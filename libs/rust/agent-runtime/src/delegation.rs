@@ -440,6 +440,21 @@ impl GrantSet {
         }
     }
 
+    /// What a callee holds, as Main records it in a delegation grant: the
+    /// toolkits of [`Self::from_tools`], the hosts its toolkits are configured
+    /// to reach ([`declared_hosts`], host only) and the data classes it
+    /// declares (none imposes nothing). `delegationgrant.FromTools` in Main
+    /// builds the same set; both run the shared `tools_cases` vectors.
+    #[must_use]
+    pub fn from_callee(tools: &[Value], callee_data_classes: &BTreeSet<String>) -> Self {
+        let mut set = Self::from_tools(tools).with_data_classes(callee_data_classes);
+        set.egress_hosts = declared_hosts(tools)
+            .into_iter()
+            .map(|(host, _)| host)
+            .collect();
+        set
+    }
+
     /// The grants of an admitted snapshot (the root's own).
     #[must_use]
     pub fn from_snapshot(snapshot: &AdmittedToolSnapshot<'_>) -> Self {

@@ -22,9 +22,11 @@ import (
 	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 	v2convs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	v2conversationskills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversationskills"
+	v2delegationgrants "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/delegationgrants"
 	v2skills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
 	v2skilltrust "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skilltrust"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
 )
 
 type routerAuditRecorder struct {
@@ -133,7 +135,9 @@ func TestEveryAuditedSurfaceMatchesAMountedRoute(t *testing.T) {
 		ConversationSkillsRepo: struct {
 			v2conversationskills.Repository
 		}{},
-		SkillTrustRepo: struct{ v2skilltrust.Repository }{},
+		SkillTrustRepo:   struct{ v2skilltrust.Repository }{},
+		DelegationGrants: struct{ v2delegationgrants.Service }{},
+		AppsRepo:         struct{ applications.Repository }{},
 	}).(chi.Routes)
 	if !ok {
 		t.Fatal("NewRouter no longer returns a chi.Routes; this test cannot walk it")

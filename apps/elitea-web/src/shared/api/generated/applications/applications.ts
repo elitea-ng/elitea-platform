@@ -111,6 +111,7 @@ import type {
   ApplicationUpdatedResponse,
   ApplicationVersionDetail,
   ApplicationVersionDetailExpanded,
+  ApproveDelegationGrantRequest,
   AuthorDetail,
   BatchReplaceVersionReferencesParams,
   CapabilityUnavailableResponse,
@@ -123,6 +124,10 @@ import type {
   CredentialReviewRefusal,
   DecideAgentWorkforceAppealBody,
   DefaultIcon,
+  DelegationGovernedError,
+  DelegationGrant,
+  DelegationGrantList,
+  DelegationPreview,
   DeleteApplicationVersionParams,
   DesktopOperationError,
   DocumentLoadersResponse,
@@ -186,6 +191,7 @@ import type {
   ListAgentWorkforceProposals200,
   ListAgentWorkforceProposalsParams,
   ListApplicationsParams,
+  ListDelegationGrantsParams,
   ListEvalDatasetsParams,
   ListEvalRunsParams,
   ListProjectIconsParams,
@@ -217,6 +223,7 @@ import type {
   PredictLLMRequest,
   PredictLLMResponse,
   PredictLLMUnavailableResponse,
+  PreviewDelegationGrantParams,
   ProjectContext,
   ProjectContextUpdateRequest,
   ProjectGroupCreate,
@@ -230,6 +237,7 @@ import type {
   ProjectStatistics,
   ProjectWithGroups,
   ProposeAgentWorkforceStageBody,
+  ProposeDelegationGrantRequest,
   PublicApplicationDetail,
   PublicApplicationList,
   PublishBadRequestResponse,
@@ -7367,6 +7375,1837 @@ export function useEnhanceEvalRun<
   queryKey: DataTag<QueryKey, TData, TError>;
 } {
   const queryOptions = getEnhanceEvalRunQueryOptions(projectId, runId, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listDelegationGrantsResponse200 = {
+  data: DelegationGrantList;
+  status: 200;
+};
+
+export type listDelegationGrantsResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type listDelegationGrantsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listDelegationGrantsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listDelegationGrantsResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type listDelegationGrantsResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type listDelegationGrantsResponseSuccess =
+  listDelegationGrantsResponse200 & {
+    headers: Headers;
+  };
+export type listDelegationGrantsResponseError = (
+  | listDelegationGrantsResponse400
+  | listDelegationGrantsResponse401
+  | listDelegationGrantsResponse403
+  | listDelegationGrantsResponse404
+  | listDelegationGrantsResponse500
+) & {
+  headers: Headers;
+};
+
+export type listDelegationGrantsResponse =
+  listDelegationGrantsResponseSuccess | listDelegationGrantsResponseError;
+
+export const getListDelegationGrantsUrl = (
+  projectId: string,
+  applicationId: number,
+  params?: ListDelegationGrantsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/delegation_grants/prompt_lib/${projectId}/${applicationId}?${stringifiedParams}`
+    : `/elitea_core/delegation_grants/prompt_lib/${projectId}/${applicationId}`;
+};
+
+/**
+ * Client contract 1.58, ADR-0044 amendment 1. Attaching a sub-agent, an agent
+ * used as a tool or a pipeline child X to this agent Y creates one grant for the
+ * edge Y to X. It lists what X held when it was attached (its toolkits, the tools
+ * selected on each, its credential references, declared data classes and the
+ * egress hosts its toolkits reach), pinned to the digest of that set. This lists
+ * the edges' active grants (`pending`, `approved` or `stale`); `history=true` adds
+ * the `superseded` and `revoked` ones. A grant is `stale` when its callee
+ * changed after approval: the grant keeps covering the set it recorded and what
+ * was added is left out of the callee's run. Needs the permission that reads an
+ * agent. NOTE(W2): internal/api/v2/delegationgrants/handler.go:177 (`List`).
+ * @summary The delegation grants of an agent's composition edges
+ */
+export const listDelegationGrants = async (
+  projectId: string,
+  applicationId: number,
+  params?: ListDelegationGrantsParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listDelegationGrantsResponse> => {
+  return eliteaFetch<listDelegationGrantsResponse>(
+    getListDelegationGrantsUrl(projectId, applicationId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListDelegationGrantsQueryKey = (
+  projectId: string,
+  applicationId: number,
+  params?: ListDelegationGrantsParams,
+) => {
+  return [
+    `/elitea_core/delegation_grants/prompt_lib/${projectId}/${applicationId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListDelegationGrantsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listDelegationGrants>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params?: ListDelegationGrantsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listDelegationGrants>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListDelegationGrantsQueryKey(projectId, applicationId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listDelegationGrants>>
+  > = ({ signal }) =>
+    listDelegationGrants(projectId, applicationId, params, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listDelegationGrants>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListDelegationGrantsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listDelegationGrants>>
+>;
+export type ListDelegationGrantsQueryError =
+  N400Response | N401Response | N403Response | N404Response | N500Response;
+
+export function useListDelegationGrants<
+  TData = Awaited<ReturnType<typeof listDelegationGrants>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params: undefined | ListDelegationGrantsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listDelegationGrants>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listDelegationGrants>>,
+          TError,
+          Awaited<ReturnType<typeof listDelegationGrants>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListDelegationGrants<
+  TData = Awaited<ReturnType<typeof listDelegationGrants>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params?: ListDelegationGrantsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listDelegationGrants>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listDelegationGrants>>,
+          TError,
+          Awaited<ReturnType<typeof listDelegationGrants>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListDelegationGrants<
+  TData = Awaited<ReturnType<typeof listDelegationGrants>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params?: ListDelegationGrantsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listDelegationGrants>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary The delegation grants of an agent's composition edges
+ */
+
+export function useListDelegationGrants<
+  TData = Awaited<ReturnType<typeof listDelegationGrants>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params?: ListDelegationGrantsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listDelegationGrants>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListDelegationGrantsQueryOptions(
+    projectId,
+    applicationId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type proposeDelegationGrantResponse201 = {
+  data: DelegationGrant;
+  status: 201;
+};
+
+export type proposeDelegationGrantResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type proposeDelegationGrantResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type proposeDelegationGrantResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type proposeDelegationGrantResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type proposeDelegationGrantResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type proposeDelegationGrantResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type proposeDelegationGrantResponseSuccess =
+  proposeDelegationGrantResponse201 & {
+    headers: Headers;
+  };
+export type proposeDelegationGrantResponseError = (
+  | proposeDelegationGrantResponse400
+  | proposeDelegationGrantResponse401
+  | proposeDelegationGrantResponse403
+  | proposeDelegationGrantResponse404
+  | proposeDelegationGrantResponse409
+  | proposeDelegationGrantResponse500
+) & {
+  headers: Headers;
+};
+
+export type proposeDelegationGrantResponse =
+  proposeDelegationGrantResponseSuccess | proposeDelegationGrantResponseError;
+
+export const getProposeDelegationGrantUrl = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return `/elitea_core/delegation_grants/prompt_lib/${projectId}/${applicationId}`;
+};
+
+/**
+ * Client contract 1.58, ADR-0044 amendment 1. Records the pending grant of the
+ * edge from this agent to the callee version, from what that version holds now.
+ * Attaching creates the pending grant already; this asks for it again, for
+ * example after a detach and re-attach. Retrying the same proposal answers the
+ * pending grant it made. An edge that has a different active grant answers 409.
+ * Under the governed profile the proposal also records the ADR-0040 change
+ * request of kind `delegation` that approves it (`change_request_id`).
+ * Needs the permission that edits an agent. Audited. NOTE(W2):
+ * internal/api/v2/delegationgrants/handler.go:225 (`Propose`).
+ * @summary Propose the delegation grant of an edge
+ */
+export const proposeDelegationGrant = async (
+  projectId: string,
+  applicationId: number,
+  proposeDelegationGrantRequest: ProposeDelegationGrantRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<proposeDelegationGrantResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<proposeDelegationGrantResponse>(
+    getProposeDelegationGrantUrl(projectId, applicationId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(proposeDelegationGrantRequest),
+    },
+  );
+};
+
+export const getProposeDelegationGrantQueryKey = (
+  projectId: string,
+  applicationId: number,
+  proposeDelegationGrantRequest?: ProposeDelegationGrantRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/delegation_grants/prompt_lib/${projectId}/${applicationId}`,
+    proposeDelegationGrantRequest,
+  ] as const;
+};
+
+export const getProposeDelegationGrantQueryOptions = <
+  TData = Awaited<ReturnType<typeof proposeDelegationGrant>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  proposeDelegationGrantRequest: ProposeDelegationGrantRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof proposeDelegationGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getProposeDelegationGrantQueryKey(
+      projectId,
+      applicationId,
+      proposeDelegationGrantRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof proposeDelegationGrant>>
+  > = ({ signal }) =>
+    proposeDelegationGrant(
+      projectId,
+      applicationId,
+      proposeDelegationGrantRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof proposeDelegationGrant>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ProposeDelegationGrantQueryResult = NonNullable<
+  Awaited<ReturnType<typeof proposeDelegationGrant>>
+>;
+export type ProposeDelegationGrantQueryError =
+  | N400Response
+  | N401Response
+  | N403Response
+  | N404Response
+  | ErrorResponse
+  | N500Response;
+
+export function useProposeDelegationGrant<
+  TData = Awaited<ReturnType<typeof proposeDelegationGrant>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  proposeDelegationGrantRequest: ProposeDelegationGrantRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof proposeDelegationGrant>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof proposeDelegationGrant>>,
+          TError,
+          Awaited<ReturnType<typeof proposeDelegationGrant>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useProposeDelegationGrant<
+  TData = Awaited<ReturnType<typeof proposeDelegationGrant>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  proposeDelegationGrantRequest: ProposeDelegationGrantRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof proposeDelegationGrant>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof proposeDelegationGrant>>,
+          TError,
+          Awaited<ReturnType<typeof proposeDelegationGrant>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useProposeDelegationGrant<
+  TData = Awaited<ReturnType<typeof proposeDelegationGrant>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  proposeDelegationGrantRequest: ProposeDelegationGrantRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof proposeDelegationGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Propose the delegation grant of an edge
+ */
+
+export function useProposeDelegationGrant<
+  TData = Awaited<ReturnType<typeof proposeDelegationGrant>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  proposeDelegationGrantRequest: ProposeDelegationGrantRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof proposeDelegationGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getProposeDelegationGrantQueryOptions(
+    projectId,
+    applicationId,
+    proposeDelegationGrantRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type previewDelegationGrantResponse200 = {
+  data: DelegationPreview;
+  status: 200;
+};
+
+export type previewDelegationGrantResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type previewDelegationGrantResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type previewDelegationGrantResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type previewDelegationGrantResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type previewDelegationGrantResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type previewDelegationGrantResponseSuccess =
+  previewDelegationGrantResponse200 & {
+    headers: Headers;
+  };
+export type previewDelegationGrantResponseError = (
+  | previewDelegationGrantResponse400
+  | previewDelegationGrantResponse401
+  | previewDelegationGrantResponse403
+  | previewDelegationGrantResponse404
+  | previewDelegationGrantResponse500
+) & {
+  headers: Headers;
+};
+
+export type previewDelegationGrantResponse =
+  previewDelegationGrantResponseSuccess | previewDelegationGrantResponseError;
+
+export const getPreviewDelegationGrantUrl = (
+  projectId: string,
+  applicationId: number,
+  params: PreviewDelegationGrantParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/delegation_preview/prompt_lib/${projectId}/${applicationId}?${stringifiedParams}`
+    : `/elitea_core/delegation_preview/prompt_lib/${projectId}/${applicationId}`;
+};
+
+/**
+ * Client contract 1.58, ADR-0044 amendment 1. For the attach dialog: what the
+ * callee version holds (`items`), the part the person asking could approve
+ * because they hold access to it (`approvable`), the part that would stay out of
+ * the grant because they do not (`withheld`), the closure (the callee and the
+ * callees it reaches through APPROVED grants, with what each holds) as
+ * information, and the edge's active grant when it has one. The closure is not
+ * approved by approving this edge: every hop needs its own grant, approved by an
+ * editor of the agent that makes the call. Needs the permission that reads an
+ * agent. NOTE(W2): internal/api/v2/delegationgrants/handler.go:358 (`Preview`).
+ * @summary What an attached agent will be able to use
+ */
+export const previewDelegationGrant = async (
+  projectId: string,
+  applicationId: number,
+  params: PreviewDelegationGrantParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<previewDelegationGrantResponse> => {
+  return eliteaFetch<previewDelegationGrantResponse>(
+    getPreviewDelegationGrantUrl(projectId, applicationId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getPreviewDelegationGrantQueryKey = (
+  projectId: string,
+  applicationId: number,
+  params?: PreviewDelegationGrantParams,
+) => {
+  return [
+    `/elitea_core/delegation_preview/prompt_lib/${projectId}/${applicationId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getPreviewDelegationGrantQueryOptions = <
+  TData = Awaited<ReturnType<typeof previewDelegationGrant>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params: PreviewDelegationGrantParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof previewDelegationGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getPreviewDelegationGrantQueryKey(projectId, applicationId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof previewDelegationGrant>>
+  > = ({ signal }) =>
+    previewDelegationGrant(projectId, applicationId, params, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof previewDelegationGrant>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type PreviewDelegationGrantQueryResult = NonNullable<
+  Awaited<ReturnType<typeof previewDelegationGrant>>
+>;
+export type PreviewDelegationGrantQueryError =
+  N400Response | N401Response | N403Response | N404Response | N500Response;
+
+export function usePreviewDelegationGrant<
+  TData = Awaited<ReturnType<typeof previewDelegationGrant>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params: PreviewDelegationGrantParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof previewDelegationGrant>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof previewDelegationGrant>>,
+          TError,
+          Awaited<ReturnType<typeof previewDelegationGrant>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function usePreviewDelegationGrant<
+  TData = Awaited<ReturnType<typeof previewDelegationGrant>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params: PreviewDelegationGrantParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof previewDelegationGrant>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof previewDelegationGrant>>,
+          TError,
+          Awaited<ReturnType<typeof previewDelegationGrant>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function usePreviewDelegationGrant<
+  TData = Awaited<ReturnType<typeof previewDelegationGrant>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params: PreviewDelegationGrantParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof previewDelegationGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary What an attached agent will be able to use
+ */
+
+export function usePreviewDelegationGrant<
+  TData = Awaited<ReturnType<typeof previewDelegationGrant>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params: PreviewDelegationGrantParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof previewDelegationGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getPreviewDelegationGrantQueryOptions(
+    projectId,
+    applicationId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getDelegationGrantResponse200 = {
+  data: DelegationGrant;
+  status: 200;
+};
+
+export type getDelegationGrantResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type getDelegationGrantResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getDelegationGrantResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getDelegationGrantResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type getDelegationGrantResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type getDelegationGrantResponseSuccess =
+  getDelegationGrantResponse200 & {
+    headers: Headers;
+  };
+export type getDelegationGrantResponseError = (
+  | getDelegationGrantResponse400
+  | getDelegationGrantResponse401
+  | getDelegationGrantResponse403
+  | getDelegationGrantResponse404
+  | getDelegationGrantResponse500
+) & {
+  headers: Headers;
+};
+
+export type getDelegationGrantResponse =
+  getDelegationGrantResponseSuccess | getDelegationGrantResponseError;
+
+export const getGetDelegationGrantUrl = (
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+) => {
+  return `/elitea_core/delegation_grant/prompt_lib/${projectId}/${applicationId}/${grantId}`;
+};
+
+/**
+ * Client contract 1.58, ADR-0044 amendment 1. Needs the permission that reads an
+ * agent. NOTE(W2): internal/api/v2/delegationgrants/handler.go:196 (`Get`).
+ * @summary One delegation grant
+ */
+export const getDelegationGrant = async (
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getDelegationGrantResponse> => {
+  return eliteaFetch<getDelegationGrantResponse>(
+    getGetDelegationGrantUrl(projectId, applicationId, grantId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetDelegationGrantQueryKey = (
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+) => {
+  return [
+    `/elitea_core/delegation_grant/prompt_lib/${projectId}/${applicationId}/${grantId}`,
+  ] as const;
+};
+
+export const getGetDelegationGrantQueryOptions = <
+  TData = Awaited<ReturnType<typeof getDelegationGrant>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getDelegationGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetDelegationGrantQueryKey(projectId, applicationId, grantId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getDelegationGrant>>
+  > = ({ signal }) =>
+    getDelegationGrant(projectId, applicationId, grantId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined &&
+      grantId !== null &&
+      grantId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getDelegationGrant>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetDelegationGrantQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getDelegationGrant>>
+>;
+export type GetDelegationGrantQueryError =
+  N400Response | N401Response | N403Response | N404Response | N500Response;
+
+export function useGetDelegationGrant<
+  TData = Awaited<ReturnType<typeof getDelegationGrant>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getDelegationGrant>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getDelegationGrant>>,
+          TError,
+          Awaited<ReturnType<typeof getDelegationGrant>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetDelegationGrant<
+  TData = Awaited<ReturnType<typeof getDelegationGrant>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getDelegationGrant>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getDelegationGrant>>,
+          TError,
+          Awaited<ReturnType<typeof getDelegationGrant>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetDelegationGrant<
+  TData = Awaited<ReturnType<typeof getDelegationGrant>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getDelegationGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary One delegation grant
+ */
+
+export function useGetDelegationGrant<
+  TData = Awaited<ReturnType<typeof getDelegationGrant>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getDelegationGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetDelegationGrantQueryOptions(
+    projectId,
+    applicationId,
+    grantId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type revokeDelegationGrantResponse200 = {
+  data: DelegationGrant;
+  status: 200;
+};
+
+export type revokeDelegationGrantResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type revokeDelegationGrantResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type revokeDelegationGrantResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type revokeDelegationGrantResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type revokeDelegationGrantResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type revokeDelegationGrantResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type revokeDelegationGrantResponseSuccess =
+  revokeDelegationGrantResponse200 & {
+    headers: Headers;
+  };
+export type revokeDelegationGrantResponseError = (
+  | revokeDelegationGrantResponse400
+  | revokeDelegationGrantResponse401
+  | revokeDelegationGrantResponse403
+  | revokeDelegationGrantResponse404
+  | revokeDelegationGrantResponse409
+  | revokeDelegationGrantResponse500
+) & {
+  headers: Headers;
+};
+
+export type revokeDelegationGrantResponse =
+  revokeDelegationGrantResponseSuccess | revokeDelegationGrantResponseError;
+
+export const getRevokeDelegationGrantUrl = (
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+) => {
+  return `/elitea_core/delegation_grant/prompt_lib/${projectId}/${applicationId}/${grantId}`;
+};
+
+/**
+ * Client contract 1.58, ADR-0044 amendment 1. Ends an active grant: the edge is
+ * refused again where the caller does not hold what the callee does. This is
+ * what a detach does. A grant already revoked or superseded answers 409. Needs
+ * the permission that edits an agent. Audited. NOTE(W2):
+ * internal/api/v2/delegationgrants/handler.go:328 (`Revoke`).
+ * @summary Revoke a delegation grant
+ */
+export const revokeDelegationGrant = async (
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<revokeDelegationGrantResponse> => {
+  return eliteaFetch<revokeDelegationGrantResponse>(
+    getRevokeDelegationGrantUrl(projectId, applicationId, grantId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getRevokeDelegationGrantQueryKey = (
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+) => {
+  return [
+    "DELETE",
+    `/elitea_core/delegation_grant/prompt_lib/${projectId}/${applicationId}/${grantId}`,
+  ] as const;
+};
+
+export const getRevokeDelegationGrantQueryOptions = <
+  TData = Awaited<ReturnType<typeof revokeDelegationGrant>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeDelegationGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getRevokeDelegationGrantQueryKey(projectId, applicationId, grantId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof revokeDelegationGrant>>
+  > = ({ signal }) =>
+    revokeDelegationGrant(projectId, applicationId, grantId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined &&
+      grantId !== null &&
+      grantId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof revokeDelegationGrant>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RevokeDelegationGrantQueryResult = NonNullable<
+  Awaited<ReturnType<typeof revokeDelegationGrant>>
+>;
+export type RevokeDelegationGrantQueryError =
+  | N400Response
+  | N401Response
+  | N403Response
+  | N404Response
+  | ErrorResponse
+  | N500Response;
+
+export function useRevokeDelegationGrant<
+  TData = Awaited<ReturnType<typeof revokeDelegationGrant>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeDelegationGrant>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof revokeDelegationGrant>>,
+          TError,
+          Awaited<ReturnType<typeof revokeDelegationGrant>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRevokeDelegationGrant<
+  TData = Awaited<ReturnType<typeof revokeDelegationGrant>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeDelegationGrant>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof revokeDelegationGrant>>,
+          TError,
+          Awaited<ReturnType<typeof revokeDelegationGrant>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRevokeDelegationGrant<
+  TData = Awaited<ReturnType<typeof revokeDelegationGrant>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeDelegationGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Revoke a delegation grant
+ */
+
+export function useRevokeDelegationGrant<
+  TData = Awaited<ReturnType<typeof revokeDelegationGrant>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeDelegationGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRevokeDelegationGrantQueryOptions(
+    projectId,
+    applicationId,
+    grantId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type approveDelegationGrantResponse200 = {
+  data: DelegationGrant;
+  status: 200;
+};
+
+export type approveDelegationGrantResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type approveDelegationGrantResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type approveDelegationGrantResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type approveDelegationGrantResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type approveDelegationGrantResponse409 = {
+  data: DelegationGovernedError;
+  status: 409;
+};
+
+export type approveDelegationGrantResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type approveDelegationGrantResponseSuccess =
+  approveDelegationGrantResponse200 & {
+    headers: Headers;
+  };
+export type approveDelegationGrantResponseError = (
+  | approveDelegationGrantResponse400
+  | approveDelegationGrantResponse401
+  | approveDelegationGrantResponse403
+  | approveDelegationGrantResponse404
+  | approveDelegationGrantResponse409
+  | approveDelegationGrantResponse500
+) & {
+  headers: Headers;
+};
+
+export type approveDelegationGrantResponse =
+  approveDelegationGrantResponseSuccess | approveDelegationGrantResponseError;
+
+export const getApproveDelegationGrantUrl = (
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+) => {
+  return `/elitea_core/delegation_grant/prompt_lib/${projectId}/${applicationId}/${grantId}/approve`;
+};
+
+/**
+ * Client contract 1.58, ADR-0044 amendment 1. An editor of the caller approves a
+ * pending grant, all of it (no body) or only the items they choose (`items`).
+ * They can approve only what they hold access to: each toolkit and each
+ * credential reference of the grant. What they leave out, or do not hold, is
+ * recorded as `omitted`, stays out of the grant, and the callee runs without it.
+ * A data class bound is never left out. Approving a grant does not create a
+ * credential use grant: a governed credential still needs the exact use grant of
+ * the agent that holds the reference. Under the governed profile the grant is
+ * approved through its change request instead, and this answers 409 with the
+ * code `DELEGATION_GOVERNED` and the `change_request_id`. Needs the permission
+ * that edits an agent. Audited. NOTE(W2):
+ * internal/api/v2/delegationgrants/handler.go:270 (`Approve`).
+ * @summary Approve a pending delegation grant
+ */
+export const approveDelegationGrant = async (
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  approveDelegationGrantRequest?: ApproveDelegationGrantRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<approveDelegationGrantResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<approveDelegationGrantResponse>(
+    getApproveDelegationGrantUrl(projectId, applicationId, grantId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(approveDelegationGrantRequest),
+    },
+  );
+};
+
+export const getApproveDelegationGrantQueryKey = (
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  approveDelegationGrantRequest?: ApproveDelegationGrantRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/delegation_grant/prompt_lib/${projectId}/${applicationId}/${grantId}/approve`,
+    approveDelegationGrantRequest,
+  ] as const;
+};
+
+export const getApproveDelegationGrantQueryOptions = <
+  TData = Awaited<ReturnType<typeof approveDelegationGrant>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | DelegationGovernedError
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  approveDelegationGrantRequest?: ApproveDelegationGrantRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveDelegationGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getApproveDelegationGrantQueryKey(
+      projectId,
+      applicationId,
+      grantId,
+      approveDelegationGrantRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof approveDelegationGrant>>
+  > = ({ signal }) =>
+    approveDelegationGrant(
+      projectId,
+      applicationId,
+      grantId,
+      approveDelegationGrantRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined &&
+      grantId !== null &&
+      grantId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof approveDelegationGrant>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ApproveDelegationGrantQueryResult = NonNullable<
+  Awaited<ReturnType<typeof approveDelegationGrant>>
+>;
+export type ApproveDelegationGrantQueryError =
+  | ErrorResponse
+  | N401Response
+  | N403Response
+  | N404Response
+  | DelegationGovernedError
+  | N500Response;
+
+export function useApproveDelegationGrant<
+  TData = Awaited<ReturnType<typeof approveDelegationGrant>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | DelegationGovernedError
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  approveDelegationGrantRequest: undefined | ApproveDelegationGrantRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveDelegationGrant>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof approveDelegationGrant>>,
+          TError,
+          Awaited<ReturnType<typeof approveDelegationGrant>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useApproveDelegationGrant<
+  TData = Awaited<ReturnType<typeof approveDelegationGrant>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | DelegationGovernedError
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  approveDelegationGrantRequest?: ApproveDelegationGrantRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveDelegationGrant>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof approveDelegationGrant>>,
+          TError,
+          Awaited<ReturnType<typeof approveDelegationGrant>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useApproveDelegationGrant<
+  TData = Awaited<ReturnType<typeof approveDelegationGrant>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | DelegationGovernedError
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  approveDelegationGrantRequest?: ApproveDelegationGrantRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveDelegationGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Approve a pending delegation grant
+ */
+
+export function useApproveDelegationGrant<
+  TData = Awaited<ReturnType<typeof approveDelegationGrant>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | DelegationGovernedError
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  approveDelegationGrantRequest?: ApproveDelegationGrantRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveDelegationGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getApproveDelegationGrantQueryOptions(
+    projectId,
+    applicationId,
+    grantId,
+    approveDelegationGrantRequest,
+    options,
+  );
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

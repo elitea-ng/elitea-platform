@@ -208,6 +208,32 @@ type NewMarketplaceChange struct {
 	Payload json.RawMessage
 }
 
+// NewDelegationChange is the change request that approves one delegation grant
+// under the governed profile (ADR-0044 amendment 1). It is recorded in the
+// transaction that proposes the grant.
+type NewDelegationChange struct {
+	ProjectID int64
+	// ApplicationID is the CALLER of the edge: the agent whose editors approve.
+	ApplicationID int64
+	GrantID       int64
+	ProposedBy    int64
+	Summary       string
+}
+
+// DelegationApply is one approved delegation change request, handed to the
+// component that owns the grant table, which approves the grant in the same
+// transaction. Approvers are every person who approved the request, the final
+// one included: the grant lists only what ALL of them hold access to.
+type DelegationApply struct {
+	ProjectID     int64
+	ApplicationID int64
+	GrantID       int64
+	ProposerID    int64
+	ApproverIDs   []int64
+	// FinalApproverID is the approval that completed the request.
+	FinalApproverID int64
+}
+
 // MarketplaceApply is one approved Marketplace change, read back by the final
 // approval (or by the upgrade that is recorded already approved) and handed to
 // the component that owns the tenant schema, which applies it in the same

@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/marketplace"
@@ -244,11 +245,11 @@ func (h *Handler) UpdateApplicationRelation(w http.ResponseWriter, r *http.Reque
 	// check below runs under this lock, which is what makes it effective
 	// (every attach mints a fresh tool_id, so no unique constraint can
 	// catch the race after the fact).
-	var parentStatus string
+	var parentStatus, parentAgentType string
 	var parentApplicationID int64
 	err = transaction.QueryRow(ctx, fmt.Sprintf(
-		`SELECT COALESCE(status, ''), application_id FROM %s.application_versions WHERE id = $1 FOR UPDATE`, s),
-		parentVersionID).Scan(&parentStatus, &parentApplicationID)
+		`SELECT COALESCE(status, ''), application_id, COALESCE(agent_type, '') FROM %s.application_versions WHERE id = $1 FOR UPDATE`, s),
+		parentVersionID).Scan(&parentStatus, &parentApplicationID, &parentAgentType)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "the parent version does not exist"})
@@ -351,6 +352,13 @@ func (h *Handler) UpdateApplicationRelation(w http.ResponseWriter, r *http.Reque
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "relation write failed"})
 			return
 		}
+		// The attach creates the pending delegation grant of the edge in the
+		// same transaction (ADR-0044 amendment 1, A1.2 rule 2).
+		if err := h.delegationHook(ctx, transaction, true, projectID, parentApplicationID, parentAgentType, childAppNumber, childVersionNumber); err != nil {
+			slog.ErrorContext(ctx, "application relation: delegation grant failed", "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "relation write failed"})
+			return
+		}
 	} else {
 		removed, err := deleteApplicationToolReferences(
 			ctx, transaction, s, strconv.FormatInt(parentVersionID, 10), childAppID, childVersionID)
@@ -365,6 +373,12 @@ func (h *Handler) UpdateApplicationRelation(w http.ResponseWriter, r *http.Reque
 			writeJSON(w, http.StatusNotFound, map[string]any{"error": "no such relation on this version"})
 			return
 		}
+		childAppNumber, _ := strconv.ParseInt(childAppID, 10, 64)
+		if err := h.delegationHook(ctx, transaction, false, projectID, parentApplicationID, parentAgentType, childAppNumber, 0); err != nil {
+			slog.ErrorContext(ctx, "application relation: delegation grant revoke failed", "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "relation delete failed"})
+			return
+		}
 	}
 
 	if err := transaction.Commit(ctx); err != nil {
@@ -377,6 +391,31 @@ func (h *Handler) UpdateApplicationRelation(w http.ResponseWriter, r *http.Reque
 		"version_id":     childVersionID,
 		"has_relation":   body.HasRelation,
 	})
+}
+
+// delegationHook proposes (attach) or revokes (detach) the delegation grant of
+// the edge from the parent to the child, in the relation's transaction. The
+// edge is a pipeline child when the parent is a pipeline and an agent tool
+// otherwise. Without a composed hook, or a signed-in user, it does nothing.
+func (h *Handler) delegationHook(ctx context.Context, tx pgx.Tx, attach bool, projectID string, parentApplicationID int64,
+	parentAgentType string, childApplicationID, childVersionID int64) error {
+	if h.delegation == nil || childApplicationID <= 0 {
+		return nil
+	}
+	project, err := strconv.ParseInt(projectID, 10, 64)
+	if err != nil || project <= 0 {
+		return nil
+	}
+	principal, _ := auth.UserFromContext(ctx)
+	actor, _ := principal.OwningUserID()
+	event := repos.DelegationAttach{
+		ProjectID: project, CallerID: parentApplicationID, CalleeID: childApplicationID, CalleeVersionID: childVersionID,
+		Pipeline: parentAgentType == "pipeline", Actor: actor,
+	}
+	if attach {
+		return h.delegation.AttachTx(ctx, tx, event)
+	}
+	return h.delegation.DetachTx(ctx, tx, event)
 }
 
 // refuseComposition writes the composition refusal (or a lookup failure) and

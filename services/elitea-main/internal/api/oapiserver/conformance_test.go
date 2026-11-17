@@ -40,6 +40,7 @@ import (
 	v2credentialprobe "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialprobe"
 	v2credentialreferences "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialreferences"
 	v2deepwiki "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
+	v2delegationgrants "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/delegationgrants"
 	v2entityfolders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/entityfolders"
 	v2evaluation "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
 	v2events "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/events"
@@ -194,14 +195,15 @@ func buildFullSurfaceConfig() api.RouterConfig {
 		ConversationSkillsRepo: struct {
 			v2conversationskills.Repository
 		}{},
-		SkillTrustRepo: struct{ v2skilltrust.Repository }{},
-		MemoriesRepo:   struct{ v2memories.Repository }{},
-		TagsRepo:       struct{ v2tags.Repository }{},
-		AnalyticsRepo:  struct{ v2analytics.Repository }{},
-		ConvsRepo:      struct{ v2convs.Repository }{},
-		WebhookRepo:    struct{ webhook.Repository }{},
-		EventSource:    struct{ v2events.EventSource }{},
-		LLMProxy:       http.NotFoundHandler(),
+		SkillTrustRepo:   struct{ v2skilltrust.Repository }{},
+		DelegationGrants: struct{ v2delegationgrants.Service }{},
+		MemoriesRepo:     struct{ v2memories.Repository }{},
+		TagsRepo:         struct{ v2tags.Repository }{},
+		AnalyticsRepo:    struct{ v2analytics.Repository }{},
+		ConvsRepo:        struct{ v2convs.Repository }{},
+		WebhookRepo:      struct{ webhook.Repository }{},
+		EventSource:      struct{ v2events.EventSource }{},
+		LLMProxy:         http.NotFoundHandler(),
 
 		// CurrentAvatarRoute has no interface-typed dependency this stub
 		// scheme can zero-value: a bare &v2social.CurrentAvatarRoute{} still

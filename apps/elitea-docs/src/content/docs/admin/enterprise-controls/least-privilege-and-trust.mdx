@@ -237,6 +237,19 @@ Each replica of the main service reads the section again after at most 15 second
 
 To find compositions that enforcement would refuse, set **Mode** to `report` for a period, and look for delegation steps with `delegation_enforced: false`. For each one, give the grant to the calling agent, or remove it from the callee. Then set **Mode** to `enforce`.
 
+### Delegation grants
+
+Attaching an agent or a pipeline to another agent (an agent used as a tool, or a pipeline child) records a **delegation grant** for that edge. The grant lists exactly what the attached agent (the callee) holds when it is attached: its toolkits, the tools selected on each, the credential references they use, the data classes it declares and the hosts its toolkits are configured to reach. It stores the digest of that set. A callee that holds none of these needs no grant.
+
+- **A grant starts pending.** Nothing is approved by attaching. An editor of the calling agent approves the grant, all of it or only the items they choose. The approver can approve only what they hold access to: each toolkit (the permission to list toolkits in the project) and each credential reference (the governed credential use permission). What they leave out, or do not hold, is recorded as *omitted* and stays out of the grant. A toolkit whose credential reference is left out leaves with it. A data class bound is never left out. Approving a grant never creates a credential use grant: a governed credential use still needs the use grant of the agent that holds the reference.
+- **One grant per edge.** The grant covers the callee's own toolkits. It does not cover the callee's own sub-agents: each of those edges has its own grant, approved by an editor of the callee.
+- **Drift.** The grant covers the set it recorded. When the callee later holds more (a new toolkit or tool, another credential reference, a new host or data class), the grant becomes *stale* and the added items stay out. A newer version of the callee with the same or a smaller set needs no approval. Re-approval replaces the grant and keeps the old one as *superseded*.
+- **Governed profile.** Under the governed profile the grant is approved through an [agent change request](/admin/enterprise-controls/agent-lifecycle) of kind `delegation` on the calling agent, with maker-checker at every tier, low included: the approver differs from the proposer, holds the approval permission of the agent's tier, and the tier's approval count applies. The direct approve route then answers 409 with the code `DELEGATION_GOVERNED` and the request to use. Rejecting or withdrawing the request revokes the grant. A delegation request is separate from the one open request an agent may have, so it never blocks a release.
+- **Detaching revokes the grant** once no version of the calling agent attaches the callee.
+- **Audit.** Each proposal, approval, re-approval, stale mark and revoke is a security audit event (`agent.delegation.*`).
+
+The review screen in the attach dialog and the notices in the chat come with later releases; until then grants are managed through the API (`listDelegationGrants`, `proposeDelegationGrant`, `previewDelegationGrant`, `approveDelegationGrant`, `revokeDelegationGrant`). This release records and approves grants; it does not yet change what runs, so no delegation that works today stops working.
+
 ### Evidence
 
 Each delegation is a `delegation` [run step](/admin/enterprise-controls/audit-evidence-and-retention#run-step-records). This includes a sub-agent start (step name `spawn_agent`). The step summary adds these fields:

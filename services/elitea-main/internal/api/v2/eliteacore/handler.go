@@ -142,6 +142,10 @@ type Handler struct {
 	// agents.workforce.manage in a project (marketplace_feedback.go). nil
 	// refuses every caller.
 	holdsWorkforceManage func(r *http.Request, projectID string) (bool, error)
+	// delegation proposes and revokes the delegation grant of an edge in the
+	// transaction that attaches or detaches it (ADR-0044 amendment 1). Nil
+	// leaves attachments as they were.
+	delegation DelegationGrantHook
 }
 
 // EventEmitter is the seam to internal/events.Publisher, declared locally so
@@ -287,6 +291,19 @@ func WithDelegatedAuthToolkitSettingsResolver(resolver DelegatedAuthToolkitSetti
 			handler.delegatedAuth = resolver
 		}
 	}
+}
+
+// DelegationGrantHook creates and revokes the delegation grant of an attached
+// edge in the attach's own transaction (repos.DelegationGrants).
+type DelegationGrantHook interface {
+	AttachTx(ctx context.Context, tx pgx.Tx, attach repos.DelegationAttach) error
+	DetachTx(ctx context.Context, tx pgx.Tx, attach repos.DelegationAttach) error
+}
+
+// WithDelegationGrants composes the delegation grant hook of the agent-as-tool
+// attach and detach (ADR-0044 amendment 1, A1.2 rule 2).
+func WithDelegationGrants(hook DelegationGrantHook) Option {
+	return func(handler *Handler) { handler.delegation = hook }
 }
 
 // WithWorkforceManagerCheck sets the check that the caller manages agents in a

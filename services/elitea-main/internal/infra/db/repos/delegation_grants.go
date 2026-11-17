@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
 	dg "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/delegationgrant"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
@@ -26,20 +27,59 @@ import (
 // the table are the second line: a code path that forgets a rule is refused
 // by the database.
 type DelegationGrants struct {
-	pool  *pgxpool.Pool
-	audit securityaudit.Appender
-	now   func() time.Time
+	pool    *pgxpool.Pool
+	audit   securityaudit.Appender
+	now     func() time.Time
+	changes DelegationChangeRecorder
+	access  DelegationAccessResolver
+	// callees and governed serve the attach path (delegation_attach.go).
+	callees interface {
+		Snapshot(ctx context.Context, projectID, applicationID, versionID int64) (dg.Callee, error)
+	}
+	governed func(context.Context) bool
+}
+
+// DelegationChangeRecorder records the ADR-0040 change request of a governed
+// grant in the proposing transaction (AgentLifecycle satisfies it).
+type DelegationChangeRecorder interface {
+	RecordDelegationChangeTx(ctx context.Context, tx pgx.Tx, change agentlifecycle.NewDelegationChange) (agentlifecycle.ChangeRequest, error)
+}
+
+// DelegationAccessResolver answers what a person holds access to in a project:
+// the toolkits they may use and the credential references they hold. A grant
+// approved by a change request lists only what every approver holds.
+type DelegationAccessResolver interface {
+	AccessFor(ctx context.Context, projectID, userID int64) (dg.Access, error)
+}
+
+// DelegationGrantsOption configures the store.
+type DelegationGrantsOption func(*DelegationGrants)
+
+// WithDelegationChanges composes the change request recorder. Without it a
+// governed grant cannot be proposed.
+func WithDelegationChanges(recorder DelegationChangeRecorder) DelegationGrantsOption {
+	return func(s *DelegationGrants) { s.changes = recorder }
+}
+
+// WithDelegationAccess composes the approver access resolver. Without it a
+// grant approved by a change request cannot be applied.
+func WithDelegationAccess(resolver DelegationAccessResolver) DelegationGrantsOption {
+	return func(s *DelegationGrants) { s.access = resolver }
 }
 
 // NewDelegationGrants builds the store. audit is required.
-func NewDelegationGrants(pool *pgxpool.Pool, audit securityaudit.Appender) (*DelegationGrants, error) {
+func NewDelegationGrants(pool *pgxpool.Pool, audit securityaudit.Appender, options ...DelegationGrantsOption) (*DelegationGrants, error) {
 	if pool == nil {
 		return nil, errors.New("delegation grants: a pool is required")
 	}
 	if audit == nil {
 		return nil, errors.New("delegation grants: the security audit appender is required")
 	}
-	return &DelegationGrants{pool: pool, audit: audit, now: time.Now}, nil
+	s := &DelegationGrants{pool: pool, audit: audit, now: time.Now}
+	for _, option := range options {
+		option(s)
+	}
+	return s, nil
 }
 
 // ProposeInput is a new grant for an edge: what the callee holds now.
@@ -96,6 +136,29 @@ func lockEdge(ctx context.Context, tx pgx.Tx, schema string, edge dg.Edge) error
 // records the same requested digest and is still pending: the attach path
 // retries, and the existing grant is returned unchanged.
 func (s *DelegationGrants) Propose(ctx context.Context, in ProposeInput) (dg.Grant, error) {
+	var out dg.Grant
+	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		grant, err := s.ProposeTx(ctx, tx, in)
+		out = grant
+		return err
+	})
+	return out, err
+}
+
+// ProposeGrant is Propose with the proposal spelled out, for the application
+// service (which holds no repos types).
+func (s *DelegationGrants) ProposeGrant(ctx context.Context, projectID int64, edge dg.Edge, calleeVersionID int64, requested dg.GrantSet, origin dg.Origin, governed bool, proposedBy int64) (dg.Grant, error) {
+	return s.Propose(ctx, ProposeInput{
+		ProjectID: projectID, Edge: edge, CalleeVersionID: calleeVersionID, Requested: requested,
+		Origin: origin, Governed: governed, ProposedBy: &proposedBy,
+	})
+}
+
+// ProposeTx is Propose in the caller's transaction: the attach path proposes
+// the grant in the transaction that writes the attachment, so a composition
+// either has its grant or does not exist. A governed grant also records its
+// change request (kind delegation) in the same transaction.
+func (s *DelegationGrants) ProposeTx(ctx context.Context, tx pgx.Tx, in ProposeInput) (dg.Grant, error) {
 	if err := in.validate(); err != nil {
 		return dg.Grant{}, err
 	}
@@ -103,31 +166,40 @@ func (s *DelegationGrants) Propose(ctx context.Context, in ProposeInput) (dg.Gra
 	if err != nil {
 		return dg.Grant{}, err
 	}
-	var out dg.Grant
-	err = s.inTx(ctx, func(tx pgx.Tx) error {
-		if err := lockEdge(ctx, tx, schema, in.Edge); err != nil {
-			return err
+	if err := lockEdge(ctx, tx, schema, in.Edge); err != nil {
+		return dg.Grant{}, err
+	}
+	existing, found, err := activeForEdge(ctx, tx, schema, in.Edge, true)
+	if err != nil {
+		return dg.Grant{}, err
+	}
+	if found {
+		if existing.State == dg.StatePending && existing.RequestedDigest == in.Requested.Digest() &&
+			existing.Governed == in.Governed && sameUser(existing.ProposedBy, in.ProposedBy) {
+			return existing, nil
 		}
-		existing, found, err := activeForEdge(ctx, tx, schema, in.Edge, true)
-		if err != nil {
-			return err
+		return dg.Grant{}, dg.ErrActiveEdgeExists
+	}
+	grant, err := s.insert(ctx, tx, schema, in, dg.StatePending, in.Requested, nil, nil)
+	if err != nil {
+		return dg.Grant{}, err
+	}
+	if err := s.append(ctx, tx, grantEvent(grant, dg.ActionProposed, proposerOf(grant))); err != nil {
+		return dg.Grant{}, err
+	}
+	if grant.Governed {
+		if s.changes == nil {
+			return dg.Grant{}, errors.New("delegation grants: no change request recorder is composed for a governed grant")
 		}
-		if found {
-			if existing.State == dg.StatePending && existing.RequestedDigest == in.Requested.Digest() &&
-				existing.Governed == in.Governed && sameUser(existing.ProposedBy, in.ProposedBy) {
-				out = existing
-				return nil
-			}
-			return dg.ErrActiveEdgeExists
+		if _, err := s.changes.RecordDelegationChangeTx(ctx, tx, agentlifecycle.NewDelegationChange{
+			ProjectID: grant.ProjectID, ApplicationID: grant.Edge.CallerEntityID, GrantID: grant.ID,
+			ProposedBy: proposerOf(grant),
+			Summary:    fmt.Sprintf("Delegate from agent %d to %d (%s)", grant.Edge.CallerEntityID, grant.Edge.CalleeEntityID, grant.Edge.Kind),
+		}); err != nil {
+			return dg.Grant{}, err
 		}
-		grant, err := s.insert(ctx, tx, schema, in, dg.StatePending, in.Requested, nil, nil)
-		if err != nil {
-			return err
-		}
-		out = grant
-		return s.append(ctx, tx, grantEvent(grant, dg.ActionProposed, proposerOf(grant)))
-	})
-	return out, err
+	}
+	return grant, nil
 }
 
 // Approve approves a pending grant. choose lists the items the approver
@@ -138,45 +210,49 @@ func (s *DelegationGrants) Approve(ctx context.Context, projectID, id, approver 
 	if approver <= 0 || access == nil {
 		return dg.Grant{}, fmt.Errorf("%w: an approver and their access are required", dg.ErrInvalid)
 	}
+	var out dg.Grant
+	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		grant, err := s.approveTx(ctx, tx, projectID, id, approver, choose, access)
+		out = grant
+		return err
+	})
+	return out, err
+}
+
+func (s *DelegationGrants) approveTx(ctx context.Context, tx pgx.Tx, projectID, id, approver int64, choose []dg.Item, access dg.Access) (dg.Grant, error) {
 	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
 	if err != nil {
 		return dg.Grant{}, err
 	}
-	var out dg.Grant
-	err = s.inTx(ctx, func(tx pgx.Tx) error {
-		grant, err := lockGrant(ctx, tx, schema, projectID, id)
-		if err != nil {
-			return err
-		}
-		if !dg.CanTransition(grant.State, dg.StateApproved) || grant.State != dg.StatePending {
-			return dg.ErrWrongState
-		}
-		if err := dg.CheckApprover(grant.Governed, grant.ProposedBy, approver); err != nil {
-			return err
-		}
-		approved, omitted, err := dg.Approvable(grant.RequestedSet, choose, access)
-		if err != nil {
-			return err
-		}
-		omittedJSON, err := json.Marshal(nonNilItems(omitted))
-		if err != nil {
-			return err
-		}
-		at := s.now().UTC()
-		if _, err := tx.Exec(ctx, fmt.Sprintf(`
+	grant, err := lockGrant(ctx, tx, schema, projectID, id)
+	if err != nil {
+		return dg.Grant{}, err
+	}
+	if !dg.CanTransition(grant.State, dg.StateApproved) || grant.State != dg.StatePending {
+		return dg.Grant{}, dg.ErrWrongState
+	}
+	if err := dg.CheckApprover(grant.Governed, grant.ProposedBy, approver); err != nil {
+		return dg.Grant{}, err
+	}
+	approved, omitted, err := dg.Approvable(grant.RequestedSet, choose, access)
+	if err != nil {
+		return dg.Grant{}, err
+	}
+	omittedJSON, err := json.Marshal(nonNilItems(omitted))
+	if err != nil {
+		return dg.Grant{}, err
+	}
+	if _, err := tx.Exec(ctx, fmt.Sprintf(`
 UPDATE %s.delegation_grants
 SET state = 'approved', grant_set = $2, digest = $3, omitted = $4, approved_by = $5, approved_at = $6, updated_at = clock_timestamp()
-WHERE id = $1`, schema), id, []byte(approved.Canonical()), approved.Digest(), omittedJSON, approver, at); err != nil {
-			return mapDelegationGrantError(err)
-		}
-		grant, err = readGrant(ctx, tx, schema, id)
-		if err != nil {
-			return err
-		}
-		out = grant
-		return s.append(ctx, tx, grantEvent(grant, dg.ActionApproved, approver, partialReason(omitted)...))
-	})
-	return out, err
+WHERE id = $1`, schema), id, []byte(approved.Canonical()), approved.Digest(), omittedJSON, approver, s.now().UTC()); err != nil {
+		return dg.Grant{}, mapDelegationGrantError(err)
+	}
+	grant, err = readGrant(ctx, tx, schema, id)
+	if err != nil {
+		return dg.Grant{}, err
+	}
+	return grant, s.append(ctx, tx, grantEvent(grant, dg.ActionApproved, approver, partialReason(omitted)...))
 }
 
 // ReapproveInput replaces an approved or stale grant with a new one for the
@@ -276,30 +352,106 @@ UPDATE %s.delegation_grants SET state = 'superseded', superseded_by = id, update
 // Revoke ends an active grant: a detach, a rejection or a withdrawal. A grant
 // already revoked or superseded refuses with dg.ErrWrongState.
 func (s *DelegationGrants) Revoke(ctx context.Context, projectID, id, actor int64) (dg.Grant, error) {
+	var out dg.Grant
+	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		grant, err := s.RevokeTx(ctx, tx, projectID, id, actor)
+		out = grant
+		return err
+	})
+	return out, err
+}
+
+// RevokeTx is Revoke in the caller's transaction (a detach revokes the grant
+// in the transaction that removes the attachment).
+func (s *DelegationGrants) RevokeTx(ctx context.Context, tx pgx.Tx, projectID, id, actor int64) (dg.Grant, error) {
 	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
 	if err != nil {
 		return dg.Grant{}, err
 	}
-	var out dg.Grant
-	err = s.inTx(ctx, func(tx pgx.Tx) error {
-		grant, err := lockGrant(ctx, tx, schema, projectID, id)
-		if err != nil {
-			return err
-		}
-		if !grant.State.Active() {
-			return dg.ErrWrongState
-		}
-		if _, err := tx.Exec(ctx, fmt.Sprintf(`
+	grant, err := lockGrant(ctx, tx, schema, projectID, id)
+	if err != nil {
+		return dg.Grant{}, err
+	}
+	if !grant.State.Active() {
+		return dg.Grant{}, dg.ErrWrongState
+	}
+	if _, err := tx.Exec(ctx, fmt.Sprintf(`
 UPDATE %s.delegation_grants SET state = 'revoked', revoked_by = $2, revoked_at = $3, updated_at = clock_timestamp() WHERE id = $1`, schema), id, actor, s.now().UTC()); err != nil {
-			return mapDelegationGrantError(err)
+		return dg.Grant{}, mapDelegationGrantError(err)
+	}
+	if grant, err = readGrant(ctx, tx, schema, id); err != nil {
+		return dg.Grant{}, err
+	}
+	return grant, s.append(ctx, tx, grantEvent(grant, dg.ActionRevoked, actor))
+}
+
+// RevokeEdgeTx revokes the active grant of an edge in the caller's
+// transaction, if there is one, and reports whether it did.
+func (s *DelegationGrants) RevokeEdgeTx(ctx context.Context, tx pgx.Tx, projectID int64, edge dg.Edge, actor int64) (bool, error) {
+	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
+	if err != nil {
+		return false, err
+	}
+	if err := lockEdge(ctx, tx, schema, edge); err != nil {
+		return false, err
+	}
+	grant, found, err := activeForEdge(ctx, tx, schema, edge, false)
+	if err != nil || !found {
+		return false, err
+	}
+	if _, err := s.RevokeTx(ctx, tx, projectID, grant.ID, actor); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// ApplyDelegationTx approves, in the final approval's transaction, the grant
+// of a delegation change request. The grant lists only what EVERY approver
+// holds access to: an approver who lacks a toolkit or credential leaves it out
+// (A1.2 rule 2), and the callee runs without it.
+func (s *DelegationGrants) ApplyDelegationTx(ctx context.Context, tx pgx.Tx, apply agentlifecycle.DelegationApply) error {
+	if s.access == nil {
+		return errors.New("delegation grants: no approver access resolver is composed")
+	}
+	holders := make([]dg.Access, 0, len(apply.ApproverIDs))
+	for _, approver := range apply.ApproverIDs {
+		access, err := s.access.AccessFor(ctx, apply.ProjectID, approver)
+		if err != nil {
+			return fmt.Errorf("delegation grants: resolve the access of approver %d: %w", approver, err)
 		}
-		if grant, err = readGrant(ctx, tx, schema, id); err != nil {
-			return err
+		holders = append(holders, access)
+	}
+	_, err := s.approveTx(ctx, tx, apply.ProjectID, apply.GrantID, apply.FinalApproverID, nil, allHold(holders))
+	return err
+}
+
+// RevokeDelegationTx revokes the grant of a rejected or withdrawn change
+// request.
+func (s *DelegationGrants) RevokeDelegationTx(ctx context.Context, tx pgx.Tx, projectID, grantID, actorID int64) error {
+	_, err := s.RevokeTx(ctx, tx, projectID, grantID, actorID)
+	return err
+}
+
+// allHold is the access every one of holders has: an item is held only when
+// each of them holds it.
+type allHold []dg.Access
+
+func (a allHold) HoldsToolkit(key string) bool {
+	for _, access := range a {
+		if !access.HoldsToolkit(key) {
+			return false
 		}
-		out = grant
-		return s.append(ctx, tx, grantEvent(grant, dg.ActionRevoked, actor))
-	})
-	return out, err
+	}
+	return len(a) > 0
+}
+
+func (a allHold) HoldsCredential(reference string) bool {
+	for _, access := range a {
+		if !access.HoldsCredential(reference) {
+			return false
+		}
+	}
+	return len(a) > 0
 }
 
 // RevokeEdge revokes the active grant of an edge, if any (a detach). It

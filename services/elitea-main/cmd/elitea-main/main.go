@@ -3267,10 +3267,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// text (skills epic 2169). The start paths read the same pins through
 		// the runtime composition.
 		ConversationSkillsRepo: conversationSkillsRepository(pool),
-		SkillTrustRepo:         skillTrustRepository(pool),
-		MemoriesRepo:           memoriesRepository(pool),
-		TagsRepo:               tagsRepository(pool),
-		AnalyticsRepo:          analyticsRepository(pool),
+		// A delegation grant proposed while the governed profile is on is
+		// approved through its ADR-0040 change request (ADR-0044 amendment 1).
+		DelegationGoverned: func(context.Context) bool { return credentialAdmission.Governed() },
+		SkillTrustRepo:     skillTrustRepository(pool),
+		MemoriesRepo:       memoriesRepository(pool),
+		TagsRepo:           tagsRepository(pool),
+		AnalyticsRepo:      analyticsRepository(pool),
 		// The Agent Evaluation dimension library. Wired here, at the
 		// composition root, in the SAME change as the routes and the RBAC
 		// grant: a handler written and never composed is the shape #597

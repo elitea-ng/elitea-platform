@@ -10,7 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
 
 	dg "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/delegationgrant"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
@@ -27,11 +30,20 @@ func newDelegationGrantStore(t *testing.T, pool *pgxpool.Pool) *DelegationGrants
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := NewDelegationGrants(pool, appender)
+	// The change request of a governed grant is the story's S2b concern
+	// (delegation_governed_postgres_integration_test.go); here a recorder that
+	// records nothing lets these tests exercise the grant rules alone.
+	store, err := NewDelegationGrants(pool, appender, WithDelegationChanges(noChangeRecorder{}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return store
+}
+
+type noChangeRecorder struct{}
+
+func (noChangeRecorder) RecordDelegationChangeTx(context.Context, pgx.Tx, agentlifecycle.NewDelegationChange) (agentlifecycle.ChangeRequest, error) {
+	return agentlifecycle.ChangeRequest{}, nil
 }
 
 func grantAudit(t *testing.T, pool *pgxpool.Pool) []string {

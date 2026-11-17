@@ -105,8 +105,24 @@ type Grant struct {
 // grant recorded: the current digest differs from the requested digest.
 func (g Grant) Stale(currentDigest string) bool { return g.RequestedDigest != currentDigest }
 
+// Callee is what an agent or pipeline version holds, as a delegation grant
+// records it: the grant set of its toolkits, the hosts they reach and the data
+// classes the agent declares (FromTools).
+type Callee struct {
+	ApplicationID int64
+	VersionID     int64
+	Name          string
+	Set           GrantSet
+}
+
 // The refusals of a grant operation. The API maps them to statuses.
 var (
+	// ErrCalleeNotFound: the callee application, or a version that is not a
+	// version of it, does not exist in the project.
+	ErrCalleeNotFound = errors.New("delegation grant: the callee was not found")
+	// ErrGoverned: the grant is approved through its change request, not
+	// directly (the governed profile forces maker-checker).
+	ErrGoverned = errors.New("delegation grant: a governed grant is approved through its change request")
 	// ErrSelfApproval: the approver is the proposer where maker-checker applies.
 	ErrSelfApproval = errors.New("delegation grant: the approver must differ from the proposer")
 	// ErrNothingToApprove: the approval would list no toolkit, and no data

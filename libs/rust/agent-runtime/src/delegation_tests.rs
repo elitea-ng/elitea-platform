@@ -314,6 +314,39 @@ fn grant_set_digests_match_the_shared_vectors() {
     }
 }
 
+/// A callee's toolkit references build the same grant set Main records
+/// (`delegationgrant.FromTools`).
+#[test]
+fn callee_grant_sets_match_the_shared_vectors() {
+    let vectors: Value = serde_json::from_str(include_str!(
+        "../../../proto/contracts/delegation-grant-digest-vectors-v1.json"
+    ))
+    .expect("vectors");
+    let cases = vectors["tools_cases"].as_array().expect("tools cases");
+    assert!(cases.len() >= 5);
+    for case in cases {
+        let name = case["name"].as_str().expect("name");
+        let tools = case["tools"].as_array().expect("tools");
+        let classes: BTreeSet<String> = case["data_classes"]
+            .as_array()
+            .expect("data classes")
+            .iter()
+            .map(|class| class.as_str().expect("class").to_owned())
+            .collect();
+        let set = GrantSet::from_callee(tools, &classes);
+        assert_eq!(
+            crate::canonical::to_string(&set.canonical()).expect("canonical"),
+            case["canonical"].as_str().expect("canonical"),
+            "{name}: canonical form"
+        );
+        assert_eq!(
+            set.digest(),
+            case["digest"].as_str().expect("digest"),
+            "{name}: digest"
+        );
+    }
+}
+
 #[test]
 fn a_grant_set_that_is_not_canonical_is_refused() {
     let schema = GRANT_SET_SCHEMA;
