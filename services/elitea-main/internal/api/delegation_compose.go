@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
 	"strconv"
 
@@ -31,21 +32,27 @@ func composeDelegationGrants(cfg RouterConfig, lifecycle *dbrepos.AgentLifecycle
 	if cfg.Pool == nil || lifecycle == nil || resolver == nil {
 		return nil
 	}
+	// A construction error leaves the routes and the attach hook out: it is
+	// logged, because an absent surface reads as a quiet one.
+	fail := func(step string, err error) *delegationWiring {
+		slog.Error("delegation grants are not composed", "step", step, "error", err)
+		return nil
+	}
 	appender, err := securityaudit.NewPostgresAppender("elitea-main")
 	if err != nil {
-		return nil
+		return fail("audit appender", err)
 	}
 	sources, err := dbrepos.NewWorkerEgressSources(cfg.Pool)
 	if err != nil {
-		return nil
+		return fail("egress sources", err)
 	}
 	callees, err := dbrepos.NewDelegationCallees(cfg.Pool, sources)
 	if err != nil {
-		return nil
+		return fail("callee reader", err)
 	}
 	access, err := dbrepos.NewDelegationAccess(permissionChecker{resolver: resolver})
 	if err != nil {
-		return nil
+		return fail("approver access", err)
 	}
 	governed := cfg.DelegationGoverned
 	if governed == nil {
@@ -55,12 +62,12 @@ func composeDelegationGrants(cfg RouterConfig, lifecycle *dbrepos.AgentLifecycle
 		dbrepos.WithDelegationChanges(lifecycle), dbrepos.WithDelegationAccess(access),
 		dbrepos.WithDelegationCallees(callees), dbrepos.WithDelegationGoverned(governed))
 	if err != nil {
-		return nil
+		return fail("grant store", err)
 	}
 	lifecycle.ComposeDelegationApplier(store)
 	service, err := appgrants.New(store, callees, lifecycle, access, governed)
 	if err != nil {
-		return nil
+		return fail("service", err)
 	}
 	return &delegationWiring{store: store, service: service}
 }

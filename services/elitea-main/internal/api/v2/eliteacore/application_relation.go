@@ -412,10 +412,22 @@ func (h *Handler) delegationHook(ctx context.Context, tx pgx.Tx, attach bool, pr
 		ProjectID: project, CallerID: parentApplicationID, CalleeID: childApplicationID, CalleeVersionID: childVersionID,
 		Pipeline: parentAgentType == "pipeline", Actor: actor,
 	}
-	if attach {
-		return h.delegation.AttachTx(ctx, tx, event)
+	// A savepoint: a grant that cannot be recorded (a read of the callee, an
+	// audit append) must not take the attachment with it. The savepoint is
+	// rolled back, the failure is logged, and the attach goes on without a grant.
+	savepoint, err := tx.Begin(ctx)
+	if err != nil {
+		return err
 	}
-	return h.delegation.DetachTx(ctx, tx, event)
+	run := h.delegation.DetachTx
+	if attach {
+		run = h.delegation.AttachTx
+	}
+	if err := run(ctx, savepoint, event); err != nil {
+		slog.ErrorContext(ctx, "application relation: the delegation grant was not recorded", "attach", attach, "error", err)
+		return savepoint.Rollback(ctx)
+	}
+	return savepoint.Commit(ctx)
 }
 
 // refuseComposition writes the composition refusal (or a lookup failure) and

@@ -121,6 +121,11 @@ func (s *Service) Propose(ctx context.Context, req ProposeRequest) (View, error)
 	if err != nil {
 		return View{}, err
 	}
+	// A callee that holds nothing needs no grant: it could never be approved
+	// (nothing to list) and would hold the edge's slot against a real attach.
+	if len(callee.Set.Toolkits) == 0 && len(callee.Set.EgressHosts) == 0 && len(callee.Set.DataClasses) == 0 {
+		return View{}, fmt.Errorf("%w: the callee holds no toolkit, host or data class, so it needs no grant", dg.ErrInvalid)
+	}
 	grant, err := s.grants.ProposeGrant(ctx, req.ProjectID,
 		dg.Edge{CallerEntityID: req.CallerID, CalleeEntityID: req.CalleeID, Kind: req.EdgeKind},
 		req.CalleeVersionID, callee.Set, req.Origin, s.governed(ctx), req.Actor)
@@ -169,6 +174,11 @@ func (s *Service) Approve(ctx context.Context, projectID, callerID, grantID, app
 	}
 	if grant.Edge.CallerEntityID != callerID {
 		return View{}, dg.ErrNotFound
+	}
+	// A grant that is not pending is a state conflict whatever its profile: the
+	// client must not be sent to a change request that is already decided.
+	if grant.State != dg.StatePending {
+		return View{}, dg.ErrWrongState
 	}
 	if grant.Governed {
 		return View{}, dg.ErrGoverned
@@ -307,7 +317,10 @@ func (s *Service) closure(ctx context.Context, projectID int64, callee dg.Callee
 				}
 				seen[grant.Edge.CalleeEntityID] = true
 				next = append(next, grant.Edge.CalleeEntityID)
-				name, _ := s.callees.ApplicationName(ctx, projectID, grant.Edge.CalleeEntityID)
+				name, err := s.callees.ApplicationName(ctx, projectID, grant.Edge.CalleeEntityID)
+				if err != nil && !errors.Is(err, dg.ErrCalleeNotFound) {
+					return nil, err
+				}
 				nodes = append(nodes, ClosureNode{
 					ApplicationID: grant.Edge.CalleeEntityID, Name: name, Depth: depth, Items: grant.GrantSet.Items(),
 				})

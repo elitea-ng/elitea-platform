@@ -149,6 +149,22 @@ func TestProposeRefusals(t *testing.T) {
 	}
 }
 
+func TestAnEmptyCalleeNeedsNoGrantAndANonPendingGrantIsAStateConflict(t *testing.T) {
+	service, store := newService(t, true, fakeAccess{toolkits: true, credentials: true})
+	ctx := context.Background()
+	if _, err := service.Propose(ctx, ProposeRequest{ProjectID: 1, CallerID: 1, CalleeID: 2, CalleeVersionID: 5, EdgeKind: dg.EdgeSubAgent, Actor: 7}); !errors.Is(err, dg.ErrInvalid) {
+		t.Fatalf("a callee that holds nothing: %v", err)
+	}
+	v, _ := service.Propose(ctx, ProposeRequest{ProjectID: 1, CallerID: 2, CalleeID: 1, CalleeVersionID: 5, EdgeKind: dg.EdgeAgentTool, Actor: 7})
+	g := store.grants[v.Grant.ID]
+	g.State = dg.StateRevoked
+	store.grants[v.Grant.ID] = g
+	// A revoked governed grant is a state conflict, not a pointer to its change request.
+	if _, err := service.Approve(ctx, 1, 2, v.Grant.ID, 8, nil); !errors.Is(err, dg.ErrWrongState) {
+		t.Fatalf("approve on a revoked governed grant: %v", err)
+	}
+}
+
 func TestGovernedGrantIsApprovedThroughItsChangeRequest(t *testing.T) {
 	service, store := newService(t, true, fakeAccess{toolkits: true, credentials: true})
 	ctx := context.Background()

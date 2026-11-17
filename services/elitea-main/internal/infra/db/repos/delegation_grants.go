@@ -43,6 +43,9 @@ type DelegationGrants struct {
 // grant in the proposing transaction (AgentLifecycle satisfies it).
 type DelegationChangeRecorder interface {
 	RecordDelegationChangeTx(ctx context.Context, tx pgx.Tx, change agentlifecycle.NewDelegationChange) (agentlifecycle.ChangeRequest, error)
+	// WithdrawDelegationChangeTx closes the open change request of a grant that
+	// was revoked outside the request (a detach, a direct revoke).
+	WithdrawDelegationChangeTx(ctx context.Context, tx pgx.Tx, projectID, grantID, actorID int64) error
 }
 
 // DelegationAccessResolver answers what a person holds access to in a project:
@@ -381,6 +384,11 @@ UPDATE %s.delegation_grants SET state = 'revoked', revoked_by = $2, revoked_at =
 	}
 	if grant, err = readGrant(ctx, tx, schema, id); err != nil {
 		return dg.Grant{}, err
+	}
+	if grant.Governed && s.changes != nil {
+		if err := s.changes.WithdrawDelegationChangeTx(ctx, tx, projectID, id, actor); err != nil {
+			return dg.Grant{}, err
+		}
 	}
 	return grant, s.append(ctx, tx, grantEvent(grant, dg.ActionRevoked, actor))
 }

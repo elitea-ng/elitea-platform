@@ -113,6 +113,14 @@ WHERE mapping.entity_type = 'agent' AND tool.type = 'application'
 	if remaining > 0 {
 		return nil
 	}
-	_, err = s.RevokeEdgeTx(ctx, tx, attach.ProjectID, attach.edge(), attach.Actor)
-	return err
+	// Every kind of edge between the two agents ends with the last attachment:
+	// a grant proposed through the API for another kind would otherwise stay
+	// approved for an edge that no longer exists.
+	for _, kind := range []dg.EdgeKind{dg.EdgeAgentTool, dg.EdgePipelineChild, dg.EdgeSubAgent, dg.EdgePipelineNode} {
+		edge := dg.Edge{CallerEntityID: attach.CallerID, CalleeEntityID: attach.CalleeID, Kind: kind}
+		if _, err := s.RevokeEdgeTx(ctx, tx, attach.ProjectID, edge, attach.Actor); err != nil {
+			return err
+		}
+	}
+	return nil
 }

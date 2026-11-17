@@ -86,6 +86,27 @@ RETURNING `+changeRequestColumns,
 	return created, nil
 }
 
+// WithdrawDelegationChangeTx withdraws the open change request of a grant that
+// was revoked outside the request, so it does not linger in the queue to be
+// approved against a revoked grant. A grant with no open request is left alone.
+func (s *AgentLifecycle) WithdrawDelegationChangeTx(ctx context.Context, tx pgx.Tx, projectID, grantID, actorID int64) error {
+	var id, applicationID int64
+	err := tx.QueryRow(ctx, `
+UPDATE elitea_lifecycle.change_requests
+SET state = 'withdrawn', decided_by = NULLIF($3::bigint, 0), decided_at = clock_timestamp(),
+    decision_reason = 'The delegation grant was revoked.', updated_at = clock_timestamp()
+WHERE tenant_project_id = $1 AND kind = 'delegation' AND delegation_grant_id = $2 AND state IN ('draft', 'submitted')
+RETURNING id, application_id`, projectID, grantID, actorID).Scan(&id, &applicationID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("agent lifecycle: withdraw the delegation change request: %w", err)
+	}
+	return s.append(ctx, tx, lifecycleEvent(projectID, agentlifecycle.ActionChangeWithdrawn, actorID,
+		"agent_change_request", changeRef(applicationID, id), "kind:delegation", "reason:grant_revoked"))
+}
+
 // DelegationChangeForGrant answers the open or decided change request of a
 // grant, newest first, or false when the grant has none (it was not governed).
 func (s *AgentLifecycle) DelegationChangeForGrant(ctx context.Context, projectID, grantID int64) (agentlifecycle.ChangeRequest, bool, error) {

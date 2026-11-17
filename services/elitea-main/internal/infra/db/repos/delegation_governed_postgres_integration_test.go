@@ -187,6 +187,28 @@ func TestRejectedDelegationRevokesItsGrant(t *testing.T) {
 	}
 }
 
+func TestRevokingAGovernedGrantClosesItsOpenChangeRequest(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	lifecycle, store := newGovernedDelegationStores(t, pool, true, holdsAccess{toolkits: map[string]bool{"toolkit:51": true}})
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancel()
+	grant, err := store.ProposeGrant(ctx, 1, dg.Edge{CallerEntityID: 32, CalleeEntityID: 31, Kind: dg.EdgeAgentTool}, 41, calleeSet(t, pool), dg.OriginAttach, true, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Revoke(ctx, 1, grant.ID, 7); err != nil {
+		t.Fatal(err)
+	}
+	change, found, err := lifecycle.DelegationChangeForGrant(ctx, 1, grant.ID)
+	if err != nil || !found || change.State != agentlifecycle.ChangeWithdrawn {
+		t.Fatalf("the request must be withdrawn with its grant: %+v %v %v", change, found, err)
+	}
+	// And nobody can approve it afterwards.
+	if _, err := lifecycle.ApproveChangeRequest(ctx, Approval{ProjectID: 1, ApplicationID: 32, ChangeID: change.ID, ApproverID: 8}); err == nil {
+		t.Fatal("a withdrawn request was approved")
+	}
+}
+
 func TestDelegationChangeRequestMigrationKeepsOneOpenRequestPerAgent(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	_, _ = newGovernedDelegationStores(t, pool, true, holdsAccess{})

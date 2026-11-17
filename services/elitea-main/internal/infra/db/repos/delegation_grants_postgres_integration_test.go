@@ -42,6 +42,10 @@ func newDelegationGrantStore(t *testing.T, pool *pgxpool.Pool) *DelegationGrants
 
 type noChangeRecorder struct{}
 
+func (noChangeRecorder) WithdrawDelegationChangeTx(context.Context, pgx.Tx, int64, int64, int64) error {
+	return nil
+}
+
 func (noChangeRecorder) RecordDelegationChangeTx(context.Context, pgx.Tx, agentlifecycle.NewDelegationChange) (agentlifecycle.ChangeRequest, error) {
 	return agentlifecycle.ChangeRequest{}, nil
 }
