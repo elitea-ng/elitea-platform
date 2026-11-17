@@ -163,7 +163,9 @@ fn strip(
     right: bool,
 ) -> Result<JinjaValue, JinjaError> {
     let chars = str_arg(args, 0)?;
-    let matcher = |character: char| chars.map_or_else(|| character.is_whitespace(), |set| set.contains(character));
+    let matcher = |character: char| {
+        chars.map_or_else(|| character.is_whitespace(), |set| set.contains(character))
+    };
     let mut stripped = text;
     if left {
         stripped = stripped.trim_start_matches(matcher);
