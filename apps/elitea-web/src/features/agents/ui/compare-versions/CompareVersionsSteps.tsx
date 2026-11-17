@@ -254,6 +254,7 @@ const paneSx: SxProps<Theme> = (theme) => ({
   gap: '0.5rem',
   padding: '0.5rem 1rem',
   minWidth: 0,
+  overflowWrap: 'anywhere',
   borderRadius: theme.vars.shape.radiusMd,
   border: `0.0625rem solid ${theme.vars.palette.border.lines}`,
 });

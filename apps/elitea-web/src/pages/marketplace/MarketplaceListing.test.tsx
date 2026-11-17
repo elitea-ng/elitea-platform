@@ -591,6 +591,46 @@ describe('a skill listing', () => {
     expect(screen.getByRole('option', { name: 'v1.1 (current)' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('option', { name: 'v1.0 (yanked)' })).toHaveAttribute('aria-disabled', 'true');
   });
+
+  it('shows the heart with the count and the caller\'s own like, and likes through the skill entity (skills epic S6)', async () => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    const liked: string[] = [];
+    server.use(
+      http.post('*/social/like/prompt_lib/:projectId/skill/:entityId', ({ request }) => {
+        liked.push(new URL(request.url).pathname);
+        return HttpResponse.json({ ok: true });
+      }),
+      http.get('/api/v2/elitea_core/public_skill/prompt_lib/41', () =>
+        HttpResponse.json({ id: 41, name: 'PR Reviewer', description: 'd', versions: [], version_details: null }),
+      ),
+    );
+    mockListing(
+      detailOf({
+        listing: {
+          ...LISTING,
+          id: '7',
+          kind: 'skill',
+          entity_id: '41',
+          name: 'PR Reviewer',
+          likes: 3,
+          is_liked: false,
+        },
+        versions: [version('6', 'v1.1', 'current', { requirements: NO_REQUIREMENTS })],
+      }),
+      ['models.applications.fork.post'],
+    );
+    mount('/marketplace/skills/7');
+    const user = userEvent.setup();
+
+    const heart = await screen.findByRole('button', { name: 'Like PR Reviewer' });
+    expect(heart).toHaveAttribute('aria-pressed', 'false');
+    expect(within(heart).getByTestId('marketplace-like-count')).toHaveTextContent('3');
+    await user.click(heart);
+    await waitFor(() => expect(heart).toHaveAttribute('aria-pressed', 'true'));
+    expect(within(heart).getByTestId('marketplace-like-count')).toHaveTextContent('4');
+    expect(liked).toHaveLength(1);
+    expect(liked[0]).toMatch(/\/skill\/41$/);
+  });
 });
 
 describe('Try on a skill listing (skills epic 2169)', () => {

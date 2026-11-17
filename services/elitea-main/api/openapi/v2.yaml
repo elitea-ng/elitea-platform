@@ -39901,7 +39901,7 @@ paths:
         - name: sort
           in: query
           schema: { type: string }
-          description: '`relevance` (default), `hires`, `rating`, `newest` or `name`.'
+          description: '`relevance` (default), `hires`, `likes` (agents and skills together), `rating`, `newest` or `name`.'
       responses:
         '200':
           description: A page of listings with the facet counts

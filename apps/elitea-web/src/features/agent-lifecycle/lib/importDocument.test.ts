@@ -85,8 +85,10 @@ describe('parseMarkdownAgent (#1996)', () => {
 });
 
 type Entry = {
+  name?: string;
   import_uuid: string;
   versions: {
+    name?: string;
     import_version_uuid: string;
     tools: { import_uuid: string }[];
     skills: { import_uuid: string; version_name: string }[];
@@ -164,6 +166,47 @@ describe('import size limits (#2032)', () => {
     zip.file('a.md', agent('A'));
     zip.file('b.md', agent('B'));
     const file = new File([await zip.generateAsync({ type: 'arraybuffer' })], 'ok.zip');
+    const { document } = await readImportFile(file);
+    expect(document.applications).toHaveLength(2);
+  });
+
+  it('folds the per-version files of one agent into ONE agent with several versions (#2098)', async () => {
+    const block = 'toolkits:\n  - toolkit: Repo\n    type: custom\n    settings: {repo: a/b}\n';
+    const zip = new JSZip();
+    zip.file('bot.v1.agent.md', `---\nname: Bot\nversion: v1\n${block}---\nsecond`);
+    zip.file('bot.agent.md', `---\nname: Bot\n${block}---\nfirst`);
+    zip.file('other.agent.md', '---\nname: Other\n---\nx');
+    const file = new File([await zip.generateAsync({ type: 'arraybuffer' })], 'multi.zip');
+    const { document } = await readImportFile(file);
+    const entries = document.applications as unknown as Entry[];
+    expect(entries.map((e) => e.name ?? '').sort((a, b) => a.localeCompare(b))).toEqual(['Bot', 'Other']);
+    const bot = entries.find((e) => e.name === 'Bot') as Entry;
+    // base first: the first version of an entry becomes the default one.
+    expect(bot.versions.map((v) => v.name)).toEqual(['base', 'v1']);
+    // The identical toolkit of both files is one toolkit both versions point at.
+    expect(document.toolkits).toHaveLength(1);
+    expect(bot.versions[1]?.tools[0]?.import_uuid).toBe(bot.versions[0]?.tools[0]?.import_uuid);
+  });
+
+  it('never leaves a version pointing at a toolkit that another agent of the same name owns', async () => {
+    const block = 'toolkits:\n  - toolkit: Repo\n    type: custom\n    settings: {repo: a/b}\n';
+    const zip = new JSZip();
+    zip.file('a/bot.agent.md', `---\nname: Bot\n${block}---\none`);
+    zip.file('b/bot.agent.md', `---\nname: Bot\n${block}---\ntwo`);
+    const { document } = await readImportFile(new File([await zip.generateAsync({ type: 'arraybuffer' })], 'dup2.zip'));
+    const entries = document.applications as unknown as Entry[];
+    const toolkitIds = new Set((document.toolkits as unknown as { import_uuid: string }[]).map((t) => t.import_uuid));
+    expect(entries).toHaveLength(2);
+    // Each agent keeps its own toolkit: every reference resolves inside the document.
+    for (const entry of entries) expect(toolkitIds.has(entry.versions[0]?.tools[0]?.import_uuid ?? '')).toBe(true);
+    expect(document.toolkits).toHaveLength(2);
+  });
+
+  it('keeps two same-named agents apart when their version names collide', async () => {
+    const zip = new JSZip();
+    zip.file('a/bot.agent.md', '---\nname: Bot\n---\none');
+    zip.file('b/bot.agent.md', '---\nname: Bot\n---\ntwo');
+    const file = new File([await zip.generateAsync({ type: 'arraybuffer' })], 'dup.zip');
     const { document } = await readImportFile(file);
     expect(document.applications).toHaveLength(2);
   });

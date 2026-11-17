@@ -50,6 +50,12 @@ export interface EntityListItem {
    * now surfaced on the LIST row too — see repos/applications.go's List).
    */
   readonly forkedFrom?: { readonly onClick: () => void };
+  /**
+   * One extra action on the row, offered in the TABLE view only: a card is a
+   * widget, and a control nested in it fails axe's `nested-interactive`
+   * (the reason `forkedFrom` is a marker on the card).
+   */
+  readonly action?: { readonly label: string; readonly onClick: () => void };
 }
 
 /** `ViewOptions` (`apps/elitea-ui/src/common/constants.js`) — the `?view=` search-param vocabulary. */

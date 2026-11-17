@@ -337,6 +337,25 @@ describe('ToolMenu — saved entity', () => {
     expect(onToolsChangedCalls).toBe(1);
   });
 
+  it('attaches to the version the user is on, not the default version the detail read carries (#2130)', async () => {
+    server.use(getGetApplicationMockHandler(applicationDetail()));
+    server.use(
+      getListToolkitInstancesMockHandler({
+        rows: [{ id: 'tk-1', type: 'github', name: 'GitHub', description: '', settings: {}, meta: {}, created_at: '2026-01-01T00:00:00Z', author_id: 1 }],
+        total: 1,
+      }),
+    );
+    let patchBody: unknown;
+    server.use(toolkitAttachMockHandler((body) => { patchBody = body; }));
+
+    renderToolMenu({ applicationId: 42, versionId: 777 });
+    await waitFor(() => expect(screen.getByTestId('agent-add-toolkit-button')).not.toBeDisabled());
+    fireEvent.click(screen.getByTestId('agent-add-toolkit-button'));
+    fireEvent.click(await screen.findByText('GitHub'));
+
+    await waitFor(() => expect(patchBody).toMatchObject({ entity_version_id: 777, entity_id: 42, has_relation: true }));
+  });
+
   it('does not call onAttachToolkit when the real attach request fails', async () => {
     server.use(getGetApplicationMockHandler(applicationDetail()));
     server.use(

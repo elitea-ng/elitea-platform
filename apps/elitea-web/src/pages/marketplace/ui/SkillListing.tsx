@@ -40,6 +40,7 @@ import { ListingNotFound } from './ListingNotFound';
 import { ListingFeedback } from '../feedback/ListingFeedback';
 import { DelistedBanner, ListingAdminBar, ListingUsedBy } from './ListingSections';
 import { useTrySkill } from '../useTrySkill';
+import { ListingLike } from './ListingLike';
 import { ListingBlock, ListingShell } from './ListingShell';
 import { ListingVersions } from './ListingVersions';
 
@@ -207,6 +208,15 @@ function SkillListingView({ detail, projectId }: SkillListingViewProps): ReactNo
         name={listing.name}
         iconUrl={listing.icon_url ?? undefined}
         version={listing.current_version?.name}
+        meta={
+          <ListingLike
+            kind="skills"
+            entityId={listing.entity_id}
+            likes={listing.likes}
+            isLiked={listing.is_liked}
+            name={listing.name}
+          />
+        }
         actions={
           <>
             <VersionPick versions={detail.versions} value={add.versionId} onChange={add.setPicked} />

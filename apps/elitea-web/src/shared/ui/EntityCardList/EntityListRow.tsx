@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { MouseEvent, ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
@@ -154,6 +154,20 @@ function NameCell({ item }: { readonly item: EntityListItem }): ReactNode {
         >
           {item.description}
         </Typography>
+      )}
+      {item.action !== undefined && (
+        <Box
+          component="button"
+          type="button"
+          data-testid="entity-row-action"
+          sx={forkedFromSx}
+          onClick={(event: MouseEvent) => {
+            event.stopPropagation();
+            item.action?.onClick();
+          }}
+        >
+          {item.action.label}
+        </Box>
       )}
       {item.forkedFrom !== undefined && (
         <Box

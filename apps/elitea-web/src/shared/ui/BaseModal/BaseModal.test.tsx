@@ -21,6 +21,23 @@ describe('BaseModal', () => {
     expect(queryByText('Hidden')).not.toBeInTheDocument();
   });
 
+  it('a wide complex modal is wider than the default one (#2097)', () => {
+    const widthOf = (wide: boolean): number => {
+      const { getByRole, unmount } = renderWithTheme(
+        <BaseModal
+          open
+          title="T"
+          content="c"
+          fullscreen={wide ? 'wide' : false}
+        />,
+      );
+      const width = Number.parseFloat(getComputedStyle(getByRole('dialog')).width);
+      unmount();
+      return width;
+    };
+    expect(widthOf(true)).toBeGreaterThan(widthOf(false));
+  });
+
   it('renders the title and content when open', () => {
     const { getByText } = renderWithTheme(
       <BaseModal

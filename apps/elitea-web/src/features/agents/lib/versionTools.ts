@@ -42,8 +42,17 @@ function toAgentToolAssociation(row: VersionToolRef): AgentToolAssociation {
   // `unknown` on purpose (`ToolSettings` = `zod.unknown()`): every field
   // `AgentToolSettings` names is optional, so the merge below cannot produce
   // a structurally invalid value — it can only carry keys nothing reads.
+  // The toolkit's own enabled tools are what THIS agent may choose from, and
+  // the attachment's `selected_tools` (merged over them below) is the subset it
+  // uses. The runtime composes the same pair (`available_tools` = the toolkit's
+  // list, `selected_tools` = the attachment's); without `available_tools` the
+  // card had no options to offer and no way to filter tools per agent (#2146).
+  const toolkitTools = asStringArray(blob['selected_tools']);
   const settings = {
     ...blob,
+    ...(toolkitTools === undefined || toolkitTools.length === 0 || blob['available_tools'] !== undefined
+      ? {}
+      : { available_tools: toolkitTools }),
     ...(selectedTools === undefined ? {} : { selected_tools: selectedTools }),
   } as NonNullable<AgentToolAssociation['settings']>;
 
