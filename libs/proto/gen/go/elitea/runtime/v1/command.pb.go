@@ -736,7 +736,10 @@ type WorkerDelegationPolicyV1 struct {
 	// callee's effective grants are intersected with it in both modes. Absent
 	// is no bound. Main sends it only when the delegation section turns the
 	// principal bound on, so a command is unchanged byte for byte otherwise.
-	PrincipalBound *WorkerPrincipalBoundV1 `protobuf:"bytes,4,opt,name=principal_bound,json=principalBound,proto3" json:"principal_bound,omitempty"`
+	//
+	// Field 11, not 4: the reserved range 4 to 10 is closed and buf breaking
+	// refuses to shrink it.
+	PrincipalBound *WorkerPrincipalBoundV1 `protobuf:"bytes,11,opt,name=principal_bound,json=principalBound,proto3" json:"principal_bound,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -1279,7 +1282,7 @@ const file_elitea_runtime_v1_command_proto_rawDesc = "" +
 	"\tmax_depth\x18\x01 \x01(\rR\bmaxDepth\x12=\n" +
 	"\x04mode\x18\x02 \x01(\x0e2).elitea.runtime.v1.WorkerDelegationModeV1R\x04mode\x12*\n" +
 	"\x11root_data_classes\x18\x03 \x03(\tR\x0frootDataClasses\x12R\n" +
-	"\x0fprincipal_bound\x18\x04 \x01(\v2).elitea.runtime.v1.WorkerPrincipalBoundV1R\x0eprincipalBoundJ\x04\b\x05\x10\v\"\x8f\x02\n" +
+	"\x0fprincipal_bound\x18\v \x01(\v2).elitea.runtime.v1.WorkerPrincipalBoundV1R\x0eprincipalBoundJ\x04\b\f\x10\x15\"\x8f\x02\n" +
 	"\x16WorkerPrincipalBoundV1\x12\x18\n" +
 	"\abounded\x18\x01 \x01(\bR\abounded\x12G\n" +
 	"\btoolkits\x18\x02 \x03(\v2+.elitea.runtime.v1.WorkerPrincipalToolkitV1R\btoolkits\x12/\n" +

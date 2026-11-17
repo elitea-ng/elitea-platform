@@ -173,10 +173,10 @@ mod merge_contract_tests {
 
     #[test]
     fn the_principal_bound_nests_in_the_delegation_policy() {
-        // principal_bound 4 (length): bounded 1, toolkits 2 (repeated),
+        // principal_bound 11 (length): bounded 1, toolkits 2 (repeated),
         // credentials_bounded 3, credential ids 4 and data classes 5.
-        let policy = scan_message(&[0x22, 0x00], Schema::WorkerDelegationPolicy).unwrap();
-        assert!(policy.contains(4));
+        let policy = scan_message(&[0x5a, 0x00], Schema::WorkerDelegationPolicy).unwrap();
+        assert!(policy.contains(11));
         let bound = scan_message(
             &[
                 0x08, 0x01, 0x12, 0x00, 0x12, 0x00, 0x18, 0x01, 0x22, 0x01, b'r', 0x2a, 0x01, b'c',
@@ -352,7 +352,7 @@ pub(crate) enum Schema {
     WorkerEgressPolicy,
     /// `WorkerCommandV1.delegation_policy` (field 67, ADR-0044 #1501).
     WorkerDelegationPolicy,
-    /// `WorkerDelegationPolicyV1.principal_bound` (field 4, ADR-0044 A1 #2157).
+    /// `WorkerDelegationPolicyV1.principal_bound` (field 11, ADR-0044 A1 #2157).
     WorkerPrincipalBound,
     /// `WorkerPrincipalBoundV1.toolkits`, one toolkit the principal may use.
     WorkerPrincipalToolkit,
@@ -631,7 +631,7 @@ const fn egress_policy_rule(field: u32) -> Option<FieldRule> {
 }
 
 /// `WorkerDelegationPolicyV1` (#1501): the maximum depth 1 and the mode 2
-/// (varints), the repeated root data classes 3 and the principal bound 4
+/// (varints), the repeated root data classes 3 and the principal bound 11
 /// (#2157).
 const fn delegation_policy_rule(field: u32) -> Option<FieldRule> {
     match field {
@@ -641,7 +641,7 @@ const fn delegation_policy_rule(field: u32) -> Option<FieldRule> {
             oneof: None,
             repeated: true,
         }),
-        4 => Some(length()),
+        11 => Some(length()),
         _ => None,
     }
 }

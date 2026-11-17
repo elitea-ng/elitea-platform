@@ -590,9 +590,9 @@ fn scan_delegation_policy(fields: &ScannedFields<'_>) -> Result<(), ProtocolErro
         )?;
         // Its nested principal bound (ADR-0044 Amendment 1, #2157) admits no
         // unknown field either, nor does any toolkit it lists.
-        if policy.contains(4) {
+        if policy.contains(11) {
             let bound = scan_message(
-                policy.length_field(4, "the worker principal bound is missing")?,
+                policy.length_field(11, "the worker principal bound is missing")?,
                 Schema::WorkerPrincipalBound,
             )?;
             for toolkit in bound.repeated_field(2) {

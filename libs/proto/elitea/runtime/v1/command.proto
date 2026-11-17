@@ -192,8 +192,11 @@ message WorkerDelegationPolicyV1 {
   // callee's effective grants are intersected with it in both modes. Absent
   // is no bound. Main sends it only when the delegation section turns the
   // principal bound on, so a command is unchanged byte for byte otherwise.
-  WorkerPrincipalBoundV1 principal_bound = 4;
-  reserved 5 to 10;
+  //
+  // Field 11, not 4: the reserved range 4 to 10 is closed and buf breaking
+  // refuses to shrink it.
+  WorkerPrincipalBoundV1 principal_bound = 11;
+  reserved 12 to 20;
 }
 
 // What the run principal may use (ADR-0044 Amendment 1, rule 1). Main
