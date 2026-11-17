@@ -85,6 +85,12 @@ function refusalText(error: unknown): string {
   return t('chat.skills.failed', 'The skills could not be changed. Try again.');
 }
 
+/** The server has no conversation skills (404 or 501), as opposed to a read that failed. */
+function isNotOffered(error: unknown): boolean {
+  if (!(error instanceof EliteaApiError) || error.failure.kind !== 'http') return false;
+  return error.failure.status === 404 || error.failure.status === 501;
+}
+
 function pinnedByText(pin: ConversationSkillPin, currentUserId: string | undefined, personName: ConversationSkillsSectionProps['personName']): string {
   if (currentUserId !== undefined && String(pin.pinned_by) === String(currentUserId)) {
     return t('chat.skills.pinnedByYou', 'Pinned by you');
@@ -258,8 +264,9 @@ export function ConversationSkillsSection({ projectId, conversationId, readOnly 
   const pins = useMemo(() => list.data ?? [], [list.data]);
   const pinned = useMemo(() => new Set(pins.flatMap((entry) => (entry.skill_id === undefined ? [] : [entry.skill_id]))), [pins]);
 
-  // A conversation still being composed has nowhere to hold a pin.
-  if (conversationId === undefined || conversationId === '') return null;
+  // A conversation still being composed has nowhere to hold a pin, and a server before client contract 1.57
+  // (or one without conversation skills) answers 404 or 501: there is no section to show.
+  if (conversationId === undefined || conversationId === '' || isNotOffered(list.error)) return null;
 
   const refuse = { onError: (error: unknown) => setRefusal(refusalText(error)) };
   return (
@@ -304,7 +311,7 @@ export function ConversationSkillsSection({ projectId, conversationId, readOnly 
   );
 }
 
-const sectionSx = { width: '100%', padding: '0.5rem 0' } as const;
+const sectionSx = { width: '100%', boxSizing: 'border-box', padding: '0.5rem 0.75rem' } as const;
 const headerSx = { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } as const;
 const listSx = { listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 0.5 } as const;
 const rowSx = { display: 'flex', alignItems: 'center', gap: 0.5 } as const;

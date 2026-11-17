@@ -214,6 +214,22 @@ describe('ConversationSkillsSection', () => {
     expect(screen.queryByTestId('conversation-skill-remove-1')).not.toBeInTheDocument();
   });
 
+  it('shows no section on a server that has no conversation skills', async () => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    let asked = false;
+    server.use(
+      http.get('/api/v2/social/author', () => HttpResponse.json({ id: '7' })),
+      http.get(LIST, () => {
+        asked = true;
+        return HttpResponse.json({ error: 'not found' }, { status: 404 });
+      }),
+    );
+    mount();
+    await waitFor(() => expect(asked).toBe(true));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.queryByTestId('conversation-skills')).not.toBeInTheDocument();
+  });
+
   it('says so when the list cannot be read', async () => {
     configureGeneratedClient({ baseUrl: '/api/v2' });
     server.use(
