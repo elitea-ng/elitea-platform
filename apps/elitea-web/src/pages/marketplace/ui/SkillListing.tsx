@@ -39,6 +39,7 @@ import { ListingLoadError } from './ListingLoadError';
 import { ListingNotFound } from './ListingNotFound';
 import { ListingFeedback } from '../feedback/ListingFeedback';
 import { DelistedBanner, ListingAdminBar, ListingUsedBy } from './ListingSections';
+import { useTrySkill } from '../useTrySkill';
 import { ListingLike } from './ListingLike';
 import { ListingBlock, ListingShell } from './ListingShell';
 import { ListingVersions } from './ListingVersions';
@@ -166,6 +167,36 @@ function useSkillAdd(detail: MarketplaceListingDetail, projectId: string | undef
   };
 }
 
+/** Try: a new chat with this listing version pinned by reference, so nothing is forked (ADR-0051 amendment 1, A1.3). */
+function TryButton({ detail, versionId }: { readonly detail: MarketplaceListingDetail; readonly versionId: string }): ReactNode {
+  const { listing } = detail;
+  const listingId = Number(listing.id);
+  const version = Number(versionId);
+  const valid = Number.isInteger(listingId) && listingId > 0 && Number.isInteger(version) && version > 0;
+  const trySkill = useTrySkill({ name: listing.name, pin: { listing_id: listingId, listing_version_id: version } });
+  return (
+    <>
+      <Button
+        variant="outlined"
+        disabled={!valid || trySkill.start === undefined || trySkill.isStarting || listing.state === 'delisted'}
+        onClick={() => trySkill.start?.()}
+        title={t(
+          'skills.try.hint',
+          'Opens a new chat with this skill pinned. Pick a model or agent there; the skill applies to whoever answers. A skill from another project is quoted data until you add it and trust it.',
+        )}
+        data-testid="marketplace-try-skill"
+      >
+        {t('skills.try.button', 'Try it')}
+      </Button>
+      {trySkill.isError && (
+        <Typography role="alert" variant="bodySmall" color="error">
+          {t('skills.try.failed', 'The chat could not be started. Try again.')}
+        </Typography>
+      )}
+    </>
+  );
+}
+
 function SkillListingView({ detail, projectId }: SkillListingViewProps): ReactNode {
   const { listing } = detail;
   const add = useSkillAdd(detail, projectId);
@@ -189,6 +220,7 @@ function SkillListingView({ detail, projectId }: SkillListingViewProps): ReactNo
         actions={
           <>
             <VersionPick versions={detail.versions} value={add.versionId} onChange={add.setPicked} />
+            <TryButton detail={detail} versionId={add.versionId} />
             <Button
               variant="contained"
               disabled={!add.canFork || add.delisted || !add.attachable}

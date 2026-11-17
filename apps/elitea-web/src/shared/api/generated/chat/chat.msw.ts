@@ -61,6 +61,8 @@ import type {
   ConversationMessageListing,
   ConversationParticipant,
   ConversationReadState,
+  ConversationSkillList,
+  ConversationSkillPin,
   ConversationSummary,
   CreatedConversation,
   ExecutionInterruptDecisionResult,
@@ -343,6 +345,103 @@ export const getUpdateConversationInternalToolsResponseMock = (
   meta: faker.helpers.arrayElement([{}, undefined]),
   ...overrideResponse,
 });
+
+export const getListConversationSkillsResponseMock = (
+  overrideResponse: Partial<Extract<ConversationSkillList, object>> = {},
+): ConversationSkillList => ({
+  rows: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.number.int(),
+    available: faker.datatype.boolean(),
+    kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    skill_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
+    listing_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
+    listing_version_id: faker.helpers.arrayElement([
+      faker.number.int(),
+      undefined,
+    ]),
+    name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    description: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    version_name: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    trust: {
+      state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      publisher_project_id: faker.helpers.arrayElement([
+        faker.number.int(),
+        undefined,
+      ]),
+    },
+    pinned_by: faker.number.int(),
+    pinned_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  })),
+  total: faker.number.int(),
+  max: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getPinConversationSkillResponseMock = (
+  overrideResponse: Partial<Extract<ConversationSkillPin, object>> = {},
+): ConversationSkillPin =>
+  faker.helpers.arrayElement([
+    {
+      id: faker.number.int(),
+      available: faker.datatype.boolean(),
+      kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      skill_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
+      listing_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
+      listing_version_id: faker.helpers.arrayElement([
+        faker.number.int(),
+        undefined,
+      ]),
+      name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      description: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      version_name: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      trust: {
+        state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        publisher_project_id: faker.helpers.arrayElement([
+          faker.number.int(),
+          undefined,
+        ]),
+      },
+      pinned_by: faker.number.int(),
+      pinned_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+      ...overrideResponse,
+    },
+    {
+      id: faker.number.int(),
+      available: faker.datatype.boolean(),
+      kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      skill_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
+      listing_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
+      listing_version_id: faker.helpers.arrayElement([
+        faker.number.int(),
+        undefined,
+      ]),
+      name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      description: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      version_name: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      trust: {
+        state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        publisher_project_id: faker.helpers.arrayElement([
+          faker.number.int(),
+          undefined,
+        ]),
+      },
+      pinned_by: faker.number.int(),
+      pinned_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+      ...overrideResponse,
+    },
+  ]);
 
 export const getForkConversationResponseMock = (
   overrideResponse: Partial<Extract<ConversationSummary, object>> = {},
@@ -4076,6 +4175,80 @@ export const getUpdateConversationInternalToolsMockHandler = (
   );
 };
 
+export const getListConversationSkillsMockHandler = (
+  overrideResponse?:
+    | ConversationSkillList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ConversationSkillList> | ConversationSkillList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/conversation_skills/prompt_lib/:projectId/:conversationId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListConversationSkillsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getPinConversationSkillMockHandler = (
+  overrideResponse?:
+    | ConversationSkillPin
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ConversationSkillPin> | ConversationSkillPin),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/conversation_skills/prompt_lib/:projectId/:conversationId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getPinConversationSkillResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getUnpinConversationSkillMockHandler = (
+  overrideResponse?:
+    | void
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<void> | void),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/elitea_core/conversation_skill/prompt_lib/:projectId/:conversationId/:pinId",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+      if (typeof overrideResponse === "function") {
+        await overrideResponse(info);
+      }
+
+      return new HttpResponse(null, { status: 204 });
+    },
+    options,
+  );
+};
+
 export const getForkConversationMockHandler = (
   overrideResponse?:
     | ConversationSummary
@@ -5939,6 +6112,9 @@ export const getChatMock = () => [
   getUnarchiveConversationMockHandler(),
   getMarkConversationReadMockHandler(),
   getUpdateConversationInternalToolsMockHandler(),
+  getListConversationSkillsMockHandler(),
+  getPinConversationSkillMockHandler(),
+  getUnpinConversationSkillMockHandler(),
   getForkConversationMockHandler(),
   getExportConversationMockHandler(),
   getListConversationsMockHandler(),

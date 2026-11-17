@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { resetBackendCapabilitiesForTests, setBackendCapabilityForTests } from '@/shared/config/backendCapabilities';
+import { resetBackendCapabilitiesForTests } from '@/shared/config/backendCapabilities';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { PageChromeProvider, useShellCrumbs } from '@/shared/ui/page-chrome';
 import { server } from '@/test/setup';
@@ -32,10 +32,11 @@ const detail = {
 
 beforeEach(() => {
   configureGeneratedClient({ baseUrl: BASE });
-  // The test pane POSTs `predict_llm`, which no router mounts, so it is
-  // hidden by default — see `shared/config/backendCapabilities`.
-  setBackendCapabilityForTests('llmPredictStreaming', true);
   server.use(
+    // A skill written in this project needs no trust (skills epic 2169, ADR-0051 amendment 1).
+    http.get(`${BASE}/elitea_core/skill_trust/prompt_lib/:projectId/:skillId`, () =>
+      HttpResponse.json({ skill_id: 1, name: 'Reviewer', foreign: false, revision: 'a'.repeat(64), state: 'not_required', history: [] }),
+    ),
     http.get(`${BASE}/elitea_core/skill/prompt_lib/:projectId/:skillId`, () =>
       HttpResponse.json(detail),
     ),
@@ -123,10 +124,10 @@ describe('EditSkill', () => {
     expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
   });
 
-  it('loads the form and ephemeral test panel', async () => {
+  it('loads the form, with no test pane (a skill is tried in a chat, ADR-0051 amendment 1)', async () => {
     renderSkillsRoute(<EditSkill />, '/skills/all/skill-1');
     expect(await screen.findByTestId('skill-name-input')).toHaveValue('Reviewer');
-    expect(screen.getByTestId('skill-test-panel')).toBeInTheDocument();
+    expect(screen.queryByTestId('skill-test-panel')).not.toBeInTheDocument();
     // The icon control is live now that the route family exists: the fixture
     // skill has a version id, so there is something for the bind to address.
     expect(screen.getByTestId('skill-icon-button')).toBeEnabled();

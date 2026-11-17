@@ -5,7 +5,6 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 import { server } from '@/test/setup';
 
 import {
-  cancelSkillTest,
   createSkill,
   createSkillVersion,
   deleteSkill,
@@ -15,7 +14,6 @@ import {
   generateSkillDraft,
   importSkill,
   setDefaultSkillVersion,
-  testSkill,
   updateSkill,
 } from './skillsApi';
 
@@ -172,39 +170,11 @@ describe('skills API', () => {
   });
 
   it('exports text and sends/cancels stateless test requests', async () => {
-    let predictBody: unknown;
     server.use(
       http.get(`${BASE}/elitea_core/skill_export/prompt_lib/:projectId/:skillId/:versionId`, () =>
         HttpResponse.text('# Skill'),
       ),
-      http.post(`${BASE}/elitea_core/predict_llm/prompt_lib/:projectId`, async ({ request }) => {
-        predictBody = await request.json();
-        return HttpResponse.json({ task_id: 'task-1' });
-      }),
-      http.delete(`${BASE}/elitea_core/task/prompt_lib/:projectId/:taskId`, () =>
-        new HttpResponse(null, { status: 204 }),
-      ),
     );
     await expect(exportSkill('project-1', 'skill-1', 'v2')).resolves.toBe('# Skill');
-    await expect(
-      testSkill('project-1', {
-        sid: 'socket-1',
-        messageId: 'message-1',
-        streamId: 'stream-1',
-        instructions: 'Review',
-        userInput: 'Hello',
-        chatHistory: [{ role: 'user', content: 'Earlier' }],
-        modelName: 'gpt',
-        modelProjectId: 'models',
-        temperature: 0.2,
-        maxTokens: 100,
-      }),
-    ).resolves.toEqual({ task_id: 'task-1' });
-    expect(predictBody).toMatchObject({
-      sid: 'socket-1',
-      await_task_timeout: 0,
-      llm_settings: { model_name: 'gpt', model_project_id: 'models', max_tokens: 100 },
-    });
-    await expect(cancelSkillTest('project-1', 'task-1')).resolves.toBeUndefined();
   });
 });

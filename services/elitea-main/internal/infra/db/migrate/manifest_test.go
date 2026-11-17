@@ -1483,7 +1483,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// revision of a skill written in another project, so its text reaches the
 	// model as an instruction and not as quoted untrusted data (ADR-0051
 	// amendment 1, skills epic 2169 story S1). No permission.
-	require.EqualValues(t, 250, Head(tenant))
+	//
+	// 251: tenant/0251_conversation_skills.sql, conversation_skills: the skills
+	// (or Marketplace listing versions, by reference) pinned to a conversation
+	// (ADR-0050 amendment 1, skills epic 2169 story S3). No permission.
+	require.EqualValues(t, 251, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

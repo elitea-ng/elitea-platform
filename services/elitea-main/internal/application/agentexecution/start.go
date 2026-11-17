@@ -328,6 +328,10 @@ type CurrentApplicationStartService struct {
 	// (project_skills.go). A service without it refuses a request that picks
 	// a project skill.
 	projectSkills CurrentProjectSkillResolver
+	// conversationSkills is optional — attached via WithConversationSkills.
+	// It reads the skills pinned to the turn's conversation (ADR-0050
+	// amendment 1); a service without it applies no pins.
+	conversationSkills CurrentConversationSkillResolver
 	// governedRefusals is optional — attached via
 	// WithGovernedRefusalSettlement (governed_refusal.go, #1485). A service
 	// without it answers a refused governed continuation and leaves the

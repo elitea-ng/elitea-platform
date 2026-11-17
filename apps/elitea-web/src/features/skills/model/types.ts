@@ -68,21 +68,3 @@ export interface SkillWriteInput {
   readonly instructions: string;
   readonly tags: readonly string[];
 }
-
-export interface SkillTestTurn {
-  readonly role: 'user' | 'assistant';
-  readonly content: string;
-}
-
-export interface SkillTestRequest {
-  readonly sid: string;
-  readonly messageId: string;
-  readonly streamId: string;
-  readonly instructions: string;
-  readonly userInput: string;
-  readonly chatHistory: readonly SkillTestTurn[];
-  readonly modelName: string;
-  readonly modelProjectId?: string;
-  readonly temperature: number;
-  readonly maxTokens: number;
-}

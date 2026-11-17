@@ -1120,6 +1120,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		// base version, under the caller's folder visibility. Same setter
 		// idiom and admission pool.
 		agentStart = agentStart.WithProjectSkills(repos.NewProjectSkillsRepo(dependencies.AdmissionPool))
+		// The skills pinned to the turn's conversation (ADR-0050 amendment 1),
+		// read at every start next to the message's picks.
+		agentStart = agentStart.WithConversationSkills(repos.NewConversationSkillsRepo(dependencies.AdmissionPool))
 		// A governed continuation that admission refuses settles its paused
 		// turn through the stop's repository (#1485). Only a governed
 		// admission refuses that way, so it is inert with governance off.

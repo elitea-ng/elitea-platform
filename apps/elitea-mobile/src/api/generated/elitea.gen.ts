@@ -4,8 +4,8 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.56
- * operations sha256:  6289cf99737da7cfce1dd3633f4de6fa8fa653296686f34307d1c02fe26646e4
+ * client contract:    1.57
+ * operations sha256:  336a0bdc3a636f61edb987afae526f597ae65151abbb2c91bc548e81a9be9991
  */
 export interface paths {
     "/.well-known/elitea-client": {
@@ -957,6 +957,81 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/elitea_core/conversation_skill/prompt_lib/{project_id}/{conversation_id}/{pin_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The conversation's numeric id or its UUID; both resolve. */
+                conversation_id: string;
+                pin_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a pinned skill from a conversation
+         * @description Client contract 1.57 (ADR-0050 amendment 1). Removes the pin; the skill
+         *     stops applying from the next turn. Needs `models.chat.conversation.update`
+         *     and the right to write to the conversation. Audited. NOTE(W2):
+         *     internal/api/v2/conversationskills/handler.go:179 (`Unpin`).
+         */
+        delete: operations["unpinConversationSkill"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/conversation_skills/prompt_lib/{project_id}/{conversation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The conversation's numeric id or its UUID; both resolve. */
+                conversation_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * The skills pinned to a conversation
+         * @description Client contract 1.57 (ADR-0050 amendment 1). The skills pinned to the
+         *     conversation, oldest first: each is a project skill or a Marketplace
+         *     skill listing version. A pin applies to every run of the conversation,
+         *     whichever agent or model answers, and is shown apart from the
+         *     participants. It is an attachment, never a participant, and grants
+         *     nothing. Needs access to the conversation; a conversation the caller
+         *     cannot see answers 404. NOTE(W2):
+         *     internal/api/v2/conversationskills/handler.go:105 (`List`).
+         */
+        get: operations["listConversationSkills"];
+        put?: never;
+        /**
+         * Pin a skill to a conversation
+         * @description Client contract 1.57 (ADR-0050 amendment 1). Pins a project skill
+         *     (`skill_id`) or a Marketplace skill listing version (`listing_id` and
+         *     `listing_version_id`); a listing is pinned by reference and nothing is
+         *     forked into the project. The text is read when each turn starts, under
+         *     the caller's own visibility, so the pin never carries text. Pinning what
+         *     is pinned already answers the existing pin with 200. A skill the caller
+         *     cannot read, or a listing that is not listed or whose version is yanked
+         *     or withdrawn, answers one 404. A conversation holds at most five pins
+         *     (409). Needs `models.chat.conversation.update` and the right to write to
+         *     the conversation (a participant). Audited. NOTE(W2):
+         *     internal/api/v2/conversationskills/handler.go:137 (`Pin`).
+         */
+        post: operations["pinConversationSkill"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/elitea_core/conversation/prompt_lib/{project_id}/{conversation_id}": {
         parameters: {
             query?: never;
@@ -1661,6 +1736,31 @@ export interface paths {
          *     and `retryable: true`.
          */
         post: operations["regenerateChatMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/skills/prompt_lib/{project_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Paginated list of skills for a project
+         * @description NOTE(W2): internal/api/v2/skills/handler.go:61-78 — {items, total,
+         *     page, page_size, total_pages}; pagination via ?page/?page_size
+         *     (limit/offset accepted but not read).
+         */
+        get: operations["listSkills"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3901,6 +4001,60 @@ export interface components {
             /** @description The row's `unread` for the caller after the read. It is true when the caller read up to a message that is older than the newest answer. */
             unread: boolean;
         };
+        /** @description The skills pinned to a conversation, oldest first. */
+        ConversationSkillList: {
+            /** @description How many skills a conversation may hold (five, shared with the skills one message invokes). */
+            max: number;
+            rows: components["schemas"]["ConversationSkillPin"][];
+            total: number;
+        };
+        /** @description One skill pinned to a conversation. It carries no skill text. */
+        ConversationSkillPin: {
+            /** @description False when the pin is not applied for the caller: a project skill they cannot read, or a listing version that is yanked, withdrawn or delisted. A turn skips such a pin for that caller, and the client says so. */
+            available: boolean;
+            description: string;
+            /** Format: int64 */
+            id: number;
+            /** @description `project` (a project skill) or `listing` (a Marketplace skill listing version, pinned by reference). */
+            kind: string;
+            /**
+             * Format: int64
+             * @description The listing, for kind `listing`.
+             */
+            listing_id?: number;
+            /**
+             * Format: int64
+             * @description The pinned version of the listing, for kind `listing`.
+             */
+            listing_version_id?: number;
+            /** @description The skill's name; for a listing, the listing's. Empty when the listing is gone, so the pin can still be removed. */
+            name: string;
+            /** Format: date-time */
+            pinned_at: string;
+            /**
+             * Format: int64
+             * @description The user id of the person who pinned it.
+             */
+            pinned_by: number;
+            /**
+             * Format: int64
+             * @description The project skill, for kind `project`.
+             */
+            skill_id?: number;
+            trust: components["schemas"]["ConversationSkillTrust"];
+            /** @description The listing version's name, for kind `listing`. */
+            version_name?: string;
+        };
+        /** @description The state of a pinned skill's text (ADR-0051 amendment 1, A1.6). */
+        ConversationSkillTrust: {
+            /**
+             * Format: int64
+             * @description The project a forked skill came from, when it has one.
+             */
+            publisher_project_id?: number;
+            /** @description `trusted` or `untrusted`. A listing pinned by reference is always `untrusted`. */
+            state: string;
+        };
         /** @description NOTE(W2): opaque jsonb array round-trip — see items marker. One caveat to the "never inspects" claim: runPublishValidation decodes the column as []string (eliteacore/handler.go:1028-1029), so non-string elements are silently read as an empty list there (spurious "no conversation starters" warning); the store/return round-trip itself is untyped. */
         ConversationStarters: unknown[];
         /** @description One row of listConversations — the run-history panel's (issue #868) light projection of a conversation. `duration` is a placeholder: internal/api/v2/conversations/handler.go's List always answers `-1` for it (no per-conversation duration is computed server-side yet); a caller wanting a displayed duration derives one from created_at/updated_at instead of trusting this field. */
@@ -4832,6 +4986,15 @@ export interface components {
         Permission: {
             enabled: boolean;
             name: string;
+        };
+        /** @description The body of pinConversationSkill: either `skill_id` alone, or `listing_id` with `listing_version_id`. Any other key, or both forms, answers 400. */
+        PinConversationSkillRequest: {
+            /** Format: int64 */
+            listing_id?: number;
+            /** Format: int64 */
+            listing_version_id?: number;
+            /** Format: int64 */
+            skill_id?: number;
         };
         PipelineSettings: {
             [key: string]: unknown;
@@ -7131,6 +7294,153 @@ export interface operations {
             500: components["responses"]["500"];
         };
     };
+    unpinConversationSkill: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The conversation's numeric id or its UUID; both resolve. */
+                conversation_id: string;
+                pin_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The pin was removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A pin id that is not a positive integer, or a native client version that does not parse (invalid_client_version). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"] | components["schemas"]["InvalidClientVersionError"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+        };
+    };
+    listConversationSkills: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The conversation's numeric id or its UUID; both resolve. */
+                conversation_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The pins. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationSkillList"];
+                };
+            };
+            /** @description A native client version that does not parse (invalid_client_version). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"] | components["schemas"]["InvalidClientVersionError"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+        };
+    };
+    pinConversationSkill: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The conversation's numeric id or its UUID; both resolve. */
+                conversation_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PinConversationSkillRequest"];
+            };
+        };
+        responses: {
+            /** @description The skill was pinned already; its pin. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationSkillPin"];
+                };
+            };
+            /** @description The new pin. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationSkillPin"];
+                };
+            };
+            /** @description A body that names neither one skill nor one listing version, or a native client version that does not parse (invalid_client_version). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"] | components["schemas"]["InvalidClientVersionError"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+            /** @description The conversation already holds five skills. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+        };
+    };
     getConversation: {
         parameters: {
             query?: {
@@ -8521,6 +8831,40 @@ export interface operations {
                     "application/json": components["schemas"]["ChatExecutionError"];
                 };
             };
+        };
+    };
+    listSkills: {
+        parameters: {
+            query?: {
+                /** @description Maximum number of items to return */
+                limit?: components["parameters"]["Limit"];
+                /** @description Number of items to skip before starting to collect results */
+                offset?: components["parameters"]["Offset"];
+                /** @description Pagination parameter the handler actually reads. */
+                page?: number;
+                /** @description Pagination parameter the handler actually reads. */
+                page_size?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Skills list */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillsList"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
         };
     };
     cancelChatExecution: {

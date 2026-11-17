@@ -29,6 +29,14 @@ An agent with toolkit tools, a sub-agent, an MCP server or the internal tools se
 
 A renamed agent now shows its current name in the participants panel and on its messages, not the name it had when it joined the conversation. After you tag a person with `@` and send, the next message to the model no longer fails with "The execution input is invalid." (upgrade the worker with Main). The **X** next to the agent or pipeline in the message bar now switches the conversation back to the model. In the agent and pipeline editor opened from a chat, **Save** is enabled only while there is something to save, and a save refreshes the panel.
 
+## Try a skill, and /skill in the composer
+
+**Try it** on a Marketplace skill listing opens a new chat with that skill pinned; nothing is added to your project. In the composer, `/skill` opens the same list as `~` (the conversation's pinned skills first), and a pick writes `~name`. A chat with only a model can use skills too. The skill editor no longer shows an empty test pane; a skill from another project shows a note with **Trust this version for this project** and **Revoke trust**. See [Skills](/menus/skills).
+
+## Skills pinned to a conversation, and trusting skill text
+
+A conversation can carry up to five skills, shown in their own **Skills** section of the conversation panel on web and desktop, and directly below **Participants** in the mobile conversation sheet. A pinned skill is not a participant: it applies to every reply, whichever agent or model answers, and shares the five-skill, 64 KiB limit with the skills one message invokes. A skill from another project shows an **Untrusted** badge until your project trusts that version of its text (`GET`, `POST` and `DELETE` on `skill_trust`; granting and revoking are audited, and an edit of the skill by a member of your project is trusted by that member). A pin never refuses a turn for an agent that already has a skill of the same name: the agent's own skill wins. **Run the migrations** (tenant `0251`) and upgrade Main, the worker and the clients together (client contract 1.57). See [Chat](/menus/chat#skills-in-a-conversation).
+
 ## Skills in a model chat, and untrusted skill text
 
 The message start for a chat with only a model now accepts project skills (`payload.skills`, ids only), applied through the same skill loading an agent chat uses, with the same limits (five skills, 64 KiB, a skill you cannot read refuses the message). Text of a skill forked from another project reaches the model as quoted data until your project trusts that version of it; skills that existed before keep working as before. **Run the migrations** (tenant `0250`) and upgrade Main and the worker together. See [Skills](/menus/skills#skills-from-another-project-are-untrusted-until-you-trust-them).

@@ -14,10 +14,12 @@ import (
 
 	v2analytics "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/analytics"
 	v2convs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	v2conversationskills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversationskills"
 	v2entityfolders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/entityfolders"
 	v2folders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/folders"
 	v2pipelinetriggers "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/pipelinetriggers"
 	v2skills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
+	v2skilltrust "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skilltrust"
 	v2tags "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/tags"
 )
 
@@ -414,12 +416,16 @@ func newEliteaCoreProjectScopeRouter(
 	resolver fakePermissionResolver,
 ) chi.Router {
 	return NewRouter(RouterConfig{
-		AuthValidator:             testTokenValidator{user: authenticatedTestUser()},
-		PrincipalValidator:        testPrincipalValidator{},
-		AppsRepo:                  struct{ applications.Repository }{},
-		SkillsRepo:                struct{ v2skills.Repository }{},
-		FoldersRepo:               struct{ v2folders.Repository }{},
-		EntityFoldersRepo:         struct{ v2entityfolders.Repository }{},
+		AuthValidator:      testTokenValidator{user: authenticatedTestUser()},
+		PrincipalValidator: testPrincipalValidator{},
+		AppsRepo:           struct{ applications.Repository }{},
+		SkillsRepo:         struct{ v2skills.Repository }{},
+		FoldersRepo:        struct{ v2folders.Repository }{},
+		EntityFoldersRepo:  struct{ v2entityfolders.Repository }{},
+		ConversationSkillsRepo: struct {
+			v2conversationskills.Repository
+		}{},
+		SkillTrustRepo:            struct{ v2skilltrust.Repository }{},
 		TagsRepo:                  struct{ v2tags.Repository }{},
 		ConvsRepo:                 struct{ v2convs.Repository }{},
 		AnalyticsRepo:             struct{ v2analytics.Repository }{},

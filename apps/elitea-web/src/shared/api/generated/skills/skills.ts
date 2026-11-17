@@ -95,9 +95,11 @@ import type {
   SkillIconBindRequest,
   SkillIconDeleteRefusal,
   SkillSetDefaultVersionRequest,
+  SkillTrustStatus,
   SkillValidationResult,
   SkillVersionCreateRequest,
   SkillsList,
+  TrustSkillRevisionRequest,
   UnpublishSkill200,
   UnpublishSkillBody,
   UpdatedResponse,
@@ -125,6 +127,822 @@ const withQueryKey = <T extends object, K>(
   }
   return result;
 };
+
+export type getSkillTrustResponse200 = {
+  data: SkillTrustStatus;
+  status: 200;
+};
+
+export type getSkillTrustResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type getSkillTrustResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getSkillTrustResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getSkillTrustResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type getSkillTrustResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type getSkillTrustResponseSuccess = getSkillTrustResponse200 & {
+  headers: Headers;
+};
+export type getSkillTrustResponseError = (
+  | getSkillTrustResponse400
+  | getSkillTrustResponse401
+  | getSkillTrustResponse403
+  | getSkillTrustResponse404
+  | getSkillTrustResponse500
+) & {
+  headers: Headers;
+};
+
+export type getSkillTrustResponse =
+  getSkillTrustResponseSuccess | getSkillTrustResponseError;
+
+export const getGetSkillTrustUrl = (projectId: string, skillId: number) => {
+  return `/elitea_core/skill_trust/prompt_lib/${projectId}/${skillId}`;
+};
+
+/**
+ * ADR-0051 amendment 1, A1.6. A skill written in another project is third-party
+ * text: on the chat surfaces the worker shows it as quoted untrusted data until
+ * this project has trusted that exact revision of it. Answers whether the skill
+ * is foreign, the revision (the SHA-256 digest of its current text) a trust
+ * request must name, the state (`not_required`, `trusted` or `untrusted`) and the
+ * history of trust decisions, revokes included. Needs the permission that reads
+ * a skill; a skill the caller cannot read answers 404. NOTE(W2):
+ * internal/api/v2/skilltrust/handler.go:83 (`Get`).
+ * @summary What the project trusts of a skill's current text
+ */
+export const getSkillTrust = async (
+  projectId: string,
+  skillId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getSkillTrustResponse> => {
+  return eliteaFetch<getSkillTrustResponse>(
+    getGetSkillTrustUrl(projectId, skillId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetSkillTrustQueryKey = (
+  projectId: string,
+  skillId: number,
+) => {
+  return [
+    `/elitea_core/skill_trust/prompt_lib/${projectId}/${skillId}`,
+  ] as const;
+};
+
+export const getGetSkillTrustQueryOptions = <
+  TData = Awaited<ReturnType<typeof getSkillTrust>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  skillId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getSkillTrust>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetSkillTrustQueryKey(projectId, skillId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getSkillTrust>>> = ({
+    signal,
+  }) => getSkillTrust(projectId, skillId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      skillId !== null &&
+      skillId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getSkillTrust>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetSkillTrustQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getSkillTrust>>
+>;
+export type GetSkillTrustQueryError =
+  N400Response | N401Response | N403Response | N404Response | N500Response;
+
+export function useGetSkillTrust<
+  TData = Awaited<ReturnType<typeof getSkillTrust>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  skillId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getSkillTrust>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getSkillTrust>>,
+          TError,
+          Awaited<ReturnType<typeof getSkillTrust>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetSkillTrust<
+  TData = Awaited<ReturnType<typeof getSkillTrust>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  skillId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getSkillTrust>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getSkillTrust>>,
+          TError,
+          Awaited<ReturnType<typeof getSkillTrust>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetSkillTrust<
+  TData = Awaited<ReturnType<typeof getSkillTrust>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  skillId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getSkillTrust>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary What the project trusts of a skill's current text
+ */
+
+export function useGetSkillTrust<
+  TData = Awaited<ReturnType<typeof getSkillTrust>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  skillId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getSkillTrust>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetSkillTrustQueryOptions(
+    projectId,
+    skillId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type trustSkillRevisionResponse200 = {
+  data: SkillTrustStatus;
+  status: 200;
+};
+
+export type trustSkillRevisionResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type trustSkillRevisionResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type trustSkillRevisionResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type trustSkillRevisionResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type trustSkillRevisionResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type trustSkillRevisionResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type trustSkillRevisionResponseSuccess =
+  trustSkillRevisionResponse200 & {
+    headers: Headers;
+  };
+export type trustSkillRevisionResponseError = (
+  | trustSkillRevisionResponse400
+  | trustSkillRevisionResponse401
+  | trustSkillRevisionResponse403
+  | trustSkillRevisionResponse404
+  | trustSkillRevisionResponse409
+  | trustSkillRevisionResponse500
+) & {
+  headers: Headers;
+};
+
+export type trustSkillRevisionResponse =
+  trustSkillRevisionResponseSuccess | trustSkillRevisionResponseError;
+
+export const getTrustSkillRevisionUrl = (
+  projectId: string,
+  skillId: number,
+) => {
+  return `/elitea_core/skill_trust/prompt_lib/${projectId}/${skillId}`;
+};
+
+/**
+ * ADR-0051 amendment 1, A1.6. Records the project's trust in one revision of a
+ * skill written in another project: after it, that exact text reaches the model
+ * as an instruction. The revision must be the skill's current one (409
+ * otherwise), so a review of old text cannot trust new text, and any later change
+ * to the text is a new revision and is untrusted again. A skill written in this
+ * project needs no trust (400). Trusting grants the skill no tool and no
+ * permission. Needs the permission that edits a skill. Audited. NOTE(W2):
+ * internal/api/v2/skilltrust/handler.go:100 (`Trust`).
+ * @summary Trust this version of a skill's text for this project
+ */
+export const trustSkillRevision = async (
+  projectId: string,
+  skillId: number,
+  trustSkillRevisionRequest: TrustSkillRevisionRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<trustSkillRevisionResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<trustSkillRevisionResponse>(
+    getTrustSkillRevisionUrl(projectId, skillId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(trustSkillRevisionRequest),
+    },
+  );
+};
+
+export const getTrustSkillRevisionQueryKey = (
+  projectId: string,
+  skillId: number,
+  trustSkillRevisionRequest?: TrustSkillRevisionRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/skill_trust/prompt_lib/${projectId}/${skillId}`,
+    trustSkillRevisionRequest,
+  ] as const;
+};
+
+export const getTrustSkillRevisionQueryOptions = <
+  TData = Awaited<ReturnType<typeof trustSkillRevision>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  skillId: number,
+  trustSkillRevisionRequest: TrustSkillRevisionRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof trustSkillRevision>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getTrustSkillRevisionQueryKey(
+      projectId,
+      skillId,
+      trustSkillRevisionRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof trustSkillRevision>>
+  > = ({ signal }) =>
+    trustSkillRevision(projectId, skillId, trustSkillRevisionRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      skillId !== null &&
+      skillId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof trustSkillRevision>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type TrustSkillRevisionQueryResult = NonNullable<
+  Awaited<ReturnType<typeof trustSkillRevision>>
+>;
+export type TrustSkillRevisionQueryError =
+  | N400Response
+  | N401Response
+  | N403Response
+  | N404Response
+  | ErrorResponse
+  | N500Response;
+
+export function useTrustSkillRevision<
+  TData = Awaited<ReturnType<typeof trustSkillRevision>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  skillId: number,
+  trustSkillRevisionRequest: TrustSkillRevisionRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof trustSkillRevision>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof trustSkillRevision>>,
+          TError,
+          Awaited<ReturnType<typeof trustSkillRevision>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useTrustSkillRevision<
+  TData = Awaited<ReturnType<typeof trustSkillRevision>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  skillId: number,
+  trustSkillRevisionRequest: TrustSkillRevisionRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof trustSkillRevision>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof trustSkillRevision>>,
+          TError,
+          Awaited<ReturnType<typeof trustSkillRevision>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useTrustSkillRevision<
+  TData = Awaited<ReturnType<typeof trustSkillRevision>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  skillId: number,
+  trustSkillRevisionRequest: TrustSkillRevisionRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof trustSkillRevision>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Trust this version of a skill's text for this project
+ */
+
+export function useTrustSkillRevision<
+  TData = Awaited<ReturnType<typeof trustSkillRevision>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  skillId: number,
+  trustSkillRevisionRequest: TrustSkillRevisionRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof trustSkillRevision>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getTrustSkillRevisionQueryOptions(
+    projectId,
+    skillId,
+    trustSkillRevisionRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type revokeSkillTrustResponse200 = {
+  data: SkillTrustStatus;
+  status: 200;
+};
+
+export type revokeSkillTrustResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type revokeSkillTrustResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type revokeSkillTrustResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type revokeSkillTrustResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type revokeSkillTrustResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type revokeSkillTrustResponseSuccess = revokeSkillTrustResponse200 & {
+  headers: Headers;
+};
+export type revokeSkillTrustResponseError = (
+  | revokeSkillTrustResponse400
+  | revokeSkillTrustResponse401
+  | revokeSkillTrustResponse403
+  | revokeSkillTrustResponse404
+  | revokeSkillTrustResponse500
+) & {
+  headers: Headers;
+};
+
+export type revokeSkillTrustResponse =
+  revokeSkillTrustResponseSuccess | revokeSkillTrustResponseError;
+
+export const getRevokeSkillTrustUrl = (projectId: string, skillId: number) => {
+  return `/elitea_core/skill_trust/prompt_lib/${projectId}/${skillId}`;
+};
+
+/**
+ * ADR-0051 amendment 1, A1.6. Revokes the project's active trust of the skill:
+ * its text reaches the model as quoted untrusted data again from the next turn.
+ * The decision stays in the history. Needs the permission that edits a skill.
+ * Audited. NOTE(W2): internal/api/v2/skilltrust/handler.go:134 (`Revoke`).
+ * @summary Stop trusting a skill's text for this project
+ */
+export const revokeSkillTrust = async (
+  projectId: string,
+  skillId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<revokeSkillTrustResponse> => {
+  return eliteaFetch<revokeSkillTrustResponse>(
+    getRevokeSkillTrustUrl(projectId, skillId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getRevokeSkillTrustQueryKey = (
+  projectId: string,
+  skillId: number,
+) => {
+  return [
+    "DELETE",
+    `/elitea_core/skill_trust/prompt_lib/${projectId}/${skillId}`,
+  ] as const;
+};
+
+export const getRevokeSkillTrustQueryOptions = <
+  TData = Awaited<ReturnType<typeof revokeSkillTrust>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  skillId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeSkillTrust>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getRevokeSkillTrustQueryKey(projectId, skillId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof revokeSkillTrust>>
+  > = ({ signal }) =>
+    revokeSkillTrust(projectId, skillId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      skillId !== null &&
+      skillId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof revokeSkillTrust>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RevokeSkillTrustQueryResult = NonNullable<
+  Awaited<ReturnType<typeof revokeSkillTrust>>
+>;
+export type RevokeSkillTrustQueryError =
+  N400Response | N401Response | N403Response | N404Response | N500Response;
+
+export function useRevokeSkillTrust<
+  TData = Awaited<ReturnType<typeof revokeSkillTrust>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  skillId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeSkillTrust>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof revokeSkillTrust>>,
+          TError,
+          Awaited<ReturnType<typeof revokeSkillTrust>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRevokeSkillTrust<
+  TData = Awaited<ReturnType<typeof revokeSkillTrust>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  skillId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeSkillTrust>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof revokeSkillTrust>>,
+          TError,
+          Awaited<ReturnType<typeof revokeSkillTrust>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRevokeSkillTrust<
+  TData = Awaited<ReturnType<typeof revokeSkillTrust>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  skillId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeSkillTrust>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Stop trusting a skill's text for this project
+ */
+
+export function useRevokeSkillTrust<
+  TData = Awaited<ReturnType<typeof revokeSkillTrust>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  skillId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeSkillTrust>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRevokeSkillTrustQueryOptions(
+    projectId,
+    skillId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
 
 export type generateSkillDraftResponse200 = {
   data: SkillDraft;

@@ -177,7 +177,7 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 	}
 	// Project skills the message picked: read here, by id, under the
 	// caller's visibility; a pick the caller cannot read refuses the turn.
-	picks, err := service.resolveProjectSkillIDs(ctx, request.ProjectID, request.ProjectSkillIDs)
+	picks, err := service.resolveTurnSkills(ctx, request.ProjectID, request.ConversationUUID, request.ProjectSkillIDs)
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err
 	}

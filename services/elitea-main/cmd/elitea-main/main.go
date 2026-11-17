@@ -40,6 +40,7 @@ import (
 	v2canvaspresence "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/canvaspresence"
 	configurationapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
 	v2convs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	v2conversationskills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversationskills"
 	v2deepwiki "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
 	desktopopsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
 	v2entityfolders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/entityfolders"
@@ -61,6 +62,7 @@ import (
 	v2secrets "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/sharedchat"
 	v2skills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
+	v2skilltrust "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skilltrust"
 	socialapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/social"
 	v2support "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/supportassistant"
 	v2tags "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/tags"
@@ -3261,9 +3263,14 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		SkillsRepo:           skillsRepository(pool),
 		FoldersRepo:          foldersRepository(pool),
 		EntityFoldersRepo:    entityFoldersRepository(pool),
-		MemoriesRepo:         memoriesRepository(pool),
-		TagsRepo:             tagsRepository(pool),
-		AnalyticsRepo:        analyticsRepository(pool),
+		// Skills pinned to a conversation and a project's trust in foreign skill
+		// text (skills epic 2169). The start paths read the same pins through
+		// the runtime composition.
+		ConversationSkillsRepo: conversationSkillsRepository(pool),
+		SkillTrustRepo:         skillTrustRepository(pool),
+		MemoriesRepo:           memoriesRepository(pool),
+		TagsRepo:               tagsRepository(pool),
+		AnalyticsRepo:          analyticsRepository(pool),
 		// The Agent Evaluation dimension library. Wired here, at the
 		// composition root, in the SAME change as the routes and the RBAC
 		// grant: a handler written and never composed is the shape #597
@@ -3439,6 +3446,20 @@ func skillsRepository(pool *pgxpool.Pool) v2skills.Repository {
 		return nil
 	}
 	return dbrepos.NewSkillsRepo(pool)
+}
+
+func conversationSkillsRepository(pool *pgxpool.Pool) v2conversationskills.Repository {
+	if pool == nil {
+		return nil
+	}
+	return dbrepos.NewConversationSkillsRepo(pool)
+}
+
+func skillTrustRepository(pool *pgxpool.Pool) v2skilltrust.Repository {
+	if pool == nil {
+		return nil
+	}
+	return dbrepos.NewSkillTrustRepo(pool)
 }
 
 func entityFoldersRepository(pool *pgxpool.Pool) v2entityfolders.Repository {

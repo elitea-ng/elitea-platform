@@ -50,6 +50,7 @@ import (
 	v2contextmgr "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/contextmgr"
 	v2contextviews "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/contextviews"
 	v2convs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	v2conversationskills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversationskills"
 	v2credentialconsent "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialconsent"
 	v2credentialgrants "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialgrants"
 	v2credentialprobe "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialprobe"
@@ -88,6 +89,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/sharedchat"
 	v2skillpublish "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skillpublish"
 	v2skills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
+	v2skilltrust "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skilltrust"
 	v2social "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/social"
 	v2support "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/supportassistant"
 	v2tags "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/tags"
@@ -394,6 +396,12 @@ type RouterConfig struct {
 	// EntityFoldersRepo backs the shared project folders of the Agents,
 	// Pipelines, Skills, Toolkits and MCPs lists (issue 2048).
 	EntityFoldersRepo v2entityfolders.Repository
+	// ConversationSkillsRepo backs the skills pinned to a conversation (ADR-0050
+	// amendment 1, skills epic 2169 story S3). SkillTrustRepo backs a project's
+	// trust in the text of skills written in other projects (ADR-0051
+	// amendment 1, A1.6).
+	ConversationSkillsRepo v2conversationskills.Repository
+	SkillTrustRepo         v2skilltrust.Repository
 	// MemoriesRepo backs persistent, cross-conversation personal memory
 	// (#870) — Settings > Memory's CRUD. Its recall INTO a chat turn is a
 	// separate dependency, wired straight into
@@ -3862,6 +3870,18 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(projectPermission("models.applications.skills.list")).
 						Get("/skills/{mode}/{projectID}", skillHandler.List)
 					r.With(requireSkillCreate).Post("/skills/{mode}/{projectID}", skillHandler.Create)
+					// A project's trust in the text of a skill written in another project
+					// (ADR-0051 amendment 1, A1.6): read with the skill, granted and revoked
+					// with the right to edit it. Audited as a surface.
+					if cfg.SkillTrustRepo != nil {
+						skillTrust := v2skilltrust.NewHandler(cfg.SkillTrustRepo)
+						r.With(requireSkillDetails).
+							Get("/skill_trust/prompt_lib/{projectID}/{skillID}", skillTrust.Get)
+						r.With(requireSkillUpdate).
+							Post("/skill_trust/prompt_lib/{projectID}/{skillID}", skillTrust.Trust)
+						r.With(requireSkillUpdate).
+							Delete("/skill_trust/prompt_lib/{projectID}/{skillID}", skillTrust.Revoke)
+					}
 					r.With(requireSkillDetails).
 						Get("/skill/{mode}/{projectID}/{skillID}", skillHandler.Get)
 					// The {versionID} segment lets a caller read one NAMED
@@ -4383,6 +4403,25 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					// statement, under the PUT's permission (internal_tools.go).
 					r.With(projectPermission("models.chat.conversation.update")).
 						Patch("/conversation_internal_tools/prompt_lib/{projectID}/{conversationID}", convHandler.UpdateInternalTools)
+					// Skills pinned to the conversation (ADR-0050 amendment 1): read with
+					// the conversation, pinned and unpinned under the conversation's
+					// update permission AND the message-write rule (a pin is content the
+					// model reads as part of the conversation). Audited as a surface.
+					if cfg.ConversationSkillsRepo != nil {
+						skillPins := v2conversationskills.NewHandler(cfg.ConversationSkillsRepo,
+							func(ctx context.Context, projectID, conversationID string) error {
+								return cfg.ConvsRepo.AuthorizeChatResource(ctx, projectID, "conversation", conversationID)
+							},
+							func(ctx context.Context, projectID, conversationID string) error {
+								return cfg.ConvsRepo.AuthorizeChatWrite(ctx, projectID, "conversation", conversationID)
+							})
+						r.With(requireConversationRead).
+							Get("/conversation_skills/prompt_lib/{projectID}/{conversationID}", skillPins.List)
+						r.With(projectPermission("models.chat.conversation.update")).
+							Post("/conversation_skills/prompt_lib/{projectID}/{conversationID}", skillPins.Pin)
+						r.With(projectPermission("models.chat.conversation.update")).
+							Delete("/conversation_skill/prompt_lib/{projectID}/{conversationID}/{pinID}", skillPins.Unpin)
+					}
 					r.With(projectPermission("models.chat.conversations.delete")).
 						Delete("/conversation/prompt_lib/{projectID}/{conversationID}", convHandler.Delete)
 					// Conversation archive (client contract 1.10), shared by

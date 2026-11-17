@@ -9,7 +9,8 @@ export type { SkillIconControl } from './ui/SkillForm';
 export { SkillImportButton } from './ui/SkillImportButton';
 export { SkillPublishControls } from './ui/SkillPublishControls';
 export { SkillsList } from './ui/SkillsList';
-export { cancelSkillTest, exportSkill, testSkill } from './api/skillsApi';
+export { exportSkill } from './api/skillsApi';
+export { SkillTrustPanel } from './ui/SkillTrustPanel';
 export { skillVersionKey } from './lib/skillVersionKey';
 // Only the two symbols an outside caller actually needs. The dialog, the
 // icon-list query and the upload/delete mutations are the slice's INTERNAL
@@ -27,7 +28,6 @@ export { useSkillBulkActions } from './model/useSkillBulkActions';
 export type {
   SkillDraft,
   SkillRecord,
-  SkillTestTurn,
   SkillVersion,
   SkillWriteInput,
 } from './model/types';
