@@ -7,6 +7,7 @@ import { applicationCatalog } from '../lib/constants';
 import { buildCatalogApplication, filterApplicationSchemas } from '../model/catalog';
 import type { CatalogApplication } from '../model/types';
 
+import { useApplicationToolkits } from './useApplicationToolkits';
 import { useSelectedProjectId } from './useSelectedProjectId';
 import { useToolkitTypeSchemas } from './useToolkitTypeSchemas';
 
@@ -134,7 +135,13 @@ export function useApplicationCatalog() {
     () => filterApplicationSchemas(toolkitTypeSchemas),
     [toolkitTypeSchemas],
   );
-  const configuredTypes = useMemo(() => deriveConfiguredTypes(applicationList), [applicationList]);
+  // A Wiki or Inventory is a toolkit instance, which the applications list never holds (#2113).
+  const { applications: applicationToolkits, isLoading: isLoadingToolkits } = useApplicationToolkits();
+  const configuredTypes = useMemo(() => {
+    const configured = new Set(deriveConfiguredTypes(applicationList));
+    for (const toolkit of applicationToolkits) configured.add(toolkit.type);
+    return configured;
+  }, [applicationList, applicationToolkits]);
 
   const applications: readonly CatalogApplication[] = useMemo(
     () => applicationCatalog().map((entry) => buildCatalogApplication(entry, applicationSchemas, configuredTypes)),
@@ -143,6 +150,6 @@ export function useApplicationCatalog() {
 
   return {
     applications,
-    isLoading: isFetchingSchemas || applicationsQuery.isFetching,
+    isLoading: isFetchingSchemas || applicationsQuery.isFetching || isLoadingToolkits,
   };
 }

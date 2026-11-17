@@ -6,11 +6,12 @@ import Dialog from '@mui/material/Dialog';
 import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
 import DialogTitle from '@mui/material/DialogTitle';
+import InputAdornment from '@mui/material/InputAdornment';
 import TextField from '@mui/material/TextField';
 
 import { t } from '@/shared/i18n';
 
-import { validateFileName } from '../lib/pathValidation';
+import { splitFileName, validateFileName } from '../lib/pathValidation';
 import type { ArtifactListItem } from '../model/types';
 
 interface RenameArtifactDialogProps {
@@ -20,22 +21,37 @@ interface RenameArtifactDialogProps {
   /** The server's refusal (a taken name, a missing file), shown under the field. */
   readonly error?: string | undefined;
   readonly onClose: () => void;
-  /** Receives the new bare file name; the folder part of the key is kept by the caller. */
+  /** Receives the new bare file name, extension included and unchanged; the folder part of the key is kept by the caller. */
   readonly onSubmit: (name: string) => void;
 }
 
+/**
+ * Why the new name is refused, or '' when it is fine. A name that gains or changes an extension is
+ * refused here as Main refuses it (#2119): typing `Makefile.md` for a file with no extension
+ * would otherwise reach the server and come back a 400.
+ */
+function renameValidation(stem: string, fullName: string, extension: string): string {
+  if (stem === '') return '';
+  const invalid = validateFileName(fullName);
+  if (invalid !== '') return invalid;
+  return splitFileName(fullName).extension === extension ? '' : t('artifacts.rename.extension', 'The file extension cannot be changed.');
+}
+
 export function RenameArtifactDialog({ item, pending, error, onClose, onSubmit }: RenameArtifactDialogProps): ReactNode {
-  const [name, setName] = useState('');
+  // Only the name before the extension is editable: the extension stays (#2119).
+  const [stem, setStem] = useState('');
   const nameRef = useRef<HTMLInputElement>(null);
+  const extension = splitFileName(item?.name ?? '').extension;
   useEffect(() => {
-    setName(item?.name ?? '');
+    setStem(splitFileName(item?.name ?? '').stem);
   }, [item]);
-  const trimmed = name.trim();
-  const validation = trimmed === '' ? '' : validateFileName(trimmed);
-  const unchanged = trimmed === item?.name;
+  const trimmed = stem.trim();
+  const fullName = `${trimmed}${extension}`;
+  const validation = renameValidation(trimmed, fullName, extension);
+  const unchanged = fullName === item?.name;
   const disabled = pending || trimmed === '' || validation !== '' || unchanged;
   const submit = (): void => {
-    if (!disabled) onSubmit(trimmed);
+    if (!disabled) onSubmit(fullName);
   };
   return (
     <Dialog
@@ -53,10 +69,23 @@ export function RenameArtifactDialog({ item, pending, error, onClose, onSubmit }
           fullWidth
           margin="dense"
           label={t('artifacts.rename.label', 'File name')}
-          value={name}
+          value={stem}
           error={validation !== '' || error !== undefined}
           helperText={validation || error || ' '}
-          onChange={(event) => setName(event.target.value)}
+          onChange={(event) => setStem(event.target.value)}
+          slotProps={{
+            input: {
+              endAdornment:
+                extension === '' ? undefined : (
+                  <InputAdornment
+                    position="end"
+                    data-testid="rename-extension"
+                  >
+                    {extension}
+                  </InputAdornment>
+                ),
+            },
+          }}
           onKeyDown={(event) => {
             if (event.key === 'Enter') {
               event.preventDefault();

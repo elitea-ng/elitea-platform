@@ -60,6 +60,12 @@ export type RequestStatus = (typeof REQUEST_STATUS)[keyof typeof REQUEST_STATUS]
  */
 export const APPLICATION_CATALOG_TYPES = ['wikis_Wikis', 'inventory'] as const;
 
+/**
+ * Every type string a Wiki toolkit is stored under (`AdmittedWikisToolkitTypes` in
+ * `internal/api/v2/deepwiki/wikis.go`): the catalogue key plus the spellings older toolkits carry.
+ */
+export const WIKI_TOOLKIT_TYPES: readonly string[] = ['wikis_Wikis', 'deepwiki_Deepwiki', 'wikis', 'deepwiki'];
+
 /** The catalogue's two entries, in baseline order. `pack` defaults to the served brand pack. */
 export function applicationCatalog(pack: BrandPack = resolveBrandPack()): readonly ApplicationCatalogEntry[] {
   return [

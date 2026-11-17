@@ -28,12 +28,46 @@ describe('RenameArtifactDialog', () => {
     const user = userEvent.setup();
     const { onSubmit } = renderDialog();
     const field = screen.getByRole('textbox', { name: 'File name' });
-    expect(field).toHaveValue('old.txt');
+    expect(field).toHaveValue('old');
     expect(screen.getByRole('button', { name: 'Rename' })).toBeDisabled();
     await user.clear(field);
-    await user.type(field, 'new.txt');
+    await user.type(field, 'new');
     await user.click(screen.getByRole('button', { name: 'Rename' }));
     expect(onSubmit).toHaveBeenCalledWith('new.txt');
+  });
+
+  // #2119: the extension was part of the editable name, so `example.txt` could become `example.json`.
+  it('locks the extension: it is shown beside the field and always sent unchanged', async () => {
+    const user = userEvent.setup();
+    const { onSubmit } = renderDialog();
+    const field = screen.getByRole('textbox', { name: 'File name' });
+    expect(screen.getByTestId('rename-extension')).toHaveTextContent('.txt');
+    await user.clear(field);
+    // Typing a different extension cannot replace the real one.
+    await user.type(field, 'example.json');
+    await user.click(screen.getByRole('button', { name: 'Rename' }));
+    expect(onSubmit).toHaveBeenCalledWith('example.json.txt');
+  });
+
+  it('refuses a name that gives an extensionless file an extension', async () => {
+    const user = userEvent.setup();
+    const { onSubmit } = renderDialog({ item: { ...file, key: 'a/Makefile', name: 'Makefile' } });
+    const field = screen.getByRole('textbox', { name: 'File name' });
+    await user.type(field, '.md');
+    expect(screen.getByText('The file extension cannot be changed.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Rename' })).toBeDisabled();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('shows no extension for a name that has none', async () => {
+    const user = userEvent.setup();
+    const { onSubmit } = renderDialog({ item: { ...file, key: 'a/Makefile', name: 'Makefile' } });
+    expect(screen.queryByTestId('rename-extension')).not.toBeInTheDocument();
+    const field = screen.getByRole('textbox', { name: 'File name' });
+    await user.clear(field);
+    await user.type(field, 'Rakefile');
+    await user.click(screen.getByRole('button', { name: 'Rename' }));
+    expect(onSubmit).toHaveBeenCalledWith('Rakefile');
   });
 
   it('refuses a name with a forbidden character', async () => {
@@ -41,7 +75,7 @@ describe('RenameArtifactDialog', () => {
     const { onSubmit } = renderDialog();
     const field = screen.getByRole('textbox', { name: 'File name' });
     await user.clear(field);
-    await user.type(field, 'a|b.txt');
+    await user.type(field, 'a|b');
     expect(screen.getByText('Filenames cannot contain "|".')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Rename' })).toBeDisabled();
     expect(onSubmit).not.toHaveBeenCalled();

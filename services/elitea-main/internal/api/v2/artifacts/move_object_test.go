@@ -109,6 +109,9 @@ func TestMoveObject_Refusals(t *testing.T) {
 		"empty to":       {`{"from":"a.txt","to":""}`, http.StatusBadRequest},
 		"same key":       {`{"from":"a.txt","to":"a.txt"}`, http.StatusBadRequest},
 		"dotdot target":  {`{"from":"a.txt","to":"../x.txt"}`, http.StatusBadRequest},
+		"new extension":  {`{"from":"a.txt","to":"a.json"}`, http.StatusBadRequest},
+		"dropped ext":    {`{"from":"a.txt","to":"a"}`, http.StatusBadRequest},
+		"added ext":      {`{"from":"dir/a","to":"dir/a.txt"}`, http.StatusBadRequest},
 		"bad json":       {`{`, http.StatusBadRequest},
 	} {
 		if rr := postMove(r, tc.body); rr.Code != tc.want {
@@ -273,5 +276,25 @@ func TestMoveObject_CancelledContextStopsTheCopy(t *testing.T) {
 	moveRouter(h).ServeHTTP(rr, req)
 	if rr.Code == http.StatusOK || storeHas(store, "b.txt") || len(repo.objectKeys(bucketID)) != 1 {
 		t.Fatalf("status = %d: a cancelled move must change nothing", rr.Code)
+	}
+}
+
+// #2119: a rename keeps the extension, so only the name before it changes; a
+// folder move that keeps the extension is still allowed.
+func TestMoveObject_KeepsTheExtension(t *testing.T) {
+	h, _, store := newObjectTestHandler(t)
+	store.seedContent("1", "reports", "a.tar.gz", []byte("A"), "")
+	store.seedContent("1", "reports", ".env", []byte("E"), "")
+	r := moveRouter(h)
+
+	if rr := postMove(r, `{"from":"a.tar.gz","to":"dir/b.tar.gz"}`); rr.Code != http.StatusOK {
+		t.Errorf("same extension, new folder: status = %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr := postMove(r, `{"from":"dir/b.tar.gz","to":"dir/b.tar.zip"}`); rr.Code != http.StatusBadRequest {
+		t.Errorf("changed last extension: status = %d, want 400", rr.Code)
+	}
+	// ".env" has no extension; ".env.local" has ".local".
+	if rr := postMove(r, `{"from":".env","to":".env.local"}`); rr.Code != http.StatusBadRequest {
+		t.Errorf("hidden file gaining an extension: status = %d, want 400", rr.Code)
 	}
 }

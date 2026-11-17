@@ -414,7 +414,7 @@ describe('Artifacts page', () => {
     await user.click(await screen.findByRole('button', { name: 'rename-nested-file' }));
     const field = screen.getByRole('textbox', { name: 'File name' });
     await user.clear(field);
-    await user.type(field, 'new.md');
+    await user.type(field, 'new');
     mocks.renameFile.mockRejectedValueOnce(new Error('A file with that name already exists.'));
     await user.click(screen.getByRole('button', { name: 'Rename' }));
     expect(await screen.findByText('A file with that name already exists.')).toBeInTheDocument();
@@ -463,7 +463,7 @@ describe('Artifacts page', () => {
     await user.click(await screen.findByRole('button', { name: 'rename-readme', hidden: true }));
     const field = screen.getByRole('textbox', { name: 'File name' });
     await user.clear(field);
-    await user.type(field, 'renamed.md');
+    await user.type(field, 'renamed');
     await user.click(screen.getByRole('button', { name: 'Rename' }));
     await waitFor(() => expect(mocks.renameFile).toHaveBeenCalledWith({ bucket: 'docs', from: 'readme.md', to: 'renamed.md' }));
     await waitFor(() => expect(screen.queryByTestId('artifacts-canvas-editor')).not.toBeInTheDocument());

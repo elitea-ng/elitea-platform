@@ -2228,3 +2228,81 @@ async fn a_rate_limited_fetch_is_skipped_rate_limited_not_fetch_failed() {
         "a rate-limited document is lost work for this run: {summary:?}"
     );
 }
+
+/// #2106: every listed document failed to fetch and the index holds nothing,
+/// so the run is a failure with the reason in its message, not a partial
+/// index of zero documents.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_run_where_every_fetch_fails_and_nothing_is_stored_is_a_failure() {
+    let harness = harness(4, None).await;
+    let summary = run(
+        &harness,
+        vec![
+            unfetchable("a.md", "v1", "alpha"),
+            unfetchable("b.md", "v1", "bravo"),
+        ],
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(
+        summary.status,
+        IndexIngestStatusV1::Error as i32,
+        "{summary:?}"
+    );
+    assert_eq!(
+        summary.terminal_state,
+        IndexIngestTerminalStateV1::Failed as i32
+    );
+    assert_eq!(summary.indexed_documents, 0);
+    assert_eq!(summary.skipped.get("fetch_failed"), Some(&2), "{summary:?}");
+    assert!(
+        summary.message.contains("No document could be indexed"),
+        "{}",
+        summary.message
+    );
+}
+
+/// #2105: the embedding gateway gave out after documents were written. They
+/// are in the index, so the run is partly indexed, with the reason, not
+/// failed.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_gateway_outage_after_documents_were_written_is_a_partial_index() {
+    let harness =
+        harness_failing(4, Some(StatusCode::SERVICE_UNAVAILABLE), Some(FAIL_MARKER)).await;
+    let mut documents = vec![document("a.md", "v1", "alpha")];
+    for n in 0..8 {
+        documents.push(document(
+            &format!("b{n}.md"),
+            "v1",
+            &format!("bravo {n} {FAIL_MARKER}"),
+        ));
+    }
+    let summary = run(
+        &harness,
+        documents,
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(
+        summary.status,
+        IndexIngestStatusV1::PartlyIndexed as i32,
+        "{summary:?}"
+    );
+    assert_eq!(
+        summary.terminal_state,
+        IndexIngestTerminalStateV1::PartlyIndexed as i32
+    );
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+    assert!(
+        summary.message.contains("stopped early"),
+        "{}",
+        summary.message
+    );
+    assert_eq!(summary.total_documents, Some(1));
+}

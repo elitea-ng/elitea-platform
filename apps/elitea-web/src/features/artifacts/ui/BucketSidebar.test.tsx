@@ -135,6 +135,6 @@ describe('BucketSidebar', () => {
     // The row keeps its place in the panel's geometry; dropping it moved
     // everything below up by its height plus its border.
     expect(screen.getByRole('button', { name: /^Storage:/ })).toBeInTheDocument();
-    expect(screen.getByText('Select Storage')).toBeInTheDocument();
+    expect(screen.getByText('Platform storage')).toBeInTheDocument();
   });
 });

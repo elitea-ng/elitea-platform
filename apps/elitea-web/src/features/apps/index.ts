@@ -21,3 +21,7 @@ export { appDetailErrorMessage } from './lib/errorMessage';
 export { useHasApplications } from './api/useHasApplications';
 
 export { appsTabByIndex, appsTabIndex, isApplicationsTab, normalizeAppsTab, searchForAppsTab } from './model/tabs';
+
+export { useApplicationToolkits } from './api/useApplicationToolkits';
+
+export { WIKI_TOOLKIT_TYPES } from './lib/constants';

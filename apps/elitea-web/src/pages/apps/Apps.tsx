@@ -22,6 +22,8 @@ import { useSelectedProjectStore } from '@/widgets/app-shell';
 import { PageToolbar, pageBodySx, pageSx } from '@/widgets/page-header';
 import { usePermissionSet } from '@/widgets/sidebar';
 
+import { ApplicationsTab } from './ApplicationsTab';
+
 interface AppsRouteParams {
   readonly tab?: string;
 }
@@ -52,21 +54,15 @@ interface AppsRouteSearch {
  * this component only reads router state and renders based on values
  * those already computed for it, no fetching/business logic of its own.
  *
- * **Composition gap, not a placeholder:** the baseline's "Applications" tab
- * renders `<ToolkitsList isApplication cardContentType={ContentType.AppAll}
- * disableEmptyRedirect />` (`features/toolkits/ui/list/ToolkitsList`, unit
- * A4's ownership — `src/features/toolkits/**` has not landed as of this
- * unit). That tab's content area is intentionally left EMPTY below rather
- * than faked; wiring `<ToolkitsList .../>` in is a one-line change once A4
- * ships (see the inline comment at the render site). The "App Catalog" tab
- * (`ApplicationCatalog`, this same domain, fully self-contained) is wired
- * completely.
+ * The "Applications" tab lists the project's Wiki and Inventory toolkits
+ * (`ApplicationsTab`): an application is a toolkit of an application type
+ * (#2113). The "App Catalog" tab (`ApplicationCatalog`) is self-contained.
  */
 export function Apps() {
   const navigate = useNavigate();
   const params = useParams({ strict: false }) as AppsRouteParams;
   const search = useSearch({ strict: false }) as AppsRouteSearch;
-  const { hasApplications } = useHasApplications();
+  const { hasApplications, isLoading: isLoadingApplications } = useHasApplications();
   const canCreate = usePermissionSet(useSelectedProjectStore((state) => state.project?.id)).has(PERMISSIONS.toolkits.create);
 
   const normalizedTab = normalizeAppsTab(params.tab, hasApplications);
@@ -80,6 +76,9 @@ export function Apps() {
   // bare `/apps`, or an unrecognised `:tab`) — `replace: true`, no history
   // entry, same as the baseline's `navigate(..., { replace: true })`.
   useEffect(() => {
+    // A bare `/apps` picks its tab from whether the project has applications:
+    // wait for that answer, or it lands on the catalog before the list arrives.
+    if (params.tab === undefined && isLoadingApplications) return;
     if (normalizedTab === params.tab && normalizedSearch === search) return;
     void navigate({
       to: '/apps/$tab',
@@ -87,7 +86,7 @@ export function Apps() {
       search: normalizedSearch,
       replace: true,
     });
-  }, [navigate, normalizedSearch, normalizedTab, params.tab, search]);
+  }, [isLoadingApplications, navigate, normalizedSearch, normalizedTab, params.tab, search]);
 
   const selectedIndex = appsTabIndex(normalizedTab);
   const isConfiguredTab = isApplicationsTab(normalizedTab);
@@ -132,10 +131,7 @@ export function Apps() {
         role="tabpanel"
       >
         {isConfiguredTab ? (
-          // Composition gap: `features/toolkits`' `ToolkitsList` (unit A4)
-          // has not landed — see this file's own doc comment. Once it
-          // exists: `<ToolkitsList isApplication cardContentType={ContentType.AppAll} disableEmptyRedirect />`.
-          <Box data-testid="apps-applications-tab-panel" />
+          <ApplicationsTab />
         ) : (
           <ApplicationCatalog onConfigure={handleConfigureAppType} />
         )}
