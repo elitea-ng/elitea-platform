@@ -147,7 +147,7 @@ func (r *SkillTrustRepo) Revoke(ctx context.Context, projectID string, skillID i
 	if !ok {
 		return skilltrust.Status{}, 0, apierr.Forbidden("trust is revoked by a person")
 	}
-	status, schema, err := r.read(ctx, projectID, skillID)
+	_, schema, err := r.read(ctx, projectID, skillID)
 	if err != nil {
 		return skilltrust.Status{}, 0, err
 	}
