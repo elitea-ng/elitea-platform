@@ -184,11 +184,11 @@ fn description_for(languages: &[AnalysisLanguage]) -> String {
                 " python: print() output and the last expression are returned (stdout, stderr, result, traceback); the standard library and the packages the sandbox provides can be imported."
             }
             AnalysisLanguage::JavaScript => {
-                " javascript: a module whose default export (or the result of a default-exported function of the state) is the result."
+                " javascript: a module whose default export (or the result of a default-exported function of the state) is the result; console output is returned as `output`."
             }
-            AnalysisLanguage::TypeScript => " typescript: like javascript.",
+            AnalysisLanguage::TypeScript => " typescript: like javascript, console output included.",
             AnalysisLanguage::Rust => {
-                " rust: define `pub fn run(state: serde_json::Value) -> Result<serde_json::Value, Box<dyn std::error::Error>>`; its value is the result."
+                " rust: define `pub fn run(state: serde_json::Value) -> Result<serde_json::Value, Box<dyn std::error::Error>>`; its value is the result; console output is returned as `output`."
             }
         });
     }
@@ -337,9 +337,17 @@ impl RunCodeTool {
                 json!({"data": data})
             },
         };
-        match self.runner.run(request).await {
-            Ok(value) if wrapped => Ok(python_answer(&value)),
-            Ok(value) => Ok(plain_answer(&value)),
+        // Python returns its own streams from the wrapper. The other languages
+        // run the model's module as it is, so what they printed is the
+        // sandbox's: the same capture the runner reads from the run's receipt.
+        if wrapped {
+            return match self.runner.run(request).await {
+                Ok(value) => Ok(python_answer(&value)),
+                Err(error) => Err(failure_text(&error)),
+            };
+        }
+        match self.runner.run_captured(request).await {
+            Ok(run) => Ok(plain_answer(&run.result, run.output.as_deref())),
             Err(error) => Err(failure_text(&error)),
         }
     }
@@ -389,10 +397,14 @@ fn put_result(answer: &mut Map<String, Value>, result: Value) {
     answer.insert("result_bytes".into(), json!(encoded.len()));
 }
 
-/// The model-facing answer for the other languages: the program's result.
-fn plain_answer(value: &Value) -> Value {
+/// The model-facing answer for the other languages: what the program printed
+/// (cut at [`MAX_STREAM_CHARS`], like Python's streams) and its result.
+fn plain_answer(value: &Value, output: Option<&str>) -> Value {
     let mut answer = Map::new();
     answer.insert("status".into(), json!("success"));
+    if let Some(output) = output {
+        answer.insert("output".into(), json!(clip(output, MAX_STREAM_CHARS)));
+    }
     put_result(&mut answer, value.clone());
     Value::Object(answer)
 }
@@ -532,6 +544,7 @@ mod tests {
     use adk_core::{ReadonlyContext, Toolset};
     use adk_tool::SimpleToolContext;
 
+    use super::super::code::CapturedRun;
     use super::*;
     use crate::tool_schema::{SchemaProfile, normalize_tool_schema, wire_violations};
 
@@ -546,6 +559,8 @@ mod tests {
         seen: Mutex<Vec<AnalysisCodeRequest>>,
         reply: Mutex<Option<Result<Value, AnalysisCodeError>>>,
         served: Vec<AnalysisLanguage>,
+        /// What the runner reports the program printed (`run_captured`).
+        output: Mutex<Option<String>>,
     }
 
     impl FakeRunner {
@@ -557,7 +572,13 @@ mod tests {
                 seen: Mutex::new(Vec::new()),
                 reply: Mutex::new(Some(reply)),
                 served: served.to_vec(),
+                output: Mutex::new(None),
             })
+        }
+
+        fn printing(self: Arc<Self>, output: &str) -> Arc<Self> {
+            *self.output.lock().unwrap() = Some(output.to_owned());
+            self
         }
 
         fn replying(reply: Result<Value, AnalysisCodeError>) -> Arc<Self> {
@@ -570,6 +591,17 @@ mod tests {
         async fn run(&self, request: AnalysisCodeRequest) -> Result<Value, AnalysisCodeError> {
             self.seen.lock().unwrap().push(request);
             self.reply.lock().unwrap().take().expect("one reply")
+        }
+
+        async fn run_captured(
+            &self,
+            request: AnalysisCodeRequest,
+        ) -> Result<CapturedRun, AnalysisCodeError> {
+            let result = self.run(request).await?;
+            Ok(CapturedRun {
+                result,
+                output: self.output.lock().unwrap().take(),
+            })
         }
 
         fn languages(&self) -> Vec<AnalysisLanguage> {
@@ -730,6 +762,64 @@ mod tests {
             assert_eq!(seen[0].source, code);
             assert_eq!(seen[0].input, json!({"data": {"n": 1}}));
         }
+    }
+
+    // #2203: what the program printed comes back for every language the
+    // sandbox serves besides Python, cut at the same 20,000 characters, and
+    // the model's code is still the source as it is (no wrapper).
+    #[tokio::test]
+    async fn other_languages_return_what_the_program_printed_bounded() {
+        for (language, code) in [
+            (
+                AnalysisLanguage::JavaScript,
+                "console.log('hi'); export default 2;",
+            ),
+            (
+                AnalysisLanguage::TypeScript,
+                "console.log('hi'); export default 2;",
+            ),
+            (
+                AnalysisLanguage::Rust,
+                "pub fn run(s: serde_json::Value) -> Result<serde_json::Value, Box<dyn std::error::Error>> { println!(\"hi\"); Ok(s) }",
+            ),
+        ] {
+            let runner = FakeRunner::replying(Ok(json!(2))).printing("hi\n");
+            let tools = served_tools(Arc::clone(&runner), &policy(&[])).await;
+            let out = call(
+                &tools[0],
+                json!({"language": language.name(), "code": code}),
+            )
+            .await;
+            assert_eq!(out["status"], "success", "{language:?}: {out}");
+            assert_eq!(out["output"], "hi\n");
+            assert_eq!(out["result"], 2);
+            assert_eq!(runner.seen.lock().unwrap()[0].source, code);
+        }
+        let runner = FakeRunner::replying(Ok(json!(1))).printing(&"x".repeat(MAX_STREAM_CHARS * 2));
+        let tools = served_tools(runner, &policy(&[])).await;
+        let out = call(
+            &tools[0],
+            json!({"language": "javascript", "code": "export default 1;"}),
+        )
+        .await;
+        let text = out["output"].as_str().unwrap();
+        assert!(text.ends_with("\n[truncated]"));
+        assert_eq!(
+            text.chars().count(),
+            MAX_STREAM_CHARS + "\n[truncated]".len()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_runner_without_capture_adds_no_output_field() {
+        let runner = FakeRunner::replying(Ok(json!(2)));
+        let tools = served_tools(runner, &policy(&[])).await;
+        let out = call(
+            &tools[0],
+            json!({"language": "javascript", "code": "export default 2;"}),
+        )
+        .await;
+        assert!(out.get("output").is_none(), "{out}");
     }
 
     #[tokio::test]

@@ -11,13 +11,13 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use elitea_agent_runtime::toolkits::{
     AnalysisCodeError, AnalysisCodeFailure, AnalysisCodeRequest, AnalysisCodeRunner,
-    AnalysisLanguage, MAX_ANALYSIS_RESULT_BYTES,
+    AnalysisLanguage, CapturedRun, MAX_ANALYSIS_RESULT_BYTES,
 };
 use ring::digest;
 use serde_json::Value;
 
 use super::code::{CodeLanguage, CodeProvenance};
-use super::code_result::{ReceiptError, parse_receipt_detailed};
+use super::code_result::{ReceiptError, parse_receipt_captured};
 use super::code_runtime::{CodeInvocation, CodeSandboxRuntime, ToolCodeError};
 
 /// The most bytes of input state one program is sent.
@@ -41,14 +41,14 @@ const MAX_DETAIL_CHARS: usize = 1_500;
 /// uses. The run's status is judged before any size: a program that failed
 /// and wrote a great deal to stderr failed; it did not return too large a
 /// result. This is the one place the result limit is checked.
-fn result_of(bytes: &[u8]) -> Result<Value, AnalysisCodeError> {
-    match parse_receipt_detailed(bytes) {
-        Ok(result) => {
+fn result_of(bytes: &[u8]) -> Result<(Value, String), AnalysisCodeError> {
+    match parse_receipt_captured(bytes) {
+        Ok((result, printed)) => {
             let size = serde_json::to_vec(&result).map_or(usize::MAX, |encoded| encoded.len());
             if size > MAX_ANALYSIS_RESULT_BYTES {
                 return Err(AnalysisCodeFailure::ResultTooLarge.into());
             }
-            Ok(result)
+            Ok((result, printed))
         }
         Err(ReceiptError::TooLarge) => Err(AnalysisCodeFailure::ResultTooLarge.into()),
         Err(ReceiptError::Malformed) => Err(AnalysisCodeFailure::Failed.into()),
@@ -107,6 +107,10 @@ fn activation(call_id: &str, source: &str, input: &[u8]) -> [u8; 32] {
     out
 }
 
+/// The most characters of a program's printed output carried out of this
+/// adapter; the tool applies its own, smaller bound to what the model reads.
+const MAX_PRINTED_CHARS: usize = 64 * 1024;
+
 #[async_trait]
 impl AnalysisCodeRunner for SandboxAnalysisRunner {
     fn languages(&self) -> Vec<AnalysisLanguage> {
@@ -123,6 +127,28 @@ impl AnalysisCodeRunner for SandboxAnalysisRunner {
     }
 
     async fn run(&self, request: AnalysisCodeRequest) -> Result<Value, AnalysisCodeError> {
+        self.execute(request).await.map(|(result, _)| result)
+    }
+
+    async fn run_captured(
+        &self,
+        request: AnalysisCodeRequest,
+    ) -> Result<CapturedRun, AnalysisCodeError> {
+        self.execute(request)
+            .await
+            .map(|(result, printed)| CapturedRun {
+                result,
+                output: Some(printed.chars().take(MAX_PRINTED_CHARS).collect()),
+            })
+    }
+}
+
+impl SandboxAnalysisRunner {
+    /// One run: the result and what the program printed (the receipt's stderr).
+    async fn execute(
+        &self,
+        request: AnalysisCodeRequest,
+    ) -> Result<(Value, String), AnalysisCodeError> {
         let input_json = serde_json::to_vec(&request.input)
             .map_err(|_| AnalysisCodeError::from(AnalysisCodeFailure::Rejected))?;
         if input_json.len() > MAX_INPUT_BYTES || request.source.contains('\0') {
@@ -290,6 +316,38 @@ mod tests {
             serde_json::from_slice::<Value>(&seen[0].3).unwrap(),
             serde_json::json!({"data": {"rows": [[1]]}})
         );
+    }
+
+    // #2203: a completed run's stderr is what the program printed; `run`
+    // keeps returning only the result.
+    #[tokio::test]
+    async fn a_captured_run_returns_what_the_program_printed() {
+        let reply = || {
+            Ok(receipt_with(
+                r#"{"revision":1,"result":2}"#,
+                0,
+                "hello\n",
+                "completed",
+            ))
+        };
+        let (runner, _) = runner(reply());
+        let captured = runner.run_captured(request("p")).await.unwrap();
+        assert_eq!(captured.result, serde_json::json!(2));
+        assert_eq!(captured.output.as_deref(), Some("hello\n"));
+        let (runner, _) = runner(reply());
+        assert_eq!(
+            runner.run(request("p")).await.unwrap(),
+            serde_json::json!(2)
+        );
+        let big = "y".repeat(MAX_PRINTED_CHARS * 2);
+        let (runner, _) = runner(Ok(receipt_with(
+            r#"{"revision":1,"result":2}"#,
+            0,
+            &big,
+            "completed",
+        )));
+        let captured = runner.run_captured(request("p")).await.unwrap();
+        assert_eq!(captured.output.unwrap().chars().count(), MAX_PRINTED_CHARS);
     }
 
     #[tokio::test]

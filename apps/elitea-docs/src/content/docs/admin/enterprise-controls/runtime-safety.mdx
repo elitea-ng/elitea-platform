@@ -711,7 +711,7 @@ The categories of the built-in tools are declared in one contract, [`libs/proto/
 | --- | --- |
 | `external_send` | GitHub `comment_on_issue`; GitLab and GitLab Org `comment_on_issue`, `create_pr_change_comment`; GitLab `comment_on_pr`; Bitbucket `add_pull_request_comment`; Azure DevOps Repos `comment_on_pull_request`; Aha! `add_comment`; Jira `add_comments`, `update_comment_with_file`; Figma `post_file_comment`; Slack `send_message`; Gmail (`yagmail`) `send_gmail_message` |
 | `delete` | Every `delete_*` tool, `remove_index` and OneNote `onenote_delete_page` |
-| `code_execution` | Data Analysis `pandas_analyze_data`; Sandbox `pyodide_sandbox`, `stateful_pyodide_sandbox`; the Code sandbox internal tool `run_code`; SQL `execute_sql`; BigQuery `execute` |
+| `code_execution` | Data Analysis `pandas_analyze_data`, `run_analysis_code`; Sandbox `pyodide_sandbox`, `stateful_pyodide_sandbox`; the Code sandbox internal tool `run_code`; SQL `execute_sql`; BigQuery `execute` |
 | `payment` | No built-in tool yet |
 
 The tools of a custom MCP server take the category that the approver gave each tool when the connector request was approved (the pinned tools carry it). A tool without a category is `write`.
