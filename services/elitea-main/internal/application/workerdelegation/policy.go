@@ -55,6 +55,10 @@ type Resolver struct {
 	// principal computes the run principal's bound; nil, or the section's
 	// principal_bound switch off, sends none (ADR-0044 Amendment 1).
 	principal PrincipalReader
+	// grants and grantsEnforced are the delegation grants a run carries
+	// (grants.go). Off by default.
+	grants         GrantSource
+	grantsEnforced bool
 }
 
 // NewResolver builds the resolver.
@@ -81,7 +85,12 @@ func (r *Resolver) WorkerDelegationPolicy(ctx context.Context, command *runtimev
 		return nil, fmt.Errorf("worker delegation: read the platform setting: %w", err)
 	}
 	if !settings.Stored {
-		return nil, nil
+		// The grant switch alone still sends the defaults and the grants.
+		input, err := r.input(ctx, command)
+		if err != nil {
+			return nil, err
+		}
+		return r.withGrants(ctx, command, input, nil)
 	}
 	if command.GetSecurityContextRef() != nil {
 		settings.Mode = platformconfig.DelegationEnforce
@@ -100,7 +109,7 @@ func (r *Resolver) WorkerDelegationPolicy(ctx context.Context, command *runtimev
 			return nil, err
 		}
 	}
-	return policy, nil
+	return r.withGrants(ctx, command, input, policy)
 }
 
 // Policy is the command field for settings and the root's data classes:

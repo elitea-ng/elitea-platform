@@ -198,6 +198,40 @@ message WorkerDelegationPolicyV1 {
   WorkerPrincipalBoundV1 principal_bound = 11;
   reserved 4 to 10;
   reserved 12 to 20;
+  // The approved delegation grants of the run (ADR-0044 amendment 1, #2166):
+  // one per composition edge Y to X that has an approved or stale grant, for
+  // the closure of the root. The worker reads them as G(Y to X) in
+  // E(X) = own(X) ∩ (E(Y) ∪ G(Y to X)) ∩ P. Empty while Main's grant switch is
+  // off (the default until the migration of existing compositions has run),
+  // and then commands are unchanged byte for byte. Fields 21 to 23, because
+  // the reserved ranges above are closed.
+  repeated WorkerDelegationGrantV1 grants = 21;
+  // The saved agent or pipeline the run starts with, the caller of its first
+  // delegation. 0 when the run has none (an ad hoc conversation).
+  uint64 root_application_id = 22;
+  // True when grants are enforced: an edge with a grant is bounded by
+  // E(Y) ∪ G and an edge without one is refused (or recorded, in report
+  // mode) as today. False leaves delegation exactly as before grants.
+  bool grants_enforced = 23;
+  reserved 24 to 30;
+}
+
+// One approved delegation grant: what the callee X may use through the caller
+// Y, pinned to its digest.
+message WorkerDelegationGrantV1 {
+  // The saved agents or pipelines of the edge.
+  uint64 caller_application_id = 1;
+  uint64 callee_application_id = 2;
+  // sub_agent, agent_tool, pipeline_child or pipeline_node.
+  string edge_kind = 3;
+  uint64 grant_id = 4;
+  // The lowercase hex SHA-256 of grant_set, as a delegation step records it.
+  string digest = 5;
+  // The approved set in its canonical JSON form (schema
+  // elitea.delegation.grants.v1). The worker refuses a command whose
+  // digest does not match it.
+  string grant_set = 6;
+  reserved 7 to 10;
 }
 
 // What the run principal may use (ADR-0044 Amendment 1, rule 1). Main

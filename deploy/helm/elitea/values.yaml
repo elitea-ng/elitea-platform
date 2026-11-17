@@ -3176,6 +3176,14 @@ main:
     # `elitea-main credential-policy put`), hashes to its digest and allows at
     # least one identity mode. Read in cmd/elitea-main/credential_governance.go.
     ELITEA_ENTERPRISE_CREDENTIAL_GOVERNANCE_ENABLED: "false"
+    # --- Delegation grants (ADR-0044 amendment 1) --------------------------------
+    # "true" | "false". Off (the default), agent execution commands carry no
+    # delegation grant and delegation behaves as before grants. On, the worker
+    # bounds each delegation by the caller's set plus the edge's approved grant.
+    # Leave it off until the migration of existing compositions has created
+    # their pending grants and owners have reviewed them. Read in
+    # internal/runtimecomposition/config.go.
+    ELITEA_DELEGATION_GRANTS_ENFORCED: "false"
     ELITEA_CREDENTIAL_GOVERNANCE_POLICY_REVISION: ""
     # External Vault/OpenBao KV v2 store for governed credentials (#1113).
     # Read ONLY with the flag above on. All empty means unconfigured, which is

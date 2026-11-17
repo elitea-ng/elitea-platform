@@ -2546,6 +2546,7 @@ fn delegate_saved_pipeline(
         &mut version,
         &admitted.data_classes,
         runtime.tool_policy.egress(),
+        None,
     )?
     .map(|delegation| (version, delegation)))
 }
@@ -2558,6 +2559,7 @@ fn composition_refusal(
     caller: &DelegationScope,
     admitted: &AdmittedSavedPipeline,
     egress: &elitea_agent_runtime::egress::RunEgress,
+    callee: Option<u64>,
 ) -> Result<Option<RefusedDelegation>, NativeAgentAssemblyError> {
     let mut version = admitted.version.clone();
     match super::application_tools::narrow_version(
@@ -2565,11 +2567,13 @@ fn composition_refusal(
         &mut version,
         &admitted.data_classes,
         egress,
+        callee,
     )? {
         Err(refused) => Ok(Some(refused)),
         Ok(delegation) => {
             for child in admitted.children.values() {
-                if let Some(refused) = composition_refusal(&delegation.scope, child, egress)? {
+                if let Some(refused) = composition_refusal(&delegation.scope, child, egress, None)?
+                {
                     return Ok(Some(refused));
                 }
             }
@@ -2628,6 +2632,7 @@ async fn admit_saved_pipeline_child(
         runtime.materialization.delegation(),
         admitted.as_ref(),
         runtime.tool_policy.egress(),
+        Some(identity.0),
     )? {
         return Ok(Err(refused));
     }
