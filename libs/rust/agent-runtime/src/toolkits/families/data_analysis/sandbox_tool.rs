@@ -47,11 +47,13 @@ pub const CODE_SANDBOX_TOOL: &str = "pyodide";
 /// The one tool the toggle binds.
 pub const RUN_CODE_TOOL_NAME: &str = "run_code";
 
-/// The most bytes of program text one call carries (the sandbox's own request
-/// limit is the real bound; this keeps the refusal a sentence).
-const MAX_CODE_BYTES: usize = 100_000;
-/// The most bytes of `input` JSON one call carries.
-const MAX_INPUT_BYTES: usize = 256 * 1024;
+/// The most bytes of program text one call carries. Below the tool-argument
+/// admission's 64 KiB string bound, so an over-long program is a sentence the
+/// model reads, not a refused call.
+const MAX_CODE_BYTES: usize = 60_000;
+/// The most bytes of `input` JSON one call carries (the admission bounds the
+/// whole call at 256 KiB and each string in it at 64 KiB).
+const MAX_INPUT_BYTES: usize = 128 * 1024;
 /// Each of stdout, stderr and the traceback is cut at this many characters,
 /// inside the sandbox first and here again, because the answer is untrusted.
 const MAX_STREAM_CHARS: usize = 20_000;
@@ -809,7 +811,10 @@ mod tests {
             json!({"code": "x", "input": [1]}),
             json!({"code": "x", "language": 3}),
             json!({"code": "x".repeat(MAX_CODE_BYTES + 1)}),
-            json!({"code": "x", "input": {"big": "y".repeat(MAX_INPUT_BYTES)}}),
+            json!({"code": "x", "input": {
+                "a": "y".repeat(30_000), "b": "y".repeat(30_000), "c": "y".repeat(30_000),
+                "d": "y".repeat(30_000), "e": "y".repeat(30_000),
+            }}),
         ] {
             let out = call(&tools[0], args).await;
             assert_eq!(out["status"], "error", "{out}");
