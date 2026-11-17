@@ -699,7 +699,7 @@ func probeVertexGenerateContent(ctx context.Context, client *http.Client, req ch
 		body := map[string]any{
 			"anthropic_version": "vertex-2023-10-16",
 			"messages":          []map[string]string{{"role": "user", "content": checkModelPrompt}},
-			"max_tokens":        1,
+			"max_tokens":        checkModelTokenBudget,
 		}
 		return modelProbePOST(ctx, client, base+"/publishers/anthropic/models/"+url.PathEscape(req.Model)+":rawPredict",
 			headers, body, "content")
