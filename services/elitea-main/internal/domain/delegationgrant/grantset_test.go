@@ -53,6 +53,48 @@ func TestDigestVectorsAgreeWithTheWorker(t *testing.T) {
 	}
 }
 
+// A callee's toolkit references build the same grant set in Main and in the
+// worker (GrantSet::from_callee).
+func TestFromToolsMatchesTheWorkerVectors(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(file), "../../../../../libs/proto/contracts/delegation-grant-digest-vectors-v1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vectors struct {
+		ToolsCases []struct {
+			Name        string           `json:"name"`
+			Tools       []map[string]any `json:"tools"`
+			DataClasses []string         `json:"data_classes"`
+			Canonical   string           `json:"canonical"`
+			Digest      string           `json:"digest"`
+		} `json:"tools_cases"`
+	}
+	if err := json.Unmarshal(raw, &vectors); err != nil {
+		t.Fatal(err)
+	}
+	if len(vectors.ToolsCases) < 5 {
+		t.Fatalf("only %d tools vectors", len(vectors.ToolsCases))
+	}
+	for _, c := range vectors.ToolsCases {
+		t.Run(c.Name, func(t *testing.T) {
+			var tools []Tool
+			for _, raw := range c.Tools {
+				tool := Tool{Type: raw["type"].(string)}
+				if id, ok := raw["id"].(float64); ok {
+					tool.ID = int64(id)
+				}
+				tool.Settings, _ = raw["settings"].(map[string]any)
+				tools = append(tools, tool)
+			}
+			got := FromTools(tools, c.DataClasses)
+			if string(got.Canonical()) != c.Canonical || got.Digest() != c.Digest {
+				t.Fatalf("canonical\n got %s\nwant %s", got.Canonical(), c.Canonical)
+			}
+		})
+	}
+}
+
 func set(toolkits ...ToolkitGrant) GrantSet { return GrantSet{Toolkits: toolkits} }
 
 func only(key string, credential string, tools ...string) ToolkitGrant {

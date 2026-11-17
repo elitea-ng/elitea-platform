@@ -57,6 +57,7 @@ import (
 	v2credentialreferences "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialreferences"
 	v2credentialreview "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialreview"
 	v2deepwiki "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
+	v2delegationgrants "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/delegationgrants"
 	desktopopsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
 	v2discovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/discovery"
 	v2drafts "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/drafts"
@@ -407,6 +408,13 @@ type RouterConfig struct {
 	// amendment 1, A1.6).
 	ConversationSkillsRepo v2conversationskills.Repository
 	SkillTrustRepo         v2skilltrust.Repository
+	// DelegationGrants backs the delegation grants of a project's composition
+	// edges (ADR-0044 amendment 1, delegation epic 2156 story S2b).
+	DelegationGrants v2delegationgrants.Service
+	// DelegationGoverned reports whether the governed profile is on (the
+	// credential governance admission): a grant proposed while it is on is
+	// governed and approved through its change request. Nil means never.
+	DelegationGoverned func(context.Context) bool
 	// MemoriesRepo backs persistent, cross-conversation personal memory
 	// (#870) — Settings > Memory's CRUD. Its recall INTO a chat turn is a
 	// separate dependency, wired straight into
@@ -2234,6 +2242,19 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		}
 		agentLifecycle, _ = dbrepos.ComposeAgentLifecycle(cfg.Pool, lifecycleGate, cfg.SuspensionChanged)
 	}
+	// Delegation grants of composition edges (ADR-0044 amendment 1): the grant
+	// store records a governed grant's change request through the lifecycle
+	// store, and the lifecycle store's final approval approves the grant
+	// through it. The attach path proposes grants in its own transaction.
+	// Without a pool the routes and the attach hook are absent.
+	delegationService := cfg.DelegationGrants
+	var delegationHook v2core.DelegationGrantHook
+	if delegation := composeDelegationGrants(cfg, agentLifecycle, permissionResolver); delegation != nil {
+		delegationHook = delegation.store
+		if delegationService == nil {
+			delegationService = delegation.service
+		}
+	}
 	// Run step records (ADR-0042, #1499): without a pool the store stays
 	// nil and the routes answer 503; without an object store the stored
 	// content of a step answers 503 while its record still reads.
@@ -2271,6 +2292,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		v2core.WithPublishAIValidation(publishAIValidator(cfg.PredictCompleter)),
 		v2core.WithConnectorGate(connectorGate),
 		v2core.WithWorkforceManagerCheck(apimw.HoldsPermissionIn(coreResolver, platformauth.PermissionModeDefault, v2agentworkforce.ManagePermission)),
+		v2core.WithDelegationGrants(delegationHook),
 	)
 	agentLifecycle.ComposePublisher(coreHandler)
 	// An approved upgrade or upstream merge is applied by the handler that owns
@@ -3816,6 +3838,21 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Put("/application/prompt_lib/{projectID}/{applicationID}", appHandler.Update)
 					r.With(projectPermission("models.applications.application.delete")).
 						Delete("/application/prompt_lib/{projectID}/{applicationID}", appHandler.Delete)
+					// The delegation grants of the agent's composition edges (ADR-0044
+					// amendment 1): read with the agent, proposed, approved and revoked
+					// with the right to edit it. Under the governed profile a grant is
+					// approved through its change request instead. Audited as a surface.
+					if delegationService != nil {
+						grants := v2delegationgrants.NewHandler(delegationService)
+						readAgent := projectPermission("models.applications.application.details")
+						editAgent := projectPermission("models.applications.application.update")
+						r.With(readAgent).Get("/delegation_grants/prompt_lib/{projectID}/{applicationID}", grants.List)
+						r.With(editAgent).Post("/delegation_grants/prompt_lib/{projectID}/{applicationID}", grants.Propose)
+						r.With(readAgent).Get("/delegation_preview/prompt_lib/{projectID}/{applicationID}", grants.Preview)
+						r.With(readAgent).Get("/delegation_grant/prompt_lib/{projectID}/{applicationID}/{grantID}", grants.Get)
+						r.With(editAgent).Post("/delegation_grant/prompt_lib/{projectID}/{applicationID}/{grantID}/approve", grants.Approve)
+						r.With(editAgent).Delete("/delegation_grant/prompt_lib/{projectID}/{applicationID}/{grantID}", grants.Revoke)
+					}
 					r.With(projectPermission("models.applications.versions.get")).
 						Get("/versions/prompt_lib/{projectID}/{applicationID}", appHandler.ListVersions)
 					r.With(projectPermission("models.applications.versions.create")).

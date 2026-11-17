@@ -1159,7 +1159,13 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// Marketplace tools), the auto_feedback switch and the auto_hire numbers of
 	// a listing on the workforce policy (ADR-0051 M6, issue 1632). No
 	// permission: deciding them is agents.workforce.manage, granted by 0236.
-	require.EqualValues(t, 253, Head(shared))
+	//
+	// 254: shared/0254_delegation_change_requests.sql, the change request kind
+	// `delegation` (the governed approval of a delegation grant, ADR-0044
+	// amendment 1, delegation epic 2156 story S2b) with its grant column, and
+	// the one-open-request index that leaves it out. No permission: approving
+	// is the lifecycle's existing change request approval.
+	require.EqualValues(t, 254, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

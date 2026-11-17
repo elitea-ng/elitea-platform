@@ -1,6 +1,6 @@
 {
   "contract": "delegation-grant-digest-vectors-v1",
-  "description": "Shared digest vectors for the delegation grant set (ADR-0044 amendment 1). Main (services/elitea-main/internal/domain/delegationgrant grantset_test.go) and the Worker runtime (libs/rust/agent-runtime delegation_tests.rs) parse each grant_set, normalise it, and must produce exactly `canonical` (compact JSON, object members sorted by key bytes, strings escaped as serde_json writes them) and its lowercase hex SHA-256 `digest`. Expected values were generated independently with Python hashlib, not by either implementation.",
+  "description": "Shared digest vectors for the delegation grant set (ADR-0044 amendment 1). Main (services/elitea-main/internal/domain/delegationgrant grantset_test.go) and the Worker runtime (libs/rust/agent-runtime delegation_tests.rs) parse each grant_set, normalise it, and must produce exactly `canonical` (compact JSON, object members sorted by key bytes, strings escaped as serde_json writes them) and its lowercase hex SHA-256 `digest`. `tools_cases` give a callee's toolkit references and declared data classes (Main: delegationgrant.FromTools; Worker: GrantSet::from_callee) and must produce the same canonical form and digest. Expected values were generated independently with Python hashlib, not by either implementation.",
   "cases": [
     {
       "name": "empty set",
@@ -184,6 +184,131 @@
       },
       "canonical": "{\"data_classes\":[\"a\",\"b\"],\"egress_hosts\":[\"y.test\",\"z.test\"],\"schema\":\"elitea.delegation.grants.v1\",\"toolkits\":[{\"credential\":null,\"key\":\"toolkit:1\",\"tools\":{\"all_except\":[\"y\",\"z\"]}},{\"credential\":null,\"key\":\"toolkit:2\",\"tools\":{\"only\":[\"a\",\"b\"]}}]}",
       "digest": "9b65a6b082002b6ca7916c58d7b7b3a3ab4d280df24aab1fde62d2ef26a855d3"
+    }
+  ],
+  "tools_cases": [
+    {
+      "name": "a toolkit with selected tools and a nested credential",
+      "tools": [
+        {
+          "id": 7,
+          "type": "jira",
+          "toolkit_name": "Jira",
+          "settings": {
+            "selected_tools": [
+              " search ",
+              "read",
+              ""
+            ],
+            "jira_configuration": {
+              "credential_reference_id": "ref-7"
+            }
+          }
+        }
+      ],
+      "data_classes": [],
+      "canonical": "{\"data_classes\":null,\"egress_hosts\":[],\"schema\":\"elitea.delegation.grants.v1\",\"toolkits\":[{\"credential\":\"ref-7\",\"key\":\"toolkit:7\",\"tools\":{\"only\":[\"read\",\"search\"]}}]}",
+      "digest": "870959c39e47b563ff924615933aa8479a3fbc78ac2e945c66e9641d61513509"
+    },
+    {
+      "name": "a built-in toolkit with exclusions, and an application tool that is not a grant",
+      "tools": [
+        {
+          "type": "python",
+          "settings": {
+            "excluded_tools": [
+              "rm"
+            ]
+          }
+        },
+        {
+          "id": 9,
+          "type": "application",
+          "settings": {
+            "application_id": 3,
+            "application_version_id": 4
+          }
+        }
+      ],
+      "data_classes": [],
+      "canonical": "{\"data_classes\":null,\"egress_hosts\":[],\"schema\":\"elitea.delegation.grants.v1\",\"toolkits\":[{\"credential\":null,\"key\":\"builtin:python\",\"tools\":{\"all_except\":[\"rm\"]}}]}",
+      "digest": "ec09808d1ffbcd1cb777be56f8a6cbeb2203a27679af893444cae2c01e835549"
+    },
+    {
+      "name": "hosts come from explicit URL fields only",
+      "tools": [
+        {
+          "id": 2,
+          "type": "git",
+          "settings": {
+            "base_url": "https://Git.Example.com:8443/x",
+            "nested": {
+              "endpoint": "wss://b.test/ws"
+            },
+            "note": "https://ignored.test",
+            "template": {
+              "url": "https://{host}/x"
+            },
+            "ftp_url": "ftp://x.test",
+            "rows": [
+              {
+                "server": "http://c.test"
+              }
+            ]
+          }
+        },
+        {
+          "id": 3,
+          "type": "openapi",
+          "settings": {
+            "url": "https://spec.test/openapi.json"
+          }
+        }
+      ],
+      "data_classes": [],
+      "canonical": "{\"data_classes\":null,\"egress_hosts\":[\"b.test\",\"c.test\",\"git.example.com\"],\"schema\":\"elitea.delegation.grants.v1\",\"toolkits\":[{\"credential\":null,\"key\":\"toolkit:2\",\"tools\":{\"all_except\":[]}},{\"credential\":null,\"key\":\"toolkit:3\",\"tools\":{\"all_except\":[]}}]}",
+      "digest": "801e7321096cae72b5fd0f245b8a266c047e0825b6aea23c552f41cdbc64473d"
+    },
+    {
+      "name": "the top-level credential wins and a malformed one is none",
+      "tools": [
+        {
+          "id": 4,
+          "type": "a",
+          "settings": {
+            "credential_reference_id": "top-1",
+            "a_configuration": {
+              "credential_reference_id": "nested"
+            }
+          }
+        },
+        {
+          "id": 5,
+          "type": "b",
+          "settings": {
+            "credential_reference_id": "has space"
+          }
+        }
+      ],
+      "data_classes": [],
+      "canonical": "{\"data_classes\":null,\"egress_hosts\":[],\"schema\":\"elitea.delegation.grants.v1\",\"toolkits\":[{\"credential\":\"top-1\",\"key\":\"toolkit:4\",\"tools\":{\"all_except\":[]}},{\"credential\":null,\"key\":\"toolkit:5\",\"tools\":{\"all_except\":[]}}]}",
+      "digest": "42708ee99f1fd70db5afb95ae3cb59559b6ecf7b8232c254e180950558678c35"
+    },
+    {
+      "name": "declared data classes",
+      "tools": [
+        {
+          "id": 1,
+          "type": "x",
+          "settings": {}
+        }
+      ],
+      "data_classes": [
+        "pii",
+        "internal"
+      ],
+      "canonical": "{\"data_classes\":[\"internal\",\"pii\"],\"egress_hosts\":[],\"schema\":\"elitea.delegation.grants.v1\",\"toolkits\":[{\"credential\":null,\"key\":\"toolkit:1\",\"tools\":{\"all_except\":[]}}]}",
+      "digest": "0fda44a90559eef49875bbbe97e7641f28a686fc0e0126f95de5a425bb53285a"
     }
   ]
 }

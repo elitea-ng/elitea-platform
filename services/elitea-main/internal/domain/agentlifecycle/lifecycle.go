@@ -96,7 +96,16 @@ const (
 	KindHire          ChangeKind = "hire"
 	KindUpgrade       ChangeKind = "upgrade"
 	KindUpstreamMerge ChangeKind = "upstream_merge"
+	// KindDelegation approves a delegation grant for one composition edge of
+	// this agent as the CALLER (ADR-0044 amendment 1, A1.2 rule 2). It is
+	// created only under the governed profile, is born submitted, carries the
+	// grant it approves, records no release and certifies nothing. One may be
+	// open per grant, beside the one open request every agent may have.
+	KindDelegation ChangeKind = "delegation"
 )
+
+// IsDelegation reports whether the kind is a delegation grant approval.
+func (k ChangeKind) IsDelegation() bool { return k == KindDelegation }
 
 // IsMarketplace reports whether the kind belongs to the Marketplace.
 func (k ChangeKind) IsMarketplace() bool {
