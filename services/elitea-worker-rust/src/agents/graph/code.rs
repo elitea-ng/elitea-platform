@@ -22,7 +22,7 @@ const MAX_DEPENDENCIES: usize = 128;
 
 #[derive(Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq, Debug)]
 #[serde(rename_all = "lowercase")]
-pub(super) enum CodeLanguage {
+pub(in crate::agents) enum CodeLanguage {
     #[default]
     Python,
     JavaScript,

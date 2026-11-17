@@ -4291,6 +4291,7 @@
   "entities.webhook.table.deliveries": "Recent deliveries",
   "entities.webhook.table.deliveriesAria": "Toggle recent deliveries",
   "features.agents.internalTools.imageGenerationUnknown": "Image generation availability could not be checked",
+  "features.agents.internalTools.noCodeSandbox": "No code sandbox is configured for this deployment",
   "features.agents.internalTools.noImageModel": "No image model is configured for this deployment",
   "features.agents.internalTools.notAvailableOnRustWorker": "Not available on the Rust worker",
   "features.agents.internalTools.notAvailableOnThisWorker": "Not available on this worker",

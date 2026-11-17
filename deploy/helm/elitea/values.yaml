@@ -3079,6 +3079,14 @@ main:
     # Image creation toggle is disabled and the worker does not offer the tool.
     ELITEA_IMAGE_GENERATION_MODEL: ""
 
+    # ELITEA_CODE_SANDBOX_LANGUAGES is the comma-separated list of languages
+    # the code sandbox serves (python, javascript, typescript, rust). It makes
+    # the agents' "Code sandbox" (pyodide) internal tool available and is
+    # reported by GET /elitea_core/runtime_capabilities. Empty: derived from
+    # worker.runtime.sandboxRuntimes; empty there too, the toggle is disabled
+    # and the worker does not offer the tool.
+    ELITEA_CODE_SANDBOX_LANGUAGES: ""
+
     # --- Local username/password (Form) sign-in --------------------------------
     # OFF unless "true". A deployment signs people in through OIDC or SAML and
     # provisions them through SCIM; the Form users file

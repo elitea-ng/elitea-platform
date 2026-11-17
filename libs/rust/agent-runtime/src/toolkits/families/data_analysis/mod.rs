@@ -43,6 +43,7 @@ pub(crate) mod chart;
 pub mod code;
 pub(crate) mod formats;
 pub(crate) mod ops;
+pub mod sandbox_tool;
 pub(crate) mod schema;
 pub(crate) mod table;
 pub mod tools;

@@ -139,6 +139,10 @@ The gateway looks the model name up in the catalogue of the project that makes t
 
 Leave the value empty to keep image generation off: the toggle then shows disabled. Choosing an image model per project is not supported yet. The tool changes its allowed sizes, image count and quality values by the model family (`dall-e-3`, `dall-e-2`, `gpt-image-*`); other models take the image count and the size `auto` only.
 
+## Code sandbox
+
+The agents' **Python sandbox** module (stored as `pyodide`) runs the `run_code` tool on the same code sandbox that runs pipeline Code nodes, in the languages of `worker.runtime.sandboxRuntimes` (`python`, `javascript`, `typescript`, `rust`). The chart gives the languages to elitea-main as `ELITEA_CODE_SANDBOX_LANGUAGES`, so `GET /elitea_core/runtime_capabilities` reports `internal_tools.pyodide` as true and lists them in `code_sandbox_languages`. A value you set yourself in `main.env.ELITEA_CODE_SANDBOX_LANGUAGES` wins. With no `sandboxRuntimes`, the toggle shows disabled and the worker skips the tool with a logged `agent_internal_tool_skipped` warning; no agent is refused.
+
 ## Object storage and artifacts
 
 `main.env.STORAGE_BACKEND` / `STORAGE_CONTAINER` point at an S3-compatible bucket. It must **exist before the first sync** — the readiness probe tolerates a missing bucket, but the very next boot step (setting the bucket's retention lifecycle) does not, so a missing bucket looks like a green install that then crash-loops. `objectInit.enabled: true` creates it for a self-hosted S3-compatible endpoint you administer directly (RustFS, MinIO); a managed cloud object store almost always withholds `CreateBucket` from an application-scoped credential, so create it out of band there.
