@@ -131,6 +131,21 @@ describe('EntityCard', () => {
   });
 });
 
+describe('row action (#2091)', () => {
+  it('shows the action in the table without opening the row, and not at all on a card', () => {
+    const onClick = vi.fn();
+    const onAction = vi.fn();
+    const items: readonly EntityListItem[] = [{ id: '1', name: 'Hired', onClick, action: { label: 'Undo hire', onClick: onAction } }];
+    const table = renderWithTheme(<EntityCardList items={items} view="table" />);
+    fireEvent.click(table.getByTestId('entity-row-action'));
+    expect(onAction).toHaveBeenCalledTimes(1);
+    expect(onClick).not.toHaveBeenCalled();
+    table.unmount();
+    const cards = renderWithTheme(<EntityCardList items={items} view="cards" />);
+    expect(cards.queryByTestId('entity-row-action')).not.toBeInTheDocument();
+  });
+});
+
 describe('EntityCardList', () => {
   it('renders one card per item in the grid view', () => {
     const { getAllByTestId } = renderWithTheme(

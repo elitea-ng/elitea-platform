@@ -32,6 +32,7 @@ export function toApplicationRow(
   application: Application,
   onSelectForkedFrom: (id: string) => void,
   badge?: string,
+  action?: ApplicationListRow['action'],
 ): ApplicationListRow {
   const forkedFrom = forkedFromId(application);
   const iconUrl = iconUrlOf(application);
@@ -48,6 +49,7 @@ export function toApplicationRow(
     tags: application.tags ?? [],
     createdAt: application.created_at,
     ...(badge === undefined ? {} : { badge }),
+    ...(action === undefined ? {} : { action }),
     ...(iconUrl === undefined ? {} : { iconUrl }),
     ...(forkedFrom === undefined ? {} : { forkedFrom: { onClick: () => onSelectForkedFrom(forkedFrom) } }),
   };

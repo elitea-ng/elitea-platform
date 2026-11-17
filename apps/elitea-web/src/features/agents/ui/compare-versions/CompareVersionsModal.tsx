@@ -290,6 +290,7 @@ export function CompareVersionsModal(props: CompareVersionsModalProps): ReactNod
     <BaseModal
       open={open}
       variant="complex"
+      fullscreen="wide"
       /* NOT `fullscreen`: `BaseModal` suppresses its whole action bar in
          fullscreen (`hasActions && !isFullscreen`), which would take away
          "Change versions"/"Close" exactly where they are needed. The wizard
