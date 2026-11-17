@@ -64,6 +64,10 @@ Open the agent, scroll to its **Skills** section, and select **+ Skill** to sear
 
 In a conversation with an agent that has skills attached, type `~` to open a picker of that agent's skills, then select one to invoke its instructions for that turn.
 
+### Skills from another project are untrusted until you trust them
+
+A skill you add from the Marketplace is text another project wrote. When you pick one in a chat, the model gets its text as quoted data, not as an instruction of your project, until your project has trusted that exact version of the text. Any change to the text, for example a newer version pulled from the Marketplace, is a new version and is untrusted again. A skill you made yourself, imported, or published from your project is never untrusted, and neither is a skill attached to an agent: attaching is part of the agent's own review. Skills that existed before this rule keep working as before. A model chat that has only a model, with no agent, takes picked skills too; the server accepts them in `payload.skills` of the message start, in the same shape an agent chat sends, up to five skills and 64 KiB of text together.
+
 ## Delete a skill
 
 Deleting a skill removes it from every agent it is attached to. Confirm in the dialog — unlike the agent editor's delete confirmation, it does not ask you to type the skill's name.

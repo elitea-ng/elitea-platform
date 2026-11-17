@@ -18,6 +18,7 @@ import { EntityListSidebar, ListSelectionSection, pageBodySx, pageSx, useListSea
 import { usePermissionSet } from '@/widgets/sidebar';
 
 import { toApplicationRow } from './lib/applicationRows';
+import { useProbationUndo } from './lib/useProbationUndo';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
 import { ApplicationListPanel } from './ui/ApplicationListPanel';
 
@@ -72,6 +73,11 @@ function AgentListActions({ projectId, canCreate }: { readonly projectId: string
 }
 
 /** What the sidebar shows in both modes: New agent, Import and the Agents | Teams switch. */
+/** The row action of an automatic hire still inside its 14-day undo window. */
+function undoAction(undo: (() => void) | undefined): { readonly label: string; readonly onClick: () => void } | undefined {
+  return undo === undefined ? undefined : { label: t('pages.agents.list.undoHire', 'Undo hire'), onClick: undo };
+}
+
 function useSidebarBase(projectId: string | undefined, permissions: Permissions, mode: string) {
   const navigate = useNavigate();
   const canCreate = permissions.has(PERMISSIONS.applications.create);
@@ -192,6 +198,7 @@ function AgentsListMode({ base, projectId, permissions }: AgentsListModeProps): 
   const { selectedTags, toggleTag } = useRailTagSelection();
   const folderId = useFolderFilter(projectId, 'agent').folderId;
   const list = workshopList.useListData({ projectId, agentsType: 'classic', enabled: true, query, tags: selectedTags, folderId });
+  const undoHireFor = useProbationUndo(projectId ?? '', list.rows);
   const ids = useMemo(() => list.rows.map((row) => row.id), [list.rows]);
   const sortFields = useMemo(
     () => ({
@@ -270,7 +277,7 @@ function AgentsListMode({ base, projectId, permissions }: AgentsListModeProps): 
             permissions={permissions}
           >
             <ApplicationListPanel
-              rows={ordered.rows.map((application) => toApplicationRow(application, open, workshopList.rowBadge(application, list.rows)))}
+              rows={ordered.rows.map((application) => toApplicationRow(application, open, workshopList.rowBadge(application, list.rows), undoAction(undoHireFor(application))))}
               isLoading={list.isLoading}
               isError={list.isError}
               errorMessage={t('pages.agents.privateList.error', 'Failed to load applications.')}

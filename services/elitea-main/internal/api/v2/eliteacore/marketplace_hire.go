@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/marketplace"
@@ -202,9 +203,6 @@ type hireInput struct {
 	// ProposalID settles the open hire_listing proposal of a workforce manager
 	// in the same transaction (0: none).
 	ProposalID int64
-	// SkipAvatar leaves the avatar files uncopied (the policy has no request
-	// to copy them under).
-	SkipAvatar bool
 	// Automatic: the hire is the policy's. It is refused (a person decides)
 	// when it would need an approval.
 	Automatic bool
@@ -371,17 +369,21 @@ func (h *Handler) performHire(ctx context.Context, external pgx.Tx, in hireInput
 	if metaMap == nil {
 		metaMap = map[string]any{}
 	}
-	var avatar any
-	if !in.SkipAvatar {
-		var packDoc any
-		if len(node.Version.AvatarPack) > 0 {
-			_ = json.Unmarshal(node.Version.AvatarPack, &packDoc) // null reads as no pack
-		}
-		avatar, err = h.carriedAvatarPack(ctx, map[string]any{"avatar_pack": packDoc, "meta": metaMap}, projectIDText)
-		if err != nil {
-			slog.WarnContext(ctx, "marketplace hire: the avatar could not be copied", "listing_id", listingID, "error", err)
-			avatar = nil
-		}
+	// A person's hire reads the source files as that person. The policy's hire
+	// has no request, so it reads them as the person it acts for: the same
+	// project-membership rule, and the same look for a hire of either kind.
+	mediaCtx := ctx
+	if in.Automatic {
+		mediaCtx = auth.ContextWithUser(ctx, auth.User{ID: strconv.FormatInt(in.ActorID, 10)})
+	}
+	var packDoc any
+	if len(node.Version.AvatarPack) > 0 {
+		_ = json.Unmarshal(node.Version.AvatarPack, &packDoc) // null reads as no pack
+	}
+	avatar, err := h.carriedAvatarPack(mediaCtx, map[string]any{"avatar_pack": packDoc, "meta": metaMap}, projectIDText)
+	if err != nil {
+		slog.WarnContext(ctx, "marketplace hire: the avatar could not be copied", "listing_id", listingID, "error", err)
+		avatar = nil
 	}
 
 	name := node.Name

@@ -3296,7 +3296,7 @@ export interface components {
             participant_id?: number;
             payload: {
                 attachments?: components["schemas"]["ChatStartAttachment"][];
-                /** @description Project skills picked in the composer's `~` menu (client contract 1.19): skills of the path's project that the answering agent version does not carry. Each entry names the skill by id only. The server reads the skill's `base` version itself under the caller's permissions (`models.applications.skills.details` and folder access); no skill text is accepted from the client. A picked skill is applied to this turn, counts toward the five skills a turn may invoke (with the `~name` skills of the version) and toward their 64 KiB of instructions, and is not added to the agent's `load_skill` catalogue. For `agent.execute.application.v1` only. A repeated id, more than five entries or another `source` answers 400. */
+                /** @description Project skills picked in the composer's `~` menu (client contract 1.19): skills of the path's project that the answering agent version does not carry. Each entry names the skill by id only. The server reads the skill's `base` version itself under the caller's permissions (`models.applications.skills.details` and folder access); no skill text is accepted from the client. A picked skill is applied to this turn, counts toward the five skills a turn may invoke (with the `~name` skills of the version) and toward their 64 KiB of instructions, and is not added to the agent's `load_skill` catalogue. Accepted by `agent.execute.application.v1` and, since skills epic 2169, by the model-chat `agent.execute.adhoc.v1` (a chat with only a model has no version, so every pick is applied to the turn). Text of a skill forked from another project that the project has not trusted reaches the model as quoted untrusted data. A repeated id, more than five entries or another `source` answers 400. */
                 skills?: components["schemas"]["ChatProjectSkillPick"][];
                 user_input: string;
             };
@@ -7497,7 +7497,7 @@ export interface operations {
                 query?: string;
                 /** @description Comma-separated toolkit or MCP types; a listing needs one of them. */
                 requires?: string;
-                /** @description `relevance` (default), `hires`, `rating`, `newest` or `name`. */
+                /** @description `relevance` (default), `hires`, `likes` (agents and skills together), `rating`, `newest` or `name`. */
                 sort?: string;
                 /** @description Comma-separated tags; a listing needs one of them. */
                 tag?: string;

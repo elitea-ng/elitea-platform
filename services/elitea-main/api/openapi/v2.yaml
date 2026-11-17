@@ -4283,9 +4283,14 @@ components:
                 A picked skill is applied to this turn, counts toward the
                 five skills a turn may invoke (with the `~name` skills of the
                 version) and toward their 64 KiB of instructions, and is not
-                added to the agent's `load_skill` catalogue. For
-                `agent.execute.application.v1` only. A repeated id, more than
-                five entries or another `source` answers 400.
+                added to the agent's `load_skill` catalogue. Accepted by
+                `agent.execute.application.v1` and, since skills epic 2169,
+                by the model-chat `agent.execute.adhoc.v1` (a chat with only a
+                model has no version, so every pick is applied to the turn).
+                Text of a skill forked from another project that the project
+                has not trusted reaches the model as quoted untrusted data.
+                A repeated id, more than five entries or another `source`
+                answers 400.
               items:
                 $ref: '#/components/schemas/ChatProjectSkillPick'
         project_id:
@@ -39457,7 +39462,7 @@ paths:
         - name: sort
           in: query
           schema: { type: string }
-          description: '`relevance` (default), `hires`, `rating`, `newest` or `name`.'
+          description: '`relevance` (default), `hires`, `likes` (agents and skills together), `rating`, `newest` or `name`.'
       responses:
         '200':
           description: A page of listings with the facet counts

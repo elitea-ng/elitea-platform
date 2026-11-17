@@ -21,6 +21,8 @@ export interface ListingCardData {
   readonly ratingCount: number;
   readonly hires: number;
   readonly likes: number;
+  /** The caller liked the public twin. */
+  readonly isLiked: boolean;
   /** The current version's label. */
   readonly version: string | undefined;
   readonly tier: string;

@@ -59,6 +59,7 @@ describe('listingCard', () => {
       ratingCount: 0,
       hires: 120,
       likes: 31,
+      isLiked: false,
       version: 'v2.3',
       tier: 'medium',
       requiredTypes: ['github'],
@@ -66,6 +67,10 @@ describe('listingCard', () => {
       categories: ['Development'],
       delisted: false,
     });
+  });
+
+  it('carries the caller\'s own like, for a skill as for an agent', () => {
+    expect(listingCard(row({ kind: 'skill', is_liked: true })).isLiked).toBe(true);
   });
 
   it('marks a skill, a hire, and a delisted listing', () => {

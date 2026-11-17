@@ -57,7 +57,7 @@ describe('AgentVersionControls', () => {
     await userEvent.type(getByRole('textbox'), 'copied');
     await userEvent.click(getByRole('button', { name: /^save$/i }));
     await waitFor(() =>
-      expect(body).toEqual({ name: 'copied', instructions: 'do the thing', copy_skills_from_version_id: 2 }),
+      expect(body).toEqual({ name: 'copied', instructions: 'do the thing', copy_skills_from_version_id: 2, copy_tools_from_version_id: 2 }),
     );
   });
 

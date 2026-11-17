@@ -160,6 +160,35 @@ describe('Marketplace', () => {
     expect(within(all).getByTestId('marketplace-card-hired')).toHaveTextContent('Hired v1');
   });
 
+  it('draws a heart with the count on every card, beside its link and not inside it, skills included (skills epic S6)', async () => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    server.use(
+      http.get('/api/v2/elitea_core/marketplace_listings/prompt_lib/:projectId', () =>
+        HttpResponse.json({
+          rows: [row('9', 'PR Reviewer', { kind: 'skill', entity_id: '501', likes: 6, is_liked: true })],
+          total: 1,
+          facets: FACETS,
+        }),
+      ),
+    );
+    mount('/marketplace?kind=skills');
+
+    const card = (await screen.findAllByTestId('marketplace-card'))[0] as HTMLElement;
+    const heart = within(card).getByRole('button', { name: 'Like PR Reviewer' });
+    expect(heart).toHaveAttribute('aria-pressed', 'true');
+    expect(within(heart).getByTestId('marketplace-like-count')).toHaveTextContent('6');
+    // A button in an anchor is invalid, and a like must not open the listing.
+    expect(within(card).getByRole('link', { name: /PR Reviewer/ })).not.toContainElement(heart);
+  });
+
+  it('asks for the Most liked sort by the server\'s key', async () => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    mockSearch();
+    mount('/marketplace?sort_by=likes');
+    await screen.findByTestId('marketplace-section-all');
+    expect(requests.some((url) => url.searchParams.get('sort') === 'likes')).toBe(true);
+  });
+
   it('asks the server for one page and appends the next on Show more, not the whole catalogue', async () => {
     configureGeneratedClient({ baseUrl: '/api/v2' });
     mockSearch(2);

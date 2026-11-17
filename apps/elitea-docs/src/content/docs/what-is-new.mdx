@@ -7,8 +7,11 @@ Elitea ships frequent, small releases. This page summarizes the most recent user
 
 ## Indexing results, Artifacts storage and rename, and Applications
 
-An index run that ends with nothing indexed, for example every document failed to fetch, is now reported as **Failed** with the reason in the message, not as **Partially indexed** with 0 documents. A run the embedding model stopped after it had indexed documents is reported as **Partially indexed** with the counts, not as failed. The result message names the ignored chunking settings only for the file types the run listed. An Artifacts index over a Google Cloud Storage bucket no longer skips every file as `fetch_failed`: the worker pins each download to the listed modified time when the store sends no entity tag. In Artifacts, the **Storage** menu always offers **Platform storage**, and renaming a file keeps its extension: the dialog shows it beside the name and Main refuses a rename that changes it. The **Applications** tab lists the Wikis and Inventory you created (they are toolkits of those types), and the App Catalog marks them **Configured**. Upgrade Main, the worker and the web app together.
+An index run in which every document failed to fetch and nothing is indexed is now reported as **Failed** with the reason in the message, not as **Partially indexed** with 0 documents. A run the embedding gateway stopped after the index held documents is reported as **Partially indexed** with the counts, not as failed. The result message names the ignored chunking settings only for the file types the run listed. An Artifacts index over a Google Cloud Storage bucket no longer skips every file as `fetch_failed`: the worker pins each download to the listed modified time when the store sends no entity tag. In Artifacts, the **Storage** menu always offers **Platform storage**, and renaming a file keeps its extension: the dialog shows it beside the name and Main refuses a rename that changes it. The **Applications** tab lists the Wikis and Inventory you created (they are toolkits of those types), and the App Catalog marks them **Configured**. Upgrade Main, the worker and the web app together.
 
+## Agent versions, per-agent toolkit tools and forks that keep their toolkits
+
+**Save as version** now copies the agent's toolkits (with their selected tools) and sub-agents to the new version, and adding a toolkit or agent on a version other than the default now attaches it to that version, not to the default one. Importing the zip of an agent exported with several versions creates one agent with those versions, not one agent per version. The Compare versions window is wider and no longer cuts text. Every toolkit card on an agent now has **Show tools**, where you choose which of the toolkit's tools this agent uses without changing the toolkit. Forking an agent into another project now forks its toolkits (without credentials or secrets) and its nested agents with it. The Workshop list shows **On probation** on an agent the workforce policy hired, with **Undo hire** in the table view for 14 days, and an automatic hire now gets the listing's avatar. No operator action is needed.
 
 ## Agents with tools: tool schemas fit the model's provider
 
@@ -17,6 +20,14 @@ An agent with toolkit tools, a sub-agent, an MCP server or the internal tools se
 ## Chat fixes: renamed agents, tagged people, the X button and Save
 
 A renamed agent now shows its current name in the participants panel and on its messages, not the name it had when it joined the conversation. After you tag a person with `@` and send, the next message to the model no longer fails with "The execution input is invalid." (upgrade the worker with Main). The **X** next to the agent or pipeline in the message bar now switches the conversation back to the model. In the agent and pipeline editor opened from a chat, **Save** is enabled only while there is something to save, and a save refreshes the panel.
+
+## Skills in a model chat, and untrusted skill text
+
+The message start for a chat with only a model now accepts project skills (`payload.skills`, ids only), applied through the same skill loading an agent chat uses, with the same limits (five skills, 64 KiB, a skill you cannot read refuses the message). Text of a skill forked from another project reaches the model as quoted data until your project trusts that version of it; skills that existed before keep working as before. **Run the migrations** (tenant `0250`) and upgrade Main and the worker together. See [Skills](/menus/skills#skills-from-another-project-are-untrusted-until-you-trust-them).
+
+## Likes on skills, and Most liked
+
+Skill cards and skill listings now have the heart that agents have, with the count and your own like. On a card the heart sits beside the card's link, so liking never opens the listing. The Marketplace sort has a new **Most liked** option that orders agents and skills together by their likes. A like on a skill is not a like on an agent, even when they share a number. See [Marketplace](/menus/marketplace).
 
 ## Skills: versions, tags, AI edit and a tidier list
 

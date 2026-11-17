@@ -876,8 +876,8 @@ func (r *SkillsRepo) updateSkill(ctx context.Context, projectID, skillID, versio
 			}
 			versionID = selected
 		}
-		var status, name string
-		err = tx.QueryRow(ctx, fmt.Sprintf(`SELECT status, name FROM %s.skill_versions WHERE id = $1 AND skill_id = $2 FOR UPDATE`, s), versionID, skillID).Scan(&status, &name)
+		var status, name, storedInstructions string
+		err = tx.QueryRow(ctx, fmt.Sprintf(`SELECT status, name, COALESCE(instructions, '') FROM %s.skill_versions WHERE id = $1 AND skill_id = $2 FOR UPDATE`, s), versionID, skillID).Scan(&status, &name, &storedInstructions)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return skills.Skill{}, apierr.NotFound("skill version not found")
 		}
@@ -920,6 +920,15 @@ func (r *SkillsRepo) updateSkill(ctx context.Context, projectID, skillID, versio
 		}
 		if _, err := replaceVersionTags(ctx, tx, s, versionIntID, skill.Tags); err != nil {
 			return skills.Skill{}, err
+		}
+		// A person in this project who saves new text on a forked skill has
+		// written and read it: that revision is trusted (ADR-0051 amendment 1,
+		// A1.6). Unchanged text is not: a metadata-only save must not trust
+		// text nobody reviewed.
+		if name == "base" && skill.Instructions != storedInstructions {
+			if err := trustEditedForeignBase(ctx, tx, s, projectID, skillID); err != nil {
+				return skills.Skill{}, err
+			}
 		}
 	}
 	meta := skill.Meta
