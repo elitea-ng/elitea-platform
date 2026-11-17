@@ -54,6 +54,14 @@ pub(super) enum ReceiptError {
 /// size judgement, so a failed run that wrote a great deal to stderr is "the
 /// program failed", never "the result is too large".
 pub(super) fn parse_receipt_detailed(bytes: &[u8]) -> Result<Value, ReceiptError> {
+    parse_receipt_captured(bytes).map(|(result, _)| result)
+}
+
+/// [`parse_receipt_detailed`], with the program's stderr kept: the sandbox's
+/// adapters send what a program prints there (JavaScript and TypeScript
+/// `console.log`, a Rust program's stdout), so a completed run's stderr is
+/// its printed output. The caller bounds it.
+pub(super) fn parse_receipt_captured(bytes: &[u8]) -> Result<(Value, String), ReceiptError> {
     let receipt: Receipt = match serde_json::from_slice(bytes) {
         Ok(receipt) => receipt,
         Err(_) if bytes.len() > 512 * 1024 => return Err(ReceiptError::TooLarge),
@@ -70,13 +78,13 @@ pub(super) fn parse_receipt_detailed(bytes: &[u8]) -> Result<Value, ReceiptError
     if bytes.len() > 512 * 1024 || receipt.stdout.len() > 256 * 1024 + 64 {
         return Err(ReceiptError::TooLarge);
     }
-    drop(receipt.stderr);
+    let printed = receipt.stderr;
     let adapter: AdapterResult =
         serde_json::from_str(&receipt.stdout).map_err(|_| ReceiptError::Malformed)?;
     if adapter.revision != 1 {
         return Err(ReceiptError::Malformed);
     }
-    Ok(adapter.result)
+    Ok((adapter.result, printed))
 }
 
 /// Message content is constructed here; user JSON cannot supply message roles,

@@ -190,7 +190,8 @@
       "stepback_summary_index": "read"
     },
     "data_analysis": {
-      "pandas_analyze_data": "code_execution"
+      "pandas_analyze_data": "code_execution",
+      "run_analysis_code": "code_execution"
     },
     "delta_lake": {
       "get_table_schema": "read",
