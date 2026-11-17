@@ -54,16 +54,6 @@ impl EdgeKind {
             _ => None,
         }
     }
-
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::SubAgent => "sub_agent",
-            Self::AgentTool => "agent_tool",
-            Self::PipelineChild => "pipeline_child",
-            Self::PipelineNode => "pipeline_node",
-        }
-    }
 }
 
 /// One composition edge: the saved agent or pipeline that calls, the one it
