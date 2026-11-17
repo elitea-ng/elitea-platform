@@ -239,11 +239,11 @@ describe('useCredentialRows', () => {
       '1': {
         ...EMPTY,
         items: [
-          { id: 1, type: 'github', elitea_title: 'has-base-url', project_id: 1, data: { base_url: 'https://github.example/api' } },
-          { id: 2, type: 'jira', elitea_title: 'has-url', project_id: 1, data: { url: 'https://jira.example' } },
-          { id: 3, type: 'github', elitea_title: 'has-neither', project_id: 1, data: { access_token: '{{secret.x}}' } },
+          { id: 1, type: 'github', elitea_title: 'has-base-url', project_id: '1', data: { base_url: 'https://github.example/api' } },
+          { id: 2, type: 'jira', elitea_title: 'has-url', project_id: '1', data: { url: 'https://jira.example' } },
+          { id: 3, type: 'github', elitea_title: 'has-neither', project_id: '1', data: { access_token: '{{secret.x}}' } },
         ],
-        shared: { ...EMPTY, items: [{ id: 4, type: 'github', elitea_title: 'from-elsewhere', project_id: 9, data: { base_url: 'https://x' } }] },
+        shared: { ...EMPTY, items: [{ id: 4, type: 'github', elitea_title: 'from-elsewhere', project_id: '9', data: { base_url: 'https://x' } }] },
       },
     });
 
