@@ -16656,6 +16656,15 @@ components:
             Catalogued toolkit type keys the configured worker cannot build —
             the same set ToolkitTypeSchemas marks metadata.hidden for
             capability reasons, restated flat.
+        code_sandbox_languages:
+          type: array
+          items: { type: string }
+          description: >
+            The languages the deployment's code sandbox serves, the ones the
+            agents' Code sandbox tool (internal tool pyodide) offers: any of
+            python, javascript, typescript and rust. Empty when the
+            deployment has no code sandbox, in which case
+            internal_tools.pyodide is false.
       description: >
         NOTE(W2): internal/api/v2/toolkits/capabilities_handler.go
         (RuntimeCapabilities). Restates, in one deployment-wide read, what

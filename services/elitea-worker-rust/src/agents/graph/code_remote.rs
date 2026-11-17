@@ -708,6 +708,18 @@ impl RemoteCodeRuntime {
 
 #[async_trait]
 impl CodeSandboxRuntime for RemoteCodeRuntime {
+    fn served_languages(&self) -> Vec<CodeLanguage> {
+        // The same filter `execute_reporting` applies to a tool's invocation:
+        // one profile per language, none with a platform client.
+        let mut languages = Vec::new();
+        for profile in self.profiles.iter() {
+            if profile.platform_client.is_none() && !languages.contains(&profile.language) {
+                languages.push(profile.language);
+            }
+        }
+        languages
+    }
+
     /// W3-2 (D3): `items` children with Code need
     /// `ceil(items / min(concurrency, slots)) × item time + margin` before the
     /// run's deadline. The item time is the longest child's Code time (Q2)

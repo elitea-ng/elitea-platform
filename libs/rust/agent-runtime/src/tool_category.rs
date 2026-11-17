@@ -267,6 +267,8 @@ mod tests {
             ("Slack", "slack___send_message", ToolCategory::ExternalSend),
             ("jira", "add_comments", ToolCategory::ExternalSend),
             ("sql", "execute_sql", ToolCategory::CodeExecution),
+            // The Code sandbox internal tool (stored as pyodide).
+            ("pyodide", "run_code", ToolCategory::CodeExecution),
             (
                 "k8s",
                 "kubernetes_integration_healthcheck",

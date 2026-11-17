@@ -3151,6 +3151,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		DelegatedAuthToolkitSettings:  delegatedAuthToolkitSettings,
 		WorkerImplementation:          workerImplementation,
 		ImageGenerationModel:          os.Getenv("ELITEA_IMAGE_GENERATION_MODEL"),
+		CodeSandboxLanguages:          strings.Split(os.Getenv("ELITEA_CODE_SANDBOX_LANGUAGES"), ","),
 		// Readiness is the database (every pool), NATS and the runtime
 		// runners (FU-275); see mainReadinessChecks. The Form graph's sign-in
 		// state is in this same database (shared migration 0153), so it adds

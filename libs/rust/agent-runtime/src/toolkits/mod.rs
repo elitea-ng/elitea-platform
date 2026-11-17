@@ -240,6 +240,11 @@ pub use families::data_analysis::code::{
     AnalysisLanguage, MAX_ANALYSIS_RESULT_BYTES,
 };
 #[cfg(feature = "toolkit-data-analysis")]
+pub use families::data_analysis::sandbox_tool::{
+    CODE_SANDBOX_TOOL, CodeSandboxAuthority, CodeSandboxToolsetError, RUN_CODE_TOOL_NAME,
+    build_code_sandbox_toolset,
+};
+#[cfg(feature = "toolkit-data-analysis")]
 pub use families::data_analysis::tools::{
     AnalysisGate, AttachmentBucketError, AttachmentBucketResolver, DataAnalysisAuthority,
     DataAnalysisToolsetError, build_data_analysis_toolset, close_analysis_gate,

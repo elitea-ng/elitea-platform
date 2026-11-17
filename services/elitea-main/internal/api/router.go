@@ -351,6 +351,11 @@ type RouterConfig struct {
 	// ImageGenerationModel is the deployment's image model (#1969), from
 	// ELITEA_IMAGE_GENERATION_MODEL, the value the worker reads too.
 	ImageGenerationModel string
+	// CodeSandboxLanguages are the languages the deployment's code sandbox
+	// serves, from ELITEA_CODE_SANDBOX_LANGUAGES (the chart sets it from the
+	// worker's sandboxRuntimes). Any entry makes the pyodide internal tool
+	// available.
+	CodeSandboxLanguages []string
 	// WorkerImplementation is the plain "python"/"rust" worker name (#865,
 	// #866) — the same value runtimecomposition.WorkerImplementationFromEnv
 	// derived to build ToolkitWorkerCapability above, restated here because
@@ -1604,6 +1609,7 @@ func newToolkitHandler(
 		options = append(options, v2toolkits.WithWorkerImplementation(cfg.WorkerImplementation))
 	}
 	options = append(options, v2toolkits.WithImageGenerationModel(cfg.ImageGenerationModel))
+	options = append(options, v2toolkits.WithCodeSandbox(cfg.CodeSandboxLanguages))
 	if cfg.Pool != nil {
 		// The save-time thinking rule (ADR-0038) reads the catalogue the
 		// agent editor and the chat participants read.

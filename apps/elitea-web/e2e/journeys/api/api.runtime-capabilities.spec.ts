@@ -40,18 +40,26 @@ test.use({ storageState: STORAGE_STATE.admin });
 
 // The toggleable internal chat tools this endpoint reports on —
 // `features/agents/lib/internalTools.ts`'s `INTERNAL_TOOLS_LIST` (see
-// `internal/api/v2/toolkits/capabilities_handler.go`'s own doc comment). Four
-// are skipped by the Rust worker; the rest it serves natively.
-const RUST_SKIPPED_INTERNAL_TOOLS = ['image_generation', 'internal_mcp', 'swarm', 'pyodide'] as const;
+// `internal/api/v2/toolkits/capabilities_handler.go`'s own doc comment). Three
+// are skipped by the Rust worker; the rest it serves natively. `pyodide` (the
+// Python sandbox) is served through the deployment's code sandbox, so its
+// answer follows the deployment: reported, but not fixed either way here.
+const RUST_SKIPPED_INTERNAL_TOOLS = ['image_generation', 'internal_mcp', 'swarm'] as const;
+const DEPLOYMENT_DEPENDENT_INTERNAL_TOOLS = ['pyodide'] as const;
 // data_analysis is served by Rust as structured table tools (ADR-0033).
 // subagents: the runtime's read-only sub-agents (#1226).
 const RUST_SERVED_INTERNAL_TOOLS = ['planner', 'lazy_tools_mode', 'attachments', 'data_analysis', 'subagents'] as const;
-const REPORTED_INTERNAL_TOOLS = [...RUST_SKIPPED_INTERNAL_TOOLS, ...RUST_SERVED_INTERNAL_TOOLS] as const;
+const REPORTED_INTERNAL_TOOLS = [
+  ...RUST_SKIPPED_INTERNAL_TOOLS,
+  ...DEPLOYMENT_DEPENDENT_INTERNAL_TOOLS,
+  ...RUST_SERVED_INTERNAL_TOOLS,
+] as const;
 
 interface RuntimeCapabilities {
   readonly worker: string;
   readonly internal_tools: Readonly<Record<string, boolean>>;
   readonly hidden_toolkit_types: readonly string[];
+  readonly code_sandbox_languages: readonly string[];
 }
 
 test('API-RC1: the endpoint answers the shape the web app reads, for a signed-in caller', async ({
@@ -90,6 +98,14 @@ test('API-RC2: the answer is internally consistent with the configured worker', 
     }
     for (const name of RUST_SERVED_INTERNAL_TOOLS) {
       expect(body.internal_tools[name], `internal_tools.${name} on rust`).toBe(true);
+    }
+    // The Code sandbox (pyodide) toggle and its language list agree: the tool
+    // is offered exactly when the sandbox serves a language, and only the
+    // languages the Code node supports are named.
+    expect(Array.isArray(body.code_sandbox_languages), JSON.stringify(body)).toBe(true);
+    expect(body.internal_tools.pyodide, JSON.stringify(body)).toBe(body.code_sandbox_languages.length > 0);
+    for (const language of body.code_sandbox_languages) {
+      expect(['python', 'javascript', 'typescript', 'rust']).toContain(language);
     }
     // #865's core claim: at least one catalogued type is withheld — the
     // Rust worker materializes 22 of the 52 catalogued families.

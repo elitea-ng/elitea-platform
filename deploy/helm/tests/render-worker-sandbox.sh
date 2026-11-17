@@ -79,6 +79,10 @@ assert config['agent_model_checkpoint_recovery'] is True
 assert config['agent_node_recovery'] is True
 assert config['consumer_id'].endswith('__ELITEA_POD_NAME__')
 PY
+# The Code sandbox (pyodide) toggle: elitea-main learns the served languages
+# from the same sandboxRuntimes entries, in their order.
+helm template test deploy/helm/elitea "${args[@]}" > "$work/all.yaml"
+grep -Eq 'ELITEA_CODE_SANDBOX_LANGUAGES: "?python,rust"?' "$work/all.yaml"
 if helm template test deploy/helm/elitea "${args[@]}" --set worker.implementation=python > "$work/error" 2>&1; then
   echo 'the retired Python worker rendered' >&2
   exit 1
