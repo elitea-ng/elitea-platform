@@ -70,7 +70,8 @@ func NewResolver(settings SettingsReader, inputs InputReader, classes DataClassR
 }
 
 // WorkerDelegationPolicy answers the command's policy, or nil when no
-// administrator saved the `delegation` section, so such a command is
+// administrator saved the `delegation` section and the grant switch is off
+// (grants.go), so such a command is
 // unchanged byte for byte and a worker from an earlier release still accepts
 // it (the chart rolls Main out first). The new worker then applies its
 // compiled-in defaults: enforce, depth 4, no data class narrowing. Only an agent execution command carries
@@ -85,7 +86,11 @@ func (r *Resolver) WorkerDelegationPolicy(ctx context.Context, command *runtimev
 		return nil, fmt.Errorf("worker delegation: read the platform setting: %w", err)
 	}
 	if !settings.Stored {
-		// The grant switch alone still sends the defaults and the grants.
+		// The grant switch alone still sends the defaults and the grants; with it
+		// off (the default) nothing is read and the command is unchanged.
+		if r.grants == nil || !r.grantsEnforced {
+			return nil, nil
+		}
 		input, err := r.input(ctx, command)
 		if err != nil {
 			return nil, err

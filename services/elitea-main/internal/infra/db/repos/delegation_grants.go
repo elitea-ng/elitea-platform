@@ -633,7 +633,10 @@ ORDER BY caller_entity_id, callee_entity_id, edge_kind`, delegationGrantColumns,
 
 // ConsumableFromCallers lists the approved and stale grants whose caller is
 // one of callerIDs: the edges below those agents that a run reads as G(Y to X)
-// (story S2c). A database without the tenant table answers none.
+// (story S2c). A stale grant is read too, as ADR-0044 amendment 1 says: it
+// covers the set it recorded (which may be broader than what the callee holds
+// today) and the drift is narrowed out, until its editors re-approve or revoke
+// it. A database without the tenant table answers none.
 func (s *DelegationGrants) ConsumableFromCallers(ctx context.Context, projectID int64, callerIDs []int64) ([]dg.Grant, error) {
 	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
 	if err != nil {

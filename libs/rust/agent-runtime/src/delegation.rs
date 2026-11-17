@@ -249,22 +249,27 @@ impl DelegationPolicy {
     }
 
     /// The approved grant between a caller and a callee, whatever the kind of
-    /// edge. A caller is an agent or a pipeline, and its edges are of one kind,
-    /// so at most one grant matches in practice; the first by kind order is
-    /// read if Main ever sent more.
+    /// edge. The worker reaches a callee through an application tool: an agent
+    /// calls it as a tool (`agent_tool`) and a pipeline runs it as a child
+    /// (`pipeline_child`), which is what attaching creates, so those two are
+    /// read first. A `sub_agent` or `pipeline_node` grant proposed through the
+    /// API for the same pair is read only when neither exists.
     #[must_use]
     pub fn grant_between(&self, caller: u64, callee: u64) -> Option<&DelegationGrant> {
-        let from = EdgeKey {
-            caller,
-            callee,
-            kind: EdgeKind::SubAgent,
-        };
-        let to = EdgeKey {
-            caller,
-            callee,
-            kind: EdgeKind::PipelineNode,
-        };
-        self.grants.range(from..=to).next().map(|(_, grant)| grant)
+        [
+            EdgeKind::AgentTool,
+            EdgeKind::PipelineChild,
+            EdgeKind::SubAgent,
+            EdgeKind::PipelineNode,
+        ]
+        .into_iter()
+        .find_map(|kind| {
+            self.grants.get(&EdgeKey {
+                caller,
+                callee,
+                kind,
+            })
+        })
     }
 
     /// Whether the run carries grants (Main's switch is on and some edge of

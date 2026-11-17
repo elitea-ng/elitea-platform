@@ -3,6 +3,7 @@ package workerdelegation
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strconv"
 
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
@@ -24,7 +25,10 @@ import (
 
 const (
 	// MaxGrantEdges bounds the grants one command carries. A closure past it is
-	// cut by distance from the root, nearest first.
+	// cut level by level from the root (the edges nearest the root first, and
+	// within the level that overflows, by caller then callee id); the cut is
+	// logged, because an edge that loses its grant is refused as an edge with
+	// none.
 	MaxGrantEdges = 256
 	// maxClosureDepth is the deepest the closure is walked (the platform's
 	// largest delegation depth).
@@ -70,6 +74,10 @@ func (r *Resolver) closureGrants(ctx context.Context, projectID, rootApplication
 			}
 		}
 		frontier = next
+	}
+	if len(out) >= MaxGrantEdges {
+		slog.WarnContext(ctx, "worker delegation: the grants of the run's closure reach the limit; edges past it carry none",
+			"project_id", projectID, "root_application_id", rootApplicationID, "limit", MaxGrantEdges)
 	}
 	return out, nil
 }

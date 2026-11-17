@@ -829,7 +829,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		// (ELITEA_DELEGATION_GRANTS_ENFORCED, off by default until the
 		// migration of existing compositions has run).
 		if config.DelegationGrantsEnforced {
-			delegationPolicy.WithGrants(repos.NewDelegationGrantReader(dependencies.AdmissionPool), true)
+			delegationPolicy = delegationPolicy.WithGrants(repos.NewDelegationGrantReader(dependencies.AdmissionPool), true)
 		}
 		agentProducer.WithDelegationPolicy(delegationPolicy)
 		// The approval policy (ADR-0041 decision 5), on the same gate.

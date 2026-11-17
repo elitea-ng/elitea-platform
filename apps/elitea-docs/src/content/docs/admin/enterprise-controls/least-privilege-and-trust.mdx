@@ -271,7 +271,7 @@ The effective set of a callee X called by Y is `own(X) ∩ (E(Y) ∪ G(Y→X))`,
 - **The step records the grant.** A delegation that used a grant carries `delegation_grant_id` and `delegation_grant_digest` next to the existing `effective_grant_digest` and `delegation_depth`.
 - **Per edge.** The grant covers X's own toolkits only. If X delegates to Z, the edge X to Z needs its own grant. The depth limit still applies. Ephemeral sub-agents need no grant.
 - **No grant, no change.** An edge without an approved grant is refused (or, in `report` mode, recorded) exactly as in the previous section. The run principal's bound and the run's egress allowlist bound every callee, with or without a grant.
-- **Limit of this release.** A grant is read for an agent or a pipeline attached as a tool of an agent or a pipeline. A pipeline that runs a saved pipeline in a node, and the saved pipelines nested below an attached pipeline, are still checked against their caller's own set only.
+- **Which edges have grants.** Attaching an agent or pipeline as a tool creates the grant of that edge. A saved pipeline that a pipeline node runs from its definition creates none yet; such an edge is checked against its caller's own set as before until the migration of existing compositions covers it.
 
 #### The switch
 

@@ -2546,7 +2546,7 @@ fn delegate_saved_pipeline(
         &mut version,
         &admitted.data_classes,
         runtime.tool_policy.egress(),
-        None,
+        Some(admitted.revision.application_id),
     )?
     .map(|delegation| (version, delegation)))
 }
@@ -2572,8 +2572,12 @@ fn composition_refusal(
         Err(refused) => Ok(Some(refused)),
         Ok(delegation) => {
             for child in admitted.children.values() {
-                if let Some(refused) = composition_refusal(&delegation.scope, child, egress, None)?
-                {
+                if let Some(refused) = composition_refusal(
+                    &delegation.scope,
+                    child,
+                    egress,
+                    Some(child.revision.application_id),
+                )? {
                     return Ok(Some(refused));
                 }
             }
