@@ -402,7 +402,7 @@ fn put_result(answer: &mut Map<String, Value>, result: Value) {
 fn plain_answer(value: &Value, output: Option<&str>) -> Value {
     let mut answer = Map::new();
     answer.insert("status".into(), json!("success"));
-    if let Some(output) = output {
+    if let Some(output) = output.filter(|output| !output.is_empty()) {
         answer.insert("output".into(), json!(clip(output, MAX_STREAM_CHARS)));
     }
     put_result(&mut answer, value.clone());
@@ -814,6 +814,15 @@ mod tests {
     async fn a_runner_without_capture_adds_no_output_field() {
         let runner = FakeRunner::replying(Ok(json!(2)));
         let tools = served_tools(runner, &policy(&[])).await;
+        let out = call(
+            &tools[0],
+            json!({"language": "javascript", "code": "export default 2;"}),
+        )
+        .await;
+        assert!(out.get("output").is_none(), "{out}");
+        // A program that printed nothing adds no empty field either.
+        let quiet = FakeRunner::replying(Ok(json!(2))).printing("");
+        let tools = served_tools(quiet, &policy(&[])).await;
         let out = call(
             &tools[0],
             json!({"language": "javascript", "code": "export default 2;"}),
