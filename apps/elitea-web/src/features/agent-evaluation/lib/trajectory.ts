@@ -24,6 +24,7 @@ export interface TrajectoryItem {
 }
 
 interface ToolFigures {
+  readonly kind: string | undefined;
   readonly name: string;
   readonly toolkitId: string | undefined;
   readonly calls: number;
@@ -41,6 +42,16 @@ export interface CaseGuardrail {
   readonly masked: number;
   readonly warned: number;
   readonly gated: number;
+  /** The run had more verdicts than one read returns: the counts are a lower bound. */
+  readonly truncated: boolean;
+}
+
+/** A case with a step-limit end or guardrail events whose run recorded no steps: no trajectory, so no row of its own. */
+export interface UntrackedCase {
+  readonly caseId: string;
+  readonly input: string | undefined;
+  readonly stepLimit: boolean;
+  readonly guardrail: CaseGuardrail | undefined;
 }
 
 export interface CaseTrajectory {
@@ -77,6 +88,11 @@ export interface TrajectorySummary {
   /** Guardrail events over the cases whose verdicts were read; `undefined` when none were. */
   readonly guardrailEvents: number | undefined;
   readonly guardrailCases: number;
+  /** Some case's guardrail figures are a lower bound (its verdicts were cut). */
+  readonly guardrailTruncated: boolean;
+  /** Cases that recorded distinct tools and redundant calls, of the measured ones. */
+  readonly countersRecorded: number;
+  readonly untracked: readonly UntrackedCase[];
   /** Cases that ended at the step limit, of every case of the run. */
   readonly stepLimitCases: number;
   readonly stepLimitCaseIds: readonly string[];
@@ -112,6 +128,7 @@ function parseGuardrail(raw: unknown): CaseGuardrail | undefined {
     masked: count(raw, 'masked') ?? 0,
     warned: count(raw, 'warned') ?? 0,
     gated: count(raw, 'gated') ?? 0,
+    truncated: raw['truncated'] === true,
   };
 }
 
@@ -131,6 +148,7 @@ function parseItem(raw: unknown): TrajectoryItem | undefined {
 function parseTool(raw: unknown): ToolFigures | undefined {
   if (!isRecord(raw)) return undefined;
   return {
+    kind: text(raw, 'kind'),
     name: text(raw, 'name') ?? '',
     toolkitId: text(raw, 'toolkit_id'),
     calls: count(raw, 'calls') ?? 0,
@@ -194,7 +212,7 @@ function distinctToolsFigures(measured: readonly CaseTrajectory[]): { perCase: n
   const withTools = measured.filter((entry) => entry.distinctTools !== undefined);
   if (withTools.length === 0) return { perCase: undefined, inRun: undefined };
   const total = sumOf(withTools.map((entry) => entry.distinctTools)) ?? 0;
-  const union = new Set(withTools.flatMap((entry) => entry.tools.map((tool) => `${tool.toolkitId ?? ''}\u0000${tool.name}`)));
+  const union = new Set(withTools.flatMap((entry) => entry.tools.map((tool) => `${tool.kind ?? ''}\u0000${tool.toolkitId ?? ''}\u0000${tool.name}`)));
   return { perCase: round1(total / withTools.length), inRun: union.size };
 }
 
@@ -206,6 +224,7 @@ function redundantFigures(measured: readonly CaseTrajectory[]): { count: number 
 }
 
 interface SeenCases {
+  readonly inputs: Map<string, string>;
   readonly caseIds: Set<string>;
   readonly cases: Map<string, CaseTrajectory>;
   readonly stepLimit: Set<string>;
@@ -214,18 +233,30 @@ interface SeenCases {
 
 /** Collapses the rows of each case: its facts are on every row, its trajectory on one. */
 function collectCases(results: readonly EvalRunResult[]): SeenCases {
-  const seen: SeenCases = { caseIds: new Set(), cases: new Map(), stepLimit: new Set(), guardrails: new Map() };
+  const seen: SeenCases = { inputs: new Map(), caseIds: new Set(), cases: new Map(), stepLimit: new Set(), guardrails: new Map() };
   for (const result of results) {
     const id = result.dataset_case_id;
     seen.caseIds.add(id);
-    const evidence: Record<string, unknown> | undefined = result.evidence;
-    if (evidence?.['agent_step_limit'] === true) seen.stepLimit.add(id);
-    const guardrail = seen.guardrails.has(id) ? undefined : parseGuardrail(evidence?.['guardrail']);
-    if (guardrail !== undefined) seen.guardrails.set(id, guardrail);
+    noteEvidence(seen, id, result.evidence);
     const parsed = seen.cases.has(id) ? undefined : parseCase(result);
     if (parsed !== undefined) seen.cases.set(id, parsed);
   }
   return seen;
+}
+
+function noteEvidence(seen: SeenCases, id: string, evidence: Record<string, unknown> | undefined): void {
+  const input = evidence?.['input'];
+  if (typeof input === 'string' && !seen.inputs.has(id)) seen.inputs.set(id, input);
+  if (evidence?.['agent_step_limit'] === true) seen.stepLimit.add(id);
+  const guardrail = seen.guardrails.has(id) ? undefined : parseGuardrail(evidence?.['guardrail']);
+  if (guardrail !== undefined) seen.guardrails.set(id, guardrail);
+}
+
+function untrackedCases(seen: SeenCases): UntrackedCase[] {
+  const ids = new Set([...seen.stepLimit, ...[...seen.guardrails].filter(([, figures]) => figures.events > 0).map(([id]) => id)]);
+  return [...ids]
+    .filter((id) => !seen.cases.has(id))
+    .map((id) => ({ caseId: id, input: seen.inputs.get(id), stepLimit: seen.stepLimit.has(id), guardrail: seen.guardrails.get(id) }));
 }
 
 /**
@@ -236,7 +267,8 @@ function collectCases(results: readonly EvalRunResult[]): SeenCases {
  * request has no steps and still has a guardrail event.
  */
 export function summarizeTrajectory(results: readonly EvalRunResult[]): TrajectorySummary | undefined {
-  const { caseIds, cases, stepLimit, guardrails } = collectCases(results);
+  const seen = collectCases(results);
+  const { caseIds, cases, stepLimit, guardrails } = seen;
   if (cases.size === 0 && stepLimit.size === 0 && guardrails.size === 0) return undefined;
   const measured = [...cases.values()];
   const steps = measured.map((entry) => entry.steps);
@@ -256,6 +288,9 @@ export function summarizeTrajectory(results: readonly EvalRunResult[]): Trajecto
     redundantShare: redundant.share,
     guardrailEvents: sumOf([...guardrails.values()].map((entry) => entry.events)),
     guardrailCases: guardrails.size,
+    guardrailTruncated: [...guardrails.values()].some((entry) => entry.truncated),
+    countersRecorded: measured.filter((entry) => entry.distinctTools !== undefined).length,
+    untracked: untrackedCases(seen),
     stepLimitCases: stepLimit.size,
     stepLimitCaseIds: [...stepLimit],
   };

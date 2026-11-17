@@ -88,9 +88,10 @@ type Evidence interface {
 
 // Guardrails counts the guardrail verdicts the LLM gateway recorded for a run
 // (ADR-0043), by outcome. The verdicts are not in the run's step chain: the
-// gateway writes its own table, keyed by the run id.
+// gateway writes its own table, keyed by the run id. truncated says the run had
+// more verdicts than one read returns, so the counts are a lower bound.
 type Guardrails interface {
-	GuardrailOutcomes(ctx context.Context, projectID int64, runID string) (map[string]int, error)
+	GuardrailOutcomes(ctx context.Context, projectID int64, runID string) (outcomes map[string]int, truncated bool, err error)
 }
 
 // Content reads a step's stored content.
@@ -184,7 +185,7 @@ func (r *Runner) RunCase(ctx context.Context, request evaluation.AgentRunRequest
 		r.stop(ctx, project, int64(request.ActorUserID), started.outcome.ResponseMessageID)
 	}
 	result.Steps = r.collectSteps(ctx, project, request, result.ExecutionID)
-	result.GuardrailOutcomes = r.collectGuardrails(ctx, project, result.ExecutionID)
+	result.GuardrailOutcomes, result.GuardrailTruncated = r.collectGuardrails(ctx, project, result.ExecutionID)
 	r.finish(&result, turn, outcome, reason, request)
 	return result, nil
 }
@@ -403,20 +404,20 @@ func (r *Runner) collectSteps(ctx context.Context, project int64, request evalua
 // collectGuardrails reads the guardrail verdicts of the case's run. A read that
 // fails is logged and answers nil: the figures are then absent from the case,
 // not zero.
-func (r *Runner) collectGuardrails(ctx context.Context, project int64, executionID string) map[string]int {
+func (r *Runner) collectGuardrails(ctx context.Context, project int64, executionID string) (map[string]int, bool) {
 	if r.guardrails == nil {
-		return nil
+		return nil, false
 	}
-	outcomes, err := r.guardrails.GuardrailOutcomes(context.WithoutCancel(ctx), project, executionID)
+	outcomes, truncated, err := r.guardrails.GuardrailOutcomes(context.WithoutCancel(ctx), project, executionID)
 	if err != nil {
 		r.logger.Warn("evaluation: could not read a case's guardrail verdicts",
 			"project_id", project, "execution_id", executionID, "error", err)
-		return nil
+		return nil, false
 	}
 	if outcomes == nil {
 		outcomes = map[string]int{}
 	}
-	return outcomes
+	return outcomes, truncated
 }
 
 // mayCopyOutputs decides once per case whether tool outputs may be copied into

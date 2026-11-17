@@ -482,12 +482,13 @@ func TestRunCaseCancelsAtATokenOrCostLimit(t *testing.T) {
 }
 
 type fakeGuardrails struct {
-	outcomes map[string]int
-	err      error
+	outcomes  map[string]int
+	truncated bool
+	err       error
 }
 
-func (f fakeGuardrails) GuardrailOutcomes(context.Context, int64, string) (map[string]int, error) {
-	return f.outcomes, f.err
+func (f fakeGuardrails) GuardrailOutcomes(context.Context, int64, string) (map[string]int, bool, error) {
+	return f.outcomes, f.truncated, f.err
 }
 
 // Issue 2192: the case carries the gateway's guardrail verdicts and the
@@ -498,14 +499,14 @@ func TestRunCaseCollectsGuardrailOutcomesAndGateSteps(t *testing.T) {
 	gate := record(2, runevidence.KindApproval, "send_mail", `{"decision": "requested", "guardrail_type": "sensitive_tool"}`)
 	auth := record(3, runevidence.KindApproval, "authorization", `{"decision": "requested", "guardrail_type": "mcp_auth"}`)
 	evidence := &fakeEvidence{records: []runevidence.Record{record(1, runevidence.KindModelCall, "m", `{}`), gate, auth}}
-	runner := copyRunner(evidence, nil, false).WithGuardrails(fakeGuardrails{outcomes: map[string]int{"blocked": 2, "pass": 5}})
+	runner := copyRunner(evidence, nil, false).WithGuardrails(fakeGuardrails{outcomes: map[string]int{"blocked": 2, "pass": 5}, truncated: true})
 
 	result, err := runner.RunCase(context.Background(), caseRequest())
 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.GuardrailOutcomes["blocked"] != 2 || result.GuardrailOutcomes["pass"] != 5 {
+	if result.GuardrailOutcomes["blocked"] != 2 || result.GuardrailOutcomes["pass"] != 5 || !result.GuardrailTruncated {
 		t.Errorf("outcomes = %v", result.GuardrailOutcomes)
 	}
 	if !result.Steps[1].IsGovernanceGate() || result.Steps[2].IsGovernanceGate() {

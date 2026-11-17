@@ -66,22 +66,26 @@ func composeEvalAgentRunner(
 
 // guardrailCounts counts the gateway's guardrail verdicts of a run by outcome,
 // from the verdicts the run evidence route reads (ADR-0043). The read is
-// bounded by maxGuardrailVerdictsPerCase, so a run with more verdicts than that
-// counts the first ones.
+// bounded by maxGuardrailVerdictsPerCase; a run with more verdicts counts the
+// oldest ones and says so (truncated).
 type guardrailCounts struct{ steps *dbrepos.RunSteps }
 
 const maxGuardrailVerdictsPerCase = 1000
 
-func (g guardrailCounts) GuardrailOutcomes(ctx context.Context, projectID int64, runID string) (map[string]int, error) {
-	verdicts, err := g.steps.GuardrailVerdicts(ctx, projectID, runID, maxGuardrailVerdictsPerCase)
+func (g guardrailCounts) GuardrailOutcomes(ctx context.Context, projectID int64, runID string) (map[string]int, bool, error) {
+	verdicts, err := g.steps.GuardrailVerdicts(ctx, projectID, runID, maxGuardrailVerdictsPerCase+1)
 	if err != nil {
-		return nil, err
+		return nil, false, err
+	}
+	truncated := len(verdicts) > maxGuardrailVerdictsPerCase
+	if truncated {
+		verdicts = verdicts[:maxGuardrailVerdictsPerCase]
 	}
 	counts := make(map[string]int, len(verdicts))
 	for _, verdict := range verdicts {
 		counts[verdict.Outcome]++
 	}
-	return counts, nil
+	return counts, truncated, nil
 }
 
 // evidencePermission answers whether the author of an evaluation run holds

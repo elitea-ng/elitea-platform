@@ -40,7 +40,28 @@ describe('summarizeTrajectory, the issue 2192 counters', () => {
       result('c', {}),
     ]);
     expect(summary).toMatchObject({ guardrailEvents: 5, guardrailCases: 2, totalCases: 3 });
-    expect(summary?.cases[0]?.guardrail).toEqual(guardrail);
+    expect(summary?.cases[0]?.guardrail).toEqual({ ...guardrail, truncated: false });
+    // The case with no steps still gets a row of its own, with its guardrail figures.
+    expect(summary?.untracked).toEqual([
+      { caseId: 'b', input: undefined, stepLimit: false, guardrail: { events: 2, blocked: 2, masked: 0, warned: 0, gated: 0, truncated: false } },
+    ]);
+  });
+
+  it('keeps a tool of another step kind apart in the run-wide union and marks cut verdicts as a lower bound', () => {
+    const a = { ...base, distinct_tools: 2, redundant_calls: 0, tools: [{ kind: 'tool_call', name: 'x', toolkit_id: 'k', calls: 1, errors: 0 }, { kind: 'retrieval', name: 'x', toolkit_id: 'k', calls: 1, errors: 0 }] };
+    const summary = summarizeTrajectory([
+      result('a', { trajectory: a, guardrail: { events: 4, blocked: 4, masked: 0, warned: 0, gated: 0, truncated: true } }),
+    ]);
+    expect(summary).toMatchObject({ distinctToolsPerCase: 2, distinctToolsInRun: 2, guardrailTruncated: true });
+  });
+
+  it('counts how many measured cases recorded the new counters, for the card to say so', () => {
+    const summary = summarizeTrajectory([
+      result('a', { trajectory: { ...base, distinct_tools: 1, redundant_calls: 0, tools: [] } }),
+      result('b', { trajectory: { ...base, tools: [] } }),
+    ]);
+    expect(summary).toMatchObject({ countersRecorded: 1 });
+    expect(summary?.cases).toHaveLength(2);
   });
 
   it('counts the cases that ended at the step limit, with their ids', () => {

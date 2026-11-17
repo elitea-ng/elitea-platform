@@ -68,6 +68,23 @@ describe('the Trajectory card counters of issue 2192', () => {
     expect(screen.getByTestId('trajectory-case-b')).toHaveTextContent('ended at the step limit');
   });
 
+  it('gives a case blocked before any step its own row, and says when verdicts were cut or counters partial', async () => {
+    const results = [
+      row('a', { trajectory: trajectory(2, { distinct_tools: 1, redundant_calls: 0 }) }),
+      row('b', { trajectory: trajectory(2) }),
+      row('c', { guardrail: { events: 2, blocked: 2, masked: 0, warned: 0, gated: 0, truncated: true }, agent_step_limit: true }),
+    ];
+    renderWithEvaluationProviders(<RunInsights projectId="1" dimensionNames={names} scorecard={scorecard(results)} />);
+
+    expect(await screen.findByTestId('trajectory-untracked-c')).toHaveTextContent('question c');
+    expect(screen.getByTestId('trajectory-untracked-c')).toHaveTextContent('2 guardrail event(s)');
+    expect(screen.getByTestId('trajectory-untracked-c')).toHaveTextContent('2 blocked');
+    expect(screen.getByTestId('trajectory-untracked-c')).toHaveTextContent('ended at the step limit');
+    expect(screen.getByTestId('run-trajectory-guardrail')).toHaveTextContent('at least 2');
+    expect(screen.getByTestId('run-trajectory-step-limit')).toHaveTextContent('1 of 3 case(s)');
+    expect(screen.getByTestId('run-trajectory-counters-partial')).toHaveTextContent('1 of 2 measured case(s)');
+  });
+
   it('says not recorded for a run stored before the counters, never 0', async () => {
     renderWithEvaluationProviders(<RunInsights projectId="1" dimensionNames={names} scorecard={scorecard([row('a', { trajectory: trajectory(2) })])} />);
 

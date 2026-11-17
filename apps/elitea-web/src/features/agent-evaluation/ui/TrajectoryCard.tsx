@@ -20,7 +20,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import { t } from '@/shared/i18n';
 
 import { formatCount, formatMs } from '../lib/insightsFormat';
-import type { CaseGuardrail, CaseTrajectory, TrajectoryItem, TrajectorySummary } from '../lib/trajectory';
+import type { CaseGuardrail, CaseTrajectory, TrajectoryItem, TrajectorySummary, UntrackedCase } from '../lib/trajectory';
 
 const cardSx: SxProps<Theme> = {
   display: 'flex',
@@ -65,8 +65,8 @@ function distinctToolsValue(summary: TrajectorySummary): string {
 function redundantValue(summary: TrajectorySummary): string {
   if (summary.redundantCalls === undefined) return notRecorded();
   if (summary.redundantShare === undefined) return formatCount(summary.redundantCalls);
-  return t('features.agentEvaluation.trajectory.redundantValue', '{{count}} ({{share}} of tool calls)', {
-    count: formatCount(summary.redundantCalls),
+  return t('features.agentEvaluation.trajectory.redundantValue', '{{redundant}} ({{share}} of tool calls)', {
+    redundant: formatCount(summary.redundantCalls),
     share: formatShare(summary.redundantShare),
   });
 }
@@ -76,6 +76,12 @@ function stepLimitValue(summary: TrajectorySummary): string {
     count: summary.stepLimitCases,
     total: summary.totalCases,
   });
+}
+
+function guardrailValue(summary: TrajectorySummary): string {
+  const value = formatCount(summary.guardrailEvents);
+  if (summary.guardrailEvents === undefined || !summary.guardrailTruncated) return value;
+  return t('features.agentEvaluation.trajectory.atLeast', 'at least {{value}}', { value });
 }
 
 function guardrailBreakdown(guardrail: CaseGuardrail): string {
@@ -121,6 +127,31 @@ function flagText(entry: CaseTrajectory): string | undefined {
   if (entry.timedOut) return t('features.agentEvaluation.trajectory.timedOut', 'ended at the time limit');
   if (entry.stepLimit) return t('features.agentEvaluation.trajectory.stepLimit', 'ended at the step limit');
   return undefined;
+}
+
+function UntrackedRow({ entry }: { readonly entry: UntrackedCase }): ReactNode {
+  return (
+    <Box data-testid={`trajectory-untracked-${entry.caseId}`} sx={rowSx}>
+      <Typography variant="bodyMedium" component="span" sx={{ maxWidth: '24rem' }} noWrap>
+        {entry.input ?? entry.caseId}
+      </Typography>
+      <Typography variant="bodySmall" component="span" color="text.secondary">
+        {t('features.agentEvaluation.trajectory.untracked', 'No steps recorded; {{guardrail}} guardrail event(s)', {
+          guardrail: formatCount(entry.guardrail?.events),
+        })}
+      </Typography>
+      {entry.guardrail !== undefined && entry.guardrail.events > 0 && (
+        <Typography variant="bodySmall" component="span" color="text.secondary">
+          {guardrailBreakdown(entry.guardrail)}
+        </Typography>
+      )}
+      {entry.stepLimit && (
+        <Typography variant="bodySmall" color="error" component="span">
+          {t('features.agentEvaluation.trajectory.stepLimit', 'ended at the step limit')}
+        </Typography>
+      )}
+    </Box>
+  );
 }
 
 function CaseRow({ entry }: { readonly entry: CaseTrajectory }): ReactNode {
@@ -185,7 +216,7 @@ export function TrajectoryCard({ summary }: TrajectoryCardProps): ReactNode {
             <Stat label={t('features.agentEvaluation.trajectory.retries', 'Retries')} value={formatCount(summary.retries)} testId="run-trajectory-retries" />
             <Stat label={t('features.agentEvaluation.trajectory.distinctTools', 'Distinct tools')} value={distinctToolsValue(summary)} testId="run-trajectory-distinct-tools" />
             <Stat label={t('features.agentEvaluation.trajectory.redundantCalls', 'Redundant calls')} value={redundantValue(summary)} testId="run-trajectory-redundant" />
-            <Stat label={t('features.agentEvaluation.trajectory.guardrailEvents', 'Guardrail events')} value={formatCount(summary.guardrailEvents)} testId="run-trajectory-guardrail" />
+            <Stat label={t('features.agentEvaluation.trajectory.guardrailEvents', 'Guardrail events')} value={guardrailValue(summary)} testId="run-trajectory-guardrail" />
             <Stat label={t('features.agentEvaluation.trajectory.stepLimitHit', 'Step limit hit')} value={stepLimitValue(summary)} testId="run-trajectory-step-limit" />
           </Box>
           {summary.cases.length < summary.totalCases && (
@@ -204,6 +235,17 @@ export function TrajectoryCard({ summary }: TrajectoryCardProps): ReactNode {
               })}
             </Typography>
           )}
+          {summary.countersRecorded < summary.cases.length && (
+            <Typography variant="bodySmall" color="text.secondary" data-testid="run-trajectory-counters-partial">
+              {t('features.agentEvaluation.trajectory.countersPartial', 'Distinct tools and redundant calls were recorded for {{measured}} of {{total}} measured case(s).', {
+                measured: summary.countersRecorded,
+                total: summary.cases.length,
+              })}
+            </Typography>
+          )}
+          {summary.untracked.map((entry) => (
+            <UntrackedRow key={entry.caseId} entry={entry} />
+          ))}
           {summary.cases.map((entry) => (
             <CaseRow key={entry.caseId} entry={entry} />
           ))}

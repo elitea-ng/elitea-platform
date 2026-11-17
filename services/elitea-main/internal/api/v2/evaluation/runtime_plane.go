@@ -97,6 +97,9 @@ type AgentRunResult struct {
 	// for the run, by outcome ("blocked", "masked", ...). Nil means the verdicts
 	// could not be read: not recorded, which is not "no events".
 	GuardrailOutcomes map[string]int
+	// GuardrailTruncated: the verdicts were more than the read's bound, so the
+	// outcomes count the oldest ones only.
+	GuardrailTruncated bool
 }
 
 // Step kinds, as the run evidence records them (ADR-0042).
@@ -135,7 +138,7 @@ type AgentStep struct {
 // request whose gate type is a sensitive-tool one. A connection authorization
 // or a clarifying question is not a guardrail decision.
 func (s AgentStep) IsGovernanceGate() bool {
-	return s.Kind == StepKindApproval && s.Decision == "requested" && strings.HasSuffix(s.GuardrailType, "sensitive_tool")
+	return s.Kind == StepKindApproval && s.Decision == "requested" && (s.GuardrailType == "sensitive_tool" || s.GuardrailType == "application_sensitive_tool")
 }
 
 // IsToolStep reports whether the step is the agent using a tool: a tool call,
@@ -239,7 +242,7 @@ func (o *Orchestrator) runtimeCase(
 		trajectory = BuildTrajectory(result.Steps, settings.keepToolOutputs)
 	}
 	done := agentCase{evidence: evidence, trajectory: trajectory}
-	if guardrail := BuildGuardrail(result.Steps, result.GuardrailOutcomes); guardrail != nil {
+	if guardrail := BuildGuardrail(result.Steps, result.GuardrailOutcomes, result.GuardrailTruncated); guardrail != nil {
 		evidence["guardrail"] = guardrail
 	}
 
@@ -310,18 +313,21 @@ const maxToolOutputRunes = 1000
 // call again. A different argument is a new call, not a retry.
 //
 // A REDUNDANT call is a tool step identical to an earlier step of the case
-// (same kind, toolkit, name and arguments digest) that had already SUCCEEDED:
-// the answer was in hand and the agent asked again. A repeat of a failed call
-// is a retry and is not counted twice, so retries and redundant calls never
-// overlap. DISTINCT tools are the unique (kind, toolkit, name) the case used.
+// (same kind, toolkit, name and arguments digest) whose latest attempt had
+// SUCCEEDED: the answer was in hand and the agent asked again. Each repeat is
+// ONE of the two, by the outcome of the latest earlier attempt: a retry after a
+// failure, redundant after a success, so the counters never count one call
+// twice. A step with no recorded arguments digest cannot be shown to repeat an
+// earlier call, so it is never redundant. DISTINCT tools are the unique
+// (kind, toolkit, name) the case used.
 func BuildTrajectory(steps []AgentStep, keepToolOutputs bool) map[string]any {
 	type toolFigures struct {
-		name, toolkit string
-		calls, errors int
+		kind, name, toolkit string
+		calls, errors       int
 	}
 	var steppedCount, modelCalls, toolCalls, toolErrors, retries, redundant int
-	failed := map[string]bool{}
-	succeeded := map[string]bool{}
+	// lastFailed holds, for every call seen, whether its latest attempt failed.
+	lastFailed := map[string]bool{}
 	tools := map[string]*toolFigures{}
 	var toolOrder []string
 	items := make([]map[string]any, 0, len(steps))
@@ -337,23 +343,23 @@ func BuildTrajectory(steps []AgentStep, keepToolOutputs bool) map[string]any {
 			key := step.Kind + "\x00" + step.ToolkitID + "\x00" + step.Name
 			figures := tools[key]
 			if figures == nil {
-				figures = &toolFigures{name: cleanText(step.Name), toolkit: cleanText(step.ToolkitID)}
+				figures = &toolFigures{kind: step.Kind, name: cleanText(step.Name), toolkit: cleanText(step.ToolkitID)}
 				tools[key] = figures
 				toolOrder = append(toolOrder, key)
 			}
 			figures.calls++
 			call := key + "\x00" + step.InputsDigest
-			if failed[call] {
-				retries++
-			} else if succeeded[call] {
-				redundant++
+			if failedBefore, seen := lastFailed[call]; seen {
+				if failedBefore {
+					retries++
+				} else if step.InputsDigest != "" {
+					redundant++
+				}
 			}
+			lastFailed[call] = step.Error != ""
 			if step.Error != "" {
 				toolErrors++
 				figures.errors++
-				failed[call] = true
-			} else {
-				succeeded[call] = true
 			}
 		}
 		if len(items) < maxTrajectoryItems {
@@ -364,7 +370,7 @@ func BuildTrajectory(steps []AgentStep, keepToolOutputs bool) map[string]any {
 	for _, key := range toolOrder {
 		figures := tools[key]
 		toolList = append(toolList, map[string]any{
-			"name": figures.name, "toolkit_id": figures.toolkit, "calls": figures.calls, "errors": figures.errors,
+			"kind": figures.kind, "name": figures.name, "toolkit_id": figures.toolkit, "calls": figures.calls, "errors": figures.errors,
 		})
 	}
 	return map[string]any{
@@ -396,7 +402,7 @@ func BuildTrajectory(steps []AgentStep, keepToolOutputs bool) map[string]any {
 // A nil outcomes map means the verdicts could not be read, and the figures are
 // absent (nil), not zero. Steps may be empty when the step record is not
 // composed; the gate count is then 0 and the verdict counts still stand.
-func BuildGuardrail(steps []AgentStep, outcomes map[string]int) map[string]any {
+func BuildGuardrail(steps []AgentStep, outcomes map[string]int, truncated bool) map[string]any {
 	if outcomes == nil {
 		return nil
 	}
@@ -409,10 +415,15 @@ func BuildGuardrail(steps []AgentStep, outcomes map[string]int) map[string]any {
 	blocked := outcomes["blocked"] + outcomes["error_closed"]
 	masked := outcomes["masked"]
 	warned := outcomes["warned"] + outcomes["flagged"]
-	return map[string]any{
+	figures := map[string]any{
 		"events":  blocked + masked + warned + gated,
 		"blocked": blocked, "masked": masked, "warned": warned, "gated": gated,
 	}
+	if truncated {
+		// The counts are a lower bound; the card says "at least".
+		figures["truncated"] = true
+	}
+	return figures
 }
 
 func trajectoryItem(step AgentStep, keepToolOutputs bool) map[string]any {

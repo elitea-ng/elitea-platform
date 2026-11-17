@@ -595,6 +595,35 @@ func TestBuildTrajectoryCountsDistinctToolsAndRedundantCalls(t *testing.T) {
 	}
 }
 
+// Each repeat is a retry or redundant by the latest earlier attempt, never both;
+// a step with no arguments digest cannot be shown to repeat anything.
+func TestBuildTrajectoryClassifiesARepeatByTheLatestAttempt(t *testing.T) {
+	t.Parallel()
+
+	call := func(seq int, digest, failure string) AgentStep {
+		return AgentStep{Seq: seq, Kind: StepKindToolCall, Name: "fetch", ToolkitID: "web", InputsDigest: digest, Error: failure}
+	}
+	// fail, ok, ok: the second is a retry, the third is redundant.
+	got := BuildTrajectory([]AgentStep{call(1, "a", "boom"), call(2, "a", ""), call(3, "a", "")}, false)
+	if got["retries"] != 1 || got["redundant_calls"] != 1 || got["tool_errors"] != 1 {
+		t.Errorf("fail,ok,ok: retries %v redundant %v errors %v", got["retries"], got["redundant_calls"], got["tool_errors"])
+	}
+	// ok, fail, ok: the second is redundant (and an error), the third a retry.
+	got = BuildTrajectory([]AgentStep{call(1, "a", ""), call(2, "a", "boom"), call(3, "a", "")}, false)
+	if got["retries"] != 1 || got["redundant_calls"] != 1 {
+		t.Errorf("ok,fail,ok: retries %v redundant %v", got["retries"], got["redundant_calls"])
+	}
+	// No digest: two successful calls with unknown arguments are not shown to repeat.
+	got = BuildTrajectory([]AgentStep{call(1, "", ""), call(2, "", "")}, false)
+	if got["redundant_calls"] != 0 {
+		t.Errorf("no digest: redundant = %v, want 0", got["redundant_calls"])
+	}
+	tools := got["tools"].([]map[string]any)
+	if tools[0]["kind"] != StepKindToolCall {
+		t.Errorf("the tool list must name the step kind: %v", tools[0])
+	}
+}
+
 func TestBuildGuardrailCountsActingVerdictsAndGates(t *testing.T) {
 	t.Parallel()
 
@@ -605,7 +634,7 @@ func TestBuildGuardrailCountsActingVerdictsAndGates(t *testing.T) {
 		{Kind: StepKindApproval, Decision: "approve", GuardrailType: "sensitive_tool"},
 		{Kind: StepKindToolCall, Name: "t"},
 	}
-	got := BuildGuardrail(steps, map[string]int{"blocked": 1, "error_closed": 1, "masked": 2, "warned": 1, "flagged": 1, "pass": 9, "error_open": 3})
+	got := BuildGuardrail(steps, map[string]int{"blocked": 1, "error_closed": 1, "masked": 2, "warned": 1, "flagged": 1, "pass": 9, "error_open": 3}, true)
 
 	want := map[string]any{"events": 8, "blocked": 2, "masked": 2, "warned": 2, "gated": 2}
 	for key, value := range want {
@@ -613,10 +642,16 @@ func TestBuildGuardrailCountsActingVerdictsAndGates(t *testing.T) {
 			t.Errorf("%s = %v, want %v (%v)", key, got[key], value, got)
 		}
 	}
-	if BuildGuardrail(steps, nil) != nil {
+	if got["truncated"] != true {
+		t.Errorf("a truncated verdict read must say the counts are a lower bound: %v", got)
+	}
+	if BuildGuardrail(steps, map[string]int{}, false)["truncated"] != nil {
+		t.Error("a complete read must not carry the truncated mark")
+	}
+	if BuildGuardrail(steps, nil, false) != nil {
 		t.Error("unread verdicts must give no figures, not zeros")
 	}
-	if zero := BuildGuardrail(nil, map[string]int{}); zero["events"] != 0 {
+	if zero := BuildGuardrail(nil, map[string]int{}, false); zero["events"] != 0 {
 		t.Errorf("a read that found nothing is zero events: %v", zero)
 	}
 }
