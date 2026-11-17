@@ -33,6 +33,29 @@ func WithImageGenerationModel(model string) Option {
 	return func(h *Handler) { h.imageGenerationModel = strings.TrimSpace(model) }
 }
 
+// WithCodeSandbox states the languages the deployment's code sandbox serves
+// (the supervisor profiles the worker's Code node and run_analysis_code use):
+// "python", "javascript", "typescript", "rust". The chart derives the list
+// from the worker's sandboxRuntimes, so RuntimeCapabilities reports pyodide
+// available, and names the languages, exactly when the worker can serve its
+// run_code tool. Empty: the toggle renders disabled with a reason. Blank and
+// duplicate entries are dropped; the order is the sandbox's own.
+func WithCodeSandbox(languages []string) Option {
+	return func(h *Handler) {
+		seen := make(map[string]bool, len(languages))
+		kept := make([]string, 0, len(languages))
+		for _, language := range languages {
+			language = strings.ToLower(strings.TrimSpace(language))
+			if language == "" || seen[language] {
+				continue
+			}
+			seen[language] = true
+			kept = append(kept, language)
+		}
+		h.codeSandboxLanguages = kept
+	}
+}
+
 // internalToolCapability names one of the platform's toggleable internal chat
 // tools and whether the CONFIGURED worker runs it for real.
 type internalToolCapability struct {
@@ -59,8 +82,12 @@ type internalToolCapability struct {
 //   - image_generation (#1969) is served when the deployment names an image
 //     model (WithImageGenerationModel); RuntimeCapabilities overrides its
 //     rustAvailable below, so it is false here;
-//   - internal_mcp, swarm and pyodide (the Python sandbox,
-//     which only the retired Python worker ran) are recognized and SKIPPED
+//   - pyodide (the Code sandbox toggle, stored under its old name) is served
+//     as the run_code tool through the platform's code sandbox, the one the
+//     Code node and run_analysis_code use, in whatever languages the
+//     deployment's sandbox serves; RuntimeCapabilities overrides its
+//     rustAvailable below from WithCodeSandbox, so it is false here;
+//   - internal_mcp and swarm are recognized and SKIPPED
 //     (PLATFORM_INTERNAL_TOOLS, agent_internal_tool_skipped), so they are
 //     rustAvailable: false and the toggle renders disabled-with-a-reason
 //     instead of silently doing nothing (#866).
@@ -102,6 +129,10 @@ type RuntimeCapabilitiesResponse struct {
 	// client can answer "what is hidden and why" without re-deriving it from
 	// fifty-two individual type schemas.
 	HiddenToolkitTypes []string `json:"hidden_toolkit_types"`
+	// CodeSandboxLanguages are the languages the deployment's code sandbox
+	// serves, the ones the run_code tool offers; empty when pyodide is
+	// unavailable.
+	CodeSandboxLanguages []string `json:"code_sandbox_languages"`
 }
 
 // RuntimeCapabilities serves which worker this deployment runs and what it
@@ -130,8 +161,11 @@ func (h *Handler) RuntimeCapabilities(w http.ResponseWriter, r *http.Request) {
 		available := true
 		if h.workerImplementation == "rust" {
 			available = tool.rustAvailable
-			if tool.name == "image_generation" {
+			switch tool.name {
+			case "image_generation":
 				available = h.imageGenerationModel != ""
+			case "pyodide":
+				available = len(h.codeSandboxLanguages) > 0
 			}
 		}
 		internalTools[tool.name] = available
@@ -145,8 +179,19 @@ func (h *Handler) RuntimeCapabilities(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, RuntimeCapabilitiesResponse{
-		Worker:             h.workerImplementation,
-		InternalTools:      internalTools,
-		HiddenToolkitTypes: hidden,
+		Worker:               h.workerImplementation,
+		InternalTools:        internalTools,
+		HiddenToolkitTypes:   hidden,
+		CodeSandboxLanguages: h.reportedCodeSandboxLanguages(),
 	})
+}
+
+// reportedCodeSandboxLanguages is the sandbox's language list as the endpoint
+// serves it: never nil (a JSON array, not null), and empty on a worker other
+// than "rust" stated explicitly, which does not serve the tool.
+func (h *Handler) reportedCodeSandboxLanguages() []string {
+	if h.workerImplementation == "rust" || h.workerImplementation == "" {
+		return append([]string{}, h.codeSandboxLanguages...)
+	}
+	return []string{}
 }

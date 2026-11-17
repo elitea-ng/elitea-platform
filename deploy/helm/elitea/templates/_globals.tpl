@@ -140,6 +140,21 @@ the values (it is the first template Helm renders).
 {{- if not $v.worker.runtime.imageGenerationModel -}}{{- $_ := set $v.worker.runtime "imageGenerationModel" $g.imageGenerationModel -}}{{- end -}}
 {{- end -}}
 
+{{- /* ── Code sandbox (the `pyodide` internal tool, run_code) ──
+       The worker serves it in the languages of worker.runtime.sandboxRuntimes
+       (the profiles Code nodes use); elitea-main reports the toggle available,
+       and the languages, from ELITEA_CODE_SANDBOX_LANGUAGES, derived from the
+       same entries so the two cannot disagree. An explicit main.env key wins. */ -}}
+{{- if and (kindIs "map" $v.worker.runtime) (not (get $mainEnv "ELITEA_CODE_SANDBOX_LANGUAGES")) -}}
+{{- $languages := list -}}
+{{- range $profile := ($v.worker.runtime.sandboxRuntimes | default list) -}}
+{{- if kindIs "map" $profile -}}
+{{- $languages = append $languages (toString (get $profile "language")) -}}
+{{- end -}}
+{{- end -}}
+{{- if $languages -}}{{- $_ := set $mainEnv "ELITEA_CODE_SANDBOX_LANGUAGES" (join "," ($languages | uniq)) -}}{{- end -}}
+{{- end -}}
+
 {{- /* ── OpenTelemetry ── */ -}}
 {{- $endpoint := include "elitea.otelEndpoint" . -}}
 {{- range $c := list "main" "scheduler" "llmGateway" "deepwiki" "inventory" "vector" -}}

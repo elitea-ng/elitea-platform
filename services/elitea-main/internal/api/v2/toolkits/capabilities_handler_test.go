@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"sort"
 	"testing"
 
@@ -117,6 +118,59 @@ func TestRuntimeCapabilitiesImageGenerationFollowsTheConfiguredModel(t *testing.
 		if got := body.InternalTools["image_generation"]; got != want {
 			t.Errorf("image model %q: internal_tools[image_generation]=%v, want %v", model, got, want)
 		}
+	}
+}
+
+// The Code sandbox toggle (pyodide) is available exactly when the deployment
+// says its code sandbox serves a language, and unavailable by default: run_code
+// is served through the platform's code sandbox, which not every deployment
+// runs. The languages it serves are reported alongside.
+func TestRuntimeCapabilitiesPyodideFollowsTheCodeSandbox(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		languages []string
+		want      []string
+	}{
+		{"none", nil, []string{}},
+		{"blank entries only", []string{"", "  "}, []string{}},
+		{"python", []string{"python"}, []string{"python"}},
+		{
+			"all four, normalised",
+			[]string{"python", " JavaScript ", "typescript", "rust", "python"},
+			[]string{"python", "javascript", "typescript", "rust"},
+		},
+	}
+	for _, tc := range cases {
+		body := getCapabilities(t, append(
+			catalogueOptions(t, "rust"),
+			toolkits.WithWorkerImplementation("rust"),
+			toolkits.WithCodeSandbox(tc.languages),
+		)...)
+		got, found := body.InternalTools["pyodide"]
+		if !found {
+			t.Fatalf("%s: internal_tools has no entry for pyodide", tc.name)
+		}
+		if got != (len(tc.want) > 0) {
+			t.Errorf("%s: internal_tools[pyodide]=%v, want %v", tc.name, got, len(tc.want) > 0)
+		}
+		if !reflect.DeepEqual(body.CodeSandboxLanguages, tc.want) {
+			t.Errorf("%s: code_sandbox_languages=%#v, want %#v", tc.name, body.CodeSandboxLanguages, tc.want)
+		}
+	}
+
+	// Never wired: the rust worker reports false and an empty list rather
+	// than guessing.
+	body := getCapabilities(t, append(
+		catalogueOptions(t, "rust"),
+		toolkits.WithWorkerImplementation("rust"),
+	)...)
+	if body.InternalTools["pyodide"] {
+		t.Error("internal_tools[pyodide]=true with no code sandbox stated, want false")
+	}
+	if body.CodeSandboxLanguages == nil || len(body.CodeSandboxLanguages) != 0 {
+		t.Errorf("code_sandbox_languages=%#v, want an empty array", body.CodeSandboxLanguages)
 	}
 }
 

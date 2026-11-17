@@ -59,6 +59,7 @@ export const NO_PAGE = new Set([
   'elastic',
   'kubernetes',
   'localgit',
+  'pyodide',
   'sandbox',
   'vectorstore',
   'yagmail',
