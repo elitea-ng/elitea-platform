@@ -36,10 +36,10 @@ export async function sha256(message: string): Promise<string> {
   return encoded;
 }
 
-/** Normalises a raw scope string, ensuring `openid` leads for OIDC flows. */
+/** Normalises a raw scope string, ensuring `openid` leads for OIDC flows. OAuth separates scopes with spaces (RFC 6749 3.3), but toolkit credentials ship them as "a, b, c"; a comma left on a token (`offline_access,`) is an unknown scope to Entra (AADSTS650053), so commas split too. */
 export function normalizeScope(scope: string | undefined | null, isOIDC: boolean): string {
   if (!scope) return isOIDC ? 'openid' : '';
-  const scopes = scope.split(' ').filter(Boolean);
+  const scopes = scope.split(/[\s,]+/).filter(Boolean);
   if (isOIDC && !scopes.includes('openid')) scopes.unshift('openid');
   return scopes.join(' ');
 }

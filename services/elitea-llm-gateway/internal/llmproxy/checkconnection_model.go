@@ -56,6 +56,13 @@ import (
 // can shorten it.
 var checkModelProbeTimeout = 30 * time.Second
 
+// checkModelTokenBudget is the output budget of every model probe. It is 16,
+// not 1: the smallest value OpenAI-on-Bedrock and the Responses API accept for
+// max_output_tokens is 16, and a probe below it was refused as "Invalid
+// max_output_tokens" for a model that answers real requests (#2095). The cost
+// of sixteen tokens is the same order as one.
+const checkModelTokenBudget = 16
+
 // checkModelMaxNameLength bounds the model name. It is interpolated into a
 // URL path for Azure, DIAL, Bedrock and Vertex.
 const checkModelMaxNameLength = 256
@@ -490,7 +497,7 @@ func probeOpenAIChatCompletion(ctx context.Context, client *http.Client, req che
 	}
 	if req.UseAnthropicEndpoints {
 		headers["anthropic-version"] = anthropicAPIVersion
-		body := map[string]any{"model": req.Model, "messages": messages, "max_tokens": 1}
+		body := map[string]any{"model": req.Model, "messages": messages, "max_tokens": checkModelTokenBudget}
 		return modelProbePOST(ctx, client, root+"/v1/messages", headers, body, "content")
 	}
 	body := map[string]any{"model": req.Model, "messages": messages}
@@ -522,13 +529,13 @@ func postCompletionWithTokenField(
 	ctx context.Context, client *http.Client, rawURL string, headers map[string]string,
 	body map[string]any, first, second, expectKey string,
 ) error {
-	body[first] = 1
+	body[first] = checkModelTokenBudget
 	err := modelProbePOST(ctx, client, rawURL, headers, body, expectKey)
 	if !refusesTokenField(err, first) {
 		return err
 	}
 	delete(body, first)
-	body[second] = 1
+	body[second] = checkModelTokenBudget
 	return modelProbePOST(ctx, client, rawURL, headers, body, expectKey)
 }
 
@@ -596,7 +603,7 @@ func probeDialCompletion(ctx context.Context, client *http.Client, req checkConn
 		} else if req.APIKey != "" {
 			headers["x-api-key"] = req.APIKey
 		}
-		body := map[string]any{"model": req.Model, "messages": messages, "max_tokens": 1}
+		body := map[string]any{"model": req.Model, "messages": messages, "max_tokens": checkModelTokenBudget}
 		return modelProbePOST(ctx, client, base+"/anthropic/v1/messages", headers, body, "content")
 	default:
 		body := map[string]any{"messages": messages}
@@ -614,7 +621,7 @@ func probeOllamaChat(ctx context.Context, client *http.Client, req checkConnecti
 		"model":    req.Model,
 		"messages": []map[string]string{{"role": "user", "content": checkModelPrompt}},
 		"stream":   false,
-		"options":  map[string]any{"num_predict": 1},
+		"options":  map[string]any{"num_predict": checkModelTokenBudget},
 	}
 	return modelProbePOST(ctx, client, checkConnectionJoinURL(req.APIBase, "/api/chat"), nil, body, "message")
 }
@@ -643,7 +650,7 @@ func probeBedrockConverse(ctx context.Context, client *http.Client, req checkCon
 	}
 	payload, err := json.Marshal(map[string]any{
 		"messages":        []map[string]any{{"role": "user", "content": []map[string]string{{"text": checkModelPrompt}}}},
-		"inferenceConfig": map[string]any{"maxTokens": 1},
+		"inferenceConfig": map[string]any{"maxTokens": checkModelTokenBudget},
 	})
 	if err != nil {
 		return &checkConnectionProbeError{err: err}
@@ -699,7 +706,7 @@ func probeVertexGenerateContent(ctx context.Context, client *http.Client, req ch
 	}
 	body := map[string]any{
 		"contents":         []map[string]any{{"role": "user", "parts": []map[string]string{{"text": checkModelPrompt}}}},
-		"generationConfig": map[string]any{"maxOutputTokens": 1},
+		"generationConfig": map[string]any{"maxOutputTokens": checkModelTokenBudget},
 	}
 	return modelProbePOST(ctx, client, base+"/publishers/google/models/"+url.PathEscape(req.Model)+":generateContent",
 		headers, body, "candidates")

@@ -251,6 +251,12 @@ export function initialValueForSchemaField(key: string, property: ConfigSchemaNo
   // of `ai_credentials` expects `{elitea_title, private}` or null.
   if (kind === 'configuration') return null;
   if (property?.default !== undefined) return property.default;
+  // `prefill_value` is the SDK's UI hint: the field stays `required` while the
+  // form opens with a sensible value (GitHub's `https://api.github.com`). It
+  // was ignored here, so a new GitHub credential opened with an empty Base URL,
+  // saved, and then refused at run time, where an empty URL is deliberately not
+  // defaulted (#2128).
+  if (typeof property?.['prefill_value'] === 'string') return property['prefill_value'];
   if (property?.type === 'boolean') return false;
   // number/integer/string/undefined all default to an empty string — an
   // empty numeric input is represented as `''`, not `0` or `NaN` (matches

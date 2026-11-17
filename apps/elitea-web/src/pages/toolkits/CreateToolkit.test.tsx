@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { getListToolkitInstancesQueryKey } from '@/shared/api/generated/toolkits/toolkits';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { PageChromeProvider, useShellCrumbs } from '@/shared/ui/page-chrome';
 import { server } from '@/test/setup';
@@ -168,6 +169,24 @@ describe('CreateToolkit', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/toolkits/all/tk-new'));
     // History REPLACE, not push — Back must not reopen the stale create form.
     expect(replaceSpy).toHaveBeenCalled();
+  });
+
+  // #2144: the list the user returns to must not serve its pre-create page.
+  it('a successful Save marks the toolkits list stale so it refetches', async () => {
+    server.use(http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => HttpResponse.json({ github: { metadata: { label: 'GitHub' } } })));
+    const user = userEvent.setup();
+    const createToolkit = vi.fn().mockResolvedValue({ id: 'tk-new', type: 'github', name: 'GitHub' });
+
+    const { router, queryClient } = renderToolkitsRoute(<CreateToolkit deps={{ createToolkit }} />, '/toolkits/create', { projectId: 'proj-1' });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+
+    await user.click(await screen.findByText('GitHub'));
+    const saveButton = await screen.findByRole('button', { name: /save/i });
+    await waitFor(() => expect(saveButton).not.toBeDisabled());
+    await user.click(saveButton);
+
+    await waitFor(() => expect(router.state.location.pathname).toBe('/toolkits/all/tk-new'));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: getListToolkitInstancesQueryKey('proj-1') });
   });
 
   it('a failed Save stays on the create route and shows the error', async () => {

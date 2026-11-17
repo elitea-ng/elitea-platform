@@ -4,10 +4,12 @@ import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
+import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from '@tanstack/react-router';
 
 import { ConfigurationTab, DeleteToolkitButton, ExportToolkitButton, IndexesTab, ToolkitsControls, type ToolkitEditorDeps, useToolkitEdit } from '@/features/toolkits';
 import type { ToolkitInstance } from '@/shared/api/generated/model';
+import { getListToolkitInstancesQueryKey } from '@/shared/api/generated/toolkits/toolkits';
 import { t } from '@/shared/i18n';
 import { ViewMode } from '@/shared/lib/enums';
 import { usePageCrumbs } from '@/shared/ui/page-chrome';
@@ -182,7 +184,7 @@ function resolveTitle(isMCP: boolean, name: string | undefined): string {
  *    emits it from its toolkit tab bar; this page is that emitter now, so the
  *    seam is wired rather than duplicated. Save is dirty-gated like the agent
  *    editor's, and REFUSED with the reason stated when the selected
- *    credential's stored check came back `auth_failed`/`unreachable` — see
+ *    credential's stored check came back `auth_failed` — see
  *    `./lib/useCredentialSaveGate.ts` for why the gate reads the probe's
  *    reason and never the `invalid` status.
  *  - **`redirect`/`iframe`-type application custom-UI branches, the
@@ -271,7 +273,12 @@ export function EditToolkit({ isMCP = false, deps }: EditToolkitProps): ReactNod
     setEditToolDetail(updater);
   }, []);
 
-  const handleSaved = useCallback(() => setIsToolDirty(false), []);
+  const queryClient = useQueryClient();
+  const handleSaved = useCallback(() => {
+    setIsToolDirty(false);
+    // A renamed or reconfigured toolkit must show in the list the user goes back to (#2144).
+    void queryClient.invalidateQueries({ queryKey: getListToolkitInstancesQueryKey(projectId ?? '') }).catch(() => undefined);
+  }, [queryClient, projectId]);
   const handleDiscarded = useCallback(() => {
     setEditToolDetail(toEditDetail(detail));
     setIsToolDirty(false);

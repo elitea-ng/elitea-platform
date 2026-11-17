@@ -93,7 +93,7 @@ interface CredentialPickerFieldProps {
  * What the picker reports UP about the credential currently selected in it,
  * and only when the platform reached a verdict AGAINST that credential.
  *
- * `refusalReason` is the toolkit probe's own `auth_failed`/`unreachable`
+ * `refusalReason` is the toolkit probe's own `auth_failed`
  * (`useCredentialValidation`'s `getCredentialRefusalReason`, which already
  * filters out every non-verdict). A deployment that cannot run the check at
  * all answers with no reason, so it produces `null` here — the check being

@@ -228,34 +228,33 @@ describe('useCredentialRows', () => {
   });
 
   /*
-   * The address a row names, which is what decides whether the option carries
-   * its "open in a new tab" action.
+   * The address the row's "open in a new tab" action opens (#2134).
    *
-   * `CredentialOptionLabel` renders that control on a truthy `credentialUrl`
-   * and on nothing else. The hook never set the field, so the control was
-   * absent from every credential picker in the application while its selector,
-   * its prop and its own unit test all went on passing.
+   * It must be the credential's own configuration page in Elitea. It used to
+   * be the provider address the credential names (`data.base_url`), so the new
+   * tab landed on github.com instead of the credential.
    */
-  it('carries the provider address a row names, and none where the row names one', async () => {
+  it("points a row's open-in-new-tab action at its Elitea configuration page, never at the provider", async () => {
     servePages({
       '1': {
         ...EMPTY,
         items: [
-          { id: 1, type: 'github', elitea_title: 'has-base-url', data: { base_url: 'https://github.example/api' } },
-          { id: 2, type: 'jira', elitea_title: 'has-url', data: { url: 'https://jira.example' } },
-          { id: 3, type: 'github', elitea_title: 'has-neither', data: { access_token: '{{secret.x}}' } },
+          { id: 1, type: 'github', elitea_title: 'has-base-url', project_id: 1, data: { base_url: 'https://github.example/api' } },
+          { id: 2, type: 'jira', elitea_title: 'has-url', project_id: 1, data: { url: 'https://jira.example' } },
+          { id: 3, type: 'github', elitea_title: 'has-neither', project_id: 1, data: { access_token: '{{secret.x}}' } },
         ],
+        shared: { ...EMPTY, items: [{ id: 4, type: 'github', elitea_title: 'from-elsewhere', project_id: 9, data: { base_url: 'https://x' } }] },
       },
     });
 
     const state = renderCredentialRows(params({ onlyPublic: true }), undefined);
     await waitFor(() => expect(state.current?.hasFetchedData).toBe(true));
 
-    expect(state.current?.rows.map((row) => row.credentialUrl)).toEqual([
-      'https://github.example/api',
-      'https://jira.example',
-      undefined,
-    ]);
+    const hrefs = state.current?.rows.map((row) => row.credentialUrl);
+    expect(hrefs?.slice(0, 3)).toEqual(['/credentials/all/1', '/credentials/all/2', '/credentials/all/3']);
+    expect(hrefs?.join(' ')).not.toContain('github.example');
+    // Another project's row cannot be opened from this project's editor.
+    expect(hrefs?.[3]).toBeUndefined();
   });
 
   it('reports no data at all, and issues no request, without a project', async () => {

@@ -4,9 +4,11 @@ import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
+import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from '@tanstack/react-router';
 
 import { CreateToolkitToolTabBar, ToolkitForm, ToolkitTypeSelector, type ToolkitEditorDeps, toolkitEditorHooks, useToolkitCreate } from '@/features/toolkits';
+import { getListToolkitInstancesQueryKey } from '@/shared/api/generated/toolkits/toolkits';
 import { t } from '@/shared/i18n';
 import { usePageCrumbs } from '@/shared/ui/page-chrome';
 import { PageToolbar, pageSx, useListSearchQuery } from '@/widgets/page-header';
@@ -165,6 +167,7 @@ function resolveSearchPlaceholder(isApplication: boolean, isMCP: boolean): strin
 export function CreateToolkit({ isMCP = false, isApplication = false, deps }: CreateToolkitProps): ReactNode {
   const defaultCreateToolkit = useToolkitCreate();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const params = useParams({ strict: false }) as CreateToolkitRouteParams;
   const projectId = useSelectedProjectId();
   const connector = useConnectorRefusal(deps?.createToolkit ?? defaultCreateToolkit, projectId);
@@ -283,6 +286,10 @@ export function CreateToolkit({ isMCP = false, isApplication = false, deps }: Cr
       // reopen a stale create form. See the module doc for the not-yet-
       // ported `ReturnUrl`/`SourceApplicationId` round-trip.
       setIsDirty(false);
+      // The create goes through a plain function, not the generated mutation
+      // hook, so nothing told the list its rows were stale: the list the user
+      // returned to showed the old page until a manual refresh (#2144).
+      void queryClient.invalidateQueries({ queryKey: getListToolkitInstancesQueryKey(projectId) }).catch(() => undefined);
       const kind = createdEntityKind(isMCP, isApplication, editToolDetail.type);
       const id = String(created.id);
       if (kind === 'mcp') {
@@ -300,7 +307,7 @@ export function CreateToolkit({ isMCP = false, isApplication = false, deps }: Cr
     } finally {
       setIsCreating(false);
     }
-  }, [projectId, editToolDetail, formValues, createToolkitMutation, navigate, isMCP, isApplication, saveValidation]);
+  }, [projectId, editToolDetail, formValues, createToolkitMutation, navigate, queryClient, isMCP, isApplication, saveValidation]);
 
   // The page's name is the shell's crumb (`Toolkits ▸ New Toolkit`): the section crumb leads back to the list.
   usePageCrumbs([{ label: resolveCreateTitle(isApplication, isMCP) }]);

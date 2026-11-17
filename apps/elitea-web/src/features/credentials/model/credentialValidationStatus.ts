@@ -11,14 +11,16 @@ export type CredentialValidationStatus = 'idle' | 'checking' | 'valid' | 'invali
 
 /**
  * The toolkit probe's closed refusal vocabulary
- * (`internal/api/v2/configurations/toolkit_check.go`). These two mean the
- * platform reached a verdict ABOUT THE CREDENTIAL: the provider rejected it,
- * or nothing answered at all. Every other refusal shape — a missing probe, a
+ * (`internal/api/v2/configurations/toolkit_check.go`). Only `auth_failed` is a
+ * verdict ABOUT THE CREDENTIAL: the provider rejected it. `unreachable` is not
+ * one (#2143): it also answers a host this deployment's egress policy refuses
+ * and a provider that timed out, neither of which says the credential is wrong,
+ * and gating Save on it left a user unable to edit a credential at all. Every other refusal shape — a missing probe, a
  * dependency this deployment does not compose ("Connection checking is not
  * available right now.") — carries no `reason` at all, and must never be read
  * as a statement about the credential.
  */
-const CREDENTIAL_REFUSAL_REASONS: readonly string[] = ['auth_failed', 'unreachable'];
+const CREDENTIAL_REFUSAL_REASONS: readonly string[] = ['auth_failed'];
 
 /** True only for a verdict that refuses THE CREDENTIAL — see {@link CREDENTIAL_REFUSAL_REASONS}. */
 export function isCredentialRefusalReason(reason: string | undefined): boolean {

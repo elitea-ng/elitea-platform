@@ -6,7 +6,7 @@
  * is refused and the reason is stated where the user is about to press it.
  *
  * THE RULE IS KEYED ON THE PROBE'S REASON, NOT ON THE STATUS. The stored
- * check answers `auth_failed`/`unreachable` when it reached a verdict about
+ * check answers `auth_failed` when it reached a verdict about
  * the credential, and answers a plain refusal with NO reason when the
  * deployment could not run the check at all ("Connection checking is not
  * available right now." — `internal/api/v2/configurations/stored_check.go`,
