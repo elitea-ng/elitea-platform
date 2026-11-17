@@ -182,7 +182,7 @@ You need these pieces, beyond the full standalone stack with the Rust worker (`d
    deploy/scripts/standalone-stack.sh up
    ```
 
-The overlay sets `ELITEA_RUNTIME_SANDBOX_AUDIENCES` and `ELITEA_CODE_SANDBOX_LANGUAGES` on elitea-main (defaults `python,javascript,typescript,rust`; set `ELITEA_CODE_SANDBOX_LANGUAGES` to the languages you serve) and mounts the prepared `runtime.json` into the worker. The supervisor needs the socket's group: the script reads it from the socket, or set `ELITEA_SANDBOX_DOCKER_GID` and `ELITEA_SANDBOX_DOCKER_SOCKET`.
+The overlay sets `ELITEA_RUNTIME_SANDBOX_AUDIENCES` and `ELITEA_CODE_SANDBOX_LANGUAGES` on elitea-main (`ELITEA_CODE_SANDBOX_LANGUAGES` is empty unless you set it; the material script prints it as `python,javascript,typescript,rust`, so set it to the languages you serve) and mounts the prepared `runtime.json` into the worker. The supervisor needs the socket's group: the script reads it from the socket, or set `ELITEA_SANDBOX_DOCKER_GID` and `ELITEA_SANDBOX_DOCKER_SOCKET`.
 
 **Check it.** `GET /elitea_core/runtime_capabilities` lists the languages in `code_sandbox_languages`. Turn **Python sandbox** on for an agent and ask it to compute `1+1`: the tool result in the conversation shows `stdout` `2`. If the supervisor does not start, `podman compose logs elitea-sandbox` names the step: the profile files must be mode `0600` (private) or `0644` (public) and owned by UID 10001, the ledger needs the agentstate migrations applied, and the image IDs in both profiles must match the daemon's. Rebuilding a runner image changes its ID: rerun the script, which rewrites both the profiles and the worker configuration, then restart the supervisor and the worker.
 

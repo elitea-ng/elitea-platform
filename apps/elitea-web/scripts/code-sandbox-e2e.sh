@@ -41,6 +41,7 @@ export CHAT_STREAM_EXTRA_LOG_SERVICES="elitea-sandbox postgres"
 STANDALONE_PROJECT="$CHAT_STREAM_PROJECT" "${REPO_ROOT}/deploy/scripts/standalone-stack.sh" certs
 
 material="${CODE_SANDBOX_MATERIAL_DIR:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/elitea-code-sandbox-material}"
+mkdir -p "$(dirname "$material")"
 CONTAINER_BIN="${CONTAINER_BIN:-docker}" \
   "${REPO_ROOT}/deploy/scripts/sandbox-compose-material.sh" "$material" > "${material}.env"
 # shellcheck disable=SC1090

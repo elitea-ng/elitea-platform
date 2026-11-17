@@ -50,6 +50,8 @@ SUPERVISOR_UID=10001
 CODE_OWNER_IDENTITY="spiffe://elitea.standalone/ns/default/sa/main-code-owner"
 
 log() { printf '%s\n' "$*" >&2; }
+# A rerun finds the profile directories owned by the supervisor's UID.
+rm_rf() { rm -rf "$@" 2>/dev/null || sudo -n rm -rf "$@"; }
 
 for file in runtime-ca.crt runtime-ca.key command-signing-keyring.json; do
   [ -f "$RUNTIME_DIR/$file" ] || { log "ERROR: $RUNTIME_DIR/$file is missing; run deploy/scripts/standalone-stack.sh certs first"; exit 1; }
@@ -76,7 +78,11 @@ umask 077
 # Main's Code-owner client certificate, off the runtime CA, in the runtime
 # directory the runtime-material service installs into Main's volume. One
 # SPIFFE URI SAN and clientAuth only. Existing files are kept.
-if [ ! -f "$RUNTIME_DIR/code-owner-client.crt" ] || [ ! -f "$RUNTIME_DIR/code-owner-client.key" ]; then
+# Re-issued when missing, expiring within a day, or not signed by the current
+# runtime CA (`certs` rotated it).
+if ! { [ -f "$RUNTIME_DIR/code-owner-client.crt" ] && [ -f "$RUNTIME_DIR/code-owner-client.key" ] \
+    && openssl verify -CAfile "$RUNTIME_DIR/runtime-ca.crt" "$RUNTIME_DIR/code-owner-client.crt" >/dev/null 2>&1 \
+    && openssl x509 -in "$RUNTIME_DIR/code-owner-client.crt" -checkend 86400 -noout >/dev/null 2>&1; }; then
   owner_scratch="$(mktemp -d "$out/.owner-XXXXXX")"
   openssl req -new -newkey rsa:2048 -nodes -keyout "$owner_scratch/key" \
     -out "$owner_scratch/csr" -subj "/CN=main-code-owner" >/dev/null 2>&1
@@ -96,7 +102,7 @@ bash "${REPO_ROOT}/deploy/scripts/gen-sandbox-certs.sh" "$RUNTIME_DIR" "$out/tls
 render_profile() {
   local profile="$1" port="$2" languages="$3" policy="$4" memory="$5" timeout="$6"
   local dir="$out/$profile" base="/run/elitea-sandbox/$profile" image="$7"
-  rm -rf "$dir"
+  rm_rf "$dir"
   mkdir -p "$dir"
   cp "$RUNTIME_DIR/runtime-ca.crt" "$dir/client-ca.pem"
   cp "$RUNTIME_DIR/runtime-ca.crt" "$dir/database-ca.pem"
@@ -195,6 +201,7 @@ docker_socket="${ELITEA_SANDBOX_DOCKER_SOCKET:-/var/run/docker.sock}"
 docker_gid="${ELITEA_SANDBOX_DOCKER_GID:-$(stat -c %g "$docker_socket" 2>/dev/null || stat -f %g "$docker_socket")}"
 
 cat <<EOF
+export ELITEA_CODE_SANDBOX_LANGUAGES='python,javascript,typescript,rust'
 export ELITEA_SANDBOX_DENO_MATERIAL='$out/deno'
 export ELITEA_SANDBOX_RUST_MATERIAL='$out/rust'
 export ELITEA_SANDBOX_WORKER_CONFIG='$out/worker-runtime.json'
