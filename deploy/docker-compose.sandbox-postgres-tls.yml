@@ -1,0 +1,23 @@
+# Add with docker-compose.sandbox.yml. Turns TLS on for the stack's PostgreSQL
+# so the sandbox supervisor can reach its receipt ledger: the supervisor
+# verifies the server certificate and its hostname (`postgres`), against the
+# runtime CA. Plaintext clients keep working.
+#
+# ELITEA_SANDBOX_POSTGRES_TLS is the directory holding postgres.crt and
+# postgres.key, issued by deploy/scripts/gen-sandbox-certs.sh (or by
+# deploy/scripts/sandbox-compose-material.sh, which calls it).
+#
+# This is for a single-host Compose deployment. A deployment with a managed
+# PostgreSQL already has TLS and does not need this file: point the supervisor's
+# database_url_path and database_ca_path at it instead.
+services:
+  postgres:
+    entrypoint: ["/bin/sh", "/opt/postgres-tls-entrypoint.sh"]
+    volumes:
+      - ./runtime/postgres-tls-entrypoint.sh:/opt/postgres-tls-entrypoint.sh:ro
+      - type: bind
+        source: ${ELITEA_SANDBOX_POSTGRES_TLS:?Set the directory with postgres.crt and postgres.key}
+        target: /tls-src
+        read_only: true
+        bind:
+          create_host_path: false

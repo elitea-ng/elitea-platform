@@ -1,0 +1,25 @@
+# Add with docker-compose.sandbox.yml to run pipeline Code NODES on the sandbox.
+# A Code node is journaled by the worker and admitted by Main only through
+# original-Code owner recovery: Main dials each supervisor over mTLS as
+# `spiffe://elitea.standalone/ns/default/sa/main-code-owner`, and the
+# supervisor profiles (rendered by deploy/scripts/sandbox-compose-material.sh)
+# accept exactly that identity as `code_owner_requester`. The agent `run_code`
+# tool does not need this overlay.
+#
+# The script also issues Main's client certificate into deploy/certs/runtime
+# (code-owner-client.crt and .key), which runtime-material installs into
+# Main's volume.
+services:
+  runtime-material:
+    environment:
+      ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED: "true"
+  elitea-main:
+    environment:
+      ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED: "true"
+      ELITEA_RUNTIME_CODE_OWNER_RECOVERY_CONFIG: >-
+        {"main_workload_identity":"spiffe://elitea.standalone/ns/default/sa/main-code-owner",
+        "certificate_chain_path":"/run/elitea-runtime/code-owner-client.crt",
+        "private_key_path":"/run/elitea-runtime/code-owner-client.key",
+        "server_ca_path":"/run/elitea-runtime/runtime-ca.crt",
+        "supervisors":[{"audience":"dns:elitea-sandbox-deno","https_origin":"https://elitea-sandbox-deno:9446"},
+        {"audience":"dns:elitea-sandbox-rust","https_origin":"https://elitea-sandbox-rust:9447"}]}

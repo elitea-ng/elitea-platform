@@ -766,6 +766,32 @@ export default defineConfig({
     },
 
     /*
+     * ── code-sandbox-stack — the agent `run_code` tool on the REAL code sandbox ─
+     *
+     * The full standalone stack plus the Docker code sandbox
+     * (deploy/docker-compose.sandbox.yml: a supervisor on the runner's Docker
+     * socket, TLS Postgres, digest-pinned runner images), brought up by
+     * scripts/code-sandbox-e2e.sh and run by the `code-sandbox` job in
+     * .github/workflows/ci-web-e2e.yml (#2206, #2208). The model is the mock
+     * (a scripted `run_code` call); the sandbox is not: each journey asserts
+     * the tool result the real runner returned.
+     *
+     * Serial, for the same four-streams-per-principal budget as `chat-stream`,
+     * and through the same `--workers=1` pin in the script.
+     */
+    {
+      name: 'code-sandbox-stack',
+      use: {
+        ...devices['Desktop Chrome'],
+        storageState: STORAGE_STATE.chat,
+        launchOptions: CHROMIUM_LAUNCH_OPTIONS,
+      },
+      dependencies: ['setup'],
+      testMatch: /streaming\/code-sandbox\..+\.spec\.ts/,
+      fullyParallel: false,
+    },
+
+    /*
      * ── chat-stream-real — the structural chat journeys against a REAL model ─
      *
      * The same stack as `chat-stream` with the `real-llm` compose profile
