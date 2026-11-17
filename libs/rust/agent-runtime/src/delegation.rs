@@ -677,9 +677,6 @@ impl PrincipalBound {
     ) -> Result<Self, DelegationPolicyError> {
         let mut bound_toolkits = BTreeMap::new();
         for toolkit in toolkits {
-            if bound_toolkits.len() >= MAX_PRINCIPAL_TOOLKITS {
-                return Err(DelegationPolicyError::PrincipalBoundTooLarge);
-            }
             let selection = match toolkit.tools {
                 None => ToolSelection::All {
                     excluded: BTreeSet::new(),
@@ -696,18 +693,26 @@ impl PrincipalBound {
                 }
             };
             bound_toolkits.insert(toolkit.id, selection);
+            // The limit is on distinct toolkits: a repeated id is not one more.
+            if bound_toolkits.len() > MAX_PRINCIPAL_TOOLKITS {
+                return Err(DelegationPolicyError::PrincipalBoundTooLarge);
+            }
         }
         let credentials = match credentials {
             None => None,
             Some(references) => {
                 let mut set = BTreeSet::new();
                 for reference in references {
-                    if set.len() >= MAX_PRINCIPAL_CREDENTIALS
-                        || reference.len() > MAX_PRINCIPAL_REFERENCE_BYTES
-                    {
+                    if reference.len() > MAX_PRINCIPAL_REFERENCE_BYTES {
                         return Err(DelegationPolicyError::PrincipalBoundTooLarge);
                     }
-                    set.insert(reference);
+                    // Reference ids are UUIDs: compared without case, as the
+                    // database spells them lower-case and a toolkit's
+                    // settings may not.
+                    set.insert(reference.to_ascii_lowercase());
+                    if set.len() > MAX_PRINCIPAL_CREDENTIALS {
+                        return Err(DelegationPolicyError::PrincipalBoundTooLarge);
+                    }
                 }
                 Some(set)
             }
@@ -731,7 +736,7 @@ impl PrincipalBound {
     pub fn admits_credential(&self, reference: &str) -> bool {
         self.credentials
             .as_ref()
-            .is_none_or(|references| references.contains(reference))
+            .is_none_or(|references| references.contains(&reference.to_ascii_lowercase()))
     }
 
     /// Whether the principal may use a toolkit row as frozen: the toolkit

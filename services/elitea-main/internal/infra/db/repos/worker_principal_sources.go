@@ -52,6 +52,11 @@ func (s *WorkerEgressSources) RunPrincipal(ctx context.Context, command *runtime
 		MandateID: stored.GetMandateId(),
 		UserID:    positiveUserID(stored.GetSubjectPrincipalRef()),
 	}
+	for _, frozen := range stored.GetCredentialReferences() {
+		if reference := frozen.GetCredentialReferenceId(); reference != "" {
+			principal.FrozenCredentialReferences = append(principal.FrozenCredentialReferences, reference)
+		}
+	}
 	if principal.MandateID == "" && principal.UserID == 0 {
 		principal.UserID = positiveUserID(command.GetPrincipalRef())
 	}

@@ -586,6 +586,16 @@ fn a_built_in_toolkit_with_no_row_is_not_bounded_and_the_limits_hold() {
         [],
     );
     assert_eq!(too_many, Err(DelegationPolicyError::PrincipalBoundTooLarge));
+    // The limit is on distinct entries: a repeated id at the limit is fine.
+    let at_limit = (0..MAX_PRINCIPAL_TOOLKITS as u64)
+        .chain([0])
+        .map(|id| PrincipalToolkit { id, tools: None });
+    assert!(PrincipalBound::new(at_limit, None, []).is_ok());
+    // A reference is compared without case.
+    let cased = principal(&[], Some(&["0192F5E2-AAAA"][..]), &[]);
+    assert!(cased.admits_credential("0192f5e2-aaaa"));
+    assert!(cased.admits_credential("0192F5E2-AAAA"));
+    assert!(!cased.admits_credential("0192f5e2-bbbb"));
     let long_reference = PrincipalBound::new(
         [],
         Some(vec!["r".repeat(MAX_PRINCIPAL_REFERENCE_BYTES + 1)]),

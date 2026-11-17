@@ -227,7 +227,7 @@ func TestAnOversizeClosureIsRefusedNotTruncated(t *testing.T) {
 
 func TestPrincipalBoundIsSortedAndBounded(t *testing.T) {
 	t.Parallel()
-	bound, err := PrincipalBound([]int64{3, 1, 3, 2, -4}, true, []string{"b", "a", "b"})
+	bound, err := PrincipalBound([]int64{3, 1, 3, 2}, true, []string{"b", "a", "b"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,22 +237,60 @@ func TestPrincipalBoundIsSortedAndBounded(t *testing.T) {
 	if _, err := PrincipalBound(nil, true, []string{string(make([]byte, MaxCredentialIDBytes+1))}); !errors.Is(err, ErrPrincipalBoundTooLarge) {
 		t.Fatalf("a long reference: %v", err)
 	}
+	if _, err := PrincipalBound([]int64{3, 0}, false, nil); err == nil {
+		t.Fatal("an invalid toolkit id must fail the dispatch, not become a silent denial")
+	}
 }
 
-// Seeds tolerate the two spellings of an id and an unreadable input.
+// Seeds tolerate the two spellings of an id; an input that cannot be decoded
+// is an error, never an empty set read as "nothing allowed".
 func TestSeedsFromInputToleratesStoredSpellings(t *testing.T) {
 	t.Parallel()
-	if seeds := SeedsFromInput([]byte("not a protobuf")); len(seeds.ToolkitIDs) != 0 || len(seeds.Versions) != 0 {
-		t.Fatalf("seeds = %+v", seeds)
+	if _, err := SeedsFromInput([]byte("not a protobuf")); !errors.Is(err, ErrPrincipalInputUnreadable) {
+		t.Fatalf("err = %v", err)
 	}
-	seeds := SeedsFromInput(agentInput(t, `{"id":"5","version_id":9,"version_details":{"tools":[
+	if _, err := SeedsFromInput(agentInput(t, `{"id":5,"version_details":{"tools":{"not":"an array"}}}`)); !errors.Is(err, ErrPrincipalInputUnreadable) {
+		t.Fatalf("a tools value that is no array: %v", err)
+	}
+	seeds, err := SeedsFromInput(agentInput(t, `{"id":"5","version_id":9,"version_details":{"tools":[
 		{"id":7,"type":"jira"},{"id":"x","type":"github"},
 		{"type":"application","settings":{"application_id":6,"version_id":"11"}}]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !slices.Equal(seeds.ToolkitIDs, []int64{7}) {
 		t.Fatalf("toolkits = %v", seeds.ToolkitIDs)
 	}
 	want := []applicationcomposition.Identity{{ApplicationID: 5, VersionID: 9}, {ApplicationID: 6, VersionID: 11}}
 	if !slices.Equal(seeds.Versions, want) {
 		t.Fatalf("versions = %v, want %v", seeds.Versions, want)
+	}
+}
+
+// With the switch on, a run that cannot be bounded is not dispatched, and the
+// references admission froze count as usable.
+func TestARunThatCannotBeBoundedIsNotDispatched(t *testing.T) {
+	t.Parallel()
+	stub := &principalStub{principal: Principal{UserID: 31}}
+	command := agentCommand()
+	command.ResourceProjectId = "not-a-project"
+	_, err := boundedResolver(t, boundedSettings(), stub).WorkerDelegationPolicy(context.Background(), command)
+	if !errors.Is(err, ErrPrincipalProjectUnknown) {
+		t.Fatalf("err = %v, want ErrPrincipalProjectUnknown", err)
+	}
+}
+
+func TestFrozenCredentialReferencesAreUsable(t *testing.T) {
+	t.Parallel()
+	stub := &principalStub{
+		principal: Principal{UserID: 44, Governed: true, FrozenCredentialReferences: []string{"ref-frozen"}},
+		reachable: []int64{7}, credentials: []string{"ref-granted"},
+	}
+	policy, err := boundedResolver(t, boundedSettings(), stub).WorkerDelegationPolicy(context.Background(), agentCommand())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := policy.GetPrincipalBound().GetCredentialReferenceIds(); !slices.Equal(got, []string{"ref-frozen", "ref-granted"}) {
+		t.Fatalf("references = %v", got)
 	}
 }

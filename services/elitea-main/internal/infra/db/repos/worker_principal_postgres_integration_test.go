@@ -178,7 +178,7 @@ VALUES (('0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e16' || $1::text)::uuid, 7, $2::uuid, $
 	// stored, digest-checked context of a governed one (a mandate acts for
 	// its subject user).
 	principal, err := sources.RunPrincipal(ctx, &runtimev1.WorkerCommandV1{PrincipalRef: "31"})
-	if err != nil || principal != (workerdelegation.Principal{UserID: 31}) {
+	if err != nil || principal.UserID != 31 || principal.Governed || principal.MandateID != "" {
 		t.Fatalf("ungoverned principal = %+v, err = %v", principal, err)
 	}
 	if principal, err := sources.RunPrincipal(ctx, &runtimev1.WorkerCommandV1{PrincipalRef: "system:scheduler"}); err != nil || principal.UserID != 0 {
@@ -187,6 +187,10 @@ VALUES (('0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e16' || $1::text)::uuid, 7, $2::uuid, $
 	stored := &runtimev1.ExecutionSecurityContextV1{
 		SchemaRevision: securitycontext.SchemaRevisionV1, TenantProjectId: 7,
 		SubjectPrincipalRef: "44", MandateId: "mandate-1",
+		CredentialReferences: []*runtimev1.GovernedCredentialReferenceV1{
+			{ToolkitId: 7, CredentialReferenceId: principalRefLive},
+			{ToolkitId: 8},
+		},
 	}
 	contextBytes, err := proto.Marshal(stored)
 	if err != nil {
@@ -205,9 +209,9 @@ VALUES ('principal-1', 'elitea.security-context/principal-1', 'elitea.runtime.se
 		}
 	}
 	principal, err = sources.RunPrincipal(ctx, &runtimev1.WorkerCommandV1{PrincipalRef: "31", SecurityContextRef: reference(digest)})
-	want := workerdelegation.Principal{UserID: 44, MandateID: "mandate-1", Governed: true}
-	if err != nil || principal != want {
-		t.Fatalf("mandate principal = %+v, err = %v; want %+v", principal, err, want)
+	if err != nil || principal.UserID != 44 || principal.MandateID != "mandate-1" || !principal.Governed ||
+		!slices.Equal(principal.FrozenCredentialReferences, []string{principalRefLive}) {
+		t.Fatalf("mandate principal = %+v, err = %v", principal, err)
 	}
 	wrong := digest
 	wrong[0] ^= 0xff

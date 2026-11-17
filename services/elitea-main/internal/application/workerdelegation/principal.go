@@ -64,6 +64,13 @@ const (
 // nothing is truncated.
 var ErrPrincipalBoundTooLarge = errors.New("worker delegation: the run principal's bound exceeds its limits")
 
+// ErrPrincipalProjectUnknown is a command with no readable project while the
+// principal bound is on: it cannot be bounded, so it is not dispatched.
+var ErrPrincipalProjectUnknown = errors.New("worker delegation: the command names no project to bound the run's principal in")
+
+// ErrPrincipalInputUnreadable is an input the closure walk cannot read.
+var ErrPrincipalInputUnreadable = errors.New("worker delegation: the command's input cannot be read to bound the run's principal")
+
 // Principal is who a run acts for.
 type Principal struct {
 	// UserID is the acting user (an attended run), or the subject user of
@@ -75,6 +82,9 @@ type Principal struct {
 	MandateID string
 	// Governed is a run under the credential governance profile.
 	Governed bool
+	// FrozenCredentialReferences are the references admission froze into the
+	// run's security context.
+	FrozenCredentialReferences []string
 }
 
 // ClosureSeeds are where the closure walk starts: what the command's input
@@ -118,13 +128,19 @@ func (r *Resolver) WithPrincipalBound(reader PrincipalReader) *Resolver {
 func (r *Resolver) principalBound(ctx context.Context, command *runtimev1.WorkerCommandV1, input []byte) (*runtimev1.WorkerPrincipalBoundV1, error) {
 	projectID, err := strconv.ParseInt(command.GetResourceProjectId(), 10, 64)
 	if err != nil || projectID <= 0 {
-		return nil, nil
+		// A run that cannot be bounded must not run unbounded while the
+		// switch is on.
+		return nil, ErrPrincipalProjectUnknown
 	}
 	principal, err := r.principal.RunPrincipal(ctx, command)
 	if err != nil {
 		return nil, fmt.Errorf("worker delegation: read the run's principal: %w", err)
 	}
-	reachable, err := r.principal.ReachableToolkits(ctx, projectID, SeedsFromInput(input))
+	seeds, err := SeedsFromInput(input)
+	if err != nil {
+		return nil, err
+	}
+	reachable, err := r.principal.ReachableToolkits(ctx, projectID, seeds)
 	if err != nil {
 		return nil, fmt.Errorf("worker delegation: read the run's toolkits: %w", err)
 	}
@@ -139,6 +155,9 @@ func (r *Resolver) principalBound(ctx context.Context, command *runtimev1.Worker
 		if err != nil {
 			return nil, fmt.Errorf("worker delegation: read the principal's credential references: %w", err)
 		}
+		// The references admission froze for the run are usable by
+		// construction (it checked them against the grants).
+		credentials = append(credentials, principal.FrozenCredentialReferences...)
 	}
 	return PrincipalBound(allowed, principal.Governed, credentials)
 }
@@ -160,7 +179,7 @@ func PrincipalBound(toolkitIDs []int64, credentialsBounded bool, credentialRefer
 	bound := &runtimev1.WorkerPrincipalBoundV1{Bounded: true, CredentialsBounded: credentialsBounded}
 	for _, id := range ids {
 		if id <= 0 {
-			continue
+			return nil, ErrPrincipalBoundTooLarge
 		}
 		bound.Toolkits = append(bound.Toolkits, &runtimev1.WorkerPrincipalToolkitV1{
 			ToolkitId: uint64(id), //nolint:gosec // positive, checked above
@@ -197,16 +216,17 @@ func difference(a, b []int64) []int64 {
 // execution input: the root saved agent (application.id and version_id), the
 // toolkits and attached agents of its frozen tools
 // (application.version_details.tools) and of the input's own tools (an ad hoc
-// conversation's). An unreadable input names nothing: the walk then reaches
-// no toolkit and the bound is empty, which refuses rather than widens.
-func SeedsFromInput(content []byte) ClosureSeeds {
+// conversation's). An input that cannot be decoded is ErrPrincipalInputUnreadable,
+// never an empty set: that would read as "nothing allowed" and look like a
+// missing access.
+func SeedsFromInput(content []byte) (ClosureSeeds, error) {
 	var seeds ClosureSeeds
 	if len(content) == 0 {
-		return seeds
+		return seeds, nil
 	}
 	input := &runtimev1.AgentExecutionInputV1{}
 	if err := proto.Unmarshal(content, input); err != nil {
-		return seeds
+		return ClosureSeeds{}, ErrPrincipalInputUnreadable
 	}
 	if len(input.GetApplication()) > 0 {
 		var application struct {
@@ -221,18 +241,24 @@ func SeedsFromInput(content []byte) ClosureSeeds {
 			if applicationID > 0 && versionID > 0 {
 				seeds.Versions = append(seeds.Versions, applicationcomposition.Identity{ApplicationID: applicationID, VersionID: versionID})
 			}
-			seeds.addTools(application.VersionDetails.Tools)
+			if err := seeds.addTools(application.VersionDetails.Tools); err != nil {
+				return ClosureSeeds{}, err
+			}
+		} else {
+			return ClosureSeeds{}, ErrPrincipalInputUnreadable
 		}
 	}
-	seeds.addTools(input.GetTools())
-	return seeds
+	if err := seeds.addTools(input.GetTools()); err != nil {
+		return ClosureSeeds{}, err
+	}
+	return seeds, nil
 }
 
 // addTools collects the toolkit ids and attached versions of a frozen tool
 // list.
-func (s *ClosureSeeds) addTools(raw json.RawMessage) {
-	if len(raw) == 0 {
-		return
+func (s *ClosureSeeds) addTools(raw json.RawMessage) error {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
 	}
 	var tools []struct {
 		ID       json.RawMessage `json:"id"`
@@ -244,7 +270,7 @@ func (s *ClosureSeeds) addTools(raw json.RawMessage) {
 		} `json:"settings"`
 	}
 	if err := json.Unmarshal(raw, &tools); err != nil {
-		return
+		return ErrPrincipalInputUnreadable
 	}
 	for _, tool := range tools {
 		if tool.Type == "application" {
@@ -261,6 +287,7 @@ func (s *ClosureSeeds) addTools(raw json.RawMessage) {
 			s.ToolkitIDs = append(s.ToolkitIDs, id)
 		}
 	}
+	return nil
 }
 
 // jsonInt reads an id the stored settings spell as a number or as a quoted
