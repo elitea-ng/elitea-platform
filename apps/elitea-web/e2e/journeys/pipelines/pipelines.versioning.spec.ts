@@ -44,10 +44,28 @@ test.afterEach(async ({ page }) => {
   }
 });
 
-/** Add one node of `label` through the editor's own menu — no store pokes. */
+/**
+ * Add one node of `label` through the editor's own menu — no store pokes.
+ *
+ * Settles on the EDITOR, not on the click. CI run 43990543445 (chromium-2of2)
+ * left the menu open with "LLM" focused and no new node: the item click was
+ * lost while the editor was re-rendering from the Save that had just
+ * persisted, and Playwright reports a lost click as a success. The next
+ * action, "Save As Version", then waited 30 s behind the open menu's backdrop.
+ * So the click is retried until the menu has closed AND the canvas holds one
+ * more node. A retry happens only while the menu is still open, which means
+ * the item handler (add, then close) never ran, so it cannot add twice.
+ */
 async function addNodeThroughMenu(page: Page, label: string): Promise<void> {
-  await page.getByRole('button', { name: 'Add node' }).click();
-  await page.getByRole('menuitem', { name: label, exact: true }).click();
+  const nodes = page.locator('.react-flow__node');
+  const before = await nodes.count();
+  const menu = page.getByRole('menu');
+  await expect(async () => {
+    if (!(await menu.isVisible())) await page.getByRole('button', { name: 'Add node' }).click({ timeout: 5_000 });
+    await page.getByRole('menuitem', { name: label, exact: true }).click({ timeout: 5_000 });
+    await expect(menu).toBeHidden({ timeout: 3_000 });
+  }).toPass({ timeout: 30_000 });
+  await expect(nodes).toHaveCount(before + 1, { timeout: 10_000 });
 }
 
 /**
