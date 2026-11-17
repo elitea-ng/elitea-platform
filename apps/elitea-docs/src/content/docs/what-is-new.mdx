@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Python sandbox module runs code in the platform's sandbox
+
+The **Python sandbox** module of an agent now works. It gives the agent a `run_code` tool that runs a short program in the same isolated sandbox as pipeline Code nodes, in the languages the deployment's sandbox serves (Python, JavaScript, TypeScript and Rust). Python returns what the program printed, its last expression and any traceback. The switch is enabled when the deployment has a code sandbox, and shows "No code sandbox is configured for this deployment" when it has none; the agent still runs either way. `GET /elitea_core/runtime_capabilities` now lists `code_sandbox_languages`. `run_code` is a `code_execution` tool for approval rules. Upgrade Main, the worker and the web app together. See [Internal tools](/menus/internal-tools#python-sandbox-code-execution).
+
 ## Evaluation: Distinct tools, Redundant calls, Guardrail events and Step limit hit
 
 The Trajectory card of an agent-run evaluation now shows **Distinct tools**, **Redundant calls** (an identical call repeated after it already succeeded, with its share of tool calls), **Guardrail events** (gateway guardrail verdicts that blocked, masked or warned, and sensitive-tool approval gates) and **Step limit hit** (cases that ended at the step limit), with each case's own values in its row. Runs stored before this change show **not recorded**, not 0. Upgrade Main and the web app together; no operator action is needed. See [Agents](/menus/agents).

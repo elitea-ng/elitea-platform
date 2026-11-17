@@ -109,6 +109,19 @@ fn activation(call_id: &str, source: &str, input: &[u8]) -> [u8; 32] {
 
 #[async_trait]
 impl AnalysisCodeRunner for SandboxAnalysisRunner {
+    fn languages(&self) -> Vec<AnalysisLanguage> {
+        self.runtime
+            .served_languages()
+            .into_iter()
+            .map(|language| match language {
+                CodeLanguage::Python => AnalysisLanguage::Python,
+                CodeLanguage::JavaScript => AnalysisLanguage::JavaScript,
+                CodeLanguage::TypeScript => AnalysisLanguage::TypeScript,
+                CodeLanguage::Rust => AnalysisLanguage::Rust,
+            })
+            .collect()
+    }
+
     async fn run(&self, request: AnalysisCodeRequest) -> Result<Value, AnalysisCodeError> {
         let input_json = serde_json::to_vec(&request.input)
             .map_err(|_| AnalysisCodeError::from(AnalysisCodeFailure::Rejected))?;
@@ -118,6 +131,8 @@ impl AnalysisCodeRunner for SandboxAnalysisRunner {
         let language = match request.language {
             AnalysisLanguage::Python => CodeLanguage::Python,
             AnalysisLanguage::JavaScript => CodeLanguage::JavaScript,
+            AnalysisLanguage::TypeScript => CodeLanguage::TypeScript,
+            AnalysisLanguage::Rust => CodeLanguage::Rust,
         };
         let activation = activation(&request.call_id, &request.source, &input_json);
         let invocation = CodeInvocation {
@@ -167,6 +182,14 @@ mod tests {
 
     #[async_trait]
     impl CodeSandboxRuntime for Fake {
+        fn served_languages(&self) -> Vec<CodeLanguage> {
+            vec![
+                CodeLanguage::Python,
+                CodeLanguage::TypeScript,
+                CodeLanguage::Rust,
+            ]
+        }
+
         async fn execute(&self, _: CodeInvocation<'_>) -> Result<Vec<u8>, GraphError> {
             unreachable!("the tool path asks for typed failures")
         }
@@ -224,6 +247,35 @@ mod tests {
     async fn failure_of(reply: Result<Vec<u8>, ToolCodeError>) -> AnalysisCodeError {
         let (runner, _) = runner(reply);
         runner.run(request("c")).await.unwrap_err()
+    }
+
+    #[test]
+    fn the_runner_offers_the_languages_the_runtime_serves() {
+        let (runner, _) = runner(Ok(Vec::new()));
+        assert_eq!(
+            AnalysisCodeRunner::languages(&runner),
+            [
+                AnalysisLanguage::Python,
+                AnalysisLanguage::TypeScript,
+                AnalysisLanguage::Rust
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn every_analysis_language_maps_to_its_code_language() {
+        for (language, expected) in [
+            (AnalysisLanguage::Python, "python"),
+            (AnalysisLanguage::JavaScript, "javascript"),
+            (AnalysisLanguage::TypeScript, "other"),
+            (AnalysisLanguage::Rust, "other"),
+        ] {
+            let (runner, fake) = runner(Ok(receipt(r#"{"revision":1,"result":1}"#, 0)));
+            let mut asked = request("map");
+            asked.language = language;
+            runner.run(asked).await.unwrap();
+            assert_eq!(fake.seen.lock().unwrap()[0].1, expected);
+        }
     }
 
     #[tokio::test]

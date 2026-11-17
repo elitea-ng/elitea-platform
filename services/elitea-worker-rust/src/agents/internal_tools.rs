@@ -36,6 +36,10 @@ pub(crate) const PROJECT_CONTEXT_BUILDER_TOOL_NAME: &str = "project_context_buil
 pub(crate) const DATA_ANALYSIS_TOOL_NAME: &str = "data_analysis";
 /// The image generation toggle (#1969), served like `data_analysis`.
 pub(crate) const IMAGE_GENERATION_TOOL_NAME: &str = "image_generation";
+/// The Code sandbox toggle (`pyodide`), served like `data_analysis`: it
+/// starts SKIPPED on every path and only the assembly that has the platform's
+/// code sandbox marks it served ([`InternalToolCatalog::serving_code_sandbox`]).
+pub(crate) const CODE_SANDBOX_TOOL_NAME: &str = "pyodide";
 const SKILLS_BUILDER_TOOLSET_NAME: &str = "skills_builder";
 const PROJECT_CONTEXT_BUILDER_TOOLSET_NAME: &str = "project_context_builder";
 const CREATE_SKILL_TOOL_NAME: &str = "create_or_update_skill";
@@ -61,10 +65,13 @@ pub(crate) const SUBAGENTS_TOOL_NAME: &str = "subagents";
 /// and `subagents`.
 ///
 /// The Python worker is NOT the runtime that serves all of these, whatever
-/// this comment used to claim. It skips `pyodide` for the same reason and with
-/// the same event name, because its image ships no Deno and the SDK's sandbox
-/// tool raises on construction without one
+/// this comment used to claim. It skips `pyodide` because its image ships no
+/// Deno and the SDK's sandbox tool raises on construction without one
 /// (`services/elitea-worker-python/src/elitea_worker/agents/internal_tools.py`).
+/// This runtime serves `pyodide` as `run_code` through the platform's code
+/// sandbox when the deployment has one (the name stays in the list below like
+/// `data_analysis`: it is skipped, with the notice, wherever no sandbox is
+/// lent).
 ///
 /// A name on this list is SKIPPED with a warning rather than refused, for the
 /// same reason `materialize_configured_toolsets` skips an unimplemented
@@ -138,6 +145,9 @@ pub(crate) struct InternalToolCatalog {
     /// #1969: the image generation tool, bound when the run has an image
     /// model and the images API.
     image_generation: bool,
+    /// The Code sandbox toggle (`pyodide`): bound when the deployment has a
+    /// code sandbox, through the same seam `run_analysis_code` uses.
+    code_sandbox: bool,
     /// The planner, Smart Tools Selection and attachments toggles. Flags
     /// beside the others, for the same reason: they are served, not skipped.
     planner: bool,
@@ -157,6 +167,7 @@ impl InternalToolCatalog {
             project_context_builder: false,
             data_analysis: false,
             image_generation: false,
+            code_sandbox: false,
             planner: false,
             lazy_tools: false,
             attachments: false,
@@ -187,6 +198,9 @@ impl InternalToolCatalog {
                     if name == IMAGE_GENERATION_TOOL_NAME {
                         catalog.image_generation = true;
                     }
+                    if name == CODE_SANDBOX_TOOL_NAME {
+                        catalog.code_sandbox = true;
+                    }
                     // Same contract as the toolkit-family skip
                     // (`agent_toolkit_skipped` in materialize.rs): the agent
                     // runs WITHOUT a capability its author asked for, and a
@@ -199,7 +213,10 @@ impl InternalToolCatalog {
                     // data_analysis is logged where it is actually omitted
                     // (`toolsets`, `data_analysis_toolset`): the ordinary
                     // assembly serves it.
-                    if name != DATA_ANALYSIS_TOOL_NAME && name != IMAGE_GENERATION_TOOL_NAME {
+                    if name != DATA_ANALYSIS_TOOL_NAME
+                        && name != IMAGE_GENERATION_TOOL_NAME
+                        && name != CODE_SANDBOX_TOOL_NAME
+                    {
                         log_skipped(name);
                     }
                     if let Some(index) = PLATFORM_INTERNAL_TOOLS
@@ -231,6 +248,7 @@ impl InternalToolCatalog {
             project_context_builder: self.project_context_builder || other.project_context_builder,
             data_analysis: self.data_analysis || other.data_analysis,
             image_generation: self.image_generation || other.image_generation,
+            code_sandbox: self.code_sandbox || other.code_sandbox,
             planner: self.planner || other.planner,
             lazy_tools: self.lazy_tools || other.lazy_tools,
             attachments: self.attachments || other.attachments,
@@ -272,6 +290,69 @@ impl InternalToolCatalog {
             self.skipped &= !(1 << index);
         }
         self
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) const fn code_sandbox_enabled(self) -> bool {
+        self.code_sandbox
+    }
+
+    /// This catalog with `pyodide` marked as served (see
+    /// [`Self::serving_data_analysis`]): the run has the code sandbox, so the
+    /// notice that says the tool is unavailable is withdrawn.
+    #[must_use]
+    pub(crate) fn serving_code_sandbox(mut self) -> Self {
+        if self.code_sandbox
+            && let Some(index) = PLATFORM_INTERNAL_TOOLS
+                .iter()
+                .position(|name| *name == CODE_SANDBOX_TOOL_NAME)
+        {
+            self.skipped &= !(1 << index);
+        }
+        self
+    }
+
+    /// The `run_code` tool for this run, when the toggle is on, the
+    /// deployment has a code sandbox to lend, and the tool policy admits it.
+    /// Without a sandbox the toggle is skipped with the usual warning and
+    /// notice; the agent still runs.
+    pub(crate) fn code_sandbox_toolset(
+        self,
+        authority: Option<&elitea_agent_runtime::toolkits::CodeSandboxAuthority>,
+        policy: &Arc<elitea_agent_runtime::toolkits::ToolAdmissionPolicy>,
+    ) -> Option<Arc<dyn Toolset>> {
+        if !self.code_sandbox {
+            return None;
+        }
+        let Some(authority) = authority else {
+            log_skipped(CODE_SANDBOX_TOOL_NAME);
+            return None;
+        };
+        if authority.languages().is_empty() {
+            // A runtime with no plain sandbox profile: nothing to run on.
+            log_skipped(CODE_SANDBOX_TOOL_NAME);
+            return None;
+        }
+        match elitea_agent_runtime::toolkits::build_code_sandbox_toolset(authority, policy) {
+            Ok(Some(toolset)) => Some(Arc::new(toolset)),
+            Ok(None) => {
+                tracing::warn!(
+                    event = "agent_internal_tool_blocked",
+                    internal_tool = CODE_SANDBOX_TOOL_NAME,
+                    "the deployment's tool policy blocks the pyodide toolkit"
+                );
+                None
+            }
+            Err(_) => {
+                tracing::error!(
+                    event = "agent_internal_tool_invalid",
+                    internal_tool = CODE_SANDBOX_TOOL_NAME,
+                    "the code sandbox tool definition was refused"
+                );
+                None
+            }
+        }
     }
 
     #[must_use]
@@ -468,6 +549,10 @@ impl InternalToolCatalog {
         if builders.is_none() && self.image_generation {
             // Pipelines and nested agents: bound by the ordinary assembly only.
             log_skipped(IMAGE_GENERATION_TOOL_NAME);
+        }
+        if builders.is_none() && self.code_sandbox {
+            // Pipelines and nested agents: bound by the ordinary assembly only.
+            log_skipped(CODE_SANDBOX_TOOL_NAME);
         }
         if builders.is_none() && self.data_analysis {
             // Pipelines and nested agents: the data tools are bound by the
@@ -1830,6 +1915,81 @@ mod tests {
         assert!(names.contains(&"describe_data") && names.contains(&"chart_data"));
         // No sandbox lent: free-form code is not offered.
         assert!(!names.contains(&"run_analysis_code"));
+    }
+
+    // The Code sandbox toggle starts skipped with the #866 notice on every
+    // path; only the assembly that has the code sandbox withdraws it.
+    #[test]
+    fn pyodide_is_skipped_until_the_assembly_serves_it() {
+        let catalog = InternalToolCatalog::from_names(&["pyodide".to_owned()]).expect("catalog");
+        assert!(catalog.code_sandbox_enabled());
+        assert_eq!(
+            catalog.skipped_tools_notice_text().as_deref(),
+            Some("internal tool 'pyodide' is not available on this worker")
+        );
+        let served = catalog.serving_code_sandbox();
+        assert!(served.code_sandbox_enabled());
+        assert_eq!(served.skipped_tools_notice_text(), None);
+        assert_eq!(served.serving_code_sandbox(), served);
+        assert_eq!(
+            InternalToolCatalog::empty().serving_code_sandbox(),
+            InternalToolCatalog::empty()
+        );
+        let parent = InternalToolCatalog::from_names(&[ASK_USER_TOOL_NAME.to_owned()]).unwrap();
+        assert!(parent.merge(catalog).code_sandbox_enabled());
+    }
+
+    #[tokio::test]
+    async fn the_code_toolset_needs_the_toggle_a_sandbox_and_policy_consent() {
+        use std::collections::BTreeMap;
+
+        use async_trait::async_trait;
+        use elitea_agent_runtime::toolkits::{
+            AnalysisCodeError, AnalysisCodeRequest, AnalysisCodeRunner, CodeSandboxAuthority,
+            ToolAdmissionPolicy,
+        };
+
+        struct Runner;
+        #[async_trait]
+        impl AnalysisCodeRunner for Runner {
+            async fn run(&self, _: AnalysisCodeRequest) -> Result<Value, AnalysisCodeError> {
+                Ok(serde_json::json!({
+                    "stdout": "2\n", "stderr": "", "error": null, "result": 2
+                }))
+            }
+        }
+
+        let allow = Arc::new(ToolAdmissionPolicy::new(&[], &BTreeMap::new()).expect("policy"));
+        let block = Arc::new(
+            ToolAdmissionPolicy::new(&["pyodide".to_owned()], &BTreeMap::new()).expect("policy"),
+        );
+        let authority = CodeSandboxAuthority::new(Arc::new(Runner));
+        let on = InternalToolCatalog::from_names(&["pyodide".to_owned()]).unwrap();
+        let off = InternalToolCatalog::from_names(&[ASK_USER_TOOL_NAME.to_owned()]).unwrap();
+
+        assert!(off.code_sandbox_toolset(Some(&authority), &allow).is_none());
+        // No sandbox configured: skipped (warning), never an error.
+        assert!(on.code_sandbox_toolset(None, &allow).is_none());
+        assert!(on.code_sandbox_toolset(Some(&authority), &block).is_none());
+        let toolset = on
+            .code_sandbox_toolset(Some(&authority), &allow)
+            .expect("toolset");
+        let tools = toolset
+            .tools(Arc::new(SimpleToolContext::new("internal-tools-test")))
+            .await
+            .expect("tools");
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].name(), "run_code");
+        let answer = tools[0]
+            .execute(
+                Arc::new(SimpleToolContext::new("internal-tools-test")),
+                serde_json::json!({"code": "print(1+1)\n1+1"}),
+            )
+            .await
+            .expect("answer");
+        assert_eq!(answer["status"], "success");
+        assert_eq!(answer["stdout"], "2\n");
+        assert_eq!(answer["result"], 2);
     }
 
     #[tokio::test]

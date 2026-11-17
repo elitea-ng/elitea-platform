@@ -1,0 +1,189 @@
+{
+  "contract": "delegation-grant-digest-vectors-v1",
+  "description": "Shared digest vectors for the delegation grant set (ADR-0044 amendment 1). Main (services/elitea-main/internal/domain/delegationgrant grantset_test.go) and the Worker runtime (libs/rust/agent-runtime delegation_tests.rs) parse each grant_set, normalise it, and must produce exactly `canonical` (compact JSON, object members sorted by key bytes, strings escaped as serde_json writes them) and its lowercase hex SHA-256 `digest`. Expected values were generated independently with Python hashlib, not by either implementation.",
+  "cases": [
+    {
+      "name": "empty set",
+      "grant_set": {
+        "schema": "elitea.delegation.grants.v1",
+        "toolkits": [],
+        "data_classes": null,
+        "egress_hosts": []
+      },
+      "canonical": "{\"data_classes\":null,\"egress_hosts\":[],\"schema\":\"elitea.delegation.grants.v1\",\"toolkits\":[]}",
+      "digest": "f1314ac36c7ff56c5c248d65df2b1947ee942f4fbca86506d1151313c8d090b0"
+    },
+    {
+      "name": "one toolkit with every tool",
+      "grant_set": {
+        "schema": "elitea.delegation.grants.v1",
+        "toolkits": [
+          {
+            "key": "toolkit:7",
+            "tools": {
+              "all_except": []
+            },
+            "credential": null
+          }
+        ],
+        "data_classes": null,
+        "egress_hosts": []
+      },
+      "canonical": "{\"data_classes\":null,\"egress_hosts\":[],\"schema\":\"elitea.delegation.grants.v1\",\"toolkits\":[{\"credential\":null,\"key\":\"toolkit:7\",\"tools\":{\"all_except\":[]}}]}",
+      "digest": "b20d96001a311a840fef0bb41cca492e20a38843f5b6eeca330e12beacb09bf0"
+    },
+    {
+      "name": "selected tools and a credential",
+      "grant_set": {
+        "schema": "elitea.delegation.grants.v1",
+        "toolkits": [
+          {
+            "key": "toolkit:7",
+            "tools": {
+              "only": [
+                "search",
+                "read"
+              ]
+            },
+            "credential": "ref-1"
+          }
+        ],
+        "data_classes": null,
+        "egress_hosts": []
+      },
+      "canonical": "{\"data_classes\":null,\"egress_hosts\":[],\"schema\":\"elitea.delegation.grants.v1\",\"toolkits\":[{\"credential\":\"ref-1\",\"key\":\"toolkit:7\",\"tools\":{\"only\":[\"read\",\"search\"]}}]}",
+      "digest": "b187636a87666261b717d353c9aafdc6436b4626a7c484c54f947a2835569419"
+    },
+    {
+      "name": "toolkit keys sort as bytes",
+      "grant_set": {
+        "schema": "elitea.delegation.grants.v1",
+        "toolkits": [
+          {
+            "key": "toolkit:9",
+            "tools": {
+              "all_except": [
+                "x"
+              ]
+            },
+            "credential": null
+          },
+          {
+            "key": "toolkit:10",
+            "tools": {
+              "only": [
+                "a"
+              ]
+            },
+            "credential": null
+          },
+          {
+            "key": "builtin:git",
+            "tools": {
+              "all_except": []
+            },
+            "credential": null
+          }
+        ],
+        "data_classes": null,
+        "egress_hosts": []
+      },
+      "canonical": "{\"data_classes\":null,\"egress_hosts\":[],\"schema\":\"elitea.delegation.grants.v1\",\"toolkits\":[{\"credential\":null,\"key\":\"builtin:git\",\"tools\":{\"all_except\":[]}},{\"credential\":null,\"key\":\"toolkit:10\",\"tools\":{\"only\":[\"a\"]}},{\"credential\":null,\"key\":\"toolkit:9\",\"tools\":{\"all_except\":[\"x\"]}}]}",
+      "digest": "3f69568251c1f13606e1c895442118ee7bdddfce957ef3d118fccc2eeb7eae61"
+    },
+    {
+      "name": "data classes and hosts",
+      "grant_set": {
+        "schema": "elitea.delegation.grants.v1",
+        "toolkits": [
+          {
+            "key": "toolkit:1",
+            "tools": {
+              "all_except": []
+            },
+            "credential": null
+          }
+        ],
+        "data_classes": [
+          "pii",
+          "internal"
+        ],
+        "egress_hosts": [
+          "b.example.com",
+          "a.example.com",
+          "a.example.com"
+        ]
+      },
+      "canonical": "{\"data_classes\":[\"internal\",\"pii\"],\"egress_hosts\":[\"a.example.com\",\"b.example.com\"],\"schema\":\"elitea.delegation.grants.v1\",\"toolkits\":[{\"credential\":null,\"key\":\"toolkit:1\",\"tools\":{\"all_except\":[]}}]}",
+      "digest": "5fae9f6c902f29dbea2caef940e782ffd3df504474e095f1f997ff3497dde091"
+    },
+    {
+      "name": "escaping",
+      "grant_set": {
+        "schema": "elitea.delegation.grants.v1",
+        "toolkits": [
+          {
+            "key": "toolkit:1",
+            "tools": {
+              "only": [
+                "say \"hi\"",
+                "back\\slash",
+                "line\nbreak",
+                "tab\there",
+                "<a>&b",
+                "café",
+                "sep x",
+                "bell\u0001",
+                "del"
+              ]
+            },
+            "credential": "r\"ef"
+          }
+        ],
+        "data_classes": null,
+        "egress_hosts": []
+      },
+      "canonical": "{\"data_classes\":null,\"egress_hosts\":[],\"schema\":\"elitea.delegation.grants.v1\",\"toolkits\":[{\"credential\":\"r\\\"ef\",\"key\":\"toolkit:1\",\"tools\":{\"only\":[\"<a>&b\",\"back\\\\slash\",\"bell\\u0001\",\"café\",\"del\",\"line\\nbreak\",\"say \\\"hi\\\"\",\"sep x\",\"tab\\there\"]}}]}",
+      "digest": "081df039b70b339cefca29f35c47ca535ad291c814994687e22afd0a4b241394"
+    },
+    {
+      "name": "unsorted input is normalised",
+      "grant_set": {
+        "schema": "elitea.delegation.grants.v1",
+        "toolkits": [
+          {
+            "key": "toolkit:2",
+            "tools": {
+              "only": [
+                "b",
+                "a",
+                "b"
+              ]
+            },
+            "credential": null
+          },
+          {
+            "key": "toolkit:1",
+            "tools": {
+              "all_except": [
+                "z",
+                "y"
+              ]
+            },
+            "credential": null
+          }
+        ],
+        "data_classes": [
+          "b",
+          "a"
+        ],
+        "egress_hosts": [
+          "z.test",
+          "y.test"
+        ]
+      },
+      "canonical": "{\"data_classes\":[\"a\",\"b\"],\"egress_hosts\":[\"y.test\",\"z.test\"],\"schema\":\"elitea.delegation.grants.v1\",\"toolkits\":[{\"credential\":null,\"key\":\"toolkit:1\",\"tools\":{\"all_except\":[\"y\",\"z\"]}},{\"credential\":null,\"key\":\"toolkit:2\",\"tools\":{\"only\":[\"a\",\"b\"]}}]}",
+      "digest": "9b65a6b082002b6ca7916c58d7b7b3a3ab4d280df24aab1fde62d2ef26a855d3"
+    }
+  ]
+}

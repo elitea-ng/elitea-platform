@@ -63,7 +63,9 @@ use crate::transport::platform_writer::ClaimPlatformWriter;
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
 use elitea_agent_runtime::host::PlatformWriter;
 use elitea_agent_runtime::toolkits::governed::GovernedOperationClient;
-use elitea_agent_runtime::toolkits::{DataAnalysisAuthority, ImageGenerationAuthority};
+use elitea_agent_runtime::toolkits::{
+    CodeSandboxAuthority, DataAnalysisAuthority, ImageGenerationAuthority,
+};
 use sqlx::PgPool;
 
 /// Shared ordinary application/ad-hoc assembler used after `AUTHORIZED_NOW`.
@@ -842,6 +844,16 @@ impl OrdinaryNativeAgentAssembler {
         if data_toolset.is_some() {
             internal_tools = internal_tools.serving_data_analysis();
         }
+        // The Code sandbox toggle (`pyodide`) needs only the platform's code
+        // sandbox, the one `run_analysis_code` and the Code node run on.
+        let code_authority = code.clone().map(|runtime| {
+            CodeSandboxAuthority::new(Arc::new(super::graph::SandboxAnalysisRunner::new(runtime)))
+        });
+        let code_toolset =
+            internal_tools.code_sandbox_toolset(code_authority.as_ref(), tool_policy);
+        if code_toolset.is_some() {
+            internal_tools = internal_tools.serving_code_sandbox();
+        }
         let image_toolset = internal_tools
             .image_generation_toolset(image_generation_authority.as_ref(), tool_policy);
         if image_toolset.is_some() {
@@ -864,6 +876,7 @@ impl OrdinaryNativeAgentAssembler {
             ));
         }
         toolsets.extend(data_toolset);
+        toolsets.extend(code_toolset);
         toolsets.extend(image_toolset);
         toolsets.extend(profile.instruction_plan().toolsets());
         // The attachment tools exist only when a document of this turn was

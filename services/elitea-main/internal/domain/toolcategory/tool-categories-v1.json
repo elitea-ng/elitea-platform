@@ -335,6 +335,9 @@
       "get_request_script": "read",
       "search_requests": "read"
     },
+    "pyodide": {
+      "run_code": "code_execution"
+    },
     "qtest": {
       "delete_test_case": "delete",
       "find_defects_by_test_run_id": "read",

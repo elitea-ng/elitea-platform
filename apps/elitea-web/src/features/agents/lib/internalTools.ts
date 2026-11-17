@@ -113,15 +113,19 @@ export const INTERNAL_TOOLS_LIST: readonly InternalToolDescriptor[] = [
     infoTooltip: { text: 'Let the agent ask clarifying questions and wait for your answers before continuing.' },
   },
   {
-    // Only the retired Python worker ran this sandbox. It stays in the list so
-    // stored agents that toggled it still pass the SQL admission gates; the
-    // Rust worker skips it, and GET /elitea_core/runtime_capabilities reports
-    // it false, so the switch renders disabled with a reason.
+    // Served as the `run_code` tool through the platform's code sandbox (the
+    // one the Code node and Data Analysis code run on), in whichever of
+    // Python, JavaScript, TypeScript and Rust that sandbox serves. The stored
+    // name and the "Python sandbox" label are kept: stored agents, the SQL
+    // gates and the parity baselines key on them. Whether the deployment
+    // has that sandbox is GET /elitea_core/runtime_capabilities's answer for
+    // this name: with none the switch renders disabled with a reason, and a
+    // stored agent that toggled it still runs, without the tool.
     name: 'pyodide',
     title: 'Python sandbox',
     icon: 'PythonIcon',
     infoTooltip: {
-      text: 'Enable Python code execution in a secure sandbox using',
+      text: 'Enable code execution in a secure sandbox: Python, JavaScript, TypeScript or Rust, as this deployment serves them. Python runs on',
       linkText: 'Pyodide',
       linkUrl: 'https://pyodide.org/en/stable/usage/packages-in-pyodide.html',
       suffix: '.',
@@ -213,6 +217,12 @@ function unavailableReasonFor(
     return t(
       'features.agents.internalTools.noImageModel',
       'No image model is configured for this deployment',
+    );
+  }
+  if (toolName === 'pyodide') {
+    return t(
+      'features.agents.internalTools.noCodeSandbox',
+      'No code sandbox is configured for this deployment',
     );
   }
   if (worker === 'rust') {

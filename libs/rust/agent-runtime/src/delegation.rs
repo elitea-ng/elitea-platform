@@ -82,6 +82,11 @@ pub const GRANT_MISSING: &str = "DELEGATION_GRANT_MISSING";
 /// The refusal code of a delegation past the maximum depth.
 pub const DEPTH_EXCEEDED: &str = "DELEGATION_DEPTH_EXCEEDED";
 
+/// The schema tag of a grant set's canonical form. Main writes the same form
+/// into a delegation grant (`delegationgrant.Schema`), and both run
+/// `libs/proto/contracts/delegation-grant-digest-vectors-v1.json`.
+pub const GRANT_SET_SCHEMA: &str = "elitea.delegation.grants.v1";
+
 /// The most toolkit references one grant set reads.
 const MAX_TOOLKITS: usize = 1_024;
 /// The most tool names one toolkit selection reads.
@@ -546,6 +551,54 @@ impl GrantSet {
         }
     }
 
+    /// The grants of a stored delegation grant: the canonical form
+    /// [`Self::canonical`] writes (the `grant_set` Main stores and sends).
+    /// `from_canonical(&set.canonical())` is `set`, and the digest of the
+    /// result is the digest Main pinned.
+    ///
+    /// # Errors
+    ///
+    /// [`GrantSetError`] for a document that is not the canonical form, or
+    /// that is past the bounds a set is built within.
+    pub fn from_canonical(value: &Value) -> Result<Self, GrantSetError> {
+        let object = value.as_object().ok_or(GrantSetError)?;
+        if object.get("schema").and_then(Value::as_str) != Some(GRANT_SET_SCHEMA) {
+            return Err(GrantSetError);
+        }
+        let entries = object
+            .get("toolkits")
+            .and_then(Value::as_array)
+            .ok_or(GrantSetError)?;
+        if entries.len() > MAX_TOOLKITS {
+            return Err(GrantSetError);
+        }
+        let mut toolkits = BTreeMap::new();
+        for entry in entries {
+            let (key, grant) = canonical_toolkit(entry)?;
+            toolkits.insert(key, grant);
+        }
+        let classes = match object.get("data_classes") {
+            Some(Value::Null) | None => None,
+            Some(Value::Array(listed)) => {
+                let listed = string_list(listed, MAX_DATA_CLASSES)?;
+                let set = data_classes(listed).map_err(|_| GrantSetError)?;
+                (!set.is_empty()).then_some(set)
+            }
+            Some(_) => return Err(GrantSetError),
+        };
+        let hosts = object
+            .get("egress_hosts")
+            .and_then(Value::as_array)
+            .ok_or(GrantSetError)?;
+        Ok(Self {
+            toolkits: Some(toolkits),
+            data_classes: classes,
+            egress_hosts: string_list(hosts, MAX_DECLARED_HOSTS)?
+                .into_iter()
+                .collect(),
+        })
+    }
+
     /// These grants limited to `classes`; an empty set imposes nothing.
     #[must_use]
     pub fn with_data_classes(mut self, classes: &BTreeSet<String>) -> Self {
@@ -611,7 +664,7 @@ impl GrantSet {
                 .collect::<Vec<_>>()
         });
         json!({
-            "schema": "elitea.delegation.grants.v1",
+            "schema": GRANT_SET_SCHEMA,
             "toolkits": toolkits,
             "data_classes": self.data_classes,
             "egress_hosts": self.egress_hosts,
@@ -803,6 +856,65 @@ impl PrincipalBound {
         }
         None
     }
+}
+
+/// A grant set document that is not the canonical form.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GrantSetError;
+
+impl fmt::Display for GrantSetError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("the delegation grant set is not in its canonical form")
+    }
+}
+
+impl std::error::Error for GrantSetError {}
+
+fn string_list(values: &[Value], limit: usize) -> Result<Vec<String>, GrantSetError> {
+    if values.len() > limit {
+        return Err(GrantSetError);
+    }
+    values
+        .iter()
+        .map(|value| value.as_str().map(str::to_owned).ok_or(GrantSetError))
+        .collect()
+}
+
+fn canonical_toolkit(entry: &Value) -> Result<(String, ToolkitGrant), GrantSetError> {
+    let object = entry.as_object().ok_or(GrantSetError)?;
+    let key = object
+        .get("key")
+        .and_then(Value::as_str)
+        .filter(|key| key.starts_with("toolkit:") || key.starts_with("builtin:"))
+        .ok_or(GrantSetError)?;
+    let tools = object
+        .get("tools")
+        .and_then(Value::as_object)
+        .filter(|tools| tools.len() == 1)
+        .ok_or(GrantSetError)?;
+    let (mode, names) = tools.iter().next().ok_or(GrantSetError)?;
+    let names = names.as_array().ok_or(GrantSetError)?;
+    let names: BTreeSet<String> = string_list(names, MAX_TOOL_NAMES)?.into_iter().collect();
+    let selection = match mode.as_str() {
+        "only" => ToolSelection::Only(names),
+        "all_except" => ToolSelection::All { excluded: names },
+        _ => return Err(GrantSetError),
+    };
+    let credential = match object.get("credential") {
+        Some(Value::Null) | None => None,
+        // No credential is null, never "": Main refuses the empty form too,
+        // so both sides digest the same document.
+        Some(Value::String(reference)) if !reference.is_empty() => Some(reference.clone()),
+        Some(_) => return Err(GrantSetError),
+    };
+    Ok((
+        key.to_owned(),
+        ToolkitGrant {
+            label: key.to_owned(),
+            selection,
+            credential,
+        },
+    ))
 }
 
 fn toolkit_grant(

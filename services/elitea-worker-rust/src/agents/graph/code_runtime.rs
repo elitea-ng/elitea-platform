@@ -177,6 +177,14 @@ pub(crate) struct FanoutCodeAdmission<'a> {
 
 #[async_trait]
 pub(in crate::agents) trait CodeSandboxRuntime: Send + Sync {
+    /// The languages this runtime has a plain (no platform client) sandbox
+    /// profile for, which is what a tool's raw invocation can run. The default
+    /// runtime has none. It is the one source `run_code` offers its languages
+    /// from, so the tool and the Code node cannot disagree.
+    fn served_languages(&self) -> Vec<CodeLanguage> {
+        Vec::new()
+    }
+
     /// W3-2 (D3): admit a fan-out of Code children. The default runtime has
     /// no slots or deadline to admit against.
     fn admit_fanout(
