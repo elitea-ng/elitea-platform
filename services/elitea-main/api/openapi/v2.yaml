@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.57"
+  x-elitea-client-contract: "1.58"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -4013,6 +4013,252 @@ components:
           minLength: 64
           maxLength: 64
           description: The digest of the skill's current text, as getSkillTrust answered it.
+
+    DelegationItem:
+      type: object
+      description: >
+        One thing a delegation grant lists: a toolkit, a tool of a toolkit, a
+        credential reference, a data class or an egress host.
+      required: [kind, name]
+      properties:
+        kind:
+          type: string
+          description: "`toolkit`, `tool`, `credential`, `data_class` or `egress_host`."
+        name:
+          type: string
+          description: >
+            The toolkit key (`toolkit:<id>`, or `builtin:<type>` for a built-in
+            toolkit), the tool name (`*` when a toolkit that selects every tool is cut
+            to the approved tools), the credential reference id, the data class or the
+            host.
+        toolkit:
+          type: string
+          description: For a tool or a credential, the key of the toolkit it belongs to.
+
+    DelegationGrant:
+      type: object
+      description: >
+        The grant of one composition edge (ADR-0044 amendment 1). `items` is what the
+        approver approved; `requested_items` is what the callee held when the grant
+        was proposed; `omitted` is the part of the second that is not in the first.
+      required:
+        - id
+        - caller_application_id
+        - callee_application_id
+        - edge_kind
+        - callee_version_id
+        - state
+        - legacy
+        - governed
+        - origin
+        - digest
+        - requested_digest
+        - items
+        - requested_items
+        - omitted
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: integer
+          format: int64
+        caller_application_id:
+          type: integer
+          format: int64
+        callee_application_id:
+          type: integer
+          format: int64
+        edge_kind:
+          type: string
+          description: "`sub_agent`, `agent_tool`, `pipeline_child` or `pipeline_node`."
+        callee_version_id:
+          type: integer
+          format: int64
+          description: The callee version the grant was taken from.
+        state:
+          type: string
+          description: >
+            `pending` (not approved yet), `approved`, `stale` (the callee changed after
+            approval; the grant still covers what it recorded), `superseded` (replaced
+            by a re-approval) or `revoked`.
+        legacy:
+          type: boolean
+          description: A pending grant the migration wrote for a composition that existed before grants.
+        governed:
+          type: boolean
+          description: Approved through an ADR-0040 change request, with maker-checker.
+        origin:
+          type: string
+          description: "`attach`, `marketplace_hire`, `marketplace_upgrade` or `migration`."
+        digest:
+          type: string
+          description: The SHA-256 of the approved set, as a delegation step records it.
+        requested_digest:
+          type: string
+          description: The SHA-256 of the set the callee held when the grant was proposed; a different current digest is drift.
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/DelegationItem"
+        requested_items:
+          type: array
+          items:
+            $ref: "#/components/schemas/DelegationItem"
+        omitted:
+          type: array
+          items:
+            $ref: "#/components/schemas/DelegationItem"
+        proposed_by:
+          type: integer
+          format: int64
+        approved_by:
+          type: integer
+          format: int64
+        approved_at:
+          type: string
+          format: date-time
+        revoked_by:
+          type: integer
+          format: int64
+        revoked_at:
+          type: string
+          format: date-time
+        superseded_by:
+          type: integer
+          format: int64
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        change_request_id:
+          type: integer
+          format: int64
+          description: The change request that approves a governed grant.
+        change_state:
+          type: string
+          description: The state of that change request.
+
+    DelegationGrantList:
+      type: object
+      required: [grants]
+      properties:
+        grants:
+          type: array
+          items:
+            $ref: "#/components/schemas/DelegationGrant"
+
+    ProposeDelegationGrantRequest:
+      type: object
+      description: The body of proposeDelegationGrant.
+      required: [callee_application_id, callee_version_id, edge_kind]
+      additionalProperties: false
+      properties:
+        callee_application_id:
+          type: integer
+          format: int64
+        callee_version_id:
+          type: integer
+          format: int64
+        edge_kind:
+          type: string
+          description: "`sub_agent`, `agent_tool`, `pipeline_child` or `pipeline_node`."
+
+    ApproveDelegationGrantRequest:
+      type: object
+      description: >
+        The body of approveDelegationGrant. Omit it, or send `items: null`, to approve
+        everything the approver holds access to; an empty list keeps nothing and is
+        refused.
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          nullable: true
+          description: The items to keep, as listed in `requested_items`.
+          items:
+            $ref: "#/components/schemas/DelegationItem"
+
+    DelegationClosureNode:
+      type: object
+      description: An agent in the closure of an edge.
+      required: [application_id, name, depth, items]
+      properties:
+        application_id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        depth:
+          type: integer
+          description: 0 for the callee itself, then one more per approved grant below it.
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/DelegationItem"
+
+    DelegationPreview:
+      type: object
+      description: What an attach of the callee version would let it use.
+      required:
+        - callee_application_id
+        - callee_version_id
+        - callee_name
+        - digest
+        - items
+        - approvable
+        - withheld
+        - closure
+      properties:
+        callee_application_id:
+          type: integer
+          format: int64
+        callee_version_id:
+          type: integer
+          format: int64
+        callee_name:
+          type: string
+        digest:
+          type: string
+          description: The SHA-256 of what the callee version holds.
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/DelegationItem"
+        approvable:
+          type: array
+          description: The items the person asking holds access to and could approve.
+          items:
+            $ref: "#/components/schemas/DelegationItem"
+        withheld:
+          type: array
+          description: The items the person asking does not hold; an approval by them leaves these out.
+          items:
+            $ref: "#/components/schemas/DelegationItem"
+        closure:
+          type: array
+          items:
+            $ref: "#/components/schemas/DelegationClosureNode"
+        existing:
+          $ref: "#/components/schemas/DelegationGrant"
+
+    DelegationGovernedError:
+      type: object
+      description: >
+        The 409 of approveDelegationGrant under the governed profile, or the plain
+        error body of any other 409.
+      required: [error]
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+          description: "`DELEGATION_GOVERNED` when the grant is approved through its change request."
+        change_request_id:
+          type: integer
+          format: int64
+          description: The change request to approve.
 
     UpdateConversationInternalToolsRequest:
       type: object
@@ -29727,6 +29973,303 @@ paths:
           $ref: "#/components/responses/403"
         "404":
           $ref: "#/components/responses/404"
+        "500":
+          $ref: "#/components/responses/500"
+  /elitea_core/delegation_grants/prompt_lib/{project_id}/{application_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - name: application_id
+        in: path
+        required: true
+        description: The caller agent or pipeline Y of the edges, the one whose editors approve.
+        schema:
+          type: integer
+          format: int64
+    get:
+      operationId: listDelegationGrants
+      summary: The delegation grants of an agent's composition edges
+      description: |
+        Client contract 1.58, ADR-0044 amendment 1. Attaching a sub-agent, an agent
+        used as a tool or a pipeline child X to this agent Y creates one grant for the
+        edge Y to X. It lists what X held when it was attached (its toolkits, the tools
+        selected on each, its credential references, declared data classes and the
+        egress hosts its toolkits reach), pinned to the digest of that set. This lists
+        the edges' active grants (`pending`, `approved` or `stale`); `history=true` adds
+        the `superseded` and `revoked` ones. A grant is `stale` when its callee
+        changed after approval: the grant keeps covering the set it recorded and what
+        was added is left out of the callee's run. Needs the permission that reads an
+        agent. NOTE(W2): internal/api/v2/delegationgrants/handler.go:177 (`List`).
+      tags:
+        - applications
+      parameters:
+        - name: history
+          in: query
+          required: false
+          description: "`true` includes superseded and revoked grants."
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: The grants of the agent's edges, newest first.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DelegationGrantList"
+        "400":
+          $ref: "#/components/responses/400"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "500":
+          $ref: "#/components/responses/500"
+    post:
+      operationId: proposeDelegationGrant
+      summary: Propose the delegation grant of an edge
+      description: |
+        Client contract 1.58, ADR-0044 amendment 1. Records the pending grant of the
+        edge from this agent to the callee version, from what that version holds now.
+        Attaching creates the pending grant already; this asks for it again, for
+        example after a detach and re-attach. Retrying the same proposal answers the
+        pending grant it made. An edge that has a different active grant answers 409.
+        Under the governed profile the proposal also records the ADR-0040 change
+        request of kind `delegation` that approves it (`change_request_id`).
+        Needs the permission that edits an agent. Audited. NOTE(W2):
+        internal/api/v2/delegationgrants/handler.go:225 (`Propose`).
+      tags:
+        - applications
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProposeDelegationGrantRequest"
+      responses:
+        "201":
+          description: The pending grant.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DelegationGrant"
+        "400":
+          $ref: "#/components/responses/400"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "409":
+          description: The edge already has an active grant for another set.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/500"
+  /elitea_core/delegation_preview/prompt_lib/{project_id}/{application_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - name: application_id
+        in: path
+        required: true
+        description: The caller agent or pipeline Y of the edge.
+        schema:
+          type: integer
+          format: int64
+    get:
+      operationId: previewDelegationGrant
+      summary: What an attached agent will be able to use
+      description: |
+        Client contract 1.58, ADR-0044 amendment 1. For the attach dialog: what the
+        callee version holds (`items`), the part the person asking could approve
+        because they hold access to it (`approvable`), the part that would stay out of
+        the grant because they do not (`withheld`), the closure (the callee and the
+        callees it reaches through APPROVED grants, with what each holds) as
+        information, and the edge's active grant when it has one. The closure is not
+        approved by approving this edge: every hop needs its own grant, approved by an
+        editor of the agent that makes the call. Needs the permission that reads an
+        agent. NOTE(W2): internal/api/v2/delegationgrants/handler.go:358 (`Preview`).
+      tags:
+        - applications
+      parameters:
+        - name: callee_application_id
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - name: callee_version_id
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - name: edge_kind
+          in: query
+          required: true
+          description: "`sub_agent`, `agent_tool`, `pipeline_child` or `pipeline_node`."
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The preview.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DelegationPreview"
+        "400":
+          $ref: "#/components/responses/400"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "500":
+          $ref: "#/components/responses/500"
+  /elitea_core/delegation_grant/prompt_lib/{project_id}/{application_id}/{grant_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - name: application_id
+        in: path
+        required: true
+        description: The caller agent or pipeline of the edge. A grant of another agent answers 404.
+        schema:
+          type: integer
+          format: int64
+      - name: grant_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+    get:
+      operationId: getDelegationGrant
+      summary: One delegation grant
+      description: |
+        Client contract 1.58, ADR-0044 amendment 1. Needs the permission that reads an
+        agent. NOTE(W2): internal/api/v2/delegationgrants/handler.go:196 (`Get`).
+      tags:
+        - applications
+      responses:
+        "200":
+          description: The grant.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DelegationGrant"
+        "400":
+          $ref: "#/components/responses/400"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "500":
+          $ref: "#/components/responses/500"
+    delete:
+      operationId: revokeDelegationGrant
+      summary: Revoke a delegation grant
+      description: |
+        Client contract 1.58, ADR-0044 amendment 1. Ends an active grant: the edge is
+        refused again where the caller does not hold what the callee does. This is
+        what a detach does. A grant already revoked or superseded answers 409. Needs
+        the permission that edits an agent. Audited. NOTE(W2):
+        internal/api/v2/delegationgrants/handler.go:328 (`Revoke`).
+      tags:
+        - applications
+      responses:
+        "200":
+          description: The revoked grant.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DelegationGrant"
+        "400":
+          $ref: "#/components/responses/400"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "409":
+          description: The grant is not active.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/500"
+  /elitea_core/delegation_grant/prompt_lib/{project_id}/{application_id}/{grant_id}/approve:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - name: application_id
+        in: path
+        required: true
+        description: The caller agent or pipeline of the edge.
+        schema:
+          type: integer
+          format: int64
+      - name: grant_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+    post:
+      operationId: approveDelegationGrant
+      summary: Approve a pending delegation grant
+      description: |
+        Client contract 1.58, ADR-0044 amendment 1. An editor of the caller approves a
+        pending grant, all of it (no body) or only the items they choose (`items`).
+        They can approve only what they hold access to: each toolkit and each
+        credential reference of the grant. What they leave out, or do not hold, is
+        recorded as `omitted`, stays out of the grant, and the callee runs without it.
+        A data class bound is never left out. Approving a grant does not create a
+        credential use grant: a governed credential still needs the exact use grant of
+        the agent that holds the reference. Under the governed profile the grant is
+        approved through its change request instead, and this answers 409 with the
+        code `DELEGATION_GOVERNED` and the `change_request_id`. Needs the permission
+        that edits an agent. Audited. NOTE(W2):
+        internal/api/v2/delegationgrants/handler.go:270 (`Approve`).
+      tags:
+        - applications
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApproveDelegationGrantRequest"
+      responses:
+        "200":
+          description: The approved grant.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DelegationGrant"
+        "400":
+          description: Nothing is left to approve, or the body is malformed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "409":
+          description: The grant is not pending, or it is governed and is approved through its change request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DelegationGovernedError"
         "500":
           $ref: "#/components/responses/500"
   /elitea_core/conversation_fork/prompt_lib/{project_id}/{conversation_id}:

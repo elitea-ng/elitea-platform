@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Delegation grants for agents you attach to other agents
+
+Attaching an agent or pipeline to another agent now records a **delegation grant** for that edge: what the attached agent holds, approved by an editor of the calling agent, who can approve only what they have access to. Under the governed profile the grant is approved through a change request with a second person. See [Delegation grants](/admin/enterprise-controls/least-privilege-and-trust#delegation-grants). Nothing that runs today changes.
+
 ## Code sandbox returns printed output for JavaScript, TypeScript and Rust
 
 `run_code` now returns what a JavaScript, TypeScript or Rust program printed, as `output`, cut at 20,000 characters like Python's streams. The Data Analysis `run_analysis_code` tool is now a `code_execution` tool for approval rules, like `run_code`.

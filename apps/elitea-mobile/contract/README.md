@@ -179,6 +179,12 @@ does not animate WebP: Android builds with `expo.webp.animated=false`, iOS anima
 video state its poster, each with the default motion. An SVG is not drawn (the still, then the old icon).
 Reduced motion shows the still only and downloads nothing else.
 
+## Client contract 1.58
+
+| Area | What |
+|---|---|
+| Delegation grants (delegation epic 2156, ADR-0044 amendment 1) | `listDelegationGrants`, `proposeDelegationGrant`, `getDelegationGrant`, `approveDelegationGrant`, `revokeDelegationGrant` and `previewDelegationGrant`. Attaching a sub-agent, an agent tool or a pipeline child to an agent creates a pending grant for that edge, listing what the callee holds. An editor of the caller approves it (all, or the items they hold access to); under the governed profile it is approved through a change request and the approve route answers 409 `DELEGATION_GOVERNED`. The app ships no screen for them yet (the review UI and the chat notice land in stories S3 and S5); a server before 1.58 has none. |
+
 ## Client contract 1.57
 
 | Area | What |
