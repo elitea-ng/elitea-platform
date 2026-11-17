@@ -349,6 +349,10 @@ impl OrdinaryNativeAgentAssembler {
         };
         let context = Arc::new(claim_context);
         let runtime_context = Arc::new(runtime_context);
+        // ADR-0044 Amendment 1: the root's own toolkits are limited to what
+        // the run principal may use.
+        let tool_snapshot =
+            super::application_tools::principal_bounded_snapshot(&runtime_context, tool_snapshot);
         // ADR-0034: a cloud turn of a handed-off thread hydrates its workspace
         // before anything else is bound, and is refused where it cannot run.
         let workspace = match context.workspace() {

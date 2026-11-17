@@ -284,3 +284,319 @@ fn the_policy_bounds_depth_and_classes() {
     );
     assert_eq!(DelegationPolicy::default().max_depth(), DEFAULT_MAX_DEPTH);
 }
+
+// The run principal's bound (ADR-0044 Amendment 1, #2157).
+
+fn principal(
+    toolkits: &[(u64, Option<&[&str]>)],
+    credentials: Option<&[&str]>,
+    data_classes: &[&str],
+) -> PrincipalBound {
+    PrincipalBound::new(
+        toolkits.iter().map(|(id, tools)| PrincipalToolkit {
+            id: *id,
+            tools: tools.map(classes),
+        }),
+        credentials.map(|references| references.iter().map(|r| (*r).to_owned()).collect()),
+        data_classes.iter().map(|class| (*class).to_owned()),
+    )
+    .expect("a valid bound")
+}
+
+fn bounded_policy(mode: NarrowingMode, bound: PrincipalBound) -> DelegationPolicy {
+    DelegationPolicy::new(4, mode, [])
+        .expect("policy")
+        .with_principal(bound)
+}
+
+fn principal_refusal(kind: GrantKind, name: &str, toolkit: Option<&str>) -> DelegationRefusal {
+    DelegationRefusal::PrincipalBound {
+        kind,
+        name: name.to_owned(),
+        toolkit: toolkit.map(str::to_owned),
+    }
+}
+
+#[test]
+fn a_toolkit_the_principal_may_not_use_is_refused_in_both_modes() {
+    // The caller holds T (id 9) and so does the callee: the caller check
+    // would let it through. The principal may not use T.
+    for mode in [NarrowingMode::Enforce, NarrowingMode::Report] {
+        let caller = scope(
+            &[toolkit(9, "Repo", &json!({}))],
+            bounded_policy(mode, principal(&[(7, None)], None, &[])),
+        );
+        let mut delegated = vec![toolkit(9, "Repo", &json!({}))];
+        let refused = caller
+            .delegate(&mut delegated, &BTreeSet::new(), &PublicPolicy::Open)
+            .expect_err("refused by the principal");
+        assert_eq!(
+            refused.refusal,
+            principal_refusal(GrantKind::Toolkit, "Repo", None)
+        );
+        assert!(
+            refused.evidence.enforced,
+            "report never relaxes P ({mode:?})"
+        );
+        assert_eq!(refused.refusal.code(), GRANT_MISSING);
+        assert_eq!(refused.refusal.to_value()["reason"], "principal");
+        assert!(refused.refusal.message().contains("(principal)"));
+    }
+}
+
+#[test]
+fn a_specialist_the_parent_does_not_hold_is_refused_by_the_principal_not_the_caller() {
+    // Agent2 holds no toolkit; Agent1 (the callee) holds the repo toolkit.
+    // When the principal may use it the refusal is the caller's (until the
+    // grant of story #2158 lands), and when it may not, the principal's.
+    let allowed = scope(
+        &[],
+        bounded_policy(NarrowingMode::Enforce, principal(&[(9, None)], None, &[])),
+    );
+    let mut repo = vec![toolkit(9, "Repo", &json!({}))];
+    assert_eq!(
+        refusal_of(allowed.delegate(&mut repo, &BTreeSet::new(), &PublicPolicy::Open)),
+        DelegationRefusal::GrantMissing {
+            kind: GrantKind::Toolkit,
+            name: "Repo".to_owned(),
+            toolkit: None,
+        }
+    );
+    let denied = scope(
+        &[],
+        bounded_policy(NarrowingMode::Enforce, principal(&[], None, &[])),
+    );
+    let mut repo = vec![toolkit(9, "Repo", &json!({}))];
+    assert_eq!(
+        refusal_of(denied.delegate(&mut repo, &BTreeSet::new(), &PublicPolicy::Open)),
+        principal_refusal(GrantKind::Toolkit, "Repo", None)
+    );
+}
+
+#[test]
+fn an_ad_hoc_root_is_bounded_by_the_principal() {
+    let root = DelegationScope::root(
+        Arc::new(bounded_policy(
+            NarrowingMode::Enforce,
+            principal(&[(7, Some(&["search"][..]))], None, &[]),
+        )),
+        GrantSet::unconstrained(),
+    );
+    assert!(!root.grants().constrains_toolkits());
+    // A toolkit outside P: refused although the ad hoc root holds no grant.
+    let mut outside = vec![toolkit(9, "Payroll", &json!({}))];
+    assert_eq!(
+        refusal_of(root.delegate(&mut outside, &BTreeSet::new(), &PublicPolicy::Open)),
+        principal_refusal(GrantKind::Toolkit, "Payroll", None)
+    );
+    // A toolkit inside P with every tool: narrowed to the principal's tools.
+    let mut inside = vec![toolkit(7, "Jira", &json!({}))];
+    let delegated = root
+        .delegate(&mut inside, &BTreeSet::new(), &PublicPolicy::Open)
+        .expect("within the principal");
+    assert_eq!(inside[0]["settings"]["selected_tools"], json!(["search"]));
+    assert_eq!(delegated.evidence.refusal, None);
+    // A tool outside P is refused by name.
+    let mut tool = vec![toolkit(7, "Jira", &json!({"selected_tools": ["delete"]}))];
+    assert_eq!(
+        refusal_of(root.delegate(&mut tool, &BTreeSet::new(), &PublicPolicy::Open)),
+        principal_refusal(GrantKind::Tool, "delete", Some("Jira"))
+    );
+}
+
+#[test]
+fn the_root_is_its_own_grants_intersected_with_the_principal() {
+    let policy = Arc::new(bounded_policy(
+        NarrowingMode::Enforce,
+        principal(&[(7, Some(&["search"][..])), (8, None)], None, &["public"]),
+    ));
+    let root = DelegationScope::root(
+        Arc::clone(&policy),
+        GrantSet::from_tools(&[
+            toolkit(7, "Jira", &json!({"selected_tools": ["search", "create"]})),
+            toolkit(9, "Payroll", &json!({})),
+        ]),
+    );
+    let canonical = root.grants().canonical();
+    let keys: Vec<&str> = canonical["toolkits"]
+        .as_array()
+        .expect("toolkits")
+        .iter()
+        .filter_map(|toolkit| toolkit["key"].as_str())
+        .collect();
+    assert_eq!(
+        keys,
+        ["toolkit:7"],
+        "the toolkit the principal lacks is gone"
+    );
+    assert_eq!(
+        canonical["toolkits"][0]["tools"],
+        json!({"only": ["search"]})
+    );
+    assert_eq!(canonical["data_classes"], json!(["public"]));
+}
+
+#[test]
+fn the_principal_is_carried_to_every_hop() {
+    let policy = Arc::new(bounded_policy(
+        NarrowingMode::Enforce,
+        principal(&[(7, None), (8, None)], None, &[]),
+    ));
+    let root = DelegationScope::root(
+        Arc::clone(&policy),
+        GrantSet::from_tools(&[
+            toolkit(7, "Jira", &json!({})),
+            toolkit(8, "Wiki", &json!({})),
+        ]),
+    );
+    let mut child = vec![toolkit(7, "Jira", &json!({}))];
+    let first = root
+        .delegate(&mut child, &BTreeSet::new(), &PublicPolicy::Open)
+        .expect("within P");
+    // The grandchild reaches for a toolkit outside P that the root never held.
+    let mut grandchild = vec![toolkit(9, "Payroll", &json!({}))];
+    assert_eq!(
+        refusal_of(
+            first
+                .scope
+                .delegate(&mut grandchild, &BTreeSet::new(), &PublicPolicy::Open)
+        ),
+        principal_refusal(GrantKind::Toolkit, "Payroll", None)
+    );
+    // A sub-agent holds a subset of its caller's grants, so nothing outside P.
+    let sub = first
+        .scope
+        .delegate_subagent_scope("read_only", &BTreeSet::new())
+        .expect("sub-agent");
+    assert_eq!(sub.scope.depth(), 2);
+    let mut outside = vec![toolkit(9, "Payroll", &json!({}))];
+    assert!(matches!(
+        refusal_of(
+            sub.scope
+                .delegate(&mut outside, &BTreeSet::new(), &PublicPolicy::Open)
+        ),
+        DelegationRefusal::PrincipalBound { .. }
+    ));
+}
+
+#[test]
+fn a_credential_reference_outside_the_principal_is_refused() {
+    let held = toolkit(7, "Jira", &json!({"credential_reference_id": "ref-a"}));
+    let caller = scope(
+        std::slice::from_ref(&held),
+        bounded_policy(
+            NarrowingMode::Report,
+            principal(&[(7, None)], Some(&["ref-z"][..]), &[]),
+        ),
+    );
+    let mut same = vec![held.clone()];
+    assert_eq!(
+        refusal_of(caller.delegate(&mut same, &BTreeSet::new(), &PublicPolicy::Open)),
+        principal_refusal(GrantKind::Credential, "ref-a", Some("Jira"))
+    );
+    // No credential bound (an ungoverned run): the reference is not judged.
+    let open = scope(
+        std::slice::from_ref(&held),
+        bounded_policy(NarrowingMode::Enforce, principal(&[(7, None)], None, &[])),
+    );
+    let mut again = vec![held];
+    open.delegate(&mut again, &BTreeSet::new(), &PublicPolicy::Open)
+        .expect("no credential bound");
+}
+
+#[test]
+fn a_data_class_the_project_does_not_allow_is_refused() {
+    let caller = scope(
+        &[],
+        bounded_policy(
+            NarrowingMode::Enforce,
+            principal(&[], None, &["public", "internal"]),
+        ),
+    );
+    assert_eq!(
+        refusal_of(caller.delegate(&mut vec![], &classes(&["pii"]), &PublicPolicy::Open)),
+        principal_refusal(GrantKind::DataClass, "pii", None)
+    );
+    // A project that declares none imposes no bound.
+    let none = scope(
+        &[],
+        bounded_policy(NarrowingMode::Enforce, principal(&[], None, &[])),
+    );
+    none.delegate(&mut vec![], &classes(&["pii"]), &PublicPolicy::Open)
+        .expect("no data class bound");
+}
+
+#[test]
+fn the_principal_narrowing_shows_in_the_effective_digest() {
+    let tools = [toolkit(7, "Jira", &json!({}))];
+    let unbounded = scope(&tools, DelegationPolicy::default());
+    let bounded = scope(
+        &tools,
+        bounded_policy(
+            NarrowingMode::Enforce,
+            principal(&[(7, Some(&["search"][..]))], None, &[]),
+        ),
+    );
+    let mut a = vec![toolkit(7, "Jira", &json!({}))];
+    let mut b = vec![toolkit(7, "Jira", &json!({}))];
+    let wide = unbounded
+        .delegate(&mut a, &BTreeSet::new(), &PublicPolicy::Open)
+        .expect("wide");
+    let narrow = bounded
+        .delegate(&mut b, &BTreeSet::new(), &PublicPolicy::Open)
+        .expect("narrow");
+    assert_ne!(
+        wide.evidence.effective_grant_digest,
+        narrow.evidence.effective_grant_digest
+    );
+}
+
+#[test]
+fn a_callee_within_the_principal_is_unchanged() {
+    // The same composition with and without a bound that covers it.
+    let tools = [toolkit(7, "Jira", &json!({"selected_tools": ["search"]}))];
+    let plain = scope(&tools, DelegationPolicy::default());
+    let covered = scope(
+        &tools,
+        bounded_policy(NarrowingMode::Enforce, principal(&[(7, None)], None, &[])),
+    );
+    let mut a = vec![toolkit(7, "Jira", &json!({"selected_tools": ["search"]}))];
+    let mut b = a.clone();
+    let left = plain
+        .delegate(&mut a, &BTreeSet::new(), &PublicPolicy::Open)
+        .expect("plain");
+    let right = covered
+        .delegate(&mut b, &BTreeSet::new(), &PublicPolicy::Open)
+        .expect("covered");
+    assert_eq!(a, b);
+    assert_eq!(
+        left.evidence.effective_grant_digest,
+        right.evidence.effective_grant_digest
+    );
+}
+
+#[test]
+fn a_built_in_toolkit_with_no_row_is_not_bounded_and_the_limits_hold() {
+    let bound = principal(&[], None, &[]);
+    assert!(bound.admits_toolkit(None));
+    assert!(!bound.admits_toolkit(Some(3)));
+    let too_many = PrincipalBound::new(
+        (0..=MAX_PRINCIPAL_TOOLKITS as u64).map(|id| PrincipalToolkit { id, tools: None }),
+        None,
+        [],
+    );
+    assert_eq!(too_many, Err(DelegationPolicyError::PrincipalBoundTooLarge));
+    let long_reference = PrincipalBound::new(
+        [],
+        Some(vec!["r".repeat(MAX_PRINCIPAL_REFERENCE_BYTES + 1)]),
+        [],
+    );
+    assert_eq!(
+        long_reference,
+        Err(DelegationPolicyError::PrincipalBoundTooLarge)
+    );
+    assert_eq!(
+        PrincipalBound::new([], None, ["Not A Class".to_owned()]),
+        Err(DelegationPolicyError::MalformedDataClass)
+    );
+}
