@@ -14,13 +14,14 @@ import { getToolkitTypeLabel } from '../lib/toolkitBlocklist';
 import type { AgentToolAssociation } from '../lib/types';
 
 import { AgentVariables } from './AgentVariables';
-import { EnhancedCardToolActions } from './EnhancedCardToolActions';
+import { ToolChoices } from './ToolChoices';
 import { EntityIcon } from './EntityIcon';
-import { buildOpenInNewTabUrl, normalizeAvailableToolOptions, resolveEntityType, resolveExtraAuthSlot, resolveMcpDisconnectedTip, resolveOpenAction, resolveRemoveAction, resolveRemoveDialogSuffix, resolveRemoveDialogTitle, resolveToolCardViewState, resolveToolkitName } from './ToolCard.lib';
+import { buildOpenInNewTabUrl, resolveEntityType, resolveExtraAuthSlot, resolveMcpDisconnectedTip, resolveOpenAction, resolveRemoveAction, resolveRemoveDialogSuffix, resolveRemoveDialogTitle, resolveToolCardViewState, resolveToolkitName } from './ToolCard.lib';
 import { cardContainerSx, cardHeaderSx, entityIconImageSx, entityIconSx } from './ToolCard.styles';
 import { ToolCardActionsCluster } from './ToolCardActionsCluster';
 import { ToolCardBody } from './ToolCardBody';
 import type { ToolCardProps } from './ToolCard.types';
+
 
 /**
  * The two mutually-exclusive status banners, extracted to its own function
@@ -93,8 +94,6 @@ export function ToolCard({ tool, disabled, isDuplicate = false, context, icon, d
   const entityType = useMemo(() => resolveEntityType(tool), [tool]);
   const toolkitName = useMemo(() => resolveToolkitName(tool, toolSelection.resolveToolkitNameFromSchema), [tool, toolSelection.resolveToolkitNameFromSchema]);
 
-  const availableToolOptionsRaw = tool.settings?.available_tools;
-  const toolOptions = useMemo(() => normalizeAvailableToolOptions(availableToolOptionsRaw ?? []), [availableToolOptionsRaw]);
 
   const someToolsAreUnavailable = useMemo(() => {
     const availableTools = toolSelection.availableTools;
@@ -197,14 +196,16 @@ export function ToolCard({ tool, disabled, isDuplicate = false, context, icon, d
           </Box>
           {renderStatusBanner({ isBlockedToolkit: view.isBlockedToolkit, someToolsAreUnavailable, hasValidationIssue: view.hasValidationIssue, showActions, toolType: tool.type })}
           {renderVariablesPanel({ show: showVariables, variables: tool.variables, onChangeVariable: variables?.onChangeVariable })}
-          <EnhancedCardToolActions
-            toolOptions={toolOptions}
-            selectedTools={view.selectedTools}
-            availableTools={toolSelection.availableTools}
-            showActions={showActions}
-            disabled={disabled}
-            onSelectedToolsChange={toolSelection.onSelectedToolsChange}
-          />
+          {showActions && (
+            <ToolChoices
+              tool={tool}
+              projectId={context.selectedProjectId}
+              selectedTools={view.selectedTools}
+              availableTools={toolSelection.availableTools}
+              disabled={disabled}
+              onSelectedToolsChange={toolSelection.onSelectedToolsChange}
+            />
+          )}
           <DeleteEntityModal
             open={openAlert}
             onClose={onCloseAlert}

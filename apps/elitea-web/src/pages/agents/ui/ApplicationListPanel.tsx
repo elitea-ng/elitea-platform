@@ -50,6 +50,8 @@ export interface ApplicationListRow {
    * `onSelectForkedFrom` callback prop would have breached.
    */
   readonly forkedFrom?: { readonly onClick: () => void };
+  /** The row's extra action (the Undo of an automatic hire), in the table view. */
+  readonly action?: { readonly label: string; readonly onClick: () => void };
 }
 
 export interface ApplicationListPanelProps {
@@ -100,6 +102,7 @@ export function ApplicationListPanel({
           onSelect(row.id);
         },
         ...(row.forkedFrom === undefined ? {} : { forkedFrom: row.forkedFrom }),
+        ...(row.action === undefined ? {} : { action: row.action }),
       })),
     [rows, onSelect],
   );

@@ -61,8 +61,12 @@ export interface BaseModalProps {
   onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
   /** `'simple'`: compact, centred dialog. `'complex'`: full editor-style dialog. */
   variant?: ModalVariant;
-  /** `variant="complex"` only: expands to a large, near-fullscreen surface. */
-  fullscreen?: boolean;
+  /**
+   * `variant="complex"` only. `true` expands to a large, near-fullscreen surface
+   * (no action bar). `'wide'` is a wide surface that keeps the action bar, for
+   * content that needs columns (#2097).
+   */
+  fullscreen?: boolean | 'wide';
   'data-testid'?: string;
   footer?: ReactNode;
   /** Header row extras — title icon, heading level, header actions, close-button test id. */
@@ -196,13 +200,18 @@ function ModalHeader({ title, header, isSimple, onClose }: ModalHeaderProps): Re
   );
 }
 
-function paperSx(isSimple: boolean, isFullscreen: boolean) {
+function paperWidth(isSimple: boolean, isWide: boolean): string {
+  if (isSimple) return '31.25rem';
+  return isWide ? '70rem' : '37.5rem';
+}
+
+function paperSx(isSimple: boolean, isFullscreen: boolean, isWide: boolean) {
   return (theme: Theme) => ({
     display: 'flex',
     flexDirection: 'column' as const,
     alignItems: 'flex-start' as const,
-    width: isFullscreen ? '80vw' : isSimple ? '31.25rem' : '37.5rem',
-    maxWidth: isFullscreen ? '80vw' : '60%',
+    width: isFullscreen ? '80vw' : paperWidth(isSimple, isWide),
+    maxWidth: isFullscreen ? '80vw' : isWide ? '92vw' : '60%',
     ...(isFullscreen ? { height: 'calc(100vh - 10rem)' } : {}),
     background: isSimple
       ? theme.vars.palette.background.modal.simple
@@ -272,7 +281,8 @@ export function BaseModal({
   actions,
 }: BaseModalProps): ReactNode {
   const isSimple = variant === 'simple';
-  const isFullscreen = variant === 'complex' && fullscreen;
+  const isFullscreen = variant === 'complex' && fullscreen === true;
+  const isWide = variant === 'complex' && fullscreen === 'wide';
   const hasActions = Boolean(actions?.node || onConfirm);
 
   // `Dialog`'s own `onClose` prop already fires on Escape (MUI's Modal
@@ -295,7 +305,7 @@ export function BaseModal({
       data-testid={dataTestId}
       onClose={onClose}
       onKeyDown={handleKeyDown}
-      slotProps={{ paper: { sx: paperSx(isSimple, isFullscreen) } }}
+      slotProps={{ paper: { sx: paperSx(isSimple, isFullscreen, isWide) } }}
     >
       <ModalHeader
         title={title}

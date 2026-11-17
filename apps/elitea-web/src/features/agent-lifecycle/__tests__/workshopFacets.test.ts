@@ -62,4 +62,11 @@ describe('installed origin and the update quick filter', () => {
     expect(workshopRowBadge(first, rows)).toBe('Draft · Installed v2.3');
     expect(workshopRowBadge(second, rows)).toBe('Draft · Installed v2.4 · also hired as Changelog Writer');
   });
+
+  it('says on the row that an automatic hire is on probation (#2091)', () => {
+    const hired = row('1', 'Changelog Writer', { origin_kind: 'installed', origin_version_name: 'v2.3', on_probation: true, probation_until: '2026-11-15T00:00:00Z' });
+    expect(workshopRowBadge(hired, [hired])).toBe('Draft · Installed v2.3 · On probation');
+    const kept = row('2', 'Kept', { origin_kind: 'installed', origin_version_name: 'v2.3' });
+    expect(workshopRowBadge(kept, [kept])).toBe('Draft · Installed v2.3');
+  });
 });

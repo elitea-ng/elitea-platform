@@ -179,6 +179,7 @@ export function AgentToolsPanel({ entity, versionTools, dirty, internalTools, on
       internalTools={internalTools.value}
       onInternalToolsChange={internalTools.onChange}
       applicationId={entity.applicationId}
+      versionId={entity.versionId}
       renderToolCard={renderToolCard}
       onToolsChanged={onToolsChanged}
       disabled={readOnly}

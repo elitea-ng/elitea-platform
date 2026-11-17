@@ -10,7 +10,7 @@ import { t } from '@/shared/i18n';
 import {
   fetchExportDocument,
   fetchForkDocument,
-  forkEntity,
+  forkEntityWithNested,
   importEntities,
   publishVersion,
   runPublishValidation,
@@ -154,7 +154,8 @@ export function useEntityLifecycle(projectId: string | undefined, entityId: stri
     // fork handler reads only the body, so a fork built from anything else
     // loses the parent pointers and every version variable.
     mutationFn: async (variables) =>
-      forkEntity(
+      forkEntityWithNested(
+        projectId ?? '',
         variables.targetProjectId,
         await fetchForkDocument(projectId ?? '', variables.entityId, variables.versionId),
       ),
