@@ -44,6 +44,10 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 RUNTIME_DIR="${RUNTIME_DIR:-${REPO_ROOT}/deploy/certs/runtime}"
 CONTAINER_BIN="${CONTAINER_BIN:-docker}"
 SUPERVISOR_UID=10001
+# Main's identity when it asks a supervisor to recover or authorize a Code node
+# (docker-compose.sandbox-code-owner.yml). The overlay, the supervisor profiles
+# and the certificate below must all carry this exact string.
+CODE_OWNER_IDENTITY="spiffe://elitea.standalone/ns/default/sa/main-code-owner"
 
 log() { printf '%s\n' "$*" >&2; }
 
@@ -69,6 +73,22 @@ mkdir -p "$out"
 out="$(cd "$out" && pwd)"
 umask 077
 
+# Main's Code-owner client certificate, off the runtime CA, in the runtime
+# directory the runtime-material service installs into Main's volume. One
+# SPIFFE URI SAN and clientAuth only. Existing files are kept.
+if [ ! -f "$RUNTIME_DIR/code-owner-client.crt" ] || [ ! -f "$RUNTIME_DIR/code-owner-client.key" ]; then
+  owner_scratch="$(mktemp -d "$out/.owner-XXXXXX")"
+  openssl req -new -newkey rsa:2048 -nodes -keyout "$owner_scratch/key" \
+    -out "$owner_scratch/csr" -subj "/CN=main-code-owner" >/dev/null 2>&1
+  printf 'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=clientAuth\nsubjectAltName=URI:%s\n' "$CODE_OWNER_IDENTITY" > "$owner_scratch/ext"
+  openssl x509 -req -in "$owner_scratch/csr" -CA "$RUNTIME_DIR/runtime-ca.crt" \
+    -CAkey "$RUNTIME_DIR/runtime-ca.key" -set_serial "0x$(openssl rand -hex 16)" \
+    -days 30 -sha256 -extfile "$owner_scratch/ext" -out "$owner_scratch/crt" >/dev/null 2>&1
+  mv "$owner_scratch/key" "$RUNTIME_DIR/code-owner-client.key"
+  mv "$owner_scratch/crt" "$RUNTIME_DIR/code-owner-client.crt"
+  rm -rf "$owner_scratch"
+fi
+
 # Server certificates for both supervisor listeners and the database, off the
 # runtime CA. Existing ones are kept and re-verified.
 bash "${REPO_ROOT}/deploy/scripts/gen-sandbox-certs.sh" "$RUNTIME_DIR" "$out/tls" >&2
@@ -86,15 +106,17 @@ render_profile() {
   # The ledger lives in the `agentstate` database; the supervisor forces
   # verify-full, so the host name must be the certificate's: `postgres`.
   printf 'postgresql://elitea:elitea@postgres:5432/agentstate' > "$dir/database-url"
-  python3 - "$dir/config.json" "$base" "$profile" "$port" "$languages" "$policy" "$memory" "$timeout" "$image" <<'PY'
+  python3 - "$dir/config.json" "$base" "$profile" "$port" "$languages" "$policy" "$memory" "$timeout" "$image" "$CODE_OWNER_IDENTITY" <<'PY'
 import json, sys
-path, base, profile, port, languages, policy, memory, timeout, image = sys.argv[1:]
+path, base, profile, port, languages, policy, memory, timeout, image, owner = sys.argv[1:]
 config = {
     "revision": 1,
     "listen_address": f"0.0.0.0:{port}",
     # A distinct, stable owner per profile: pending stops are partitioned by it.
     "owner": f"compose-sandbox-{profile}-1",
     "audience": f"dns:elitea-sandbox-{profile}",
+    # Main, asking to recover or authorize a Code node.
+    "code_owner_requester": owner,
     "ca_path": f"{base}/client-ca.pem",
     "certificate_path": f"{base}/server.pem",
     "private_key_path": f"{base}/server.key",

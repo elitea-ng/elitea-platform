@@ -186,7 +186,7 @@ The overlay sets `ELITEA_RUNTIME_SANDBOX_AUDIENCES` and `ELITEA_CODE_SANDBOX_LAN
 
 **Check it.** `GET /elitea_core/runtime_capabilities` lists the languages in `code_sandbox_languages`. Turn **Python sandbox** on for an agent and ask it to compute `1+1`: the tool result in the conversation shows `stdout` `2`. If the supervisor does not start, `podman compose logs elitea-sandbox` names the step: the profile files must be mode `0600` (private) or `0644` (public) and owned by UID 10001, the ledger needs the agentstate migrations applied, and the image IDs in both profiles must match the daemon's. Rebuilding a runner image changes its ID: rerun the script, which rewrites both the profiles and the worker configuration, then restart the supervisor and the worker.
 
-Code owner recovery and the other Code consumers are separate and optional: see `deploy/runtime/code-consumers-deployment.md`. The `run_code` tool does not need them.
+**Pipeline Code nodes** need one more overlay, `docker-compose.sandbox-code-owner.yml`: Main admits a journaled Code node only through original-Code owner recovery, so Main dials each supervisor over mTLS with its own client certificate and the supervisor profiles accept exactly that identity as `code_owner_requester`. The material script issues the certificate and renders the profiles for it; add the overlay to `STANDALONE_OVERLAY` after the other two. The agent `run_code` tool does not need it. The other Code consumers (workspace, platform, debug artifacts) stay optional: see `deploy/runtime/code-consumers-deployment.md`.
 
 ## Object storage and artifacts
 

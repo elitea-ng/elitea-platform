@@ -46,5 +46,5 @@ CONTAINER_BIN="${CONTAINER_BIN:-docker}" \
 # shellcheck disable=SC1090
 . "${material}.env"
 
-export STANDALONE_OVERLAY="${REPO_ROOT}/deploy/docker-compose.sandbox.yml ${REPO_ROOT}/deploy/docker-compose.sandbox-postgres-tls.yml"
+export STANDALONE_OVERLAY="${REPO_ROOT}/deploy/docker-compose.sandbox.yml ${REPO_ROOT}/deploy/docker-compose.sandbox-postgres-tls.yml ${REPO_ROOT}/deploy/docker-compose.sandbox-code-owner.yml"
 exec "${REPO_ROOT}/apps/elitea-web/scripts/chat-stream-e2e.sh" "$@"

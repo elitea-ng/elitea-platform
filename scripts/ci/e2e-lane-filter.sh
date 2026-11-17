@@ -92,7 +92,7 @@ SANDBOX='^('\
 'services/(elitea-worker-rust|elitea-code-runner)/|'\
 'libs/(rust|proto)/|rust-toolchain\.toml$|'\
 'services/elitea-main/(internal/(runtimecomposition|domain/codesandbox)/|cmd/elitea-main/)|'\
-'deploy/(docker-compose\.(standalone-full|standalone-rust-agent|sandbox|sandbox-postgres-tls)\.yml|runtime/(worker-runtime\.rust\.json|postgres-tls-entrypoint\.sh|install-material\.sh)|scripts/(standalone-stack|sandbox-compose-material|gen-sandbox-certs|gen-runtime-certs)\.sh|scripts/lib/|mock-llm/)|'\
+'deploy/(docker-compose\.(standalone-full|standalone-rust-agent|sandbox|sandbox-postgres-tls|sandbox-code-owner)\.yml|runtime/(worker-runtime\.rust\.json|postgres-tls-entrypoint\.sh|install-material\.sh)|scripts/(standalone-stack|sandbox-compose-material|gen-sandbox-certs|gen-runtime-certs)\.sh|scripts/lib/|mock-llm/)|'\
 'apps/elitea-web/(scripts/(chat-stream-e2e|code-sandbox-e2e)\.sh|scripts/lib/compose-detect\.sh|playwright\.config\.ts|e2e/(fixtures/|streaming/code-sandbox\.))|'\
 '\.github/(actions/(stack-images|build-stack-images|pull-stack-images)/|workflows/ci-web-e2e\.yml)|'\
 'scripts/ci/(e2e-lane-filter|stack-images)'\
