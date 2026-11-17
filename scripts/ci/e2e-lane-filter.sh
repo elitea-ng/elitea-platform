@@ -16,6 +16,13 @@
 # stack lanes skip: a change to apps/elitea-desktop/src-tauri/src/handoff*.rs
 # must still reach the one lane that runs that code against a real Main.
 #
+# A fourth line, reaches-sandbox=true|false, says whether the pull request
+# touches what the `code-sandbox` lane (#2206, #2208) exercises: the agent
+# `run_code` tool against the real Docker code sandbox. Its subjects are the
+# worker, the agent runtime, the runner images and the supervisor, the sandbox
+# compose files and their material script, the lane's journeys and wrapper.
+# It is decided on every changed path, and an empty list reaches it.
+#
 # ── WHAT IS SKIPPED, AND WHY EACH IS SAFE ───────────────────────────────────
 #
 # Measured 2026-10-20: Web E2E ran on 97% of pull-request SHAs, because its
@@ -79,6 +86,18 @@ HANDOFF='^('\
 'api/v2/workspacehandoff|nativeauth|transport/runtimegrpc/workspace|platformconfig/|infra/db/repos/workspace_))'\
 ')'
 
+# What the code-sandbox lane runs. Only ever too wide, never too narrow: a miss
+# is a lane that stops gating.
+SANDBOX='^('\
+'services/(elitea-worker-rust|elitea-code-runner)/|'\
+'libs/(rust|proto)/|rust-toolchain\.toml$|'\
+'services/elitea-main/(internal/(runtimecomposition|domain/codesandbox|api/v2/toolkits)/|cmd/elitea-main/)|ci/|\\.github/actions/(npm-cache|go-cache)/|'\
+'deploy/(docker-compose\.(standalone-full|standalone-rust-agent|sandbox|sandbox-postgres-tls|sandbox-code-owner)\.yml|runtime/(worker-runtime\.rust\.json|postgres-tls-entrypoint\.sh|install-material\.sh)|scripts/(standalone-stack|sandbox-compose-material|gen-sandbox-certs|gen-runtime-certs)\.sh|scripts/lib/|mock-llm/)|'\
+'apps/elitea-web/(scripts/(chat-stream-e2e|code-sandbox-e2e)\.sh|scripts/lib/compose-detect\.sh|playwright\.config\.ts|e2e/(fixtures/|streaming/code-sandbox\.))|'\
+'\.github/(actions/(stack-images|build-stack-images|pull-stack-images)/|workflows/ci-web-e2e\.yml)|'\
+'scripts/ci/(e2e-lane-filter|stack-images)'\
+')'
+
 # Every deploy/helm path a compose file references, as a repository path.
 # A compose file names it relative to deploy/ (`./helm/...`).
 helm_used=()
@@ -101,10 +120,12 @@ MODEL='^(services/elitea-llm-gateway/|services/elitea-worker-rust/|libs/rust/llm
 total=0
 reaching=()
 handoff=false
+sandbox=false
 while IFS= read -r f; do
   [ -n "$f" ] || continue
   total=$((total + 1))
   if [[ "$f" =~ $HANDOFF ]]; then handoff=true; fi
+  if [[ "$f" =~ $SANDBOX ]]; then sandbox=true; fi
   if [[ "$f" =~ $SKIP_TREE ]] && ! used_by_compose "$f"; then
     continue
   fi
@@ -119,6 +140,7 @@ if [ "$total" -eq 0 ]; then
   echo "reaches-stack=true"
   echo "reaches-model=true"
   echo "reaches-handoff=true"
+  echo "reaches-sandbox=true"
   exit 0
 fi
 
@@ -127,6 +149,7 @@ if [ "${#reaching[@]}" -eq 0 ]; then
   echo "reaches-stack=false"
   echo "reaches-model=false"
   echo "reaches-handoff=${handoff}"
+  echo "reaches-sandbox=${sandbox}"
   exit 0
 fi
 
@@ -142,3 +165,4 @@ else
   echo "reaches-model=false"
 fi
 echo "reaches-handoff=${handoff}"
+echo "reaches-sandbox=${sandbox}"

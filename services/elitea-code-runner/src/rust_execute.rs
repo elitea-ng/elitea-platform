@@ -17,7 +17,7 @@ mod workspace_content;
 #[allow(dead_code)]
 mod workspace_lifecycle;
 use std::{
-    io::Read,
+    io::{Read, Write},
     path::Path,
     process::{Command, Stdio},
 };
@@ -41,6 +41,37 @@ fn run(mut command: Command) -> Result<(), Box<dyn std::error::Error>> {
     }
     if !child.wait()?.success() {
         return Err("Rust compilation or execution failed; see diagnostics".into());
+    }
+    Ok(())
+}
+
+/// The most compiler diagnostics kept for a failed build.
+const MAX_COMPILER_DIAGNOSTICS: u64 = 256 * 1024;
+
+/// Compile the user's program. The compiler's output is NOT the program's
+/// output: a successful build prints nothing to the run's captured stream
+/// (the model-facing `output` holds only what the program printed), and a
+/// failed build writes its diagnostics, bounded, to `diagnostics`.
+fn run_compile_to(
+    mut command: Command,
+    diagnostics: &mut impl Write,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut child = command
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::null())
+        .spawn()?;
+    let mut kept = Vec::new();
+    if let Some(mut stderr) = child.stderr.take() {
+        (&mut stderr)
+            .take(MAX_COMPILER_DIAGNOSTICS)
+            .read_to_end(&mut kept)?;
+        // Keep draining so the compiler never blocks on a full pipe.
+        std::io::copy(&mut stderr, &mut std::io::sink())?;
+    }
+    if !child.wait()?.success() {
+        diagnostics.write_all(&kept)?;
+        return Err("Rust compilation failed; see diagnostics".into());
     }
     Ok(())
 }
@@ -193,7 +224,7 @@ fn execute(mode: Option<compiled_code::Purpose>) -> Result<(), Box<dyn std::erro
         )?;
     }
     match mode {
-        None => run(compile)?,
+        None => run_compile_to(compile, &mut std::io::stderr())?,
         Some(compiled_code::Purpose::Compile) => {
             // Reap compiler and escaped build-script descendants before capture.
             let runtime = tokio::runtime::Builder::new_current_thread()
@@ -460,5 +491,50 @@ mod platform_compiled_identity_tests {
         changed = original;
         changed.descriptor_sha256 = None;
         assert!(original_compiled_request_digest(&changed).is_err());
+    }
+}
+
+#[cfg(test)]
+mod compile_output_tests {
+    use super::*;
+
+    fn shell(script: &str) -> Command {
+        let mut command = Command::new("sh");
+        command.args(["-c", script]);
+        command
+    }
+
+    #[test]
+    fn a_successful_build_adds_nothing_to_the_captured_output() {
+        let mut diagnostics = Vec::new();
+        run_compile_to(
+            shell("echo '   Compiling serde v1' >&2; echo built"),
+            &mut diagnostics,
+        )
+        .unwrap();
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn a_failed_build_reports_its_diagnostics() {
+        let mut diagnostics = Vec::new();
+        let error = run_compile_to(
+            shell("echo 'error[E0425]: nope' >&2; exit 101"),
+            &mut diagnostics,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("compilation failed"));
+        assert_eq!(
+            String::from_utf8(diagnostics).unwrap(),
+            "error[E0425]: nope\n"
+        );
+    }
+
+    #[test]
+    fn diagnostics_are_bounded_and_a_noisy_compiler_does_not_block() {
+        let mut diagnostics = Vec::new();
+        let script = "head -c 1048576 /dev/zero | tr '\\0' x >&2; exit 1";
+        run_compile_to(shell(script), &mut diagnostics).unwrap_err();
+        assert_eq!(diagnostics.len() as u64, MAX_COMPILER_DIAGNOSTICS);
     }
 }
