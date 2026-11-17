@@ -255,7 +255,7 @@ impl DelegationPolicy {
     /// read first. A `sub_agent` or `pipeline_node` grant proposed through the
     /// API for the same pair is read only when neither exists.
     #[must_use]
-    pub fn grant_between(&self, caller: u64, callee: u64) -> Option<&DelegationGrant> {
+    pub fn grant_between(&self, from_agent: u64, to_agent: u64) -> Option<&DelegationGrant> {
         [
             EdgeKind::AgentTool,
             EdgeKind::PipelineChild,
@@ -265,8 +265,8 @@ impl DelegationPolicy {
         .into_iter()
         .find_map(|kind| {
             self.grants.get(&EdgeKey {
-                caller,
-                callee,
+                caller: from_agent,
+                callee: to_agent,
                 kind,
             })
         })
