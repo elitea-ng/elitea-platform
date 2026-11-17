@@ -156,7 +156,7 @@ UPDATE %s.skill_trust SET revoked_at = now(), revoked_by = $2 WHERE skill_id = $
 	if err != nil {
 		return skilltrust.Status{}, 0, fmt.Errorf("skill trust: revoke: %w", err)
 	}
-	status, _, err = r.read(ctx, projectID, skillID)
+	status, _, err := r.read(ctx, projectID, skillID)
 	return status, int(tag.RowsAffected()), err
 }
 
