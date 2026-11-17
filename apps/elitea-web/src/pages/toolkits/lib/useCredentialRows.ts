@@ -22,7 +22,9 @@
  */
 import { useCallback, useMemo } from 'react';
 
-import { credentialUrl, type Credential } from '@/entities/credential';
+import { useRouter } from '@tanstack/react-router';
+
+import type { Credential } from '@/entities/credential';
 import { normalizeCredentialPage, useConfigurationsList } from '@/features/credentials';
 
 import { usePersonalProjectId } from './usePersonalProjectId';
@@ -55,16 +57,15 @@ export interface CredentialPickerRow {
   readonly ownerProjectId: string | undefined;
   readonly data: Readonly<Record<string, unknown>>;
   /**
-   * The provider address this credential names (`data.base_url`, else
-   * `data.url`), and `undefined` when it names none.
+   * The in-app address of this credential's own configuration page (the
+   * `/credentials/all/<id>` editor), and `undefined` when this project cannot
+   * open it (a shared or personal row owned by another project).
    *
    * `CredentialOptionLabel` renders its "open in a new tab" action ONLY when
-   * this is set — that action is how a user goes and fixes the credential a
-   * row has just told them is refused. This field was missing here, so the
-   * property was `undefined` for every row the toolkit form offers and the
-   * control never rendered anywhere in the application: the selector existed
-   * (`entities/credential`), `CredentialsSelect` forwarded the prop, and
-   * nothing in between ever computed it.
+   * this is set. It used to carry the provider address the credential names
+   * (`data.base_url`), so the action opened github.com instead of the
+   * credential's configuration in Elitea (#2134). The prop keeps its name
+   * because `CredentialOptionLabel` and `CredentialsSelect` forward it as is.
    */
   readonly credentialUrl?: string;
 }
@@ -96,7 +97,10 @@ function readDisplayLabel(credential: Credential, eliteaTitle: string): string {
   return eliteaTitle;
 }
 
-function toRows(items: readonly Credential[], isPrivate: boolean, accepted: ReadonlySet<string>): CredentialPickerRow[] {
+/** Resolves the editor address of one row; kept apart so `toRows` stays under the complexity budget. */
+type EditHref = (credentialId: string, ownerProjectId: string | undefined) => string | undefined;
+
+function toRows(items: readonly Credential[], isPrivate: boolean, accepted: ReadonlySet<string>, editHref: EditHref): CredentialPickerRow[] {
   const rows: CredentialPickerRow[] = [];
   for (const item of items) {
     if (accepted.size > 0 && !accepted.has(item.type)) continue;
@@ -105,8 +109,10 @@ function toRows(items: readonly Credential[], isPrivate: boolean, accepted: Read
     // empty string as "no selection", so such a row would silently clear the
     // field instead of picking anything.
     if (eliteaTitle === '') continue;
+    const id = item.uid ?? item.id;
+    const href = editHref(id, item.projectId);
     rows.push({
-      id: item.uid ?? item.id,
+      id,
       ...(item.uuid !== undefined ? { uuid: item.uuid } : {}),
       eliteaTitle,
       isPrivate,
@@ -114,10 +120,10 @@ function toRows(items: readonly Credential[], isPrivate: boolean, accepted: Read
       type: item.type,
       ownerProjectId: item.projectId,
       data: item.data ?? {},
-      // Omitted rather than set to '' when the credential names no address:
+      // Omitted rather than set to '' when this project cannot open the row:
       // the label renders the action on a truthy value, and an empty string
       // would open a new tab on nothing.
-      ...(credentialUrl(item) !== '' ? { credentialUrl: credentialUrl(item) } : {}),
+      ...(href !== undefined ? { credentialUrl: href } : {}),
     });
   }
   return rows;
@@ -126,6 +132,16 @@ function toRows(items: readonly Credential[], isPrivate: boolean, accepted: Read
 export function useCredentialRows(params: UseCredentialRowsParams): UseCredentialRowsResult {
   const { projectId, section, configurationTypes, onlyPublic } = params;
   const personalProjectId = usePersonalProjectId();
+  const router = useRouter();
+  const editHref = useCallback<EditHref>(
+    (credentialId, ownerProjectId) => {
+      // The editor loads the row from the SELECTED project, so a row another
+      // project owns (shared in, or personal) has no address here.
+      if (ownerProjectId !== undefined && ownerProjectId !== projectId) return undefined;
+      return router.buildLocation({ to: '/credentials/$tab/$credential_uid', params: { tab: 'all', credential_uid: credentialId } }).href;
+    },
+    [router, projectId],
+  );
 
   const wantsPersonalRows =
     !onlyPublic && personalProjectId !== undefined && personalProjectId !== projectId;
@@ -147,11 +163,11 @@ export function useCredentialRows(params: UseCredentialRowsParams): UseCredentia
     const projectPage = projectData === undefined ? undefined : normalizeCredentialPage(projectData);
     const personalPage = wantsPersonalRows && personalData !== undefined ? normalizeCredentialPage(personalData) : undefined;
     return [
-      ...toRows(projectPage?.items ?? [], false, accepted),
-      ...toRows(projectPage?.shared?.items ?? [], false, accepted),
-      ...toRows(personalPage?.items ?? [], true, accepted),
+      ...toRows(projectPage?.items ?? [], false, accepted, editHref),
+      ...toRows(projectPage?.shared?.items ?? [], false, accepted, editHref),
+      ...toRows(personalPage?.items ?? [], true, accepted, editHref),
     ];
-  }, [projectData, personalData, wantsPersonalRows, configurationTypes]);
+  }, [projectData, personalData, wantsPersonalRows, configurationTypes, editHref]);
 
   const refetchProject = projectQuery.refetch;
   const refetchPersonal = personalQuery.refetch;

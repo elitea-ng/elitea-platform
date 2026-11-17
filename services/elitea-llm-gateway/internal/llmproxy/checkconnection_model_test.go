@@ -92,8 +92,8 @@ func TestCheckModelConnection_SuccessSendsOneTokenCompletion(t *testing.T) {
 	if request["model"] != "my-model" {
 		t.Fatalf("model = %v, want the trimmed name", request["model"])
 	}
-	if request["max_tokens"] != float64(1) {
-		t.Fatalf("max_tokens = %v, want 1", request["max_tokens"])
+	if request["max_tokens"] != float64(checkModelTokenBudget) {
+		t.Fatalf("max_tokens = %v, want the probe budget", request["max_tokens"])
 	}
 }
 
@@ -270,7 +270,7 @@ func TestProbeAzureChatCompletion_DeploymentRouteAndVersion(t *testing.T) {
 	if headers.Get("api-key") != "azure-key" || headers.Get("Authorization") != "" {
 		t.Fatalf("headers = %v, want the api-key header only", headers)
 	}
-	if request["max_completion_tokens"] != float64(1) {
+	if request["max_completion_tokens"] != float64(checkModelTokenBudget) {
 		t.Fatalf("request = %v, want max_completion_tokens for a current api-version", request)
 	}
 }
@@ -285,7 +285,7 @@ func TestProbeAzureChatCompletion_OldVersionUsesMaxTokens(t *testing.T) {
 	if err != nil {
 		t.Fatalf("probe: %v", err)
 	}
-	if _, _, _, request := fp.last(); request["max_tokens"] != float64(1) {
+	if _, _, _, request := fp.last(); request["max_tokens"] != float64(checkModelTokenBudget) {
 		t.Fatalf("request = %v, want max_tokens for an old api-version", request)
 	}
 }
@@ -309,7 +309,7 @@ func TestProbeDialCompletion_UsesTheRuntimeAzureRoute(t *testing.T) {
 	if headers.Get("api-key") != "dial-key" || headers.Get("anthropic-version") != "" {
 		t.Fatalf("headers = %v, want the api-key header only", headers)
 	}
-	if request["max_tokens"] != float64(1) {
+	if request["max_tokens"] != float64(checkModelTokenBudget) {
 		t.Fatalf("request = %v, want max_tokens", request)
 	}
 }
@@ -457,7 +457,7 @@ func TestProbeOpenAIChatCompletion_AnthropicEndpoints(t *testing.T) {
 	if headers.Get("Authorization") != "Bearer k" || headers.Get("anthropic-version") != anthropicAPIVersion {
 		t.Fatalf("headers = %v, want Bearer auth and the anthropic-version header", headers)
 	}
-	if request["max_tokens"] != float64(1) || request["model"] != "claude-local" {
+	if request["max_tokens"] != float64(checkModelTokenBudget) || request["model"] != "claude-local" {
 		t.Fatalf("request = %v", request)
 	}
 }
@@ -532,7 +532,7 @@ func TestCheckModelConnection_ReasoningModelRefusingMaxTokensIsRetried(t *testin
 	if len(*seen) != 2 {
 		t.Fatalf("requests = %d, want 2", len(*seen))
 	}
-	if _, ok := (*seen)[1]["max_tokens"]; ok || (*seen)[1]["max_completion_tokens"] != float64(1) {
+	if _, ok := (*seen)[1]["max_tokens"]; ok || (*seen)[1]["max_completion_tokens"] != float64(checkModelTokenBudget) {
 		t.Fatalf("retry = %v, want max_completion_tokens only", (*seen)[1])
 	}
 }
@@ -643,7 +643,7 @@ func TestProbeOllamaChat_NativeRouteOneToken(t *testing.T) {
 		t.Fatalf("path = %q", path)
 	}
 	options, _ := request["options"].(map[string]any)
-	if options["num_predict"] != float64(1) || request["stream"] != false {
+	if options["num_predict"] != float64(checkModelTokenBudget) || request["stream"] != false {
 		t.Fatalf("request = %v, want a one-token, non-streaming chat", request)
 	}
 }
@@ -731,5 +731,13 @@ func TestProviderErrorMessage(t *testing.T) {
 		if got := providerErrorMessage([]byte(body)); got != want {
 			t.Errorf("providerErrorMessage(%q) = %q, want %q", body, got, want)
 		}
+	}
+}
+
+// #2095: a budget under 16 is refused by providers whose floor is 16, which
+// reported a working model as not found.
+func TestModelProbeBudgetClearsTheSmallestProviderFloor(t *testing.T) {
+	if checkModelTokenBudget < 16 {
+		t.Fatalf("checkModelTokenBudget = %d, want at least 16", checkModelTokenBudget)
 	}
 }

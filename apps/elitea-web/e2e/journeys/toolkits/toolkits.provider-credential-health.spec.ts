@@ -203,7 +203,7 @@ test.describe('ELITEA-1180/1182 — action row shape (refused vs. simulated-vali
     request,
     context,
   }, testInfo) => {
-    /* onetest: ELITEA-1180 — the action opens the credential's own `base_url` (`CredentialOptionLabel.tsx`'s `window.open(credentialUrl, ...)`) in a fresh tab; the original toolkit tab keeps its own state. */
+    /* onetest: ELITEA-1180 — the action opens the credential's own configuration page in Elitea (#2134: it used to open the provider's `base_url`) in a fresh tab; the original toolkit tab keeps its own state. */
     test.setTimeout(180_000);
     const tag = `${testInfo.project.name}_open_${Date.now()}`;
     // A REAL, resolvable address (this same app) rather than the placeholder
@@ -225,9 +225,10 @@ test.describe('ELITEA-1180/1182 — action row shape (refused vs. simulated-vali
 
       const [popup] = await Promise.all([context.waitForEvent('page'), openInNewTab.click()]);
       await popup.waitForLoadState('domcontentloaded');
-      // The seeded credential's own `base_url` — asserted against the SAME
-      // value the seed used, not a guess at what the row displays.
-      expect(popup.url()).toBe(credentialBaseUrl);
+      // The credential's own configuration page in Elitea, never the service
+      // address the credential names (#2134).
+      expect(popup.url()).toBe(`${BASE_URL}/app/credentials/all/${cred.credentialId}`);
+      expect(popup.url()).not.toBe(credentialBaseUrl);
       await popup.close();
 
       // The original tab's picker is still open on the same row.
