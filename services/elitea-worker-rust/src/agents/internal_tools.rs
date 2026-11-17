@@ -329,6 +329,11 @@ impl InternalToolCatalog {
             log_skipped(CODE_SANDBOX_TOOL_NAME);
             return None;
         };
+        if authority.languages().is_empty() {
+            // A runtime with no plain sandbox profile: nothing to run on.
+            log_skipped(CODE_SANDBOX_TOOL_NAME);
+            return None;
+        }
         match elitea_agent_runtime::toolkits::build_code_sandbox_toolset(authority, policy) {
             Ok(Some(toolset)) => Some(Arc::new(toolset)),
             Ok(None) => {

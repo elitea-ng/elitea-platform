@@ -149,7 +149,8 @@ the values (it is the first template Helm renders).
 {{- $languages := list -}}
 {{- range $profile := ($v.worker.runtime.sandboxRuntimes | default list) -}}
 {{- if kindIs "map" $profile -}}
-{{- $languages = append $languages (toString (get $profile "language")) -}}
+{{- $language := toString (get $profile "language") -}}
+{{- if has $language (list "python" "javascript" "typescript" "rust") -}}{{- $languages = append $languages $language -}}{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- if $languages -}}{{- $_ := set $mainEnv "ELITEA_CODE_SANDBOX_LANGUAGES" (join "," ($languages | uniq)) -}}{{- end -}}

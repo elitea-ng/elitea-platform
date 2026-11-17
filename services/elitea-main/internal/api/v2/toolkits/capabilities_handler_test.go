@@ -135,6 +135,7 @@ func TestRuntimeCapabilitiesPyodideFollowsTheCodeSandbox(t *testing.T) {
 	}{
 		{"none", nil, []string{}},
 		{"blank entries only", []string{"", "  "}, []string{}},
+		{"unknown languages never turn it on", []string{"go", "cobol"}, []string{}},
 		{"python", []string{"python"}, []string{"python"}},
 		{
 			"all four, normalised",

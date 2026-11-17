@@ -89,7 +89,7 @@ except BaseException:
 finally:
     _sys.stdout, _sys.stderr = _old
 try:
-    _result = _json.loads(_json.dumps(_result, default=repr, allow_nan=False))
+    _result = _json.loads(_json.dumps(_result, default=repr), parse_constant=lambda _c: None)
 except Exception:
     _result = repr(_result)
 def _clip(_text):
@@ -239,10 +239,11 @@ impl Tool for RunCodeTool {
         &self.description
     }
 
-    // The sandbox has no network and no files: a run changes nothing outside
-    // itself, so calls may run side by side.
+    // Not read-only: it runs code the model wrote (`code_execution`), so a
+    // grant or sub-agent limited to read-only tools must not get it. Runs do
+    // not share state, so calls may still run side by side.
     fn is_read_only(&self) -> bool {
-        true
+        false
     }
 
     fn is_concurrency_safe(&self) -> bool {
@@ -358,12 +359,7 @@ fn python_source(code: &str) -> String {
             break;
         }
         // Top level only: an indented import is inside a block.
-        let simple = (line.starts_with("import ") || line.starts_with("from "))
-            && line.len() <= 200
-            && !line.contains(['(', ';', '\\', '#', '"', '\'', '\t'])
-            && !line.starts_with("from __future__")
-            && !line.starts_with("from .");
-        if simple {
+        if is_simple_import(line) {
             source.push_str("try:\n    ");
             source.push_str(line.trim_end());
             source.push_str("\nexcept Exception:\n    pass\n");
@@ -397,6 +393,52 @@ fn plain_answer(value: &Value) -> Value {
     answer.insert("status".into(), json!("success"));
     put_result(&mut answer, value.clone());
     Value::Object(answer)
+}
+
+/// Whether `line` is, exactly, one top-level `import a.b as c, d` or
+/// `from a.b import c as d, e` statement. A line of prose or code that merely
+/// starts with those words (inside a string or docstring) is not hoisted: it
+/// would be a syntax error at module level, which no `try` catches.
+fn is_simple_import(line: &str) -> bool {
+    fn ident(text: &str) -> bool {
+        let mut chars = text.chars();
+        chars
+            .next()
+            .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+            && !matches!(
+                text,
+                "import" | "from" | "as" | "in" | "is" | "not" | "and" | "or" | "if" | "else"
+            )
+    }
+    fn dotted(text: &str) -> bool {
+        !text.is_empty() && text.split('.').all(ident)
+    }
+    // `name` or `name as alias`, the name dotted when `dots`.
+    fn item(text: &str, dots: bool) -> bool {
+        let parts: Vec<&str> = text.split_whitespace().collect();
+        let name_ok = |name: &str| if dots { dotted(name) } else { ident(name) };
+        match parts.as_slice() {
+            [name] => name_ok(name),
+            [name, "as", alias] => name_ok(name) && ident(alias),
+            _ => false,
+        }
+    }
+    if line.len() > 200 || line.trim_end() != line {
+        return false;
+    }
+    if let Some(rest) = line.strip_prefix("import ") {
+        return rest.split(',').all(|part| item(part, true));
+    }
+    if let Some(rest) = line.strip_prefix("from ") {
+        let Some((module, names)) = rest.split_once(" import ") else {
+            return false;
+        };
+        return dotted(module.trim())
+            && module.trim() != "__future__"
+            && (names.trim() == "*" || names.split(',').all(|part| item(part, false)));
+    }
+    false
 }
 
 /// The model-facing answer from the Python wrapper's dict. Every field is
@@ -572,7 +614,9 @@ mod tests {
         let tools = served_tools(runner, &policy(&[])).await;
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].name(), RUN_CODE_TOOL_NAME);
-        assert!(tools[0].is_read_only());
+        // Code execution is never a read-only tool.
+        assert!(!tools[0].is_read_only());
+        assert!(tools[0].is_concurrency_safe());
         assert!(tools[0].description().len() <= 1_000);
         let schema = tools[0].parameters_schema().unwrap();
         assert_eq!(schema["required"], json!(["code"]));
@@ -779,6 +823,29 @@ mod tests {
             "import numpy as np\nfrom math import sqrt\n    import indented\nfrom x import (a,\n b)\nimport os; import sys\nprint(np)",
         );
         assert!(source.starts_with("try:\n    import numpy as np\n"));
+        // Prose that starts with the words is not an import.
+        let prose =
+            python_source("x = '''\nfrom the data above, take rows\nimport the following\n'''");
+        assert!(prose.starts_with("import ast as _ast"), "{prose}");
+        for ok in [
+            "import os",
+            "import a.b as c, d",
+            "from a.b import c as d, e",
+            "from x import *",
+        ] {
+            assert!(is_simple_import(ok), "{ok}");
+        }
+        for bad in [
+            "import the following",
+            "from the data above, take",
+            "import",
+            "from x import",
+            "import a b",
+            "from __future__ import annotations",
+            "import os ",
+        ] {
+            assert!(!is_simple_import(bad), "{bad}");
+        }
         assert!(source.contains("    from math import sqrt\n"));
         assert!(!source.contains("indented"));
         assert!(!source.contains("from x import"));

@@ -46,7 +46,14 @@ func WithCodeSandbox(languages []string) Option {
 		kept := make([]string, 0, len(languages))
 		for _, language := range languages {
 			language = strings.ToLower(strings.TrimSpace(language))
-			if language == "" || seen[language] {
+			// Only the languages the Code node supports; anything else is a
+			// typo that must not turn the toggle on.
+			switch language {
+			case "python", "javascript", "typescript", "rust":
+			default:
+				continue
+			}
+			if seen[language] {
 				continue
 			}
 			seen[language] = true
