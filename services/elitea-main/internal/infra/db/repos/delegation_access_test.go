@@ -63,6 +63,11 @@ func TestDelegationAccessIsPerToolkit(t *testing.T) {
 	if !access.HoldsToolkit("builtin:calculator") {
 		t.Error("a built-in toolkit holds no secret and is open to every approver")
 	}
+	for _, key := range []string{"toolkit:", "toolkit:x", "mcp:12", "12", ""} {
+		if access.HoldsToolkit(key) {
+			t.Errorf("a key that is not a toolkit id (%q) must fail closed", key)
+		}
+	}
 
 	// Without the toolkit permission nothing but a built-in is held, and the
 	// hidden list is not even read.
@@ -87,9 +92,12 @@ func TestDelegationAccessIsPerCredential(t *testing.T) {
 
 	// Under it a reference no active use grant covers is not held, even with the
 	// permission: nobody can stand behind a reference that can never be used.
-	governed := accessOf(t, both, &fakeVisibility{references: []string{"ref-a"}}, true)
+	governed := accessOf(t, both, &fakeVisibility{references: []string{"ref-a", "0192F5E2-7C3A"}}, true)
 	if !governed.HoldsCredential("ref-a") {
 		t.Error("governed: a covered reference must be held")
+	}
+	if !governed.HoldsCredential("0192f5e2-7c3a") || !governed.HoldsCredential("0192F5E2-7C3A") {
+		t.Error("governed: references compare in lower case, whatever case either side spells them")
 	}
 	if governed.HoldsCredential("ref-b") {
 		t.Error("governed: a reference with no use grant must not be held")

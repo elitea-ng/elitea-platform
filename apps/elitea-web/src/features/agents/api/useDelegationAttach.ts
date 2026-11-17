@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 
 import { useQueryClient } from '@tanstack/react-query';
 
@@ -20,8 +20,13 @@ import type { AssociateAgentOutcome, AssociationCandidate } from './useAgentPipe
  * exactly as before. `confirm` attaches, then approves the grant the attach
  * proposed with the items the editor kept (under the governed profile the grant
  * is a change request another approver decides, so nothing is approved and the
- * row says "Awaiting approval"). An approval that fails never undoes the
- * attach: the grant stays pending, the row says so, and the message says why.
+ * row says "Awaiting approval"; an empty list means the editor can approve none
+ * of it, so the agent is attached and the grant stays pending). An approval that
+ * fails never undoes the attach: the grant stays pending, the row says so, and
+ * the message says why.
+ *
+ * One attach runs at a time: a second pick while the first is being read or
+ * written is ignored, so two reviews or two writes never race.
  */
 interface AttachParams {
   readonly projectId: string | undefined;
@@ -53,6 +58,7 @@ export function useDelegationAttach({ projectId, applicationId, parentIsPipeline
   const queryClient = useQueryClient();
   const [pending, setPending] = useState<PendingAttach>();
   const [busy, setBusy] = useState(false);
+  const inFlight = useRef(false);
 
   const attach = useCallback(
     async (candidate: AssociationCandidate, isPipeline: boolean) => {
@@ -65,17 +71,25 @@ export function useDelegationAttach({ projectId, applicationId, parentIsPipeline
 
   const begin = useCallback(
     (candidate: AssociationCandidate, isPipeline: boolean) => {
+      if (inFlight.current) return;
+      inFlight.current = true;
       const review = projectId === undefined || applicationId === undefined ? Promise.resolve(null) : loadDelegationReview({ queryClient, projectId, applicationId, candidate, parentIsPipeline });
-      void review.then(async (request) => {
-        if (request === null) return report(await attach(candidate, isPipeline));
-        setPending({ request, isPipeline });
-      });
+      void review
+        .then(async (request) => {
+          if (request !== null) return setPending({ request, isPipeline });
+          report(await attach(candidate, isPipeline));
+          inFlight.current = false;
+        })
+        .catch(() => {
+          inFlight.current = false;
+        });
     },
     [projectId, applicationId, queryClient, parentIsPipeline, attach, report],
   );
 
   const cancel = useCallback(() => {
     setPending(undefined);
+    inFlight.current = false;
   }, []);
 
   const confirm = useCallback(
@@ -87,7 +101,8 @@ export function useDelegationAttach({ projectId, applicationId, parentIsPipeline
         const outcome = await attach({ id: request.calleeId, name: request.calleeName }, isPipeline);
         setPending(undefined);
         if (!outcome.ok) return report(outcome);
-        const settled = await settleDelegation({ projectId, applicationId, calleeId: request.calleeId, items });
+        // An empty list is "attach, approve nothing" (the editor holds none of it).
+        const settled = items?.length === 0 ? ({ kind: 'failed', message: t('agents.delegation.nothingApproved', 'You cannot approve any of it.') } as const) : await settleDelegation({ projectId, applicationId, calleeId: request.calleeId, items });
         await invalidateDelegationGrants(queryClient, projectId, applicationId);
         if (settled.kind === 'failed') {
           return report({
@@ -96,7 +111,12 @@ export function useDelegationAttach({ projectId, applicationId, parentIsPipeline
           });
         }
         report(outcome);
-      })().finally(() => setBusy(false));
+      })()
+        .catch(() => report({ ok: false, message: t('agents.delegation.attachFailed', 'The agent could not be added.') }))
+        .finally(() => {
+          setBusy(false);
+          inFlight.current = false;
+        });
     },
     [pending, projectId, applicationId, attach, queryClient, report],
   );

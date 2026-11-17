@@ -41,6 +41,38 @@ export interface DelegationReviewRequest {
   readonly names: ReadonlyMap<string, string>;
 }
 
+interface FetchReviewParams {
+  readonly queryClient: QueryClient;
+  readonly projectId: string;
+  /** The PARENT (caller) application. */
+  readonly applicationId: number;
+  readonly calleeId: number;
+  readonly calleeName: string;
+  readonly calleeVersionId: number | undefined;
+  readonly edgeKind: string;
+}
+
+/**
+ * The preview of one edge with the callee's toolkit names. Throws when either
+ * read fails. `calleeVersionId` undefined reads the callee's default version.
+ */
+export async function fetchDelegationReview({ queryClient, projectId, applicationId, calleeId, calleeName, calleeVersionId, edgeKind }: FetchReviewParams): Promise<DelegationReviewRequest | null> {
+  const detail = bodyOf<ApplicationDetail>(await queryClient.query(getGetApplicationQueryOptions(projectId, calleeId)));
+  const version = detail.version_details;
+  const versionId = calleeVersionId ?? (version?.id === undefined ? undefined : Number(version.id));
+  if (versionId === undefined) return null;
+  const preview = bodyOf<DelegationPreview>(
+    await previewDelegationGrant(projectId, applicationId, { callee_application_id: calleeId, callee_version_id: versionId, edge_kind: edgeKind }),
+  );
+  return {
+    calleeId,
+    calleeName: preview.callee_name === '' ? calleeName : preview.callee_name,
+    calleeVersionId: versionId,
+    preview,
+    names: toolkitNames(version?.tools as readonly VersionToolRef[] | undefined),
+  };
+}
+
 interface LoadReviewParams {
   readonly queryClient: QueryClient;
   readonly projectId: string;
@@ -58,25 +90,17 @@ interface LoadReviewParams {
  */
 export async function loadDelegationReview({ queryClient, projectId, applicationId, candidate, parentIsPipeline }: LoadReviewParams): Promise<DelegationReviewRequest | null> {
   try {
-    const detail = bodyOf<ApplicationDetail>(await queryClient.query(getGetApplicationQueryOptions(projectId, candidate.id)));
-    const version = detail.version_details;
-    if (version?.id === undefined) return null;
-    const calleeVersionId = Number(version.id);
-    const preview = bodyOf<DelegationPreview>(
-      await previewDelegationGrant(projectId, applicationId, {
-        callee_application_id: candidate.id,
-        callee_version_id: calleeVersionId,
-        edge_kind: edgeKindFor(parentIsPipeline),
-      }),
-    );
-    if (preview.items.length === 0 || preview.existing?.state === 'approved') return null;
-    return {
+    const request = await fetchDelegationReview({
+      queryClient,
+      projectId,
+      applicationId,
       calleeId: candidate.id,
-      calleeName: preview.callee_name === '' ? candidate.name : preview.callee_name,
-      calleeVersionId,
-      preview,
-      names: toolkitNames(version.tools as readonly VersionToolRef[] | undefined),
-    };
+      calleeName: candidate.name,
+      calleeVersionId: undefined,
+      edgeKind: edgeKindFor(parentIsPipeline),
+    });
+    if (request === null || request.preview.items.length === 0 || request.preview.existing?.state === 'approved') return null;
+    return request;
   } catch {
     return null;
   }
@@ -101,7 +125,7 @@ function isGovernedRefusal(error: unknown): boolean {
 }
 
 /** The grant the attach proposed for the callee: the edge's one open grant. */
-export function pendingGrantFor(grants: readonly DelegationGrant[], calleeId: number): DelegationGrant | undefined {
+function pendingGrantFor(grants: readonly DelegationGrant[], calleeId: number): DelegationGrant | undefined {
   return grants.find((grant) => grant.callee_application_id === calleeId && (grant.state === 'pending' || grant.state === 'stale'));
 }
 

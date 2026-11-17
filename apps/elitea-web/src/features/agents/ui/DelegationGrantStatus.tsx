@@ -6,13 +6,12 @@ import { useQueryClient } from '@tanstack/react-query';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 
-import { getGetApplicationQueryOptions, previewDelegationGrant } from '@/shared/api/generated/applications/applications';
-import type { ApplicationDetail, DelegationGrant, DelegationItem, DelegationPreview, VersionToolRef } from '@/shared/api/generated/model';
+import type { DelegationGrant, DelegationItem, DelegationPreview } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
 
-import { invalidateDelegationGrants, settleDelegation } from '../api/delegationGrants';
-import { grantView, grantViewLabel, toolkitNames } from '../lib/delegationReview';
+import { fetchDelegationReview, invalidateDelegationGrants, settleDelegation } from '../api/delegationGrants';
+import { grantView, grantViewLabel } from '../lib/delegationReview';
 import type { GrantView } from '../lib/delegationReview';
 
 import { DelegationReviewDialog } from './DelegationReviewDialog';
@@ -45,10 +44,6 @@ interface Review {
   readonly calleeName: string;
 }
 
-function bodyOf<T>(response: unknown): T {
-  return (response as { data: T }).data;
-}
-
 /** What the dialog lists for a grant: what was approved once it is decided, what is asked while it is pending. */
 function previewFor(grant: DelegationGrant, current: DelegationPreview): DelegationPreview {
   if (grant.state === 'pending') return current;
@@ -69,20 +64,17 @@ function noticeFor(grant: DelegationGrant, view: GrantView): string | undefined 
 }
 
 async function loadReview(queryClient: ReturnType<typeof useQueryClient>, projectId: string, applicationId: number, grant: DelegationGrant): Promise<Review> {
-  const preview = bodyOf<DelegationPreview>(
-    await previewDelegationGrant(projectId, applicationId, {
-      callee_application_id: grant.callee_application_id,
-      callee_version_id: grant.callee_version_id,
-      edge_kind: grant.edge_kind,
-    }),
-  );
-  let tools: readonly VersionToolRef[] | undefined;
-  try {
-    tools = bodyOf<ApplicationDetail>(await queryClient.query(getGetApplicationQueryOptions(projectId, grant.callee_application_id))).version_details?.tools as readonly VersionToolRef[] | undefined;
-  } catch {
-    tools = undefined;
-  }
-  return { preview: previewFor(grant, preview), names: toolkitNames(tools), calleeName: preview.callee_name };
+  const request = await fetchDelegationReview({
+    queryClient,
+    projectId,
+    applicationId,
+    calleeId: grant.callee_application_id,
+    calleeName: '',
+    calleeVersionId: grant.callee_version_id,
+    edgeKind: grant.edge_kind,
+  });
+  if (request === null) throw new Error('the delegation has no callee version');
+  return { preview: previewFor(grant, request.preview), names: request.names, calleeName: request.calleeName };
 }
 
 export function DelegationGrantStatus({ projectId, applicationId, grant, readOnly }: DelegationGrantStatusProps): ReactNode {
@@ -160,6 +152,7 @@ export function DelegationGrantStatus({ projectId, applicationId, grant, readOnl
           names={review.names}
           confirmLabel={confirmLabel}
           notice={noticeFor(grant, view)}
+          omittedReason={grant.state === 'pending' ? undefined : t('agents.delegation.omittedReason', 'Left out of the approval, so the agent runs without it.')}
           busy={busy}
           error={error}
           onCancel={close}

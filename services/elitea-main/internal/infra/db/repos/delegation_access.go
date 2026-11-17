@@ -88,22 +88,31 @@ type approverAccess struct {
 	usableReferences map[string]bool
 }
 
+// HoldsToolkit fails closed: only a built-in toolkit, or a well-formed
+// `toolkit:<id>` the folder access rules do not hide, is held.
 func (a approverAccess) HoldsToolkit(key string) bool {
 	if strings.HasPrefix(key, "builtin:") {
 		return true
 	}
-	if !a.toolkits {
+	if !a.toolkits || !strings.HasPrefix(key, "toolkit:") {
 		return false
 	}
 	id, err := strconv.ParseInt(strings.TrimPrefix(key, "toolkit:"), 10, 64)
-	return err != nil || !a.hiddenToolkits[id]
+	return err == nil && !a.hiddenToolkits[id]
 }
 
+// HoldsCredential compares references in lower case: a toolkit may spell its
+// reference id in upper case, the use grant table answers canonical lower case.
+//
+// Under the governed profile the covering use grants are the project's, not
+// the toolkit's (the grant carries no toolkit for a reference), so a reference
+// some toolkit's grant covers is held by an approver of any toolkit that names
+// it. The broker still decides the exact grant at every call.
 func (a approverAccess) HoldsCredential(reference string) bool {
 	if !a.credentials {
 		return false
 	}
-	return a.usableReferences == nil || a.usableReferences[reference]
+	return a.usableReferences == nil || a.usableReferences[strings.ToLower(reference)]
 }
 
 // AccessFor reads the person's two permissions in the project, and what the
@@ -138,7 +147,7 @@ func (r *DelegationAccess) AccessFor(ctx context.Context, projectID, userID int6
 		}
 		access.usableReferences = make(map[string]bool, len(references))
 		for _, reference := range references {
-			access.usableReferences[reference] = true
+			access.usableReferences[strings.ToLower(reference)] = true
 		}
 	}
 	return access, nil

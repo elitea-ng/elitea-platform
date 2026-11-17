@@ -6988,5 +6988,11 @@
   "agents.delegation.state.stale": "Needs re-approval",
   "agents.delegation.state.pending": "Delegation not approved",
   "agents.delegation.approveFailed": "The delegation could not be approved.",
-  "agents.delegation.attachedNotApproved": "Added, but the delegation is not approved: {{reason}} Use Review delegation on the row to try again."
+  "agents.delegation.attachedNotApproved": "Added, but the delegation is not approved: {{reason}} Use Review delegation on the row to try again.",
+  "agents.delegation.attachOnly": "Attach without approving",
+  "agents.delegation.introGoverned": "When this agent is used as a tool, it can use the following even if the agent using it does not hold them. A different approver decides this, from their own access.",
+  "agents.delegation.cannotApprove": "You cannot approve any of this. The agent is attached anyway, and the delegation stays pending until someone with access approves it.",
+  "agents.delegation.omittedReason": "Left out of the approval, so the agent runs without it.",
+  "agents.delegation.nothingApproved": "You cannot approve any of it.",
+  "agents.delegation.attachFailed": "The agent could not be added."
 }

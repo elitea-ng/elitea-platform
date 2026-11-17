@@ -41,6 +41,13 @@ export interface DelegationReviewDialogProps {
   readonly names: ReadonlyMap<string, string>;
   /** The primary action's label; `undefined` makes the dialog read-only (nothing the person can decide). */
   readonly confirmLabel?: string | undefined;
+  /**
+   * What the primary action says when the person can approve none of it: the agent is still attached and the
+   * delegation stays pending for someone with access (the review never refuses an attach).
+   */
+  readonly attachOnlyLabel?: string | undefined;
+  /** Why an item the grant left out is shown disabled, for a grant that is already decided. */
+  readonly omittedReason?: string | undefined;
   /** A line above the list, for a state the list does not say (awaiting a change request, needs re-approval). */
   readonly notice?: string | undefined;
   readonly busy?: boolean | undefined;
@@ -51,7 +58,7 @@ export interface DelegationReviewDialogProps {
 
 const listSx = (theme: Theme) => ({ display: 'flex', flexDirection: 'column', gap: theme.spacing(2), m: 0, p: 0, listStyle: 'none' }) as const;
 
-function ToolkitRow({ group, reason, ticked, onToggle }: { readonly group: ToolkitGroup; readonly reason: string | undefined; readonly ticked: boolean; readonly onToggle: (key: string) => void }): ReactNode {
+function ToolkitRow({ group, reason, ticked, selectable, onToggle }: { readonly group: ToolkitGroup; readonly reason: string | undefined; readonly ticked: boolean; readonly selectable: boolean; readonly onToggle: (key: string) => void }): ReactNode {
   const withheld = reason !== undefined;
   const tools = group.tools.map(toolLabel).join(', ');
   const credentials = group.credentials.map((item) => item.name).join(', ');
@@ -61,18 +68,22 @@ function ToolkitRow({ group, reason, ticked, onToggle }: { readonly group: Toolk
       data-testid="delegation-toolkit"
       sx={{ display: 'flex', flexDirection: 'column' }}
     >
-      <FormControlLabel
-        disabled={withheld}
-        control={
-          <BaseCheckbox
-            checked={ticked && !withheld}
-            disabled={withheld}
-            onChange={() => onToggle(group.key)}
-            aria-label={group.label}
-          />
-        }
-        label={<Typography variant="labelMedium">{group.label}</Typography>}
-      />
+      {selectable ? (
+        <FormControlLabel
+          disabled={withheld}
+          control={
+            <BaseCheckbox
+              checked={ticked && !withheld}
+              disabled={withheld}
+              onChange={() => onToggle(group.key)}
+              aria-label={group.label}
+            />
+          }
+          label={<Typography variant="labelMedium">{group.label}</Typography>}
+        />
+      ) : (
+        <Typography variant="labelMedium">{group.label}</Typography>
+      )}
       {tools === '' ? null : (
         <Typography
           variant="bodySmall"
@@ -149,13 +160,17 @@ function InfoLine({ label, items }: { readonly label: string; readonly items: re
   );
 }
 
-export function DelegationReviewDialog({ open, calleeName, preview, names, confirmLabel, notice, busy = false, error, onCancel, onConfirm }: DelegationReviewDialogProps): ReactNode {
+export function DelegationReviewDialog({ open, calleeName, preview, names, confirmLabel, attachOnlyLabel, omittedReason, notice, busy = false, error, onCancel, onConfirm }: DelegationReviewDialogProps): ReactNode {
   const [unticked, setUnticked] = useState<ReadonlySet<string>>(new Set());
   const grouped = useMemo(() => groupItems(preview.items, names), [preview.items, names]);
-  const withheld = useMemo(() => new Set(preview.withheld.map(itemKey)), [preview.withheld]);
+  // Under the governed profile a different approver decides, from their own access, so the requester's access
+  // says nothing here and nothing can be narrowed: the request carries the whole set.
+  const selectable = !preview.governed;
+  const withheld = useMemo(() => new Set(selectable ? preview.withheld.map(itemKey) : []), [preview.withheld, selectable]);
   const approvableToolkits = grouped.toolkits.filter((group) => !isWithheld(group, withheld));
-  const everythingWithheld = grouped.toolkits.length > 0 && approvableToolkits.length === 0 && grouped.egressHosts.length === 0 && grouped.dataClasses.length === 0;
-  const nothingTicked = approvableToolkits.every((group) => unticked.has(group.key)) && grouped.dataClasses.length === 0 && grouped.egressHosts.length === 0;
+  const canApproveNothing = selectable && confirmLabel !== undefined && grouped.toolkits.length > 0 && approvableToolkits.length === 0 && grouped.dataClasses.length === 0 && grouped.egressHosts.length === 0;
+  // Hosts and data classes are never left out, so only the toolkits are a choice to leave empty.
+  const nothingTicked = selectable && approvableToolkits.length > 0 && approvableToolkits.every((group) => unticked.has(group.key));
 
   const onToggle = useCallback((key: string) => {
     setUnticked((prev) => {
@@ -166,21 +181,23 @@ export function DelegationReviewDialog({ open, calleeName, preview, names, confi
     });
   }, []);
 
-  const confirm = useCallback(() => onConfirm(itemsToApprove(preview.approvable, unticked)), [onConfirm, preview.approvable, unticked]);
+  // An empty list is "attach, approve nothing": the grant stays pending.
+  const confirm = useCallback(() => onConfirm(canApproveNothing ? [] : itemsToApprove(preview.approvable, unticked)), [onConfirm, canApproveNothing, preview.approvable, unticked]);
+  const primaryLabel = canApproveNothing && attachOnlyLabel !== undefined ? attachOnlyLabel : confirmLabel;
 
   return (
     <BaseModal
       open={open}
       onClose={onCancel}
-      {...(confirmLabel === undefined ? {} : { onConfirm: confirm })}
+      {...(primaryLabel === undefined ? {} : { onConfirm: confirm })}
       variant="simple"
       title={t('agents.delegation.title', 'What {{name}} will be able to use', { name: calleeName })}
       data-testid="delegation-review-dialog"
       actions={{
-        ...(confirmLabel === undefined ? {} : { confirmText: confirmLabel }),
-        cancelText: confirmLabel === undefined ? t('agents.delegation.close', 'Close') : t('agents.delegation.cancel', 'Cancel'),
+        ...(primaryLabel === undefined ? {} : { confirmText: primaryLabel }),
+        cancelText: primaryLabel === undefined ? t('agents.delegation.close', 'Close') : t('agents.delegation.cancel', 'Cancel'),
         confirming: busy,
-        confirmDisabled: everythingWithheld || nothingTicked,
+        confirmDisabled: nothingTicked || (canApproveNothing && attachOnlyLabel === undefined),
       }}
       content={
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: { sm: '30rem' } }}>
@@ -194,8 +211,16 @@ export function DelegationReviewDialog({ open, calleeName, preview, names, confi
             variant="bodyMedium"
             color="text.secondary"
           >
-            {t('agents.delegation.intro', 'When this agent is used as a tool, it can use the following even if the agent using it does not hold them. You approve only what you can access yourself.')}
+            {preview.governed
+              ? t('agents.delegation.introGoverned', 'When this agent is used as a tool, it can use the following even if the agent using it does not hold them. A different approver decides this, from their own access.')
+              : t('agents.delegation.intro', 'When this agent is used as a tool, it can use the following even if the agent using it does not hold them. You approve only what you can access yourself.')}
           </Typography>
+          {canApproveNothing && attachOnlyLabel !== undefined ? (
+            <BannerMessage
+              message={t('agents.delegation.cannotApprove', 'You cannot approve any of this. The agent is attached anyway, and the delegation stays pending until someone with access approves it.')}
+              variant="warning"
+            />
+          ) : null}
           <Box
             component="ul"
             aria-label={t('agents.delegation.toolkitsLabel', 'Toolkits')}
@@ -205,7 +230,8 @@ export function DelegationReviewDialog({ open, calleeName, preview, names, confi
               <ToolkitRow
                 key={group.key}
                 group={group}
-                reason={isWithheld(group, withheld) ? groupWithheldReason(group, withheld) : undefined}
+                reason={isWithheld(group, withheld) ? (omittedReason ?? groupWithheldReason(group, withheld)) : undefined}
+                selectable={selectable}
                 ticked={!unticked.has(group.key)}
                 onToggle={onToggle}
               />

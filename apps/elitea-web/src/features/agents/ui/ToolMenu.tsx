@@ -372,6 +372,7 @@ export function ToolMenu({ applicationId, versionId: pinnedVersionId, currentToo
           preview={delegation.pending.preview}
           names={delegation.pending.names}
           confirmLabel={delegation.pending.preview.governed ? t('agents.delegation.requestApproval', 'Request approval') : t('agents.delegation.approveAndAttach', 'Approve and attach')}
+          attachOnlyLabel={t('agents.delegation.attachOnly', 'Attach without approving')}
           busy={delegation.busy}
           onCancel={delegation.cancel}
           onConfirm={delegation.confirm}

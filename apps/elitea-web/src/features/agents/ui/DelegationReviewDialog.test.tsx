@@ -138,4 +138,49 @@ describe('DelegationReviewDialog', () => {
     expect(screen.getByText('The delegation could not be approved.')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Approve and attach' })).toBeDisabled();
   });
+
+  it('offers Attach without approving when the person can approve none of it: the agent is attached and the grant stays pending', () => {
+    const { onConfirm } = renderDialog({
+      attachOnlyLabel: 'Attach without approving',
+      preview: preview({ items: [GIT, GIT_PUSH], approvable: [], withheld: [GIT, GIT_PUSH] }),
+    });
+
+    expect(screen.getByText(/You cannot approve any of this/)).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Approve and attach' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Attach without approving' }));
+
+    expect(onConfirm).toHaveBeenCalledWith([]);
+  });
+
+  it('does not let the editor untick every toolkit and still approve, even when the agent declares a host', () => {
+    renderDialog({ preview: preview({ items: [GIT, GIT_PUSH, HOST], approvable: [GIT, GIT_PUSH, HOST] }) });
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Git' }));
+
+    expect(screen.getByRole('button', { name: 'Approve and attach' })).toBeDisabled();
+  });
+
+  it('under the governed profile offers no selection and never blocks the request: a different approver decides from their own access', () => {
+    const { onConfirm } = renderDialog({
+      confirmLabel: 'Request approval',
+      preview: preview({ governed: true, approvable: [], withheld: [GIT, GIT_PUSH, GIT_CREDENTIAL, DB, DB_ALL] }),
+    });
+
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('delegation-withheld-reason')).not.toBeInTheDocument();
+    expect(screen.getByText(/A different approver decides this, from their own access/)).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Request approval' }));
+
+    expect(onConfirm).toHaveBeenCalledWith(undefined);
+  });
+
+  it('explains an item a decided grant left out with its own reason, not the viewer\'s access', () => {
+    renderDialog({
+      confirmLabel: undefined,
+      omittedReason: 'Left out of the approval, so the agent runs without it.',
+      preview: preview({ items: [GIT, GIT_PUSH], approvable: [], withheld: [GIT, GIT_PUSH] }),
+    });
+
+    expect(screen.getByTestId('delegation-withheld-reason')).toHaveTextContent('Left out of the approval');
+  });
 });

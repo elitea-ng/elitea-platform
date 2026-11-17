@@ -261,4 +261,33 @@ describe('ToolMenu attach review', () => {
     expect(calls.relations).toBe(1);
     expect(changed).toBe(1);
   });
+
+  it('still attaches when the editor can approve none of it, and leaves the grant pending with the reason', async () => {
+    const calls = serve({ preview: preview({ approvable: [], withheld: [GIT, GIT_PUSH, DB] }) });
+    let changed = 0;
+    renderMenu(() => (changed += 1));
+
+    await chooseOtherBot();
+    fireEvent.click(await screen.findByRole('button', { name: 'Attach without approving' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Added, but the delegation is not approved: You cannot approve any of it.');
+    expect(calls.relations).toBe(1);
+    expect(calls.approvals).toEqual([]);
+    expect(changed).toBe(1);
+  });
+
+  it('ignores a second pick while the first is being read', async () => {
+    const calls = serve({ preview: preview({ items: [], approvable: [] }) });
+    renderMenu(() => undefined);
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Agent' })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Agent' }));
+    const row = await screen.findByText('Other Bot');
+    fireEvent.click(row);
+    fireEvent.click(row);
+
+    await waitFor(() => expect(calls.relations).toBeGreaterThanOrEqual(1));
+    expect(calls.relations).toBe(1);
+  });
 });
