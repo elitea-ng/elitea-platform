@@ -671,7 +671,10 @@ impl PipelineNativeAgentAssembler {
         };
         tracing::Span::current().record("stage", "toolsets");
         let aliases = profile.definition().runtime_toolkit_aliases();
-        let selected_snapshot = toolsets.retain_toolkit_names(&aliases);
+        let selected_snapshot = super::application_tools::principal_bounded_snapshot(
+            runtime_context,
+            toolsets.retain_toolkit_names(&aliases),
+        );
         // The claim is lent to the `artifact` family here as on the ordinary
         // path (#906): its authority is the live claim, and a direct node or a
         // model calls it mid-run, after assembly. Without it the family is

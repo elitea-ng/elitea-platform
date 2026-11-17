@@ -89,11 +89,34 @@ impl From<AnalysisCodeFailure> for AnalysisCodeError {
     }
 }
 
+/// A finished run: the program's JSON result and what it wrote to its
+/// output streams while running.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CapturedRun {
+    pub result: Value,
+    /// Everything the program printed (the sandbox merges stdout and stderr
+    /// for JavaScript, TypeScript and Rust). `None`: this runner does not
+    /// capture output.
+    pub output: Option<String>,
+}
+
 /// The host side of `run_analysis_code`.
 #[async_trait]
 pub trait AnalysisCodeRunner: Send + Sync {
     /// Run `request` and return the program's JSON result.
     async fn run(&self, request: AnalysisCodeRequest) -> Result<Value, AnalysisCodeError>;
+
+    /// [`Self::run`], plus the program's printed output where the runner has
+    /// it. The default has none.
+    async fn run_captured(
+        &self,
+        request: AnalysisCodeRequest,
+    ) -> Result<CapturedRun, AnalysisCodeError> {
+        self.run(request).await.map(|result| CapturedRun {
+            result,
+            output: None,
+        })
+    }
 
     /// The languages this deployment's sandbox actually serves, from the same
     /// profiles the pipeline Code node runs on. The default is the two

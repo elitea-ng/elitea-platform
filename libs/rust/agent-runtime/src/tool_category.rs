@@ -269,6 +269,12 @@ mod tests {
             ("sql", "execute_sql", ToolCategory::CodeExecution),
             // The Code sandbox internal tool (stored as pyodide).
             ("pyodide", "run_code", ToolCategory::CodeExecution),
+            // Free-form code in the same sandbox: the same category (#2204).
+            (
+                "data_analysis",
+                "run_analysis_code",
+                ToolCategory::CodeExecution,
+            ),
             (
                 "k8s",
                 "kubernetes_integration_healthcheck",

@@ -52,6 +52,9 @@ type Resolver struct {
 	settings SettingsReader
 	inputs   InputReader
 	classes  DataClassReader
+	// principal computes the run principal's bound; nil, or the section's
+	// principal_bound switch off, sends none (ADR-0044 Amendment 1).
+	principal PrincipalReader
 }
 
 // NewResolver builds the resolver.
@@ -83,11 +86,21 @@ func (r *Resolver) WorkerDelegationPolicy(ctx context.Context, command *runtimev
 	if command.GetSecurityContextRef() != nil {
 		settings.Mode = platformconfig.DelegationEnforce
 	}
-	classes, err := r.rootDataClasses(ctx, command)
+	input, err := r.input(ctx, command)
 	if err != nil {
 		return nil, err
 	}
-	return Policy(settings, classes), nil
+	classes, err := r.rootDataClasses(ctx, command, input)
+	if err != nil {
+		return nil, err
+	}
+	policy := Policy(settings, classes)
+	if settings.PrincipalBound && r.principal != nil {
+		if policy.PrincipalBound, err = r.principalBound(ctx, command, input); err != nil {
+			return nil, err
+		}
+	}
+	return policy, nil
 }
 
 // Policy is the command field for settings and the root's data classes:
@@ -114,10 +127,10 @@ func Policy(settings platformconfig.DelegationSettings, rootDataClasses []string
 // rootDataClasses reads the declared data classes of the run's root agent:
 // the saved agent the command's input names, in the command's project. An
 // ad hoc conversation names none.
-func (r *Resolver) rootDataClasses(ctx context.Context, command *runtimev1.WorkerCommandV1) ([]string, error) {
-	applicationID, err := r.rootApplication(ctx, command)
-	if err != nil || applicationID <= 0 {
-		return nil, err
+func (r *Resolver) rootDataClasses(ctx context.Context, command *runtimev1.WorkerCommandV1, input []byte) ([]string, error) {
+	applicationID := ApplicationID(input)
+	if applicationID <= 0 {
+		return nil, nil
 	}
 	projectID, err := strconv.ParseInt(command.GetResourceProjectId(), 10, 64)
 	if err != nil || projectID <= 0 {
@@ -136,19 +149,19 @@ func (r *Resolver) rootDataClasses(ctx context.Context, command *runtimev1.Worke
 	return classes, nil
 }
 
-// rootApplication reads the saved agent id from the command's agent input,
-// or 0 when the input names none (an ad hoc conversation).
-func (r *Resolver) rootApplication(ctx context.Context, command *runtimev1.WorkerCommandV1) (int64, error) {
+// input reads the command's agent execution input: nothing for a command
+// that names none.
+func (r *Resolver) input(ctx context.Context, command *runtimev1.WorkerCommandV1) ([]byte, error) {
 	bundle := command.GetInputBundleRef().GetInputBundleId()
 	entryID := command.GetAgentExecution().GetRequestEntryId()
 	if bundle == "" || entryID == "" {
-		return 0, nil
+		return nil, nil
 	}
 	contents, err := r.inputs.InputEntries(ctx, bundle, []string{entryID})
 	if err != nil {
-		return 0, fmt.Errorf("worker delegation: read the command's input: %w", err)
+		return nil, fmt.Errorf("worker delegation: read the command's input: %w", err)
 	}
-	return ApplicationID(contents[entryID]), nil
+	return contents[entryID], nil
 }
 
 // ApplicationID is the saved agent id an agent execution input names in its

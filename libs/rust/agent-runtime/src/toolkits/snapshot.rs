@@ -185,6 +185,21 @@ impl<'a> AdmittedToolSnapshot<'a> {
         self.references.iter()
     }
 
+    /// Retain only the toolkits the run principal may use (ADR-0044
+    /// Amendment 1, `own ∩ P` at the root): a toolkit row the principal may
+    /// not use, or whose credential reference it may not use, never reaches
+    /// credentials or family materialization. A nested application and a
+    /// built-in toolkit with no row are not bounded here: delegation governs
+    /// the first, and a built-in has no row to hold access on.
+    #[must_use]
+    pub fn retain_principal(mut self, principal: &crate::delegation::PrincipalBound) -> Self {
+        self.references.retain(|reference| {
+            reference.kind() == FrozenToolKind::Application
+                || principal.admits_reference(reference.tool_id(), reference.settings())
+        });
+        self
+    }
+
     /// Retain only toolkit aliases selected by an admitted pipeline node.
     ///
     /// This is an authority reduction: unconnected toolkit credentials never

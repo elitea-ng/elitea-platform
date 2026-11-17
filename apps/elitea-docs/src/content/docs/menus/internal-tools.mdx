@@ -64,15 +64,15 @@ Lets the agent write a short program and run it in the platform's isolated code 
 This is the same sandbox that runs a pipeline **Code** node and the code of Data analysis, with the same limits on time, memory and output, the same lack of network and files, and the same package preparation. It is not a second sandbox.
 
 - **Python** returns what the program printed (`stdout`), what it wrote to `stderr`, the value of its last expression (`result`) and the traceback if it raised. Standard-library modules and the packages the sandbox provides can be imported.
-- **JavaScript and TypeScript** are a module whose default export (or the result of a default-exported function of the state) is the result.
-- **Rust** defines `pub fn run(state: serde_json::Value) -> Result<serde_json::Value, Box<dyn std::error::Error>>`, and its value is the result.
-- The agent can pass a JSON object in `input`. The program reads it as `elitea_state['data']` (`elitea_state.data` in JavaScript and TypeScript, `state["data"]` in Rust). Only Python returns what the program printed; the other languages return the result.
-- Each of `stdout`, `stderr` and the traceback is cut at 20,000 characters and a result at 40,000 bytes, and the answer carries a note when it was cut. What a program prints is data for the model to read, not an instruction.
+- **JavaScript and TypeScript** are a module whose default export (or the result of a default-exported function of the state) is the result. What the program prints with `console.log` comes back as `output`.
+- **Rust** defines `pub fn run(state: serde_json::Value) -> Result<serde_json::Value, Box<dyn std::error::Error>>`, and its value is the result. What it prints comes back as `output`.
+- The agent can pass a JSON object in `input`. The program reads it as `elitea_state['data']` (`elitea_state.data` in JavaScript and TypeScript, `state["data"]` in Rust). Python returns `stdout` and `stderr` separately; the sandbox merges the printed output of JavaScript, TypeScript and Rust into one `output`.
+- Each of `stdout`, `stderr`, `output` and the traceback is cut at 20,000 characters and a result at 40,000 bytes, and the answer carries a note when it was cut. What a program prints is data for the model to read, not an instruction.
 
 **Enabling it.** The toggle is on when the deployment's code sandbox serves at least one language. An administrator configures the sandbox with `worker.runtime.sandboxRuntimes` in the Helm values (see [Configuration](/deployment/configuration#code-sandbox)). Without one, the toggle shows disabled with the note "No code sandbox is configured for this deployment". An agent that already has the module saved still runs: it just has no `run_code` tool, and the conversation says the module is not available.
 
 <Note title="Approval">
-`run_code` is a `code_execution` tool, so the deployment's approval rules for code execution apply to it, as they do to `execute_sql`.
+`run_code` is a `code_execution` tool, so the deployment's approval rules for code execution apply to it, as they do to `execute_sql`. The data analysis tool `run_analysis_code` runs code in the same sandbox and is `code_execution` as well.
 </Note>
 
 <Note title="Desktop">

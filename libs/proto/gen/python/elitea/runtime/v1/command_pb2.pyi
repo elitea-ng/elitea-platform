@@ -145,14 +145,40 @@ class WorkerEgressPolicyV1(_message.Message):
     def __init__(self, mode: _Optional[_Union[WorkerEgressModeV1, str]] = ..., allow: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class WorkerDelegationPolicyV1(_message.Message):
-    __slots__ = ("max_depth", "mode", "root_data_classes")
+    __slots__ = ("max_depth", "mode", "root_data_classes", "principal_bound")
     MAX_DEPTH_FIELD_NUMBER: _ClassVar[int]
     MODE_FIELD_NUMBER: _ClassVar[int]
     ROOT_DATA_CLASSES_FIELD_NUMBER: _ClassVar[int]
+    PRINCIPAL_BOUND_FIELD_NUMBER: _ClassVar[int]
     max_depth: int
     mode: WorkerDelegationModeV1
     root_data_classes: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, max_depth: _Optional[int] = ..., mode: _Optional[_Union[WorkerDelegationModeV1, str]] = ..., root_data_classes: _Optional[_Iterable[str]] = ...) -> None: ...
+    principal_bound: WorkerPrincipalBoundV1
+    def __init__(self, max_depth: _Optional[int] = ..., mode: _Optional[_Union[WorkerDelegationModeV1, str]] = ..., root_data_classes: _Optional[_Iterable[str]] = ..., principal_bound: _Optional[_Union[WorkerPrincipalBoundV1, _Mapping]] = ...) -> None: ...
+
+class WorkerPrincipalBoundV1(_message.Message):
+    __slots__ = ("bounded", "toolkits", "credentials_bounded", "credential_reference_ids", "data_classes")
+    BOUNDED_FIELD_NUMBER: _ClassVar[int]
+    TOOLKITS_FIELD_NUMBER: _ClassVar[int]
+    CREDENTIALS_BOUNDED_FIELD_NUMBER: _ClassVar[int]
+    CREDENTIAL_REFERENCE_IDS_FIELD_NUMBER: _ClassVar[int]
+    DATA_CLASSES_FIELD_NUMBER: _ClassVar[int]
+    bounded: bool
+    toolkits: _containers.RepeatedCompositeFieldContainer[WorkerPrincipalToolkitV1]
+    credentials_bounded: bool
+    credential_reference_ids: _containers.RepeatedScalarFieldContainer[str]
+    data_classes: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, bounded: _Optional[bool] = ..., toolkits: _Optional[_Iterable[_Union[WorkerPrincipalToolkitV1, _Mapping]]] = ..., credentials_bounded: _Optional[bool] = ..., credential_reference_ids: _Optional[_Iterable[str]] = ..., data_classes: _Optional[_Iterable[str]] = ...) -> None: ...
+
+class WorkerPrincipalToolkitV1(_message.Message):
+    __slots__ = ("toolkit_id", "all_tools", "tool_names")
+    TOOLKIT_ID_FIELD_NUMBER: _ClassVar[int]
+    ALL_TOOLS_FIELD_NUMBER: _ClassVar[int]
+    TOOL_NAMES_FIELD_NUMBER: _ClassVar[int]
+    toolkit_id: int
+    all_tools: bool
+    tool_names: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, toolkit_id: _Optional[int] = ..., all_tools: _Optional[bool] = ..., tool_names: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class WorkerApprovalPolicyV1(_message.Message):
     __slots__ = ("risk_tier", "approval_categories")

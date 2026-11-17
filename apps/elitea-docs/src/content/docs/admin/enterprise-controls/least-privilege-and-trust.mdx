@@ -201,6 +201,13 @@ An agent can delegate work: it calls a saved agent or a saved pipeline as a tool
 - **The depth is limited.** The root agent is depth 0. Each delegation adds 1. Saved agents, saved pipelines, pipeline nodes and sub-agents count together. A delegation deeper than the maximum is refused with `DELEGATION_DEPTH_EXCEEDED`. The existing limits on agent nesting and on the number of pipeline participants still apply.
 - **The first saved agent sets the limit.** The root grants are the toolkits, tools and credentials of the agent or pipeline that the run starts with, the data classes of its [registry record](/admin/enterprise-controls/agent-lifecycle#registry-and-risk-tiers), and the run's egress allowlist. A root agent with no registry record, or with no data classes, imposes no data class limit.
 
+- **The run principal bounds every callee.** A callee never exceeds what the person who started the run may use, whatever its caller holds. For an unattended run the bound is the mandate (ADR-0039) and the project. The bound covers three things:
+  - **Toolkits.** A toolkit that the project's folder access hides from the person is out of bounds. This also applies to the toolkits of an ad hoc conversation. The bound is computed for the agents and pipelines that the run can reach, not for the whole project.
+  - **Credential references.** In a governed run, a callee toolkit can use only a credential reference that an active credential use grant of the project lets a toolkit use. The exact grant is still checked on every use.
+  - **Data classes.** A project that declares no allowed data classes sets no bound. Today no project declares any, so this part does nothing yet.
+
+  The bound applies in both modes. `report` never relaxes it. A delegation that needs something out of bounds is refused with `DELEGATION_GRANT_MISSING` and the reason `principal`, and the root agent's own toolkits that are out of bounds are not offered to it. The bound starts when an administrator turns on **Bound Delegation By The Run's Principal**, as described in **Configure and use** below.
+
 A nested pipeline is checked before its parent runs. When any agent or pipeline inside it is refused, the whole pipeline is refused, and the refusal names the grant.
 
 Example of a refused call, as the model reads it:
@@ -218,6 +225,8 @@ Example of a refused call, as the model reads it:
 }
 ```
 
+A refusal by the run principal carries the reason: `{"code": "DELEGATION_GRANT_MISSING", "reason": "principal", "kind": "toolkit", "name": "jira-prod"}`. Its message says that the person or mandate this run acts for may not use the grant.
+
 A depth refusal carries `{"code": "DELEGATION_DEPTH_EXCEEDED", "depth": 5, "max_depth": 4}`.
 
 ### Configure and use
@@ -227,11 +236,14 @@ Open **Configuration › Delegation** in the admin console (permission `configur
 | Setting | Values | Default | Effect |
 | --- | --- | --- | --- |
 | **Maximum Delegation Depth** (`max_depth`) | 1 to 16 | 4 | The deepest delegation a run can make. |
+| **Bound Delegation By The Run's Principal** (`principal_bound`) | on, off | off | When on, every callee is limited to what the run's principal may use, in both modes. See the note below before you turn it on. |
 | **Mode** (`mode`) | `enforce`, `report` | `enforce` | `enforce` refuses a delegation that needs a missing grant. `report` records the missing grant on the delegation step and lets the callee run. The depth limit applies in both modes. Runs under the governed credential profile always use `enforce`. |
 
 Until an administrator saves this section, the main service does not send it to the workers. The workers then use the defaults in the table, and they do not compare data classes. Narrowing of toolkits, tools, credentials and egress hosts, and the depth limit, apply from the time that a worker runs the release.
 
 **Save the section only after every worker runs the release.** The main service is upgraded first and the workers after it (the default order of the Helm chart). A worker from an earlier release refuses a command that carries this section. When you save the section, also with the default values, data class narrowing starts.
+
+**Turn on the principal bound once every worker runs the release.** It is off by default, so a composition that reaches a toolkit that its principal may not use keeps running as before. While it is on, such a composition stops: the delegation is refused with the reason `principal`, and the root agent's own out-of-bounds toolkits are not offered. A closure with more than 512 toolkits or 256 credential references is not truncated; the run is not dispatched.
 
 Each replica of the main service reads the section again after at most 15 seconds. The setting applies to runs that start after that. A run keeps the policy that it started with.
 
@@ -276,7 +288,8 @@ Example summary of a permitted delegation:
 ### What is not enforced
 
 - **Data classes are declared metadata.** They are the labels that the agent owners set in the registry. They are not the output of a classifier, and the platform does not examine the data that an agent reads. The check makes sure that a callee declares no class that its caller does not declare.
-- **An ad hoc conversation has no root limit.** A conversation without a saved agent imposes no toolkit grants, because the user selected its participants. Narrowing starts at the first saved agent or pipeline.
+- **An ad hoc conversation imposes no grant of its own.** A conversation without a saved agent holds no toolkit grants, because the user selected its participants. Caller narrowing starts at the first saved agent or pipeline. With the principal bound on, the conversation's own toolkits and every callee are still limited to what the person may use.
+- **The principal bound reads project access, not tool permissions.** Project roles grant no access per tool, so a toolkit the person may use carries all its tools. A project's allowed data classes and a per-tool access rule are not read yet.
 - **Agent and pipeline references are not grants.** A caller does not need to hold the callee itself. The callee's own toolkits are compared.
 - **Hosts are read from the toolkit settings.** The host check uses the URL settings of the callee's toolkits that have an explicit scheme (`https://…`). Hosts in an OpenAPI specification are not read at assembly. The worker egress allowlist still checks every call at run time.
 

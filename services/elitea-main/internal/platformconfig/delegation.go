@@ -21,6 +21,12 @@ const SectionDelegation = "delegation"
 const (
 	KeyDelegationMaxDepth = "max_depth"
 	KeyDelegationMode     = "mode"
+	// KeyDelegationPrincipalBound turns on the run principal bound
+	// (ADR-0044 Amendment 1, #2157): every delegated agent is limited to
+	// what the acting user, or the mandate and project, may use. Off until
+	// every worker runs the release and the delegation migration of epic
+	// #2156 (S6) has created the pending grants for existing compositions.
+	KeyDelegationPrincipalBound = "principal_bound"
 )
 
 // Bounds of KeyDelegationMaxDepth: the worker's DelegationPolicy bounds.
@@ -46,6 +52,10 @@ const (
 type DelegationSettings struct {
 	MaxDepth int            `json:"max_depth"`
 	Mode     DelegationMode `json:"mode"`
+	// PrincipalBound is the principal bound switch: false (the default)
+	// sends no bound, so a composition that reaches a toolkit its principal
+	// may not use keeps running as before.
+	PrincipalBound bool `json:"principal_bound"`
 	// Stored reports that the section has a stored value: an administrator
 	// saved it. Only then does Main send the policy (WorkerCommandV1 field
 	// 67) and a child's data classes. The chart rolls Main out before the
@@ -88,6 +98,9 @@ func DelegationSettingsFromValues(values Values) DelegationSettings {
 			settings.Mode = DelegationReport
 		}
 	}
+	// Only an explicit true turns the bound on: an unreadable value is off,
+	// the default, so a hand-written row never enables it by accident.
+	settings.PrincipalBound, _ = values[KeyDelegationPrincipalBound].(bool)
 	return settings
 }
 
