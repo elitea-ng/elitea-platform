@@ -330,23 +330,23 @@ mod tests {
                 "completed",
             ))
         };
-        let (runner, _) = runner(reply());
-        let captured = runner.run_captured(request("p")).await.unwrap();
+        let (first, _) = runner(reply());
+        let captured = first.run_captured(request("p")).await.unwrap();
         assert_eq!(captured.result, serde_json::json!(2));
         assert_eq!(captured.output.as_deref(), Some("hello\n"));
-        let (runner, _) = runner(reply());
+        let (second, _) = runner(reply());
         assert_eq!(
-            runner.run(request("p")).await.unwrap(),
+            second.run(request("p")).await.unwrap(),
             serde_json::json!(2)
         );
         let big = "y".repeat(MAX_PRINTED_CHARS * 2);
-        let (runner, _) = runner(Ok(receipt_with(
+        let (third, _) = runner(Ok(receipt_with(
             r#"{"revision":1,"result":2}"#,
             0,
             &big,
             "completed",
         )));
-        let captured = runner.run_captured(request("p")).await.unwrap();
+        let captured = third.run_captured(request("p")).await.unwrap();
         assert_eq!(captured.output.unwrap().chars().count(), MAX_PRINTED_CHARS);
     }
 
