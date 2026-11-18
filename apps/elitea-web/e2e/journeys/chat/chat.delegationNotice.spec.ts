@@ -114,7 +114,7 @@ test.describe('delegation notice in the chat (fixture)', () => {
     await expect(card).toContainText('Agent1 could not use git from Agent2. This delegation is not approved.', { timeout: 20_000 });
     const review = card.getByRole('link', { name: 'Review delegation' });
     await expect(review).toBeVisible();
-    await expect(review).toHaveAttribute('href', /\/agents\/all\/2$/);
+    await expect(review).toHaveAttribute('href', /\/agents\/all\/2\?review_delegation=1$/);
   });
 
   test('a viewer who may not review is told who to ask, and a principal refusal offers no action', async ({ page }) => {

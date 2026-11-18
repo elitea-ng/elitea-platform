@@ -61,8 +61,20 @@ describe('DelegationNotices', () => {
     const card = screen.getByTestId('delegation-notice');
     expect(card).toHaveTextContent('Delegation refused');
     const link = within(card).getByRole('link', { name: 'Review delegation' });
-    expect(link).toHaveAttribute('href', delegationReviewHref('', 2));
-    expect(link.getAttribute('href')).toMatch(/\/agents\/all\/2$/);
+    expect(link).toHaveAttribute('href', delegationReviewHref('', 2, 1));
+    // The link names the called agent too, so the editor opens that edge's review dialog.
+    expect(link.getAttribute('href')).toMatch(/\/agents\/all\/2\?review_delegation=1$/);
+  });
+
+  it('sends a refused pipeline node to the pipeline editor, naming no edge', () => {
+    const node = notice({ can_review: true, edge: { ...refusedRaw.edge, kind: 'pipeline_node' } });
+    renderWithTheme(<DelegationNotices notices={[node]} />);
+    expect(screen.getByRole('link', { name: 'Review delegation' }).getAttribute('href')).toMatch(/\/pipelines\/all\/2$/);
+  });
+
+  it('links to the plain editor when the notice does not name the called agent', () => {
+    expect(delegationReviewHref('', 2)).toBe('/agents/all/2');
+    expect(delegationReviewHref('/app/', 2, 1)).toBe('/app/agents/all/2?review_delegation=1');
   });
 
   it('tells a viewer who may not review who to ask, with no action', () => {

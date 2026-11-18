@@ -1,4 +1,4 @@
-import type { ReactElement } from 'react';
+import { useMemo, type ReactElement } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, View, type RefreshControlProps } from 'react-native';
 
 import { canApprove, canReapprove, canRevoke, stateLabel, type DelegationGrantView, type DelegationItem } from '@/api/queries/delegation';
@@ -26,6 +26,8 @@ export interface DelegationGrantsViewProps {
   onRevoke: (grant: DelegationGrantView) => void;
   onRetry: () => void;
   refreshControl?: ReactElement<RefreshControlProps>;
+  /** The callee a chat notice named: its grant is listed first and marked. */
+  focusCalleeId?: number | null;
 }
 
 const EDGE: Record<string, string> = {
@@ -57,9 +59,14 @@ export function itemLine(item: DelegationItem): string {
  * attaching is on the web and desktop. A grant under the governed profile is decided in its
  * change request there, so no Approve is offered for it.
  */
-export function DelegationGrantsView({ agentName, status, grants, names, busy, banner, selectable, onApprove, onRevoke, onRetry, refreshControl }: DelegationGrantsViewProps) {
+export function DelegationGrantsView({ agentName, status, grants, names, busy, banner, selectable, onApprove, onRevoke, onRetry, refreshControl, focusCalleeId = null }: DelegationGrantsViewProps) {
   const { colors, radius } = useDesign();
   const margin = useLayoutMargin();
+  // The delegation a chat notice named goes first (a stable sort keeps the rest in order).
+  const ordered = useMemo(
+    () => (focusCalleeId === null ? grants : [...grants].sort((a, b) => Number(b.calleeApplicationId === focusCalleeId) - Number(a.calleeApplicationId === focusCalleeId))),
+    [grants, focusCalleeId],
+  );
 
   if (status.kind === 'unavailable') {
     return (
@@ -96,15 +103,21 @@ export function DelegationGrantsView({ agentName, status, grants, names, busy, b
           </Text>
         ) : null}
         <ListSection title={grants.length === 1 ? '1 delegation' : `${grants.length} delegations`} footer={DELEGATION_HINT}>
-          {grants.map((grant) => {
+          {ordered.map((grant) => {
             const name = calleeName(grant, names);
             const label = stateLabel(grant);
             const running = busy === grant.id;
+            const focused = focusCalleeId !== null && grant.calleeApplicationId === focusCalleeId;
             return (
               <View
                 key={grant.id}
                 testID={`delegation-grant-${grant.id}`}
-                style={[styles.row, { backgroundColor: colors.surface, borderRadius: radius.md }]}>
+                style={[styles.row, { backgroundColor: colors.surface, borderRadius: radius.md }, focused ? { borderWidth: 2, borderColor: colors.accent } : null]}>
+                {focused ? (
+                  <Text variant="footnote" tone="secondary">
+                    Named in the chat notice
+                  </Text>
+                ) : null}
                 <Text variant="headline" heading>
                   {name}
                 </Text>
