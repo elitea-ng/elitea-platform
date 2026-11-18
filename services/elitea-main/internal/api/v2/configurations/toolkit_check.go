@@ -297,6 +297,11 @@ type toolkitProbe struct {
 	// normalizeBase, when set, rewrites the base URL before the path is
 	// joined (qtest: a pasted `/api/v3` suffix is stripped).
 	normalizeBase func(base string) string
+	// authFailedStatuses are statuses, beyond 401 and 403, that THIS provider
+	// answers for a credential it does not recognise (ado: 203 and a sign-in
+	// page). Per probe, because a 203 from any other provider through a
+	// transforming proxy is not a refusal.
+	authFailedStatuses []int
 	// mint, when set, replaces the single authenticated GET above with a
 	// token exchange (toolkit_check_mint.go). Such a probe sets neither path
 	// nor authorize.
@@ -788,6 +793,11 @@ func (c *httpToolkitConnectionChecker) CheckToolkit(ctx context.Context, configT
 	}
 	defer func() { _ = response.Body.Close() }()
 
+	for _, status := range probe.authFailedStatuses {
+		if response.StatusCode == status {
+			return ToolkitCheckOutcome{Reason: ToolkitCheckReasonAuthFailed, Message: toolkitCheckAuthFailedMessage}
+		}
+	}
 	return outcomeForStatus(response.StatusCode)
 }
 
@@ -872,11 +882,6 @@ func (c *httpToolkitConnectionChecker) resolveTarget(probe toolkitProbe, data ma
 // renders differently.
 func outcomeForStatus(status int) ToolkitCheckOutcome {
 	switch {
-	case status == http.StatusNonAuthoritativeInfo:
-		// Azure DevOps answers a PAT it does not recognise with 203 and a
-		// sign-in page rather than 401. A 203 is not the provider recognising
-		// the credential.
-		return ToolkitCheckOutcome{Reason: ToolkitCheckReasonAuthFailed, Message: toolkitCheckAuthFailedMessage}
 	case status >= 200 && status < 300:
 		return ToolkitCheckOutcome{Reason: ToolkitCheckReasonOK, Message: toolkitCheckOKMessage}
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:

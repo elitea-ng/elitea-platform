@@ -183,6 +183,19 @@ func TestVendorGetProbesAnswerUnreachableWhenNothingAnswers(t *testing.T) {
 	}
 }
 
+// The 203 rule belongs to ado alone: another provider answering 203 is not
+// refusing anything.
+func TestAChangeOfStatusRuleForAdoDoesNotLeakToOtherProviders(t *testing.T) {
+	stub := newVendorStub(t, http.StatusNonAuthoritativeInfo, "{}")
+	checker := handler.NewToolkitConnectionChecker(allowAnyHost())
+
+	outcome := checker.CheckToolkit(context.Background(), "testio", map[string]any{"endpoint": stub.server.URL, "api_key": "k"})
+
+	if outcome.Reason == handler.ToolkitCheckReasonAuthFailed {
+		t.Fatalf("a 203 from a non-ADO provider must not be auth_failed: %+v", outcome)
+	}
+}
+
 func TestAdoTreatsASignInRedirectAnswerAsARefusedToken(t *testing.T) {
 	stub := newVendorStub(t, http.StatusNonAuthoritativeInfo, "<html>sign in</html>")
 	checker := handler.NewToolkitConnectionChecker(allowAnyHost())
@@ -244,7 +257,7 @@ func TestXrayMintsATokenWithTheStoredClientPairAndAnswersOk(t *testing.T) {
 }
 
 func TestXrayAnswersAuthFailedForAPairTheProviderRefuses(t *testing.T) {
-	for _, status := range []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden} {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
 		stub := newVendorStub(t, status, `{"error":"provider-secret-detail"}`)
 		checker := handler.NewToolkitConnectionChecker(allowAnyHost())
 
@@ -316,6 +329,56 @@ func TestSharepointMintsAnEntraTokenSpendsItOnOneGraphReadAndAnswersOk(t *testin
 	}
 }
 
+// A 400 from the token endpoint is a verdict on the secret only when its OAuth
+// error code says so; a wrong tenant is a 400 too.
+func TestMintedProbesReadTheOAuthErrorCodeOfA400(t *testing.T) {
+	for body, want := range map[string]string{
+		`{"error":"invalid_client","error_description":"AADSTS7000215"}`:                 handler.ToolkitCheckReasonAuthFailed,
+		`{"error":"invalid_request","error_description":"AADSTS90002 tenant not found"}`: handler.ToolkitCheckReasonUnreachable,
+		`not json`: handler.ToolkitCheckReasonUnreachable,
+	} {
+		_, _ = sharepointStubs(t, http.StatusBadRequest, body, http.StatusOK)
+		checker := handler.NewToolkitConnectionChecker(allowAnyHost())
+
+		outcome := checker.CheckToolkit(context.Background(), "sharepoint", sharepointCredential)
+
+		if outcome.Reason != want {
+			t.Fatalf("400 body %q must be %s, got %+v", body, want, outcome)
+		}
+	}
+}
+
+// The token was minted, so the secret is good: a Graph 403 or 404 is the app's
+// permission or the site's address, not a refused credential.
+func TestSharepointDoesNotBlameTheCredentialForAGraphPermissionOrSiteError(t *testing.T) {
+	for _, status := range []int{http.StatusForbidden, http.StatusNotFound} {
+		_, _ = sharepointStubs(t, http.StatusOK, `{"access_token":"graph-token"}`, status)
+		checker := handler.NewToolkitConnectionChecker(allowAnyHost())
+
+		outcome := checker.CheckToolkit(context.Background(), "sharepoint", sharepointCredential)
+
+		if outcome.Reason != handler.ToolkitCheckReasonUnreachable {
+			t.Fatalf("graph %d must not warn about the credential, got %+v", status, outcome)
+		}
+	}
+}
+
+func TestSharepointReadsTheRootSiteByHostAlone(t *testing.T) {
+	_, graph := sharepointStubs(t, http.StatusOK, `{"access_token":"graph-token"}`, http.StatusOK)
+	checker := handler.NewToolkitConnectionChecker(allowAnyHost())
+
+	outcome := checker.CheckToolkit(context.Background(), "sharepoint", map[string]any{
+		"client_id": "a", "client_secret": "b", "site_url": "https://contoso.sharepoint.com",
+	})
+
+	if outcome.Reason != handler.ToolkitCheckReasonOK {
+		t.Fatalf("expected ok, got %+v", outcome)
+	}
+	if uri := graph.only(t).uri; uri != "/v1.0/sites/contoso.sharepoint.com" {
+		t.Fatalf("the root site must be read by host alone, asked %q", uri)
+	}
+}
+
 func TestSharepointAnswersAuthFailedForAClientSecretEntraRefuses(t *testing.T) {
 	for _, status := range []int{http.StatusBadRequest, http.StatusUnauthorized} {
 		login, graph := sharepointStubs(t, status, `{"error":"invalid_client"}`, http.StatusOK)
@@ -333,8 +396,8 @@ func TestSharepointAnswersAuthFailedForAClientSecretEntraRefuses(t *testing.T) {
 	}
 }
 
-func TestSharepointAnswersAuthFailedWhenGraphRefusesTheMintedToken(t *testing.T) {
-	_, _ = sharepointStubs(t, http.StatusOK, `{"access_token":"graph-token"}`, http.StatusForbidden)
+func TestSharepointAnswersAuthFailedWhenGraphDoesNotRecogniseTheMintedToken(t *testing.T) {
+	_, _ = sharepointStubs(t, http.StatusOK, `{"access_token":"graph-token"}`, http.StatusUnauthorized)
 	checker := handler.NewToolkitConnectionChecker(allowAnyHost())
 
 	outcome := checker.CheckToolkit(context.Background(), "sharepoint", sharepointCredential)

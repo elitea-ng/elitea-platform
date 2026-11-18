@@ -45,6 +45,9 @@ func vendorProbes() map[string]toolkitProbe {
 			baseURLFields: []string{"organization_url", "base_url", "url"},
 			path:          func(map[string]any) string { return "/_apis/projects?api-version=7.1&$top=1" },
 			authorize:     authorizeBasicEmptyUser("token", "pat", "api_key"),
+			// Azure DevOps answers a PAT it does not recognise with 203 and a
+			// sign-in page rather than 401.
+			authFailedStatuses: []int{http.StatusNonAuthoritativeInfo},
 		},
 		// qtest: the projects read, one row. A pasted `/api/v3` suffix is
 		// stripped, as the SDK does, so the canonical path is not doubled.
@@ -119,8 +122,8 @@ func stripQtestAPIVersion(base string) string {
 // as the password — Azure DevOps' personal-access-token shape.
 func authorizeBasicEmptyUser(secretFields ...string) func(http.Header, map[string]any) authorizeOutcome {
 	return func(header http.Header, data map[string]any) authorizeOutcome {
-		secret := firstStrVal(data, secretFields...)
-		if strings.TrimSpace(secret) == "" {
+		secret := strings.TrimSpace(firstStrVal(data, secretFields...))
+		if secret == "" {
 			return unsupportedAuth()
 		}
 		setBasicAuth(header, "", secret)
@@ -132,8 +135,8 @@ func authorizeBasicEmptyUser(secretFields ...string) func(http.Header, map[strin
 // Authorization scheme (`Token <key>`).
 func authorizeScheme(scheme string, tokenFields ...string) func(http.Header, map[string]any) authorizeOutcome {
 	return func(header http.Header, data map[string]any) authorizeOutcome {
-		token := firstStrVal(data, tokenFields...)
-		if strings.TrimSpace(token) == "" {
+		token := strings.TrimSpace(firstStrVal(data, tokenFields...))
+		if token == "" {
 			return unsupportedAuth()
 		}
 		header.Set("Authorization", scheme+" "+token)

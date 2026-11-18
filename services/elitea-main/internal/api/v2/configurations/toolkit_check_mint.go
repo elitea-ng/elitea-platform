@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -65,9 +66,10 @@ func (c *httpToolkitConnectionChecker) checkMinted(ctx context.Context, configTy
 
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		// A token endpoint answers a wrong secret with 400 as readily as 401
-		// (Entra's invalid_client, Xray's bad request), and either way the
-		// credential as stored cannot be used.
-		if response.StatusCode == http.StatusBadRequest {
+		// (Entra's invalid_client). A 400 is a verdict on the credential only
+		// when the OAuth error code says so: a wrong tenant or a malformed
+		// base URL is a 400 too, and says nothing about the secret.
+		if response.StatusCode == http.StatusBadRequest && mintErrorRefusesCredential(response.Body) {
 			return ToolkitCheckOutcome{Reason: ToolkitCheckReasonAuthFailed, Message: toolkitCheckAuthFailedMessage}
 		}
 		return outcomeForStatus(response.StatusCode)
@@ -95,7 +97,34 @@ func (c *httpToolkitConnectionChecker) checkMinted(ctx context.Context, configTy
 		return *refused
 	}
 	defer func() { _ = spent.Body.Close() }()
+	if spent.StatusCode == http.StatusForbidden || spent.StatusCode == http.StatusNotFound {
+		// The provider just minted this token, so the secret is good. A 403
+		// or 404 on the site read is the app's permission or the site's
+		// address, which is not a verdict on the credential.
+		return ToolkitCheckOutcome{
+			Reason:  ToolkitCheckReasonUnreachable,
+			Message: fmt.Sprintf("Could not verify the credential: the provider answered %d.", spent.StatusCode),
+		}
+	}
 	return outcomeForStatus(spent.StatusCode)
+}
+
+// mintErrorRefusesCredential reads the OAuth `error` code of a failed token
+// answer. These are the codes that mean the client id or secret was refused.
+func mintErrorRefusesCredential(body io.Reader) bool {
+	raw, err := io.ReadAll(io.LimitReader(body, mintResponseLimit))
+	if err != nil {
+		return false
+	}
+	var decoded map[string]any
+	if json.Unmarshal(raw, &decoded) != nil {
+		return false
+	}
+	switch strVal(decoded, "error") {
+	case "invalid_client", "unauthorized_client", "invalid_grant":
+		return true
+	}
+	return false
 }
 
 // readMintedToken reads either shape a token endpoint answers with: an object
@@ -207,7 +236,8 @@ func sharepointSpendURL(data map[string]any) (string, bool) {
 	}
 	path := strings.TrimRight(site.EscapedPath(), "/")
 	if path == "" {
-		path = "/"
+		// The tenant's root site: Graph addresses it by host alone.
+		return graphBase + "/v1.0/sites/" + site.Host, true
 	}
 	return graphBase + "/v1.0/sites/" + site.Host + ":" + path, true
 }
