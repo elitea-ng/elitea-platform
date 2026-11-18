@@ -11,6 +11,8 @@ export { SkillPublishControls } from './ui/SkillPublishControls';
 export { SkillsList } from './ui/SkillsList';
 export { exportSkill } from './api/skillsApi';
 export { SkillTrustPanel } from './ui/SkillTrustPanel';
+export { SkillToChatDialog } from './ui/SkillToChatDialog';
+export { forkPublicSkill } from './api/skillPublishApi';
 export { skillVersionKey } from './lib/skillVersionKey';
 // Only the two symbols an outside caller actually needs. The dialog, the
 // icon-list query and the upload/delete mutations are the slice's INTERNAL

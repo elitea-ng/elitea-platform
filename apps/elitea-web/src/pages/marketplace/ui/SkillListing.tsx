@@ -21,8 +21,8 @@ import MenuItem from '@mui/material/MenuItem';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 
-import { AttachPublicSkillDialog, type PublicSkillSummary } from '@/features/skills';
-import type { MarketplaceListingDetail, MarketplaceVersion, PublicSkillDetail } from '@/shared/api/generated/model';
+import { AttachPublicSkillDialog, SkillToChatDialog, forkPublicSkill, type PublicSkillSummary } from '@/features/skills';
+import type { MarketplaceListingDetail, MarketplaceVersion, PinConversationSkillRequest, PublicSkillDetail } from '@/shared/api/generated/model';
 import { unwrapBody } from '@/shared/api/unwrap';
 import { useGetPublicSkill } from '@/shared/api/generated/skills/skills';
 import { t } from '@/shared/i18n';
@@ -167,32 +167,86 @@ function useSkillAdd(detail: MarketplaceListingDetail, projectId: string | undef
   };
 }
 
-/** Try: a new chat with this listing version pinned by reference, so nothing is forked (ADR-0051 amendment 1, A1.3). */
-function TryButton({ detail, versionId }: { readonly detail: MarketplaceListingDetail; readonly versionId: string }): ReactNode {
-  const { listing } = detail;
-  const listingId = Number(listing.id);
+/** The listing version the actions work on, as the ids a pin by reference carries; null while the page has no valid pair. */
+function listingPinOf(detail: MarketplaceListingDetail, versionId: string): PinConversationSkillRequest | null {
+  const listingId = Number(detail.listing.id);
   const version = Number(versionId);
   const valid = Number.isInteger(listingId) && listingId > 0 && Number.isInteger(version) && version > 0;
-  const trySkill = useTrySkill({ name: listing.name, pin: { listing_id: listingId, listing_version_id: version } });
+  return valid ? { listing_id: listingId, listing_version_id: version } : null;
+}
+
+type ChatAction = 'use' | 'add';
+
+/**
+ * Try, Use in a chat and Add to a conversation (ADR-0051 amendment 1, A1.3, A1.4). Try opens a new chat on the
+ * default model with this version pinned by reference, so nothing is forked. Use in a chat pins the same reference to
+ * a new or existing chat. Add to a conversation forks the version into the project (needs the fork permission) and
+ * pins the copy. The untrusted notice sits with them: this text is another project's until it is added and trusted.
+ */
+function ChatActions({
+  detail,
+  versionId,
+  projectId,
+  canFork,
+}: {
+  readonly detail: MarketplaceListingDetail;
+  readonly versionId: string;
+  readonly projectId: string | undefined;
+  readonly canFork: boolean;
+}): ReactNode {
+  const { listing } = detail;
+  const trySkill = useTrySkill();
+  const [action, setAction] = useState<ChatAction | undefined>();
+  const pin = listingPinOf(detail, versionId);
+  const off = pin === null || trySkill.start === undefined || trySkill.isStarting || listing.state === 'delisted';
+  const forkAndPin = async (): Promise<PinConversationSkillRequest> => {
+    const forked = await forkPublicSkill(projectId ?? '', Number(listing.entity_id), Number(versionId));
+    return { skill_id: forked.skillId };
+  };
   return (
     <>
       <Button
         variant="outlined"
-        disabled={!valid || trySkill.start === undefined || trySkill.isStarting || listing.state === 'delisted'}
-        onClick={() => trySkill.start?.()}
+        disabled={off}
+        onClick={() => pin !== null && trySkill.start?.({ name: listing.name, pin })}
         title={t(
           'skills.try.hint',
-          'Opens a new chat with this skill pinned. Pick a model or agent there; the skill applies to whoever answers. A skill from another project is quoted data until you add it and trust it.',
+          'Opens a new chat on your default model, without tools, with this skill pinned. A skill from another project is quoted data until you add it and trust it.',
         )}
         data-testid="marketplace-try-skill"
       >
         {t('skills.try.button', 'Try it')}
       </Button>
+      <Button variant="text" disabled={off} onClick={() => setAction('use')} data-testid="marketplace-use-skill">
+        {t('skills.use.button', 'Use in a chat')}
+      </Button>
+      <Button
+        variant="text"
+        disabled={off || !canFork}
+        onClick={() => setAction('add')}
+        title={canFork ? undefined : t('skills.addToChat.noFork', 'Copying a skill into this project needs the fork permission. Use in a chat pins it without copying.')}
+        data-testid="marketplace-add-skill-to-chat"
+      >
+        {t('skills.addToChat.button', 'Add to a conversation')}
+      </Button>
+      <Typography variant="bodySmall" color="text.secondary" role="note" data-testid="marketplace-skill-untrusted">
+        {t('skills.try.untrusted', 'Written in another project: until you add it and trust it, the model gets its text as quoted data.')}
+      </Typography>
       {trySkill.isError && (
         <Typography role="alert" variant="bodySmall" color="error">
           {t('skills.try.failed', 'The chat could not be started. Try again.')}
         </Typography>
       )}
+      <SkillToChatDialog
+        open={action !== undefined}
+        projectId={projectId}
+        skillName={listing.name}
+        title={action === 'add' ? t('skills.addToChat.title', 'Add to a conversation') : t('skills.use.title', 'Use in a chat')}
+        confirmText={action === 'add' ? t('skills.addToChat.confirm', 'Add') : t('skills.use.confirm', 'Use')}
+        resolvePin={action === 'add' ? forkAndPin : () => Promise.resolve(pin ?? {})}
+        onNewChat={action === 'use' ? (picked) => trySkill.start?.({ name: listing.name, pin: picked, kind: 'use' }) : undefined}
+        onClose={() => setAction(undefined)}
+      />
     </>
   );
 }
@@ -220,7 +274,7 @@ function SkillListingView({ detail, projectId }: SkillListingViewProps): ReactNo
         actions={
           <>
             <VersionPick versions={detail.versions} value={add.versionId} onChange={add.setPicked} />
-            <TryButton detail={detail} versionId={add.versionId} />
+            <ChatActions detail={detail} versionId={add.versionId} projectId={projectId} canFork={add.canFork} />
             <Button
               variant="contained"
               disabled={!add.canFork || add.delisted || !add.attachable}

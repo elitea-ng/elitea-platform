@@ -14,6 +14,7 @@
 import { memo, type CSSProperties } from 'react';
 
 import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
 import Card from '@mui/material/Card';
 import Chip from '@mui/material/Chip';
 import Typography from '@mui/material/Typography';
@@ -26,6 +27,7 @@ import { cardGradientSx } from '@/shared/lib/cardGradient';
 
 import { listingParams, ratingText } from '../listing';
 import type { ListingCardData } from '../types';
+import { useTrySkill } from '../useTrySkill';
 
 import { ListingLike, hasLikeTarget } from './ListingLike';
 
@@ -43,6 +45,27 @@ function CardAvatar({ card }: { readonly card: ListingCardData }): React.JSX.Ele
     <Box aria-hidden sx={styles.monogram}>
       {card.name.trim().charAt(0).toUpperCase()}
     </Box>
+  );
+}
+
+/** Try on a skill card (ADR-0051 amendment 1, A1.3): a new chat on the default model with this version pinned by reference. */
+function CardTry({ card }: { readonly card: ListingCardData }): React.JSX.Element | null {
+  const trySkill = useTrySkill();
+  const listingId = Number(card.id);
+  const version = Number(card.versionId);
+  const valid = Number.isInteger(listingId) && listingId > 0 && Number.isInteger(version) && version > 0;
+  if (!valid) return null;
+  return (
+    <Button
+      size="small"
+      variant="outlined"
+      disabled={trySkill.start === undefined || trySkill.isStarting || card.delisted}
+      onClick={() => trySkill.start?.({ name: card.name, pin: { listing_id: listingId, listing_version_id: version } })}
+      aria-label={t('skills.try.cardLabel', 'Try {{name}}', { name: card.name })}
+      data-testid="marketplace-card-try"
+    >
+      {t('skills.try.button', 'Try it')}
+    </Button>
   );
 }
 
@@ -94,7 +117,7 @@ export const MarketplaceCard = memo(function MarketplaceCard({ card }: Marketpla
             label={t('marketplace.card.tier', 'Tier {{tier}}', { tier: card.tier })}
           />
         </Box>
-        <Box sx={styles.footer}>
+        <Box sx={card.kind === 'skills' ? styles.footerWithTry : styles.footer}>
           <Typography variant="bodySmall" color="text.secondary">
             {card.version ?? ''}
           </Typography>
@@ -107,11 +130,12 @@ export const MarketplaceCard = memo(function MarketplaceCard({ card }: Marketpla
         </Box>
       </Link>
       {/* Beside the link, not inside it: a button in an anchor is invalid, and a like must not open the listing. */}
-      {hasLikeTarget(card.entityId) && (
-        <Box sx={styles.like}>
+      <Box sx={styles.like}>
+        {card.kind === 'skills' && <CardTry card={card} />}
+        {hasLikeTarget(card.entityId) && (
           <ListingLike kind={card.kind} entityId={card.entityId} likes={card.likes} isLiked={card.isLiked} name={card.name} />
-        </Box>
-      )}
+        )}
+      </Box>
     </Card>
   );
 });
@@ -140,7 +164,7 @@ const styles: Record<string, SxProps<Theme>> = {
     boxSizing: 'border-box',
     position: 'relative',
   }),
-  like: { position: 'absolute', right: '1rem', bottom: '0.75rem' },
+  like: { position: 'absolute', right: '1rem', bottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' },
   header: { display: 'flex', alignItems: 'center', gap: '0.75rem', width: '100%' },
   icon: (theme: Theme) => ({ width: '2rem', height: '2rem', flexShrink: 0, borderRadius: theme.vars.shape.radiusSm }),
   monogram: (theme: Theme) => ({
@@ -181,4 +205,6 @@ const styles: Record<string, SxProps<Theme>> = {
     // Room for the heart, which sits beside the link at the card's corner.
     paddingRight: '3.5rem',
   },
+  // Room for Try as well, beside the heart.
+  footerWithTry: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem', minHeight: '1.25rem', paddingRight: '7.5rem' },
 };

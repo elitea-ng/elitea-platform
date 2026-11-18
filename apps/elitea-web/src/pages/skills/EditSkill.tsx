@@ -36,6 +36,7 @@ import { useEditSkillVersionControls } from './lib/useEditSkillVersionControls';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
 import { SkillAiEditButton } from './SkillAiEditButton';
 import { SkillEditorHeader } from './SkillEditorHeader';
+import { SkillTryButton } from './SkillTryButton';
 
 interface EditSkillParams {
   readonly tab?: string;
@@ -250,14 +251,17 @@ export function EditSkill(): ReactNode {
         onDelete={() => setDeleteOpen(true)}
         onExport={() => void doExport()}
         publishing={
-          <SkillPublishControls
-            projectId={projectId}
-            skill={detail.data}
-            skillId={params.skillId}
-            versionId={params.version}
-            permissions={permissions}
-            onPublished={() => void detail.refetch()}
-          />
+          <>
+            <SkillTryButton skillId={params.skillId} name={detail.data.name} isDirty={isDirty} />
+            <SkillPublishControls
+              projectId={projectId}
+              skill={detail.data}
+              skillId={params.skillId}
+              versionId={params.version}
+              permissions={permissions}
+              onPublished={() => void detail.refetch()}
+            />
+          </>
         }
       />
       <SkillTrustPanel

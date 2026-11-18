@@ -64,7 +64,7 @@ test('SKILL-2: create a version, edit it independently, compare, and restore it 
       (response) =>
         response.request().method() === 'POST' && /\/elitea_core\/skills\/prompt_lib\//.test(response.url()),
     );
-    await page.getByRole('button', { name: 'Save' }).click();
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
     const created = await (await createResponse).json();
     skillId = String(created.id);
     await page.waitForURL(new RegExp(`/skills/all/${skillId}`), { timeout: 15_000 });
@@ -100,7 +100,7 @@ test('SKILL-2: create a version, edit it independently, compare, and restore it 
     const savedV2 = page.waitForResponse(
       (response) => response.request().method() === 'PUT' && response.url().includes(`/skill/prompt_lib/`),
     );
-    await page.getByRole('button', { name: 'Save' }).click();
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
     await savedV2;
 
     let server = await fetchSkill(request, skillId);

@@ -33,7 +33,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 
-import { useConversationSkills } from '@/entities/conversation-skill';
+import { useConversationSkillMutations, useConversationSkills } from '@/entities/conversation-skill';
+import type { ConversationSkillPin } from '@/entities/conversation-skill';
 import { normaliseSkills } from '@/entities/skill';
 import type { Skill, SkillWire } from '@/entities/skill';
 import type { Participant } from '@/entities/participant';
@@ -44,6 +45,7 @@ import { MentionPhase, SKILL_TRIGGER } from '../constants/mention.constants';
 import type { MentionPhaseValue } from '../constants/mention.constants';
 import { parseMentionRanges } from '../utils/instructionsMention.utils';
 import { useProjectSkillList } from './useProjectSkillList';
+import { useUntrustedSkillIds } from './useSkillPickerTrust';
 import type { ProjectSkillEntry, ProjectSkillList } from './useProjectSkillList';
 import type { MentionableItem, MentionRange } from '../utils/instructionsMention.utils';
 import type { ChatInputHandle } from '../chatInputHandle';
@@ -62,6 +64,10 @@ interface SkillMentionItem extends MentionableItem {
   readonly isToolkit: false;
   /** One of the project's skills that the agent version does not carry: sent to the server by id (`payload.skills`), not resolved from the text. */
   readonly isProject: boolean;
+  /** The skill is pinned to this conversation (a pinned skill is listed first). */
+  readonly pinned?: boolean;
+  /** The skill's text was written in another project and this project has not trusted it (A1.6): the model gets it as quoted data. */
+  readonly untrusted?: boolean;
 }
 
 /** A committed "~skill" reference found in the current input text. Not exported beyond this module — same rationale as `SkillMentionItem` above. */
@@ -182,6 +188,8 @@ export interface UseChatSkillMentionResult {
   readonly onSkillKeyDown: (event: { readonly key: string; preventDefault: () => void }) => void;
   readonly onSelectSkill: (item: SkillMentionItem) => void;
   readonly resetSkill: () => void;
+  /** Pins a listed project skill to the conversation (the picker's "Pin to this conversation"); undefined without a saved conversation. Rejects with the server's refusal. */
+  readonly pinSkill: ((item: SkillMentionItem) => Promise<void>) | undefined;
   readonly skillHighlightRanges: readonly MentionRange[];
   /** The ids of the project skills `text` mentions (`~Name`), each once: what the send puts in `payload.skills`. Empty when it names none; `null` when `text` has a "~" and the project's skills are not read yet (or the read failed), so the answer is not known — the send then awaits `resolveProjectSkillIds`. */
   readonly projectSkillIdsFor: (text: string) => readonly string[] | null;
@@ -220,10 +228,19 @@ function canUseSkills(participant: Participant | null | undefined): boolean {
   return kind === 'application' || kind === 'llm' || kind === 'dummy';
 }
 
-/** The ids of the project skills pinned to the conversation, as strings. */
-function usePinnedSkillIds(projectId: string | undefined, conversationId: string | undefined): ReadonlySet<string> {
-  const pins = useConversationSkills(projectId, conversationId);
-  return useMemo(() => new Set((pins.data ?? []).flatMap((pin) => (pin.skill_id === undefined ? [] : [String(pin.skill_id)]))), [pins.data]);
+const NO_PINS: readonly ConversationSkillPin[] = [];
+
+/** The conversation's pins, and the ids of the project skills among them as strings. */
+function usePinnedSkills(projectId: string | undefined, conversationId: string | undefined): { readonly pins: readonly ConversationSkillPin[]; readonly ids: ReadonlySet<string> } {
+  const read = useConversationSkills(projectId, conversationId);
+  const pins = read.data ?? NO_PINS;
+  const ids = useMemo(() => new Set(pins.flatMap((pin) => (pin.skill_id === undefined ? [] : [String(pin.skill_id)]))), [pins]);
+  return { pins, ids };
+}
+
+/** `items` marked pinned and untrusted, for the picker's badge and pin action. */
+function markItems(items: readonly SkillMentionItem[], pinnedIds: ReadonlySet<string>, untrustedIds: ReadonlySet<string>): readonly SkillMentionItem[] {
+  return items.map((item) => (item.isProject ? { ...item, pinned: pinnedIds.has(item.skillId), untrusted: untrustedIds.has(item.skillId) } : item));
 }
 
 export function useChatSkillMention({ chatInput, activeParticipant, fallbackAppVersionId, projectId, conversationId }: UseChatSkillMentionParams): UseChatSkillMentionResult {
@@ -250,7 +267,8 @@ export function useChatSkillMention({ chatInput, activeParticipant, fallbackAppV
   // the CONVERSATION's project, which is the one the send's route reads them
   // from, not to the agent's own (possibly public) project.
   const projectSkills = useProjectSkillList(projectId, canUseProjectSkills);
-  const pinnedIds = usePinnedSkillIds(projectId, conversationId);
+  const { pins, ids: pinnedIds } = usePinnedSkills(projectId, conversationId);
+  const pinAsync = useConversationSkillMutations(projectId, conversationId).pin.mutateAsync;
 
   const versionItems = useMemo<readonly SkillMentionItem[]>(() => {
     // See `applicationParticipants.ts`'s header (this app's established
@@ -295,15 +313,22 @@ export function useChatSkillMention({ chatInput, activeParticipant, fallbackAppV
     [chatInput, resetSkill],
   );
 
-  const filteredItems = useMemo<readonly SkillMentionItem[]>(() => {
+  const matchingItems = useMemo<readonly SkillMentionItem[]>(() => {
     if (!mentionableItems.length) return [];
     if (!itemQuery) return mentionableItems;
     return mentionableItems.filter((item) => item.name.toLowerCase().includes(itemQuery.toLowerCase()));
   }, [mentionableItems, itemQuery]);
+  const shownIds = useMemo(() => matchingItems.flatMap((item) => (item.isProject ? [item.skillId] : [])), [matchingItems]);
+  const untrustedIds = useUntrustedSkillIds(projectId, pins, shownIds, phase === MentionPhase.Items);
+  const filteredItems = useMemo(() => markItems(matchingItems, pinnedIds, untrustedIds), [matchingItems, pinnedIds, untrustedIds]);
+  const pinSkill = useMemo(
+    () => (conversationId === undefined ? undefined : async (item: SkillMentionItem): Promise<void> => { await pinAsync({ skill_id: Number(item.skillId) }); }),
+    [conversationId, pinAsync],
+  );
 
   useEffect(() => {
     setHighlightedIndex(0);
-  }, [phase, filteredItems]);
+  }, [phase, matchingItems]);
 
   const onSelectSkill = useCallback(
     (item: SkillMentionItem) => {
@@ -361,6 +386,7 @@ export function useChatSkillMention({ chatInput, activeParticipant, fallbackAppV
     onSkillKeyDown,
     onSelectSkill,
     resetSkill,
+    pinSkill,
     skillHighlightRanges,
     projectSkillIdsFor,
     resolveProjectSkillIds,

@@ -7,8 +7,10 @@
  * component-props budget, matching the pattern established across this Wave.
  */
 import type { ReactNode } from 'react';
+import { useState } from 'react';
 
 import Box from '@mui/material/Box';
+import Typography from '@mui/material/Typography';
 import { SlashSuggestionList, UserMentionList } from '@/features/chat-input';
 import { RecommendationList } from '@/features/chat-recommendations';
 import { t } from '@/shared/i18n';
@@ -48,6 +50,8 @@ interface ChatBoxPopupsSkill {
   readonly filteredItems: ChatBoxState['skill']['filteredItems'];
   readonly highlightedIndex: ChatBoxState['skill']['highlightedIndex'];
   readonly onSelectTool: (toolName: string | null) => void;
+  /** Pins a listed project skill to the conversation; absent while the chat has no saved conversation. */
+  readonly onPin?: ((item: ChatBoxState['skill']['filteredItems'][number]) => Promise<void>) | undefined;
 }
 
 interface ChatBoxPopupsAgents {
@@ -144,6 +148,7 @@ export function buildChatBoxPopupsProps(input: {
       filteredItems: state.skill.filteredItems,
       highlightedIndex: state.skill.highlightedIndex,
       onSelectTool,
+      onPin: state.skill.pinSkill,
     },
   };
 }
@@ -214,17 +219,33 @@ export function ChatBoxPopups({ recommendations, hashPicker, agents, userMention
           />
         </Box>
       )}
-      {skill.isActive && (
-        <Box sx={{ mb: 1 }}>
-          <MentionToolList
-            tools={skillMenuTools(skill.filteredItems)}
-            toolkitName="Skill"
-            onSelectTool={skill.onSelectTool}
-            highlightedIndex={skill.highlightedIndex}
-          />
-        </Box>
-      )}
+      {skill.isActive && <SkillPicker skill={skill} />}
     </>
+  );
+}
+
+/** The "~" and `/skill` list: rows badged Untrusted or Pinned, and a "Pin to this conversation" action on a project skill not yet pinned. */
+function SkillPicker({ skill }: { readonly skill: ChatBoxPopupsSkill }): ReactNode {
+  const [pinFailed, setPinFailed] = useState(false);
+  const onPin = skill.onPin;
+  const pin = onPin === undefined ? undefined : (item: ChatBoxPopupsSkill['filteredItems'][number]): void => {
+    setPinFailed(false);
+    onPin(item).catch(() => setPinFailed(true));
+  };
+  return (
+    <Box sx={{ mb: 1 }}>
+      <MentionToolList
+        tools={skillMenuTools(skill.filteredItems, pin)}
+        toolkitName="Skill"
+        onSelectTool={skill.onSelectTool}
+        highlightedIndex={skill.highlightedIndex}
+      />
+      {pinFailed && (
+        <Typography role="alert" variant="bodySmall" color="error">
+          {t('widgets.chatBox.skillPinFailed', 'The skill could not be pinned. Try again.')}
+        </Typography>
+      )}
+    </Box>
   );
 }
 
@@ -233,7 +254,10 @@ export function ChatBoxPopups({ recommendations, hashPicker, agents, userMention
  * ("Agent skills", then "Project skills", the second only for skills the agent
  * version does not carry); without any, the list is flat as it always was.
  */
-function skillMenuTools(items: ChatBoxPopupsSkill['filteredItems']): MentionTool[] {
+function skillMenuTools(
+  items: ChatBoxPopupsSkill['filteredItems'],
+  pin: ((item: ChatBoxPopupsSkill['filteredItems'][number]) => void) | undefined,
+): MentionTool[] {
   const sectioned = items.some((item) => item.isProject);
   return items.map((item) => ({
     name: item.name,
@@ -241,5 +265,24 @@ function skillMenuTools(items: ChatBoxPopupsSkill['filteredItems']): MentionTool
     ...(sectioned
       ? { group: item.isProject ? t('widgets.chatBox.projectSkills', 'Project skills') : t('widgets.chatBox.agentSkills', 'Agent skills') }
       : {}),
+    ...skillRowExtras(item, pin),
   }));
+}
+
+/** A project skill's badges (untrusted, pinned) and its pin action (only while it is not pinned). */
+function skillRowExtras(
+  item: ChatBoxPopupsSkill['filteredItems'][number],
+  pin: ((item: ChatBoxPopupsSkill['filteredItems'][number]) => void) | undefined,
+): Pick<MentionTool, 'badges' | 'action'> {
+  const badges = [
+    ...(item.pinned === true ? [{ label: t('widgets.chatBox.skillPinned', 'Pinned') }] : []),
+    ...(item.untrusted === true
+      ? [{ label: t('widgets.chatBox.skillUntrusted', 'Untrusted'), title: t('widgets.chatBox.skillUntrustedHint', 'Written in another project. The model gets its text as quoted data until this project trusts it.') }]
+      : []),
+  ];
+  const canPin = pin !== undefined && item.isProject && item.pinned !== true;
+  return {
+    ...(badges.length > 0 ? { badges } : {}),
+    ...(canPin ? { action: { label: t('widgets.chatBox.skillPin', 'Pin to this conversation'), onClick: () => pin(item) } } : {}),
+  };
 }
