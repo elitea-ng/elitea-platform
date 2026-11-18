@@ -211,26 +211,56 @@ with the switch on or off.
 
 ## Real-browser evidence
 
-**Not yet run on this branch** (the orchestrator asked for the plan first). The gate is open until it is.
+Run 2026-11-18 on the disposable stack `fu335s1` (`http://fu335s1.localhost:49900/app/`, production profile,
+`verify-profile: 50 passed, 0 failed`), Claude in Chrome, main chat, each case reloaded. Images:
 
-Plan, on a disposable real-model stack (runbook `handoffs/real-model-stack/README.md`, production profile,
-Worker image built from this branch after #1160 with a branch-unique symbol checked in the extracted binary):
+| Service | Image | Id | Branch check |
+|---|---|---|---|
+| Worker | `elitea-worker-rust:fu335b-be773eb8c` (this branch's head) | `785624f24e09` | `binary-check … "a graph node delegates to a saved agent or pipeline its caller may not run"`: present (1); absent in `main-ce2756fad-verify` |
+| Main | `elitea-main:fu335b-882b518f8` (merged head; no Main change on the branch) | `3fd848d7e171` | `/elitea-migrate` carries `0254_delegation_migration`, `/elitea-main` carries `delegation_legacy_pending` (#2239) |
+| Web | `elitea-web:fu335b-882b518f8` | `cd999519bb35` | — |
 
-1. **Shape 899.** Root pipeline P0 attaching MCP toolkit T, one Agent node → saved agent S (T attached) → S's pipeline
-   tool P1 (MCP node on T). Expect: the run completes, P1's MCP result reaches S; reload; History shows the same.
-2. **Map.** Root pipeline with a Map node whose member Agent node runs S (T attached to P0 and S). Expect: completes;
-   reload.
-3. **Refusal with Main's notice.** Remove T from P0 (keep it on S). Expect: the run ends at start with
-   "Execution authorization failed." and, above it, the `delegation_refused` notice for the node (edge
-   `pipeline_node`, missing toolkit T) with **Review delegation** opening S's delegation dialog on P0; reload keeps
-   both. Since #2239 (merged into this branch) the stack runs main's rollout defaults:
-   `ELITEA_DELEGATION_GRANTS_ENFORCED` is `"true"` and the principal bound is on, and Main's composition walk writes a
-   **pending** P0→S grant for this edge. A pending grant approves nothing, so the edge is refused.
-   Recorded cause: **pending grant, root lacks T** (the grant is not approved; T missing at the root is why the edge
-   needs one), with the notice's code quoted.
-4. **Approve and rerun (the user's path).** From the refused chat, Review delegation → approve the P0→S grant, rerun
-   without T on P0: the pipeline-root run completes (G(P0→S) honoured as on an ordinary root); reload. The account
-   that approves is named in the evidence.
+Supervisor `pm-778e5beb8`, runners `pm-2d7f7d3e8-deno|-rust`. Main runs #2239's defaults: `ELITEA_DELEGATION_GRANTS_ENFORCED`
+unset, which is `true`, and the principal bound on. On first spawn every preconfigured chat model answered one short
+request (`eu.anthropic.claude-haiku`, `eu.anthropic.claude-sonnet-4-6`, `global.openai.gpt-5.6-luna`, `gpt-5.4`,
+`gpt-5.4-mini`: each "OK", chat 887).
+
+The stack is torn down; its database is kept locally as a `pg_dump -Fc` (mode 600, never committed).
+
+Fixtures (project 2, created through Main's API, the same routes the UI calls: `POST applications`, the toolkit
+relation and the application relation; no database write): P1 `fu_echo` (170, MCP node `echo` on toolkit 100 `c1 mock
+mcp 20261008`), S `fu_echoer` (171, toolkit 100 + `fu_echo`), P0 `fu335 P0 shape899` (172, toolkit 100 + S), P0m
+`fu335 P0m map` (173, toolkit 100 + S), P0r `fu335 P0r refusal` (174, S only), and for parity the ordinary agent R0
+`fu335 R0 ordinary` (175, S only). Main's composition walk wrote a **pending** grant for every edge on attach
+(grants 10–14), including P0→S and P0m→S where the root already holds the toolkit.
+
+1. **Shape 899 (chat 888).** The run is admitted and S runs: no delegation refusal, although the P0→S grant is only
+   pending (the root holds the toolkit, so the pending grant cuts nothing, as ruled). On main this run ended at start
+   (`agent.legacy`). S's call of its pipeline tool P1 then stops at P1's MCP node with `PIPELINE_TOOL_UNAVAILABLE`,
+   Worker `failure_reason` "A tool with external effects requires its current fenced node writer." The same stop
+   happens when S is the chat's own agent (chat 889, an ordinary root), so it is not this change: an effectful direct
+   node inside a saved pipeline offered as a tool of a non-member agent has no node writer (FU-358). Reload: same.
+2. **Map (chat 890).** Completes: both items return the echo of "Echo the item via fu_echo"; the mock MCP server
+   logged 2 `tools/call`. Members run the pipeline tool durably (FU-291), so the effectful node runs there. On main
+   this run ended "Configuration type is not supported.". Reload: same.
+3. **Refusal (chat 891).** P0r lacks the toolkit. Cause: **pending grant, root lacks T** (with grants on and only a
+   pending P0r→S grant, the edge has no approved grant; T missing at the root is why it needs one). The run ends at
+   start: Worker `delegation_refused` `{"code":"DELEGATION_GRANT_MISSING","kind":"toolkit","name":"c1mockmcp20261008"}`,
+   `agent_assembly_delegation_notice_published`, then `native_agent.authorization_failed`; 0 model calls. The chat
+   shows "Execution authorization failed." Live, main's notice did not appear; after the reload it sits above the
+   terminal: **Delegation refused** — "delegate could not use c1mockmcp20261008 from its caller. This delegation is not
+   approved." (persisted as `meta.delegation_notices_v1`, `code` `DELEGATION_GRANT_MISSING`, `reason` `no_grant`,
+   edge `pipeline_node`, `callee_id` 171). **Review delegation is not offered**: the notice carries no `caller_id`.
+   The ordinary root R0 (chat 892) shows the same: "fu_echoer could not use c1mockmcp20261008 from elitea-agent. This
+   delegation is not approved.", also without `caller_id` and without Review delegation. The root's id reaches the
+   policy only through `DelegationPolicy::with_grants` (`L/delegation.rs:235-247`), which Main calls only when the run
+   carries an approved grant, so with every grant pending neither root names its caller (FU-359; the live gap is
+   FU-360).
+4. **Approve and rerun (chat 891).** Approved from P0r's editor, Tools row **Review delegation** ("What fu_echoer will
+   be able to use": c1 mock mcp 20261008, tools echo and reverse, host mcp-mock), as `admin@centry.user`, the author
+   (user 3; this profile is not governed, so no second person is needed). Grant 13 is `approved`. Rerun in the same
+   chat: no delegation refusal, S runs (G(P0r→S) honoured as on an ordinary root) and stops at the same FU-358 node.
+   Reload: the refusal turn and the rerun turns are both kept.
 
 ## Fixtures
 
@@ -252,6 +282,18 @@ the Map cases use a disposable PostgreSQL 18 container. No database fixture.
   notice although that tool is now offered as the refusal. No model call, effect or authority follows from either. A
   pre-pass needs each saved agent's narrowing without materializing it (`composition_refusal` walks only saved
   pipelines today).
+- **FU-358 (new, pre-existing on main): an effectful direct node in a saved pipeline offered as a tool of a non-member
+  agent has no node writer.** `PIPELINE_TOOL_UNAVAILABLE`, "A tool with external effects requires its current fenced
+  node writer." Seen at a root Agent node (chat 888) and with the agent as the chat's own root (chat 889); a Map
+  member runs the same pipeline tool durably (FU-291) and completes (chat 890).
+- **FU-359 (new, pre-existing on main): no Review delegation on a root's refusal while every grant is pending.** The
+  root's id reaches the policy only through `DelegationPolicy::with_grants`, which Main calls only when the run carries
+  an approved grant, so the notice has no `caller_id` (pipeline root, chat 891; ordinary root, chat 892). Fix: send the
+  root application id with the policy whenever the switch is on, with or without approved grants.
+- **FU-360 (new): a refused graph node's notice shows only after a reload.** Live, chat 891 showed only "Execution
+  authorization failed."; after the reload main's notice sits above it. The Worker publishes the notice before the
+  terminal (`agent_assembly_delegation_notice_published`), so the live gap is on the Main/Web side. Not compared live
+  with #2235's saved-pipeline node, which uses the same path.
 - **Legacy unscoped continuation** (a conversation an older worker left paused inside an application call,
   `ApplicationContinuation::LegacyUnscoped`, `W/agents/pipeline.rs:926`): unchanged. Its direct Agent participants
   are bound by alias without the node check, so a refused saved agent there still answers its refusal text as the
