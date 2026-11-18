@@ -20,7 +20,7 @@ import { writeAgentLlmSettings, type AgentLlmTunables } from './writeAgentLlmSet
 
 export interface AgentChatModelBinding {
   /** `undefined` while the version pins no model: the chat then shows the project default, as the form does. */
-  readonly settings: Readonly<Record<string, unknown>> | undefined;
+  readonly settings?: Readonly<Record<string, unknown>>;
   readonly onSetSettings: (settings: Readonly<Record<string, unknown>>) => void;
 }
 
@@ -86,7 +86,7 @@ export function useAgentChatModelBinding(
   );
 
   return useMemo(
-    () => (disabled ? undefined : { settings: value === undefined ? undefined : { ...value }, onSetSettings }),
+    () => (disabled ? undefined : { ...(value === undefined ? {} : { settings: { ...value } }), onSetSettings }),
     [disabled, value, onSetSettings],
   );
 }

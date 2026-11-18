@@ -16,7 +16,7 @@ import { muiOverrides } from '.';
 const theme = buildEliteaTheme(DEFAULT_BRAND_PACK);
 
 function standardVariantStyle(): Record<string, Record<string, unknown>> {
-  const variant = muiOverrides().MuiTextField?.variants?.find((entry) => entry.props.variant === 'standard');
+  const variant = muiOverrides().MuiTextField?.variants?.find((entry) => typeof entry.props !== 'function' && entry.props.variant === 'standard');
   expect(typeof variant?.style).toBe('function');
   return (variant?.style as (arg: { theme: typeof theme }) => Record<string, Record<string, unknown>>)({ theme });
 }
