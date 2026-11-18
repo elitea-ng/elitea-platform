@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useQueryClient } from '@tanstack/react-query';
 
@@ -38,6 +38,12 @@ export interface DelegationGrantStatusProps {
   readonly grant: DelegationGrant;
   /** A read-only viewer, or a locked version, may look but not approve. */
   readonly readOnly: boolean;
+  /**
+   * Open the review on mount (the chat notice's "Review delegation" link names this edge). Called once;
+   * `onAutoOpened` then lets the host drop the deep link so a reload does not reopen it.
+   */
+  readonly autoOpen?: boolean | undefined;
+  readonly onAutoOpened?: (() => void) | undefined;
 }
 
 interface Review {
@@ -82,7 +88,7 @@ async function loadReview(queryClient: ReturnType<typeof useQueryClient>, projec
   return { preview: previewFor(grant, request.preview, canAct), names: request.names, calleeName: request.calleeName };
 }
 
-export function DelegationGrantStatus({ projectId, applicationId, grant, readOnly }: DelegationGrantStatusProps): ReactNode {
+export function DelegationGrantStatus({ projectId, applicationId, grant, readOnly, autoOpen = false, onAutoOpened }: DelegationGrantStatusProps): ReactNode {
   const queryClient = useQueryClient();
   const view = grantView(grant);
   const [review, setReview] = useState<Review>();
@@ -99,6 +105,14 @@ export function DelegationGrantStatus({ projectId, applicationId, grant, readOnl
       .catch(() => setError(t('agents.delegation.reviewFailed', 'The delegation could not be loaded.')))
       .finally(() => setLoading(false));
   }, [queryClient, projectId, applicationId, grant, canApprove]);
+
+  const autoOpened = useRef(false);
+  useEffect(() => {
+    if (!autoOpen || autoOpened.current) return;
+    autoOpened.current = true;
+    open();
+    onAutoOpened?.();
+  }, [autoOpen, open, onAutoOpened]);
 
   const close = useCallback(() => {
     setReview(undefined);

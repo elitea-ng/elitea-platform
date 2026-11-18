@@ -24,6 +24,8 @@ export interface DelegationGrantsViewProps {
   onRevoke: (grant: DelegationGrantView) => void;
   onRetry: () => void;
   refreshControl?: ReactElement<RefreshControlProps>;
+  /** The callee a chat notice named: its grant is listed first and marked. */
+  focusCalleeId?: number | null;
 }
 
 const EDGE: Record<string, string> = {
@@ -55,7 +57,7 @@ export function itemLine(item: DelegationItem): string {
  * attaching is on the web and desktop. A grant under the governed profile is decided in its
  * change request there, so no Approve is offered for it.
  */
-export function DelegationGrantsView({ agentName, status, grants, names, busy, banner, selectable, onApprove, onRevoke, onRetry, refreshControl }: DelegationGrantsViewProps) {
+export function DelegationGrantsView({ agentName, status, grants, names, busy, banner, selectable, onApprove, onRevoke, onRetry, refreshControl, focusCalleeId = null }: DelegationGrantsViewProps) {
   const { colors, radius } = useDesign();
   const margin = useLayoutMargin();
 
@@ -73,6 +75,7 @@ export function DelegationGrantsView({ agentName, status, grants, names, busy, b
       </View>
     );
   }
+  const ordered = focusCalleeId === null ? grants : [...grants].sort((a, b) => Number(b.calleeApplicationId === focusCalleeId) - Number(a.calleeApplicationId === focusCalleeId));
   const content =
     grants.length === 0 ? (
       status.kind === 'error' ? (
@@ -88,15 +91,17 @@ export function DelegationGrantsView({ agentName, status, grants, names, busy, b
           </Text>
         ) : null}
         <ListSection title={grants.length === 1 ? '1 delegation' : `${grants.length} delegations`} footer={DELEGATION_HINT}>
-          {grants.map((grant) => {
+          {ordered.map((grant) => {
             const name = calleeName(grant, names);
             const label = stateLabel(grant);
             const running = busy === grant.id;
+            const focused = focusCalleeId !== null && grant.calleeApplicationId === focusCalleeId;
             return (
               <View
                 key={grant.id}
                 testID={`delegation-grant-${grant.id}`}
-                style={[styles.row, { backgroundColor: colors.surface, borderRadius: radius.md }]}>
+                accessibilityState={{ selected: focused }}
+                style={[styles.row, { backgroundColor: colors.surface, borderRadius: radius.md }, focused ? { borderWidth: 2, borderColor: colors.accent } : null]}>
                 <Text variant="headline" heading>
                   {name}
                 </Text>

@@ -81,6 +81,28 @@ it('lists what each attached agent brings, with the state and the callee name', 
   expect(screen.getAllByText('Egress host git.corp.example').length).toBe(3);
 });
 
+it('lands on the edge a chat notice named: its grant is listed first and marked', async () => {
+  const server = install();
+  server.on('GET', LIST, { status: 200, body: { grants: [grant(1), grant(2), grant(3)] } });
+  // grant(3) calls agent 53.
+  mockParams = { id: '41', name: 'Mira', callee: '53' };
+  await render(withQueries(<AgentDelegationsScreen />));
+  await screen.findByTestId('delegation-grant-3');
+  const rows = screen.getAllByTestId(/^delegation-grant-\d$/).map((row) => row.props.testID);
+  expect(rows).toEqual(['delegation-grant-3', 'delegation-grant-1', 'delegation-grant-2']);
+  expect(screen.getByTestId('delegation-grant-3').props.accessibilityState).toEqual({ selected: true });
+  expect(screen.getByTestId('delegation-grant-1').props.accessibilityState).toEqual({ selected: false });
+});
+
+it('ignores a callee param that is not an id', async () => {
+  const server = install();
+  server.on('GET', LIST, { status: 200, body: { grants: [grant(1), grant(2)] } });
+  mockParams = { id: '41', name: 'Mira', callee: 'abc' };
+  await render(withQueries(<AgentDelegationsScreen />));
+  await screen.findByTestId('delegation-grant-1');
+  expect(screen.getAllByTestId(/^delegation-grant-\d$/).map((row) => row.props.testID)).toEqual(['delegation-grant-1', 'delegation-grant-2']);
+});
+
 it('approves a pending grant only after the confirmation, then reads the list again', async () => {
   const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
   const server = install();

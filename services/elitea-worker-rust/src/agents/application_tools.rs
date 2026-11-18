@@ -77,7 +77,8 @@ use crate::transport::platform_client::PlatformClient;
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
 use crate::transport::runtime_context::SavedAgentFingerprint;
 use elitea_agent_runtime::delegation::{
-    Delegation, DelegationEvidence, DelegationRefusal, DelegationScope, GrantSet, RefusedDelegation,
+    Delegation, DelegationEvidence, DelegationNotice, DelegationRefusal, DelegationScope, GrantSet,
+    NoticeContext, RefusedDelegation,
 };
 #[cfg(test)]
 pub(in crate::agents) use materialization::MAX_MATERIALIZATION_VERSION_BYTES;
@@ -4046,10 +4047,15 @@ pub(in crate::agents) fn narrow_version(
 /// A refused delegation where no tool result can carry it: a pipeline node
 /// that runs a saved pipeline inside the graph. The run ends with the
 /// authorization terminal; the cause names the refusal code and the grant
-/// kind, and the log names the grant.
+/// kind, and the log names the grant. The error also carries the person's
+/// notice (edge kind `pipeline_node`), which the lifecycle publishes before
+/// that terminal so the chat shows the delegation notice and not only the
+/// generic failure (#2218). `graph_path` is the node's place in the graph.
 pub(in crate::agents) fn delegation_refused_error(
-    refusal: &DelegationRefusal,
+    refused: &RefusedDelegation,
+    graph_path: &str,
 ) -> NativeAgentAssemblyError {
+    let refusal = &refused.refusal;
     tracing::warn!(
         event = "delegation_refused",
         refusal = %refusal.to_value(),
@@ -4065,6 +4071,30 @@ pub(in crate::agents) fn delegation_refused_error(
         "a pipeline node delegates to a saved pipeline that needs a grant its caller does not hold, or is past the delegation depth",
     )
     .with_cause(refusal.code(), Some(detail))
+    .with_delegation_notice(pipeline_node_notice(&refused.evidence, graph_path))
+}
+
+/// The most characters of a graph path a notice id carries (Main bounds the
+/// whole id to 128 bytes).
+const NODE_NOTICE_PATH_CHARS: usize = 64;
+
+/// The notice of a refused pipeline node: one per node, keyed by its graph
+/// path, naming the node as the callee. A refusal `report` mode recorded and
+/// did not enforce shows nothing: the node ran, and the run step's summary
+/// is its only record.
+pub(in crate::agents) fn pipeline_node_notice(
+    evidence: &DelegationEvidence,
+    graph_path: &str,
+) -> Option<DelegationNotice> {
+    let path: String = graph_path.chars().take(NODE_NOTICE_PATH_CHARS).collect();
+    let node = path.rsplit('/').next().unwrap_or_default();
+    let call_id = format!("pipeline_node:{path}");
+    evidence.notice(&NoticeContext {
+        call_id: &call_id,
+        callee_name: node,
+        caller_name: None,
+        edge_kind: "pipeline_node",
+    })
 }
 
 /// A saved agent its caller may not delegate to, offered with its refusal.

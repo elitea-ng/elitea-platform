@@ -2704,7 +2704,8 @@ fn bind_admitted_saved_pipeline<'a>(
             Ok(delegated) => delegated,
             Err(refused) => {
                 return Err(super::application_tools::delegation_refused_error(
-                    &refused.refusal,
+                    &refused,
+                    &graph_path,
                 ));
             }
         };

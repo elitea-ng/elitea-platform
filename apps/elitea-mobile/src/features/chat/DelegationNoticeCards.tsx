@@ -35,7 +35,7 @@ export function DelegationNoticeCards({ notices }: { notices: readonly Delegatio
             ) : null}
             {callerId !== undefined ? (
               <View style={styles.actions}>
-                <Button title="Review delegation" variant="tonal" size="small" onPress={() => router.push(delegationReviewHref(callerId) as Href)} />
+                <Button title="Review delegation" variant="tonal" size="small" onPress={() => router.push(delegationReviewHref(callerId, notice.calleeId, notice.callerName) as Href)} />
               </View>
             ) : null}
           </GlassSurface>

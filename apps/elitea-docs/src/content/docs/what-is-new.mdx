@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Review delegation opens the delegation, and a refused pipeline node shows its notice
+
+The **Review delegation** link in a chat notice now opens the review window of that exact delegation on the calling agent's Tools panel, instead of only the agent. The mobile app lists that delegation first and marks it. A pipeline node that runs a saved pipeline and is refused now shows the same **Delegation refused** card before the run fails, where it showed only the generic failure. In `report` mode nothing is shown, because nothing was refused; the run step records it. Upgrade the worker and the web app together. See [Notices in the chat](/admin/enterprise-controls/least-privilege-and-trust#notices-in-the-chat).
+
 ## Delegation grants notice drift and follow Marketplace upgrades
 
 When an agent you attached gains a toolkit, a tool, a credential or a host after you approved it, the delegation grant is marked stale and the calling agent's owners and editors get one notification. The agent keeps running with what you approved; re-approve to give it the new items. Marketplace upgrades list every internal agent that would hold more, need a person's approval when one does, and re-approve those edges when approved. See [When the attached agent changes](/admin/enterprise-controls/least-privilege-and-trust#when-the-attached-agent-changes).

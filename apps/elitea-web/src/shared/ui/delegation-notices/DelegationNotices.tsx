@@ -25,15 +25,21 @@ import { getConfig } from '@/shared/config';
 import { t } from '@/shared/i18n';
 import { normalizeBasename } from '@/shared/lib/basename';
 
-/** @public The agent whose delegations an editor reviews, under the configured app base. */
-export function delegationReviewHref(basePath: string, callerId: number): string {
-  return `${normalizeBasename(basePath)}/agents/all/${String(callerId)}`;
+/**
+ * @public The calling agent's editor under the configured app base. With the
+ * called agent's id it carries `review_delegation`, which opens that edge's
+ * review dialog on arrival (S3's dialog, in the Tools panel); without it the
+ * editor opens as before.
+ */
+export function delegationReviewHref(basePath: string, callerId: number, calleeId?: number): string {
+  const path = `${normalizeBasename(basePath)}/agents/all/${String(callerId)}`;
+  return calleeId === undefined ? path : `${path}?review_delegation=${String(calleeId)}`;
 }
 
-function resolveReviewHref(callerId: number): string {
-  if (import.meta.env.DEV) return delegationReviewHref('', callerId);
+function resolveReviewHref(callerId: number, calleeId: number | undefined): string {
+  if (import.meta.env.DEV) return delegationReviewHref('', callerId, calleeId);
   const result = getConfig();
-  return delegationReviewHref(result.status === 'ok' ? result.config.vite_base_uri : '', callerId);
+  return delegationReviewHref(result.status === 'ok' ? result.config.vite_base_uri : '', callerId, calleeId);
 }
 
 function namesOf(notice: DelegationNotice): string {
@@ -93,7 +99,7 @@ function Notice({ notice }: { readonly notice: DelegationNotice }): ReactNode {
         {delegationNoticeSentence(notice)}
       </Typography>
       {review !== undefined && (
-        <Link href={resolveReviewHref(review)} variant="bodyMedium" data-testid="delegation-review" sx={{ display: 'inline-block', mt: 0.5 }}>
+        <Link href={resolveReviewHref(review, notice.calleeId)} variant="bodyMedium" data-testid="delegation-review" sx={{ display: 'inline-block', mt: 0.5 }}>
           {t('features.chatMessages.delegationNotice.review', 'Review delegation')}
         </Link>
       )}

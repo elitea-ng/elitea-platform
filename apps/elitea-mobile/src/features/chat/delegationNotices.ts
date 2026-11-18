@@ -8,8 +8,15 @@ import { missingNames, parseDelegationNotices, type DelegationNotice } from '@el
  * text: the names are untrusted.
  */
 
-/** The approve screen of a calling agent's delegation. One place, so the route is a one-line change. */
-export const delegationReviewHref = (callerId: number): string => `/agent-delegations/${callerId}`;
+/**
+ * The approve screen of a calling agent's delegation. One place, so the route is a one-line change.
+ * `callee` (the called agent's id) puts that edge first and marks it, so the person lands on the
+ * grant the notice is about; `name` titles the screen with the caller.
+ */
+export const delegationReviewHref = (callerId: number, calleeId?: number, callerName?: string): string => {
+  const query = [calleeId === undefined ? '' : `callee=${calleeId}`, callerName === undefined ? '' : `name=${encodeURIComponent(callerName)}`].filter((part) => part !== '');
+  return query.length === 0 ? `/agent-delegations/${callerId}` : `/agent-delegations/${callerId}?${query.join('&')}`;
+};
 
 /** A notice's stored list; a streaming answer and a settled one read it the same. */
 export function storedDelegationNotices(meta: unknown): DelegationNotice[] {

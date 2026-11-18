@@ -3151,3 +3151,97 @@ fn a_narrowed_delegation_projects_a_notice_and_a_clean_one_does_not() {
             .is_some_and(|kind| kind.starts_with("delegation_"))
     }),);
 }
+
+fn missing_toolkit() -> elitea_agent_runtime::delegation::DelegationRefusal {
+    elitea_agent_runtime::delegation::DelegationRefusal::GrantMissing {
+        kind: elitea_agent_runtime::delegation::GrantKind::Toolkit,
+        name: "Git".to_owned(),
+        toolkit: None,
+    }
+}
+
+/// #2218: a pipeline node that runs a saved pipeline its caller may not run
+/// ends the run, and the person gets the same notice as an agent tool would,
+/// with the `pipeline_node` edge, keyed by the node's place in the graph.
+#[test]
+fn a_refused_pipeline_node_carries_a_pipeline_node_notice() {
+    let refused = elitea_agent_runtime::delegation::RefusedDelegation {
+        refusal: missing_toolkit(),
+        evidence: evidence(Some(missing_toolkit()), vec![]),
+    };
+    let error = super::application_tools::delegation_refused_error(&refused, "review/lint");
+    assert_eq!(
+        error.code(),
+        elitea_agent_runtime::assembly_error::NativeAgentAssemblyErrorCode::AuthorizationFailed,
+        "the run still ends as the authorization failure"
+    );
+    let notice = error.delegation_notice().expect("a notice rides the error");
+    assert_eq!(notice.event, "delegation_refused");
+    assert_eq!(notice.value["id"], "pipeline_node:review/lint");
+    assert_eq!(notice.value["reason"], "no_grant");
+    assert_eq!(notice.value["code"], "DELEGATION_GRANT_MISSING");
+    assert_eq!(
+        notice.value["missing"],
+        json!([{"kind": "toolkit", "name": "Git"}])
+    );
+    assert_eq!(
+        notice.value["edge"],
+        json!({"caller_id": 2, "callee_id": 1, "callee_name": "lint", "kind": "pipeline_node"})
+    );
+}
+
+/// `report` mode records the refusal in the run step's summary and runs the
+/// node: nothing was refused, so the person sees no card (#2218 decision).
+#[test]
+fn a_pipeline_node_refusal_that_report_mode_did_not_enforce_shows_no_notice() {
+    let mut recorded = evidence(Some(missing_toolkit()), vec![]);
+    recorded.enforced = false;
+    assert!(super::application_tools::pipeline_node_notice(&recorded, "review/lint").is_none());
+    assert!(
+        recorded
+            .summary()
+            .iter()
+            .any(|(key, value)| *key == "delegation_enforced" && value == &json!(false)),
+        "the step summary still records the refusal and that it was not enforced"
+    );
+}
+
+#[test]
+fn the_assembly_notice_frame_is_stamped_with_the_bound_identity_and_refuses_an_unroutable_one() {
+    let notice = super::application_tools::pipeline_node_notice(
+        &evidence(Some(missing_toolkit()), vec![]),
+        "lint",
+    )
+    .expect("an enforced refusal shows");
+    fn identity(stream_id: &str) -> super::events::AssemblyNoticeIdentity<'_> {
+        super::events::AssemblyNoticeIdentity {
+            stream_id,
+            message_id: "message-1",
+            sio_event: "chat_predict",
+            execution_generation: "generation-1",
+            thread_id: "thread-1",
+        }
+    }
+    let event = super::events::assembly_delegation_notice(
+        &identity("conversation-1"),
+        &notice,
+        timestamp(3),
+    )
+    .expect("the notice must project");
+    assert_eq!(event.r#type, "delegation_refused");
+    let projected = current(&event);
+    assert_eq!(projected["stream_id"], "conversation-1");
+    assert_eq!(projected["message_id"], "message-1");
+    assert_eq!(
+        projected["response_metadata"]["delegation_v1"]["edge"]["kind"],
+        "pipeline_node"
+    );
+    assert_eq!(
+        projected["response_metadata"]["delegation_v1"]["id"],
+        "pipeline_node:lint"
+    );
+    assert!(
+        super::events::assembly_delegation_notice(&identity(""), &notice, timestamp(3)).is_err(),
+        "a blank stream id cannot be routed"
+    );
+}

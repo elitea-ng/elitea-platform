@@ -7404,6 +7404,7 @@ mod subagent_lane_frames;
 
 #[path = "events_delegation_notice.rs"]
 mod delegation_notice_frames;
+pub(crate) use delegation_notice_frames::assembly_delegation_notice;
 
 #[path = "grounding_events.rs"]
 mod grounding_events;

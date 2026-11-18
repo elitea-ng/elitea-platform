@@ -6,11 +6,14 @@
 //! chat shows it at the sub-agent's place instead of a failure only the model
 //! reads.
 
-use chrono::{DateTime, Utc};
-use elitea_agent_runtime::delegation::{NOTICE_METADATA_KEY, NoticeContext};
+use chrono::{DateTime, SecondsFormat, Utc};
+use elitea_agent_runtime::delegation::{DelegationNotice, NOTICE_METADATA_KEY, NoticeContext};
 use serde_json::{Value, json};
 
-use super::{ActiveToolCall, AgentEventProjectionError, AgentEventProjector, NodeEventV1};
+use super::{
+    ActiveToolCall, AgentEventProjectionError, AgentEventProjector, NodeEventV1, ProtocolError,
+    encode_current_node_event_json,
+};
 
 impl AgentEventProjector {
     /// The notice frame of a completed saved-agent or saved-pipeline call, or
@@ -52,4 +55,54 @@ impl AgentEventProjector {
         )
         .map(Some)
     }
+}
+
+/// The notice frame of a delegation refused while the run was being
+/// assembled: a pipeline node that runs a saved pipeline its caller may not
+/// delegate to (#2218). No tool call carries it, so the lifecycle publishes
+/// it before the terminal failure, stamped with the identity the verified
+/// command binds (the projector cannot be built when assembly failed).
+pub(crate) fn assembly_delegation_notice(
+    identity: &super::AssemblyNoticeIdentity<'_>,
+    notice: &DelegationNotice,
+    occurred_at: DateTime<Utc>,
+) -> Result<NodeEventV1, AgentEventProjectionError> {
+    let fields = [
+        identity.stream_id,
+        identity.message_id,
+        identity.sio_event,
+        identity.execution_generation,
+    ];
+    if fields.iter().any(|value| {
+        value.is_empty()
+            || value.len() > super::MAX_CONTEXT_TEXT_BYTES
+            || value
+                .bytes()
+                .any(|byte| matches!(byte, b'\0' | b'\r' | b'\n'))
+    }) {
+        return Err(AgentEventProjectionError::invalid_state());
+    }
+    let output = |_: serde_json::Error| {
+        AgentEventProjectionError::output(ProtocolError::InvalidInput(
+            "the delegation notice is malformed",
+        ))
+    };
+    let event = NodeEventV1 {
+        r#type: notice.event.to_owned(),
+        stream_id: Some(identity.stream_id.to_owned()),
+        message_id: Some(identity.message_id.to_owned()),
+        question_id: None,
+        content: serde_json::to_vec(&Value::Null).map_err(output)?,
+        thinking: None,
+        response_metadata: serde_json::to_vec(&json!({ NOTICE_METADATA_KEY: notice.value }))
+            .map_err(output)?,
+        references: b"[]".to_vec(),
+        sio_event: Some(identity.sio_event.to_owned()),
+        created_at: Some(occurred_at.to_rfc3339_opts(SecondsFormat::AutoSi, false)),
+        parent_message_id: None,
+        agent_name: None,
+        execution_generation: Some(identity.execution_generation.to_owned()),
+    };
+    encode_current_node_event_json(&event).map_err(AgentEventProjectionError::output)?;
+    Ok(event)
 }

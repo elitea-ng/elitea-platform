@@ -72,7 +72,9 @@ describe('delegation notices (client contract 1.60)', () => {
   it('shows Review delegation only when offered, and asks the editors otherwise', async () => {
     const { rerender } = await render(<DelegationNoticeCards notices={[parsed(notice())]} />);
     await fireEvent.press(screen.getByText('Review delegation'));
-    expect(router.push).toHaveBeenCalledWith(delegationReviewHref(7));
+    // The notice names the called agent (9) and the caller (Planner), so the screen lands on that edge.
+    expect(router.push).toHaveBeenCalledWith('/agent-delegations/7?callee=9&name=Planner');
+    expect(delegationReviewHref(7)).toBe('/agent-delegations/7');
 
     await rerender(<DelegationNoticeCards notices={[parsed(notice({ reason: 'principal' }))]} />);
     expect(screen.queryByText('Review delegation')).toBeNull();
