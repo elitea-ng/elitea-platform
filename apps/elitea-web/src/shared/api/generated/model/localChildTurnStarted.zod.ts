@@ -41,6 +41,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { DelegationNotice } from "./delegationNotice.zod";
 
 export const LocalChildTurnStarted = zod
   .object({
@@ -58,6 +59,9 @@ export const LocalChildTurnStarted = zod
       .uuid()
       .describe("The hidden child conversation (`source` `local_child`)."),
     created: zod.boolean().describe("False for a replay of an admitted child."),
+    delegation_notice: DelegationNotice.optional().describe(
+      "Client contract 1.61 (ADR-0044 Amendment 1, issue 2214). Present when the edge from the turn's agent to this nested agent has an approved grant the nested agent has drifted past: the child was admitted narrowed (`kind: narrowed`, `reason: stale`) to what its caller and the grant cover. Its `id` is the start's `idempotency_key`; show it at the call. Absent for a replay and for a child run as it was frozen.",
+    ),
   })
   .describe(
     "The child turn admitted (or replayed). NOTE(W2): internal/api/v2/desktopops/child_turn.go (`writeChildStarted`).",

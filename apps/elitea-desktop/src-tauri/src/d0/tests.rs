@@ -9391,6 +9391,110 @@ async fn child_call_reuses_idempotency_key_on_retry() {
     assert_eq!(lanes[1].0, "subagent_finished");
 }
 
+fn delegation_notice(kind: &str, reason: &str) -> Value {
+    json!({"id": "start-key", "kind": kind, "reason": reason,
+        "edge": {"caller_id": 1, "caller_name": "Supervisor", "callee_id": 2,
+            "callee_name": "Researcher", "kind": "agent_tool"},
+        "missing": [{"kind": "toolkit", "name": "Jira"}], "can_review": true})
+}
+
+/// A nested agent whose edge has no approved grant is refused by Main
+/// (ADR-0044 Amendment 1, #2214): nothing runs, the model reads the typed
+/// error without the notice, and the lane's end carries the notice at the
+/// call that started the child.
+#[tokio::test]
+async fn refused_delegation_shows_the_notice_at_the_call() {
+    let server = serve(move |req: &Req| {
+        if req.path == CHILD_START {
+            return Res::json(
+                403,
+                &json!({"error": "delegation_refused", "message": "no approved grant",
+                    "delegation_notice": delegation_notice("refused", "no_grant")}),
+            );
+        }
+        Res::json(404, &json!({"error": "not_found"}))
+    })
+    .await;
+    let prompt = Arc::new(Answering {
+        decision: None,
+        asked: Mutex::default(),
+    });
+    let (context, emitter) = child_context(&server, prompt).await;
+    let result = super::child_agent::call(&context, &child_spec(), "call-7", "Find the doc").await;
+    assert_eq!(result["status"], "error", "{result}");
+    assert_eq!(result["code"], "delegation_refused");
+    assert!(
+        result.get("delegation_notice").is_none(),
+        "the model reads the typed error, not the notice"
+    );
+    assert_eq!(seen(&server, CHILD_START).len(), 1, "a refusal is not retried");
+
+    let finished = of_kind(&emitter.all(), "subagent_finished");
+    assert_eq!(finished.len(), 1);
+    assert_eq!(finished[0]["status"], "failed");
+    let notice = &finished[0]["delegation_notice"];
+    assert_eq!(notice["kind"], "refused");
+    assert_eq!(notice["reason"], "no_grant");
+    assert_eq!(notice["id"], "call-7", "keyed by the call, not Main's key");
+    assert_eq!(notice["edge"]["callee_name"], "Researcher");
+}
+
+/// A child Main admitted narrowed runs, and its lane ends with the notice.
+#[tokio::test]
+async fn narrowed_delegation_runs_and_shows_the_notice() {
+    let server = serve(move |req: &Req| {
+        if req.path == CHILD_START {
+            return Res::json(
+                202,
+                &json!({"child_execution_id": CHILD_EXECUTION, "response_message_id": CHILD_RESPONSE,
+                    "conversation_uuid": CHILD_CONVERSATION, "created": true,
+                    "delegation_notice": delegation_notice("narrowed", "stale")}),
+            );
+        }
+        if req.path == format!("{CHILD_START}/{CHILD_EXECUTION}") {
+            return child_state("completed");
+        }
+        Res::json(404, &json!({"error": "not_found"}))
+    })
+    .await;
+    let prompt = Arc::new(Answering {
+        decision: None,
+        asked: Mutex::default(),
+    });
+    let (context, emitter) = child_context(&server, prompt).await;
+    let result = super::child_agent::call(&context, &child_spec(), "call-8", "Find the doc").await;
+    assert_eq!(result["status"], "ok", "{result}");
+
+    let finished = of_kind(&emitter.all(), "subagent_finished");
+    assert_eq!(finished[0]["status"], "completed");
+    let notice = &finished[0]["delegation_notice"];
+    assert_eq!(notice["kind"], "narrowed");
+    assert_eq!(notice["id"], "call-8");
+}
+
+/// A child run as frozen carries no notice: the payload is what it was.
+#[tokio::test]
+async fn child_without_a_notice_ends_without_one() {
+    let server = serve(move |req: &Req| {
+        if req.path == CHILD_START {
+            return child_started();
+        }
+        if req.path == format!("{CHILD_START}/{CHILD_EXECUTION}") {
+            return child_state("completed");
+        }
+        Res::json(404, &json!({"error": "not_found"}))
+    })
+    .await;
+    let prompt = Arc::new(Answering {
+        decision: None,
+        asked: Mutex::default(),
+    });
+    let (context, emitter) = child_context(&server, prompt).await;
+    let _ = super::child_agent::call(&context, &child_spec(), "call-9", "Find the doc").await;
+    let finished = of_kind(&emitter.all(), "subagent_finished");
+    assert!(finished[0].get("delegation_notice").is_none());
+}
+
 /// The child's approve/reject pause reaches the person's approval card and
 /// their answer resumes the child through the continue route.
 #[tokio::test]

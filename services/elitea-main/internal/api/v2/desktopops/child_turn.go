@@ -11,6 +11,7 @@ import (
 	"math"
 	"mime"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +23,8 @@ import (
 	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/desktopwire"
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/delegationedge"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/delegationnotice"
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/localturn"
 	toolkitcalltoolapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
@@ -82,6 +85,14 @@ type ChildTurnDependencies struct {
 	Audit audit.Recorder
 	// Limiter counts starts per caller; nil uses ChildTurnStartsPerMinute.
 	Limiter *failurelimit.Limiter
+	// Delegation applies the delegation rule of the edge from the turn's agent
+	// to the child (ADR-0044 Amendment 1, issue 2214). Nil is the rule off (the
+	// grant switch, ELITEA_DELEGATION_GRANTS_ENFORCED, is off): a child start
+	// is exactly what it was.
+	Delegation *delegationedge.Evaluator
+	// Editors names the people to ask about a delegation notice; nil serves
+	// the notice without Review delegation.
+	Editors delegationnotice.EditorLister
 }
 
 // NewChildTurnRoute composes startLocalChildTurn and readLocalChildTurn
@@ -123,6 +134,9 @@ func NewChildTurnRoute(
 		return nil, ErrInvalidRoute
 	}
 	h := newChildTurnHandler(deps)
+	if reviewer := delegationnotice.NewService(permissionChecker{resolver: permissions}, deps.Editors); reviewer != nil {
+		h.reviewer = reviewer
+	}
 	router := chi.NewRouter()
 	router.Method(http.MethodPost, ChildTurnStartPath, gate(authConfig, permissions, ChildTurnPermission, h.start))
 	router.Method(http.MethodGet, ChildTurnReadPath, gate(authConfig, permissions, ChildTurnPermission, h.read))
@@ -140,7 +154,7 @@ func newChildTurnHandler(deps ChildTurnDependencies) *childTurnHandler {
 	}
 	return &childTurnHandler{
 		starter: deps.Start, authorizer: deps.Authorizer, turns: deps.Turns, store: deps.Store,
-		audit: recorder, limiter: limiter, now: time.Now,
+		audit: recorder, limiter: limiter, now: time.Now, delegation: deps.Delegation,
 	}
 }
 
@@ -152,6 +166,10 @@ type childTurnHandler struct {
 	audit      audit.Recorder
 	limiter    *failurelimit.Limiter
 	now        func() time.Time
+	delegation *delegationedge.Evaluator
+	// reviewer stamps what the viewer may do about a notice; nil serves the
+	// notice without it.
+	reviewer delegationnotice.Reviewer
 }
 
 type childTurnBody struct {
@@ -273,7 +291,7 @@ func (h *childTurnHandler) start(writer http.ResponseWriter, request *http.Reque
 	}
 	if conversation.ExecutionID != "" {
 		call.outcome, call.childExecutionID = "replayed", conversation.ExecutionID
-		writeChildStarted(writer, conversation.ExecutionID, conversation.ResponseMessageID, conversation.ConversationUUID, false)
+		writeChildStarted(writer, conversation.ExecutionID, conversation.ResponseMessageID, conversation.ConversationUUID, false, nil)
 		return
 	}
 	// RATE. Charged up front in one step (Take), so concurrent starts cannot
@@ -291,7 +309,16 @@ func (h *childTurnHandler) start(writer http.ResponseWriter, request *http.Reque
 			"Too many child turns from this caller. Retry after the interval in Retry-After.")
 		return
 	}
+	var narrowed delegationedge.Outcome
 	outcome, err := h.starter.StartCurrentApplication(request.Context(), agentexecutionapp.CurrentApplicationStartRequest{
+		// The edge from the turn's agent to the child: its grant narrows what
+		// the child holds, or refuses it (nil while the rule is off).
+		NarrowVersion: h.delegation.Hook(delegationedge.Edge{
+			ProjectID:           projectID,
+			CallerApplicationID: turn.ApplicationID, CallerVersionID: turn.VersionID,
+			CalleeApplicationID: body.ApplicationID, CalleeVersionID: body.VersionID,
+			NoticeID: body.IdempotencyKey,
+		}, &narrowed),
 		ProjectID:           projectID,
 		ActorUserID:         actor,
 		ConversationUUID:    conversation.ConversationUUID,
@@ -307,6 +334,12 @@ func (h *childTurnHandler) start(writer http.ResponseWriter, request *http.Reque
 		call.outcome = "start_error"
 		if conversation.Created {
 			h.store.DiscardChildConversation(request.Context(), projectID, conversation.ConversationUUID)
+		}
+		var refused *delegationedge.RefusedError
+		if errors.As(err, &refused) {
+			call.outcome = "delegation_refused"
+			h.writeDelegationRefused(request.Context(), writer, projectID, actor, refused.Notice)
+			return
 		}
 		writeChildStartError(request.Context(), writer, err)
 		return
@@ -326,16 +359,73 @@ func (h *childTurnHandler) start(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	call.outcome, call.childExecutionID = "started", outcome.ExecutionID
-	writeChildStarted(writer, outcome.ExecutionID, outcome.ResponseMessageID, conversation.ConversationUUID, outcome.Created)
+	var notice map[string]any
+	if narrowed.Notice != nil {
+		notice = h.stamped(request.Context(), projectID, actor, *narrowed.Notice)
+	}
+	writeChildStarted(writer, outcome.ExecutionID, outcome.ResponseMessageID, conversation.ConversationUUID, outcome.Created, notice)
 }
 
-func writeChildStarted(writer http.ResponseWriter, executionID, responseMessageID, conversationUUID string, created bool) {
-	desktopwire.WriteJSON(writer, http.StatusAccepted, map[string]any{
+// writeDelegationRefused answers a child the edge's delegation rule refused:
+// 403 `delegation_refused` with the notice the desktop shows.
+func (h *childTurnHandler) writeDelegationRefused(ctx context.Context, writer http.ResponseWriter, projectID, actor int64, notice delegationnotice.Notice) {
+	desktopwire.WriteJSON(writer, http.StatusForbidden, map[string]any{
+		"error": "delegation_refused",
+		"message": "The nested agent needs something its caller does not hold, and this delegation has no approved grant. " +
+			"Ask an editor of the calling agent to review the delegation, or remove it from the nested agent.",
+		"delegation_notice": h.stamped(ctx, projectID, actor, notice),
+	})
+}
+
+// stamped is the notice as the caller is served it: what they may do about it
+// (`can_review`, and the people to ask), derived now and never stored.
+func (h *childTurnHandler) stamped(ctx context.Context, projectID, actor int64, notice delegationnotice.Notice) map[string]any {
+	encoded, err := json.Marshal(notice)
+	if err != nil {
+		return nil
+	}
+	var value map[string]any
+	if json.Unmarshal(encoded, &value) != nil {
+		return nil
+	}
+	if h.reviewer != nil {
+		if review, err := h.reviewer.DelegationReview(ctx, projectID, actor, notice.Edge.CallerID); err == nil {
+			delegationnotice.Stamp(value, review)
+		}
+	}
+	return value
+}
+
+// permissionChecker answers what the notice's Review needs: the person's
+// resolved permissions in the project.
+type permissionChecker struct {
+	resolver auth.PermissionResolver
+}
+
+func (c permissionChecker) HasProjectPermission(ctx context.Context, userID, projectID int64, permission string) (bool, error) {
+	id := strconv.FormatInt(userID, 10)
+	resolution, err := c.resolver.ResolvePermissions(ctx,
+		auth.User{ID: id, UserID: id}, auth.PermissionModeDefault, strconv.FormatInt(projectID, 10))
+	if err != nil {
+		if errors.Is(err, auth.ErrPermissionDenied) {
+			return false, nil
+		}
+		return false, err
+	}
+	return slices.Contains(resolution.Permissions, permission), nil
+}
+
+func writeChildStarted(writer http.ResponseWriter, executionID, responseMessageID, conversationUUID string, created bool, notice map[string]any) {
+	body := map[string]any{
 		"child_execution_id":  executionID,
 		"response_message_id": responseMessageID,
 		"conversation_uuid":   conversationUUID,
 		"created":             created,
-	})
+	}
+	if notice != nil {
+		body["delegation_notice"] = notice
+	}
+	desktopwire.WriteJSON(writer, http.StatusAccepted, body)
 }
 
 // childQuestionID is the start's question id: a name-based UUID of the
