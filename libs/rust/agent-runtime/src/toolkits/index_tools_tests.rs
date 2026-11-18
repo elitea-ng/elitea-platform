@@ -300,7 +300,7 @@ fn an_unstamped_entry_is_a_listed_index_with_no_vectors() {
     assert_eq!(blank.pending(), ["blank".to_owned()]);
     let shared = SharedIndexCatalog::new(catalog);
     assert!(shared.remove("failed-run"));
-    assert!(shared.snapshot().pending().is_empty());
+    assert_eq!(shared.snapshot().pending(), [] as [String; 0]);
     for invalid in [
         json!([{"name": "n", "index_id": "ab", "embedding_model": "m"}]),
         json!([{"name": "n", "index_id": "ab", "embedding_dimension": 3}]),
