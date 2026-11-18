@@ -585,3 +585,76 @@ WHERE execution_id IN ($1, $2)`, own, idle); err != nil {
 		t.Fatalf("window = %v (%v); want only the agent's own run", copied, rows.Err())
 	}
 }
+
+// seedPlatformRefusal writes the failure event Main projects for a run the
+// worker refused with the given failure code (INVALID_INPUT, ...).
+func seedPlatformRefusal(t *testing.T, pool *pgxpool.Pool, executionID string, projectID int64, code string) {
+	t.Helper()
+	event := `{"code":"` + code + `","safe_message":"The execution input is invalid.","retryable":false}`
+	if _, err := pool.Exec(t.Context(), `
+INSERT INTO elitea_runtime.execution_replay_events
+    (event_id, execution_id, generation, projection_project_id, event_type, event_bytes, event_digest)
+VALUES ('failed-' || $1, $1, 1, $2, 'execution.failed', convert_to($3, 'UTF8'), sha256(convert_to($3, 'UTF8')))`,
+		executionID, projectID, event); err != nil {
+		t.Fatalf("seed the refusal of %s: %v", executionID, err)
+	}
+}
+
+// Issue 2152: an agent created before a release tripped the breaker on its
+// first message, because the runs the platform refused (the execution input
+// is invalid) counted as the agent's failures. Refusals are not in the error
+// rate, and a trip that rested on them is lifted by the pass, without an
+// administrator; a trip that rests on the agent's own failures stays.
+func TestAgentBreaker_PlatformRefusalsAreNotTheAgentsFailuresAndAnOldTripIsLifted(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedAgentReleaseFixture(t, pool)
+	ctx := t.Context()
+	store := newBreakerTestStore(t, pool)
+	metrics := breaker.NewMetrics()
+	key := breaker.AgentKey{ProjectID: 1, ApplicationID: 31}
+
+	// 20 ended runs, all FAILED with INVALID_INPUT: nothing the agent did.
+	for i := range 20 {
+		id := fmt.Sprintf("brk-ref-%02d", i)
+		seedEndedAgentRun(t, pool, id, 1, 31, "FAILED")
+		seedPlatformRefusal(t, pool, id, 1, "INVALID_INPUT")
+	}
+	if summary, err := breakerPass(store, metrics).Run(ctx); err != nil || summary.Tripped != 0 {
+		t.Fatalf("pass over refused runs = %s, %v", summary.String(), err)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM elitea_runtime.agent_breaker_runs WHERE cap_reached`); n != 20 {
+		t.Fatalf("refusals marked as not the agent's = %d, want 20", n)
+	}
+
+	// A trip written by a build that counted them: the rows read as plain
+	// failures and the agent is suspended.
+	if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.agent_breaker_runs SET cap_reached = false`); err != nil {
+		t.Fatal(err)
+	}
+	trip := breaker.Trip{Key: key, Tier: agentlifecycle.TierLow, Rule: breaker.RuleErrorRate, ResumeRequires: safety.ResumeAnyAdmin,
+		Unit: breaker.UnitPercent, Observed: 100, Threshold: 50, WindowRuns: 20, FailedRuns: 20}
+	suspension, err := store.Trip(ctx, trip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary, err := breakerPass(store, metrics).Run(ctx)
+	if err != nil || summary.Recovered != 1 {
+		t.Fatalf("pass over the old trip = %s, %v", summary.String(), err)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM elitea_runtime.execution_suspensions
+WHERE id = $1 AND resumed_at IS NOT NULL AND resumed_by = 0 AND resume_reason = $2`, suspension.ID, breaker.RecoveryReason); n != 1 {
+		t.Fatalf("the suspension was not resumed by the system")
+	}
+
+	// The same agent now fails for real, 20 of 20: it trips and is NOT lifted.
+	for i := range 20 {
+		seedEndedAgentRun(t, pool, fmt.Sprintf("brk-ref-real-%02d", i), 1, 31, "FAILED")
+	}
+	summary, err = breakerPass(store, metrics).Run(ctx)
+	if err != nil || summary.Tripped != 1 || summary.Recovered != 0 {
+		t.Fatalf("pass over real failures = %s, %v", summary.String(), err)
+	}
+	if summary, err = breakerPass(store, metrics).Run(ctx); err != nil || summary.Recovered != 0 {
+		t.Fatalf("a genuine trip was lifted: %s, %v", summary.String(), err)
+	}
+}

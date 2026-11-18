@@ -78,6 +78,17 @@ func NewAgentBreaker(pool *pgxpool.Pool, appender securityaudit.Appender) (*Agen
 // the tool did not fail.
 const capRefusalText = "the run reached a run cap an administrator set; the call does not run"
 
+// platformRefusalIngestSQL and platformRefusalHeldSQL are true for a failure
+// event (alias e) whose code is in breaker.NotAgentFailureCodes, which is
+// parameter $5 of the ingest and $1 of the held-agents read.
+const platformRefusalIngestSQL = `EXISTS (
+               SELECT 1 FROM unnest($5::text[]) AS refused(code)
+               WHERE position(convert_to('"code":"' || refused.code || '"', 'UTF8') IN e.event_bytes) > 0)`
+
+const platformRefusalHeldSQL = `EXISTS (
+               SELECT 1 FROM unnest($1::text[]) AS refused(code)
+               WHERE position(convert_to('"code":"' || refused.code || '"', 'UTF8') IN e.event_bytes) > 0)`
+
 // ingestRunsSQL copies into the window the application runs that ended
 // between $1 seconds and $2 seconds ago and are not in the window yet. Each
 // run is computed once ("fresh" is materialised before the step read, so a
@@ -135,7 +146,15 @@ SELECT f.execution_id, f.generation, f.resource_project_id, f.application_id, f.
            WHERE e.projection_project_id = f.projection_project_id
              AND e.execution_id = f.execution_id AND e.generation = f.generation
              AND e.event_type = 'execution.failed'
-             AND position(convert_to('"code":"' || $4::text || '"', 'UTF8') IN e.event_bytes) > 0)),
+             AND position(convert_to('"code":"' || $4::text || '"', 'UTF8') IN e.event_bytes) > 0))
+       -- A run the platform refused (invalid input, an unserved version or
+       -- capability) is a fault of the release, not of the agent (#2152).
+       OR (f.state = 'FAILED' AND EXISTS (
+           SELECT 1 FROM elitea_runtime.execution_replay_events AS e
+           WHERE e.projection_project_id = f.projection_project_id
+             AND e.execution_id = f.execution_id AND e.generation = f.generation
+             AND e.event_type = 'execution.failed'
+             AND ` + platformRefusalIngestSQL + `)),
        COALESCE(streak.n, 0), COALESCE(left(streak.tool, 128), '')
 FROM fresh AS f
 LEFT JOIN LATERAL (
@@ -160,7 +179,8 @@ RETURNING r.project_id, r.application_id`
 
 // IngestRuns implements breaker.Store.
 func (b *AgentBreaker) IngestRuns(ctx context.Context, lookback time.Duration) ([]breaker.AgentKey, error) {
-	rows, err := b.pool.Query(ctx, ingestRunsSQL, lookback.Seconds(), b.settleGrace.Seconds(), capRefusalText, runcaps.Code)
+	rows, err := b.pool.Query(ctx, ingestRunsSQL, lookback.Seconds(), b.settleGrace.Seconds(), capRefusalText, runcaps.Code,
+		breaker.NotAgentFailureCodes)
 	if err != nil {
 		return nil, fmt.Errorf("agent breaker: copy the ended runs: %w", err)
 	}
@@ -287,6 +307,15 @@ SELECT EXISTS (SELECT 1 FROM elitea_lifecycle.agent_registry
 
 // Observe implements breaker.Store.
 func (b *AgentBreaker) Observe(ctx context.Context, key breaker.AgentKey, window int) (breaker.Observation, error) {
+	return b.observe(ctx, key, window, false)
+}
+
+// ObserveWindow implements breaker.Store.
+func (b *AgentBreaker) ObserveWindow(ctx context.Context, key breaker.AgentKey, window int) (breaker.Observation, error) {
+	return b.observe(ctx, key, window, true)
+}
+
+func (b *AgentBreaker) observe(ctx context.Context, key breaker.AgentKey, window int, ignoreSuspension bool) (breaker.Observation, error) {
 	observation := breaker.Observation{Key: key, Tier: agentlifecycle.TierLow, Outcomes: []string{}}
 	agentRefText := strconv.FormatInt(key.ApplicationID, 10)
 	var (
@@ -300,7 +329,7 @@ WHERE scope = 'agent' AND project_id = $1 AND scope_key = $2`, key.ProjectID, ag
 		return observation, fmt.Errorf("agent breaker: read the agent's suspensions: %w", err)
 	}
 	observation.Suspended = active != nil && *active
-	if observation.Suspended {
+	if observation.Suspended && !ignoreSuspension {
 		return observation, nil
 	}
 
@@ -569,4 +598,65 @@ func breakerOverrideReasons(raw []byte) []string {
 	addInt("tool_failure_streak", override.ToolFailureStreak)
 	addInt("runs_per_hour", override.RunsPerHour)
 	return reasons
+}
+
+// recoverableTripsSQL marks, in the window of each agent a breaker error_rate
+// suspension holds, the FAILED runs the platform refused, and answers the
+// suspensions. It reads only the held agents' window rows (a handful, each
+// by agent_breaker_runs_agent), never the whole window.
+const recoverableTripsSQL = `
+WITH held AS (
+    SELECT s.id, s.project_id, s.scope_key::bigint AS application_id
+    FROM elitea_runtime.execution_suspensions AS s
+    WHERE s.scope = 'agent' AND s.source = 'breaker' AND s.resumed_at IS NULL
+      AND s.resume_requires <> 'two_person'
+      AND s.detail->>'rule' = 'error_rate'
+),
+marked AS (
+    UPDATE elitea_runtime.agent_breaker_runs AS r
+    SET cap_reached = true
+    FROM held AS h
+    WHERE r.project_id = h.project_id AND r.application_id = h.application_id
+      AND r.state = 'FAILED' AND NOT r.cap_reached
+      AND EXISTS (
+          SELECT 1
+          FROM elitea_runtime.execution_jobs AS j
+          JOIN elitea_runtime.execution_replay_events AS e
+            ON e.projection_project_id = j.projection_project_id
+           AND e.execution_id = j.execution_id AND e.generation = j.generation
+          WHERE j.execution_id = r.execution_id AND j.generation = r.generation
+            AND e.event_type = 'execution.failed'
+            AND ` + platformRefusalHeldSQL + `)
+)
+SELECT id, project_id, application_id FROM held ORDER BY id`
+
+// RecoverableTrips implements breaker.Store.
+func (b *AgentBreaker) RecoverableTrips(ctx context.Context) ([]breaker.HeldAgent, error) {
+	rows, err := b.pool.Query(ctx, recoverableTripsSQL, breaker.NotAgentFailureCodes)
+	if err != nil {
+		return nil, fmt.Errorf("agent breaker: read the held agents: %w", err)
+	}
+	defer rows.Close()
+	var out []breaker.HeldAgent
+	for rows.Next() {
+		var held breaker.HeldAgent
+		if err := rows.Scan(&held.SuspensionID, &held.Key.ProjectID, &held.Key.ApplicationID); err != nil {
+			return nil, fmt.Errorf("agent breaker: scan a held agent: %w", err)
+		}
+		out = append(out, held)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("agent breaker: read the held agents: %w", err)
+	}
+	return out, nil
+}
+
+// Resume implements breaker.Store: the system (actor 0) lifts a breaker
+// suspension.
+func (b *AgentBreaker) Resume(ctx context.Context, suspensionID int64, reason string) error {
+	_, err := b.suspensions.ResumeSuspension(ctx, safety.ResumeRecord{ID: suspensionID, ResumedBy: 0, Reason: reason})
+	if errors.Is(err, safety.ErrNotActive) {
+		return nil // an administrator resumed it first
+	}
+	return err
 }

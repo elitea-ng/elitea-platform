@@ -16,7 +16,9 @@ import type { SxProps, Theme } from '@mui/material/styles';
 
 import type { ApplicationDetail, ApplicationVersionDetail, SocialAuthorProfile } from '@/shared/api/generated/model';
 import { useGetCurrentAuthor } from '@/shared/api/generated/social/social';
+import type { AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 import { unwrapBody } from '@/shared/api/unwrap';
+import { useAgentChatModelBinding } from '@/widgets/agent-model-settings';
 
 import { applicationDetailDisplayName } from '../lib/editApplicationMappers';
 import { AgentTestChat } from './AgentTestChat';
@@ -27,6 +29,9 @@ export interface EditApplicationTestPaneProps {
   readonly detail: ApplicationDetail | undefined;
   readonly activeVersion: ApplicationVersionDetail | undefined;
   readonly isDirty: boolean;
+  /** The form's model (`version_details.llm_settings`): the one setting the chat's picker shows and writes (#2151). */
+  readonly llmSettings: AgentLlmSettings | undefined;
+  readonly onLlmSettingsChange: (next: AgentLlmSettings) => void;
 }
 
 /** `unwrapBody` is the one place envelope knowledge lives (R-A6); the cast is this caller's. */
@@ -44,6 +49,8 @@ export function EditApplicationTestPane({
   detail,
   activeVersion,
   isDirty,
+  llmSettings,
+  onLlmSettingsChange,
 }: EditApplicationTestPaneProps): ReactNode {
   const author = authorOf(useGetCurrentAuthor().data);
   const authorId = author?.id;
@@ -79,7 +86,9 @@ export function EditApplicationTestPane({
     [activeVersion?.conversation_starters],
   );
 
-  return <AgentTestChat identity={identity} user={user} isDirty={isDirty} conversationStarters={starters} />;
+  const llm = useAgentChatModelBinding(projectId, llmSettings, onLlmSettingsChange, false);
+
+  return <AgentTestChat identity={identity} user={user} isDirty={isDirty} conversationStarters={starters} llm={llm} />;
 }
 
 const splitSx: SxProps<Theme> = {
