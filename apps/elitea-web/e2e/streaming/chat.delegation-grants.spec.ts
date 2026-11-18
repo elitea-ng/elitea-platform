@@ -549,13 +549,20 @@ test('J2: a toolkit added to the specialist leaves its grant stale, runs without
     await expect(page.getByTestId('delegation-notice').first()).toContainText(`${specialist.name} ran without`, { timeout: 45_000 });
 
     // The editors are told ONCE, however many times the drift is read or run.
-    const notifications = await page.request.get(`${API}/notifications/notifications/prompt_lib/${projectId}?limit=200`);
-    expect(notifications.status(), `read notifications: ${(await notifications.text()).slice(0, 300)}`).toBe(200);
-    const rows = ((await notifications.json()) as { rows?: readonly { event_type?: string; meta?: Record<string, unknown> }[] }).rows ?? [];
-    const told = rows.filter(
-      (row) => row.event_type === 'delegation_grant_stale' && String(row.meta?.['caller_application_id']) === parent.id,
-    );
-    expect(told, 'exactly one delegation_grant_stale notification for this edge and digest').toHaveLength(1);
+    const readTold = async (): Promise<number> => {
+      const notifications = await page.request.get(`${API}/notifications/notifications/prompt_lib/${projectId}?limit=1000`);
+      expect(notifications.status(), `read notifications: ${(await notifications.text()).slice(0, 300)}`).toBe(200);
+      const rows =
+        ((await notifications.json()) as { rows?: readonly { event_type?: string; meta?: Record<string, unknown> }[] }).rows ?? [];
+      return rows.filter(
+        (row) => row.event_type === 'delegation_grant_stale' && String(row.meta?.['caller_application_id']) === parent.id,
+      ).length;
+    };
+    await expect.poll(readTold, { timeout: 60_000, message: 'the editors must be told that the grant went stale' }).toBeGreaterThan(0);
+    // Read the grants again (the check runs on a read) and let a duplicate show itself before the count is judged.
+    await readGrants(page, projectId, parent);
+    await page.waitForTimeout(3_000);
+    expect(await readTold(), 'exactly one delegation_grant_stale notification for this edge and digest').toBe(1);
 
     // Re-approval in the dialog restores it, and keeps the old grant as superseded.
     const dialog = await openReview(page, parent, specialist);
@@ -680,7 +687,7 @@ test('J4: report runs an unapproved delegation and records it, enforce refuses i
     expect(enforced.notices.some((row) => row.kind === 'refused' && row.reason === 'no_grant')).toBe(true);
   } finally {
     // The section is platform-wide state shared by every journey on this stack.
-    await delegationSection({ mode: original.mode }).catch(() => {});
     await cleanup.run();
+    await delegationSection({ mode: original.mode });
   }
 });
