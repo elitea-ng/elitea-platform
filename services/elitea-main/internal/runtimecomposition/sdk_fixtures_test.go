@@ -112,6 +112,31 @@ func TestTavilyToolkitTypeIsCataloguedThroughTheNativePath(t *testing.T) {
 	}
 }
 
+// A native type's credential annotations are checked when the catalogue is
+// tested, not when a user opens the editor: every annotated field is a settings
+// field, and every credential type it accepts is known to a catalogue.
+func TestNativeToolkitTypeCredentialAnnotationsAreResolvable(t *testing.T) {
+	for toolkitType, entry := range rustOnlyNewTypes(t) {
+		settingsProperties, _ := entry.Settings["properties"].(map[string]any)
+		for field, rawAnnotation := range entry.Properties {
+			if _, ok := settingsProperties[field]; !ok {
+				t.Errorf("%s: annotated field %q is not a settings field", toolkitType, field)
+			}
+			annotation, _ := rawAnnotation.(map[string]any)
+			accepted, _ := annotation[configurationTypesAnnotation].([]any)
+			if len(accepted) == 0 {
+				t.Errorf("%s.%s: no configuration_types", toolkitType, field)
+			}
+			for _, name := range accepted {
+				configurationType, _ := name.(string)
+				if _, ok := nativeConfigurationSection(configurationType); !ok {
+					t.Errorf("%s.%s: credential type %q is in no catalogue", toolkitType, field, configurationType)
+				}
+			}
+		}
+	}
+}
+
 // A type resolved through the native fallback must exist in the available
 // catalogue; an invented one stays a hard error.
 func TestNativeConfigurationSectionFallbackKnowsOnlyRealTypes(t *testing.T) {

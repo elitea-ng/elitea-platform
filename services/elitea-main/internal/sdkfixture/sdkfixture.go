@@ -133,6 +133,9 @@ func (f Fixture) DiffConfiguration(properties map[string]any, required []string)
 	for _, name := range sortedKeys(want) {
 		have, ok := properties[name].(map[string]any)
 		if !ok {
+			if _, present := properties[name]; present {
+				diffs = append(diffs, fmt.Sprintf("field %q is not a schema object", name))
+			}
 			continue
 		}
 		wantField, _ := want[name].(map[string]any)
