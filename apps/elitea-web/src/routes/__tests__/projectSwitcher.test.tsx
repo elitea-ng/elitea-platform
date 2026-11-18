@@ -30,6 +30,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stubAuthContext } from '../../app/router-context';
 import type { RouterContext } from '../../app/router-context';
 import { resetConfigForTests } from '../../shared/config/get-config';
+import { readPersistedProject } from '../../shared/lib/selectedProjectPersistence';
 import { renderWithTheme } from '../../shared/ui/lib/testTheme';
 import { server } from '../../test/setup';
 import { routeTree } from '../../routeTree.gen';
@@ -414,6 +415,19 @@ describe('ProjectSwitcherView — component-level integration', () => {
 
     await waitFor(() => expect(replaceCalls).toEqual(['https://app.example/chat?x=1']));
     expect(getProjectStore().getState().selectedProject).toEqual({ id: 29, name: 'Demo' });
+  });
+
+  // #2148: the reloaded app boots its selected project from storage, so a link
+  // naming a project must write it there or the reload lands in the old one.
+  it('persists the resolved project as the selection the reloaded app boots from', async () => {
+    mockProjectList([{ id: 29, name: 'Demo' }]);
+    const { replaceCalls } = overrideLocation('/29/toolkits/all/12', '', '');
+    vi.stubEnv('DEV', true);
+
+    renderView('29');
+
+    await waitFor(() => expect(replaceCalls).toEqual(['https://app.example/toolkits/all/12']));
+    expect(readPersistedProject()).toEqual({ id: '29', name: 'Demo' });
   });
 
   it('clears the query cache only when switching FROM an artifacts-shaped path', async () => {

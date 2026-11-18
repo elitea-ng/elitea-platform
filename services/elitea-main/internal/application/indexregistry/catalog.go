@@ -9,42 +9,53 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/indexcatalog"
 )
 
-// CatalogRow is what the frozen catalog needs of one live, stamped registry
-// row: nothing else (no state, no history JSON) is read for it.
+// CatalogRow is what the frozen catalog needs of one live registry row:
+// nothing else (no history JSON) is read for it. Model and Dimension are the
+// embedding space the row was stamped with, empty for a row that holds no
+// vectors yet.
 type CatalogRow struct {
 	ToolkitID int32
 	Name      string
 	IndexID   string
+	State     string
 	Model     string
 	Dimension int32
 }
 
+// Stamped reports whether the row carries an embedding space.
+func (r CatalogRow) Stamped() bool { return r.Model != "" || r.Dimension != 0 }
+
 // CatalogSource is the one registry read the frozen catalog needs.
 type CatalogSource interface {
-	// CatalogEntries returns the live, stamped rows of the project's
-	// toolkits named, ordered by toolkit then oldest first, at most
+	// CatalogEntries returns the live rows of the project's toolkits named,
+	// stamped or not (the Indexes tab lists the same rows), ordered by toolkit then oldest first, at most
 	// indexcatalog.MaxEntries+1 per toolkit (the extra row tells the caller
 	// the toolkit was truncated). A toolkit with no such rows yields none.
 	CatalogEntries(ctx context.Context, projectID int32, toolkitIDs []int32) ([]CatalogRow, error)
 }
 
 // ToolkitIndexCatalog projects one toolkit's catalog rows into the frozen
-// catalog the Rust worker's index tools read (ADR-0030 I1). Only a row that
-// has been stamped with its embedding space (its first run wrote vectors) is
-// an index the tools can search; the query already leaves out a row that was
-// created and never ran, as the SDK's list_indexes (distinct collections
-// among stored chunks) left it out. A row outside indexcatalog.ValidEntry —
-// the one rule the worker parses by — is left out too, as is a second row
-// of a name already listed, and the catalog is cut at
-// indexcatalog.MaxEntries (oldest first); `dropped` and `truncated` report
-// those so the resolver can log them. The result is never nil: an empty
-// catalog is `[]`, which the worker reads as "no indexes yet", not as "no
-// catalog".
+// catalog the Rust worker's index tools read (ADR-0030 I1). It lists every
+// live registry row, the rows the Indexes tab shows, so list_indexes and the
+// tab share one source of truth. A row stamped with its embedding space (its
+// run wrote vectors, even a run that then failed or finished partly) is a
+// searchable entry; a row that was created and never ran, or whose run failed
+// before storing anything, is a pending entry (name, id, state and no
+// embedding space): listed, never searched. A row outside the entry rule the
+// worker parses by is left out, as is a second row of a name already listed,
+// and the catalog is cut at indexcatalog.MaxEntries (oldest first); `dropped`
+// and `truncated` report those so the resolver can log them. The result is
+// never nil: an empty catalog is `[]`, which the worker reads as "no indexes
+// yet", not as "no catalog".
 func ToolkitIndexCatalog(rows []CatalogRow) (catalog []map[string]any, dropped int, truncated bool) {
 	catalog = make([]map[string]any, 0, min(len(rows), indexcatalog.MaxEntries))
 	seen := make(map[string]struct{}, len(rows))
 	for _, row := range rows {
-		if !indexcatalog.ValidEntry(row.Name, row.IndexID, row.Model, int64(row.Dimension)) {
+		valid := indexcatalog.ValidEntry(row.Name, row.IndexID, row.Model, int64(row.Dimension))
+		if !row.Stamped() {
+			valid = indexcatalog.ValidPendingEntry(row.Name, row.IndexID)
+		}
+		if !valid {
 			dropped++
 			continue
 		}
@@ -57,6 +68,10 @@ func ToolkitIndexCatalog(rows []CatalogRow) (catalog []map[string]any, dropped i
 			break
 		}
 		seen[row.Name] = struct{}{}
+		if !row.Stamped() {
+			catalog = append(catalog, indexcatalog.PendingEntry(row.Name, row.IndexID, row.State))
+			continue
+		}
 		catalog = append(catalog, indexcatalog.Entry(row.Name, row.IndexID, row.Model, row.Dimension))
 	}
 	return catalog, dropped, truncated
