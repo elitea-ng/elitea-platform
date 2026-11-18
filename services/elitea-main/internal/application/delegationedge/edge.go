@@ -39,6 +39,7 @@ import (
 	"log/slog"
 	"strconv"
 
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/delegationnotice"
 	dg "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/delegationgrant"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
@@ -120,11 +121,11 @@ func (e *Evaluator) Hook(edge Edge, out *Outcome) Hook {
 func (e *Evaluator) apply(ctx context.Context, edge Edge, out *Outcome, versionDetails json.RawMessage) (json.RawMessage, error) {
 	callee, err := e.callees.Snapshot(ctx, edge.ProjectID, edge.CalleeApplicationID, edge.CalleeVersionID)
 	if err != nil {
-		return nil, fmt.Errorf("delegation edge: read the nested agent: %w", err)
+		return nil, snapshotError("the nested agent", err)
 	}
 	caller, err := e.callees.Snapshot(ctx, edge.ProjectID, edge.CallerApplicationID, edge.CallerVersionID)
 	if err != nil {
-		return nil, fmt.Errorf("delegation edge: read the calling agent: %w", err)
+		return nil, snapshotError("the calling agent", err)
 	}
 	settings, err := e.settings.Get(ctx)
 	if err != nil {
@@ -158,7 +159,8 @@ func (e *Evaluator) apply(ctx context.Context, edge Edge, out *Outcome, versionD
 		notice.Kind, notice.Reason, notice.GrantID = "narrowed", "stale", grant.ID
 		notice.Missing, notice.MissingTotal = noticeItems(narrowed), len(narrowed)
 	default:
-		missing, refused := dg.RefuseWithoutGrant(caller.Set, callee.Set, labels)
+		missing := dg.MissingWithoutGrant(caller.Set, callee.Set, labels)
+		refused := len(missing) > 0
 		if refused && !enforce {
 			slog.InfoContext(ctx, "delegation edge: report mode, the nested agent holds more than its caller and the edge has no grant",
 				"project_id", edge.ProjectID, "caller", edge.CallerApplicationID, "callee", edge.CalleeApplicationID)
@@ -166,7 +168,7 @@ func (e *Evaluator) apply(ctx context.Context, edge Edge, out *Outcome, versionD
 		}
 		if refused {
 			notice.Kind, notice.Reason, notice.Code = "refused", "no_grant", "DELEGATION_GRANT_MISSING"
-			notice.Missing, notice.MissingTotal = noticeItems([]dg.Item{missing}), 1
+			notice.Missing, notice.MissingTotal = noticeItems(missing), len(missing)
 			return nil, &RefusedError{Notice: notice}
 		}
 		// Holds no more than its caller: cut to the caller's selections, with
@@ -181,6 +183,16 @@ func (e *Evaluator) apply(ctx context.Context, edge Edge, out *Outcome, versionD
 		out.Notice = &notice
 	}
 	return narrowedVersion, nil
+}
+
+// snapshotError is a version that could not be read. One that no longer exists
+// will not exist on a retry: it is the start's permanent refusal (422), not a
+// transient 503.
+func snapshotError(which string, err error) error {
+	if errors.Is(err, dg.ErrCalleeNotFound) {
+		return fmt.Errorf("delegation edge: %s no longer exists: %w", which, agentexecutionapp.ErrUnsupportedCurrentAgentStart)
+	}
+	return fmt.Errorf("delegation edge: read %s: %w", which, err)
 }
 
 // edgeGrant is the approved or stale grant of the edge, whatever its kind, read
@@ -302,13 +314,19 @@ func applyEffective(versionDetails json.RawMessage, own, effective dg.GrantSet) 
 		if !held {
 			continue
 		}
-		if settings, ok := tool["settings"].(map[string]any); ok {
-			switch {
-			case grant.Tools.Mode == dg.ToolsOnly:
-				settings["selected_tools"] = stringList(grant.Tools.Names)
-			case len(grant.Tools.Names) > 0:
-				settings["excluded_tools"] = stringList(grant.Tools.Names)
-			}
+		settings, ok := tool["settings"].(map[string]any)
+		if !ok {
+			// A frozen toolkit with no settings object still has its selection
+			// cut: never leave it at every tool while a notice says it was
+			// narrowed.
+			settings = map[string]any{}
+			tool["settings"] = settings
+		}
+		switch {
+		case grant.Tools.Mode == dg.ToolsOnly:
+			settings["selected_tools"] = stringList(grant.Tools.Names)
+		case len(grant.Tools.Names) > 0:
+			settings["excluded_tools"] = stringList(grant.Tools.Names)
 		}
 		kept = append(kept, tool)
 	}
@@ -316,11 +334,13 @@ func applyEffective(versionDetails json.RawMessage, own, effective dg.GrantSet) 
 		kept = []any{}
 	}
 	version["tools"] = kept
-	out, err := json.Marshal(version)
-	if err != nil {
+	var out bytes.Buffer
+	encoder := json.NewEncoder(&out)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(version); err != nil {
 		return nil, fmt.Errorf("delegation edge: write the narrowed version: %w", err)
 	}
-	return out, nil
+	return bytes.TrimSpace(out.Bytes()), nil
 }
 
 func stringList(names []string) []any {

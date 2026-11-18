@@ -360,7 +360,7 @@ func (h *childTurnHandler) start(writer http.ResponseWriter, request *http.Reque
 	}
 	call.outcome, call.childExecutionID = "started", outcome.ExecutionID
 	var notice map[string]any
-	if narrowed.Notice != nil {
+	if narrowed.Notice != nil && outcome.Created {
 		notice = h.stamped(request.Context(), projectID, actor, *narrowed.Notice)
 	}
 	writeChildStarted(writer, outcome.ExecutionID, outcome.ResponseMessageID, conversation.ConversationUUID, outcome.Created, notice)
@@ -369,12 +369,15 @@ func (h *childTurnHandler) start(writer http.ResponseWriter, request *http.Reque
 // writeDelegationRefused answers a child the edge's delegation rule refused:
 // 403 `delegation_refused` with the notice the desktop shows.
 func (h *childTurnHandler) writeDelegationRefused(ctx context.Context, writer http.ResponseWriter, projectID, actor int64, notice delegationnotice.Notice) {
-	desktopwire.WriteJSON(writer, http.StatusForbidden, map[string]any{
+	body := map[string]any{
 		"error": "delegation_refused",
 		"message": "The nested agent needs something its caller does not hold, and this delegation has no approved grant. " +
 			"Ask an editor of the calling agent to review the delegation, or remove it from the nested agent.",
-		"delegation_notice": h.stamped(ctx, projectID, actor, notice),
-	})
+	}
+	if stamped := h.stamped(ctx, projectID, actor, notice); stamped != nil {
+		body["delegation_notice"] = stamped
+	}
+	desktopwire.WriteJSON(writer, http.StatusForbidden, body)
 }
 
 // stamped is the notice as the caller is served it: what they may do about it

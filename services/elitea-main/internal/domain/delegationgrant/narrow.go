@@ -91,40 +91,43 @@ func NarrowToCaller(caller, requested GrantSet) GrantSet {
 	return GrantSet{Toolkits: kept}.Normalize()
 }
 
-// RefuseWithoutGrant is the first thing the callee holds that its caller does
-// not, for an edge with no approved grant: toolkits, then credentials, then the
-// tools of a selection the callee names one by one. Nothing is the callee
-// holding no more than its caller.
-func RefuseWithoutGrant(caller, requested GrantSet, labels EdgeLabels) (Item, bool) {
+// MissingWithoutGrant is everything the callee holds that its caller does not,
+// for an edge with no approved grant, in the worker's order (its first is the
+// one the worker names): toolkits, then credentials, then the tools of a
+// selection the callee names one by one. Nothing is the callee holding no more
+// than its caller.
+func MissingWithoutGrant(caller, requested GrantSet, labels EdgeLabels) []Item {
 	callerHeld := toolkitIndex(caller)
-	wanted := requested.Normalize().Toolkits
-	for _, want := range wanted {
-		if _, ok := callerHeld[want.Key]; !ok {
-			return Item{Kind: ItemToolkit, Name: labels.of(want.Key)}, true
-		}
-	}
 	credentials := map[string]bool{}
 	for _, toolkit := range callerHeld {
 		if toolkit.Credential != "" {
 			credentials[toolkit.Credential] = true
 		}
 	}
+	wanted := requested.Normalize().Toolkits
+	var missing []Item
 	for _, want := range wanted {
-		if want.Credential != "" && !credentials[want.Credential] {
-			return Item{Kind: ItemCredential, Name: want.Credential, Toolkit: labels.of(want.Key)}, true
+		if _, ok := callerHeld[want.Key]; !ok {
+			missing = append(missing, Item{Kind: ItemToolkit, Name: labels.of(want.Key)})
 		}
 	}
 	for _, want := range wanted {
-		if want.Tools.Mode != ToolsOnly {
+		if want.Credential != "" && !credentials[want.Credential] {
+			missing = append(missing, Item{Kind: ItemCredential, Name: want.Credential, Toolkit: labels.of(want.Key)})
+		}
+	}
+	for _, want := range wanted {
+		held, ok := callerHeld[want.Key]
+		if !ok || want.Tools.Mode != ToolsOnly {
 			continue
 		}
 		for _, name := range want.Tools.Names {
-			if !callerHeld[want.Key].Tools.Allows(name) {
-				return Item{Kind: ItemTool, Name: name, Toolkit: labels.of(want.Key)}, true
+			if !held.Tools.Allows(name) {
+				missing = append(missing, Item{Kind: ItemTool, Name: name, Toolkit: labels.of(want.Key)})
 			}
 		}
 	}
-	return Item{}, false
+	return missing
 }
 
 func toolkitIndex(set GrantSet) map[string]ToolkitGrant {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"testing"
 
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/delegationnotice"
 	dg "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/delegationgrant"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
@@ -222,6 +223,39 @@ func TestANarrowedOutToolkitIsRemoved(t *testing.T) {
 	}
 	if outcome.Notice == nil || outcome.Notice.Missing[0] != itemOf("toolkit", "Jira", "") {
 		t.Fatalf("notice = %+v", outcome.Notice)
+	}
+}
+
+// A frozen toolkit with no settings object is still cut: the notice says it was
+// narrowed, so it must not keep every tool.
+func TestANarrowedToolkitWithoutSettingsIsStillCut(t *testing.T) {
+	grant := grantFor(dg.GrantSet{Toolkits: []dg.ToolkitGrant{onlyTools("toolkit:2", "read")}}, dg.EdgeAgentTool)
+	evaluator, err := New(fakeSettings{}, callees(dg.GrantSet{}), fakeGrants{grant})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var outcome Outcome
+	version := json.RawMessage(`{"tools":[{"id":2,"type":"jira","toolkit_name":"Jira"}]}`)
+	narrowed, err := evaluator.Hook(Edge{CallerApplicationID: callerID, CalleeApplicationID: calleeID}, &outcome)(context.Background(), version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, _ := toolsOf(t, narrowed)[0].Settings["selected_tools"].([]any)
+	if len(selected) != 1 || selected[0] != "read" {
+		t.Fatalf("the toolkit keeps %s", narrowed)
+	}
+}
+
+// A version that no longer exists is the start's permanent refusal (422), not a
+// transient failure the desktop retries.
+func TestAVersionThatNoLongerExistsIsAPermanentRefusal(t *testing.T) {
+	evaluator, err := New(fakeSettings{}, fakeCallees{}, fakeGrants{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = evaluator.Hook(Edge{CallerApplicationID: callerID, CalleeApplicationID: calleeID}, &Outcome{})(context.Background(), json.RawMessage(calleeVersion))
+	if !errors.Is(err, agentexecutionapp.ErrUnsupportedCurrentAgentStart) {
+		t.Fatalf("err = %v", err)
 	}
 }
 

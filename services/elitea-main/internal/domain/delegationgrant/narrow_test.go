@@ -70,28 +70,30 @@ func TestNarrowWithGrantIsOwnIntersectCallerUnionGrant(t *testing.T) {
 	})
 }
 
-func TestRefuseWithoutGrantNamesTheFirstThingTheCallerLacks(t *testing.T) {
-	labels := EdgeLabels{"toolkit:2": "Jira"}
+func TestMissingWithoutGrantNamesEverythingTheCallerLacks(t *testing.T) {
+	labels := EdgeLabels{"toolkit:2": "Jira", "toolkit:3": "Wiki"}
 	caller := toolkits(only("toolkit:1", "ref-a", "read"))
 	cases := []struct {
 		name      string
 		requested GrantSet
-		want      Item
-		refused   bool
+		want      []Item
 	}{
-		{"within the caller", toolkits(only("toolkit:1", "ref-a", "read")), Item{}, false},
-		{"a toolkit the caller lacks", toolkits(all("toolkit:2")), Item{Kind: ItemToolkit, Name: "Jira"}, true},
-		{"a credential the caller lacks", toolkits(only("toolkit:1", "ref-b", "read")), Item{Kind: ItemCredential, Name: "ref-b", Toolkit: "toolkit:1"}, true},
-		{"a tool the caller lacks", toolkits(only("toolkit:1", "ref-a", "read", "write")), Item{Kind: ItemTool, Name: "write", Toolkit: "toolkit:1"}, true},
+		{"within the caller", toolkits(only("toolkit:1", "ref-a", "read")), nil},
+		{"a toolkit the caller lacks", toolkits(all("toolkit:2")), []Item{{Kind: ItemToolkit, Name: "Jira"}}},
+		{"a credential the caller lacks", toolkits(only("toolkit:1", "ref-b", "read")), []Item{{Kind: ItemCredential, Name: "ref-b", Toolkit: "toolkit:1"}}},
+		{"a tool the caller lacks", toolkits(only("toolkit:1", "ref-a", "read", "write")), []Item{{Kind: ItemTool, Name: "write", Toolkit: "toolkit:1"}}},
+		{"all of it, toolkits first", toolkits(all("toolkit:2"), all("toolkit:3"), only("toolkit:1", "ref-b", "read", "write")), []Item{
+			{Kind: ItemToolkit, Name: "Jira"}, {Kind: ItemToolkit, Name: "Wiki"},
+			{Kind: ItemCredential, Name: "ref-b", Toolkit: "toolkit:1"}, {Kind: ItemTool, Name: "write", Toolkit: "toolkit:1"},
+		}},
 		// The worker does not refuse a callee that selects every tool where the
 		// caller selected some: it cuts it (NarrowToCaller).
-		{"every tool where the caller selected some", toolkits(all("toolkit:1")), Item{}, false},
+		{"every tool where the caller selected some", toolkits(all("toolkit:1")), nil},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, refused := RefuseWithoutGrant(caller, c.requested, labels)
-			if refused != c.refused || got != c.want {
-				t.Fatalf("got %+v %v, want %+v %v", got, refused, c.want, c.refused)
+			if got := MissingWithoutGrant(caller, c.requested, labels); !reflect.DeepEqual(got, c.want) {
+				t.Fatalf("got %+v, want %+v", got, c.want)
 			}
 		})
 	}
