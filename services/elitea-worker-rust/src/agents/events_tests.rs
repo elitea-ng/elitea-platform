@@ -3208,11 +3208,6 @@ fn a_pipeline_node_refusal_that_report_mode_did_not_enforce_shows_no_notice() {
 
 #[test]
 fn the_assembly_notice_frame_is_stamped_with_the_bound_identity_and_refuses_an_unroutable_one() {
-    let notice = super::application_tools::pipeline_node_notice(
-        &evidence(Some(missing_toolkit()), vec![]),
-        "lint",
-    )
-    .expect("an enforced refusal shows");
     fn identity(stream_id: &str) -> super::events::AssemblyNoticeIdentity<'_> {
         super::events::AssemblyNoticeIdentity {
             stream_id,
@@ -3222,6 +3217,11 @@ fn the_assembly_notice_frame_is_stamped_with_the_bound_identity_and_refuses_an_u
             thread_id: "thread-1",
         }
     }
+    let notice = super::application_tools::pipeline_node_notice(
+        &evidence(Some(missing_toolkit()), vec![]),
+        "lint",
+    )
+    .expect("an enforced refusal shows");
     let event = super::events::assembly_delegation_notice(
         &identity("conversation-1"),
         &notice,

@@ -4107,15 +4107,18 @@ fn pipeline_node_notice_id(graph_path: &str) -> String {
     if graph_path.len() <= NODE_NOTICE_PATH_BYTES {
         return format!("pipeline_node:{graph_path}");
     }
+    use std::fmt::Write as _;
     let mut end = NODE_NOTICE_PATH_BYTES;
     while !graph_path.is_char_boundary(end) {
         end -= 1;
     }
     let digest = ring::digest::digest(&ring::digest::SHA256, graph_path.as_bytes());
-    let suffix: String = digest.as_ref()[..6]
+    let suffix = digest.as_ref()[..6]
         .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
+        .fold(String::new(), |mut hex, byte| {
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        });
     format!("pipeline_node:{}~{suffix}", &graph_path[..end])
 }
 
