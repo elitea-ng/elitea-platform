@@ -18,9 +18,11 @@ import (
 //     `xlsx`), each with its catalogue metadata, its settings form and the
 //     argument schema of every tool.
 //
-// The SDK snapshots are generated from the pinned SDK registry
-// (scripts/contract/sync_toolkit_schema_snapshot.py) and a regeneration
-// replaces them, so none of this can live in them. It is a second pinned
+// The SDK snapshots were generated from the SDK registry by a script that was
+// deleted with the Python worker (#1312). They are no longer regenerated
+// (D1 of epic #2254): a type the SDK added after the pin is authored HERE,
+// owned by its Rust family, with a captured upstream fixture as its contract
+// test (see docs/contributing/adding-types.md). It is a second pinned
 // document, merged into the argument-schema snapshot AND the catalogue snapshot
 // when they are loaded; the toolkit editor's tool list is the keys of a type's
 // argument schemas, so a merged tool appears in the picker and the test pane,
@@ -46,8 +48,13 @@ type rustOnlyToolkitToolsDocument struct {
 // rustOnlyNewType is a toolkit type the SDK does not have: the same three
 // things the SDK snapshots carry for one.
 type rustOnlyNewType struct {
-	Metadata    map[string]any            `json:"metadata"`
-	Settings    map[string]any            `json:"settings"`
+	Metadata map[string]any `json:"metadata"`
+	Settings map[string]any `json:"settings"`
+	// Properties is the SDK snapshot's per-field annotations for the type:
+	// today only `configuration_types`, which marks a settings field as a
+	// reference to a saved credential (`tavily_configuration` -> ["tavily"]).
+	// Absent for a type with no credential field (docx, web).
+	Properties  map[string]any            `json:"properties,omitempty"`
 	ArgsSchemas map[string]map[string]any `json:"args_schemas"`
 }
 
@@ -109,9 +116,13 @@ func applyRustOnlyToolkitTools(
 			}
 		}
 		zero := 0
+		properties := entry.Properties
+		if properties == nil {
+			properties = map[string]any{}
+		}
 		entries = append(entries, currentToolkitSchemaSnapshotJSONEntry{
 			Type:        toolkitType,
-			Properties:  map[string]any{},
+			Properties:  properties,
 			ArgsSchemas: entry.ArgsSchemas,
 			Naming:      &currentToolkitSchemaSnapshotName{MaxLength: &zero},
 		})

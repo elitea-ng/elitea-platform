@@ -3,7 +3,9 @@
 //!
 //! The SDK is the schema source of truth until the Python worker is gone:
 //! `services/elitea-main/internal/runtimecomposition/current_toolkit_schema_snapshot.json`
-//! is generated from its registry (`scripts/contract/sync_toolkit_schema_snapshot.py`).
+//! was generated from its registry (by a script deleted in #1312; the snapshot
+//! is no longer regenerated, types added after the pin are authored natively:
+//! `docs/contributing/adding-types.md`).
 //! Saved agent versions store tool NAMES, and pipeline nodes store argument
 //! mappings written against the SDK's argument schemas, so for every tool a
 //! family serves:
