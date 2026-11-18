@@ -1340,8 +1340,17 @@ type SubmitSandboxJobResponseV1 struct {
 	ResultJson     []byte `protobuf:"bytes,2,opt,name=result_json,json=resultJson,proto3" json:"result_json,omitempty"`
 	FailureCode    string `protobuf:"bytes,3,opt,name=failure_code,json=failureCode,proto3" json:"failure_code,omitempty"`
 	CleanupPending bool   `protobuf:"varint,4,opt,name=cleanup_pending,json=cleanupPending,proto3" json:"cleanup_pending,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Additive (#2223). The program's stderr for a FAILED run, so the model can
+	// read a compiler diagnostic or an exception message: the last 1,500
+	// characters, control characters removed, empty when the run printed
+	// nothing or the failure is not the program's own. It is untrusted text,
+	// never a result: result_json stays empty for every non-completed status.
+	// A worker that predates the field ignores it; a supervisor that predates
+	// it leaves it empty.
+	// Number 16, not 5: the 5-15 range is reserved and buf breaking keeps it so.
+	FailureDetail string `protobuf:"bytes,16,opt,name=failure_detail,json=failureDetail,proto3" json:"failure_detail,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SubmitSandboxJobResponseV1) Reset() {
@@ -1400,6 +1409,13 @@ func (x *SubmitSandboxJobResponseV1) GetCleanupPending() bool {
 		return x.CleanupPending
 	}
 	return false
+}
+
+func (x *SubmitSandboxJobResponseV1) GetFailureDetail() string {
+	if x != nil {
+		return x.FailureDetail
+	}
+	return ""
 }
 
 // Cancellation carries identity only; source and state are not required.
@@ -2137,8 +2153,10 @@ type SubmitRustCompiledSnapshotResponseV1 struct {
 	// A successful indexed reply acknowledges the exact requested index.
 	// Busy ownership returns Aborted; false never acknowledges a skipped transfer.
 	NativeHydrationReady bool `protobuf:"varint,8,opt,name=native_hydration_ready,json=nativeHydrationReady,proto3" json:"native_hydration_ready,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// Same bounded stderr as SubmitSandboxJobResponseV1.failure_detail (#2223).
+	FailureDetail string `protobuf:"bytes,32,opt,name=failure_detail,json=failureDetail,proto3" json:"failure_detail,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SubmitRustCompiledSnapshotResponseV1) Reset() {
@@ -2225,6 +2243,13 @@ func (x *SubmitRustCompiledSnapshotResponseV1) GetNativeHydrationReady() bool {
 		return x.NativeHydrationReady
 	}
 	return false
+}
+
+func (x *SubmitRustCompiledSnapshotResponseV1) GetFailureDetail() string {
+	if x != nil {
+		return x.FailureDetail
+	}
+	return ""
 }
 
 // Preserve the recorded compiler runtime. Publish has no code execution authority.
@@ -2433,13 +2458,14 @@ const file_elitea_runtime_v1_sandbox_proto_rawDesc = "" +
 	"\x1acode_execution_intent_json\x18\x12 \x01(\fR\x17codeExecutionIntentJson\x12*\n" +
 	"\x11prepared_job_json\x18\x02 \x01(\fR\x0fpreparedJobJson\x12d\n" +
 	"\x18dependency_content_grant\x18\x10 \x01(\v2*.elitea.runtime.v1.SignedSandboxJobGrantV1R\x16dependencyContentGrant\x124\n" +
-	"\x16dependency_bundle_json\x18\x11 \x01(\fR\x14dependencyBundleJsonJ\x04\b\x03\x10\x10\"\xce\x01\n" +
+	"\x16dependency_bundle_json\x18\x11 \x01(\fR\x14dependencyBundleJsonJ\x04\b\x03\x10\x10\"\xf5\x01\n" +
 	"\x1aSubmitSandboxJobResponseV1\x12=\n" +
 	"\x06status\x18\x01 \x01(\x0e2%.elitea.runtime.v1.SandboxJobStatusV1R\x06status\x12\x1f\n" +
 	"\vresult_json\x18\x02 \x01(\fR\n" +
 	"resultJson\x12!\n" +
 	"\ffailure_code\x18\x03 \x01(\tR\vfailureCode\x12'\n" +
-	"\x0fcleanup_pending\x18\x04 \x01(\bR\x0ecleanupPendingJ\x04\b\x05\x10\x10\"c\n" +
+	"\x0fcleanup_pending\x18\x04 \x01(\bR\x0ecleanupPending\x12%\n" +
+	"\x0efailure_detail\x18\x10 \x01(\tR\rfailureDetailJ\x04\b\x05\x10\x10\"c\n" +
 	"\x19CancelSandboxJobRequestV1\x12@\n" +
 	"\x05grant\x18\x01 \x01(\v2*.elitea.runtime.v1.SignedSandboxJobGrantV1R\x05grantJ\x04\b\x02\x10\x10\"\x8a\x01\n" +
 	"\x1aCancelSandboxJobResponseV1\x12=\n" +
@@ -2490,7 +2516,7 @@ const file_elitea_runtime_v1_sandbox_proto_rawDesc = "" +
 	"\x16native_hydration_index\x18\t \x01(\rH\x00R\x14nativeHydrationIndex\x88\x01\x01\x12;\n" +
 	"\x1acode_execution_intent_json\x18\n" +
 	" \x01(\fR\x17codeExecutionIntentJsonB\x19\n" +
-	"\x17_native_hydration_indexJ\x04\b\v\x10 \"\x90\x03\n" +
+	"\x17_native_hydration_indexJ\x04\b\v\x10 \"\xb7\x03\n" +
 	"$SubmitRustCompiledSnapshotResponseV1\x12=\n" +
 	"\x06status\x18\x01 \x01(\x0e2%.elitea.runtime.v1.SandboxJobStatusV1R\x06status\x12\x1f\n" +
 	"\vresult_json\x18\x02 \x01(\fR\n" +
@@ -2500,7 +2526,8 @@ const file_elitea_runtime_v1_sandbox_proto_rawDesc = "" +
 	"\ffailure_code\x18\x05 \x01(\tR\vfailureCode\x12'\n" +
 	"\x0fcleanup_pending\x18\x06 \x01(\bR\x0ecleanupPending\x12'\n" +
 	"\x0fneeds_admission\x18\a \x01(\bR\x0eneedsAdmission\x124\n" +
-	"\x16native_hydration_ready\x18\b \x01(\bR\x14nativeHydrationReadyJ\x04\b\t\x10 \"\xc6\x01\n" +
+	"\x16native_hydration_ready\x18\b \x01(\bR\x14nativeHydrationReady\x12%\n" +
+	"\x0efailure_detail\x18  \x01(\tR\rfailureDetailJ\x04\b\t\x10 \"\xc6\x01\n" +
 	"$PublishRustCompiledSnapshotRequestV1\x12O\n" +
 	"\rpublish_grant\x18\x01 \x01(\v2*.elitea.runtime.v1.SignedSandboxJobGrantV1R\fpublishGrant\x12G\n" +
 	"\x05phase\x18\x02 \x01(\x0e21.elitea.runtime.v1.RustCompiledPublicationPhaseV1R\x05phaseJ\x04\b\x03\x10 \"\xb8\x01\n" +

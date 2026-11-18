@@ -244,16 +244,13 @@ journey(
 );
 
 /**
- * A Rust program that does not compile, as the model is told about it.
+ * A program that fails, as the model is told about it (#2223).
  *
- * The compiler's diagnostic does NOT reach the model today (#2223): the runner
- * writes it to the run's stderr, but the supervisor keeps no result for a
- * failed run, so the worker only learns `sandbox.code_failed`. Two journeys
- * pin both halves. The first is the contract that holds now: a compile failure
- * is an `error` answer that names the Rust hint, never a success. The second
- * is the contract this journey exists for, the diagnostic itself, marked
- * `test.fail` so it passes while #2223 is open and turns red the day the
- * diagnostic arrives, which is the signal to delete the marker.
+ * The program's own stderr (a compiler diagnostic, an uncaught exception)
+ * reaches the model: the runner writes it to the run's receipt, the
+ * supervisor keeps a bounded tail on the failed row, and the worker puts it in
+ * the failure text under `Program error output:`. These journeys pin the whole
+ * chain for Rust and JavaScript; the unit tests pin each hop.
  */
 const NON_COMPILING_RUST =
   'pub fn run(state: serde_json::Value) -> Result<serde_json::Value, Box<dyn std::error::Error>> {\n    let _ = state;\n    let n: i32 = "not a number";\n    Ok(serde_json::json!(n))\n}';
@@ -273,11 +270,21 @@ test('run_code answers a Rust program that does not compile with an error, never
 });
 
 test('run_code gives the model the Rust compiler diagnostic (#2223)', async ({ page }) => {
-  test.fail(true, 'the diagnostic is dropped between the runner and the worker: #2223');
   const message = await runNonCompilingRust(page, 'rustdiag');
   expect(message, 'the failure must carry the program error output section').toContain('Program error output:');
   expect(message, `the compiler's error code must reach the model: ${message.slice(0, 800)}`).toMatch(
     /error\[E\d{4}\]/,
   );
   expect(message, 'the compiler message must reach the model').toContain('mismatched types');
+});
+
+test('run_code gives the model a JavaScript exception message (#2223)', async ({ page }) => {
+  test.setTimeout(TURN_TIMEOUT_MS + 120_000);
+  const prepared = await prepareSandboxAgent(page, `${AUTOTEST_PREFIX}code-jsthrow-${Date.now() % 100_000}`);
+  const code = 'throw new Error("js-boom-2223");\nexport default 1;';
+  const prompt = `[[mock:call_tool ${RUN_CODE_TOOL} ${JSON.stringify({ language: 'javascript', code })}]] run this javascript`;
+  await sendTurn(page, prompt);
+  const message = (await storedRunCodeResult(page, prepared, 'error')).message ?? '';
+  expect(message, 'the failure must carry the program error output section').toContain('Program error output:');
+  expect(message, `the exception message must reach the model: ${message.slice(0, 800)}`).toContain('js-boom-2223');
 });
