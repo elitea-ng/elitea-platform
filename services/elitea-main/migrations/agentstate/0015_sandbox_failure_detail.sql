@@ -12,4 +12,5 @@ ALTER TABLE elitea_runtime.sandbox_jobs
         CHECK (octet_length(failure_detail) BETWEEN 1 AND 8192);
 ALTER TABLE elitea_runtime.sandbox_jobs
     ADD CONSTRAINT sandbox_failure_detail_phase
-    CHECK (failure_detail IS NULL OR (phase = 'failed' AND failure_code IS NOT NULL));
+    CHECK (failure_detail IS NULL OR (phase = 'failed' AND failure_code IS NOT NULL)) NOT VALID;
+ALTER TABLE elitea_runtime.sandbox_jobs VALIDATE CONSTRAINT sandbox_failure_detail_phase;
