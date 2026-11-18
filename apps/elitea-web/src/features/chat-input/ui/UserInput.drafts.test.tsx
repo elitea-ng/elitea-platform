@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { clearNamespace } from '@/shared/lib/storage';
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
-import { MAX_DRAFTS, carryDraft, readDraft, writeDraft } from '@/shared/lib/composerDrafts';
+import { MAX_DRAFTS, carryDraft, readDraft, rememberDraftAlias, writeDraft } from '@/shared/lib/composerDrafts';
 import { UserInput } from './UserInput';
 
 const textarea = (): HTMLTextAreaElement => screen.getByTestId('chat-message-input');
@@ -119,6 +119,51 @@ describe('composer drafts', () => {
     const { rerender } = renderWithTheme(<Composer draftKey={undefined} />);
     rerender(<Composer draftKey="chat:1:a" />);
     expect(textarea()).toHaveValue('saved earlier');
+  });
+
+  it('a uuid deep link keeps text typed before the conversation loads, and shares its draft with the numeric id (#2229)', async () => {
+    const user = userEvent.setup();
+    // The URL carries the uuid; the key is the uuid's from the first render and the conversation's numeric id arrives on load.
+    const { rerender, unmount } = renderWithTheme(<Composer draftKey="chat:1:u-abc" />);
+    await user.type(textarea(), 'typed before load');
+    act(() => rememberDraftAlias('chat:1:u-abc', 'chat:1:12'));
+    rerender(<Composer draftKey="chat:1:u-abc" />);
+    expect(textarea()).toHaveValue('typed before load');
+    unmount();
+    expect(readDraft('chat:1:12')).toBe('typed before load');
+    expect(readDraft('chat:1:u-abc')).toBe('typed before load');
+    // A numeric deep link to the same conversation finds the text.
+    renderWithTheme(<Composer draftKey="chat:1:12" />);
+    expect(textarea()).toHaveValue('typed before load');
+  });
+
+  it('a numeric deep link and a later uuid one share the draft, and an older uuid draft moves to the numeric id (#2229)', () => {
+    writeDraft('chat:1:u-old', 'saved by the uuid form');
+    writeDraft('chat:1:13', 'kept numeric');
+    rememberDraftAlias('chat:1:u-old', 'chat:1:12');
+    rememberDraftAlias('chat:1:u-13', 'chat:1:13');
+    expect(readDraft('chat:1:12')).toBe('saved by the uuid form');
+    renderWithTheme(<Composer draftKey="chat:1:u-13" />);
+    expect(textarea()).toHaveValue('kept numeric');
+  });
+
+  it('registering the alias keeps the newer text when both forms hold a draft (#2229)', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    writeDraft('chat:1:12', 'older numeric');
+    vi.setSystemTime(2_000);
+    writeDraft('chat:1:u-abc', 'typed just now');
+    rememberDraftAlias('chat:1:u-abc', 'chat:1:12');
+    expect(readDraft('chat:1:12')).toBe('typed just now');
+  });
+
+  it('the logout sweep clears drafts and the id aliases (#2229)', () => {
+    writeDraft('chat:1:12', 'private');
+    rememberDraftAlias('chat:1:u-abc', 'chat:1:12');
+    expect(Object.keys(window.localStorage).filter((key) => key.includes('composer'))).toEqual(expect.arrayContaining(['el.composer.drafts', 'el.composer.draftAliases']));
+    clearNamespace();
+    expect(Object.keys(window.localStorage).filter((key) => key.includes('composer'))).toEqual([]);
+    expect(readDraft('chat:1:u-abc')).toBe('');
   });
 
   it('keeps only the newest drafts', () => {

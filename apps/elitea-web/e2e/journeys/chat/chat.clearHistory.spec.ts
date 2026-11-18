@@ -60,7 +60,7 @@ import type { Page } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
 import { BASE_URL } from '../../../playwright.config';
-import { API_BASE, AUTOTEST_PREFIX, DEFAULT_PROJECT_ID, deleteConversation } from '../../fixtures/api';
+import { API_BASE, AUTOTEST_PREFIX, DEFAULT_PROJECT_ID, deleteConversation, fillComposer } from '../../fixtures/api';
 
 /** Every entity this file creates carries this suffix (concurrent-agent hygiene). */
 const SUFFIX = '-clear';
@@ -88,13 +88,11 @@ function uniqueMessage(tag: string): string {
 async function sendMessage(page: Page, text: string, expectedCount: number): Promise<void> {
   const input = page.getByTestId('chat-message-input');
   await expect(input).toBeEditable({ timeout: 20_000 });
-  await input.fill(text);
-  // Read back before the control is looked for: the send button is rendered in
-  // response to the composer holding text, so "no send button" and "the draft
-  // did not stick" are the same symptom and only this line tells them apart.
+  // `fillComposer` retries the fill until the send control exists: the control is
+  // rendered in response to the composer holding text, and a fill that lands
+  // while the pane resolves its conversation is discarded.
+  const send = await fillComposer(page, text);
   await expect(input).toHaveValue(text);
-  const send = page.getByTestId('chat-send-button');
-  await expect(send).toBeEnabled({ timeout: 10_000 });
   await send.click();
   await expect(page.getByTestId('user-message')).toHaveCount(expectedCount, { timeout: 30_000 });
   await expect(input).toHaveValue('');

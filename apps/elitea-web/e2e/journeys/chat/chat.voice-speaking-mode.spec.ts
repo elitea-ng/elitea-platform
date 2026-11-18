@@ -35,6 +35,7 @@ import {
   clickCreateButton,
   createConversation,
   deleteConversation,
+  fillComposer,
 } from '../../fixtures/api';
 
 async function stubSpeechRecognition(page: Page): Promise<void> {
@@ -161,8 +162,8 @@ test('disabling Speaking Mode stops voice capture; typed Send keeps working', as
 
     // Ordinary typed Send still works.
     const text = uniqueName('typed');
-    await input.fill(text);
-    await page.getByTestId('chat-send-button').click();
+    const send = await fillComposer(page, text);
+    await send.click();
     await expect(page.getByTestId('user-message').last()).toContainText(text, { timeout: 15_000 });
   } finally {
     await deleteConversation(page.request, conversationId);
@@ -372,9 +373,7 @@ test('the Voice Mini Player is not rendered by default in a chat conversation (r
   await expect(page.getByTestId('chat-voice-mini-player')).toHaveCount(0);
 
   const text = uniqueName('minicheck');
-  await page.getByTestId('chat-message-input').fill(text);
-  const sendButton = page.getByTestId('chat-send-button');
-  await expect(sendButton).toBeEnabled({ timeout: 5_000 });
+  const sendButton = await fillComposer(page, text);
   const created = page.waitForResponse(
     (response) => response.url().includes(CONVERSATIONS_PATH) && response.request().method() === 'POST',
     { timeout: 15_000 },

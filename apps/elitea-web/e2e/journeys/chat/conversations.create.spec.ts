@@ -36,6 +36,7 @@ import {
   clickCreateButton,
   createConversation,
   deleteConversation,
+  fillComposer,
   readCallerIdentity,
 } from '../../fixtures/api';
 
@@ -99,12 +100,12 @@ test('the Create control leaves the open conversation for a blank one, and the n
   // The second half: the first send is what writes the row.
   const text = uniqueName('created');
   expect(text.length, 'the message must fit the 50-char name truncation').toBeLessThanOrEqual(MAX_NAME);
+  const send = await fillComposer(page, text);
   const created = page.waitForResponse(
     (response) => response.url().includes(CONVERSATIONS_PATH) && response.request().method() === 'POST',
     { timeout: 20_000 },
   );
-  await page.getByTestId('chat-message-input').fill(text);
-  await page.getByTestId('chat-send-button').click();
+  await send.click();
   const response = await created;
   expect(response.status()).toBe(201);
   const body = (await response.json()) as { id?: string; name?: string };
