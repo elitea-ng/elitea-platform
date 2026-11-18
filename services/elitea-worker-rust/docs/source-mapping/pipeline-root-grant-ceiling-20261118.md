@@ -225,6 +225,19 @@ unset, which is `true`, and the principal bound on. On first spawn every preconf
 request (`eu.anthropic.claude-haiku`, `eu.anthropic.claude-sonnet-4-6`, `global.openai.gpt-5.6-luna`, `gpt-5.4`,
 `gpt-5.4-mini`: each "OK", chat 887).
 
+**Ordinary-root comparison rows** (the "pre-existing, same as an ordinary root" claims):
+
+| Chat | Root | What it shows | Evidence |
+|---|---|---|---|
+| 888 | pipeline P0 (172), Agent node → S | S runs; P1's MCP node stops `PIPELINE_TOOL_UNAVAILABLE` | Worker `failure_reason` "A tool with external effects requires its current fenced node writer." |
+| 889 | ordinary agent S (171) as the chat's agent | the same stop on the same P1 node (FU-358 is not pipeline-root specific) | the same `failure_reason`, `error_code` `pipeline.toolkit_node.failed` |
+| 891 | pipeline P0r (174) | refusal notice without Review delegation | `meta.delegation_notices_v1` edge `{kind: pipeline_node, callee_id: 171}`, no `caller_id` |
+| 892 | ordinary agent R0 (175), attaches only S | the same refusal notice, also without Review delegation (FU-359 is not pipeline-root specific) | `meta.delegation_notices_v1` edge `{kind: agent_tool, callee_id: 171, caller_name: elitea-agent}`, no `caller_id` |
+
+**Review delegation was taken from the pipeline's Tools row, not from the chat notice, because of FU-359**: the
+chat notice offers no link while every grant of the run is pending. FU-358, FU-359 and FU-360 are not fixed in this
+change.
+
 The stack is torn down; its database is kept locally as a `pg_dump -Fc` (mode 600, never committed).
 
 Fixtures (project 2, created through Main's API, the same routes the UI calls: `POST applications`, the toolkit
