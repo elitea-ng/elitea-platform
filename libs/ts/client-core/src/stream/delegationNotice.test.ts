@@ -35,6 +35,8 @@ describe('parseDelegationNotice', () => {
     assert.equal(notice.calleeName, 'Agent1');
     assert.equal(notice.callerName, 'Agent2');
     assert.equal(notice.callerId, 2);
+    assert.equal(notice.edgeKind, 'agent_tool');
+    assert.equal(parsed({ ...refused, edge: { ...refused.edge, kind: 'pipeline_node' } }).edgeKind, 'pipeline_node');
     assert.deepEqual(notice.missing, [{ kind: 'toolkit', name: 'Git' }]);
     assert.equal(notice.canReview, true);
     assert.deepEqual(notice.editors, []);

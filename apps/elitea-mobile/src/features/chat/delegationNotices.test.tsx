@@ -75,6 +75,7 @@ describe('delegation notices (client contract 1.60)', () => {
     // The notice names the called agent (9) and the caller (Planner), so the screen lands on that edge.
     expect(router.push).toHaveBeenCalledWith('/agent-delegations/7?callee=9&name=Planner');
     expect(delegationReviewHref(7)).toBe('/agent-delegations/7');
+    expect(delegationReviewHref(7, Number.NaN)).toBe('/agent-delegations/7');
 
     await rerender(<DelegationNoticeCards notices={[parsed(notice({ reason: 'principal' }))]} />);
     expect(screen.queryByText('Review delegation')).toBeNull();

@@ -1,4 +1,4 @@
-import type { ReactElement } from 'react';
+import { useMemo, type ReactElement } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, View, type RefreshControlProps } from 'react-native';
 
 import { canApprove, canReapprove, canRevoke, stateLabel, type DelegationGrantView, type DelegationItem } from '@/api/queries/delegation';
@@ -60,6 +60,11 @@ export function itemLine(item: DelegationItem): string {
 export function DelegationGrantsView({ agentName, status, grants, names, busy, banner, selectable, onApprove, onRevoke, onRetry, refreshControl, focusCalleeId = null }: DelegationGrantsViewProps) {
   const { colors, radius } = useDesign();
   const margin = useLayoutMargin();
+  // The delegation a chat notice named goes first (a stable sort keeps the rest in order).
+  const ordered = useMemo(
+    () => (focusCalleeId === null ? grants : [...grants].sort((a, b) => Number(b.calleeApplicationId === focusCalleeId) - Number(a.calleeApplicationId === focusCalleeId))),
+    [grants, focusCalleeId],
+  );
 
   if (status.kind === 'unavailable') {
     return (
@@ -75,7 +80,6 @@ export function DelegationGrantsView({ agentName, status, grants, names, busy, b
       </View>
     );
   }
-  const ordered = focusCalleeId === null ? grants : [...grants].sort((a, b) => Number(b.calleeApplicationId === focusCalleeId) - Number(a.calleeApplicationId === focusCalleeId));
   const content =
     grants.length === 0 ? (
       status.kind === 'error' ? (
@@ -100,8 +104,12 @@ export function DelegationGrantsView({ agentName, status, grants, names, busy, b
               <View
                 key={grant.id}
                 testID={`delegation-grant-${grant.id}`}
-                accessibilityState={{ selected: focused }}
                 style={[styles.row, { backgroundColor: colors.surface, borderRadius: radius.md }, focused ? { borderWidth: 2, borderColor: colors.accent } : null]}>
+                {focused ? (
+                  <Text variant="footnote" tone="secondary">
+                    Named in the chat notice
+                  </Text>
+                ) : null}
                 <Text variant="headline" heading>
                   {name}
                 </Text>

@@ -90,8 +90,8 @@ it('lands on the edge a chat notice named: its grant is listed first and marked'
   await screen.findByTestId('delegation-grant-3');
   const rows = screen.getAllByTestId(/^delegation-grant-\d$/).map((row) => row.props.testID);
   expect(rows).toEqual(['delegation-grant-3', 'delegation-grant-1', 'delegation-grant-2']);
-  expect(screen.getByTestId('delegation-grant-3').props.accessibilityState).toEqual({ selected: true });
-  expect(screen.getByTestId('delegation-grant-1').props.accessibilityState).toEqual({ selected: false });
+  // Only the named edge says so, in text a screen reader reads.
+  expect(screen.getAllByText('Named in the chat notice')).toHaveLength(1);
 });
 
 it('ignores a callee param that is not an id', async () => {
@@ -100,6 +100,7 @@ it('ignores a callee param that is not an id', async () => {
   mockParams = { id: '41', name: 'Mira', callee: 'abc' };
   await render(withQueries(<AgentDelegationsScreen />));
   await screen.findByTestId('delegation-grant-1');
+  expect(screen.queryByText('Named in the chat notice')).toBeNull();
   expect(screen.getAllByTestId(/^delegation-grant-\d$/).map((row) => row.props.testID)).toEqual(['delegation-grant-1', 'delegation-grant-2']);
 });
 

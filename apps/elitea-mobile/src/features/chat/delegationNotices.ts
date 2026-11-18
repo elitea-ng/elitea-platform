@@ -14,7 +14,7 @@ import { missingNames, parseDelegationNotices, type DelegationNotice } from '@el
  * grant the notice is about; `name` titles the screen with the caller.
  */
 export const delegationReviewHref = (callerId: number, calleeId?: number, callerName?: string): string => {
-  const query = [calleeId === undefined ? '' : `callee=${calleeId}`, callerName === undefined ? '' : `name=${encodeURIComponent(callerName)}`].filter((part) => part !== '');
+  const query = [calleeId === undefined || !Number.isSafeInteger(calleeId) || calleeId < 1 ? '' : `callee=${calleeId}`, callerName === undefined ? '' : `name=${encodeURIComponent(callerName)}`].filter((part) => part !== '');
   return query.length === 0 ? `/agent-delegations/${callerId}` : `/agent-delegations/${callerId}?${query.join('&')}`;
 };
 

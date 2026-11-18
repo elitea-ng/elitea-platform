@@ -3245,3 +3245,37 @@ fn the_assembly_notice_frame_is_stamped_with_the_bound_identity_and_refuses_an_u
         "a blank stream id cannot be routed"
     );
 }
+
+#[test]
+fn a_long_or_multibyte_node_path_keeps_a_routable_distinct_notice_id() {
+    let long = |tail: &str| format!("{}/{tail}", "ж".repeat(60));
+    let id = |path: &str| {
+        super::application_tools::pipeline_node_notice(
+            &evidence(Some(missing_toolkit()), vec![]),
+            path,
+        )
+        .expect("an enforced refusal shows")
+        .value["id"]
+            .as_str()
+            .expect("id")
+            .to_owned()
+    };
+    let first = id(&long("a"));
+    assert!(
+        first.len() <= 128,
+        "Main and the clients bound the id: {first}"
+    );
+    assert_ne!(
+        first,
+        id(&long("b")),
+        "two long paths must not share one card"
+    );
+    assert!(
+        super::application_tools::pipeline_node_notice(
+            &evidence(Some(missing_toolkit()), vec![]),
+            "",
+        )
+        .is_none(),
+        "a saved pipeline bound with no graph path is not a node"
+    );
+}

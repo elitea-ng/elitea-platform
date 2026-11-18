@@ -97,22 +97,29 @@ export function DelegationGrantStatus({ projectId, applicationId, grant, readOnl
   const [busy, setBusy] = useState(false);
 
   const canApprove = (view === 'pending' || view === 'stale') && !readOnly;
-  const open = useCallback(() => {
-    setLoading(true);
-    setError(undefined);
-    loadReview(queryClient, projectId, applicationId, grant, canApprove)
-      .then(setReview)
-      .catch(() => setError(t('agents.delegation.reviewFailed', 'The delegation could not be loaded.')))
-      .finally(() => setLoading(false));
-  }, [queryClient, projectId, applicationId, grant, canApprove]);
+  const load = useCallback(
+    (whenOpened?: () => void) => {
+      setLoading(true);
+      setError(undefined);
+      loadReview(queryClient, projectId, applicationId, grant, canApprove)
+        .then((loaded) => {
+          setReview(loaded);
+          whenOpened?.();
+        })
+        .catch(() => setError(t('agents.delegation.reviewFailed', 'The delegation could not be loaded.')))
+        .finally(() => setLoading(false));
+    },
+    [queryClient, projectId, applicationId, grant, canApprove],
+  );
+  const open = useCallback(() => load(), [load]);
 
   const autoOpened = useRef(false);
   useEffect(() => {
     if (!autoOpen || autoOpened.current) return;
     autoOpened.current = true;
-    open();
-    onAutoOpened?.();
-  }, [autoOpen, open, onAutoOpened]);
+    // The deep link is dropped once the window is open; a load that failed keeps it, so a reload can retry.
+    load(onAutoOpened);
+  }, [autoOpen, load, onAutoOpened]);
 
   const close = useCallback(() => {
     setReview(undefined);

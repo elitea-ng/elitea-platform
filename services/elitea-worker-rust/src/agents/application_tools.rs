@@ -4074,27 +4074,49 @@ pub(in crate::agents) fn delegation_refused_error(
     .with_delegation_notice(pipeline_node_notice(&refused.evidence, graph_path))
 }
 
-/// The most characters of a graph path a notice id carries (Main bounds the
-/// whole id to 128 bytes).
-const NODE_NOTICE_PATH_CHARS: usize = 64;
+/// The most bytes of a graph path a notice id carries before it is hashed
+/// (Main and the clients bound the whole id to 128 bytes).
+const NODE_NOTICE_PATH_BYTES: usize = 80;
 
 /// The notice of a refused pipeline node: one per node, keyed by its graph
 /// path, naming the node as the callee. A refusal `report` mode recorded and
 /// did not enforce shows nothing: the node ran, and the run step's summary
-/// is its only record.
+/// is its only record. A binding with no graph path is not a node (a saved
+/// pipeline bound as a participant), so it shows no node notice either.
 pub(in crate::agents) fn pipeline_node_notice(
     evidence: &DelegationEvidence,
     graph_path: &str,
 ) -> Option<DelegationNotice> {
-    let path: String = graph_path.chars().take(NODE_NOTICE_PATH_CHARS).collect();
-    let node = path.rsplit('/').next().unwrap_or_default();
-    let call_id = format!("pipeline_node:{path}");
+    if graph_path.is_empty() {
+        return None;
+    }
+    let node = graph_path.rsplit('/').next().unwrap_or_default();
+    let call_id = pipeline_node_notice_id(graph_path);
     evidence.notice(&NoticeContext {
         call_id: &call_id,
         callee_name: node,
         caller_name: None,
         edge_kind: "pipeline_node",
     })
+}
+
+/// `pipeline_node:<path>`, or, for a path past the bound (multi-byte names
+/// count in bytes), its first bytes on a character boundary plus a digest of
+/// the whole path, so two long paths never share an id.
+fn pipeline_node_notice_id(graph_path: &str) -> String {
+    if graph_path.len() <= NODE_NOTICE_PATH_BYTES {
+        return format!("pipeline_node:{graph_path}");
+    }
+    let mut end = NODE_NOTICE_PATH_BYTES;
+    while !graph_path.is_char_boundary(end) {
+        end -= 1;
+    }
+    let digest = ring::digest::digest(&ring::digest::SHA256, graph_path.as_bytes());
+    let suffix: String = digest.as_ref()[..6]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("pipeline_node:{}~{suffix}", &graph_path[..end])
 }
 
 /// A saved agent its caller may not delegate to, offered with its refusal.

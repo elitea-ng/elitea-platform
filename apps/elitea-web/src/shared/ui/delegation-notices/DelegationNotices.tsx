@@ -36,10 +36,19 @@ export function delegationReviewHref(basePath: string, callerId: number, calleeI
   return calleeId === undefined ? path : `${path}?review_delegation=${String(calleeId)}`;
 }
 
-function resolveReviewHref(callerId: number, calleeId: number | undefined): string {
-  if (import.meta.env.DEV) return delegationReviewHref('', callerId, calleeId);
+/**
+ * Where Review delegation goes. A refused pipeline node has a pipeline as its caller and no row in a
+ * Tools panel to open, so it opens that pipeline's editor and names no edge.
+ */
+function resolveReviewHref(notice: DelegationNotice, callerId: number): string {
+  const base = import.meta.env.DEV ? '' : delegationBase();
+  if (notice.edgeKind === 'pipeline_node') return `${normalizeBasename(base)}/pipelines/all/${String(callerId)}`;
+  return delegationReviewHref(base, callerId, notice.calleeId);
+}
+
+function delegationBase(): string {
   const result = getConfig();
-  return delegationReviewHref(result.status === 'ok' ? result.config.vite_base_uri : '', callerId, calleeId);
+  return result.status === 'ok' ? result.config.vite_base_uri : '';
 }
 
 function namesOf(notice: DelegationNotice): string {
@@ -99,7 +108,7 @@ function Notice({ notice }: { readonly notice: DelegationNotice }): ReactNode {
         {delegationNoticeSentence(notice)}
       </Typography>
       {review !== undefined && (
-        <Link href={resolveReviewHref(review, notice.calleeId)} variant="bodyMedium" data-testid="delegation-review" sx={{ display: 'inline-block', mt: 0.5 }}>
+        <Link href={resolveReviewHref(notice, review)} variant="bodyMedium" data-testid="delegation-review" sx={{ display: 'inline-block', mt: 0.5 }}>
           {t('features.chatMessages.delegationNotice.review', 'Review delegation')}
         </Link>
       )}

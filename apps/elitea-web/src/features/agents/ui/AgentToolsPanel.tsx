@@ -147,7 +147,7 @@ function useToolsMirror(versionTools: readonly VersionToolRef[] | undefined): To
  * dialog is opening (a reload would otherwise reopen it).
  */
 function useDelegationDeepLink(): { readonly reviewCalleeId: number | undefined; readonly clearReview: () => void } {
-  const raw = (useSearch({ strict: false }) as { readonly review_delegation?: unknown }).review_delegation;
+  const { review_delegation: raw } = useSearch({ strict: false });
   const navigate = useNavigate();
   const parsed = Number(raw);
   const reviewCalleeId = raw !== undefined && raw !== '' && Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
@@ -181,6 +181,11 @@ export function AgentToolsPanel({ entity, versionTools, dirty, internalTools, on
   const holdsApplications = mirror.tools.some((tool) => tool.type === 'application');
   const grants = useAgentDelegationGrants(projectId, entity.applicationId, holdsApplications);
   const { reviewCalleeId, clearReview } = useDelegationDeepLink();
+  // Only the first row of the named callee opens (the same agent can be attached twice).
+  const reviewTool = useMemo(
+    () => (reviewCalleeId === undefined ? undefined : mirror.tools.find((tool) => tool.type === 'application' && Number(tool.settings?.application_id) === reviewCalleeId)),
+    [mirror.tools, reviewCalleeId],
+  );
   const delegationOf = useCallback(
     (tool: AgentToolAssociation) => {
       const calleeId = tool.type === 'application' ? Number(tool.settings?.application_id) : Number.NaN;
@@ -191,11 +196,11 @@ export function AgentToolsPanel({ entity, versionTools, dirty, internalTools, on
         projectId,
         applicationId: entity.applicationId,
         readOnly: rowDisabled,
-        autoOpen: calleeId === reviewCalleeId,
+        autoOpen: tool === reviewTool,
         onAutoOpened: clearReview,
       };
     },
-    [grants, projectId, entity.applicationId, rowDisabled, reviewCalleeId, clearReview],
+    [grants, projectId, entity.applicationId, rowDisabled, reviewTool, clearReview],
   );
 
   const renderToolCard = useCallback(
