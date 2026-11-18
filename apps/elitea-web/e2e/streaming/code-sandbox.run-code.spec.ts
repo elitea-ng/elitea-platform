@@ -33,6 +33,7 @@ import { BASE_URL } from '../../playwright.config';
 import {
   AUTOTEST_PREFIX,
   createAgentThroughForm,
+  deleteAgent as deleteAgentInProject,
   expectStoredAssistantAnswer,
   fillComposer,
   MOCK_CALL_TOOL_SENTINEL,
@@ -54,6 +55,25 @@ const RUN_CODE_TOOL = 'run_code';
  */
 const TURN_TIMEOUT_MS = 240_000;
 
+/**
+ * Every agent this file creates, deleted after each journey whether it passed
+ * or not: a journey that fails between the form save and its last assertion
+ * would otherwise leave an `autotest_` agent (and its conversation) behind on
+ * a stack other journeys share.
+ */
+const createdAgents: { projectId: string; agentId: string }[] = [];
+
+test.afterEach(async ({ page }) => {
+  const agents = createdAgents.splice(0);
+  for (const { projectId, agentId } of agents) {
+    try {
+      await deleteAgentInProject(page.request, agentId, projectId);
+    } catch {
+      // The delete is hygiene; the journey's own failure is the one to read.
+    }
+  }
+});
+
 interface PreparedAgent {
   readonly projectId: string;
   readonly conversationId: string;
@@ -66,6 +86,7 @@ interface PreparedAgent {
  */
 async function prepareSandboxAgent(page: Page, name: string): Promise<PreparedAgent> {
   const { projectId, agentId, versionId } = await createAgentThroughForm(page, name);
+  createdAgents.push({ projectId, agentId });
 
   const stored = await page.request.get(
     `${BASE_URL}/api/v2/elitea_core/application/prompt_lib/${projectId}/${agentId}`,
@@ -139,7 +160,11 @@ interface RunCodeResult {
  * so a refusal ("no code sandbox for that language", a sandbox failure) reads
  * as itself rather than as a missing field.
  */
-async function storedRunCodeResult(page: Page, prepared: PreparedAgent): Promise<RunCodeResult> {
+async function storedRunCodeResult(
+  page: Page,
+  prepared: PreparedAgent,
+  expectedStatus: 'success' | 'error' = 'success',
+): Promise<RunCodeResult> {
   await expectStoredAssistantAnswer(page, prepared.projectId, prepared.conversationId, {
     contains: MOCK_CALL_TOOL_SENTINEL,
     timeout: TURN_TIMEOUT_MS,
@@ -164,8 +189,8 @@ async function storedRunCodeResult(page: Page, prepared: PreparedAgent): Promise
   }
   expect(
     parsed.status,
-    `${RUN_CODE_TOOL} must succeed on the real sandbox: ${body.slice(0, 800)}`,
-  ).toBe('success');
+    `${RUN_CODE_TOOL} must answer \`${expectedStatus}\` on the real sandbox: ${body.slice(0, 800)}`,
+  ).toBe(expectedStatus);
   return parsed;
 }
 
@@ -212,3 +237,28 @@ journey(
     expect((result.output ?? '').trim()).toBe('2');
   },
 );
+
+/**
+ * A Rust program that does not compile. The model must be told WHY: the tool
+ * result it receives carries the compiler's diagnostic (the error code and
+ * message), not a bare "could not run the program". The path is the runner's
+ * captured compiler stderr (`rust_execute.rs`), the supervisor's receipt, the
+ * worker's `ProgramFailed` mapping (`graph/code_tool.rs`) and the tool's
+ * `failure_text`; before this journey only each hop's unit test covered it.
+ */
+test('run_code reports a Rust compile error to the model with the compiler diagnostic', async ({ page }) => {
+  test.setTimeout(TURN_TIMEOUT_MS + 120_000);
+  const prepared = await prepareSandboxAgent(page, `${AUTOTEST_PREFIX}code-rustfail-${Date.now() % 100_000}`);
+  const code =
+    'pub fn run(state: serde_json::Value) -> Result<serde_json::Value, Box<dyn std::error::Error>> {\n    let _ = state;\n    let n: i32 = "not a number";\n    Ok(serde_json::json!(n))\n}';
+  const prompt = `[[mock:call_tool ${RUN_CODE_TOOL} ${JSON.stringify({ language: 'rust', code })}]] compile this rust`;
+  await sendTurn(page, prompt);
+  const result = await storedRunCodeResult(page, prepared, 'error');
+  const message = result.message ?? '';
+  expect(message, 'the model must be told the program failed to run').toContain('could not run the program');
+  expect(
+    message,
+    `the compiler's error code must reach the model, not only the generic failure: ${message.slice(0, 800)}`,
+  ).toContain('E0308');
+  expect(message, 'the compiler message must reach the model').toContain('mismatched types');
+});

@@ -30,6 +30,18 @@ nodes:
     transition: END
 `;
 
+const createdPipelines: { projectId: string; pipelineId: string }[] = [];
+
+test.afterEach(async ({ page }) => {
+  for (const { projectId, pipelineId } of createdPipelines.splice(0)) {
+    try {
+      await page.request.delete(`${BASE_URL}/api/v2/elitea_core/application/prompt_lib/${projectId}/${pipelineId}`);
+    } catch {
+      // Hygiene only; the journey's own failure is the one to read.
+    }
+  }
+});
+
 test('a pipeline code node runs JavaScript on the real sandbox and its result is the answer', async ({ page }) => {
   test.setTimeout(300_000);
   const name = `${AUTOTEST_PREFIX}codenode-${Date.now() % 1_000_000}`;
@@ -52,6 +64,9 @@ test('a pipeline code node runs JavaScript on the real sandbox and its result is
   const versionId = String(body.version_details?.id ?? '');
   expect(projectId).not.toBe('');
   expect(pipelineId).toMatch(/^\d+$/);
+  // Deleted after the journey whether it passed or not (the agents of the
+  // `run_code` journeys are cleaned the same way).
+  createdPipelines.push({ projectId, pipelineId });
   expect(versionId).not.toBe('');
 
   const saved = await page.request.put(
@@ -97,6 +112,4 @@ test('a pipeline code node runs JavaScript on the real sandbox and its result is
     timeout: 180_000,
     message: 'the code node never produced `sum:2`: the sandbox did not run the node',
   });
-
-  await page.request.delete(`${BASE_URL}/api/v2/elitea_core/application/prompt_lib/${projectId}/${pipelineId}`);
 });

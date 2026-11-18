@@ -11,6 +11,14 @@
 # mode 0600 (or root-owned 0640). A bind mount arrives with the host's owner,
 # so the pair is copied to a private directory owned by `postgres` first.
 set -eu
+# The arguments are the base file's `command`, which must be the postgres
+# server (`postgres -c ...`). If a change to the base file turns it into
+# anything else, appending `-c ssl=...` below would hand PostgreSQL flags to a
+# program that does not know them, or silently run without TLS: stop instead.
+[ "${1:-}" = postgres ] || {
+  echo "ERROR: the container command must start with 'postgres', got '${1:-}'" >&2
+  exit 1
+}
 src=/tls-src
 dst=/var/lib/postgresql-tls
 [ -r "$src/postgres.crt" ] && [ -r "$src/postgres.key" ] || {
