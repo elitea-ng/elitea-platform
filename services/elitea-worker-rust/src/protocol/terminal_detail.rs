@@ -10,7 +10,7 @@
 //! The slot is in memory, so a restart between the node failure and the
 //! terminal would lose it. The node that fails also keeps the text durably
 //! (`DispatchJournal::record_failure_detail`, #2234), and the terminal path
-//! calls [`hydrate`] before it builds the frame: an empty slot is refilled from
+//! calls `hydrate` before it builds the frame: an empty slot is refilled from
 //! that copy. Either way the detail is a courtesy, never a reason to fail a run
 //! differently: whatever cannot be read leaves the registered sentence alone.
 
@@ -52,7 +52,7 @@ fn durable() -> &'static OnceLock<Arc<dyn DurableDetail>> {
     &DURABLE
 }
 
-/// Name the durable copy [`hydrate`] reads. The first one installed stays: a
+/// Name the durable copy `hydrate` reads. The first one installed stays: a
 /// worker has one agent-state database.
 pub(crate) fn install_durable(source: Arc<dyn DurableDetail>) {
     let _already_installed = durable().set(source);
