@@ -279,7 +279,7 @@ An installed agent's internal edges (the agents it uses as tools) come from its 
 - **Upstream merge.** The review lists widened edges the same way, and a merge that widens one needs a person. Approving the request re-approves the agent's edges. A merge only writes a draft, so edges the fork gains when its editors publish it are caught by the drift check.
 - **Removed agents.** The grants of edges whose agent an upgrade removed are revoked.
 
-The notices in the chat come with a later release. The review in the attach dialog is described next; the API (`listDelegationGrants`, `proposeDelegationGrant`, `previewDelegationGrant`, `approveDelegationGrant`, `revokeDelegationGrant`) is what it uses.
+The review in the attach dialog is described next; the API (`listDelegationGrants`, `proposeDelegationGrant`, `previewDelegationGrant`, `approveDelegationGrant`, `revokeDelegationGrant`) is what it uses.
 
 #### The review when an editor attaches an agent
 
@@ -291,6 +291,22 @@ The editor's view of this is [Attach a specialist agent](/how-tos/agents-pipelin
 - **An approval that fails never undoes the attach.** The grant stays pending, the row says **Delegation not approved**, and **Review delegation** tries again.
 - **Review delegation.** Each attached agent or pipeline shows its edge's state: approved, delegation not approved (pending), awaiting approval (a governed change request is open) or needs re-approval (stale). The review opens read-only unless the grant is pending and ungoverned. Re-approving a stale grant comes with the drift notifications of a later release.
 - **Clients.** The web app and the desktop app (its screens are the web app's) show the dialog and the row. The mobile app has no agent editor: it lists an agent's delegations, and an editor approves or revokes them there (client contract 1.59); under the governed profile it points to the change request. A nested agent in the desktop app's local turn runs as its own cloud turn, bounded by its owner and the acting person, and does not read the edge's grant.
+
+### Notices in the chat
+
+A refused or narrowed delegation is shown in the chat, on web, desktop and mobile, at the place of the agent that was called. The model still reads the same typed result, so it can explain itself; the notice is for the person.
+
+| Notice | Reason | What it says | Action |
+| --- | --- | --- | --- |
+| Delegation refused | `no_grant` | "Agent1 could not use git from Agent2. This delegation is not approved." The edge has no approved grant and the run enforces them. | **Review delegation** for an editor of the calling agent. Anyone else sees who to ask: the calling agent's registry owners, else its owner, by name. |
+| Delegation narrowed | `stale` | "Agent1 ran without Database. It was added after this delegation was approved." The callee gained something its grant does not cover (drift), so it ran without it. | The same. |
+| Delegation refused | `principal` | "Agent3 could not use payroll. You do not have access to it." The person or mandate the run acts for may not use it. | None: an editor of the calling agent cannot fix this. Someone with project access must grant it to the person. |
+| Delegation refused | `depth` | "Agent1 was not called: the delegation depth limit of 2 was reached." | None: an administrator raises **Maximum Delegation Depth**. |
+
+- **Review delegation** opens the calling agent, where its Tools panel shows each attached agent's grant state with **Review delegation** (the dialog above). It shows for a person who may edit agents in the project (the permission `models.applications.application.update`), only for an agent saved in the project.
+- **What a notice carries.** The edge (calling and called agent), why, and the names of the grants involved, up to 16. It never carries a credential value or a tool argument. The answer keeps up to 16 notices, one per call, so a reloaded chat shows them again.
+- **What does not show a notice.** A delegation that `report` mode only recorded ran, so nothing is shown. A pipeline node that runs a saved pipeline in its graph ends the run with the authorization failure as before. Ephemeral sub-agents (`spawn_agent`) are exempt from grants.
+- **Events.** The worker sends `delegation_refused` and `delegation_narrowed` run events (client contract 1.60). Main keeps them on the answer's `metadata.delegation_notices_v1` and adds `can_review` and `editors` for the person who reads, never stored.
 
 #### What a grant changes at run time
 

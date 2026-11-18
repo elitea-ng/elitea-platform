@@ -35,6 +35,7 @@ import { isTerminalPhase, type TranscriptItem, type TurnView } from '../model/tu
 import { AnsweringAgent, ContinuedMarker, StopNotices } from './ChainNotices';
 import { SteerMessage } from './SteerMessage';
 import { SubAgentLanes, type SubAgentAvatar } from './SubAgentLanes';
+import { DelegationNotices } from '@/shared/ui/delegation-notices';
 import { ThinkingBlock } from './ThinkingBlock';
 import { ToolProcessOutput } from './ToolProcessOutput';
 
@@ -296,6 +297,7 @@ export function TurnTranscript({ view, busy, onRetryCommit, onTextContextMenu, o
           </Box>
         ),
       )}
+      <DelegationNotices notices={view.delegationNotices} />
       {view.error !== undefined && <TurnError error={view.error} onRetry={onRetryTurn} />}
       <RetryNotice view={view} />
       <StopNotices view={view} onContinue={onContinue} />

@@ -101,7 +101,7 @@ it('approves a pending grant only after the confirmation, then reads the list ag
 
 it('shows what a stale grant now also holds and re-approves it after a confirmation', async () => {
   const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
-  const server = install('1.60');
+  const server = install('1.61');
   server.on('GET', LIST, {
     status: 200,
     body: { grants: [grant(3, { state: 'stale', drift: { callee_version_id: 9, digest: 'd', added: [{ kind: 'tool', name: 'git_delete', toolkit: 'toolkit:7' }] } })] },
@@ -120,7 +120,7 @@ it('shows what a stale grant now also holds and re-approves it after a confirmat
 
 it('points a governed stale grant to its change request when re-approval is asked', async () => {
   const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
-  const server = install('1.60');
+  const server = install('1.61');
   server.on('GET', LIST, { status: 200, body: { grants: [grant(3, { state: 'stale', governed: true })] } });
   server.on('POST', `${ONE(3)}/approve`, { status: 409, body: { error: 'governed', code: 'DELEGATION_GOVERNED', change_request_id: 8 } });
   await render(withQueries(<AgentDelegationsScreen />));

@@ -3488,6 +3488,9 @@ impl AgentEventProjector {
                     error.is_some(),
                 )?;
                 self.record_tool_step(id, active, result.response, &timestamp_finish);
+                if let Some(notice) = self.delegation_notice_event(id, active, event.timestamp)? {
+                    batch.push(notice)?;
+                }
                 completed.push(id.to_owned());
                 continue;
             }
@@ -3528,6 +3531,9 @@ impl AgentEventProjector {
             )?)?;
             batch.push(self.tool_partial_event(id, &entry, event.timestamp)?)?;
             self.record_tool_step(id, active, result.response, &timestamp_finish);
+            if let Some(notice) = self.delegation_notice_event(id, active, event.timestamp)? {
+                batch.push(notice)?;
+            }
             completed.push(id.to_owned());
         }
         for id in completed {
@@ -7395,6 +7401,9 @@ mod run_steps;
 
 #[path = "events_subagent_lane.rs"]
 mod subagent_lane_frames;
+
+#[path = "events_delegation_notice.rs"]
+mod delegation_notice_frames;
 
 #[path = "grounding_events.rs"]
 mod grounding_events;

@@ -42,12 +42,15 @@
  */
 import * as zod from "zod";
 import { AttachmentMessageItem } from "./attachmentMessageItem.zod";
+import { DelegationNotice } from "./delegationNotice.zod";
 import { GroundingIndicator } from "./groundingIndicator.zod";
 import { SubAgentLane } from "./subAgentLane.zod";
 
 export const conversationMessageAddressedToMax = 64;
 
 export const conversationMessageMetadataSubagentsV1Max = 24;
+
+export const conversationMessageMetadataDelegationNoticesV1Max = 16;
 
 export const ConversationMessage = zod
   .object({
@@ -125,6 +128,13 @@ export const ConversationMessage = zod
           .optional()
           .describe(
             'Client contract 1.48 (ADR-0050 decision 4). On a cloud answer whose agent started temporary sub-agents (`spawn_agent`): one lane per child, as its `agent_subagent` frames left it. Show each under the `spawn_agent` tool row whose call id is its `parent_call_id`, with its display name and a "temporary" badge. Absent when the answer started none.',
+          ),
+        delegation_notices_v1: zod
+          .array(DelegationNotice)
+          .max(conversationMessageMetadataDelegationNoticesV1Max)
+          .optional()
+          .describe(
+            "Client contract 1.60 (ADR-0044 Amendment 1). On an answer whose agent had a delegation refused or narrowed: one notice per call, as its `delegation_refused` and `delegation_narrowed` frames left them, with `can_review` and `editors` derived for the viewer. Show each at the callee's tool-call row (`id` is its `tool_run_id`). Absent when none.",
           ),
       })
       .optional(),

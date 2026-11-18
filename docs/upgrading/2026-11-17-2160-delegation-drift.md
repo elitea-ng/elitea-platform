@@ -2,7 +2,7 @@
 
 **What changed.** A delegation grant now notices when its callee holds more than the grant
 recorded. The grant is marked `stale`, records what changed (`drift`, new in client contract
-1.60), and the calling agent's owners, the people who proposed and approved the grant and the
+1.61), and the calling agent's owners, the people who proposed and approved the grant and the
 authors of its recent versions get one notification per edge and digest
 (`delegation_grant_stale`; `delegation_closure_grew` when an agent the callee reaches gains a
 grant). Approving a stale grant re-approves it: the old grant is kept as `superseded`. The check

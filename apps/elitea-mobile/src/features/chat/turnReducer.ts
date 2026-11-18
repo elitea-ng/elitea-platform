@@ -2,10 +2,13 @@ import {
   ANSWER_DELTA_TYPES,
   FRAME_TYPE,
   TURN_FAILURE_TYPES,
+  delegationNoticeOf,
+  foldDelegationNotice,
   foldSubAgentEntry,
   mergeSteeringAll,
   subAgentEntryOf,
   type CloudSubAgentLane,
+  type DelegationNotice,
   type SteeringItem,
 } from '@elitea/client-core/stream';
 
@@ -86,6 +89,8 @@ export interface TurnState {
    * (`agent_subagent`), shown as tool groups (`subAgentSteps`).
    */
   subAgents: readonly CloudSubAgentLane[];
+  /** Client contract 1.60: refused or narrowed delegations (`delegation_refused` / `delegation_narrowed`), one per tool call. */
+  delegationNotices: readonly DelegationNotice[];
 }
 
 /**
@@ -110,6 +115,7 @@ export const INITIAL_TURN: TurnState = {
   stopped: false,
   steering: [],
   subAgents: [],
+  delegationNotices: [],
 };
 /** The `execution.failed` code of a run that was stopped. */
 export const CANCELLED_CODE = 'CANCELLED';
@@ -199,6 +205,11 @@ export function reduceTurn(state: TurnState, frame: Frame): TurnState {
   if (node.type === FRAME_TYPE.AgentSubAgent) {
     const subAgents = foldSubAgentEntry(streaming.subAgents, subAgentEntryOf(node));
     return subAgents === streaming.subAgents ? streaming : { ...streaming, subAgents };
+  }
+  if (node.type === FRAME_TYPE.DelegationRefused || node.type === FRAME_TYPE.DelegationNarrowed) {
+    // A notice never touches the answer's text or tool rows.
+    const notice = delegationNoticeOf(node.response_metadata);
+    return notice === undefined ? streaming : { ...streaming, delegationNotices: foldDelegationNotice(streaming.delegationNotices, notice) };
   }
   return reduceNode(streaming, node);
 }

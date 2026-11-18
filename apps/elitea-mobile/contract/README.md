@@ -179,11 +179,17 @@ does not animate WebP: Android builds with `expo.webp.animated=false`, iOS anima
 video state its poster, each with the default motion. An SVG is not drawn (the still, then the old icon).
 Reduced motion shows the still only and downloads nothing else.
 
+## Client contract 1.61
+
+| Area | What |
+|---|---|
+| Delegation drift (delegation epic 2156, story S4) | A delegation grant answered by `listDelegationGrants`, `getDelegationGrant` and `approveDelegationGrant` can be `stale` and carries `drift` (`callee_version_id`, `digest`, `added`): what its callee holds now beyond the grant. `approveDelegationGrant` re-approves a stale grant (the old one becomes `superseded`); under the governed profile it answers 409 `DELEGATION_GOVERNED` with the new change request. Notifications `delegation_grant_stale` and `delegation_closure_grew` carry a `meta.message`. The app shows them in the inbox, and the agent's delegations screen shows what a stale grant's callee now also holds with a **Re-approve** action (a governed grant points to its change request on the web or desktop app). A server before 1.61 sends no `drift`. |
+
 ## Client contract 1.60
 
 | Area | What |
 |---|---|
-| Delegation drift (delegation epic 2156, story S4) | A delegation grant answered by `listDelegationGrants`, `getDelegationGrant` and `approveDelegationGrant` can be `stale` and carries `drift` (`callee_version_id`, `digest`, `added`): what its callee holds now beyond the grant. `approveDelegationGrant` re-approves a stale grant (the old one becomes `superseded`); under the governed profile it answers 409 `DELEGATION_GOVERNED` with the new change request. Notifications `delegation_grant_stale` and `delegation_closure_grew` carry a `meta.message`. The app shows them in the inbox, and the agent's delegations screen shows what a stale grant's callee now also holds with a **Re-approve** action (a governed grant points to its change request on the web or desktop app). A server before 1.60 sends no `drift`. |
+| Delegation notices (delegation epic 2156, story S5, ADR-0044 amendment 1) | A run that refused or narrowed a delegation streams a `delegation_refused` or `delegation_narrowed` frame (`response_metadata.delegation_v1`), and the answer keeps the same list on `metadata.delegation_notices_v1` (`DelegationNotice`). The thread shows one plain-text card per notice under the answer's tool activity (`src/features/chat/DelegationNoticeCards.tsx`, `delegationNotices.ts`; parsing and folding are shared in `@elitea/client-core/stream`). "Review delegation" shows only when the server says the viewer may review (`can_review`); otherwise the card names the editors to ask. The frames never touch the answer's text or tool rows. A server before 1.60 sends none; no card is shown. |
 
 ## Client contract 1.59
 

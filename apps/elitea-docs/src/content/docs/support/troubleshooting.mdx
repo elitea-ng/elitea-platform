@@ -36,6 +36,15 @@ If any of these fail, fix that first — most downstream errors trace back to on
   </Accordion>
 </AccordionGroup>
 
+### An agent could not use a toolkit of the agent it called
+
+The chat shows a notice at the called agent, such as "Agent1 could not use git from Agent2. This delegation is not approved." It means the agent that called Agent1 had no approved delegation for it, or the person running the chat may not use that toolkit. The called agent did not run with it, and the model was told why.
+
+- **"This delegation is not approved."** An editor of the calling agent chooses **Review delegation** and approves what Agent1 may use. If you cannot edit agents, the notice names who to ask.
+- **"ran without ..., It was added after this delegation was approved."** Agent1 gained a toolkit after the delegation was approved. The run went on without it. An editor of the calling agent approves it again.
+- **"You do not have access to it."** You may not use that toolkit or credential yourself. A delegation never exceeds the person running the chat, and an editor cannot change that. Ask a project administrator for access.
+- **"the delegation depth limit ... was reached."** The chain of agents is deeper than the administrator allows. See [Delegation grants and notices](/admin/enterprise-controls/least-privilege-and-trust#notices-in-the-chat).
+
 ## Pipeline configuration issues
 
 <AccordionGroup>

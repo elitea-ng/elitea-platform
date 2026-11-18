@@ -2332,6 +2332,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		if cfg.Pool != nil {
 			convHandler.WithParticipantCandidates(dbrepos.NewParticipantCandidatesRepo(cfg.Pool))
 		}
+		// A refused or narrowed delegation's notice is served with what this
+		// viewer may do about it (#2161). A nil reviewer serves it unstamped.
+		if reviewer := composeDelegationReviewer(cfg, permissionResolver); reviewer != nil {
+			convHandler.WithDelegationReviewer(reviewer)
+		}
 	}
 	mountMCPServerRoutes(
 		r, cfg.Pool, authenticate, cfg.MCPAgentStart, cfg.MCPToolkitExecute,
