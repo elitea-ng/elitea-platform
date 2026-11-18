@@ -461,7 +461,11 @@ impl IndexCatalog {
                     .get("embedding_dimension")
                     .is_none_or(|dimension| dimension.is_null() || dimension.as_u64() == Some(0));
             if unstamped {
-                if entries.iter().any(|entry| entry.name == name) || pending.contains(&name) {
+                if entries
+                    .iter()
+                    .any(|entry: &IndexCatalogEntry| entry.name == name)
+                    || pending.contains(&name)
+                {
                     return Err(IndexCatalogError("`indexes` repeats a name"));
                 }
                 pending.push(name);
