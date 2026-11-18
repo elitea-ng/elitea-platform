@@ -171,8 +171,8 @@ type RetentionStats struct {
 	MemoryAgents int64
 	// SandboxRuns is how many runs' sandbox rows the pass cleared.
 	SandboxRuns int64
-	Errors       int64
-	Truncated    bool
+	Errors      int64
+	Truncated   bool
 }
 
 // Sweeper enforces step_content (Content) and step_record (Records).
