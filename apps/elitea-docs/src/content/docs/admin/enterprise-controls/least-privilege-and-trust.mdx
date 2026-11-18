@@ -260,8 +260,18 @@ Attaching an agent or a pipeline to another agent (an agent used as a tool, or a
 - **Detaching revokes the grant** once no version of the calling agent attaches the callee.
 - **Audit.** Each proposal, approval, re-approval, stale mark and revoke is a security audit event (`agent.delegation.*`).
 
-<<<<<<< HEAD
-The review screen in the attach dialog comes with a later release; until then grants are managed through the API (`listDelegationGrants`, `proposeDelegationGrant`, `previewDelegationGrant`, `approveDelegationGrant`, `revokeDelegationGrant`).
+The review in the attach dialog is described next; the API (`listDelegationGrants`, `proposeDelegationGrant`, `previewDelegationGrant`, `approveDelegationGrant`, `revokeDelegationGrant`) is what it uses.
+
+#### The review when an editor attaches an agent
+
+The editor's view of this is [Attach a specialist agent](/how-tos/agents-pipelines/attach-a-specialist-agent). What the platform does:
+
+- **Before the attach.** Choosing an agent or pipeline in the Tools panel reads `previewDelegationGrant` for the edge: what the callee will be able to use (toolkits and tools, credential references by name, data classes, egress hosts), which of those the editor could approve, which they could not (`withheld`), the closure below the callee as information, and whether the governed profile is on (`governed`). A callee that holds nothing is attached with no dialog. Nothing is written until the editor decides.
+- **Approve and attach.** The attach writes the link and the pending grant in one transaction, as before. The dialog then approves that grant with the toolkits the editor kept (`approveDelegationGrant` with `items`, or with no body when nothing was unticked). The server reads the approver's access again, so a client cannot approve more than the person holds. Under the governed profile the button is **Request approval**: the attach records the change request, nothing is approved by the dialog, and the row says **Awaiting approval**.
+- **Items the approver cannot access** are shown disabled with the reason and stay out of the grant (`omitted`).
+- **An approval that fails never undoes the attach.** The grant stays pending, the row says **Delegation not approved**, and **Review delegation** tries again.
+- **Review delegation.** Each attached agent or pipeline shows its edge's state: approved, delegation not approved (pending), awaiting approval (a governed change request is open) or needs re-approval (stale). The review opens read-only unless the grant is pending and ungoverned. Re-approving a stale grant comes with the drift notifications of a later release.
+- **Clients.** The web app and the desktop app (its screens are the web app's) show the dialog and the row. The mobile app has no agent editor: it lists an agent's delegations, and an editor approves or revokes them there (client contract 1.59); under the governed profile it points to the change request. A nested agent in the desktop app's local turn runs as its own cloud turn, bounded by its owner and the acting person, and does not read the edge's grant.
 
 ### Notices in the chat
 
@@ -274,26 +284,10 @@ A refused or narrowed delegation is shown in the chat, on web, desktop and mobil
 | Delegation refused | `principal` | "Agent3 could not use payroll. You do not have access to it." The person or mandate the run acts for may not use it. | None: an editor of the calling agent cannot fix this. Someone with project access must grant it to the person. |
 | Delegation refused | `depth` | "Agent1 was not called: the delegation depth limit of 2 was reached." | None: an administrator raises **Maximum Delegation Depth**. |
 
-- **Review delegation** opens the calling agent. It shows for a person who may edit agents in the project (the permission `models.applications.application.update`), only for an agent saved in the project. The attach dialog's review of the edge replaces this link when that release ships.
+- **Review delegation** opens the calling agent, where its Tools panel shows each attached agent's grant state with **Review delegation** (the dialog above). It shows for a person who may edit agents in the project (the permission `models.applications.application.update`), only for an agent saved in the project.
 - **What a notice carries.** The edge (calling and called agent), why, and the names of the grants involved, up to 16. It never carries a credential value or a tool argument. The answer keeps up to 16 notices, one per call, so a reloaded chat shows them again.
 - **What does not show a notice.** A delegation that `report` mode only recorded ran, so nothing is shown. A pipeline node that runs a saved pipeline in its graph ends the run with the authorization failure as before. Ephemeral sub-agents (`spawn_agent`) are exempt from grants.
 - **Events.** The worker sends `delegation_refused` and `delegation_narrowed` run events (client contract 1.60). Main keeps them on the answer's `metadata.delegation_notices_v1` and adds `can_review` and `editors` for the person who reads, never stored.
-||||||| 948d63f93
-The review screen in the attach dialog and the notices in the chat come with later releases; until then grants are managed through the API (`listDelegationGrants`, `proposeDelegationGrant`, `previewDelegationGrant`, `approveDelegationGrant`, `revokeDelegationGrant`).
-=======
-The notices in the chat come with a later release. The review in the attach dialog is described next; the API (`listDelegationGrants`, `proposeDelegationGrant`, `previewDelegationGrant`, `approveDelegationGrant`, `revokeDelegationGrant`) is what it uses.
-
-#### The review when an editor attaches an agent
-
-The editor's view of this is [Attach a specialist agent](/how-tos/agents-pipelines/attach-a-specialist-agent). What the platform does:
-
-- **Before the attach.** Choosing an agent or pipeline in the Tools panel reads `previewDelegationGrant` for the edge: what the callee will be able to use (toolkits and tools, credential references by name, data classes, egress hosts), which of those the editor could approve, which they could not (`withheld`), the closure below the callee as information, and whether the governed profile is on (`governed`). A callee that holds nothing is attached with no dialog. Nothing is written until the editor decides.
-- **Approve and attach.** The attach writes the link and the pending grant in one transaction, as before. The dialog then approves that grant with the toolkits the editor kept (`approveDelegationGrant` with `items`, or with no body when nothing was unticked). The server reads the approver's access again, so a client cannot approve more than the person holds. Under the governed profile the button is **Request approval**: the attach records the change request, nothing is approved by the dialog, and the row says **Awaiting approval**.
-- **Items the approver cannot access** are shown disabled with the reason and stay out of the grant (`omitted`).
-- **An approval that fails never undoes the attach.** The grant stays pending, the row says **Delegation not approved**, and **Review delegation** tries again.
-- **Review delegation.** Each attached agent or pipeline shows its edge's state: approved, delegation not approved (pending), awaiting approval (a governed change request is open) or needs re-approval (stale). The review opens read-only unless the grant is pending and ungoverned. Re-approving a stale grant comes with the drift notifications of a later release.
-- **Clients.** The web app and the desktop app (its screens are the web app's) show the dialog and the row. The mobile app has no agent editor: it lists an agent's delegations, and an editor approves or revokes them there (client contract 1.59); under the governed profile it points to the change request. A nested agent in the desktop app's local turn runs as its own cloud turn, bounded by its owner and the acting person, and does not read the edge's grant.
->>>>>>> origin/main
 
 #### What a grant changes at run time
 
