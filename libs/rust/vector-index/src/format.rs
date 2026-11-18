@@ -225,6 +225,15 @@ pub fn index_not_found_message(index_name: &str, available: &str) -> String {
     format!("Index '{index_name}' not found. Available indexes: {available}")
 }
 
+/// `Index '…' is listed but holds no vectors: …`, for an index that was
+/// created and never run, or whose run failed before storing any.
+#[must_use]
+pub fn index_not_searchable_message(index_name: &str, available: &str) -> String {
+    format!(
+        "Index '{index_name}' holds no searchable content yet: it was never indexed, or its last indexing run failed before storing any. Re-run indexing to build it. Available indexes: {available}"
+    )
+}
+
 /// What `list_indexes` returns for no indexes.
 pub const NO_INDEXES: &str = "No indexed collections";
 

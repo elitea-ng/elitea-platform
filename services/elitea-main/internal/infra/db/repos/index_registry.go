@@ -623,9 +623,10 @@ LIMIT 10001`, projectID, toolkitID)
 	return result, nil
 }
 
-// CatalogEntries implements indexregistry.CatalogSource: the live, stamped
-// rows of the project's toolkits named, as the frozen index catalog needs
-// them — name, id, embedding space — and nothing else (no history JSON, no
+// CatalogEntries implements indexregistry.CatalogSource: the live rows of the
+// project's toolkits named (every row the Indexes tab lists, stamped with an
+// embedding space or not), as the frozen index catalog needs them — name, id,
+// state, embedding space — and nothing else (no history JSON, no
 // run job). One query for every toolkit of a freeze, ordered by toolkit then
 // oldest first, at most indexcatalog.MaxEntries+1 rows per toolkit so the
 // resolver can tell a truncated toolkit from a full one.
@@ -638,15 +639,19 @@ func (r *IndexRegistryRepository) CatalogEntries(
 		return []indexregistryapp.CatalogRow{}, nil
 	}
 	rows, err := r.pool.Query(ctx, `
-SELECT toolkit_id, name, index_id::text, embedding_model, embedding_dimension
+SELECT toolkit_id, name, index_id::text, state, embedding_model, embedding_dimension
 FROM (
-    SELECT toolkit_id, name, index_id, embedding_model, embedding_dimension,
-           row_number() OVER (PARTITION BY toolkit_id ORDER BY created_at, index_id) AS position
+    SELECT toolkit_id, name, index_id, state,
+           COALESCE(embedding_model, '') AS embedding_model,
+           COALESCE(embedding_dimension, 0) AS embedding_dimension,
+           row_number() OVER (
+               PARTITION BY toolkit_id
+               -- Rows that hold vectors come first, so a toolkit's many never-run or
+               -- failed rows can never push a searchable index past the cap.
+               ORDER BY (COALESCE(embedding_model, '') = ''), created_at, index_id) AS position
     FROM elitea_runtime.index_registry
     WHERE project_id = $1 AND toolkit_id = ANY($2::integer[]) AND deleted_at IS NULL
-      AND embedding_model IS NOT NULL AND embedding_model <> ''
-      AND embedding_dimension IS NOT NULL AND embedding_dimension > 0
-) AS stamped
+) AS listed
 WHERE position <= $3
 ORDER BY toolkit_id, position`, projectID, toolkitIDs, indexcatalog.MaxEntries+1)
 	if err != nil {
@@ -656,7 +661,7 @@ ORDER BY toolkit_id, position`, projectID, toolkitIDs, indexcatalog.MaxEntries+1
 	result := make([]indexregistryapp.CatalogRow, 0)
 	for rows.Next() {
 		var row indexregistryapp.CatalogRow
-		if err := rows.Scan(&row.ToolkitID, &row.Name, &row.IndexID, &row.Model, &row.Dimension); err != nil {
+		if err := rows.Scan(&row.ToolkitID, &row.Name, &row.IndexID, &row.State, &row.Model, &row.Dimension); err != nil {
 			return nil, fmt.Errorf("scan index registry catalog entry: %w", err)
 		}
 		result = append(result, row)

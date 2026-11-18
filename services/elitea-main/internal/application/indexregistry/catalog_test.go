@@ -24,14 +24,23 @@ func TestToolkitIndexCatalogAppliesTheWorkersEntryRuleAndCap(t *testing.T) {
 		{Name: "upper", IndexID: "4E3F8C1E-6C1A-4D8E-9B1A-2F6D1C3E4A5E", Model: "m", Dimension: 3},
 		// A second row of a listed name: the worker refuses a repeated name.
 		{Name: "docs", IndexID: "5e3f8c1e-6c1a-4d8e-9b1a-2f6d1c3e4a5e", Model: "m", Dimension: 3},
+		// Rows that hold no vectors (a failed first run, a never-run row) are
+		// listed by the Indexes tab, so they are listed here too (#2150):
+		// name, id and state, with no embedding space.
+		{Name: "failed-first-run", IndexID: "6e3f8c1e-6c1a-4d8e-9b1a-2f6d1c3e4a5e", State: "failed"},
+		{Name: "never-ran", IndexID: "7e3f8c1e-6c1a-4d8e-9b1a-2f6d1c3e4a5e", State: "created"},
+		// ...but one with an id the worker would refuse is still left out.
+		{Name: "bad-id", IndexID: "BAD", State: "failed"},
 	}
 	got, dropped, truncated := ToolkitIndexCatalog(rows)
 	want := []map[string]any{
 		{"name": "docs", "index_id": "0b0f8c1e-6c1a-4d8e-9b1a-2f6d1c3e4a5b", "embedding_model": "text-embedding-3-small", "embedding_dimension": int32(1536)},
 		{"name": "partial", "index_id": "2d2f8c1e-6c1a-4d8e-9b1a-2f6d1c3e4a5d", "embedding_model": "text-embedding-3-small", "embedding_dimension": int32(1536)},
+		{"name": "failed-first-run", "index_id": "6e3f8c1e-6c1a-4d8e-9b1a-2f6d1c3e4a5e", "state": "failed"},
+		{"name": "never-ran", "index_id": "7e3f8c1e-6c1a-4d8e-9b1a-2f6d1c3e4a5e", "state": "created"},
 	}
-	if !reflect.DeepEqual(got, want) || dropped != 5 || truncated {
-		t.Fatalf("catalog = %#v dropped=%d truncated=%v, want %#v 5 false", got, dropped, truncated, want)
+	if !reflect.DeepEqual(got, want) || dropped != 6 || truncated {
+		t.Fatalf("catalog = %#v dropped=%d truncated=%v, want %#v 6 false", got, dropped, truncated, want)
 	}
 	if empty, _, _ := ToolkitIndexCatalog(nil); empty == nil || len(empty) != 0 {
 		t.Fatalf("an empty catalog must be [] not nil: %#v", empty)

@@ -566,7 +566,8 @@ func (f *fakeRepo) isWorkspaceBucket(_ context.Context, projectID int64, name st
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, row := range f.buckets {
-		if row.ProjectID == projectID && row.Name == name && row.BucketType == "workspace" {
+		if row.ProjectID == projectID && row.Name == name &&
+			(row.BucketType == "workspace" || (row.BucketType == "system" && row.Name == "index-artifacts")) {
 			return true, nil
 		}
 	}

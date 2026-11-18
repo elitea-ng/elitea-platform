@@ -114,6 +114,21 @@ func Family(toolkitType string) bool {
 	return false
 }
 
+// ValidPendingEntry is the rule for an index that holds no vectors yet
+// (created and never run, or a run that failed before storing any): a name
+// and an index id by the same rules, and no embedding space. The worker lists
+// it and does not search it.
+func ValidPendingEntry(name, indexID string) bool {
+	return boundedText(name, MaxNameBytes) && validIndexID(indexID)
+}
+
+// PendingEntry is one such index: name, registry id and run state, and no
+// embedding_model or embedding_dimension, which is how the worker tells it
+// from a searchable one.
+func PendingEntry(name, indexID, state string) map[string]any {
+	return map[string]any{"name": name, "index_id": indexID, "state": state}
+}
+
 // Entry is one index as the worker's catalog reads it: the user's name, the
 // index_registry UUID (the vector namespace), and the embedding model and
 // dimension the index was stamped with. The worker embeds a query with that

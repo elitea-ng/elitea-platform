@@ -319,6 +319,11 @@ func (h *Handler) ListBuckets(w http.ResponseWriter, r *http.Request) {
 
 	buckets := make([]Bucket, 0, len(rows))
 	for _, row := range rows {
+		// The index result bucket is internal storage (index runs and toolkit
+		// discovery), never a person's: it is not listed (#2167).
+		if internalBucket(row) {
+			continue
+		}
 		b, err := h.enrichBucket(r.Context(), row)
 		if err != nil {
 			h.writeInternal(w, r, "list buckets", err)
@@ -692,6 +697,13 @@ func (h *Handler) reservedBucketName(ctx context.Context, projectID int64, name 
 // indexArtifactBucketName is the system bucket index runs write their results
 // to (repos.indexArtifactBucketName).
 const indexArtifactBucketName = "index-artifacts"
+
+// internalBucket reports the platform's own index result bucket: a system
+// bucket by its reserved name, which every bucket route also answers as absent
+// (repos hiddenBucketSQL).
+func internalBucket(row repos.BucketRow) bool {
+	return row.BucketType == "system" && row.Name == indexArtifactBucketName
+}
 
 // agentMediaBucketName is the bucket avatar pack media live in
 // (agentmediaapi.Bucket, ADR-0050 decision 6). A person-made bucket of that

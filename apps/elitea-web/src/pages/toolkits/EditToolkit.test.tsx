@@ -353,7 +353,9 @@ describe('EditToolkit', () => {
     expect(screen.getByRole('button', { name: 'More actions' })).toBeInTheDocument();
   });
 
-  it('copies the current page URL to the clipboard via the kebab\'s real Copy Link item', async () => {
+  // #2148: the copied link must name the project, or it opens the toolkit in
+  // whichever project the reader has selected.
+  it('copies a link that names the project to the clipboard via the kebab\'s real Copy Link item', async () => {
     server.use(
       http.get('/api/v2/elitea_core/tools/prompt_lib/:projectId', () => HttpResponse.json({ rows: [mockToolkitRow()], total: 1 })),
       http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => HttpResponse.json({})),
@@ -361,6 +363,7 @@ describe('EditToolkit', () => {
     const saveToolkit = vi.fn();
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    window.history.pushState({}, '', '/toolkits/latest/tk-1');
 
     renderToolkitsRoute(withShell(<EditToolkit deps={{ saveToolkit }} />), '/toolkits/latest/tk-1', { projectId: 'proj-1' });
 
@@ -368,7 +371,7 @@ describe('EditToolkit', () => {
     fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
     fireEvent.click(await screen.findByText('Copy link'));
 
-    await waitFor(() => expect(writeText).toHaveBeenCalledWith(window.location.href));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/proj-1/toolkits/latest/tk-1`));
 
     // `ControlsDropdown`'s own `handleLeafActivate` closes the menu right
     // after firing `onClick` — the "Copied!" label swap is only visible on
