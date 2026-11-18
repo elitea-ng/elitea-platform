@@ -60,6 +60,19 @@ class's schema. Re-capture means a new commit in `upstream` and a reviewed diff 
    `application/configurations/native_types.go`: id, section (`credentials`), title (the SDK class name),
    label, categories, and `Properties` and `Required` as the fixture has them. A secret field carries
    `secret: true`, `format: "password"`, `writeOnly: true`. `AuthSubsections` groups the fields in the form.
+   - **Create normalizer.** Main refuses to boot unless every catalogue type has exactly one create
+     owner. A native type is owned by the default, `CurrentNativeDataNormalizer`
+     (`native_normalizer.go`): a create keeps only the declared fields, requires the `Required` ones to be
+     present and of the declared JSON type (strings non-empty and bounded), and stores a
+     `{{secret.NAME}}` reference as given. If the type needs its own rules, set `OwnNormalizer: true`,
+     write the owner, and count it in `NewCurrentConfigurationDataNormalizer` (and the owner counts in
+     `normalizer_chain_test.go`); the default then steps aside. Declaring `OwnNormalizer` without
+     adding the owner fails boot. `TestNativeConfigurationTypeIsOwnedByTheDefaultNormalizerAtBoot` boots
+     the chain with a real native type.
+   - **Hidden.** `Hidden: true` registers the type but sets `metadata.hidden`, which the web credential
+     picker honours, so it stays out of the create list until its flow works. Existing rows still open and
+     edit. Mobile and desktop have no credential-type picker of their own (they open the web form or do
+     not create credentials), so the flag is not read there.
 3. Connection check: add the probe to `toolkitCheckProbes` in
    `api/v2/configurations/toolkit_check.go` (it reads an identity endpoint, never content) and set
    `CheckConnection: true`. For a delegated sign-in type, answer through `check_connection_oauth.go`

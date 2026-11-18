@@ -50,6 +50,16 @@ type NativeConfigurationType struct {
 	AuthSubsections []NativeAuthSubsection
 	// CheckConnection reports that a probe exists for the type.
 	CheckConnection bool
+	// Hidden registers the type but keeps it out of the create pickers
+	// (`metadata.hidden`, which the web credential type selector honours), for
+	// a type whose flow is not ready. Existing rows of the type still open and
+	// edit; the type stays in the available catalogue.
+	Hidden bool
+	// OwnNormalizer says the type's create rules are written by its own
+	// story: it adds its own owner in NewCurrentConfigurationDataNormalizer
+	// and the default (CurrentNativeDataNormalizer) steps aside. Without it
+	// the default owns the type. Exactly one owner, or Main does not boot.
+	OwnNormalizer bool
 }
 
 // NativeAuthSubsection is one group of fields of the form's auth section.
@@ -138,6 +148,9 @@ func nativeConfigSchema(envelope json.RawMessage, native NativeConfigurationType
 		"label":                      native.Label,
 		"section":                    native.Section,
 		"type":                       native.Type,
+	}
+	if native.Hidden {
+		metadata["hidden"] = true
 	}
 	if len(native.AuthSubsections) > 0 {
 		subsections := make([]any, 0, len(native.AuthSubsections))
