@@ -73,9 +73,12 @@ export default function AgentDelegationsScreen() {
   const onApprove = (grant: DelegationGrantView) => {
     if (projectId === null || applicationId === null || busy !== null) return;
     const callee = calleeName(grant, names);
+    const again = grant.state === 'stale';
     Alert.alert(
-      `Approve ${callee}?`,
-      `${agentName} will be able to use what ${callee} brings, as listed, for the parts you hold access to. What you do not hold access to stays out.`,
+      again ? `Re-approve ${callee}?` : `Approve ${callee}?`,
+      again
+        ? `${agentName} will be able to use what ${callee} holds now, for the parts you hold access to. The earlier approval is kept in the history.`
+        : `${agentName} will be able to use what ${callee} brings, as listed, for the parts you hold access to. What you do not hold access to stays out.`,
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Approve', onPress: () => stillHere() && run(grant, () => approveDelegationGrant(projectId, applicationId, grant.id), DELEGATION_COPY.approve) },

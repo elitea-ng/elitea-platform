@@ -6,7 +6,7 @@ import { Alert } from 'react-native';
 import { discoveryDocument13 } from '@/api/__fixtures__/nativeClient';
 import { DiscoveryDocumentSchema } from '@/api/discovery';
 import AgentDelegationsScreen from '@/app/(app)/agent-delegations/[id]';
-import { DelegationGrantsView, GOVERNED_NOTE } from '@/features/delegation/DelegationGrantsView';
+import { DelegationGrantsView, GOVERNED_NOTE, REAPPROVAL_GOVERNED_NOTE } from '@/features/delegation/DelegationGrantsView';
 import { __resetSessionForTests, setCredential, setSession } from '@/state/session';
 import { __resetWorkspaceInfoForTests, setWorkspaceInfo } from '@/state/workspaceInfo';
 import { FAKE_ORIGIN, fakeServer, type FakeServer } from '@/test/fakeServer';
@@ -99,6 +99,38 @@ it('approves a pending grant only after the confirmation, then reads the list ag
   await waitFor(() => expect(server.requests.filter((r) => r.method === 'GET' && r.url.pathname.endsWith('/41')).length).toBeGreaterThan(1));
 });
 
+it('shows what a stale grant now also holds and re-approves it after a confirmation', async () => {
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  const server = install('1.60');
+  server.on('GET', LIST, {
+    status: 200,
+    body: { grants: [grant(3, { state: 'stale', drift: { callee_version_id: 9, digest: 'd', added: [{ kind: 'tool', name: 'git_delete', toolkit: 'toolkit:7' }] } })] },
+  });
+  server.on('POST', `${ONE(3)}/approve`, { status: 200, body: grant(4, { state: 'approved' }) });
+  await render(withQueries(<AgentDelegationsScreen />));
+  expect(await screen.findByText('Agent 53 now also holds, not approved yet')).toBeTruthy();
+  expect(screen.getByText('Tool git_delete (toolkit:7)')).toBeTruthy();
+  await fireEvent.press(screen.getByRole('button', { name: 'Re-approve delegation to Agent 53' }));
+  expect(server.requests.some((r) => r.method === 'POST')).toBe(false);
+  expect(alert.mock.calls[0][0]).toBe('Re-approve Agent 53?');
+  await act(async () => alert.mock.calls[0][2]!.find((b) => b.text === 'Approve')!.onPress!());
+  await settle();
+  expect(server.requests.find((r) => r.method === 'POST')?.url.pathname).toBe(`/api/v2${ONE(3)}/approve`);
+});
+
+it('points a governed stale grant to its change request when re-approval is asked', async () => {
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  const server = install('1.60');
+  server.on('GET', LIST, { status: 200, body: { grants: [grant(3, { state: 'stale', governed: true })] } });
+  server.on('POST', `${ONE(3)}/approve`, { status: 409, body: { error: 'governed', code: 'DELEGATION_GOVERNED', change_request_id: 8 } });
+  await render(withQueries(<AgentDelegationsScreen />));
+  expect(await screen.findByText(REAPPROVAL_GOVERNED_NOTE)).toBeTruthy();
+  await fireEvent.press(screen.getByRole('button', { name: 'Re-approve delegation to Agent 53' }));
+  await act(async () => alert.mock.calls[0][2]!.find((b) => b.text === 'Approve')!.onPress!());
+  await settle();
+  expect(await screen.findByText('This delegation is decided in a change request. Open it on the web or desktop app to approve it.')).toBeTruthy();
+});
+
 it('shows a refused approval in the app words: governed, self-approval, nothing to approve', async () => {
   const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
   const server = install();
@@ -157,6 +189,7 @@ describe('DelegationGrantsView', () => {
     changeRequestId: null,
     items: [{ kind: 'toolkit', name: 'toolkit:7', toolkit: null }],
     omitted: [],
+    drift: [],
     ...extra,
   });
 

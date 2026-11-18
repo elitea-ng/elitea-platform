@@ -1,11 +1,12 @@
 import type { ReactElement } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, View, type RefreshControlProps } from 'react-native';
 
-import { canApprove, canRevoke, stateLabel, type DelegationGrantView, type DelegationItem } from '@/api/queries/delegation';
+import { canApprove, canReapprove, canRevoke, stateLabel, type DelegationGrantView, type DelegationItem } from '@/api/queries/delegation';
 import { useDesign } from '@/design/DesignProvider';
 import { Button, EmptyState, ListSection, Text, useLayoutMargin } from '@/ui';
 
 export const DELEGATION_HINT = 'Attaching an agent to another one is done on the web or desktop app.';
+export const REAPPROVAL_GOVERNED_NOTE = 'Re-approval is decided in a change request on the web or desktop app. Until then the agent runs without the new items.';
 export const GOVERNED_NOTE = 'Awaiting approval, decided in a change request on the web or desktop app.';
 
 export interface DelegationGrantsViewProps {
@@ -107,6 +108,11 @@ export function DelegationGrantsView({ agentName, status, grants, names, busy, b
                     {GOVERNED_NOTE}
                   </Text>
                 ) : null}
+                {grant.state === 'stale' && grant.governed ? (
+                  <Text variant="callout" tone="secondary">
+                    {REAPPROVAL_GOVERNED_NOTE}
+                  </Text>
+                ) : null}
                 <Text variant="subheadline" tone="secondary">
                   {grant.state === 'pending' ? `${name} would be able to use` : `${name} can use`}
                 </Text>
@@ -121,6 +127,18 @@ export function DelegationGrantsView({ agentName, status, grants, names, busy, b
                     </Text>
                   ))
                 )}
+                {grant.state === 'stale' && grant.drift.length > 0 ? (
+                  <>
+                    <Text variant="subheadline" tone="secondary">
+                      {`${name} now also holds, not approved yet`}
+                    </Text>
+                    {grant.drift.map((item) => (
+                      <Text key={`drift:${item.kind}:${item.name}:${item.toolkit ?? ''}`} variant="callout" tone="danger" selectable={selectable}>
+                        {itemLine(item)}
+                      </Text>
+                    ))}
+                  </>
+                ) : null}
                 {grant.omitted.length > 0 ? (
                   <>
                     <Text variant="subheadline" tone="secondary">
@@ -133,13 +151,23 @@ export function DelegationGrantsView({ agentName, status, grants, names, busy, b
                     ))}
                   </>
                 ) : null}
-                {canApprove(grant) || canRevoke(grant) ? (
+                {canApprove(grant) || canReapprove(grant) || canRevoke(grant) ? (
                   <View style={styles.actions}>
                     {canApprove(grant) ? (
                       <Button
                         title="Approve"
                         size="small"
                         accessibilityLabel={`Approve delegation to ${name}`}
+                        disabled={busy !== null}
+                        loading={running}
+                        onPress={() => onApprove(grant)}
+                      />
+                    ) : null}
+                    {canReapprove(grant) ? (
+                      <Button
+                        title="Re-approve"
+                        size="small"
+                        accessibilityLabel={`Re-approve delegation to ${name}`}
                         disabled={busy !== null}
                         loading={running}
                         onPress={() => onApprove(grant)}

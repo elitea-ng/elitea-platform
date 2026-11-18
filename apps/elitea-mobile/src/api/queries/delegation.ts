@@ -13,6 +13,10 @@ import { queryKeys } from '@/api/queries/keys';
  * shows an agent's grants and lets an editor approve or revoke one; attaching and the governed
  * change request are on the web and desktop.
  *
+ * Client contract 1.60 adds `drift` to a stale grant: what its callee holds now beyond the grant.
+ * Approving a stale grant re-approves it against what the callee holds now (the old grant is kept
+ * as superseded); under the governed profile that is decided in a change request instead.
+ *
  * Everything the server says about a grant is shown as plain text and never interpreted.
  */
 
@@ -37,6 +41,8 @@ export interface DelegationGrantView {
   items: DelegationItem[];
   /** What the callee held when proposed and the approver left out. */
   omitted: DelegationItem[];
+  /** On a stale grant: what its callee holds now that the grant does not cover (contract 1.60). */
+  drift: DelegationItem[];
 }
 
 export type DelegationFailure = 'offline' | 'not_available' | 'refused' | 'failed';
@@ -78,6 +84,7 @@ const Grant = z.looseObject({
   change_request_id: Id.nullish().catch(null),
   items: z.array(z.unknown()).nullish(),
   omitted: z.array(z.unknown()).nullish(),
+  drift: z.looseObject({ added: z.array(z.unknown()).nullish() }).nullish().catch(null),
 });
 const Envelope = z.looseObject({ grants: z.array(z.unknown()).nullish() });
 
@@ -104,6 +111,7 @@ export function grantOf(raw: unknown): DelegationGrantView | null {
     changeRequestId: grant.data.change_request_id ?? null,
     items: itemsOf(grant.data.items),
     omitted: itemsOf(grant.data.omitted),
+    drift: itemsOf(grant.data.drift?.added),
   };
 }
 
@@ -129,6 +137,12 @@ export function stateLabel(grant: Pick<DelegationGrantView, 'state'>): string {
 
 /** Whether the caller can approve here: pending and not governed (a governed one is decided in its change request). */
 export const canApprove = (grant: Pick<DelegationGrantView, 'state' | 'governed'>): boolean => grant.state === 'pending' && !grant.governed;
+
+/**
+ * Whether the caller can ask to re-approve: a stale grant. Under the governed profile the server
+ * records the change request and answers 409 `DELEGATION_GOVERNED`, which the app shows as such.
+ */
+export const canReapprove = (grant: Pick<DelegationGrantView, 'state'>): boolean => grant.state === 'stale';
 
 /** Whether the caller can revoke here: an approved or stale grant, or a pending one that is not governed. */
 export const canRevoke = (grant: Pick<DelegationGrantView, 'state' | 'governed'>): boolean =>

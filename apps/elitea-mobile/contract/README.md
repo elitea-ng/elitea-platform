@@ -183,7 +183,7 @@ Reduced motion shows the still only and downloads nothing else.
 
 | Area | What |
 |---|---|
-| Delegation drift (delegation epic 2156, story S4) | A delegation grant answered by `listDelegationGrants`, `getDelegationGrant` and `approveDelegationGrant` can be `stale` and carries `drift` (`callee_version_id`, `digest`, `added`): what its callee holds now beyond the grant. `approveDelegationGrant` re-approves a stale grant (the old one becomes `superseded`); under the governed profile it answers 409 `DELEGATION_GOVERNED` with the new change request. Notifications `delegation_grant_stale` and `delegation_closure_grew` carry a `meta.message`. The app shows them in the inbox; the review screen is story S3. A server before 1.60 sends no `drift`. |
+| Delegation drift (delegation epic 2156, story S4) | A delegation grant answered by `listDelegationGrants`, `getDelegationGrant` and `approveDelegationGrant` can be `stale` and carries `drift` (`callee_version_id`, `digest`, `added`): what its callee holds now beyond the grant. `approveDelegationGrant` re-approves a stale grant (the old one becomes `superseded`); under the governed profile it answers 409 `DELEGATION_GOVERNED` with the new change request. Notifications `delegation_grant_stale` and `delegation_closure_grew` carry a `meta.message`. The app shows them in the inbox, and the agent's delegations screen shows what a stale grant's callee now also holds with a **Re-approve** action (a governed grant points to its change request on the web or desktop app). A server before 1.60 sends no `drift`. |
 
 ## Client contract 1.59
 
