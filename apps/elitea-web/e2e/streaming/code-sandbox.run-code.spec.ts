@@ -54,6 +54,31 @@ const RUN_CODE_TOOL = 'run_code';
  */
 const TURN_TIMEOUT_MS = 240_000;
 
+/**
+ * Every agent this file creates, deleted after each journey whether it passed
+ * or not: a journey that fails between the form save and its last assertion
+ * would otherwise leave an `autotest_` agent (and its conversation) behind on
+ * a stack other journeys share.
+ */
+const createdAgents: { projectId: string; agentId: string }[] = [];
+
+test.afterEach(async ({ page }) => {
+  const agents = createdAgents.splice(0);
+  for (const { projectId, agentId } of agents) {
+    // `request.delete` resolves on 4xx/5xx, so the status is read, not a catch.
+    // A failed delete is an annotation: the journey's own failure is the one to read.
+    const response = await page.request
+      .delete(`${BASE_URL}/api/v2/elitea_core/application/prompt_lib/${projectId}/${agentId}`)
+      .catch(() => undefined);
+    if (response === undefined || (!response.ok() && response.status() !== 404)) {
+      test.info().annotations.push({
+        type: 'cleanup',
+        description: `agent ${agentId} in project ${projectId} was not deleted (${String(response?.status())})`,
+      });
+    }
+  }
+});
+
 interface PreparedAgent {
   readonly projectId: string;
   readonly conversationId: string;
@@ -66,6 +91,7 @@ interface PreparedAgent {
  */
 async function prepareSandboxAgent(page: Page, name: string): Promise<PreparedAgent> {
   const { projectId, agentId, versionId } = await createAgentThroughForm(page, name);
+  createdAgents.push({ projectId, agentId });
 
   const stored = await page.request.get(
     `${BASE_URL}/api/v2/elitea_core/application/prompt_lib/${projectId}/${agentId}`,
@@ -139,7 +165,11 @@ interface RunCodeResult {
  * so a refusal ("no code sandbox for that language", a sandbox failure) reads
  * as itself rather than as a missing field.
  */
-async function storedRunCodeResult(page: Page, prepared: PreparedAgent): Promise<RunCodeResult> {
+async function storedRunCodeResult(
+  page: Page,
+  prepared: PreparedAgent,
+  expectedStatus: 'success' | 'error' = 'success',
+): Promise<RunCodeResult> {
   await expectStoredAssistantAnswer(page, prepared.projectId, prepared.conversationId, {
     contains: MOCK_CALL_TOOL_SENTINEL,
     timeout: TURN_TIMEOUT_MS,
@@ -164,8 +194,8 @@ async function storedRunCodeResult(page: Page, prepared: PreparedAgent): Promise
   }
   expect(
     parsed.status,
-    `${RUN_CODE_TOOL} must succeed on the real sandbox: ${body.slice(0, 800)}`,
-  ).toBe('success');
+    `${RUN_CODE_TOOL} must answer \`${expectedStatus}\` on the real sandbox: ${body.slice(0, 800)}`,
+  ).toBe(expectedStatus);
   return parsed;
 }
 
@@ -212,3 +242,42 @@ journey(
     expect((result.output ?? '').trim()).toBe('2');
   },
 );
+
+/**
+ * A Rust program that does not compile, as the model is told about it.
+ *
+ * The compiler's diagnostic does NOT reach the model today (#2223): the runner
+ * writes it to the run's stderr, but the supervisor keeps no result for a
+ * failed run, so the worker only learns `sandbox.code_failed`. Two journeys
+ * pin both halves. The first is the contract that holds now: a compile failure
+ * is an `error` answer that names the Rust hint, never a success. The second
+ * is the contract this journey exists for, the diagnostic itself, marked
+ * `test.fail` so it passes while #2223 is open and turns red the day the
+ * diagnostic arrives, which is the signal to delete the marker.
+ */
+const NON_COMPILING_RUST =
+  'pub fn run(state: serde_json::Value) -> Result<serde_json::Value, Box<dyn std::error::Error>> {\n    let _ = state;\n    let n: i32 = "not a number";\n    Ok(serde_json::json!(n))\n}';
+
+async function runNonCompilingRust(page: Page, label: string): Promise<string> {
+  test.setTimeout(TURN_TIMEOUT_MS + 120_000);
+  const prepared = await prepareSandboxAgent(page, `${AUTOTEST_PREFIX}code-${label}-${Date.now() % 100_000}`);
+  const prompt = `[[mock:call_tool ${RUN_CODE_TOOL} ${JSON.stringify({ language: 'rust', code: NON_COMPILING_RUST })}]] compile this rust`;
+  await sendTurn(page, prompt);
+  const result = await storedRunCodeResult(page, prepared, 'error');
+  return result.message ?? '';
+}
+
+test('run_code answers a Rust program that does not compile with an error, never a success', async ({ page }) => {
+  const message = await runNonCompilingRust(page, 'rustfail');
+  expect(message, 'the model must be told to check that the Rust compiles').toContain('for Rust, that it compiles');
+});
+
+test('run_code gives the model the Rust compiler diagnostic (#2223)', async ({ page }) => {
+  test.fail(true, 'the diagnostic is dropped between the runner and the worker: #2223');
+  const message = await runNonCompilingRust(page, 'rustdiag');
+  expect(message, 'the failure must carry the program error output section').toContain('Program error output:');
+  expect(message, `the compiler's error code must reach the model: ${message.slice(0, 800)}`).toMatch(
+    /error\[E\d{4}\]/,
+  );
+  expect(message, 'the compiler message must reach the model').toContain('mismatched types');
+});
