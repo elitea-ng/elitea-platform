@@ -7,11 +7,17 @@
 //! terminal machinery, so the text waits here, keyed by the run (execution id
 //! and generation), from the moment the node knows it until the terminal frame
 //! is built. It is bounded twice: per text, and in how many runs wait at once.
-//! A restart loses it, and the terminal then carries the registered sentence
-//! alone: the detail is a courtesy, never a reason to fail a run differently.
+//! The slot is in memory, so a restart between the node failure and the
+//! terminal would lose it. The node that fails also keeps the text durably
+//! (`DispatchJournal::record_failure_detail`, #2234), and the terminal path
+//! calls `hydrate` before it builds the frame: an empty slot is refilled from
+//! that copy. Either way the detail is a courtesy, never a reason to fail a run
+//! differently: whatever cannot be read leaves the registered sentence alone.
 
 use std::collections::VecDeque;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
+
+use super::elitea::runtime::v1::ExecutionIdentityV1;
 
 /// What follows the registered sentence, before the program's output. Main's
 /// `CodeFailureDetailSeparator` is the same text: Main admits nothing else
@@ -31,6 +37,42 @@ type Waiting = VecDeque<((String, u64), String)>;
 fn registry() -> &'static Mutex<Waiting> {
     static REGISTRY: OnceLock<Mutex<Waiting>> = OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(VecDeque::new()))
+}
+
+/// Where a run's failure output is kept across a worker restart. The worker's
+/// dispatch journal is the production one.
+#[async_trait::async_trait]
+pub(crate) trait DurableDetail: Send + Sync {
+    /// The output kept for this run, or `None` (nothing kept, or unreadable).
+    async fn recall(&self, identity: &ExecutionIdentityV1) -> Option<String>;
+}
+
+fn durable() -> &'static OnceLock<Arc<dyn DurableDetail>> {
+    static DURABLE: OnceLock<Arc<dyn DurableDetail>> = OnceLock::new();
+    &DURABLE
+}
+
+/// Name the durable copy `hydrate` reads. The first one installed stays: a
+/// worker has one agent-state database.
+pub(crate) fn install_durable(source: Arc<dyn DurableDetail>) {
+    let _already_installed = durable().set(source);
+}
+
+/// Refill this run's slot from its durable copy when the slot is empty (a
+/// restart lost it). A slot that holds output is never replaced.
+pub(crate) async fn hydrate(identity: &ExecutionIdentityV1) {
+    if let Some(source) = durable().get() {
+        hydrate_from(source.as_ref(), identity).await;
+    }
+}
+
+async fn hydrate_from(source: &dyn DurableDetail, identity: &ExecutionIdentityV1) {
+    if noted(&identity.execution_id, identity.generation).is_some() {
+        return;
+    }
+    if let Some(detail) = source.recall(identity).await {
+        note(&identity.execution_id, identity.generation, Some(&detail));
+    }
 }
 
 /// The program's output as bounded text, whatever it was: control characters
@@ -149,6 +191,46 @@ mod tests {
         assert_eq!(noted("run-a", 1).as_deref(), Some("second"));
         assert_eq!(noted("run-b", 1).as_deref(), Some("other run"));
         assert_eq!(noted("run-c", 1), None, "no output was ever noted");
+    }
+
+    struct Kept(Option<&'static str>);
+    #[async_trait::async_trait]
+    impl DurableDetail for Kept {
+        async fn recall(&self, _: &ExecutionIdentityV1) -> Option<String> {
+            self.0.map(str::to_owned)
+        }
+    }
+    fn identity(execution_id: &str, generation: u64) -> ExecutionIdentityV1 {
+        ExecutionIdentityV1 {
+            execution_id: execution_id.to_owned(),
+            generation,
+            ..ExecutionIdentityV1::default()
+        }
+    }
+
+    /// #2234: a restart empties the slot; the durable copy refills it, and a
+    /// slot that holds output is never replaced by an older copy.
+    #[tokio::test]
+    async fn an_empty_slot_is_refilled_from_the_durable_copy_and_a_full_one_is_not() {
+        hydrate_from(&Kept(None), &identity("hydrate-none", 1)).await;
+        assert_eq!(noted("hydrate-none", 1), None, "nothing was kept");
+        hydrate_from(
+            &Kept(Some("kept before the restart")),
+            &identity("hydrate-a", 1),
+        )
+        .await;
+        assert_eq!(
+            noted("hydrate-a", 1).as_deref(),
+            Some("kept before the restart")
+        );
+        assert_eq!(
+            noted("hydrate-a", 2),
+            None,
+            "another generation is another run"
+        );
+        note("hydrate-b", 1, Some("in memory"));
+        hydrate_from(&Kept(Some("older copy")), &identity("hydrate-b", 1)).await;
+        assert_eq!(noted("hydrate-b", 1).as_deref(), Some("in memory"));
     }
 
     #[test]

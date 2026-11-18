@@ -159,7 +159,15 @@ impl ClaimBoundSandboxAuthority {
 
     #[cfg(test)]
     pub(crate) fn original_code_visit_conformance_fixture() -> Self {
-        tests::original_code_visit_conformance_fixture()
+        tests::original_code_visit_conformance_fixture("1".repeat(32))
+    }
+
+    /// The same fixture under its own execution id (32 lowercase hex digits):
+    /// tests that run in parallel and read per-run process state (the failed
+    /// program's output slot, #2234) each take a distinct one.
+    #[cfg(test)]
+    pub(crate) fn original_code_visit_conformance_fixture_for(execution_id: &str) -> Self {
+        tests::original_code_visit_conformance_fixture(execution_id.to_owned())
     }
     /// Borrow only for current-fence Main intent admission. No new permit is issued.
     pub(crate) fn intent_content_binding(&self) -> (&str, u64, &str, &[u8]) {
@@ -722,7 +730,9 @@ mod tests {
         .unwrap();
         ClaimBoundRuntimeContextAuthority::from_claim(&claim)
     }
-    pub(super) fn original_code_visit_conformance_fixture() -> ClaimBoundSandboxAuthority {
+    pub(super) fn original_code_visit_conformance_fixture(
+        execution_id: String,
+    ) -> ClaimBoundSandboxAuthority {
         use crate::protocol::elitea::runtime::v1::{
             SignedWorkerCommandEnvelopeV1, WorkerCommandV1,
         };
@@ -730,7 +740,7 @@ mod tests {
             SignedWorkerCommandEnvelopeV1::decode(vector("signed_command").as_slice()).unwrap();
         let mut body = WorkerCommandV1::decode(signed.worker_command_bytes.as_slice()).unwrap();
         let original_execution = body.execution_id.clone();
-        body.execution_id = "1".repeat(32);
+        body.execution_id = execution_id;
         if body.root_execution_id == original_execution {
             body.root_execution_id = body.execution_id.clone();
         }

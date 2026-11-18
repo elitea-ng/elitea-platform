@@ -346,6 +346,50 @@ impl DispatchJournal {
     }
 }
 
+impl DispatchJournal {
+    /// Keep the output a failed Code node ends its run with, so a restart
+    /// before the run's terminal still has it (#2234). One row per run: a later
+    /// failure of the same run replaces it, as the in-memory slot does. The
+    /// text is already bounded (`protocol::terminal_detail::bounded`).
+    pub(crate) async fn record_failure_detail(
+        &self,
+        scope: &DispatchScope,
+        detail: &str,
+    ) -> Result<(), DispatchError> {
+        sqlx::query("INSERT INTO elitea_runtime.sandbox_run_failure_details (tenant_id,project_id,execution_id,generation,failure_detail) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (tenant_id,project_id,execution_id,generation) DO UPDATE SET failure_detail=EXCLUDED.failure_detail, recorded_at=clock_timestamp()")
+            .bind(&scope.tenant).bind(scope.project).bind(&scope.execution).bind(scope.generation)
+            .bind(detail)
+            .execute(&self.pool).await?;
+        Ok(())
+    }
+
+    /// What [`Self::record_failure_detail`] kept for this run, if anything.
+    pub(crate) async fn failure_detail(
+        &self,
+        scope: &DispatchScope,
+    ) -> Result<Option<String>, DispatchError> {
+        Ok(sqlx::query_scalar::<_, String>(
+            "SELECT failure_detail FROM elitea_runtime.sandbox_run_failure_details WHERE tenant_id=$1 AND project_id=$2 AND execution_id=$3 AND generation=$4",
+        )
+        .bind(&scope.tenant).bind(scope.project).bind(&scope.execution).bind(scope.generation)
+        .fetch_optional(&self.pool).await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::protocol::terminal_detail::DurableDetail for DispatchJournal {
+    async fn recall(
+        &self,
+        identity: &crate::protocol::elitea::runtime::v1::ExecutionIdentityV1,
+    ) -> Option<String> {
+        // The detail is a courtesy: a database that is unreachable, or one
+        // Main has not migrated yet (it upgrades first, but be safe), leaves
+        // the registered sentence alone.
+        let scope = DispatchScope::from_identity(identity).ok()?;
+        self.failure_detail(&scope).await.ok().flatten()
+    }
+}
+
 pub(crate) struct BoundSandboxStop {
     delivery: std::sync::Arc<dyn SandboxStopDelivery>,
     authority: crate::protocol::control::SandboxStopAuthority,

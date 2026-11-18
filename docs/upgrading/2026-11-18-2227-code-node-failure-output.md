@@ -17,5 +17,5 @@ error. What a program prints is not redacted here, as in the `run_code` tool's a
 
 **What to do.** Upgrade Main before the worker (the chart does this in one rollout). A worker that
 sends the new text to a Main that does not admit it has its terminal refused once and replaced by the
-generic internal failure, so the run still ends, without the Code failure's own sentence. After a worker
-restart in the middle of a failing run the error carries the sentence alone.
+generic internal failure, so the run still ends, without the Code failure's own sentence. A worker
+restart in the middle of a failing run keeps the output (issue 2234, see its upgrade note).

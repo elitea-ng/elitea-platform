@@ -601,6 +601,8 @@ async fn harness(script: MainScript, fail_after: Duration) -> Harness {
     .await
 }
 
+static NEXT_RUN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// The harness with the profiles' `code_slots` and the run's deadline (W3-1).
 #[allow(clippy::too_many_lines)] // One harness wires every fake the code-recovery proofs share.
 async fn harness_with(
@@ -623,13 +625,25 @@ async fn harness_with(
         include_str!(
             "../../../../elitea-main/migrations/agentstate/0014_sandbox_dispatch_submission_marker.sql"
         ),
+        include_str!(
+            "../../../../elitea-main/migrations/agentstate/0016_sandbox_run_failure_detail.sql"
+        ),
     ] {
         sqlx::raw_sql(migration)
             .execute(&database.pool)
             .await
             .unwrap();
     }
-    let authority = Arc::new(ClaimBoundSandboxAuthority::original_code_visit_conformance_fixture());
+    // Each harness is its own run: the failed program's output is kept per
+    // run in process state (`protocol::terminal_detail`), and these tests run
+    // in parallel, so a shared execution id would race a per-run assertion.
+    let execution_id = format!(
+        "{:032x}",
+        0xe2_3400_0000_u64 + NEXT_RUN.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    let authority = Arc::new(
+        ClaimBoundSandboxAuthority::original_code_visit_conformance_fixture_for(&execution_id),
+    );
     let scope = authority.dispatch_scope().unwrap();
     let main = Arc::new(StdMutex::new(MainCalls::default()));
     let supervisor = Arc::new(StdMutex::new(SupervisorCalls::default()));
@@ -1382,6 +1396,49 @@ async fn a_user_code_failure_settles_typed_and_is_never_rerun() {
     let failure = run.ledger().await.effective_failure().unwrap();
     assert_eq!(failure.class, NodeFailureClass::InvalidResult);
     assert_eq!(failure.replay, ReplaySafety::NoExternalEffect);
+}
+
+/// #2227, #2234: the failed program's output is kept for the run's terminal
+/// through the production attempt path, in the per-run slot and durably, so a
+/// restart (an empty slot) can refill it. Each harness is its own run, so this
+/// reads the slot without racing the other tests.
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn a_failed_programs_output_is_kept_for_the_terminal_and_durably_for_a_restart() {
+    let h = harness(QUIET, Duration::ZERO).await;
+    let detail = "thread 'main' panicked at src/user.rs:3:5:\nboom";
+    h.answers
+        .lock()
+        .unwrap()
+        .push_back(pb::SubmitSandboxJobResponseV1 {
+            failure_detail: detail.into(),
+            ..terminal("sandbox.code_failed")
+        });
+    let (execution, generation) = h.authority.trace_identity();
+    assert_eq!(
+        crate::protocol::terminal_detail::noted(execution, generation),
+        None,
+        "this run has not failed yet"
+    );
+    assert_eq!(h.dispatch.failure_detail(&h.scope).await.unwrap(), None);
+    let run = default_run(&h, PURE_YAML);
+    let error = run.node.execute(&run.context).await.err().unwrap();
+    assert!(error.to_string().contains("pipeline.node_recovery.failed"));
+    assert_eq!(run.events().await, ["pipeline.code_failed"]);
+    // The slot the terminal frame is built from.
+    assert_eq!(
+        crate::protocol::terminal_detail::noted(execution, generation).as_deref(),
+        Some(detail)
+    );
+    // The copy a restarted worker reads when its slot is empty.
+    assert_eq!(
+        h.dispatch
+            .failure_detail(&h.scope)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some(detail)
+    );
 }
 
 /// The allowance is bounded: once it is spent the node settles typed.
