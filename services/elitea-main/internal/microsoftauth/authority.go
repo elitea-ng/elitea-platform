@@ -44,6 +44,14 @@ func NormalizeEntraAuthority(raw string) (string, error) {
 // EntraOnly reports whether this type accepts an Entra authority only.
 func (d Descriptor) EntraOnly() bool { return d.entraOnly }
 
+// ForbiddenIdentityReadMeansSignedIn is true where the identity read can be
+// refused (403) for a token that is perfectly good: Graph GET /me needs a
+// profile permission, and the Outlook and Teams permission lists offer none
+// that every default selection holds. A 401 still means "sign in again".
+// Dataverse WhoAmI answers 403 only for a user with no access to the
+// environment, which is a failed credential.
+func (d Descriptor) ForbiddenIdentityReadMeansSignedIn() bool { return d.probe == ProbeGraphMe }
+
 // TokenEndpoint is the token endpoint of an authority that passed
 // NormalizeEntraAuthority: {authority}/oauth2/v2.0/token. It is always computed,
 // never read from a discovery document a user could influence.

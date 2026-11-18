@@ -68,6 +68,19 @@ func currentMicrosoftConfigurationType(typeName string) bool {
 	}
 }
 
+// microsoftFields is the set of fields each Microsoft type defines, taken once
+// from the definitions so the live registry is never read (or changed) here.
+var microsoftFields = func() map[string]map[string]bool {
+	fields := map[string]map[string]bool{}
+	for _, native := range microsoftNativeTypes() {
+		fields[native.Type] = map[string]bool{}
+		for field := range native.Properties {
+			fields[native.Type][field] = true
+		}
+	}
+	return fields
+}()
+
 func microsoftFieldError(field string) error {
 	return currentMutationFieldError(CurrentConfigurationMutationInvalid, "data."+field)
 }
@@ -85,14 +98,9 @@ func normalizeCurrentMicrosoftData(
 		return nil, currentMutationFieldError(CurrentConfigurationMutationInvalid, "data")
 	}
 	kept := map[string]any{}
-	for _, native := range nativeConfigurationTypes {
-		if native.Type != typeName {
-			continue
-		}
-		for field := range native.Properties {
-			if value, present := data[field]; present {
-				kept[field] = value
-			}
+	for field := range microsoftFields[typeName] {
+		if value, present := data[field]; present {
+			kept[field] = value
 		}
 	}
 	if operation == CurrentConfigurationNormalizationCreate {
@@ -125,7 +133,9 @@ func normalizeCurrentMicrosoftData(
 		}
 		return kept, nil
 	}
-	if _, present := kept[microsoftauth.FieldScopes]; present {
+	// A create stores the normalized selection even when none was sent, so the
+	// stored value is what a sign-in will ask for.
+	if _, present := kept[microsoftauth.FieldScopes]; present || operation == CurrentConfigurationNormalizationCreate {
 		selected, _, err := descriptor.Scopes(kept)
 		if err != nil {
 			return nil, microsoftFieldError(microsoftauth.FieldScopes)

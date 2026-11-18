@@ -218,10 +218,9 @@ func TestMicrosoftIdentityReadFailuresAreReportedNotAsSuccess(t *testing.T) {
 		wantReason string
 		wantText   string
 	}{
-		{"403 names the missing permission", http.StatusForbidden, nil, ToolkitCheckReasonAuthFailed, "tick it in the credential scopes"},
-		{"429", http.StatusTooManyRequests, nil, ToolkitCheckReasonUnreachable, ""},
-		{"503", http.StatusServiceUnavailable, nil, ToolkitCheckReasonUnreachable, ""},
-		{"404", http.StatusNotFound, nil, ToolkitCheckReasonUnreachable, ""},
+		{"429 says Microsoft is throttling", http.StatusTooManyRequests, nil, ToolkitCheckReasonUnreachable, "HTTP 429"},
+		{"503", http.StatusServiceUnavailable, nil, ToolkitCheckReasonUnreachable, "HTTP 503"},
+		{"404", http.StatusNotFound, nil, ToolkitCheckReasonUnreachable, "HTTP 404"},
 		{"transport failure", 0, errors.New("dial tcp 10.0.0.1: " + plantedToken), ToolkitCheckReasonUnreachable, ""},
 	}
 	for _, tc := range cases {
@@ -240,6 +239,29 @@ func TestMicrosoftIdentityReadFailuresAreReportedNotAsSuccess(t *testing.T) {
 				t.Error("an error detail or the token came back in the answer")
 			}
 		})
+	}
+}
+
+// Graph answers 403 (not 401) to a /me read made with a token that holds only
+// Mail.Read: the token is good. Dataverse answers 403 to a user with no access to
+// the environment: the credential is not.
+func TestAForbiddenIdentityReadIsASignInForGraphAndAFailureForDataverse(t *testing.T) {
+	for _, tc := range microsoftCases() {
+		probe := &probeRecorder{status: http.StatusForbidden}
+		handler, _ := newMicrosoftHandler(goodEntraDiscovery(), probe)
+		recorder := postDelegatedCheck(t, handler, tc.configType, encode(t, withToken(tc.body)))
+		body := decodeCheck(t, recorder.Body.Bytes())
+		if tc.configType == "dataverse" {
+			if recorder.Code != http.StatusBadRequest || body.Success || body.Reason != ToolkitCheckReasonAuthFailed ||
+				!strings.Contains(body.Message, "tick it in the credential scopes") {
+				t.Errorf("dataverse: status = %d body = %s", recorder.Code, recorder.Body.String())
+			}
+			continue
+		}
+		if recorder.Code != http.StatusOK || !body.Success || body.Reason != ToolkitCheckReasonOK ||
+			!strings.Contains(body.Message, "who you are was not checked") {
+			t.Errorf("%s: status = %d body = %s", tc.configType, recorder.Code, recorder.Body.String())
+		}
 	}
 }
 
@@ -439,12 +461,32 @@ func TestSharePointIsUnchangedByTheDescriptors(t *testing.T) {
 	}
 }
 
-// A token that is not Microsoft's own type's concern: other credential types
-// carrying an oauth_discovery_endpoint are no longer treated as delegated.
-func TestOnlyDescribedTypesAreDelegated(t *testing.T) {
+// A credential type with no discovery endpoint field is not delegated.
+func TestATypeWithNoDiscoveryEndpointIsNotDelegated(t *testing.T) {
 	handler, requested := newMicrosoftHandler(goodEntraDiscovery(), nil)
-	recorder := postDelegatedCheck(t, handler, "github", `{"oauth_discovery_endpoint":"`+entraTenant+`"}`)
+	recorder := postDelegatedCheck(t, handler, "github", `{"base_url":"https://api.github.com"}`)
 	if recorder.Code == http.StatusUnauthorized || len(*requested) != 0 {
 		t.Fatalf("github answered %d and fetched %v", recorder.Code, *requested)
+	}
+}
+
+// The OpenAPI credential's OAuth2 mode also names an oauth_discovery_endpoint; the
+// descriptors must not take its sign-in request away.
+func TestANonMicrosoftTypeWithADiscoveryEndpointKeepsItsSignInRequest(t *testing.T) {
+	const issuer = "https://idp.example.test/realm"
+	handler, _ := newMicrosoftHandler(map[string]string{
+		issuer + "/v2.0/.well-known/openid-configuration": `{"issuer":"` + issuer + `/v2.0",
+			"authorization_endpoint":"` + issuer + `/authorize","token_endpoint":"` + issuer + `/token"}`,
+	}, nil)
+	recorder := postDelegatedCheck(t, handler, "openapi",
+		`{"oauth_discovery_endpoint":"`+issuer+`","scopes":["read"]}`)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d body = %s", recorder.Code, recorder.Body.String())
+	}
+	body := decodeCheck(t, recorder.Body.Bytes())
+	if !body.RequiresAuthorization || body.AuthMetadata.ServerURL != issuer ||
+		strings.Join(body.AuthMetadata.ResourceMetadata.ScopesSupport, ",") != "read" ||
+		body.AuthMetadata.ResourceMetadata.AuthServer["token_endpoint"] != issuer+"/token" {
+		t.Fatalf("body = %s", recorder.Body.String())
 	}
 }

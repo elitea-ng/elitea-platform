@@ -194,3 +194,24 @@ func TestMicrosoftNativeTypesAreServedWithTheirDefaultsAndCheckboxes(t *testing.
 		t.Error("ms_graph scopes are free text")
 	}
 }
+
+func TestMicrosoftCreateStoresTheNormalizedDefaultScopesWhenNoneWereSent(t *testing.T) {
+	cases := map[string][]any{
+		"outlook":  {"Mail.Read"},
+		"teams":    {"User.ReadBasic.All", "Chat.Read", "Team.ReadBasic.All", "Channel.ReadBasic.All"},
+		"ms_graph": {"User.Read"},
+	}
+	for typeName, want := range cases {
+		data, err := normalizeMicrosoft(t, typeName, CurrentConfigurationNormalizationCreate, map[string]any{
+			"client_id": "a", "client_secret": "b",
+		})
+		if err != nil || !reflect.DeepEqual(data["scopes"], want) {
+			t.Errorf("%s: scopes = %v, %v, want %v", typeName, data["scopes"], err, want)
+		}
+	}
+	// An update that does not touch the scopes does not add them.
+	data, _ := normalizeMicrosoft(t, "outlook", CurrentConfigurationNormalizationUpdate, map[string]any{"mailbox": "x@y.z"})
+	if _, present := data["scopes"]; present {
+		t.Errorf("an update invented scopes: %v", data)
+	}
+}

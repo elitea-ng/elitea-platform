@@ -36,7 +36,10 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/microsoftauth/scopes"
 )
 
-const oauthDiscoveryTimeout = 5 * time.Second
+const (
+	oauthDiscoveryEndpointField = "oauth_discovery_endpoint"
+	oauthDiscoveryTimeout       = 5 * time.Second
+)
 
 // WithOAuthDiscoveryGuard supplies the egress guard the delegated-credential
 // check reads its discovery document through. Without it the check refuses to
@@ -88,7 +91,12 @@ const accessTokenField = "access_token"
 //     success, 401 asks for a sign-in again, anything else is reported.
 func (h *Handler) delegatedAuthorization(w http.ResponseWriter, r *http.Request, projectID, configType string, data map[string]any) bool {
 	descriptor, known := microsoftauth.For(configType)
-	if !known || !descriptor.IsDelegated(data) {
+	if !known {
+		// Any other type that names a discovery endpoint (the OpenAPI
+		// credential's OAuth2 mode) keeps the answer it always had.
+		return h.genericDelegatedAuthorization(w, r, projectID, data)
+	}
+	if !descriptor.IsDelegated(data) {
 		return false
 	}
 	if appID, _ := data[microsoftauth.FieldAppID].(string); descriptor.DefaultAppSupported() && strings.TrimSpace(appID) != "" {
@@ -127,6 +135,42 @@ func (h *Handler) delegatedAuthorization(w http.ResponseWriter, r *http.Request,
 			return true
 		}
 	}
+	return h.answerSignInRequest(w, r, projectID, signInRequest{
+		authority: authority, descriptor: &descriptor, audience: audience, scopes: signInScopes,
+		storedScopes: data["scopes"],
+	})
+}
+
+// genericDelegatedAuthorization is the check of a credential that names an
+// OAuth discovery endpoint and is not a Microsoft type: 401, the metadata of
+// that endpoint, and the scopes it lists, as before the descriptors.
+func (h *Handler) genericDelegatedAuthorization(w http.ResponseWriter, r *http.Request, projectID string, data map[string]any) bool {
+	endpoint, _ := data[oauthDiscoveryEndpointField].(string)
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return false
+	}
+	return h.answerSignInRequest(w, r, projectID, signInRequest{authority: endpoint, storedScopes: data["scopes"]})
+}
+
+// signInRequest is what the 401 answer is built from.
+type signInRequest struct {
+	authority string
+	// descriptor is set for a Microsoft type: its audience, resource name and
+	// sign-in scopes go in the metadata, and the authority must stay on Entra.
+	descriptor *microsoftauth.Descriptor
+	audience   string
+	scopes     []string
+	// storedScopes is the credential's own list, for a type without a descriptor
+	// and for SharePoint, which has always passed it through.
+	storedScopes any
+}
+
+// answerSignInRequest fetches the authority's discovery document through the
+// egress guard and answers the 401 `requires_authorization` the browser opens
+// its sign-in window on.
+func (h *Handler) answerSignInRequest(w http.ResponseWriter, r *http.Request, projectID string, request signInRequest) bool {
+	authority, descriptor := request.authority, request.descriptor
 	release := h.acquireDiscoveryProbe(r.Context(), projectID)
 	if release == nil {
 		writeJSON(w, http.StatusTooManyRequests, map[string]any{
@@ -141,7 +185,7 @@ func (h *Handler) delegatedAuthorization(w http.ResponseWriter, r *http.Request,
 		err = refuseForeignEndpoints(descriptor, authority, metadata)
 	}
 	if err != nil {
-		slog.WarnContext(r.Context(), "check_connection: OAuth discovery failed", "type", configType, "err", err)
+		slog.WarnContext(r.Context(), "check_connection: OAuth discovery failed", "err", err)
 		writeDiscoveryFailed(w)
 		return true
 	}
@@ -156,14 +200,14 @@ func (h *Handler) delegatedAuthorization(w http.ResponseWriter, r *http.Request,
 		"authorization_servers":      []string{issuer},
 		"oauth_authorization_server": metadata,
 	}
-	if descriptor.ScopeModel() == microsoftauth.ScopesAsStored {
-		if scopes, ok := mcpoauth.BoundedMetadataList(data["scopes"]); ok {
+	if descriptor == nil || descriptor.ScopeModel() == microsoftauth.ScopesAsStored {
+		if scopes, ok := mcpoauth.BoundedMetadataList(request.storedScopes); ok {
 			resourceMetadata["scopes_supported"] = scopes
 		}
 	} else {
-		resourceMetadata["resource"] = audience
+		resourceMetadata["resource"] = request.audience
 		resourceMetadata["resource_name"] = descriptor.ResourceName()
-		resourceMetadata["scopes_supported"] = signInScopes
+		resourceMetadata["scopes_supported"] = request.scopes
 	}
 	writeJSON(w, http.StatusUnauthorized, map[string]any{
 		"success":                false,
@@ -214,13 +258,32 @@ func (h *Handler) probeDelegatedIdentity(w http.ResponseWriter, r *http.Request,
 	case microsoftauth.ProbeUnauthorized:
 		return false
 	case microsoftauth.ProbeForbidden:
+		if descriptor.ForbiddenIdentityReadMeansSignedIn() {
+			// Graph answered 403, not 401: it accepted the token and refused the
+			// profile read, because Outlook's and Teams' own permission lists do
+			// not include one that reads /me (Mail.Read alone does not). The
+			// token works for the toolkit's own calls, so this is a sign-in, not
+			// a failed credential.
+			writeJSON(w, http.StatusOK, map[string]any{
+				"success": true, "reason": ToolkitCheckReasonOK,
+				"message": "Signed in. Microsoft accepted the token; its permissions do not include reading your profile, so who you are was not checked.",
+			})
+			return true
+		}
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"success": false, "reason": ToolkitCheckReasonAuthFailed,
 			"message": "The signed-in account was refused." + scopes.MissingPermissionHint(""),
 		})
 		return true
 	default:
-		return unreachable()
+		// Throttling and server errors say nothing about the token. The status
+		// is a number, never provider text.
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"success": false, "reason": ToolkitCheckReasonUnreachable,
+			"message": "Microsoft did not answer the identity check (HTTP " + strconv.Itoa(response.StatusCode) +
+				"). Try again shortly.",
+		})
+		return true
 	}
 }
 
@@ -230,8 +293,8 @@ func (h *Handler) probeDelegatedIdentity(w http.ResponseWriter, r *http.Request,
 // choose it. The token endpoint served back is always
 // {authority}/oauth2/v2.0/token, never the document's own: the platform posts a
 // client secret there (ADR-0057 decision 5).
-func refuseForeignEndpoints(descriptor microsoftauth.Descriptor, authority string, metadata map[string]any) error {
-	if !descriptor.EntraOnly() {
+func refuseForeignEndpoints(descriptor *microsoftauth.Descriptor, authority string, metadata map[string]any) error {
+	if descriptor == nil || !descriptor.EntraOnly() {
 		return nil
 	}
 	if err := microsoftauth.RequireEntraEndpoint(metadata["authorization_endpoint"]); err != nil {
