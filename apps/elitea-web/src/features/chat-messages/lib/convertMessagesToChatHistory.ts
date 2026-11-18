@@ -1,4 +1,4 @@
-import { parseDelegationNotices, parseSubAgentLanes, settleSubAgentLanes } from '@elitea/client-core/stream';
+import { parseSubAgentLanes, settleSubAgentLanes } from '@elitea/client-core/stream';
 import { nodeRecoveryBinding } from '@/shared/lib/nodeRecovery';
 import { staticPauseBinding } from './staticPipelinePause';
 import { getParticipantName } from './participantName';
@@ -48,6 +48,7 @@ import type { PersistedTraceSteps } from '@/entities/message/lib/traceSteps';
 import { withMemberThinkingSteps } from '@/entities/message/lib/traceSteps';
 import { convertTime, isParticipant, normaliseAssistantMessage, normaliseUserMessage } from '@/entities/message/lib/normalise';
 import type { SubAgentGroupable } from '@/entities/message/lib/subAgentGrouping';
+import { delegationNoticesOf } from './chatStreamDelegationFrames';
 
 import { splitWholeResponse } from './chatStreamReasoning';
 import type { ToolAction } from './chatStreamToolAction';
@@ -365,12 +366,6 @@ function subAgentsOf(raw: unknown, streaming: boolean): Pick<ChatMessage, 'subAg
   const lanes = parseSubAgentLanes(raw);
   if (lanes.length === 0) return {};
   return { subAgents: streaming ? lanes : settleSubAgentLanes(lanes) };
-}
-
-/** Client contract 1.60: the answer's refused or narrowed delegations. */
-function delegationNoticesOf(raw: unknown): Pick<ChatMessage, 'delegationNotices'> {
-  const notices = parseDelegationNotices(raw);
-  return notices.length === 0 ? {} : { delegationNotices: notices };
 }
 
 function answerMarks(meta: unknown, questionContinued: boolean): ReturnType<typeof unattendedMarksOf> {

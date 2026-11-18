@@ -1,1 +1,1 @@
-export { DelegationNotices, delegationNoticeSentence, delegationReviewHref } from './DelegationNotices';
+export { DelegationNotices } from './DelegationNotices';

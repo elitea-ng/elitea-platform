@@ -57,8 +57,6 @@ import { FailureReference } from '../error-trace/FailureReference';
 import { ContinuationError } from '../error-trace/ContinuationError';
 
 import { PersistedMessageTrace } from './PersistedMessageTrace';
-import { DelegationNotices } from '@/shared/ui/delegation-notices';
-
 import { CloudSubAgents } from './CloudSubAgents';
 import { AnswerContent } from './AnswerContent';
 import { AnswerGuardrails } from './AnswerGuardrails';
@@ -286,9 +284,7 @@ export function ApplicationAnswer({
 
       {nonSwarmChildActions.length > 0 && <ApplicationAnswerThinking actions={nonSwarmChildActions} isStreaming={isActivelyProcessing} pendingInstanceKeys={pendingInstanceKeys} />}
 
-      <CloudSubAgents lanes={answer.subAgents} />
-
-      <DelegationNotices notices={answer.delegationNotices} />
+      <CloudSubAgents lanes={answer.subAgents} notices={answer.delegationNotices} />
 
       {!isProcessing && swarmChildActions.length > 0 && (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, mb: 0.5 }}>

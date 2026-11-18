@@ -15,8 +15,9 @@ import Box from '@mui/material/Box';
 import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
-import type { CloudSubAgentLane } from '@elitea/client-core/stream';
+import type { CloudSubAgentLane, DelegationNotice } from '@elitea/client-core/stream';
 
+import { DelegationNotices } from '@/shared/ui/delegation-notices';
 import { SubAgentLaneCard } from '@/shared/ui/sub-agent-lane';
 
 import { AgentAvatar } from './AgentAvatar';
@@ -51,13 +52,18 @@ function Lane({ lane }: { readonly lane: CloudSubAgentLane }): ReactNode {
   );
 }
 
-export function CloudSubAgents({ lanes }: { readonly lanes: readonly CloudSubAgentLane[] | undefined }): ReactNode {
-  if (lanes === undefined || lanes.length === 0) return null;
+/** The answer's temporary sub-agents and, beside them, the delegations the run refused or narrowed (client contract 1.60). */
+export function CloudSubAgents({ lanes, notices }: { readonly lanes: readonly CloudSubAgentLane[] | undefined; readonly notices?: readonly DelegationNotice[] | undefined }): ReactNode {
   return (
-    <Box data-testid="cloud-subagents" sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, mb: 0.5 }}>
-      {lanes.map((lane) => (
-        <Lane key={lane.agentId} lane={lane} />
-      ))}
-    </Box>
+    <>
+      <DelegationNotices notices={notices} />
+      {lanes === undefined || lanes.length === 0 ? null : (
+        <Box data-testid="cloud-subagents" sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, mb: 0.5 }}>
+          {lanes.map((lane) => (
+            <Lane key={lane.agentId} lane={lane} />
+          ))}
+        </Box>
+      )}
+    </>
   );
 }

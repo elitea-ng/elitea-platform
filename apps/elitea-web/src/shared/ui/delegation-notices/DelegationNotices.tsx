@@ -43,7 +43,7 @@ function namesOf(notice: DelegationNotice): string {
   return more > 0 ? t('features.chatMessages.delegationNotice.namesMore', '{{names}} and {{count}} more', { names: listed, count: more }) : listed;
 }
 
-/** The sentence a notice reads as, by what caused it. */
+/** @public The sentence a notice reads as, by what caused it. */
 export function delegationNoticeSentence(notice: DelegationNotice): string {
   const callee = notice.calleeName;
   switch (notice.reason) {
