@@ -15,16 +15,17 @@ export function chatDraftKey(params: {
   readonly projectId: string | number | undefined;
   readonly conversationId: string | number | undefined;
   /**
-   * The conversation the page is opening (its URL's id) while it is still
-   * loading, so `conversationId` is not there yet. Without it the key reads
-   * "a new chat" until the conversation arrives and then flips to the
-   * conversation's own, and text typed in between was discarded by the flip.
+   * The conversation the page is opening (its URL's id). It wins over the
+   * loaded `conversationId`: while the conversation loads that one is not
+   * there yet (or still the previous conversation's), so the key would read
+   * "a new chat" and then flip to the conversation's own, and text typed in
+   * between was discarded by the flip. The URL's id never flips.
    */
   readonly pendingConversationId?: string | number | undefined;
   readonly scratch: readonly unknown[];
 }): string | undefined {
   if (params.scratch.some(Boolean) || params.projectId === undefined) return undefined;
-  return `chat:${params.projectId}:${params.conversationId ?? params.pendingConversationId ?? 'new'}`;
+  return `chat:${params.projectId}:${params.pendingConversationId ?? params.conversationId ?? 'new'}`;
 }
 
 type Created = { readonly id?: string | number };

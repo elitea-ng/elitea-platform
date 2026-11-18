@@ -23,6 +23,7 @@ import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/sh
 import { server } from '@/test/setup';
 
 import { chatDraftKey } from './ChatBox.draft';
+import { unwrapChatBoxConversation } from './ChatBox.props';
 
 const BASE = '/api/v2';
 const theme = buildEliteaTheme(DEFAULT_BRAND_PACK);
@@ -101,6 +102,10 @@ describe('chatDraftKey', () => {
     const loaded = chatDraftKey({ projectId: 7, conversationId: 12, pendingConversationId: 12, scratch: [] });
     expect(loading).toBe('chat:7:12');
     expect(loading).toBe(loaded);
+    // The URL's conversation wins over a stale one still on screen (12 -> 13).
+    expect(chatDraftKey({ projectId: 7, conversationId: 12, pendingConversationId: 13, scratch: [] })).toBe('chat:7:13');
+    // `ChatBox` receives the id through its `conversation` prop group.
+    expect(unwrapChatBoxConversation({ pendingId: 13 }).pendingConversationId).toBe(13);
     // No conversation in the URL: still the project's new chat.
     expect(chatDraftKey({ projectId: 7, conversationId: undefined, pendingConversationId: undefined, scratch: [] })).toBe('chat:7:new');
   });
