@@ -147,9 +147,14 @@ fn a_code_failure_terminal_carries_its_programs_output_and_nothing_else_does() {
         error.safe_message
     };
 
-    terminal_detail::note(&execution_id, generation, None);
+    // Nothing noted for this run: the registered sentence alone. The slot is
+    // the process's, so this runs before this test notes anything.
     let sentence = message_of(RuntimeFailureKind::PipelineCodeFailed);
     assert!(!sentence.contains("Program output"));
+
+    // Another run's output is never this run's.
+    terminal_detail::note(&execution_id, generation + 1, Some("another run"));
+    assert_eq!(message_of(RuntimeFailureKind::PipelineCodeFailed), sentence);
 
     terminal_detail::note(
         &execution_id,
@@ -168,12 +173,6 @@ fn a_code_failure_terminal_carries_its_programs_output_and_nothing_else_does() {
 
     // Another failure kind under the same code keeps its own registered text.
     assert!(!message_of(RuntimeFailureKind::CodePreparationFailed).contains("Program output"));
-
-    // Another run's output is never this run's.
-    terminal_detail::note(&execution_id, generation, None);
-    terminal_detail::note(&execution_id, generation + 1, Some("another run"));
-    assert_eq!(message_of(RuntimeFailureKind::PipelineCodeFailed), sentence);
-    terminal_detail::note(&execution_id, generation + 1, None);
 }
 
 #[test]
