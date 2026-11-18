@@ -52,7 +52,7 @@
 import { expect, test } from '@playwright/test';
 
 import { BASE_URL } from '../../playwright.config';
-import { readStoredAssistantAnswer } from '../fixtures/api';
+import { readStoredAssistantAnswer, fillComposer } from '../fixtures/api';
 
 /** Matched WITHOUT a project id: the chat persona works inside its own personal project (#290). */
 const CONVERSATIONS_RE = /\/elitea_core\/conversations\/prompt_lib\/(\d+)$/;
@@ -133,11 +133,7 @@ test('Stop mid-stream cancels the run and keeps the partial answer', async ({ pa
   await expect(page.getByTestId('model-selector-name')).toContainText(MOCK_MODEL, { timeout: 10_000 });
 
   // ── Send ────────────────────────────────────────────────────────────────
-  const input = page.getByTestId('chat-message-input');
-  await expect(input).toBeEditable({ timeout: 15_000 });
-  await input.fill(prompt);
-  const sendButton = page.getByTestId('chat-send-button');
-  await expect(sendButton).toBeEnabled({ timeout: 5_000 });
+  const sendButton = await fillComposer(page, prompt);
 
   const created = page.waitForResponse(
     (r) => CONVERSATIONS_RE.test(new URL(r.url()).pathname) && r.request().method() === 'POST',

@@ -33,7 +33,7 @@ import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
 
 import { BASE_URL } from '../../playwright.config';
-import { describeRefusal, expectStoredAssistantAnswer } from '../fixtures/api';
+import { describeRefusal, expectStoredAssistantAnswer, fillComposer } from '../fixtures/api';
 
 const CONVERSATIONS_RE = /\/elitea_core\/conversations\/prompt_lib\/(\d+)$/;
 const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/;
@@ -64,6 +64,7 @@ async function seedAnswer(
   await modelOption.click();
   await expect(page.getByTestId('model-selector-name')).toContainText(MODEL_NAME, { timeout: 10_000 });
 
+  const send = await fillComposer(page, prompt);
   const created = page.waitForResponse(
     (r) => CONVERSATIONS_RE.test(new URL(r.url()).pathname) && r.request().method() === 'POST',
     { timeout: 45_000 },
@@ -72,11 +73,7 @@ async function seedAnswer(
     timeout: 45_000,
   });
 
-  const input = page.getByTestId('chat-message-input');
-  await expect(input).toBeEditable({ timeout: 20_000 });
-  await input.fill(prompt);
-  await expect(page.getByTestId('chat-send-button')).toBeEnabled({ timeout: 10_000 });
-  await page.getByTestId('chat-send-button').click();
+  await send.click();
 
   const createdResponse = await created;
   expect(createdResponse.status(), 'the send must create a real conversation').toBe(201);
@@ -204,14 +201,11 @@ test('a whole reply opens as a document, a heading edited in it round-trips, and
     // Every turn statement refused a conversation holding a canvas, so this
     // send answered 422 "This agent turn requires the current execution path."
     const followToken = uniqueToken('CANVASNEXT');
+    const send = await fillComposer(page, `autotest ${followToken}`);
     const followStarted = page.waitForResponse((r) => START_RE.test(r.url()) && r.request().method() === 'POST', {
       timeout: 45_000,
     });
-    const input = page.getByTestId('chat-message-input');
-    await expect(input).toBeEditable({ timeout: 20_000 });
-    await input.fill(`autotest ${followToken}`);
-    await expect(page.getByTestId('chat-send-button')).toBeEnabled({ timeout: 10_000 });
-    await page.getByTestId('chat-send-button').click();
+    await send.click();
     const followResponse = await followStarted;
     expect(
       followResponse.status(),

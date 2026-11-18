@@ -220,9 +220,7 @@ async function answerOneTurn(page: Page, prompt: string): Promise<string> {
   await expect(modelOption, `the seeded model ${MODEL_NAME} must be offered`).toBeVisible({ timeout: 20_000 });
   await modelOption.click();
 
-  const input = page.getByTestId('chat-message-input');
-  await expect(input).toBeEditable({ timeout: 15_000 });
-  await input.fill(prompt);
+  const send = await fillComposer(page, prompt);
   const created = page.waitForResponse(
     (r) => CONVERSATIONS_RE.test(new URL(r.url()).pathname) && r.request().method() === 'POST',
     { timeout: 30_000 },
@@ -230,7 +228,7 @@ async function answerOneTurn(page: Page, prompt: string): Promise<string> {
   const started = page.waitForResponse((r) => START_RE.test(r.url()) && r.request().method() === 'POST', {
     timeout: 30_000,
   });
-  await page.getByTestId('chat-send-button').click();
+  await send.click();
   const conversationId = String(((await (await created).json()) as { id?: unknown }).id ?? '');
   const startResponse = await started;
   expect(startResponse.status(), `the turn was refused: ${(await startResponse.text()).slice(0, 200)}`).toBe(200);

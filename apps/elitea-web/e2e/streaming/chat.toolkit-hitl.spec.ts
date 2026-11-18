@@ -73,6 +73,7 @@ import {
   readStoredHitlInterrupt,
   readStoredTranscript,
   setToolkitGuardrails,
+  fillComposer,
 } from '../fixtures/api';
 
 /** Matched WITHOUT a project id: the chat persona works inside its own personal project (#290). */
@@ -185,14 +186,12 @@ test('a sensitive tool call pauses, a rejection blocks the effect, and a read-on
   const conversationId = await openConversation();
 
   // ── 4. TURN ONE — the EFFECTFUL call, rejected ──────────────────────────
-  const input = page.getByTestId('chat-message-input');
+  const effectfulSend = await fillComposer(page, callToolPrompt(MOCK_TOOL_EFFECTFUL_OPERATION, `create an item ${suffix}`));
   const effectfulStarted = page.waitForResponse(
     (r) => START_RE.test(r.url()) && r.request().method() === 'POST',
     { timeout: 60_000 },
   );
-  await input.fill(callToolPrompt(MOCK_TOOL_EFFECTFUL_OPERATION, `create an item ${suffix}`));
-  await expect(page.getByTestId('chat-send-button')).toBeEnabled({ timeout: 10_000 });
-  await page.getByTestId('chat-send-button').click();
+  await effectfulSend.click();
   expect(
     (await effectfulStarted).status(),
     'the sensitive turn was refused before it could pause',
@@ -377,15 +376,13 @@ test('a sensitive tool call pauses, a rejection blocks the effect, and a read-on
   await page.goto(agentEditUrl);
   await expect(page.getByTestId('agent-toolkits-section')).toBeVisible({ timeout: 30_000 });
   const approveConversationId = await openConversation();
-  const approveInput = page.getByTestId('chat-message-input');
 
+  const readSend = await fillComposer(page, callToolPrompt(MOCK_TOOL_READ_OPERATION, `read the status ${suffix}`));
   const readStarted = page.waitForResponse(
     (r) => START_RE.test(r.url()) && r.request().method() === 'POST',
     { timeout: 60_000 },
   );
-  await approveInput.fill(callToolPrompt(MOCK_TOOL_READ_OPERATION, `read the status ${suffix}`));
-  await expect(page.getByTestId('chat-send-button')).toBeEnabled({ timeout: 15_000 });
-  await page.getByTestId('chat-send-button').click();
+  await readSend.click();
   expect((await readStarted).status(), 'the read-only sensitive turn was refused').toBe(200);
 
   const readCard = page.getByTestId('chat-hitl-actions').last();

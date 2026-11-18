@@ -96,6 +96,15 @@ describe('chatDraftKey', () => {
     expect(chatDraftKey({ projectId: '7', conversationId: undefined, scratch: [] })).toBe('chat:7:new');
   });
 
+  it('names the conversation being opened while it loads, so the key does not flip when it arrives (#2221)', () => {
+    const loading = chatDraftKey({ projectId: 7, conversationId: undefined, pendingConversationId: 12, scratch: [] });
+    const loaded = chatDraftKey({ projectId: 7, conversationId: 12, pendingConversationId: 12, scratch: [] });
+    expect(loading).toBe('chat:7:12');
+    expect(loading).toBe(loaded);
+    // No conversation in the URL: still the project's new chat.
+    expect(chatDraftKey({ projectId: 7, conversationId: undefined, pendingConversationId: undefined, scratch: [] })).toBe('chat:7:new');
+  });
+
   it('keeps no draft for an editor test chat or without a project', () => {
     expect(chatDraftKey({ projectId: 7, conversationId: 12, scratch: [undefined, { editorTest: true }] })).toBeUndefined();
     expect(chatDraftKey({ projectId: undefined, conversationId: 12, scratch: [] })).toBeUndefined();
@@ -103,6 +112,46 @@ describe('chatDraftKey', () => {
 });
 
 describe('chat composer drafts', () => {
+  it('keeps text typed while a conversation is still loading (#2221)', async () => {
+    function Opening(): ReactElement {
+      const [active, setActive] = useState<number | undefined>(undefined);
+      return (
+        <>
+          <button type="button" onClick={() => setActive(12)}>conversation loaded</button>
+          <NewChatInput
+            agentEditor={{ activeParticipant: undefined, activeParticipantDetails: undefined, onSelectVersion: vi.fn(), variables: [], onChangeVariables: vi.fn() }}
+            content={{ clearInputAfterSubmit: true, draftKey: chatDraftKey({ projectId: 7, conversationId: active, pendingConversationId: 12, scratch: [] }) }}
+            callbacks={{ onSend: vi.fn() }}
+          />
+        </>
+      );
+    }
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const socketClient = makeSocketClient();
+    function Root(): ReactElement {
+      return (
+        <QueryClientProvider client={queryClient}>
+          <SocketClientContext.Provider value={socketClient}>
+            <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+              <Opening />
+            </ThemeProvider>
+          </SocketClientContext.Provider>
+        </QueryClientProvider>
+      );
+    }
+    const router = createRouter({
+      routeTree: createRootRoute({ component: Root }),
+      history: createMemoryHistory({ initialEntries: ['/'] }),
+      context: { auth: { getSelectedProjectId: () => '7' } },
+    });
+    render(<RouterProvider router={router} />);
+    await waitFor(() => expect(textarea()).toBeInTheDocument());
+    fireEvent.change(textarea(), { target: { value: 'typed before it loaded' } });
+    fireEvent.click(screen.getByText('conversation loaded'));
+    await waitFor(() => expect(screen.getByText('conversation loaded')).toBeInTheDocument());
+    expect(textarea()).toHaveValue('typed before it loaded');
+  });
+
   it('brings back what was typed in a conversation after another one was open', async () => {
     renderChat(vi.fn());
     await waitFor(() => expect(textarea()).toBeInTheDocument());

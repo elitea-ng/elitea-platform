@@ -14,10 +14,17 @@ import { carryDraft } from '@/shared/lib/composerDrafts';
 export function chatDraftKey(params: {
   readonly projectId: string | number | undefined;
   readonly conversationId: string | number | undefined;
+  /**
+   * The conversation the page is opening (its URL's id) while it is still
+   * loading, so `conversationId` is not there yet. Without it the key reads
+   * "a new chat" until the conversation arrives and then flips to the
+   * conversation's own, and text typed in between was discarded by the flip.
+   */
+  readonly pendingConversationId?: string | number | undefined;
   readonly scratch: readonly unknown[];
 }): string | undefined {
   if (params.scratch.some(Boolean) || params.projectId === undefined) return undefined;
-  return `chat:${params.projectId}:${params.conversationId ?? 'new'}`;
+  return `chat:${params.projectId}:${params.conversationId ?? params.pendingConversationId ?? 'new'}`;
 }
 
 type Created = { readonly id?: string | number };
