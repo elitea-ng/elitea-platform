@@ -9427,7 +9427,11 @@ async fn refused_delegation_shows_the_notice_at_the_call() {
         result.get("delegation_notice").is_none(),
         "the model reads the typed error, not the notice"
     );
-    assert_eq!(seen(&server, CHILD_START).len(), 1, "a refusal is not retried");
+    assert_eq!(
+        seen(&server, CHILD_START).len(),
+        1,
+        "a refusal is not retried"
+    );
 
     let finished = of_kind(&emitter.all(), "subagent_finished");
     assert_eq!(finished.len(), 1);
