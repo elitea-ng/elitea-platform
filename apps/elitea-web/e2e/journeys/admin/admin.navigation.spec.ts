@@ -135,6 +135,15 @@ const ITEMS = [
     heading: 'Connector requests',
     path: '/admin/app/connector-requests',
   },
+  // Delegations awaiting review (ADR-0044 Amendment 1, epic 2156 story S6)
+  // shares the Delegation section's gate, `configuration.governance`, so it
+  // renders for the same persona as Agent registry.
+  {
+    id: 'delegation-review',
+    label: 'Delegations awaiting review',
+    heading: 'Delegations awaiting review',
+    path: '/admin/app/delegation-review',
+  },
   // Credential inventory and Permission trimming (ADR-0044 decision 5, issue
   // 1501): shared migration 0208 grants `credentials.inventory.read` to the
   // administration `admin` role, the nav gate's name.

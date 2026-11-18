@@ -4402,6 +4402,102 @@ components:
         existing:
           $ref: "#/components/schemas/DelegationGrant"
 
+    DelegationReviewCaller:
+      type: object
+      description: A calling agent with delegations to review.
+      required: [application_id, name, pending, stale]
+      properties:
+        application_id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        pending:
+          type: integer
+          description: Grants awaiting a first approval.
+        stale:
+          type: integer
+          description: Grants whose callee changed after approval.
+
+    DelegationReviewProject:
+      type: object
+      description: One project's share of the delegations that await review.
+      required: [project_id, project_name, pending, legacy, stale, callers]
+      properties:
+        project_id:
+          type: integer
+          format: int64
+        project_name:
+          type: string
+        pending:
+          type: integer
+        legacy:
+          type: integer
+          description: How many of the pending grants the migration of existing compositions wrote.
+        stale:
+          type: integer
+        callers:
+          type: array
+          description: The calling agents with the most delegations to review (at most 20).
+          items:
+            $ref: "#/components/schemas/DelegationReviewCaller"
+
+    DelegationReview:
+      type: object
+      description: The delegations that await review, and the mode the administrator decides about.
+      required:
+        - pending
+        - legacy
+        - stale
+        - mode
+        - mode_stored
+        - principal_bound
+        - report_window_days
+        - projects
+      properties:
+        pending:
+          type: integer
+        legacy:
+          type: integer
+        stale:
+          type: integer
+        mode:
+          type: string
+          description: The delegation mode in force, enforce or report.
+        mode_stored:
+          type: boolean
+          description: False when no mode was ever saved, which enforces.
+        principal_bound:
+          type: boolean
+          description: The run principal bound switch. Report mode never relaxes it.
+        report_window_days:
+          type: integer
+          description: The recommended length of the migration window in which the mode stays report.
+        projects:
+          type: array
+          items:
+            $ref: "#/components/schemas/DelegationReviewProject"
+
+    DelegationScanResult:
+      type: object
+      description: What a scan of the compositions did.
+      required: [projects, scanned, failed, edges, created, notified]
+      properties:
+        projects:
+          type: integer
+        scanned:
+          type: integer
+        failed:
+          type: integer
+        edges:
+          type: integer
+          description: The composition edges found.
+        created:
+          type: integer
+          description: The pending legacy grants written.
+        notified:
+          type: integer
+
     DelegationGovernedError:
       type: object
       description: >
@@ -24537,6 +24633,60 @@ paths:
               schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
+
+  /admin/delegation_review:
+    get:
+      operationId: getDelegationReview
+      summary: List the delegations that await review, per project
+      description: >
+        The delegation grants that await review across the projects (ADR-0044
+        Amendment 1, A1.3): grants pending a first approval, those of them the
+        migration of existing compositions wrote (flagged legacy), and grants
+        whose callee changed after approval (stale), counted per project with
+        the calling agents to open. Also the delegation mode in force and the
+        recommended length of the report window. Nothing the migration wrote is
+        approved. Gated on `configuration.governance` in the administration
+        mode.
+      tags: [admin]
+      responses:
+        '200':
+          description: The queue
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DelegationReview' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '503':
+          description: The delegation grants are not composed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DelegationGovernedError' }
+
+  /admin/delegation_review/scan:
+    post:
+      operationId: scanDelegationReview
+      summary: Scan the compositions again for delegations that need a grant
+      description: >
+        Runs the migration of existing compositions again for every project and
+        writes a pending legacy grant for each edge whose callee holds more than
+        its caller and that has none. An edge that already has a grant, or whose
+        legacy grant was decided, is left alone, so the scan is safe to repeat.
+        It approves nothing. Gated on `configuration.governance` in the
+        administration mode.
+      tags: [admin]
+      responses:
+        '200':
+          description: What the scan did
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DelegationScanResult' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '503':
+          description: The delegation grants are not composed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DelegationGovernedError' }
 
   /admin/entitlements:
     get:

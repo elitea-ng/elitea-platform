@@ -739,6 +739,16 @@
     },
     {
       "file": null,
+      "route": "/admin/app/delegation-review",
+      "targetComponent": "src/pages/admin/DelegationReview.tsx",
+      "theme": "dark",
+      "wiringStatus": "wired",
+      "notes": "The delegations that await review (ADR-0044 Amendment 1, A1.3; epic 2156 story S6): pending and stale delegation grants per project with the calling agents to open, what the migration of existing compositions did, the report window, and the scan. The summary and the table are hidden for the screenshot (admin-screenshot.css): their counts follow the agents other journeys attach.",
+      "surface": "admin",
+      "baseline": null
+    },
+    {
+      "file": null,
       "route": "/admin/app/credential-inventory",
       "targetComponent": "src/pages/admin/CredentialInventory.tsx",
       "theme": "dark",

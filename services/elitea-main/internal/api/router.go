@@ -415,6 +415,11 @@ type RouterConfig struct {
 	// credential governance admission): a grant proposed while it is on is
 	// governed and approved through its change request. Nil means never.
 	DelegationGoverned func(context.Context) bool
+	// DelegationMigrationEnabled starts the one-time migration of the
+	// existing compositions to pending delegation grants in the background
+	// (epic 2156 story S6). The production composition sets it; a test
+	// router with no real database leaves it off.
+	DelegationMigrationEnabled bool
 	// MemoriesRepo backs persistent, cross-conversation personal memory
 	// (#870) — Settings > Memory's CRUD. Its recall INTO a chat turn is a
 	// separate dependency, wired straight into
@@ -2251,10 +2256,15 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	var delegationHook v2core.DelegationGrantHook
 	// driftTrigger asks for a drift check of a project after a write that can
 	// change a callee agent (story S4); nil without the grant store.
-	var driftTrigger func(projectID int64)
+	var driftTrigger func(projectID, actorID int64)
+	var delegationReview admin.DelegationReviewSource
 	if delegation := composeDelegationGrants(cfg, agentLifecycle, permissionResolver); delegation != nil {
 		delegationHook = delegation.store
-		driftTrigger = delegation.trigger.ProjectChanged
+		delegationReview = adminDelegationReview{queue: delegation.store, scan: delegation.edges}
+		driftTrigger = delegation.trigger.ProjectChangedBy
+		if cfg.DelegationMigrationEnabled {
+			delegation.startMigration()
+		}
 		if delegationService == nil {
 			delegationService = delegation.service
 		}
@@ -2472,7 +2482,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		// A write that can change what a callee agent holds asks for the drift
 		// check of its delegation grants (ADR-0044 amendment 1, A1.2 rule 3).
 		// Below Audit so it sees the final status; it never changes a response.
-		r.Use(apimw.DelegationDrift(driftTrigger))
+		r.Use(apimw.DelegationDriftBy(driftTrigger))
 
 		r.Route("/api/v2", func(r chi.Router) {
 			// THE GROUP'S OWN "no such route" ANSWER (F3).
@@ -2688,6 +2698,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					admin.WithSessionPolicyCache(cfg.SessionPolicyCache),
 					admin.WithRunCapsCache(cfg.RunCapsCache),
 					admin.WithDelegationCache(cfg.DelegationCache),
+					admin.WithDelegationReview(delegationReview),
 					admin.WithApprovalPolicyCache(cfg.ApprovalPolicyCache),
 					admin.WithContentControlsCache(cfg.ContentControlsCache),
 					admin.WithAgentToolsCache(cfg.AgentToolsCache),
@@ -3308,6 +3319,17 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// Agent Lifecycle section.
 				r.With(central("configuration.governance")).
 					Get(v2agentlifecycle.AdminRegistryPath, v2agentlifecycle.NewHandler(agentLifecycle, nil).AdminRegistry)
+
+				// The delegations that await review (ADR-0044 Amendment 1,
+				// A1.3; epic 2156 story S6): the queue the migration of
+				// existing compositions left, per project, and the scan that
+				// writes the grants it missed. Behind the permission of the
+				// Delegation section it explains. Mounted unconditionally: a
+				// handler without the grant store answers 503.
+				r.With(central("configuration.governance")).
+					Get("/delegation_review", adminHandler.DelegationReviewList)
+				r.With(central("configuration.governance")).
+					Post("/delegation_review/scan", adminHandler.DelegationReviewScan)
 
 				// The connector approval queue (ADR-0044 decision 1, #1501):
 				// every request, approve and reject, behind connector.approve

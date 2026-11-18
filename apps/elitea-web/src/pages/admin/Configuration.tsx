@@ -148,6 +148,7 @@ import { LLM_PROXY_MANAGED_SURFACE } from './api/adminLlmProxyApi';
 import { MCP_SERVERS_MANAGED_SURFACE } from './api/adminMcpServersApi';
 import { NATIVE_CLIENTS_MANAGED_SURFACE } from './api/adminNativeClientsApi';
 import { ConfigurationSectionActions } from './ConfigurationSectionActions';
+import { ConfigurationDelegationStatus } from './ConfigurationDelegationStatus';
 import { ConfigurationSectionForm } from './ConfigurationSectionForm';
 import { WorkerEgressHostsPanel } from './WorkerEgressHostsPanel';
 import { useAdminConfigurationPage, type AdminConfigurationPageState } from './useAdminConfigurationPage';
@@ -288,6 +289,7 @@ function SectionForm({ state }: { readonly state: AdminConfigurationPageState })
           {state.activeSection.notice}
         </Alert>
       ) : null}
+      {state.activeSection?.id === 'delegation' ? <ConfigurationDelegationStatus status={state.status} /> : null}
       <ConfigurationSectionForm
         fields={state.activeSection?.fields ?? []}
         values={state.values}

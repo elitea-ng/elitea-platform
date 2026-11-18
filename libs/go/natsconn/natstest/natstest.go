@@ -138,28 +138,46 @@ func launch(dir, bin, rendered, cli, root string) (*Server, error) {
 	if err := s.writePKI(); err != nil {
 		return nil, fmt.Errorf("test PKI: %w", err)
 	}
+	// A free port is only free until the next process takes it: another test
+	// binary on the runner can bind the port between our probe and the server's
+	// listen ("address already in use"). Pick again, a few times.
 	var err error
-	if s.port, err = freePortErr(); err != nil {
-		return nil, err
+	for attempt := 0; attempt < portRaceAttempts; attempt++ {
+		if err = s.listenAndStart(rendered); err == nil || !strings.Contains(err.Error(), "address already in use") {
+			break
+		}
 	}
-	if s.httpPort, err = freePortErr(); err != nil {
-		return nil, err
-	}
-	localConf, err := s.localise(rendered)
 	if err != nil {
 		return nil, err
 	}
+	return s, nil
+}
+
+// portRaceAttempts is how many times launch re-picks its ports after losing the
+// bind race for one of them.
+const portRaceAttempts = 4
+
+// listenAndStart picks two ports, writes the config for them and starts the server.
+func (s *Server) listenAndStart(rendered string) error {
+	var err error
+	if s.port, err = freePortErr(); err != nil {
+		return err
+	}
+	if s.httpPort, err = freePortErr(); err != nil {
+		return err
+	}
+	localConf, err := s.localise(rendered)
+	if err != nil {
+		return err
+	}
 	s.conf = filepath.Join(s.dir, "nats.conf")
 	if err := os.WriteFile(s.conf, []byte(localConf), 0o600); err != nil {
-		return nil, err
+		return err
 	}
 	if err := os.MkdirAll(filepath.Join(s.dir, "js"), 0o700); err != nil {
-		return nil, err
+		return err
 	}
-	if err := s.startErr(); err != nil {
-		return nil, err
-	}
-	return s, nil
+	return s.startErr()
 }
 
 // URL is the client URL: tls://, no credential, as the chart renders it.

@@ -157,9 +157,30 @@ export interface AdminConfigSection {
 /** The value of `page` for the sections the Features page owns. */
 export const ADMIN_CONFIG_PAGE_FEATURES = 'features';
 
+/**
+ * What a section shows next to its values (the server's `status`): the
+ * Delegation section's pending count and report-window hint (ADR-0044
+ * Amendment 1, A1.3).
+ */
+export interface AdminConfigStatus {
+  readonly pending?: number;
+  readonly legacy?: number;
+  readonly stale?: number;
+  readonly mode?: string;
+  readonly mode_stored?: boolean;
+  readonly report_window_days?: number;
+}
+
 /** The GET body. Not exported: no call site outside this module reads it. */
 interface AdminConfigValues {
   readonly values: Readonly<Record<string, unknown>>;
+  readonly status?: AdminConfigStatus;
+}
+
+/** One section's stored values, and the status the server shows next to them. */
+export interface AdminConfigSectionData {
+  readonly values: Readonly<Record<string, unknown>>;
+  readonly status: AdminConfigStatus | undefined;
 }
 
 /**
@@ -232,15 +253,15 @@ export function useAdminConfigSections(): UseQueryResult<readonly AdminConfigSec
 export function useAdminConfigValues(
   sectionId: string | undefined,
   enabled: boolean,
-): UseQueryResult<Readonly<Record<string, unknown>>, Error> {
+): UseQueryResult<AdminConfigSectionData, Error> {
   return useQuery({
     queryKey: adminConfigKeys.values(sectionId ?? ''),
     enabled: enabled && sectionId !== undefined && sectionId !== '',
-    queryFn: async (): Promise<Readonly<Record<string, unknown>>> => {
+    queryFn: async (): Promise<AdminConfigSectionData> => {
       const body = unwrapBody(await eliteaFetch<unknown>(sectionValuesUrl(sectionId ?? ''))) as
         | AdminConfigValues
         | undefined;
-      return body?.values ?? {};
+      return { values: body?.values ?? {}, status: body?.status };
     },
   });
 }

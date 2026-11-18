@@ -128,6 +128,19 @@ describe('icons, details and labels', () => {
     ).toBe('Delegation closure grew');
   });
 
+  it('shows the notice of the delegations the migration left for review by its title and message', () => {
+    expect(
+      describeNotification({
+        event_type: 'delegation_legacy_pending',
+        meta: { message: 'Delegations awaiting review: Agent2 calls Agent1, which hold more than it does.' },
+      }),
+    ).toMatchObject({
+      title: 'Delegation legacy pending',
+      detail: 'Delegations awaiting review: Agent2 calls Agent1, which hold more than it does.',
+      icon: 'bell',
+    });
+  });
+
   it('reads title, detail, age and unread', () => {
     expect(notificationLabel({ title: 'T', detail: 'D' }, '5m', true)).toBe('T, D, 5m, unread');
     expect(notificationLabel({ title: 'T', detail: null }, '', false)).toBe('T');

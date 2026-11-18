@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Agent model: one setting on the agent page; the circuit breaker no longer blames agents for refused runs
+
+On the agent page, the model picker in the chat now shows the model chosen in the agent's settings, and a model picked in the chat changes the setting (and the unsaved-changes state), instead of being a second, unconnected picker. The circuit breaker no longer counts a run that the platform refused (for example "The execution input is invalid.") as a failure of the agent, and it resumes by itself an agent that it stopped only because of such runs. The placeholder text of the **Generate with AI** boxes (skill, agent, project context) is pinned to the theme's placeholder colour in both themes.
+
 ## Review delegation opens the delegation, and a refused pipeline node shows its notice
 
 The **Review delegation** link in a chat notice now opens the review window of that exact delegation on the calling agent's Tools panel, instead of only the agent. The mobile app lists that delegation first and marks it. A pipeline node that runs a saved pipeline and is refused now shows the same **Delegation refused** card before the run fails, where it showed only the generic failure. In `report` mode nothing is shown, because nothing was refused; the run step records it. Upgrade the worker and the web app together. See [Notices in the chat](/admin/enterprise-controls/least-privilege-and-trust#notices-in-the-chat).
@@ -15,6 +19,10 @@ The **Review delegation** link in a chat notice now opens the review window of t
 - The platform's own `index-artifacts` bucket (index results and toolkit discovery files) is no longer listed under **Artifacts** and its address answers "not found" to everyone. Nothing in it was deleted or moved, so existing deployments need no action.
 - **Copy link** on a toolkit, and **Share** on an agent or pipeline, now copy an address that names the project. Opening it from another project switches to the project the link was copied from, then opens the entity. Before, it opened in whichever project you had selected.
 - Signing in to SharePoint (and other Microsoft OAuth toolkits) no longer fails with `AADSTS650053` when the credential lists its scopes with commas ("User.Read, Chat.Read"): scopes are sent space-separated on both the sign-in and the token request.
+
+## Existing delegations are left for review, and grants are on by default
+
+When you upgrade, each attached agent that holds more than the agent that attaches it gets a **pending** delegation grant for the owners to review: nothing is approved and no agent can reach more than before. The calling agent's owners and editors get one notification, the agent's Tools panel shows a banner with **Review delegation**, and **Admin › Delegations awaiting review** lists the queue per project. Delegation grants and the run principal bound are now on by default; a deployment with no saved mode enforces, and **Mode** `report` for about 14 days keeps those calls running while owners review. Pipeline edges defined in YAML get grants too. See [Existing compositions after the upgrade](/admin/enterprise-controls/least-privilege-and-trust#existing-compositions-after-the-upgrade).
 
 ## Delegation grants notice drift and follow Marketplace upgrades
 
@@ -38,7 +46,7 @@ Opening a conversation (from an agent's **Chat** button, a link or a notificatio
 
 ## A nested agent in the desktop app follows its delegation grant
 
-The desktop app runs a saved agent that the local agent calls as its own cloud turn. That turn did not read the delegation grant of the edge. With the delegation grant switch on (`ELITEA_DELEGATION_GRANTS_ENFORCED`, off by default), the main service now applies the grant when the desktop starts the nested agent: the agent runs with what its caller and the approved grant cover, or is refused when the edge has no grant and it holds something its caller does not. The desktop transcript shows the same notice as the web app, with **Review delegation** for an editor. Client contract 1.61 (additive). Upgrade Main with the desktop app. See [Notices in the chat](/admin/enterprise-controls/least-privilege-and-trust#notices-in-the-chat).
+The desktop app runs a saved agent that the local agent calls as its own cloud turn. That turn did not read the delegation grant of the edge. With the delegation grant switch on (`ELITEA_DELEGATION_GRANTS_ENFORCED`, on by default since the delegation migration), the main service now applies the grant when the desktop starts the nested agent: the agent runs with what its caller and the approved grant cover, or is refused when the edge has no grant and it holds something its caller does not. The desktop transcript shows the same notice as the web app, with **Review delegation** for an editor. Client contract 1.61 (additive). Upgrade Main with the desktop app. See [Notices in the chat](/admin/enterprise-controls/least-privilege-and-trust#notices-in-the-chat).
 
 ## Review what an agent brings when you attach it
 

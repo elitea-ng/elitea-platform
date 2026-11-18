@@ -155,6 +155,8 @@ The breaker does not trip an agent that is already suspended, by any source. Aft
 
 An agent with fewer ended runs than the window since its last resume is not judged on `error_rate`. A cancelled run does not count as a failure or as a run in the window.
 
+**A run the platform refused is not a failure of the agent.** A run that failed with `INVALID_INPUT`, `INCOMPATIBLE_VERSION`, `UNSUPPORTED_CAPABILITY`, `EXECUTION_INPUT_LIMIT` or `APPLICATION_COMPOSITION_INVALID` was refused before the agent did anything, usually because of a mismatch between Main and the Worker after an upgrade. Such a run does not count in the `error_rate` window. In each pass the breaker also re-reads the window of every agent that an `error_rate` suspension holds. When the window no longer trips without those runs, the breaker resumes the agent by itself, with the reason `Resumed automatically: the failures that tripped the breaker were refusals by the platform, not failures of the agent.` A suspension that still trips, or that needs `two_person`, stays until an administrator resumes it.
+
 **A run cap stop is not a failure.** A run that a [run cap](#run-caps) stopped (`CAP_REACHED`) does not count as a failure or as a run in the `error_rate` window. This applies to all caps: the wall time and spend caps that Main applies, and the tool call, model turn and records caps that the worker applies. A tool call that the worker refused because the run reached a cap is not a failure of that tool, so it does not add to `tool_failure_streak`. Thus an agent that does long tasks and often reaches its caps is not stopped by the breaker for that reason.
 
 **Who can resume** depends on the agent's risk tier:

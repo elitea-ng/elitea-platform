@@ -25,9 +25,10 @@
 //     and cuts a child that holds no more than its caller to the caller's
 //     tool selections, as the worker does. Report mode records and runs.
 //
-// It acts only while ELITEA_DELEGATION_GRANTS_ENFORCED is on (off by default
-// until the migration of existing compositions, story S6, has created their
-// grants), like the worker's side. With it off the child start is unchanged.
+// It acts only while ELITEA_DELEGATION_GRANTS_ENFORCED is on (on by default
+// since the migration of existing compositions, story S6, creates their
+// pending grants), like the worker's side. With it off the child start is
+// unchanged.
 package delegationedge
 
 import (

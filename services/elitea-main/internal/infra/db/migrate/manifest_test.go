@@ -1502,7 +1502,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 253: tenant/0253_delegation_drift.sql, delegation_grants.drift and
 	// closure, and delegation_drift_notices, the once-per-edge-and-digest
 	// notice record (delegation epic 2156 story S4). No permission.
-	require.EqualValues(t, 253, Head(tenant))
+	//
+	// 254: tenant/0254_delegation_migration.sql, delegation_migration_runs, the
+	// record that the one-time migration of existing compositions to pending
+	// legacy grants ran for the project, and the queue index (delegation epic
+	// 2156 story S6). No permission.
+	require.EqualValues(t, 254, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

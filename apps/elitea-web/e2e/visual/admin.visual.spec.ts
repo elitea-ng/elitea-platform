@@ -461,6 +461,17 @@ const ADMIN_ROUTES: readonly AdminVisualRoute[] = [
     landmark: (page) => page.getByTestId('connector-inventory-count'),
   },
   {
+    // @covers /admin/app/delegation-review
+    name: 'admin-delegation-review',
+    path: '/admin/app/delegation-review',
+    // The scan button: it renders on the first paint of the page body, and the
+    // summary and the table that follow it are HIDDEN for the screenshot
+    // (`admin-screenshot.css`): their counts and their heights follow whatever
+    // agents the other journeys have attached at that moment, so only the
+    // title, the subtitle and the scan row are compared.
+    landmark: (page) => page.getByTestId('delegation-review-scan'),
+  },
+  {
     // @covers /admin/app/permission-trimming
     name: 'admin-permission-trimming',
     path: '/admin/app/permission-trimming',

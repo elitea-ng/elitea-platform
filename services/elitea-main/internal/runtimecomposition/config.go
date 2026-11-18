@@ -158,8 +158,9 @@ type Config struct {
 	// DelegationGrantsEnforced is ELITEA_DELEGATION_GRANTS_ENFORCED: while true,
 	// an agent execution command carries the approved delegation grants of its
 	// run and the worker bounds each delegation by E(Y) ∪ G (ADR-0044
-	// amendment 1). Off by default, until the migration of existing
-	// compositions (story S6) has created their pending legacy grants.
+	// amendment 1). On by default (unset is true) since the migration of
+	// existing compositions (story S6) creates their pending legacy grants and
+	// never an approved one, so enforcing widens nothing.
 	DelegationGrantsEnforced bool
 
 	// NATSURL and NATSMaterial: the runtime plane's own NATS connection, as
@@ -348,10 +349,13 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 	default:
 		return Config{}, errors.New("ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED must be true or false")
 	}
+	// On by default since the delegation migration (S6) shipped: unset and
+	// "true" enforce, "false" is the escape hatch for a rollout in which a
+	// worker from an earlier release still runs.
 	switch grants, _ := lookup("ELITEA_DELEGATION_GRANTS_ENFORCED"); grants {
-	case "", "false":
-	case "true":
+	case "", "true":
 		config.DelegationGrantsEnforced = true
+	case "false":
 	default:
 		return Config{}, errors.New("ELITEA_DELEGATION_GRANTS_ENFORCED must be true or false")
 	}
