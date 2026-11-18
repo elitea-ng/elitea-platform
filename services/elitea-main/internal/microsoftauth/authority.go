@@ -2,6 +2,7 @@ package microsoftauth
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -43,14 +44,6 @@ func NormalizeEntraAuthority(raw string) (string, error) {
 
 // EntraOnly reports whether this type accepts an Entra authority only.
 func (d Descriptor) EntraOnly() bool { return d.entraOnly }
-
-// ForbiddenIdentityReadMeansSignedIn is true where the identity read can be
-// refused (403) for a token that is perfectly good: Graph GET /me needs a
-// profile permission, and the Outlook and Teams permission lists offer none
-// that every default selection holds. A 401 still means "sign in again".
-// Dataverse WhoAmI answers 403 only for a user with no access to the
-// environment, which is a failed credential.
-func (d Descriptor) ForbiddenIdentityReadMeansSignedIn() bool { return d.probe == ProbeGraphMe }
 
 // TokenEndpoint is the token endpoint of an authority that passed
 // NormalizeEntraAuthority: {authority}/oauth2/v2.0/token. It is always computed,
@@ -131,14 +124,22 @@ func ClassifyProbe(status int) ProbeResult {
 	}
 }
 
-// ProbeRequest builds the identity read for a credential and a token: Graph
-// GET /v1.0/me, or Dataverse WhoAmI on the credential's own validated org. It
-// reads who the token is, never content. ProbeNone descriptors have none.
+// ProbeRequest builds the check read for a credential and a token, exactly as
+// the SDK's own checks make it: Outlook reads one mail folder
+// (/me/mailFolders?$top=1, or the shared mailbox's), Teams the joined teams
+// (/me/joinedTeams?$top=1), Microsoft Graph /me, Dataverse WhoAmI on the
+// credential's own validated org. The read proves the token AND the permission
+// the toolkit needs; it asks for one item at most and nothing of it is kept.
+// ProbeNone descriptors have none.
 func (d Descriptor) ProbeRequest(ctx context.Context, data map[string]any, token string) (*http.Request, error) {
 	var target string
 	switch d.probe {
 	case ProbeGraphMe:
-		target = "https://" + GraphHost + "/v1.0/me?$select=id"
+		path, err := d.graphProbePath(data)
+		if err != nil {
+			return nil, err
+		}
+		target = "https://" + GraphHost + path
 	case ProbeWhoAmI:
 		org, err := NormalizeDataverseURL(text(data, FieldURL))
 		if err != nil {
@@ -159,4 +160,64 @@ func (d Descriptor) ProbeRequest(ctx context.Context, data map[string]any, token
 		request.Header.Set("OData-Version", "4.0")
 	}
 	return request, nil
+}
+
+// mailboxPattern is what a shared mailbox address may look like. The value goes
+// into a Graph URL path, so nothing that could change the path is accepted.
+var mailboxPattern = regexp.MustCompile(`^[A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+$`)
+
+// ErrMailbox refuses a mailbox that is not an address.
+var ErrMailbox = errors.New("the mailbox must be an email address")
+
+func (d Descriptor) graphProbePath(data map[string]any) (string, error) {
+	switch d.configType {
+	case Outlook:
+		mailbox := text(data, FieldMailbox)
+		if mailbox == "" {
+			return "/v1.0/me/mailFolders?$top=1", nil
+		}
+		if !mailboxPattern.MatchString(mailbox) {
+			return "", ErrMailbox
+		}
+		return "/v1.0/users/" + url.PathEscape(mailbox) + "/mailFolders?$top=1", nil
+	case Teams:
+		return "/v1.0/me/joinedTeams?$top=1", nil
+	default:
+		return "/v1.0/me?$select=id,displayName", nil
+	}
+}
+
+// ForbiddenMessage is what a 403 on the check read means: the token is good and
+// lacks the permission the toolkit needs, and the message names it (the SDK's
+// own wording).
+func (d Descriptor) ForbiddenMessage(data map[string]any) string {
+	switch d.configType {
+	case Outlook:
+		if mailbox := text(data, FieldMailbox); mailbox != "" {
+			return "Access to mailbox '" + mailbox + "' is forbidden - you need Full Access to it " +
+				"and the Mail.Read.Shared scope. Tick it in the credential scopes and sign in again."
+		}
+		return "Access forbidden - the token lacks the Microsoft Graph permission Mail.Read. " +
+			"Tick it in the credential scopes and sign in again."
+	case Teams:
+		return "Access forbidden - the token lacks the Microsoft Graph permission Team.ReadBasic.All. " +
+			"Tick it in the credential scopes and sign in again."
+	case MSGraph:
+		return "Access forbidden - the token lacks the Microsoft Graph permission User.Read. " +
+			"Add it to the credential scopes and sign in again."
+	case Dataverse:
+		return "Your Dataverse user has no permission for this environment."
+	default:
+		return "The signed-in account was refused."
+	}
+}
+
+// NotFoundMessage is what a 404 on the check read means, where it means more than
+// a failure (a mailbox that is not one the person can open); empty otherwise.
+func (d Descriptor) NotFoundMessage(data map[string]any) string {
+	if mailbox := text(data, FieldMailbox); d.configType == Outlook && mailbox != "" {
+		return "'" + mailbox + "' is not a mailbox you can open. A distribution list or group has no " +
+			"mailbox of its own (its mail arrives in your inbox): leave the mailbox field empty."
+	}
+	return ""
 }

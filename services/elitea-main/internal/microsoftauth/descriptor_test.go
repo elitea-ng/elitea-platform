@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -247,7 +248,7 @@ func TestIdentityProbeRequests(t *testing.T) {
 	outlook, _ := For(Outlook)
 	request, err := outlook.ProbeRequest(ctx, nil, "tok")
 	if err != nil || request.Method != http.MethodGet || request.URL.Host != "graph.microsoft.com" ||
-		request.URL.Path != "/v1.0/me" || request.Header.Get("Authorization") != "Bearer tok" {
+		request.URL.Path != "/v1.0/me/mailFolders" || request.URL.RawQuery != "$top=1" || request.Header.Get("Authorization") != "Bearer tok" {
 		t.Fatalf("graph probe = %+v, %v", request, err)
 	}
 	dataverse, _ := For(Dataverse)
@@ -263,6 +264,55 @@ func TestIdentityProbeRequests(t *testing.T) {
 	sharepoint, _ := For(SharePoint)
 	if request, err := sharepoint.ProbeRequest(ctx, nil, "tok"); request != nil || err != nil {
 		t.Fatalf("sharepoint has no probe here: %+v, %v", request, err)
+	}
+}
+
+func TestCheckReadsPerType(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		typ  string
+		data map[string]any
+		want string
+	}{
+		{Outlook, nil, "https://graph.microsoft.com/v1.0/me/mailFolders?$top=1"},
+		{Outlook, map[string]any{FieldMailbox: "shared@contoso.com"}, "https://graph.microsoft.com/v1.0/users/shared@contoso.com/mailFolders?$top=1"},
+		{Teams, nil, "https://graph.microsoft.com/v1.0/me/joinedTeams?$top=1"},
+		{MSGraph, nil, "https://graph.microsoft.com/v1.0/me?$select=id,displayName"},
+		{Dataverse, map[string]any{FieldURL: "https://o.crm4.dynamics.com"}, "https://o.crm4.dynamics.com/api/data/v9.2/WhoAmI"},
+	}
+	for _, tc := range cases {
+		d, _ := For(tc.typ)
+		request, err := d.ProbeRequest(ctx, tc.data, "tok")
+		if err != nil || request.URL.String() != tc.want {
+			t.Errorf("%s: %v, %v, want %s", tc.typ, request, err, tc.want)
+		}
+	}
+	outlook, _ := For(Outlook)
+	for _, mailbox := range []string{"a/b@c.d", "../me", "x@y.z/../../me", "a b@c.d", "me", "a@b?x=1", "a@b#f", "a@b\\c"} {
+		if request, err := outlook.ProbeRequest(ctx, map[string]any{FieldMailbox: mailbox}, "tok"); !errors.Is(err, ErrMailbox) || request != nil {
+			t.Errorf("mailbox %q built a request: %v %v", mailbox, request, err)
+		}
+	}
+}
+
+func TestForbiddenNamesTheMissingPermission(t *testing.T) {
+	for typ, want := range map[string]string{
+		Outlook: "Mail.Read", Teams: "Team.ReadBasic.All", MSGraph: "User.Read",
+	} {
+		d, _ := For(typ)
+		if got := d.ForbiddenMessage(nil); !strings.Contains(got, want) {
+			t.Errorf("%s: %q does not name %s", typ, got, want)
+		}
+	}
+	outlook, _ := For(Outlook)
+	if got := outlook.ForbiddenMessage(map[string]any{FieldMailbox: "s@c.d"}); !strings.Contains(got, "Mail.Read.Shared") {
+		t.Errorf("shared mailbox: %q", got)
+	}
+	if got := outlook.NotFoundMessage(map[string]any{FieldMailbox: "s@c.d"}); !strings.Contains(got, "distribution list") {
+		t.Errorf("404: %q", got)
+	}
+	if outlook.NotFoundMessage(nil) != "" {
+		t.Error("a 404 on the own mailbox has no special message")
 	}
 }
 

@@ -57,13 +57,13 @@ func microsoftCases() []microsoftCase {
 	return []microsoftCase{
 		{"outlook", custom(map[string]any{"scopes": []string{"Mail.Send", "Mail.Read"}}),
 			[]string{"offline_access", "Mail.Read", "Mail.Send"}, "https://graph.microsoft.com",
-			"https://graph.microsoft.com/v1.0/me?$select=id"},
+			"https://graph.microsoft.com/v1.0/me/mailFolders?$top=1"},
 		{"teams", custom(map[string]any{"scopes": []string{"Chat.Read"}}),
 			[]string{"offline_access", "Chat.Read"}, "https://graph.microsoft.com",
-			"https://graph.microsoft.com/v1.0/me?$select=id"},
+			"https://graph.microsoft.com/v1.0/me/joinedTeams?$top=1"},
 		{"ms_graph", custom(map[string]any{"scopes": "Mail.Read https://graph.microsoft.com/Files.Read"}),
 			[]string{"offline_access", "Mail.Read", "Files.Read"}, "https://graph.microsoft.com",
-			"https://graph.microsoft.com/v1.0/me?$select=id"},
+			"https://graph.microsoft.com/v1.0/me?$select=id,displayName"},
 		{"dataverse", map[string]any{
 			"url": dataverseOrg, "tenant_id": "contoso.onmicrosoft.com", "client_id": "app-id", "client_secret": plantedSecret,
 		}, []string{"offline_access", dataverseOrg + "/user_impersonation"}, dataverseOrg,
@@ -242,26 +242,44 @@ func TestMicrosoftIdentityReadFailuresAreReportedNotAsSuccess(t *testing.T) {
 	}
 }
 
-// Graph answers 403 (not 401) to a /me read made with a token that holds only
-// Mail.Read: the token is good. Dataverse answers 403 to a user with no access to
-// the environment: the credential is not.
-func TestAForbiddenIdentityReadIsASignInForGraphAndAFailureForDataverse(t *testing.T) {
+// A 403 on the check read is a failure that names the permission the toolkit
+// needs: the check proves the token and the permission, per type.
+func TestAForbiddenCheckReadNamesTheMissingPermission(t *testing.T) {
+	want := map[string]string{
+		"outlook": "Mail.Read", "teams": "Team.ReadBasic.All", "ms_graph": "User.Read", "dataverse": "no permission",
+	}
 	for _, tc := range microsoftCases() {
-		probe := &probeRecorder{status: http.StatusForbidden}
-		handler, _ := newMicrosoftHandler(goodEntraDiscovery(), probe)
-		recorder := postDelegatedCheck(t, handler, tc.configType, encode(t, withToken(tc.body)))
-		body := decodeCheck(t, recorder.Body.Bytes())
-		if tc.configType == "dataverse" {
+		t.Run(tc.configType, func(t *testing.T) {
+			probe := &probeRecorder{status: http.StatusForbidden}
+			handler, _ := newMicrosoftHandler(goodEntraDiscovery(), probe)
+			recorder := postDelegatedCheck(t, handler, tc.configType, encode(t, withToken(tc.body)))
+			body := decodeCheck(t, recorder.Body.Bytes())
 			if recorder.Code != http.StatusBadRequest || body.Success || body.Reason != ToolkitCheckReasonAuthFailed ||
-				!strings.Contains(body.Message, "tick it in the credential scopes") {
-				t.Errorf("dataverse: status = %d body = %s", recorder.Code, recorder.Body.String())
+				!strings.Contains(body.Message, want[tc.configType]) {
+				t.Fatalf("status = %d body = %s", recorder.Code, recorder.Body.String())
 			}
-			continue
+		})
+	}
+}
+
+func TestAnOutlookSharedMailboxIsReadAndNamedOn403And404(t *testing.T) {
+	data := withToken(microsoftCases()[0].body)
+	data["mailbox"] = "shared@contoso.com"
+	for status, want := range map[int]string{http.StatusForbidden: "Mail.Read.Shared", http.StatusNotFound: "distribution list"} {
+		probe := &probeRecorder{status: status}
+		handler, _ := newMicrosoftHandler(goodEntraDiscovery(), probe)
+		recorder := postDelegatedCheck(t, handler, "outlook", encode(t, data))
+		if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), want) ||
+			len(probe.requests) != 1 || probe.requests[0].URL.Path != "/v1.0/users/shared@contoso.com/mailFolders" {
+			t.Errorf("%d: status = %d body = %s", status, recorder.Code, recorder.Body.String())
 		}
-		if recorder.Code != http.StatusOK || !body.Success || body.Reason != ToolkitCheckReasonOK ||
-			!strings.Contains(body.Message, "who you are was not checked") {
-			t.Errorf("%s: status = %d body = %s", tc.configType, recorder.Code, recorder.Body.String())
-		}
+	}
+	data["mailbox"] = "../me"
+	probe := &probeRecorder{status: http.StatusOK}
+	handler, _ := newMicrosoftHandler(goodEntraDiscovery(), probe)
+	recorder := postDelegatedCheck(t, handler, "outlook", encode(t, data))
+	if recorder.Code != http.StatusBadRequest || len(probe.requests) != 0 {
+		t.Errorf("a path-changing mailbox was read: status = %d, %d probes", recorder.Code, len(probe.requests))
 	}
 }
 

@@ -33,7 +33,6 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/egress"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpoauth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/microsoftauth"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/microsoftauth/scopes"
 )
 
 const (
@@ -258,30 +257,21 @@ func (h *Handler) probeDelegatedIdentity(w http.ResponseWriter, r *http.Request,
 	case microsoftauth.ProbeUnauthorized:
 		return false
 	case microsoftauth.ProbeForbidden:
-		if descriptor.ForbiddenIdentityReadMeansSignedIn() {
-			// Graph answered 403, not 401: it accepted the token and refused the
-			// profile read, because Outlook's and Teams' own permission lists do
-			// not include one that reads /me (Mail.Read alone does not). The
-			// token works for the toolkit's own calls, so this is a sign-in, not
-			// a failed credential.
-			writeJSON(w, http.StatusOK, map[string]any{
-				"success": true, "reason": ToolkitCheckReasonOK,
-				"message": "Signed in. Microsoft accepted the token; its permissions do not include reading your profile, so who you are was not checked.",
-			})
-			return true
-		}
+		// 403, not 401: the token is good and lacks the permission this type
+		// needs. A failure that names it.
 		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"success": false, "reason": ToolkitCheckReasonAuthFailed,
-			"message": "The signed-in account was refused." + scopes.MissingPermissionHint(""),
+			"success": false, "reason": ToolkitCheckReasonAuthFailed, "message": descriptor.ForbiddenMessage(data),
 		})
 		return true
 	default:
-		// Throttling and server errors say nothing about the token. The status
-		// is a number, never provider text.
+		message := "Microsoft did not answer the check (HTTP " + strconv.Itoa(response.StatusCode) + "). Try again shortly."
+		if response.StatusCode == http.StatusNotFound {
+			if specific := descriptor.NotFoundMessage(data); specific != "" {
+				message = specific
+			}
+		}
 		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"success": false, "reason": ToolkitCheckReasonUnreachable,
-			"message": "Microsoft did not answer the identity check (HTTP " + strconv.Itoa(response.StatusCode) +
-				"). Try again shortly.",
+			"success": false, "reason": ToolkitCheckReasonUnreachable, "message": message,
 		})
 		return true
 	}
