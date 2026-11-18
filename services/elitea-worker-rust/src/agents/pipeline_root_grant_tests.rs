@@ -1401,3 +1401,28 @@ fn a_pipeline_root_delegates_exactly_as_an_ordinary_root_with_the_same_inputs() 
         );
     }
 }
+
+/// The credential set a pipeline root's own nodes materialize stays within
+/// the run principal: a direct node on `outside` (not in P) gets no
+/// credential, while the same pipeline without a principal bound keeps it.
+#[test]
+fn a_pipeline_roots_own_credentials_stay_within_the_principal() {
+    let yaml = MCP_NODE_PIPELINE.replace("toolkit_name: batch", "toolkit_name: outside");
+    let tools = vec![mcp_toolkit_at(94, "outside", OUTSIDE_URL)];
+    let admission = ToolAdmissionPolicy::new(&[], &BTreeMap::new()).expect("policy");
+    for (bounded, expected) in [(true, 0), (false, 1)] {
+        let mut policy = enforcing_policy(DEFAULT_DEPTH);
+        if bounded {
+            policy = policy.with_principal(principal());
+        }
+        let authority = test_runtime_context_authority().with_delegation_policy_for_test(policy);
+        let pipeline = root_request(&yaml, tools.clone());
+        let (profile, _, toolsets, ..) = authorized(&pipeline)
+            .admit_pipeline_with_policy(&admission)
+            .expect("pipeline admission")
+            .into_parts();
+        let (_, credentials) =
+            super::super::pipeline::root_delegation_and_credentials(&authority, &profile, toolsets);
+        assert_eq!(credentials.len(), expected, "bounded by P: {bounded}");
+    }
+}
