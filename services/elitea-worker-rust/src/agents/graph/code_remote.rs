@@ -134,7 +134,13 @@ impl CodeRuntimeFactory {
             intent_content: None,
             control,
             profiles,
-            journal: Arc::new(crate::sandbox::dispatch::DispatchJournal::new(state)),
+            journal: {
+                let journal = Arc::new(crate::sandbox::dispatch::DispatchJournal::new(state));
+                // #2234: the terminal path refills a run's failure output
+                // from the journal's durable copy after a restart.
+                crate::protocol::terminal_detail::install_durable(journal.clone());
+                journal
+            },
             compiled_profile: None,
             debug_sink: None,
             code_slots,
@@ -283,6 +289,27 @@ impl CodeRuntimeFactory {
 }
 
 impl RemoteCodeRuntime {
+    /// Keep the failed program's output for this run's terminal (#2227): in the
+    /// per-run slot, and durably (#2234) so a worker restart before the
+    /// terminal keeps it. Blank or absent output leaves what was kept alone.
+    /// The durable write is a courtesy: a database error is not the node's.
+    pub(super) async fn keep_failure_detail(&self, detail: Option<&str>) {
+        let (execution_id, generation) = self.authority.trace_identity();
+        crate::protocol::terminal_detail::note(execution_id, generation, detail);
+        let Some(bounded) = detail.and_then(crate::protocol::terminal_detail::bounded) else {
+            return;
+        };
+        let Ok(scope) = self.authority.dispatch_scope() else {
+            return;
+        };
+        if let Err(error) = self.journal.record_failure_detail(&scope, &bounded).await {
+            tracing::warn!(
+                event = "code_failure_detail_not_kept",
+                error = %error,
+            );
+        }
+    }
+
     /// Hydrate the prepared dependencies for the raw `execute` path. A failure
     /// happens before any submission, so the runtime this attempt hydrated is
     /// released with the claim-bound stop instead of waiting out the
@@ -847,35 +874,30 @@ impl CodeSandboxRuntime for RemoteCodeRuntime {
         invocation: CodeInvocation<'_>,
     ) -> Result<Vec<u8>, (GraphError, Option<&'static str>)> {
         let report = std::sync::Mutex::new(None);
-        Box::pin(code_attempt_scope(
+        let outcome = Box::pin(code_attempt_scope(
             self.execute_reporting(invocation, Some(&report)),
         ))
-        .await
-        .map_err(|error| {
-            let cause = report.lock().ok().and_then(|mut slot| slot.take());
-            // #2227: the failed program's output ends the run after the
-            // registered sentence (`protocol::terminal_detail`).
-            let (execution_id, generation) = self.authority.trace_identity();
-            crate::protocol::terminal_detail::note(
-                execution_id,
-                generation,
-                match &cause {
-                    Some(super::code_runtime::ToolCodeError::Sandbox { detail, .. }) => {
-                        detail.as_deref()
-                    }
-                    _ => None,
-                },
-            );
-            let refused = matches!(
-                cause,
-                Some(super::code_runtime::ToolCodeError::DeadlineInsufficient)
-            );
-            (
-                error,
-                refused
-                    .then_some(crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE),
-            )
+        .await;
+        let error = match outcome {
+            Ok(bytes) => return Ok(bytes),
+            Err(error) => error,
+        };
+        let cause = report.lock().ok().and_then(|mut slot| slot.take());
+        // #2227: the failed program's output ends the run after the
+        // registered sentence (`protocol::terminal_detail`).
+        self.keep_failure_detail(match &cause {
+            Some(super::code_runtime::ToolCodeError::Sandbox { detail, .. }) => detail.as_deref(),
+            _ => None,
         })
+        .await;
+        let refused = matches!(
+            cause,
+            Some(super::code_runtime::ToolCodeError::DeadlineInsufficient)
+        );
+        Err((
+            error,
+            refused.then_some(crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE),
+        ))
     }
 }
 

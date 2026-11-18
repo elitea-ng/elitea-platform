@@ -24,7 +24,9 @@ use crate::protocol::control::{
     AcceptedTerminalClaimRecovery, AgentControlClient, AgentControlError,
     AgentExecutionOutputCursor, AgentProgressCommit, ClaimBoundAgentTerminal,
 };
-use crate::protocol::elitea::runtime::v1::{ExecutionOutputFrameV1, NodeEventV1};
+use crate::protocol::elitea::runtime::v1::{
+    ExecutionIdentityV1, ExecutionOutputFrameV1, NodeEventV1,
+};
 use crate::protocol::node_event::encode_current_node_event_json;
 use crate::protocol::output::{
     AgentTerminalOutput, RuntimeFailureKind, ValidatedAgentOutputFrameKind,
@@ -2077,6 +2079,20 @@ where
                 occurred_at_unix_millis,
                 verified.command().deadline_unix_millis,
             );
+            if failure == RuntimeFailureKind::PipelineCodeFailed {
+                // #2234: a restart between the node failure and this terminal
+                // emptied the in-memory slot of the failed program's output;
+                // refill it from the durable copy the failing node kept.
+                let command = verified.command();
+                crate::protocol::terminal_detail::hydrate(&ExecutionIdentityV1 {
+                    tenant_id: command.tenant_id.clone(),
+                    resource_project_id: command.resource_project_id.clone(),
+                    execution_id: command.execution_id.clone(),
+                    generation: command.generation,
+                    ..ExecutionIdentityV1::default()
+                })
+                .await;
+            }
             let frame = output_authority
                 .bind_failure_terminal(&verified, failure, occurred_at_unix_millis)
                 .map_err(AgentFailureTerminalError::InvalidDurableState)?;
