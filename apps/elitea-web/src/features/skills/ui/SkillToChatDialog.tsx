@@ -63,7 +63,7 @@ function pinRefusalText(error: unknown): string {
 
 /** The caller's own conversations, newest first as the server lists them, with a name to read. */
 function useConversationChoices(projectId: string | undefined, open: boolean): readonly { readonly id: string; readonly name: string }[] {
-  const query = useListConversations(projectId ?? '', { mine: true, limit: 50, offset: 0 }, { query: { enabled: open && projectId !== undefined } });
+  const query = useListConversations(projectId ?? '', { mine: true, limit: 100, offset: 0 }, { query: { enabled: open && projectId !== undefined } });
   return useMemo(
     () =>
       unwrapList<ConversationRow>(query.data, 'skills.toChat.conversations').flatMap((row) =>

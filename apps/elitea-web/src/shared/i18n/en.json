@@ -57,6 +57,8 @@
   "skills.try.cardLabel": "Try {{name}}",
   "skills.try.saveFirst": "Save to try",
   "skills.try.test": "Test skill",
+  "skills.try.testHint": "Opens a chat on your default model with the saved skill pinned. A named version is not pinned separately: the chat uses the skill as it is saved.",
+  "skills.addToChat.noFork": "Copying a skill into this project needs the fork permission. Use in a chat pins it without copying.",
   "skills.try.untrusted": "Written in another project: until you add it and trust it, the model gets its text as quoted data.",
   "skills.use.button": "Use in a chat",
   "skills.use.title": "Use in a chat",

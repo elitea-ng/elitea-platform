@@ -27,6 +27,7 @@ export function SkillTryButton({ skillId, name, isDirty }: SkillTryButtonProps):
         variant="secondary"
         disabled={isDirty || !known || trySkill.start === undefined || trySkill.isStarting}
         onClick={() => trySkill.start?.({ name, pin: { skill_id: id } })}
+        title={t('skills.try.testHint', 'Opens a chat on your default model with the saved skill pinned. A named version is not pinned separately: the chat uses the skill as it is saved.')}
         data-testid="skill-test-button"
       >
         {isDirty ? t('skills.try.saveFirst', 'Save to try') : t('skills.try.test', 'Test skill')}

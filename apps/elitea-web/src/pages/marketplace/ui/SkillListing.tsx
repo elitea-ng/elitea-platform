@@ -220,7 +220,13 @@ function ChatActions({
       <Button variant="text" disabled={off} onClick={() => setAction('use')} data-testid="marketplace-use-skill">
         {t('skills.use.button', 'Use in a chat')}
       </Button>
-      <Button variant="text" disabled={off || !canFork} onClick={() => setAction('add')} data-testid="marketplace-add-skill-to-chat">
+      <Button
+        variant="text"
+        disabled={off || !canFork}
+        onClick={() => setAction('add')}
+        title={canFork ? undefined : t('skills.addToChat.noFork', 'Copying a skill into this project needs the fork permission. Use in a chat pins it without copying.')}
+        data-testid="marketplace-add-skill-to-chat"
+      >
         {t('skills.addToChat.button', 'Add to a conversation')}
       </Button>
       <Typography variant="bodySmall" color="text.secondary" role="note" data-testid="marketplace-skill-untrusted">

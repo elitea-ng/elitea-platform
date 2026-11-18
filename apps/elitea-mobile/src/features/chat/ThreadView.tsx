@@ -662,6 +662,9 @@ export function ThreadView({
             .map((sk) => ({ key: `skill-${sk.name}`, title: sk.name, subtitle: sk.description || 'Skill', initial: '~' })),
         };
       case '/':
+        // Only what can be shown opens the strip: a path like "/etc/hosts" in a chat with no toolkits must not.
+        if (slash?.phase === 'skill' && !offerSkillPicker) return null;
+        if (slash?.phase === 'unknown_toolkit' && !offerTools) return null;
         if (slash?.phase === 'skill') {
           return {
             loading: projectSkills.isLoading,
