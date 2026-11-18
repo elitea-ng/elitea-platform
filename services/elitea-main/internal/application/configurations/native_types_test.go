@@ -1,6 +1,7 @@
 package configurations
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -198,6 +199,107 @@ func TestNativeFixtureDirectoryHoldsOnlyFixturesOfNativeTypes(t *testing.T) {
 		if !native[name] {
 			t.Errorf("fixture %s names no native credential type", entry.Name())
 		}
+	}
+}
+
+// withNativeRegistry swaps the production (empty) registry for a test's, the
+// way the first real native type will be present at boot.
+func withNativeRegistry(t *testing.T, natives ...NativeConfigurationType) {
+	t.Helper()
+	previous := nativeConfigurationTypes
+	nativeConfigurationTypes = natives
+	t.Cleanup(func() { nativeConfigurationTypes = previous })
+}
+
+func bootNormalizer(t *testing.T) (CurrentConfigurationDataNormalizer, error) {
+	t.Helper()
+	catalog, err := LoadPinnedCurrentAvailableCatalog()
+	if err != nil {
+		t.Fatalf("the catalog with a native type did not load: %v", err)
+	}
+	return NewCurrentConfigurationDataNormalizer(catalog,
+		&currentSDKExpanderStub{result: map[string]any{}}, &currentNormalizerChainValidator{})
+}
+
+// Boot with a real native type: Main constructs its normalizer chain over the
+// real loader's catalog, and the default owner takes the type.
+func TestNativeConfigurationTypeIsOwnedByTheDefaultNormalizerAtBoot(t *testing.T) {
+	native := stubNativeType()
+	native.Hidden = true
+	withNativeRegistry(t, native)
+	normalizer, err := bootNormalizer(t)
+	if err != nil {
+		t.Fatalf("Main would not boot with a native type: %v", err)
+	}
+	create := func(data map[string]any) (CurrentConfigurationNormalizationResult, error) {
+		return normalizer.Normalize(context.Background(), CurrentConfigurationNormalizationRequest{
+			Operation: CurrentConfigurationNormalizationCreate, ProjectID: 7, AuthorID: 13,
+			Type: "stub_example", Data: data,
+		})
+	}
+	result, err := create(map[string]any{"api_key": "k-1", "scopes": []any{"A"}, "junk": 1})
+	if err != nil || !result.Complete {
+		t.Fatalf("create = %#v, %v", result, err)
+	}
+	if _, kept := result.Data["junk"]; kept || result.Data["api_key"] != "k-1" {
+		t.Errorf("an undeclared field was kept or a declared one lost: %v", result.Data)
+	}
+	for name, data := range map[string]map[string]any{
+		"missing required": {"scopes": []any{}},
+		"wrong type":       {"api_key": 5},
+		"blank":            {"api_key": "  "},
+		"array as string":  {"api_key": "k", "scopes": "A"},
+	} {
+		if _, err := create(data); err == nil {
+			t.Errorf("%s: the create was accepted", name)
+		}
+	}
+	update, err := normalizer.Normalize(context.Background(), CurrentConfigurationNormalizationRequest{
+		Operation: CurrentConfigurationNormalizationUpdate, ProjectID: 7, AuthorID: 13,
+		Type: "stub_example", Data: map[string]any{"scopes": []any{"B"}},
+	})
+	if err != nil || update.Data["scopes"] == nil {
+		t.Errorf("update was not delegated: %#v, %v", update, err)
+	}
+}
+
+// A type that declares its own normalizer must have it: the default steps aside
+// and, with no other owner, boot fails closed (S1a adds the owner and the test
+// of its own types).
+func TestNativeConfigurationTypeWithOwnNormalizerNeedsAnOwner(t *testing.T) {
+	native := stubNativeType()
+	native.OwnNormalizer = true
+	withNativeRegistry(t, native)
+	if _, err := bootNormalizer(t); err == nil ||
+		!strings.Contains(err.Error(), `"stub_example" has 0 create normalizer owners`) {
+		t.Fatalf("boot err = %v, want the unowned type refused", err)
+	}
+}
+
+func TestHiddenNativeConfigurationTypeIsRegisteredButMarkedHidden(t *testing.T) {
+	visible, err := loadWithNative(t, stubNativeType())
+	if err != nil {
+		t.Fatal(err)
+	}
+	hidden := stubNativeType()
+	hidden.Hidden = true
+	catalog, err := loadWithNative(t, hidden)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadataOf := func(c *CurrentAvailableCatalog) map[string]any {
+		schema, ok := c.DataSchemaByType("stub_example")
+		if !ok {
+			t.Fatal("type is not in the catalogue")
+		}
+		metadata, _ := schema["metadata"].(map[string]any)
+		return metadata
+	}
+	if metadataOf(catalog)["hidden"] != true {
+		t.Error("a hidden native type is not marked metadata.hidden")
+	}
+	if _, present := metadataOf(visible)["hidden"]; present {
+		t.Error("a visible native type carries a hidden flag")
 	}
 }
 

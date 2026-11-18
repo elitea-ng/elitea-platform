@@ -215,3 +215,23 @@ func TestMicrosoftCreateStoresTheNormalizedDefaultScopesWhenNoneWereSent(t *test
 		t.Errorf("an update invented scopes: %v", data)
 	}
 }
+
+// Until the sign-in works on every client the four types are kept out of the
+// create pickers (metadata.hidden, which the web selector and desktop honour;
+// mobile has no credential-type picker) but stay in the catalogue.
+func TestMicrosoftNativeTypesAreHiddenFromThePickersAndOwnTheirNormalizer(t *testing.T) {
+	catalog, err := LoadPinnedCurrentAvailableCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, typeName := range []string{"outlook", "teams", "ms_graph", "dataverse"} {
+		schema, ok := catalog.DataSchemaByType(typeName)
+		metadata, _ := schema["metadata"].(map[string]any)
+		if !ok || metadata["hidden"] != true {
+			t.Errorf("%s is not hidden: %v", typeName, metadata)
+		}
+		if currentNativeConfigurationType(typeName) || !currentMicrosoftConfigurationType(typeName) {
+			t.Errorf("%s must be owned by the Microsoft normalizer alone", typeName)
+		}
+	}
+}

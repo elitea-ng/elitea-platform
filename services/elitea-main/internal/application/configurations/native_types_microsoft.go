@@ -18,6 +18,12 @@ import (
 //     `client_id` and `client_secret` become optional like the other three,
 //     because a Default app holds the client.
 //
+// They are registered Hidden (kept out of the create pickers of every client)
+// and own their save rules (OwnNormalizer, microsoft_normalizer.go): until the
+// sign-in works end to end on web, desktop and mobile (S1c to S1e of epic #2254)
+// a person could create a credential they cannot sign in with. S1d (#2269) or
+// S1e (#2271) removes Hidden. Existing rows, the check and the save still work.
+//
 // Their connection check is the delegated one of
 // api/v2/configurations/check_connection_oauth.go, driven by the descriptors in
 // internal/microsoftauth: the 401 `requires_authorization` answer, or an
@@ -146,16 +152,19 @@ func microsoftNativeTypes() []NativeConfigurationType {
 			Type: microsoftauth.Outlook, Section: "credentials", Title: "OutlookConfiguration", Label: "Outlook",
 			Categories: []string{"office"}, ExtraCategories: []string{"outlook", "microsoft", "email", "mail"},
 			Properties: outlook, AuthSubsections: outlookSubsections, CheckConnection: true,
+			Hidden: true, OwnNormalizer: true,
 		},
 		{
 			Type: microsoftauth.Teams, Section: "credentials", Title: "TeamsConfiguration", Label: "Teams",
 			Categories: []string{"office"}, ExtraCategories: []string{"teams", "microsoft", "chat", "messaging"},
 			Properties: teams, AuthSubsections: microsoftAuthSubsections(), CheckConnection: true,
+			Hidden: true, OwnNormalizer: true,
 		},
 		{
 			Type: microsoftauth.MSGraph, Section: "credentials", Title: "MsGraphConfiguration", Label: "Microsoft Graph",
 			Categories: []string{"office"}, ExtraCategories: []string{"microsoft", "graph", "office 365", "microsoft 365", "entra"},
 			Properties: msGraph, AuthSubsections: microsoftAuthSubsections(), CheckConnection: true,
+			Hidden: true, OwnNormalizer: true,
 		},
 		{
 			Type: microsoftauth.Dataverse, Section: "credentials", Title: "DataverseConfiguration", Label: "Dataverse (OneCRM)",
@@ -178,6 +187,7 @@ func microsoftNativeTypes() []NativeConfigurationType {
 				{Name: "Custom app", Fields: []string{"client_id", "client_secret"}},
 			},
 			CheckConnection: true,
+			Hidden:          true, OwnNormalizer: true,
 		},
 	}
 }

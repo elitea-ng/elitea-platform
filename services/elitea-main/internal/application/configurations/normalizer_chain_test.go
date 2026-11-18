@@ -22,8 +22,8 @@ func TestCurrentConfigurationDataNormalizerOwnsEveryPinnedTypeExactlyOnce(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := 61 + len(NativeConfigurationTypes()); len(entries) != want {
-		t.Fatalf("catalog entries = %d, want %d: 51 pinned, the five web providers, cloud_executor, worker_egress, ai_disclosure, browser, computer_use and the native types", len(entries), want)
+	if len(entries) != 61+len(nativeConfigurationTypes) {
+		t.Fatalf("catalog entries = %d, want 51 pinned, the five web providers, cloud_executor, worker_egress, ai_disclosure, browser and computer_use", len(entries))
 	}
 
 	sdkTypes := 0
@@ -53,6 +53,9 @@ func TestCurrentConfigurationDataNormalizerOwnsEveryPinnedTypeExactlyOnce(t *tes
 			owners++
 		}
 		if currentMicrosoftConfigurationType(entry.Type) {
+			owners++
+		}
+		if currentNativeConfigurationType(entry.Type) {
 			owners++
 		}
 		if owners != 1 {
