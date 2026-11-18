@@ -11,7 +11,7 @@ import { getDelegationReview, scanDelegationReview } from '@/shared/api/generate
 import type { DelegationReview, DelegationScanResult } from '@/shared/api/generated/model';
 import { unwrapBody } from '@/shared/api/unwrap';
 
-export const DELEGATION_REVIEW_KEY = ['admin', 'delegation-review'] as const;
+const DELEGATION_REVIEW_KEY = ['admin', 'delegation-review'] as const;
 
 /** The queue: pending and stale grants per project, and the mode the administrator decides about. */
 export function useDelegationReview() {
