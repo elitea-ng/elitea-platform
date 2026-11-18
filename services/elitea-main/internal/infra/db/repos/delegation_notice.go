@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -78,6 +79,21 @@ func projectDelegationNotice(ctx context.Context, tx sqlExecutor, projectID int6
 	schema, err := currentProjectSchema(projectID)
 	if err != nil {
 		return err
+	}
+	// The worker names the root caller by its runtime label ("elitea-agent"),
+	// not by the agent: the stored notice carries the saved agent's own name
+	// when its id is known, so the chat says which agent could not delegate.
+	if callerID := notice.Edge.CallerID; callerID > 0 {
+		var name string
+		switch err := tx.QueryRow(ctx, fmt.Sprintf(`SELECT name FROM %s.applications WHERE id = $1`, schema), callerID).Scan(&name); {
+		case err == nil:
+			if clipped := strings.TrimSpace(name); clipped != "" {
+				notice.Edge.CallerName = delegationnotice.ClipName(clipped)
+			}
+		case errors.Is(err, pgx.ErrNoRows):
+		default:
+			return fmt.Errorf("read the calling agent's name: %w", err)
+		}
 	}
 	groupID, err := lockCurrentAgentMessageGroup(ctx, tx, schema, frame.Fence.ExecutionID, binding)
 	if err != nil {

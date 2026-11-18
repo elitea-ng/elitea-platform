@@ -316,6 +316,9 @@ func positive(value int64) int64 {
 	return value
 }
 
+// ClipName bounds an agent's display name the way a notice does.
+func ClipName(text string) string { return clip(text) }
+
 // clip bounds a display string: valid UTF-8, no control characters, trimmed.
 func clip(text string) string {
 	if !utf8.ValidString(text) {
