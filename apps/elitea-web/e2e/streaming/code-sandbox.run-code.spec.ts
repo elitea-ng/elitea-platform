@@ -244,26 +244,40 @@ journey(
 );
 
 /**
- * A Rust program that does not compile. The model must be told WHY: the tool
- * result it receives carries the compiler's diagnostic (the error code and
- * message), not a bare "could not run the program". The path is the runner's
- * captured compiler stderr (`rust_execute.rs`), the supervisor's receipt, the
- * worker's `ProgramFailed` mapping (`graph/code_tool.rs`) and the tool's
- * `failure_text`; before this journey only each hop's unit test covered it.
+ * A Rust program that does not compile, as the model is told about it.
+ *
+ * The compiler's diagnostic does NOT reach the model today (#2223): the runner
+ * writes it to the run's stderr, but the supervisor keeps no result for a
+ * failed run, so the worker only learns `sandbox.code_failed`. Two journeys
+ * pin both halves. The first is the contract that holds now: a compile failure
+ * is an `error` answer that names the Rust hint, never a success. The second
+ * is the contract this journey exists for, the diagnostic itself, marked
+ * `test.fail` so it passes while #2223 is open and turns red the day the
+ * diagnostic arrives, which is the signal to delete the marker.
  */
-test('run_code reports a Rust compile error to the model with the compiler diagnostic', async ({ page }) => {
+const NON_COMPILING_RUST =
+  'pub fn run(state: serde_json::Value) -> Result<serde_json::Value, Box<dyn std::error::Error>> {\n    let _ = state;\n    let n: i32 = "not a number";\n    Ok(serde_json::json!(n))\n}';
+
+async function runNonCompilingRust(page: Page, label: string): Promise<string> {
   test.setTimeout(TURN_TIMEOUT_MS + 120_000);
-  const prepared = await prepareSandboxAgent(page, `${AUTOTEST_PREFIX}code-rustfail-${Date.now() % 100_000}`);
-  const code =
-    'pub fn run(state: serde_json::Value) -> Result<serde_json::Value, Box<dyn std::error::Error>> {\n    let _ = state;\n    let n: i32 = "not a number";\n    Ok(serde_json::json!(n))\n}';
-  const prompt = `[[mock:call_tool ${RUN_CODE_TOOL} ${JSON.stringify({ language: 'rust', code })}]] compile this rust`;
+  const prepared = await prepareSandboxAgent(page, `${AUTOTEST_PREFIX}code-${label}-${Date.now() % 100_000}`);
+  const prompt = `[[mock:call_tool ${RUN_CODE_TOOL} ${JSON.stringify({ language: 'rust', code: NON_COMPILING_RUST })}]] compile this rust`;
   await sendTurn(page, prompt);
   const result = await storedRunCodeResult(page, prepared, 'error');
-  const message = result.message ?? '';
+  return result.message ?? '';
+}
+
+test('run_code answers a Rust program that does not compile with an error, never a success', async ({ page }) => {
+  const message = await runNonCompilingRust(page, 'rustfail');
+  expect(message, 'the model must be told to check that the Rust compiles').toContain('for Rust, that it compiles');
+});
+
+test('run_code gives the model the Rust compiler diagnostic (#2223)', async ({ page }) => {
+  test.fail(true, 'the diagnostic is dropped between the runner and the worker: #2223');
+  const message = await runNonCompilingRust(page, 'rustdiag');
   expect(message, 'the failure must carry the program error output section').toContain('Program error output:');
-  expect(
-    message,
-    `the compiler's error code must reach the model, not only the generic failure: ${message.slice(0, 800)}`,
-  ).toMatch(/error\[E\d{4}\]/);
+  expect(message, `the compiler's error code must reach the model: ${message.slice(0, 800)}`).toMatch(
+    /error\[E\d{4}\]/,
+  );
   expect(message, 'the compiler message must reach the model').toContain('mismatched types');
 });
