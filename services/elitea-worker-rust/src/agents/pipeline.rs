@@ -1096,7 +1096,7 @@ impl PipelineNativeAgentAssembler {
                 }
             } else {
                 let (tool, projection, fingerprint, member) =
-                    bind_scoped_agent(snapshot, profile.shell(), &runtime, (alias, node)).await?;
+                    bind_scoped_agent(snapshot, profile.shell(), &runtime, alias, node).await?;
                 if presented.insert(alias.to_owned()) {
                     presentations = merge_application_presentations(
                         presentations,
@@ -2702,9 +2702,12 @@ fn bind_admitted_saved_pipeline<'a>(
         ))?;
         runtime.materialization.admit_version(&admitted.version)?;
         // ADR-0044 decision 3: the saved pipeline runs with the intersection
-        // of its grants and its caller's. A refusal here has no tool result
-        // to answer it: a pipeline-as-tool is checked before this
-        // (`materialize_saved_pipeline_tool`), so this is a node of a graph.
+        // of its grants and its caller's. A refusal here is a node of a graph:
+        // a pipeline-as-tool's own composition is checked before this
+        // (`composition_refusal`). The error carries the refusal, so when the
+        // node sits inside a pipeline offered as a tool,
+        // `admit_saved_pipeline_child` answers it as that tool's result
+        // (FU-335); otherwise it ends the run with Main's notice.
         let (version, delegation) = match delegate_saved_pipeline(&runtime, admitted)? {
             Ok(delegated) => delegated,
             Err(refused) => {
@@ -2736,17 +2739,17 @@ fn bind_admitted_saved_pipeline<'a>(
         let mut presented = BTreeSet::new();
         for (node, selection) in admitted.profile.definition().application_nodes() {
             let alias = selection.alias();
+            let node_path = if graph_path.is_empty() {
+                node.to_owned()
+            } else {
+                format!("{graph_path}/{node}")
+            };
             // A conversation an older worker left paused owns no call receipts.
             if runtime.materialization.is_scoped() {
                 call_owners.insert(node.to_owned(), scopes.graph_call_owner(&graph_path, node)?);
             }
             let participant = if let Some(child) = admitted.children.get(alias) {
-                let child_path = if graph_path.is_empty() {
-                    node.to_owned()
-                } else {
-                    format!("{graph_path}/{node}")
-                };
-                let bound = bind_admitted_saved_pipeline(child, runtime, child_path).await?;
+                let bound = bind_admitted_saved_pipeline(child, runtime, node_path).await?;
                 descendant_guards.extend(bound.guarded_interrupt_kinds);
                 pause_height = pause_height.max(bound.pause_height.map(|height| height + 1));
                 if let Some(child_scopes) = bound.runtimes.application_scopes() {
@@ -2773,16 +2776,12 @@ fn bind_admitted_saved_pipeline<'a>(
                 }
             } else {
                 // Bind one exact ordinary descendant to its registry-owned event receiver.
-                let node_path = if graph_path.is_empty() {
-                    node.to_owned()
-                } else {
-                    format!("{graph_path}/{node}")
-                };
                 let (tool, projection, fingerprint, member) = bind_scoped_agent(
                     &snapshot,
                     admitted.profile.shell(),
                     runtime,
-                    (alias, &node_path),
+                    alias,
+                    &node_path,
                 )
                 .await?;
                 if presented.insert(alias.to_owned()) {
@@ -2909,7 +2908,8 @@ async fn bind_scoped_agent(
     snapshot: &AdmittedToolSnapshot<'_>,
     shell: &OrdinaryNoToolProfile,
     runtime: &PipelineApplicationRuntime<'_>,
-    (alias, graph_path): (&str, &str),
+    alias: &str,
+    graph_path: &str,
 ) -> Result<ScopedAgentBinding, NativeAgentAssemblyError> {
     let selected = BTreeSet::from([alias.to_owned()]);
     let (materialized, skipped) = materialize_application_runtime(

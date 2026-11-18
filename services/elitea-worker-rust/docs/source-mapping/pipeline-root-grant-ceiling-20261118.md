@@ -36,12 +36,12 @@ caller itself does not hold; this is the formula as written, not a change to it.
     operation failed.") at the root and "the stored pipeline could not be compiled" for a Map member, with no notice.
     #2235 had fixed only the saved-pipeline node (`pipeline.rs:2706`).
 - **Now.**
-  - `root_delegation_and_credentials` (`W/agents/pipeline.rs:2881-2898`, called at `:674`, scope used at `:835`)
+  - `root_delegation_and_credentials` (`W/agents/pipeline.rs:2880-2893`, called at `:674`, scope used at `:835`)
     builds the scope from the principal-bounded full admitted snapshot, then reduces that snapshot to the nodes'
     aliases for credentials. The extraction (commit `e975c0343`) is behaviour-preserving; the fix (`716251778`)
     changes only which snapshot the scope reads.
-  - `bind_scoped_agent` takes the node's graph path (`W/agents/pipeline.rs:2908-2958`; root call site `:1099`,
-    nested call site `:2779-2786` with `graph_path/node`) and ends a refused binding with #2235's
+  - `bind_scoped_agent` takes the node's graph path (`W/agents/pipeline.rs:2902-2972`; root call site `:1099`,
+    nested call site `:2779-2786`, with the path `graph_path/node` computed once per node at `:2742-2746`) and ends a refused binding with #2235's
     `delegation_refused_error` (`:2953-2957`; `W/agents/application_tools.rs:4069-4091`): `AUTHORIZATION_FAILED`,
     cause `DELEGATION_GRANT_MISSING` / `DELEGATION_DEPTH_EXCEEDED` with the grant kind, and Main's `DelegationNotice`
     (edge kind `pipeline_node`, id `pipeline_node:<graph path>`, `callee_id` for Review delegation), which the
@@ -49,7 +49,7 @@ caller itself does not hold; this is the formula as written, not a change to it.
     enforced refusal is read by `MaterializedApplicationTool::enforced_refusal`
     (`W/agents/application_tools.rs:3084-3093`).
   - Inside a saved pipeline offered as a tool, the refusal stays that tool's result
-    (`W/agents/pipeline.rs:2637-2648`): the error also carries the refusal (`L/assembly_error.rs:96,128-136`), so the
+    (`W/agents/pipeline.rs:2636-2648`): the error also carries the refusal (`L/assembly_error.rs:96,128-136`), so the
     binder answers it as the tool's refusal; an uncalled tool fails nothing, a called one answers by name. Main's
     test `a_pipeline_agent_node_offers_a_refused_saved_agent` becomes
     `a_pipeline_tool_whose_agent_node_is_refused_is_offered_as_the_refusal`
@@ -134,6 +134,17 @@ unchanged (P is applied twice); M2 is caught by the credential test, M2c by the 
 `code-review` and `security-review` skill passes were not run in this session; the Security section states each
 category by hand. Dependency scanners are not affected (no dependency change).
 
+### Main moved under the branch (#2239)
+
+The branch was cut from main `25829e2b4`; the failing-first evidence stays recorded against it. Main then landed
+#2239, which changes no Worker file and flips two Main defaults: `ELITEA_DELEGATION_GRANTS_ENFORCED` is `"true"` and
+the principal bound is on, and Main's composition walk writes a **pending** grant for an edge whose callee holds more
+than its caller. The branch merges it (`882b518f8`), and the gates above were re-run on the merged head. No Worker
+test depends on Main's default: each builds its `DelegationPolicy`, grants and principal bound explicitly. The grant
+cases (approved, missing, pending, revoked, stale, partial) and the parity test carry their grants and principal
+bound in the command, and the ceiling cases need no grant because the root holds what the callee holds, so they hold
+with the switch on or off.
+
 ## Performance
 
 - The scope is built once per assembly from the already-admitted snapshot (`GrantSet::from_snapshot`, O(attachments));
@@ -142,8 +153,11 @@ category by hand. Dependency scanners are not affected (no dependency change).
 - Credentials are unchanged: still materialized only for toolkits a root node selects. Proven by
   `an_attached_toolkit_nothing_uses_is_never_dialled` (0 dials of the unused toolkit) and
   `a_pipeline_roots_own_credentials_stay_within_the_principal`.
-- The refusal check is one field read per bound Agent node, before any model call or dial (every refusal test asserts
-  0 model calls and 0 dials).
+- The refusal check is one field read per bound Agent node, before any model call, and before the refused node or
+  any later node is bound (every refusal test asserts 0 model calls and 0 dials). Nodes are bound in order, as
+  #2235's refused pipeline node is: an allowed Agent node bound *before* the refused one has already materialized
+  its toolkits (an MCP toolkit lists its tools), with no model call and no effect. A pre-pass that refuses every
+  graph node before binding any is FU-357.
 
 ## Durability
 
@@ -170,16 +184,29 @@ category by hand. Dependency scanners are not affected (no dependency change).
 - **Parity.** `a_pipeline_root_delegates_exactly_as_an_ordinary_root_with_the_same_inputs` composes both roots with
   their production code under one claim (partial grant, principal bound) and compares the ceiling, the effective set,
   the narrowing records and the tools S keeps, for a root that holds the items and one that does not.
-- **Data.** The notice is main's: names and ids only. The in-process refusal on the error is never serialized.
-- `security-review` and `code-review`: see the PR-less report (no PR on this branch by instruction).
+- **Data.** The notice is main's: names and ids only. The in-process refusal on the error
+  (`L/assembly_error.rs`, `delegation_refusal`) has one writer (`delegation_refused_error`,
+  `W/agents/application_tools.rs`) and one reader (`admit_saved_pipeline_child`, `W/agents/pipeline.rs`), which turns
+  it into main's existing refusal tool. The error's `Debug` prints only its code and `Display` its static message, so
+  no log line, event or record carries it. An uncalled pipeline tool never fails its agent's turn
+  (`an_uncalled_pipeline_tool_with_a_refused_agent_node_does_not_fail_its_agents_turn`); a called one answers the
+  refusal as its tool result (`a_called_pipeline_tool_with_a_refused_agent_node_answers_the_refusal`).
+- **The refactor of authorization code is behaviour-neutral.** `e975c0343` moves main's two calls
+  (`principal_bounded_snapshot` of the alias-reduced snapshot, then `root_delegation_scope` of it) into
+  `root_delegation_and_credentials` with the same arguments and order; `root_delegation_scope` is pure (a
+  `GrantSet` from the snapshot and the policy `Arc`), so calling it before the later assembly steps changes nothing.
+  The commit touches no existing test; across the branch the only changed existing test is the one whose meaning the
+  fix changes (`application_tools/materialization_tests.rs`, commit `716251778`). The delegation goldens and the
+  FU-323a/FU-338 digest goldens are unmodified and pass (Worker lib run below).
+- `security-review` and `code-review`: see the PR description.
 
 ## Recovery guarantee rows
 
 | Component × phase | Class | Enforcing code | Proof |
 |---|---|---|---|
-| Worker × admission (assembly) of a pipeline root delegating to an Agent node, Map member or saved pipeline node | R (unchanged): assembly is pure and repeats identically on reclaim | `W/agents/pipeline.rs:2881-2898` | parity and ceiling tests |
-| Worker × admission of a refused Agent node or Map member | F: typed `AUTHORIZATION_FAILED` with Main's notice published first; refused before any model call, dial or effect, so nothing repeats | `W/agents/pipeline.rs:2953-2957`, `W/agents/application_tools.rs:4069-4091`, `W/execution/native_agent_lifecycle.rs:264-276` | refusal tests (root, nested, Map on PostgreSQL 18) |
-| Worker × tool call of a saved pipeline whose Agent node is refused | F as a tool result (the turn goes on) | `W/agents/pipeline.rs:2637-2648` | `a_called_pipeline_tool_with_a_refused_agent_node_answers_the_refusal` |
+| Worker × admission (assembly) of a pipeline root delegating to an Agent node, Map member or saved pipeline node | R (unchanged): assembly is pure and repeats identically on reclaim | `W/agents/pipeline.rs:2880-2893` | parity and ceiling tests |
+| Worker × admission of a refused Agent node or Map member | F: typed `AUTHORIZATION_FAILED` with Main's notice published first; refused before any model call or effect and before the refused node is bound (an earlier allowed node may have listed its MCP tools, FU-357), so nothing repeats | `W/agents/pipeline.rs:2953-2957`, `W/agents/application_tools.rs:4069-4091`, `W/execution/native_agent_lifecycle.rs:264-276` | refusal tests (root, nested, Map on PostgreSQL 18) |
+| Worker × tool call of a saved pipeline whose Agent node is refused | F as a tool result (the turn goes on) | `W/agents/pipeline.rs:2636-2648` | `a_called_pipeline_tool_with_a_refused_agent_node_answers_the_refusal` |
 | Main, NATS, PostgreSQL, sandbox supervisor, LLM gateway, Web | not touched | — | — |
 
 ## Real-browser evidence
@@ -196,12 +223,14 @@ Worker image built from this branch after #1160 with a branch-unique symbol chec
 3. **Refusal with Main's notice.** Remove T from P0 (keep it on S). Expect: the run ends at start with
    "Execution authorization failed." and, above it, the `delegation_refused` notice for the node (edge
    `pipeline_node`, missing toolkit T) with **Review delegation** opening S's delegation dialog on P0; reload keeps
-   both. The default-off switch is enough: with `ELITEA_DELEGATION_GRANTS_ENFORCED` off and the default `enforce`
-   mode, an edge with no grant is refused when the caller lacks what the callee holds.
-4. **Grants on (optional, for the approve path).** Set `ELITEA_DELEGATION_GRANTS_ENFORCED: "true"` on the
-   `elitea-main` service in the stack's compose overlay (`override.yml`; Helm: `deploy/helm/elitea/values.yaml:3186`),
-   restart Main, approve the P0→S grant in Review delegation, run again without T on P0: expect it to run (the grant
-   covers it); revoke it: expect step 3 again.
+   both. Since #2239 (merged into this branch) the stack runs main's rollout defaults:
+   `ELITEA_DELEGATION_GRANTS_ENFORCED` is `"true"` and the principal bound is on, and Main's composition walk writes a
+   **pending** P0→S grant for this edge. A pending grant approves nothing, so the edge is refused.
+   Recorded cause: **pending grant, root lacks T** (the grant is not approved; T missing at the root is why the edge
+   needs one), with the notice's code quoted.
+4. **Approve and rerun (the user's path).** From the refused chat, Review delegation → approve the P0→S grant, rerun
+   without T on P0: the pipeline-root run completes (G(P0→S) honoured as on an ordinary root); reload. The account
+   that approves is named in the evidence.
 
 ## Fixtures
 
@@ -217,6 +246,24 @@ the Map cases use a disposable PostgreSQL 18 container. No database fixture.
 - **FU-355** (the refused-pipeline-tool step records the inner agent's delegation evidence, not P1's): still valid;
   the tool's refusal is the inner edge's (caller P2, depth 2), as `a_pipeline_tool_whose_agent_node_is_refused_is_offered_as_the_refusal`
   pins.
-- The pipeline-participant binder (`W/agents/pipeline.rs:1158`) passes no graph path, so a refused Agent node inside a
-  saved pipeline bound as a participant ends the run with a node notice keyed by the inner node; not covered by a
-  dedicated test.
+- **FU-357 (new): refuse every graph node before binding any.** Nodes are bound in order (as for #2235's refused
+  pipeline node), so an allowed Agent node before a refused one has already materialized its toolkits, and inside a
+  saved pipeline offered as a tool its unbuildable attachments are already recorded on the run's skipped-attachments
+  notice although that tool is now offered as the refusal. No model call, effect or authority follows from either. A
+  pre-pass needs each saved agent's narrowing without materializing it (`composition_refusal` walks only saved
+  pipelines today).
+- **Legacy unscoped continuation** (a conversation an older worker left paused inside an application call,
+  `ApplicationContinuation::LegacyUnscoped`, `W/agents/pipeline.rs:926`): unchanged. Its direct Agent participants
+  are bound by alias without the node check, so a refused saved agent there still answers its refusal text as the
+  node's output, as on main; it grants nothing. Its saved-pipeline participant binder (`W/agents/pipeline.rs:1158`)
+  passes no graph path, so a refused Agent node inside it is keyed by the inner node id. Neither path is reachable for
+  a conversation this worker starts.
+
+## Code review (round 1, `/code-review high`)
+
+Nine candidates. Fixed: the stale comment on `bind_admitted_saved_pipeline`'s refusal (it now names
+`admit_saved_pipeline_child` answering it as the tool result); the graph-path join computed once per node; the
+`(alias, graph_path)` tuple split into two named parameters. Documented, not changed: binding order (FU-357 above,
+same as #2235); the legacy unscoped path (above); the inner edge's evidence on a refused pipeline tool (FU-355); the
+principal-bound log now counting a root toolkit no node uses, which is the ordinary root's behaviour
+(`W/agents/ordinary.rs:356-357` bounds the full snapshot) and the parity this change asserts.
