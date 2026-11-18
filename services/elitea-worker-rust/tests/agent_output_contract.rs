@@ -120,6 +120,62 @@ fn cancelled_failure_and_settlement_match_python_exactly() {
     );
 }
 
+/// #2227: a Code node failure ends the run with the registered sentence and
+/// the failed program's output; no other failure kind, and no other run, ever
+/// carries it.
+#[test]
+fn a_code_failure_terminal_carries_its_programs_output_and_nothing_else_does() {
+    use elitea_worker_rust::protocol::terminal_detail;
+
+    let verified = verified_command();
+    let command = verified.command();
+    let (execution_id, generation) = (command.execution_id.clone(), command.generation);
+    let message_of = |kind: RuntimeFailureKind| {
+        let frame = build_agent_terminal_output_frame(
+            &verified,
+            &fixture_fence(),
+            AgentTerminalOutput::Failure(kind),
+            10,
+            1_786_940_222_700,
+            4,
+        )
+        .expect("failure terminal frame");
+        let Some(execution_output_frame_v1::Payload::RuntimeError(error)) = frame.payload else {
+            panic!("runtime error payload");
+        };
+        assert_eq!(error.code, RuntimeErrorCodeV1::PipelineCodeFailed as i32);
+        error.safe_message
+    };
+
+    terminal_detail::note(&execution_id, generation, None);
+    let sentence = message_of(RuntimeFailureKind::PipelineCodeFailed);
+    assert!(!sentence.contains("Program output"));
+
+    terminal_detail::note(
+        &execution_id,
+        generation,
+        Some("\u{1b}[31mError: boom\n  at main.js:1"),
+    );
+    let carried = message_of(RuntimeFailureKind::PipelineCodeFailed);
+    assert_eq!(
+        carried,
+        format!("{sentence}\n\nProgram output:\n[31mError: boom\n  at main.js:1")
+    );
+    assert_eq!(
+        terminal_detail::detail_of(&carried, &sentence),
+        Some("[31mError: boom\n  at main.js:1")
+    );
+
+    // Another failure kind under the same code keeps its own registered text.
+    assert!(!message_of(RuntimeFailureKind::CodePreparationFailed).contains("Program output"));
+
+    // Another run's output is never this run's.
+    terminal_detail::note(&execution_id, generation, None);
+    terminal_detail::note(&execution_id, generation + 1, Some("another run"));
+    assert_eq!(message_of(RuntimeFailureKind::PipelineCodeFailed), sentence);
+    terminal_detail::note(&execution_id, generation + 1, None);
+}
+
 #[test]
 fn both_supported_agent_pause_results_settle_as_success() {
     for state in [

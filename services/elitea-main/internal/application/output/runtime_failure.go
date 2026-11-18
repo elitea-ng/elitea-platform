@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
@@ -48,6 +50,44 @@ type RuntimeFailureFrame struct {
 // services/elitea-worker-rust/src/protocol/output.rs reads this line).
 const MaxRuntimeFailureSafeMessageBytes = 256
 
+// A pipeline Code node whose program failed may carry the tail of the program's
+// stderr after its registered sentence (#2227): the registered sentence, the
+// separator, then at most MaxCodeFailureDetailRunes characters. This is the ONE
+// registered failure whose message is not a fixed sentence; the worker bounds
+// and cleans the detail, and Main refuses anything that is not exactly that.
+const (
+	CodeFailureCode            = "PIPELINE_CODE_FAILED"
+	CodeFailureDetailSeparator = "\n\nProgram output:\n"
+	MaxCodeFailureDetailRunes  = 1500
+	// UTF-8 is at most four bytes a character.
+	maxCodeFailureMessageBytes = MaxRuntimeFailureSafeMessageBytes + len(CodeFailureDetailSeparator) + 4*MaxCodeFailureDetailRunes
+)
+
+// ValidCodeFailureDetail reports whether detail is a program-output tail Main
+// admits: non-empty text, valid UTF-8, within the character bound, with no
+// control character other than a newline or a tab.
+func ValidCodeFailureDetail(detail string) bool {
+	if strings.TrimSpace(detail) == "" || !utf8.ValidString(detail) || utf8.RuneCountInString(detail) > MaxCodeFailureDetailRunes {
+		return false
+	}
+	for _, r := range detail {
+		if unicode.IsControl(r) && r != '\n' && r != '\t' {
+			return false
+		}
+	}
+	return true
+}
+
+// MaxRuntimeFailureSafeMessageBytesFor is the longest safe message a failure of
+// this public code may carry: the fixed-sentence bound, except for the Code
+// failure that carries a program's output.
+func MaxRuntimeFailureSafeMessageBytesFor(code string) int {
+	if code == CodeFailureCode {
+		return maxCodeFailureMessageBytes
+	}
+	return MaxRuntimeFailureSafeMessageBytes
+}
+
 func (f RuntimeFailureFrame) Validate() error {
 	if f.StreamID == "" || f.TenantID == "" || f.ResourceProjectID == "" || f.ProjectionProjectID == "" || f.WorkloadSessionID == "" || f.ProducerID == "" || f.EventID == "" || f.LogicalOutputID == "" || f.Sequence == 0 || f.OccurredAt.IsZero() {
 		return ErrInvalidValidationOutput
@@ -73,7 +113,7 @@ func (f RuntimeFailureFrame) Validate() error {
 	if f.PayloadDigest.IsZero() || len(f.EncodedFailure) == 0 || len(f.EncodedFailure) > MaxConfigurationValidationResultBytes || runtimedomain.SHA256(f.EncodedFailure) != f.PayloadDigest {
 		return ErrInvalidValidationOutput
 	}
-	if f.Failure.Code == "" || f.Failure.SafeMessage == "" || len(f.Failure.Code) > 256 || len(f.Failure.SafeMessage) > MaxRuntimeFailureSafeMessageBytes {
+	if f.Failure.Code == "" || f.Failure.SafeMessage == "" || len(f.Failure.Code) > 256 || len(f.Failure.SafeMessage) > MaxRuntimeFailureSafeMessageBytesFor(f.Failure.Code) {
 		return ErrInvalidValidationOutput
 	}
 	expectedOutcome := executionapp.SettlementFailed

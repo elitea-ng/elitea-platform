@@ -260,8 +260,11 @@ pub(crate) enum CompilationOutcome {
         canonical: Vec<u8>,
         job_key: [u8; 32],
     },
+    /// `detail` is the bounded tail of the compiler's diagnostic (#2228), when
+    /// the supervisor sent one. Diagnostic text, never a result.
     Failed {
         code: String,
+        detail: Option<String>,
     },
     Cancelled,
     Uncertain {
@@ -556,7 +559,7 @@ fn decode_compilation(
             failure_detail: response.failure_detail,
         })? {
             SandboxOutcome::Pending => CompilationOutcome::Pending,
-            SandboxOutcome::Failed { code, .. } => CompilationOutcome::Failed { code },
+            SandboxOutcome::Failed { code, detail } => CompilationOutcome::Failed { code, detail },
             SandboxOutcome::Cancelled => CompilationOutcome::Cancelled,
             SandboxOutcome::Uncertain { code } => CompilationOutcome::Uncertain { code },
             SandboxOutcome::Completed(_) => return Err(SandboxCallError::InvalidReceipt),

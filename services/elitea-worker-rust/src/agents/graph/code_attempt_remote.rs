@@ -36,6 +36,10 @@ impl RemoteCodeRuntime {
         invocation: CodeInvocation<'_>,
         authority: &NodeAttemptAuthority,
     ) -> Result<Vec<u8>, CodeAttemptFailure> {
+        // #2227: the program output a failure of THIS attempt leaves for the
+        // run's terminal. An earlier attempt's is never this one's.
+        let (execution_id, generation) = self.authority.trace_identity();
+        crate::protocol::terminal_detail::note(execution_id, generation, None);
         // Durable proof decides whether a previous attempt may have started the
         // user's code. The error kind never does.
         let prior_dispatch = prior_dispatch_possible(
@@ -228,7 +232,15 @@ impl RemoteCodeRuntime {
                 Some(&original_visit),
             )
             .await
-            .map_err(|error| before(error.phase(), error.class()))?;
+            .map_err(|error| {
+                // The compiler failed the program (#2228): its diagnostic ends
+                // the run after the registered sentence, as an execution
+                // failure's output does.
+                if let Some((_, detail)) = error.compile_failure() {
+                    crate::protocol::terminal_detail::note(execution_id, generation, detail);
+                }
+                before(error.phase(), error.class())
+            })?;
         let scope = self.authority.dispatch_scope().map_err(|_| {
             before(
                 CodeAttemptPhase::Admission,
@@ -666,7 +678,16 @@ impl RemoteCodeRuntime {
                             true,
                         ))
                     }
-                    SandboxOutcome::Failed { code, .. } => {
+                    SandboxOutcome::Failed { code, detail } => {
+                        // #2227: the failed program's output ends the run
+                        // after the registered sentence (built into the
+                        // terminal frame, not into the node's error text).
+                        let (execution_id, generation) = self.authority.trace_identity();
+                        crate::protocol::terminal_detail::note(
+                            execution_id,
+                            generation,
+                            detail.as_deref(),
+                        );
                         let _resolved = self
                             .journal
                             .resolve(

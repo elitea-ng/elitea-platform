@@ -412,6 +412,9 @@ pub(crate) fn unrecognised_failure_terminal_kind(
     });
     let kept = match (same_code.next(), same_code.next()) {
         (None, _) => return Err(malformed_restored_output()),
+        // #2227: the Code failure with its program's output is this kind's
+        // own message, not an older build's unregistered text.
+        _ if is_code_failure_with_output(error) => RuntimeFailureKind::PipelineCodeFailed,
         (Some(kind), None) => kind,
         _ => RuntimeFailureKind::Internal,
     };
@@ -692,7 +695,18 @@ pub fn build_agent_terminal_output_frame(
             )
         }
         AgentTerminalOutput::Failure(kind) => {
-            let error = runtime_error(kind);
+            let mut error = runtime_error(kind);
+            // #2227: a failed Code program's output follows the registered
+            // sentence. Main admits exactly that shape and nothing else.
+            if kind == RuntimeFailureKind::PipelineCodeFailed
+                && let Some(detail) = super::terminal_detail::noted(
+                    &verified.command().execution_id,
+                    verified.command().generation,
+                )
+            {
+                error.safe_message =
+                    super::terminal_detail::with_detail(&error.safe_message, &detail);
+            }
             let bytes = error.encode_to_vec();
             (
                 ExecutionOutputEventTypeV1::RuntimeError,
@@ -1509,6 +1523,16 @@ const REGISTERED_RUNTIME_FAILURES: &[RuntimeFailureKind] = &[
     RuntimeFailureKind::Internal,
 ];
 
+/// Whether `error` is the registered Code failure followed by the program's
+/// bounded output (#2227), as Main admits it.
+fn is_code_failure_with_output(error: &RuntimeErrorV1) -> bool {
+    let registered = runtime_error(RuntimeFailureKind::PipelineCodeFailed);
+    error.code == registered.code
+        && error.retryable == registered.retryable
+        && super::terminal_detail::detail_of(&error.safe_message, &registered.safe_message)
+            .is_some()
+}
+
 fn canonical_runtime_failure(error: &RuntimeErrorV1) -> Option<RuntimeFailureKind> {
     REGISTERED_RUNTIME_FAILURES
         .iter()
@@ -2087,6 +2111,47 @@ fn validate_fence(fence: &ExecutionFenceV1) -> Result<(), ProtocolError> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod code_failure_output_tests {
+    use super::*;
+
+    /// #2227: the registered Code failure followed by the program's bounded
+    /// output is that kind's own message, not an older build's unregistered
+    /// text; any other text after the sentence is neither.
+    #[test]
+    fn only_the_exact_sentence_and_a_clean_bound_output_are_a_code_failure_with_output() {
+        let registered = runtime_error(RuntimeFailureKind::PipelineCodeFailed);
+        let with = |message: String| RuntimeErrorV1 {
+            safe_message: message,
+            ..registered.clone()
+        };
+        let carried = super::super::terminal_detail::with_detail(
+            &registered.safe_message,
+            "Error: boom\n  at main.js:1",
+        );
+        assert!(is_code_failure_with_output(&with(carried.clone())));
+        // Not canonical: it replays through the unregistered-text path, which
+        // keeps this kind instead of falling to Internal.
+        assert_eq!(canonical_runtime_failure(&with(carried)), None);
+        assert!(!is_code_failure_with_output(&registered));
+        assert!(!is_code_failure_with_output(&with(format!(
+            "{} Error: boom",
+            registered.safe_message
+        ))));
+        assert!(!is_code_failure_with_output(&with(
+            super::super::terminal_detail::with_detail(&registered.safe_message, "bad\u{1b}")
+        )));
+        let other = runtime_error(RuntimeFailureKind::CodePreparationFailed);
+        assert!(!is_code_failure_with_output(&RuntimeErrorV1 {
+            safe_message: super::super::terminal_detail::with_detail(
+                &other.safe_message,
+                "Error: boom"
+            ),
+            ..other
+        }));
+    }
 }
 
 #[cfg(test)]

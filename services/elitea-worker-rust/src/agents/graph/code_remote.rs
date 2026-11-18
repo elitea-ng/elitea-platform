@@ -550,8 +550,19 @@ impl RemoteCodeRuntime {
         )
         .await?;
         let selected = self
-            .select_compiled_snapshot(&invocation, profile, &job, bundle.as_ref(), None)
-            .await?;
+            .select_compiled_snapshot_typed(&invocation, profile, &job, bundle.as_ref(), None)
+            .await
+            .map_err(|failure| {
+                // The compiler failed the program (#2228): its diagnostic is
+                // the cause the caller reads, as for an execution failure.
+                if let Some((code, detail)) = failure.compile_failure() {
+                    note(super::code_runtime::ToolCodeError::Sandbox {
+                        code: code.to_owned(),
+                        detail: detail.map(str::to_owned),
+                    });
+                }
+                failure.into_graph_error()
+            })?;
         let scope = self
             .authority
             .dispatch_scope()
@@ -646,7 +657,8 @@ impl RemoteCodeRuntime {
                 Ok(SandboxOutcome::Completed(receipt)) => return Ok(receipt),
                 Ok(SandboxOutcome::Failed { code, detail }) => {
                     // The tool path reads the program's stderr from `detail`
-                    // (#2223); the pipeline Code node's error text is unchanged.
+                    // (#2223), and a pipeline Code node's run ends with it
+                    // (#2227, `execute_node`).
                     note(super::code_runtime::ToolCodeError::Sandbox {
                         code: code.clone(),
                         detail,
@@ -840,8 +852,23 @@ impl CodeSandboxRuntime for RemoteCodeRuntime {
         ))
         .await
         .map_err(|error| {
+            let cause = report.lock().ok().and_then(|mut slot| slot.take());
+            // #2227: the failed program's output ends the run after the
+            // registered sentence. Every failure notes it, with or without
+            // output, so one never inherits an earlier attempt's.
+            let (execution_id, generation) = self.authority.trace_identity();
+            crate::protocol::terminal_detail::note(
+                execution_id,
+                generation,
+                match &cause {
+                    Some(super::code_runtime::ToolCodeError::Sandbox { detail, .. }) => {
+                        detail.as_deref()
+                    }
+                    _ => None,
+                },
+            );
             let refused = matches!(
-                report.lock().ok().and_then(|mut slot| slot.take()),
+                cause,
                 Some(super::code_runtime::ToolCodeError::DeadlineInsufficient)
             );
             (
