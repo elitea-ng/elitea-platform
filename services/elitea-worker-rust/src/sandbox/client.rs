@@ -26,9 +26,16 @@ use tonic::{Code, Request, transport::Channel};
 pub enum SandboxOutcome {
     Pending,
     Completed(Vec<u8>),
-    Failed { code: String },
+    /// `detail` is the bounded tail of the failed program's stderr (#2223),
+    /// when the supervisor sent one. Diagnostic text, never a result.
+    Failed {
+        code: String,
+        detail: Option<String>,
+    },
     Cancelled,
-    Uncertain { code: String },
+    Uncertain {
+        code: String,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -381,6 +388,33 @@ fn local_transport_failure(status: &tonic::Status) -> bool {
     false
 }
 
+/// The most characters of a failed program's stderr read from a supervisor.
+/// The same bound the supervisor keeps and the model-facing tool shows.
+const FAILURE_DETAIL_CHARS: usize = 1_500;
+
+/// The supervisor's failure detail as bounded text, whatever it sent: control
+/// characters removed, the last [`FAILURE_DETAIL_CHARS`] characters kept, and
+/// `None` when nothing is left. An old supervisor sends nothing. A malformed
+/// or oversized value is bounded here, never a reason to refuse the receipt:
+/// the failure code is the receipt, the detail is only a courtesy to the model.
+fn failure_detail(raw: &str) -> Option<String> {
+    let clean: String = raw
+        .chars()
+        .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+        .collect();
+    let clean = clean.trim();
+    let count = clean.chars().count();
+    if count == 0 {
+        return None;
+    }
+    Some(
+        clean
+            .chars()
+            .skip(count.saturating_sub(FAILURE_DETAIL_CHARS))
+            .collect(),
+    )
+}
+
 fn decode(response: SubmitSandboxJobResponseV1) -> Result<SandboxOutcome, SandboxCallError> {
     if response.result_json.len() > 512 * 1024
         || response.failure_code.len() > 128
@@ -416,6 +450,7 @@ fn decode(response: SubmitSandboxJobResponseV1) -> Result<SandboxOutcome, Sandbo
         {
             Ok(SandboxOutcome::Failed {
                 code: response.failure_code,
+                detail: failure_detail(&response.failure_detail),
             })
         }
         SandboxJobStatusV1::Cancelled if response.result_json.is_empty() => {
@@ -473,6 +508,56 @@ mod tests {
         assert_eq!(SandboxCallError::Invalid.submission_message(), "");
     }
 
+    fn failed_with(detail: &str) -> SubmitSandboxJobResponseV1 {
+        SubmitSandboxJobResponseV1 {
+            status: SandboxJobStatusV1::Failed.into(),
+            failure_code: "sandbox.code_failed".into(),
+            failure_detail: detail.into(),
+            ..Default::default()
+        }
+    }
+
+    // #2223: the failed program's stderr reaches the worker, bounded; a
+    // supervisor that predates the field sends none, and the failure stands.
+    #[test]
+    fn a_failed_receipt_carries_the_programs_bounded_stderr() {
+        let SandboxOutcome::Failed { code, detail } =
+            decode(failed_with("error[E0308]: mismatched types")).unwrap()
+        else {
+            panic!("a failed receipt decodes as Failed");
+        };
+        assert_eq!(code, "sandbox.code_failed");
+        assert_eq!(detail.as_deref(), Some("error[E0308]: mismatched types"));
+        for empty in ["", "  \n\u{1b}"] {
+            assert!(matches!(
+                decode(failed_with(empty)).unwrap(),
+                SandboxOutcome::Failed { detail: None, .. }
+            ));
+        }
+        let long = format!("{}THE-ERROR", "x".repeat(40_000));
+        let SandboxOutcome::Failed { detail, .. } = decode(failed_with(&long)).unwrap() else {
+            panic!("a failed receipt decodes as Failed");
+        };
+        let detail = detail.unwrap();
+        assert_eq!(detail.chars().count(), FAILURE_DETAIL_CHARS);
+        assert!(detail.ends_with("THE-ERROR"));
+    }
+
+    #[test]
+    fn detail_on_any_other_status_is_ignored_and_never_a_result() {
+        let mut cancelled = failed_with("stderr");
+        cancelled.status = SandboxJobStatusV1::Cancelled.into();
+        cancelled.failure_code = String::new();
+        assert!(matches!(
+            decode(cancelled).unwrap(),
+            SandboxOutcome::Cancelled
+        ));
+        // A failed receipt still may not carry a result.
+        let mut with_result = failed_with("stderr");
+        with_result.result_json = b"{}".to_vec();
+        assert!(decode(with_result).is_err());
+    }
+
     #[test]
     fn terminal_receipts_cannot_be_confused_with_pending_or_success() {
         let receipt =
@@ -481,6 +566,7 @@ mod tests {
                 result_json: result.to_vec(),
                 failure_code: code.into(),
                 cleanup_pending: false,
+                failure_detail: String::new(),
             };
         assert!(matches!(
             decode(receipt(
@@ -493,7 +579,7 @@ mod tests {
         ));
         assert!(matches!(
             decode(receipt(SandboxJobStatusV1::Failed, b"", "runtime_failed")).unwrap(),
-            SandboxOutcome::Failed { .. }
+            SandboxOutcome::Failed { detail: None, .. }
         ));
         for invalid in [
             receipt(SandboxJobStatusV1::Completed, b"partial", ""),

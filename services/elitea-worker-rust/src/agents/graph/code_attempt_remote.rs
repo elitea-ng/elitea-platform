@@ -666,7 +666,7 @@ impl RemoteCodeRuntime {
                             true,
                         ))
                     }
-                    SandboxOutcome::Failed { code } => {
+                    SandboxOutcome::Failed { code, .. } => {
                         let _resolved = self
                             .journal
                             .resolve(

@@ -2324,7 +2324,7 @@ async fn sandbox_submission(over_tls: bool) {
             let returned = match &submission {
                 Ok(SandboxOutcome::Pending) => "Ok(Pending)".to_owned(),
                 Ok(SandboxOutcome::Completed(_)) => "Ok(Completed)".to_owned(),
-                Ok(SandboxOutcome::Failed { code }) => format!("Ok(Failed {{ code: {code} }})"),
+                Ok(SandboxOutcome::Failed { code, .. }) => format!("Ok(Failed {{ code: {code} }})"),
                 Ok(SandboxOutcome::Cancelled) => "Ok(Cancelled)".to_owned(),
                 Ok(SandboxOutcome::Uncertain { code }) => {
                     format!("Ok(Uncertain {{ code: {code} }})")

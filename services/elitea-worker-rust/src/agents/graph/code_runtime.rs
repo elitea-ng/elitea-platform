@@ -148,8 +148,13 @@ pub(in crate::agents) enum ToolCodeError {
     /// No runtime is configured for the language.
     Unavailable,
     /// The supervisor finished the job as failed; `code` is its failure code
-    /// (`sandbox.deadline_exceeded`, `sandbox.memory_limit`, ...).
-    Sandbox { code: String },
+    /// (`sandbox.deadline_exceeded`, `sandbox.memory_limit`, ...). `detail` is
+    /// the bounded tail of the program's stderr when the program itself failed
+    /// (a compile error, an exception, a panic): untrusted diagnostic text.
+    Sandbox {
+        code: String,
+        detail: Option<String>,
+    },
     /// The job was cancelled.
     Cancelled,
     /// Completion cannot be confirmed either way.

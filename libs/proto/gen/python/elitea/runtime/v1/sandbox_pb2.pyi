@@ -230,16 +230,18 @@ class SubmitSandboxJobRequestV1(_message.Message):
     def __init__(self, grant: _Optional[_Union[SignedSandboxJobGrantV1, _Mapping]] = ..., code_execution_intent_json: _Optional[bytes] = ..., prepared_job_json: _Optional[bytes] = ..., dependency_content_grant: _Optional[_Union[SignedSandboxJobGrantV1, _Mapping]] = ..., dependency_bundle_json: _Optional[bytes] = ...) -> None: ...
 
 class SubmitSandboxJobResponseV1(_message.Message):
-    __slots__ = ("status", "result_json", "failure_code", "cleanup_pending")
+    __slots__ = ("status", "result_json", "failure_code", "cleanup_pending", "failure_detail")
     STATUS_FIELD_NUMBER: _ClassVar[int]
     RESULT_JSON_FIELD_NUMBER: _ClassVar[int]
     FAILURE_CODE_FIELD_NUMBER: _ClassVar[int]
     CLEANUP_PENDING_FIELD_NUMBER: _ClassVar[int]
+    FAILURE_DETAIL_FIELD_NUMBER: _ClassVar[int]
     status: SandboxJobStatusV1
     result_json: bytes
     failure_code: str
     cleanup_pending: bool
-    def __init__(self, status: _Optional[_Union[SandboxJobStatusV1, str]] = ..., result_json: _Optional[bytes] = ..., failure_code: _Optional[str] = ..., cleanup_pending: _Optional[bool] = ...) -> None: ...
+    failure_detail: str
+    def __init__(self, status: _Optional[_Union[SandboxJobStatusV1, str]] = ..., result_json: _Optional[bytes] = ..., failure_code: _Optional[str] = ..., cleanup_pending: _Optional[bool] = ..., failure_detail: _Optional[str] = ...) -> None: ...
 
 class CancelSandboxJobRequestV1(_message.Message):
     __slots__ = ("grant",)
@@ -354,7 +356,7 @@ class SubmitRustCompiledSnapshotRequestV1(_message.Message):
     def __init__(self, grant: _Optional[_Union[SignedSandboxJobGrantV1, _Mapping]] = ..., prepared_job_json: _Optional[bytes] = ..., control_json: _Optional[bytes] = ..., descriptor_json: _Optional[bytes] = ..., read_grant: _Optional[_Union[SignedSandboxJobGrantV1, _Mapping]] = ..., dependency_content_grant: _Optional[_Union[SignedSandboxJobGrantV1, _Mapping]] = ..., dependency_bundle_json: _Optional[bytes] = ..., reconcile_only: _Optional[bool] = ..., native_hydration_index: _Optional[int] = ..., code_execution_intent_json: _Optional[bytes] = ...) -> None: ...
 
 class SubmitRustCompiledSnapshotResponseV1(_message.Message):
-    __slots__ = ("status", "result_json", "descriptor_json", "compilation_job_key", "failure_code", "cleanup_pending", "needs_admission", "native_hydration_ready")
+    __slots__ = ("status", "result_json", "descriptor_json", "compilation_job_key", "failure_code", "cleanup_pending", "needs_admission", "native_hydration_ready", "failure_detail")
     STATUS_FIELD_NUMBER: _ClassVar[int]
     RESULT_JSON_FIELD_NUMBER: _ClassVar[int]
     DESCRIPTOR_JSON_FIELD_NUMBER: _ClassVar[int]
@@ -363,6 +365,7 @@ class SubmitRustCompiledSnapshotResponseV1(_message.Message):
     CLEANUP_PENDING_FIELD_NUMBER: _ClassVar[int]
     NEEDS_ADMISSION_FIELD_NUMBER: _ClassVar[int]
     NATIVE_HYDRATION_READY_FIELD_NUMBER: _ClassVar[int]
+    FAILURE_DETAIL_FIELD_NUMBER: _ClassVar[int]
     status: SandboxJobStatusV1
     result_json: bytes
     descriptor_json: bytes
@@ -371,7 +374,8 @@ class SubmitRustCompiledSnapshotResponseV1(_message.Message):
     cleanup_pending: bool
     needs_admission: bool
     native_hydration_ready: bool
-    def __init__(self, status: _Optional[_Union[SandboxJobStatusV1, str]] = ..., result_json: _Optional[bytes] = ..., descriptor_json: _Optional[bytes] = ..., compilation_job_key: _Optional[bytes] = ..., failure_code: _Optional[str] = ..., cleanup_pending: _Optional[bool] = ..., needs_admission: _Optional[bool] = ..., native_hydration_ready: _Optional[bool] = ...) -> None: ...
+    failure_detail: str
+    def __init__(self, status: _Optional[_Union[SandboxJobStatusV1, str]] = ..., result_json: _Optional[bytes] = ..., descriptor_json: _Optional[bytes] = ..., compilation_job_key: _Optional[bytes] = ..., failure_code: _Optional[str] = ..., cleanup_pending: _Optional[bool] = ..., needs_admission: _Optional[bool] = ..., native_hydration_ready: _Optional[bool] = ..., failure_detail: _Optional[str] = ...) -> None: ...
 
 class PublishRustCompiledSnapshotRequestV1(_message.Message):
     __slots__ = ("publish_grant", "phase")

@@ -1506,7 +1506,9 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 14: agentstate/0014_sandbox_dispatch_submission_marker.sql, the
 	// submission_pending marker that tells a hydration-phase lease loss apart
 	// from a submitted Code job (#1084).
+	// 15: agentstate/0015_sandbox_failure_detail.sql, the bounded stderr a
+	// failed sandbox run keeps for the model (#2223).
 	agentState, err := LoadManifest(platformmigrations.Files, ScopeAgentState)
 	require.NoError(t, err)
-	require.EqualValues(t, 14, Head(agentState))
+	require.EqualValues(t, 15, Head(agentState))
 }

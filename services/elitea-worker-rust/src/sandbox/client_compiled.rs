@@ -495,6 +495,7 @@ fn decode_execution(
         result_json: response.result_json,
         failure_code: response.failure_code,
         cleanup_pending: response.cleanup_pending,
+        failure_detail: response.failure_detail,
     })
 }
 
@@ -552,9 +553,10 @@ fn decode_compilation(
             result_json: response.result_json,
             failure_code: response.failure_code,
             cleanup_pending: response.cleanup_pending,
+            failure_detail: response.failure_detail,
         })? {
             SandboxOutcome::Pending => CompilationOutcome::Pending,
-            SandboxOutcome::Failed { code } => CompilationOutcome::Failed { code },
+            SandboxOutcome::Failed { code, .. } => CompilationOutcome::Failed { code },
             SandboxOutcome::Cancelled => CompilationOutcome::Cancelled,
             SandboxOutcome::Uncertain { code } => CompilationOutcome::Uncertain { code },
             SandboxOutcome::Completed(_) => return Err(SandboxCallError::InvalidReceipt),
