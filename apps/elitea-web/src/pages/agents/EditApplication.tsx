@@ -236,8 +236,7 @@ export function EditApplication(): ReactNode {
    * `conversation_starters` has no input mounted (see the
    * `conversationStartersSlot` note on `CreateAgentForm`), so the value
    * round-trips from the server but cannot be changed. The `variables` gap
-   * this used to record is closed (#307 wrote the UPDATE branch) and so is
-   * the `tags` one (#345 added the wire field and the association write).
+   * (#307, UPDATE branch) and the `tags` one (#345) are closed.
    */
   const editor = useEditApplicationEditorBridge(form, versionFields);
   // Named once: the picker is disabled on the same terms as the form, and a second inline `||` breaks the complexity gate.
