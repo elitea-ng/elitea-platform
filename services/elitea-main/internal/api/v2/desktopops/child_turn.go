@@ -87,8 +87,8 @@ type ChildTurnDependencies struct {
 	Limiter *failurelimit.Limiter
 	// Delegation applies the delegation rule of the edge from the turn's agent
 	// to the child (ADR-0044 Amendment 1, issue 2214). Nil is the rule off (the
-	// grant switch, ELITEA_DELEGATION_GRANTS_ENFORCED, is off): a child start
-	// is exactly what it was.
+	// grant switch, ELITEA_DELEGATION_GRANTS_ENFORCED, is set to false): a child
+	// start is exactly what it was.
 	Delegation *delegationedge.Evaluator
 	// Editors names the people to ask about a delegation notice; nil serves
 	// the notice without Review delegation.

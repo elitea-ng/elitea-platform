@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"slices"
 	"strconv"
+	"time"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/delegationdrift"
 	appgrants "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/delegationgrants"
@@ -26,6 +27,10 @@ type delegationWiring struct {
 	// callee (story S4); the service runs the check for a caller when its grants
 	// are read.
 	trigger *delegationdrift.Trigger
+	// edges migrates the existing compositions to pending grants at startup
+	// (story S6), keeps the edges a save created covered, and serves the
+	// administrator's scan.
+	edges *dbrepos.DelegationEdges
 }
 
 // composeDelegationGrants builds the grant store over the pool and composes it
@@ -81,8 +86,56 @@ func composeDelegationGrants(cfg RouterConfig, lifecycle *dbrepos.AgentLifecycle
 		return fail("drift detector", err)
 	}
 	service.WithDriftCheck(detector.CheckCallerQuietly)
-	return &delegationWiring{store: store, service: service, trigger: delegationdrift.NewTrigger(detector, delegationdrift.DefaultDelay)}
+	edges, err := dbrepos.NewDelegationEdges(store)
+	if err != nil {
+		return fail("edge migration", err)
+	}
+	trigger := delegationdrift.NewTrigger(detector, delegationdrift.DefaultDelay).WithSync(edges.SyncQuietly)
+	return &delegationWiring{store: store, service: service, trigger: trigger, edges: edges}
 }
+
+// adminDelegationReview is the queue and the scan the administration page reads
+// (admin.DelegationReviewSource).
+type adminDelegationReview struct {
+	queue *dbrepos.DelegationGrants
+	scan  *dbrepos.DelegationEdges
+}
+
+func (a adminDelegationReview) ReviewQueue(ctx context.Context) ([]dbrepos.DelegationProjectQueue, error) {
+	return a.queue.ReviewQueue(ctx)
+}
+
+func (a adminDelegationReview) ScanAll(ctx context.Context) (dbrepos.DelegationMigrationReport, error) {
+	return a.scan.ScanAll(ctx)
+}
+
+// startMigration runs the one-time migration of the existing compositions in the
+// background: it never holds up the service, and a project it does not reach is
+// tried again at the next start (ADR-0044 amendment 1, A1.3).
+func (w *delegationWiring) startMigration() {
+	if w == nil || w.edges == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), delegationMigrationTimeout)
+		defer cancel()
+		report, err := w.edges.MigrateAll(ctx)
+		switch {
+		case err != nil:
+			slog.ErrorContext(ctx, "delegation migration: the pass did not finish", "error", err,
+				"projects", report.Projects, "migrated", report.Migrated, "failed", report.Failed)
+		case report.SkippedLocked:
+			slog.InfoContext(ctx, "delegation migration: another replica is running it")
+		case report.Migrated > 0 || report.Failed > 0:
+			slog.InfoContext(ctx, "delegation migration: existing compositions now have pending grants for review; nothing was approved",
+				"projects", report.Projects, "migrated", report.Migrated, "failed", report.Failed,
+				"edges", report.Edges, "pending_grants", report.Created, "notifications", report.Notified)
+		}
+	}()
+}
+
+// delegationMigrationTimeout bounds the startup migration.
+const delegationMigrationTimeout = 30 * time.Minute
 
 // permissionChecker answers what the REST routes' RBAC middleware asks: the
 // person's resolved permissions in the project, in the default mode. A person

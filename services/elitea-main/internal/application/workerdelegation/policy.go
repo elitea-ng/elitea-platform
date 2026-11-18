@@ -69,14 +69,18 @@ func NewResolver(settings SettingsReader, inputs InputReader, classes DataClassR
 	return &Resolver{settings: settings, inputs: inputs, classes: classes}, nil
 }
 
-// WorkerDelegationPolicy answers the command's policy, or nil when no
-// administrator saved the `delegation` section and the grant switch is off
-// (grants.go), so such a command is
-// unchanged byte for byte and a worker from an earlier release still accepts
-// it (the chart rolls Main out first). The new worker then applies its
-// compiled-in defaults: enforce, depth 4, no data class narrowing. Only an agent execution command carries
-// one. A governed command (one with a security context) is always enforced.
-// An error is a source that could not be read; the dispatch is retried.
+// WorkerDelegationPolicy answers the command's policy. It is nil only when no
+// administrator saved the `delegation` section and neither the grant switch
+// (grants.go) nor the principal bound (principal.go) needs one; such a command
+// is unchanged byte for byte. Since the delegation migration (epic 2156, S6)
+// both are on by default, so an unsaved section sends the compiled-in defaults
+// (enforce, depth 4, no data class narrowing) with the bound and the grants.
+// A worker from an earlier release rejects the new fields: the chart rolls
+// Main out first, and an operator who has such workers running sets the switch
+// and the section's principal_bound off for the rollout window (see the
+// upgrade note). Only an agent execution command carries one. A governed
+// command (one with a security context) is always enforced. An error is a
+// source that could not be read; the dispatch is retried.
 func (r *Resolver) WorkerDelegationPolicy(ctx context.Context, command *runtimev1.WorkerCommandV1) (*runtimev1.WorkerDelegationPolicyV1, error) {
 	if command.GetAgentExecution() == nil {
 		return nil, nil
@@ -85,17 +89,11 @@ func (r *Resolver) WorkerDelegationPolicy(ctx context.Context, command *runtimev
 	if err != nil {
 		return nil, fmt.Errorf("worker delegation: read the platform setting: %w", err)
 	}
-	if !settings.Stored {
-		// The grant switch alone still sends the defaults and the grants; with it
-		// off (the default) nothing is read and the command is unchanged.
-		if r.grants == nil || !r.grantsEnforced {
-			return nil, nil
-		}
-		input, err := r.input(ctx, command)
-		if err != nil {
-			return nil, err
-		}
-		return r.withGrants(ctx, command, input, nil)
+	bounded := settings.PrincipalBound && r.principal != nil
+	if !settings.Stored && !bounded && (r.grants == nil || !r.grantsEnforced) {
+		// Nothing was saved and no switch needs the policy: the command is
+		// unchanged and reads nothing.
+		return nil, nil
 	}
 	if command.GetSecurityContextRef() != nil {
 		settings.Mode = platformconfig.DelegationEnforce
@@ -104,12 +102,24 @@ func (r *Resolver) WorkerDelegationPolicy(ctx context.Context, command *runtimev
 	if err != nil {
 		return nil, err
 	}
-	classes, err := r.rootDataClasses(ctx, command, input)
-	if err != nil {
-		return nil, err
+	var policy *runtimev1.WorkerDelegationPolicyV1
+	switch {
+	case settings.Stored:
+		classes, err := r.rootDataClasses(ctx, command, input)
+		if err != nil {
+			return nil, err
+		}
+		policy = Policy(settings, classes)
+	case bounded:
+		// Never saved, but the principal bound is on by default (ADR-0044
+		// Amendment 1, A1.3): send the compiled-in defaults (enforce, depth 4,
+		// no data class narrowing) with the bound. The worker applies the
+		// same defaults to a command that carries none.
+		defaults := settings
+		defaults.Stored = true
+		policy = Policy(defaults, nil)
 	}
-	policy := Policy(settings, classes)
-	if settings.PrincipalBound && r.principal != nil {
+	if bounded {
 		if policy.PrincipalBound, err = r.principalBound(ctx, command, input); err != nil {
 			return nil, err
 		}

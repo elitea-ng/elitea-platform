@@ -825,9 +825,10 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		// policy while the section's principal_bound switch is on.
 		delegationPolicy = delegationPolicy.WithPrincipalBound(egressSources)
 		// The approved delegation grants of a run (ADR-0044 amendment 1,
-		// story S2c): sent only while the operator turns the grant switch on
-		// (ELITEA_DELEGATION_GRANTS_ENFORCED, off by default until the
-		// migration of existing compositions has run).
+		// story S2c): sent while the grant switch is on
+		// (ELITEA_DELEGATION_GRANTS_ENFORCED, on by default since the
+		// migration of existing compositions, story S6, creates their pending
+		// grants and approves none).
 		if config.DelegationGrantsEnforced {
 			delegationPolicy = delegationPolicy.WithGrants(repos.NewDelegationGrantReader(dependencies.AdmissionPool), true)
 		}

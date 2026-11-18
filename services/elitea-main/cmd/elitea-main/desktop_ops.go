@@ -107,7 +107,7 @@ func composeChildTurns(
 }
 
 // delegationSwitch is what the nested agent's delegation rule reads: the grant
-// switch (ELITEA_DELEGATION_GRANTS_ENFORCED, off by default) and the platform's
+// switch (ELITEA_DELEGATION_GRANTS_ENFORCED, on by default) and the platform's
 // `delegation` section.
 type delegationSwitch struct {
 	grantsEnforced bool
