@@ -77,7 +77,7 @@ fn classify(error: &ToolCodeError) -> AnalysisCodeFailure {
         ToolCodeError::Refused | ToolCodeError::DeadlineInsufficient => {
             AnalysisCodeFailure::Rejected
         }
-        ToolCodeError::Sandbox { code } => match code.as_str() {
+        ToolCodeError::Sandbox { code, .. } => match code.as_str() {
             "sandbox.output_limit" | "sandbox.receipt_limit" => AnalysisCodeFailure::ResultTooLarge,
             "sandbox.invalid_request" => AnalysisCodeFailure::Rejected,
             "sandbox.deadline_exceeded"
@@ -90,6 +90,25 @@ fn classify(error: &ToolCodeError) -> AnalysisCodeFailure {
         },
         ToolCodeError::Submission | ToolCodeError::Untyped(_) => AnalysisCodeFailure::Failed,
     }
+}
+
+/// What the failed program printed to stderr, when the supervisor kept it
+/// (#2223): a compiler diagnostic, an exception, a panic. The supervisor and
+/// the worker client already bound it; it is bounded again here to the count
+/// the model-facing failure text shows, so no path can exceed it.
+fn failure_detail(error: &ToolCodeError) -> Option<String> {
+    let ToolCodeError::Sandbox {
+        detail: Some(detail),
+        ..
+    } = error
+    else {
+        return None;
+    };
+    let mut kept: String = detail.chars().take(MAX_DETAIL_CHARS).collect();
+    if detail.chars().count() > MAX_DETAIL_CHARS {
+        kept.push_str(" [stderr truncated]");
+    }
+    (!kept.trim().is_empty()).then_some(kept)
 }
 
 /// Stable per tool call: a replay of the same call with the same program and
@@ -184,7 +203,10 @@ impl SandboxAnalysisRunner {
                     failure = ?failure,
                     "the sandbox did not return a result for run_analysis_code"
                 );
-                Err(failure.into())
+                Err(AnalysisCodeError {
+                    failure,
+                    detail: failure_detail(&error),
+                })
             }
         }
     }
@@ -422,9 +444,42 @@ mod tests {
         );
     }
 
+    // #2223: the stderr the supervisor kept for a failed run reaches the
+    // model's failure through the tool's error detail, for every language.
+    #[tokio::test]
+    async fn a_failed_runs_stderr_rides_to_the_tool_error() {
+        let diagnostic = "error[E0308]: mismatched types";
+        let error = failure_of(Err(ToolCodeError::Sandbox {
+            code: "sandbox.code_failed".into(),
+            detail: Some(diagnostic.into()),
+        }))
+        .await;
+        assert_eq!(error.failure, AnalysisCodeFailure::Failed);
+        assert_eq!(error.detail.as_deref(), Some(diagnostic));
+        // No detail: the failure stands alone, as before.
+        let bare = failure_of(Err(ToolCodeError::Sandbox {
+            code: "sandbox.code_failed".into(),
+            detail: None,
+        }))
+        .await;
+        assert_eq!(bare.detail, None);
+        // A code that is not the program's own failure keeps its class, and
+        // an over-long detail is bounded once more.
+        let long = failure_of(Err(ToolCodeError::Sandbox {
+            code: "sandbox.deadline_exceeded".into(),
+            detail: Some("y".repeat(MAX_DETAIL_CHARS * 2)),
+        }))
+        .await;
+        assert_eq!(long.failure, AnalysisCodeFailure::Overrun);
+        assert!(long.detail.unwrap().ends_with("[stderr truncated]"));
+    }
+
     #[tokio::test]
     async fn typed_runtime_failures_map_by_code_without_reading_text() {
-        let sandbox = |code: &str| ToolCodeError::Sandbox { code: code.into() };
+        let sandbox = |code: &str| ToolCodeError::Sandbox {
+            code: code.into(),
+            detail: None,
+        };
         for (error, expected) in [
             (ToolCodeError::Unavailable, AnalysisCodeFailure::Unavailable),
             (ToolCodeError::Cancelled, AnalysisCodeFailure::Cancelled),

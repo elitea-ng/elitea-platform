@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## `run_code` shows the model why a program failed
+
+When a program run by **Python sandbox** fails, the model now gets the program's own error output: the Rust compiler's diagnostic for code that does not compile, a JavaScript or TypeScript exception message, a Rust panic. Before, it was told only that the sandbox could not run the program, so it could not correct the code. The sandbox's supervisor keeps the last 1,500 characters of that output with the failed run (a new `failure_detail` column, applied by Main's agent-state migration 0015); the worker reads it from an additive field of the internal gRPC response, so the worker and the supervisor can be upgraded in either order. Pipeline **Code** nodes report failures as before. See [Python sandbox](/menus/internal-tools#python-sandbox-code-execution).
+
 ## A nested agent in the desktop app follows its delegation grant
 
 The desktop app runs a saved agent that the local agent calls as its own cloud turn. That turn did not read the delegation grant of the edge. With the delegation grant switch on (`ELITEA_DELEGATION_GRANTS_ENFORCED`, off by default), the main service now applies the grant when the desktop starts the nested agent: the agent runs with what its caller and the approved grant cover, or is refused when the edge has no grant and it holds something its caller does not. The desktop transcript shows the same notice as the web app, with **Review delegation** for an editor. Client contract 1.61 (additive). Upgrade Main with the desktop app. See [Notices in the chat](/admin/enterprise-controls/least-privilege-and-trust#notices-in-the-chat).

@@ -724,7 +724,17 @@ impl DockerSupervisor {
         } else {
             None
         };
-        self.ledger.finish(lease, phase, result, failure).await?;
+        // A failed program's own stderr rides on the failed row so the tool
+        // that asked for the run can show the model a compiler diagnostic or
+        // an exception (#2223). Never part of `result`.
+        let detail = if phase == Phase::Failed {
+            failure_detail(bytes)
+        } else {
+            None
+        };
+        self.ledger
+            .finish_with_detail(lease, phase, result, failure, detail.as_deref())
+            .await?;
         self.terminal(scope, self.ledger.read(scope).await?).await
     }
 
@@ -780,6 +790,43 @@ fn native_platform_permits(
         .is_none_or(|native| Some(&native.platform) == platform)
 }
 
+/// The most characters of a failed program's stderr kept on its receipt row.
+/// The worker bounds what the model reads to the same count.
+const FAILURE_DETAIL_CHARS: usize = 1_500;
+const FAILURE_DETAIL_MARK: &str = "[earlier output truncated]\n";
+
+/// The tail of the stderr of a run the PROGRAM failed (status `failed`: a
+/// compile error, an uncaught exception, a panic, a non-zero exit). Any other
+/// status already says why in its failure code, and its stderr is not the
+/// program's diagnostic. The tail, not the head: a program prints its work
+/// before it dies, and the error is the last thing it says. Control
+/// characters are removed (ANSI escapes, NUL, which the column cannot hold),
+/// the same text bound the model-facing tool applies to anything a program
+/// prints. `None` when the program printed nothing.
+fn failure_detail(bytes: &[u8]) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    if value.get("status")?.as_str()? != "failed" {
+        return None;
+    }
+    let clean: String = value
+        .get("stderr")?
+        .as_str()?
+        .chars()
+        .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+        .collect();
+    let clean = clean.trim();
+    let count = clean.chars().count();
+    if count == 0 {
+        return None;
+    }
+    if count <= FAILURE_DETAIL_CHARS {
+        return Some(clean.to_owned());
+    }
+    let keep = FAILURE_DETAIL_CHARS - FAILURE_DETAIL_MARK.chars().count();
+    let tail: String = clean.chars().skip(count - keep).collect();
+    Some(format!("{FAILURE_DETAIL_MARK}{tail}"))
+}
+
 fn classify_receipt(bytes: &[u8]) -> Result<(Phase, Option<&'static str>), SupervisorError> {
     if bytes.len() > 524_288 {
         return Ok((Phase::Failed, Some("sandbox.receipt_limit")));
@@ -814,6 +861,54 @@ mod deadline_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn failed_receipt(stderr: &str) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "revision": 1, "status": "failed", "exit_code": 1, "stdout": "", "stderr": stderr
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_failed_programs_stderr_is_kept_for_the_model() {
+        let diagnostic = "error[E0308]: mismatched types\n --> src/lib.rs:3:18";
+        assert_eq!(
+            failure_detail(&failed_receipt(diagnostic)).as_deref(),
+            Some(diagnostic)
+        );
+        assert_eq!(failure_detail(&failed_receipt("  \n ")), None);
+    }
+
+    #[test]
+    fn only_the_programs_own_failure_carries_detail() {
+        for status in ["timeout", "memory_limit", "output_limit", "launch_failed"] {
+            let receipt = serde_json::to_vec(&serde_json::json!({
+                "revision": 1, "status": status, "exit_code": 1, "stdout": "", "stderr": "noise"
+            }))
+            .unwrap();
+            assert_eq!(failure_detail(&receipt), None, "{status}");
+        }
+        let completed = serde_json::to_vec(&serde_json::json!({
+            "revision": 1, "status": "completed", "exit_code": 0, "stdout": "{}", "stderr": "printed"
+        }))
+        .unwrap();
+        assert_eq!(failure_detail(&completed), None);
+        assert_eq!(failure_detail(b"not json"), None);
+    }
+
+    #[test]
+    fn the_detail_is_the_bounded_tail_without_control_characters() {
+        let long = format!("{}THE-ERROR", "x".repeat(10_000));
+        let kept = failure_detail(&failed_receipt(&long)).unwrap();
+        assert_eq!(kept.chars().count(), FAILURE_DETAIL_CHARS);
+        assert!(kept.starts_with(FAILURE_DETAIL_MARK));
+        assert!(kept.ends_with("THE-ERROR"));
+        let noisy = failed_receipt("\u{1b}[31merror\u{1b}[0m\0 bad\r\nnext\tline");
+        assert_eq!(
+            failure_detail(&noisy).as_deref(),
+            Some("[31merror[0m bad\nnext\tline")
+        );
+    }
 
     #[test]
     fn native_platform_admission_keeps_plain_rust_and_rejects_unbound_native_jobs() {

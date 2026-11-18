@@ -644,8 +644,13 @@ impl RemoteCodeRuntime {
             }
             match outcome {
                 Ok(SandboxOutcome::Completed(receipt)) => return Ok(receipt),
-                Ok(SandboxOutcome::Failed { code }) => {
-                    note(super::code_runtime::ToolCodeError::Sandbox { code: code.clone() });
+                Ok(SandboxOutcome::Failed { code, detail }) => {
+                    // The tool path reads the program's stderr from `detail`
+                    // (#2223); the pipeline Code node's error text is unchanged.
+                    note(super::code_runtime::ToolCodeError::Sandbox {
+                        code: code.clone(),
+                        detail,
+                    });
                     return Err(failed(&format!(
                         "Sandbox execution failed ({code}); dependent pipeline nodes were not run."
                     )));
