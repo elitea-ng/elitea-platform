@@ -4104,10 +4104,10 @@ pub(in crate::agents) fn pipeline_node_notice(
 /// count in bytes), its first bytes on a character boundary plus a digest of
 /// the whole path, so two long paths never share an id.
 fn pipeline_node_notice_id(graph_path: &str) -> String {
+    use std::fmt::Write as _;
     if graph_path.len() <= NODE_NOTICE_PATH_BYTES {
         return format!("pipeline_node:{graph_path}");
     }
-    use std::fmt::Write as _;
     let mut end = NODE_NOTICE_PATH_BYTES;
     while !graph_path.is_char_boundary(end) {
         end -= 1;
