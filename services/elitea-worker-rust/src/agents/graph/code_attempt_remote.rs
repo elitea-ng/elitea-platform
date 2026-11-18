@@ -36,10 +36,9 @@ impl RemoteCodeRuntime {
         invocation: CodeInvocation<'_>,
         authority: &NodeAttemptAuthority,
     ) -> Result<Vec<u8>, CodeAttemptFailure> {
-        // #2227: the program output a failure of THIS attempt leaves for the
-        // run's terminal. An earlier attempt's is never this one's.
+        // #2227: where a failure of this attempt leaves the program's output
+        // for the run's terminal (`protocol::terminal_detail`).
         let (execution_id, generation) = self.authority.trace_identity();
-        crate::protocol::terminal_detail::note(execution_id, generation, None);
         // Durable proof decides whether a previous attempt may have started the
         // user's code. The error kind never does.
         let prior_dispatch = prior_dispatch_possible(

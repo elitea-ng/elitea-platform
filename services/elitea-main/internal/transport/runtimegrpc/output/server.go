@@ -1221,20 +1221,19 @@ func budgetScopePolicy(safeMessage string) (runtimeFailurePolicy, bool) {
 	}
 }
 
-// Input sections use fixed public messages. Never accept an arbitrary worker reason.
 // codeFailedSafeMessage is the registered sentence of a Code node failure; the
 // worker's `PipelineCodeFailed` message is the same text.
-const codeFailedSafeMessage = "The pipeline stopped at a Code node. Check its source, selected input, and sandbox limits. Later nodes did not run. Share the support reference with your administrator before retrying."
+const codeFailedSafeMessage = outputapp.CodeFailureSentence
 
+// Input sections use fixed public messages. Never accept an arbitrary worker reason.
 func runtimeFailurePolicyForError(payload *runtimev1.RuntimeErrorV1) (runtimeFailurePolicy, bool) {
 	// A Code node whose program failed: the registered sentence, then the
-	// program's bounded stderr (#2227). Nothing else may follow the sentence.
+	// program's bounded stderr (#2227), the one failure that is not a fixed
+	// sentence. Nothing else may follow the sentence.
 	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_CODE_FAILED {
-		if detail, ok := strings.CutPrefix(payload.GetSafeMessage(), codeFailedSafeMessage+outputapp.CodeFailureDetailSeparator); ok && outputapp.ValidCodeFailureDetail(detail) {
+		if outputapp.SafeMessageAdmitted(outputapp.CodeFailureCode, payload.GetSafeMessage()) && strings.HasPrefix(payload.GetSafeMessage(), codeFailedSafeMessage+outputapp.CodeFailureDetailSeparator) {
 			return runtimeFailurePolicy{Code: outputapp.CodeFailureCode, SafeMessage: payload.GetSafeMessage()}, true
 		}
-	}
-	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_CODE_FAILED {
 		switch payload.GetSafeMessage() {
 		case "Code dependency preparation failed. Later nodes did not run. Share the support reference with your administrator before retrying.",
 			"Code dependency preparation was cancelled. Later nodes did not run. Review the existing attempt before retrying.",

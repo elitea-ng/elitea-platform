@@ -525,7 +525,7 @@ func persistCurrentAgentRuntimeTerminal(
 		capabilityID != executiondomain.AgentAdhocCapability {
 		return nil
 	}
-	if safeMessage == "" || len(safeMessage) > outputapp.MaxRuntimeFailureSafeMessageBytesFor(failureCode) {
+	if safeMessage == "" || !outputapp.SafeMessageAdmitted(failureCode, safeMessage) {
 		return outputapp.ErrInvalidValidationOutput
 	}
 	schema, err := currentProjectSchema(projectID)

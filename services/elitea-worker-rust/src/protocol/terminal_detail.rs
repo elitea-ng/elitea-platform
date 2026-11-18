@@ -56,8 +56,9 @@ pub fn bounded(raw: &str) -> Option<String> {
 }
 
 /// Remember `detail` for this run's terminal, replacing what was remembered.
-/// `None` forgets it, so a node that fails without output never inherits an
-/// earlier attempt's.
+/// `None` (or blank output) leaves what was remembered alone: the slot is the
+/// run's, not a node's, so one node failing without output must not wipe the
+/// output a node running beside it left.
 pub fn note(execution_id: &str, generation: u64, detail: Option<&str>) {
     if let Ok(mut waiting) = registry().lock() {
         remember(
@@ -77,10 +78,10 @@ fn remember(
     generation: u64,
     detail: Option<&str>,
 ) {
-    waiting.retain(|(key, _)| key.0 != execution_id || key.1 != generation);
     let Some(detail) = detail.and_then(bounded) else {
         return;
     };
+    waiting.retain(|(key, _)| key.0 != execution_id || key.1 != generation);
     while waiting.len() >= most {
         waiting.pop_front();
     }
@@ -141,15 +142,13 @@ mod tests {
         assert_eq!(noted("run-a", 2), None, "another generation is another run");
         note("run-a", 1, Some("second"));
         assert_eq!(noted("run-a", 1).as_deref(), Some("second"));
+        // A failure without output (or with blank output) leaves the run's
+        // remembered output alone: the slot is the run's, not a node's.
         note("run-a", 1, None);
-        assert_eq!(
-            noted("run-a", 1),
-            None,
-            "a failure without output forgets the earlier one"
-        );
+        note("run-a", 1, Some(" \n"));
+        assert_eq!(noted("run-a", 1).as_deref(), Some("second"));
         assert_eq!(noted("run-b", 1).as_deref(), Some("other run"));
-        note("run-b", 1, Some(" \n"));
-        assert_eq!(noted("run-b", 1), None, "blank output is no output");
+        assert_eq!(noted("run-c", 1), None, "no output was ever noted");
     }
 
     #[test]

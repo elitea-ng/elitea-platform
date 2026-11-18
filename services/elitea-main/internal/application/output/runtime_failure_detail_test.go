@@ -6,19 +6,31 @@ import (
 )
 
 // #2227: only the Code failure carries a program's output, so only its safe
-// message may exceed the fixed-sentence bound, and by exactly the separator
-// and the bounded detail.
+// message may exceed the fixed-sentence bound, and only as the exact registered
+// sentence, the exact separator and a clean, bounded detail.
 func TestOnlyTheCodeFailureMayCarryAProgramOutputTail(t *testing.T) {
-	if got := MaxRuntimeFailureSafeMessageBytesFor("INTERNAL"); got != MaxRuntimeFailureSafeMessageBytes {
-		t.Fatalf("a fixed-sentence failure kept its bound? got %d", got)
-	}
-	code := MaxRuntimeFailureSafeMessageBytesFor(CodeFailureCode)
-	if code <= MaxRuntimeFailureSafeMessageBytes {
-		t.Fatalf("the Code failure cannot carry its program output: %d", code)
-	}
-	// The registered sentence and the worst case detail (four bytes a character) fit.
-	if want := MaxRuntimeFailureSafeMessageBytes + len(CodeFailureDetailSeparator) + 4*MaxCodeFailureDetailRunes; code != want {
-		t.Fatalf("the Code failure bound is %d, want %d", code, want)
+	carried := CodeFailureSentence + CodeFailureDetailSeparator + "Error: boom\n    at main.js:1" + strings.Repeat(" y", 150)
+	long := strings.Repeat("x", MaxRuntimeFailureSafeMessageBytes+1)
+	for _, tc := range []struct {
+		name    string
+		code    string
+		message string
+		ok      bool
+	}{
+		{"a fixed sentence", "INTERNAL", "The runtime operation failed.", true},
+		{"the Code failure with output", CodeFailureCode, carried, true},
+		{"another code with the same text", "INTERNAL", carried, false},
+		{"a long text under the Code failure", CodeFailureCode, long, false},
+		{"another sentence, then output", CodeFailureCode, "Another sentence." + CodeFailureDetailSeparator + long, false},
+		{"output without the separator", CodeFailureCode, CodeFailureSentence + " " + long, false},
+		{"output that is too long", CodeFailureCode, CodeFailureSentence + CodeFailureDetailSeparator + strings.Repeat("x", MaxCodeFailureDetailRunes+1), false},
+		{"output with a control character", CodeFailureCode, CodeFailureSentence + CodeFailureDetailSeparator + strings.Repeat("x", 300) + "\x1b", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := SafeMessageAdmitted(tc.code, tc.message); got != tc.ok {
+				t.Fatalf("SafeMessageAdmitted(%s, %d bytes) = %v, want %v", tc.code, len(tc.message), got, tc.ok)
+			}
+		})
 	}
 }
 

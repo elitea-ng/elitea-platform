@@ -854,8 +854,7 @@ impl CodeSandboxRuntime for RemoteCodeRuntime {
         .map_err(|error| {
             let cause = report.lock().ok().and_then(|mut slot| slot.take());
             // #2227: the failed program's output ends the run after the
-            // registered sentence. Every failure notes it, with or without
-            // output, so one never inherits an earlier attempt's.
+            // registered sentence (`protocol::terminal_detail`).
             let (execution_id, generation) = self.authority.trace_identity();
             crate::protocol::terminal_detail::note(
                 execution_id,

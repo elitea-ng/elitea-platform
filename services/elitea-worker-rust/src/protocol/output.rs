@@ -371,6 +371,11 @@ pub(crate) fn refused_terminal_replacement(
 ) -> Option<RuntimeFailureKind> {
     match restored_terminal_failure_kind(frame) {
         None => Some(RuntimeFailureKind::Internal),
+        // #2227: a Main that does not admit the program's output still admits
+        // the registered sentence alone, so the run ends as a Code failure.
+        Some(RuntimeFailureKind::PipelineCodeFailed) if carries_code_output(frame) => {
+            Some(RuntimeFailureKind::PipelineCodeFailed)
+        }
         Some(kind) => kind.older_main_fallback(),
     }
 }
@@ -412,9 +417,6 @@ pub(crate) fn unrecognised_failure_terminal_kind(
     });
     let kept = match (same_code.next(), same_code.next()) {
         (None, _) => return Err(malformed_restored_output()),
-        // #2227: the Code failure with its program's output is this kind's
-        // own message, not an older build's unregistered text.
-        _ if is_code_failure_with_output(error) => RuntimeFailureKind::PipelineCodeFailed,
         (Some(kind), None) => kind,
         _ => RuntimeFailureKind::Internal,
     };
@@ -1523,6 +1525,15 @@ const REGISTERED_RUNTIME_FAILURES: &[RuntimeFailureKind] = &[
     RuntimeFailureKind::Internal,
 ];
 
+/// Whether `frame` is a Code failure carrying the failed program's output.
+fn carries_code_output(frame: &ExecutionOutputFrameV1) -> bool {
+    matches!(
+        frame.payload.as_ref(),
+        Some(execution_output_frame_v1::Payload::RuntimeError(error))
+            if is_code_failure_with_output(error)
+    )
+}
+
 /// Whether `error` is the registered Code failure followed by the program's
 /// bounded output (#2227), as Main admits it.
 fn is_code_failure_with_output(error: &RuntimeErrorV1) -> bool {
@@ -1534,6 +1545,11 @@ fn is_code_failure_with_output(error: &RuntimeErrorV1) -> bool {
 }
 
 fn canonical_runtime_failure(error: &RuntimeErrorV1) -> Option<RuntimeFailureKind> {
+    // #2227: the Code failure with its program's output is that kind's own
+    // frame, so it validates, restores and replays exactly like a registered one.
+    if is_code_failure_with_output(error) {
+        return Some(RuntimeFailureKind::PipelineCodeFailed);
+    }
     REGISTERED_RUNTIME_FAILURES
         .iter()
         .copied()
@@ -2132,14 +2148,42 @@ mod code_failure_output_tests {
             "Error: boom\n  at main.js:1",
         );
         assert!(is_code_failure_with_output(&with(carried.clone())));
-        // Not canonical: it replays through the unregistered-text path, which
-        // keeps this kind instead of falling to Internal.
-        assert_eq!(canonical_runtime_failure(&with(carried)), None);
+        // It is that kind's own frame: it validates, restores and replays
+        // exactly, and a Main that refuses it gets the sentence alone.
+        assert_eq!(
+            canonical_runtime_failure(&with(carried.clone())),
+            Some(RuntimeFailureKind::PipelineCodeFailed)
+        );
+        let frame = ExecutionOutputFrameV1 {
+            terminal: true,
+            payload: Some(execution_output_frame_v1::Payload::RuntimeError(with(
+                carried,
+            ))),
+            ..Default::default()
+        };
+        assert!(carries_code_output(&frame));
+        assert_eq!(
+            refused_terminal_replacement(&frame),
+            Some(RuntimeFailureKind::PipelineCodeFailed)
+        );
+        let bare = ExecutionOutputFrameV1 {
+            terminal: true,
+            payload: Some(execution_output_frame_v1::Payload::RuntimeError(
+                registered.clone(),
+            )),
+            ..Default::default()
+        };
+        assert!(!carries_code_output(&bare));
+        assert_eq!(refused_terminal_replacement(&bare), None);
         assert!(!is_code_failure_with_output(&registered));
         assert!(!is_code_failure_with_output(&with(format!(
             "{} Error: boom",
             registered.safe_message
         ))));
+        assert_eq!(
+            canonical_runtime_failure(&with(format!("{} Error: boom", registered.safe_message))),
+            None
+        );
         assert!(!is_code_failure_with_output(&with(
             super::super::terminal_detail::with_detail(&registered.safe_message, "bad\u{1b}")
         )));
