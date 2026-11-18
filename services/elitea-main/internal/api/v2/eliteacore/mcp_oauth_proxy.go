@@ -269,7 +269,7 @@ func (h *Handler) mcpDCRProxy(w http.ResponseWriter, r *http.Request) {
 		"application_type":           applicationType,
 	}
 	setOptionalMCPDCRField(registration, "client_name", body.ClientName)
-	setOptionalMCPDCRField(registration, "scope", body.Scope)
+	setOptionalMCPDCRField(registration, "scope", normalizeOAuthScope(body.Scope))
 	setOptionalMCPDCRField(registration, "software_id", body.SoftwareID)
 	setOptionalMCPDCRField(registration, "software_version", body.SoftwareVersion)
 	requestBody, err := json.Marshal(registration)
@@ -402,7 +402,7 @@ func (h *Handler) resolveMCPOAuthCredentials(
 	}
 	credentials := mcpOAuthCredentials{
 		clientID: body.ClientID,
-		scope:    body.Scope,
+		scope:    normalizeOAuthScope(body.Scope),
 	}
 	secret, placeholder, err := normalizeMCPClientSecret(body.ClientSecret)
 	if err != nil {

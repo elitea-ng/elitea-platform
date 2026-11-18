@@ -644,7 +644,11 @@ FROM (
     SELECT toolkit_id, name, index_id, state,
            COALESCE(embedding_model, '') AS embedding_model,
            COALESCE(embedding_dimension, 0) AS embedding_dimension,
-           row_number() OVER (PARTITION BY toolkit_id ORDER BY created_at, index_id) AS position
+           row_number() OVER (
+               PARTITION BY toolkit_id
+               -- Rows that hold vectors come first, so a toolkit's many never-run or
+               -- failed rows can never push a searchable index past the cap.
+               ORDER BY (COALESCE(embedding_model, '') = ''), created_at, index_id) AS position
     FROM elitea_runtime.index_registry
     WHERE project_id = $1 AND toolkit_id = ANY($2::integer[]) AND deleted_at IS NULL
 ) AS listed

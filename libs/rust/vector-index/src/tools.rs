@@ -376,9 +376,9 @@ impl<'a, B: VectorBackend, E: QueryEmbedder> IndexTools<'a, B, E> {
         }
         let Some(entry) = self.catalog.entry(index_name) else {
             if self.catalog.is_pending(index_name) {
-                return Err(Error::NotFound(
-                    self.catalog.not_searchable_message(index_name),
-                ));
+                return Err(Error::NotFound(format!(
+                    "Index '{index_name}' holds no vectors, so there is nothing to remove from the vector store; delete it from the toolkit's Indexes tab"
+                )));
             }
             return Err(Error::NotFound(index_not_found_message(
                 index_name,

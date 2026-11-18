@@ -292,6 +292,12 @@ fn an_unstamped_entry_is_a_listed_index_with_no_vectors() {
     .expect("catalog");
     assert_eq!(catalog.entries().len(), 1);
     assert_eq!(catalog.pending(), ["failed-run".to_owned()]);
+    // An empty model and a zero dimension are no space either, as Main reads them.
+    let blank = IndexCatalog::parse(&json!([
+        {"name": "blank", "index_id": "ef", "embedding_model": "", "embedding_dimension": 0}
+    ]))
+    .expect("blank space");
+    assert_eq!(blank.pending(), ["blank".to_owned()]);
     let shared = SharedIndexCatalog::new(catalog);
     assert!(shared.remove("failed-run"));
     assert!(shared.snapshot().pending().is_empty());

@@ -454,8 +454,12 @@ impl IndexCatalog {
             // An entry with no embedding space at all is an index that holds
             // no vectors yet: listed, never searched. One with half a space
             // is malformed.
-            let unstamped = object.get("embedding_model").is_none_or(Value::is_null)
-                && object.get("embedding_dimension").is_none_or(Value::is_null);
+            let unstamped = object
+                .get("embedding_model")
+                .is_none_or(|model| model.is_null() || model.as_str() == Some(""))
+                && object
+                    .get("embedding_dimension")
+                    .is_none_or(|dimension| dimension.is_null() || dimension.as_u64() == Some(0));
             if unstamped {
                 if entries.iter().any(|entry| entry.name == name) || pending.contains(&name) {
                     return Err(IndexCatalogError("`indexes` repeats a name"));
