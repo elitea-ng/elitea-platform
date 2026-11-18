@@ -601,6 +601,8 @@ async fn harness(script: MainScript, fail_after: Duration) -> Harness {
     .await
 }
 
+static NEXT_RUN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// The harness with the profiles' `code_slots` and the run's deadline (W3-1).
 #[allow(clippy::too_many_lines)] // One harness wires every fake the code-recovery proofs share.
 async fn harness_with(
@@ -635,7 +637,6 @@ async fn harness_with(
     // Each harness is its own run: the failed program's output is kept per
     // run in process state (`protocol::terminal_detail`), and these tests run
     // in parallel, so a shared execution id would race a per-run assertion.
-    static NEXT_RUN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let execution_id = format!(
         "{:032x}",
         0xe2_3400_0000_u64 + NEXT_RUN.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
