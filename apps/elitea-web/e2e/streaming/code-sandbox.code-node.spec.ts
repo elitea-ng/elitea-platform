@@ -34,10 +34,15 @@ const createdPipelines: { projectId: string; pipelineId: string }[] = [];
 
 test.afterEach(async ({ page }) => {
   for (const { projectId, pipelineId } of createdPipelines.splice(0)) {
-    try {
-      await page.request.delete(`${BASE_URL}/api/v2/elitea_core/application/prompt_lib/${projectId}/${pipelineId}`);
-    } catch {
-      // Hygiene only; the journey's own failure is the one to read.
+    // `request.delete` resolves on 4xx/5xx, so the status is read, not a catch.
+    const response = await page.request
+      .delete(`${BASE_URL}/api/v2/elitea_core/application/prompt_lib/${projectId}/${pipelineId}`)
+      .catch(() => undefined);
+    if (response === undefined || (!response.ok() && response.status() !== 404)) {
+      test.info().annotations.push({
+        type: 'cleanup',
+        description: `pipeline ${pipelineId} in project ${projectId} was not deleted (${String(response?.status())})`,
+      });
     }
   }
 });

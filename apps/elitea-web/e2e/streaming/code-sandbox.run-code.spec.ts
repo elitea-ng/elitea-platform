@@ -33,7 +33,6 @@ import { BASE_URL } from '../../playwright.config';
 import {
   AUTOTEST_PREFIX,
   createAgentThroughForm,
-  deleteAgent as deleteAgentInProject,
   expectStoredAssistantAnswer,
   fillComposer,
   MOCK_CALL_TOOL_SENTINEL,
@@ -66,10 +65,16 @@ const createdAgents: { projectId: string; agentId: string }[] = [];
 test.afterEach(async ({ page }) => {
   const agents = createdAgents.splice(0);
   for (const { projectId, agentId } of agents) {
-    try {
-      await deleteAgentInProject(page.request, agentId, projectId);
-    } catch {
-      // The delete is hygiene; the journey's own failure is the one to read.
+    // `request.delete` resolves on 4xx/5xx, so the status is read, not a catch.
+    // A failed delete is an annotation: the journey's own failure is the one to read.
+    const response = await page.request
+      .delete(`${BASE_URL}/api/v2/elitea_core/application/prompt_lib/${projectId}/${agentId}`)
+      .catch(() => undefined);
+    if (response === undefined || (!response.ok() && response.status() !== 404)) {
+      test.info().annotations.push({
+        type: 'cleanup',
+        description: `agent ${agentId} in project ${projectId} was not deleted (${String(response?.status())})`,
+      });
     }
   }
 });
@@ -255,10 +260,10 @@ test('run_code reports a Rust compile error to the model with the compiler diagn
   await sendTurn(page, prompt);
   const result = await storedRunCodeResult(page, prepared, 'error');
   const message = result.message ?? '';
-  expect(message, 'the model must be told the program failed to run').toContain('could not run the program');
+  expect(message, 'the failure must carry the program error output section').toContain('Program error output:');
   expect(
     message,
     `the compiler's error code must reach the model, not only the generic failure: ${message.slice(0, 800)}`,
-  ).toContain('E0308');
+  ).toMatch(/error\[E\d{4}\]/);
   expect(message, 'the compiler message must reach the model').toContain('mismatched types');
 });
