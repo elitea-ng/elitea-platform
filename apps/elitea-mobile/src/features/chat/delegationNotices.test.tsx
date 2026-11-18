@@ -13,7 +13,7 @@ const notice = (extra: Record<string, unknown> = {}) => ({
   id: 'call-1',
   kind: 'refused',
   reason: 'no_grant',
-  edge: { callee_name: 'Reviewer', caller_name: 'Planner', caller_id: 7, callee_id: 9 },
+  edge: { callee_name: 'Reviewer', caller_name: 'Planner', caller_id: 7, callee_id: 9, kind: 'agent_tool' },
   missing: [{ kind: 'toolkit', name: 'Git' }],
   missing_total: 1,
   can_review: true,
@@ -57,7 +57,7 @@ describe('delegation notices (client contract 1.60)', () => {
 
   it('words each reason', () => {
     expect(delegationNoticeText(parsed(notice()))).toBe('Reviewer could not use Git from Planner. This delegation is not approved.');
-    expect(delegationNoticeText(parsed(notice({ edge: { callee_name: 'Reviewer' }, missing_total: 3 })))).toBe(
+    expect(delegationNoticeText(parsed(notice({ edge: { callee_name: 'Reviewer', kind: 'agent_tool' }, missing_total: 3 })))).toBe(
       'Reviewer could not use Git and 2 more from its caller. This delegation is not approved.',
     );
     expect(delegationNoticeText(parsed(notice({ kind: 'narrowed', reason: 'stale' })))).toBe(

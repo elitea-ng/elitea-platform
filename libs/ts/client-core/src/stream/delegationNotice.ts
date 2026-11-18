@@ -57,7 +57,11 @@ const MAX_EDITORS = 3;
 const MAX_TEXT_CHARS = 120;
 const MAX_ID_CHARS = 128;
 
+/** What a callee is called when its name is blank (Main's `UnnamedAgent`). */
+const UNNAMED_AGENT = 'an agent';
+
 const KINDS: ReadonlySet<string> = new Set(['refused', 'narrowed']);
+const EDGE_KINDS: ReadonlySet<string> = new Set(['agent_tool', 'pipeline_child', 'sub_agent', 'pipeline_node']);
 const REASONS: ReadonlySet<string> = new Set(['no_grant', 'stale', 'principal', 'depth']);
 const GRANT_KINDS: ReadonlySet<string> = new Set(['toolkit', 'tool', 'credential', 'data_class', 'egress_host']);
 
@@ -83,8 +87,12 @@ export function parseDelegationNotice(value: unknown): DelegationNotice | undefi
   const kind = typeof raw.kind === 'string' && KINDS.has(raw.kind) ? (raw.kind as DelegationNoticeKind) : undefined;
   const reason = typeof raw.reason === 'string' && REASONS.has(raw.reason) ? (raw.reason as DelegationNoticeReason) : undefined;
   const edge = record(raw.edge);
-  const calleeName = text(edge?.callee_name);
-  if (id === undefined || kind === undefined || reason === undefined || calleeName === undefined) return undefined;
+  if (id === undefined || kind === undefined || reason === undefined) return undefined;
+  // Main's rule, so the live notice and the reloaded one agree: a narrowing is
+  // drift (`stale`) and drift is a narrowing.
+  if ((kind === 'narrowed') !== (reason === 'stale')) return undefined;
+  if (typeof edge?.kind !== 'string' || !EDGE_KINDS.has(edge.kind)) return undefined;
+  const calleeName = text(edge.callee_name) ?? UNNAMED_AGENT;
   const missing: DelegationMissing[] = [];
   for (const entry of Array.isArray(raw.missing) ? raw.missing.slice(0, MAX_MISSING) : []) {
     const item = record(entry);

@@ -39,6 +39,9 @@ const (
 	// MaxEditors is how many names a notice offers a viewer who may not review.
 	MaxEditors = 3
 
+	// UnnamedAgent stands in for a callee whose name is blank.
+	UnnamedAgent = "an agent"
+
 	maxMissing   = 16
 	maxIDBytes   = 128
 	maxNameRunes = 120
@@ -130,8 +133,10 @@ func Sanitize(raw json.RawMessage) (Notice, bool) {
 		Depth:        max(0, min(in.Depth, 1<<10)),
 		MaxDepth:     max(0, min(in.MaxDepth, 1<<10)),
 	}
+	// A name the agent does not have (blank, or only control characters) is
+	// still a refusal the person must see.
 	if out.Edge.CalleeName == "" {
-		return Notice{}, false
+		out.Edge.CalleeName = UnnamedAgent
 	}
 	for _, item := range in.Missing {
 		if len(out.Missing) == maxMissing {
@@ -268,15 +273,17 @@ func StampFrame(ctx context.Context, data []byte, projectID, userID int64, revie
 	return out
 }
 
-// StampMeta stamps the notices of a served answer's meta, in place. The
-// notices are copied first: the map may be shared with a cache.
-func StampMeta(ctx context.Context, meta map[string]any, projectID, userID int64, reviewer Reviewer) {
+// StampMeta returns the served answer's meta with its notices stamped. The
+// map it was given is never modified: it may be shared with a cache, and
+// another viewer's stamp must not leak into it. It returns meta itself when
+// there is nothing to stamp.
+func StampMeta(ctx context.Context, meta map[string]any, projectID, userID int64, reviewer Reviewer) map[string]any {
 	if reviewer == nil {
-		return
+		return meta
 	}
 	stored, ok := meta[MetaKey].([]any)
 	if !ok || len(stored) == 0 {
-		return
+		return meta
 	}
 	stamped := make([]any, 0, len(stored))
 	for _, entry := range stored {
@@ -294,7 +301,12 @@ func StampMeta(ctx context.Context, meta map[string]any, projectID, userID int64
 		}
 		stamped = append(stamped, copied)
 	}
-	meta[MetaKey] = stamped
+	out := make(map[string]any, len(meta))
+	for key, value := range meta {
+		out[key] = value
+	}
+	out[MetaKey] = stamped
+	return out
 }
 
 func positive(value int64) int64 {

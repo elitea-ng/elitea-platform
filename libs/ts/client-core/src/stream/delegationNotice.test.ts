@@ -48,10 +48,16 @@ describe('parseDelegationNotice', () => {
       { ...refused, id: '' },
       { ...refused, kind: 'other' },
       { ...refused, reason: 'because' },
-      { ...refused, edge: { kind: 'agent_tool' } },
+      { ...refused, kind: 'narrowed' },
+      { ...refused, reason: 'stale' },
+      { ...refused, edge: { callee_name: 'Agent1', kind: 'skill' } },
     ]) {
       assert.equal(parseDelegationNotice(bad), undefined, JSON.stringify(bad));
     }
+  });
+
+  it('names a callee with a blank name rather than hiding the refusal', () => {
+    assert.equal(parsed({ ...refused, edge: { callee_id: 1, callee_name: '   ', kind: 'agent_tool' } }).calleeName, 'an agent');
   });
 
   it('bounds the lists and keeps only known grant kinds', () => {

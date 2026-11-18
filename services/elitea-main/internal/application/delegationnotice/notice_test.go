@@ -41,7 +41,6 @@ func TestSanitizeRefusesWhatIsNotANotice(t *testing.T) {
 		"unknown reason":     strings.Replace(refusedJSON, `no_grant`, `whatever`, 1),
 		"unknown code":       strings.Replace(refusedJSON, `DELEGATION_GRANT_MISSING`, `OTHER`, 1),
 		"unknown edge kind":  strings.Replace(refusedJSON, `agent_tool`, `skill`, 1),
-		"no callee name":     strings.Replace(refusedJSON, `"callee_name":"Agent1",`, ``, 1),
 		"narrowed not stale": strings.Replace(refusedJSON, `"kind":"refused"`, `"kind":"narrowed"`, 1),
 		"stale not narrowed": strings.Replace(refusedJSON, `no_grant`, `stale`, 1),
 	} {
@@ -140,13 +139,16 @@ func TestStampFrameAddsTheViewersReviewAndNothingElse(t *testing.T) {
 func TestStampMetaCopiesAndStamps(t *testing.T) {
 	notice := map[string]any{"reason": "no_grant", "edge": map[string]any{"caller_id": float64(2)}}
 	meta := map[string]any{MetaKey: []any{notice}}
-	StampMeta(t.Context(), meta, 7, 9, &fakeReviewer{review: Review{Editors: []string{"Ada"}}})
-	stamped := meta[MetaKey].([]any)[0].(map[string]any)
+	served := StampMeta(t.Context(), meta, 7, 9, &fakeReviewer{review: Review{Editors: []string{"Ada"}}})
+	stamped := served[MetaKey].([]any)[0].(map[string]any)
 	if stamped["can_review"] != false || stamped["editors"].([]string)[0] != "Ada" {
 		t.Fatalf("stamped = %+v", stamped)
 	}
 	if _, touched := notice["can_review"]; touched {
 		t.Fatal("the stored notice was modified in place")
+	}
+	if _, touched := meta[MetaKey].([]any)[0].(map[string]any)["can_review"]; touched {
+		t.Fatal("the map the caller passed (it may be shared) was modified")
 	}
 }
 
@@ -221,5 +223,13 @@ func TestDecodeDropsWhatIsNotANotice(t *testing.T) {
 	}
 	if got := Decode([]byte(`{"not":"a list"}`)); got != nil {
 		t.Fatalf("decoded = %+v", got)
+	}
+}
+
+func TestSanitizeNamesAnUnnamedCalleeRatherThanHidingTheRefusal(t *testing.T) {
+	raw := strings.Replace(refusedJSON, `"callee_name":"Agent1"`, `"callee_name":"  \u0007 "`, 1)
+	notice, ok := Sanitize(json.RawMessage(raw))
+	if !ok || notice.Edge.CalleeName != UnnamedAgent {
+		t.Fatalf("notice = %+v, %v", notice, ok)
 	}
 }

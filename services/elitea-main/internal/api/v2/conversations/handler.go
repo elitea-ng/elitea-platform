@@ -1240,7 +1240,7 @@ func (h *Handler) stampDelegationNotices(ctx context.Context, projectID string, 
 	// One question per calling agent for the whole page.
 	reviewer := delegationnotice.Cached(h.delegationReviewer)
 	for i := range items {
-		delegationnotice.StampMeta(ctx, items[i].Metadata, project, viewer, reviewer)
+		items[i].Metadata = delegationnotice.StampMeta(ctx, items[i].Metadata, project, viewer, reviewer)
 	}
 }
 

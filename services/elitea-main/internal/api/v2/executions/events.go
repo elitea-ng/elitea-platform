@@ -17,6 +17,8 @@ import (
 )
 
 const (
+	// delegationStampTimeout bounds one viewer lookup for a delegation notice.
+	delegationStampTimeout = 2 * time.Second
 	defaultReplayBatchSize = 100
 	maxSSEEventBytes       = 64 * 1024
 	// An authorization decision covers at most one already-fetched replay
@@ -257,15 +259,17 @@ func (h *EventHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	}
 	for {
 		if len(events) > 0 {
+			// A delegation notice is stamped for the viewer BEFORE the write
+			// deadline is armed: the lookup is a database read, and a slow one
+			// must not eat the write's time (a display decoration never tears
+			// the stream down).
+			events = stampDelegationNotices(r.Context(), events, projectNumber, viewerNumber, reviewer)
 			if err := stream.writeAndFlush(func() error {
 				for _, event := range events {
 					if event.Cursor <= cursor || validateDurableEvent(event) != nil {
 						return ErrInvalidEventStream
 					}
 					stamped, state := states.stamp(event)
-					if event.Type == nodeEventType {
-						stamped.Data = delegationnotice.StampFrame(r.Context(), stamped.Data, projectNumber, viewerNumber, reviewer)
-					}
 					if err := writeDurableEvent(w, stamped); err != nil {
 						return err
 					}
@@ -437,6 +441,32 @@ func requestedCursor(r *http.Request) (uint64, error) {
 		return 0, nil
 	}
 	return strconv.ParseUint(value, 10, 64)
+}
+
+// stampDelegationNotices returns the batch with each delegation notice stamped
+// for the viewer (`can_review`, and who to ask). Only a node event that names
+// the notice is touched, under its own bounded context; a lookup that fails or
+// is slow serves the notice as stored.
+func stampDelegationNotices(ctx context.Context, events []DurableEvent, project, viewer int64, reviewer delegationnotice.Reviewer) []DurableEvent {
+	if reviewer == nil {
+		return events
+	}
+	var stamped []DurableEvent
+	for i, event := range events {
+		if event.Type != nodeEventType || !bytes.Contains(event.Data, delegationnotice.FrameMarker) {
+			continue
+		}
+		if stamped == nil {
+			stamped = append([]DurableEvent(nil), events...)
+		}
+		lookup, cancel := context.WithTimeout(ctx, delegationStampTimeout)
+		stamped[i].Data = delegationnotice.StampFrame(lookup, event.Data, project, viewer, reviewer)
+		cancel()
+	}
+	if stamped == nil {
+		return events
+	}
+	return stamped
 }
 
 func validateDurableEvent(event DurableEvent) error {
