@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { Fragment, useEffect, useRef } from 'react';
 
 import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
 import ClickAwayListener from '@mui/material/ClickAwayListener';
 import Typography from '@mui/material/Typography';
 
@@ -14,6 +15,10 @@ export interface MentionTool {
   description?: string;
   /** A section title: shown above the first row of each run of rows with the same group. */
   group?: string;
+  /** Small labels after the name (a trust state, "Pinned"). */
+  badges?: readonly { readonly label: string; readonly title?: string }[];
+  /** A button beside the row that acts on this row without picking it (for instance "Pin to this conversation"). */
+  action?: { readonly label: string; readonly onClick: () => void; readonly disabled?: boolean };
 }
 
 /** @public shared/ui component API — consumed once a features/widgets/pages caller exists (none does yet in this pass). */
@@ -112,12 +117,22 @@ export function MentionToolList({
                 {tool.group}
               </Typography>
             )}
-            <MentionToolItem
-              label={tool.name}
-              {...(tool.description !== undefined ? { description: tool.description } : {})}
-              onClick={() => onSelectTool(tool.name)}
-              isHighlighted={index === highlightedIndex}
-            />
+            <Box sx={{ display: 'flex', alignItems: 'stretch', gap: '0.25rem' }}>
+              <Box sx={{ flex: 1, minWidth: 0, display: 'flex' }}>
+                <MentionToolItem
+                  label={tool.name}
+                  {...(tool.description !== undefined ? { description: tool.description } : {})}
+                  {...(tool.badges !== undefined ? { badges: tool.badges } : {})}
+                  onClick={() => onSelectTool(tool.name)}
+                  isHighlighted={index === highlightedIndex}
+                />
+              </Box>
+              {tool.action !== undefined && (
+                <Button size="small" variant="text" disabled={tool.action.disabled === true} onClick={tool.action.onClick} sx={{ flexShrink: 0 }}>
+                  {tool.action.label}
+                </Button>
+              )}
+            </Box>
           </Fragment>
         ))}
       </Box>

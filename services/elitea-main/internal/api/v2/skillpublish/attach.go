@@ -29,6 +29,9 @@ type attachRequest struct {
 	PublicVersionID int    `json:"public_version_id"`
 	AgentVersionIDs []int  `json:"agent_version_ids"`
 	EntityType      string `json:"entity_type"`
+	// ForkOnly forks the published version into the project and attaches it to nothing: the
+	// "Add to a conversation" action (ADR-0051 amendment 1, A1.4), which then pins the copy.
+	ForkOnly bool `json:"fork_only"`
 }
 
 type attachResult struct {
@@ -58,7 +61,7 @@ func (h *Handler) AttachPublicSkill(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
 		return
 	}
-	if body.PublicSkillID <= 0 || body.PublicVersionID <= 0 || len(body.AgentVersionIDs) == 0 {
+	if body.PublicSkillID <= 0 || body.PublicVersionID <= 0 || (len(body.AgentVersionIDs) == 0 && !body.ForkOnly) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"error": "public_skill_id, public_version_id and agent_version_ids are required",
 		})
@@ -81,7 +84,7 @@ func (h *Handler) AttachPublicSkill(w http.ResponseWriter, r *http.Request) {
 			agentVersionIDs = append(agentVersionIDs, id)
 		}
 	}
-	if len(agentVersionIDs) == 0 {
+	if len(agentVersionIDs) == 0 && !body.ForkOnly {
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"error": "public_skill_id, public_version_id and agent_version_ids are required",
 		})
@@ -107,6 +110,10 @@ func (h *Handler) AttachPublicSkill(w http.ResponseWriter, r *http.Request) {
 	}
 
 	localSkillID, localVersionID, ok := h.resolveOrForkLocalSkill(ctx, schema, publicQuoted, publicID, body, userID)
+	if !ok && body.ForkOnly {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "public skill or version not found"})
+		return
+	}
 	if !ok {
 		results := make([]attachResult, 0, len(agentVersionIDs))
 		for _, id := range agentVersionIDs {
@@ -180,7 +187,7 @@ func (h *Handler) AttachPublicSkill(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"results": results})
+	writeJSON(w, http.StatusOK, map[string]any{"results": results, "skill_id": localSkillID, "skill_version_id": localVersionID})
 }
 
 // resolveOrForkLocalSkill returns the project's own copy of a published

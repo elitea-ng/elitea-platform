@@ -132,6 +132,11 @@ function mount(initial = '/marketplace'): void {
         path: '/marketplace/$kind/$listingId',
         component: () => <p data-testid="listing-page" />,
       }),
+      createRoute({
+        getParentRoute: () => rootRoute,
+        path: '/chat/$conversationId',
+        component: () => <p data-testid="chat-page" />,
+      }),
     ]),
     history: createMemoryHistory({ initialEntries: [initial] }),
     context: { auth: { getSelectedProjectId: () => '5' } },
@@ -179,6 +184,44 @@ describe('Marketplace', () => {
     expect(within(heart).getByTestId('marketplace-like-count')).toHaveTextContent('6');
     // A button in an anchor is invalid, and a like must not open the listing.
     expect(within(card).getByRole('link', { name: /PR Reviewer/ })).not.toContainElement(heart);
+  });
+
+  it('puts Try on a skill card, and not on an agent card, and Try pins that version by reference (A1.3)', async () => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    const calls: { url: string; body: unknown }[] = [];
+    server.use(
+      http.get('/api/v2/elitea_core/marketplace_listings/prompt_lib/:projectId', () =>
+        HttpResponse.json({
+          rows: [
+            row('9', 'PR Reviewer', { kind: 'skill', entity_id: '501', current_version: { id: '311', name: 'v1', published_at: '2026-10-30T09:00:00Z' } }),
+            row('2', 'Support Bot'),
+          ],
+          total: 2,
+          facets: FACETS,
+        }),
+      ),
+      http.get('/api/v2/configurations/models/:projectId', () => HttpResponse.json({ items: [{ name: 'gpt-main', project_id: 1, default: true }] })),
+      http.post('/api/v2/elitea_core/conversations/prompt_lib/:projectId', async ({ request }) => {
+        calls.push({ url: 'create', body: await request.json() });
+        return HttpResponse.json({ id: 55 }, { status: 201 });
+      }),
+      http.post('/api/v2/elitea_core/conversation_skills/prompt_lib/:projectId/:conversationId', async ({ request, params }) => {
+        calls.push({ url: `pin:${String(params['conversationId'])}`, body: await request.json() });
+        return HttpResponse.json({}, { status: 201 });
+      }),
+    );
+    mount('/marketplace?kind=skills');
+
+    const cards = await screen.findAllByTestId('marketplace-card');
+    const cardOf = (name: string): HTMLElement => cards.find((card) => card.textContent?.includes(name)) as HTMLElement;
+    expect(within(cardOf('Support Bot')).queryByTestId('marketplace-card-try')).not.toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(within(cardOf('PR Reviewer')).getByRole('button', { name: 'Try PR Reviewer' }));
+
+    await waitFor(() => expect(calls).toHaveLength(2));
+    expect(calls[0]?.body).toMatchObject({ participants: [{ entity_name: 'llm' }], meta: { origin: 'skill_try' } });
+    expect(calls[1]).toEqual({ url: 'pin:55', body: { listing_id: 9, listing_version_id: 311 } });
+    expect(await screen.findByTestId('chat-page')).toBeInTheDocument();
   });
 
   it('asks for the Most liked sort by the server\'s key', async () => {

@@ -133,6 +133,39 @@ describe('EditSkill', () => {
     expect(screen.getByTestId('skill-icon-button')).toBeEnabled();
   });
 
+  it('Test skill is Try on the saved skill, and reads "Save to try" while there are unsaved edits (A1.3)', async () => {
+    const user = userEvent.setup();
+    const calls: { url: string; body: unknown }[] = [];
+    server.use(
+      http.get(`${BASE}/configurations/models/:projectId`, () => HttpResponse.json({ items: [{ name: 'gpt-main', project_id: 1, default: true }] })),
+      http.post(`${BASE}/elitea_core/conversations/prompt_lib/:projectId`, async ({ request }) => {
+        calls.push({ url: 'create', body: await request.json() });
+        return HttpResponse.json({ id: 55 }, { status: 201 });
+      }),
+      http.post(`${BASE}/elitea_core/conversation_skills/prompt_lib/:projectId/:conversationId`, async ({ request, params }) => {
+        calls.push({ url: `pin:${String(params['conversationId'])}`, body: await request.json() });
+        return HttpResponse.json({}, { status: 201 });
+      }),
+    );
+    renderSkillsRoute(<EditSkill />, '/skills/all/7');
+    const test = await screen.findByTestId('skill-test-button');
+    expect(test).toHaveTextContent('Test skill');
+    expect(test).toBeEnabled();
+
+    await user.type(await screen.findByTestId('skill-name-input'), ' updated');
+    expect(screen.getByTestId('skill-test-button')).toHaveTextContent('Save to try');
+    expect(screen.getByTestId('skill-test-button')).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: 'Discard' }));
+    await user.click(screen.getByTestId('skill-test-button'));
+    await waitFor(() => expect(calls).toHaveLength(2));
+    expect(calls[0]?.body).toMatchObject({
+      participants: [{ entity_name: 'llm', entity_meta: { model_name: 'gpt-main' } }],
+      meta: { origin: 'skill_try' },
+    });
+    expect(calls[1]).toEqual({ url: 'pin:55', body: { skill_id: 7 } });
+  });
+
   it('saves edits through the version-aware endpoint', async () => {
     const user = userEvent.setup();
     let updated = false;

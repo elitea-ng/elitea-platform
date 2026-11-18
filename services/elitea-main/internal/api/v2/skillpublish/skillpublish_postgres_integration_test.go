@@ -723,6 +723,67 @@ func TestAttachForksTheSkillAndWritesTheMapping(t *testing.T) {
 	}
 }
 
+// TestForkOnlyAttachForksTheSkillAndNamesTheCopy is "Add to a conversation"
+// (ADR-0051 amendment 1, A1.4): the published version is forked into the project
+// once, attached to no agent, and the answer names the project's own copy so the
+// client can pin it. Without fork_only an empty agent list is still refused.
+func TestForkOnlyAttachForksTheSkillAndNamesTheCopy(t *testing.T) {
+	pool := newSkillPublishPool(t)
+	router := newRouter(skillpublish.NewHandler(pool))
+
+	skillID, versionID := seedSkill(t, pool, userSchema, "pr-reviewer", goodDescription, goodInstructions, []string{"review"})
+	published := decode(t, do(t, router, http.MethodPost,
+		fmt.Sprintf("/elitea_core/publish_skill/prompt_lib/%s/%d/%d", userProject, skillID, versionID),
+		map[string]any{"version_name": "v1.0-initial"}))
+	publicSkillID := intField(t, published, "public_skill_id")
+	publicVersionID := intField(t, published, "public_version_id")
+
+	const consumerProject = "3"
+	if _, err := pool.Exec(context.Background(), `SELECT create_tenant_schema('p_3')`); err != nil {
+		t.Fatalf("create consumer schema: %v", err)
+	}
+	url := "/elitea_core/attach_public_skill/prompt_lib/" + consumerProject
+
+	refused := do(t, router, http.MethodPost, url, map[string]any{
+		"public_skill_id": publicSkillID, "public_version_id": publicVersionID, "agent_version_ids": []int{},
+	})
+	if refused.Code != http.StatusBadRequest {
+		t.Fatalf("an empty agent list without fork_only = %d, want 400", refused.Code)
+	}
+
+	var firstCopy int
+	for attempt := 0; attempt < 2; attempt++ {
+		recorder := do(t, router, http.MethodPost, url, map[string]any{
+			"public_skill_id": publicSkillID, "public_version_id": publicVersionID, "fork_only": true,
+		})
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("fork-only attach status = %d, want 200 (body %s)", recorder.Code, recorder.Body.String())
+		}
+		body := decode(t, recorder)
+		copyID := intField(t, body, "skill_id")
+		if attempt == 0 {
+			firstCopy = copyID
+		} else if copyID != firstCopy {
+			t.Errorf("the second fork-only attach made copy %d, want the first copy %d", copyID, firstCopy)
+		}
+		if intField(t, body, "skill_version_id") == 0 {
+			t.Error("fork-only attach named no version of the copy")
+		}
+	}
+	if count := countRows(t, pool, `SELECT COUNT(*) FROM p_3.skills`); count != 1 {
+		t.Errorf("forked local skills = %d, want 1", count)
+	}
+	if count := countRows(t, pool, `SELECT COUNT(*) FROM p_3.entity_skill_mapping`); count != 0 {
+		t.Errorf("entity_skill_mapping rows = %d, want 0: fork-only attaches to no agent", count)
+	}
+	missing := do(t, router, http.MethodPost, url, map[string]any{
+		"public_skill_id": 987654, "public_version_id": 987654, "fork_only": true,
+	})
+	if missing.Code != http.StatusNotFound {
+		t.Errorf("fork-only attach of a skill that does not exist = %d, want 404", missing.Code)
+	}
+}
+
 // TestAttachRefusesAnUnpublishedPublicVersion — the catalog is the only thing
 // attach may copy from. A draft in the public project is an admin's work in
 // progress, and forking it would hand its instructions to any caller who can

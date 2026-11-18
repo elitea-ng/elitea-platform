@@ -15,7 +15,7 @@ The Skills page has two modes, switched at the top of the **List** tab in the si
   <Step title="Open the form">Select **+ New skill** in the **List** tab (or in the bar above the list when the side panel is closed), or the **+** next to **Skills** in the sidebar.</Step>
   <Step title="Fill in General">Give it a **Name** (lowercase letters, digits, and hyphens only, no leading/trailing hyphen, 64 characters max, and it must not contain "claude" or "anthropic"), a **Description**, and optional tags.</Step>
   <Step title="Write Instructions">Enter the skill's instructions in the Markdown editor, up to 5,000 characters. Toggle Edit/Preview to check formatting.</Step>
-  <Step title="Save">The skill opens with a test chat panel on the right so you can verify its behavior before attaching it to any agent.</Step>
+  <Step title="Save">Select **Test skill** to open a chat with the skill pinned and check its behavior before attaching it to any agent.</Step>
 </Steps>
 
 <Tip title="Generate a skill with AI">
@@ -24,7 +24,16 @@ Select **Generate with AI** in the General section to describe what the skill sh
 
 ## Try a skill
 
-A skill is text that an agent or a model loads, so it is tried in a chat, not run on its own. **Try it** on a Marketplace skill listing opens a new conversation with that skill pinned to it; pick a model or an agent there and the skill applies to whoever answers. A listing is pinned by reference, so nothing is added to your project. See [Skills in a conversation](/menus/chat#skills-in-a-conversation).
+A skill is text that an agent or a model loads, so it is tried in a chat, not run on its own. **Try it** opens a new conversation on your project's default model, with no tools, and the skill pinned to it. The first message just works; a model or an agent you add later answers with the skill too. The chat is named `Try: ` followed by the skill's name and is an ordinary conversation, so it keeps its history.
+
+**Try it** is on a Marketplace skill listing and on its card, in the row menu of your own skills, and in the skill editor, where it reads **Test skill**. While the editor holds unsaved edits it says **Save to try** and is off, because the chat uses the saved text. A listing is pinned by reference, so nothing is added to your project, and the listing page says its text is another project's until you add it and trust it.
+
+Two more actions put a skill in a conversation you already have:
+
+- **Use in a chat** (a listing page, or a skill's row menu) pins the skill to a new chat or to a conversation you pick. A listing is pinned by reference, so nothing is forked.
+- **Add to a conversation** (a listing page, needs the fork permission) copies the listing version into your project and pins that copy to the conversation you pick.
+
+A conversation holds at most five skills. See [Skills in a conversation](/menus/chat#skills-in-a-conversation).
 
 ## Versions
 
@@ -62,7 +71,7 @@ Open the agent, scroll to its **Skills** section, and select **+ Skill** to sear
 
 ## Use a skill in chat
 
-In a conversation, type `~` or `/skill` to open a picker of the skills you can use, then select one to invoke its instructions for that turn. The skills pinned to the conversation come first. Both ways write the same `~name` into your message, so `~` stays as it was. A chat with only a model takes project skills too. On an agent chat the picker also lists the agent's own skills.
+In a conversation, type `~` or `/skill` to open a picker of the skills you can use, then select one to invoke its instructions for that turn. The skills pinned to the conversation come first. Both ways write the same `~name` into your message, so `~` stays as it was. A chat with only a model takes project skills too. On an agent chat the picker also lists the agent's own skills. A skill from another project that your project has not trusted carries an **Untrusted** badge, and a pinned one carries **Pinned**. **Pin to this conversation** on a row pins that skill without picking it for the message. The mobile app has the same list: type `/`, choose **Skills** (or type `/skill`), and the skills pinned to the conversation come first.
 
 ### Skills from another project are untrusted until you trust them
 

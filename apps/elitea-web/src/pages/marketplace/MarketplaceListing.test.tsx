@@ -649,6 +649,15 @@ describe('Try on a skill listing (skills epic 2169)', () => {
       ['models.applications.fork.post'],
     );
     server.use(
+      http.get('/api/v2/configurations/models/:projectId', () =>
+        HttpResponse.json({
+          items: [
+            { name: 'shared-small', project_id: 1 },
+            { name: 'gpt-main', project_id: 1, default: true },
+          ],
+          default_model_name: '',
+        }),
+      ),
       http.post('/api/v2/elitea_core/conversations/prompt_lib/:projectId', async ({ request }) => {
         calls.push({ url: new URL(request.url).pathname, body: await request.json() });
         return HttpResponse.json({ id: 55 }, { status: 201 });
@@ -669,10 +678,146 @@ describe('Try on a skill listing (skills epic 2169)', () => {
 
     await userEvent.setup().click(await screen.findByTestId('marketplace-try-skill'));
     await waitFor(() => expect(calls).toHaveLength(2));
-    expect(calls[0]?.body).toMatchObject({ participants: [], meta: { origin: 'skill_try' } });
+    // The project's default model is the one participant, and nothing else (no toolkit, no internal tool): A1.3.
+    expect(calls[0]?.body).toMatchObject({
+      participants: [{ entity_name: 'llm', entity_meta: { model_name: 'gpt-main' }, entity_settings: { model_project_id: 1 } }],
+      meta: { origin: 'skill_try' },
+    });
     expect(calls[1]?.url).toMatch(/conversation_skills\/prompt_lib\/[^/]+\/55$/);
     expect(calls[1]?.body).toEqual({ listing_id: 7, listing_version_id: 6 });
     expect(calls.some((call) => call.url === 'attach')).toBe(false);
+  });
+});
+
+describe('Try on a skill listing when the project has no model', () => {
+  afterEach(() => {
+    resetGeneratedClient();
+  });
+
+  it('still opens the chat, without a participant, when the model catalogue cannot be read', async () => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    const bodies: unknown[] = [];
+    mockListing(
+      detailOf({
+        listing: { ...LISTING, id: '7', kind: 'skill', entity_id: '41', name: 'PR Reviewer' },
+        versions: [version('6', 'v1.1', 'current', { requirements: NO_REQUIREMENTS })],
+      }),
+      ['models.applications.fork.post'],
+    );
+    server.use(
+      http.get('/api/v2/configurations/models/:projectId', () => HttpResponse.json({ error: 'down' }, { status: 500 })),
+      http.post('/api/v2/elitea_core/conversations/prompt_lib/:projectId', async ({ request }) => {
+        bodies.push(await request.json());
+        return HttpResponse.json({ id: 57 }, { status: 201 });
+      }),
+      http.post('/api/v2/elitea_core/conversation_skills/prompt_lib/:projectId/:conversationId', () => HttpResponse.json({}, { status: 201 })),
+      http.get('/api/v2/elitea_core/public_skill/prompt_lib/41', () =>
+        HttpResponse.json({ id: 41, name: 'PR Reviewer', description: 'd', versions: [], version_details: null }),
+      ),
+    );
+    mount('/marketplace/skills/7');
+
+    await userEvent.setup().click(await screen.findByTestId('marketplace-try-skill'));
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    expect(bodies[0]).toMatchObject({ participants: [] });
+    expect(await screen.findByTestId('chat-page')).toBeInTheDocument();
+  });
+});
+
+describe('Use in a chat and Add to a conversation on a skill listing (A1.4)', () => {
+  afterEach(() => {
+    resetGeneratedClient();
+  });
+
+  function mockSkillListing(permissions: string[] = ['models.applications.fork.post']): { calls: { url: string; body: unknown }[] } {
+    const calls: { url: string; body: unknown }[] = [];
+    mockListing(
+      detailOf({
+        listing: { ...LISTING, id: '7', kind: 'skill', entity_id: '41', name: 'PR Reviewer' },
+        versions: [version('6', 'v1.1', 'current', { requirements: NO_REQUIREMENTS })],
+      }),
+      permissions,
+    );
+    server.use(
+      http.get('/api/v2/elitea_core/conversations/prompt_lib/:projectId', () =>
+        HttpResponse.json({ rows: [{ id: 31, name: 'Release chat' }, { id: 32, name: 'Standup' }], total: 2 }),
+      ),
+      http.post('/api/v2/elitea_core/conversation_skills/prompt_lib/:projectId/:conversationId', async ({ request, params }) => {
+        calls.push({ url: `pin:${String(params['conversationId'])}`, body: await request.json() });
+        return HttpResponse.json({}, { status: 201 });
+      }),
+      http.post('/api/v2/elitea_core/attach_public_skill/prompt_lib/:projectId', async ({ request }) => {
+        calls.push({ url: 'attach', body: await request.json() });
+        return HttpResponse.json({ results: [], skill_id: 904, skill_version_id: 905 });
+      }),
+      http.get('/api/v2/elitea_core/public_skill/prompt_lib/41', () =>
+        HttpResponse.json({ id: 41, name: 'PR Reviewer', description: 'd', versions: [], version_details: null }),
+      ),
+    );
+    return { calls };
+  }
+
+  async function pickConversation(name: string, confirm: string): Promise<void> {
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('combobox', { name: 'Conversation' }));
+    await user.click(await screen.findByRole('option', { name }));
+    await user.click(screen.getByRole('button', { name: confirm }));
+  }
+
+  it('says on the listing that the text is another project\'s until it is added and trusted', async () => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    mockSkillListing();
+    mount('/marketplace/skills/7');
+    expect(await screen.findByTestId('marketplace-skill-untrusted')).toHaveTextContent('quoted data');
+  });
+
+  it('Use in a chat pins the listing version by reference to the chosen conversation, forking nothing', async () => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    const { calls } = mockSkillListing();
+    mount('/marketplace/skills/7');
+
+    await userEvent.setup().click(await screen.findByTestId('marketplace-use-skill'));
+    await pickConversation('Standup', 'Use');
+
+    await waitFor(() => expect(calls).toEqual([{ url: 'pin:32', body: { listing_id: 7, listing_version_id: 6 } }]));
+    expect(await screen.findByTestId('chat-page')).toBeInTheDocument();
+  });
+
+  it('Add to a conversation forks the version into the project, then pins the project copy', async () => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    const { calls } = mockSkillListing();
+    mount('/marketplace/skills/7');
+
+    await userEvent.setup().click(await screen.findByTestId('marketplace-add-skill-to-chat'));
+    await pickConversation('Release chat', 'Add');
+
+    await waitFor(() => expect(calls).toHaveLength(2));
+    expect(calls[0]).toEqual({ url: 'attach', body: { public_skill_id: 41, public_version_id: 6, fork_only: true } });
+    expect(calls[1]).toEqual({ url: 'pin:31', body: { skill_id: 904 } });
+  });
+
+  it('says why a pin was refused when the conversation already holds five skills', async () => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    mockSkillListing();
+    server.use(
+      http.post('/api/v2/elitea_core/conversation_skills/prompt_lib/:projectId/:conversationId', () =>
+        HttpResponse.json({ error: 'limit' }, { status: 409 }),
+      ),
+    );
+    mount('/marketplace/skills/7');
+
+    await userEvent.setup().click(await screen.findByTestId('marketplace-use-skill'));
+    await pickConversation('Standup', 'Use');
+
+    expect(await screen.findByTestId('skill-to-chat-error')).toHaveTextContent('at most five skills');
+  });
+
+  it('keeps Add to a conversation off without the fork permission, and Use in a chat on', async () => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    mockSkillListing([]);
+    mount('/marketplace/skills/7');
+    expect(await screen.findByTestId('marketplace-add-skill-to-chat')).toBeDisabled();
+    expect(screen.getByTestId('marketplace-use-skill')).toBeEnabled();
   });
 });
 
