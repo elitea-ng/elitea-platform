@@ -1517,7 +1517,10 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// from a submitted Code job (#1084).
 	// 15: agentstate/0015_sandbox_failure_detail.sql, the bounded stderr a
 	// failed sandbox run keeps for the model (#2223).
+	// 16: agentstate/0016_sandbox_run_failure_detail.sql, the durable copy of
+	// the output a failed Code node ends its run with, so a worker restart
+	// before the terminal keeps it (#2234).
 	agentState, err := LoadManifest(platformmigrations.Files, ScopeAgentState)
 	require.NoError(t, err)
-	require.EqualValues(t, 15, Head(agentState))
+	require.EqualValues(t, 16, Head(agentState))
 }

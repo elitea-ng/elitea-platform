@@ -36,9 +36,6 @@ impl RemoteCodeRuntime {
         invocation: CodeInvocation<'_>,
         authority: &NodeAttemptAuthority,
     ) -> Result<Vec<u8>, CodeAttemptFailure> {
-        // #2227: where a failure of this attempt leaves the program's output
-        // for the run's terminal (`protocol::terminal_detail`).
-        let (execution_id, generation) = self.authority.trace_identity();
         // Durable proof decides whether a previous attempt may have started the
         // user's code. The error kind never does.
         let prior_dispatch = prior_dispatch_possible(
@@ -222,7 +219,7 @@ impl RemoteCodeRuntime {
                     prior_dispatch,
                 )
             })?;
-        let selected = self
+        let selected = match self
             .select_compiled_snapshot_typed(
                 &invocation,
                 profile,
@@ -231,15 +228,18 @@ impl RemoteCodeRuntime {
                 Some(&original_visit),
             )
             .await
-            .map_err(|error| {
+        {
+            Ok(selected) => selected,
+            Err(error) => {
                 // The compiler failed the program (#2228): its diagnostic ends
                 // the run after the registered sentence, as an execution
                 // failure's output does.
                 if let Some((_, detail)) = error.compile_failure() {
-                    crate::protocol::terminal_detail::note(execution_id, generation, detail);
+                    self.keep_failure_detail(detail).await;
                 }
-                before(error.phase(), error.class())
-            })?;
+                return Err(before(error.phase(), error.class()));
+            }
+        };
         let scope = self.authority.dispatch_scope().map_err(|_| {
             before(
                 CodeAttemptPhase::Admission,
@@ -681,12 +681,7 @@ impl RemoteCodeRuntime {
                         // #2227: the failed program's output ends the run
                         // after the registered sentence (built into the
                         // terminal frame, not into the node's error text).
-                        let (execution_id, generation) = self.authority.trace_identity();
-                        crate::protocol::terminal_detail::note(
-                            execution_id,
-                            generation,
-                            detail.as_deref(),
-                        );
+                        self.keep_failure_detail(detail.as_deref()).await;
                         let _resolved = self
                             .journal
                             .resolve(
