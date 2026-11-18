@@ -20,9 +20,10 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 import { SocketClientContext, createSocketClient } from '@/shared/api/socket/client';
 import type { SocketIoFactory } from '@/shared/api/socket/client';
 import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/shared/brand';
+import { readDraft, writeDraft } from '@/shared/lib/composerDrafts';
 import { server } from '@/test/setup';
 
-import { chatDraftKey } from './ChatBox.draft';
+import { chatDraftKey, rememberConversationDraftIds } from './ChatBox.draft';
 import { unwrapChatBoxConversation } from './ChatBox.props';
 
 const BASE = '/api/v2';
@@ -108,6 +109,26 @@ describe('chatDraftKey', () => {
     expect(unwrapChatBoxConversation({ pendingId: 13 }).pendingConversationId).toBe(13);
     // No conversation in the URL: still the project's new chat.
     expect(chatDraftKey({ projectId: 7, conversationId: undefined, pendingConversationId: undefined, scratch: [] })).toBe('chat:7:new');
+  });
+
+  it('a uuid deep link keeps one key from the first render through the load, and the draft is shared with the numeric id (#2229)', () => {
+    const uuid = '0b9f8c1e-5d6a-4c7b-9e21-3a4b5c6d7e8f';
+    const loading = chatDraftKey({ projectId: 7, conversationId: undefined, pendingConversationId: uuid, scratch: [] });
+    const loaded = chatDraftKey({ projectId: 7, conversationId: 12, pendingConversationId: uuid, scratch: [] });
+    expect(loading).toBe(`chat:7:${uuid}`);
+    expect(loaded).toBe(loading);
+    writeDraft('chat:7:12', 'typed in the numeric form');
+    rememberConversationDraftIds({ projectId: 7, conversationId: 12, conversationUuid: uuid, scratch: [] });
+    expect(readDraft(`chat:7:${uuid}`)).toBe('typed in the numeric form');
+  });
+
+  it('a numeric deep link names the conversation from the first render and registers its uuid on load (#2229)', () => {
+    expect(chatDraftKey({ projectId: 7, conversationId: undefined, pendingConversationId: '12', scratch: [] })).toBe('chat:7:12');
+    writeDraft('chat:7:u-x', 'typed under the uuid');
+    rememberConversationDraftIds({ projectId: 7, conversationId: 12, conversationUuid: 'u-x', scratch: [] });
+    expect(readDraft('chat:7:12')).toBe('typed under the uuid');
+    rememberConversationDraftIds({ projectId: 7, conversationId: 12, conversationUuid: 'u-y', scratch: [{ editorTest: true }] });
+    expect(readDraft('chat:7:u-y')).toBe('');
   });
 
   it('keeps no draft for an editor test chat or without a project', () => {

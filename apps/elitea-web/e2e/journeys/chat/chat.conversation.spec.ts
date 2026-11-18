@@ -48,7 +48,7 @@ import { test, expect } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
 import { BASE_URL } from '../../../playwright.config';
-import { API_BASE, AUTOTEST_PREFIX, DEFAULT_PROJECT_ID } from '../../fixtures/api';
+import { API_BASE, AUTOTEST_PREFIX, DEFAULT_PROJECT_ID, fillComposer } from '../../fixtures/api';
 
 /** Every entity this file creates carries this suffix (concurrent-agent hygiene). */
 const SUFFIX = '-conv';
@@ -83,9 +83,7 @@ async function sendFirstMessage(
   // The send control is not rendered at all while the composer is empty; it
   // appears in response to input. A stub that always paints a button fails.
   await expect(page.getByTestId('chat-send-button')).toHaveCount(0);
-  await input.fill(text);
-  const sendButton = page.getByTestId('chat-send-button');
-  await expect(sendButton).toBeEnabled({ timeout: 5_000 });
+  const sendButton = await fillComposer(page, text);
 
   const created = page.waitForResponse(
     (r) => r.url().includes(CONVERSATIONS_PATH) && r.request().method() === 'POST',
