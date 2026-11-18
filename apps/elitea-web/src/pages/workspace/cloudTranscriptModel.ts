@@ -144,6 +144,12 @@ function spawnRowsOf(message: ChatMessage, tools: readonly TranscriptItem[]): Tr
   return rows;
 }
 
+/** Client contract 1.60: the answer's refused or narrowed delegations, shown under its sub-agent rows. */
+function noticesOfAnswer(message: ChatMessage): Pick<TurnView, 'delegationNotices'> {
+  const notices = message.delegationNotices ?? [];
+  return notices.length === 0 ? {} : { delegationNotices: notices };
+}
+
 /** What an assistant message shows: its tool steps, then its text, and its error. */
 export function turnViewOf(message: ChatMessage): TurnView {
   const tools = ((message.toolActions ?? []) as readonly RawAction[]).map(toolItem).filter((item): item is TranscriptItem => item !== undefined);
@@ -157,7 +163,7 @@ export function turnViewOf(message: ChatMessage): TurnView {
     items,
     approvals: [],
     ...lanesOfAnswer(message),
-    ...(message.delegationNotices === undefined || message.delegationNotices.length === 0 ? {} : { delegationNotices: message.delegationNotices }),
+    ...noticesOfAnswer(message),
     ...(exception !== undefined && exception !== null && exception !== '' ? { error: { code: message.failureCode ?? 'error', message: typeof exception === 'string' ? exception : JSON.stringify(exception) } } : {}),
   };
 }
