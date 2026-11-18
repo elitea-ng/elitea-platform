@@ -59,7 +59,7 @@ async function createSkillViaForm(page: Page, name: string, instructions: string
   const createResponse = page.waitForResponse(
     (response) => response.request().method() === 'POST' && /\/elitea_core\/skills\/prompt_lib\//.test(response.url()),
   );
-  await page.getByRole('button', { name: 'Save' }).click();
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
   const created = await (await createResponse).json();
   const skillId = String(created.id);
   await page.waitForURL(new RegExp(`/skills/all/${skillId}`), { timeout: 15_000 });
