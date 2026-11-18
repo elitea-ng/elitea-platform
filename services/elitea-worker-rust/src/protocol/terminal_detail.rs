@@ -19,6 +19,26 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use super::elitea::runtime::v1::ExecutionIdentityV1;
 
+/// What follows the registered sentence, before the program's output. Main's
+/// `CodeFailureDetailSeparator` is the same text: Main admits nothing else
+/// after the sentence.
+pub const SEPARATOR: &str = "\n\nProgram output:\n";
+
+/// The most characters of program output a failure carries. Main's
+/// `MaxCodeFailureDetailRunes`, the sandbox client's bound and the model-facing
+/// tool's bound are the same number.
+pub const MAX_DETAIL_CHARS: usize = 1_500;
+
+/// How many runs may wait for their terminal at once; the oldest is dropped.
+const MAX_WAITING_RUNS: usize = 256;
+
+type Waiting = VecDeque<((String, u64), String)>;
+
+fn registry() -> &'static Mutex<Waiting> {
+    static REGISTRY: OnceLock<Mutex<Waiting>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(VecDeque::new()))
+}
+
 /// Where a run's failure output is kept across a worker restart. The worker's
 /// dispatch journal is the production one.
 #[async_trait::async_trait]

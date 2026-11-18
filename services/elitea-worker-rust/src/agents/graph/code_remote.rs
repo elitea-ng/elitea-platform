@@ -302,11 +302,19 @@ impl RemoteCodeRuntime {
         let Ok(scope) = self.authority.dispatch_scope() else {
             return;
         };
-        if let Err(error) = self.journal.record_failure_detail(&scope, &bounded).await {
-            tracing::warn!(
+        // Bounded: a slow database must not hold the node's failure.
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            self.journal.record_failure_detail(&scope, &bounded),
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::warn!(
                 event = "code_failure_detail_not_kept",
                 error = %error,
-            );
+            ),
+            Err(_) => tracing::warn!(event = "code_failure_detail_not_kept", error = "timeout"),
         }
     }
 
