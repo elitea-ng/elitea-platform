@@ -2994,3 +2994,160 @@ fn large_arguments_beside_a_fitting_result_still_chunk() {
         serde_json::to_string(&response).expect("encoded tool result")
     );
 }
+
+// ADR-0044 Amendment 1 (#2161): a refused or narrowed delegation is a frame of
+// its own beside the callee's tool-call row, and the model keeps its result.
+fn delegated_catalog(
+    evidence: elitea_agent_runtime::delegation::DelegationEvidence,
+    agent_type: &str,
+) -> ApplicationToolPresentationCatalog {
+    let mut applications = ApplicationToolPresentationCatalog::default();
+    applications
+        .insert_runtime(
+            "elitea_agent_1_v_1".to_owned(),
+            "Agent1".to_owned(),
+            agent_type.to_owned(),
+            "child-model".to_owned(),
+            ApplicationToolPresentationCatalog::default(),
+            super::events::ApplicationToolGuardCatalogs::default().with_delegation(Some(evidence)),
+        )
+        .expect("presentation");
+    applications
+}
+
+fn evidence(
+    refusal: Option<elitea_agent_runtime::delegation::DelegationRefusal>,
+    narrowed: Vec<elitea_agent_runtime::delegation::Narrowed>,
+) -> elitea_agent_runtime::delegation::DelegationEvidence {
+    use elitea_agent_runtime::delegation::{DelegationEdge, DelegationEvidence, GrantEvidence};
+    DelegationEvidence {
+        depth: 1,
+        effective_grant_digest: "0".repeat(64),
+        enforced: refusal.is_some(),
+        refusal,
+        grant: (!narrowed.is_empty()).then(|| GrantEvidence {
+            grant_id: 5,
+            grant_digest: "1".repeat(64),
+            narrowed,
+        }),
+        edge: Some(DelegationEdge {
+            caller: 2,
+            callee: 1,
+        }),
+    }
+}
+
+fn delegation_frames(catalog: ApplicationToolPresentationCatalog, response: Value) -> Vec<Value> {
+    let mut projector = AgentEventProjector::with_tool_catalogs(
+        AgentEventProjectionContext::fixture(json!({})),
+        super::sensitive_tools::SensitiveToolCatalog::default(),
+        catalog,
+    )
+    .expect("projector");
+    projector.start(timestamp(0)).expect("start");
+    projector
+        .project(&event(
+            "delegation-call",
+            1,
+            false,
+            true,
+            vec![Part::FunctionCall {
+                name: "elitea_agent_1_v_1".to_owned(),
+                args: json!({"task": "commit the change"}),
+                id: Some("call-1".to_owned()),
+                thought_signature: None,
+            }],
+        ))
+        .expect("call");
+    let mut result = Event::with_id("delegation-result", "invocation-1");
+    result.timestamp = timestamp(2);
+    result.author = "root-agent".to_owned();
+    result.llm_response.content = Some(Content {
+        role: "function".to_owned(),
+        parts: vec![Part::FunctionResponse {
+            function_response: adk_rust::FunctionResponseData::new("elitea_agent_1_v_1", response),
+            id: Some("call-1".to_owned()),
+            annotations: None,
+        }],
+    });
+    projector
+        .project(&result)
+        .expect("result")
+        .into_iter()
+        .map(|event| current(&event))
+        .collect()
+}
+
+#[test]
+fn a_refused_delegation_projects_a_notice_and_the_model_keeps_its_error() {
+    use elitea_agent_runtime::delegation::{DelegationRefusal, GrantKind};
+    let refusal = DelegationRefusal::GrantMissing {
+        kind: GrantKind::Toolkit,
+        name: "Git".to_owned(),
+        toolkit: None,
+    };
+    let response = super::application_tools::delegation_refusal_result(&refusal);
+    let frames = delegation_frames(
+        delegated_catalog(evidence(Some(refusal), vec![]), "agent"),
+        response,
+    );
+    let types = frames
+        .iter()
+        .map(|event| &event["type"])
+        .collect::<Vec<_>>();
+    assert_eq!(
+        types,
+        ["agent_tool_error", "partial_message", "delegation_refused"]
+    );
+    let notice = &frames[2]["response_metadata"]["delegation_v1"];
+    assert_eq!(notice["id"], "call-1");
+    assert_eq!(notice["reason"], "no_grant");
+    assert_eq!(notice["code"], "DELEGATION_GRANT_MISSING");
+    assert_eq!(
+        notice["missing"],
+        json!([{"kind": "toolkit", "name": "Git"}])
+    );
+    assert_eq!(
+        notice["edge"],
+        json!({"caller_id": 2, "caller_name": "root-agent", "callee_id": 1, "callee_name": "Agent1", "kind": "agent_tool"})
+    );
+    assert!(
+        frames[0].to_string().contains("DELEGATION_GRANT_MISSING"),
+        "the model still gets the typed refusal"
+    );
+}
+
+#[test]
+fn a_narrowed_delegation_projects_a_notice_and_a_clean_one_does_not() {
+    use elitea_agent_runtime::delegation::{GrantKind, Narrowed};
+    let narrowed = vec![Narrowed {
+        kind: GrantKind::Toolkit,
+        name: "Database".to_owned(),
+        toolkit: None,
+    }];
+    let frames = delegation_frames(
+        delegated_catalog(evidence(None, narrowed), "pipeline"),
+        json!({"result": "done"}),
+    );
+    let notice = frames
+        .iter()
+        .find(|event| event["type"] == "delegation_narrowed")
+        .expect("a narrowed notice");
+    assert_eq!(
+        notice["response_metadata"]["delegation_v1"]["reason"],
+        "stale"
+    );
+    assert_eq!(
+        notice["response_metadata"]["delegation_v1"]["edge"]["kind"],
+        "pipeline_child"
+    );
+    let clean = delegation_frames(
+        delegated_catalog(evidence(None, vec![]), "agent"),
+        json!({"result": "done"}),
+    );
+    assert!(!clean.iter().any(|event| {
+        event["type"]
+            .as_str()
+            .is_some_and(|kind| kind.starts_with("delegation_"))
+    }),);
+}

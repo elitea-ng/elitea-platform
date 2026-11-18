@@ -1,4 +1,4 @@
-import { parseSubAgentLanes, settleSubAgentLanes } from '@elitea/client-core/stream';
+import { parseDelegationNotices, parseSubAgentLanes, settleSubAgentLanes } from '@elitea/client-core/stream';
 import { nodeRecoveryBinding } from '@/shared/lib/nodeRecovery';
 import { staticPauseBinding } from './staticPipelinePause';
 import { getParticipantName } from './participantName';
@@ -337,6 +337,7 @@ export function convertMessagesToChatHistory(
       ...(meta?.skipped_capabilities === undefined ? {} : { skippedCapabilities: meta.skipped_capabilities }),
       ...(meta?.grounding === undefined ? {} : { grounding: meta.grounding }),
       ...subAgentsOf(meta?.subagents_v1, messageGroup.is_streaming === true),
+      ...delegationNoticesOf(meta?.delegation_notices_v1),
       ...answerMarks(meta, reply_to_id === undefined ? false : continuedRows.has(String(reply_to_id))),
     };
     if (messageGroup.persisted_trace) Object.assign(aiMessage, { persistedTrace: messageGroup.persisted_trace });
@@ -364,6 +365,12 @@ function subAgentsOf(raw: unknown, streaming: boolean): Pick<ChatMessage, 'subAg
   const lanes = parseSubAgentLanes(raw);
   if (lanes.length === 0) return {};
   return { subAgents: streaming ? lanes : settleSubAgentLanes(lanes) };
+}
+
+/** Client contract 1.60: the answer's refused or narrowed delegations. */
+function delegationNoticesOf(raw: unknown): Pick<ChatMessage, 'delegationNotices'> {
+  const notices = parseDelegationNotices(raw);
+  return notices.length === 0 ? {} : { delegationNotices: notices };
 }
 
 function answerMarks(meta: unknown, questionContinued: boolean): ReturnType<typeof unattendedMarksOf> {

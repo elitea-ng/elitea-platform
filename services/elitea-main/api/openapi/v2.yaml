@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.58"
+  x-elitea-client-contract: "1.60"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -3312,6 +3312,133 @@ components:
                     result: { type: string }
                     error: { type: string }
 
+    DelegationNotice:
+      type: object
+      description: >-
+        Client contract 1.60 (ADR-0044 Amendment 1, A1.2 rule 5). A delegation
+        the run refused (`kind: refused`) or narrowed (`kind: narrowed`), shown
+        in the chat at the callee's place: "Agent2 could not use git from
+        Agent1. This delegation is not approved." It carries names and ids
+        only, never a credential value or a tool argument. The model keeps
+        reading the same typed refusal as the tool result. Untrusted text:
+        render it as plain text.
+      required: [id, kind, reason, edge, missing]
+      properties:
+        id:
+          type: string
+          description: The `tool_run_id` of the call the notice answers; it sits at that row.
+        kind:
+          type: string
+          enum: [refused, narrowed]
+        reason:
+          type: string
+          enum: [no_grant, stale, principal, depth]
+          description: >-
+            `no_grant`: the edge has no approved grant and the run enforces
+            them. `stale`: the callee holds something its approved grant does
+            not cover (drift), so it ran without it ("used without the new
+            toolkit"). `principal`: the person or mandate the run acts for may
+            not use it; an editor cannot fix it, so there is no Review
+            delegation. `depth`: the delegation would pass the maximum depth.
+        code:
+          type: string
+          enum: [DELEGATION_GRANT_MISSING, DELEGATION_DEPTH_EXCEEDED]
+          description: Present on a refusal.
+        edge:
+          type: object
+          required: [callee_name, kind]
+          properties:
+            caller_id:
+              type: integer
+              format: int64
+              description: The calling saved agent; absent when the caller has no saved identity.
+            caller_name: { type: string }
+            callee_id: { type: integer, format: int64 }
+            callee_name: { type: string }
+            kind:
+              type: string
+              enum: [agent_tool, pipeline_child, sub_agent, pipeline_node]
+        missing:
+          type: array
+          maxItems: 16
+          description: What the callee needs (a refusal) or held beyond its grant (a narrowing).
+          items:
+            type: object
+            required: [kind, name]
+            properties:
+              kind:
+                type: string
+                enum: [toolkit, tool, credential, data_class, egress_host]
+              name: { type: string }
+              toolkit: { type: string }
+        missing_total:
+          type: integer
+          description: How many there were when more than `missing` lists.
+        grant_id: { type: integer, format: int64 }
+        depth: { type: integer }
+        max_depth: { type: integer }
+        can_review:
+          type: boolean
+          description: >-
+            Derived for the viewer when the notice is served, never stored:
+            true when the viewer may edit agents in the project and so may open
+            the grant review (Review delegation). Always false for `principal`
+            and `depth`. Absent from a server that cannot say; show the notice
+            without the action.
+        editors:
+          type: array
+          maxItems: 3
+          items: { type: string }
+          description: >-
+            When `can_review` is false: the people to ask (the caller's
+            registry owners, else its owner), by display name.
+
+    ClientFrameDelegationRefused:
+      description: >-
+        Client contract 1.60 (ADR-0044 Amendment 1, A1.2 rule 5). The run
+        refused a delegation to a saved agent or pipeline called as a tool. It
+        follows the callee's tool-call frames; `response_metadata.delegation_v1`
+        is the notice, and the answer keeps it as `metadata.delegation_notices_v1`.
+        A client that does not know the frame ignores it. Not terminal.
+      allOf:
+        - $ref: '#/components/schemas/ClientFrameEnvelope'
+        - type: object
+          required: [response_metadata]
+          properties:
+            response_metadata:
+              type: object
+              additionalProperties: true
+              x-elitea-passthrough: >-
+                NOTE(W2): the notice
+                (libs/rust/agent-runtime/src/delegation/notice.rs); Main adds
+                `can_review` and `editors` per viewer.
+              required: [delegation_v1]
+              properties:
+                delegation_v1:
+                  $ref: '#/components/schemas/DelegationNotice'
+
+    ClientFrameDelegationNarrowed:
+      description: >-
+        Client contract 1.60. A delegation ran with less than the callee holds
+        because its approved grant no longer covers it (drift): the same notice
+        as `delegation_refused` with `reason: stale`.
+      allOf:
+        - $ref: '#/components/schemas/ClientFrameEnvelope'
+        - type: object
+          required: [response_metadata]
+          properties:
+            response_metadata:
+              type: object
+              additionalProperties: true
+              x-elitea-passthrough: >-
+                NOTE(W2): the notice
+                (libs/rust/agent-runtime/src/delegation/notice.rs); Main adds
+                `can_review` and `editors` per viewer.
+              required: [delegation_v1]
+              properties:
+                delegation_v1:
+                  $ref: '#/components/schemas/DelegationNotice'
+
     ClientFrameAgentState:
       description: >-
         Client contract 1.38: the participant moved to a new state. The
@@ -4552,6 +4679,18 @@ components:
                 each under the `spawn_agent` tool row whose call id is its
                 `parent_call_id`, with its display name and a "temporary"
                 badge. Absent when the answer started none.
+            delegation_notices_v1:
+              type: array
+              maxItems: 16
+              items:
+                $ref: '#/components/schemas/DelegationNotice'
+              description: >-
+                Client contract 1.60 (ADR-0044 Amendment 1). On an answer whose
+                agent had a delegation refused or narrowed: one notice per
+                call, as its `delegation_refused` and `delegation_narrowed`
+                frames left them, with `can_review` and `editors` derived for
+                the viewer. Show each at the callee's tool-call row (`id` is
+                its `tool_run_id`). Absent when none.
         message_items:
           type: array
           description: Omitted, not empty, for a group with no attachments.
@@ -23153,6 +23292,8 @@ x-elitea-client-frames:
   agent_requires_confirmation: '#/components/schemas/ClientFrameRequiresConfirmation'
   agent_state: '#/components/schemas/ClientFrameAgentState'
   agent_subagent: '#/components/schemas/ClientFrameAgentSubAgent'
+  delegation_refused: '#/components/schemas/ClientFrameDelegationRefused'
+  delegation_narrowed: '#/components/schemas/ClientFrameDelegationNarrowed'
 
 paths:
   /.well-known/elitea-client:

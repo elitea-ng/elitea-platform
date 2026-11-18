@@ -80,7 +80,7 @@ export function resetTurnForReplay(history: readonly ChatMessage[], messageId: s
   const index = history.findIndex((message) => message.id === messageId);
   if (index === -1) return history;
   const next = [...history];
-  next[index] = { ...history[index], content: '', messageItems: [], toolActions: [], subAgents: undefined, isStreaming: true, isLoading: true } as ChatMessage;
+  next[index] = { ...history[index], content: '', messageItems: [], toolActions: [], subAgents: undefined, delegationNotices: undefined, isStreaming: true, isLoading: true } as ChatMessage;
   return next;
 }
 

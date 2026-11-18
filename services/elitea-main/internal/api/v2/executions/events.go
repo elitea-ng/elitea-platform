@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/delegationnotice"
 )
 
 const (
@@ -87,6 +89,17 @@ type EventHandler struct {
 	authorizationTimeout   time.Duration
 	authorizationAdmission *sseAuthorizationGate
 	admission              *sseAdmissionGate
+	// delegationReviewer stamps what the viewer may do about a delegation
+	// notice (#2161). Nil serves notices unstamped.
+	delegationReviewer delegationnotice.Reviewer
+}
+
+// WithDelegationReviewer sets who answers what a viewer may do about a refused
+// or narrowed delegation. A nil reviewer leaves it unset (the typed nil trap:
+// the caller passes the interface only when it holds one).
+func (h *EventHandler) WithDelegationReviewer(reviewer delegationnotice.Reviewer) *EventHandler {
+	h.delegationReviewer = reviewer
+	return h
 }
 
 func NewEventHandler(authorizer EventAuthorizer, repository EventRepository, waiter ReplayWaiter) (*EventHandler, error) {
@@ -225,6 +238,10 @@ func (h *EventHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	events := initial
+	// One question per calling agent for the life of the stream.
+	reviewer := delegationnotice.Cached(h.delegationReviewer)
+	projectNumber, _ := strconv.ParseInt(projectID, 10, 64)
+	viewerNumber, _ := strconv.ParseInt(principalID, 10, 64)
 	var states participantStates
 	var seed *DurableEvent
 	if source, ok := h.repository.(EventStateSource); ok && cursor > 0 {
@@ -246,6 +263,9 @@ func (h *EventHandler) Stream(w http.ResponseWriter, r *http.Request) {
 						return ErrInvalidEventStream
 					}
 					stamped, state := states.stamp(event)
+					if event.Type == nodeEventType {
+						stamped.Data = delegationnotice.StampFrame(r.Context(), stamped.Data, projectNumber, viewerNumber, reviewer)
+					}
 					if err := writeDurableEvent(w, stamped); err != nil {
 						return err
 					}

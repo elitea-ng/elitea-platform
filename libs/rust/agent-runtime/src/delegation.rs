@@ -67,10 +67,15 @@ use crate::egress::PublicPolicy;
 use crate::toolkits::{AdmittedToolSnapshot, FrozenToolKind};
 
 mod grants;
+mod notice;
 
 pub use grants::{
     DelegationGrant, EdgeKey, EdgeKind, GrantEvidence, Grants, MAX_GRANT_EDGES, Narrowed,
     narrow_with_grant,
+};
+pub use notice::{
+    DelegationNotice, MAX_NOTICE_ITEMS, NARROWED_EVENT, NOTICE_METADATA_KEY, NoticeContext,
+    REFUSED_EVENT,
 };
 
 /// The depth a run may delegate to when the administrator set none.
@@ -1087,6 +1092,17 @@ pub struct DelegationEvidence {
     pub enforced: bool,
     /// The grant that bounded the delegation, and what it narrowed out.
     pub grant: Option<GrantEvidence>,
+    /// The composition edge the delegation crossed, when the callee is a
+    /// saved agent or pipeline (a notice names it).
+    pub edge: Option<DelegationEdge>,
+}
+
+/// The saved agents or pipelines an edge joins. `caller` is 0 when the
+/// caller has no saved identity (an ad hoc root).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DelegationEdge {
+    pub caller: u64,
+    pub callee: u64,
 }
 
 impl DelegationEvidence {
@@ -1197,6 +1213,14 @@ impl DelegationScope {
         )
     }
 
+    /// The edge from this scope's saved agent to `callee`, when it is known.
+    fn edge_to(&self, callee: Option<u64>) -> Option<DelegationEdge> {
+        callee.map(|callee| DelegationEdge {
+            caller: self.application_id,
+            callee,
+        })
+    }
+
     fn next_depth(&self) -> Result<u32, DelegationRefusal> {
         let depth = self.depth.saturating_add(1);
         if depth > self.policy.max_depth {
@@ -1261,6 +1285,7 @@ impl DelegationScope {
                         refusal: Some(refusal.clone()),
                         enforced: true,
                         grant: None,
+                        edge: self.edge_to(callee),
                     },
                     refusal,
                 }));
@@ -1281,6 +1306,7 @@ impl DelegationScope {
                     refusal: Some(refusal.clone()),
                     enforced: true,
                     grant: None,
+                    edge: self.edge_to(callee),
                 },
                 refusal,
             }));
@@ -1307,6 +1333,7 @@ impl DelegationScope {
             refusal: missing.clone(),
             enforced: enforce && missing.is_some(),
             grant: None,
+            edge: self.edge_to(callee),
         };
         if let (Some(refusal), true) = (missing, enforce) {
             return Err(Box::new(RefusedDelegation { refusal, evidence }));
@@ -1368,6 +1395,7 @@ impl DelegationScope {
                 grant_digest: grant.digest().to_owned(),
                 narrowed,
             }),
+            edge: self.edge_to(Some(callee_id)),
         };
         if let (Some(refusal), true) = (refusal, enforce) {
             return Err(Box::new(RefusedDelegation { refusal, evidence }));
@@ -1434,6 +1462,7 @@ impl DelegationScope {
                 refusal: None,
                 enforced: false,
                 grant: None,
+                edge: None,
             },
         })
     }

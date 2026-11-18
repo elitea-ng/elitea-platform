@@ -13,6 +13,7 @@ import (
 	indexingapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/indexing"
 	toolkitrun "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
 	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/delegationnotice"
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	discovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
 	toolkitexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
@@ -109,6 +110,7 @@ func newPublicRoutes(
 	toolkitCallTool toolkitrun.UseCase,
 	replayCapacity int,
 	streamLimits executionapi.SSEStreamLimits,
+	delegationReviewer delegationnotice.Reviewer,
 ) (PublicRoutes, error) {
 	validation, err := configurationapi.NewValidationHandler(authorizer, submitter)
 	if err != nil {
@@ -123,6 +125,10 @@ func newPublicRoutes(
 	)
 	if err != nil {
 		return PublicRoutes{}, err
+	}
+	// A nil reviewer serves delegation notices unstamped (#2161).
+	if delegationReviewer != nil {
+		events.WithDelegationReviewer(delegationReviewer)
 	}
 	return PublicRoutes{
 		Validation:      http.HandlerFunc(validation.Submit),

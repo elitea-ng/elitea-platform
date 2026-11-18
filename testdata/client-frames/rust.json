@@ -1,4 +1,75 @@
 {
+  "delegation_narrowed": {
+    "agent_name": null,
+    "content": null,
+    "created_at": "2026-08-14T12:00:02+00:00",
+    "execution_generation": "generation-1",
+    "message_id": "message-1",
+    "parent_message_id": null,
+    "question_id": null,
+    "references": [],
+    "response_metadata": {
+      "delegation_v1": {
+        "edge": {
+          "callee_id": 1,
+          "callee_name": "Agent1",
+          "caller_id": 2,
+          "caller_name": "root-agent",
+          "kind": "agent_tool"
+        },
+        "grant_id": 5,
+        "id": "call-1",
+        "kind": "narrowed",
+        "missing": [
+          {
+            "kind": "toolkit",
+            "name": "Database"
+          }
+        ],
+        "missing_total": 1,
+        "reason": "stale"
+      }
+    },
+    "sio_event": "chat_predict",
+    "stream_id": "conversation-1",
+    "thinking": null,
+    "type": "delegation_narrowed"
+  },
+  "delegation_refused": {
+    "agent_name": null,
+    "content": null,
+    "created_at": "2026-08-14T12:00:02+00:00",
+    "execution_generation": "generation-1",
+    "message_id": "message-1",
+    "parent_message_id": null,
+    "question_id": null,
+    "references": [],
+    "response_metadata": {
+      "delegation_v1": {
+        "code": "DELEGATION_GRANT_MISSING",
+        "edge": {
+          "callee_id": 1,
+          "callee_name": "Agent1",
+          "caller_id": 2,
+          "caller_name": "root-agent",
+          "kind": "agent_tool"
+        },
+        "id": "call-1",
+        "kind": "refused",
+        "missing": [
+          {
+            "kind": "toolkit",
+            "name": "Git"
+          }
+        ],
+        "reason": "no_grant"
+      }
+    },
+    "sio_event": "chat_predict",
+    "stream_id": "conversation-1",
+    "thinking": null,
+    "type": "delegation_refused"
+  },
   "hitl_interrupt": {
     "agent_name": null,
     "content": "Review the generated answer.",

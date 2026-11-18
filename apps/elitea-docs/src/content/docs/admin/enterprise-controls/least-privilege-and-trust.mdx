@@ -260,7 +260,23 @@ Attaching an agent or a pipeline to another agent (an agent used as a tool, or a
 - **Detaching revokes the grant** once no version of the calling agent attaches the callee.
 - **Audit.** Each proposal, approval, re-approval, stale mark and revoke is a security audit event (`agent.delegation.*`).
 
-The review screen in the attach dialog and the notices in the chat come with later releases; until then grants are managed through the API (`listDelegationGrants`, `proposeDelegationGrant`, `previewDelegationGrant`, `approveDelegationGrant`, `revokeDelegationGrant`).
+The review screen in the attach dialog comes with a later release; until then grants are managed through the API (`listDelegationGrants`, `proposeDelegationGrant`, `previewDelegationGrant`, `approveDelegationGrant`, `revokeDelegationGrant`).
+
+### Notices in the chat
+
+A refused or narrowed delegation is shown in the chat, on web, desktop and mobile, at the place of the agent that was called. The model still reads the same typed result, so it can explain itself; the notice is for the person.
+
+| Notice | Reason | What it says | Action |
+| --- | --- | --- | --- |
+| Delegation refused | `no_grant` | "Agent1 could not use git from Agent2. This delegation is not approved." The edge has no approved grant and the run enforces them. | **Review delegation** for an editor of the calling agent. Anyone else sees who to ask: the calling agent's registry owners, else its owner, by name. |
+| Delegation narrowed | `stale` | "Agent1 ran without Database. It was added after this delegation was approved." The callee gained something its grant does not cover (drift), so it ran without it. | The same. |
+| Delegation refused | `principal` | "Agent3 could not use payroll. You do not have access to it." The person or mandate the run acts for may not use it. | None: an editor of the calling agent cannot fix this. Someone with project access must grant it to the person. |
+| Delegation refused | `depth` | "Agent1 was not called: the delegation depth limit of 2 was reached." | None: an administrator raises **Maximum Delegation Depth**. |
+
+- **Review delegation** opens the calling agent. It shows for a person who may edit agents in the project (the permission `models.applications.application.update`), only for an agent saved in the project. The attach dialog's review of the edge replaces this link when that release ships.
+- **What a notice carries.** The edge (calling and called agent), why, and the names of the grants involved, up to 16. It never carries a credential value or a tool argument. The answer keeps up to 16 notices, one per call, so a reloaded chat shows them again.
+- **What does not show a notice.** A delegation that `report` mode only recorded ran, so nothing is shown. A pipeline node that runs a saved pipeline in its graph ends the run with the authorization failure as before. Ephemeral sub-agents (`spawn_agent`) are exempt from grants.
+- **Events.** The worker sends `delegation_refused` and `delegation_narrowed` run events (client contract 1.60). Main keeps them on the answer's `metadata.delegation_notices_v1` and adds `can_review` and `editors` for the person who reads, never stored.
 
 #### What a grant changes at run time
 

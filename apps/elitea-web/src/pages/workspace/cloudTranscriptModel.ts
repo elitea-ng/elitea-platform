@@ -157,6 +157,7 @@ export function turnViewOf(message: ChatMessage): TurnView {
     items,
     approvals: [],
     ...lanesOfAnswer(message),
+    ...(message.delegationNotices === undefined || message.delegationNotices.length === 0 ? {} : { delegationNotices: message.delegationNotices }),
     ...(exception !== undefined && exception !== null && exception !== '' ? { error: { code: message.failureCode ?? 'error', message: typeof exception === 'string' ? exception : JSON.stringify(exception) } } : {}),
   };
 }

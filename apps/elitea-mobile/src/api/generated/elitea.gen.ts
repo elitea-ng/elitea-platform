@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.58
+ * client contract:    1.60
  * operations sha256:  336a0bdc3a636f61edb987afae526f597ae65151abbb2c91bc548e81a9be9991
  */
 export interface paths {
@@ -3864,6 +3864,8 @@ export interface components {
             /** @description Omitted, not empty, for a group with no attachments. */
             message_items?: components["schemas"]["AttachmentMessageItem"][];
             metadata?: {
+                /** @description Client contract 1.60 (ADR-0044 Amendment 1). On an answer whose agent had a delegation refused or narrowed: one notice per call, as its `delegation_refused` and `delegation_narrowed` frames left them, with `can_review` and `editors` derived for the viewer. Show each at the callee's tool-call row (`id` is its `tool_run_id`). Absent when none. */
+                delegation_notices_v1?: components["schemas"]["DelegationNotice"][];
                 grounding?: components["schemas"]["GroundingIndicator"];
                 /** @description Client contract 1.14. On a user's message: the user ids the sender tagged (the send's `user_ids`), deduplicated, in the order sent, at most 64. Absent when the message tags nobody and on messages sent before 1.14. These are who was TAGGED, not who was notified: notification only reaches project members other than the sender. */
                 mentioned_user_ids?: number[];
@@ -4125,6 +4127,53 @@ export interface components {
             updated_at: string;
             /** Format: uuid */
             uuid?: string;
+        };
+        /** @description Client contract 1.60 (ADR-0044 Amendment 1, A1.2 rule 5). A delegation the run refused (`kind: refused`) or narrowed (`kind: narrowed`), shown in the chat at the callee's place: "Agent2 could not use git from Agent1. This delegation is not approved." It carries names and ids only, never a credential value or a tool argument. The model keeps reading the same typed refusal as the tool result. Untrusted text: render it as plain text. */
+        DelegationNotice: {
+            /** @description Derived for the viewer when the notice is served, never stored: true when the viewer may edit agents in the project and so may open the grant review (Review delegation). Always false for `principal` and `depth`. Absent from a server that cannot say; show the notice without the action. */
+            can_review?: boolean;
+            /**
+             * @description Present on a refusal.
+             * @enum {string}
+             */
+            code?: "DELEGATION_GRANT_MISSING" | "DELEGATION_DEPTH_EXCEEDED";
+            depth?: number;
+            edge: {
+                /** Format: int64 */
+                callee_id?: number;
+                callee_name: string;
+                /**
+                 * Format: int64
+                 * @description The calling saved agent; absent when the caller has no saved identity.
+                 */
+                caller_id?: number;
+                caller_name?: string;
+                /** @enum {string} */
+                kind: "agent_tool" | "pipeline_child" | "sub_agent" | "pipeline_node";
+            };
+            /** @description When `can_review` is false: the people to ask (the caller's registry owners, else its owner), by display name. */
+            editors?: string[];
+            /** Format: int64 */
+            grant_id?: number;
+            /** @description The `tool_run_id` of the call the notice answers; it sits at that row. */
+            id: string;
+            /** @enum {string} */
+            kind: "refused" | "narrowed";
+            max_depth?: number;
+            /** @description What the callee needs (a refusal) or held beyond its grant (a narrowing). */
+            missing: {
+                /** @enum {string} */
+                kind: "toolkit" | "tool" | "credential" | "data_class" | "egress_host";
+                name: string;
+                toolkit?: string;
+            }[];
+            /** @description How many there were when more than `missing` lists. */
+            missing_total?: number;
+            /**
+             * @description `no_grant`: the edge has no approved grant and the run enforces them. `stale`: the callee holds something its approved grant does not cover (drift), so it ran without it ("used without the new toolkit"). `principal`: the person or mandate the run acts for may not use it; an editor cannot fix it, so there is no Review delegation. `depth`: the delegation would pass the maximum depth.
+             * @enum {string}
+             */
+            reason: "no_grant" | "stale" | "principal" | "depth";
         };
         /** @description The ADR-0025 `device_revoked` answer: FLAT, unlike the nested error envelope, so a native client tells "wipe local data" (`error` is the string device_revoked) from "refresh once" (`error` is an object). Sent only for native credentials, with `WWW-Authenticate: Bearer error="invalid_token", error_description="device_revoked"`. NOTE(W2): internal/api/middleware/auth.go:453 (`DeviceRevokedBody`). */
         DeviceRevokedError: {

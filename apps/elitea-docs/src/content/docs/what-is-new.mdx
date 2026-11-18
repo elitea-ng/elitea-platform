@@ -9,6 +9,10 @@ Elitea ships frequent, small releases. This page summarizes the most recent user
 
 A single-host Compose deployment can now run the code sandbox with two overlays and one script: `docker-compose.sandbox.yml` (it now also passes the served languages to Main), `docker-compose.sandbox-postgres-tls.yml` (TLS for the supervisor's receipt ledger) and `deploy/scripts/sandbox-compose-material.sh` (profiles, certificates and the worker's `sandbox_runtimes`). A new CI job runs an agent with **Python sandbox** on and checks that `run_code` returns the program's own output on the real sandbox. See [Run the code sandbox with Docker Compose](/deployment/configuration#run-the-code-sandbox-with-docker-compose). Set `ELITEA_CODE_SANDBOX_LANGUAGES` to the languages you serve (the script prints it).
 
+## A refused or narrowed delegation shows in the chat
+
+When an agent calls another agent and the run refuses the delegation (no approved grant, or the toolkit is outside your own access) or runs it without something the approved grant no longer covers, the chat now says so at the called agent, on web, desktop and mobile: "Agent1 could not use git from Agent2. This delegation is not approved." An editor of the calling agent gets **Review delegation**; everyone else sees who to ask. See [Notices in the chat](/admin/enterprise-controls/least-privilege-and-trust#notices-in-the-chat). Nothing that runs today changes.
+
 ## Delegation grants for agents you attach to other agents
 
 Attaching an agent or pipeline to another agent now records a **delegation grant** for that edge: what the attached agent holds, approved by an editor of the calling agent, who can approve only what they have access to. Under the governed profile the grant is approved through a change request with a second person. See [Delegation grants](/admin/enterprise-controls/least-privilege-and-trust#delegation-grants). Nothing that runs today changes.

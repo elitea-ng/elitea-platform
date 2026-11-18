@@ -2001,6 +2001,91 @@ export const getListConversationMessagesResponseMock = (
           })),
           undefined,
         ]),
+        delegation_notices_v1: faker.helpers.arrayElement([
+          Array.from(
+            { length: faker.number.int({ min: 1, max: 16 }) },
+            (_, i) => i + 1,
+          ).map(() => ({
+            id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+            kind: faker.helpers.arrayElement(["refused", "narrowed"] as const),
+            reason: faker.helpers.arrayElement([
+              "no_grant",
+              "stale",
+              "principal",
+              "depth",
+            ] as const),
+            code: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                "DELEGATION_GRANT_MISSING",
+                "DELEGATION_DEPTH_EXCEEDED",
+              ] as const),
+              undefined,
+            ]),
+            edge: {
+              caller_id: faker.helpers.arrayElement([
+                faker.number.int(),
+                undefined,
+              ]),
+              caller_name: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              callee_id: faker.helpers.arrayElement([
+                faker.number.int(),
+                undefined,
+              ]),
+              callee_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+              kind: faker.helpers.arrayElement([
+                "agent_tool",
+                "pipeline_child",
+                "sub_agent",
+                "pipeline_node",
+              ] as const),
+            },
+            missing: Array.from(
+              { length: faker.number.int({ min: 1, max: 16 }) },
+              (_, i) => i + 1,
+            ).map(() => ({
+              kind: faker.helpers.arrayElement([
+                "toolkit",
+                "tool",
+                "credential",
+                "data_class",
+                "egress_host",
+              ] as const),
+              name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+              toolkit: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+            })),
+            missing_total: faker.helpers.arrayElement([
+              faker.number.int(),
+              undefined,
+            ]),
+            grant_id: faker.helpers.arrayElement([
+              faker.number.int(),
+              undefined,
+            ]),
+            depth: faker.helpers.arrayElement([faker.number.int(), undefined]),
+            max_depth: faker.helpers.arrayElement([
+              faker.number.int(),
+              undefined,
+            ]),
+            can_review: faker.helpers.arrayElement([
+              faker.datatype.boolean(),
+              undefined,
+            ]),
+            editors: faker.helpers.arrayElement([
+              Array.from(
+                { length: faker.number.int({ min: 1, max: 3 }) },
+                (_, i) => i + 1,
+              ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+              undefined,
+            ]),
+          })),
+          undefined,
+        ]),
       },
       undefined,
     ]),
