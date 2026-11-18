@@ -121,7 +121,7 @@ import { randomUUID } from 'node:crypto';
 import { expect, test } from '@playwright/test';
 
 import { BASE_URL } from '../../playwright.config';
-import { expectStoredAssistantAnswer, readStoredTranscript } from '../fixtures/api';
+import { expectStoredAssistantAnswer, readStoredTranscript, fillComposer } from '../fixtures/api';
 
 /** Matched WITHOUT a project id: the chat driver acts inside its own personal project (#290). */
 const CONVERSATIONS_RE = /\/elitea_core\/conversations\/prompt_lib\/(\d+)$/;
@@ -172,6 +172,7 @@ test('regenerating rewrites the SAME answer row rather than appending a second o
   await expect(page.getByTestId('model-selector-name')).toContainText(MODEL_NAME, { timeout: 10_000 });
 
   // ── One completed turn ──────────────────────────────────────────────────
+  const send = await fillComposer(page, prompt);
   const created = page.waitForResponse(
     (r) => CONVERSATIONS_RE.test(new URL(r.url()).pathname) && r.request().method() === 'POST',
     { timeout: 45_000 },
@@ -181,11 +182,7 @@ test('regenerating rewrites the SAME answer row rather than appending a second o
     { timeout: 45_000 },
   );
 
-  const input = page.getByTestId('chat-message-input');
-  await expect(input).toBeEditable({ timeout: 20_000 });
-  await input.fill(prompt);
-  await expect(page.getByTestId('chat-send-button')).toBeEnabled({ timeout: 10_000 });
-  await page.getByTestId('chat-send-button').click();
+  await send.click();
 
   const createdResponse = await created;
   expect(createdResponse.status(), 'the send must create a real conversation').toBe(201);

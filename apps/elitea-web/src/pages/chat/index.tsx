@@ -297,6 +297,7 @@ const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
           conversation={{
             ...(activeConversation ? { active: activeConversation } : {}),
             isLoading: isLoadingConversation,
+            pendingId: conversationId,
             onCreated: handleConversationCreated,
             onTurn: onConversationActivity,
           }}

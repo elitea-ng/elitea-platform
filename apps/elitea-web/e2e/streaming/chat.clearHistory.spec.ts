@@ -38,7 +38,7 @@
 import { expect, test } from '@playwright/test';
 
 import { BASE_URL } from '../../playwright.config';
-import { expectStoredAssistantAnswer, readStoredMessageGroups } from '../fixtures/api';
+import { expectStoredAssistantAnswer, readStoredMessageGroups, fillComposer } from '../fixtures/api';
 
 /** The create and turn-start routes, matched on the pathname so a query string cannot break them. */
 const CONVERSATIONS_RE = /\/elitea_core\/conversations\/prompt_lib\/(\d+)$/;
@@ -84,6 +84,7 @@ test('clearing the chat empties the stored transcript and keeps the conversation
   await expect(page.getByTestId('model-selector-name')).toContainText(MODEL_NAME, { timeout: 10_000 });
 
   // ── the turn whose rows this journey clears ─────────────────────────────
+  const send = await fillComposer(page, prompt);
   const created = page.waitForResponse(
     (r) => CONVERSATIONS_RE.test(new URL(r.url()).pathname) && r.request().method() === 'POST',
     { timeout: 45_000 },
@@ -93,11 +94,7 @@ test('clearing the chat empties the stored transcript and keeps the conversation
     { timeout: 45_000 },
   );
 
-  const input = page.getByTestId('chat-message-input');
-  await expect(input).toBeEditable({ timeout: 20_000 });
-  await input.fill(prompt);
-  await expect(page.getByTestId('chat-send-button')).toBeEnabled({ timeout: 10_000 });
-  await page.getByTestId('chat-send-button').click();
+  await send.click();
 
   const createdResponse = await created;
   expect(createdResponse.status(), 'the send must create a real conversation').toBe(201);
