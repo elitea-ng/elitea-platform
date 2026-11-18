@@ -28,12 +28,12 @@ export function DelegationPendingBanner({ grants }: DelegationPendingBannerProps
       {legacy === pending.length
         ? t(
             'agents.delegation.bannerLegacy',
-            '{{count}} delegations from before this release await review. Nothing was approved for you, so the attached agents run without what they hold beyond this agent. Use Review delegation on each row.',
+            '{{count}} delegations from before this release await review. Nothing was approved for you: a call to an attached agent that holds more than this agent is refused until you approve it (in report mode it only runs and is recorded). Use Review delegation on each row.',
             { count: pending.length },
           )
         : t(
             'agents.delegation.bannerPending',
-            '{{count}} delegations await review. Until one is approved, the attached agent runs without what it holds beyond this agent. Use Review delegation on each row.',
+            '{{count}} delegations await review. Until one is approved, a call to an attached agent that holds more than this agent is refused (in report mode it only runs and is recorded). Use Review delegation on each row.',
             { count: pending.length },
           )}{' '}
       {governed

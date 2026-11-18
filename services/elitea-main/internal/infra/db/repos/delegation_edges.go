@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -54,11 +55,6 @@ import (
 // delegation_migration_runs.
 const DelegationEdgesMigrationName = "0254_delegation_legacy_grants"
 
-// maxEdgePairs bounds the pairs one run evaluates. A project past it is walked
-// again by the next run (the sync runs after every write, the migration is run
-// again from the admin page).
-const maxEdgePairs = 2000
-
 // NotifyLegacyPending is the event type of the one notification per calling
 // agent that lists its pending legacy delegations.
 const NotifyLegacyPending = dg.NotifyLegacyPending
@@ -92,9 +88,7 @@ type DelegationEdgeResult struct {
 	Unattributed int
 	// Notified is the notifications written.
 	Notified int
-	// Truncated is a project with more pairs than one run evaluates.
-	Truncated bool
-	Grants    []dg.Grant
+	Grants   []dg.Grant
 }
 
 // edgeCandidate is one stored attachment of a callee to a version of a caller.
@@ -151,9 +145,6 @@ func (e *DelegationEdges) Run(ctx context.Context, projectID int64, options Dele
 	}
 	pairs, kinds, versions := groupEdges(candidates)
 	result.Edges = len(pairs)
-	if len(pairs) > maxEdgePairs {
-		pairs, result.Truncated = pairs[:maxEdgePairs], true
-	}
 	covered, err := e.coveredPairs(ctx, schema)
 	if err != nil {
 		return result, err
@@ -180,8 +171,13 @@ func (e *DelegationEdges) Run(ctx context.Context, projectID int64, options Dele
 			continue
 		}
 		proposer := options.Actor
-		if governed && proposer <= 0 {
-			proposer = e.lastAuthor(ctx, schema, pair.caller)
+		if governed {
+			// The maker is the person who last wrote the caller, not whoever
+			// armed the debounced sync: another person's later write may have
+			// made the edge, and maker-checker keys on the proposer.
+			if author := e.lastAuthor(ctx, schema, pair.caller); author > 0 {
+				proposer = author
+			}
 			if proposer <= 0 {
 				result.Unattributed++
 				continue
@@ -191,6 +187,21 @@ func (e *DelegationEdges) Run(ctx context.Context, projectID int64, options Dele
 	}
 
 	err = e.grants.inTx(ctx, func(tx pgx.Tx) error {
+		// One writer per project at a time, across replicas: a second run waits
+		// here and then finds the grants and the marker the first one wrote.
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "delegation-edges/"+schema); err != nil {
+			return fmt.Errorf("delegation edges: lock the project: %w", err)
+		}
+		if options.Marker != "" {
+			done, err := e.marked(ctx, tx, schema, options.Marker)
+			if err != nil {
+				return err
+			}
+			if done {
+				result.Skipped = true
+				return nil
+			}
+		}
 		for _, p := range proposals {
 			input := ProposeInput{
 				ProjectID: projectID, Edge: dg.Edge{CallerEntityID: p.pair.caller, CalleeEntityID: p.pair.callee, Kind: kinds[p.pair]},
@@ -219,7 +230,9 @@ func (e *DelegationEdges) Run(ctx context.Context, projectID int64, options Dele
 			}
 			result.Notified = told
 		}
-		if options.Marker != "" {
+		// An edge a governed project could not attribute leaves the run
+		// incomplete: the marker stays unwritten and the next start tries again.
+		if options.Marker != "" && result.Unattributed == 0 {
 			if _, err := tx.Exec(ctx, fmt.Sprintf(`
 INSERT INTO %s.delegation_migration_runs (name, edges, contained, created, notified) VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (name) DO NOTHING`, schema), options.Marker, result.Edges, result.Contained, result.Created, result.Notified); err != nil {
@@ -228,9 +241,9 @@ ON CONFLICT (name) DO NOTHING`, schema), options.Marker, result.Edges, result.Co
 		}
 		return nil
 	})
-	// A run that left an edge unattributed or past the cap is not marked
-	// complete in spirit, but the marker is: those edges are the admin scan's
-	// and the sync's (they find an edge with no grant whatever its history).
+	if result.Skipped {
+		result.Created, result.Notified, result.Grants = 0, 0, nil
+	}
 	return result, err
 }
 
@@ -246,16 +259,24 @@ func (e *DelegationEdges) marked(ctx context.Context, q grantQuerier, schema, na
 // version of another, with the kind of caller it is and, for a pipeline, the
 // alias its Agent nodes use.
 func (e *DelegationEdges) candidates(ctx context.Context, schema string) ([]edgeCandidate, error) {
+	// Only the versions a run can use: each caller's newest version and its
+	// published ones. A version that once attached an agent and was replaced
+	// since does not make an edge. A tool row that pins no callee version runs
+	// the callee's newest.
 	query := fmt.Sprintf(`
 SELECT DISTINCT version.application_id::bigint, version.id::bigint, COALESCE(version.agent_type, '') = 'pipeline',
-       (tool.settings->>'application_id')::bigint, (%[2]s)::bigint, COALESCE(tool.name, '')
+       callee.id::bigint,
+       CASE WHEN (%[2]s) ~ '^[0-9]{1,18}$' THEN (%[2]s)::bigint
+            ELSE (SELECT max(newest.id)::bigint FROM %[1]s.application_versions AS newest WHERE newest.application_id = callee.id) END,
+       COALESCE(tool.name, '')
 FROM %[1]s.entity_tool_mapping AS mapping
 JOIN %[1]s.elitea_tools AS tool ON tool.id = mapping.tool_id
 JOIN %[1]s.application_versions AS version ON version.id = mapping.entity_version_id
 JOIN %[1]s.applications AS callee ON callee.id = (tool.settings->>'application_id')::bigint
 WHERE mapping.entity_type = 'agent' AND tool.type = 'application'
-  AND tool.settings->>'application_id' ~ '^[0-9]{1,18}$' AND (%[2]s) ~ '^[0-9]{1,18}$'
-  AND version.application_id <> (tool.settings->>'application_id')::bigint`, schema, ApplicationToolSettingsVersionSQL)
+  AND tool.settings->>'application_id' ~ '^[0-9]{1,18}$'
+  AND version.application_id <> callee.id
+  AND (version.status = 'published' OR version.id = (SELECT max(latest.id) FROM %[1]s.application_versions AS latest WHERE latest.application_id = version.application_id))`, schema, ApplicationToolSettingsVersionSQL)
 	legacy, err := legacyApplicationToolsExists(ctx, pgxReader{e.grants.pool}, schema)
 	if err != nil {
 		return nil, err
@@ -264,13 +285,17 @@ WHERE mapping.entity_type = 'agent' AND tool.type = 'application'
 		query += fmt.Sprintf(`
 UNION
 SELECT DISTINCT version.application_id::bigint, version.id::bigint, COALESCE(version.agent_type, '') = 'pipeline',
-       (tool.settings->>'application_id')::bigint, (%[2]s)::bigint, COALESCE(tool.name, '')
+       callee.id::bigint,
+       CASE WHEN (%[2]s) ~ '^[0-9]{1,18}$' THEN (%[2]s)::bigint
+            ELSE (SELECT max(newest.id)::bigint FROM %[1]s.application_versions AS newest WHERE newest.application_id = callee.id) END,
+       COALESCE(tool.name, '')
 FROM %[1]s.application_tools AS tool
 JOIN %[1]s.application_versions AS version ON version.id = tool.application_version_id
 JOIN %[1]s.applications AS callee ON callee.id = (tool.settings->>'application_id')::bigint
 WHERE tool.type = 'application'
-  AND tool.settings->>'application_id' ~ '^[0-9]{1,18}$' AND (%[2]s) ~ '^[0-9]{1,18}$'
-  AND version.application_id <> (tool.settings->>'application_id')::bigint`, schema, ApplicationToolSettingsVersionSQL)
+  AND tool.settings->>'application_id' ~ '^[0-9]{1,18}$'
+  AND version.application_id <> callee.id
+  AND (version.status = 'published' OR version.id = (SELECT max(latest.id) FROM %[1]s.application_versions AS latest WHERE latest.application_id = version.application_id))`, schema, ApplicationToolSettingsVersionSQL)
 	}
 	rows, err := e.grants.pool.Query(ctx, query)
 	if err != nil {
@@ -556,21 +581,74 @@ ORDER BY p.id`)
 		return nil, err
 	}
 	queue := []DelegationProjectQueue{}
-	for _, project := range projects {
-		schema, err := tenantSchema(strconv.FormatInt(project.ProjectID, 10))
+	// One counting query per batch of projects (a union over their tenant
+	// schemas), and the calling agents only for a project that has a queue.
+	for start := 0; start < len(projects); start += queueBatch {
+		end := min(start+queueBatch, len(projects))
+		batch := projects[start:end]
+		var union strings.Builder
+		for index, project := range batch {
+			schema, err := tenantSchema(strconv.FormatInt(project.ProjectID, 10))
+			if err != nil {
+				continue
+			}
+			if index > 0 && union.Len() > 0 {
+				union.WriteString(" UNION ALL ")
+			}
+			fmt.Fprintf(&union, `SELECT %d::bigint AS project_id,
+       count(*) FILTER (WHERE state = 'pending')::int AS pending,
+       count(*) FILTER (WHERE state = 'pending' AND legacy)::int AS legacy,
+       count(*) FILTER (WHERE state = 'stale')::int AS stale
+FROM %s.delegation_grants WHERE state IN ('pending', 'stale')`, project.ProjectID, schema)
+		}
+		if union.Len() == 0 {
+			continue
+		}
+		counts, err := s.pool.Query(ctx, union.String())
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("delegation review: count the projects: %w", err)
 		}
-		if err := s.pool.QueryRow(ctx, fmt.Sprintf(`
-SELECT count(*) FILTER (WHERE state = 'pending'), count(*) FILTER (WHERE state = 'pending' AND legacy),
-       count(*) FILTER (WHERE state = 'stale')
-FROM %s.delegation_grants WHERE state IN ('pending', 'stale')`, schema)).Scan(&project.Pending, &project.Legacy, &project.Stale); err != nil {
-			return nil, fmt.Errorf("delegation review: count project %d: %w", project.ProjectID, err)
+		byProject := map[int64]DelegationProjectQueue{}
+		for counts.Next() {
+			var counted DelegationProjectQueue
+			if err := counts.Scan(&counted.ProjectID, &counted.Pending, &counted.Legacy, &counted.Stale); err != nil {
+				counts.Close()
+				return nil, err
+			}
+			byProject[counted.ProjectID] = counted
 		}
-		if project.Pending+project.Stale == 0 {
-			continue
+		counts.Close()
+		if err := counts.Err(); err != nil {
+			return nil, err
 		}
-		callers, err := s.pool.Query(ctx, fmt.Sprintf(`
+		for _, project := range batch {
+			counted, ok := byProject[project.ProjectID]
+			if !ok || counted.Pending+counted.Stale == 0 {
+				continue
+			}
+			project.Pending, project.Legacy, project.Stale = counted.Pending, counted.Legacy, counted.Stale
+			callers, err := s.queueCallers(ctx, project.ProjectID)
+			if err != nil {
+				return nil, err
+			}
+			project.Callers = callers
+			queue = append(queue, project)
+		}
+	}
+	return queue, nil
+}
+
+// queueBatch is how many projects one counting query covers.
+const queueBatch = 100
+
+// queueCallers lists the calling agents of a project with the most delegations
+// to review.
+func (s *DelegationGrants) queueCallers(ctx context.Context, projectID int64) ([]DelegationQueueCaller, error) {
+	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
 SELECT grants.caller_entity_id, COALESCE(application.name, ''),
        count(*) FILTER (WHERE grants.state = 'pending'), count(*) FILTER (WHERE grants.state = 'stale')
 FROM %[1]s.delegation_grants AS grants
@@ -578,23 +656,18 @@ LEFT JOIN %[1]s.applications AS application ON application.id = grants.caller_en
 WHERE grants.state IN ('pending', 'stale')
 GROUP BY grants.caller_entity_id, application.name
 ORDER BY count(*) DESC, grants.caller_entity_id
-LIMIT %d`, schema, maxQueueCallers))
-		if err != nil {
-			return nil, fmt.Errorf("delegation review: list the callers of project %d: %w", project.ProjectID, err)
-		}
-		for callers.Next() {
-			var caller DelegationQueueCaller
-			if err := callers.Scan(&caller.ApplicationID, &caller.Name, &caller.Pending, &caller.Stale); err != nil {
-				callers.Close()
-				return nil, err
-			}
-			project.Callers = append(project.Callers, caller)
-		}
-		callers.Close()
-		if err := callers.Err(); err != nil {
+LIMIT %[2]d`, schema, maxQueueCallers))
+	if err != nil {
+		return nil, fmt.Errorf("delegation review: list the callers of project %d: %w", projectID, err)
+	}
+	defer rows.Close()
+	var callers []DelegationQueueCaller
+	for rows.Next() {
+		var caller DelegationQueueCaller
+		if err := rows.Scan(&caller.ApplicationID, &caller.Name, &caller.Pending, &caller.Stale); err != nil {
 			return nil, err
 		}
-		queue = append(queue, project)
+		callers = append(callers, caller)
 	}
-	return queue, nil
+	return callers, rows.Err()
 }

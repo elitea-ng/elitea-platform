@@ -7032,7 +7032,7 @@
   "pages.admin.configuration.delegation.open": "Open the queue",
   "pages.admin.configuration.delegation.window": "To keep delegations that need a grant running while the owners review them, set the mode to report for a window of about {{days}} days, then return to enforce. Report never relaxes the run principal bound, and a governed run always enforces.",
   "pages.admin.nav.delegationReview": "Delegations awaiting review",
-  "agents.delegation.bannerLegacy": "{{count}} delegations from before this release await review. Nothing was approved for you, so the attached agents run without what they hold beyond this agent. Use Review delegation on each row.",
-  "agents.delegation.bannerPending": "{{count}} delegations await review. Until one is approved, the attached agent runs without what it holds beyond this agent. Use Review delegation on each row.",
+  "agents.delegation.bannerLegacy": "{{count}} delegations from before this release await review. Nothing was approved for you: a call to an attached agent that holds more than this agent is refused until you approve it (in report mode it only runs and is recorded). Use Review delegation on each row.",
+  "agents.delegation.bannerPending": "{{count}} delegations await review. Until one is approved, a call to an attached agent that holds more than this agent is refused (in report mode it only runs and is recorded). Use Review delegation on each row.",
   "agents.delegation.bannerGoverned": "A different approver decides each one in its change request."
 }

@@ -25,10 +25,10 @@ package workerdelegation
 // The egress allowlist is already on the run (WorkerEgressPolicyV1) and
 // needs no second copy here.
 //
-// The bound is on only while the delegation section's principal_bound switch
-// is on (platformconfig.DelegationSettings.PrincipalBound), which is off by
-// default: a composition that reaches a toolkit its principal may not use
-// keeps running until an administrator turns it on.
+// The bound is on while the delegation section's principal_bound switch is on
+// (platformconfig.DelegationSettings.PrincipalBound), which is the default since
+// the delegation migration (epic 2156, S6): a composition that reaches a toolkit
+// its principal may not use is refused. An administrator can turn it off.
 
 import (
 	"context"

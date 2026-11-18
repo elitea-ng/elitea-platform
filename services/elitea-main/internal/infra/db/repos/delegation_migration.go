@@ -17,13 +17,7 @@ type DelegationMigrationReport struct {
 	// were not (the next start tries them again).
 	Migrated, Failed         int
 	Edges, Created, Notified int
-	// SkippedLocked is a pass another replica is running.
-	SkippedLocked bool
 }
-
-// delegationMigrationLockKey is the advisory lock that lets one replica run the
-// startup migration at a time.
-const delegationMigrationLockKey int64 = 0x5d1e6a7e0254
 
 // MigrateAll runs the one-time migration for every project that has not had it.
 // A project is migrated in one transaction with its marker, so a failure leaves
@@ -31,24 +25,9 @@ const delegationMigrationLockKey int64 = 0x5d1e6a7e0254
 // the caller logs the report.
 func (e *DelegationEdges) MigrateAll(ctx context.Context) (DelegationMigrationReport, error) {
 	var report DelegationMigrationReport
-	conn, err := e.grants.pool.Acquire(ctx)
-	if err != nil {
-		return report, fmt.Errorf("delegation migration: acquire a connection: %w", err)
-	}
-	defer conn.Release()
-	lock, err := conn.Begin(ctx)
-	if err != nil {
-		return report, fmt.Errorf("delegation migration: begin the lock transaction: %w", err)
-	}
-	defer func() { _ = lock.Rollback(context.WithoutCancel(ctx)) }()
-	var acquired bool
-	if err := lock.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock($1)`, delegationMigrationLockKey).Scan(&acquired); err != nil {
-		return report, fmt.Errorf("delegation migration: lock: %w", err)
-	}
-	if !acquired {
-		report.SkippedLocked = true
-		return report, nil
-	}
+	// No session lock is held across the pass: each project is written under its
+	// own transaction lock and finds the marker a replica that got there first
+	// wrote, so a second replica repeats nothing and no connection is pinned.
 	projects, err := e.projectIDs(ctx)
 	if err != nil {
 		return report, err

@@ -124,8 +124,6 @@ func (w *delegationWiring) startMigration() {
 		case err != nil:
 			slog.ErrorContext(ctx, "delegation migration: the pass did not finish", "error", err,
 				"projects", report.Projects, "migrated", report.Migrated, "failed", report.Failed)
-		case report.SkippedLocked:
-			slog.InfoContext(ctx, "delegation migration: another replica is running it")
 		case report.Migrated > 0 || report.Failed > 0:
 			slog.InfoContext(ctx, "delegation migration: existing compositions now have pending grants for review; nothing was approved",
 				"projects", report.Projects, "migrated", report.Migrated, "failed", report.Failed,

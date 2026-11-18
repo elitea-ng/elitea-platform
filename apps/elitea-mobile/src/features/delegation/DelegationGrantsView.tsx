@@ -8,7 +8,7 @@ import { Button, EmptyState, ListSection, Text, useLayoutMargin } from '@/ui';
 export const DELEGATION_HINT = 'Attaching an agent to another one is done on the web or desktop app.';
 export const REAPPROVAL_GOVERNED_NOTE = 'Re-approval is decided in a change request on the web or desktop app. Until then the agent runs without the new items.';
 export const LEGACY_BANNER = (count: number): string =>
-  `${count === 1 ? '1 delegation' : `${count} delegations`} from before this release await${count === 1 ? 's' : ''} review. Nothing was approved for you, so the attached ${count === 1 ? 'agent runs' : 'agents run'} without what ${count === 1 ? 'it holds' : 'they hold'} beyond this agent until you approve ${count === 1 ? 'it' : 'them'}.`;
+  `${count === 1 ? '1 delegation' : `${count} delegations`} from before this release await${count === 1 ? 's' : ''} review. Nothing was approved for you: a call to an attached agent that holds more than this agent is refused until you approve ${count === 1 ? 'it' : 'them'} (in report mode it only runs and is recorded).`;
 export const GOVERNED_NOTE = 'Awaiting approval, decided in a change request on the web or desktop app.';
 
 export interface DelegationGrantsViewProps {
