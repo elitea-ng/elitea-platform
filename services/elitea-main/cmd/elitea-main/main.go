@@ -2186,6 +2186,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	var currentIndexConfiguration http.Handler
 	var currentIndexScheduleUpdate http.Handler
 	var currentIndexScheduleDelete http.Handler
+	// The AgentState pool, when a Code consumer composed one: the step
+	// retention sweep also prunes the worker's sandbox rows there (#2241).
+	var agentStatePool *pgxpool.Pool
 	if runtimeConfig.Enabled {
 		databasePoolLimits, limitsErr := runtimecomposition.DatabasePoolLimitsFromEnv(os.LookupEnv)
 		if limitsErr != nil {
@@ -2213,6 +2216,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			return codeConsumersErr
 		}
 		defer codeConsumers.Close()
+		if agentStatePool = compiledState.pool; agentStatePool == nil {
+			agentStatePool = codeConsumers.debugStatePool
+		}
 		var configurationLifecycleReconciler configurationapp.CurrentConfigurationLifecycleReconciler
 		if currentConfigurationsConfig.MutationEnabled {
 			// No LLM runtime here: the lifecycle is database-side. It once
@@ -3064,7 +3070,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	}
 	// Step evidence retention (ADR-0042, #1499): step_content and step_record
 	// keep forever until an administrator sets a maximum age.
-	if err := startStepRetention(ctx, os.LookupEnv, pool, objectStore, logger); err != nil {
+	if err := startStepRetention(ctx, os.LookupEnv, pool, agentStatePool, objectStore, logger); err != nil {
 		return fmt.Errorf("compose step retention: %w", err)
 	}
 

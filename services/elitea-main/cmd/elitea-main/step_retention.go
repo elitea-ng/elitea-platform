@@ -27,11 +27,13 @@ import (
 //     the objects a failed persist left with no row (content journal);
 //   - main.step_record_retention (hourly) anchors settled runs whose anchor
 //     request was missed, then deletes whole runs past the step_record
-//     maximum once every sink exporting run_steps passed them.
+//     maximum once every sink exporting run_steps passed them, and clears
+//     the sandbox dispatch and failure-detail rows of runs idle past it
+//     (#2241).
 //
 // All pause in maintenance; the sweeps skip what an active legal hold
 // covers. With the seeded policies (keep forever) they expire nothing.
-func startStepRetention(ctx context.Context, lookup func(string) (string, bool), pool *pgxpool.Pool, objectStore storage.ObjectStore, logger *slog.Logger) error {
+func startStepRetention(ctx context.Context, lookup func(string) (string, bool), pool, agentStatePool *pgxpool.Pool, objectStore storage.ObjectStore, logger *slog.Logger) error {
 	if pool == nil {
 		return nil
 	}
@@ -71,6 +73,12 @@ func startStepRetention(ctx context.Context, lookup func(string) (string, bool),
 		return err
 	}
 	sweeper.WithAgentMemory(memory)
+	// #2241: the worker's per-run sandbox rows live in the AgentState
+	// database; Main reaches it only when a Code consumer composed a pool,
+	// and without one there is nothing of Main's to prune.
+	if sandbox := dbrepos.NewSandboxRunState(agentStatePool); sandbox != nil {
+		sweeper.WithSandboxState(sandbox)
+	}
 	for _, routine := range []struct {
 		id, description string
 		schedule        string
