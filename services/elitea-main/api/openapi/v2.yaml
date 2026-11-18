@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.61"
+  x-elitea-client-contract: "1.62"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -4273,7 +4273,7 @@ components:
     DelegationDrift:
       type: object
       description: >
-        Client contract 1.61. What the callee of a `stale` grant holds now that the
+        Client contract 1.62. What the callee of a `stale` grant holds now that the
         grant does not cover: the changes an editor of the caller reviews when they
         re-approve. Set containment against what the callee held when the grant was
         proposed, never version equality: a version with the same or a smaller set
@@ -7067,6 +7067,16 @@ components:
         created:
           type: boolean
           description: False for a replay of an admitted child.
+        delegation_notice:
+          allOf:
+            - $ref: '#/components/schemas/DelegationNotice'
+          description: >-
+            Client contract 1.61 (ADR-0044 Amendment 1, issue 2214). Present when
+            the edge from the turn's agent to this nested agent has an approved
+            grant the nested agent has drifted past: the child was admitted
+            narrowed (`kind: narrowed`, `reason: stale`) to what its caller and
+            the grant cover. Its `id` is the start's `idempotency_key`; show it at
+            the call. Absent for a replay and for a child run as it was frozen.
     LocalChildTurnInterrupt:
       type: object
       description: >-
@@ -7155,6 +7165,23 @@ components:
       properties:
         error: { type: string }
         message: { type: string }
+
+    LocalChildTurnForbidden:
+      type: object
+      description: >-
+        startLocalChildTurn's 403: a DesktopOperationError, and for
+        `delegation_refused` (client contract 1.61, ADR-0044 Amendment 1, issue
+        2214: the nested agent holds something its caller does not and the
+        delegation has no approved grant, so it was not started) the
+        `delegation_notice` that says why (`kind: refused`, `reason: no_grant`;
+        its `id` is the start's `idempotency_key`). NOTE(W2):
+        internal/api/v2/desktopops/child_turn.go (`writeDelegationRefused`).
+      required: [error]
+      properties:
+        error: { type: string }
+        message: { type: string }
+        delegation_notice:
+          $ref: '#/components/schemas/DelegationNotice'
 
     SteeringMessageRequest:
       type: object
@@ -30418,7 +30445,7 @@ paths:
         the agent that holds the reference. Under the governed profile the grant is
         approved through its change request instead, and this answers 409 with the
         code `DELEGATION_GOVERNED` and the `change_request_id`. Needs the permission
-        that edits an agent. Audited. Since 1.61 the grant may also be `stale`: the
+        that edits an agent. Audited. Since 1.62 the grant may also be `stale`: the
         callee now holds more than the grant recorded (`drift` lists what). Approving
         re-approves it against what the callee holds now: the old grant is kept as
         `superseded` and the answer is the new, approved grant. Under the governed
@@ -37223,11 +37250,11 @@ paths:
                   - $ref: '#/components/schemas/InvalidClientVersionError'
         '401': { $ref: '#/components/responses/401' }
         '403':
-          description: No `models.chat.messages.create`, a session caller (`local_child_turn_requires_token`), local work turned off (`local_work_disabled`), or an agent the turn's agent does not nest (`child_agent_not_in_agent`).
+          description: No `models.chat.messages.create`, a session caller (`local_child_turn_requires_token`), local work turned off (`local_work_disabled`), an agent the turn's agent does not nest (`child_agent_not_in_agent`), or, while delegation grants are enforced, a nested agent that holds something its caller does not and has no approved grant (`delegation_refused`, with `delegation_notice`).
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DesktopOperationError'
+                $ref: '#/components/schemas/LocalChildTurnForbidden'
         '404':
           description: The local turn is not this caller's in this project (`local_turn_not_found`).
           content:

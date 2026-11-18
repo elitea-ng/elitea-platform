@@ -13,7 +13,7 @@ import { queryKeys } from '@/api/queries/keys';
  * shows an agent's grants and lets an editor approve or revoke one; attaching and the governed
  * change request are on the web and desktop.
  *
- * Client contract 1.61 adds `drift` to a stale grant: what its callee holds now beyond the grant.
+ * Client contract 1.62 adds `drift` to a stale grant: what its callee holds now beyond the grant.
  * Approving a stale grant re-approves it against what the callee holds now (the old grant is kept
  * as superseded); under the governed profile that is decided in a change request instead.
  *
@@ -41,7 +41,7 @@ export interface DelegationGrantView {
   items: DelegationItem[];
   /** What the callee held when proposed and the approver left out. */
   omitted: DelegationItem[];
-  /** On a stale grant: what its callee holds now that the grant does not cover (contract 1.61). */
+  /** On a stale grant: what its callee holds now that the grant does not cover (contract 1.62). */
   drift: DelegationItem[];
 }
 

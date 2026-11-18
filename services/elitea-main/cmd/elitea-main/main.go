@@ -3011,7 +3011,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("compose remote toolkit route: %w", err)
 	}
-	currentChildTurns, err := composeChildTurns(pool, childAgentStart, childAgentAuthorizer, nativePolicy, auditRecorder, apiGroupAuth, logger)
+	currentChildTurns, err := composeChildTurns(pool, childAgentStart, childAgentAuthorizer, nativePolicy, auditRecorder, apiGroupAuth,
+		delegationSwitch{grantsEnforced: runtimeConfig.DelegationGrantsEnforced, settings: runSafetySections.delegation}, logger)
 	if err != nil {
 		return fmt.Errorf("compose local child turn routes: %w", err)
 	}

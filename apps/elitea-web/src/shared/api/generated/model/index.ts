@@ -660,6 +660,7 @@ export * from "./listWorkerEgressHostsParams.zod";
 export * from "./llmSettings.zod";
 export * from "./localAgentDefinition.zod";
 export * from "./localChildToolCall.zod";
+export * from "./localChildTurnForbidden.zod";
 export * from "./localChildTurnInterrupt.zod";
 export * from "./localChildTurnRequest.zod";
 export * from "./localChildTurnStarted.zod";

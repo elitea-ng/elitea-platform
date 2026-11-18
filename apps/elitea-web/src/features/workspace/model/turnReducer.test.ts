@@ -404,6 +404,27 @@ describe('sub-agents (#1226)', () => {
     expect(replayView([...events, finished(5, 'a_1', 'cancelled')]).subAgents?.[0]?.result).toBeUndefined();
   });
 
+  it('shows a cloud child\'s delegation notice at the turn, once per call (client contract 1.61, #2214)', () => {
+    const notice = { id: 'c1', kind: 'refused', reason: 'no_grant', edge: { callee_name: 'Researcher', kind: 'agent_tool', caller_id: 4 }, missing: [{ kind: 'toolkit', name: 'Jira' }], can_review: true };
+    const refused = (seq: number): AgentEvent => ({
+      turn_id: T,
+      seq,
+      kind: 'subagent_finished',
+      payload: { agent_id: 'cloud_1', status: 'failed', steps: 0, input_tokens: 0, output_tokens: 0, error: 'no approved grant', delegation_notice: notice },
+    });
+    const events = [spawn(1, 'c1'), started(2, 'cloud_1', 'c1', 1), refused(3)];
+    const view = activeView(run(events));
+    expect(view.delegationNotices).toEqual([expect.objectContaining({ id: 'c1', kind: 'refused', reason: 'no_grant', calleeName: 'Researcher', canReview: true })]);
+    // The same notice twice (a replayed event) is still one.
+    expect(activeView(run([...events, refused(4)])).delegationNotices).toHaveLength(1);
+    // A child with no notice, or one that is not a notice, adds none.
+    expect(activeView(run([spawn(1, 'c1'), started(2, 'cloud_1', 'c1', 1), finished(3, 'cloud_1', 'completed', 'ok')])).delegationNotices).toBeUndefined();
+    const junk: AgentEvent = { turn_id: T, seq: 3, kind: 'subagent_finished', payload: { agent_id: 'cloud_1', status: 'failed', steps: 0, input_tokens: 0, output_tokens: 0, delegation_notice: { kind: 'bogus' } } };
+    expect(activeView(run([spawn(1, 'c1'), started(2, 'cloud_1', 'c1', 1), junk])).delegationNotices).toBeUndefined();
+    // The recorded turn shows it as the live one did.
+    expect(replayView(events).delegationNotices).toHaveLength(1);
+  });
+
   it('keeps the spawn profile a local start names (#1827, #1910)', () => {
     const named: AgentEvent = {
       turn_id: T,
