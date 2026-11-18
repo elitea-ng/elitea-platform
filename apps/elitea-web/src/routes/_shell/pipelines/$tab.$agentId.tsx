@@ -7,7 +7,7 @@ import { RouteError, RoutePending } from '../../-ui/RouteStatus';
 import { pickParams } from '../../-search/params';
 
 export const Route = createFileRoute('/_shell/pipelines/$tab/$agentId')({
-  validateSearch: pickParams('history_run_id'),
+  validateSearch: pickParams('history_run_id', 'review_delegation'),
   pendingComponent: RoutePending,
   errorComponent: RouteError,
   component: EditPipelineRoute,

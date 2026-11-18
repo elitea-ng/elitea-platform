@@ -101,6 +101,9 @@ interface AgentToolRowDelegation {
   /** The caller: the agent or pipeline whose panel this is. */
   readonly applicationId: number;
   readonly readOnly: boolean;
+  /** The deep link names this edge: open its review dialog on arrival. */
+  readonly autoOpen?: boolean | undefined;
+  readonly onAutoOpened?: (() => void) | undefined;
 }
 
 export interface AgentToolRowProps {
@@ -201,6 +204,8 @@ export function AgentToolRow({ tool, index, isDuplicate, disabled, viewMode, ent
         applicationId={delegation.applicationId}
         grant={delegation.grant}
         readOnly={delegation.readOnly}
+        autoOpen={delegation.autoOpen}
+        onAutoOpened={delegation.onAutoOpened}
       />
     </>
   );

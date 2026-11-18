@@ -19,6 +19,7 @@
 
 export type DelegationNoticeKind = 'refused' | 'narrowed';
 export type DelegationNoticeReason = 'no_grant' | 'stale' | 'principal' | 'depth';
+export type DelegationEdgeKind = 'agent_tool' | 'pipeline_child' | 'sub_agent' | 'pipeline_node';
 export type DelegationGrantKind = 'toolkit' | 'tool' | 'credential' | 'data_class' | 'egress_host';
 
 /** One grant a notice names. */
@@ -35,6 +36,8 @@ export interface DelegationNotice {
   readonly kind: DelegationNoticeKind;
   readonly reason: DelegationNoticeReason;
   readonly calleeName: string;
+  /** How the caller reaches the callee; a `pipeline_node` is a node of a graph, not a row of the Tools panel. */
+  readonly edgeKind: DelegationEdgeKind;
   readonly callerName?: string;
   /** The calling saved agent; absent when the caller has no saved identity. */
   readonly callerId?: number;
@@ -116,6 +119,7 @@ export function parseDelegationNotice(value: unknown): DelegationNotice | undefi
     kind,
     reason,
     calleeName,
+    edgeKind: edge.kind as DelegationEdgeKind,
     ...(callerName === undefined ? {} : { callerName }),
     ...(callerId === undefined ? {} : { callerId }),
     ...(calleeId === undefined ? {} : { calleeId }),

@@ -148,6 +148,8 @@ export const paramSchemas = {
   source_application_id: text(),
   viewMode: z.enum(['owner', 'public']).catch('owner').prefault('owner'),
   history_run_id: text(),
+  /** The callee agent id of a delegation edge: the editor opens that edge's review dialog on arrival (the chat notice's Review delegation link). */
+  review_delegation: text(),
 
   // ── marketplace + the legacy catalogue redirects (PARAM-021) ─────────────
   /** The shared agent deep link's key: `/agents-hub` and `/elitea-catalog` read it to open that agent's listing page. */

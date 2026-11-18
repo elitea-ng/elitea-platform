@@ -75,6 +75,7 @@ export function renderWithRouterAndProject(
   ui: ReactElement,
   projectId: string | undefined,
   queryClient: QueryClient = createTestQueryClient(),
+  initialEntry = '/',
 ): RenderResult {
   function RootComponent(): ReactNode {
     return <Providers queryClient={queryClient}>{ui}</Providers>;
@@ -82,7 +83,7 @@ export function renderWithRouterAndProject(
   const rootRoute = createRootRoute({ component: RootComponent });
   const router = createRouter({
     routeTree: rootRoute,
-    history: createMemoryHistory({ initialEntries: ['/'] }),
+    history: createMemoryHistory({ initialEntries: [initialEntry] }),
     context: { auth: { getSelectedProjectId: () => projectId } },
   });
   return render(<RouterProvider router={router} />);
