@@ -259,4 +259,35 @@ describe('AgentToolsPanel', () => {
     await waitFor(() => expect(screen.getByTestId('agent-toolkit-card')).toBeVisible());
     expect(screen.getByTestId('agent-toolkit-delete-button')).toBeDisabled();
   });
+
+  it('shows the delegation state of an attached agent on its row, and none on a toolkit row (ADR-0044 amendment 1)', async () => {
+    const SUB_AGENT: VersionToolRef = { id: 6, tool_id: 78, entity_type: 'agent', name: 'Git specialist', type: 'application', config: { application_id: '7', application_version_id: '70' } };
+    server.use(
+      http.get('*/elitea_core/delegation_grants/prompt_lib/:projectId/:applicationId', () =>
+        HttpResponse.json({
+          grants: [
+            {
+              id: 5, caller_application_id: 42, callee_application_id: 7, edge_kind: 'agent_tool', callee_version_id: 70, state: 'stale', legacy: false, governed: false, origin: 'attach',
+              digest: 'a', requested_digest: 'b', items: [], requested_items: [], omitted: [], created_at: '2026-11-17T10:00:00Z', updated_at: '2026-11-17T10:00:00Z',
+            },
+          ],
+        }),
+      ),
+    );
+    renderWithRouterAndProject(
+      <AgentToolsPanel
+        entity={{ applicationId: 42, versionId: 100, versionStatus: 'draft' }}
+        versionTools={[ATTACHED_TOOL, SUB_AGENT]}
+        dirty={false}
+        internalTools={{ value: [], onChange: vi.fn() }}
+        readOnly={false}
+        viewMode="owner"
+      />,
+      'proj-1',
+    );
+
+    const status = await screen.findByTestId('delegation-grant-status');
+    expect(status).toHaveTextContent('Needs re-approval');
+    expect(screen.getAllByTestId('delegation-grant-status')).toHaveLength(1);
+  });
 });

@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/shared/brand';
 import { getGetPlatformSettingsMockHandler } from '@/shared/api/generated/admin/admin.msw';
-import { getGetApplicationMockHandler, getListApplicationsMockHandler, getUpdateApplicationRelationMockHandler } from '@/shared/api/generated/applications/applications.msw';
+import { getGetApplicationMockHandler, getListApplicationsMockHandler, getPreviewDelegationGrantMockHandler, getUpdateApplicationRelationMockHandler } from '@/shared/api/generated/applications/applications.msw';
 import { getGetToolkitMockHandler, getListToolkitInstancesMockHandler } from '@/shared/api/generated/toolkits/toolkits.msw';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { server } from '@/test/setup';
@@ -176,6 +176,8 @@ beforeEach(() => {
   server.use(getListToolkitInstancesMockHandler({ rows: [], total: 0 }));
   server.use(getListApplicationsMockHandler({ rows: [], total: 0, page: 0, page_size: 20, total_pages: 0 }));
   server.use(toolkitAttachMockHandler());
+  // An agent that brings nothing needs no review, so these attach tests see no delegation dialog (ToolMenu.delegation.test.tsx covers it).
+  server.use(getPreviewDelegationGrantMockHandler({ callee_application_id: 0, callee_version_id: 0, callee_name: '', digest: '', items: [], approvable: [], withheld: [], closure: [], governed: false }));
 });
 
 afterEach(() => {

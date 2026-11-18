@@ -81,7 +81,7 @@ export interface AssociationCandidate {
   readonly name: string;
 }
 
-interface AssociateAgentOutcome {
+export interface AssociateAgentOutcome {
   readonly ok: boolean;
   /** Always a caller-displayable message, on both success and failure — see module doc comment, gap 3. */
   readonly message: string;

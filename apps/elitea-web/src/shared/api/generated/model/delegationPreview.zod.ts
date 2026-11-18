@@ -65,6 +65,11 @@ export const DelegationPreview = zod
         "The items the person asking does not hold; an approval by them leaves these out.",
       ),
     closure: zod.array(DelegationClosureNode),
+    governed: zod
+      .boolean()
+      .describe(
+        "The governed profile is on: an attach records a change request that a\ndifferent approver decides, and the person asking cannot approve it\ndirectly.\n",
+      ),
     existing: DelegationGrant.optional(),
   })
   .describe("What an attach of the callee version would let it use.");

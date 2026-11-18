@@ -119,6 +119,16 @@ INSERT INTO p_7.folder_access_overrides (id, folder_id, user_id, access_level) V
 			t.Fatalf("user %d hidden = %v, err = %v", user, hidden, err)
 		}
 	}
+	// An approver of a delegation grant is asked about the whole project, with no
+	// id filter: the same two toolkits for user 31, none for the others.
+	if all, err := sources.HiddenToolkitsForUser(ctx, 7, 31); err != nil || !slices.Equal(all, []int64{8, 9}) {
+		t.Fatalf("user 31 hidden in the project = %v, err = %v; want [8 9]", all, err)
+	}
+	for _, user := range []int64{32, 0} {
+		if all, err := sources.HiddenToolkitsForUser(ctx, 7, user); err != nil || len(all) != 0 {
+			t.Fatalf("user %d hidden in the project = %v, err = %v", user, all, err)
+		}
+	}
 	// Overrides without their dependencies are refused, not read as open.
 	exec(`DROP TABLE p_7.social_folder_items`)
 	if _, err := sources.HiddenToolkits(ctx, 7, 31, reachable); err == nil {
@@ -169,6 +179,14 @@ VALUES (('0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e16' || $1::text)::uuid, 7, $2::uuid, $
 	references, err := sources.UsableCredentialReferences(ctx, 7, reachable)
 	if err != nil || !slices.Equal(references, []string{principalRefLive}) {
 		t.Fatalf("references = %v, err = %v; want only the live reference", references, err)
+	}
+	// The project-wide read (the approver's side) lists every active, unexpired
+	// reference whatever toolkit it is for, and none of another project's.
+	if all, err := sources.UsableCredentialReferencesInProject(ctx, 7); err != nil || !slices.Equal(all, []string{principalRefLive, principalRefOutside}) {
+		t.Fatalf("project references = %v, err = %v; want the live and the outside reference", all, err)
+	}
+	if all, err := sources.UsableCredentialReferencesInProject(ctx, 8); err != nil || len(all) != 0 {
+		t.Fatalf("another project read the grants: %v, err = %v", all, err)
 	}
 	if references, err := sources.UsableCredentialReferences(ctx, 8, reachable); err != nil || len(references) != 0 {
 		t.Fatalf("another project read the grants: %v, err = %v", references, err)
