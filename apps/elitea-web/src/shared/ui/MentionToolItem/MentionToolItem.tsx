@@ -12,6 +12,8 @@ export interface MentionToolItemProps {
   icon?: ReactNode;
   onClick?: () => void;
   isHighlighted?: boolean;
+  /** Small labels after the name (a trust state, "Pinned"). `title` explains one on hover. */
+  badges?: readonly { readonly label: string; readonly title?: string }[];
   'data-testid'?: string;
 }
 
@@ -33,6 +35,7 @@ export function MentionToolItem({
   icon,
   onClick,
   isHighlighted = false,
+  badges = [],
   'data-testid': dataTestId,
 }: MentionToolItemProps): ReactNode {
   return (
@@ -69,6 +72,17 @@ export function MentionToolItem({
         >
           {label}
         </Typography>
+        {badges.map((badge) => (
+          <Typography
+            key={badge.label}
+            variant="labelSmall"
+            color="text.secondary"
+            title={badge.title}
+            sx={(theme: Theme) => ({ flexShrink: 0, padding: '0 0.375rem', borderRadius: theme.vars.shape.radiusSm, border: `0.0625rem solid ${theme.vars.palette.border.lines}` })}
+          >
+            {badge.label}
+          </Typography>
+        ))}
       </Box>
       {description && (
         <Typography

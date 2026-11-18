@@ -86,7 +86,7 @@ test('SKILL-1: a skill is created on the form, opens on its own page, and is del
       (response) =>
         response.request().method() === 'POST' && /\/elitea_core\/skills\/prompt_lib\//.test(response.url()),
     );
-    await page.getByRole('button', { name: 'Save' }).click();
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
     const created = await createResponse;
     // One read of the body, reused for both the status message and the id:
     // the create DOES answer with a body, but reading it twice is the same

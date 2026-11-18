@@ -214,3 +214,25 @@ export async function attachPublicSkill(
   });
   return unwrap<{ readonly results?: readonly AttachOutcome[] }>(response)?.results ?? [];
 }
+
+/** The project's own copy of a published skill, as a fork-only attach answers it. */
+export interface ForkedSkill {
+  readonly skillId: number;
+  readonly versionId: number;
+}
+
+/**
+ * Forks a published (skill, version) into the project and attaches it to nothing: the "Add to a conversation" step
+ * that comes before the pin (ADR-0051 amendment 1, A1.4). A copy the project already holds is reused, so repeating it
+ * forks nothing twice. Rejects when the published version is gone (404) or the caller may not fork.
+ */
+export async function forkPublicSkill(projectId: string, publicSkillId: number, publicVersionId: number): Promise<ForkedSkill> {
+  const response = await attachPublicSkillRequest(projectId, {
+    public_skill_id: publicSkillId,
+    public_version_id: publicVersionId,
+    fork_only: true,
+  });
+  const body = unwrap<{ readonly skill_id?: number; readonly skill_version_id?: number }>(response);
+  if (body?.skill_id === undefined || body.skill_version_id === undefined) throw new Error('The skill was not forked');
+  return { skillId: body.skill_id, versionId: body.skill_version_id };
+}

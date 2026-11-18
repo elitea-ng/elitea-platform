@@ -25,6 +25,8 @@ export interface ListingCardData {
   readonly isLiked: boolean;
   /** The current version's label. */
   readonly version: string | undefined;
+  /** The current version's id: what Try on a skill card pins. */
+  readonly versionId: string | undefined;
   readonly tier: string;
   readonly requiredTypes: readonly string[];
   /** The newest version this project hired, when it did. */

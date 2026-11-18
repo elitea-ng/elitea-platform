@@ -27,6 +27,7 @@ import { EntityListSidebar, ListSelectionSection, pageBodySx, pageSx, useListSea
 import { usePermissionSet } from '@/widgets/sidebar';
 
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
+import { useSkillChatActions } from './lib/useSkillChatActions';
 
 /**
  * Client-side tag filter for the skills list.
@@ -101,6 +102,7 @@ export function Skills(): ReactNode {
   const search = useSearch({ strict: false }) as { readonly sort_by?: string; readonly sort_order?: string };
   const activeTab = resolveSkillTab(routeParams.tab);
   const projectId = useSelectedProjectId();
+  const chat = useSkillChatActions(projectId);
   const query = useListSearchQuery();
   const [pendingDelete, setPendingDelete] = useState<SkillRecord>();
   const [confirmingBulkDelete, setConfirmingBulkDelete] = useState(false);
@@ -246,12 +248,15 @@ export function Skills(): ReactNode {
                 onExport={(skill) => {
                   void handleExport(skill);
                 }}
+                onTry={chat.onTry}
+                onUseInChat={chat.onUseInChat}
                 onCreate={openCreate}
               />
             </EntityFolderScope>
           </EntitySelectionProvider>
         )}
       </Box>
+      {chat.dialog}
       <DeleteEntityModal
         open={pendingDelete !== undefined}
         {...(pendingDelete ? { name: pendingDelete.name } : {})}
