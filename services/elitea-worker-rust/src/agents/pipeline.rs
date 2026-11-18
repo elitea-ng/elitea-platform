@@ -1096,7 +1096,7 @@ impl PipelineNativeAgentAssembler {
                 }
             } else {
                 let (tool, projection, fingerprint, member) =
-                    bind_scoped_agent(snapshot, profile.shell(), &runtime, alias).await?;
+                    bind_scoped_agent(snapshot, profile.shell(), &runtime, (alias, node)).await?;
                 if presented.insert(alias.to_owned()) {
                     presentations = merge_application_presentations(
                         presentations,
@@ -2633,7 +2633,19 @@ async fn admit_saved_pipeline_child(
     )? {
         return Ok(Err(refused));
     }
-    let bound = bind_admitted_saved_pipeline(admitted.as_ref(), runtime, String::new()).await?;
+    // FU-335: a saved agent one of its graph nodes runs is refused while
+    // binding. Offered as a tool, the refusal stays this tool's result, which
+    // its call answers, so an uncalled tool never fails its caller's turn.
+    let bound = match bind_admitted_saved_pipeline(admitted.as_ref(), runtime, String::new()).await
+    {
+        Ok(bound) => bound,
+        Err(error) => {
+            return match error.delegation_refusal() {
+                Some(refused) => Ok(Err(refused.clone())),
+                None => Err(error),
+            };
+        }
+    };
     Ok(Ok((
         admitted.profile.definition().clone(),
         bound,
@@ -2761,8 +2773,18 @@ fn bind_admitted_saved_pipeline<'a>(
                 }
             } else {
                 // Bind one exact ordinary descendant to its registry-owned event receiver.
-                let (tool, projection, fingerprint, member) =
-                    bind_scoped_agent(&snapshot, admitted.profile.shell(), runtime, alias).await?;
+                let node_path = if graph_path.is_empty() {
+                    node.to_owned()
+                } else {
+                    format!("{graph_path}/{node}")
+                };
+                let (tool, projection, fingerprint, member) = bind_scoped_agent(
+                    &snapshot,
+                    admitted.profile.shell(),
+                    runtime,
+                    (alias, &node_path),
+                )
+                .await?;
                 if presented.insert(alias.to_owned()) {
                     presentations = merge_application_presentations(
                         presentations,
@@ -2848,24 +2870,27 @@ pub(crate) fn saved_pipeline_resolver_for_tests(
 }
 
 /// The pipeline root's delegation scope (ADR-0044 decision 3) and the
-/// snapshot its own nodes materialize credentials from: the toolkits those
-/// nodes select, bounded by the run principal.
+/// snapshot its own nodes materialize credentials from.
+///
+/// FU-335: the scope is the root's own admitted attachments bounded by the
+/// run principal, `own(root) ∩ P` (Amendment 1), exactly as an ordinary
+/// root's (`ordinary.rs`). A toolkit the root attaches but no root node uses
+/// is still the root's, so a saved agent or pipeline a node runs may be
+/// delegated it. Credentials stay reduced to the toolkits the root's own
+/// nodes select.
 pub(super) fn root_delegation_and_credentials<'a>(
     runtime_context: &ClaimBoundRuntimeContextAuthority,
     profile: &PipelineExecutionProfile,
     toolsets: AdmittedToolSnapshot<'a>,
 ) -> (DelegationScope, AdmittedToolSnapshot<'a>) {
-    let aliases = profile.definition().runtime_toolkit_aliases();
-    let selected = super::application_tools::principal_bounded_snapshot(
-        runtime_context,
-        toolsets.retain_toolkit_names(&aliases),
-    );
+    let toolsets = super::application_tools::principal_bounded_snapshot(runtime_context, toolsets);
     let delegation = super::application_tools::root_delegation_scope(
         runtime_context,
         super::request::AgentExecutionKind::Application,
-        &selected,
+        &toolsets,
     );
-    (delegation, selected)
+    let aliases = profile.definition().runtime_toolkit_aliases();
+    (delegation, toolsets.retain_toolkit_names(&aliases))
 }
 
 type ScopedAgentBinding = (
@@ -2875,11 +2900,16 @@ type ScopedAgentBinding = (
     Option<crate::agents::application_tools::ScopedAgentMember>,
 );
 
+/// Bind the saved agent the graph node at `graph_path` runs.
+///
+/// FU-335: a node cannot answer a refused delegation as a tool result, so a
+/// refusal ends the run at start as #2235's refused pipeline node does: the
+/// authorization terminal, with Main's notice for that node.
 async fn bind_scoped_agent(
     snapshot: &AdmittedToolSnapshot<'_>,
     shell: &OrdinaryNoToolProfile,
     runtime: &PipelineApplicationRuntime<'_>,
-    alias: &str,
+    (alias, graph_path): (&str, &str),
 ) -> Result<ScopedAgentBinding, NativeAgentAssemblyError> {
     let selected = BTreeSet::from([alias.to_owned()]);
     let (materialized, skipped) = materialize_application_runtime(
@@ -2920,6 +2950,11 @@ async fn bind_scoped_agent(
         .iter()
         .find(|entry| entry.alias == alias && entry.agent_type == "agent")
         .ok_or_else(invalid_pipeline_tool_scope)?;
+    if let Some(refused) = entry.enforced_refusal() {
+        return Err(super::application_tools::delegation_refused_error(
+            &refused, graph_path,
+        ));
+    }
     let (fingerprint, member) = (entry.saved_agent_fingerprint, entry.member.clone());
     let (mut participants, projection) = application_participants(materialized)?;
     if participants.len() != 1 {

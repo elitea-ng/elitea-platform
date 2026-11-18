@@ -511,8 +511,6 @@ async fn a_root_agent_node_refused_a_toolkit_ends_typed_naming_it() {
     assert_eq!(fixture.dials.dials_to(BATCH_URL), 0);
 }
 
-/// The notice names only the node kind and the toolkit's display name: never
-/// a tool, a credential reference, a data class, a host or a URL.
 // ---- negative authorization ----
 
 /// A toolkit attached only to a descendant (P1), not to the root or S, is
@@ -993,7 +991,8 @@ async fn an_agent_node_inside_a_saved_pipeline_node_is_refused_by_its_graph_path
     let Err(error) = fixture.assembler.assemble(enforcing(&request)).await else {
         panic!("a refused nested Agent node must end the run at start");
     };
-    assert_refused_with_notice(&error, "delegate/delegate", "no_grant", "batch");
+    // The caller of this edge is P2, the saved pipeline the node runs in.
+    assert_refused_with_notice_from(&error, "delegate/delegate", ("no_grant", "batch"), Some(7));
     assert_eq!(model_calls(&fixture.captured), 0);
     assert_eq!(fixture.dials.dials_to(BATCH_URL), 0);
 }
@@ -1386,7 +1385,7 @@ fn a_pipeline_root_delegates_exactly_as_an_ordinary_root_with_the_same_inputs() 
         assert_eq!(
             kept[0]["settings"]["selected_tools"],
             if root_holds {
-                json!(all)
+                json!(["echo", "get_issues", "reverse"])
             } else {
                 json!(["echo"])
             },
