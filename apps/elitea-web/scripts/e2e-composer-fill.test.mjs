@@ -63,24 +63,58 @@ function specsUnder(dir, base = dir) {
   });
 }
 
+/** The `{ ... }` block around `index`: where a name declared there can be used. */
+function enclosingBlock(source, index) {
+  let depth = 0;
+  let start = 0;
+  for (let i = index - 1; i >= 0; i -= 1) {
+    if (source[i] === '}') depth += 1;
+    else if (source[i] === '{') {
+      if (depth === 0) {
+        start = i;
+        break;
+      }
+      depth -= 1;
+    }
+  }
+  let end = source.length;
+  depth = 0;
+  for (let i = start === 0 && source[0] !== '{' ? 0 : start + 1; i < source.length; i += 1) {
+    if (source[i] === '{') depth += 1;
+    else if (source[i] === '}') {
+      if (depth === 0) {
+        end = i;
+        break;
+      }
+      depth -= 1;
+    }
+  }
+  return [start, end];
+}
+
 /**
  * 1-based lines of every composer `.fill(` followed within WINDOW_LINES by a
  * click on the Send control or an Enter press.
  */
 export function findBareComposerSends(source) {
-  const names = new Set();
+  // A name is the composer only inside the block that declares it: another function's `input` is not.
+  const declared = [];
   const declaration = new RegExp(String.raw`\b(?:const|let) (\w+)\s*=\s*[^;]*?${COMPOSER}`, 'g');
-  for (const match of source.matchAll(declaration)) names.add(match[1]);
-  const fills = [new RegExp(String.raw`${COMPOSER}\s*\.fill\(`, 'g')];
-  for (const name of names) fills.push(new RegExp(String.raw`\b${name}(?:\([^)]*\))?\s*\.fill\(`, 'g'));
+  for (const match of source.matchAll(declaration)) declared.push({ name: match[1], scope: enclosingBlock(source, match.index) });
+  const fills = [{ pattern: new RegExp(String.raw`${COMPOSER}\s*\.fill\(`, 'g'), receiver: COMPOSER, scope: [0, source.length] }];
+  for (const { name, scope } of declared) {
+    fills.push({ pattern: new RegExp(String.raw`\b${name}(?:\([^)]*\))?\s*\.fill\(`, 'g'), receiver: String.raw`\b${name}(?:\([^)]*\))?`, scope });
+  }
   const lines = source.split('\n');
   const found = new Set();
-  for (const fill of fills) {
-    for (const match of source.matchAll(fill)) {
+  for (const { pattern, receiver, scope } of fills) {
+    for (const match of source.matchAll(pattern)) {
+      if (match.index < scope[0] || match.index > scope[1]) continue;
       const index = source.slice(0, match.index).split('\n').length - 1;
       const after = lines.slice(index + 1, index + 1 + WINDOW_LINES).join('\n');
       const clicksSend = /chat-send-button|\bsendButton\b/.test(after) && /\.click\(\)/.test(after);
-      const pressesEnter = /\.press\(\s*(['"])Enter\1/.test(after);
+      // Enter on the composer itself, or on the focused element (the keyboard): not Enter on some other control.
+      const pressesEnter = new RegExp(String.raw`(?:${receiver}|\bkeyboard)\s*\.press\(\s*(['"])Enter\1`).test(after);
       if (clicksSend || pressesEnter) found.add(index + 1);
     }
   }
@@ -120,6 +154,21 @@ describe('e2e specs send through fillComposer (#2221, #2229)', () => {
     ).toHaveLength(1);
     expect(findBareComposerSends(`const box = page.locator('[data-testid="chat-message-input"]');\nawait box.fill(x);\nawait box.press('Enter');`)).toHaveLength(1);
     expect(findBareComposerSends(`await page.getByTestId('chat-message-input').fill(x);\nawait page.keyboard.press("Enter");`)).toHaveLength(1);
+  });
+
+  it('ties Enter to the composer, and a name to the block that declares it (#2231)', () => {
+    // Enter on another control after a fill is not a send of the composer.
+    expect(findBareComposerSends(`await page.getByTestId('chat-message-input').fill(x);\nawait page.getByTestId('other').press('Enter');`)).toEqual([]);
+    // The same name in another function is not the composer.
+    expect(
+      findBareComposerSends(
+        `function a() {\n  const input = page.getByTestId('chat-message-input');\n}\nfunction b() {\n  const input = page.getByTestId('title');\n  await input.fill(x);\n  await input.press('Enter');\n}`,
+      ),
+    ).toEqual([]);
+    // Inside its own block it still is.
+    expect(
+      findBareComposerSends(`function a() {\n  const input = page.getByTestId('chat-message-input');\n  await input.fill(x);\n  await input.press('Enter');\n}`),
+    ).toHaveLength(1);
   });
 
   it('accepts the helper, and a fill that is never followed by a send', () => {
