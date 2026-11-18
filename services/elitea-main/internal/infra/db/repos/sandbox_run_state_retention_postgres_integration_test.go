@@ -9,8 +9,9 @@ import (
 	"time"
 )
 
-func TestSandboxRunStatePurgesOnlyRunsIdlePastTheCutoff(t *testing.T) {
-	f := newCompiledPGFixture(t)
+// Run as a subtest of TestCompiledSnapshotPostgresLifecycle: the fixture
+// database must be empty when opened, so one test owns it per job.
+func sandboxRunStatePurgesOnlyRunsIdlePastTheCutoff(t *testing.T, f *compiledPGFixture) {
 	f.reset(t)
 	if _, err := f.pool.Exec(f.ctx, `DELETE FROM elitea_runtime.sandbox_run_failure_details`); err != nil {
 		t.Fatal(err)
