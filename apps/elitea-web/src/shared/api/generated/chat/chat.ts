@@ -111,6 +111,7 @@ import type {
   ListMessageTracesParams,
   ListParticipantCandidatesParams,
   ListSupportConversationsParams,
+  LocalChildTurnForbidden,
   LocalChildTurnRequest,
   LocalChildTurnStarted,
   LocalChildTurnState,
@@ -16033,7 +16034,7 @@ export type startLocalChildTurnResponse401 = {
 };
 
 export type startLocalChildTurnResponse403 = {
-  data: DesktopOperationError;
+  data: LocalChildTurnForbidden;
   status: 403;
 };
 
@@ -16216,6 +16217,7 @@ export const getStartLocalChildTurnQueryOptions = <
     | DesktopOperationError
     | InvalidClientVersionError
     | N401Response
+    | LocalChildTurnForbidden
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -16274,6 +16276,7 @@ export type StartLocalChildTurnQueryError =
   | DesktopOperationError
   | InvalidClientVersionError
   | N401Response
+  | LocalChildTurnForbidden
   | ClientUpgradeRequiredResponse
   | N500Response;
 
@@ -16283,6 +16286,7 @@ export function useStartLocalChildTurn<
     | DesktopOperationError
     | InvalidClientVersionError
     | N401Response
+    | LocalChildTurnForbidden
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -16317,6 +16321,7 @@ export function useStartLocalChildTurn<
     | DesktopOperationError
     | InvalidClientVersionError
     | N401Response
+    | LocalChildTurnForbidden
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -16351,6 +16356,7 @@ export function useStartLocalChildTurn<
     | DesktopOperationError
     | InvalidClientVersionError
     | N401Response
+    | LocalChildTurnForbidden
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -16381,6 +16387,7 @@ export function useStartLocalChildTurn<
     | DesktopOperationError
     | InvalidClientVersionError
     | N401Response
+    | LocalChildTurnForbidden
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(

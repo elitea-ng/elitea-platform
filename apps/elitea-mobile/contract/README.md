@@ -179,6 +179,12 @@ does not animate WebP: Android builds with `expo.webp.animated=false`, iOS anima
 video state its poster, each with the default motion. An SVG is not drawn (the still, then the old icon).
 Reduced motion shows the still only and downloads nothing else.
 
+## Client contract 1.61
+
+| Area | What |
+|---|---|
+| Nested agent of a desktop turn (delegation epic 2156, issue 2214) | `startLocalChildTurn` answers `delegation_notice` (a `DelegationNotice`) when it admitted the nested agent narrowed by its edge's grant, and its 403 `delegation_refused` carries one when the edge has no approved grant. Desktop only: the mobile app does not run a local agent loop, so nothing here changes on mobile. |
+
 ## Client contract 1.60
 
 | Area | What |

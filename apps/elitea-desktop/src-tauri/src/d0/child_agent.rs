@@ -176,10 +176,15 @@ impl Tool for CloudChildAgentTool {
 struct Lane {
     events: Arc<TurnEvents>,
     agent_id: String,
+    /// The call that started the child: a delegation notice sits at that call
+    /// (`parent_call_id`).
+    call_id: String,
 }
 
 impl Lane {
-    fn finish(&self, status: &str, result: &Value, usage: Option<&Value>) {
+    /// `notice` is the delegation notice of the child's edge (ADR-0044
+    /// Amendment 1, #2214): Main's, narrowed or refused, shown at the call.
+    fn finish(&self, status: &str, result: &Value, usage: Option<&Value>, notice: Option<&Value>) {
         let tokens = |key: &str| {
             usage
                 .and_then(|usage| usage.get(key))
@@ -201,8 +206,21 @@ impl Lane {
                 }
             }
         }
+        if let Some(notice) = notice.and_then(|notice| notice_at(notice, &self.call_id)) {
+            payload["delegation_notice"] = notice;
+        }
         self.events.send("subagent_finished", payload);
     }
+}
+
+/// Main's delegation notice for the call it answers: its `id` is the start's
+/// idempotency key, which the thread does not know, so the notice is keyed by
+/// the call that started the child. Anything that is not an object is no
+/// notice.
+fn notice_at(notice: &Value, call_id: &str) -> Option<Value> {
+    let mut notice = notice.as_object()?.clone();
+    notice.insert("id".to_owned(), json!(call_id));
+    Some(Value::Object(notice))
 }
 
 /// At most this much of a cloud agent's answer is relayed into a desktop
@@ -277,6 +295,7 @@ async fn call_bounded(
     let lane = Lane {
         events: context.events.clone(),
         agent_id: format!("cloud_{}", ordinal + 1),
+        call_id: call_id.to_owned(),
     };
     context.events.send(
         "subagent_started",
@@ -300,9 +319,14 @@ async fn call_bounded(
     };
     let started = match guard.started().await {
         Ok(started) => started,
-        Err(result) => {
+        Err(mut result) => {
+            // A refused delegation's notice is for the person, not the model:
+            // the model reads the typed error.
+            let notice = result
+                .as_object_mut()
+                .and_then(|result| result.remove("delegation_notice"));
             if let Some(lane) = guard.disarm() {
-                lane.finish("failed", &result, None);
+                lane.finish("failed", &result, None, notice.as_ref());
             }
             return result;
         }
@@ -315,7 +339,12 @@ async fn call_bounded(
         stop_child(&context.remote, &started.response_message_id).await;
     }
     if let Some(lane) = guard.disarm() {
-        lane.finish(end.status, &end.result, end.usage.as_ref());
+        lane.finish(
+            end.status,
+            &end.result,
+            end.usage.as_ref(),
+            started.notice.as_ref(),
+        );
     }
     end.result
 }
@@ -355,6 +384,9 @@ struct Started {
     execution_id: String,
     response_message_id: String,
     conversation_uuid: String,
+    /// Main's notice that the child was admitted narrowed by its edge's
+    /// grant (client contract 1.61).
+    notice: Option<Value>,
 }
 
 /// `startLocalChildTurn`, retried with the body's one key. Spawned as its
@@ -395,6 +427,7 @@ async fn start(remote: Arc<RemoteContext>, body: Value) -> Result<Started, Value
                 execution_id: text("child_execution_id"),
                 response_message_id: text("response_message_id"),
                 conversation_uuid: text("conversation_uuid"),
+                notice: answer.body.get("delegation_notice").cloned(),
             };
             if started.execution_id.is_empty() || started.response_message_id.is_empty() {
                 return Err(error_result(
@@ -415,7 +448,12 @@ async fn start(remote: Arc<RemoteContext>, body: Value) -> Result<Started, Value
             (_, message) if message.is_empty() => "the platform refused to start the agent".to_owned(),
             (_, message) => message,
         };
-        return Err(error_result(&code, &message));
+        let mut result = error_result(&code, &message);
+        // A refused delegation (403 `delegation_refused`) names why.
+        if let Some(notice) = answer.body.get("delegation_notice") {
+            result["delegation_notice"] = notice.clone();
+        }
+        return Err(result);
     }
 }
 
@@ -744,6 +782,7 @@ impl Drop for CancelOnDrop {
         lane.finish(
             "cancelled",
             &error_result("child_agent_cancelled", "the turn was stopped"),
+            None,
             None,
         );
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {

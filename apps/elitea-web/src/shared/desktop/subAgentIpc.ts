@@ -38,4 +38,11 @@ export interface SubAgentFinishedPayload {
   output_tokens: number;
   result?: string;
   error?: string;
+  /**
+   * A cloud child's delegation notice (client contract 1.61, ADR-0044
+   * Amendment 1): Main admitted the nested agent narrowed by its edge's grant,
+   * or refused it (`status` `failed`). The wire form of `delegation_v1`; read
+   * it with `parseDelegationNotice`, never as typed data.
+   */
+  delegation_notice?: Record<string, unknown>;
 }

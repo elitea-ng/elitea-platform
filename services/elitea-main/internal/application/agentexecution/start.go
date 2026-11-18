@@ -262,6 +262,12 @@ type CurrentApplicationStartRequest struct {
 	// a request body. The turn binds only its unattended tools and its
 	// question carries cause heartbeat. It needs the schedule origin.
 	Heartbeat bool
+	// NarrowVersion rewrites the frozen version the turn runs, after it is
+	// frozen and before it is admitted. It is set only by the desktop's cloud
+	// child start, to apply the delegation rule of the edge from the desktop's
+	// agent to the child (issue 2214, internal/application/delegationedge); never
+	// from a request body. An error refuses the start and is returned as is.
+	NarrowVersion func(ctx context.Context, versionDetails json.RawMessage) (json.RawMessage, error)
 	// projectSkills is ProjectSkillIDs, read and frozen by the service for
 	// this one turn. Unexported so no caller can hand the service skill
 	// content of its own.
@@ -436,6 +442,11 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 		return CurrentApplicationStartOutcome{}, err
 	}
 	target.VersionDetails = frozenVersion
+	if request.NarrowVersion != nil {
+		if target.VersionDetails, err = request.NarrowVersion(ctx, frozenVersion); err != nil {
+			return CurrentApplicationStartOutcome{}, err
+		}
+	}
 	questionItemID := currentTurnUUID(request.QuestionID, "question-item")
 	responseMessageID := currentTurnUUID(request.QuestionID, "response-message")
 	questionMeta := request.ThreadRun.questionMeta(

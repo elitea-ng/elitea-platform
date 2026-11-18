@@ -5,6 +5,8 @@
  * tool rows and text, `subagent_finished` settles it (again, after a
  * `send_input` continued it).
  */
+import { foldDelegationNotice, parseDelegationNotice, type DelegationNotice } from '@elitea/client-core/stream';
+
 import { t } from '@/shared/i18n';
 import type { SubAgentStartedPayload } from '@/shared/desktop/subAgentIpc';
 import type { AgentEvent, SubAgentStatus } from '@/shared/desktop/workspaceIpc';
@@ -66,6 +68,8 @@ export function briefRefsLine(refs: SubAgentLane['briefRefs']): string | undefin
 /** The part of a turn's view these events change. */
 interface LaneView {
   subAgents?: SubAgentLane[] | undefined;
+  /** The turn's refused or narrowed delegations; a cloud child's edge adds one at its call. */
+  delegationNotices?: readonly DelegationNotice[] | undefined;
 }
 
 type EventOf<K extends AgentEvent['kind']> = Extract<AgentEvent, { kind: K }>;
@@ -147,8 +151,19 @@ export function applySubAgentEvent<V extends LaneView>(view: V, event: SubAgentE
     case 'subagent_event':
       return withLane(view, event.payload.agent_id, (lane) => withInner(lane, event));
     case 'subagent_finished':
-      return withLane(view, event.payload.agent_id, (lane) => settled(lane, event));
+      return withDelegationNotice(withLane(view, event.payload.agent_id, (lane) => settled(lane, event)), event.payload.delegation_notice);
   }
+}
+
+/**
+ * A cloud child's delegation notice (client contract 1.61): one per call, so
+ * a replayed event does not double it. A value that is not a notice is no
+ * notice.
+ */
+function withDelegationNotice<V extends LaneView>(view: V, wire: Record<string, unknown> | undefined): V {
+  const notice = parseDelegationNotice(wire);
+  if (notice === undefined) return view;
+  return { ...view, delegationNotices: foldDelegationNotice(view.delegationNotices ?? [], notice) };
 }
 
 /** The lanes of the children one `spawn_agent` call started, in start order. */
