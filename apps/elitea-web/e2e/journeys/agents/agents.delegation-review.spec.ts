@@ -36,7 +36,7 @@ import {
   DEFAULT_PROJECT_ID,
   type GithubToolkitFixture,
 } from '../../fixtures/api';
-import { BASE_URL } from '../../playwright.config';
+import { BASE_URL } from '../../../playwright.config';
 
 const RUN_ID = String(Date.now()).slice(-6);
 
