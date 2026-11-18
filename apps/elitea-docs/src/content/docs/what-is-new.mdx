@@ -5,6 +5,13 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Toolkit indexes, internal storage, shared links and SharePoint sign-in
+
+- **List indexes** now names every index the toolkit has on its **Indexes** tab, not only those that already stored vectors. An index that was created and never ran, or whose first run failed, is listed too; searching it answers that it holds no searchable content yet instead of "not found". Before, the tool said "No indexed collections" next to a tab full of indexes. Upgrade the worker before Main.
+- The platform's own `index-artifacts` bucket (index results and toolkit discovery files) is no longer listed under **Artifacts** and its address answers "not found" to everyone. Nothing in it was deleted or moved, so existing deployments need no action.
+- **Copy link** on a toolkit, and **Share** on an agent or pipeline, now copy an address that names the project. Opening it from another project switches to the project the link was copied from, then opens the entity. Before, it opened in whichever project you had selected.
+- Signing in to SharePoint (and other Microsoft OAuth toolkits) no longer fails with `AADSTS650053` when the credential lists its scopes with commas ("User.Read, Chat.Read"): scopes are sent space-separated on both the sign-in and the token request.
+
 ## Delegation grants notice drift and follow Marketplace upgrades
 
 When an agent you attached gains a toolkit, a tool, a credential or a host after you approved it, the delegation grant is marked stale and the calling agent's owners and editors get one notification. The agent keeps running with what you approved; re-approve to give it the new items. Marketplace upgrades list every internal agent that would hold more, need a person's approval when one does, and re-approve those edges when approved. See [When the attached agent changes](/admin/enterprise-controls/least-privilege-and-trust#when-the-attached-agent-changes).

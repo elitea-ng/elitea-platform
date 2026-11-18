@@ -221,7 +221,7 @@ export function EditToolkit({ isMCP = false, deps }: EditToolkitProps): ReactNod
 
   const { detail, isFetching, isSuccess } = useToolkitDetail(projectId, toolkitId);
   const { canExport, canDelete } = useToolkitActionPermissions(projectId);
-  const copyLinkMenuItems = useCopyLinkMenuItem();
+  const copyLinkMenuItems = useCopyLinkMenuItem(projectId);
   const navigate = useNavigate();
 
   /*

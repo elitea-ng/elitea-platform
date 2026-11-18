@@ -16,6 +16,25 @@ describe('buildEntityShareLink', () => {
     ).toBe('http://localhost:8084/app/agents/all/7?name=Audit%20Agent');
   });
 
+  // #2148: without the project the link opened in the reader's own project.
+  it('names the project in the link so it opens in the project it was copied from', () => {
+    expect(
+      buildEntityShareLink({
+        origin: 'http://localhost:8084',
+        basename: '/app',
+        projectId: '17015',
+        entity: 'agents',
+        tab: 'all',
+        entityId: '7',
+        versionId: '11',
+        name: 'Audit Agent',
+      }),
+    ).toBe('http://localhost:8084/app/17015/agents/all/7/11?name=Audit%20Agent');
+    expect(
+      buildEntityShareLink({ origin: 'https://h', basename: '', projectId: '3', entity: 'pipelines', tab: 'all', entityId: '4' }),
+    ).toBe('https://h/3/pipelines/all/4');
+  });
+
   it('builds a VERSION link with the version segment', () => {
     expect(
       buildEntityShareLink({
