@@ -70,6 +70,7 @@ import {
   expectStoredAssistantAnswer,
   readStoredHitlInterrupt,
   readStoredTranscript,
+  fillComposer,
 } from '../fixtures/api';
 
 /** Matched WITHOUT a project id: the chat persona works inside its own personal project (#290). */
@@ -185,15 +186,12 @@ test('an ask_user pause renders answerable controls, and the answer finishes the
   await page.waitForURL(new RegExp(`/app/chat/${conversationId}(?:[/?#]|$)`), { timeout: 45_000 });
 
   // ── 4. Ask something the agent must clarify ────────────────────────────
+  const send = await fillComposer(page, `${ASK_USER_MARKER} pick the environment`);
   const started = page.waitForResponse(
     (r) => START_RE.test(r.url()) && r.request().method() === 'POST',
     { timeout: 60_000 },
   );
-  const input = page.getByTestId('chat-message-input');
-  await expect(input).toBeEditable({ timeout: 30_000 });
-  await input.fill(`${ASK_USER_MARKER} pick the environment`);
-  await expect(page.getByTestId('chat-send-button')).toBeEnabled({ timeout: 10_000 });
-  await page.getByTestId('chat-send-button').click();
+  await send.click();
 
   const startResponse = await started;
   expect(
@@ -338,13 +336,12 @@ test('an ask_user pause renders answerable controls, and the answer finishes the
   ).toBeEditable({ timeout: 30_000 });
 
   const followUpToken = `hitl${Date.now().toString(36)}${Math.floor(Math.random() * 46_656).toString(36)}`;
+  const followUpSend = await fillComposer(page, `autotest echo exactly: ${followUpToken}`);
   const followUpStarted = page.waitForResponse(
     (r) => START_RE.test(r.url()) && r.request().method() === 'POST',
     { timeout: 60_000 },
   );
-  await composer.fill(`autotest echo exactly: ${followUpToken}`);
-  await expect(page.getByTestId('chat-send-button')).toBeEnabled({ timeout: 10_000 });
-  await page.getByTestId('chat-send-button').click();
+  await followUpSend.click();
 
   // The STATUS, read from the route. A refused send leaves the typed text in
   // the composer and paints nothing, which on screen is indistinguishable from

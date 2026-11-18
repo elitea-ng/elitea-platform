@@ -44,6 +44,7 @@ import {
   expectStoredAssistantAnswer,
   fetchMockToolSpec,
   setToolkitGuardrails,
+  fillComposer,
 } from '../fixtures/api';
 
 const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/;
@@ -180,14 +181,11 @@ test('a real toolkit turn is attributed to its agent and its tool on the cost es
   expect(conversationId).not.toBe('');
   await page.waitForURL(new RegExp(`/app/chat/${conversationId}(?:[/?#]|$)`), { timeout: 45_000 });
 
+  const send = await fillComposer(page, callToolPrompt(MOCK_TOOL_READ_OPERATION, `attribute this call ${suffix}`));
   const started = page.waitForResponse((r) => START_RE.test(r.url()) && r.request().method() === 'POST', {
     timeout: 60_000,
   });
-  const input = page.getByTestId('chat-message-input');
-  await expect(input).toBeEditable({ timeout: 30_000 });
-  await input.fill(callToolPrompt(MOCK_TOOL_READ_OPERATION, `attribute this call ${suffix}`));
-  await expect(page.getByTestId('chat-send-button')).toBeEnabled({ timeout: 10_000 });
-  await page.getByTestId('chat-send-button').click();
+  await send.click();
   expect((await started).status(), 'the toolkit turn was refused').toBe(200);
 
   await expectStoredAssistantAnswer(page, projectId, conversationId, {

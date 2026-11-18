@@ -33,6 +33,8 @@ export type ChatBoxAgentEventSink = (frame: ExecutionEventData) => void;
 export interface ChatBoxConversationProp {
   readonly active?: ChatBoxActiveConversation;
   readonly isLoading?: boolean;
+  /** The id the page is opening (its URL's), known before `active` has loaded: the composer's draft belongs to it from the first keystroke. */
+  readonly pendingId?: string | number | undefined;
   /** Promote a newly persisted conversation into the page route and state. */
   readonly onCreated?: ((conversation: { readonly id?: string | number; readonly uuid?: string; readonly activeParticipantId?: string }) => void) | undefined;
   /** A turn opened (`sent`) or closed (`settled`) in this conversation (`hooks/useTurnActivity.ts`). */
@@ -43,12 +45,14 @@ export interface ChatBoxConversationProp {
 export function unwrapChatBoxConversation(conversation: ChatBoxConversationProp | undefined): {
   readonly activeConversation: ChatBoxActiveConversation | undefined;
   readonly isLoadingConversation: boolean | undefined;
+  readonly pendingConversationId: string | number | undefined;
   readonly onConversationCreated: ChatBoxConversationProp['onCreated'];
   readonly onTurn: ChatBoxConversationProp['onTurn'];
 } {
   return {
     activeConversation: conversation?.active,
     isLoadingConversation: conversation?.isLoading,
+    pendingConversationId: conversation?.pendingId,
     onConversationCreated: conversation?.onCreated,
     onTurn: conversation?.onTurn,
   };

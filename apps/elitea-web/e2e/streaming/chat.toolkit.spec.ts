@@ -85,6 +85,7 @@ import {
   readMockToolJournal,
   readStoredTranscript,
   setToolkitGuardrails,
+  fillComposer,
 } from '../fixtures/api';
 
 /** Matched WITHOUT a project id: the chat persona works inside its own personal project (#290). */
@@ -226,15 +227,12 @@ test('an openapi toolkit authored in the form is offered to the model and its ca
   expect(conversationId, 'the Chat button must create a conversation').not.toBe('');
   await page.waitForURL(new RegExp(`/app/chat/${conversationId}(?:[/?#]|$)`), { timeout: 45_000 });
 
+  const send = await fillComposer(page, callToolPrompt(MOCK_TOOL_READ_OPERATION, `read the status ${suffix}`));
   const started = page.waitForResponse(
     (r) => START_RE.test(r.url()) && r.request().method() === 'POST',
     { timeout: 60_000 },
   );
-  const input = page.getByTestId('chat-message-input');
-  await expect(input).toBeEditable({ timeout: 30_000 });
-  await input.fill(callToolPrompt(MOCK_TOOL_READ_OPERATION, `read the status ${suffix}`));
-  await expect(page.getByTestId('chat-send-button')).toBeEnabled({ timeout: 10_000 });
-  await page.getByTestId('chat-send-button').click();
+  await send.click();
 
   const startResponse = await started;
   expect(

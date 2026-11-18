@@ -75,7 +75,7 @@ const isNewDraft = (key: string | undefined): key is string => key?.endsWith(':n
 
 /**
  * Restores `key`'s draft into the composer (`restore`) when the key arrives
- * or changes, saves the text as it is typed, and saves it once more as the
+ * or changes (text typed BEFORE the key arrived is kept, not replaced), saves the text as it is typed, and saves it once more as the
  * key changes or the composer goes, so the last keystrokes before a switch
  * are not lost to the delay.
  */
@@ -95,8 +95,10 @@ export function useComposerDraft(key: string | undefined, text: string, restore:
     if (isNewDraft(before) && before !== key && saved !== '' && saved === latest.current.text) {
       // The new chat became this conversation and its text was carried here (`carryDraft`): the new chat starts empty again.
       writeDraft(before, '');
-    } else if (saved !== latest.current.text) {
+    } else if (saved !== latest.current.text && !(before === undefined && latest.current.text.trim() !== '')) {
       // Another conversation's text never stays behind: no draft here empties the input.
+      // Text typed while there was no key at all (the chat page before its project resolves) belongs to
+      // nobody else: it is kept and becomes this key's draft, never discarded for the saved one.
       latest.current.restore(saved);
       // The input holds this key's text from now on, even before that render lands: a composer
       // unmounted first (Create remounts the chat) must not save the text it is leaving under this key.

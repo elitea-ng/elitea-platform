@@ -70,7 +70,7 @@ import type { APIRequestContext } from '@playwright/test';
 import { createHash } from 'node:crypto';
 
 import { BASE_URL } from '../../playwright.config';
-import { AUTOTEST_PREFIX, DEFAULT_PROJECT_ID, createAgentThroughForm, readMockLlmJournal } from '../fixtures/api';
+import { AUTOTEST_PREFIX, DEFAULT_PROJECT_ID, createAgentThroughForm, readMockLlmJournal, fillComposer } from '../fixtures/api';
 
 /** Matched WITHOUT a project id: the chat persona works inside its own personal project (#290). */
 const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/;
@@ -224,15 +224,12 @@ interface BuilderTurn {
 
 /** Sends one message and asserts the START was accepted — a 422 here is the admission failure this journey is largely about. */
 async function sendTurn(page: import('@playwright/test').Page, prepared: PreparedAgent, text: string): Promise<BuilderTurn> {
+  const send = await fillComposer(page, text);
   const started = page.waitForResponse(
     (r) => START_RE.test(r.url()) && r.request().method() === 'POST',
     { timeout: 60_000 },
   );
-  const input = page.getByTestId('chat-message-input');
-  await expect(input).toBeEditable({ timeout: 30_000 });
-  await input.fill(text);
-  await expect(page.getByTestId('chat-send-button')).toBeEnabled({ timeout: 10_000 });
-  await page.getByTestId('chat-send-button').click();
+  await send.click();
   const startResponse = await started;
   expect(
     startResponse.status(),

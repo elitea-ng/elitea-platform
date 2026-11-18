@@ -47,6 +47,7 @@ import {
   readCallerIdentity,
   readCallerPersonalProjectId,
   readStoredTranscript,
+  fillComposer,
 } from '../fixtures/api';
 
 const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/;
@@ -270,14 +271,11 @@ async function callTool(
   args: Readonly<Record<string, unknown>>,
   tail: string,
 ): Promise<string> {
+  const send = await fillComposer(page, callToolWithArgumentsPrompt(tool, args, tail));
   const started = page.waitForResponse((r) => START_RE.test(r.url()) && r.request().method() === 'POST', {
     timeout: 60_000,
   });
-  const input = page.getByTestId('chat-message-input');
-  await expect(input).toBeEditable({ timeout: 30_000 });
-  await input.fill(callToolWithArgumentsPrompt(tool, args, tail));
-  await expect(page.getByTestId('chat-send-button')).toBeEnabled({ timeout: 10_000 });
-  await page.getByTestId('chat-send-button').click();
+  await send.click();
   const startResponse = await started;
   expect(
     startResponse.status(),

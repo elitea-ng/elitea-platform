@@ -11,7 +11,7 @@ import { UserInput } from './UserInput';
 
 const textarea = (): HTMLTextAreaElement => screen.getByTestId('chat-message-input');
 
-function Composer({ draftKey }: { readonly draftKey: string }): React.JSX.Element {
+function Composer({ draftKey }: { readonly draftKey: string | undefined }): React.JSX.Element {
   return <UserInput slots={{}} slotProps={{ field: { draftKey } }} callbacks={{ onSend: () => undefined }} />;
 }
 
@@ -98,6 +98,27 @@ describe('composer drafts', () => {
     expect(textarea()).toHaveValue('');
     expect(readDraft('chat:1:new')).toBe('');
     expect(readDraft('chat:1:a')).toBe('left behind');
+  });
+
+  it('keeps text typed before the draft key exists, instead of discarding it when the key arrives (#2221)', async () => {
+    // The chat page has no key until its project resolves; a fast typist's text must survive the key arriving.
+    const user = userEvent.setup();
+    const { rerender } = renderWithTheme(<Composer draftKey={undefined} />);
+    await user.type(textarea(), 'typed first');
+    rerender(<Composer draftKey="chat:1:new" />);
+    expect(textarea()).toHaveValue('typed first');
+    rerender(<Composer draftKey="chat:1:new" />);
+    act(() => {
+      rerender(<Composer draftKey="chat:1:other" />);
+    });
+    expect(readDraft('chat:1:new')).toBe('typed first');
+  });
+
+  it('still restores the saved draft when the composer opens empty and the key arrives', () => {
+    writeDraft('chat:1:a', 'saved earlier');
+    const { rerender } = renderWithTheme(<Composer draftKey={undefined} />);
+    rerender(<Composer draftKey="chat:1:a" />);
+    expect(textarea()).toHaveValue('saved earlier');
   });
 
   it('keeps only the newest drafts', () => {

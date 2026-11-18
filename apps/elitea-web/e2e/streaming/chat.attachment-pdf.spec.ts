@@ -32,6 +32,7 @@ import { BASE_URL } from "../../playwright.config";
 import {
   expectStoredAssistantAnswer,
   readStoredAssistantAnswer,
+  fillComposer,
 } from "../fixtures/api";
 
 const CONVERSATIONS_RE = /\/elitea_core\/conversations\/prompt_lib\/(\d+)$/;
@@ -134,6 +135,7 @@ test("a real PDF attached in chat reaches the model as its text", async ({
       "the picked PDF must enter the composer’s attachment state",
     ).toContainText("9 left");
 
+    const send = await fillComposer(page, prompt);
     const created = page.waitForResponse(
       (r) =>
         CONVERSATIONS_RE.test(new URL(r.url()).pathname) &&
@@ -153,12 +155,7 @@ test("a real PDF attached in chat reaches the model as its text", async ({
       },
     );
 
-    const input = page.getByTestId("chat-message-input");
-    await expect(input).toBeEditable({ timeout: 20_000 });
-    await input.fill(prompt);
-    const sendButton = page.getByTestId("chat-send-button");
-    await expect(sendButton).toBeEnabled({ timeout: 10_000 });
-    await sendButton.click();
+    await send.click();
 
     const createdResponse = await created;
     expect(createdResponse.status()).toBe(201);

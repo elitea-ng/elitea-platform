@@ -49,7 +49,7 @@
 import { expect, test } from '@playwright/test';
 
 import { BASE_URL } from '../../playwright.config';
-import { expectStoredAssistantAnswer, readStoredTranscript } from '../fixtures/api';
+import { expectStoredAssistantAnswer, readStoredTranscript, fillComposer } from '../fixtures/api';
 
 /**
  * Route shapes, matched WITHOUT pinning a project id — the chat driver acts
@@ -129,6 +129,7 @@ test('a second turn lands in the SAME conversation and the transcript accumulate
   await expect(page.getByTestId('model-selector-name')).toContainText(MODEL_NAME, { timeout: 10_000 });
 
   // ── Turn 1 ──────────────────────────────────────────────────────────────
+  const send = await fillComposer(page, promptA);
   const created = page.waitForResponse(
     (r) => CONVERSATIONS_RE.test(new URL(r.url()).pathname) && r.request().method() === 'POST',
     { timeout: 45_000 },
@@ -138,11 +139,7 @@ test('a second turn lands in the SAME conversation and the transcript accumulate
     { timeout: 45_000 },
   );
 
-  const input = page.getByTestId('chat-message-input');
-  await expect(input).toBeEditable({ timeout: 20_000 });
-  await input.fill(promptA);
-  await expect(page.getByTestId('chat-send-button')).toBeEnabled({ timeout: 10_000 });
-  await page.getByTestId('chat-send-button').click();
+  await send.click();
 
   const createdResponse = await created;
   expect(createdResponse.status(), 'the first send must create a real conversation').toBe(201);
@@ -205,14 +202,12 @@ test('a second turn lands in the SAME conversation and the transcript accumulate
   // always paints one fails here.
   await expect(page.getByTestId('chat-send-button')).toHaveCount(0);
 
+  const sendB = await fillComposer(page, promptB);
   const startedB = page.waitForResponse(
     (r) => START_RE.test(r.url()) && r.request().method() === 'POST',
     { timeout: 60_000 },
   );
-
-  await composer.fill(promptB);
-  await expect(page.getByTestId('chat-send-button')).toBeEnabled({ timeout: 10_000 });
-  await page.getByTestId('chat-send-button').click();
+  await sendB.click();
 
   const startBResponse = await startedB;
   expect(
