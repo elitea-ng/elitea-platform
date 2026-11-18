@@ -296,9 +296,19 @@ func (r *ArtifactBucketsRepository) MarkBucketNotified(ctx context.Context, buck
 	return nil
 }
 
-// IsWorkspaceBucket reports whether name is the project's hidden workspace
-// bucket (ADR-0034 decision 3). Every artifact gate asks it before the access
-// list, so the hidden bucket answers 404 by its type whatever it is called.
+// hiddenBucketSQL is the predicate (over elitea_storage.buckets columns) for a
+// bucket no person ever sees: the project's workspace bucket (ADR-0034
+// decision 3), found by type whatever it is called, and the platform's own
+// index result bucket (#2167: index runs and toolkit discovery keep internal
+// objects there, never a person's files). The index bucket is matched by its
+// reserved name AND the system type, so a person-made bucket of that name
+// (which creation refuses) could never be hidden by it.
+const hiddenBucketSQL = `(bucket_type = 'workspace' OR (bucket_type = 'system' AND name = '` + indexArtifactBucketName + `'))`
+
+// IsWorkspaceBucket reports whether name is a hidden bucket: the project's
+// workspace bucket (ADR-0034 decision 3) or the internal index result bucket
+// (#2167). Every artifact gate asks it before the access list, so a hidden
+// bucket answers 404 whatever it is called.
 func (r *ArtifactBucketsRepository) IsWorkspaceBucket(ctx context.Context, projectID int64, name string) (bool, error) {
 	if r.pool == nil {
 		return false, nil
@@ -306,7 +316,7 @@ func (r *ArtifactBucketsRepository) IsWorkspaceBucket(ctx context.Context, proje
 	var hidden bool
 	if err := r.pool.QueryRow(ctx, `
 SELECT EXISTS (SELECT 1 FROM elitea_storage.buckets
-               WHERE project_id = $1 AND name = $2 AND bucket_type = 'workspace' AND deleted_at IS NULL)`,
+               WHERE project_id = $1 AND name = $2 AND deleted_at IS NULL AND `+hiddenBucketSQL+`)`,
 		projectID, name).Scan(&hidden); err != nil {
 		return false, fmt.Errorf("read workspace bucket: %w", err)
 	}

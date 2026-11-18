@@ -280,6 +280,35 @@ fn the_catalog_is_read_strictly() {
     }
 }
 
+/// An index with no embedding space (created and never run, or a run that
+/// failed before storing vectors) is listed beside the searchable ones; half
+/// a space, or a repeated name, is still refused.
+#[test]
+fn an_unstamped_entry_is_a_listed_index_with_no_vectors() {
+    let catalog = IndexCatalog::parse(&json!([
+        {"name": "docs", "index_id": "ab", "embedding_model": "m", "embedding_dimension": 3},
+        {"name": "failed-run", "index_id": "cd", "state": "failed"}
+    ]))
+    .expect("catalog");
+    assert_eq!(catalog.entries().len(), 1);
+    assert_eq!(catalog.pending(), ["failed-run".to_owned()]);
+    let shared = SharedIndexCatalog::new(catalog);
+    assert!(shared.remove("failed-run"));
+    assert!(shared.snapshot().pending().is_empty());
+    for invalid in [
+        json!([{"name": "n", "index_id": "ab", "embedding_model": "m"}]),
+        json!([{"name": "n", "index_id": "ab", "embedding_dimension": 3}]),
+        json!([{"name": "n", "index_id": "AB"}]),
+        json!([{"name": "n", "index_id": "ab"}, {"name": "n", "index_id": "cd"}]),
+        json!([
+            {"name": "n", "index_id": "ab", "embedding_model": "m", "embedding_dimension": 3},
+            {"name": "n", "index_id": "cd"}
+        ]),
+    ] {
+        assert!(IndexCatalog::parse(&invalid).is_err(), "{invalid}");
+    }
+}
+
 /// Review round 2, finding 2: the entry rule is ONE rule, shared with
 /// elitea-main's `indexcatalog.ValidEntry` through the fixture both test
 /// suites read, and the entry cap is Main's cap.

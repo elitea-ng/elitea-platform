@@ -13,6 +13,7 @@ import { usePermissionList } from '@/shared/api/generated/auth/auth';
 import type { Permission } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 import { handleCopy } from '@/shared/lib/clipboard';
+import { currentPageProjectLink } from '@/shared/lib/projectLink';
 import { PERMISSIONS } from '@/shared/lib/permissions';
 import type { ControlsDropdownItem } from '@/shared/ui/ControlsDropdown';
 
@@ -71,22 +72,23 @@ const COPIED_LABEL_DURATION_MS = 2500;
  * Copy-link needs neither: `@/shared/lib/clipboard`'s real `handleCopy`
  * (the SAME primitive every other copy-to-clipboard call site in this app
  * already uses) plus the current page's own URL is the entire feature.
- * `window.location.href` (not the baseline's unported `useProjectEntityLink`)
- * is a disclosed simplification — THIS page's URL already IS the toolkit's
- * own detail-page URL.
+ * The link names the selected project (#2148): the page's own URL alone opens
+ * in whatever project the reader has selected, not the one it was copied from.
+ * `{origin}{basename}/{projectId}{path}` goes through the project switcher
+ * route, which selects that project before the toolkit opens.
  */
-export function useCopyLinkMenuItem(): ControlsDropdownItem[] {
+export function useCopyLinkMenuItem(projectId?: string): ControlsDropdownItem[] {
   const [copied, setCopied] = useState(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => () => clearTimeout(timeoutRef.current), []);
 
   const onClick = useCallback(() => {
-    void handleCopy(window.location.href);
+    void handleCopy(currentPageProjectLink(projectId));
     setCopied(true);
     clearTimeout(timeoutRef.current);
     timeoutRef.current = setTimeout(() => setCopied(false), COPIED_LABEL_DURATION_MS);
-  }, []);
+  }, [projectId]);
 
   const label = copied
     ? t('pages.toolkits.editToolkit.copyLinkCopied', 'Copied!')

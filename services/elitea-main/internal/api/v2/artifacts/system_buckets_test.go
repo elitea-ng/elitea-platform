@@ -123,16 +123,20 @@ func TestATurnReachesOnlyItsOwnConversationInASystemBucket(t *testing.T) {
 	}
 	// An unscoped listing, another system bucket, a claim that is not live.
 	for path, claimID := range map[string]string{
-		"/objects/1/" + attachments:                                          "claim-1",
-		"/objects/1/index-artifacts/" + ownConversation + "/result.json":     "claim-1",
+		"/objects/1/" + attachments: "claim-1",
 		"/objects/1/" + attachments + "/" + ownConversation + "/report.xlsx": "forged",
 	} {
 		if code := download(t, router, path, claimID); code != http.StatusForbidden {
 			t.Fatalf("%s (%s) = %d, want 403", path, claimID, code)
 		}
 	}
-	if code := upload(t, router, "index-artifacts", ownConversation+"/x.json", true); code != http.StatusForbidden {
-		t.Fatalf("index-artifacts write = %d, want 403", code)
+	// The index result bucket is internal (#2167): absent to every caller,
+	// claim or not, before the system-bucket rule is reached.
+	if code := download(t, router, "/objects/1/index-artifacts/"+ownConversation+"/result.json", "claim-1"); code != http.StatusNotFound {
+		t.Fatalf("index-artifacts read = %d, want 404", code)
+	}
+	if code := upload(t, router, "index-artifacts", ownConversation+"/x.json", true); code != http.StatusNotFound {
+		t.Fatalf("index-artifacts write = %d, want 404", code)
 	}
 
 	// A user bucket is not judged by the system-bucket rule.
