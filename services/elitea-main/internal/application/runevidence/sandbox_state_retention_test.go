@@ -6,15 +6,26 @@ import (
 	"time"
 )
 
+// heldStore is emptyRunStore that also lists held runs.
+type heldStore struct {
+	emptyRunStore
+	held []string
+}
+
+func (h heldStore) HeldRunIDs(context.Context, int64, time.Time) ([]string, error) {
+	return h.held, nil
+}
+
 type sandboxSpy struct {
 	project int64
 	cutoff  time.Time
+	held    []string
 	limits  []int
 	answers []int
 }
 
-func (s *sandboxSpy) PurgeSettledRuns(_ context.Context, project int64, cutoff time.Time, limit int) (int, error) {
-	s.project, s.cutoff = project, cutoff
+func (s *sandboxSpy) PurgeSettledRuns(_ context.Context, project int64, cutoff time.Time, held []string, limit int) (int, error) {
+	s.project, s.cutoff, s.held = project, cutoff, held
 	s.limits = append(s.limits, limit)
 	n := s.answers[0]
 	s.answers = s.answers[1:]
@@ -25,7 +36,7 @@ func (s *sandboxSpy) PurgeSettledRuns(_ context.Context, project int64, cutoff t
 // project's step_record cutoff, repeating a full batch within the same pass.
 func TestRecordPassClearsSandboxRunStateAtTheStepRecordCutoff(t *testing.T) {
 	spy := &sandboxSpy{answers: []int{10, 3}}
-	sweeper, err := NewSweeper(memoryPolicies{maxDays: 30}, emptyRunStore{}, nil,
+	sweeper, err := NewSweeper(memoryPolicies{maxDays: 30}, heldStore{held: []string{"held-run"}}, nil,
 		func(context.Context) (bool, error) { return false, nil }, RetentionConfig{BatchSize: 10}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -38,7 +49,7 @@ func TestRecordPassClearsSandboxRunStateAtTheStepRecordCutoff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if spy.project != 4 || !spy.cutoff.Equal(now.Add(-30*24*time.Hour)) || len(spy.limits) != 2 || stats.SandboxRuns != 13 {
+	if spy.project != 4 || !spy.cutoff.Equal(now.Add(-30*24*time.Hour)) || len(spy.limits) != 2 || stats.SandboxRuns != 13 || len(spy.held) != 1 || spy.held[0] != "held-run" {
 		t.Fatalf("project %d cutoff %s limits %v runs %d", spy.project, spy.cutoff, spy.limits, stats.SandboxRuns)
 	}
 }

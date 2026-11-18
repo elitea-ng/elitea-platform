@@ -32,12 +32,15 @@ func NewSandboxRunState(pool *pgxpool.Pool) *SandboxRunState {
 // rows of up to limit runs of the project whose latest sandbox activity (a
 // dispatch written or a failure detail recorded, any generation) is before
 // cutoff. A run with any newer row keeps all its rows, so a resumed run is
-// never cut in half. It returns how many runs it cleared.
+// never cut in half, and the runs in held (legal hold) keep everything. It
+// returns how many runs it selected.
 //
 // The AgentState database holds no run status of its own; the window is the
-// settlement guarantee: a run idle in the sandbox for the whole retention
-// window is not executing.
-func (s *SandboxRunState) PurgeSettledRuns(ctx context.Context, projectID int64, cutoff time.Time, limit int) (int, error) {
+// settlement guarantee: step_record deletes the run's own records at the same
+// age (at least seven days), so a run idle in the sandbox that long is over.
+// A run resumed in the instant between the select and the delete keeps only
+// its newer rows.
+func (s *SandboxRunState) PurgeSettledRuns(ctx context.Context, projectID int64, cutoff time.Time, held []string, limit int) (int, error) {
 	if limit < 1 {
 		return 0, nil
 	}
@@ -47,17 +50,23 @@ func (s *SandboxRunState) PurgeSettledRuns(ctx context.Context, projectID int64,
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	rows, err := tx.Query(ctx, `
-SELECT tenant_id, execution_id FROM (
+SELECT o.tenant_id, o.execution_id FROM (
     SELECT tenant_id, execution_id, created_at AS at
-      FROM elitea_runtime.sandbox_dispatches WHERE project_id = $1
+      FROM elitea_runtime.sandbox_dispatches WHERE project_id = $1 AND created_at < $2
     UNION ALL
     SELECT tenant_id, execution_id, recorded_at AS at
-      FROM elitea_runtime.sandbox_run_failure_details WHERE project_id = $1
-) activity
- GROUP BY tenant_id, execution_id
-HAVING max(at) < $2
- ORDER BY max(at)
- LIMIT $3`, projectID, cutoff.UTC(), limit)
+      FROM elitea_runtime.sandbox_run_failure_details WHERE project_id = $1 AND recorded_at < $2
+) o
+ WHERE o.execution_id <> ALL($4::text[])
+   AND NOT EXISTS (SELECT 1 FROM elitea_runtime.sandbox_dispatches d
+                    WHERE d.tenant_id = o.tenant_id AND d.project_id = $1
+                      AND d.execution_id = o.execution_id AND d.created_at >= $2)
+   AND NOT EXISTS (SELECT 1 FROM elitea_runtime.sandbox_run_failure_details f
+                    WHERE f.tenant_id = o.tenant_id AND f.project_id = $1
+                      AND f.execution_id = o.execution_id AND f.recorded_at >= $2)
+ GROUP BY o.tenant_id, o.execution_id
+ ORDER BY max(o.at)
+ LIMIT $3`, projectID, cutoff.UTC(), limit, nonNilStrings(held))
 	if err != nil {
 		return 0, fmt.Errorf("sandbox run state: select settled runs: %w", err)
 	}

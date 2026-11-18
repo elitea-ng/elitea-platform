@@ -121,9 +121,17 @@ type AgentMemoryStore interface {
 // AgentState database follow the run retention window.
 type SandboxStateStore interface {
 	// PurgeSettledRuns deletes the dispatch journal and failure-detail rows of
-	// up to limit runs of the project with no sandbox activity since cutoff.
-	// It returns how many runs.
-	PurgeSettledRuns(ctx context.Context, projectID int64, cutoff time.Time, limit int) (int, error)
+	// up to limit runs of the project with no sandbox activity since cutoff,
+	// except the runs in held (an active legal hold covers them). It returns
+	// how many runs.
+	PurgeSettledRuns(ctx context.Context, projectID int64, cutoff time.Time, held []string, limit int) (int, error)
+}
+
+// HeldRunLister names the runs of a project older than cutoff that an active
+// legal hold covers (repos.RunSteps). The sandbox purge needs it: the
+// AgentState database cannot see holds, so without it the purge does not run.
+type HeldRunLister interface {
+	HeldRunIDs(ctx context.Context, projectID int64, cutoff time.Time) ([]string, error)
 }
 
 // memoryBackfillEvery is how often the full-scan backfill runs per project:
@@ -263,14 +271,23 @@ func (s *Sweeper) sweepSandboxState(ctx context.Context, maxima map[int64]int, s
 	if s.sandbox == nil {
 		return
 	}
+	holds, ok := s.store.(HeldRunLister)
+	if !ok {
+		return
+	}
 	class := attribute.String("class", string(retention.ClassStepRecord))
 	now := s.now().UTC()
 	budget := s.cfg.MaxPerPass
 	for _, projectID := range sortedKeys(maxima) {
 		cutoff := now.Add(-time.Duration(maxima[projectID]) * 24 * time.Hour)
+		held, err := holds.HeldRunIDs(ctx, projectID, cutoff)
+		if err != nil {
+			s.fail(ctx, stats, class, "sandbox_state", projectID, err)
+			continue
+		}
 		for budget > 0 && ctx.Err() == nil {
 			limit := min(s.cfg.BatchSize, budget)
-			cleared, err := s.sandbox.PurgeSettledRuns(ctx, projectID, cutoff, limit)
+			cleared, err := s.sandbox.PurgeSettledRuns(ctx, projectID, cutoff, held, limit)
 			budget -= cleared
 			stats.SandboxRuns += int64(cleared)
 			if err != nil {

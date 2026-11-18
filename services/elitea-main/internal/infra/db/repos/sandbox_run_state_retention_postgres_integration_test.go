@@ -39,17 +39,20 @@ VALUES('t1',$1,$2,1,'boom',clock_timestamp()-make_interval(secs => $3::float8))`
 	dispatch(7, "resumed", 45*day)
 	failure(7, "resumed", day)
 	dispatch(7, "recent", day)
+	// A run under legal hold keeps its rows however old.
+	dispatch(7, "held", 50*day)
+	failure(7, "held", 50*day)
 	// Another project's old run is not this project's to clear.
 	dispatch(8, "other-project", 60*day)
 
 	store := NewSandboxRunState(f.pool)
 	cutoff := time.Now().Add(-30 * day)
 	// The limit is honoured: one run first, then the rest.
-	first, err := store.PurgeSettledRuns(f.ctx, 7, cutoff, 1)
+	first, err := store.PurgeSettledRuns(f.ctx, 7, cutoff, []string{"held"}, 1)
 	if err != nil || first != 1 {
 		t.Fatalf("first batch = %d, %v; want 1", first, err)
 	}
-	second, err := store.PurgeSettledRuns(f.ctx, 7, cutoff, 10)
+	second, err := store.PurgeSettledRuns(f.ctx, 7, cutoff, []string{"held"}, 10)
 	if err != nil || second != 1 {
 		t.Fatalf("second batch = %d, %v; want 1", second, err)
 	}
@@ -71,11 +74,11 @@ VALUES('t1',$1,$2,1,'boom',clock_timestamp()-make_interval(secs => $3::float8))`
 		return got
 	}
 	dispatches := left("sandbox_dispatches")
-	if len(dispatches) != 3 || !dispatches["resumed"] || !dispatches["recent"] || !dispatches["other-project"] {
+	if len(dispatches) != 4 || !dispatches["held"] || !dispatches["resumed"] || !dispatches["recent"] || !dispatches["other-project"] {
 		t.Fatalf("dispatches left = %v", dispatches)
 	}
 	failures := left("sandbox_run_failure_details")
-	if len(failures) != 1 || !failures["resumed"] {
+	if len(failures) != 2 || !failures["held"] || !failures["resumed"] {
 		t.Fatalf("failure details left = %v", failures)
 	}
 }

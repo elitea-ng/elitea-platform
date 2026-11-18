@@ -78,6 +78,8 @@ func startStepRetention(ctx context.Context, lookup func(string) (string, bool),
 	// and without one there is nothing of Main's to prune.
 	if sandbox := dbrepos.NewSandboxRunState(agentStatePool); sandbox != nil {
 		sweeper.WithSandboxState(sandbox)
+	} else {
+		logger.Info("step retention: no AgentState database composed; the worker's sandbox rows are not pruned by Main")
 	}
 	for _, routine := range []struct {
 		id, description string
