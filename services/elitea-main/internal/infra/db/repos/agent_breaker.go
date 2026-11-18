@@ -78,6 +78,12 @@ func NewAgentBreaker(pool *pgxpool.Pool, appender securityaudit.Appender) (*Agen
 // the tool did not fail.
 const capRefusalText = "the run reached a run cap an administrator set; the call does not run"
 
+// The agent_breaker_runs.cap_reached column (shared 0213) reads, for the
+// breaker, as "not a failure of the agent": a run cap stop or a platform
+// refusal. Only the breaker reads it (the workforce scorecard counts caps
+// from execution_jobs.cancel_reason), so the two causes share it and no
+// migration is needed (#2152).
+//
 // platformRefusalIngestSQL and platformRefusalHeldSQL are true for a failure
 // event (alias e) whose code is in breaker.NotAgentFailureCodes, which is
 // parameter $5 of the ingest and $1 of the held-agents read.
