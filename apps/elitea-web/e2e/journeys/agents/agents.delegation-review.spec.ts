@@ -36,6 +36,7 @@ import {
   DEFAULT_PROJECT_ID,
   type GithubToolkitFixture,
 } from '../../fixtures/api';
+import { BASE_URL } from '../../../playwright.config';
 
 const RUN_ID = String(Date.now()).slice(-6);
 
@@ -103,7 +104,7 @@ async function openParentWithSpecialist(page: Page, suffix: string, toolkitCount
   };
 }
 
-async function chooseSpecialist(page: Page, fixture: Fixture): Promise<void> {
+async function chooseSpecialist(page: Page, fixture: { readonly specialistName: string }): Promise<void> {
   const picker = page.getByRole('button', { name: 'Agent', exact: true });
   await expect(picker).toBeEnabled({ timeout: 30_000 });
   await picker.click();
@@ -213,5 +214,48 @@ test('DR-3: cancelling the review attaches nothing and writes no grant', async (
     expect(await readGrants(page, fixture)).toEqual([]);
   } finally {
     await cleanUp(page, fixture);
+  }
+});
+
+test('DR-4: the chat notice link (review_delegation) opens the review of exactly that edge, then drops the param', async ({
+  page,
+}) => {
+  test.setTimeout(300_000);
+  let fixture: Fixture | undefined;
+  let second: { id: string; name: string; toolkit: GithubToolkitFixture } | undefined;
+  try {
+    fixture = await openParentWithSpecialist(page, 'dl', 1);
+    await chooseSpecialist(page, fixture);
+    await page.getByRole('dialog', { name: `What ${fixture.specialistName} will be able to use` }).getByRole('button', { name: 'Approve and attach' }).click();
+    await expect(page.getByTestId('delegation-grant-status')).toHaveAttribute('data-grant-state', 'approved', { timeout: 30_000 });
+
+    // A second edge on the same caller, so "the right row" is a choice between two.
+    const toolkit = await createGithubToolkit(page.request, DEFAULT_PROJECT_ID, `${AUTOTEST_PREFIX}dg_dl2_${RUN_ID}`);
+    const name = `${AUTOTEST_PREFIX}spec_dl2_${RUN_ID}`;
+    const other = await createAgent(page.request, name);
+    second = { id: other.id, name, toolkit };
+    const attached = await page.request.patch(`${API_BASE}/elitea_core/tool/prompt_lib/${DEFAULT_PROJECT_ID}/${toolkit.toolkitId}`, {
+      data: { entity_version_id: Number(other.versionId), entity_id: Number(other.id), entity_type: 'agent', has_relation: true },
+    });
+    expect(attached.ok()).toBe(true);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await expect(page.getByTestId('agent-toolkits-section')).toBeVisible({ timeout: 30_000 });
+    await chooseSpecialist(page, { specialistName: name });
+    await page.getByRole('dialog', { name: `What ${name} will be able to use` }).getByRole('button', { name: 'Approve and attach' }).click();
+    await expect(page.getByTestId('delegation-grant-status')).toHaveCount(2, { timeout: 30_000 });
+
+    // The link the notice carries, for each edge in turn.
+    for (const callee of [{ id: second.id, name }, { id: fixture.specialistId, name: fixture.specialistName }]) {
+      await page.goto(`${BASE_URL}/app/agents/all/${fixture.parentId}?review_delegation=${callee.id}`);
+      const dialog = page.getByRole('dialog', { name: `What ${callee.name} will be able to use` });
+      await expect(dialog, 'the dialog of the edge the link names must open on arrival').toBeVisible({ timeout: 30_000 });
+      await expect(page).not.toHaveURL(/review_delegation/);
+    }
+  } finally {
+    await cleanUp(page, fixture);
+    if (second !== undefined) {
+      await deleteAgent(page.request, second.id).catch(() => {});
+      await deleteGithubToolkit(page.request, DEFAULT_PROJECT_ID, second.toolkit).catch(() => {});
+    }
   }
 });

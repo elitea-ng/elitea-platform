@@ -14,6 +14,7 @@
 
 use std::fmt;
 
+use crate::delegation::DelegationNotice;
 use crate::toolkits::DelegatedAuthorizationRequirement;
 
 /// Stable native assembly and result-selection failures.
@@ -87,6 +88,9 @@ pub struct NativeAgentAssemblyError {
     message: &'static str,
     authorization: Option<Box<DelegatedAuthorizationRequirement>>,
     cause: Option<NativeAgentAssemblyCause>,
+    /// The notice of a delegation refused where no tool result can carry it
+    /// (a pipeline node that runs a saved pipeline): names and ids only.
+    delegation_notice: Option<Box<DelegationNotice>>,
 }
 
 impl NativeAgentAssemblyError {
@@ -96,7 +100,22 @@ impl NativeAgentAssemblyError {
             message,
             authorization: None,
             cause: None,
+            delegation_notice: None,
         }
+    }
+
+    /// Attach the notice of a delegation this failure refused (ADR-0044
+    /// Amendment 1, A1.2 rule 5), so the lifecycle can show it before the
+    /// terminal failure.
+    #[must_use]
+    pub fn with_delegation_notice(mut self, notice: Option<DelegationNotice>) -> Self {
+        self.delegation_notice = notice.map(Box::new);
+        self
+    }
+
+    #[must_use]
+    pub fn delegation_notice(&self) -> Option<&DelegationNotice> {
+        self.delegation_notice.as_deref()
     }
 
     /// Attach the worker's typed, data-free reason (see [`NativeAgentAssemblyCause`]).

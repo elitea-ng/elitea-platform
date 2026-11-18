@@ -1,6 +1,6 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getGetApplicationMockHandler, getPreviewDelegationGrantMockHandler } from '@/shared/api/generated/applications/applications.msw';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
@@ -78,13 +78,15 @@ function serve(body: DelegationPreview): { approvals: unknown[] } {
   return seen;
 }
 
-function renderStatus(value: DelegationGrant, readOnly = false) {
+function renderStatus(value: DelegationGrant, readOnly = false, deepLink?: { readonly onAutoOpened: () => void }) {
   return renderWithProviders(
     <DelegationGrantStatus
       projectId="proj-1"
       applicationId={42}
       grant={value}
       readOnly={readOnly}
+      autoOpen={deepLink !== undefined}
+      onAutoOpened={deepLink?.onAutoOpened}
     />,
   );
 }
@@ -104,6 +106,15 @@ describe('DelegationGrantStatus', () => {
     expect(screen.getByTestId('delegation-grant-status')).toHaveAttribute('data-grant-state', view);
     expect(screen.getByText(label)).toBeVisible();
     expect(screen.getByRole('button', { name: 'Review delegation' })).toBeEnabled();
+  });
+
+  it('opens the review on arrival when the deep link names its edge, once, and tells the host to drop the link', async () => {
+    serve(preview());
+    const onAutoOpened = vi.fn();
+    renderStatus(grant(), false, { onAutoOpened });
+
+    expect(await screen.findByRole('dialog', { name: 'What Git specialist will be able to use' })).toBeVisible();
+    expect(onAutoOpened).toHaveBeenCalledTimes(1);
   });
 
   it('approves a pending grant from the review, with what the person kept, and closes', async () => {

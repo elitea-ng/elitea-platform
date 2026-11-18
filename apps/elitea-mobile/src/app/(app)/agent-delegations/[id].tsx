@@ -34,7 +34,8 @@ function nameParam(value: unknown): string {
  */
 export default function AgentDelegationsScreen() {
   const { colors } = useDesign();
-  const { id, name } = useLocalSearchParams<{ id: string; name?: string }>();
+  const { id, name, callee } = useLocalSearchParams<{ id: string; name?: string; callee?: string }>();
+  const focusCalleeId = typeof callee === 'string' && /^[1-9]\d{0,14}$/.test(callee) ? Number(callee) : null;
   const applicationId = typeof id === 'string' && /^[1-9]\d{0,14}$/.test(id) ? Number(id) : null;
   const agentName = nameParam(name);
   // The agent id means something only in the project it was opened from: pin it at mount.
@@ -152,6 +153,7 @@ export default function AgentDelegationsScreen() {
         busy={busy}
         banner={note ?? (failed && rows.length > 0 ? delegationErrorText(failed) : null)}
         selectable={selectable}
+        focusCalleeId={focusCalleeId}
         onApprove={onApprove}
         onRevoke={onRevoke}
         onRetry={refetch}
