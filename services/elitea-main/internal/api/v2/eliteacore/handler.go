@@ -42,6 +42,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/marketplace"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpoauth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpregistry"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/publicproject"
@@ -61,6 +62,10 @@ func mustJSON(v any) []byte {
 }
 
 type Handler struct {
+	// listingsOnce and listingsBackfill build the Marketplace listings of
+	// versions published before they existed (marketplace_read.go).
+	listingsOnce     sync.Once
+	listingsBackfill *marketplace.Backfill
 	// connectors is the connector catalogue gate (ADR-0044 decision 1,
 	// #1501): mcp_connector_gate.go. Nil is the open mode.
 	connectors *connectorapproval.Gate
@@ -129,6 +134,18 @@ type Handler struct {
 	// change request (publish_core.go, ADR-0040 decision 3). nil governs
 	// nothing.
 	governor PublishGovernor
+	// suspender stops the agents that hold a yanked listing version when an
+	// administrator asks (marketplace_yank.go, ADR-0051 decision 4). nil
+	// answers that the suspension is unavailable.
+	suspender ListingSuspender
+	// holdsWorkforceManage answers whether the caller holds
+	// agents.workforce.manage in a project (marketplace_feedback.go). nil
+	// refuses every caller.
+	holdsWorkforceManage func(r *http.Request, projectID string) (bool, error)
+	// delegation proposes and revokes the delegation grant of an edge in the
+	// transaction that attaches or detaches it (ADR-0044 amendment 1). Nil
+	// leaves attachments as they were.
+	delegation DelegationGrantHook
 }
 
 // EventEmitter is the seam to internal/events.Publisher, declared locally so
@@ -274,6 +291,26 @@ func WithDelegatedAuthToolkitSettingsResolver(resolver DelegatedAuthToolkitSetti
 			handler.delegatedAuth = resolver
 		}
 	}
+}
+
+// DelegationGrantHook creates and revokes the delegation grant of an attached
+// edge in the attach's own transaction (repos.DelegationGrants).
+type DelegationGrantHook interface {
+	AttachTx(ctx context.Context, tx pgx.Tx, attach repos.DelegationAttach) error
+	DetachTx(ctx context.Context, tx pgx.Tx, attach repos.DelegationAttach) error
+}
+
+// WithDelegationGrants composes the delegation grant hook of the agent-as-tool
+// attach and detach (ADR-0044 amendment 1, A1.2 rule 2).
+func WithDelegationGrants(hook DelegationGrantHook) Option {
+	return func(handler *Handler) { handler.delegation = hook }
+}
+
+// WithWorkforceManagerCheck sets the check that the caller manages agents in a
+// project (agents.workforce.manage). The publish of a workforce report takes it
+// (ADR-0051 decision 6); without it the route refuses every caller.
+func WithWorkforceManagerCheck(check func(r *http.Request, projectID string) (bool, error)) Option {
+	return func(handler *Handler) { handler.holdsWorkforceManage = check }
 }
 
 // WithObjectStore wires S20b's icon byte path (UploadIcon/DeleteIcon) onto
@@ -1110,6 +1147,7 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 		VersionName     string `json:"version_name"`
 		ValidationToken string `json:"validation_token"`
 		Category        string `json:"category"`
+		ReleaseNotes    string `json:"release_notes"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
@@ -1134,6 +1172,16 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
+	}
+
+	// An agent installed from the Marketplace is someone else's work: it is
+	// not published again as it stands. Fork it first (ADR-0051 decision 3).
+	if marketplace.IsInstalledVersion(ctx, h.pool, s, versionID) {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error": "installed_agent_not_publishable",
+			"msg":   "This agent was installed from the Marketplace. Fork it before you publish it.",
+		})
+		return
 	}
 
 	// Agent lifecycle governance (ADR-0040 decision 3): a tier that needs
@@ -1194,6 +1242,7 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 		schema: s, projectID: projectID, appID: appID, versionID: versionID,
 		versionName: body.VersionName, category: body.Category,
 		publishedBy: publishedBy, hasPublisher: hasPublisher, releaseActorID: releaseActorID(r),
+		releaseNotes: body.ReleaseNotes,
 	})
 	if refusal != nil {
 		writeJSON(w, refusal.Status, refusal.Body)
@@ -1562,6 +1611,14 @@ func (h *Handler) Unpublish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The Marketplace snapshots stay while a project holds them: the versions
+	// are withdrawn, not deleted, and a listing with none left is delisted.
+	// This runs first, because it reads the twin rows the next call deletes.
+	if err := withdrawListingVersions(ctx, tx, projectID, revertedVersionIDs); err != nil {
+		slog.ErrorContext(ctx, "unpublish: marketplace withdraw failed", "project_id", projectID, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to withdraw the agent from the marketplace"})
+		return
+	}
 	if err := removeCatalogTwins(ctx, tx, projectID, revertedVersionIDs); err != nil {
 		slog.ErrorContext(ctx, "unpublish: catalog twin removal failed", "project_id", projectID, "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove the agent from the catalog"})
@@ -4207,6 +4264,22 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 			forkMeta["parent_entity_id"] = sourceAppID
 			forkMeta["parent_project_id"] = sourceOwnerID
 			forkMeta["parent_author_id"] = fmt.Sprintf("%d", userID)
+			// A fork of a published version records which listing version it
+			// came from, so an upstream update has a base to diff against
+			// (ADR-0051 decision 3). A fork of anything else has no such version.
+			var originListing, originVersion int64
+			var originDigest [32]byte
+			if sourceVersion, parseErr := strconv.ParseInt(fmt.Sprint(v["id"]), 10, 64); parseErr == nil && sourceVersion > 0 {
+				if match, found, lookupErr := marketplace.LookupByCatalogueVersion(ctx, h.pool, marketplace.KindAgent, sourceVersion); lookupErr == nil && found {
+					originListing, originVersion, originDigest = match.ListingID, sourceVersion, match.Digest
+					forkMeta[marketplace.MetaOriginKind] = marketplace.OriginForked
+					forkMeta[marketplace.MetaOriginListingID] = strconv.FormatInt(match.ListingID, 10)
+					forkMeta[marketplace.MetaOriginVersionID] = strconv.FormatInt(sourceVersion, 10)
+					forkMeta[marketplace.MetaOriginDigest] = hex.EncodeToString(match.Digest[:])
+					forkMeta[marketplace.MetaOriginVersionName] = match.VersionName
+					forkMeta[marketplace.MetaOriginListingName] = match.ListingName
+				}
+			}
 			if _, hasIcon := forkMeta["icon_meta"]; !hasIcon {
 				forkMeta["icon_meta"] = map[string]any{}
 			}
@@ -4249,6 +4322,15 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			createdVersionID = vID
+			if originListing > 0 {
+				if err := marketplace.RecordInstall(ctx, h.pool, marketplace.Install{
+					ProjectID: parseProjectID(projectID), EntityKind: marketplace.KindAgent, EntityID: int64(appID),
+					ListingID: originListing, VersionID: originVersion, Digest: originDigest,
+					Mode: marketplace.ModeFork, ToolsOn: true, InstalledBy: userID.Int64(),
+				}); err != nil {
+					slog.WarnContext(ctx, "fork: the marketplace record failed", "application_id", appID, "error", err)
+				}
+			}
 
 			// Insert variables. A variable is a value the agent needs to run,
 			// and these two statements were written `_, _ = h.pool.Exec(...)`
@@ -4596,8 +4678,14 @@ func (h *Handler) ExportImportGet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	isFork := strings.EqualFold(r.URL.Query().Get("fork"), "true")
-	if isFork && len(versions) > 0 {
-		versions = versions[len(versions)-1:]
+	if isFork {
+		// The version the caller named, else the newest (#1993).
+		kept, found := forkVersions(versions, r.URL.Query()["follow_version_ids"])
+		if !found {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "version not found"})
+			return
+		}
+		versions = kept
 	}
 
 	// AFTER the fork branch, so the skills the document carries are the skills

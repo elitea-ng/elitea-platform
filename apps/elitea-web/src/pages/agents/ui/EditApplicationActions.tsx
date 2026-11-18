@@ -8,7 +8,12 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import { useNavigate } from '@tanstack/react-router';
 
 import { EntityLifecycleControls } from '@/features/agent-lifecycle';
-import { DeleteApplicationButton, ExportApplicationButton, applicationServerErrorMessage } from '@/features/agents';
+import {
+  DeleteApplicationButton,
+  ExportApplicationButton,
+  applicationServerErrorMessage,
+  useApplicationsStore,
+} from '@/features/agents';
 import { StopAgentButton } from '@/features/kill-switch';
 
 import { ChatWithAgentButton } from './ChatWithAgentButton';
@@ -67,6 +72,10 @@ export function EditApplicationActions({
   const listTab = tab ?? 'latest';
   const navigate = useNavigate();
   const forkTargets = useForkTargetProjects(projectId);
+  const openCompareVersions = useApplicationsStore((state) => state.setCompareVersionsOpen);
+  // #1997 — the version bar's compare modal, offered from the ⋮ menu too; same
+  // two-version gate as `CompareVersionsButton`.
+  const canCompare = hasTwoVersions(detail);
   const [error, setError] = useState<string | undefined>(undefined);
   const [notice, setNotice] = useState<string | undefined>(undefined);
 
@@ -91,29 +100,19 @@ export function EditApplicationActions({
   const handleChatError = useCallback(
     // The server's own refusal when it gave one (an agent or pipeline whose
     // attachments break the composition rule, FU-244), else the generic text.
-    (error?: unknown) => setError(applicationServerErrorMessage(error, t('pages.agents.editApplication.chatError', 'Failed to open a chat with this agent.'))),
+    (error?: unknown) =>
+      setError(
+        applicationServerErrorMessage(
+          error,
+          t('pages.agents.editApplication.chatError', 'Failed to open a chat with this agent.'),
+        ),
+      ),
     [],
   );
 
   return (
     <Box sx={wrapperSx}>
-      {error !== undefined && (
-        <Typography
-          role="alert"
-          variant="bodySmall"
-        >
-          {error}
-        </Typography>
-      )}
-      {notice !== undefined && (
-        <Typography
-          component="output"
-          variant="bodySmall"
-          data-testid="agent-copy-notice"
-        >
-          {notice}
-        </Typography>
-      )}
+      <ActionMessages error={error} notice={notice} />
       <ChatWithAgentButton
         projectId={projectId}
         applicationId={applicationId}
@@ -128,7 +127,13 @@ export function EditApplicationActions({
         onError={handleExportError}
       />
       {/* ADR-0050 decision 1: a personal agent's independent copy in a team project. */}
-      <PersonalAgentCopyButton projectId={projectId} applicationId={applicationId} name={name} projects={forkTargets} onNotice={setNotice} />
+      <PersonalAgentCopyButton
+        projectId={projectId}
+        applicationId={applicationId}
+        name={name}
+        projects={forkTargets}
+        onNotice={setNotice}
+      />
       {/* ADR-0041 decision 1: the project admin's kill switch for this agent. */}
       <StopAgentButton projectId={projectId} applicationId={applicationId} onError={setError} />
       <DeleteApplicationButton
@@ -153,11 +158,40 @@ export function EditApplicationActions({
         entityId={applicationId}
         entityName={name ?? ''}
         tab={tab}
-        activeVersionId={activeVersion?.id}
+        activeVersionId={currentVersionId}
         activeVersionStatus={activeVersion?.status}
+        {...(canCompare ? { onCompareVersions: () => openCompareVersions(true) } : {})}
       />
     </Box>
   );
+}
+
+function ActionMessages({
+  error,
+  notice,
+}: {
+  readonly error: string | undefined;
+  readonly notice: string | undefined;
+}): ReactNode {
+  return (
+    <>
+      {error !== undefined && (
+        <Typography role="alert" variant="bodySmall">
+          {error}
+        </Typography>
+      )}
+      {notice !== undefined && (
+        <Typography component="output" variant="bodySmall" data-testid="agent-copy-notice">
+          {notice}
+        </Typography>
+      )}
+    </>
+  );
+}
+
+/** Same two-version gate as `CompareVersionsButton`. */
+function hasTwoVersions(detail: ApplicationDetail | undefined): boolean {
+  return (detail?.versions.length ?? 0) >= 2;
 }
 
 const wrapperSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', gap: '0.25rem' };

@@ -670,11 +670,15 @@ impl PipelineNativeAgentAssembler {
             None
         };
         tracing::Span::current().record("stage", "toolsets");
+        // ADR-0044 Amendment 1: the root is `own(root) ∩ P`, as on the
+        // ordinary path (`ordinary.rs`), before either use below.
+        let toolsets =
+            super::application_tools::principal_bounded_snapshot(runtime_context, toolsets);
         // FU-335: the delegation ceiling is the root's own frozen,
-        // policy-applied attachments, the same set an ordinary root holds
-        // (`ordinary.rs`). It is taken BEFORE the alias reduction below,
-        // which only keeps credentials of unused toolkits from being
-        // materialized here; it is never a grant rule.
+        // policy-applied attachments, the same set an ordinary root holds.
+        // It is taken BEFORE the alias reduction below, which only keeps
+        // credentials of unused toolkits from being materialized here; it is
+        // never a grant rule.
         let delegation_root = super::application_tools::root_delegation_scope(
             runtime_context,
             super::request::AgentExecutionKind::Application,
@@ -2549,6 +2553,7 @@ fn delegate_saved_pipeline(
         &mut version,
         &admitted.data_classes,
         runtime.tool_policy.egress(),
+        Some(admitted.revision.application_id),
     )?
     .map(|delegation| (version, delegation)))
 }
@@ -2561,6 +2566,7 @@ fn composition_refusal(
     caller: &DelegationScope,
     admitted: &AdmittedSavedPipeline,
     egress: &elitea_agent_runtime::egress::RunEgress,
+    target_id: Option<u64>,
 ) -> Result<Option<RefusedDelegation>, NativeAgentAssemblyError> {
     let mut version = admitted.version.clone();
     match super::application_tools::narrow_version(
@@ -2568,11 +2574,17 @@ fn composition_refusal(
         &mut version,
         &admitted.data_classes,
         egress,
+        target_id,
     )? {
         Err(refused) => Ok(Some(refused)),
         Ok(delegation) => {
             for child in admitted.children.values() {
-                if let Some(refused) = composition_refusal(&delegation.scope, child, egress)? {
+                if let Some(refused) = composition_refusal(
+                    &delegation.scope,
+                    child,
+                    egress,
+                    Some(child.revision.application_id),
+                )? {
                     return Ok(Some(refused));
                 }
             }
@@ -2631,6 +2643,7 @@ async fn admit_saved_pipeline_child(
         runtime.materialization.delegation(),
         admitted.as_ref(),
         runtime.tool_policy.egress(),
+        Some(identity.0),
     )? {
         return Ok(Err(refused));
     }
@@ -2712,6 +2725,7 @@ fn bind_admitted_saved_pipeline<'a>(
                 return Err(super::application_tools::delegation_refused_error(
                     DelegatedCallee::Pipeline,
                     &refused,
+                    &graph_path,
                 ));
             }
         };
@@ -2916,9 +2930,12 @@ async fn bind_scoped_agent(
     // refusal answered as a tool result: a refused delegation ends the run at
     // start, typed and readable, before any effect.
     if let Some(refused) = entry.enforced_refusal() {
+        // MERGE NOTE (FU-335 x #2235): no graph path here, so main's
+        // `pipeline_node` notice is not attached; only FU-335's.
         return Err(super::application_tools::delegation_refused_error(
             DelegatedCallee::Agent,
             &refused,
+            "",
         ));
     }
     let (fingerprint, member) = (entry.saved_agent_fingerprint, entry.member.clone());
@@ -3012,7 +3029,8 @@ async fn bind_saved_pipeline_runtimes(
     });
     let mut runtimes = PipelineNodeRuntimes::new(llm_factory, direct_tool_resolver, application)
         .with_delegated_servers(runtime.mcp_tokens)
-        .with_events(runtime.node_events.clone());
+        .with_events(runtime.node_events.clone())
+        .with_execution_id(runtime.context.execution_id());
     if let Some(code) = &runtime.code {
         runtimes = runtimes.with_code(code.clone());
     }

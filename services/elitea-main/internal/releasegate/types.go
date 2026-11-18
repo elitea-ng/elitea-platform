@@ -305,7 +305,10 @@ type GateResult struct {
 	CreatedBy          *int64         `json:"created_by"`
 	CreatedAt          time.Time      `json:"created_at"`
 	EvaluatedAt        *time.Time     `json:"evaluated_at"`
-	Override           *Override      `json:"override"`
+	// PendingReason says why a pending gate has not decided, when it is more
+	// than "its runs are still going": results waiting for human scores.
+	PendingReason string    `json:"pending_reason,omitempty"`
+	Override      *Override `json:"override"`
 	// Starting is a gate whose runs are still being started: it is stored
 	// before the first run starts and is not evaluated until FinishStart.
 	Starting bool `json:"-"`

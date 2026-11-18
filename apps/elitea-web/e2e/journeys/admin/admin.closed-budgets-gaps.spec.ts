@@ -31,7 +31,8 @@
  *    no warning banner above the chat input — #6011, #6012, #6014.
  *
  * One journey per group stands for the whole group, the same way
- * `agents.closed-entity-folders-gap.spec.ts` stands for its cluster.
+ * the entity-folders gap journey used to stand for its cluster (it was replaced by
+ * `agents.folders.spec.ts` when project folders shipped, issue 2048).
  */
 import { expect, test as adminTest } from '@playwright/test';
 

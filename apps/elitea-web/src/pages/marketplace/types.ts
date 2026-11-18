@@ -1,0 +1,34 @@
+/**
+ * Marketplace types — the one card shape both kinds of listing are drawn from.
+ */
+
+/** What a listing is: an agent to hire or a skill to add. Pipelines come after publishing supports them (ADR-0051 Q7). */
+export type MarketplaceKind = 'agents' | 'skills';
+
+/** One listing as a card shows it, whatever the kind. */
+export interface ListingCardData {
+  readonly kind: MarketplaceKind;
+  /** The listing id: the page's URL key. */
+  readonly id: string;
+  /** The public catalogue agent or skill: likes and Try in chat use it. */
+  readonly entityId: string;
+  readonly name: string;
+  readonly description: string;
+  readonly iconUrl: string | undefined;
+  readonly publisher: string | undefined;
+  /** Null until reviews exist (ADR-0051 M5). */
+  readonly ratingAvg: number | null;
+  readonly ratingCount: number;
+  readonly hires: number;
+  readonly likes: number;
+  /** The caller liked the public twin. */
+  readonly isLiked: boolean;
+  /** The current version's label. */
+  readonly version: string | undefined;
+  readonly tier: string;
+  readonly requiredTypes: readonly string[];
+  /** The newest version this project hired, when it did. */
+  readonly hiredVersion: string | undefined;
+  readonly categories: readonly string[];
+  readonly delisted: boolean;
+}

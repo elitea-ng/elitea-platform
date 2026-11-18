@@ -21,7 +21,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { TestToolkitToolOutcome } from '../../api/toolkitTestRun';
-import { readToolkitToolResult, testToolkitTool } from '../../api/toolkitTestRun';
+import { readToolkitToolResult, startIndexTest, testToolkitTool } from '../../api/toolkitTestRun';
 import { forgetToolkitTest, recalledToolkitTest, rememberToolkitTest, rememberToolkitTestOutcome } from '../../api/toolkitTestRecovery';
 
 export interface UseToolkitTestToolRunParams {
@@ -49,6 +49,8 @@ export function useToolkitTestToolRun({ projectId, toolkitId }: UseToolkitTestTo
 
   /** The press whose answer this component still wants. */
   const currentPressRef = useRef(0);
+  /** True while an `index_data` start request is on the wire, so a second press cannot start a second run. */
+  const indexStartInFlightRef = useRef(false);
   const authorizationReference = useRef<string | undefined>(undefined);
   const getAuthorizationReference = useCallback(() => authorizationReference.current, []);
   const rememberAuthorization = useCallback((reference: string) => {
@@ -97,6 +99,7 @@ export function useToolkitTestToolRun({ projectId, toolkitId }: UseToolkitTestTo
 
   const run = useCallback(
     async (toolName: string, toolParams: Readonly<Record<string, unknown>>): Promise<void> => {
+      if (toolName === 'index_data' && indexStartInFlightRef.current) return;
       currentPressRef.current += 1;
       const press = currentPressRef.current;
       setOutcome(undefined);
@@ -104,6 +107,15 @@ export function useToolkitTestToolRun({ projectId, toolkitId }: UseToolkitTestTo
 
       const savedParams = structuredClone(toolParams);
       pendingRef.current = undefined;
+      if (toolName === 'index_data') {
+        // No recovery bookkeeping: a reload that re-presses Run gets the active run's 409 (`indexBusy`).
+        indexStartInFlightRef.current = true;
+        const started = await startIndexTest({ projectId, toolkitId, toolParams: savedParams }).finally(() => { indexStartInFlightRef.current = false; });
+        if (!mountedRef.current || press !== currentPressRef.current) return;
+        setOutcome(started);
+        setIsRunning(false);
+        return;
+      }
       const requestId = crypto.randomUUID();
       rememberToolkitTest(projectId, toolkitId, requestId, 'request');
       const settled = await testToolkitTool({ requestId, projectId, toolkitId, toolName, toolParams: savedParams, ...(authorizationReference.current ? { authorizationReference: authorizationReference.current } : {}) });

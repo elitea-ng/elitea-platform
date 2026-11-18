@@ -27,3 +27,8 @@ export function triggerScope(projectId: string | undefined, versionDetails: Chat
     versionInstructions: versionDetails?.instructions,
   };
 }
+
+/** Wide layout: the columns scroll on their own so the canvas stays pinned; the stacked one scrolls as a page. */
+export function mainOverflow(isSmallWindow: boolean): 'scroll' | 'hidden' {
+  return isSmallWindow ? 'scroll' : 'hidden';
+}

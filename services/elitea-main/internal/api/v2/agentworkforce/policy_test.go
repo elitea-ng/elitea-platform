@@ -46,6 +46,10 @@ func (f *fakePolicyStore) ListAutomaticActions(_ context.Context, _ int64, filte
 
 func (f *fakePolicyStore) UndoAutoHire(_ context.Context, _, actionID int64, actor repos.WorkforceActor, _ string, confirm bool) (repos.AutomaticAction, error) {
 	f.undo.action, f.undo.actor, f.undo.confirm = actionID, actor, confirm
+	// The real store refuses anyone who is not an agent manager (decideHire).
+	if !actor.Manager {
+		return repos.AutomaticAction{}, agentworkforce.Refuse(agentworkforce.ForbiddenCode, "Only an agent manager undoes or keeps an automatic hire.")
+	}
 	return repos.AutomaticAction{ID: actionID, Status: agentworkforce.ActionUndone}, nil
 }
 
@@ -115,6 +119,23 @@ func TestSetPolicyCarriesTheManagerFlagAndRefusesUnknownFields(t *testing.T) {
 	recorder = servePolicy(t, store, true, http.MethodPut, "/agent_workforce/prompt_lib/7/policy", `{"auto_delete":true}`)
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("unknown field: %d", recorder.Code)
+	}
+}
+
+// Undo hire is offered on the Workshop list row (issue 2091). A person without
+// the workforce permission is refused by the route, and the list of actions the
+// row reads to find the action is refused too, so the row has nothing to offer.
+func TestUndoHireIsRefusedWithoutTheWorkforcePermission(t *testing.T) {
+	store := &fakePolicyStore{}
+	recorder := servePolicy(t, store, false, http.MethodPost, "/agent_workforce/prompt_lib/7/automatic_actions/5/undo", "")
+	if recorder.Code != http.StatusForbidden || !strings.Contains(recorder.Body.String(), agentworkforce.ForbiddenCode) {
+		t.Fatalf("undo as a member: %d %s", recorder.Code, recorder.Body.String())
+	}
+	if recorder := servePolicy(t, store, false, http.MethodGet, "/agent_workforce/prompt_lib/7/automatic_actions?status=applied", ""); recorder.Code != http.StatusForbidden {
+		t.Fatalf("list as a member: %d", recorder.Code)
+	}
+	if recorder := servePolicy(t, store, true, http.MethodPost, "/agent_workforce/prompt_lib/7/automatic_actions/5/undo", ""); recorder.Code != http.StatusOK {
+		t.Fatalf("undo as a manager: %d", recorder.Code)
 	}
 }
 

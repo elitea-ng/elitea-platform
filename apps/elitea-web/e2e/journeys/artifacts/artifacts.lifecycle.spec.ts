@@ -223,7 +223,8 @@ test.describe('J20 artifacts lifecycle', () => {
     // line later than before.
     const name = page.getByRole('textbox', { name: /^name$/i });
     await expect(name).toHaveValue('new-bucket', { timeout: 15_000 });
-    await expect(name).toHaveAttribute('maxlength', '56');
+    // The server's bucket rule is `^[a-z][a-z0-9-]{1,62}$`: 63 characters at most.
+    await expect(name).toHaveAttribute('maxlength', '63');
 
     const submit = page.getByRole('button', { name: /^create bucket$/i });
     await expect(submit).toBeEnabled();
@@ -232,7 +233,7 @@ test.describe('J20 artifacts lifecycle', () => {
     // validator's exact sentence. A stub renders neither.
     await name.fill('9-starts-with-a-digit');
     await name.blur();
-    await expect(page.getByText('Start with a letter and use only letters, numbers, and hyphens.')).toBeVisible();
+    await expect(page.getByText('Start with a letter and use only lowercase letters, numbers, and hyphens.')).toBeVisible();
     await expect(submit).toBeDisabled();
 
     // …and recovering restores it, proving the validator is live, not a

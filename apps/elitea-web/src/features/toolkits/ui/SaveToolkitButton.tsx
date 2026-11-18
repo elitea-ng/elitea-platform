@@ -91,6 +91,7 @@ export function SaveToolkitButton({
 
   const onSaveToolkit = useCallback(() => {
     if (hasErrors) {
+      // The caller's triggerValidation also says why the click did nothing (#2016).
       triggerValidation?.();
       return;
     }

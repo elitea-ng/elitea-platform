@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -261,6 +262,12 @@ type CurrentApplicationStartRequest struct {
 	// a request body. The turn binds only its unattended tools and its
 	// question carries cause heartbeat. It needs the schedule origin.
 	Heartbeat bool
+	// NarrowVersion rewrites the frozen version the turn runs, after it is
+	// frozen and before it is admitted. It is set only by the desktop's cloud
+	// child start, to apply the delegation rule of the edge from the desktop's
+	// agent to the child (issue 2214, internal/application/delegationedge); never
+	// from a request body. An error refuses the start and is returned as is.
+	NarrowVersion func(ctx context.Context, versionDetails json.RawMessage) (json.RawMessage, error)
 	// projectSkills is ProjectSkillIDs, read and frozen by the service for
 	// this one turn. Unexported so no caller can hand the service skill
 	// content of its own.
@@ -327,6 +334,10 @@ type CurrentApplicationStartService struct {
 	// (project_skills.go). A service without it refuses a request that picks
 	// a project skill.
 	projectSkills CurrentProjectSkillResolver
+	// conversationSkills is optional — attached via WithConversationSkills.
+	// It reads the skills pinned to the turn's conversation (ADR-0050
+	// amendment 1); a service without it applies no pins.
+	conversationSkills CurrentConversationSkillResolver
 	// governedRefusals is optional — attached via
 	// WithGovernedRefusalSettlement (governed_refusal.go, #1485). A service
 	// without it answers a refused governed continuation and leaves the
@@ -431,6 +442,11 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 		return CurrentApplicationStartOutcome{}, err
 	}
 	target.VersionDetails = frozenVersion
+	if request.NarrowVersion != nil {
+		if target.VersionDetails, err = request.NarrowVersion(ctx, frozenVersion); err != nil {
+			return CurrentApplicationStartOutcome{}, err
+		}
+	}
 	questionItemID := currentTurnUUID(request.QuestionID, "question-item")
 	responseMessageID := currentTurnUUID(request.QuestionID, "response-message")
 	questionMeta := request.ThreadRun.questionMeta(
@@ -786,9 +802,11 @@ const maxCurrentAgentStepLimit = 1024
 // (apps/elitea-web/src/features/agents/lib/internalTools.ts) plus `ask_user`.
 // Membership here means "the product can do this", not "every worker can":
 // BOTH runtimes skip what they cannot serve, with a logged
-// `agent_internal_tool_skipped` — the native one for the five it has not
-// implemented (data_analysis, image_generation, internal_mcp, pyodide, swarm;
-// services/elitea-worker-rust/src/agents/internal_tools.rs). It serves
+// `agent_internal_tool_skipped` — the native one for the five it does not
+// serve everywhere (data_analysis, image_generation, internal_mcp, pyodide,
+// swarm; services/elitea-worker-rust/src/agents/internal_tools.rs: pyodide
+// is served as run_python wherever the deployment has a code sandbox, and
+// skipped, with the notice, where it has none). It serves
 // planner, lazy_tools_mode (Smart Tools Selection), attachments and subagents itself. The Python worker's image now ships everything in this
 // map (#872 gave it a pinned Deno runtime plus the SDK's own sandbox
 // entrypoint, closing the one gap it had —
@@ -1007,6 +1025,8 @@ func validJSONArray(value []byte) bool {
 type unsupportedCurrentAgentStart struct {
 	reason string
 	cause  error
+	// code marks a refusal the sender may be told (start_refusal.go).
+	code StartRefusal
 }
 
 func (e *unsupportedCurrentAgentStart) Error() string {
@@ -1022,6 +1042,37 @@ func (e *unsupportedCurrentAgentStart) Unwrap() []error {
 		return []error{ErrUnsupportedCurrentAgentStart}
 	}
 	return []error{ErrUnsupportedCurrentAgentStart, e.cause}
+}
+
+// UnsupportedReasons returns the fixed sentences of the refusals in err that
+// carry a registered StartRefusal code, outermost first. Free-form reasons
+// (stage names, join descriptions) and wrapped dependency errors are never
+// returned: they go to the log only. A bare sentinel yields none.
+func UnsupportedReasons(err error) []string {
+	var reasons []string
+	var walk func(error)
+	walk = func(current error) {
+		if current == nil {
+			return
+		}
+		if typed, ok := current.(*unsupportedCurrentAgentStart); ok {
+			if sentence := startRefusalSentences[typed.code]; sentence != "" && !slices.Contains(reasons, sentence) {
+				reasons = append(reasons, sentence)
+			}
+			walk(typed.cause)
+			return
+		}
+		switch wrapped := current.(type) {
+		case interface{ Unwrap() []error }:
+			for _, inner := range wrapped.Unwrap() {
+				walk(inner)
+			}
+		case interface{ Unwrap() error }:
+			walk(wrapped.Unwrap())
+		}
+	}
+	walk(err)
+	return reasons
 }
 
 // unsupportedStart names a refusal. The reason must be a fixed string: it

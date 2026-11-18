@@ -42,6 +42,13 @@ export function buildEditorTheme(theme: Theme): Extension {
         color: theme.vars.palette.text.primary,
         caretColor: theme.vars.palette.text.primary,
       },
+      // `basicSetup` includes `drawSelection()`, which hides the native caret and
+      // paints its own `.cm-cursor` — a left border whose default colour is
+      // black, invisible on the dark editor background. `caretColor` above does
+      // nothing for it (#2021).
+      '.cm-cursor, .cm-dropCursor': {
+        borderLeftColor: theme.vars.palette.text.primary,
+      },
       '.cm-gutters': {
         backgroundColor: theme.vars.palette.background.tabPanel,
         color: theme.vars.palette.text.secondary,

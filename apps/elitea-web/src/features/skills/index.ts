@@ -1,13 +1,16 @@
 export { GenerateSkillModal } from './ui/GenerateSkillModal';
-export { PublicSkillsCatalog } from './ui/PublicSkillsCatalog';
+export { PublicSkillsCatalog, publishedVersionIdOf } from './ui/PublicSkillsCatalog';
+export { AttachPublicSkillDialog } from './ui/AttachPublicSkillDialog';
 export { SkillCompareModal } from './ui/SkillCompareModal';
 export { SkillEditorToolbar } from './ui/SkillEditorToolbar';
+export { NewSkillVersionModal } from './ui/NewSkillVersionModal';
 export { SkillForm } from './ui/SkillForm';
 export type { SkillIconControl } from './ui/SkillForm';
 export { SkillImportButton } from './ui/SkillImportButton';
 export { SkillPublishControls } from './ui/SkillPublishControls';
 export { SkillsList } from './ui/SkillsList';
-export { cancelSkillTest, exportSkill, testSkill } from './api/skillsApi';
+export { exportSkill } from './api/skillsApi';
+export { SkillTrustPanel } from './ui/SkillTrustPanel';
 export { skillVersionKey } from './lib/skillVersionKey';
 // Only the two symbols an outside caller actually needs. The dialog, the
 // icon-list query and the upload/delete mutations are the slice's INTERNAL
@@ -18,10 +21,13 @@ export { useBindSkillIconMutation } from './api/skillIconApi';
 export type { SkillIconMeta } from './api/skillIconApi';
 export { isSkillValid } from './lib/skillValidation';
 export { useSkill, useSkillMutations, useSkills } from './model/useSkills';
+export { useAllPublicSkills } from './model/usePublicSkills';
+export { useSkillCategories } from './model/useSkillPublishing';
+export type { PublicSkillSummary } from './model/publishTypes';
+export { useSkillBulkActions } from './model/useSkillBulkActions';
 export type {
   SkillDraft,
   SkillRecord,
-  SkillTestTurn,
   SkillVersion,
   SkillWriteInput,
 } from './model/types';

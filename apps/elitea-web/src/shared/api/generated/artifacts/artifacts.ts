@@ -67,6 +67,7 @@ import type {
   Error,
   ListObjectsParams,
   ListObjectsResponse,
+  MoveObjectRequest,
   N401Response,
   N403Response,
   PresignUploadPartResponse,
@@ -1906,6 +1907,262 @@ export function useBatchDeleteObjects<
     projectID,
     bucket,
     batchDeleteObjectsRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type moveObjectResponse200 = {
+  data: UploadObjectResponse;
+  status: 200;
+};
+
+export type moveObjectResponse400 = {
+  data: Error;
+  status: 400;
+};
+
+export type moveObjectResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type moveObjectResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type moveObjectResponse404 = {
+  data: Error;
+  status: 404;
+};
+
+export type moveObjectResponse409 = {
+  data: Error;
+  status: 409;
+};
+
+export type moveObjectResponseSuccess = moveObjectResponse200 & {
+  headers: Headers;
+};
+export type moveObjectResponseError = (
+  | moveObjectResponse400
+  | moveObjectResponse401
+  | moveObjectResponse403
+  | moveObjectResponse404
+  | moveObjectResponse409
+) & {
+  headers: Headers;
+};
+
+export type moveObjectResponse =
+  moveObjectResponseSuccess | moveObjectResponseError;
+
+export const getMoveObjectUrl = (projectID: number, bucket: string) => {
+  return `/artifacts/objects/${projectID}/${bucket}:move`;
+};
+
+/**
+ * Copies the object to `to`, then deletes `from`, so the caller sees one name or the other, never both (#2015). Needs the upload and the delete permission and the bucket's write access. `to` follows the upload's key rules; an existing target is 409 AlreadyExists unless `overwrite` is true. Answers the upload's response shape for the new key.
+ * @summary Rename or move one object inside its bucket
+ */
+export const moveObject = async (
+  projectID: number,
+  bucket: string,
+  moveObjectRequest: MoveObjectRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<moveObjectResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<moveObjectResponse>(getMoveObjectUrl(projectID, bucket), {
+    ...options,
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getHeaders(options?.headers),
+    },
+    body: JSON.stringify(moveObjectRequest),
+  });
+};
+
+export const getMoveObjectQueryKey = (
+  projectID: number,
+  bucket: string,
+  moveObjectRequest?: MoveObjectRequest,
+) => {
+  return [
+    "POST",
+    `/artifacts/objects/${projectID}/${bucket}:move`,
+    moveObjectRequest,
+  ] as const;
+};
+
+export const getMoveObjectQueryOptions = <
+  TData = Awaited<ReturnType<typeof moveObject>>,
+  TError = Error | N401Response | N403Response,
+>(
+  projectID: number,
+  bucket: string,
+  moveObjectRequest: MoveObjectRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof moveObject>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getMoveObjectQueryKey(projectID, bucket, moveObjectRequest);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof moveObject>>> = ({
+    signal,
+  }) =>
+    moveObject(projectID, bucket, moveObjectRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectID !== null &&
+      projectID !== undefined &&
+      bucket !== null &&
+      bucket !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof moveObject>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type MoveObjectQueryResult = NonNullable<
+  Awaited<ReturnType<typeof moveObject>>
+>;
+export type MoveObjectQueryError = Error | N401Response | N403Response;
+
+export function useMoveObject<
+  TData = Awaited<ReturnType<typeof moveObject>>,
+  TError = Error | N401Response | N403Response,
+>(
+  projectID: number,
+  bucket: string,
+  moveObjectRequest: MoveObjectRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof moveObject>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof moveObject>>,
+          TError,
+          Awaited<ReturnType<typeof moveObject>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useMoveObject<
+  TData = Awaited<ReturnType<typeof moveObject>>,
+  TError = Error | N401Response | N403Response,
+>(
+  projectID: number,
+  bucket: string,
+  moveObjectRequest: MoveObjectRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof moveObject>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof moveObject>>,
+          TError,
+          Awaited<ReturnType<typeof moveObject>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useMoveObject<
+  TData = Awaited<ReturnType<typeof moveObject>>,
+  TError = Error | N401Response | N403Response,
+>(
+  projectID: number,
+  bucket: string,
+  moveObjectRequest: MoveObjectRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof moveObject>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Rename or move one object inside its bucket
+ */
+
+export function useMoveObject<
+  TData = Awaited<ReturnType<typeof moveObject>>,
+  TError = Error | N401Response | N403Response,
+>(
+  projectID: number,
+  bucket: string,
+  moveObjectRequest: MoveObjectRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof moveObject>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getMoveObjectQueryOptions(
+    projectID,
+    bucket,
+    moveObjectRequest,
     options,
   );
 

@@ -7,12 +7,14 @@ use prost::Message;
 
 use super::output_delivery::{
     AgentOutputPreflight, AgentOutputPreflightError, AgentOutputSpoolFactory,
-    AgentOutputSpoolReopener, PreparedAgentOutput, ToolkitTerminalReplay,
+    AgentOutputSpoolReopener, PreparedAgentOutput, ToolkitTerminalReplay, retire_superseded_frame,
 };
 use super::toolkit_delivery::{FreshToolkitDelivery, ToolkitOutputRecoveryDelivery};
 use crate::protocol::ProtocolError;
 use crate::protocol::command::VerifiedToolkitExecuteReadCommand;
-use crate::protocol::control::{AcceptedTerminalClaimRecovery, AgentOutputRecovery};
+use crate::protocol::control::{
+    AcceptedTerminalClaimRecovery, AgentOutputRecovery, RecoveredProgress,
+};
 use crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1;
 use crate::protocol::output::{
     RuntimeFailureKind, ToolkitExecuteReadTerminalOutput,
@@ -23,6 +25,51 @@ use crate::transport::command_bus::CommandDelivery;
 use crate::transport::{
     DurablyAckedTerminal, OutputGrpcError, OutputProtocolError, PreparedOutputSpool,
 };
+
+/// An unaccepted `NodeEvent` of an index run, found in the spool of a claim
+/// that cannot replay it, leaves the spool empty (#2041).
+///
+/// A frame at or below Main's handoff watermark is already durable in Main and
+/// is reconciled away; one beyond it that an older claim bound can never be
+/// accepted under that fence and is retired as a record. Anything else (a
+/// frame this claim cannot account for) fails closed. The spool is reopened
+/// afterwards, as the reconcile and retire operations seal the handle.
+async fn settle_restored_progress(
+    disposition: Option<RecoveredProgress>,
+    watermark: u64,
+    frame: ExecutionOutputFrameV1,
+    prepared: PreparedOutputSpool,
+    factory: &AgentOutputSpoolFactory,
+) -> Result<PreparedOutputSpool, AgentOutputPreflightError> {
+    let reopened = match disposition {
+        Some(RecoveredProgress::Covered) => {
+            let mut prepared = prepared;
+            tokio::task::spawn_blocking(move || prepared.reconcile_pending_through(watermark))
+                .await
+                .map_err(|_| {
+                    AgentOutputPreflightError::Unavailable(
+                        "the index progress reconciliation task did not complete",
+                    )
+                })?
+                .map_err(AgentOutputPreflightError::Output)?;
+            factory.reopen().await?
+        }
+        Some(RecoveredProgress::Superseded) => {
+            retire_superseded_frame(factory, prepared, frame).await?
+        }
+        None => {
+            return Err(AgentOutputPreflightError::InvalidDurableState(
+                "the pending index progress output does not match the claim",
+            ));
+        }
+    };
+    if reopened.pending_frame_count() != 0 {
+        return Err(AgentOutputPreflightError::InvalidDurableState(
+            "the index progress output was not cleared",
+        ));
+    }
+    Ok(reopened)
+}
 
 pub(super) enum ToolkitOutputPreflightOutcome {
     Empty(Box<EmptyToolkitOutput>),
@@ -100,6 +147,19 @@ pub(super) async fn prepare_toolkit_output(
             "the pending direct toolkit output does not match the accepted claim",
         ));
     }
+    if !frame.terminal {
+        // Progress an earlier claim of this run left behind: nothing of it
+        // can be replayed, so the claim proceeds on an empty spool.
+        let (disposition, watermark) = fresh.recovered_progress(&frame);
+        let prepared =
+            settle_restored_progress(disposition, watermark, frame, prepared, &factory).await?;
+        return Ok(ToolkitOutputPreflightOutcome::Empty(Box::new(
+            EmptyToolkitOutput {
+                fresh,
+                output: PreparedAgentOutput::new(prepared, factory),
+            },
+        )));
+    }
     if !fresh.matches_output_binding(&frame) {
         let replacement = fresh
             .terminal_replacement(&frame, now_unix_millis)
@@ -151,7 +211,22 @@ pub(super) async fn prepare_empty_toolkit_recovery(
         ));
     }
     let factory = AgentOutputSpoolFactory::new(policy, Arc::new(recovery.spool_identity()));
-    let prepared = factory.reopen().await?;
+    let mut prepared = factory.reopen().await?;
+    if prepared.pending_frame_count() == 1
+        && let Some(frame) = prepared.pending_replay_frame()
+        && !frame.terminal
+    {
+        // An index run that crashed or lost its output plane with a progress
+        // frame in flight (#2041): the frame is settled against Main's
+        // watermark, then the recovery proceeds on the empty spool.
+        let (disposition, watermark) = recovery.recovered_progress(&frame).map_err(|_| {
+            AgentOutputPreflightError::InvalidDurableState(
+                "the pending index progress output is malformed",
+            )
+        })?;
+        prepared =
+            settle_restored_progress(disposition, watermark, frame, prepared, &factory).await?;
+    }
     if prepared.pending_frame_count() != 0 {
         return Ok(None);
     }

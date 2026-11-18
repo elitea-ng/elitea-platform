@@ -107,6 +107,14 @@ describe('ConfigurationTab', () => {
     expect(screen.getByTestId('chat-slot')).toBeInTheDocument();
   });
 
+  it('keeps the canvas row from scrolling and gives each column its own scroll (issue 2039)', async () => {
+    renderConfigurationTab();
+    const row = (await screen.findByTestId('pipeline-config-tab')).parentElement as HTMLElement;
+    expect(getComputedStyle(row).overflow).toBe('hidden');
+    expect(getComputedStyle(screen.getByTestId('pipeline-config-tab')).overflowY).toBe('auto');
+    expect(getComputedStyle(screen.getByTestId('pipeline-chat-content')).overflowY).toBe('auto');
+  });
+
   it('passes testPaneSettings-equivalent live data down to renderChat (llmSettings/type/tools/interaction_uuid)', async () => {
     let received: Record<string, unknown> | null = null;
     renderConfigurationTab({

@@ -179,6 +179,22 @@ describe('useEditFolder', () => {
     expect(updater([mkFolder({ id: 'f1' })])[0]?.isPinned).toBe(true);
   });
 
+  it('onPinFolder moves the pinned folder ahead of the unpinned ones (issue 2031)', async () => {
+    server.use(http.patch(`${BASE}/elitea_core/folder/prompt_lib/7/f2`, () => HttpResponse.json({ id: 'f2' })));
+    const setFolders = vi.fn();
+
+    const { wrapper } = createWrapper(['models.chat.folders.update']);
+    const { result } = renderHook(
+      () => useEditFolder({ projectId: '7', activeFolder: undefined, setActiveFolder: vi.fn(), setFolders, toastError: vi.fn() }),
+      { wrapper },
+    );
+
+    await result.current.onPinFolder(mkFolder({ id: 'f2' }), true);
+
+    const updater = setFolders.mock.calls[0]?.[0] as (prev: readonly FolderListItem[]) => readonly FolderListItem[];
+    expect(updater([mkFolder({ id: 'f1' }), mkFolder({ id: 'f2' })]).map((folder) => folder.id)).toEqual(['f2', 'f1']);
+  });
+
   it('onPinFolder error path: toasts and does not touch local state', async () => {
     server.use(http.patch(`${BASE}/elitea_core/folder/prompt_lib/7/f1`, () => HttpResponse.json({ message: 'boom' }, { status: 500 })));
     const setFolders = vi.fn();
@@ -301,5 +317,19 @@ describe('useEditFolder', () => {
     await result.current.onPinFolder(mkFolder({ id: 'f1' }), true);
 
     expect(invalidateSpy).not.toHaveBeenCalled();
+  });
+
+  it('onPinFolder re-reads the folder list on UNpin, so the folder returns to its own place', async () => {
+    server.use(http.patch(`${BASE}/elitea_core/folder/prompt_lib/7/f1`, () => HttpResponse.json({ id: 'f1' })));
+    const { wrapper, client } = createWrapper(['models.chat.folders.update']);
+    const invalidateSpy = vi.spyOn(client, 'invalidateQueries');
+    const { result } = renderHook(
+      () => useEditFolder({ projectId: '7', activeFolder: undefined, setActiveFolder: vi.fn(), setFolders: vi.fn(), toastError: vi.fn() }),
+      { wrapper },
+    );
+
+    await result.current.onPinFolder(mkFolder({ id: 'f1', isPinned: true }), false);
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folder', 'list'] });
   });
 });

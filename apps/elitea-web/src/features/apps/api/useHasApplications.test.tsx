@@ -1,13 +1,30 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { waitFor } from '@testing-library/react';
 
-import { getListApplicationsMockHandler } from '@/shared/api/generated/applications/applications.msw';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
+import { getListToolkitInstancesMockHandler } from '@/shared/api/generated/toolkits/toolkits.msw';
 import { server } from '@/test/setup';
 
 import { renderHookWithRouter } from '../__tests__/testUtils';
 
 import { useHasApplications } from './useHasApplications';
+
+function toolkit(id: string, type: string, name = `Toolkit ${id}`) {
+  return {
+    id,
+    type,
+    name,
+    description: '',
+    settings: {},
+    meta: {},
+    created_at: '2026-01-01T00:00:00Z',
+    author_id: 1,
+  };
+}
+
+function toolkitList(...rows: ReturnType<typeof toolkit>[]) {
+  return { rows, total: rows.length };
+}
 
 beforeEach(() => {
   configureGeneratedClient({ baseUrl: '/api/v2' });
@@ -25,37 +42,17 @@ describe('useHasApplications', () => {
     expect(result.current.isLoading).toBe(false);
   });
 
-  it('is false when the project has zero applications', async () => {
-    server.use(getListApplicationsMockHandler({ rows: [], total: 0, page: 1, page_size: 20, total_pages: 0 }));
+  it('is false when the project has no toolkit of an application type', async () => {
+    server.use(getListToolkitInstancesMockHandler(toolkitList(toolkit('1', 'github'))));
     const { result } = renderHookWithRouter(() => useHasApplications(), { projectId: 'proj-1' });
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     expect(result.current.hasApplications).toBe(false);
   });
 
-  it('is true when the project has at least one application', async () => {
-    server.use(
-      getListApplicationsMockHandler({
-        rows: [
-          {
-            id: '1',
-            name: 'App',
-            created_at: '2026-01-01T00:00:00Z',
-            updated_at: '2026-01-01T00:00:00Z',
-            owner_id: 'user-1',
-            is_forked: false,
-            meta: null,
-            has_interrupt: false,
-            tags: [],
-          },
-        ],
-        total: 1,
-        page: 1,
-        page_size: 20,
-        total_pages: 1,
-      }),
-    );
+  // #2113: a created Wiki or Inventory is a toolkit instance, which the applications list never held.
+  it('is true when the project has a Wiki or Inventory toolkit', async () => {
+    server.use(getListToolkitInstancesMockHandler(toolkitList(toolkit('1', 'github'), toolkit('2', 'inventory'))));
     const { result } = renderHookWithRouter(() => useHasApplications(), { projectId: 'proj-1' });
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-    expect(result.current.hasApplications).toBe(true);
+    await waitFor(() => expect(result.current.hasApplications).toBe(true));
   });
 });

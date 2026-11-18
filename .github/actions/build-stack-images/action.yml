@@ -355,6 +355,31 @@ runs:
         path: .buildkit-mounts
         cap-mb: "4096"
 
+    # buildkit-cache-dance builds a tiny utility image FROM a third-party
+    # image on ghcr.io. A single `failed to fetch oauth token: denied` from the
+    # registry fails the whole job (seen on one of ten Build once jobs of the
+    # same run, #1631), though the login had succeeded. Pull the image INTO the
+    # builder first, with a bounded retry, and pin it by digest below, so the
+    # dance resolves it from the builder's own store instead of the registry.
+    - name: Warm the cache-dance utility image in the builder
+      shell: bash
+      env:
+        BUILDER: ${{ steps.buildx.outputs.name }}
+        UTILITY_IMAGE: ghcr.io/containerd/busybox@sha256:52f73a0a43a16cf37cd0720c90887ce972fe60ee06a687ee71fb93a7ca601df7
+      run: |
+        set -uo pipefail
+        dir="$(mktemp -d)"
+        printf 'FROM %s\nRUN true\n' "$UTILITY_IMAGE" > "$dir/Dockerfile"
+        for attempt in 1 2 3 4 5; do
+          if docker buildx build --builder "$BUILDER" --output type=cacheonly "$dir"; then
+            exit 0
+          fi
+          echo "::warning::utility image pull failed (attempt $attempt); retrying"
+          sleep $((attempt * 5))
+        done
+        echo "::error::the cache-dance utility image could not be pulled after five attempts"
+        exit 1
+
     # Injects the restored directories into the builder's cache mounts before
     # the build and, only when this run will save them, extracts them back
     # after it (a post step). Mount ids default to their target path, except
@@ -368,6 +393,7 @@ runs:
       uses: reproducible-containers/buildkit-cache-dance@v3
       with:
         builder: ${{ steps.buildx.outputs.name }}
+        utility-image: ghcr.io/containerd/busybox@sha256:52f73a0a43a16cf37cd0720c90887ce972fe60ee06a687ee71fb93a7ca601df7
         # `cache-hit` is now structurally false on a writer (the key carries
         # the run id), so this reduces to "readers do not extract" — which is
         # the whole rule. It is spelled with both halves because the second

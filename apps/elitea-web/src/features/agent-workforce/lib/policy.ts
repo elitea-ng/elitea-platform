@@ -18,6 +18,7 @@ const POLICY_BOUNDS = {
   minSuccessfulRuns: [1, 100],
   maxAutoHired: [1, 50],
   graceDays: [1, 90],
+  listingMinReviews: [1, 1000],
 } as const;
 
 /** What the page edits: the input shape, numbers held as typed. */
@@ -27,6 +28,12 @@ export interface PolicyForm {
   readonly maxAutoHired: string;
   readonly autoDismissEnabled: boolean;
   readonly graceDays: string;
+  /** agents.workforce.auto_feedback: publish a drafted workforce report when its stage is applied. */
+  readonly autoFeedbackEnabled: boolean;
+  /** The auto_hire rule for a Marketplace listing (ADR-0051 decision 6), numbers as typed. */
+  readonly listingMinReviews: string;
+  readonly listingMinRating: string;
+  readonly listingMaxDismissalRate: string;
   readonly rules: readonly AgentWorkforceRule[];
   /**
    * Each condition's threshold as typed, keyed `rule:condition` by index. A
@@ -67,6 +74,10 @@ export function formOf(policy: AgentWorkforcePolicy): PolicyForm {
     maxAutoHired: String(policy.max_auto_hired),
     autoDismissEnabled: policy.auto_dismiss_enabled,
     graceDays: String(policy.grace_days),
+    autoFeedbackEnabled: policy.auto_feedback_enabled,
+    listingMinReviews: String(policy.listing_min_reviews),
+    listingMinRating: String(policy.listing_min_rating),
+    listingMaxDismissalRate: String(policy.listing_max_dismissal_rate),
     rules: policy.auto_dismiss_rules,
     thresholds: thresholdsOf(policy.auto_dismiss_rules),
   };
@@ -77,12 +88,22 @@ function bounded(value: string, [min, max]: readonly [number, number]): number |
   return Number.isInteger(parsed) && parsed >= min && parsed <= max ? parsed : undefined;
 }
 
+/** A number between min (exclusive of 0 when `above`) and max, or undefined. */
+function ranged(value: string, min: number, max: number): number | undefined {
+  const parsed = Number(value);
+  return value.trim() !== '' && Number.isFinite(parsed) && parsed >= min && parsed <= max ? parsed : undefined;
+}
+
 /** The input to save, or undefined while a number is out of bounds. */
 export function inputOf(form: PolicyForm): AgentWorkforcePolicyInput | undefined {
   const minSuccessfulRuns = bounded(form.minSuccessfulRuns, POLICY_BOUNDS.minSuccessfulRuns);
   const maxAutoHired = bounded(form.maxAutoHired, POLICY_BOUNDS.maxAutoHired);
   const graceDays = bounded(form.graceDays, POLICY_BOUNDS.graceDays);
+  const listingMinReviews = bounded(form.listingMinReviews, POLICY_BOUNDS.listingMinReviews);
+  const listingMinRating = ranged(form.listingMinRating, 1, 5);
+  const listingMaxDismissalRate = ranged(form.listingMaxDismissalRate, 0.01, 1);
   if (minSuccessfulRuns === undefined || maxAutoHired === undefined || graceDays === undefined) return undefined;
+  if (listingMinReviews === undefined || listingMinRating === undefined || listingMaxDismissalRate === undefined) return undefined;
   const typedOk = form.rules.every((rule, r) =>
     rule.conditions.every((condition, c) => {
       const typed = form.thresholds[thresholdKey(r, c)] ?? String(condition.value);
@@ -98,6 +119,10 @@ export function inputOf(form: PolicyForm): AgentWorkforcePolicyInput | undefined
     auto_dismiss_enabled: form.autoDismissEnabled,
     auto_dismiss_rules: form.rules.map((rule) => ({ id: rule.id, stage: rule.stage, conditions: rule.conditions.map((c) => ({ ...c })) })),
     grace_days: graceDays,
+    auto_feedback_enabled: form.autoFeedbackEnabled,
+    listing_min_reviews: listingMinReviews,
+    listing_min_rating: listingMinRating,
+    listing_max_dismissal_rate: listingMaxDismissalRate,
   };
 }
 

@@ -1,0 +1,58 @@
+{
+  "contract": "pipeline-node-settings-v1",
+  "description": "The per-node `settings:` block of a pipeline node (5b-1): its keys, bounds, the node types that admit each setting, and the readable refusal texts. The single source for the Worker compiler (services/elitea-worker-rust src/agents/graph/node_settings_parity_tests.rs and libs/rust/agent-runtime src/graph/node_settings.rs), Main's save-time check (services/elitea-main internal/domain/pipelinelimits/node_settings_test.go) and the Web editor (apps/elitea-web runtimeContract.nodeSettings.test.ts). A node type gains settings here and in every layer in the same change; there are no feature flags. A node type that is not listed under `families` refuses the whole block with `family_not_yet` or, for a pause, `family_pause`. Every refusal reads `Node <id>: <text>`; document-level refusals read `<text>`.",
+  "settings_key": "settings",
+  "node_errors_key": "node_errors",
+  "executed_once_key": "__elitea_executed_once_v1",
+  "keys": [
+    "retry_on_fail",
+    "max_tries",
+    "wait_between_tries_ms",
+    "on_error",
+    "error_transition",
+    "always_output_data",
+    "execute_once",
+    "timeout_ms"
+  ],
+  "on_error": ["stop", "continue", "error_output"],
+  "limits": {
+    "min_node_tries": 2,
+    "max_node_tries": 5,
+    "min_wait_between_tries_ms": 100,
+    "max_wait_between_tries_ms": 300000,
+    "default_wait_between_tries_ms": 1000,
+    "min_node_timeout_ms": 1000,
+    "max_node_timeout_ms": 900000,
+    "max_node_errors": 64,
+    "max_node_error_entry_bytes": 1024,
+    "max_node_error_object_bytes": 512,
+    "max_executed_once_nodes": 128
+  },
+  "families": {
+    "aggregate": ["on_error", "error_transition", "always_output_data", "execute_once"],
+    "router": ["on_error", "error_transition", "always_output_data", "execute_once"],
+    "split_out": ["on_error", "error_transition", "always_output_data", "execute_once"],
+    "state_modifier": ["on_error", "error_transition", "always_output_data", "execute_once"]
+  },
+  "pause_families": ["hitl", "printer"],
+  "refusals": {
+    "malformed": "Its settings are malformed: use a mapping of the known settings with plain values.",
+    "family_not_yet": "Settings are not available for this node type yet.",
+    "family_pause": "Settings are not available for a node that pauses the run.",
+    "fanout_owned": "Settings are not available for a node inside a Parallel or Map yet.",
+    "with_recovery": "Settings cannot be combined with recovery or failure_handler on one node.",
+    "retry_not_allowed": "Retry on fail is not available for this node type.",
+    "timeout_not_allowed": "Timeout is not available for this node type.",
+    "max_tries_range": "Max tries must be between 2 and 5.",
+    "wait_range": "Wait between tries must be between 100 and 300000 ms.",
+    "timeout_range": "Timeout must be between 1000 and 900000 ms.",
+    "retry_fields_need_retry": "Max tries and wait between tries need Retry on fail.",
+    "error_transition_required": "On error 'error output' needs an error transition.",
+    "error_transition_unexpected": "An error transition needs On error 'error output'.",
+    "error_transition_target": "The error transition must name END or another node of this pipeline outside any Parallel or Map.",
+    "always_output_reducer": "Always output data cannot write an output that uses the sum_int or merge reducer.",
+    "router_continue_needs_default": "On error 'continue' on a Router needs an explicit default output.",
+    "node_errors_type": "When a node continues on error, a declared node_errors must be a list with reducer: append.",
+    "node_errors_nested_mapping": "An Agent node cannot map node_errors into or out of a nested pipeline."
+  }
+}

@@ -29,9 +29,18 @@ export interface ApplicationListRow {
   readonly id: string;
   readonly name: string;
   readonly description: string;
-  readonly authors?: readonly { readonly id?: string; readonly name: string; readonly avatar?: string; readonly deleted?: boolean }[];
+  readonly authors?: readonly {
+    readonly id?: string;
+    readonly name: string;
+    readonly avatar?: string;
+    readonly deleted?: boolean;
+  }[];
   readonly tags?: readonly string[];
   readonly createdAt?: string;
+  /** The status as a word (Draft, Published): the card's badge and the table's Status column. */
+  readonly badge?: string;
+  /** #1995 — the uploaded icon (`meta.icon_meta.url`); the agent glyph when absent. */
+  readonly iconUrl?: string;
   /**
    * #915 — set by the caller (which already holds the router's `navigate`)
    * when this row is a fork, to render a "Forked from" link that opens the
@@ -41,6 +50,8 @@ export interface ApplicationListRow {
    * `onSelectForkedFrom` callback prop would have breached.
    */
   readonly forkedFrom?: { readonly onClick: () => void };
+  /** The row's extra action (the Undo of an automatic hire), in the table view. */
+  readonly action?: { readonly label: string; readonly onClick: () => void };
 }
 
 export interface ApplicationListPanelProps {
@@ -77,14 +88,21 @@ export function ApplicationListPanel({
         id: row.id,
         name: row.name,
         description: row.description,
-        icon: entityTypeIcon('agent'),
+        icon:
+          row.iconUrl === undefined ? (
+            entityTypeIcon('agent')
+          ) : (
+            <Box component="img" src={row.iconUrl} alt="" data-testid="application-card-icon" sx={iconImageSx} />
+          ),
         authors: row.authors ?? [],
         tags: (row.tags ?? []).map((tag) => ({ id: tag, name: tag })),
         ...(row.createdAt === undefined ? {} : { createdAt: row.createdAt }),
+        ...(row.badge === undefined ? {} : { badge: row.badge }),
         onClick: () => {
           onSelect(row.id);
         },
         ...(row.forkedFrom === undefined ? {} : { forkedFrom: row.forkedFrom }),
+        ...(row.action === undefined ? {} : { action: row.action }),
       })),
     [rows, onSelect],
   );
@@ -107,11 +125,7 @@ export function ApplicationListPanel({
       />
       {hasMore && (
         <Box sx={loadMoreSx}>
-          <BaseBtn
-            variant="secondary"
-            disabled={isLoadingMore}
-            onClick={onLoadMore}
-          >
+          <BaseBtn variant="secondary" disabled={isLoadingMore} onClick={onLoadMore}>
             {t('pages.agents.list.loadMore', 'Load more')}
           </BaseBtn>
         </Box>
@@ -120,4 +134,15 @@ export function ApplicationListPanel({
   );
 }
 
-const loadMoreSx: SxProps<Theme> = (theme: Theme) => ({ display: 'flex', justifyContent: 'center', padding: theme.spacing(2) });
+const iconImageSx: SxProps<Theme> = (theme: Theme) => ({
+  width: '100%',
+  height: '100%',
+  objectFit: 'cover',
+  borderRadius: theme.vars.shape.radiusPill,
+});
+
+const loadMoreSx: SxProps<Theme> = (theme: Theme) => ({
+  display: 'flex',
+  justifyContent: 'center',
+  padding: theme.spacing(2),
+});

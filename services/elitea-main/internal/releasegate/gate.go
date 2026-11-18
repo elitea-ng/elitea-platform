@@ -545,33 +545,42 @@ func (g *Gate) Result(ctx context.Context, tenantProjectID, gateID int64) (GateR
 	if gate.State != StatePending {
 		return gate, nil
 	}
-	settled, err := g.settle(ctx, gate)
-	if err != nil || !settled {
+	settled, waiting, err := g.settle(ctx, gate)
+	if err != nil {
 		return gate, err
+	}
+	if !settled {
+		gate.PendingReason = waiting
+		return gate, nil
 	}
 	return g.store.GetGate(ctx, tenantProjectID, gateID)
 }
 
 // settle evaluates a pending gate when its runs are terminal. It answers
-// false when a run is not terminal yet.
-func (g *Gate) settle(ctx context.Context, gate GateResult) (bool, error) {
+// false when a run is not terminal yet, or when finished runs still hold
+// results waiting for a human score; the string then says so ("waiting for N
+// human scores"). Result runs this on every read and Pass runs it for every
+// pending gate, so a gate decides on the first read or pass after the last
+// score is recorded.
+func (g *Gate) settle(ctx context.Context, gate GateResult) (bool, string, error) {
 	project := projectKey(gate.TenantProjectID)
 	if gate.Starting {
 		// Its runs are still being started: not every suite has its runs
 		// yet. A start that never finished is a failed start.
 		if g.now().Sub(gate.CreatedAt) < startTimeout {
-			return false, nil
+			return false, "", nil
 		}
 		g.cancelRuns(ctx, project, gate.ID, gate.Runs)
 		_, outcome, _ := Evaluate(notRunnableEvidence(gate.Suites, nil))
 		failures := []GateFailure{{Code: FailureStartFailed,
 			Message: "the gate's runs were not all started (the process starting them stopped); submit again or ask for an override"}}
 		if err := g.store.SettleGate(ctx, gate.TenantProjectID, gate.ID, StateFailed, outcome, failures); err != nil {
-			return false, err
+			return false, "", err
 		}
-		return true, nil
+		return true, "", nil
 	}
 	evidence := make([]SuiteEvidence, 0, len(gate.Suites))
+	pendingHuman, runFailed := 0, false
 	for _, suite := range gate.Suites {
 		item := SuiteEvidence{Suite: suite, CaseNames: map[string]string{}}
 		for _, run := range gate.Runs {
@@ -580,10 +589,17 @@ func (g *Gate) settle(ctx context.Context, gate GateResult) (bool, error) {
 			}
 			read, terminal, err := g.readRun(ctx, project, run.EvalRunID)
 			if err != nil {
-				return false, err
+				return false, "", err
 			}
 			if !terminal {
-				return false, nil
+				return false, "", nil
+			}
+			// A result that waits for a human score is undecided, not
+			// failed: the gate stays pending, and the next pass decides it
+			// once a reviewer has scored every case.
+			pendingHuman += countPendingHuman(read.Results)
+			if read.Missing || read.Status != evaluation.RunStatusFinished {
+				runFailed = true
 			}
 			if run.Role == RoleBaseline {
 				item.Baseline = &read
@@ -610,11 +626,16 @@ func (g *Gate) settle(ctx context.Context, gate GateResult) (bool, error) {
 		}
 		evidence = append(evidence, item)
 	}
+	// A gate that already has a failed run is failed whatever a reviewer
+	// would say about the other runs: it does not wait for them.
+	if pendingHuman > 0 && !runFailed {
+		return false, waitingForHumanScores(pendingHuman), nil
+	}
 	state, outcome, failures := Evaluate(evidence)
 	if err := g.store.SettleGate(ctx, gate.TenantProjectID, gate.ID, state, outcome, failures); err != nil {
-		return false, err
+		return false, "", err
 	}
-	return true, nil
+	return true, "", nil
 }
 
 // readRun reads one run and, when it finished, every page of its results.
@@ -841,4 +862,26 @@ func clientRefusal(err error) (string, bool) {
 		return apiErr.Message, true
 	}
 	return "", false
+}
+
+// countPendingHuman counts the results that still wait for a human score
+// (issue 2008). The gate does not decide on a score nobody has given. Only a
+// run that finished carries results here: an errored or cancelled run is read
+// without its results and fails the gate as before, so its pending rows never
+// hold a gate.
+func countPendingHuman(results []evaluation.RunResult) int {
+	count := 0
+	for _, result := range results {
+		if result.Status == evaluation.ResultStatusPendingHuman {
+			count++
+		}
+	}
+	return count
+}
+
+func waitingForHumanScores(count int) string {
+	if count == 1 {
+		return "waiting for 1 human score"
+	}
+	return "waiting for " + strconv.Itoa(count) + " human scores"
 }

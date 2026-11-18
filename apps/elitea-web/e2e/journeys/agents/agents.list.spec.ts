@@ -92,7 +92,9 @@ test('J14e: the agents list renders its header search box, and typing in it narr
   created.push(agent.id);
 
   await openAgentsList(page);
-  await expect(page.getByRole('tablist', { name: 'Agents' })).toBeVisible();
+  // The list's controls are in the right sidebar (ADR-0051), which is open by default on a wide window: no tab strip.
+  await expect(page.getByTestId('agent-list-sidebar')).toBeVisible();
+  await expect(page.getByRole('tablist', { name: 'Agents' })).toHaveCount(0);
   await expect(searchBox(page)).toBeEditable();
 
   await expect(cards(page).filter({ hasText: name }), 'the new agent must be on the dashboard').toHaveCount(1, {

@@ -21,6 +21,7 @@ func TestSandboxWholeCodeOwnerMigrationBootstrapAndUpgrade(t *testing.T) {
 	manifest, err := LoadManifest(platformmigrations.Files, ScopeAgentState)
 	require.NoError(t, err)
 	// 0013 is the upgrade under test; later heads must not change what it adds.
+	// (0015 adds failure_detail, left out of the before/after row comparison below.)
 	require.GreaterOrEqual(t, Head(manifest), int64(13))
 	prefix := fstest.MapFS{}
 	for _, entry := range manifest {
@@ -54,7 +55,8 @@ func TestSandboxWholeCodeOwnerMigrationBootstrapAndUpgrade(t *testing.T) {
 				var after string
 				require.NoError(t, pool.QueryRow(ctx, `SELECT (to_jsonb(j)-ARRAY[
 					'code_recovery_binding_json','code_recovery_receipt_json','code_recovery_cleanup_at',
-					'code_recovery_cleanup_failure','code_platform_binding_json'])::text
+					'code_recovery_cleanup_failure','code_platform_binding_json',
+					'failure_detail'])::text
 					FROM elitea_runtime.sandbox_jobs j`).Scan(&after))
 				require.Equal(t, before, after)
 			}

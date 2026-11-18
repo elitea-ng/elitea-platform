@@ -71,6 +71,21 @@ func delegationSection() map[string]any {
 				"default": string(defaults.Mode),
 				"enum":    []string{string(platformconfig.DelegationEnforce), string(platformconfig.DelegationReport)},
 			},
+			{
+				"key":   platformconfig.KeyDelegationPrincipalBound,
+				"type":  "boolean",
+				"title": "Bound Delegation By The Run's Principal",
+				"description": "Off by default. When on, a delegated agent never exceeds what the person who " +
+					"started the run (or the mandate and project of an unattended run) may use: a toolkit " +
+					"hidden from that person, a credential reference they may not use, or a tool outside their " +
+					"access stops the delegation with DELEGATION_GRANT_MISSING and reason principal, in both " +
+					"modes. This also bounds an ad hoc conversation's toolkits. Turn it on once every worker " +
+					"runs this release, and after the delegation migration has created the grants for your " +
+					"existing compositions. A composition that reaches something its principal may not use " +
+					"stops working while it is on.",
+				"section": section,
+				"default": defaults.PrincipalBound,
+			},
 		},
 	}
 }
@@ -92,6 +107,11 @@ func validateDelegationValues(section string, values map[string]any) string {
 		case platformconfig.DelegationEnforce, platformconfig.DelegationReport:
 		default:
 			return fmt.Sprintf("%q must be enforce or report", platformconfig.KeyDelegationMode)
+		}
+	}
+	if raw, present := values[platformconfig.KeyDelegationPrincipalBound]; present {
+		if _, isBool := raw.(bool); !isBool {
+			return fmt.Sprintf("%q must be true or false", platformconfig.KeyDelegationPrincipalBound)
 		}
 	}
 	return ""

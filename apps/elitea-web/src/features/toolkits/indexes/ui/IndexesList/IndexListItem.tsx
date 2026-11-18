@@ -16,6 +16,7 @@ import { InfoTooltip } from '@/shared/ui/InfoTooltip';
 import { StopIcon } from '@/shared/ui/icons/stop-icon';
 
 import { IndexStatuses } from '../../lib/constants/indexDetails.constants';
+import { describeIndexError } from '../../lib/helpers/indexError.helpers';
 import { normalizeIndexingReport } from '../../lib/helpers/indexingReport.serialize';
 import { toDisplayString } from '../../lib/helpers/displayString.local';
 import type { IndexRow } from '../../model/indexesStore';
@@ -37,6 +38,18 @@ export interface IndexListItemProps {
 function formatCreatedOn(createdOn: number | undefined): string {
   if (createdOn === undefined) return '–';
   return format(new Date(createdOn * 1000), 'dd.MM.yyyy');
+}
+
+/** The row's state and what is derived from it, read defensively (see the note at the call site). */
+function rowStatus(index: IndexRow): { state: unknown; createdOn: number | undefined; isProgressError: boolean; failureReason: string | undefined } {
+  const state = index.metadata?.['state'];
+  return {
+    state,
+    createdOn: index.metadata?.['created_on'] as number | undefined,
+    isProgressError: Boolean(index['stale']) && state === IndexStatuses.progress,
+    // The failure's own reason on the badge (#2042), not only "Index processing error".
+    failureReason: state === IndexStatuses.fail ? describeIndexError(index.metadata?.['error']) : undefined,
+  };
 }
 
 export function IndexListItem(props: IndexListItemProps): ReactNode {
@@ -89,9 +102,7 @@ export function IndexListItem(props: IndexListItemProps): ReactNode {
   // its `metadata` has arrived at all (not merely empty) — read defensively,
   // the same guard `computeIndexingSummary` above already applies, instead
   // of crashing with "Cannot read properties of undefined".
-  const state = index.metadata?.['state'];
-  const createdOn = index.metadata?.['created_on'] as number | undefined;
-  const isProgressError = Boolean(index['stale']) && state === IndexStatuses.progress;
+  const { state, createdOn, isProgressError, failureReason } = rowStatus(index);
 
   return (
     <Box
@@ -165,8 +176,10 @@ export function IndexListItem(props: IndexListItemProps): ReactNode {
       )}
       {state === IndexStatuses.fail && (
         <InfoTooltip
-          title={t('features.toolkits.indexListItem.processingError', 'Index processing error')}
-          disableTooltip
+          // Plain text (a node, not a string): a string title is rendered as markdown, and
+          // the worker's error is not markdown.
+          title={<span>{failureReason ?? t('features.toolkits.indexListItem.processingError', 'Index processing error')}</span>}
+          disableTooltip={failureReason === undefined}
           sx={{ position: 'absolute', top: '50%', right: '1rem', marginTop: '-.4375rem', color: 'error.main' }}
         />
       )}

@@ -82,6 +82,8 @@ export const HANDLED_STREAM_TYPES: ReadonlySet<string> = new Set<string>([
   SocketMessageType.AgentFanoutMember,
   SocketMessageType.AgentFanoutProgress,
   SocketMessageType.AgentSubAgent,
+  SocketMessageType.DelegationRefused,
+  SocketMessageType.DelegationNarrowed,
 ]);
 
 /**

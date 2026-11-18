@@ -13,11 +13,7 @@ import type {
   VersionWriteRequest,
 } from '@/shared/api/generated/model';
 
-import {
-  toVersionOptions,
-  toVersionWriteBody,
-  type EditApplicationVersionOption,
-} from './editApplicationMappers';
+import { toVersionOptions, toVersionWriteBody, type EditApplicationVersionOption } from './editApplicationMappers';
 import type { EditApplicationVersionFields } from './useEditApplicationVersionFields';
 
 export interface EditApplicationVersionControlsArgs {
@@ -124,7 +120,8 @@ const EMPTY_VERSION_BODY: Omit<VersionWriteRequest, 'name'> = {};
 export function useEditApplicationVersionControls(
   args: EditApplicationVersionControlsArgs,
 ): EditApplicationVersionControlsState {
-  const { projectId, applicationId, tab, versions, activeVersion, control, versionFields, isReadOnly, isFetching } = args;
+  const { projectId, applicationId, tab, versions, activeVersion, control, versionFields, isReadOnly, isFetching } =
+    args;
 
   const navigate = useNavigate();
   const queryClient = useQueryClient();

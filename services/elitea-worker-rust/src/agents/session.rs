@@ -3260,7 +3260,8 @@ pub(super) async fn assemble_pipeline_native(
     let node_runtimes = match state.node_recovery_authority() {
         Some(authority) => node_runtimes.with_node_recovery_authority(authority),
         None => node_runtimes,
-    };
+    }
+    .with_execution_id(&plan.execution_id);
     let printer_catalog = definition.printer_pause_catalog();
     let static_catalog = definition.static_pause_catalog();
     let static_family = super::graph::static_pause::StaticPauseFamily::new(

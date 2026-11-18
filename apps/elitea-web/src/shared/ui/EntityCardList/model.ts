@@ -39,6 +39,8 @@ export interface EntityListItem {
   /** Table view's "Type" column, and the card's bottom row when the domain has no tags (credentials/toolkits). */
   readonly typeLabel?: string;
   readonly onClick?: () => void;
+  /** The row's status as a word ("Draft", "Published"): a badge on the card and a Status column in the table. Text, so it is announced, not only coloured. */
+  readonly badge?: string;
   /**
    * #915 — when set, both card and table views render a "Forked from" link
    * beside the entity's name that navigates to the SOURCE entity instead of
@@ -48,6 +50,12 @@ export interface EntityListItem {
    * now surfaced on the LIST row too — see repos/applications.go's List).
    */
   readonly forkedFrom?: { readonly onClick: () => void };
+  /**
+   * One extra action on the row, offered in the TABLE view only: a card is a
+   * widget, and a control nested in it fails axe's `nested-interactive`
+   * (the reason `forkedFrom` is a marker on the card).
+   */
+  readonly action?: { readonly label: string; readonly onClick: () => void };
 }
 
 /** `ViewOptions` (`apps/elitea-ui/src/common/constants.js`) — the `?view=` search-param vocabulary. */

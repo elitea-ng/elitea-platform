@@ -44,13 +44,13 @@ function wrapper({ children }: { readonly children: ReactNode }): ReactNode {
 function panelProps(panels: { readonly tools: ReactNode; readonly information?: ReactNode }) {
   const element = panels.information as ReactElement<{
     readonly onFieldChange: (path: string, value: unknown) => void;
-    readonly tagsSlot: ReactElement<{ readonly value: readonly unknown[]; readonly onChange: (next: readonly { readonly name: string }[]) => void }>;
+    readonly generalSlots: { readonly tags: ReactElement<{ readonly value: readonly unknown[]; readonly onChange: (next: readonly { readonly name: string }[]) => void }> };
     readonly values: { readonly name: string; readonly description: string; readonly version_details: Record<string, unknown> };
   }>;
   return {
     onFieldChange: element.props.onFieldChange,
-    onTagsChange: element.props.tagsSlot.props.onChange,
-    tagValue: element.props.tagsSlot.props.value,
+    onTagsChange: element.props.generalSlots.tags.props.onChange,
+    tagValue: element.props.generalSlots.tags.props.value,
     values: element.props.values,
   };
 }
@@ -449,6 +449,27 @@ describe('useChatPipelineConfig — onSaveVersion', () => {
     expect(editCalls).toBe(1);
     const saved = onSuccess.mock.calls[0]?.[0] as { readonly versionDetail?: unknown } | undefined;
     expect(saved?.versionDetail).toBeDefined();
+  });
+
+  it('refreshes the conversation participants after a save so a rename reaches the rail', async () => {
+    const invalidate = vi.spyOn(QueryClient.prototype, 'invalidateQueries');
+    server.use(
+      getGetApplicationVersionDetailMockHandler({ id: '10', application_id: '1', name: 'latest', status: 'draft' }),
+      getGetApplicationMockHandler({ id: '1', name: 'App', description: 'Desc', icon: '', owner_id: 'u1', created_at: '2026-01-01T00:00:00Z', versions: [] }),
+      getUpdateApplicationVersionMockHandler({ id: '10', application_id: '1', name: 'latest', status: 'draft' }),
+      getEditApplicationMockHandler({ id: '1', name: 'Renamed', description: 'Desc', icon: '', owner_id: 'u1', created_at: '2026-01-01T00:00:00Z' }),
+    );
+    const { result } = renderHook(
+      () => useChatPipelineConfig({ projectId: '7', participant: { entity_meta: { id: '1' }, entity_settings: { version_id: '10' } }, enabled: true }),
+      { wrapper },
+    );
+    await waitFor(() => expect(panelProps(result.current.renderConfigurationPanels()).values.name).toBe('App'));
+    const onSuccess = vi.fn<(saved: unknown) => void>();
+    await act(async () => {
+      result.current.onSaveVersion?.(onSuccess);
+      await waitFor(() => expect(onSuccess).toHaveBeenCalledTimes(1));
+    });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['conversation', 'details'] });
   });
 
   it('sends toVersionBody defaults (empty strings/arrays, step_limit 25) for a bare draft', async () => {

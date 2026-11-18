@@ -693,6 +693,9 @@ fn refusal_message(code: &str) -> &'static str {
             "the project's budget for this period is used up"
         }
         "model_gateway.budget_exhausted" => "the model's quota is used up",
+        "model_gateway.guardrail_blocked" => {
+            "a content guardrail of the platform blocked the message"
+        }
         "model_gateway.unauthorized" => "the platform refused the sign-in; sign in again",
         "model_gateway.forbidden" => "the project may not use this model",
         "model_gateway.rate_limited" => "the model is rate limited; try again shortly",

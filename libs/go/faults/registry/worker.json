@@ -272,6 +272,62 @@
       "audience": "operator",
       "retryable": "yes",
       "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "pipeline.aggregate.failed",
+      "sentence": "The Aggregate node could not aggregate this input.",
+      "action": "Check the node's source and aggregation settings against the state it reads, then run the pipeline again.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "pipeline.node.failed_continued",
+      "sentence": "A pipeline node failed and its settings recorded the failure in node_errors, so the run went on.",
+      "action": "Nothing for the platform; read the node_errors entry with the same support reference to see which node failed.",
+      "audience": "operator",
+      "retryable": "n/a",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "pipeline.node_errors.exhausted",
+      "sentence": "This run already recorded the most node failures one run may hold, so the next failure stopped the run instead of continuing.",
+      "action": "Fix the node that keeps failing, or stop it from looping, then run the pipeline again.",
+      "audience": "both",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "pipeline.node_settings.invalid",
+      "sentence": "A node's settings block in this pipeline is invalid, so the Worker refused to compile the pipeline.",
+      "action": "Fix the node's settings in the pipeline editor; the editor and Main name the node and the setting.",
+      "audience": "operator",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "pipeline.router.failed",
+      "sentence": "The Router node could not evaluate its condition on this input.",
+      "action": "Check the node's condition and the state it reads, then run the pipeline again.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "pipeline.split_out.failed",
+      "sentence": "The Split Out node could not split this input.",
+      "action": "Check the node's source and split settings against the state it reads, then run the pipeline again.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "pipeline.state_modifier.failed",
+      "sentence": "The State Modifier node could not produce its output from this input.",
+      "action": "Check the node's template and the state it reads, then run the pipeline again.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
     }
   ]
 }

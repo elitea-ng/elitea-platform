@@ -41,7 +41,7 @@ func TestCurrentApplicationSkillsRoutePreservesExactCurrentContract(t *testing.T
 		handler.CurrentApplicationSkillsMode != auth.PermissionModeDefault ||
 		handler.CurrentApplicationSkillsPermission !=
 			"models.applications.applications.details" ||
-		handler.MaxCurrentApplicationSkills != 5 {
+		handler.MaxCurrentApplicationSkills != 50 {
 		t.Fatalf(
 			"current application-skills contract drifted: path=%q mode=%q permission=%q max=%d",
 			handler.CurrentApplicationSkillsPath,
@@ -135,7 +135,7 @@ func TestCurrentApplicationSkillsRoutePreservesExactCurrentContract(t *testing.T
 		"\"icon_meta\":{\"url\":\"/icons/deploy.svg\",\"type\":\"image/svg+xml\"}}," +
 		"{\"name\":\"review\",\"description\":\"Review changes\",\"skill_id\":18," +
 		"\"version_id\":29,\"version_name\":\"unknown\",\"version_missing\":true," +
-		"\"icon_meta\":null}],\"max_skills\":5}\n"
+		"\"icon_meta\":null}],\"max_skills\":50}\n"
 	if response.Code != http.StatusOK || response.Body.String() != want ||
 		reader.calls != 1 || reader.projectID != 7 || reader.appVersionID != 31 ||
 		permissionCalls != 1 {
@@ -291,7 +291,7 @@ func TestCurrentApplicationSkillsRoutePreservesEmptyListAndSafeGenericFailure(
 		"10.0.0.8:43120",
 	))
 	if response.Code != http.StatusOK ||
-		response.Body.String() != "{\"items\":[],\"total\":0,\"page\":1,\"page_size\":0,\"total_pages\":0,\"skills\":[],\"max_skills\":5}\n" {
+		response.Body.String() != "{\"items\":[],\"total\":0,\"page\":1,\"page_size\":0,\"total_pages\":0,\"skills\":[],\"max_skills\":50}\n" {
 		t.Fatalf("empty response status=%d body=%q", response.Code, response.Body.String())
 	}
 
@@ -417,7 +417,7 @@ func TestCurrentApplicationSkillsRouteAcceptsFlaskIntegerDomainAndBoundsPostgres
 				"10.0.0.8:43120",
 			))
 			if response.Code != http.StatusOK ||
-				response.Body.String() != "{\"items\":[],\"total\":0,\"page\":1,\"page_size\":0,\"total_pages\":0,\"skills\":[],\"max_skills\":5}\n" ||
+				response.Body.String() != "{\"items\":[],\"total\":0,\"page\":1,\"page_size\":0,\"total_pages\":0,\"skills\":[],\"max_skills\":50}\n" ||
 				reader.calls != test.wantReaderCalls ||
 				reader.projectID != test.wantReaderProject ||
 				reader.appVersionID != test.wantReaderVersion {
@@ -723,7 +723,7 @@ func TestCurrentApplicationSkillsRouteAnswersThePublishedSkillsListContract(
 	// handler answered before #395 deleted it, so a client that read them from
 	// the old route keeps reading the same values.
 	if envelope.Total != 1 || envelope.Page != 1 || envelope.PageSize != 1 ||
-		envelope.TotalPages != 1 || envelope.MaxSkills != 5 {
+		envelope.TotalPages != 1 || envelope.MaxSkills != 50 {
 		t.Fatalf(
 			"pagination total=%d page=%d page_size=%d total_pages=%d max=%d",
 			envelope.Total,

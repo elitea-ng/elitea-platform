@@ -236,6 +236,9 @@ type publishWrite struct {
 	publishedBy    int64
 	hasPublisher   bool
 	releaseActorID int64
+	// releaseNotes is what changed in this version, for the Marketplace
+	// listing (ADR-0051 decision 2). Optional.
+	releaseNotes string
 }
 
 // publishOutcome is what publishTx wrote.
@@ -353,6 +356,14 @@ func (h *Handler) publishTx(ctx context.Context, tx pgx.Tx, p publishWrite) (pub
 		return publishOutcome{}, refuse(http.StatusInternalServerError, map[string]any{"error": "failed to publish agent sub-agents"})
 	}
 
+	// The Marketplace listing of this publish (ADR-0051 decision 2): the
+	// snapshot of the published clone with its requirements, in the same
+	// transaction, so a version the catalogue shows always has its snapshot.
+	if err := h.recordListing(ctx, tx, p, cloneID, twin); err != nil {
+		slog.ErrorContext(ctx, "publish: record the marketplace listing", "schema", s, "version_id", cloneID, "error", err)
+		return publishOutcome{}, refuse(http.StatusInternalServerError, map[string]any{"error": "failed to publish agent to the marketplace"})
+	}
+
 	// The release of this publish (ADR-0040 decision 2), recorded last in
 	// the same transaction, so its digest is the definition a run reads and
 	// a publish never commits without its release: a failure here answers
@@ -405,6 +416,9 @@ func publishResponse(appID int, versionID, versionName string, outcome publishOu
 
 // announcePublished emits agent.version.published after the commit.
 func (h *Handler) announcePublished(ctx context.Context, projectID string, appID, cloneID int, versionID, versionName string) {
+	// A new listing version is what the upgrade policies of the installs that
+	// hold an older one react to (ADR-0051 decision 4).
+	h.settleListingHolders(ctx, projectID, appID)
 	if h.events == nil {
 		return
 	}
@@ -476,7 +490,7 @@ func (h *Handler) PublishCandidateTx(ctx context.Context, tx pgx.Tx, candidate a
 		schema: s, projectID: projectID, appID: appID, versionID: versionID,
 		versionName: candidate.VersionName, category: candidate.Category,
 		publishedBy: candidate.PublisherID, hasPublisher: candidate.PublisherID > 0,
-		releaseActorID: candidate.PublisherID,
+		releaseActorID: candidate.PublisherID, releaseNotes: candidate.ReleaseNotes,
 	})
 	if refusal != nil {
 		return agentlifecycle.PublishedCandidate{}, refusal

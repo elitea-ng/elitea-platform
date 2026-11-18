@@ -5,11 +5,14 @@ import {
   createBucket,
   deleteBucket,
   deleteObject,
+  moveObject,
   updateBucket,
 } from '@/shared/api/generated/artifacts/artifacts';
-import { eliteaFetch } from '@/shared/api/generated/mutator';
+import { EliteaApiError, eliteaFetch } from '@/shared/api/generated/mutator';
+
 import { listArtifacts, listBuckets } from '@/shared/api/artifacts';
 
+import { envelopeMessage } from '../lib/uploadFailure';
 import type { ArtifactStorageConfiguration } from '../model/types';
 
 interface BucketListWire {
@@ -106,8 +109,40 @@ function toProjectID(projectId: string): number {
   return parsed;
 }
 
-export async function createArtifactBucket(projectId: string, name: string): Promise<void> {
-  await createBucket(toProjectID(projectId), { name });
+/**
+ * An error whose message is the server's own explanation of a 4xx refusal, so a page may show it as
+ * written. Marked by `name` rather than a class so the slice's public API does not grow; any other
+ * thrown error must be shown as a generic sentence.
+ */
+function serverRefusal(message: string): Error {
+  const error = new Error(message);
+  error.name = 'ServerRefusal';
+  return error;
+}
+
+export async function createArtifactBucket(
+  projectId: string,
+  name: string,
+  retentionDays?: number | null,
+): Promise<void> {
+  // `retention_days` is omitted (not sent as null) when unset, so the project's
+  // default retention still applies server-side.
+  // Converted outside the try: a non-numeric id is a caller bug and must surface as such.
+  const id = toProjectID(projectId);
+  try {
+    await createBucket(id, {
+      name,
+      ...(retentionDays === undefined || retentionDays === null ? {} : { retention_days: retentionDays }),
+    });
+  } catch (cause) {
+    // A refusal the server explains (a retention above the project's ceiling, a
+    // storage quota, a name that is taken) is shown as the server wrote it.
+    if (cause instanceof EliteaApiError && cause.failure.kind === 'http' && cause.failure.status < 500) {
+      const message = envelopeMessage(cause.failure.body);
+      if (message !== undefined) throw serverRefusal(message);
+    }
+    throw new Error('Failed to create the bucket.');
+  }
 }
 
 /**
@@ -146,6 +181,26 @@ export async function removeArtifact(projectId: string, bucket: string, key: str
 export async function removeArtifacts(projectId: string, bucket: string, keys: readonly string[]): Promise<void> {
   if (keys.length === 0) return;
   await batchDeleteObjects(toProjectID(projectId), bucket, { keys: [...keys] });
+}
+
+/**
+ * Rename or move one file inside its bucket (#2015): `POST
+ * /artifacts/objects/{projectID}/{bucket}:move` copies to `to` and then
+ * deletes `from` on the server, so a failure leaves the original in place.
+ * A name that is already taken is refused (409) rather than replaced.
+ */
+export async function renameArtifact(projectId: string, bucket: string, from: string, to: string): Promise<void> {
+  try {
+    await moveObject(toProjectID(projectId), bucket, { from, to });
+  } catch (cause) {
+    if (cause instanceof EliteaApiError && cause.failure.kind === 'http') {
+      if (cause.failure.status === 409) throw new Error('A file with that name already exists.');
+      if (cause.failure.status === 404) throw new Error('The file no longer exists.');
+      if (cause.failure.status === 400) throw new Error('That name is not allowed.');
+      if (cause.failure.status === 403) throw new Error('You do not have permission to rename this file.');
+    }
+    throw new Error('Failed to rename the file.');
+  }
 }
 
 function configurationTitle(configuration: ConfigurationWire): string {

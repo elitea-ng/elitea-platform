@@ -4,7 +4,7 @@
  * a place to work in (`AccountMenuFrame.tsx` draws the button and the menu).
  *
  * Rows, top to bottom: Settings, Usage, the account places moved out of the
- * sidebar (Credentials, Catalog), Admin portal for an administrator,
+ * sidebar (Credentials), Admin portal for an administrator,
  * Appearance and Language, Get help, What's new, Troubleshoot (desktop), then
  * the version line and Sign out.
  *
@@ -29,7 +29,6 @@ import NewReleasesOutlinedIcon from '@mui/icons-material/NewReleasesOutlined';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import PaletteOutlinedIcon from '@mui/icons-material/PaletteOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
-import StorefrontOutlinedIcon from '@mui/icons-material/StorefrontOutlined';
 import SupportAgentOutlinedIcon from '@mui/icons-material/SupportAgentOutlined';
 import IconButton from '@mui/material/IconButton';
 import { useColorScheme } from '@mui/material/styles';
@@ -54,14 +53,13 @@ type ThemeMode = 'system' | 'light' | 'dark';
 
 /** A place that lives in this menu rather than in the sidebar. */
 export interface AccountMenuItem {
-  readonly value: 'credentials' | 'catalog' | 'help' | (string & {});
+  readonly value: 'credentials' | 'help' | (string & {});
   readonly label: string;
   readonly url: string;
 }
 
 const ITEM_ICONS: Partial<Record<string, ReactNode>> = {
   credentials: <KeyOutlinedIcon />,
-  catalog: <StorefrontOutlinedIcon />,
 };
 
 interface Choice<T extends string> {
@@ -158,7 +156,7 @@ function reloadPage(): void {
 }
 
 export interface AccountMenuProps {
-  /** The places this person can open that live in this menu (Credentials, Catalog, Help). */
+  /** The places this person can open that live in this menu (Credentials, Help). */
   readonly items: readonly AccountMenuItem[];
   /** Goes to an app path. */
   readonly go: (to: string) => void;

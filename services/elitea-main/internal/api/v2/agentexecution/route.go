@@ -293,7 +293,7 @@ func (handler *currentApplicationStartHandler) Start(writer http.ResponseWriter,
 	if body.ProjectID != projectID || body.ConversationUUID != conversationID ||
 		body.Payload.UserInput == "" || !emptyJSONArray(body.AttachmentsInfo) ||
 		(!absentJSON(body.MCPTokens) && !currentJSONObject(body.MCPTokens)) {
-		writeUnsupported(writer)
+		writeUnsupportedBecause(writer, []string{"the message is empty or does not match the conversation it was sent to"})
 		return
 	}
 	// `user_ids` is no longer a parity gate: it is the mention list, and it is
@@ -318,18 +318,15 @@ func (handler *currentApplicationStartHandler) Start(writer http.ResponseWriter,
 		return
 	}
 
-	// Project skills: an application turn only (a model chat has no skills),
-	// and only for a caller who may read the project's skills.
+	// Project skills: an application turn or a model chat (a model chat takes
+	// them since skills S2, ADR-0050 amendment 1), and only for a caller who
+	// may read the project's skills.
 	projectSkillIDs, ok := parseProjectSkillPicks(body.Payload.Skills)
 	if !ok {
 		writeError(writer, http.StatusBadRequest, "Invalid agent execution request")
 		return
 	}
 	if len(projectSkillIDs) > 0 {
-		if contract != CurrentApplicationStartContract {
-			writeError(writer, http.StatusBadRequest, "Invalid agent execution request")
-			return
-		}
 		if !callerMayReadProjectSkills(request, chi.URLParam(request, "projectID")) {
 			writeJSON(writer, http.StatusForbidden, map[string]string{
 				"error":   "project_skills_forbidden",
@@ -395,7 +392,7 @@ func (handler *currentApplicationStartHandler) Start(writer http.ResponseWriter,
 	switch contract {
 	case CurrentApplicationStartContract:
 		if body.ParticipantID <= 0 || !absentJSON(body.LLMSettings) {
-			writeUnsupported(writer)
+			writeUnsupportedBecause(writer, []string{"the message names no agent of this conversation to answer it"})
 			return
 		}
 		outcome, err = handler.useCase.StartCurrentApplication(
@@ -437,6 +434,7 @@ func (handler *currentApplicationStartHandler) Start(writer http.ResponseWriter,
 				MentionedUserIDs: mentioned,
 				MentionsEveryone: body.SendingToEveryone,
 				TriggerOrigin:    origin,
+				ProjectSkillIDs:  projectSkillIDs,
 				Unattended:       body.Unattended.request(),
 			},
 		)
@@ -773,7 +771,10 @@ func writeStartError(writer http.ResponseWriter, err error) {
 			"message": "This conversation has several agents. Pick the agent this message is for.",
 		})
 	case errors.Is(err, agentexecutionapp.ErrUnsupportedCurrentAgentStart):
-		writeUnsupported(writer)
+		// The full chain (stage names, causes) is for the log; the body
+		// carries only the registered sentences of typed refusals.
+		slog.Warn("agent turn refused as unsupported", "err", err)
+		writeUnsupportedBecause(writer, agentexecutionapp.UnsupportedReasons(err))
 	case errors.Is(err, agentexecutionapp.ErrCurrentAgentRegenerationStillFinalizing):
 		writer.Header().Set("Retry-After", "1")
 		writeJSON(writer, http.StatusConflict, map[string]any{
@@ -876,9 +877,22 @@ func ignoredRunInputs(llmSettings, mcpTokens json.RawMessage, skills []int64, un
 }
 
 func writeUnsupported(writer http.ResponseWriter) {
+	writeUnsupportedBecause(writer, nil)
+}
+
+// writeUnsupportedBecause is the 422 with the reason the start was refused,
+// when one is known. The reasons are the fixed strings the start path wrote
+// (agentexecutionapp.UnsupportedReasons), never a dependency's error text or a
+// request value, so they are safe to show to the sender. Without one the
+// message stays the generic sentence it always was.
+func writeUnsupportedBecause(writer http.ResponseWriter, reasons []string) {
+	message := "This agent turn requires the current execution path."
+	if len(reasons) > 0 {
+		message = "This agent turn cannot start: " + strings.Join(reasons, ": ") + "."
+	}
 	writeJSON(writer, http.StatusUnprocessableEntity, map[string]string{
 		"error":   "unsupported_agent_execution",
-		"message": "This agent turn requires the current execution path.",
+		"message": message,
 	})
 }
 

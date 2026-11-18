@@ -62,8 +62,8 @@ use super::elitea::runtime::v1::{
 };
 use super::output::{
     AgentTerminalOutput, RuntimeFailureKind, ToolkitExecuteReadTerminalOutput,
-    build_agent_terminal_output_frame, build_node_event_output_frame,
-    build_toolkit_execute_read_terminal_output_frame,
+    build_agent_terminal_output_frame, build_execution_node_event_output_frame,
+    build_node_event_output_frame, build_toolkit_execute_read_terminal_output_frame,
 };
 use super::security_context::{
     ExecutionSecurityContext, GovernedContext, SecurityContextReference,
@@ -381,6 +381,16 @@ impl AcceptedAgentClaim {
             fence.claim_attempt < self.fence.claim_attempt
                 && fence.lease_epoch < self.fence.lease_epoch
         })
+    }
+
+    /// How this claim treats a restored nonterminal frame (see
+    /// [`RecoveredProgress`]); `None` for a frame it cannot dispose of.
+    #[must_use]
+    pub(crate) fn recovered_progress(
+        &self,
+        frame: &ExecutionOutputFrameV1,
+    ) -> Option<RecoveredProgress> {
+        recovered_progress_of(&self.identity, self.claim_handoff_watermark, frame)
     }
 
     /// The canonical failure terminal for `sequence` under this claim's fence.
@@ -809,6 +819,19 @@ impl AgentOutputRecovery {
     #[must_use]
     pub const fn claim_handoff_watermark(&self) -> u64 {
         self.binding.claim_handoff_watermark
+    }
+
+    /// How this recovery claim treats a restored nonterminal frame.
+    #[must_use]
+    pub(crate) fn recovered_progress(
+        &self,
+        frame: &ExecutionOutputFrameV1,
+    ) -> Option<RecoveredProgress> {
+        recovered_progress_of(
+            &self.binding.identity,
+            self.binding.claim_handoff_watermark,
+            frame,
+        )
     }
 
     #[must_use]
@@ -1557,6 +1580,26 @@ impl AgentExecutionOutputAuthority {
         terminal: ToolkitExecuteReadTerminalOutput,
         occurred_at_unix_millis: i64,
     ) -> Result<ExecutionOutputFrameV1, ProtocolError> {
+        let sequence = next_output_sequence(self.claim.claim_handoff_watermark)?;
+        self.bind_toolkit_execute_read_terminal_at(
+            verified,
+            terminal,
+            occurred_at_unix_millis,
+            sequence,
+        )
+    }
+
+    /// The terminal of a run that published progress (#2041): its sequence is
+    /// the one [`ToolkitOutputCursor::terminal_sequence`] allocated after the
+    /// last acknowledged progress frame, not the handoff watermark's successor.
+    /// The frame builder still refuses a sequence at or below the watermark.
+    pub(crate) fn bind_toolkit_execute_read_terminal_at(
+        self,
+        verified: &VerifiedToolkitExecuteReadCommand,
+        terminal: ToolkitExecuteReadTerminalOutput,
+        occurred_at_unix_millis: i64,
+        sequence: u64,
+    ) -> Result<ExecutionOutputFrameV1, ProtocolError> {
         if !self.claim.matches_verified_command(verified) {
             return Err(ProtocolError::AuthorizationFailed(
                 "the output authority does not match its command",
@@ -1591,7 +1634,7 @@ impl AgentExecutionOutputAuthority {
             verified,
             &self.claim.fence,
             terminal,
-            next_output_sequence(self.claim.claim_handoff_watermark)?,
+            sequence,
             occurred_at_unix_millis,
             self.claim.claim_handoff_watermark,
         )
@@ -1668,6 +1711,36 @@ enum AgentOutputCursorState {
         frame_sha256: [u8; 32],
     },
     Exhausted,
+}
+
+/// What a restored, unaccepted progress frame of an index run is to a claim
+/// that finds it in the spool (#2041).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RecoveredProgress {
+    /// At or below Main's handoff watermark: Main already holds it.
+    Covered,
+    /// Beyond the watermark: Main did not hold it when this claim was made, and
+    /// only this claim's own worker could send it, so it can never become
+    /// durable. Whatever fence bound it (this claim's own, an older one, or
+    /// one newer in either component) it is set aside as a record and the run
+    /// continues from the watermark.
+    Superseded,
+}
+
+/// Classify a restored nonterminal frame against one claim's binding.
+fn recovered_progress_of(
+    identity: &ExecutionIdentityV1,
+    watermark: u64,
+    frame: &ExecutionOutputFrameV1,
+) -> Option<RecoveredProgress> {
+    if frame.terminal || frame.identity.as_ref() != Some(identity) {
+        return None;
+    }
+    Some(if frame.sequence <= watermark {
+        RecoveredProgress::Covered
+    } else {
+        RecoveredProgress::Superseded
+    })
 }
 
 /// Result of consuming an exact durable progress ACK.
@@ -1851,6 +1924,185 @@ impl AgentExecutionOutputCursor {
         } else {
             Err(ProtocolError::AuthorizationFailed(
                 "the output cursor does not match its command",
+            ))
+        }
+    }
+
+    fn require_ready_sequence(&self) -> Result<u64, ProtocolError> {
+        match self.state {
+            AgentOutputCursorState::Ready(sequence) => Ok(sequence),
+            AgentOutputCursorState::Pending { .. } => Err(ProtocolError::AuthorizationFailed(
+                "a progress frame remains unacknowledged",
+            )),
+            AgentOutputCursorState::Exhausted => Err(ProtocolError::ResourceExhausted(
+                "the output sequence exceeds the durable counter limit",
+            )),
+        }
+    }
+}
+
+/// Progress cursor of one index run (#2041), the toolkit counterpart of
+/// [`AgentExecutionOutputCursor`].
+///
+/// It owns a copy of the claim's fence and handoff watermark so the run can
+/// keep borrowing its execution while it publishes. It can only mint
+/// nonterminal `NodeEvent` frames for the exact `index.ingest.v1` command it
+/// was bound to; the terminal still comes from the claim's unique output
+/// authority, at the sequence [`Self::terminal_sequence`] returns. Like the
+/// agent cursor it never advances speculatively: the sequence moves only on
+/// the exact ACK of the pending frame.
+pub(crate) struct ToolkitOutputCursor {
+    command_binding: [u8; 32],
+    fence: ExecutionFenceV1,
+    claim_handoff_watermark: u64,
+    state: AgentOutputCursorState,
+}
+
+impl LeaseMonitoredAgentExecution {
+    /// Bind a progress cursor to this claim for one index command.
+    ///
+    /// # Errors
+    ///
+    /// The command is not this claim's, or is not an index run (every other
+    /// direct toolkit command keeps a terminal-only stream), or the handoff
+    /// watermark leaves no sequence.
+    pub(crate) fn toolkit_progress_cursor(
+        &self,
+        verified: &VerifiedToolkitExecuteReadCommand,
+    ) -> Result<ToolkitOutputCursor, ProtocolError> {
+        if verified.kind() != super::command::ToolkitCommandKind::IndexIngest {
+            return Err(ProtocolError::AuthorizationFailed(
+                "only an index run publishes progress",
+            ));
+        }
+        if !self.claim.matches_verified_command(verified) {
+            return Err(ProtocolError::AuthorizationFailed(
+                "the progress cursor does not match its command",
+            ));
+        }
+        Ok(ToolkitOutputCursor {
+            command_binding: self.claim.command_binding,
+            fence: self.claim.fence.clone(),
+            claim_handoff_watermark: self.claim.claim_handoff_watermark,
+            state: AgentOutputCursorState::Ready(next_output_sequence(
+                self.claim.claim_handoff_watermark,
+            )?),
+        })
+    }
+}
+
+impl ToolkitOutputCursor {
+    /// Bind one `NodeEvent` at the next sequence (`watermark + 1`, then each
+    /// acknowledged frame's successor).
+    pub(crate) fn bind_progress(
+        &mut self,
+        verified: &VerifiedToolkitExecuteReadCommand,
+        event: NodeEventV1,
+        occurred_at_unix_millis: i64,
+    ) -> Result<ClaimBoundAgentProgress, ProtocolError> {
+        self.require_command(verified)?;
+        let sequence = self.require_ready_sequence()?;
+        let frame = build_execution_node_event_output_frame(
+            verified,
+            &self.fence,
+            event,
+            sequence,
+            occurred_at_unix_millis,
+            self.claim_handoff_watermark,
+        )?;
+        self.state = AgentOutputCursorState::Pending {
+            sequence,
+            frame_sha256: progress_frame_sha256(&frame),
+        };
+        Ok(ClaimBoundAgentProgress { frame })
+    }
+
+    /// Consume one exact ACK while distinguishing durable sequence exhaustion.
+    pub(crate) fn commit_progress_durable(
+        &mut self,
+        acknowledged: DurablyAckedProgress,
+    ) -> Result<AgentProgressCommit, ProtocolError> {
+        let (acknowledged_sequence, acknowledged_sha256) = acknowledged.into_binding();
+        let AgentOutputCursorState::Pending {
+            sequence,
+            frame_sha256,
+        } = &self.state
+        else {
+            return Err(ProtocolError::AuthorizationFailed(
+                "the output cursor has no pending progress frame",
+            ));
+        };
+        if acknowledged_sequence != *sequence
+            || !bool::from(acknowledged_sha256.ct_eq(frame_sha256))
+        {
+            return Err(ProtocolError::AuthorizationFailed(
+                "the progress ACK does not cover the exact pending frame",
+            ));
+        }
+        match next_output_sequence(acknowledged_sequence) {
+            Ok(next) => {
+                self.state = AgentOutputCursorState::Ready(next);
+                Ok(AgentProgressCommit::Advanced)
+            }
+            Err(error) => {
+                self.state = AgentOutputCursorState::Exhausted;
+                Ok(AgentProgressCommit::Exhausted(error))
+            }
+        }
+    }
+
+    /// Consume Main's exact rejection of the pending frame into the sequence
+    /// the terminal takes in its place. The proof must cover the cursor's sole
+    /// pending frame. The terminal is the run's real outcome; Main's decision
+    /// is applied when it is replayed.
+    pub(crate) fn bind_rejected_progress(
+        &mut self,
+        verified: &VerifiedToolkitExecuteReadCommand,
+        rejected: FrameBoundProgressRejection,
+    ) -> Result<u64, ProtocolError> {
+        self.require_command(verified)?;
+        let (rejected_sequence, rejected_sha256, _winner) = rejected.into_binding();
+        let AgentOutputCursorState::Pending {
+            sequence,
+            frame_sha256,
+        } = &self.state
+        else {
+            return Err(ProtocolError::AuthorizationFailed(
+                "the output cursor has no rejected progress frame",
+            ));
+        };
+        if rejected_sequence != *sequence || !bool::from(rejected_sha256.ct_eq(frame_sha256)) {
+            return Err(ProtocolError::AuthorizationFailed(
+                "the progress rejection does not cover the exact pending frame",
+            ));
+        }
+        Ok(rejected_sequence)
+    }
+
+    /// The sequence the terminal takes. Only a cursor with no unacknowledged
+    /// frame has one: a pending frame may or may not be durable in Main, so
+    /// the terminal is never written over it or after it from here (the
+    /// redelivered command's recovery claim settles it from Main's watermark).
+    ///
+    /// # Errors
+    ///
+    /// A progress frame remains unacknowledged, or the counter is exhausted.
+    pub(crate) fn terminal_sequence(&self) -> Result<u64, ProtocolError> {
+        self.require_ready_sequence()
+    }
+
+    fn require_command(
+        &self,
+        verified: &VerifiedToolkitExecuteReadCommand,
+    ) -> Result<(), ProtocolError> {
+        let binding = verified_command_binding(verified);
+        if verified.kind() == super::command::ToolkitCommandKind::IndexIngest
+            && bool::from(self.command_binding.ct_eq(&binding))
+        {
+            Ok(())
+        } else {
+            Err(ProtocolError::AuthorizationFailed(
+                "the progress cursor does not match its command",
             ))
         }
     }
@@ -4676,6 +4928,20 @@ fn hex_lower(value: &[u8]) -> String {
 #[cfg(test)]
 #[path = "shared_toolkit_tests.rs"]
 mod shared_toolkit_tests;
+
+/// An authenticated `index.ingest.v1` command and its accepted claim response,
+/// for the tests of the layers above the protocol (#2041).
+#[cfg(test)]
+pub(crate) use shared_toolkit_tests::index_command_and_claim;
+
+/// The progress cursor of a claim, as the execution layer binds it.
+#[cfg(test)]
+pub(crate) fn test_toolkit_progress_cursor(
+    claim: AcceptedAgentClaim,
+    verified: &VerifiedToolkitExecuteReadCommand,
+) -> Result<ToolkitOutputCursor, ProtocolError> {
+    LeaseMonitoredAgentExecution { claim }.toolkit_progress_cursor(verified)
+}
 
 #[cfg(test)]
 mod remove_index_disposition_tests {

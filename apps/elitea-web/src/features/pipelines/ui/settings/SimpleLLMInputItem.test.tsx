@@ -62,6 +62,53 @@ describe('SimpleLLMInputItem', () => {
     expect(getByText('User message')).toBeInTheDocument();
   });
 
+  it.each([
+    ['system', 'Describe how the assistant should behave'],
+    ['task', 'Describe what the assistant should do'],
+    ['chat_history', 'Earlier messages as a JSON list, or leave empty'],
+    ['code', 'Write the code to run'],
+    ['anything_else', 'Enter a value'],
+  ])('an empty %s value shows a visible hint, in the AI-assistant field and in the plain one (issue 2001)', (variable, hint) => {
+    for (const assistant of [true, false]) {
+      const view = renderItem({ variableName: variable, variable, type: 'fixed', value: '', defaultValue: '', onChangeMapping: vi.fn(), enableAIAssistant: assistant });
+      const field = view.container.querySelector<HTMLInputElement | HTMLTextAreaElement>('input[name="value"], textarea[name="value"]');
+      expect(field?.getAttribute('placeholder')).toBe(hint);
+      // The label sits above the field, so the hint is not drawn over it.
+      expect(view.container.querySelector('label[data-shrink="true"]')).not.toBeNull();
+      view.unmount();
+    }
+  });
+
+  it.each([true, false])('the Value field shares the Type select\'s size, label line and text start, with AI assistant %s (issue 2001)', assistant => {
+    const view = renderItem({ variableName: 'system', variable: 'system', type: 'fixed', value: 'hello', defaultValue: '', onChangeMapping: vi.fn(), enableAIAssistant: assistant });
+    const value = view.getByLabelText('Value');
+    const inputRoot = value.parentElement as HTMLElement;
+    const textField = inputRoot.parentElement as HTMLElement;
+    const typeRoot = view.getByRole('combobox', { name: /Type/ }).closest('[class*="MuiFormControl"]') as HTMLElement;
+    // Same `small` size on both fields.
+    expect(inputRoot.className).toContain('sizeSmall');
+    expect(typeRoot.querySelector('[class*="sizeSmall"]')).not.toBeNull();
+    // The select's stock 10rem minimum must not overrun its column (its underline ran under the Value field).
+    expect(getComputedStyle(typeRoot).minWidth).toBe('0px');
+    // The standard TextField brand style adds 8px above and 12px left of the text; the select has none.
+    expect(getComputedStyle(textField).paddingTop).toBe('0px');
+    expect(getComputedStyle(inputRoot).paddingLeft).toBe('0px');
+    expect(getComputedStyle(value).marginBottom).toBe('0px');
+    // BOTH labels are shrunk above their fields.
+    for (const name of ['Type', 'Value']) {
+      expect(view.getByText(name, { selector: 'label' })).toHaveAttribute('data-shrink', 'true');
+    }
+  });
+
+  it('a multiline Code value is aligned at the top and left (issue 2001)', () => {
+    const view = renderItem({ variableName: 'code', variable: 'code', type: 'fixed', value: 'a\nb', defaultValue: '', onChangeMapping: vi.fn(), codeLanguage: 'python', enableAIAssistant: false });
+    const area = view.container.querySelector<HTMLTextAreaElement>('textarea[name="value"]') as HTMLTextAreaElement;
+    const inputRoot = area.closest('[class*="MuiInput-root"]') as HTMLElement;
+    expect(getComputedStyle(inputRoot).paddingLeft).toBe('0px');
+    expect(getComputedStyle(inputRoot).paddingTop).toBe('0px');
+    // Not zeroed: the last line stays clear of the underline, the text clear of the toolbar.
+  });
+
   it('renders a plain text field for a fixed/fstring/string type', () => {
     const { getByLabelText } = renderItem({
       variableName: 'system',

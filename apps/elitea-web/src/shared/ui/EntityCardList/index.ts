@@ -28,3 +28,9 @@ export type { EntityKind } from './EntityTypeIcon';
 
 export { ENTITY_LIST_VIEW } from './model';
 export type { EntityListAuthor, EntityListItem, EntityListTag, EntityListView } from './model';
+
+export { EntityRowSlotProvider } from './rowSlot';
+export type { EntityRowSlot } from './rowSlot';
+
+export { EntitySelectionProvider } from './selection';
+export type { EntitySelection } from './selection';

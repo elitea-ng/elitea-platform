@@ -318,8 +318,10 @@ export function buildChatBoxStateParams(params: {
   readonly chatInput: UseChatBoxStateParams['chatInput'];
   readonly projectId: string | number | undefined;
   readonly activeParticipantVersions: UseChatBoxStateParams['activeParticipantVersions'];
+  readonly conversationId?: string | undefined;
 }): UseChatBoxStateParams {
   return {
+    ...(params.conversationId !== undefined && params.conversationId !== '' ? { conversationId: params.conversationId } : {}),
     activeParticipant: params.activeParticipant,
     participants: params.participants,
     userId: params.userId,

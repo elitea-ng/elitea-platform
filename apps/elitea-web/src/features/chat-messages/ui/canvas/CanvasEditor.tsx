@@ -973,7 +973,7 @@ export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(
               borderRadius: '8px',
               border: '1px solid',
               borderColor: 'divider',
-              background: '#fafafa',
+              backgroundColor: 'background.paper',
               boxSizing: 'border-box',
             }}
           >

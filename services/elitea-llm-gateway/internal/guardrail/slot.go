@@ -81,7 +81,7 @@ func parseDetectorScope(d *Detector, obj map[string]any) error {
 	if d.Action == ActionMask {
 		return fmt.Errorf("slot %q allows the actions block and flag; mask cannot remove an injection", SlotPromptInjection)
 	}
-	if d.Type == TypeSecrets || d.Type == TypePresidio {
+	if d.Type == TypeSecrets || d.Type == TypePresidio || d.Type == TypePersonalData {
 		return fmt.Errorf("a %s detector cannot fill slot %q: it finds data, not instructions", d.Type, SlotPromptInjection)
 	}
 	d.Slot = SlotPromptInjection

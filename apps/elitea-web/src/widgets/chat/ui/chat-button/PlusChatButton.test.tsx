@@ -48,6 +48,7 @@ afterEach(() => {
 async function renderPlusButton(props: {
   readonly attachmentButtonRef: RefObject<AttachmentButtonHandle | null>;
   readonly onAttachFiles: (files: readonly File[]) => void;
+  readonly onPickSkill?: () => void;
 }): Promise<{ readonly container: HTMLElement }> {
   configureGeneratedClient({ baseUrl: BASE });
   server.use(
@@ -58,7 +59,7 @@ async function renderPlusButton(props: {
     return (
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })}>
         <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
-          <PlusChatButton attachmentButtonRef={props.attachmentButtonRef} onAttachFiles={props.onAttachFiles} />
+          <PlusChatButton attachmentButtonRef={props.attachmentButtonRef} onAttachFiles={props.onAttachFiles} {...(props.onPickSkill ? { onPickSkill: props.onPickSkill } : {})} />
         </ThemeProvider>
       </QueryClientProvider>
     );
@@ -175,5 +176,34 @@ describe('PlusChatButton — submenu position and size (#6629)', () => {
     expect(submenuPopper().style.transform).toBe(agentsTransform);
     // Not a row top (134 or 178): the submenu follows the menu, not the row.
     expect(agentsTransform).not.toMatch(/134px|178px/);
+  });
+});
+
+/** #2017: the menu lists Skills beside Modules, Agents, Pipelines, Toolkits and MCPs; choosing it hands over to the composer's `~` picker. */
+describe('PlusChatButton — Skills row (#2017)', () => {
+  it('shows a Skills row that calls onPickSkill once and closes the menu', async () => {
+    const onPickSkill = vi.fn();
+    await renderPlusButton({ attachmentButtonRef: createRef<AttachmentButtonHandle | null>(), onAttachFiles: vi.fn(), onPickSkill });
+    act(() => {
+      screen.getByTestId('plus-menu-button').click();
+    });
+    await waitFor(() => expect(screen.getByTestId('plus-menu-skills')).toBeInTheDocument());
+    expect(screen.getByTestId('plus-menu-skills')).toHaveTextContent('Skills');
+
+    act(() => {
+      screen.getByTestId('plus-menu-skills').click();
+    });
+
+    expect(onPickSkill).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByTestId('plus-menu-skills')).toBeNull());
+  });
+
+  it('shows no Skills row when the composer offers no skill picker', async () => {
+    await renderPlusButton({ attachmentButtonRef: createRef<AttachmentButtonHandle | null>(), onAttachFiles: vi.fn() });
+    act(() => {
+      screen.getByTestId('plus-menu-button').click();
+    });
+    await waitFor(() => expect(screen.getByTestId('plus-menu-agents')).toBeInTheDocument());
+    expect(screen.queryByTestId('plus-menu-skills')).toBeNull();
   });
 });

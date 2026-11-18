@@ -489,7 +489,7 @@ pgbouncer:
   resources:
     requests:
       cpu: 50m
-      memory: 32Mi
+      memory: 64Mi
     limits:
       cpu: "1"
       memory: 128Mi
@@ -796,8 +796,22 @@ nats:
   # is off here: turn it on where the operator runs.
   promExporter:
     enabled: true
+    # Requests at the GKE Autopilot minimum (50m CPU, 64Mi memory; Autopilot
+    # raises anything lower, which Argo CD then shows as permanent drift,
+    # #1460). The two sidecars are the upstream chart's, which sets none.
+    merge:
+      resources:
+        requests: {cpu: 50m, memory: 64Mi}
+        limits: {memory: 128Mi}
     podMonitor:
       enabled: false
+
+  # The config reloader sidecar: same Autopilot-minimum requests.
+  reloader:
+    merge:
+      resources:
+        requests: {cpu: 50m, memory: 64Mi}
+        limits: {memory: 128Mi}
 
   # The CA bundle the server verifies client certificates against. cert-manager
   # writes ca.crt (the NATS CA) into the server certificate's Secret.
@@ -1945,7 +1959,7 @@ objectInit:
   resources:
     requests:
       cpu: 50m
-      memory: 32Mi
+      memory: 64Mi
     limits:
       cpu: "1"
       memory: 128Mi
@@ -2129,7 +2143,7 @@ kedaCleanup:
   resources:
     requests:
       cpu: 50m
-      memory: 32Mi
+      memory: 64Mi
     limits:
       memory: 64Mi
 
@@ -3065,6 +3079,14 @@ main:
     # Image creation toggle is disabled and the worker does not offer the tool.
     ELITEA_IMAGE_GENERATION_MODEL: ""
 
+    # ELITEA_CODE_SANDBOX_LANGUAGES is the comma-separated list of languages
+    # the code sandbox serves (python, javascript, typescript, rust). It makes
+    # the agents' "Code sandbox" (pyodide) internal tool available and is
+    # reported by GET /elitea_core/runtime_capabilities. Empty: derived from
+    # worker.runtime.sandboxRuntimes; empty there too, the toggle is disabled
+    # and the worker does not offer the tool.
+    ELITEA_CODE_SANDBOX_LANGUAGES: ""
+
     # --- Local username/password (Form) sign-in --------------------------------
     # OFF unless "true". A deployment signs people in through OIDC or SAML and
     # provisions them through SCIM; the Form users file
@@ -3154,6 +3176,14 @@ main:
     # `elitea-main credential-policy put`), hashes to its digest and allows at
     # least one identity mode. Read in cmd/elitea-main/credential_governance.go.
     ELITEA_ENTERPRISE_CREDENTIAL_GOVERNANCE_ENABLED: "false"
+    # --- Delegation grants (ADR-0044 amendment 1) --------------------------------
+    # "true" | "false". Off (the default), agent execution commands carry no
+    # delegation grant and delegation behaves as before grants. On, the worker
+    # bounds each delegation by the caller's set plus the edge's approved grant.
+    # Leave it off until the migration of existing compositions has created
+    # their pending grants and owners have reviewed them. Read in
+    # internal/runtimecomposition/config.go.
+    ELITEA_DELEGATION_GRANTS_ENFORCED: "false"
     ELITEA_CREDENTIAL_GOVERNANCE_POLICY_REVISION: ""
     # External Vault/OpenBao KV v2 store for governed credentials (#1113).
     # Read ONLY with the flag above on. All empty means unconfigured, which is
@@ -3579,6 +3609,13 @@ main:
     # a migration window), never to opt in. Independent of the project
     # reconciler's ELITEA_PROJECT_DELETION_RECONCILER_ENABLED (same default).
     ELITEA_TOOLKIT_DELETION_RECONCILER_ENABLED: "true"
+
+    # Semantic recall for an agent's own memory (issue 1657): the reconciler on
+    # every elitea-main replica that embeds memory entries into elitea-vector
+    # (source agent_memory) and ranks recall by similarity. ON by default; it
+    # is off by itself when the vector client, the LLM gateway or
+    # APPLICATION_SECRET_KEY is missing. "false" keeps the keyword recall.
+    ELITEA_AGENT_MEMORY_VECTORS_ENABLED: "true"
 
     # --- elitea-vector gRPC client (ADR-0031 decision 4) ---------------------
     #
@@ -4466,7 +4503,7 @@ web:
   resources:
     requests:
       cpu: 50m
-      memory: 32Mi
+      memory: 64Mi
     limits:
       cpu: "200m"
       memory: 128Mi
@@ -7089,6 +7126,11 @@ worker:
   materialInit:
     image: docker.io/library/python:3.12.14-slim-trixie
     sizeLimit: 8Mi
+    # Requests at the GKE Autopilot minimum, so Autopilot does not raise them
+    # and Argo CD does not show the drift (#1460).
+    resources:
+      requests: {cpu: 50m, memory: 64Mi}
+      limits: {memory: 128Mi}
 
   # The document extraction sidecar (ADR-0030 I1): elitea-doc-extractor, a
   # second container in the worker pod that reads the PDF and Office documents

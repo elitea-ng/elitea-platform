@@ -27,7 +27,7 @@ describe('BucketStorageSelector (#6638)', () => {
     expect(trigger).toHaveStyle({ minHeight: remToPx('3.25rem') });
   });
 
-  it('keeps the caption with the fallback label and still opens the menu', () => {
+  it('names the platform storage when none is chosen and still opens the menu', () => {
     const onChange = vi.fn();
     renderWithTheme(
       <BucketStorageSelector
@@ -36,9 +36,25 @@ describe('BucketStorageSelector (#6638)', () => {
       />,
     );
     const trigger = screen.getByRole('button', { name: /^Storage:/ });
-    expect(trigger).toHaveTextContent('Storage:Select Storage');
+    expect(trigger).toHaveTextContent('Storage:Platform storage');
     fireEvent.click(trigger);
     fireEvent.click(screen.getByText('Team S3'));
     expect(onChange).toHaveBeenCalledWith('a');
+  });
+
+  // #2094: a project with no S3 configuration got an empty menu and no label.
+  it('offers the platform storage when the project has no configured storage', () => {
+    const onChange = vi.fn();
+    renderWithTheme(
+      <BucketStorageSelector
+        configurations={[]}
+        onChange={onChange}
+      />,
+    );
+    const trigger = screen.getByRole('button', { name: /^Storage:/ });
+    expect(trigger).toHaveTextContent('Storage:Platform storage');
+    fireEvent.click(trigger);
+    expect(screen.getAllByRole('menuitem')).toHaveLength(1);
+    expect(screen.getByText('Built-in storage')).toBeInTheDocument();
   });
 });

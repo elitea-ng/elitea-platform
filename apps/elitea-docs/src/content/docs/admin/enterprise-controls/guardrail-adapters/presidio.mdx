@@ -3,7 +3,7 @@ title: "Presidio adapter"
 description: "Connect a self-hosted Microsoft Presidio Analyzer to the guardrail pipeline of the LLM gateway, with the detector type presidio, to find and mask personal data."
 ---
 
-The `presidio` detector sends the content to a Microsoft Presidio Analyzer that you operate. Presidio finds personal data (PII) and returns the position of each entity. The gateway converts the positions to spans, so a `mask` action replaces only the personal data. See [Content controls](/admin/enterprise-controls/content-controls#guardrail-pipeline) for the guardrail entry and its settings.
+The `presidio` detector sends the content to a Microsoft Presidio Analyzer that you operate. Presidio finds personal data (PII) and returns the position of each entity. The gateway converts the positions to spans, so a `mask` action replaces only the personal data. See [Content controls](/admin/enterprise-controls/content-controls#guardrail-pipeline) for the guardrail entry and its settings. For e-mail addresses, phone numbers, payment cards and IBANs, the built-in `personal_data` detector needs no service. Use Presidio for names, addresses and national identifiers.
 
 ## Prerequisites
 

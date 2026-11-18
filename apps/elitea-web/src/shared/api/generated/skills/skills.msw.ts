@@ -62,11 +62,111 @@ import type {
   Skill,
   SkillDraft,
   SkillForkPayload,
+  SkillTrustStatus,
   SkillValidationResult,
   SkillsList,
   UnpublishSkill200,
   UpdatedResponse,
 } from "../model";
+
+export const getGetSkillTrustResponseMock = (
+  overrideResponse: Partial<Extract<SkillTrustStatus, object>> = {},
+): SkillTrustStatus => ({
+  skill_id: faker.number.int(),
+  name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  foreign: faker.datatype.boolean(),
+  publisher_project_id: faker.helpers.arrayElement([
+    faker.number.int(),
+    undefined,
+  ]),
+  revision: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  history: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    revision: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    publisher_project_id: faker.helpers.arrayElement([
+      faker.number.int(),
+      undefined,
+    ]),
+    trusted_by: faker.helpers.arrayElement([faker.number.int(), undefined]),
+    trusted_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    revoked_by: faker.helpers.arrayElement([faker.number.int(), undefined]),
+    revoked_at: faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      undefined,
+    ]),
+    source: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  })),
+  ...overrideResponse,
+});
+
+export const getTrustSkillRevisionResponseMock = (
+  overrideResponse: Partial<Extract<SkillTrustStatus, object>> = {},
+): SkillTrustStatus => ({
+  skill_id: faker.number.int(),
+  name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  foreign: faker.datatype.boolean(),
+  publisher_project_id: faker.helpers.arrayElement([
+    faker.number.int(),
+    undefined,
+  ]),
+  revision: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  history: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    revision: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    publisher_project_id: faker.helpers.arrayElement([
+      faker.number.int(),
+      undefined,
+    ]),
+    trusted_by: faker.helpers.arrayElement([faker.number.int(), undefined]),
+    trusted_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    revoked_by: faker.helpers.arrayElement([faker.number.int(), undefined]),
+    revoked_at: faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      undefined,
+    ]),
+    source: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  })),
+  ...overrideResponse,
+});
+
+export const getRevokeSkillTrustResponseMock = (
+  overrideResponse: Partial<Extract<SkillTrustStatus, object>> = {},
+): SkillTrustStatus => ({
+  skill_id: faker.number.int(),
+  name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  foreign: faker.datatype.boolean(),
+  publisher_project_id: faker.helpers.arrayElement([
+    faker.number.int(),
+    undefined,
+  ]),
+  revision: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  history: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    revision: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    publisher_project_id: faker.helpers.arrayElement([
+      faker.number.int(),
+      undefined,
+    ]),
+    trusted_by: faker.helpers.arrayElement([faker.number.int(), undefined]),
+    trusted_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    revoked_by: faker.helpers.arrayElement([faker.number.int(), undefined]),
+    revoked_at: faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      undefined,
+    ]),
+    source: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  })),
+  ...overrideResponse,
+});
 
 export const getGenerateSkillDraftResponseMock = (
   overrideResponse: Partial<Extract<SkillDraft, object>> = {},
@@ -1983,6 +2083,84 @@ export const getListAgentsWithSkillResponseMock = (
   ...overrideResponse,
 });
 
+export const getGetSkillTrustMockHandler = (
+  overrideResponse?:
+    | SkillTrustStatus
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<SkillTrustStatus> | SkillTrustStatus),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/skill_trust/prompt_lib/:projectId/:skillId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetSkillTrustResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getTrustSkillRevisionMockHandler = (
+  overrideResponse?:
+    | SkillTrustStatus
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<SkillTrustStatus> | SkillTrustStatus),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/skill_trust/prompt_lib/:projectId/:skillId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getTrustSkillRevisionResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getRevokeSkillTrustMockHandler = (
+  overrideResponse?:
+    | SkillTrustStatus
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<SkillTrustStatus> | SkillTrustStatus),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/elitea_core/skill_trust/prompt_lib/:projectId/:skillId",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getRevokeSkillTrustResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getGenerateSkillDraftMockHandler = (
   overrideResponse?:
     | SkillDraft
@@ -2850,6 +3028,9 @@ export const getListAgentsWithSkillMockHandler = (
   );
 };
 export const getSkillsMock = () => [
+  getGetSkillTrustMockHandler(),
+  getTrustSkillRevisionMockHandler(),
+  getRevokeSkillTrustMockHandler(),
   getGenerateSkillDraftMockHandler(),
   getListApplicationSkillsMockHandler(),
   getListSkillsMockHandler(),

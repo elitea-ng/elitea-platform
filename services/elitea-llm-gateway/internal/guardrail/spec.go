@@ -48,6 +48,10 @@ const (
 	ActionBlock = "block"
 	ActionMask  = "mask"
 	ActionFlag  = "flag"
+	// ActionWarn leaves the content as it is, like flag, and tells the person
+	// who sent the message. The chat shows a notice that names the entry; the
+	// verdict outcome is OutcomeWarned.
+	ActionWarn = "warn"
 )
 
 // Fail modes.
@@ -61,11 +65,14 @@ const (
 	TypeRegex   = "regex"
 	TypeSecrets = "secrets"
 	TypeHTTP    = "http"
+	// TypePersonalData is the built-in personal data rule pack (e-mail,
+	// phone number, payment card, IBAN); see personal_data.go.
+	TypePersonalData = "personal_data"
 )
 
 // DetectorTypes lists the detector types this gateway runs.
 func DetectorTypes() []string {
-	return []string{TypeRegex, TypeSecrets, TypeHTTP, TypeAzureContentSafety, TypeBedrockGuardrails, TypeModelArmor, TypeLlamaGuard, TypePresidio}
+	return []string{TypeRegex, TypeSecrets, TypePersonalData, TypeHTTP, TypeAzureContentSafety, TypeBedrockGuardrails, TypeModelArmor, TypeLlamaGuard, TypePresidio}
 }
 
 // Bounds. elitea-main refuses a row outside them on write; the gateway refuses
@@ -227,7 +234,7 @@ func ParseRow(name string, data map[string]any) (*Row, error) {
 // fails closed because a failed mask would release the raw text.
 func DefaultFailMode(detectors []*Detector) string {
 	for _, d := range detectors {
-		if d.Action != ActionFlag {
+		if d.Action != ActionFlag && d.Action != ActionWarn {
 			return FailClosed
 		}
 	}
@@ -247,9 +254,9 @@ func parseDetector(obj map[string]any) (*Detector, error) {
 		return nil, fmt.Errorf("name %q must match %s", d.Name, labelPattern.String())
 	}
 	switch d.Action {
-	case ActionBlock, ActionMask, ActionFlag:
+	case ActionBlock, ActionMask, ActionFlag, ActionWarn:
 	default:
-		return nil, fmt.Errorf("action must be %q, %q or %q", ActionBlock, ActionMask, ActionFlag)
+		return nil, fmt.Errorf("action must be %q, %q, %q or %q", ActionBlock, ActionMask, ActionFlag, ActionWarn)
 	}
 	var err error
 	switch d.Type {
@@ -257,6 +264,8 @@ func parseDetector(obj map[string]any) (*Detector, error) {
 		d.impl, err = newRegexDetector(obj)
 	case TypeSecrets:
 		d.impl, err = newSecretsDetector(obj)
+	case TypePersonalData:
+		d.impl, err = newPersonalDataDetector(obj)
 	case TypeHTTP:
 		d.impl, err = newHTTPDetector(obj)
 	case TypeLlamaGuard:

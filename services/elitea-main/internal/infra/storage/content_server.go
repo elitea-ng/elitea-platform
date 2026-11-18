@@ -124,11 +124,14 @@ type ContentServer struct {
 	runtimeProposeAgent *RuntimeProposeAgentService
 	// runtimeProposeDismissal serves propose_dismissal (#1616).
 	runtimeProposeDismissal *RuntimeProposeDismissalService
-	runtimeArtifacts        *RuntimeArtifactObjectService
-	sandboxBundles          *SandboxBundleContentService
-	compiledSnapshots       *CompiledSnapshotContentService
-	maxBytes                int64
-	requests                chan struct{}
+	// runtimeMarketplaceWorkforce serves the Marketplace tools of a
+	// workforce manager (#1632).
+	runtimeMarketplaceWorkforce *RuntimeMarketplaceWorkforceService
+	runtimeArtifacts            *RuntimeArtifactObjectService
+	sandboxBundles              *SandboxBundleContentService
+	compiledSnapshots           *CompiledSnapshotContentService
+	maxBytes                    int64
+	requests                    chan struct{}
 	// attachmentRequests is the attachment route's OWN pool. One attachment
 	// read can wait up to attachmentExtractionWait for an extraction, so in
 	// the shared pool a burst of first-time PDFs would answer 503 to every
@@ -382,6 +385,17 @@ func (s *ContentServer) WithRuntimeProposeDismissal(propose *RuntimeProposeDismi
 		return nil
 	}
 	s.runtimeProposeDismissal = propose
+	return s
+}
+
+// WithRuntimeMarketplaceWorkforce enables the Marketplace tools of a workforce
+// manager (ADR-0051 decision 6, #1632). Nil leaves the route answering
+// Unimplemented.
+func (s *ContentServer) WithRuntimeMarketplaceWorkforce(service *RuntimeMarketplaceWorkforceService) *ContentServer {
+	if s == nil {
+		return nil
+	}
+	s.runtimeMarketplaceWorkforce = service
 	return s
 }
 
@@ -878,7 +892,7 @@ func (s *ContentServer) ProposeAgent(ctx context.Context, request *runtimev1.Pro
 	return &runtimev1.ProposeAgentResponseV1{ResponseJson: encoded}, nil
 }
 
-// ProposeDismissal serves an HR agent's propose_dismissal call.
+// ProposeDismissal serves a workforce manager's propose_dismissal call.
 func (s *ContentServer) ProposeDismissal(ctx context.Context, request *runtimev1.ProposeDismissalRequestV1) (*runtimev1.ProposeDismissalResponseV1, error) {
 	if s.runtimeProposeDismissal == nil {
 		return nil, contentStatus(codes.Unimplemented)
@@ -899,6 +913,29 @@ func (s *ContentServer) ProposeDismissal(ctx context.Context, request *runtimev1
 		return nil, err
 	}
 	return &runtimev1.ProposeDismissalResponseV1{ResponseJson: encoded}, nil
+}
+
+// MarketplaceWorkforce serves a workforce manager's Marketplace tool call.
+func (s *ContentServer) MarketplaceWorkforce(ctx context.Context, request *runtimev1.MarketplaceWorkforceRequestV1) (*runtimev1.MarketplaceWorkforceResponseV1, error) {
+	if s.runtimeMarketplaceWorkforce == nil {
+		return nil, contentStatus(codes.Unimplemented)
+	}
+	var document MarketplaceWorkforceRequest
+	claim, release, err := s.claimedDocument(ctx, request.GetScope(), request.GetRequestJson(), &document,
+		maxRuntimeMarketplaceWorkforceRequestBytes)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	value, err := s.runtimeMarketplaceWorkforce.Call(ctx, claim, document)
+	if err != nil {
+		return nil, s.builderError(ctx, err, "marketplace workforce unavailable")
+	}
+	encoded, err := runtimeResponse(value, maxRuntimeMarketplaceWorkforceResponseBytes)
+	if err != nil {
+		return nil, err
+	}
+	return &runtimev1.MarketplaceWorkforceResponseV1{ResponseJson: encoded}, nil
 }
 
 func (s *ContentServer) agentMemoryRequest(ctx context.Context, scope *runtimev1.RuntimeContentScopeV1, raw []byte, target any) (ContentClaim, func(), error) {

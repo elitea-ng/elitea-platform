@@ -7,7 +7,11 @@ import { HttpResponse, http } from 'msw';
 
 import { ThreadGrantFieldContext } from '@/entities/thread-target';
 import { ThreadGrantField } from '@/features/unattended';
-import { getGetConversationMockHandler, getGetConversationResponseMock, getListConversationsMockHandler } from '@/shared/api/generated/chat/chat.msw';
+import {
+  getGetConversationMockHandler,
+  getGetConversationResponseMock,
+  getListConversationsMockHandler,
+} from '@/shared/api/generated/chat/chat.msw';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { server } from '@/test/setup';
 
@@ -56,7 +60,9 @@ function serve(trigger: Record<string, unknown> = { configured: false }): Record
       recorded.revealed += 1;
       return HttpResponse.json({ ...CONFIGURED_TRIGGER, secret: 'the-secret' });
     }),
-    http.get('*/pipeline_triggers/prompt_lib/:projectId/:versionId', () => HttpResponse.json(trigger as Record<string, string | boolean | number>)),
+    http.get('*/pipeline_triggers/prompt_lib/:projectId/:versionId', () =>
+      HttpResponse.json(trigger as Record<string, string | boolean | number>),
+    ),
     http.post('*/pipeline_triggers/prompt_lib/:projectId/:versionId', async ({ request }) => {
       const text = await request.text();
       recorded.rotated.push(text === '' ? undefined : JSON.parse(text));
@@ -100,25 +106,37 @@ describe('agent webhook modes', () => {
   });
 
   it('rotates in the stored mode with no body, so the server keeps every stored setting', () => {
-    const customHmac = { configured: true, auth_mode: 'hmac_sha256' as const, provider: 'custom' as const, signature_header: 'X-Acme-Signature' };
+    const customHmac = {
+      configured: true,
+      auth_mode: 'hmac_sha256' as const,
+      provider: 'custom' as const,
+      signature_header: 'X-Acme-Signature',
+    };
     expect(agentWebhookRotateRequest(customHmac, 'custom_hmac')).toBeUndefined();
     expect(agentWebhookRotateRequest(customHmac, 'github')).toEqual({ type: 'github' });
     expect(agentWebhookRotateRequest({ configured: false }, 'custom')).toEqual({ type: 'custom' });
   });
 
   it('offers the custom signed mode only to a trigger that already is one', () => {
-    expect(selectableAgentWebhookModes('custom').map(mode => mode.value)).not.toContain('custom_hmac');
-    expect(selectableAgentWebhookModes('custom_hmac').map(mode => mode.value)).toContain('custom_hmac');
+    expect(selectableAgentWebhookModes('custom').map((mode) => mode.value)).not.toContain('custom_hmac');
+    expect(selectableAgentWebhookModes('custom_hmac').map((mode) => mode.value)).toContain('custom_hmac');
   });
 
   it('reads the stored row back as the mode', () => {
     expect(agentWebhookModeOf(undefined)).toBe('custom');
     expect(agentWebhookModeOf({ configured: true, auth_mode: 'hmac_sha256', provider: 'github' })).toBe('github');
-    expect(agentWebhookModeOf({ configured: true, auth_mode: 'hmac_sha256', signature_header: 'X-Hub-Signature-256' })).toBe('github');
+    expect(
+      agentWebhookModeOf({ configured: true, auth_mode: 'hmac_sha256', signature_header: 'X-Hub-Signature-256' }),
+    ).toBe('github');
     // A custom-header HMAC trigger minted through the API is NOT GitHub.
-    expect(agentWebhookModeOf({ configured: true, auth_mode: 'hmac_sha256', provider: 'custom', signature_header: 'X-Acme-Signature' })).toBe(
-      'custom_hmac',
-    );
+    expect(
+      agentWebhookModeOf({
+        configured: true,
+        auth_mode: 'hmac_sha256',
+        provider: 'custom',
+        signature_header: 'X-Acme-Signature',
+      }),
+    ).toBe('custom_hmac');
     expect(agentWebhookModeOf({ configured: true, auth_mode: 'standard_webhooks_hmac' })).toBe('gitlab_signing');
     expect(agentWebhookModeOf({ configured: true, auth_mode: 'token', provider: 'gitlab' })).toBe('gitlab');
     expect(agentWebhookModeOf({ configured: true, auth_mode: 'token', provider: 'custom' })).toBe('custom');
@@ -173,7 +191,12 @@ describe('EditApplicationTriggersPanel', () => {
 
   it('rotates a GitHub trigger as a GitHub trigger', async () => {
     const user = userEvent.setup();
-    const recorded = serve({ ...CONFIGURED_TRIGGER, auth_mode: 'hmac_sha256', provider: 'github', signature_header: 'X-Hub-Signature-256' });
+    const recorded = serve({
+      ...CONFIGURED_TRIGGER,
+      auth_mode: 'hmac_sha256',
+      provider: 'github',
+      signature_header: 'X-Hub-Signature-256',
+    });
     renderPanel();
 
     await screen.findByTestId('agent-trigger-url');
@@ -185,7 +208,12 @@ describe('EditApplicationTriggersPanel', () => {
 
   it('rotates a custom-header HMAC trigger without turning it into a GitHub one', async () => {
     const user = userEvent.setup();
-    const recorded = serve({ ...CONFIGURED_TRIGGER, auth_mode: 'hmac_sha256', provider: 'custom', signature_header: 'X-Acme-Signature' });
+    const recorded = serve({
+      ...CONFIGURED_TRIGGER,
+      auth_mode: 'hmac_sha256',
+      provider: 'custom',
+      signature_header: 'X-Acme-Signature',
+    });
     renderPanel();
 
     await waitFor(() => expect(screen.getByTestId('agent-trigger-mode-hint')).toHaveTextContent('X-Acme-Signature'));
@@ -195,10 +223,18 @@ describe('EditApplicationTriggersPanel', () => {
   });
 
   it('says whose access the runs use, which events start one, and whether callers can change variables', async () => {
-    serve({ ...CONFIGURED_TRIGGER, auth_mode: 'hmac_sha256', provider: 'github', events: ['push', 'pull_request'], allow_variable_overrides: true });
+    serve({
+      ...CONFIGURED_TRIGGER,
+      auth_mode: 'hmac_sha256',
+      provider: 'github',
+      events: ['push', 'pull_request'],
+      allow_variable_overrides: true,
+    });
     renderPanel();
 
-    expect(await screen.findByTestId('agent-trigger-access')).toHaveTextContent('access of the person who created the trigger');
+    expect(await screen.findByTestId('agent-trigger-access')).toHaveTextContent(
+      'access of the person who created the trigger',
+    );
     expect(await screen.findByTestId('agent-trigger-events')).toHaveTextContent('push, pull_request');
     expect(screen.getByTestId('agent-trigger-variables')).toHaveTextContent('Anyone with this URL can change');
   });
@@ -257,7 +293,21 @@ describe('EditApplicationTriggersPanel — Runs on a handed-off workspace thread
   const THREAD = '6f1c2d3e-4a5b-4c6d-8e7f-901234567890';
   const LISTING = {
     total: 1,
-    rows: [{ id: 11, uuid: THREAD, name: 'Alert triage', source: 'local_work', workspace_executor: 'cloud', created_at: '2026-11-04T09:00:00Z', updated_at: '2026-11-04T09:00:00Z', duration: -1, message_groups_count: 2, is_pinned: false, is_archived: false }],
+    rows: [
+      {
+        id: 11,
+        uuid: THREAD,
+        name: 'Alert triage',
+        source: 'local_work',
+        workspace_executor: 'cloud',
+        created_at: '2026-11-04T09:00:00Z',
+        updated_at: '2026-11-04T09:00:00Z',
+        duration: -1,
+        message_groups_count: 2,
+        is_pinned: false,
+        is_archived: false,
+      },
+    ],
   };
 
   it('runs this agent by default and creates the trigger as it did', async () => {
@@ -279,7 +329,9 @@ describe('EditApplicationTriggersPanel — Runs on a handed-off workspace thread
     await user.type(screen.getByTestId('thread-target-prompt'), 'Triage the alert.');
     await user.click(screen.getByTestId('agent-trigger-rotate'));
     await waitFor(() =>
-      expect(recorded.rotated).toEqual([{ type: 'custom', target_kind: 'workspace_thread', conversation_uuid: THREAD, prompt: 'Triage the alert.' }]),
+      expect(recorded.rotated).toEqual([
+        { type: 'custom', target_kind: 'workspace_thread', conversation_uuid: THREAD, prompt: 'Triage the alert.' },
+      ]),
     );
   });
 
@@ -289,7 +341,13 @@ describe('EditApplicationTriggersPanel — Runs on a handed-off workspace thread
     server.use(
       getListConversationsMockHandler(LISTING),
       http.post('*/pipeline_triggers/prompt_lib/:projectId/:versionId', () =>
-        HttpResponse.json({ error: 'this conversation was never handed off to the cloud; hand it off from the desktop first', code: 'not_handed_off' }, { status: 422 }),
+        HttpResponse.json(
+          {
+            error: 'this conversation was never handed off to the cloud; hand it off from the desktop first',
+            code: 'not_handed_off',
+          },
+          { status: 422 },
+        ),
       ),
     );
     renderPanel();
@@ -298,23 +356,46 @@ describe('EditApplicationTriggersPanel — Runs on a handed-off workspace thread
     await user.click(await screen.findByRole('option', { name: 'Alert triage' }));
     await user.type(screen.getByTestId('thread-target-prompt'), 'Triage the alert.');
     await user.click(screen.getByTestId('agent-trigger-rotate'));
-    expect(await screen.findByText('This thread was never sent to the cloud. Send it to the cloud from the desktop app first.')).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        'This thread was never sent to the cloud. Send it to the cloud from the desktop app first.',
+      ),
+    ).toBeInTheDocument();
     expect(screen.queryByTestId('agent-triggers-error')).toBeNull();
   });
 
   it('shows a stored thread target as "Runs on <thread>"', async () => {
-    serve({ ...CONFIGURED_TRIGGER, target_kind: 'workspace_thread', conversation_uuid: THREAD, prompt: 'Triage the alert.' });
-    server.use(getListConversationsMockHandler(LISTING), getGetConversationMockHandler(getGetConversationResponseMock({ uuid: THREAD, name: 'Alert triage' })));
+    serve({
+      ...CONFIGURED_TRIGGER,
+      target_kind: 'workspace_thread',
+      conversation_uuid: THREAD,
+      prompt: 'Triage the alert.',
+    });
+    server.use(
+      getListConversationsMockHandler(LISTING),
+      getGetConversationMockHandler(getGetConversationResponseMock({ uuid: THREAD, name: 'Alert triage' })),
+    );
     renderPanel();
     await waitFor(() => expect(screen.getByTestId('agent-trigger-thread')).toHaveTextContent('Runs on Alert triage'));
     expect(screen.getByLabelText('A handed-off workspace thread')).toBeChecked();
   });
   it('shows the new stored grant when a save answers with it (the form seeds again)', async () => {
     const user = userEvent.setup();
-    const grantOf = (max: number) => ({ continue_step_limit: true, continue_output_limit: true, goal_check: true, chain: { max_continuations: max } });
+    const grantOf = (max: number) => ({
+      continue_step_limit: true,
+      continue_output_limit: true,
+      goal_check: true,
+      chain: { max_continuations: max },
+    });
     let saved = false;
     let readsAfterSave = 0;
-    let stored: Record<string, unknown> = { ...CONFIGURED_TRIGGER, target_kind: 'workspace_thread', conversation_uuid: THREAD, prompt: 'Triage the alert.', grant: grantOf(5) };
+    let stored: Record<string, unknown> = {
+      ...CONFIGURED_TRIGGER,
+      target_kind: 'workspace_thread',
+      conversation_uuid: THREAD,
+      prompt: 'Triage the alert.',
+      grant: grantOf(5),
+    };
     server.use(
       http.get('*/pipeline_triggers/prompt_lib/:projectId/:versionId', () => {
         if (saved) readsAfterSave += 1;
@@ -325,7 +406,9 @@ describe('EditApplicationTriggersPanel — Runs on a handed-off workspace thread
         stored = { ...stored, grant: grantOf(7) };
         return HttpResponse.json({ ...(stored as Record<string, string>), secret: 'fresh-secret' });
       }),
-      http.get('*/pipeline_schedules/prompt_lib/:projectId/:versionId', () => HttpResponse.json({ configured: false, active: false })),
+      http.get('*/pipeline_schedules/prompt_lib/:projectId/:versionId', () =>
+        HttpResponse.json({ configured: false, active: false }),
+      ),
       getListConversationsMockHandler(LISTING),
       getGetConversationMockHandler(getGetConversationResponseMock({ uuid: THREAD, name: 'Alert triage' })),
     );
@@ -356,10 +439,13 @@ describe('useAgentWebhookTrigger', () => {
   // revealed on version A must not stay on screen beside version B's URL.
   it('drops a revealed secret when the version changes', async () => {
     serve(CONFIGURED_TRIGGER);
-    const { result, rerender } = renderHook(({ versionId }: { versionId: number }) => useAgentWebhookTrigger('9', versionId), {
-      wrapper,
-      initialProps: { versionId: 1 },
-    });
+    const { result, rerender } = renderHook(
+      ({ versionId }: { versionId: number }) => useAgentWebhookTrigger('9', versionId),
+      {
+        wrapper,
+        initialProps: { versionId: 1 },
+      },
+    );
 
     await act(async () => {
       await result.current.reveal();

@@ -11,11 +11,9 @@ import { useTheme } from '@mui/material/styles';
 import CodeMirror, { basicSetup, type ReactCodeMirrorRef } from '@uiw/react-codemirror';
 
 import { buildEditorTheme, buildHighlightStyle } from './codeMirrorTheme';
-import type { CodeMirrorSyntaxError } from './codeMirrorExtensions';
-import { buildSyntaxErrorListener, createMaxLengthExtension } from './codeMirrorExtensions';
+import { buildSyntaxErrorListener, createMaxLengthExtension, type CodeMirrorSyntaxError } from './codeMirrorExtensions';
 
 export type { CodeMirrorSyntaxError } from './codeMirrorExtensions';
-
 
 /** @public shared/ui component API — consumed once a features/widgets/pages caller exists (none does yet in this pass). */
 export interface CodeMirrorEditorProps {
@@ -27,12 +25,8 @@ export interface CodeMirrorEditorProps {
   onBlur?: (value: string) => void;
   /** Extra CodeMirror extensions — language support, a `linter()`, etc. */
   extensions?: Extension[];
-  // Explicit `| undefined`: callers commonly forward an already-optional
-  // `meta.disabled`-shaped value straight through (e.g.
-  // `CommonStringField`'s code-language branch) — under
-  // `exactOptionalPropertyTypes`, a plain `readOnly?: boolean` target
-  // rejects that `boolean | undefined` value even though omitting the prop
-  // entirely is fine. Same fix as `FieldHeaderProps`.
+  // Explicit `| undefined`: callers forward an already-optional `meta.disabled`-shaped
+  // value, which `exactOptionalPropertyTypes` rejects for a plain `readOnly?: boolean`.
   readOnly?: boolean | undefined;
   /** Hard character cap; further input past this length is rejected in place. */
   maxLength?: number;
@@ -202,8 +196,21 @@ export function CodeMirrorEditor({
   const lastNotifiedValueRef = useRef(value);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
+  /** True from a keystroke until its debounced `onChange` has fired. */
+  const changePendingRef = useRef(false);
+
   useEffect(() => {
-    if (value !== lastNotifiedValueRef.current) {
+    // An outside write (import, Discard) is told from our own onChange echo by the
+    // lastNotified guard; if the screen still differs and nothing is in flight, it must land too (PJC03a).
+    const view = cmRef.current?.view;
+    const onScreen = view?.state.doc.toString();
+    // Only when `value` is the one already notified: a `value` that merely lags a newer keystroke must not overwrite it.
+    const staleOnScreen = !changePendingRef.current && value === lastNotifiedValueRef.current && onScreen !== undefined && onScreen !== value;
+    if (staleOnScreen && view !== undefined) {
+      // `code` may equal `value` already: write the document directly.
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } });
+    }
+    if (value !== lastNotifiedValueRef.current || staleOnScreen) {
       setCode(value);
       lastNotifiedValueRef.current = value;
     }
@@ -220,7 +227,9 @@ export function CodeMirrorEditor({
     (newValue: string) => {
       setCode(newValue);
       if (debounceRef.current !== undefined) clearTimeout(debounceRef.current);
+      changePendingRef.current = true;
       debounceRef.current = setTimeout(() => {
+        changePendingRef.current = false;
         lastNotifiedValueRef.current = newValue;
         onChange?.(newValue);
       }, CHANGE_DEBOUNCE_MS);

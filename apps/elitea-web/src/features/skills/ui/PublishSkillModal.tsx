@@ -42,15 +42,9 @@ function IssueList({
 }): ReactNode {
   if (issues.length === 0) return null;
   return (
-    <Alert
-      severity={severity}
-      sx={{ mt: 1 }}
-    >
+    <Alert severity={severity} sx={{ mt: 1 }}>
       <Typography variant="labelMedium">{title}</Typography>
-      <Box
-        component="ul"
-        sx={{ pl: 2, m: 0 }}
-      >
+      <Box component="ul" sx={{ pl: 2, m: 0 }}>
         {issues.map((issue, index) => (
           <li key={`${issue.field ?? 'issue'}-${index}`}>
             <Typography variant="bodySmall">
@@ -69,10 +63,7 @@ function ValidationReport({ state }: { readonly state: SkillPublishingState }): 
     return (
       <Box sx={{ mt: 2 }}>
         <LinearProgress />
-        <Typography
-          variant="bodySmall"
-          color="text.secondary"
-        >
+        <Typography variant="bodySmall" color="text.secondary">
           {t('skills.publish.validating', 'Running the pre-publish checks…')}
         </Typography>
       </Box>
@@ -80,27 +71,16 @@ function ValidationReport({ state }: { readonly state: SkillPublishingState }): 
   }
   if (!state.report) return null;
   return (
-    <Box
-      sx={{ mt: 2 }}
-      data-testid="skill-publish-report"
-    >
+    <Box sx={{ mt: 2 }} data-testid="skill-publish-report">
       <Typography variant="bodyMedium">{state.report.summary}</Typography>
       <IssueList
         title={t('skills.publish.criticals', 'Blocking issues')}
         issues={state.report.critical_issues}
         severity="error"
       />
-      <IssueList
-        title={t('skills.publish.warnings', 'Warnings')}
-        issues={state.report.warnings}
-        severity="warning"
-      />
+      <IssueList title={t('skills.publish.warnings', 'Warnings')} issues={state.report.warnings} severity="warning" />
       {!state.report.ai_validation_available && (
-        <Typography
-          variant="bodySmall"
-          color="text.secondary"
-          sx={{ display: 'block', mt: 1 }}
-        >
+        <Typography variant="bodySmall" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
           {t(
             'skills.publish.deterministicOnly',
             'Deterministic checks only — this deployment runs no AI review before publishing.',
@@ -116,18 +96,11 @@ function PublishActions({ state }: { readonly state: SkillPublishingState }): Re
   const failed = state.report?.status === 'FAIL';
   return (
     <>
-      <BaseBtn
-        variant="secondary"
-        onClick={state.close}
-      >
+      <BaseBtn variant="secondary" onClick={state.close}>
         {t('shared.ui.baseModal.cancel', 'Cancel')}
       </BaseBtn>
       {state.step === 'preparation' || state.report === undefined ? (
-        <BaseBtn
-          variant="contained"
-          disabled={!nameReady || state.isValidating}
-          onClick={() => void state.validate()}
-        >
+        <BaseBtn variant="contained" disabled={!nameReady || state.isValidating} onClick={() => void state.validate()}>
           {t('skills.publish.continue', 'Continue')}
         </BaseBtn>
       ) : (
@@ -157,10 +130,7 @@ export function PublishSkillModal({ state }: { readonly state: SkillPublishingSt
       actions={{ node: <PublishActions state={state} /> }}
       content={
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 420 }}>
-          <Typography
-            variant="bodySmall"
-            color="text.secondary"
-          >
+          <Typography variant="bodySmall" color="text.secondary">
             {t(
               'skills.publish.explain',
               'Publishing snapshots this version under a new name and copies it into the public skill catalog.',
@@ -176,9 +146,7 @@ export function PublishSkillModal({ state }: { readonly state: SkillPublishingSt
             slotProps={{ htmlInput: { 'aria-label': 'Published version name' } }}
           />
           <FormControl size="small">
-            <InputLabel id="skill-publish-category">
-              {t('skills.publish.category', 'Category')}
-            </InputLabel>
+            <InputLabel id="skill-publish-category">{t('skills.publish.category', 'Category')}</InputLabel>
             <Select
               labelId="skill-publish-category"
               label={t('skills.publish.category', 'Category')}
@@ -186,20 +154,25 @@ export function PublishSkillModal({ state }: { readonly state: SkillPublishingSt
               onChange={(event) => state.setCategory(event.target.value)}
             >
               {state.categories.map((category) => (
-                <MenuItem
-                  key={category.name}
-                  value={category.name}
-                >
+                <MenuItem key={category.name} value={category.name}>
                   {category.name}
                 </MenuItem>
               ))}
             </Select>
           </FormControl>
+          <TextField
+            size="small"
+            multiline
+            minRows={3}
+            label={t('skills.publish.releaseNotes', 'Release notes (optional)')}
+            helperText={t('skills.publish.releaseNotesHelp', 'Say what changed. The listing page shows this text.')}
+            value={state.releaseNotes}
+            onChange={(event) => state.setReleaseNotes(event.target.value)}
+            slotProps={{ htmlInput: { maxLength: 4000, 'aria-label': 'Release notes' } }}
+            data-testid="skill-publish-release-notes"
+          />
           {state.error !== undefined && (
-            <Alert
-              severity="error"
-              data-testid="skill-publish-error"
-            >
+            <Alert severity="error" data-testid="skill-publish-error">
               {state.error}
             </Alert>
           )}

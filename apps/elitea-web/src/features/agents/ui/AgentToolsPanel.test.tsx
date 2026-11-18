@@ -259,4 +259,75 @@ describe('AgentToolsPanel', () => {
     await waitFor(() => expect(screen.getByTestId('agent-toolkit-card')).toBeVisible());
     expect(screen.getByTestId('agent-toolkit-delete-button')).toBeDisabled();
   });
+
+  it('shows the delegation state of an attached agent on its row, and none on a toolkit row (ADR-0044 amendment 1)', async () => {
+    const SUB_AGENT: VersionToolRef = { id: 6, tool_id: 78, entity_type: 'agent', name: 'Git specialist', type: 'application', config: { application_id: '7', application_version_id: '70' } };
+    server.use(
+      http.get('*/elitea_core/delegation_grants/prompt_lib/:projectId/:applicationId', () =>
+        HttpResponse.json({
+          grants: [
+            {
+              id: 5, caller_application_id: 42, callee_application_id: 7, edge_kind: 'agent_tool', callee_version_id: 70, state: 'stale', legacy: false, governed: false, origin: 'attach',
+              digest: 'a', requested_digest: 'b', items: [], requested_items: [], omitted: [], created_at: '2026-11-17T10:00:00Z', updated_at: '2026-11-17T10:00:00Z',
+            },
+          ],
+        }),
+      ),
+    );
+    renderWithRouterAndProject(
+      <AgentToolsPanel
+        entity={{ applicationId: 42, versionId: 100, versionStatus: 'draft' }}
+        versionTools={[ATTACHED_TOOL, SUB_AGENT]}
+        dirty={false}
+        internalTools={{ value: [], onChange: vi.fn() }}
+        readOnly={false}
+        viewMode="owner"
+      />,
+      'proj-1',
+    );
+
+    const status = await screen.findByTestId('delegation-grant-status');
+    expect(status).toHaveTextContent('Needs re-approval');
+    expect(screen.getAllByTestId('delegation-grant-status')).toHaveLength(1);
+  });
+
+  it('opens the review dialog of the edge a review_delegation deep link names, not another edge', async () => {
+    const GIT_AGENT: VersionToolRef = { id: 6, tool_id: 78, entity_type: 'agent', name: 'Git specialist', type: 'application', config: { application_id: '7', application_version_id: '70' } };
+    const DB_AGENT: VersionToolRef = { id: 8, tool_id: 79, entity_type: 'agent', name: 'DB specialist', type: 'application', config: { application_id: '9', application_version_id: '90' } };
+    const edge = (id: number, calleeId: number, calleeVersion: number) => ({
+      id, caller_application_id: 42, callee_application_id: calleeId, edge_kind: 'agent_tool', callee_version_id: calleeVersion, state: 'pending', legacy: false, governed: false, origin: 'attach',
+      digest: '', requested_digest: 'x', items: [], requested_items: [], omitted: [], created_at: '2026-11-17T10:00:00Z', updated_at: '2026-11-17T10:00:00Z',
+    });
+    const previewed: unknown[] = [];
+    server.use(
+      http.get('*/elitea_core/delegation_grants/prompt_lib/:projectId/:applicationId', () => HttpResponse.json({ grants: [edge(5, 7, 70), edge(6, 9, 90)] })),
+      getGetApplicationMockHandler({
+        id: '9', name: 'DB specialist', description: '', icon: '', owner_id: 'user-1', created_at: '2026-01-01T00:00:00Z', versions: [],
+        version_details: { id: '90', application_id: '9', name: 'base', status: 'draft', tools: [], meta: {} },
+      }),
+      http.get('*/elitea_core/delegation_preview/prompt_lib/:projectId/:applicationId', ({ request }) => {
+        const callee = Number(new URL(request.url).searchParams.get('callee_application_id'));
+        previewed.push(callee);
+        return HttpResponse.json({
+          callee_application_id: callee, callee_version_id: 90, callee_name: 'DB specialist', digest: 'x', items: [], approvable: [], withheld: [], closure: [], governed: false,
+        });
+      }),
+    );
+    renderWithRouterAndProject(
+      <AgentToolsPanel
+        entity={{ applicationId: 42, versionId: 100, versionStatus: 'draft' }}
+        versionTools={[GIT_AGENT, DB_AGENT]}
+        dirty={false}
+        internalTools={{ value: [], onChange: vi.fn() }}
+        readOnly={false}
+        viewMode="owner"
+      />,
+      'proj-1',
+      undefined,
+      '/?review_delegation=9',
+    );
+
+    expect(await screen.findByRole('dialog', { name: 'What DB specialist will be able to use' })).toBeVisible();
+    expect(previewed).toEqual([9]);
+  });
 });

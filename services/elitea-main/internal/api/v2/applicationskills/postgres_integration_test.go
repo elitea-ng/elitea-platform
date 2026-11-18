@@ -79,7 +79,7 @@ func TestCurrentApplicationSkillsRoutePostgresContractAndTenantIsolation(t *test
 	if err := json.NewDecoder(projectOne.Body).Decode(&projectOneBody); err != nil {
 		t.Fatal(err)
 	}
-	if projectOneBody.MaxSkills != 5 || len(projectOneBody.Skills) != 2 {
+	if projectOneBody.MaxSkills != 50 || len(projectOneBody.Skills) != 2 {
 		t.Fatalf("project one response=%+v", projectOneBody)
 	}
 	// The published SkillsList half (#395), read from the same rows. Without
@@ -267,7 +267,7 @@ func TestCurrentApplicationSkillsHTTPPostgresRBACAndTenantMatrix(t *testing.T) {
 			appVersion: "999999",
 			userID:     "11",
 			wantStatus: http.StatusOK,
-			exactBody:  "{\"items\":[],\"total\":0,\"page\":1,\"page_size\":0,\"total_pages\":0,\"skills\":[],\"max_skills\":5}\n",
+			exactBody:  "{\"items\":[],\"total\":0,\"page\":1,\"page_size\":0,\"total_pages\":0,\"skills\":[],\"max_skills\":50}\n",
 		},
 		{
 			name:       "zero version remains empty",
@@ -275,7 +275,7 @@ func TestCurrentApplicationSkillsHTTPPostgresRBACAndTenantMatrix(t *testing.T) {
 			appVersion: "0",
 			userID:     "11",
 			wantStatus: http.StatusOK,
-			exactBody:  "{\"items\":[],\"total\":0,\"page\":1,\"page_size\":0,\"total_pages\":0,\"skills\":[],\"max_skills\":5}\n",
+			exactBody:  "{\"items\":[],\"total\":0,\"page\":1,\"page_size\":0,\"total_pages\":0,\"skills\":[],\"max_skills\":50}\n",
 		},
 		{
 			name:       "version beyond PostgreSQL integer remains empty",
@@ -283,7 +283,7 @@ func TestCurrentApplicationSkillsHTTPPostgresRBACAndTenantMatrix(t *testing.T) {
 			appVersion: "9999999999999999999999999999999999999999",
 			userID:     "11",
 			wantStatus: http.StatusOK,
-			exactBody:  "{\"items\":[],\"total\":0,\"page\":1,\"page_size\":0,\"total_pages\":0,\"skills\":[],\"max_skills\":5}\n",
+			exactBody:  "{\"items\":[],\"total\":0,\"page\":1,\"page_size\":0,\"total_pages\":0,\"skills\":[],\"max_skills\":50}\n",
 		},
 		{
 			name:       "nonnumeric version follows current routing 404",

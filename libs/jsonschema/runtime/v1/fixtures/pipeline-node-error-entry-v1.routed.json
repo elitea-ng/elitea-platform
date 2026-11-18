@@ -1,0 +1,1 @@
+{"attempts":1,"error":{"code":"pipeline.router.failed","message_safe":"The Router node failed.","support_ref":"21fc6365f76aaf63a4475f6cee6c2307"},"handled":"error_output","input_step":3,"node":"route","node_type":"router","retryable":false,"status":"failed"}

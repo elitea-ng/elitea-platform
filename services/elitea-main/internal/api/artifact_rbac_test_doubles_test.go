@@ -164,6 +164,14 @@ func (alwaysSucceedsArtifactRepo) UpsertObject(_ context.Context, input repos.Ne
 	}, nil
 }
 
+func (alwaysSucceedsArtifactRepo) ReserveObjectKey(context.Context, int64, string, string, *time.Time) (bool, error) {
+	return true, nil
+}
+
+func (alwaysSucceedsArtifactRepo) ListObjects(context.Context, int64, string) ([]repos.ObjectRow, error) {
+	return nil, nil
+}
+
 func (alwaysSucceedsArtifactRepo) DeleteObjects(context.Context, int64, []string) error { return nil }
 
 func (alwaysSucceedsArtifactRepo) SumProjectBytes(context.Context, int64) (int64, error) {

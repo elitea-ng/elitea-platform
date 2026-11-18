@@ -10,7 +10,9 @@ import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { SidePanelSlotProvider, type InspectorTabId, type InspectorTabInfo, type InspectorTarget, type SidePanelSlot } from '@/shared/desktop/inspectorSlot';
 
-export function SidePanelHarness({ children, onShow }: { readonly children: ReactNode; readonly onShow?: (tab: InspectorTabId) => void }): ReactNode {
+export function SidePanelHarness({ children, onShow, toggle = false }: { readonly children: ReactNode; readonly onShow?: (tab: InspectorTabId) => void; readonly toggle?: boolean }): ReactNode {
+  // `toggle` adds a button that closes and reopens the panel, as the shell's own control does.
+  const [open, setOpen] = useState(true);
   const [tabs, setTabs] = useState<readonly InspectorTabInfo[]>([]);
   const [nodes, setNodes] = useState<ReadonlyMap<InspectorTabId, HTMLElement>>(new Map());
 
@@ -41,13 +43,18 @@ export function SidePanelHarness({ children, onShow }: { readonly children: Reac
 
   const slot = useMemo<SidePanelSlot>(() => {
     const targets = new Map<InspectorTabId, InspectorTarget>();
-    nodes.forEach((node, id) => targets.set(id, { node }));
+    if (open) nodes.forEach((node, id) => targets.set(id, { node }));
     return { register, targets, show: (tab) => onShow?.(tab) };
-  }, [register, nodes, onShow]);
+  }, [register, nodes, onShow, open]);
 
   return (
     <SidePanelSlotProvider value={slot}>
       {children}
+      {toggle && (
+        <button type="button" data-testid="side-panel-harness-toggle" onClick={() => setOpen((current) => !current)}>
+          toggle
+        </button>
+      )}
       <aside data-testid="side-panel-harness">
         {tabs.map((info) => (
           <div

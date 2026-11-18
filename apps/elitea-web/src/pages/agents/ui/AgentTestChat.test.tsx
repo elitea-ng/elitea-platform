@@ -22,7 +22,14 @@ import { AgentTestChat } from './AgentTestChat';
 
 const globals = globalThis as unknown as Record<string, unknown>;
 
-const IDENTITY = { projectId: '9', applicationId: '42', agentName: 'My Agent', versionId: '7', agentType: 'openai', userId: '6' };
+const IDENTITY = {
+  projectId: '9',
+  applicationId: '42',
+  agentName: 'My Agent',
+  versionId: '7',
+  agentType: 'openai',
+  userId: '6',
+};
 const USER = { id: '6', name: 'E2E Chat Driver', avatar: '' };
 
 interface ParticipantRow {
@@ -59,8 +66,9 @@ function installRoutes(): Routes {
   const reads: string[] = [];
   server.use(
     // `ChatBox` syncs the picked model onto the agent participant once the conversation exists.
-    http.put('*/elitea_core/entity_settings/prompt_lib/:projectId/:conversationId/:participantId', async ({ request }) =>
-      HttpResponse.json({ entity_settings: await request.json() }),
+    http.put(
+      '*/elitea_core/entity_settings/prompt_lib/:projectId/:conversationId/:participantId',
+      async ({ request }) => HttpResponse.json({ entity_settings: await request.json() }),
     ),
     http.delete('*/elitea_core/conversation/prompt_lib/:projectId/:id', ({ params }) => {
       deleted.push(String(params['id']));
@@ -73,7 +81,14 @@ function installRoutes(): Routes {
         uuid: '00000000-0000-4000-8000-000000000abc',
         name: 'My Agent',
         source: 'editor_test',
-        participants: [{ id: '901', entity_name: 'application', entity_meta: { id: '42', project_id: '9' }, entity_settings: { version_id: '7' } }],
+        participants: [
+          {
+            id: '901',
+            entity_name: 'application',
+            entity_meta: { id: '42', project_id: '9' },
+            entity_settings: { version_id: '7' },
+          },
+        ],
         message_groups: [],
       });
     }),
@@ -85,15 +100,32 @@ function installRoutes(): Routes {
         name: 'My Agent',
         source: 'editor_test',
         is_private: true,
-        meta: { is_hidden: true, editor_test: { revision: 1, actor_id: '6', project_id: '9', application_id: '42', application_version_id: '7' } },
+        meta: {
+          is_hidden: true,
+          editor_test: {
+            revision: 1,
+            actor_id: '6',
+            project_id: '9',
+            application_id: '42',
+            application_version_id: '7',
+          },
+        },
         participants: [
           { id: '900', entity_name: 'user', entity_meta: { id: 6 } },
-          { id: '901', entity_name: 'application', entity_meta: { id: '42', project_id: '9' }, entity_settings: { version_id: '7', agent_type: 'openai' } },
+          {
+            id: '901',
+            entity_name: 'application',
+            entity_meta: { id: '42', project_id: '9' },
+            entity_settings: { version_id: '7', agent_type: 'openai' },
+          },
         ],
       });
     }),
     http.get('*/configurations/models/:projectId', () =>
-      HttpResponse.json({ items: [{ name: 'gpt-4o', display_name: 'GPT-4o', project_id: '9', default: true }], default_model_name: 'gpt-4o' }),
+      HttpResponse.json({
+        items: [{ name: 'gpt-4o', display_name: 'GPT-4o', project_id: '9', default: true }],
+        default_model_name: 'gpt-4o',
+      }),
     ),
     http.get('*/configurations/tts_voices/*', () => HttpResponse.json({ items: [] })),
   );
@@ -145,7 +177,13 @@ describe('AgentTestChat', () => {
     expect(body?.is_private).toBe(true);
     const rows = body?.participants ?? [];
     expect(rows, 'Main refuses an editor_test create with anything but one application participant').toHaveLength(1);
-    expect(participantSummary(rows[0])).toEqual({ name: 'application', id: '42', projectId: '9', versionId: '7', agentType: 'openai' });
+    expect(participantSummary(rows[0])).toEqual({
+      name: 'application',
+      id: '42',
+      projectId: '9',
+      versionId: '7',
+      agentType: 'openai',
+    });
   });
 
   it('tells the author the chat runs the saved version while the form is dirty', async () => {
@@ -161,7 +199,10 @@ describe('AgentTestChat', () => {
     installRoutes();
     server.use(
       http.post('*/elitea_core/conversations/prompt_lib/:projectId', () =>
-        HttpResponse.json({ code: 'APPLICATION_COMPOSITION_INVALID', error: 'Agent has an attachment that cannot run here.' }, { status: 400 }),
+        HttpResponse.json(
+          { code: 'APPLICATION_COMPOSITION_INVALID', error: 'Agent has an attachment that cannot run here.' },
+          { status: 400 },
+        ),
       ),
     );
     const user = userEvent.setup();
@@ -232,7 +273,11 @@ describe('AgentTestChat', () => {
   it('restores the conversation, with a read and no create, when the page is re-entered', async () => {
     const { bodies, reads } = installRoutes();
     const user = userEvent.setup();
-    const first = renderAgentsRoute(<AgentTestChat identity={IDENTITY} user={USER} isDirty={false} />, '/agents/latest/42', { projectId: '9' });
+    const first = renderAgentsRoute(
+      <AgentTestChat identity={IDENTITY} user={USER} isDirty={false} />,
+      '/agents/latest/42',
+      { projectId: '9' },
+    );
     await user.click(await screen.findByTestId('chat-message-input'));
     await waitFor(() => expect(bodies).toHaveLength(1));
     first.unmount();
@@ -247,7 +292,11 @@ describe('AgentTestChat', () => {
   it('starts a separate conversation for another version and does not carry the old one over', async () => {
     const { bodies } = installRoutes();
     const user = userEvent.setup();
-    const view = renderAgentsRoute(<AgentTestChat identity={IDENTITY} user={USER} isDirty={false} />, '/agents/latest/42', { projectId: '9' });
+    const view = renderAgentsRoute(
+      <AgentTestChat identity={IDENTITY} user={USER} isDirty={false} />,
+      '/agents/latest/42',
+      { projectId: '9' },
+    );
     await user.click(await screen.findByTestId('chat-message-input'));
     await waitFor(() => expect(bodies).toHaveLength(1));
 

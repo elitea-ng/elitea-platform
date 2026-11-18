@@ -199,6 +199,9 @@ const errorPredicate = `status >= 400`
 // AnalyticsRepo answers the analytics reads from the gateway's request log.
 type AnalyticsRepo struct {
 	pool *pgxpool.Pool
+	// evalUsage remembers, per evaluation run, what EvaluationUsage looks up
+	// once (the run's start and whether the price catalogue exists).
+	evalUsage evalUsageMetaCache
 }
 
 func NewAnalyticsRepo(pool *pgxpool.Pool) *AnalyticsRepo {

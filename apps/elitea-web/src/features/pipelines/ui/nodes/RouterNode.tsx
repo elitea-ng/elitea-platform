@@ -54,7 +54,9 @@ import type { FlowNode } from '../../lib/flow-editor/reactFlowTypes';
 import { AIAssistantInput } from '../AIAssistantInput';
 import { InputSelect } from '../select/InputSelect';
 import { RouteSelect } from '../select/RouteSelect';
+import { NodeSettings } from '../settings/NodeSettings';
 import { CustomHandle } from './CustomHandle';
+import { NodeErrorOutputHandle } from './NodeErrorOutputHandle';
 import { NodeCard } from './BaseNode/NodeCard';
 
 /** `FlowEditorContext`, defaulted once — see `./AgentNode.tsx`'s identical constant for the full rationale (§3.5 complexity budget). */
@@ -70,6 +72,7 @@ export interface RouterNodeProps extends NodeProps<FlowNode> {
 }
 
 interface RouterNodeHandlesProps {
+  readonly id: string;
   readonly isRunningPipeline: boolean;
   readonly disabled: boolean;
   readonly isTargetConnectable: boolean;
@@ -79,7 +82,7 @@ interface RouterNodeHandlesProps {
 
 /** Extracted purely to keep `RouterNode`'s own cyclomatic complexity under the §3.5 budget (12) — same technique `./AgentNode.tsx`'s `AgentNodeHandles` uses. */
 function RouterNodeHandles(props: RouterNodeHandlesProps): ReactNode {
-  const { isRunningPipeline, disabled, isTargetConnectable, isDefaultConnectable, isPerforming } = props;
+  const { id, isRunningPipeline, disabled, isTargetConnectable, isDefaultConnectable, isPerforming } = props;
   return (
     <>
       <CustomHandle
@@ -106,6 +109,7 @@ function RouterNodeHandles(props: RouterNodeHandlesProps): ReactNode {
         isPerforming={isPerforming}
         style={{ left: 'calc(50% + 3.125rem)' }}
       />
+      <NodeErrorOutputHandle id={id} isRunningPipeline={isRunningPipeline} disabled={disabled} isPerforming={isPerforming} left="calc(50% + 6.25rem)" />
     </>
   );
 }
@@ -205,6 +209,7 @@ export const RouterNode = memo(function RouterNode(props: RouterNodeProps): Reac
       id={id}
       handles={() => (
         <RouterNodeHandles
+          id={id}
           isRunningPipeline={isRunningPipeline}
           disabled={disabled}
           isTargetConnectable={isTargetConnectable}
@@ -262,6 +267,7 @@ export const RouterNode = memo(function RouterNode(props: RouterNodeProps): Reac
           disabled={isFieldsDisabled}
         />
       </Box>
+      <NodeSettings id={id} type={FlowEditorConstants.PipelineNodeTypes.Router} disabled={isFieldsDisabled} />
     </NodeCard>
   );
 });

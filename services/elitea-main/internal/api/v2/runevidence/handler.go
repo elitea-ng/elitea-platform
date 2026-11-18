@@ -1,6 +1,6 @@
 // Package runevidence serves the step records of runs (ADR-0042 decisions 1
-// and 2, issue #1499) under /api/v2/elitea_core, every route behind the
-// runs.evidence.read project permission:
+// and 2, issue #1499) under /api/v2/elitea_core, every route but the
+// notices behind the runs.evidence.read project permission:
 //
 //	GET /run_steps/prompt_lib/{projectID}/{runID}
 //	    the run's head and a page of its steps (?after_seq=, ?limit=); the
@@ -12,6 +12,9 @@
 //	    read of stored content writes an audit_events row first
 //	GET /conversation_runs/prompt_lib/{projectID}/{conversationUUID}
 //	    the conversation's runs with their step counts
+//	GET /guardrail_notices/prompt_lib/{projectID}/{runID}
+//	    what the guardrails did to the run that the chat tells the person
+//	    (notices.go); this one route takes models.chat.messages.create
 //
 // The router applies the permission. A handler with no store answers 503.
 package runevidence
@@ -69,6 +72,9 @@ type Store interface {
 	// GuardrailVerdicts reads the LLM gateway's guardrail verdicts of the run
 	// (ADR-0043 decision 1), oldest first.
 	GuardrailVerdicts(ctx context.Context, projectID int64, runID string, limit int) ([]repos.GuardrailVerdict, error)
+	// GuardrailNoticeVerdicts reads the verdicts of the run that a chat notice
+	// reports (notices.go), oldest first.
+	GuardrailNoticeVerdicts(ctx context.Context, projectID, userID int64, runID string, limit int) ([]repos.GuardrailNoticeVerdict, error)
 	RecordContentRead(ctx context.Context, userID, projectID int64, runID, stepID string, side runevidence.Side, route string) error
 }
 

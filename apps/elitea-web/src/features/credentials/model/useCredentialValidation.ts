@@ -76,8 +76,8 @@ export interface UseCredentialValidationResult {
   getCredentialMessage: (credentialId: string | undefined) => string;
   /**
    * The refusal REASON the toolkit probe answered with, and ONLY when that
-   * reason is a verdict about the credential itself (`auth_failed` /
-   * `unreachable`). `undefined` for every other outcome — a healthy
+   * reason is a verdict about the credential itself (`auth_failed`
+   * only; `unreachable` is not one, see `credentialValidationStatus.ts`). `undefined` for every other outcome — a healthy
    * credential, a type with no probe, and, crucially, a refusal this
    * deployment could not really make ("Connection checking is not available
    * right now."), which carries no reason at all.

@@ -2994,3 +2994,292 @@ fn large_arguments_beside_a_fitting_result_still_chunk() {
         serde_json::to_string(&response).expect("encoded tool result")
     );
 }
+
+// ADR-0044 Amendment 1 (#2161): a refused or narrowed delegation is a frame of
+// its own beside the callee's tool-call row, and the model keeps its result.
+fn delegated_catalog(
+    evidence: elitea_agent_runtime::delegation::DelegationEvidence,
+    agent_type: &str,
+) -> ApplicationToolPresentationCatalog {
+    let mut applications = ApplicationToolPresentationCatalog::default();
+    applications
+        .insert_runtime(
+            "elitea_agent_1_v_1".to_owned(),
+            "Agent1".to_owned(),
+            agent_type.to_owned(),
+            "child-model".to_owned(),
+            ApplicationToolPresentationCatalog::default(),
+            super::events::ApplicationToolGuardCatalogs::default().with_delegation(Some(evidence)),
+        )
+        .expect("presentation");
+    applications
+}
+
+fn evidence(
+    refusal: Option<elitea_agent_runtime::delegation::DelegationRefusal>,
+    narrowed: Vec<elitea_agent_runtime::delegation::Narrowed>,
+) -> elitea_agent_runtime::delegation::DelegationEvidence {
+    use elitea_agent_runtime::delegation::{DelegationEdge, DelegationEvidence, GrantEvidence};
+    DelegationEvidence {
+        depth: 1,
+        effective_grant_digest: "0".repeat(64),
+        enforced: refusal.is_some(),
+        refusal,
+        grant: (!narrowed.is_empty()).then(|| GrantEvidence {
+            grant_id: 5,
+            grant_digest: "1".repeat(64),
+            narrowed,
+        }),
+        edge: Some(DelegationEdge {
+            caller: 2,
+            callee: 1,
+        }),
+    }
+}
+
+fn delegation_frames(catalog: ApplicationToolPresentationCatalog, response: Value) -> Vec<Value> {
+    let mut projector = AgentEventProjector::with_tool_catalogs(
+        AgentEventProjectionContext::fixture(json!({})),
+        super::sensitive_tools::SensitiveToolCatalog::default(),
+        catalog,
+    )
+    .expect("projector");
+    projector.start(timestamp(0)).expect("start");
+    projector
+        .project(&event(
+            "delegation-call",
+            1,
+            false,
+            true,
+            vec![Part::FunctionCall {
+                name: "elitea_agent_1_v_1".to_owned(),
+                args: json!({"task": "commit the change"}),
+                id: Some("call-1".to_owned()),
+                thought_signature: None,
+            }],
+        ))
+        .expect("call");
+    let mut result = Event::with_id("delegation-result", "invocation-1");
+    result.timestamp = timestamp(2);
+    result.author = "root-agent".to_owned();
+    result.llm_response.content = Some(Content {
+        role: "function".to_owned(),
+        parts: vec![Part::FunctionResponse {
+            function_response: adk_rust::FunctionResponseData::new("elitea_agent_1_v_1", response),
+            id: Some("call-1".to_owned()),
+            annotations: None,
+        }],
+    });
+    projector
+        .project(&result)
+        .expect("result")
+        .into_iter()
+        .map(|event| current(&event))
+        .collect()
+}
+
+#[test]
+fn a_refused_delegation_projects_a_notice_and_the_model_keeps_its_error() {
+    use elitea_agent_runtime::delegation::{DelegationRefusal, GrantKind};
+    let refusal = DelegationRefusal::GrantMissing {
+        kind: GrantKind::Toolkit,
+        name: "Git".to_owned(),
+        toolkit: None,
+    };
+    let response = super::application_tools::delegation_refusal_result(&refusal);
+    let frames = delegation_frames(
+        delegated_catalog(evidence(Some(refusal), vec![]), "agent"),
+        response,
+    );
+    let types = frames
+        .iter()
+        .map(|event| &event["type"])
+        .collect::<Vec<_>>();
+    assert_eq!(
+        types,
+        ["agent_tool_error", "partial_message", "delegation_refused"]
+    );
+    let notice = &frames[2]["response_metadata"]["delegation_v1"];
+    assert_eq!(notice["id"], "call-1");
+    assert_eq!(notice["reason"], "no_grant");
+    assert_eq!(notice["code"], "DELEGATION_GRANT_MISSING");
+    assert_eq!(
+        notice["missing"],
+        json!([{"kind": "toolkit", "name": "Git"}])
+    );
+    assert_eq!(
+        notice["edge"],
+        json!({"caller_id": 2, "caller_name": "root-agent", "callee_id": 1, "callee_name": "Agent1", "kind": "agent_tool"})
+    );
+    assert!(
+        frames[0].to_string().contains("DELEGATION_GRANT_MISSING"),
+        "the model still gets the typed refusal"
+    );
+}
+
+#[test]
+fn a_narrowed_delegation_projects_a_notice_and_a_clean_one_does_not() {
+    use elitea_agent_runtime::delegation::{GrantKind, Narrowed};
+    let narrowed = vec![Narrowed {
+        kind: GrantKind::Toolkit,
+        name: "Database".to_owned(),
+        toolkit: None,
+    }];
+    let frames = delegation_frames(
+        delegated_catalog(evidence(None, narrowed), "pipeline"),
+        json!({"result": "done"}),
+    );
+    let notice = frames
+        .iter()
+        .find(|event| event["type"] == "delegation_narrowed")
+        .expect("a narrowed notice");
+    assert_eq!(
+        notice["response_metadata"]["delegation_v1"]["reason"],
+        "stale"
+    );
+    assert_eq!(
+        notice["response_metadata"]["delegation_v1"]["edge"]["kind"],
+        "pipeline_child"
+    );
+    let clean = delegation_frames(
+        delegated_catalog(evidence(None, vec![]), "agent"),
+        json!({"result": "done"}),
+    );
+    assert!(!clean.iter().any(|event| {
+        event["type"]
+            .as_str()
+            .is_some_and(|kind| kind.starts_with("delegation_"))
+    }),);
+}
+
+fn missing_toolkit() -> elitea_agent_runtime::delegation::DelegationRefusal {
+    elitea_agent_runtime::delegation::DelegationRefusal::GrantMissing {
+        kind: elitea_agent_runtime::delegation::GrantKind::Toolkit,
+        name: "Git".to_owned(),
+        toolkit: None,
+    }
+}
+
+/// #2218: a pipeline node that runs a saved pipeline its caller may not run
+/// ends the run, and the person gets the same notice as an agent tool would,
+/// with the `pipeline_node` edge, keyed by the node's place in the graph.
+#[test]
+fn a_refused_pipeline_node_carries_a_pipeline_node_notice() {
+    let refused = elitea_agent_runtime::delegation::RefusedDelegation {
+        refusal: missing_toolkit(),
+        evidence: evidence(Some(missing_toolkit()), vec![]),
+    };
+    let error = super::application_tools::delegation_refused_error(
+        elitea_agent_runtime::delegation::DelegatedCallee::Pipeline,
+        &refused,
+        "review/lint",
+    );
+    assert_eq!(
+        error.code(),
+        elitea_agent_runtime::assembly_error::NativeAgentAssemblyErrorCode::AuthorizationFailed,
+        "the run still ends as the authorization failure"
+    );
+    let notice = error.delegation_notice().expect("a notice rides the error");
+    assert_eq!(notice.event, "delegation_refused");
+    assert_eq!(notice.value["id"], "pipeline_node:review/lint");
+    assert_eq!(notice.value["reason"], "no_grant");
+    assert_eq!(notice.value["code"], "DELEGATION_GRANT_MISSING");
+    assert_eq!(
+        notice.value["missing"],
+        json!([{"kind": "toolkit", "name": "Git"}])
+    );
+    assert_eq!(
+        notice.value["edge"],
+        json!({"caller_id": 2, "callee_id": 1, "callee_name": "lint", "kind": "pipeline_node"})
+    );
+}
+
+/// `report` mode records the refusal in the run step's summary and runs the
+/// node: nothing was refused, so the person sees no card (#2218 decision).
+#[test]
+fn a_pipeline_node_refusal_that_report_mode_did_not_enforce_shows_no_notice() {
+    let mut recorded = evidence(Some(missing_toolkit()), vec![]);
+    recorded.enforced = false;
+    assert!(super::application_tools::pipeline_node_notice(&recorded, "review/lint").is_none());
+    assert!(
+        recorded
+            .summary()
+            .iter()
+            .any(|(key, value)| *key == "delegation_enforced" && value == &json!(false)),
+        "the step summary still records the refusal and that it was not enforced"
+    );
+}
+
+#[test]
+fn the_assembly_notice_frame_is_stamped_with_the_bound_identity_and_refuses_an_unroutable_one() {
+    fn identity(stream_id: &str) -> super::events::AssemblyNoticeIdentity<'_> {
+        super::events::AssemblyNoticeIdentity {
+            stream_id,
+            message_id: "message-1",
+            sio_event: "chat_predict",
+            execution_generation: "generation-1",
+            thread_id: "thread-1",
+        }
+    }
+    let notice = super::application_tools::pipeline_node_notice(
+        &evidence(Some(missing_toolkit()), vec![]),
+        "lint",
+    )
+    .expect("an enforced refusal shows");
+    let event = super::events::assembly_delegation_notice(
+        &identity("conversation-1"),
+        &notice,
+        timestamp(3),
+    )
+    .expect("the notice must project");
+    assert_eq!(event.r#type, "delegation_refused");
+    let projected = current(&event);
+    assert_eq!(projected["stream_id"], "conversation-1");
+    assert_eq!(projected["message_id"], "message-1");
+    assert_eq!(
+        projected["response_metadata"]["delegation_v1"]["edge"]["kind"],
+        "pipeline_node"
+    );
+    assert_eq!(
+        projected["response_metadata"]["delegation_v1"]["id"],
+        "pipeline_node:lint"
+    );
+    assert!(
+        super::events::assembly_delegation_notice(&identity(""), &notice, timestamp(3)).is_err(),
+        "a blank stream id cannot be routed"
+    );
+}
+
+#[test]
+fn a_long_or_multibyte_node_path_keeps_a_routable_distinct_notice_id() {
+    let long = |tail: &str| format!("{}/{tail}", "ж".repeat(60));
+    let id = |path: &str| {
+        super::application_tools::pipeline_node_notice(
+            &evidence(Some(missing_toolkit()), vec![]),
+            path,
+        )
+        .expect("an enforced refusal shows")
+        .value["id"]
+            .as_str()
+            .expect("id")
+            .to_owned()
+    };
+    let first = id(&long("a"));
+    assert!(
+        first.len() <= 128,
+        "Main and the clients bound the id: {first}"
+    );
+    assert_ne!(
+        first,
+        id(&long("b")),
+        "two long paths must not share one card"
+    );
+    assert!(
+        super::application_tools::pipeline_node_notice(
+            &evidence(Some(missing_toolkit()), vec![]),
+            "",
+        )
+        .is_none(),
+        "a saved pipeline bound with no graph path is not a node"
+    );
+}

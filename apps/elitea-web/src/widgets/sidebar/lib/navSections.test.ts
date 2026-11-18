@@ -73,10 +73,6 @@ describe('selectedNavItem', () => {
     expect(selectedNavItem('/agents/create', items)).toBe('agents');
   });
 
-  it('returns undefined for /agents-hub', () => {
-    expect(selectedNavItem('/agents-hub', items)).toBeUndefined();
-  });
-
   it('returns undefined for unrecognized path', () => {
     expect(selectedNavItem('/unknown', items)).toBeUndefined();
   });
@@ -85,5 +81,6 @@ describe('selectedNavItem', () => {
     expect(selectedNavItem('/toolkits/edit', items)).toBe('toolkits');
     expect(selectedNavItem('/credentials', items)).toBe('credentials');
     expect(selectedNavItem('/artifacts/list', items)).toBe('artifacts');
+    expect(selectedNavItem('/marketplace/skills/3', items)).toBe('marketplace');
   });
 });

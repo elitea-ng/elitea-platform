@@ -6,7 +6,8 @@ use crate::agents::result::{BoundAgentExecutionResult, validate_agent_execution_
 use crate::toolkits::DelegatedAuthorizationRequirement;
 
 use super::command::{
-    VerifiedAgentCommand, VerifiedExecutionCommand, VerifiedToolkitExecuteReadCommand,
+    ToolkitCommandKind, VerifiedAgentCommand, VerifiedExecutionCommand,
+    VerifiedToolkitExecuteReadCommand,
 };
 use super::node_event::encode_current_node_event_json;
 use super::{
@@ -229,6 +230,9 @@ pub(crate) fn validate_restored_toolkit_execute_read_output_frame(
     frame: &ExecutionOutputFrameV1,
 ) -> Result<(), ProtocolError> {
     validate_restored_frame_identity(verified, frame)?;
+    if let Some(execution_output_frame_v1::Payload::NodeEvent(event)) = frame.payload.as_ref() {
+        return validate_restored_index_progress(verified, frame, event);
+    }
     let (payload_bytes, requested_outcome) = match frame.payload.as_ref() {
         Some(execution_output_frame_v1::Payload::ToolkitExecuteRead(result)) => {
             validate_toolkit_execute_read_result(verified, result)?;
@@ -302,6 +306,32 @@ pub(crate) fn validate_restored_toolkit_execute_read_output_frame(
     validate_restored_settlement(verified, frame, payload_digest, Some(requested_outcome))
 }
 
+/// Revalidate one nonterminal `NodeEvent` of an index run (#2041). Only
+/// `index.ingest.v1` publishes progress; every other direct toolkit command
+/// keeps its terminal-only stream, so a `NodeEvent` restored under one of them
+/// is malformed.
+fn validate_restored_index_progress(
+    verified: &VerifiedToolkitExecuteReadCommand,
+    frame: &ExecutionOutputFrameV1,
+    event: &NodeEventV1,
+) -> Result<(), ProtocolError> {
+    let command = verified.command();
+    if verified.kind() != ToolkitCommandKind::IndexIngest
+        || frame.terminal
+        || frame.event_type != ExecutionOutputEventTypeV1::NodeEvent as i32
+        || frame.logical_output_id
+            != format!("node-event:{}:{}", command.execution_id, frame.sequence)
+        || frame.settlement_proposal.is_some()
+    {
+        return Err(malformed_restored_output());
+    }
+    encode_current_node_event_json(event)?;
+    if frame.payload_digest.as_ref() != Some(&sha256(&event.encode_to_vec())) {
+        return Err(malformed_restored_output());
+    }
+    Ok(())
+}
+
 /// The one deadline rule every terminal route applies: a failure that is not a
 /// cancellation becomes `DeadlineExceeded` once the signed command deadline has
 /// passed.
@@ -346,6 +376,11 @@ pub(crate) fn refused_terminal_replacement(
 ) -> Option<RuntimeFailureKind> {
     match restored_terminal_failure_kind(frame) {
         None => Some(RuntimeFailureKind::Internal),
+        // #2227: a Main that does not admit the program's output still admits
+        // the registered sentence alone, so the run ends as a Code failure.
+        Some(RuntimeFailureKind::PipelineCodeFailed) if carries_code_output(frame) => {
+            Some(RuntimeFailureKind::PipelineCodeFailed)
+        }
         Some(kind) => kind.older_main_fallback(),
     }
 }
@@ -561,6 +596,31 @@ pub fn build_node_event_output_frame(
     occurred_at_unix_millis: i64,
     claim_handoff_watermark: u64,
 ) -> Result<ExecutionOutputFrameV1, ProtocolError> {
+    build_execution_node_event_output_frame(
+        verified,
+        fence,
+        event,
+        sequence,
+        occurred_at_unix_millis,
+        claim_handoff_watermark,
+    )
+}
+
+/// The same binding for any verified execution command: an agent run, or an
+/// index run's progress (#2041). Callers choose which commands may publish
+/// progress; this function only binds the frame.
+///
+/// # Errors
+///
+/// As [`build_node_event_output_frame`].
+pub(crate) fn build_execution_node_event_output_frame(
+    verified: &impl VerifiedExecutionCommand,
+    fence: &ExecutionFenceV1,
+    event: NodeEventV1,
+    sequence: u64,
+    occurred_at_unix_millis: i64,
+    claim_handoff_watermark: u64,
+) -> Result<ExecutionOutputFrameV1, ProtocolError> {
     if sequence == 0 || occurred_at_unix_millis <= 0 || claim_handoff_watermark >= sequence {
         return Err(ProtocolError::InvalidInput(
             "the progress output identity is malformed",
@@ -642,7 +702,18 @@ pub fn build_agent_terminal_output_frame(
             )
         }
         AgentTerminalOutput::Failure(kind) => {
-            let error = runtime_error(kind);
+            let mut error = runtime_error(kind);
+            // #2227: a failed Code program's output follows the registered
+            // sentence. Main admits exactly that shape and nothing else.
+            if kind == RuntimeFailureKind::PipelineCodeFailed
+                && let Some(detail) = super::terminal_detail::noted(
+                    &verified.command().execution_id,
+                    verified.command().generation,
+                )
+            {
+                error.safe_message =
+                    super::terminal_detail::with_detail(&error.safe_message, &detail);
+            }
             let bytes = error.encode_to_vec();
             (
                 ExecutionOutputEventTypeV1::RuntimeError,
@@ -916,6 +987,7 @@ pub(crate) fn model_failure(upstream_code: Option<&str>) -> RuntimeFailureKind {
         }
         Some(
             "model_gateway.rejected"
+            | "model_gateway.guardrail_blocked"
             | "model_gateway.invalid_request"
             | "anthropic_gateway.invalid_request"
             | "anthropic_gateway.sampling_unsupported",
@@ -1470,7 +1542,31 @@ const REGISTERED_RUNTIME_FAILURES: &[RuntimeFailureKind] = &[
     RuntimeFailureKind::Internal,
 ];
 
+/// Whether `frame` is a Code failure carrying the failed program's output.
+fn carries_code_output(frame: &ExecutionOutputFrameV1) -> bool {
+    matches!(
+        frame.payload.as_ref(),
+        Some(execution_output_frame_v1::Payload::RuntimeError(error))
+            if is_code_failure_with_output(error)
+    )
+}
+
+/// Whether `error` is the registered Code failure followed by the program's
+/// bounded output (#2227), as Main admits it.
+fn is_code_failure_with_output(error: &RuntimeErrorV1) -> bool {
+    let registered = runtime_error(RuntimeFailureKind::PipelineCodeFailed);
+    error.code == registered.code
+        && error.retryable == registered.retryable
+        && super::terminal_detail::detail_of(&error.safe_message, &registered.safe_message)
+            .is_some()
+}
+
 fn canonical_runtime_failure(error: &RuntimeErrorV1) -> Option<RuntimeFailureKind> {
+    // #2227: the Code failure with its program's output is that kind's own
+    // frame, so it validates, restores and replays exactly like a registered one.
+    if is_code_failure_with_output(error) {
+        return Some(RuntimeFailureKind::PipelineCodeFailed);
+    }
     REGISTERED_RUNTIME_FAILURES
         .iter()
         .copied()
@@ -2048,6 +2144,75 @@ fn validate_fence(fence: &ExecutionFenceV1) -> Result<(), ProtocolError> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod code_failure_output_tests {
+    use super::*;
+
+    /// #2227: the registered Code failure followed by the program's bounded
+    /// output is that kind's own message, not an older build's unregistered
+    /// text; any other text after the sentence is neither.
+    #[test]
+    fn only_the_exact_sentence_and_a_clean_bound_output_are_a_code_failure_with_output() {
+        let registered = runtime_error(RuntimeFailureKind::PipelineCodeFailed);
+        let with = |message: String| RuntimeErrorV1 {
+            safe_message: message,
+            ..registered.clone()
+        };
+        let carried = super::super::terminal_detail::with_detail(
+            &registered.safe_message,
+            "Error: boom\n  at main.js:1",
+        );
+        assert!(is_code_failure_with_output(&with(carried.clone())));
+        // It is that kind's own frame: it validates, restores and replays
+        // exactly, and a Main that refuses it gets the sentence alone.
+        assert_eq!(
+            canonical_runtime_failure(&with(carried.clone())),
+            Some(RuntimeFailureKind::PipelineCodeFailed)
+        );
+        let frame = ExecutionOutputFrameV1 {
+            terminal: true,
+            payload: Some(execution_output_frame_v1::Payload::RuntimeError(with(
+                carried,
+            ))),
+            ..Default::default()
+        };
+        assert!(carries_code_output(&frame));
+        assert_eq!(
+            refused_terminal_replacement(&frame),
+            Some(RuntimeFailureKind::PipelineCodeFailed)
+        );
+        let bare = ExecutionOutputFrameV1 {
+            terminal: true,
+            payload: Some(execution_output_frame_v1::Payload::RuntimeError(
+                registered.clone(),
+            )),
+            ..Default::default()
+        };
+        assert!(!carries_code_output(&bare));
+        assert_eq!(refused_terminal_replacement(&bare), None);
+        assert!(!is_code_failure_with_output(&registered));
+        assert!(!is_code_failure_with_output(&with(format!(
+            "{} Error: boom",
+            registered.safe_message
+        ))));
+        assert_eq!(
+            canonical_runtime_failure(&with(format!("{} Error: boom", registered.safe_message))),
+            None
+        );
+        assert!(!is_code_failure_with_output(&with(
+            super::super::terminal_detail::with_detail(&registered.safe_message, "bad\u{1b}")
+        )));
+        let other = runtime_error(RuntimeFailureKind::CodePreparationFailed);
+        assert!(!is_code_failure_with_output(&RuntimeErrorV1 {
+            safe_message: super::super::terminal_detail::with_detail(
+                &other.safe_message,
+                "Error: boom"
+            ),
+            ..other
+        }));
+    }
 }
 
 #[cfg(test)]

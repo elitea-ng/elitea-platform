@@ -164,6 +164,16 @@ describe('CodeMirrorEditor', () => {
  * Every case here is additive: the two ref-less callers above are untouched,
  * and the tests above still pass unchanged, which is the point.
  */
+describe('CodeMirrorEditor — caret', () => {
+  it('colours the drawn cursor from the theme so it shows on a dark background (#2021)', () => {
+    renderWithTheme(<CodeMirrorEditor value="hello" />);
+    const css = Array.from(document.querySelectorAll('style'))
+      .map((tag) => `${tag.textContent ?? ''} ${Array.from(tag.sheet?.cssRules ?? []).map((rule) => rule.cssText).join(' ')}`)
+      .join(' ');
+    expect(css).toMatch(/\.cm-cursor[^{]*\{[^}]*border-left-color:\s*var\(/);
+  });
+});
+
 describe('CodeMirrorEditor — imperative handle', () => {
   it('reads the live document through getCode, not the debounced mirror', async () => {
     const user = userEvent.setup();

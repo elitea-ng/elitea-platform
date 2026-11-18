@@ -2,8 +2,9 @@ import type { components } from '@/api/generated/elitea.gen';
 import { budgetRefusalText, budgetScopeOf } from '@/features/usage/budgetRefusal';
 import { parseServerTime } from '@/lib/time';
 import { classifyMessage, participantKindOf, type MessageClass } from '@elitea/client-core/conversation';
-import type { CloudSubAgentLane } from '@elitea/client-core/stream';
+import type { CloudSubAgentLane, DelegationNotice } from '@elitea/client-core/stream';
 
+import { storedDelegationNotices } from '@/features/chat/delegationNotices';
 import { storedSubAgents } from '@/features/chat/subAgentLanes';
 
 /**
@@ -64,6 +65,8 @@ export interface ChatMessage {
   addressedTo?: number[];
   /** Client contract 1.48: the temporary sub-agents a cloud answer started (`meta.subagents_v1`). */
   subAgents?: CloudSubAgentLane[];
+  /** Client contract 1.60: the refused or narrowed delegations of a cloud answer (`meta.delegation_notices_v1`). */
+  delegationNotices?: DelegationNotice[];
 }
 
 /** One file of a message. */
@@ -238,6 +241,12 @@ function subAgentsOf(role: ChatRole, group: Record<string, unknown>): Pick<ChatM
   return lanes.length === 0 ? {} : { subAgents: lanes };
 }
 
+function delegationNoticesOf(role: ChatRole, group: Record<string, unknown>): Pick<ChatMessage, 'delegationNotices'> {
+  if (role !== 'assistant') return {};
+  const notices = storedDelegationNotices(asRecord(group.meta) ?? asRecord(group.metadata));
+  return notices.length === 0 ? {} : { delegationNotices: notices };
+}
+
 export function toChatMessages(
   detail: Pick<ConversationDetail, 'participants' | 'message_groups'> | undefined,
   self: SelfContext = { selfUserId: null },
@@ -290,6 +299,7 @@ export function toChatMessages(
         (id): id is number => typeof id === 'number' && Number.isSafeInteger(id) && id > 0,
       ),
       ...subAgentsOf(role, group),
+      ...delegationNoticesOf(role, group),
     });
   }
   // Oldest first; equal or missing times keep the server's id order.

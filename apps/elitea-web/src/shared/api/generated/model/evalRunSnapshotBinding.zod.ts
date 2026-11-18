@@ -49,7 +49,7 @@ export const EvalRunSnapshotBinding = zod
       .enum(["ai", "human", "code"])
       .optional()
       .describe(
-        "Always `ai` in this release. Stored rather than implied, so a later `code` or `human` binding is distinguishable from these instead of every historical row claiming the newest default.\n",
+        "`ai` for a dimension the AI judge scores, `human` for one only a reviewer can score (its results wait as `pending_human`). Stored rather than implied, so a binding is distinguishable from the ones before it instead of every historical row claiming the newest default.\n",
       ),
     weight: zod.number().optional(),
     target: zod.number().nullish(),

@@ -16,7 +16,7 @@ import { applicationErrorMessage } from '../lib/errorMessage';
  *
  * `POST /elitea_core/versions/prompt_lib/{projectId}/{applicationId}` uses
  * Main's shared CreateVersion handler. The name is required. An optional
- * sourceVersionId copies the source's exact skill bindings in the same
+ * sourceVersionId copies the source's exact skill, toolkit and sub-agent bindings in the same
  * transaction as the new version. Main enforces application and project
  * ownership; the source ID is not part of the saved version metadata.
  * See the internal-elitea-mcp source mapping for the shared REST/MCP contract.
@@ -80,7 +80,12 @@ export function useSaveNewVersion(options: UseSaveNewVersionOptions = {}): UseSa
         const body: SaveApplicationNewVersionBody = {
           ...input.version,
           name: input.name,
-          ...(input.sourceVersionId === undefined ? {} : { copy_skills_from_version_id: input.sourceVersionId }),
+          // Skills AND toolkit/sub-agent bindings ride along in the same
+          // transaction; without copy_tools_from_version_id the new version
+          // started with an empty Tools area (#2132, #2139).
+          ...(input.sourceVersionId === undefined
+            ? {}
+            : { copy_skills_from_version_id: input.sourceVersionId, copy_tools_from_version_id: input.sourceVersionId }),
         };
         const queryOptions = getSaveApplicationNewVersionQueryOptions(input.projectId, input.applicationId, body);
         const response = await queryClient.query(queryOptions);

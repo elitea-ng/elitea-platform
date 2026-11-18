@@ -51,6 +51,15 @@ export const agentWorkforcePolicyInputAutoDismissRulesMax = 20;
 
 export const agentWorkforcePolicyInputGraceDaysMax = 90;
 
+export const agentWorkforcePolicyInputListingMinReviewsMin = 0;
+export const agentWorkforcePolicyInputListingMinReviewsMax = 1000;
+
+export const agentWorkforcePolicyInputListingMinRatingMin = 0;
+export const agentWorkforcePolicyInputListingMinRatingMax = 5;
+
+export const agentWorkforcePolicyInputListingMaxDismissalRateMin = 0;
+export const agentWorkforcePolicyInputListingMaxDismissalRateMax = 1;
+
 export const AgentWorkforcePolicyInput = zod.object({
   auto_hire_enabled: zod.boolean(),
   min_successful_runs: zod
@@ -66,6 +75,36 @@ export const AgentWorkforcePolicyInput = zod.object({
     .array(AgentWorkforceRule)
     .max(agentWorkforcePolicyInputAutoDismissRulesMax),
   grace_days: zod.int().min(1).max(agentWorkforcePolicyInputGraceDaysMax),
+  auto_feedback_enabled: zod
+    .boolean()
+    .optional()
+    .describe(
+      "agents.workforce.auto_feedback: publish a workforce manager's drafted report on a dismissed or demoted hired agent when the stage is applied. The person who turns it on is recorded as the approver.\n",
+    ),
+  listing_min_reviews: zod
+    .int()
+    .min(agentWorkforcePolicyInputListingMinReviewsMin)
+    .max(agentWorkforcePolicyInputListingMinReviewsMax)
+    .optional()
+    .describe(
+      "auto_hire of a listing: reviews the version needs. 0 or absent is 3.",
+    ),
+  listing_min_rating: zod
+    .number()
+    .min(agentWorkforcePolicyInputListingMinRatingMin)
+    .max(agentWorkforcePolicyInputListingMinRatingMax)
+    .optional()
+    .describe(
+      "auto_hire of a listing: the average rating the version needs. 0 or absent is 4.0.",
+    ),
+  listing_max_dismissal_rate: zod
+    .number()
+    .min(agentWorkforcePolicyInputListingMaxDismissalRateMin)
+    .max(agentWorkforcePolicyInputListingMaxDismissalRateMax)
+    .optional()
+    .describe(
+      "auto_hire of a listing: the dismissal rate must be under this. 0 or absent is 0.2.",
+    ),
 });
 
 export type AgentWorkforcePolicyInput = zod.input<

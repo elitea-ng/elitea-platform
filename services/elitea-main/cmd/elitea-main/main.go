@@ -40,8 +40,10 @@ import (
 	v2canvaspresence "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/canvaspresence"
 	configurationapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
 	v2convs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	v2conversationskills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversationskills"
 	v2deepwiki "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
 	desktopopsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
+	v2entityfolders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/entityfolders"
 	v2evaluation "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
 	v2events "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/events"
 	v2folders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/folders"
@@ -60,6 +62,7 @@ import (
 	v2secrets "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/sharedchat"
 	v2skills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
+	v2skilltrust "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skilltrust"
 	socialapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/social"
 	v2support "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/supportassistant"
 	v2tags "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/tags"
@@ -431,6 +434,12 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err := startAgentScorecard(ctx, pool, executionSuspensions, logger); err != nil {
 		return err
 	}
+	// The Marketplace snapshot purge (ADR-0051, ADR-0042): the
+	// main.marketplace_retention routine, daily, paused in maintenance.
+	startMarketplaceRetention(ctx, pool, logger)
+	// main.marketplace_signals routine, daily: the listing signals (active
+	// hires, retention, dismissal rate, upgrade adoption) and the ratings.
+	startMarketplaceSignals(ctx, pool, logger)
 	// The workforce policy pass (ADR-0050 decisions 5c and 5k, #1617): the
 	// main.agent_workforce_policy routine, paused in maintenance; a project
 	// with no policy (the default) is never touched.
@@ -573,10 +582,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			return fmt.Errorf("create object store: %w", err)
 		}
 		if err := objectStoreReadinessProbe(ctx, objectStore); err != nil {
-			return fmt.Errorf("object store readiness probe: %w", err)
+			return objectStoreStartupError(storageCfg, "object store readiness probe", err)
 		}
 		if err := configureObjectStoreRetentionLifecycle(ctx, objectStore); err != nil {
-			return fmt.Errorf("configure object store retention lifecycle: %w", err)
+			return objectStoreStartupError(storageCfg, "configure object store retention lifecycle", err)
 		}
 	} else {
 		logger.Info("Go artifacts capability disabled; current Centry artifacts routes remain authoritative")
@@ -2087,6 +2096,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// and for the same typed-nil reason. `tools/call` runs an agent through the
 	// SAME use case; left nil it keeps answering the refusal it always has.
 	var mcpAgentStart v2mcp.AgentStartUseCase
+	// The evaluation runtime_plane mode's half of the same wiring: the chat
+	// start and stop use cases, assigned under the same guard and for the same
+	// typed-nil reason.
+	var evalAgentStart agentexecutionapi.StartUseCase
+	var evalAgentCancel agentexecutionapi.CurrentAgentCanceller
 	var mcpToolkitExecute v2mcp.ToolkitExecuteReadUseCase
 	// The tool-run halves, assigned ONLY inside the guard below and for the
 	// same typed-nil reason: a nil concrete value in a non-nil interface reads
@@ -2112,6 +2126,39 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// guard, so an absent agent plane leaves a NIL interface and the route
 	// answers 501.
 	var remoteToolAuthorizer desktopopsapi.RemoteToolAuthorizer
+	// #1359 H8: ONE client of elitea-llm-gateway, gRPC over mutual TLS
+	// (elitea.gateway.v1.GatewayService). Every consumer below — the /llm
+	// surface, the configuration checks, predict_llm and the governance status —
+	// shares it, so an operator configures the gateway hop once. It is nil when
+	// LLM_GATEWAY_URL is empty, and each consumer reports that posture.
+	var llmGateway *llmproxy.GatewayClient
+	if gwURL := os.Getenv("LLM_GATEWAY_URL"); gwURL != "" {
+		client, clientErr := llmproxy.NewGatewayClient(llmproxy.GatewayClientConfig{
+			Target:         gwURL,
+			IdentitySecret: os.Getenv("GATEWAY_IDENTITY_SECRET"),
+			ClientCertFile: os.Getenv("LLM_GATEWAY_CLIENT_CERT"),
+			ClientKeyFile:  os.Getenv("LLM_GATEWAY_CLIENT_KEY"),
+			CAFile:         os.Getenv("LLM_GATEWAY_CA_FILE"),
+		})
+		if clientErr != nil {
+			return fmt.Errorf("compose llm gateway client: %w", clientErr)
+		}
+		defer func() { _ = client.Close() }()
+		llmGateway = client
+	}
+
+	// Semantic recall for an agent's own memory (issue 1657): the embedding,
+	// the vector copy and the reconciler. Zero when a requirement is missing.
+	// A nil gateway is passed as a nil INTERFACE, never a typed nil.
+	var memoryGateway llmproxy.Gateway
+	if llmGateway != nil {
+		memoryGateway = llmGateway
+	}
+	agentMemoryVectorsRoot, err := composeAgentMemoryVectors(ctx, logger, os.LookupEnv, pool,
+		vectorClient, memoryGateway, currentConfigurationsRoot, currentConfigurationsConfig.PublicProjectID)
+	if err != nil {
+		return fmt.Errorf("compose agent memory vectors: %w", err)
+	}
 	// The cloud child turns of a local turn (issue 1239): the chat start use
 	// case and the same version service, under the same guards and for the
 	// same typed-nil reason.
@@ -2243,6 +2290,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			// elitea-vector's token introspection (ADR-0031) reads callback
 			// grants over the main pool, where the minting facades write them.
 			CallbackTokenFacts: dbrepos.NewCallbackTokenGrants(pool),
+			// elitea-main's own vector token and the vector ranker of an
+			// agent's memory recall (issue 1657); both nil when off.
+			VectorPlatformTokens: agentMemoryVectorsRoot.Tokens,
+			AgentMemoryRanker:    agentMemoryVectorsRoot.Ranker,
 			// elitea-vector's Delete for the registry (ADR-0031 decision 4);
 			// nil keeps the deferred hook and an idle sweeper.
 			IndexVectorDeleter:      indexVectorDeleter,
@@ -2391,6 +2442,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			workspaceTurnStarter.bind(publicRoutes.AgentStart)
 			supportAssistantStart = publicRoutes.AgentStart
 			mcpAgentStart = publicRoutes.AgentStart
+			evalAgentStart = publicRoutes.AgentStart
 			childAgentStart = publicRoutes.AgentStart
 			credentialAuthorizationContinuer = publicRoutes.AgentStart
 			// The pipeline trigger and schedule handler. It runs pipelines
@@ -2493,6 +2545,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			// The cloud turn canceller of the workspace handoff (ADR-0034):
 			// the same stop use case the chat's DELETE route drives.
 			workspaceTurnCanceller.bind(publicRoutes.AgentCancel)
+			evalAgentCancel = publicRoutes.AgentCancel
 			currentAgentCancel, err = agentexecutionapi.NewCurrentAgentCancelRoute(
 				publicRoutes.AgentCancel,
 				apiGroupAuth,
@@ -2639,27 +2692,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		)
 	}
 
-	// #1359 H8: ONE client of elitea-llm-gateway, gRPC over mutual TLS
-	// (elitea.gateway.v1.GatewayService). Every consumer below — the /llm
-	// surface, the configuration checks, predict_llm and the governance status —
-	// shares it, so an operator configures the gateway hop once. It is nil when
-	// LLM_GATEWAY_URL is empty, and each consumer reports that posture.
-	var llmGateway *llmproxy.GatewayClient
-	if gwURL := os.Getenv("LLM_GATEWAY_URL"); gwURL != "" {
-		client, clientErr := llmproxy.NewGatewayClient(llmproxy.GatewayClientConfig{
-			Target:         gwURL,
-			IdentitySecret: os.Getenv("GATEWAY_IDENTITY_SECRET"),
-			ClientCertFile: os.Getenv("LLM_GATEWAY_CLIENT_CERT"),
-			ClientKeyFile:  os.Getenv("LLM_GATEWAY_CLIENT_KEY"),
-			CAFile:         os.Getenv("LLM_GATEWAY_CA_FILE"),
-		})
-		if clientErr != nil {
-			return fmt.Errorf("compose llm gateway client: %w", clientErr)
-		}
-		defer func() { _ = client.Close() }()
-		llmGateway = client
-	}
-
 	// BF0.9c: the browser /llm surface over that client.
 	var gatewayProxy http.Handler
 	var gatewayProjectResolver apimw.PersonalProjectResolver
@@ -2754,6 +2786,16 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if evalRunsRepo != nil {
 		orchestrator := v2evaluation.NewOrchestrator(
 			evalRunsRepo, v2evaluation.NewAIJudge(predictCompleter), predictCompleter, logger)
+		// The run limits (issue 2013) are enforced from the usage the gateway
+		// attributed to the run, which the analytics repository reads.
+		orchestrator.WithUsage(dbrepos.NewAnalyticsRepo(pool))
+		// runtime_plane runs execute each case as an agent run through the
+		// chat start use case (issue 2011 step B). Without a runtime plane the
+		// runner stays unset, and such a run errors with the reason.
+		if runner := composeEvalAgentRunner(pool, objectStore, evalAgentStart, evalAgentCancel,
+			dbrepos.NewAnalyticsRepo(pool), legacyrbac.NewPostgresResolver(pool), logger); runner != nil {
+			orchestrator.WithAgentRunner(runner)
+		}
 		// Started with the PROCESS context, so the workers and the recovery
 		// sweep stop on SIGTERM. A run in flight then hands its row back to
 		// `created`, and the next process resumes it at startup; a process
@@ -2969,7 +3011,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("compose remote toolkit route: %w", err)
 	}
-	currentChildTurns, err := composeChildTurns(pool, childAgentStart, childAgentAuthorizer, nativePolicy, auditRecorder, apiGroupAuth, logger)
+	currentChildTurns, err := composeChildTurns(pool, childAgentStart, childAgentAuthorizer, nativePolicy, auditRecorder, apiGroupAuth,
+		delegationSwitch{grantsEnforced: runtimeConfig.DelegationGrantsEnforced, settings: runSafetySections.delegation}, logger)
 	if err != nil {
 		return fmt.Errorf("compose local child turn routes: %w", err)
 	}
@@ -3059,6 +3102,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		CredentialConsent:             credentialConsentHandler,
 		ExternalAgentIdentityAdmin:    agentIdentity.ExternalAdmin,
 		ExecutionSuspensions:          executionSuspensions.handler,
+		SuspensionService:             executionSuspensions.service,
 		MandateAttachments:            governedTriggers.Attachments,
 		AgentHeartbeatMandates:        governedTriggers.Runs,
 		CredentialReferencesAdmin:     credentialReferencesHandler,
@@ -3108,6 +3152,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		DelegatedAuthToolkitSettings:  delegatedAuthToolkitSettings,
 		WorkerImplementation:          workerImplementation,
 		ImageGenerationModel:          os.Getenv("ELITEA_IMAGE_GENERATION_MODEL"),
+		CodeSandboxLanguages:          strings.Split(os.Getenv("ELITEA_CODE_SANDBOX_LANGUAGES"), ","),
 		// Readiness is the database (every pool), NATS and the runtime
 		// runners (FU-275); see mainReadinessChecks. The Form graph's sign-in
 		// state is in this same database (shared migration 0153), so it adds
@@ -3219,9 +3264,18 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		SharedChatTranscript: sharedChatTranscriptRepository(pool),
 		SkillsRepo:           skillsRepository(pool),
 		FoldersRepo:          foldersRepository(pool),
-		MemoriesRepo:         memoriesRepository(pool),
-		TagsRepo:             tagsRepository(pool),
-		AnalyticsRepo:        analyticsRepository(pool),
+		EntityFoldersRepo:    entityFoldersRepository(pool),
+		// Skills pinned to a conversation and a project's trust in foreign skill
+		// text (skills epic 2169). The start paths read the same pins through
+		// the runtime composition.
+		ConversationSkillsRepo: conversationSkillsRepository(pool),
+		// A delegation grant proposed while the governed profile is on is
+		// approved through its ADR-0040 change request (ADR-0044 amendment 1).
+		DelegationGoverned: func(context.Context) bool { return credentialAdmission.Governed() },
+		SkillTrustRepo:     skillTrustRepository(pool),
+		MemoriesRepo:       memoriesRepository(pool),
+		TagsRepo:           tagsRepository(pool),
+		AnalyticsRepo:      analyticsRepository(pool),
 		// The Agent Evaluation dimension library. Wired here, at the
 		// composition root, in the SAME change as the routes and the RBAC
 		// grant: a handler written and never composed is the shape #597
@@ -3232,11 +3286,14 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// for the reason above. The orchestrator is started below, after the
 		// config is built, so that a nil pool leaves all three fields nil
 		// together and the thirteen routes are simply not registered.
-		EvalDatasetsRepo:  evalDatasetsRepository(pool),
-		EvalRunsRepo:      evalRunsRepo,
-		EvalOrchestrator:  evalOrchestrator,
-		ReleaseGate:       releaseGate,
-		SuspensionChanged: executionSuspensions.gate.Notify,
+		EvalDatasetsRepo: evalDatasetsRepository(pool),
+		EvalRunsRepo:     evalRunsRepo,
+		EvalOrchestrator: evalOrchestrator,
+		EvalSuitesRepo:   evalSuitesRepository(pool),
+		// The run repository stores the human scores too (issue 2008).
+		EvalHumanScoresRepo: evalHumanScoresRepository(evalRunsRepo),
+		ReleaseGate:         releaseGate,
+		SuspensionChanged:   executionSuspensions.gate.Notify,
 		// ADR-0044 decision 1 (#1501): the governed profile forces the
 		// connector catalogue to approved_only.
 		CatalogueGoverned:  credentialAdmission.Governed(),
@@ -3318,6 +3375,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 				Validator:     introspectionValidator,
 				CallbackFacts: dbrepos.NewCallbackTokenGrants(pool),
 				Logger:        logger,
+				// elitea-main's own platform token (issue 1657).
+				PlatformTokens: agentMemoryVectorsRoot.Tokens,
 			})
 	})
 	if err != nil {
@@ -3392,6 +3451,27 @@ func skillsRepository(pool *pgxpool.Pool) v2skills.Repository {
 		return nil
 	}
 	return dbrepos.NewSkillsRepo(pool)
+}
+
+func conversationSkillsRepository(pool *pgxpool.Pool) v2conversationskills.Repository {
+	if pool == nil {
+		return nil
+	}
+	return dbrepos.NewConversationSkillsRepo(pool)
+}
+
+func skillTrustRepository(pool *pgxpool.Pool) v2skilltrust.Repository {
+	if pool == nil {
+		return nil
+	}
+	return dbrepos.NewSkillTrustRepo(pool)
+}
+
+func entityFoldersRepository(pool *pgxpool.Pool) v2entityfolders.Repository {
+	if pool == nil {
+		return nil
+	}
+	return dbrepos.NewEntityFoldersRepo(pool)
 }
 
 func foldersRepository(pool *pgxpool.Pool) v2folders.Repository {
@@ -3490,6 +3570,18 @@ func evalRunsRepository(pool *pgxpool.Pool) v2evaluation.RunRepository {
 		return nil
 	}
 	return dbrepos.NewEvalRunsRepo(pool)
+}
+
+func evalHumanScoresRepository(runs v2evaluation.RunRepository) v2evaluation.HumanScoreRepository {
+	scores, _ := runs.(v2evaluation.HumanScoreRepository)
+	return scores
+}
+
+func evalSuitesRepository(pool *pgxpool.Pool) v2evaluation.SuiteRepository {
+	if pool == nil {
+		return nil
+	}
+	return dbrepos.NewEvalSuitesRepo(pool)
 }
 
 func tagsRepository(pool *pgxpool.Pool) v2tags.Repository {

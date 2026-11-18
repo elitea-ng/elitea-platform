@@ -40,6 +40,7 @@ const runColumns = `
 	progress_total,
 	headline_score,
 	COALESCE(error, ''),
+	COALESCE(limit_reached, ''),
 	created_at,
 	started_at,
 	finished_at`
@@ -64,6 +65,7 @@ func scanRun(row pgx.Row) (evaluation.Run, error) {
 		&run.Progress.Total,
 		&run.HeadlineScore,
 		&run.Error,
+		&run.LimitReached,
 		&createdAt,
 		&startedAt,
 		&finishedAt,
@@ -125,6 +127,15 @@ func (r *EvalRunsRepo) ListRuns(
 		datasetID = &parsed
 	}
 
+	var beforeID *int
+	if filter.BeforeID != nil {
+		parsed, parseErr := parseEvalID(*filter.BeforeID, "run")
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		beforeID = &parsed
+	}
+
 	// Newest first. The reference's run-history panel computes a delta against
 	// the nearest OLDER scored run, so the order is not cosmetic: it is the
 	// order that makes "the previous run" mean the same thing to the client and
@@ -134,8 +145,10 @@ func (r *EvalRunsRepo) ListRuns(
 		FROM %s.eval_runs
 		WHERE ($1::int IS NULL OR application_id = $1::int)
 		  AND ($2::int IS NULL OR dataset_id = $2::int)
+		  AND ($4::int IS NULL OR id < $4::int)
+		  AND (NOT $5::bool OR (status = 'finished' AND headline_score IS NOT NULL))
 		ORDER BY id DESC
-		LIMIT $3`, schema), filter.ApplicationID, datasetID, limit)
+		LIMIT $3`, schema), filter.ApplicationID, datasetID, limit, beforeID, filter.ScoredOnly)
 	if err != nil {
 		return nil, fmt.Errorf("eval runs: list: %w", err)
 	}
@@ -468,7 +481,10 @@ func (r *EvalRunsRepo) SaveResult(
 		    target_met = EXCLUDED.target_met,
 		    verdict = EXCLUDED.verdict,
 		    evidence = EXCLUDED.evidence,
-		    created_at = now()`, schema),
+		    created_at = now()
+		-- A score a reviewer recorded is never moved back to pending: a resumed
+		-- run that re-answers the case must not erase it.
+		WHERE NOT (eval_results.status = 'ok' AND EXCLUDED.status = 'pending_human')`, schema),
 		runID, caseID, dimensionID, result.Status,
 		result.NativeScore, result.NormalizedScore, result.TargetMet,
 		string(verdict), string(evidence))
@@ -496,7 +512,7 @@ func orEmptyObject(value map[string]any) map[string]any {
 func (r *EvalRunsRepo) FinishRun(
 	ctx context.Context,
 	projectID, runID, status string,
-	headline *float64,
+	_ *float64, // the caller's headline; ignored, see below
 	failure string,
 ) error {
 	schema, err := tenantSchema(projectID)
@@ -508,19 +524,45 @@ func (r *EvalRunsRepo) FinishRun(
 		return err
 	}
 
-	_, err = r.pool.Exec(ctx, fmt.Sprintf(`
+	// The run row is locked and the headline is computed from the STORED
+	// results in the same transaction, so a human score that landed after the
+	// caller read the results is counted, and one that lands next waits for
+	// this commit (RecordHumanScore locks the same row). The caller's
+	// `headline` is not trusted: it may be stale by now.
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("eval runs: finish: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var current string
+	if err := tx.QueryRow(ctx, fmt.Sprintf(
+		`SELECT status FROM %s.eval_runs WHERE id = $1 FOR UPDATE`, schema), id).Scan(&current); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return fmt.Errorf("eval runs: finish: %w", err)
+	}
+	if current != evaluation.RunStatusRunning {
+		return nil
+	}
+	var headline *float64
+	if err := tx.QueryRow(ctx, fmt.Sprintf(`
+		SELECT round(avg(normalized_score)::numeric, 2)::float8 FROM %s.eval_results
+		WHERE run_id = $1 AND status = 'ok' AND normalized_score IS NOT NULL`, schema), id).Scan(&headline); err != nil {
+		return fmt.Errorf("eval runs: finish headline: %w", err)
+	}
+	if _, err := tx.Exec(ctx, fmt.Sprintf(`
 		UPDATE %s.eval_runs
 		SET status = $1,
 		    headline_score = $2,
 		    error = NULLIF($3, ''),
 		    finished_at = now(),
 		    heartbeat_at = NULL
-		WHERE id = $4 AND status = $5`, schema),
-		status, headline, failure, id, evaluation.RunStatusRunning)
-	if err != nil {
+		WHERE id = $4`, schema),
+		status, headline, failure, id); err != nil {
 		return fmt.Errorf("eval runs: finish: %w", err)
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 // RequeueStaleRuns moves orphaned `running` rows back to `created`, across

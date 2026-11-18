@@ -1123,7 +1123,49 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// gateway.gateway_model_image_prices and the kind, image_count, image_size,
 	// image_quality and pricing_source columns of gateway.llm_request_logs
 	// (issue 1969). No backfill, no permission.
-	require.EqualValues(t, 243, Head(shared))
+	//
+	// 245: shared/0245_evaluation_human_score_permissions.sql, the
+	// evaluation.human_score.read and .create grants (issue 2008).
+	//
+	// 247: shared/0247_guardrail_warn_action.sql, the `warn` action and the
+	// `warned` outcome in the CHECK constraints of
+	// gateway.guardrail_verdicts (issue 2012). No data, no permission.
+	//
+	// 248: shared/0248_agent_memory_vector_journal.sql, the journal of an
+	// agent's memory vectors (centry.agent_memory_vector_journal, issue 1657),
+	// and the one-time enqueue of the entries the tenants already hold. No
+	// permission.
+	//
+	// 249: shared/0249_agent_workforce_manager_source.sql, the proposal source
+	// hr_agent renamed workforce_manager (rows and the two CHECK constraints
+	// of 0237). No permission.
+	//
+	// 250: shared/0250_marketplace_listings.sql, the Marketplace's listings,
+	// listing versions and hires (elitea_marketplace, ADR-0051, issue 1629), and
+	// the hire, upgrade and upstream_merge kinds of change requests. No
+	// backfill in SQL (the service builds the listings on first read), no
+	// permission.
+	//
+	// 251: shared/0251_marketplace_upgrades.sql, the upgrade policy of an
+	// install and the payload of a Marketplace change request (ADR-0051
+	// decision 4, issue 1630). No backfill, no permission.
+	//
+	// 252: shared/0252_marketplace_feedback.sql, the feedback per listing version,
+	// its moderation audit trail, the daily listing signals and the dismissal
+	// column of installs (ADR-0051 M5, issue 1631). No permission.
+	//
+	// 253: shared/0253_marketplace_workforce.sql, the hire_listing and
+	// feedback_report kinds of workforce proposals (a workforce manager's
+	// Marketplace tools), the auto_feedback switch and the auto_hire numbers of
+	// a listing on the workforce policy (ADR-0051 M6, issue 1632). No
+	// permission: deciding them is agents.workforce.manage, granted by 0236.
+	//
+	// 254: shared/0254_delegation_change_requests.sql, the change request kind
+	// `delegation` (the governed approval of a delegation grant, ADR-0044
+	// amendment 1, delegation epic 2156 story S2b) with its grant column, and
+	// the one-open-request index that leaves it out. No permission: approving
+	// is the lifecycle's existing change request approval.
+	require.EqualValues(t, 254, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
@@ -1418,7 +1460,49 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 172: tenant/0172_entity_name_description_limits.sql, entity
 	// descriptions truncated to 2000 characters and names to 128, with CHECK
 	// constraints where only the handlers write (issue 1968). No permission.
-	require.EqualValues(t, 172, Head(tenant))
+	//
+	// 244: tenant/0244_eval_suites_human_scores.sql, eval_suites (run
+	// settings and limits), the append-only eval_human_scores and the
+	// eval_runs.limit_reached column (issues 2008, 2013). The
+	// tenant history is numbered with the shared one at merge. No permission.
+	//
+	// 246: tenant/0246_eval_runtime_plane.sql, the runtime_plane execution
+	// mode and its per-case limits on eval_suites, and eval_case_runs, the
+	// execution each case ran as (issues 2011 step B, 2013 step 2). No
+	// permission.
+	//
+	// 247: tenant/0247_project_entity_folders.sql, project_folders and
+	// project_folder_items, the shared per-kind folders of the Agents,
+	// Pipelines, Skills, Toolkits and MCPs lists (issue 2048). No permission.
+	//
+	// 248: tenant/0248_agent_memory_vector_trigger.sql, the trigger that
+	// writes the shared agent memory vector journal when an entry changes,
+	// and the one-time enqueue of the active entries (issue 1657). No
+	// permission.
+	//
+	// 249: tenant/0249_project_folder_item_order_and_pins.sql, the order of an
+	// entity inside its project folder and the personal Pinned group of the
+	// Agents, Pipelines, Skills, Toolkits and MCPs lists (issue 1628). No
+	// permission.
+	//
+	// 250: tenant/0250_skill_trust.sql, skill_trust: a project's trust in one
+	// revision of a skill written in another project, so its text reaches the
+	// model as an instruction and not as quoted untrusted data (ADR-0051
+	// amendment 1, skills epic 2169 story S1). No permission.
+	//
+	// 251: tenant/0251_conversation_skills.sql, conversation_skills: the skills
+	// (or Marketplace listing versions, by reference) pinned to a conversation
+	// (ADR-0050 amendment 1, skills epic 2169 story S3). No permission.
+	//
+	// 252: tenant/0252_delegation_grants.sql, delegation_grants: one pinned
+	// grant per composition edge (caller, callee, edge kind), the set the
+	// worker reads as G(Y to X) (ADR-0044 amendment 1, delegation epic 2156
+	// story S2a). No permission.
+	//
+	// 253: tenant/0253_delegation_drift.sql, delegation_grants.drift and
+	// closure, and delegation_drift_notices, the once-per-edge-and-digest
+	// notice record (delegation epic 2156 story S4). No permission.
+	require.EqualValues(t, 253, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own
@@ -1426,7 +1510,9 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 14: agentstate/0014_sandbox_dispatch_submission_marker.sql, the
 	// submission_pending marker that tells a hydration-phase lease loss apart
 	// from a submitted Code job (#1084).
+	// 15: agentstate/0015_sandbox_failure_detail.sql, the bounded stderr a
+	// failed sandbox run keeps for the model (#2223).
 	agentState, err := LoadManifest(platformmigrations.Files, ScopeAgentState)
 	require.NoError(t, err)
-	require.EqualValues(t, 14, Head(agentState))
+	require.EqualValues(t, 15, Head(agentState))
 }

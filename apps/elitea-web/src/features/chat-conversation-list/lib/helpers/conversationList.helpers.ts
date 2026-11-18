@@ -107,3 +107,13 @@ export function sortConversations(conversations: readonly Conversation[]): Conve
     return dateResult !== 0 ? dateResult : comparePlaybackFirst(a, b);
   });
 }
+
+/**
+ * Pinned folders first, each side in its current order (a stable partition).
+ * Pinning a folder only flipped its flag, so it stayed where it was in the
+ * list; the server lists pinned folders first and the local list now agrees
+ * with it the moment the pin lands (issue 2031).
+ */
+export function pinnedFoldersFirst<TFolder extends { readonly isPinned?: boolean | undefined }>(folders: readonly TFolder[]): TFolder[] {
+  return [...folders.filter((folder) => folder.isPinned === true), ...folders.filter((folder) => folder.isPinned !== true)];
+}

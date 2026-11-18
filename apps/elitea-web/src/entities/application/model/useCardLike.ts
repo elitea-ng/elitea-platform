@@ -38,39 +38,56 @@
  * (revert the optimistic UI) — it cannot make the backend table shape
  * correct.
  */
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 
 import { create } from 'zustand';
 
-import { likeApplication, unlikeApplication } from '@/shared/api/generated/social/social';
+import { likeApplication, likeEntity, unlikeApplication, unlikeEntity } from '@/shared/api/generated/social/social';
 import { EliteaApiError } from '@/shared/api/generated/mutator';
 
 /* ── Store ──────────────────────────────────────────────────────────── */
 
+/**
+ * One like the user toggled, with the server's own values it was toggled FROM.
+ * A later read that carries different server values (another person liked it,
+ * or the list was refetched after this like) wins over the local entry: the
+ * entry only stands while the server still says what it said then.
+ */
+interface LikeEntry {
+  readonly liked: boolean;
+  readonly count: number;
+  readonly baseLiked: boolean;
+  readonly baseCount: number;
+}
+
 interface LikeState {
-  likedStates: Record<string, boolean>;
-  likeCounts: Record<string, number>;
-  setLikeState: (id: string, liked: boolean) => void;
-  setLikeCount: (id: string, count: number) => void;
+  entries: Record<string, LikeEntry>;
+  setEntry: (id: string, entry: LikeEntry) => void;
+  clearEntry: (id: string) => void;
 }
 
 const useLikeStore = create<LikeState>(set => ({
-  likedStates: {},
-  likeCounts: {},
-  setLikeState: (id, liked) =>
-    set(state => ({
-      likedStates: { ...state.likedStates, [id]: liked },
-    })),
-  setLikeCount: (id, count) =>
-    set(state => ({
-      likeCounts: { ...state.likeCounts, [id]: count },
-    })),
+  entries: {},
+  setEntry: (id, entry) => set(state => ({ entries: { ...state.entries, [id]: entry } })),
+  clearEntry: id =>
+    set(state => ({ entries: Object.fromEntries(Object.entries(state.entries).filter(([key]) => key !== id)) })),
 }));
 
 /* ── Hook ───────────────────────────────────────────────────────────── */
 
+/**
+ * What a like names. An agent is liked as the `application` entity, a skill as
+ * the `skill` entity (skills epic 2169, S6: the generic like route takes any
+ * entity name). The two share one id space per table, so the store keys a like
+ * by both.
+ */
+type CardLikeEntityType = 'application' | 'skill';
+
 export interface UseCardLikeOptions {
+  /** The entity's id (the public twin's id for a Marketplace listing). Named for its first use, the agents hub. */
   applicationId: string;
+  /** Default `application`. */
+  entityType?: CardLikeEntityType;
   /**
    * Owning project id — for every public agents-hub card this is always the
    * public project (`ApplicationData.project_id`, "Always the public
@@ -84,36 +101,45 @@ export interface UseCardLikeOptions {
   initialLiked?: boolean;
   initialCount?: number;
   onLikeSuccess?: (applicationId: string, isLiked: boolean, likeCount: number) => void;
+  /** Called when the server refused the like or unlike and the optimistic change was reverted, so the caller can say so. */
+  onError?: () => void;
 }
 
 export function useCardLike({
   applicationId,
+  entityType = 'application',
   projectId,
   initialLiked = false,
   initialCount = 0,
   onLikeSuccess,
+  onError,
 }: UseCardLikeOptions) {
-  const likedStates = useLikeStore(state => state.likedStates);
-  const likeCounts = useLikeStore(state => state.likeCounts);
-  const setLikeState = useLikeStore(state => state.setLikeState);
-  const setLikeCount = useLikeStore(state => state.setLikeCount);
+  const entry = useLikeStore(state => state.entries[`${entityType}:${applicationId}`]);
+  // The callbacks are read at click time, so a new function each render does not rebuild the toggle.
+  const callbacks = useRef({ onLikeSuccess, onError });
+  callbacks.current = { onLikeSuccess, onError };
 
-  const isLiked = likedStates[applicationId] ?? initialLiked;
-  const likeCount = likeCounts[applicationId] ?? initialCount;
+  // An agent and a skill can share a numeric id: key the store by both.
+  const storeKey = `${entityType}:${applicationId}`;
+  // The local entry stands only while the server still says what it said when
+  // the entry was made; a refetch with other values wins.
+  const current = entry !== undefined && entry.baseLiked === initialLiked && entry.baseCount === initialCount ? entry : undefined;
+  const isLiked = current?.liked ?? initialLiked;
+  const likeCount = current?.count ?? initialCount;
   const [isToggling, setIsToggling] = useState(false);
+  // A ref as well as the state: two clicks in one tick both read the state as false.
+  const inFlight = useRef(false);
 
   const toggleLike = useCallback(async () => {
-    if (isToggling) return;
+    if (inFlight.current) return;
+    inFlight.current = true;
     setIsToggling(true);
 
-    const wasLiked = isLiked;
-    const newLiked = !wasLiked;
-    const previousCount = likeCount;
-    const newCount = newLiked ? previousCount + 1 : Math.max(0, previousCount - 1);
+    const newLiked = !isLiked;
+    const newCount = newLiked ? likeCount + 1 : Math.max(0, likeCount - 1);
 
     // Optimistic update — reverted below if the server call fails.
-    setLikeState(applicationId, newLiked);
-    setLikeCount(applicationId, newCount);
+    useLikeStore.getState().setEntry(storeKey, { liked: newLiked, count: newCount, baseLiked: initialLiked, baseCount: initialCount });
 
     const numericApplicationId = Number(applicationId);
     try {
@@ -122,24 +148,27 @@ export function useCardLike({
           `useCardLike: applicationId "${applicationId}" is not numeric — /social/like/prompt_lib requires a numeric path segment`,
         );
       }
-      if (newLiked) {
+      if (entityType === 'skill') {
+        await (newLiked ? likeEntity : unlikeEntity)(projectId, 'skill', numericApplicationId);
+      } else if (newLiked) {
         await likeApplication(projectId, numericApplicationId);
       } else {
         await unlikeApplication(projectId, numericApplicationId);
       }
-      onLikeSuccess?.(applicationId, newLiked, newCount);
+      callbacks.current.onLikeSuccess?.(applicationId, newLiked, newCount);
     } catch (error) {
       // Revert the optimistic update — the like did not actually persist
       // (see this file's module doc comment for the known backend defect).
-      setLikeState(applicationId, wasLiked);
-      setLikeCount(applicationId, previousCount);
+      useLikeStore.getState().clearEntry(storeKey);
       // Only the documented API-failure path is swallowed; anything else
       // (a programmer error, e.g. the NaN guard above) still surfaces.
       if (!(error instanceof EliteaApiError)) throw error;
+      callbacks.current.onError?.();
     } finally {
+      inFlight.current = false;
       setIsToggling(false);
     }
-  }, [isToggling, isLiked, likeCount, applicationId, projectId, setLikeState, setLikeCount, onLikeSuccess]);
+  }, [isLiked, likeCount, applicationId, entityType, storeKey, projectId, initialLiked, initialCount]);
 
   return { isLiked, likeCount, isToggling, toggleLike };
 }

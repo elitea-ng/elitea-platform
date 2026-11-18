@@ -92,3 +92,24 @@ describe('BucketList — "Manage access" is Team-project-only (#901)', () => {
     expect(screen.getByLabelText('Edit docs')).toBeInTheDocument();
   });
 });
+
+describe('BucketList — pinned marker (#2024)', () => {
+  it('keeps the pin of a pinned bucket visible at rest while the other actions stay hover-only', () => {
+    render(
+      <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+        <BucketList
+          buckets={[bucket({ id: '1', name: 'docs', isPinned: true }), bucket({ id: '2', name: 'logs' })]}
+          tree={[]}
+          expandedPaths={[]}
+          {...NOOP}
+        />
+      </ThemeProvider>,
+    );
+
+    expect(screen.getByLabelText('Unpin docs')).toHaveClass('artifact-bucket-pinned');
+    expect(getComputedStyle(screen.getByLabelText('Unpin docs')).opacity).toBe('1');
+    expect(getComputedStyle(screen.getByLabelText('Edit docs')).opacity).toBe('0');
+    expect(screen.getByLabelText('Pin logs')).not.toHaveClass('artifact-bucket-pinned');
+    expect(getComputedStyle(screen.getByLabelText('Pin logs')).opacity).toBe('0');
+  });
+});

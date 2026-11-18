@@ -100,7 +100,7 @@ const chatContainerSx = (isSmallWindow: boolean, collapsed: boolean, display: st
   gap: '0.75rem',
 });
 const collapseButtonSx: SxProps<Theme> = { padding: '0', marginLeft: '0', position: 'absolute', top: '0.25rem', left: '0', zIndex: 100 };
-const chatContentSx: SxProps<Theme> = { display: 'flex', flexDirection: 'column', height: '100%', width: '100%', maxWidth: '100%', flex: 1, gap: '0.75rem', boxSizing: 'border-box' };
+const chatContentSx: SxProps<Theme> = { display: 'flex', flexDirection: 'column', height: '100%', width: '100%', maxWidth: '100%', flex: 1, minHeight: 0, overflowY: 'auto', gap: '0.75rem', boxSizing: 'border-box' };
 const topBarSx = (collapsed: boolean): SxProps<Theme> => ({
   display: !collapsed ? 'flex' : 'none',
   alignItems: 'center',
@@ -192,7 +192,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function Ch
           {collapsed ? <KeyboardDoubleArrowLeftIcon fontSize="small" /> : <KeyboardDoubleArrowRightIcon fontSize="small" />}
         </IconButton>
       )}
-      <Box sx={chatContentSx}>
+      <Box data-testid="pipeline-chat-content" sx={chatContentSx}>
         <Box sx={topBarSx(collapsed)}>
           {contextBudgetSlotProps && renderContextBudget?.(contextBudgetSlotProps)}
           <Box sx={clearButtonContainerSx(isSmallWindow, activeConversation?.id !== undefined)}>

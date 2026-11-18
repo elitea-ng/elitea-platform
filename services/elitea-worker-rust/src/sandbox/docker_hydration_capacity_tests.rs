@@ -7,6 +7,7 @@ fn record(phase: Phase) -> JobRecord {
         phase,
         result_json: None,
         failure_code: None,
+        failure_detail: None,
         runtime_id: Some("retained-runtime".into()),
     }
 }

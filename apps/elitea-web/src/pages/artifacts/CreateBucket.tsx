@@ -16,21 +16,33 @@ import { usePageCrumbs } from '@/shared/ui/page-chrome';
 
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
 
-const BUCKET_NAME_PATTERN = /^[a-zA-Z][a-zA-Z0-9-]*$/;
+/**
+ * The server's own bucket-name rule (`bucketNamePattern` in
+ * `internal/api/v2/artifacts/handler.go`): a lowercase letter, then 1-62
+ * lowercase letters, digits or hyphens. The length bounds below are the same
+ * rule, kept in one place with it. Edit mode never validates the name (the
+ * field is read-only and a bucket cannot be renamed), so this applies to
+ * create only and never rewrites an existing bucket's name.
+ */
+const BUCKET_NAME_PATTERN = /^[a-z][a-z0-9-]{1,62}$/;
+const BUCKET_NAME_MIN_LENGTH = 2;
+const BUCKET_NAME_MAX_LENGTH = 63;
 
 export function validateBucketName(name: string): string {
   if (name.trim() === '') return 'Name is required.';
-  if (name.length > 56) return 'Name must not exceed 56 characters.';
+  if (name.length < BUCKET_NAME_MIN_LENGTH) return `Name must be at least ${BUCKET_NAME_MIN_LENGTH} characters.`;
+  if (name.length > BUCKET_NAME_MAX_LENGTH) return `Name must not exceed ${BUCKET_NAME_MAX_LENGTH} characters.`;
   if (!BUCKET_NAME_PATTERN.test(name)) {
-    return 'Start with a letter and use only letters, numbers, and hyphens.';
+    return 'Start with a letter and use only lowercase letters, numbers, and hyphens.';
   }
   return '';
 }
 
 /**
- * Retention is optional. An empty box means "keep objects indefinitely" —
- * the `null` the API models as no lifecycle — so only a NON-empty value is
- * validated, and it must be a whole number of days above zero (the legacy
+ * Retention is optional. On create an empty box sends nothing, so the server
+ * applies the project's default retention (`resolveCreateRetention`; no
+ * default means no expiry). On edit an empty box sends an explicit `null`,
+ * which clears the expiry. Only a NON-empty value is validated, and it must be a whole number of days above zero (the legacy
  * form's own `min(1, 'Retention value should be greater than 0')`).
  */
 export function validateRetentionDays(raw: string): string {
@@ -118,15 +130,23 @@ function useSeededRetention(
  * §3.5 cyclomatic-complexity budget — it carries the field's own error/hint
  * branch, which the page does not otherwise need.
  */
-function RetentionField(props: { value: string; error: string; onChange: (value: string) => void }): ReactNode {
-  const { value, error, onChange } = props;
+function RetentionField(props: {
+  value: string;
+  error: string;
+  isEditing: boolean;
+  onChange: (value: string) => void;
+}): ReactNode {
+  const { value, error, isEditing, onChange } = props;
+  const hint = isEditing
+    ? t('artifacts.edit.retentionHelp', 'Leave empty to keep files indefinitely.')
+    : t('artifacts.create.retentionDefaultHelp', "Leave empty to use the project's default retention.");
   return (
     <TextField
       fullWidth
       label={t('artifacts.edit.retention', 'Retention (days)')}
       value={value}
       error={error !== ''}
-      helperText={error === '' ? t('artifacts.edit.retentionHelp', 'Leave empty to keep files indefinitely.') : error}
+      helperText={error === '' ? hint : error}
       onChange={(event) => onChange(event.target.value)}
     />
   );
@@ -175,9 +195,12 @@ export function CreateBucket(): ReactNode {
       return;
     }
     void mutations.createBucket
-      .mutateAsync(name.trim())
+      .mutateAsync({ name: name.trim(), retentionDays: parseRetentionDays(retention) })
       .then(() => goToBucket(name.trim()))
-      .catch(() => setError('Failed to create the bucket.'));
+      .catch((cause: unknown) => {
+        // Only the server's own 4xx explanation is shown as written; anything else stays generic.
+        setError(cause instanceof Error && cause.name === 'ServerRefusal' ? cause.message : 'Failed to create the bucket.');
+      });
   };
 
   return (
@@ -195,7 +218,7 @@ export function CreateBucket(): ReactNode {
           fullWidth
           label={t('common.name', 'Name')}
           value={name}
-          slotProps={{ htmlInput: { maxLength: 56, readOnly: isEditing } }}
+          slotProps={{ htmlInput: { maxLength: BUCKET_NAME_MAX_LENGTH, readOnly: isEditing } }}
           error={touched && validationError !== ''}
           // The helper line must never collapse. It used to hold the long
           // hint until the field blurred and '' afterwards, so FormHelperText
@@ -206,22 +229,16 @@ export function CreateBucket(): ReactNode {
           // both reserves the line and keeps the naming rule on screen.
           helperText={nameHelperText(isEditing, touched, validationError)}
           onBlur={() => setTouched(true)}
-          onChange={(event) => setName(event.target.value)}
+          // The server only accepts lowercase names (`^[a-z][a-z0-9-]{1,62}$`); typing
+          // `TestBucket` yields `testbucket` instead of a silent 400 (#2002).
+          onChange={(event) => setName(event.target.value.toLowerCase())}
         />
-        {isEditing ? (
-          <RetentionField
-            value={retention}
-            error={retentionError}
-            onChange={setRetention}
-          />
-        ) : (
-          <Typography variant="bodySmall">
-            {t(
-              'artifacts.create.retentionHelp',
-              'Retention settings are managed by the storage service and are not part of the current bucket API.',
-            )}
-          </Typography>
-        )}
+        <RetentionField
+          value={retention}
+          error={retentionError}
+          isEditing={isEditing}
+          onChange={setRetention}
+        />
         <Box sx={{ display: 'flex', gap: 1 }}>
           <Button
             type="submit"

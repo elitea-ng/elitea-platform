@@ -575,6 +575,8 @@ fn a_missing_grant_ends_with_its_registered_terminal_and_depth_stays_generic() {
                 effective_grant_digest: String::new(),
                 refusal: Some(refusal.clone()),
                 enforced: true,
+                grant: None,
+                edge: None,
             },
             refusal,
         };
@@ -585,6 +587,7 @@ fn a_missing_grant_ends_with_its_registered_terminal_and_depth_stays_generic() {
             name: "batch".to_owned(),
             toolkit: None,
         }),
+        "",
     );
     let kind = crate::execution::assembly_failure(&grant);
     assert_eq!(kind, RuntimeFailureKind::DelegationGrantMissing);
@@ -611,6 +614,7 @@ fn a_missing_grant_ends_with_its_registered_terminal_and_depth_stays_generic() {
             depth: 2,
             max_depth: 1,
         }),
+        "",
     );
     assert_eq!(
         crate::execution::assembly_failure(&depth),

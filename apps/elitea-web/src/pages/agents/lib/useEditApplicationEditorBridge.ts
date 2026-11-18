@@ -75,7 +75,12 @@ export function useEditApplicationEditorBridge(
         instructions: fields.instructions,
         welcome_message: fields.welcomeMessage,
         variables: fields.variables,
-        meta: { step_limit: fields.stepLimit, output_contract: fields.outputContract, citations: fields.citations ?? null, context: fields.contextBlock ?? null },
+        meta: {
+          step_limit: fields.stepLimit,
+          output_contract: fields.outputContract,
+          citations: fields.citations ?? null,
+          context: fields.contextBlock ?? null,
+        },
         llm_settings: fields.llmSettings,
       },
     }),

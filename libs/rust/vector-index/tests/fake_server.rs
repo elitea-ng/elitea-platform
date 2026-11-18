@@ -871,6 +871,47 @@ async fn remove_index_refuses_an_empty_name_and_deletes_a_named_one() {
     assert_eq!(none.list_indexes(), "No indexed collections");
 }
 
+/// An index the registry lists but that holds no vectors (never run, or its
+/// run failed before storing any) is named by `list_indexes`, as the Indexes
+/// tab shows it, and answered as "no searchable content" when searched by
+/// name rather than as unknown.
+#[tokio::test]
+async fn list_indexes_names_an_index_that_holds_no_vectors_yet() {
+    let (client, _fake) = connect().await;
+    seed(&client).await;
+    let session_token = token(TOKEN_A);
+    let session = VectorSession::new(&client, &session_token);
+    let only_pending = IndexCatalog::default().with_pending(vec!["failed-run".into()]);
+    let tools = IndexTools::new(&session, &KeywordEmbedder, &only_pending, Doctype::Document);
+    assert_eq!(tools.list_indexes(), "failed-run");
+
+    let mixed = IndexCatalog::new(vec![IndexEntry {
+        name: "docs".into(),
+        namespace_id: NS.into(),
+        active_generation: None,
+        space: space(),
+    }])
+    .with_pending(vec!["failed-run".into()]);
+    let tools = IndexTools::new(&session, &KeywordEmbedder, &mixed, Doctype::Document);
+    assert_eq!(tools.list_indexes(), "docs,failed-run");
+    let searched = tools
+        .search_index(&args(json!({"query": "alpha", "index_name": "failed-run"})))
+        .await
+        .unwrap();
+    let SearchOutput::Message(message) = searched else {
+        panic!("expected a message");
+    };
+    assert!(
+        message.contains("holds no searchable content yet"),
+        "{message}"
+    );
+    assert!(
+        message.ends_with("Available indexes: docs,failed-run"),
+        "{message}"
+    );
+    assert_eq!(mixed.without("failed-run").list_indexes(), "docs");
+}
+
 #[tokio::test]
 async fn stepback_tools_use_the_model_twice_for_a_summary() {
     let (client, _fake) = connect().await;

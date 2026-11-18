@@ -43,6 +43,7 @@ import {
   deleteConversation,
   expectStoredAssistantAnswer,
   readMockLlmJournal,
+  fillComposer,
 } from '../fixtures/api';
 
 /** The offline mock `standalone-stack.sh` points the chat model at, reached as a vLLM-class credential. */
@@ -256,14 +257,12 @@ test('read-aloud with a speech model whose provider cannot speak says so, instea
     await expect(page.getByTestId('model-selector-name')).toContainText(CHAT_MODEL_NAME, { timeout: 10_000 });
 
     // ── one answer to read ──────────────────────────────────────────────
+    const send = await fillComposer(page, prompt);
     const created = page.waitForResponse(
       (r) => CONVERSATIONS_RE.test(new URL(r.url()).pathname) && r.request().method() === 'POST',
       { timeout: 45_000 },
     );
-    const input = page.getByTestId('chat-message-input');
-    await expect(input).toBeEditable({ timeout: 20_000 });
-    await input.fill(prompt);
-    await page.getByTestId('chat-send-button').click();
+    await send.click();
     const createdResponse = await created;
     projectId = CONVERSATIONS_RE.exec(new URL(createdResponse.url()).pathname)?.[1] ?? '';
     conversationId = ((await createdResponse.json()) as { id?: string }).id ?? '';

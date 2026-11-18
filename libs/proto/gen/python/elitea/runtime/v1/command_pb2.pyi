@@ -145,14 +145,62 @@ class WorkerEgressPolicyV1(_message.Message):
     def __init__(self, mode: _Optional[_Union[WorkerEgressModeV1, str]] = ..., allow: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class WorkerDelegationPolicyV1(_message.Message):
-    __slots__ = ("max_depth", "mode", "root_data_classes")
+    __slots__ = ("max_depth", "mode", "root_data_classes", "principal_bound", "grants", "root_application_id", "grants_enforced")
     MAX_DEPTH_FIELD_NUMBER: _ClassVar[int]
     MODE_FIELD_NUMBER: _ClassVar[int]
     ROOT_DATA_CLASSES_FIELD_NUMBER: _ClassVar[int]
+    PRINCIPAL_BOUND_FIELD_NUMBER: _ClassVar[int]
+    GRANTS_FIELD_NUMBER: _ClassVar[int]
+    ROOT_APPLICATION_ID_FIELD_NUMBER: _ClassVar[int]
+    GRANTS_ENFORCED_FIELD_NUMBER: _ClassVar[int]
     max_depth: int
     mode: WorkerDelegationModeV1
     root_data_classes: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, max_depth: _Optional[int] = ..., mode: _Optional[_Union[WorkerDelegationModeV1, str]] = ..., root_data_classes: _Optional[_Iterable[str]] = ...) -> None: ...
+    principal_bound: WorkerPrincipalBoundV1
+    grants: _containers.RepeatedCompositeFieldContainer[WorkerDelegationGrantV1]
+    root_application_id: int
+    grants_enforced: bool
+    def __init__(self, max_depth: _Optional[int] = ..., mode: _Optional[_Union[WorkerDelegationModeV1, str]] = ..., root_data_classes: _Optional[_Iterable[str]] = ..., principal_bound: _Optional[_Union[WorkerPrincipalBoundV1, _Mapping]] = ..., grants: _Optional[_Iterable[_Union[WorkerDelegationGrantV1, _Mapping]]] = ..., root_application_id: _Optional[int] = ..., grants_enforced: _Optional[bool] = ...) -> None: ...
+
+class WorkerDelegationGrantV1(_message.Message):
+    __slots__ = ("caller_application_id", "callee_application_id", "edge_kind", "grant_id", "digest", "grant_set")
+    CALLER_APPLICATION_ID_FIELD_NUMBER: _ClassVar[int]
+    CALLEE_APPLICATION_ID_FIELD_NUMBER: _ClassVar[int]
+    EDGE_KIND_FIELD_NUMBER: _ClassVar[int]
+    GRANT_ID_FIELD_NUMBER: _ClassVar[int]
+    DIGEST_FIELD_NUMBER: _ClassVar[int]
+    GRANT_SET_FIELD_NUMBER: _ClassVar[int]
+    caller_application_id: int
+    callee_application_id: int
+    edge_kind: str
+    grant_id: int
+    digest: str
+    grant_set: str
+    def __init__(self, caller_application_id: _Optional[int] = ..., callee_application_id: _Optional[int] = ..., edge_kind: _Optional[str] = ..., grant_id: _Optional[int] = ..., digest: _Optional[str] = ..., grant_set: _Optional[str] = ...) -> None: ...
+
+class WorkerPrincipalBoundV1(_message.Message):
+    __slots__ = ("bounded", "toolkits", "credentials_bounded", "credential_reference_ids", "data_classes")
+    BOUNDED_FIELD_NUMBER: _ClassVar[int]
+    TOOLKITS_FIELD_NUMBER: _ClassVar[int]
+    CREDENTIALS_BOUNDED_FIELD_NUMBER: _ClassVar[int]
+    CREDENTIAL_REFERENCE_IDS_FIELD_NUMBER: _ClassVar[int]
+    DATA_CLASSES_FIELD_NUMBER: _ClassVar[int]
+    bounded: bool
+    toolkits: _containers.RepeatedCompositeFieldContainer[WorkerPrincipalToolkitV1]
+    credentials_bounded: bool
+    credential_reference_ids: _containers.RepeatedScalarFieldContainer[str]
+    data_classes: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, bounded: _Optional[bool] = ..., toolkits: _Optional[_Iterable[_Union[WorkerPrincipalToolkitV1, _Mapping]]] = ..., credentials_bounded: _Optional[bool] = ..., credential_reference_ids: _Optional[_Iterable[str]] = ..., data_classes: _Optional[_Iterable[str]] = ...) -> None: ...
+
+class WorkerPrincipalToolkitV1(_message.Message):
+    __slots__ = ("toolkit_id", "all_tools", "tool_names")
+    TOOLKIT_ID_FIELD_NUMBER: _ClassVar[int]
+    ALL_TOOLS_FIELD_NUMBER: _ClassVar[int]
+    TOOL_NAMES_FIELD_NUMBER: _ClassVar[int]
+    toolkit_id: int
+    all_tools: bool
+    tool_names: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, toolkit_id: _Optional[int] = ..., all_tools: _Optional[bool] = ..., tool_names: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class WorkerApprovalPolicyV1(_message.Message):
     __slots__ = ("risk_tier", "approval_categories")

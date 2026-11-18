@@ -91,6 +91,7 @@ import {
   createAgentThroughForm,
   expectStoredAssistantAnswer,
   readMockLlmJournal,
+  fillComposer,
 } from '../fixtures/api';
 
 /** Matched WITHOUT a project id: the chat persona works inside its own personal project (#290). */
@@ -191,14 +192,12 @@ test('an agent variable is substituted into the instructions the model receives'
   await clearMockLlmJournal(page);
 
   // ── 4. Send, and require the turn to be ADMITTED ────────────────────────
+  const send = await fillComposer(page, `autotest variables ${Date.now()}`);
   const started = page.waitForResponse(
     (r) => START_RE.test(r.url()) && r.request().method() === 'POST',
     { timeout: 45_000 },
   );
-  const input = page.getByTestId('chat-message-input');
-  await expect(input).toBeEditable({ timeout: 20_000 });
-  await input.fill(`autotest variables ${Date.now()}`);
-  await page.getByTestId('chat-send-button').click();
+  await send.click();
 
   const startResponse = await started;
   expect(

@@ -41,6 +41,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
+	v2skills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 )
@@ -553,9 +554,10 @@ func TestImportKeepsTheSkillCapOfAVersion(t *testing.T) {
 	pool := newImportLinkPool(t)
 	router := importLinkRouter(eliteacore.NewHandler(pool))
 
-	entities := make([]any, 0, 7)
-	references := make([]any, 0, 6)
-	for index := 0; index < 6; index++ {
+	limit := v2skills.MaxSkillsPerEntityVersion
+	entities := make([]any, 0, limit+2)
+	references := make([]any, 0, limit+1)
+	for index := 0; index < limit+1; index++ {
 		importUUID := fmt.Sprintf("sk-%d", index)
 		entities = append(entities, map[string]any{
 			"entity": "skills", "import_uuid": importUUID,
@@ -582,11 +584,11 @@ func TestImportKeepsTheSkillCapOfAVersion(t *testing.T) {
 	if len(reported) != 1 {
 		t.Fatalf("errors.skills = %+v, want exactly the reference over the cap", reported)
 	}
-	if !bytes.Contains([]byte(reported[0].Msg), []byte("at most 5 skills")) {
+	if !bytes.Contains([]byte(reported[0].Msg), []byte(fmt.Sprintf("at most %d skills", limit))) {
 		t.Errorf("reported msg = %q, want it to name the cap", reported[0].Msg)
 	}
-	if count := importLinkCount(t, pool, `SELECT count(*) FROM p_1.entity_skill_mapping`); count != 5 {
-		t.Errorf("skill attachment rows = %d, want the capped 5", count)
+	if count := importLinkCount(t, pool, `SELECT count(*) FROM p_1.entity_skill_mapping`); count != limit {
+		t.Errorf("skill attachment rows = %d, want the capped %d", count, limit)
 	}
 }
 

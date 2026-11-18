@@ -186,7 +186,7 @@ export function SharepointOAuthStatus({
     credentials: buildSharepointCredentials(spConfig),
   });
 
-  const { runCheck, isRunning } = useSharepointCheckConnection({
+  const { runCheck, isRunning, error: checkError } = useSharepointCheckConnection({
     projectId,
     spConfig,
     ...(oauthEndpoint === '' && { onSuccess: onNonDelegatedSuccess }),
@@ -236,6 +236,15 @@ export function SharepointOAuthStatus({
           {resolveActionLabel(isOAuthLoggedIn, isRunning)}
         </BaseBtn>
       </Box>
+      {checkError !== undefined && (
+        <Typography
+          variant="bodySmall"
+          role="alert"
+          sx={{ color: 'error.main', marginBottom: 1 }}
+        >
+          {checkError}
+        </Typography>
+      )}
       {showModal && renderAuthModal && renderAuthModal(modalProps)}
       {renderLogoutModal &&
         renderLogoutModal({

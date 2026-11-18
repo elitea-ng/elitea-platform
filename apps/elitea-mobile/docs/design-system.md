@@ -933,7 +933,7 @@ Landed on `feat/redesign-entry-home`:
   away. The workspace pill reads "Name · Project" over the host (unbranded: "host · Project" on one
   line, so the first segment is always the workspace) and opens the project sheet. The
   greeting names the user ("who am I" `name`, kept in memory only). The chip row and four cards
-  (New chat, Discover agents, Dictate a message, Ask about a file) start a chat; Dictate and
+  (New chat, Marketplace, Dictate a message, Ask about a file) start a chat; Dictate and
   Attach hand the new conversation a one-time action in memory (`IntentHandoff.then`), so a URL
   can never start the microphone or a picker. Up to five recent chats; the Elitea mark empty state
   when there are none.

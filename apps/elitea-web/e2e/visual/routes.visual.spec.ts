@@ -286,8 +286,8 @@ const ROUTES: readonly VisualRoute[] = [
     // @covers /agents/:tab
     name: 'agents-list-empty',
     path: '/app/agents/latest',
-    // The empty state, NOT `getByTestId('agents-tab-all')`. Measured: the tab
-    // strip renders during load (loaded YES, stalled YES) — it is chrome. The
+    // The empty state, NOT the sidebar's search box. Measured: the list's
+    // controls render during load (loaded YES, stalled YES) — they are chrome. The
     // empty-state copy renders only from a resolved, empty list: loaded YES,
     // stalled no.
     landmark: (page) => page.getByText('No agents yet'),
@@ -445,18 +445,20 @@ const ROUTES: readonly VisualRoute[] = [
     landmark: (page) => page.getByText('Still no local MCP available'),
   },
   {
-    // @covers /agents-hub
-    name: 'agents-hub',
-    path: '/app/agents-hub',
-    // A category chip that comes from the API. The page's obvious landmarks all
-    // fail the experiment: "Welcome to Agent HUB", the search box, "No agents
-    // found", and the chips `Trending`/`My Liked` are all present during load
-    // (loaded YES, stalled YES) — `Trending` and `My Liked` are hardcoded, the
-    // other seven chips are fetched. So the stalled screen is a plausible-
-    // looking hub with two chips instead of nine, which is exactly the kind of
-    // screenshot this suite must not accept. `Business Analyst` is one of the
-    // fetched chips: loaded YES, stalled no.
-    landmark: (page) => page.getByText('Business Analyst'),
+    // @covers /marketplace
+    name: 'marketplace',
+    path: '/app/marketplace',
+    // WHAT ONLY A RESOLVED LISTING SEARCH PRODUCES. Categories used to come
+    // from their own endpoint (`useGetAgentCategories`), so a category
+    // checkbox was the landmark; they are now the facet counts of the listings
+    // search itself, so a stack with no published listing has no category at
+    // all. The page's other landmarks (the summary bar, the search box) are
+    // present during load, and the empty copy and the grid's section are
+    // rendered only once the search has answered: `LinearProgress` stands in
+    // until then. So the landmark is either of the two answers: the empty
+    // state or the "All agents" section. Loaded YES, stalled no.
+    landmark: (page) =>
+      page.getByText('Nothing is published yet').or(page.getByTestId('marketplace-section-all')),
     light: true,
   },
   {

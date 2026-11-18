@@ -83,7 +83,7 @@ describe('AgentPipelineVersionSelector', () => {
     expect(getByText('base')).toBeInTheDocument();
   });
 
-  it('opens the menu, lists versions with the latest first then newest-first by date, and calls onSelectVersion on click', async () => {
+  it('opens the menu, lists named versions newest-first by date with base last (issue 1990), and calls onSelectVersion on click', async () => {
     const user = userEvent.setup();
     const onSelectVersion = vi.fn();
     const { getByTestId, getAllByRole, getByText } = renderWithTheme(
@@ -102,9 +102,9 @@ describe('AgentPipelineVersionSelector', () => {
     // than an exact match keeps this assertion about ORDER and the PRIMARY
     // label, not byte-exact text content.
     const items = getAllByRole('menuitem').map((el) => el.textContent);
-    expect(items[0]).toContain('base');
-    expect(items[1]).toContain(`v1 – ${formatDate('2026-02-01T12:00:00Z')}`);
-    expect(items[2]).toContain(`v0 – ${formatDate('2026-01-15T12:00:00Z')}`);
+    expect(items[0]).toContain(`v1 – ${formatDate('2026-02-01T12:00:00Z')}`);
+    expect(items[1]).toContain(`v0 – ${formatDate('2026-01-15T12:00:00Z')}`);
+    expect(items[2]).toContain('base');
 
     await user.click(getByText(`v1 – ${formatDate('2026-02-01T12:00:00Z')}`));
     expect(onSelectVersion).toHaveBeenCalledWith(expect.objectContaining({ id: 2, name: 'v1' }));

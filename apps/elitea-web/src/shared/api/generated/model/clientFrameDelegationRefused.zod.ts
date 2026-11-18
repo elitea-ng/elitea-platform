@@ -42,26 +42,16 @@
  */
 import * as zod from "zod";
 import { ClientFrameEnvelope } from "./clientFrameEnvelope.zod";
-
-export const clientFrameDelegationRefusedTwoResponseMetadataDelegationRefusedToolkitMax = 128;
+import { DelegationNotice } from "./delegationNotice.zod";
 
 export const ClientFrameDelegationRefused = ClientFrameEnvelope.and(
   zod.object({
     response_metadata: zod.object({
-      delegation_refused: zod.object({
-        code: zod.enum(["DELEGATION_GRANT_MISSING"]),
-        node: zod.enum(["agent", "pipeline"]),
-        toolkit: zod
-          .string()
-          .max(
-            clientFrameDelegationRefusedTwoResponseMetadataDelegationRefusedToolkitMax,
-          )
-          .nullable(),
-      }),
+      delegation_v1: DelegationNotice,
     }),
   }),
 ).describe(
-  "Client contract 1.54 (FU-335). A saved agent or pipeline that a node of the run delegates to needs a grant its caller does not hold, so the run did not start. Served only beside the run's FAILED terminal (code AUTHORIZATION_FAILED); show it above the failure text. The persisted answer keeps the same block as `meta.delegation_refused`. A client that does not know the frame ignores it. Not terminal. `toolkit` is the author-written display name of the toolkit the grant belongs to, null for a grant without one: render it as plain text.",
+  "Client contract 1.60 (ADR-0044 Amendment 1, A1.2 rule 5). The run refused a delegation to a saved agent or pipeline called as a tool. It follows the callee's tool-call frames; `response_metadata.delegation_v1` is the notice, and the answer keeps it as `metadata.delegation_notices_v1`. A client that does not know the frame ignores it. Not terminal.",
 );
 
 export type ClientFrameDelegationRefused = zod.input<

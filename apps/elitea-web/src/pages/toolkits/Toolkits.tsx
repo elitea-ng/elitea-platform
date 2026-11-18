@@ -13,14 +13,20 @@ import type { ToolkitInstance } from '@/shared/api/generated/model';
 import { unwrapListPage } from '@/shared/api/unwrap';
 import { getConfig } from '@/shared/config';
 import { PERMISSIONS } from '@/shared/lib/permissions';
-import { EntityCard, entityTypeIcon } from '@/shared/ui/EntityCardList';
-import { PageToolbar, pageBodySx, pageSx, useListSearchQuery } from '@/widgets/page-header';
+import { t } from '@/shared/i18n';
+import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
+import { EntityCard, EntitySelectionProvider, entityTypeIcon } from '@/shared/ui/EntityCardList';
+import { EntityFolderDnd, EntityFolderScope, useFolderFilter } from '@/widgets/entity-folders';
+import { pageBodySx, pageSx, useListSearchQuery } from '@/widgets/page-header';
 import { usePermissionSet } from '@/widgets/sidebar';
 
 import { matchesQuery, toListItem, toTagList } from './lib/toolkitListRows';
+import { useFolderRows } from './lib/useFolderRows';
+import { useToolkitSelection } from './lib/useToolkitSelection';
 import { toolkitsCopy } from './lib/toolkitsCopy';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
-import { ToolkitsFilters } from './ui/ToolkitsFilters';
+import { EmptyFolderNote } from './ui/EmptyFolderNote';
+import { ToolkitsSidebar } from './ui/ToolkitsSidebar';
 
 const PAGE_SIZE = 20;
 
@@ -72,6 +78,8 @@ interface UsePagedToolkitRowsResult {
   readonly isFetchingMore: boolean;
   readonly isError: boolean;
   readonly hasMore: boolean;
+  /** Whether the server holds rows past the ones loaded, regardless of a fetch in flight. The redirect gate reads THIS, not `hasMore` (#2000). */
+  readonly hasMoreRawPages: boolean;
   readonly totalCount: number;
   readonly onLoadMore: () => void;
 }
@@ -111,7 +119,9 @@ function usePagedToolkitRows(projectId: string | undefined, isMCP: boolean): Use
 
   const query = useListToolkitInstances(
     safeProjectId,
-    { limit: PAGE_SIZE, offset: resolvedPage * PAGE_SIZE },
+    // The server filters by kind, so a page holds only this list's rows. Without it
+    // the first 20 rows of a project with many toolkits held no MCP at all (#2092).
+    { limit: PAGE_SIZE, offset: resolvedPage * PAGE_SIZE, mcp: isMCP },
     { query: { enabled: projectId !== undefined } },
   );
   // R-A6 (#132) via the one helper. `undefined` is preserved deliberately:
@@ -138,7 +148,13 @@ function usePagedToolkitRows(projectId: string | undefined, isMCP: boolean): Use
   }
 
   const totalCount = wire?.total ?? 0;
-  const hasMore = !query.isFetching && (resolvedPage + 1) * PAGE_SIZE < totalCount;
+  // `hasMore` hides "load more" while a fetch is in flight; the redirect gate must not inherit that,
+  // or a refetch on re-entry reads as an empty project and sends the person to Create (#2000).
+  // While a later page is in flight `wire` is undefined and `totalCount` reads 0: that is "not known yet",
+  // never "no more rows", or the redirect gate sends the person to Create mid load-more (#2092).
+  const nextPageUnknown = resolvedPage > 0 && wire === undefined && !query.isError;
+  const hasMoreRawPages = nextPageUnknown || (resolvedPage + 1) * PAGE_SIZE < totalCount;
+  const hasMore = !query.isFetching && hasMoreRawPages;
   const onLoadMore = useCallback(() => setPage((prev) => prev + 1), []);
 
   return {
@@ -147,6 +163,7 @@ function usePagedToolkitRows(projectId: string | undefined, isMCP: boolean): Use
     isFetchingMore: query.isFetching && resolvedPage > 0,
     isError: query.isError,
     hasMore,
+    hasMoreRawPages,
     totalCount,
     onLoadMore,
   };
@@ -191,7 +208,7 @@ function useToolkitsListData(projectId: string | undefined, isMCP: boolean, isPu
     isPublicProject: isPublicProjectFlag,
     isLoading: paged.isLoading,
     isError: paged.isError,
-    hasMoreRawPages: paged.hasMore,
+    hasMoreRawPages: paged.hasMoreRawPages,
     scopedItemCount: scopedRows.length,
     selectedTypesCount: selectedTypes.length,
   });
@@ -219,14 +236,7 @@ interface ToolkitCardProps {
   readonly onOpen: () => void;
 }
 
-/**
- * One toolkit/MCP card. The bespoke `ButtonBase` tile this used to render
- * is replaced by the shared `EntityCard` every other list page now uses, so
- * a toolkit card carries the same round gradient icon tile, `headingSmall`
- * title and divider-separated bottom row as an agent or pipeline card. The
- * toolkit's `type` rides in the bottom row's chip slot (and the table
- * view's "Type" column), which is where the production reference shows it.
- */
+/** One toolkit/MCP card: the shared `EntityCard`, with the toolkit's `type` in the chip slot (and the table's "Type" column). */
 function ToolkitCard({ item, isMCP, onOpen }: ToolkitCardProps): ReactNode {
   return (
     <EntityCard
@@ -244,36 +254,19 @@ function ToolkitCard({ item, isMCP, onOpen }: ToolkitCardProps): ReactNode {
 }
 
 /**
- * Ported from `apps/elitea-ui/src/pages/Toolkits/Toolkits.jsx` (39 lines) —
- * ROUTE-030-family (`/toolkits/:tab`, `/mcps/:tab`; spec §8.1); `isMCP`
- * mirrors the baseline's own single component reused for both.
+ * `/toolkits/:tab` and `/mcps/:tab` (ROUTE-030 family), ported from
+ * `apps/elitea-ui/src/pages/Toolkits/Toolkits.jsx`; `isMCP` picks the surface.
  *
- * **Composition gap CLOSED.** The baseline's body is `<StickyTabs>` wrapping
- * ONE tab whose content is `<ToolkitsList isMCP cardContentType={...} />`;
- * this page now wires the real, already-ported `ToolkitsList` (`@/features/
- * toolkits`) to a real data source instead of the empty placeholder `<Box
- * data-testid=.../>` this file used to render. `useLoadToolkits`/a
- * `renderCard` are budget-capped out of `features/toolkits`' public
- * `index.ts`, and `no-deep-slice-import` forbids reaching that slice's
- * internals directly from `pages/` (same rule `./lib/useToolkitDetail.ts`
- * cites) — so this page talks to the SAME real `useListToolkitInstances`
- * endpoint directly (`@/shared/api/generated/toolkits/toolkits`, the
- * `shared/` layer) and owns its own minimal `renderCard`, rather than
- * duplicating `useLoadToolkits.ts`'s full 188-line body.
+ * The list (ADR-0051 M1) has no toolbar row: search, New, the types filter,
+ * the author card and the folders are in the right sidebar's List tab, and a
+ * summary bar above the list keeps the search and the active types on screen
+ * while that sidebar is closed. Rows are selectable, for Delete.
  *
- * DISCLOSED, NARROWER than the baseline (real backend/budget constraints,
- * same class of gap `useLoadToolkits.ts`'s own doc comment discloses):
- *  - **No server-side search/sort/type filtering** — `ListToolkitInstancesParams`
- *    only has `limit`/`offset`. The "Types" filter is real and interactive,
- *    but filters CLIENT-SIDE over whatever pages have already loaded.
- *  - **The toolbar's search filters CLIENT-SIDE** too, over the loaded
- *    rows' names and types — the server param it would feed does not exist.
- *  - **`tagList`** is derived from loaded rows' raw `type` strings, not the
- *    baseline's per-type schema-derived label (see `toTagList`'s own doc).
- *  - **Types and the author card are the Filters tab** of the shell's side
- *    panel (`./ui/ToolkitsFilters.tsx`), opened from the toolbar's Filters
- *    button; the toolbar shows the count where a single tab repeated the
- *    page's name.
+ * This page talks to `useListToolkitInstances` directly: `no-deep-slice-import`
+ * keeps `features/toolkits`' loader out of reach, and the endpoint has only
+ * `limit`/`offset`, so the search and the types filter run CLIENT-SIDE over the
+ * rows loaded so far. `tagList` is derived from those rows' raw `type` strings,
+ * not the baseline's per-type schema-derived label (see `toTagList`).
  */
 export function Toolkits({ isMCP = false }: ToolkitsProps): ReactNode {
   const copy = toolkitsCopy(isMCP);
@@ -281,10 +274,15 @@ export function Toolkits({ isMCP = false }: ToolkitsProps): ReactNode {
   const navigate = useNavigate();
   const projectId = useSelectedProjectId();
   const isPublic = isPublicToolkitsProject(projectId);
-  const canCreate = usePermissionSet(projectId).has(PERMISSIONS.toolkits.create) && !isPublic;
+  const permissions = usePermissionSet(projectId);
+  const canCreate = permissions.has(PERMISSIONS.toolkits.create) && !isPublic;
+  const canDelete = permissions.has(PERMISSIONS.toolkits.delete) && permissions.has(PERMISSIONS.applications.delete);
+  const kind = isMCP ? 'mcp' : 'toolkit';
+  const folderFilter = useFolderFilter(isPublic ? undefined : projectId, kind);
   const query = useListSearchQuery();
 
   const list = useToolkitsListData(projectId, isMCP, isPublic, query);
+  const rows = useFolderRows(list.data, folderFilter, list);
 
   const handleOpen = useCallback(
     (toolkitId: string) => {
@@ -308,51 +306,72 @@ export function Toolkits({ isMCP = false }: ToolkitsProps): ReactNode {
 
   const createAction = canCreate ? { label: copy.createLabel, testId: copy.createTestId, onClick: handleCreateClick } : undefined;
 
+  const selection = useToolkitSelection(projectId, rows);
+  const { selected } = selection;
+
   return (
+    <EntityFolderDnd
+      projectId={isPublic ? undefined : projectId}
+      kind={kind}
+      permissions={permissions}
+      selectedIds={selected.ids}
+    >
     <Box sx={pageSx}>
-      <PageToolbar
-        summary={copy.summary(list.scopedCount)}
-        search={{ placeholder: copy.searchPlaceholder, 'data-testid': copy.searchTestId }}
-        filters={{ activeCount: list.selectedTypes.length }}
-        primaryAction={createAction}
+      <ToolkitsSidebar
+        isMCP={isMCP}
+        projectId={projectId}
+        isPublic={isPublic}
+        canDelete={canDelete}
+        permissions={permissions}
+        createAction={createAction}
+        selection={selection}
+        types={{ tagList: list.tagList, selected: list.selectedTypes, onSelect: list.onSelectType, onClear: list.onClearTypes, isLoading: list.isLoading }}
       />
       <Box sx={pageBodySx}>
         <Box data-testid={copy.listTestId}>
-          <ToolkitsList
-            sx={listSx}
-            data={list.data}
-            renderCard={(item) => (
-              <ToolkitCard
-                key={item.id}
-                item={item}
-                isMCP={isMCP}
-                onOpen={() => handleOpen(item.id)}
-              />
-            )}
-            listState={{
-              isLoading: list.isLoading,
-              isFetchingMore: list.isFetchingMore,
-              isError: list.isError,
-              hasMore: list.hasMore,
-              onLoadMore: list.onLoadMore,
-              totalCount: list.totalCount,
-            }}
-            query={query}
-            isMCP={isMCP}
-            emptyStateConfig={{ title: copy.emptyTitle, description: copy.emptyDescription, onCreateClick: handleCreateClick }}
-          />
+          <EntitySelectionProvider value={selected.selection}>
+            <EntityFolderScope
+            projectId={isPublic ? undefined : projectId}
+            kind={kind}
+            permissions={permissions}
+          >
+            <ToolkitsList
+              sx={listSx}
+              data={rows}
+              renderCard={(item) => (
+                <ToolkitCard
+                  key={item.id}
+                  item={item}
+                  isMCP={isMCP}
+                  onOpen={() => handleOpen(item.id)}
+                />
+              )}
+              listState={{
+                isLoading: list.isLoading,
+                isFetchingMore: list.isFetchingMore,
+                isError: list.isError,
+                hasMore: list.hasMore,
+                onLoadMore: list.onLoadMore,
+                totalCount: folderFilter.active ? rows.length : list.totalCount,
+              }}
+              query={query}
+              isMCP={isMCP}
+              {...(folderFilter.active
+                ? { emptyListPlaceHolder: <EmptyFolderNote /> }
+                : { emptyStateConfig: { title: copy.emptyTitle, description: copy.emptyDescription, onCreateClick: handleCreateClick } })}
+            />
+          </EntityFolderScope>
+          </EntitySelectionProvider>
         </Box>
       </Box>
-      <ToolkitsFilters
-        projectId={projectId}
-        isMCP={isMCP}
-        subject={copy.title}
-        tagList={list.tagList}
-        selectedTypes={list.selectedTypes}
-        onSelectType={list.onSelectType}
-        onClearTypes={list.onClearTypes}
-        isLoading={list.isLoading}
+      <DeleteEntityModal
+        open={selection.confirmingDelete}
+        name={t('pages.toolkits.toolkits.deleteSelection', '{{count}} selected', { count: selected.ids.length })}
+        confirming={selection.deleting}
+        onClose={() => selection.setConfirmingDelete(false)}
+        onConfirm={() => void selection.deleteSelected()}
       />
     </Box>
+    </EntityFolderDnd>
   );
 }

@@ -108,8 +108,17 @@ function StateHeader({ projectId, state, onPropose }: { readonly projectId: stri
 
 function StateBadges({ state }: { readonly state: AgentWorkforceAgent }): ReactNode {
   const badges: readonly (readonly [boolean, string, string])[] = [
-    [state.is_hr_agent, 'text.secondary', t('features.agentWorkforce.hrAgent', 'Reviewer (HR) agent')],
+    [state.is_workforce_manager, 'text.secondary', t('features.agentWorkforce.workforceManager', 'Workforce manager')],
     [state.legal_hold, 'warning.main', t('features.agentWorkforce.legalHold', 'Legal hold')],
+    [
+      // An agent the workforce policy hired (an installed Marketplace listing included) is on probation until
+      // a manager keeps it; Settings › Agent workforce undoes the hire for 14 days or keeps it.
+      state.auto_hired_at !== null && state.probation_reviewed_at === null,
+      'warning.main',
+      t('features.agentWorkforce.probation', 'On probation until {{date}} (hired automatically)', {
+        date: state.probation_until === null ? '' : new Date(state.probation_until).toLocaleDateString(),
+      }),
+    ],
     [
       state.lifecycle_state === 'retired' && state.reinstate_until !== null,
       'text.secondary',

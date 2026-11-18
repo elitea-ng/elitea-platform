@@ -20,6 +20,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenant"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/marketplace"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -162,6 +163,17 @@ func encodeJSONArray(v []any) (string, error) {
 // splitTagFilter reads the `tags` query parameter, which is a comma-separated
 // list. It removes the empty and blank entries, so `tags=` and `tags=,,` mean
 // "no tag filter" and do not produce a condition that matches nothing.
+// applicationHasPipelineVersionSQL is `(SELECT 1 ...)` for use after EXISTS or
+// NOT EXISTS: the application `alias` has a pipeline version. The agents,
+// pipelines and project-folder lists all classify by it, so they cannot drift.
+func applicationHasPipelineVersionSQL(s, alias string) string {
+	return fmt.Sprintf("(SELECT 1 FROM %s.application_versions pv WHERE pv.application_id=%s.id AND pv.agent_type='pipeline')", s, alias)
+}
+
+func applicationIsPipelineSQL(s, alias string) string {
+	return "EXISTS " + applicationHasPipelineVersionSQL(s, alias)
+}
+
 func splitTagFilter(raw string) []string {
 	out := []string{}
 	for _, part := range strings.Split(raw, ",") {
@@ -198,7 +210,7 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 		if req.AgentsType == "classic" {
 			operator = "NOT EXISTS"
 		}
-		conditions = append(conditions, fmt.Sprintf("%s (SELECT 1 FROM %s.application_versions pv WHERE pv.application_id=a.id AND pv.agent_type='pipeline')", operator, s))
+		conditions = append(conditions, operator+" "+applicationHasPipelineVersionSQL(s, "a"))
 	}
 	if len(req.IDs) > 0 {
 		conditions = append(conditions, "a.id=ANY("+bind(req.IDs)+"::integer[])")
@@ -218,6 +230,17 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 		kinds = []string{"agent"}
 	case "pipeline":
 		kinds = []string{"pipeline"}
+	}
+	// `folder_id` narrows the list to ONE project folder (migration 0247). The
+	// item rows carry the kind, so a folder id of the other list matches nothing.
+	if req.FolderID != "" {
+		if !isNumericRowID(req.FolderID) {
+			return empty, apierr.BadRequest("folder_id must be a folder id")
+		}
+		conditions = append(conditions, fmt.Sprintf("EXISTS (SELECT 1 FROM %s.project_folder_items pfi WHERE pfi.entity_id=a.id AND pfi.entity_kind=ANY(%s::text[]) AND pfi.folder_id=%s::integer)", s, bind(kinds), bind(req.FolderID)))
+	}
+	if req.Pinned {
+		conditions = append(conditions, fmt.Sprintf("EXISTS (SELECT 1 FROM %s.project_entity_pins pp WHERE pp.entity_id=a.id AND pp.entity_kind=ANY(%s::text[]) AND pp.user_id=%s)", s, bind(kinds), bind(access.ActorID)))
 	}
 	if access.FolderRestrictions {
 		conditions = append(conditions, foldervisibility.ExclusionSQL(s, "a.id", bind(kinds), bind(access.ActorID)))
@@ -254,25 +277,6 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 			JOIN %[1]s.tags ft ON ft.id = fta.tag_id
 			WHERE ftv.application_id = a.id AND (ft.name = $%[2]d OR ft.id::text = $%[2]d))`, s, len(args)))
 	}
-	where := ""
-	if len(conditions) > 0 {
-		where = " WHERE " + strings.Join(conditions, " AND ")
-	}
-
-	// Count and page share one snapshot and the same predicates.
-	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
-	if err != nil {
-		return empty, fmt.Errorf("applications: list snapshot: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	var total int
-	countQuery := fmt.Sprintf(`SELECT COUNT(DISTINCT a.id) FROM %s.applications a`, s) + join + where
-	if err := tx.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
-		return empty, fmt.Errorf("applications: list count: %w", err)
-	}
-
-	selectArgs := append([]any{}, args...)
-	limitIdx := len(selectArgs) + 1
 	// The agent's PUBLISH state, computed per application.
 	//
 	// `Application.Status` was never selected, so every listed agent carried
@@ -293,6 +297,128 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 			SELECT 1 FROM %s.application_versions pv
 			WHERE pv.application_id = a.id AND pv.status = 'published'
 		) THEN 'published' ELSE 'draft' END`, s)
+	// An agent is forked when its stable version records where it came from
+	// (`applications.IsForkedFromMeta`).
+	forkedSQL := "(COALESCE(av.meta, '{}'::jsonb) ?& ARRAY['parent_entity_id','parent_project_id'])"
+	// An agent hired from the Marketplace as an install records its origin on
+	// the stable version (ADR-0051 decision 3). It is not a fork.
+	installedSQL := "(COALESCE(av.meta->>'origin_kind', '') = 'installed')"
+	originExpr := "CASE WHEN " + installedSQL + " THEN 'installed' WHEN " + forkedSQL + " THEN 'forked' ELSE 'own' END"
+	// A newer hireable version of the listing the agent came from. The CASE
+	// keeps the casts away from rows whose origin ids are not numbers.
+	updateSQL := `(CASE WHEN COALESCE(av.meta->>'origin_listing_id', '') ~ '^[0-9]{1,18}$'
+		AND COALESCE(av.meta->>'origin_version_id', '') ~ '^[0-9]{1,18}$' THEN EXISTS (
+			SELECT 1 FROM elitea_marketplace.listing_versions cv
+			WHERE cv.listing_id = (av.meta->>'origin_listing_id')::bigint
+			  AND cv.withdrawn_at IS NULL AND cv.state <> 'yanked'
+			  AND (cv.published_at, cv.version_id) > (
+				SELECT pv.published_at, pv.version_id FROM elitea_marketplace.listing_versions pv
+				WHERE pv.listing_id = cv.listing_id AND pv.version_id = (av.meta->>'origin_version_id')::bigint))
+		ELSE false END)`
+	// A database that has not run shared 0250 has no listings to compare with,
+	// and a statement that names a missing table fails at parse time even when
+	// its branch is never taken, so the comparison is left out there.
+	var hasListings bool
+	if err := r.pool.QueryRow(ctx, `SELECT to_regclass('elitea_marketplace.listing_versions') IS NOT NULL`).Scan(&hasListings); err != nil {
+		return empty, fmt.Errorf("applications: list marketplace probe: %w", err)
+	}
+	if !hasListings {
+		updateSQL = "false"
+	}
+	// An agent the workforce policy hired is on probation until a person keeps
+	// it (ADR-0051 decision 6). The registry is central and keyed by project,
+	// so the list reads it here and the row can say so without a second
+	// request per agent (issue 2091). A database without the registry has no
+	// probation to show.
+	probationOnSQL, probationUntilSQL := "false", "''"
+	// The columns arrive with shared 0237, after the table (0204), so the probe
+	// names the column the query reads.
+	var hasRegistry bool
+	if err := r.pool.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_schema = 'elitea_lifecycle' AND table_name = 'agent_registry' AND column_name = 'probation_reviewed_at')`).Scan(&hasRegistry); err != nil {
+		return empty, fmt.Errorf("applications: list registry probe: %w", err)
+	}
+	if projectNumber, convErr := strconv.ParseInt(req.ProjectID, 10, 64); hasRegistry && convErr == nil {
+		probation := fmt.Sprintf(`FROM elitea_lifecycle.agent_registry reg
+			WHERE reg.tenant_project_id = %d AND reg.application_id = a.id
+			  AND reg.auto_hired_at IS NOT NULL AND reg.probation_reviewed_at IS NULL`, projectNumber)
+		probationOnSQL = "EXISTS (SELECT 1 " + probation + ")"
+		probationUntilSQL = `COALESCE((SELECT to_char(reg.probation_until AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') ` + probation + `), '')`
+	}
+	// Status and origin are facets: the page of rows is narrowed by them, the
+	// facet counts are not (each count honours every OTHER filter).
+	facetConditions := []string{}
+	switch req.Status {
+	case "draft":
+		facetConditions = append(facetConditions, "("+statusExpr+") <> 'published'")
+	case "published":
+		facetConditions = append(facetConditions, "("+statusExpr+") = 'published'")
+	}
+	switch req.Origin {
+	case "forked":
+		facetConditions = append(facetConditions, "NOT "+installedSQL+" AND "+forkedSQL)
+	case "installed":
+		facetConditions = append(facetConditions, installedSQL)
+	case "own":
+		facetConditions = append(facetConditions, "NOT "+installedSQL+" AND NOT "+forkedSQL)
+	}
+	if req.UpdateAvailable {
+		facetConditions = append(facetConditions, updateSQL)
+	}
+	where := ""
+	if len(conditions) > 0 {
+		where = " WHERE " + strings.Join(conditions, " AND ")
+	}
+	facetBase := where
+	if len(facetConditions) > 0 {
+		if where == "" {
+			where = " WHERE " + strings.Join(facetConditions, " AND ")
+		} else {
+			where += " AND " + strings.Join(facetConditions, " AND ")
+		}
+	}
+
+	// Count and page share one snapshot and the same predicates.
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return empty, fmt.Errorf("applications: list snapshot: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var total int
+	countQuery := fmt.Sprintf(`SELECT COUNT(DISTINCT a.id) FROM %s.applications a`, s) + join + where
+	if err := tx.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
+		return empty, fmt.Errorf("applications: list count: %w", err)
+	}
+
+	facets := applications.ListFacets{Statuses: map[string]int{}, Origins: map[string]int{}}
+	facetRows, err := tx.Query(ctx, `SELECT `+statusExpr+`, `+originExpr+`, `+updateSQL+`, COUNT(*) FROM `+s+`.applications a`+join+facetBase+` GROUP BY 1, 2, 3`, args...)
+	if err != nil {
+		return empty, fmt.Errorf("applications: list facets: %w", err)
+	}
+	for facetRows.Next() {
+		var (
+			status, origin string
+			update         bool
+			n              int
+		)
+		if err := facetRows.Scan(&status, &origin, &update, &n); err != nil {
+			facetRows.Close()
+			return empty, fmt.Errorf("applications: list facets scan: %w", err)
+		}
+		facets.Statuses[status] += n
+		facets.Origins[origin] += n
+		if update {
+			facets.UpdateAvailable += n
+		}
+	}
+	facetRows.Close()
+	if err := facetRows.Err(); err != nil {
+		return empty, fmt.Errorf("applications: list facets rows: %w", err)
+	}
+
+	selectArgs := append([]any{}, args...)
+	limitIdx := len(selectArgs) + 1
 	// Every tag of every version of the application, by name, deduplicated
 	// and sorted.
 	//
@@ -317,7 +443,8 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 			COALESCE(av.agent_type, '`+defaultAgentType+`'),
 			COALESCE(av.author_id, 0), COALESCE(u.email, ''), COALESCE(u.name, ''),
 			`+statusExpr+`,
-			`+tagsExpr+`
+			`+tagsExpr+`,
+			`+probationOnSQL+`, `+probationUntilSQL+`
 		FROM %s.applications a`, s) + join +
 		// The author join reads `av.author_id`, the USER that wrote the
 		// version, and not `a.owner_id`, which is the owning PROJECT (#533).
@@ -346,6 +473,8 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 			authorID       int
 			authorEmail    string
 			authorName     string
+			onProbation    bool
+			probationUntil string
 		)
 		if err := rows.Scan(
 			&app.ID, &app.Name, &app.Description, &app.Icon,
@@ -353,6 +482,7 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 			&metaStr, &versionMetaStr, &app.AgentType,
 			&authorID, &authorEmail, &authorName,
 			&app.Status, &app.Tags,
+			&onProbation, &probationUntil,
 		); err != nil {
 			return empty, fmt.Errorf("applications: list scan: %w", err)
 		}
@@ -373,9 +503,32 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 		// the source agent without a second round-trip.
 		versionMeta := decodeJSONObject(versionMetaStr)
 		app.IsForked = applications.IsForkedFromMeta(versionMeta)
+		// The Marketplace origin (ADR-0051): the keys the Workshop badge and the
+		// second-hire marker read.
+		for _, key := range []string{"origin_kind", "origin_listing_id", "origin_version_id", "origin_version_name", "origin_listing_name"} {
+			if value, ok := versionMeta[key]; ok {
+				app.Meta[key] = value
+			}
+		}
+		if onProbation {
+			app.Meta["on_probation"] = true
+			if probationUntil != "" {
+				app.Meta["probation_until"] = probationUntil
+			}
+		}
 		if entityID, projectID, ok := applications.ForkOrigin(versionMeta); ok {
 			app.Meta["parent_entity_id"] = entityID
 			app.Meta["parent_project_id"] = projectID
+		}
+		// #1995 — the icon an author uploads is bound to a VERSION
+		// (`application_versions.meta.icon_meta`), and the list read only the
+		// application row, so a card could never show it. The first version's
+		// icon rides on the list row's `meta` (passthrough, no schema change),
+		// the same version the fork signal above comes from.
+		if iconMeta, ok := versionMeta["icon_meta"].(map[string]any); ok {
+			if iconURL, _ := iconMeta["url"].(string); iconURL != "" {
+				app.Meta["icon_meta"] = iconMeta
+			}
 		}
 		app.Authors = []applications.Author{}
 		// The id comes from the VERSION, not from the user join, so an author
@@ -403,7 +556,7 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 		totalPages++
 	}
 	return applications.ListResponse{
-		Rows: items, Total: total, Page: page, PageSize: pageSize, TotalPages: totalPages,
+		Rows: items, Total: total, Page: page, PageSize: pageSize, TotalPages: totalPages, Facets: &facets,
 	}, nil
 }
 
@@ -737,7 +890,12 @@ func (r *ApplicationsRepo) CreateVersion(ctx context.Context, projectID, applica
 	if v.AuthorID <= 0 {
 		return applications.Version{}, apierr.Unauthorized("an authenticated author is required to create a version")
 	}
-	if v.CopySkillsFromVersionID <= 0 {
+	// A new version of an installed agent would let its definition drift
+	// (ADR-0051); every caller, the REST route and the internal tool, ends here.
+	if marketplace.IsInstalledApplication(ctx, r.pool, s, applicationID) {
+		return applications.Version{}, apierr.Conflict(marketplace.ReadOnlyMessage)
+	}
+	if v.CopySkillsFromVersionID <= 0 && v.CopyToolsFromVersionID <= 0 {
 		return insertVersion(ctx, r.pool, s, applicationID, v)
 	}
 	project, err := parseProjectID(projectID)
@@ -751,16 +909,57 @@ func (r *ApplicationsRepo) CreateVersion(ctx context.Context, projectID, applica
 		if err != nil {
 			return err
 		}
-		_, err = sqlcgen.New(tx).CopyApplicationVersionSkills(ctx, sqlcgen.CopyApplicationVersionSkillsParams{
-			SourceVersionID: v.CopySkillsFromVersionID,
-			TargetVersionID: created.ID,
-		})
-		return err
+		if v.CopySkillsFromVersionID > 0 {
+			if _, err = sqlcgen.New(tx).CopyApplicationVersionSkills(ctx, sqlcgen.CopyApplicationVersionSkillsParams{
+				SourceVersionID: v.CopySkillsFromVersionID,
+				TargetVersionID: created.ID,
+			}); err != nil {
+				return err
+			}
+		}
+		if v.CopyToolsFromVersionID > 0 {
+			return copyVersionTools(ctx, tx, s, v.CopyToolsFromVersionID, created.ID)
+		}
+		return nil
 	})
 	if err != nil {
 		return applications.Version{}, fmt.Errorf("applications: create version with skills: %w", err)
 	}
 	return created, nil
+}
+
+// copyVersionTools copies the toolkit and tool bindings of one version onto
+// another version of the SAME application. The join on application_id is the
+// ownership check: a source from another application (or project) matches no
+// row and copies nothing. entity_type, selected_tools and, where the tenant
+// has it, entity_id ride along as publish does
+// (internal/api/v2/eliteacore/publish_core.go). entity_id arrives with tenant
+// migration 0125, which an older tenant may not have run yet — the same shape
+// check the MCP version backup makes (internal/api/v2/mcp/internal_applications_version.go).
+func copyVersionTools(ctx context.Context, tx pgx.Tx, schema string, sourceVersionID int32, targetVersionID string) error {
+	var hasEntityID bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema = $1 AND table_name = 'entity_tool_mapping' AND column_name = 'entity_id'
+		)`, schema).Scan(&hasEntityID); err != nil {
+		return err
+	}
+	columns, values := "entity_version_id, entity_type, tool_id, selected_tools, created_at",
+		"target.id, mapping.entity_type, mapping.tool_id, mapping.selected_tools, now() AT TIME ZONE 'UTC'"
+	if hasEntityID {
+		columns, values = "entity_version_id, entity_id, entity_type, tool_id, selected_tools, created_at",
+			"target.id, mapping.entity_id, mapping.entity_type, mapping.tool_id, mapping.selected_tools, now() AT TIME ZONE 'UTC'"
+	}
+	_, err := tx.Exec(ctx, fmt.Sprintf(`
+		INSERT INTO %s.entity_tool_mapping (%s)
+		SELECT %s
+		FROM %s.application_versions AS source
+		JOIN %s.application_versions AS target ON target.application_id = source.application_id
+		JOIN %s.entity_tool_mapping AS mapping ON mapping.entity_version_id = source.id
+		WHERE source.id = $1::integer AND target.id = $2::text::integer AND source.id <> target.id`,
+		schema, columns, values, schema, schema, schema), sourceVersionID, targetVersionID)
+	return err
 }
 
 // querier is the subset of pgxpool.Pool / pgx.Tx insertVersion needs, so the
@@ -1187,12 +1386,16 @@ func checkStoredPipelineInstructions(ctx context.Context, q querier, schema, app
 }
 
 func (r *ApplicationsRepo) DeleteVersion(ctx context.Context, projectID, applicationID, versionID string) error {
-	_, err := tenantSchema(projectID)
+	s, err := tenantSchema(projectID)
 	if err != nil {
 		return err
 	}
 	if !isNumericRowID(applicationID) || !isNumericRowID(versionID) {
 		return apierr.NotFound("version not found")
+	}
+	// The one version of an installed agent is its definition (ADR-0051).
+	if marketplace.IsInstalledVersion(ctx, r.pool, s, versionID) {
+		return apierr.Conflict(marketplace.ReadOnlyMessage)
 	}
 	project, err := parseProjectID(projectID)
 	if err != nil {

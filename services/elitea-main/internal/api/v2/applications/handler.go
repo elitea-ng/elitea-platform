@@ -24,6 +24,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/ownership"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/marketplace"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/entitylimits"
 )
@@ -1152,9 +1153,31 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	// Detach the deleted agent from every parent that used it as a sub-agent.
 	if h.pool != nil {
 		h.detachSubAgentReferences(r.Context(), s, applicationID)
+		h.recordMarketplaceDismissal(r.Context(), projectID, applicationID)
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// recordMarketplaceDismissal tells the Marketplace that a hired agent left its
+// project, so the active hires and the dismissal rate of its listing stay true
+// (ADR-0051 decision 5). It changes nothing for an agent that was not hired. A
+// failure is logged: the delete has already happened and the next daily signals
+// pass is not wrong enough to undo it.
+func (h *Handler) recordMarketplaceDismissal(ctx context.Context, projectID, applicationID string) {
+	project, projectErr := strconv.ParseInt(projectID, 10, 64)
+	application, applicationErr := strconv.ParseInt(applicationID, 10, 64)
+	if projectErr != nil || applicationErr != nil {
+		return
+	}
+	var by int64
+	if user, ok := auth.UserFromContext(ctx); ok {
+		by, _ = strconv.ParseInt(user.ID, 10, 64)
+	}
+	if err := marketplace.MarkDismissed(ctx, h.pool, project, marketplace.KindAgent, application, by); err != nil {
+		slog.WarnContext(ctx, "marketplace: could not record the dismissal of a deleted agent",
+			"project_id", project, "application_id", application, "error", err)
+	}
 }
 
 // detachSubAgentReferences removes every sub-agent reference that points at a
@@ -1279,6 +1302,15 @@ func (h *Handler) CreateVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// An agent installed from the Marketplace keeps the one version its snapshot
+	// made: a new version would let its definition drift (ADR-0051 decision 3).
+	if h.pool != nil {
+		if schema, schemaOK := tenantSchema(projectID); schemaOK && marketplace.IsInstalledApplication(r.Context(), h.pool, schema, applicationID) {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": marketplace.ReadOnlyCode, "msg": marketplace.ReadOnlyMessage})
+			return
+		}
+	}
+
 	name, _ := body["name"].(string)
 	if name == "" {
 		apierr.Write(w, apierr.BadRequest("version name is required"))
@@ -1319,6 +1351,7 @@ func (h *Handler) CreateVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	input.CopySkillsFromVersionID = optionalSkillSourceVersionID(body["copy_skills_from_version_id"])
+	input.CopyToolsFromVersionID = optionalSkillSourceVersionID(body["copy_tools_from_version_id"])
 	ver, err := h.repo.CreateVersion(r.Context(), projectID, applicationID, *input)
 	if err != nil {
 		apierr.Write(w, err)
@@ -1392,6 +1425,18 @@ func (h *Handler) UpdateVersion(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		apierr.Write(w, apierr.BadRequest("invalid request body"))
 		return
+	}
+
+	// The definition of an agent installed from the Marketplace is read-only
+	// (ADR-0051 decision 3). A save that repeats the stored values, as the editor
+	// sends, is not a change.
+	if h.pool != nil {
+		if schema, schemaOK := tenantSchema(projectID); schemaOK &&
+			marketplace.IsInstalledVersion(r.Context(), h.pool, schema, versionID) &&
+			marketplace.DefinitionChanged(r.Context(), h.pool, schema, versionID, body) {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": marketplace.ReadOnlyCode, "msg": marketplace.ReadOnlyMessage})
+			return
+		}
 	}
 
 	user, ownerID, ok := principal(r)
@@ -1794,6 +1839,14 @@ func (h *Handler) DeleteVersion(w http.ResponseWriter, r *http.Request) {
 	if _, ok := tenantSchema(projectID); !ok {
 		apierr.Write(w, apierr.BadRequest("invalid project id"))
 		return
+	}
+
+	// The one version of an installed agent is its definition (ADR-0051).
+	if h.pool != nil {
+		if schema, schemaOK := tenantSchema(projectID); schemaOK && marketplace.IsInstalledVersion(r.Context(), h.pool, schema, versionID) {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": marketplace.ReadOnlyCode, "msg": marketplace.ReadOnlyMessage})
+			return
+		}
 	}
 
 	// Guard: block deletion of published/embedded versions

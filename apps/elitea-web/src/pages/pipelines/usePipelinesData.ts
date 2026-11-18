@@ -58,7 +58,7 @@ export function usePipelinesData(projectId: string | undefined, hasAdminPermissi
   const applicationsQuery = useListApplications(
     projectId ?? '',
     { agents_type: 'pipeline' },
-    { query: { enabled: projectId !== undefined && (!isPublicProject || hasAdminPermission) } },
+    { query: { enabled: projectId !== undefined && isPublicProject && hasAdminPermission } },
   );
   const applicationsList = applicationsQuery.data?.data as ApplicationList | undefined;
 

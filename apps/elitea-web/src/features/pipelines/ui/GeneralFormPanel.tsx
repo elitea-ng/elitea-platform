@@ -66,6 +66,10 @@ const containerSx = (isSmallWindow: boolean, collapsed: boolean): SxProps<Theme>
   maxWidth: isSmallWindow ? '100%' : collapsed ? '1.75rem' : '20rem',
   minWidth: isSmallWindow ? '100%' : collapsed ? '1.75rem' : '20rem',
   height: !isSmallWindow ? '100%' : 'auto',
+  // The panel scrolls on its own: the page row must not, or the canvas and
+  // its controls scroll away with the settings.
+  overflowY: isSmallWindow ? 'visible' : 'auto',
+  minHeight: 0,
   position: 'relative',
   display: 'flex',
   flexDirection: 'column',

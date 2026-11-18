@@ -3,7 +3,7 @@
  * desktop app has (`widgets/account-menu`).
  *
  * - AM01: it holds the account places that left the rail (Settings,
- *   Credentials, the Catalog, help) and the version line; a member sees no
+ *   Credentials, help) and the version line; a member sees no
  *   admin portal.
  * - AM02: an administrator gets "Admin portal", which opens the console, and
  *   the console's own account menu leads back with "Back to Elitea".
@@ -50,9 +50,12 @@ test.describe('member', () => {
     await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 20_000 });
 
     const menu = await openAccountMenu(page);
-    for (const name of ['Settings', 'Credentials', 'Catalog', 'Get help', 'Sign out']) {
+    for (const name of ['Settings', 'Credentials', 'Get help', 'Sign out']) {
       await expect(menu.getByRole('menuitem', { name, exact: true })).toBeVisible();
     }
+    // The Catalog left the menu: the Marketplace is a primary row of the sidebar (ADR-0051).
+    await expect(menu.getByRole('menuitem', { name: 'Catalog', exact: true })).toHaveCount(0);
+    await expect(page.getByTestId('shell-elitea-marketplace')).toBeVisible();
     await expect(page.getByTestId('account-menu-version')).toContainText(/Version \S+/);
     await expect(page.getByTestId('shell-account-admin-portal')).toHaveCount(0);
     await checkA11y(page);

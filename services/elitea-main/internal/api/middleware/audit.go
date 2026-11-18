@@ -168,6 +168,24 @@ var auditedSurfaces = []string{
 	// decision 5): each removes a tool, a toolkit, a credential use grant
 	// or an egress allowlist entry. The report read is a GET.
 	"/api/v2/elitea_core/permission_trimming/",
+	// Project folders of the entity lists (ADR-0051 decision Q2, issue 1628):
+	// any member with update rights can move another member's agent, so every
+	// move, rename, reorder and delete is recorded, with the moved entity.
+	"/api/v2/elitea_core/entity_folders/",
+	// Skills pinned to a conversation (ADR-0050 amendment 1): a pin steers every
+	// later turn of the conversation, so each pin and unpin is recorded, with
+	// the skill's name.
+	"/api/v2/elitea_core/conversation_skills/",
+	"/api/v2/elitea_core/conversation_skill/",
+	// A project's trust in the text of a skill from another project (ADR-0051
+	// amendment 1, A1.6): granting or revoking changes how that text reaches the
+	// model, so each change is recorded. The read is a GET.
+	"/api/v2/elitea_core/skill_trust/",
+	// Delegation grants (ADR-0044 amendment 1): a grant lets a callee use what
+	// its caller does not hold, so each proposal, approval and revoke is
+	// recorded, with the grant. The reads are GETs.
+	"/api/v2/elitea_core/delegation_grants/",
+	"/api/v2/elitea_core/delegation_grant/",
 }
 
 // AuditedSurfaces returns a copy of the prefix list, so a router-level test can

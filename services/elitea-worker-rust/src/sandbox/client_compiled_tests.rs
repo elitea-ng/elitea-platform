@@ -1266,3 +1266,42 @@ async fn warm_changed_native_root_fails_before_authority_or_runtime_admission() 
     );
     task.abort();
 }
+
+/// #2228: a compile-stage failure reaches the caller with the compiler's
+/// diagnostic, bounded and cleaned as the execution decode bounds it.
+#[test]
+fn a_failed_compilation_carries_the_compiler_diagnostic() {
+    let (_, selected, _) = native_rebound();
+    let failed = |detail: &str| SubmitRustCompiledSnapshotResponseV1 {
+        status: SandboxJobStatusV1::Failed as i32,
+        failure_code: "sandbox.code_failed".into(),
+        failure_detail: detail.into(),
+        ..Default::default()
+    };
+    let CompilationOutcome::Failed { code, detail } = decode_compilation(
+        &selected.control,
+        failed("error[E0308]: mismatched types\u{1b}[0m"),
+    )
+    .unwrap() else {
+        panic!("a failed compilation");
+    };
+    assert_eq!(code, "sandbox.code_failed");
+    assert_eq!(detail.as_deref(), Some("error[E0308]: mismatched types[0m"));
+
+    // A supervisor that sent nothing leaves no detail; the code is still the receipt.
+    assert!(matches!(
+        decode_compilation(&selected.control, failed("")).unwrap(),
+        CompilationOutcome::Failed { detail: None, .. }
+    ));
+
+    // The bound keeps the TAIL: the compiler's last lines name the error.
+    let long = format!("{}THE-ERROR", "x".repeat(5_000));
+    let CompilationOutcome::Failed { detail, .. } =
+        decode_compilation(&selected.control, failed(&long)).unwrap()
+    else {
+        panic!("a failed compilation");
+    };
+    let detail = detail.unwrap();
+    assert_eq!(detail.chars().count(), 1_500);
+    assert!(detail.ends_with("THE-ERROR"));
+}

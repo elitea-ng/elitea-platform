@@ -6,6 +6,7 @@ import { getApplicationsMock } from '../../../shared/api/generated/applications/
 import { getArtifactsMock } from '../../../shared/api/generated/artifacts/artifacts.msw';
 import { getAuthMock } from '../../../shared/api/generated/auth/auth.msw';
 import { getDefaultMock } from '../../../shared/api/generated/default/default.msw';
+import { getMarketplaceMock } from '../../../shared/api/generated/marketplace/marketplace.msw';
 import { getSecretsMock } from '../../../shared/api/generated/secrets/secrets.msw';
 import { getSettingsMock } from '../../../shared/api/generated/settings/settings.msw';
 import { getSkillsMock } from '../../../shared/api/generated/skills/skills.msw';
@@ -95,6 +96,7 @@ export const handlers: RequestHandler[] = [
   ...getArtifactsMock(),
   ...getAuthMock(),
   ...getDefaultMock(),
+  ...getMarketplaceMock(),
   ...getSecretsMock(),
   ...getSettingsMock(),
   ...getSkillsMock(),

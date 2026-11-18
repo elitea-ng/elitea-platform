@@ -11,7 +11,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { ALLOWED, eliteaIdentifiers, isBinary, printableChunks, printableStrings, report, scan, scanText } from './brand-output-scan.mjs';
+import { ALLOWED, eliteaIdentifiers, insideContentHash, isBinary, printableChunks, printableStrings, report, scan, scanText } from './brand-output-scan.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SCRIPT = path.join(REPO, 'scripts/ci/brand-output-scan.mjs');
@@ -51,6 +51,19 @@ test('an identifier fails in any form, even packed against the next string', () 
   assert.deepEqual(find('com.apple.x ai.elitea.desktop'), ['ai.elitea.desktop']);
   assert.deepEqual(find('elitea://connect?x'), ['elitea://']);
   assert.deepEqual(find('mailto:supportalita@epam.com'), ['epam', 'supportalita@epam.com']);
+});
+
+test('a bundler content hash holding the term passes; a real EPAM still fails', () => {
+  // `BCePam0p` is the hash of a chunk (`chat_.archived-BCePam0p.js`), not text.
+  assert.deepEqual(find('import(`./chat_.archived-BCePam0p.js`)'), []);
+  assert.deepEqual(find('assets/App-BW66ApSD.js dist/app/assets/webhooks-BCePam0p.js'), []);
+  assert.deepEqual(find('a{background:url(./logo-BCePam0p.svg)}'), []);
+  assert.equal(insideContentHash('x-BCePam0p.js', 3, 4), true);
+  // Not a hash: the wrong length, no extension, or the term outside the token.
+  assert.deepEqual(find('assets/x-BCePam0pq.js'), ['ePam']);
+  assert.deepEqual(find('see BCePam0p now'), ['ePam']);
+  assert.deepEqual(find('by EPAM Systems in logo-BCePam0p.js'), ['EPAM', 'EPAM']);
+  assert.deepEqual(find('logo-EPAM.js'), ['EPAM']);
 });
 
 test('NOTICE and licence files are skipped; everything else is read', () => {

@@ -10,14 +10,20 @@ import type { SxProps, Theme } from '@mui/material/styles';
 
 import { isMcpToolkit } from '@/entities/toolkit';
 import type { Toolkit } from '@/entities/toolkit';
-import { getGetApplicationQueryKey, useGetApplication, useListApplications } from '@/shared/api/generated/applications/applications';
-import type { Application, ApplicationDetail } from '@/shared/api/generated/model';
+import {
+  getGetApplicationQueryKey,
+  getGetApplicationVersionDetailQueryKey,
+  useListApplications,
+} from '@/shared/api/generated/applications/applications';
+import type { Application } from '@/shared/api/generated/model';
 import { getToolkit } from '@/shared/api/generated/toolkits/toolkits';
 import { unwrapBody, unwrapList } from '@/shared/api/unwrap';
 import { t } from '@/shared/i18n';
 import { SearchParams } from '@/shared/lib/params';
 
 import { useAgentPipelineAssociation } from '../api/useAgentPipelineAssociation';
+import { useDelegationAttach } from '../api/useDelegationAttach';
+import type { AttachReport } from '../api/useDelegationAttach';
 import type { AssociationCandidate } from '../api/useAgentPipelineAssociation';
 import { useIsMcpVisible } from '../api/useIsMcpVisible';
 import { useSelectedProjectId } from '../api/useSelectedProjectId';
@@ -25,6 +31,8 @@ import { setToolkitRelation } from '../lib/toolRelation';
 import { useFilterAddedItems } from '../lib/useFilterAddedItems';
 import type { AgentToolAssociation } from '../lib/types';
 
+import { DelegationReviewDialog } from './DelegationReviewDialog';
+import { useToolMenuEntityDetail } from './useToolMenuEntityDetail';
 import { EntityAddSection, InstanceAddSection, useEntityAssociationItems } from './ToolMenuSections';
 
 /**
@@ -127,6 +135,14 @@ import { EntityAddSection, InstanceAddSection, useEntityAssociationItems } from 
  */
 export interface ToolMenuProps {
   readonly applicationId?: number | string | undefined;
+  /**
+   * The version the user is on. The application detail read carries only the
+   * DEFAULT version, so without this an attach on any other version was sent
+   * for the default one (#2130, #2139).
+   */
+  readonly versionId?: number | string | undefined;
+  /** That version's own tools, for the "already added" filtering; falls back to the default version's. */
+  readonly currentTools?: readonly AgentToolAssociation[] | undefined;
   /** Called after any successful attach (agent/pipeline/toolkit/MCP) — see the module doc comment's "known integration gap" paragraph. */
   readonly onToolsChanged?: (() => void) | undefined;
   /** Optional observer, fired after this component's OWN real toolkit-attach call succeeds — see the module doc comment's "REAL GAPS" bullet. Not required for attaching to work. */
@@ -138,22 +154,6 @@ export interface ToolMenuProps {
 const containerSx: SxProps<Theme> = { display: 'flex', gap: 1, alignItems: 'center', maxWidth: '100%', flexWrap: 'wrap' };
 /** Not in `SearchParams` (`@/shared/lib/params`) — the baseline never put it in `constants.js` either (`ToolMenu.jsx:217`'s `searchParams.get('newToolkitId')` is a raw literal), only `src/routes/-search/params.ts`'s `paramSchemas.newToolkitId` registers it. */
 const NEW_TOOLKIT_ID_PARAM = 'newToolkitId';
-
-function toApplicationTool(tool: unknown): AgentToolAssociation {
-  return tool as AgentToolAssociation;
-}
-
-function computeAddedToolkitIds(currentTools: readonly AgentToolAssociation[]): ReadonlySet<string | number> {
-  const ids = currentTools
-    .filter((tool) => tool.type !== 'application')
-    .map((tool) => tool.id)
-    .filter((id): id is string | number => id !== undefined);
-  return new Set(ids);
-}
-
-function resolveEntityLabel(agentType: string | undefined): 'agent' | 'pipeline' {
-  return agentType === 'pipeline' ? 'pipeline' : 'agent';
-}
 
 /**
  * `PATCH /elitea_core/tool/prompt_lib/{project_id}/{toolkit_id}` — attaches a toolkit instance
@@ -174,44 +174,12 @@ async function associateToolkitInstance(projectId: string, applicationId: number
   }
 }
 
-/* ── the application/version this ToolMenu is attached to ─────────────────── */
-
-interface ToolMenuEntityDetail {
-  readonly numericApplicationId: number | undefined;
-  readonly versionId: number | undefined;
-  readonly isEntityUnsaved: boolean;
-  readonly entityLabel: 'agent' | 'pipeline';
-  readonly currentTools: readonly AgentToolAssociation[];
-  readonly addedToolkitIds: ReadonlySet<string | number>;
-}
-
-function useToolMenuEntityDetail(applicationId: number | string | undefined, projectId: string | undefined): ToolMenuEntityDetail {
-  const numericApplicationId = applicationId === undefined ? undefined : Number(applicationId);
-  const applicationQuery = useGetApplication(projectId ?? '', numericApplicationId ?? 0, {
-    query: { enabled: projectId !== undefined && numericApplicationId !== undefined },
-  });
-  // Same error-envelope-unreachable cast as every other Wave-2 generated-client caller (eliteaFetch throws instead of resolving with the error variant).
-  const versionDetails = (applicationQuery.data as { data: ApplicationDetail } | undefined)?.data.version_details;
-  const versionId = versionDetails === undefined || versionDetails.id === undefined ? undefined : Number(versionDetails.id);
-  const currentTools = useMemo(() => (versionDetails?.tools ?? []).map(toApplicationTool), [versionDetails?.tools]);
-  const addedToolkitIds = useMemo(() => computeAddedToolkitIds(currentTools), [currentTools]);
-
-  return {
-    numericApplicationId,
-    versionId,
-    isEntityUnsaved: numericApplicationId === undefined || versionId === undefined,
-    entityLabel: resolveEntityLabel(versionDetails?.agent_type),
-    currentTools,
-    addedToolkitIds,
-  };
-}
-
-export function ToolMenu({ applicationId, onToolsChanged, onAttachToolkit, onAttachMcp }: ToolMenuProps): ReactNode {
+export function ToolMenu({ applicationId, versionId: pinnedVersionId, currentTools: pinnedTools, onToolsChanged, onAttachToolkit, onAttachMcp }: ToolMenuProps): ReactNode {
   const projectId = useSelectedProjectId();
   const queryClient = useQueryClient();
   const isMcpVisible = useIsMcpVisible();
 
-  const { numericApplicationId, versionId, isEntityUnsaved, entityLabel, currentTools, addedToolkitIds } = useToolMenuEntityDetail(applicationId, projectId);
+  const { numericApplicationId, versionId, isEntityUnsaved, entityLabel, currentTools, addedToolkitIds } = useToolMenuEntityDetail(applicationId, projectId, { versionId: pinnedVersionId, currentTools: pinnedTools });
   const { filterAgents, filterPipelines } = useFilterAddedItems(currentTools);
 
   // `getToolIcon` (agent/pipeline flat icon, faithfully ported) is also returned by this hook
@@ -223,9 +191,13 @@ export function ToolMenu({ applicationId, onToolsChanged, onAttachToolkit, onAtt
   const onAssociated = useCallback(async () => {
     if (projectId !== undefined && numericApplicationId !== undefined) {
       await queryClient.invalidateQueries({ queryKey: getGetApplicationQueryKey(projectId, numericApplicationId) });
+      // A non-default version is read from its own detail query (#2130).
+      if (versionId !== undefined) {
+        await queryClient.invalidateQueries({ queryKey: getGetApplicationVersionDetailQueryKey(projectId, numericApplicationId, versionId) });
+      }
     }
     onToolsChanged?.();
-  }, [projectId, numericApplicationId, queryClient, onToolsChanged]);
+  }, [projectId, numericApplicationId, versionId, queryClient, onToolsChanged]);
 
 
   // Performs the REAL toolkit/MCP attach (see this module's own doc comment, "REAL GAPS"
@@ -295,16 +267,25 @@ export function ToolMenu({ applicationId, onToolsChanged, onAttachToolkit, onAtt
   // toasted it; this app has no toasts, so the menu closes and an inline alert shows it.
   const [associationFailure, setAssociationFailure] = useState<string>();
   const reportAssociation = useCallback(
-    (outcome: { readonly ok: boolean; readonly message: string }) => {
-      setAssociationFailure(outcome.ok ? undefined : outcome.message);
+    (outcome: AttachReport) => {
+      setAssociationFailure(outcome.ok ? outcome.warning : outcome.message);
       if (outcome.ok) return void onAssociated();
       closeAgentMenu();
       closePipelineMenu();
     },
     [onAssociated, closeAgentMenu, closePipelineMenu],
   );
-  const associateAsAgent = useCallback((candidate: AssociationCandidate) => void associateAgent(candidate, { isPipeline: false, currentTools }).then(reportAssociation), [associateAgent, currentTools, reportAssociation]);
-  const associateAsPipeline = useCallback((candidate: AssociationCandidate) => void associateAgent(candidate, { isPipeline: true, currentTools }).then(reportAssociation), [associateAgent, currentTools, reportAssociation]);
+  // Attaching an agent or pipeline goes through the review of what it brings (ADR-0044 amendment 1, S3).
+  const delegation = useDelegationAttach({ projectId, applicationId: numericApplicationId, parentIsPipeline: entityLabel === 'pipeline', currentTools, associate: associateAgent, report: reportAssociation });
+  const { begin: beginAttach, pending: pendingReview } = delegation;
+  // The review dialog takes over from the menu that chose the agent.
+  useEffect(() => {
+    if (pendingReview === undefined) return;
+    closeAgentMenu();
+    closePipelineMenu();
+  }, [pendingReview, closeAgentMenu, closePipelineMenu]);
+  const associateAsAgent = useCallback((candidate: AssociationCandidate) => beginAttach(candidate, false), [beginAttach]);
+  const associateAsPipeline = useCallback((candidate: AssociationCandidate) => beginAttach(candidate, true), [beginAttach]);
 
   const agentsQuery = useListApplications(projectId ?? '', { agents_type: 'classic', query: agentSearch }, { query: { enabled: projectId !== undefined } });
   const pipelinesQuery = useListApplications(projectId ?? '', { agents_type: 'pipeline', query: pipelineSearch }, { query: { enabled: projectId !== undefined } });
@@ -384,6 +365,19 @@ export function ToolMenu({ applicationId, onToolsChanged, onAttachToolkit, onAtt
         anchor={pipelineAnchor}
         onClose={closePipelineMenu}
       />
+      {delegation.pending === undefined ? null : (
+        <DelegationReviewDialog
+          open
+          calleeName={delegation.pending.calleeName}
+          preview={delegation.pending.preview}
+          names={delegation.pending.names}
+          confirmLabel={delegation.pending.preview.governed ? t('agents.delegation.requestApproval', 'Request approval') : t('agents.delegation.approveAndAttach', 'Approve and attach')}
+          attachOnlyLabel={t('agents.delegation.attachOnly', 'Attach without approving')}
+          busy={delegation.busy}
+          onCancel={delegation.cancel}
+          onConfirm={delegation.confirm}
+        />
+      )}
       {associationFailure !== undefined && (
         <Typography
           role="alert"

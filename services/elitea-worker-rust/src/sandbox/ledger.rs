@@ -94,6 +94,11 @@ pub struct JobRecord {
     pub phase: Phase,
     pub result_json: Option<String>,
     pub failure_code: Option<String>,
+    /// The bounded tail of a failed program's stderr (#2223). Diagnostic text
+    /// only, never a result. `None` for every row that is not a failed run
+    /// whose program printed something, and for a row written before the
+    /// column existed.
+    pub failure_detail: Option<String>,
     pub runtime_id: Option<String>,
 }
 
@@ -170,6 +175,17 @@ impl From<sqlx::Error> for LedgerError {
     }
 }
 
+/// The fence every terminal write shares: the exact job, the live owner and
+/// epoch, a lease still held, and the cancellation rule. One copy, so the
+/// write that keeps a failure detail and the one that does not cannot drift.
+/// A macro, not a const: `sqlx` takes only SQL it can see as a literal, and
+/// `concat!` joins literals.
+macro_rules! finish_fence {
+    () => {
+        " WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND owner_id=$5 AND lease_epoch=$6 AND lease_until > clock_timestamp() AND (phase='dispatched' OR (phase='reserved' AND $7 <> 'completed')) AND (NOT cancellation_requested OR $7='cancelled')"
+    };
+}
+
 pub struct JobLedger {
     pub(super) pool: PgPool,
 }
@@ -200,12 +216,36 @@ impl JobLedger {
         if digest.as_slice() != scope.digest {
             return Err(LedgerError::Conflict);
         }
+        let phase = Phase::parse(row.try_get("phase")?)?;
+        // A separate read, and only for a failed run: a supervisor that runs
+        // before the column's migration still reads every other row.
+        let failure_detail = if phase == Phase::Failed {
+            self.read_failure_detail(scope).await?
+        } else {
+            None
+        };
         Ok(JobRecord {
-            phase: Phase::parse(row.try_get("phase")?)?,
+            phase,
             result_json: row.try_get("result_json")?,
             failure_code: row.try_get("failure_code")?,
+            failure_detail,
             runtime_id: row.try_get("runtime_id")?,
         })
+    }
+
+    /// The stored stderr tail of a failed run. A schema without the column
+    /// (the migration has not run yet) has none, which is not an error.
+    async fn read_failure_detail(&self, scope: &JobScope) -> Result<Option<String>, LedgerError> {
+        match sqlx::query_scalar::<_, Option<String>>("SELECT failure_detail FROM elitea_runtime.sandbox_jobs WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3")
+            .bind(&scope.tenant).bind(scope.project).bind(scope.key.as_slice())
+            .fetch_optional(&self.pool).await.map_err(LedgerError::from)
+        {
+            Ok(row) => Ok(row.flatten()),
+            Err(LedgerError::SchemaMigrationRequired(SchemaMigrationRequired::MissingColumn)) => {
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// Read immutable preparation metadata after owner replacement or terminal completion.
@@ -523,6 +563,38 @@ impl JobLedger {
         result: Option<&str>,
         failure: Option<&str>,
     ) -> Result<(), LedgerError> {
+        self.finish_with_detail(lease, phase, result, failure, None)
+            .await
+    }
+
+    /// [`Self::finish`] that also keeps `detail`, the bounded stderr of a
+    /// failed run (#2223). The detail is kept only on a failed row and only
+    /// when it fits the column; otherwise the row is finished without it,
+    /// because the failure code is what the receipt rests on. A schema that
+    /// lacks the column finishes the row without the detail too.
+    /// # Errors
+    /// Same as [`Self::finish`].
+    pub async fn finish_with_detail(
+        &self,
+        lease: &JobLease,
+        phase: Phase,
+        result: Option<&str>,
+        failure: Option<&str>,
+        detail: Option<&str>,
+    ) -> Result<(), LedgerError> {
+        let offered = detail.is_some();
+        let detail = detail.filter(|detail| {
+            phase == Phase::Failed
+                && !detail.is_empty()
+                && detail.len() <= 8192
+                && !detail.contains('\0')
+        });
+        if offered && detail.is_none() && phase == Phase::Failed {
+            tracing::warn!(
+                operation = "sandbox.failure_detail_dropped",
+                "A failed run's stderr detail did not fit the ledger column and was not stored"
+            );
+        }
         let phase = match phase {
             Phase::Completed => {
                 let result = result.ok_or(LedgerError::Invalid)?;
@@ -554,9 +626,28 @@ impl JobLedger {
             }
             Phase::Reserved | Phase::Dispatched => return Err(LedgerError::Invalid),
         };
-        let count = sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET phase=$7,result_json=$8,failure_code=$9,updated_at=clock_timestamp() WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND owner_id=$5 AND lease_epoch=$6 AND lease_until > clock_timestamp() AND (phase='dispatched' OR (phase='reserved' AND $7 <> 'completed')) AND (NOT cancellation_requested OR $7='cancelled')")
+        if let Some(detail) = detail {
+            let kept = sqlx::query(concat!(
+                "UPDATE elitea_runtime.sandbox_jobs SET phase=$7,result_json=$8,failure_code=$9,failure_detail=$10,updated_at=clock_timestamp()",
+                finish_fence!()
+            ))
             .bind(&lease.scope.tenant).bind(lease.scope.project).bind(lease.scope.key.as_slice()).bind(lease.scope.digest.as_slice())
-            .bind(&lease.owner).bind(lease.epoch).bind(phase).bind(result).bind(failure).execute(&self.pool).await?.rows_affected();
+            .bind(&lease.owner).bind(lease.epoch).bind(phase).bind(result).bind(failure).bind(detail)
+            .execute(&self.pool).await.map_err(LedgerError::from);
+            match kept {
+                Ok(done) => return changed(done.rows_affected()),
+                Err(LedgerError::SchemaMigrationRequired(
+                    SchemaMigrationRequired::MissingColumn,
+                )) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        let count = sqlx::query(concat!(
+            "UPDATE elitea_runtime.sandbox_jobs SET phase=$7,result_json=$8,failure_code=$9,updated_at=clock_timestamp()",
+            finish_fence!()
+        ))
+        .bind(&lease.scope.tenant).bind(lease.scope.project).bind(lease.scope.key.as_slice()).bind(lease.scope.digest.as_slice())
+        .bind(&lease.owner).bind(lease.epoch).bind(phase).bind(result).bind(failure).execute(&self.pool).await?.rows_affected();
         changed(count)
     }
 }
@@ -596,3 +687,7 @@ pub use workspace::{WorkspaceBackend, WorkspaceRuntimeReceipt};
 #[cfg(test)]
 #[path = "ledger_schema_tests.rs"]
 mod schema_tests;
+
+#[cfg(test)]
+#[path = "ledger_failure_detail_postgres_tests.rs"]
+mod failure_detail_tests;

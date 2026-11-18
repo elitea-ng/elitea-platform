@@ -191,6 +191,8 @@ export interface MessageGroupMetaWire {
   readonly grounding?: unknown;
   /** Client contract 1.48: the cloud answer's temporary sub-agents (`@elitea/client-core/stream` `parseSubAgentLanes`). */
   readonly subagents_v1?: unknown;
+  /** Client contract 1.60: the answer's refused or narrowed delegations (`@elitea/client-core/stream` `parseDelegationNotices`). */
+  readonly delegation_notices_v1?: unknown;
   readonly interaction_uuid?: string;
   readonly references?: unknown;
   readonly is_error?: boolean;

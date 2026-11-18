@@ -12,11 +12,20 @@ import {
   type Participant,
 } from '@/api/queries/participants';
 import { setConversationLead } from '@/api/queries/conversationActions';
+import {
+  CONVERSATION_SKILL_LIMIT,
+  pinConversationSkill,
+  skillPinErrorText,
+  unpinConversationSkill,
+  useConversationSkills,
+  useProjectSkills,
+} from '@/api/queries/conversationSkills';
 import { useDesign } from '@/design/DesignProvider';
 import { TURN_TAKING_COPY } from '@/features/chat/turnTakingCopy';
 import { floorOf } from '@elitea/client-core/conversation';
 import { useModalAnimation } from '@/features/a11y/motion';
 import { participantAgentId, participantName, participantUserId } from '@/features/chat/messageModel';
+import { ProbationBadge } from '@/features/workforce/ProbationBadge';
 import { LockAwareModal } from '@/security/lock/LockAwareModal';
 import { Avatar, Button, hitTarget, Icon, ListRow, ListSection, maxScale, ramp, Text } from '@/ui';
 
@@ -63,6 +72,8 @@ export interface ParticipantsSheetProps {
    * each agent row offers "What it remembers"; the caller closes the sheet and navigates.
    */
   onAgentMemory?: (agentId: number, name: string) => void;
+  /** Opens the agent's delegation grants (client contract 1.59). When given, each agent row offers "Delegations". */
+  onAgentDelegations?: (agentId: number, name: string) => void;
 }
 
 /** Agents and pipelines: the participants a lead can be. */
@@ -84,7 +95,7 @@ export function ParticipantsSheet(props: ParticipantsSheetProps) {
   );
 }
 
-type Mode = 'list' | 'people' | 'agents';
+type Mode = 'list' | 'people' | 'agents' | 'skills';
 
 function SheetBody({
   onClose,
@@ -98,6 +109,7 @@ function SheetBody({
   onAgentAdded,
   conversationMeta,
   onAgentMemory,
+  onAgentDelegations,
 }: ParticipantsSheetProps) {
   const { colors, radius } = useDesign();
   const insets = useSafeAreaInsets();
@@ -108,6 +120,25 @@ function SheetBody({
   const candidates = useParticipantCandidates(projectId, conversationId, mode === 'people' ? query : '', !offline);
   const agents = useAgents(mode === 'agents' && !offline ? projectId : null, query);
   const peopleAvailable = candidates.data !== null;
+  // ADR-0050 amendment 1, A1.3: the skills pinned to the conversation, in their own section below the
+  // participants. null = this workspace has none (before client contract 1.57), so the section is left out.
+  const pins = useConversationSkills(projectId, conversationId, !offline);
+  const skillOptions = useProjectSkills(projectId, mode === 'skills' && !offline);
+  const pinList = pins.data ?? null;
+  const pinnedSkillIds = new Set((pinList ?? []).flatMap((pin) => (pin.skill_id === undefined ? [] : [pin.skill_id])));
+  const runSkills = (work: () => Promise<unknown>) => {
+    if (busy || offline) return;
+    setBusy(true);
+    setError(null);
+    work()
+      .then(() => pins.refetch())
+      .then(() => {
+        setMode('list');
+        setQuery('');
+      })
+      .catch((e: unknown) => setError(skillPinErrorText(e)))
+      .finally(() => setBusy(false));
+  };
 
   const run = (work: () => Promise<void>) => {
     if (busy || offline) return;
@@ -148,7 +179,7 @@ function SheetBody({
     participants.filter((p) => p.entity_name === 'application' || p.entity_name === 'pipeline').map((p) => Number(p.entity_meta?.id)),
   );
 
-  const title = mode === 'people' ? 'Add people' : mode === 'agents' ? 'Add agent' : 'Participants';
+  const title = mode === 'people' ? 'Add people' : mode === 'agents' ? 'Add agent' : mode === 'skills' ? 'Add skill' : 'Participants';
   const back = () => {
     setMode('list');
     setQuery('');
@@ -192,6 +223,8 @@ function SheetBody({
               const kind = KIND_LABEL[p.entity_name] ?? p.entity_name;
               const agentId = onAgentMemory ? participantAgentId(p) : null;
               const remembers = agentId !== null && onAgentMemory ? () => onAgentMemory(agentId, name) : undefined;
+              const delegatesId = onAgentDelegations ? participantAgentId(p) : null;
+              const delegations = delegatesId !== null && onAgentDelegations ? () => onAgentDelegations(delegatesId, name) : undefined;
               return (
                 <ListRow
                   key={p.id}
@@ -199,8 +232,10 @@ function SheetBody({
                   subtitle={isLead ? `${kind} · ${TURN_TAKING_COPY.lead}` : kind}
                   leading={<Avatar name={name} kind={p.entity_name === 'user' ? 'person' : 'agent'} size={36} decorative />}
                   trailing={
-                    leadable || isRemovable(p, selfUserId) || remembers ? (
+                    leadable || isRemovable(p, selfUserId) || remembers || delegations || (!offline && participantAgentId(p) !== null) ? (
                       <View style={styles.trailing}>
+                        {/* Draws only for an agent hired automatically and not kept yet (client contract 1.56). */}
+                        {!offline ? <ProbationBadge projectId={projectId} agentId={participantAgentId(p)} /> : null}
                         {remembers ? (
                           <Button
                             title="What it remembers"
@@ -209,6 +244,16 @@ function SheetBody({
                             accessibilityLabel={`What ${name} remembers`}
                             disabled={offline}
                             onPress={remembers}
+                          />
+                        ) : null}
+                        {delegations ? (
+                          <Button
+                            title="Delegations"
+                            variant="plain"
+                            size="small"
+                            accessibilityLabel={`${name} delegations`}
+                            disabled={offline}
+                            onPress={delegations}
                           />
                         ) : null}
                         {leadable ? (
@@ -246,13 +291,48 @@ function SheetBody({
               <ListRow icon="info" title="Agents can't join a conversation with toolkits." />
             )}
           </ListSection>
+          {pinList !== null ? (
+            <ListSection
+              title={`Skills (${pinList.length})`}
+              footer="Applied to every reply here, whichever agent or model answers."
+            >
+              {pinList.map((pin) => {
+                const name = pin.name === '' ? 'A skill that is no longer available' : pin.name;
+                const untrusted = pin.trust.state === 'untrusted';
+                const origin = pin.kind === 'listing' ? `Marketplace ${pin.version_name ?? ''}`.trim() : 'Project skill';
+                const note = pin.available ? '' : ' · Not applied for you: not available to you';
+                return (
+                  <ListRow
+                    key={pin.id}
+                    title={name}
+                    subtitle={`${untrusted ? `${origin} · Untrusted: the model gets its text as quoted data` : origin}${note}`}
+                    trailing={
+                      <Button
+                        title="Remove"
+                        variant="destructivePlain"
+                        size="small"
+                        accessibilityLabel={`Remove ${name} from this conversation`}
+                        disabled={offline || busy}
+                        onPress={() => runSkills(() => unpinConversationSkill(projectId, conversationId, pin.id))}
+                      />
+                    }
+                  />
+                );
+              })}
+              {pinList.length < CONVERSATION_SKILL_LIMIT ? (
+                <ListRow icon="plus" title="Add skill" disabled={offline} onPress={() => setMode('skills')} />
+              ) : (
+                <ListRow icon="info" title="This conversation holds five skills." />
+              )}
+            </ListSection>
+          ) : null}
         </ScrollView>
       ) : (
         <>
           <View style={[styles.search, { backgroundColor: colors.surfaceSunken, borderColor: colors.separatorStrong, borderRadius: radius.md }]}>
             <Icon name="search" size={18} tone="secondary" />
             <TextInput
-              accessibilityLabel={mode === 'people' ? 'Search people' : 'Search agents'}
+              accessibilityLabel={mode === 'people' ? 'Search people' : mode === 'skills' ? 'Search skills' : 'Search agents'}
               placeholder="Search"
               placeholderTextColor={colors.textTertiary}
               autoFocus
@@ -266,7 +346,22 @@ function SheetBody({
           </View>
           <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={[styles.list, { paddingBottom: Math.max(insets.bottom, 16) }]}>
             <ListSection>
-              {mode === 'people'
+              {mode === 'skills'
+                ? (skillOptions.data ?? [])
+                    .filter((skill) => !pinnedSkillIds.has(skill.id) && skill.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
+                    .map((skill) => (
+                      <ListRow
+                        key={skill.id}
+                        title={skill.name}
+                        subtitle={skill.description || null}
+                        trailing={<Icon name="plus" size={20} tone="accent" />}
+                        accessibilityLabel={`Add ${skill.name}`}
+                        disabled={busy}
+                        chevron={false}
+                        onPress={() => runSkills(() => pinConversationSkill(projectId, conversationId, skill.id))}
+                      />
+                    ))
+                : mode === 'people'
                 ? (candidates.data?.rows ?? []).map((c) => (
                     <ListRow
                       key={c.userId}
@@ -304,7 +399,7 @@ function SheetBody({
                     );
                   })}
             </ListSection>
-            {(mode === 'people' ? candidates.isLoading : agents.isLoading) ? <ActivityIndicator color={colors.accent} /> : null}
+            {(mode === 'people' ? candidates.isLoading : mode === 'skills' ? skillOptions.isLoading : agents.isLoading) ? <ActivityIndicator color={colors.accent} /> : null}
           </ScrollView>
         </>
       )}

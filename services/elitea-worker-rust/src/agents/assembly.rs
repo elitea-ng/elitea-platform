@@ -112,7 +112,7 @@ pub(crate) struct OrdinaryNoToolProfile {
     /// as `N·TAG` with it.
     recalled_memory_tag: Option<String>,
     /// The version's `meta.capabilities.can_review_agents` (ADR-0050
-    /// decision 5l, #1616): an HR agent, bound `propose_dismissal`. Only a
+    /// decision 5l, #1616): a workforce manager, bound `propose_dismissal`. Only a
     /// root application agent has it; Main checks it again on every call.
     can_review_agents: bool,
 }
@@ -626,7 +626,7 @@ impl OrdinaryNoToolProfile {
         self.recalled_memory_tag.as_deref()
     }
 
-    /// Whether the version makes the agent an HR agent
+    /// Whether the version makes the agent a workforce manager
     /// (`meta.capabilities.can_review_agents`).
     #[must_use]
     pub(crate) const fn can_review_agents(&self) -> bool {
@@ -1131,10 +1131,19 @@ fn history_author(
     NativeAgentAssemblyError,
 > {
     use elitea_agent_runtime::untrusted::MessageAuthorKind;
-    match additional.len() {
-        0 => return Ok(None),
-        1 => {}
-        _ => return Err(invalid_profile()),
+    if additional.is_empty() {
+        return Ok(None);
+    }
+    // #2122: a message the asker wrote to PEOPLE (a people-only post) carries
+    // `elitea_addressed: "people"` beside its author. Refusing the second key
+    // failed every later turn of a conversation holding one with "The execution
+    // input is invalid.". It is admitted in the one shape Main writes, and only
+    // beside an author; the marker itself changes nothing the model reads.
+    let marker = additional.get("elitea_addressed");
+    if additional.len() != 1 + usize::from(marker.is_some())
+        || marker.is_some_and(|marker| marker.as_str() != Some("people"))
+    {
+        return Err(invalid_profile());
     }
     let author = additional
         .get("elitea_author")

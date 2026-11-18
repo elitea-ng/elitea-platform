@@ -9,6 +9,8 @@ import (
 	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 	desktopopsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
 	toolkitrun "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/delegationedge"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/delegationnotice"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/localturn"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	dbrepos "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
@@ -83,6 +85,7 @@ func composeChildTurns(
 	policy localturn.PolicyReader,
 	recorder audit.Recorder,
 	groupAuth apimw.AuthConfig,
+	delegation delegationSwitch,
 	logger *slog.Logger,
 ) (http.Handler, error) {
 	if pool == nil || groupAuth.PrincipalValidator == nil {
@@ -92,8 +95,48 @@ func composeChildTurns(
 	if err != nil {
 		return nil, err
 	}
+	edge, editors, err := composeDelegationEdge(pool, delegation)
+	if err != nil {
+		return nil, err
+	}
 	return desktopopsapi.NewChildTurnRoute(desktopopsapi.ChildTurnDependencies{
 		Start: start, Authorizer: authorizer, Turns: turns,
 		Store: dbrepos.NewLocalChildTurnsRepo(pool), Audit: recorder,
+		Delegation: edge, Editors: editors,
 	}, groupAuth, legacyrbac.NewPostgresResolver(pool))
+}
+
+// delegationSwitch is what the nested agent's delegation rule reads: the grant
+// switch (ELITEA_DELEGATION_GRANTS_ENFORCED, off by default) and the platform's
+// `delegation` section.
+type delegationSwitch struct {
+	grantsEnforced bool
+	settings       delegationedge.SettingsReader
+}
+
+// composeDelegationEdge builds the delegation rule of the edge from a local
+// turn's agent to a nested agent it starts as a cloud child (issue 2214). It
+// answers no evaluator while the grant switch is off, so the child start is
+// unchanged.
+func composeDelegationEdge(pool *pgxpool.Pool, delegation delegationSwitch) (*delegationedge.Evaluator, delegationnotice.EditorLister, error) {
+	if !delegation.grantsEnforced || delegation.settings == nil {
+		return nil, nil, nil
+	}
+	sources, err := dbrepos.NewWorkerEgressSources(pool)
+	if err != nil {
+		return nil, nil, err
+	}
+	callees, err := dbrepos.NewDelegationCallees(pool, sources)
+	if err != nil {
+		return nil, nil, err
+	}
+	editors, err := dbrepos.NewDelegationEditors(pool)
+	if err != nil {
+		return nil, nil, err
+	}
+	evaluator, err := delegationedge.New(delegation.settings, callees, dbrepos.NewDelegationGrantReader(pool))
+	if err != nil {
+		return nil, nil, err
+	}
+	return evaluator, editors, nil
 }

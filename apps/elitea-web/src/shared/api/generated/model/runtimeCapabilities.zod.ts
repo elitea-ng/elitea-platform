@@ -59,6 +59,12 @@ export const RuntimeCapabilities = zod
       .describe(
         "Catalogued toolkit type keys the configured worker cannot build — the same set ToolkitTypeSchemas marks metadata.hidden for capability reasons, restated flat.\n",
       ),
+    code_sandbox_languages: zod
+      .array(zod.string())
+      .optional()
+      .describe(
+        "The languages the deployment's code sandbox serves, the ones the agents' Code sandbox tool (internal tool pyodide) offers: any of python, javascript, typescript and rust. Empty when the deployment has no code sandbox, in which case internal_tools.pyodide is false.\n",
+      ),
   })
   .describe(
     "NOTE(W2): internal/api/v2/toolkits/capabilities_handler.go (RuntimeCapabilities). Restates, in one deployment-wide read, what the worker-capability projection already decides per toolkit type (ToolkitTypeSchemas' metadata.hidden) and adds the internal chat tools that projection does not cover at all.\n",

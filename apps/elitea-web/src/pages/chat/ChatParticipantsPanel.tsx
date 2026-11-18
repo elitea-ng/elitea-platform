@@ -25,6 +25,7 @@ import type { ChatBoxProps } from '@/widgets/chat-box';
 import { AgentContextMeter, ContextBudget } from '@/widgets/context-budget';
 
 import { useAgentLeadSlot } from './ChatAgentLead';
+import { ConversationSkillsSection } from './ConversationSkillsSection';
 
 /**
  * Baseline `rightPanelWidth` (`NewChat.jsx:187`). `ParticipantsWrapper`'s own
@@ -60,6 +61,10 @@ export function ChatParticipantsPanel({ activeConversation, activeParticipant, p
   );
   // ADR-0050 7d (issue 1612): the lead badge and menu on each agent row, with two or more agents.
   const leadSlot = useAgentLeadSlot(projectId, activeConversation);
+
+  // ADR-0050 amendment 1, A1.3: the skills pinned to the conversation, in their own section beside
+  // the participants and never among them.
+  const skills = <PanelSkills projectId={projectId} activeConversation={activeConversation} />;
 
   const panel = (
     <ParticipantsWrapper
@@ -98,8 +103,43 @@ export function ChatParticipantsPanel({ activeConversation, activeParticipant, p
   return inspector ? (
     <SidePanelTab id="conversation" title={t('desktop.inspector.chat', 'Conversation')} subject={activeConversation?.name ?? ''}>
       {panel}
+      {skills}
     </SidePanelTab>
   ) : (
-    panel
+    <>
+      {panel}
+      {skills}
+    </>
   );
+}
+
+/** The Skills section for the open conversation; only a saved conversation can hold a pin. */
+function PanelSkills({ projectId, activeConversation }: { readonly projectId: string | undefined; readonly activeConversation: ActiveConversation | undefined }): ReactNode {
+  const saved = activeConversation !== undefined && !activeConversation.isNew && !activeConversation.isPlayback;
+  return (
+    <ConversationSkillsSection
+      projectId={projectId}
+      conversationId={saved ? activeConversationId(activeConversation) : undefined}
+      personName={personNameOf(activeConversation)}
+    />
+  );
+}
+
+/** The conversation's id as the pin routes take it: its uuid when it has one, else its numeric id. */
+export function activeConversationId(conversation: NonNullable<ActiveConversation>): string | undefined {
+  if (conversation.uuid !== undefined && conversation.uuid !== '') return conversation.uuid;
+  return conversation.id === undefined || conversation.id === '' ? undefined : String(conversation.id);
+}
+
+/** Names of the people in the conversation by user id, for "Pinned by ...". */
+export function personNameOf(conversation: ActiveConversation | undefined): (userId: number) => string | undefined {
+  const names = new Map<string, string>();
+  for (const participant of (conversation?.participants ?? []) as readonly unknown[]) {
+    const row = participant as { readonly entity_name?: unknown; readonly entity_meta?: { readonly id?: unknown; readonly name?: unknown } };
+    if (row.entity_name !== 'user' || row.entity_meta === undefined) continue;
+    const id = row.entity_meta.id;
+    const name = row.entity_meta.name;
+    if ((typeof id === 'string' || typeof id === 'number') && typeof name === 'string') names.set(String(id), name);
+  }
+  return (userId) => names.get(String(userId));
 }

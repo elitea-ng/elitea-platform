@@ -334,18 +334,7 @@ export async function uploadPendingAttachments(
   if (!outcome.success) return UPLOAD_FAILED;
   return outcome.uploaded.map((uploaded) => ({ filepath: uploaded.filepath, name: uploaded.sanitizedName }));
 }
-export function buildOptimisticUserMessage(questionId: string, question: string, userParticipant: { id?: string; name?: string; avatar?: string } | undefined, participantId: string | number | undefined): ChatMessage {
-  return {
-    id: questionId,
-    role: ROLES.User,
-    name: userParticipant?.name ?? '',
-    content: question,
-    createdAt: new Date().toISOString(),
-    ...(userParticipant?.avatar !== undefined ? { avatar: userParticipant.avatar } : {}),
-    ...(userParticipant?.id !== undefined ? { userId: userParticipant.id } : {}),
-    ...(participantId !== undefined ? { participantId: String(participantId) } : {}),
-  };
-}
+export { buildOptimisticUserMessage } from './optimisticUserMessage';
 /**
  * The identifier this send's attachments are UPLOADED under: the
  * conversation's UUID, and never its numeric id.

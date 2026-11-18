@@ -109,17 +109,19 @@ export function EditPipelineConfigurationPanel(props: EditPipelineConfigurationP
         values={editor.values}
         onFieldChange={editor.onFieldChange}
         disabled={isEditorDisabled}
-        tagsSlot={
-          <>
-            <ApplicationMcpAccessToggle
-              checked={tags.some((tag) => tag.name === 'mcp')}
-              onChange={handleMcpAccessChange}
-              disabled={isEditorDisabled}
-              entityType="pipeline"
-            />
-            <AgentTagEditor projectId={projectId} value={tags} onChange={setTags} />
-          </>
-        }
+        generalSlots={{
+          tags: (
+            <>
+              <ApplicationMcpAccessToggle
+                checked={tags.some((tag) => tag.name === 'mcp')}
+                onChange={handleMcpAccessChange}
+                disabled={isEditorDisabled}
+                entityType="pipeline"
+              />
+              <AgentTagEditor projectId={projectId} value={tags} onChange={setTags} />
+            </>
+          ),
+        }}
         modelSettingsSlot={
           <AgentModelSettings
             projectId={projectId}

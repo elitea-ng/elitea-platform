@@ -9,6 +9,7 @@ import type { TestSocketClient } from '@/shared/api/socket/testing';
 import { installTestEventSource, type TestEventSourceRegistry } from '@/shared/api/sse/testing';
 import { resetConfigForTests } from '@/shared/config/get-config';
 
+import { settleIndexRunProgress } from '../helpers/indexRunNotices.helpers';
 import type { ToolkitChatMessage } from './useToolkitChat.types';
 import { useToolkitChatSocket } from './useToolkitChatSocket.hooks';
 
@@ -224,6 +225,37 @@ describe('useToolkitChatSocket — SSE execution stream (issue #93)', () => {
     }
   });
 
+  it('replaces the running placeholder with the run summary, counts and all, when the run completes (#2041)', () => {
+    const client = createTestSocketClient();
+    const placeholder = { id: 'index-run-progress', role: 'assistant', content: 'running', created_at: 1, participant_id: 'system' };
+    const { getChatHistory } = setup(client, { executionId: 'exec-1' });
+    act(() => {
+      sse.emit('index.ingest.completed', JSON.stringify({ status: 'ok', message: 'Indexed 4 documents.', indexed_documents: 4, indexed_chunks: 19 }));
+    });
+    const history = settleIndexRunProgress([placeholder], getChatHistory().at(-1) as ToolkitChatMessage);
+    expect(getChatHistory()).toHaveLength(1);
+    expect(getChatHistory()[0]?.content).toContain('4 documents indexed (19 chunks)');
+    expect(history.map((message) => message.id)).not.toContain('index-run-progress');
+  });
+
+  it('shows a step frame of the execution stream whose message the panel has not seen yet (#2041)', () => {
+    const client = createTestSocketClient();
+    const { getChatHistory } = setup(client, { executionId: 'exec-1' });
+    act(() => {
+      sse.emit(
+        'execution.node_event',
+        JSON.stringify({
+          type: 'agent_tool_start',
+          message_id: 'run-1',
+          response_metadata: { tool_run_id: 'step-1', tool_name: 'Listing documents' },
+        }),
+      );
+    });
+    const message = getChatHistory().find((item) => item.id === 'run-1');
+    expect(message).toBeDefined();
+    expect((message as { toolActions?: { name?: string }[] }).toolActions?.[0]?.name).toBe('Listing documents');
+  });
+
   it('settles as completed when the terminal frame carries no status (the artifact-shaped projection)', () => {
     const client = createTestSocketClient();
     const { onRunFinish } = setup(client, { executionId: 'exec-1' });
@@ -287,17 +319,67 @@ describe('useToolkitChatSocket — SSE execution stream (issue #93)', () => {
     expect(onRunFinish).toHaveBeenCalledWith('failed');
   });
 
+  it('reads a stopped run as stopped, not failed, and reports it as cancelled', () => {
+    const client = createTestSocketClient();
+    const { getChatHistory, onRunFinish } = setup(client, { executionId: 'exec-1' });
+
+    act(() => {
+      sse.emit('execution.failed', JSON.stringify({ code: 'CANCELLED', safe_message: 'Execution was cancelled.', retryable: false }));
+    });
+
+    const rendered = getChatHistory().map((message) => String(message.content ?? '')).join('\n');
+    expect(rendered).toContain('Indexing was stopped before it finished.');
+    expect(rendered).not.toMatch(/fail/i);
+    expect(onRunFinish).toHaveBeenCalledWith('cancelled');
+  });
+
   it('still says something useful when the failure frame carries no safe_message', () => {
     const client = createTestSocketClient();
     const { getChatHistory } = setup(client, { executionId: 'exec-1' });
 
     act(() => {
-      sse.emit('execution.failed', JSON.stringify({ code: 'CANCELLED', retryable: false }));
+      sse.emit('execution.failed', JSON.stringify({ code: 'RUNTIME_FAULT', retryable: false }));
     });
 
     const rendered = getChatHistory().map((message) => String(message.content ?? '')).join('\n');
-    expect(rendered).toContain('CANCELLED');
+    expect(rendered).toContain('RUNTIME_FAULT');
     expect(rendered).not.toMatch(/retried/i);
+  });
+
+  // #2041 review: on the execution stream a mid-run frame is a step, never the
+  // end of the run. Only ingest.completed / execution.failed end it, so the
+  // summary is not lost to an early close.
+  it('does not finish the run on a mid-run error or finish_reason frame, and still delivers the summary', () => {
+    const client = createTestSocketClient();
+    const { getChatHistory, onRunFinish } = setup(client, { executionId: 'exec-1' });
+
+    act(() => {
+      sse.emit('execution.node_event', JSON.stringify({ type: 'agent_tool_start', message_id: 'run-1', response_metadata: { tool_run_id: 's1', tool_name: 'List' } }));
+      sse.emit('execution.node_event', JSON.stringify({ type: 'agent_tool_error', message_id: 'run-1', response_metadata: { tool_run_id: 's1' }, content: 'one document failed' }));
+      sse.emit('execution.node_event', JSON.stringify({ type: 'agent_response', message_id: 'run-1', content: 'x', response_metadata: { finish_reason: 'stop' } }));
+    });
+    expect(onRunFinish).not.toHaveBeenCalled();
+
+    act(() => {
+      sse.emit('index.ingest.completed', JSON.stringify({ status: 'ok', message: 'done', indexed_documents: 2 }));
+    });
+    expect(onRunFinish).toHaveBeenCalledTimes(1);
+    const steps = getChatHistory().find((item) => item.id === 'run-1') as { isLoading?: boolean; isStreaming?: boolean } | undefined;
+    expect(steps).toMatchObject({ isLoading: false, isStreaming: false });
+    expect(getChatHistory().at(-1)?.content).toContain('2 documents indexed');
+  });
+
+  it('says so when neither the stream nor a socket server can follow the run, instead of leaving a spinner', () => {
+    const client = createTestSocketClient();
+    client.setConnectionState('disconnected');
+    const { getChatHistory, onStreamError } = setup(client, { executionId: 'exec-1' });
+
+    act(() => {
+      sse.fail();
+    });
+
+    expect(onStreamError).toHaveBeenCalled();
+    expect(getChatHistory().map((message) => String(message.content ?? '')).join('\n')).toContain('could not be opened');
   });
 
   // `execution.replay_reset` is emitted when the durable log was pruned past

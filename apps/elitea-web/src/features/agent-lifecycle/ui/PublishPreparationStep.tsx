@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
 import FormControlLabel from '@mui/material/FormControlLabel';
+import FormHelperText from '@mui/material/FormHelperText';
 import MenuItem from '@mui/material/MenuItem';
 import Select from '@mui/material/Select';
 import TextField from '@mui/material/TextField';
@@ -30,6 +31,14 @@ export interface PublishPreparationStepProps {
   readonly onCategoryChange: (next: PublishCategory | '') => void;
   readonly agreed: boolean;
   readonly onAgreedChange: (next: boolean) => void;
+  /** Absent for a change request: its summary is the release notes. */
+  readonly releaseNotes?: string;
+  readonly onReleaseNotesChange?: (next: string) => void;
+  /**
+   * Set once Continue was pressed with something missing (#2025): the empty
+   * fields are then marked instead of the click doing nothing.
+   */
+  readonly showErrors?: boolean;
 }
 
 export function PublishPreparationStep({
@@ -40,18 +49,28 @@ export function PublishPreparationStep({
   onCategoryChange,
   agreed,
   onAgreedChange,
+  releaseNotes = '',
+  onReleaseNotesChange,
+  showErrors = false,
 }: PublishPreparationStepProps): ReactNode {
+  const nameMissing = showErrors && versionName === '';
+  const categoryMissing = showErrors && category === '';
+  const termsMissing = showErrors && !agreed;
   return (
     <>
       <TextField
         label={t('features.agentLifecycle.publish.versionName', 'Version name')}
         value={versionName}
         onChange={(event) => onVersionNameChange(event.target.value)}
-        error={versionName !== '' && !nameValid}
-        helperText={t(
-          'features.agentLifecycle.publish.versionNameHelp',
-          'Only letters, numbers, dots, hyphens and underscores are allowed.',
-        )}
+        error={(versionName !== '' && !nameValid) || nameMissing}
+        helperText={
+          nameMissing
+            ? t('features.agentLifecycle.publish.versionNameRequired', 'Enter a version name.')
+            : t(
+                'features.agentLifecycle.publish.versionNameHelp',
+                'Only letters, numbers, dots, hyphens and underscores are allowed.',
+              )
+        }
         slotProps={{ htmlInput: { 'data-testid': 'publish-version-name' } }}
         fullWidth
       />
@@ -60,18 +79,36 @@ export function PublishPreparationStep({
         value={category}
         onChange={(event) => onCategoryChange(event.target.value)}
         data-testid="publish-category"
+        error={categoryMissing}
         fullWidth
       >
         <MenuItem value="">{t('features.agentLifecycle.publish.noCategory', 'Category')}</MenuItem>
         {PUBLISH_CATEGORIES.map((name) => (
-          <MenuItem
-            key={name}
-            value={name}
-          >
+          <MenuItem key={name} value={name}>
             {name}
           </MenuItem>
         ))}
       </Select>
+      {categoryMissing && (
+        <FormHelperText error data-testid="publish-category-error">
+          {t('features.agentLifecycle.publish.categoryMissing', 'Choose a category.')}
+        </FormHelperText>
+      )}
+      {onReleaseNotesChange !== undefined && (
+        <TextField
+          label={t('features.agentLifecycle.publish.releaseNotes', 'Release notes (optional)')}
+          helperText={t(
+            'features.agentLifecycle.publish.releaseNotesHelp',
+            'Say what changed. The Marketplace listing shows this text.',
+          )}
+          value={releaseNotes}
+          onChange={(event) => onReleaseNotesChange(event.target.value)}
+          multiline
+          minRows={3}
+          slotProps={{ htmlInput: { maxLength: 4000, 'data-testid': 'publish-release-notes' } }}
+          fullWidth
+        />
+      )}
       <Typography variant="labelMedium">{t('features.agentLifecycle.publish.terms', 'Publishing Terms')}</Typography>
       <Box sx={termsSx}>
         {getPublishingTerms().map((term) => (
@@ -82,18 +119,11 @@ export function PublishPreparationStep({
               lines rendered as one run-on sentence — measured in the browser:
               "1 - Exclusions NoticeWhen publishing, certain components…".
             */}
-            <Typography
-              component="div"
-              variant="labelSmall"
-            >
+            <Typography component="div" variant="labelSmall">
               {term.heading}
             </Typography>
             {term.lines.map((line) => (
-              <Typography
-                key={line}
-                component="div"
-                variant="bodySmall"
-              >
+              <Typography key={line} component="div" variant="bodySmall">
                 {line}
               </Typography>
             ))}
@@ -110,6 +140,11 @@ export function PublishPreparationStep({
         }
         label={t('features.agentLifecycle.publish.agree', 'I agree with the Publishing Terms.')}
       />
+      {termsMissing && (
+        <FormHelperText error data-testid="publish-terms-error">
+          {t('features.agentLifecycle.publish.termsMissing', 'Accept the Publishing Terms to continue.')}
+        </FormHelperText>
+      )}
     </>
   );
 }

@@ -331,7 +331,7 @@ export const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(funct
   const initialEdges: readonly FlowEdge[] = useMemo(() => parseYaml(yamlJsonObject).edges as unknown as readonly FlowEdge[], [yamlJsonObject]);
 
   const theme = useTheme();
-  const rootBaseSx: SxProps<Theme> = useMemo(() => ({ display: display ?? 'flex', flexDirection: 'column', height: '100%', flex: 1 }), [display]);
+  const rootBaseSx: SxProps<Theme> = useMemo(() => ({ display: display ?? 'flex', flexDirection: 'column', height: '100%', minHeight: 0, flex: 1 }), [display]);
   const rootSx = combineSx(rootBaseSx, sx);
 
   return (

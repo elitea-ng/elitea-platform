@@ -91,7 +91,7 @@ const ChatBoxInner = memo(function ChatBox({
   const chatInputRef = useRef<NewChatInputHandle>(null);
   const attachmentButtonRef = useRef<AttachmentButtonHandle>(null);
   const voiceButtonRef = useRef<VoiceButtonHandle>(null);
-  const { activeConversation, isLoadingConversation, onConversationCreated: onCreated, onTurn } = unwrapChatBoxConversation(conversation);
+  const { activeConversation, isLoadingConversation, pendingConversationId, onConversationCreated: onCreated, onTurn } = unwrapChatBoxConversation(conversation);
   const onConversationCreated = withDraftCarry(onCreated, { projectId, scratch: [isAgentsPage, editorTest], text: () => chatInputRef.current?.getInputContent() ?? '' });
   const { userId, userName, userAvatar, llmSettings, onSetLLMSettings, onDeleteAnswer, onDeleteAllMessages } = flattenChatBoxProps({ user, llm, onDelete });
   const { conversationId, conversationParticipants, conversationUuid, conversationMeta, isConversationSending, projectIdString } = deriveChatBoxIds(activeConversation, projectId);
@@ -101,8 +101,10 @@ const ChatBoxInner = memo(function ChatBox({
   const messages = data.messageList.messages;
   // ADR-0050 D7c: who an unaddressed message goes to, derived once for the send, the stream identity, the attachments gate and "To:".
   const target = useResolvedTarget(activeParticipant, conversationParticipants, messages);
-  const { participantForEditor, normalisedParticipants, agentEditorParticipantDetails, isFetchingParticipantDetails, assistantName, areAttachmentsGated, grantableTools } = useChatBoxParticipant({ activeParticipant, conversationParticipants, target, isAgentsPage });
+  const { participantForEditor, normalisedParticipants, agentEditorParticipantDetails, isFetchingParticipantDetails, assistantName, areAttachmentsGated, grantableTools, welcomeMessage, participantStarters } = useChatBoxParticipant({ activeParticipant, conversationParticipants, target, isAgentsPage });
   const activeParticipantVersions = agentEditorParticipantDetails?.versions;
+  // #1988: the bound agent's own starters, unless the caller supplied a list (the editor's test pane passes its live form).
+  const effectiveStarters = conversationStarters ?? participantStarters;
   // ADR-0045: "Run to completion", on by default: the grant each send carries.
   const unattended = useChatBoxUnattended(conversationUuid, grantableTools, !editorTest);
 
@@ -113,11 +115,12 @@ const ChatBoxInner = memo(function ChatBox({
     activeParticipant: participantForEditor,
     participants: normalisedParticipants,
     userId,
-    conversationStarters,
+    conversationStarters: effectiveStarters,
     isAgentsPage,
     chatInput: chatInputRef,
     projectId,
     activeParticipantVersions,
+    conversationId: typeof conversationUuid === 'string' ? conversationUuid : undefined,
   }));
 
   // Socket client + read-aloud (TTS)
@@ -311,8 +314,8 @@ const ChatBoxInner = memo(function ChatBox({
     <Box sx={chatShellSx(isEmptyConversation)}>
       <Box sx={chatColumnSx(isEmptyConversation)}>
         <ChatMessageList
-          assistant={{ name: assistantName, conversationUuid }}
-          emptyState={<ChatEmptyGreeting userName={userName} />}
+          assistant={{ name: assistantName, conversationUuid, readerName: userName }}
+          emptyState={<ChatEmptyGreeting userName={userName} welcomeMessage={welcomeMessage} />}
           chatHistory={composer.queued.decorate(messages)}
           isStreaming={isStreaming}
           userId={userId ?? ''}
@@ -332,7 +335,7 @@ const ChatBoxInner = memo(function ChatBox({
         {state.shouldShowStarters && (
           <ChatConversationStarters
             onSend={handleSendStarter}
-            conversationStarters={resolveConversationStarters(state.hasStarterBeenSent, messages.length, conversationStarters)}
+            conversationStarters={resolveConversationStarters(state.hasStarterBeenSent, messages.length, effectiveStarters)}
           />
         )}
       </Box>
@@ -344,7 +347,7 @@ const ChatBoxInner = memo(function ChatBox({
             composer={composer}
             state={state}
             data={data}
-            conversation={{ projectId, projectIdString, conversationId, conversationMeta, conversationParticipants, isAgentsPage, editorTest, messageCount: messages.length }}
+            conversation={{ projectId, projectIdString, conversationId, pendingConversationId, conversationUuid, conversationMeta, conversationParticipants, isAgentsPage, editorTest, messageCount: messages.length }}
             participant={{ participantForEditor, agentEditorParticipantDetails, normalisedParticipants, target, onChangeParticipant, onSelectVersion: handleSelectVersion, entityActions: entityParticipantActions }}
             inputState={{ ...inputState, isStreaming, areAttachmentsDisabled }}
             media={{ readAloud, voiceFeedback }}

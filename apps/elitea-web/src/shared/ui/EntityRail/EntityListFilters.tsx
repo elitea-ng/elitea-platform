@@ -47,12 +47,7 @@ export interface EntityListFiltersProps {
   readonly indexesTotal?: number;
 }
 
-export function EntityListFilters({ projectId, subject, authorIdFromUrl, preferTrendingAuthors = false, statKind, indexesTotal }: EntityListFiltersProps): ReactNode {
-  const location = useLocation();
-  const tagSelection = useRailTagSelection();
-  const viewer = useRailViewer(authorIdFromUrl);
-  const showAuthor = !preferTrendingAuthors && shouldShowAuthorCard(authorIdFromUrl, projectId, viewer.personalProjectId);
-
+export function EntityListFilters({ projectId, subject, ...rest }: EntityListFiltersProps): ReactNode {
   return (
     <SidePanelTab
       id="filters"
@@ -63,24 +58,44 @@ export function EntityListFilters({ projectId, subject, authorIdFromUrl, preferT
         data-testid="entity-list-filters"
         sx={filtersPanelSx}
       >
-        <RailTagsPanel
+        <EntityListFiltersBody
           projectId={projectId}
-          selectedTags={tagSelection.selectedTags}
-          onToggleTag={tagSelection.toggleTag}
-          onClearTags={tagSelection.clearTags}
+          {...rest}
         />
-        {showAuthor ? (
-          <RailAuthorCard
-            authorId={viewer.authorId}
-            pathname={location.pathname}
-            {...(statKind === undefined ? {} : { statKind })}
-            {...(indexesTotal === undefined ? {} : { indexesTotal })}
-          />
-        ) : (
-          <RailTrendingAuthors projectId={projectId} />
-        )}
       </Box>
     </SidePanelTab>
+  );
+}
+
+/**
+ * The tags filter and the author card (or the trending authors) without a tab
+ * around them: the Workshop's List tab (`widgets/page-header`'s
+ * `EntityListSidebar`) puts them under its own controls.
+ */
+export function EntityListFiltersBody({ projectId, authorIdFromUrl, preferTrendingAuthors = false, statKind, indexesTotal }: Omit<EntityListFiltersProps, 'subject'>): ReactNode {
+  const location = useLocation();
+  const tagSelection = useRailTagSelection();
+  const viewer = useRailViewer(authorIdFromUrl);
+  const showAuthor = !preferTrendingAuthors && shouldShowAuthorCard(authorIdFromUrl, projectId, viewer.personalProjectId);
+  return (
+    <>
+      <RailTagsPanel
+        projectId={projectId}
+        selectedTags={tagSelection.selectedTags}
+        onToggleTag={tagSelection.toggleTag}
+        onClearTags={tagSelection.clearTags}
+      />
+      {showAuthor ? (
+        <RailAuthorCard
+          authorId={viewer.authorId}
+          pathname={location.pathname}
+          {...(statKind === undefined ? {} : { statKind })}
+          {...(indexesTotal === undefined ? {} : { indexesTotal })}
+        />
+      ) : (
+        <RailTrendingAuthors projectId={projectId} />
+      )}
+    </>
   );
 }
 

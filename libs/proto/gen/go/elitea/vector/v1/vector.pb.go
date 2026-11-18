@@ -30,7 +30,7 @@
 //
 // LAYOUT (ADR-0031 decision 2). One Qdrant collection per embedding space
 // and collection family. The shared family (toolkit indexes, DeepWiki,
-// memory) is `emb_<model_slug>_<dimension>`: float16 dense vectors with an
+// memory, agent memory) is `emb_<model_slug>_<dimension>`: float16 dense vectors with an
 // int8 quantized copy, plus a BM25 sparse vector. The Inventory family is
 // `inv_<model_slug>_<dimension>`: float32 dense vectors, no quantization, no
 // BM25 (HybridSearch is refused for it), searched by an exact scan, so its
@@ -78,6 +78,14 @@ const (
 	// namespace string. Every point carries an `owner` the SERVICE stamps from
 	// the token and every read, count, update and delete is narrowed by it.
 	Source_SOURCE_MEMORY Source = 4
+	// An agent's own memory (ADR-0050 decision 1b, issue 1657): one namespace
+	// per (project, agent), namespace_id the UUIDv5 elitea-main derives from the
+	// agent id, one document per memory entry (document_key is the entry id).
+	// It is an ordinary shared-family source: no memory_scope, no toolkit_id,
+	// no owner. It is not an index, so ListIndexes never lists it. Only
+	// elitea-main uses it: it embeds an entry on write and searches the agent's
+	// entries to rank a turn's recall; the platform's rows stay the authority.
+	Source_SOURCE_AGENT_MEMORY Source = 5
 )
 
 // Enum value maps for Source.
@@ -88,6 +96,7 @@ var (
 		2: "SOURCE_DEEPWIKI",
 		3: "SOURCE_INVENTORY",
 		4: "SOURCE_MEMORY",
+		5: "SOURCE_AGENT_MEMORY",
 	}
 	Source_value = map[string]int32{
 		"SOURCE_UNSPECIFIED":   0,
@@ -95,6 +104,7 @@ var (
 		"SOURCE_DEEPWIKI":      2,
 		"SOURCE_INVENTORY":     3,
 		"SOURCE_MEMORY":        4,
+		"SOURCE_AGENT_MEMORY":  5,
 	}
 )
 
@@ -3351,13 +3361,14 @@ const file_elitea_vector_v1_vector_proto_rawDesc = "" +
 	"\x18DeleteMemoryUserResponse\x12 \n" +
 	"\vcollections\x18\x01 \x01(\rR\vcollections\"?\n" +
 	"\x1bDeleteMemoryToolkitResponse\x12 \n" +
-	"\vcollections\x18\x01 \x01(\rR\vcollections*x\n" +
+	"\vcollections\x18\x01 \x01(\rR\vcollections*\x91\x01\n" +
 	"\x06Source\x12\x16\n" +
 	"\x12SOURCE_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14SOURCE_TOOLKIT_INDEX\x10\x01\x12\x13\n" +
 	"\x0fSOURCE_DEEPWIKI\x10\x02\x12\x14\n" +
 	"\x10SOURCE_INVENTORY\x10\x03\x12\x11\n" +
-	"\rSOURCE_MEMORY\x10\x04*`\n" +
+	"\rSOURCE_MEMORY\x10\x04\x12\x17\n" +
+	"\x13SOURCE_AGENT_MEMORY\x10\x05*`\n" +
 	"\vMemoryScope\x12\x1c\n" +
 	"\x18MEMORY_SCOPE_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15MEMORY_SCOPE_PERSONAL\x10\x01\x12\x18\n" +

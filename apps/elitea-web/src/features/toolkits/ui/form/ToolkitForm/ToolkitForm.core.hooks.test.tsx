@@ -211,6 +211,25 @@ describe('useToolkitFormCore editField', () => {
       expect(readEnum(box)).toBeUndefined();
     });
 
+    it.each(['mcp', 'mcp_context7'])('reads no type catalogue for a %s toolkit still being created: that route lists the project\'s other MCPs, not tools (issue 2093)', async (mcpType) => {
+      let requestCount = 0;
+      server.use(http.get(TOOLKIT_TYPES_URL, () => HttpResponse.json({ [mcpType]: { properties: { selected_tools: { type: 'array' } } } })));
+      server.use(
+        http.post(DISCOVER_TOOLS_URL, () => {
+          requestCount += 1;
+          return HttpResponse.json({ tools: [{ id: '1', name: 'Context7', type: 'mcp' }], total: 1 });
+        }),
+      );
+      const mcpDetail = { type: mcpType, settings: {} };
+
+      const { box } = renderCore(baseProps({ editToolDetail: mcpDetail, formValues: mcpDetail, formInitialValues: mcpDetail }));
+
+      await waitFor(() => expect(box.current?.effectiveToolSchema).toBeDefined());
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(requestCount).toBe(0);
+      expect(readEnum(box)).toBeUndefined();
+    });
+
     it('keeps the declared tool list and reads no catalogue for a type that declares its own tools', async () => {
       let requestCount = 0;
       server.use(http.get(TOOLKIT_TYPES_URL, () => HttpResponse.json({ github: { properties: { selected_tools: { items: { enum: ['create_issue'] } } } } })));

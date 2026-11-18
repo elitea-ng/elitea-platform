@@ -13,6 +13,7 @@ import * as ConnectionOperationsHelpers from '../helpers/connectionOperations.he
 import { handleToConditionNodeConnection, handleToDecisionNodeConnection } from '../helpers/connectionOperations.toNode.helpers';
 import * as EdgeOperationsHelpers from '../helpers/edgeOperations.helpers';
 import type { NodeIdRenameMap } from '../helpers/edgeOperations.helpers';
+import { connectErrorRoute, ERROR_OUTPUT_HANDLE } from '../helpers/nodeErrorRoute.helpers';
 import * as NodeTypeHelpers from '../helpers/nodeType.helpers';
 import type { FlowNode, SetFlowEdges, SetFlowNodes, SetYamlJsonObject, YamlPipelineDocumentRef } from '../reactFlowTypes';
 
@@ -50,6 +51,18 @@ type DispatchRule = readonly [predicate: (args: DispatchArgs) => boolean, handle
  * "from decision", checked before "to decision").
  */
 const DISPATCH_RULES: readonly DispatchRule[] = [
+  // 5b-1 (C6): the error output handle writes `settings.error_transition` only.
+  [
+    ({ connection }) => connection.sourceHandle === ERROR_OUTPUT_HANDLE,
+    ({ connection, yamlJsonObjectRef, setYamlJsonObject }) => {
+      const document = yamlJsonObjectRef.current;
+      if (document) setYamlJsonObject(connectErrorRoute(document, connection.source, connection.target));
+      return {
+        result: { removeEdgePredicate: (edge) => edge.source === connection.source && edge.sourceHandle === ERROR_OUTPUT_HANDLE },
+        shouldChangeNodeIdMap: {},
+      };
+    },
+  ],
   [
     ({ connection }) => NodeTypeHelpers.isFromHitlNode(connection),
     ({ connection, yamlJsonObjectRef, setYamlJsonObject }) => ({

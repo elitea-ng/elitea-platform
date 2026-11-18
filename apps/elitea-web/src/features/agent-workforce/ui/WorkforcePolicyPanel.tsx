@@ -28,6 +28,7 @@ import type { AutomaticActionDecision } from '../api/agentWorkforceApi';
 import { actionKindLabel, actionStatusLabel, conditionText, formOf, inputOf, thresholdKey, typeThreshold, withRules, type PolicyForm } from '../lib/policy';
 import { stageLabel, workforceRefusal } from '../lib/workforce';
 import { useAutomaticActions, useWorkforcePolicy, useWorkforcePolicyActions } from '../model/useWorkforcePolicy';
+import { AutoFeedbackSwitch } from './AutoFeedbackSwitch';
 
 export interface WorkforcePolicyPanelProps {
   readonly projectId: string;
@@ -173,6 +174,35 @@ function PolicyEditor({ projectId, policy }: { readonly projectId: string; reado
             onChange={(value) => edit({ ...form, maxAutoHired: value })}
           />
         </Box>
+        <Typography variant="bodySmall" color="text.secondary">
+          {t(
+            'features.agentWorkforce.policy.listingHelp',
+            'A workforce manager can propose hiring a Marketplace listing. It is hired automatically only in Install mode, at low tier, with read-only tools, every requirement bindable to a toolkit of this project, and the numbers below.',
+          )}
+        </Typography>
+        <Box sx={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+          <NumberField
+            label={t('features.agentWorkforce.policy.listingMinReviews', 'Listing: reviews needed (1–1000)')}
+            value={form.listingMinReviews}
+            disabled={disabled}
+            testId="agent-workforce-policy-listing-min-reviews"
+            onChange={(value) => edit({ ...form, listingMinReviews: value })}
+          />
+          <NumberField
+            label={t('features.agentWorkforce.policy.listingMinRating', 'Listing: average rating needed (1–5)')}
+            value={form.listingMinRating}
+            disabled={disabled}
+            testId="agent-workforce-policy-listing-min-rating"
+            onChange={(value) => edit({ ...form, listingMinRating: value })}
+          />
+          <NumberField
+            label={t('features.agentWorkforce.policy.listingMaxDismissal', 'Listing: dismissal rate under (0.01–1)')}
+            value={form.listingMaxDismissalRate}
+            disabled={disabled}
+            testId="agent-workforce-policy-listing-max-dismissal"
+            onChange={(value) => edit({ ...form, listingMaxDismissalRate: value })}
+          />
+        </Box>
         <Typography variant="bodySmall" color="text.secondary" data-testid="agent-workforce-policy-open-hired">
           {t('features.agentWorkforce.policy.openHired', 'On probation now: {{count}}', { count: policy.open_auto_hired })}
         </Typography>
@@ -206,6 +236,12 @@ function PolicyEditor({ projectId, policy }: { readonly projectId: string; reado
         />
         <RulesEditor form={form} disabled={disabled} onChange={edit} />
       </Box>
+
+      <AutoFeedbackSwitch
+        checked={form.autoFeedbackEnabled}
+        disabled={disabled}
+        onChange={(checked) => edit({ ...form, autoFeedbackEnabled: checked })}
+      />
 
       {error !== undefined && (
         <Alert severity="error" data-testid="agent-workforce-policy-error">

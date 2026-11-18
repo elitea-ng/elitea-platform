@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5" //nolint:gosec // ETag identity, not a security digest
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -85,6 +86,9 @@ type fakeStore struct {
 	// key unconditionally, so no test could reach DeleteBucket's
 	// partial-failure path at all.
 	failKeys map[string]bool
+	// failDeleteKey makes Delete refuse that key; failPutKey makes Put refuse it.
+	failDeleteKey string
+	failPutKey    string
 }
 
 // firstReadRecorder wraps an io.Reader and calls onFirstRead exactly once,
@@ -180,6 +184,9 @@ func (s *fakeStore) Put(_ context.Context, ref storage.ObjectRef, body io.Reader
 		s.firstPutReadAt = time.Now()
 		s.mu.Unlock()
 	}}
+	if s.failPutKey != "" && s.failPutKey == ref.Key() {
+		return storage.ObjectInfo{}, errors.New("fakeStore: put refused")
+	}
 	data, err := io.ReadAll(body)
 	if err != nil {
 		return storage.ObjectInfo{}, err
@@ -238,6 +245,9 @@ func (s *fakeStore) Stat(_ context.Context, ref storage.ObjectRef) (storage.Obje
 func (s *fakeStore) Delete(_ context.Context, ref storage.ObjectRef) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.failDeleteKey != "" && s.failDeleteKey == ref.Key() {
+		return errors.New("fakeStore: delete refused")
+	}
 	storageKey := ref.StorageKey("")
 	delete(s.objects, storageKey)
 	delete(s.data, storageKey)

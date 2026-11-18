@@ -4,6 +4,7 @@ import { uploadArtifactObject } from '@/shared/api/artifacts';
 import { getConfig } from '@/shared/config';
 
 import { useChatConfig } from '../api/chatConfigApi';
+import { describeUploadFailure } from '../lib/uploadFailure';
 import { computeSecurePath, validateFileName, validateFolderPath } from '../lib/pathValidation';
 import type { ArtifactUploadPlan } from './types';
 import type { Artifact } from '@/entities/artifact';
@@ -130,16 +131,18 @@ export function useArtifactUpload(options: UseArtifactUploadOptions) {
             fileKey: `${targetPrefix}${file.name}`,
             file,
           }).then((result) => {
-            if (!result.ok) throw new Error(file.name);
+            if (!result.ok) throw new Error(describeUploadFailure(result.error));
           }),
         ),
       );
-      const failedNames = results
-        .map((result, index) => (result.status === 'rejected' ? files[index]?.name : undefined))
-        .filter((name): name is string => name !== undefined);
-      if (failedNames.length > 0) {
-        setError(`Failed to upload: ${failedNames.join(', ')}.`);
-      }
+      // One reason per file ("x.pdf: <reason>"), so a mixed batch says which file hit which refusal.
+      const failures: string[] = [];
+      results.forEach((result, index) => {
+        if (result.status !== 'rejected') return;
+        const name = files[index]?.name ?? '';
+        failures.push(result.reason instanceof Error ? `${name}: ${result.reason.message}` : name);
+      });
+      if (failures.length > 0) setError(`Failed to upload: ${failures.join(' ')}`);
       await options.onUploaded();
       setPendingFiles([]);
       setPendingPlan(undefined);

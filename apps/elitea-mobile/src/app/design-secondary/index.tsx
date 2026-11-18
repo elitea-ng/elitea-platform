@@ -53,7 +53,7 @@ function Preview({ screen }: { screen: Screen }) {
       <>
         <Stack.Screen
           options={{
-            title: 'Discover',
+            title: 'Marketplace',
             ...largeTitleOptions(design),
             ...searchBarOptions(design, { placeholder: 'Search public agents', onChange: noop }),
             ...headerActionOptions(
@@ -84,8 +84,8 @@ function Preview({ screen }: { screen: Screen }) {
     case 'discover-unavailable':
       return (
         <>
-          <Stack.Screen options={{ title: 'Discover', ...largeTitleOptions(design) }} />
-          <StatusScreen mark="small" title="Discover isn't available" body="This workspace does not offer public agents to mobile yet." />
+          <Stack.Screen options={{ title: 'Marketplace', ...largeTitleOptions(design) }} />
+          <StatusScreen mark="small" title="Marketplace isn't available" body="This workspace does not offer public agents to mobile yet." />
         </>
       );
     case 'notifications':

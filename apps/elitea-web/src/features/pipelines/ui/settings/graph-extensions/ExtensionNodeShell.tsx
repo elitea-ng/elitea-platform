@@ -7,6 +7,8 @@ import { patchGraphExtensionNode } from '../../../lib/graphExtensions.helpers';
 import type { ExtensionSettingsProps } from '../../../lib/graphExtensions.types';
 import { NodeCard } from '../../nodes/BaseNode/NodeCard';
 import { CustomHandle } from '../../nodes/CustomHandle';
+import { NodeErrorOutputHandle } from '../../nodes/NodeErrorOutputHandle';
+import { NodeSettings } from '../NodeSettings';
 
 interface ExtensionNodeShellProps extends NodeProps<FlowNode> {
   readonly renderSettings: (props: ExtensionSettingsProps) => ReactNode;
@@ -32,7 +34,9 @@ export function ExtensionNodeShell({ id, type = '', data, selected, renderSettin
     isPerforming={performing} handles={() => <>
       <CustomHandle type="target" id="target" isConnectable={!disabled} isRunningPipeline={running} isPerforming={performing} />
       <CustomHandle type="source" id="source" isConnectable={sourceAvailable && !disabled} isRunningPipeline={running} isPerforming={performing} />
+      <NodeErrorOutputHandle id={id} isRunningPipeline={running} disabled={disabled} isPerforming={performing} />
     </>}>
     {renderSettings({ node, disabled, change, remove })}
+    <NodeSettings id={id} type={node.type ?? ''} disabled={disabled} />
   </NodeCard>;
 }

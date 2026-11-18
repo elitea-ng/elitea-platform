@@ -25,12 +25,26 @@ export interface DisplayVersion extends AgentPipelineVersionOption {
   readonly isLatest: boolean;
 }
 
-export function toDisplayVersions(versions: readonly AgentPipelineVersionOption[]): readonly DisplayVersion[] {
+/**
+ * The dropdown's order (#1990, #1991): the pinned default first, then the
+ * named versions newest first, and `base` — the working copy every agent
+ * starts with — last. `defaultVersionId` is the one the version bar marks
+ * "Default"; with none pinned the list is just newest-first with `base` at
+ * the bottom.
+ */
+export function toDisplayVersions(
+  versions: readonly AgentPipelineVersionOption[],
+  defaultVersionId?: number,
+): readonly DisplayVersion[] {
+  const rank = (v: DisplayVersion): number => {
+    if (defaultVersionId !== undefined && v.id === defaultVersionId) return 0;
+    return v.isLatest ? 2 : 1;
+  };
   return [...versions]
     .map((version): DisplayVersion => ({ ...version, isLatest: version.name === LATEST_VERSION_NAME }))
     .sort((a, b) => {
-      if (a.isLatest && !b.isLatest) return -1;
-      if (!a.isLatest && b.isLatest) return 1;
+      const byRank = rank(a) - rank(b);
+      if (byRank !== 0) return byRank;
       const dateA = new Date(a.created_at ?? 0).getTime();
       const dateB = new Date(b.created_at ?? 0).getTime();
       return dateB - dateA;

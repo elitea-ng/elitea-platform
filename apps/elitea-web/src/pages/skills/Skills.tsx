@@ -5,13 +5,14 @@ import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
-import { useNavigate, useParams } from '@tanstack/react-router';
+import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
 
 import {
   exportSkill,
   PublicSkillsCatalog,
   SkillImportButton,
   SkillsList,
+  useSkillBulkActions,
   useSkillMutations,
   useSkills,
   type SkillRecord,
@@ -19,8 +20,10 @@ import {
 import { t } from '@/shared/i18n';
 import { PERMISSIONS } from '@/shared/lib/permissions';
 import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
-import { EntityListFilters, useRailTagSelection } from '@/shared/ui/EntityRail';
-import { PageToolbar, pageBodySx, pageSx, useListSearchQuery } from '@/widgets/page-header';
+import { EntitySelectionProvider } from '@/shared/ui/EntityCardList';
+import { EntityListFiltersBody, useRailTagSelection } from '@/shared/ui/EntityRail';
+import { EntityFolderDnd, EntityFolderPanel, EntityFolderScope, MoveSelectionControl, useFolderFilter } from '@/widgets/entity-folders';
+import { EntityListSidebar, ListSelectionSection, pageBodySx, pageSx, useListSearchQuery, useListSelection } from '@/widgets/page-header';
 import { usePermissionSet } from '@/widgets/sidebar';
 
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
@@ -46,6 +49,14 @@ export function filterSkillsByTags<T extends { readonly tags?: readonly string[]
   return items.filter((item) => selectedTags.every((selected) => (item.tags ?? []).includes(selected)));
 }
 
+/** Sorts the listed skills by the sidebar's sort field. The list endpoint answers newest first, so no field means no reordering. */
+export function sortSkills<T extends { readonly name: string; readonly created_at?: string | undefined }>(items: readonly T[], sortBy: string | undefined, ascending: boolean): T[] {
+  if ((sortBy === undefined || sortBy === '') && !ascending) return [...items];
+  const direction = ascending ? 1 : -1;
+  const key = (item: T): string => (sortBy === 'name' ? item.name : (item.created_at ?? ''));
+  return [...items].sort((a, b) => key(a).localeCompare(key(b)) * direction);
+}
+
 function downloadMarkdown(content: string, filename: string): void {
   const url = URL.createObjectURL(new Blob([content], { type: 'text/markdown' }));
   const link = document.createElement('a');
@@ -68,7 +79,6 @@ function downloadMarkdown(content: string, filename: string): void {
  */
 export const SKILL_TABS = ['all', 'public'] as const;
 
-const SEARCH_TEST_ID = 'skill-search-input';
 export type SkillTab = (typeof SKILL_TABS)[number];
 
 export function resolveSkillTab(tab: string | undefined): SkillTab {
@@ -76,24 +86,37 @@ export function resolveSkillTab(tab: string | undefined): SkillTab {
 }
 
 /**
- * The skills list page: one toolbar (the All / Public tabs, the search, the
- * Filters button, Import and "+ New skill"), the selected tab below it, and
- * the tag filter in the shell's side panel. The Public tab is the published
- * catalog, which keeps its own search over the catalog's own request.
+ * The skills list page (ADR-0051 M1): the project's skills with every control
+ * in the right sidebar's List tab — search, New skill, Import, sort, the
+ * card/table switch, the folders and the tag filter — and no toolbar row. A
+ * summary bar above the list keeps the search text and the active tags on
+ * screen while the sidebar is closed. The Skills | Public switch in the sidebar
+ * chooses between the project's own skills and the published catalog, which
+ * keeps its own search over the catalog's own request. Rows are selectable for
+ * Add tag, Export and Delete.
  */
 export function Skills(): ReactNode {
   const navigate = useNavigate();
   const routeParams = useParams({ strict: false }) as { readonly tab?: string };
+  const search = useSearch({ strict: false }) as { readonly sort_by?: string; readonly sort_order?: string };
   const activeTab = resolveSkillTab(routeParams.tab);
   const projectId = useSelectedProjectId();
   const query = useListSearchQuery();
   const [pendingDelete, setPendingDelete] = useState<SkillRecord>();
+  const [confirmingBulkDelete, setConfirmingBulkDelete] = useState(false);
   const [actionError, setActionError] = useState<string>();
   const skills = useSkills(projectId, query);
   const mutations = useSkillMutations(projectId);
-  const { selectedTags } = useRailTagSelection();
+  const bulk = useSkillBulkActions(projectId);
+  const { selectedTags, toggleTag } = useRailTagSelection();
   const permissions = usePermissionSet(projectId);
-  const visibleSkills = useMemo(() => filterSkillsByTags(skills.data?.items ?? [], selectedTags), [skills.data, selectedTags]);
+  const folderFilter = useFolderFilter(projectId, 'skill');
+  const visibleSkills = useMemo(
+    () => sortSkills(filterSkillsByTags(skills.data?.items ?? [], selectedTags).filter((skill) => folderFilter.includes(skill.id)), search.sort_by, search.sort_order === 'asc'),
+    [skills.data, selectedTags, folderFilter, search.sort_by, search.sort_order],
+  );
+  const visibleIds = useMemo(() => visibleSkills.map((skill) => skill.id), [visibleSkills]);
+  const selected = useListSelection(visibleIds);
   const title = t('skills.page.title', 'Skills');
   const openCreate = (): void => void navigate({ to: '/skills/create' });
 
@@ -113,23 +136,19 @@ export function Skills(): ReactNode {
     : undefined;
 
   return (
+    <EntityFolderDnd
+      projectId={projectId}
+      kind="skill"
+      permissions={permissions}
+      selectedIds={selected.ids}
+    >
     <Box sx={pageSx}>
-      <PageToolbar
-        tabs={{
-          items: [
-            { value: 'all', label: t('skills.page.tabAll', 'Skills') },
-            { value: 'public', label: t('skills.page.tabPublic', 'Public') },
-          ],
-          selectedIndex: SKILL_TABS.indexOf(activeTab),
-          onChange: (_event, index) => {
-            const next = SKILL_TABS[index];
-            if (next !== undefined) void navigate({ to: '/skills/$tab', params: { tab: next } });
-          },
-          ariaLabel: title,
-          testIdPrefix: 'skills-tab',
-        }}
-        search={onAllTab ? { placeholder: t('skills.page.search', 'Search skills'), 'data-testid': SEARCH_TEST_ID } : undefined}
-        filters={onAllTab ? { activeCount: selectedTags.length } : undefined}
+      <EntityListSidebar
+        subject={title}
+        testIdPrefix="skill"
+        pageKey="skills"
+        searchPlaceholder={t('skills.page.search', 'Search skills')}
+        newAction={createAction}
         secondaryActions={
           <SkillImportButton
             isImporting={mutations.importFile.isPending}
@@ -138,7 +157,57 @@ export function Skills(): ReactNode {
             }}
           />
         }
-        primaryAction={createAction}
+        modes={{
+          items: [
+            { value: 'all', label: t('skills.page.tabAll', 'Skills'), testId: 'skills-mode-all' },
+            { value: 'public', label: t('skills.page.tabPublic', 'Public'), testId: 'skills-mode-public' },
+          ],
+          active: activeTab,
+          onSelect: (next) => void navigate({ to: '/skills/$tab', params: { tab: next } }),
+        }}
+        listControls={onAllTab}
+        sortFields={{
+          items: [
+            { value: 'createdAt', label: t('skills.page.sortCreated', 'Created') },
+            { value: 'name', label: t('skills.page.sortName', 'Name') },
+          ],
+          defaultField: 'createdAt',
+        }}
+        extraChips={selectedTags.map((tag) => ({ id: `tag-${tag}`, label: t('skills.page.tagChip', 'Tag: {{tag}}', { tag }), onRemove: () => toggleTag(tag) }))}
+        clearParams={{ 'tags[]': [] }}
+        folders={
+          <EntityFolderPanel
+            projectId={projectId}
+            kind="skill"
+            permissions={permissions}
+          />
+        }
+        filters={<EntityListFiltersBody projectId={projectId} />}
+        selection={
+          selected.ids.length === 0 ? undefined : (
+            <ListSelectionSection
+              testIdPrefix="skill"
+              count={selected.ids.length}
+              noun={t('skills.page.selectionNoun', 'skills')}
+              onClear={selected.clear}
+              onAddTag={(tag) => void bulk.addTag(selected.ids, tag).then(selected.settle)}
+              onExport={() => void bulk.exportMany(selected.ids).then(selected.settle)}
+              onDelete={() => setConfirmingBulkDelete(true)}
+              extra={
+                <MoveSelectionControl
+                  projectId={projectId}
+                  kind="skill"
+                  permissions={permissions}
+                  ids={selected.ids}
+                  onSettled={selected.settle}
+                  testIdPrefix="skill"
+                />
+              }
+              busy={bulk.busy}
+              error={bulk.error}
+            />
+          )
+        }
       />
       <Box sx={pageBodySx}>
         {actionError && (
@@ -156,31 +225,33 @@ export function Skills(): ReactNode {
           />
         )}
         {onAllTab && (
-          <SkillsList
-            items={visibleSkills}
-            isLoading={skills.isFetching && skills.data === undefined}
-            isError={skills.isError}
-            query={query}
-            onSelect={(skillId) => {
-              void navigate({
-                to: '/skills/$tab/$skillId',
-                params: { tab: 'all', skillId },
-              });
-            }}
-            onDelete={setPendingDelete}
-            onExport={(skill) => {
-              void handleExport(skill);
-            }}
-            onCreate={openCreate}
-          />
+          <EntitySelectionProvider value={selected.selection}>
+            <EntityFolderScope
+              projectId={projectId}
+              kind="skill"
+              permissions={permissions}
+            >
+              <SkillsList
+                items={visibleSkills}
+                isLoading={skills.isFetching && skills.data === undefined}
+                isError={skills.isError}
+                query={query}
+                onSelect={(skillId) => {
+                  void navigate({
+                    to: '/skills/$tab/$skillId',
+                    params: { tab: 'all', skillId },
+                  });
+                }}
+                onDelete={setPendingDelete}
+                onExport={(skill) => {
+                  void handleExport(skill);
+                }}
+                onCreate={openCreate}
+              />
+            </EntityFolderScope>
+          </EntitySelectionProvider>
         )}
       </Box>
-      {onAllTab && (
-        <EntityListFilters
-          projectId={projectId}
-          subject={title}
-        />
-      )}
       <DeleteEntityModal
         open={pendingDelete !== undefined}
         {...(pendingDelete ? { name: pendingDelete.name } : {})}
@@ -194,7 +265,20 @@ export function Skills(): ReactNode {
             .catch(() => setActionError(t('skills.page.deleteError', 'Failed to delete the skill.')));
         }}
       />
+      <DeleteEntityModal
+        open={confirmingBulkDelete}
+        name={t('skills.page.deleteSelection', '{{count}} skills', { count: selected.ids.length })}
+        confirming={bulk.busy}
+        onClose={() => setConfirmingBulkDelete(false)}
+        onConfirm={() => {
+          void bulk.deleteMany(selected.ids).then((result) => {
+            selected.settle(result);
+            setConfirmingBulkDelete(false);
+          });
+        }}
+      />
     </Box>
+    </EntityFolderDnd>
   );
 }
 

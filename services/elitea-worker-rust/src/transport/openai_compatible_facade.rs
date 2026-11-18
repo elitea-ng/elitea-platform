@@ -23,6 +23,7 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use bytes::Bytes;
+use elitea_agent_runtime::tool_schema::{SchemaProfile, normalize_tool_schema};
 use elitea_llm_wire::headers::{BEARER_PREFIX, EXECUTION_HEADER, PROJECT_HEADER};
 use elitea_llm_wire::openai::{
     ChunkError, Delta as OpenAiDelta, FinishReason as OpenAiFinish, StrictChunk, Usage,
@@ -830,7 +831,13 @@ fn encode_request_body(
     append_history_messages(contents, &mut messages)?;
     body.insert("messages".to_owned(), serde_json::Value::Array(messages));
     if !request.tools.is_empty() {
-        body.insert("tools".to_owned(), openai_tools(&request.tools)?);
+        body.insert(
+            "tools".to_owned(),
+            openai_tools(
+                &request.tools,
+                SchemaProfile::for_model(&invocation.model_name),
+            )?,
+        );
         body.insert(
             "tool_choice".to_owned(),
             serde_json::Value::String("auto".to_owned()),
@@ -1340,8 +1347,12 @@ fn openai_assistant_message(content: &Content) -> Result<serde_json::Value, AdkE
     Ok(serde_json::Value::Object(message))
 }
 
-fn openai_tools(
+/// The request's `tools`, each parameter schema in the wire form `profile`
+/// accepts (`elitea_agent_runtime::tool_schema`, #2145): the declarations in
+/// the request itself stay as the tools built them.
+pub(super) fn openai_tools(
     tools: &std::collections::HashMap<String, serde_json::Value>,
+    profile: SchemaProfile,
 ) -> Result<serde_json::Value, AdkError> {
     let mut names = tools.keys().collect::<Vec<_>>();
     names.sort_unstable();
@@ -1359,10 +1370,12 @@ fn openai_tools(
             }
             function.insert(
                 "parameters".to_owned(),
-                declaration
-                    .get("parameters")
-                    .cloned()
-                    .unwrap_or_else(|| serde_json::json!({"type": "object", "properties": {}})),
+                normalize_tool_schema(
+                    declaration
+                        .get("parameters")
+                        .unwrap_or(&serde_json::Value::Null),
+                    profile,
+                ),
             );
             Ok(serde_json::json!({"type": "function", "function": function}))
         })
@@ -1498,6 +1511,17 @@ pub(super) async fn rejection_with_detail(
         Ok(Ok(collected)) => collected.to_bytes(),
         _ => Bytes::new(),
     };
+    // A content guardrail's block (ADR-0043) is its own code: the chat tells
+    // the person which control refused the message instead of a generic
+    // rejection. Only the fact is kept; the body, which names the guardrail
+    // and its labels, is not forwarded.
+    if status == 400 && elitea_llm_wire::refusal::is_guardrail_block(&bytes) {
+        return model_error(
+            ErrorCategory::InvalidInput,
+            elitea_llm_wire::refusal::GUARDRAIL_BLOCKED_CODE,
+            "the model gateway blocked the content",
+        );
+    }
     if let Some(detail) = rejection_detail(&bytes) {
         tracing::warn!(
             event = "model_gateway_rejected_detail",

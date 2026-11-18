@@ -27,6 +27,16 @@ Open **Schedules & Tasks**. It lists every recurring routine the platform runs: 
 What a routine does is fixed in code and cannot be edited here: only whether it runs, and when. The editing controls need the `configuration.scheduling.schedules.edit` permission; with only the view permission the page is read-only. If the scheduling registry cannot be read, the main service's scheduled jobs pause until it can, rather than running unchecked.
 </Note>
 
+## Marketplace snapshot retention
+
+The routine `main.marketplace_retention` runs once a day and pauses in maintenance. It deletes withdrawn Marketplace listing versions, the snapshots, that no project has installed or as a fork origin. It deletes them 30 days after the publisher unpublished them. It also deletes a listing that has no version left. A snapshot that a project holds is never deleted.
+
+The 30 days are the platform's choice. ADR-0051 says snapshots go "after the ADR-0042 retention" and gives no number. The value is a constant in the Main service (`SnapshotRetentionDays`), and you cannot change it on this page. You can switch the routine off or change its schedule here, like any other routine.
+
+## Marketplace signals
+
+The routine `main.marketplace_signals` runs once a day and pauses in maintenance. For each listing that has a hire it writes the active hires, the 30-day retention, the dismissal rate and the upgrade adoption, for the listing and for each version, and it refreshes the ratings from the visible reviews. The Marketplace page and the admin published agents view read them. The project counter of the published agents view is the number of projects with an active hire. A hire counts as dismissed when its agent is deleted from the project. You can switch the routine off or change its schedule here.
+
 ## See what is running
 
 Open the separate **Tasks** page for a live view of background work this platform actually tracks: index runs, agent turns, toolkit tool calls, scheduled occurrences, and evaluation runs.

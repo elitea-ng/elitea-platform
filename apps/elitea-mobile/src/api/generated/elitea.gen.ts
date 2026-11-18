@@ -4,8 +4,8 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.54
- * operations sha256:  90f7ce0d441261594219777baafedfb6c11c64e23476f55952ced30a49d7d69e
+ * client contract:    1.63
+ * operations sha256:  a836121d14038ae2f1db1dde8f4300b624195ee490ebe669220b1372ba3cd2fb
  */
 export interface paths {
     "/.well-known/elitea-client": {
@@ -420,6 +420,53 @@ export interface paths {
          * @description A manager with ownership or `models.applications.memory.delete` deletes any entry; anyone deletes an entry about themself. Requires `models.applications.memory.list`.
          */
         delete: operations["deleteAgentMemoryEntry"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/agent_workforce/prompt_lib/{project_id}/agents/{application_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                application_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Read an agent's workforce state and latest scorecard
+         * @description The agent's place on the dismissal ladder (ADR-0050 decision 5g): whether it is under review (watch), suspended, retired (and until when it can be reinstated) or deleted, its owners, legal hold, whether it is a workforce manager, its latest daily scorecard, and whether the caller manages agents here or owns the agent. Requires `models.applications.applications.list`. The mobile app reads it for the probation badge of an automatically hired agent (contract 1.56).
+         */
+        get: operations["getAgentWorkforce"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/agent_workforce/prompt_lib/{project_id}/proposals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List workforce proposals
+         * @description The project's workforce proposals, newest first: open ones (proposed or asked_owner) unless status names proposed, asked_owner, approved, rejected or all. application_id narrows them to one agent. kind picks the ladder's dismiss and demote (the default) or the Marketplace's hire_listing and feedback_report (ADR-0051 decision 6). Requires `models.applications.applications.list`. The mobile app reads the Marketplace kinds, read-only (contract 1.56).
+         */
+        get: operations["listAgentWorkforceProposals"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -910,6 +957,81 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/elitea_core/conversation_skill/prompt_lib/{project_id}/{conversation_id}/{pin_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The conversation's numeric id or its UUID; both resolve. */
+                conversation_id: string;
+                pin_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a pinned skill from a conversation
+         * @description Client contract 1.57 (ADR-0050 amendment 1). Removes the pin; the skill
+         *     stops applying from the next turn. Needs `models.chat.conversation.update`
+         *     and the right to write to the conversation. Audited. NOTE(W2):
+         *     internal/api/v2/conversationskills/handler.go:179 (`Unpin`).
+         */
+        delete: operations["unpinConversationSkill"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/conversation_skills/prompt_lib/{project_id}/{conversation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The conversation's numeric id or its UUID; both resolve. */
+                conversation_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * The skills pinned to a conversation
+         * @description Client contract 1.57 (ADR-0050 amendment 1). The skills pinned to the
+         *     conversation, oldest first: each is a project skill or a Marketplace
+         *     skill listing version. A pin applies to every run of the conversation,
+         *     whichever agent or model answers, and is shown apart from the
+         *     participants. It is an attachment, never a participant, and grants
+         *     nothing. Needs access to the conversation; a conversation the caller
+         *     cannot see answers 404. NOTE(W2):
+         *     internal/api/v2/conversationskills/handler.go:105 (`List`).
+         */
+        get: operations["listConversationSkills"];
+        put?: never;
+        /**
+         * Pin a skill to a conversation
+         * @description Client contract 1.57 (ADR-0050 amendment 1). Pins a project skill
+         *     (`skill_id`) or a Marketplace skill listing version (`listing_id` and
+         *     `listing_version_id`); a listing is pinned by reference and nothing is
+         *     forked into the project. The text is read when each turn starts, under
+         *     the caller's own visibility, so the pin never carries text. Pinning what
+         *     is pinned already answers the existing pin with 200. A skill the caller
+         *     cannot read, or a listing that is not listed or whose version is yanked
+         *     or withdrawn, answers one 404. A conversation holds at most five pins
+         *     (409). Needs `models.chat.conversation.update` and the right to write to
+         *     the conversation (a participant). Audited. NOTE(W2):
+         *     internal/api/v2/conversationskills/handler.go:137 (`Pin`).
+         */
+        post: operations["pinConversationSkill"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/elitea_core/conversation/prompt_lib/{project_id}/{conversation_id}": {
         parameters: {
             query?: never;
@@ -1009,6 +1131,150 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/elitea_core/delegation_grant/prompt_lib/{project_id}/{application_id}/{grant_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The caller agent or pipeline of the edge. A grant of another agent answers 404. */
+                application_id: number;
+                grant_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * One delegation grant
+         * @description Client contract 1.58, ADR-0044 amendment 1. Needs the permission that reads an
+         *     agent. NOTE(W2): internal/api/v2/delegationgrants/handler.go:196 (`Get`).
+         */
+        get: operations["getDelegationGrant"];
+        put?: never;
+        post?: never;
+        /**
+         * Revoke a delegation grant
+         * @description Client contract 1.58, ADR-0044 amendment 1. Ends an active grant: the edge is
+         *     refused again where the caller does not hold what the callee does. This is
+         *     what a detach does. A grant already revoked or superseded answers 409. Needs
+         *     the permission that edits an agent. Audited. NOTE(W2):
+         *     internal/api/v2/delegationgrants/handler.go:328 (`Revoke`).
+         */
+        delete: operations["revokeDelegationGrant"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/delegation_grant/prompt_lib/{project_id}/{application_id}/{grant_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The caller agent or pipeline of the edge. */
+                application_id: number;
+                grant_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve a pending delegation grant, or re-approve a stale one
+         * @description Client contract 1.58, ADR-0044 amendment 1. An editor of the caller approves a
+         *     pending grant, all of it (no body) or only the items they choose (`items`).
+         *     They can approve only what they hold access to: each toolkit and each
+         *     credential reference of the grant. What they leave out, or do not hold, is
+         *     recorded as `omitted`, stays out of the grant, and the callee runs without it.
+         *     A data class bound is never left out. Approving a grant does not create a
+         *     credential use grant: a governed credential still needs the exact use grant of
+         *     the agent that holds the reference. Under the governed profile the grant is
+         *     approved through its change request instead, and this answers 409 with the
+         *     code `DELEGATION_GOVERNED` and the `change_request_id`. Needs the permission
+         *     that edits an agent. Audited. Since 1.62 the grant may also be `stale`: the
+         *     callee now holds more than the grant recorded (`drift` lists what). Approving
+         *     re-approves it against what the callee holds now: the old grant is kept as
+         *     `superseded` and the answer is the new, approved grant. Under the governed
+         *     profile a stale grant is re-approved through a new change request, and this
+         *     answers 409 `DELEGATION_GOVERNED` with that request. NOTE(W2):
+         *     internal/api/v2/delegationgrants/handler.go:270 (`Approve`).
+         */
+        post: operations["approveDelegationGrant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/delegation_grants/prompt_lib/{project_id}/{application_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The caller agent or pipeline Y of the edges, the one whose editors approve. */
+                application_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * The delegation grants of an agent's composition edges
+         * @description Client contract 1.58, ADR-0044 amendment 1. Attaching a sub-agent, an agent
+         *     used as a tool or a pipeline child X to this agent Y creates one grant for the
+         *     edge Y to X. It lists what X held when it was attached (its toolkits, the tools
+         *     selected on each, its credential references, declared data classes and the
+         *     egress hosts its toolkits reach), pinned to the digest of that set. This lists
+         *     the edges' active grants (`pending`, `approved` or `stale`); `history=true` adds
+         *     the `superseded` and `revoked` ones. A grant is `stale` when its callee
+         *     changed after approval: the grant keeps covering the set it recorded and what
+         *     was added is left out of the callee's run. Needs the permission that reads an
+         *     agent. NOTE(W2): internal/api/v2/delegationgrants/handler.go:177 (`List`).
+         */
+        get: operations["listDelegationGrants"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/delegation_preview/prompt_lib/{project_id}/{application_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The caller agent or pipeline Y of the edge. */
+                application_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * What an attached agent will be able to use
+         * @description Client contract 1.58, ADR-0044 amendment 1. For the attach dialog: what the
+         *     callee version holds (`items`), the part the person asking could approve
+         *     because they hold access to it (`approvable`), the part that would stay out of
+         *     the grant because they do not (`withheld`), the closure (the callee and the
+         *     callees it reaches through APPROVED grants, with what each holds) as
+         *     information, and the edge's active grant when it has one. The closure is not
+         *     approved by approving this edge: every hop needs its own grant, approved by an
+         *     editor of the agent that makes the call. Needs the permission that reads an
+         *     agent. NOTE(W2): internal/api/v2/delegationgrants/handler.go:358 (`Preview`).
+         */
+        get: operations["previewDelegationGrant"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/elitea_core/generate_application_draft_stream/prompt_lib/{project_id}": {
         parameters: {
             query?: never;
@@ -1054,6 +1320,92 @@ export interface paths {
          *     unknown event type.
          */
         post: operations["generateApplicationDraftStream"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/guardrail_notices/prompt_lib/{project_id}/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+                /** @description The run (execution) id. */
+                run_id: components["parameters"]["RunStepRunId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * What the content guardrails did to a run, for the chat
+         * @description The guardrail verdicts of a run that the person must be told about, merged to one notice per guardrail, stage and kind (ADR-0043 decision 1): a request or an answer the gateway blocked, content it redacted (masked), content a `warn` guardrail warned about, and a guardrail with fail mode closed that could not run. A notice names the stage, the action, the guardrail (the governance entry's name) and the finding labels such as `email`. It never holds the inspected text or the matched value. A run with no notice, and an unknown run, answer an empty list. The gateway writes verdicts up to one second after the request, so a client asks again once when a turn failed or ended and the list is empty. Requires `models.chat.messages.create`, the permission that sends a chat message; reading the full verdicts needs `runs.evidence.read` (listRunSteps).
+         */
+        get: operations["listRunGuardrailNotices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/marketplace_feedback/prompt_lib/{project_id}/{listing_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                listing_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * The Feedback section of a listing
+         * @description A page of reviews and workforce reports, newest first, the rating
+         *     distribution of each version and the signals beside it. `version_id`
+         *     filters the items to one version and `kind` to one kind. A hidden item
+         *     is shown only to a platform administrator and to its author. No item
+         *     carries a project id or a project name: a review names its author, and
+         *     a workforce report reads "Workforce report from a hiring project"
+         *     (internal/api/v2/eliteacore/marketplace_feedback.go).
+         */
+        get: operations["getMarketplaceFeedback"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/marketplace_listings/prompt_lib/{project_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Search the Marketplace
+         * @description Facet search over the listings (ADR-0051 decision 2). Answers
+         *     `{rows, total, facets}`. `project_id` is the project that hires: the
+         *     `hired_here` filter and the `hired` field read it.
+         *
+         *     Every parameter is validated in internal/marketplace/search.go. A
+         *     `kind`, `sort`, `max_tier` or numeric parameter outside its range
+         *     answers 400. `query` matches the name, description and soul summary;
+         *     the pattern is a bind parameter. The `facets` counts ignore the facet
+         *     they describe.
+         */
+        get: operations["searchMarketplaceListings"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1528,6 +1880,31 @@ export interface paths {
          *     and `retryable: true`.
          */
         post: operations["regenerateChatMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/skills/prompt_lib/{project_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Paginated list of skills for a project
+         * @description NOTE(W2): internal/api/v2/skills/handler.go:61-78 — {items, total,
+         *     page, page_size, total_pages}; pagination via ?page/?page_size
+         *     (limit/offset accepted but not read).
+         */
+        get: operations["listSkills"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2383,6 +2760,27 @@ export interface components {
                 tool?: string;
             }[];
         };
+        AgentScorecard: {
+            approval_rejections_30d: number;
+            breaker_trips_7d: number;
+            cap_reached_30d: number;
+            certification_state: string;
+            /** Format: date-time */
+            computed_at: string;
+            /** Format: date */
+            day: string;
+            failed_30d: number;
+            failure_rate_30d: number;
+            guardrail_hits_30d: number;
+            /** Format: date-time */
+            last_used_at: string | null;
+            project_median_spend_usd: number;
+            runs_30d: number;
+            spend_30d_usd: number;
+            thumbs_down_30d: number;
+            thumbs_up_30d: number;
+            unused_days: number | null;
+        };
         /**
          * @description ADR-0050 decision 1a: an agent version's soul document, the JSON form of a `SOUL.md` file (YAML front matter holding every key but `body`, then `body` as the markdown after the closing `---`). It shapes how the agent speaks and behaves and GRANTS NOTHING: no key names a tool, a toolkit, a credential, a secret, a permission or a scope, and Main refuses an unknown key outright (400 `soul_capability_key` for a capability-shaped one, `soul_invalid` for any other), so a soul can never be read as a grant. At most 16384 bytes of text: the UTF-8 bytes of every string value (keys not counted) are summed, which reads the same in every client and in SOUL.md (400 `soul_too_large`). Prompt order: platform system text, organization guardrails, the soul, the instructions, recalled memory. `proactive_goals` is not put into the prompt; the heartbeat reads it. Self-contained (no $ref, no `nullable`) so it is valid JSON Schema as written.
          * @example {
@@ -2450,6 +2848,180 @@ export interface components {
             };
             /** @description The tools the agent may use in a turn nobody waits on (a turn another agent handed it). Absent is the read-only tools; a tool that writes needs the platform's agents.unattended_tools_allowlist too. Empty is no tool. */
             unattended_tools?: string[];
+        };
+        AgentWorkforceAgent: {
+            /** Format: int64 */
+            application_id: number;
+            application_name: string;
+            /**
+             * Format: date-time
+             * @description The workforce policy hired the agent (it is on probation until a manager keeps it).
+             */
+            auto_hired_at: string | null;
+            /** Format: int64 */
+            business_owner_id: number;
+            /** @description The caller holds agents.workforce.manage here (only on getAgentWorkforce). */
+            can_manage?: boolean;
+            /**
+             * @deprecated
+             * @description Deprecated duplicate of is_workforce_manager, kept for one release for older mobile and desktop builds. Removed in the next release.
+             */
+            is_hr_agent?: boolean;
+            /** @description The caller owns the agent (only on getAgentWorkforce). */
+            is_owner?: boolean;
+            is_workforce_manager: boolean;
+            legal_hold: boolean;
+            /** @description active, retired or deleted. */
+            lifecycle_state: string;
+            /**
+             * Format: date-time
+             * @description The agent's owners left the project; it is offered for reassignment.
+             */
+            orphaned_since: string | null;
+            /**
+             * Format: date-time
+             * @description When an agent manager kept or undid the automatic hire.
+             */
+            probation_reviewed_at: string | null;
+            /**
+             * Format: date-time
+             * @description Until when an agent manager can undo the automatic hire.
+             */
+            probation_until: string | null;
+            /** Format: int64 */
+            project_id: number;
+            /** Format: date-time */
+            purge_after: string | null;
+            /** Format: date-time */
+            reinstate_until: string | null;
+            /** Format: date-time */
+            retired_at: string | null;
+            /** Format: int64 */
+            retired_by: number | null;
+            risk_tier: string;
+            /** @description The latest scorecard (only on getAgentWorkforce). */
+            scorecard?: components["schemas"]["AgentScorecard"] | null;
+            /**
+             * Format: int64
+             * @description The active suspension, 0 for none.
+             */
+            suspension_id: number;
+            suspension_source: string;
+            /** Format: int64 */
+            technical_owner_id: number;
+            /** @description The watch flag. */
+            under_review: boolean;
+            /** Format: date-time */
+            under_review_since: string | null;
+        };
+        /** @description The exact narrowing of a demotion. Every field only takes away. */
+        AgentWorkforceNarrowing: {
+            /** @description Set the memory write mode to review. */
+            memory_review?: boolean;
+            /** @description Turn the heartbeat off. */
+            proactivity_off?: boolean;
+            /** @description can_propose_agents and/or can_review_agents. */
+            remove_capabilities?: string[];
+            /** @description Drop the agent as the lead of every conversation it leads. */
+            remove_lead?: boolean;
+            remove_toolkit_ids?: number[];
+            /** @description Keep only toolkits of these types (an allowlist; empty is no ceiling). */
+            toolkit_type_ceiling?: string[];
+        };
+        AgentWorkforceNesting: {
+            /** Format: int64 */
+            application_id: number;
+            name: string;
+        };
+        AgentWorkforceProposal: {
+            /** Format: date-time */
+            appeal_decided_at: string | null;
+            /** Format: int64 */
+            appeal_decided_by_user_id: number | null;
+            appeal_note: string | null;
+            appeal_reason: string | null;
+            /** @description open, granted or upheld. */
+            appeal_state: string | null;
+            /** Format: date-time */
+            appealed_at: string | null;
+            /** Format: int64 */
+            appealed_by_user_id: number | null;
+            /**
+             * Format: int64
+             * @description The agent the proposal is about; the hired agent of a feedback_report. 0 for a hire_listing (no agent yet).
+             */
+            application_id: number;
+            application_name: string;
+            /** @description What applying the stage changed (the reinstate and appeal reversal read it). */
+            applied: {
+                [key: string]: unknown;
+            } | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            decided_at: string | null;
+            /** Format: int64 */
+            decided_by_user_id: number | null;
+            decision_note: string | null;
+            /** @description The latest scorecard when the proposal was made. */
+            evidence: {
+                [key: string]: unknown;
+            } | null;
+            evidence_digest: string;
+            execution_id: string | null;
+            /** Format: int64 */
+            id: number;
+            /** @description dismiss or demote (the ladder), hire_listing (a workforce manager proposes hiring a Marketplace listing version) or feedback_report (a workforce manager's drafted report on a hired agent). */
+            kind: string;
+            /**
+             * Format: int64
+             * @description The Marketplace listing of a hire_listing or feedback_report.
+             */
+            listing_id: number | null;
+            /**
+             * Format: int64
+             * @description The listing version to hire, or the version the hired agent was installed from.
+             */
+            listing_version_id: number | null;
+            narrowing: components["schemas"]["AgentWorkforceNarrowing"];
+            owner_comment: string | null;
+            /** @description What a Marketplace kind carries. A hire_listing has mode (install or fork), bindings_hint ([{requirement_key, toolkit_id}]), listing_name, version_name, tier, has_write_tools and required_types. A feedback_report has outcome, reason_code, scorecard (the platform-filled summary), listing_name and hired_agent_id; its text is the rationale. Empty for the ladder. */
+            payload: {
+                [key: string]: unknown;
+            };
+            /** @description The rule of a stage the workforce policy applied or noticed (source policy). */
+            policy_rule: string | null;
+            /** Format: int64 */
+            project_id: number;
+            /** Format: int64 */
+            proposed_by_user_id: number | null;
+            /**
+             * Format: int64
+             * @description The workforce manager that proposed it.
+             */
+            proposer_application_id: number | null;
+            rationale: string;
+            /** @description person, workforce_manager or policy (the project's automatic dismissal policy). */
+            source: string;
+            /** @description watch, demote, suspend, retire or delete. For a feedback_report, the stage the report is about. Empty for a hire_listing. */
+            stage: string;
+            /** @description proposed, asked_owner, approved or rejected. */
+            status: string;
+        };
+        /** @description NOTE(W2): internal/api/v2/agentworkforce/handler.go, writeError. code is one of not_found, workforce_invalid, workforce_forbidden, workforce_guard_refused, workforce_proposal_open, workforce_state_conflict, workforce_confirm_nested, workforce_legal_hold, workforce_retention_pending, workforce_reinstate_closed, workforce_appeal_closed. */
+        AgentWorkforceRefusal: {
+            code: string;
+            error: string;
+            message: string;
+            /** @description With workforce_confirm_nested, the agents that nest it. */
+            nested_by?: components["schemas"]["AgentWorkforceNesting"][];
+            /**
+             * Format: date-time
+             * @description With workforce_retention_pending.
+             */
+            purge_after?: string | null;
+            /** Format: int64 */
+            workforce_proposal_id?: number;
         };
         /** @description NOTE(W2): internal/domain/applications/types.go:15-50 — required set = json tags WITHOUT omitempty (id, name, tags, created_at, owner_id, is_forked, meta, has_interrupt) PLUS updated_at, whose omitempty is ineffective on a time.Time (always marshaled; zero sentinel when unscanned). Every other omitempty field is optional (absent when zero-valued). */
         Application: {
@@ -2521,11 +3093,25 @@ export interface components {
         };
         /** @description NOTE(W2): internal/domain/applications/types.go:86-92 (ListResponse), marshaled directly by List (internal/api/v2/applications/handler.go:101-107). */
         ApplicationList: {
+            facets?: components["schemas"]["ApplicationListFacets"];
             page: number;
             page_size: number;
             rows: components["schemas"]["Application"][];
             total: number;
             total_pages: number;
+        };
+        /** @description The counts behind the Workshop's status and origin filters. Each count honours every list filter except the status and origin filters themselves (internal/domain/applications/types.go ListFacets). */
+        ApplicationListFacets: {
+            /** @description Agents per origin (`own`, `installed`, `forked`); only origins that occur are keys. `installed` is an agent hired from the Marketplace with a read-only definition (ADR-0051). */
+            origins: {
+                [key: string]: number;
+            };
+            /** @description Agents per publish state (`draft`, `published`); only states that occur are keys. */
+            statuses: {
+                [key: string]: number;
+            };
+            /** @description Installed and forked agents whose listing has a newer hireable version than the one they came from. */
+            update_available?: number;
         };
         /** @description NOTE(W2): internal/api/v2/applicationskills/handler.go:45-51, CurrentApplicationSkill. */
         ApplicationSkillAttachment: {
@@ -2595,6 +3181,11 @@ export interface components {
             meta?: components["schemas"]["VersionMeta"] | null;
             name: string;
             status: string;
+        };
+        /** @description The body of approveDelegationGrant. Omit it, or send `items: null`, to approve everything the approver holds access to; an empty list keeps nothing and is refused. */
+        ApproveDelegationGrantRequest: {
+            /** @description The items to keep, as listed in `requested_items`. */
+            items?: components["schemas"]["DelegationItem"][] | null;
         };
         /** @description One file sent with a message (`item_type` `attachment_message`). `item_details.filepath` is `/{bucket}/{conversation_uuid}/{name}`; download it with downloadConversationAttachment using the last segment as the name. */
         AttachmentMessageItem: {
@@ -2954,7 +3545,7 @@ export interface components {
             participant_id?: number;
             payload: {
                 attachments?: components["schemas"]["ChatStartAttachment"][];
-                /** @description Project skills picked in the composer's `~` menu (client contract 1.19): skills of the path's project that the answering agent version does not carry. Each entry names the skill by id only. The server reads the skill's `base` version itself under the caller's permissions (`models.applications.skills.details` and folder access); no skill text is accepted from the client. A picked skill is applied to this turn, counts toward the five skills a turn may invoke (with the `~name` skills of the version) and toward their 64 KiB of instructions, and is not added to the agent's `load_skill` catalogue. For `agent.execute.application.v1` only. A repeated id, more than five entries or another `source` answers 400. */
+                /** @description Project skills picked in the composer's `~` menu (client contract 1.19): skills of the path's project that the answering agent version does not carry. Each entry names the skill by id only. The server reads the skill's `base` version itself under the caller's permissions (`models.applications.skills.details` and folder access); no skill text is accepted from the client. A picked skill is applied to this turn, counts toward the five skills a turn may invoke (with the `~name` skills of the version) and toward their 64 KiB of instructions, and is not added to the agent's `load_skill` catalogue. Accepted by `agent.execute.application.v1` and, since skills epic 2169, by the model-chat `agent.execute.adhoc.v1` (a chat with only a model has no version, so every pick is applied to the turn). Text of a skill forked from another project that the project has not trusted reaches the model as quoted untrusted data. A repeated id, more than five entries or another `source` answers 400. */
                 skills?: components["schemas"]["ChatProjectSkillPick"][];
                 user_input: string;
             };
@@ -3422,6 +4013,8 @@ export interface components {
             /** @description Omitted, not empty, for a group with no attachments. */
             message_items?: components["schemas"]["AttachmentMessageItem"][];
             metadata?: {
+                /** @description Client contract 1.60 (ADR-0044 Amendment 1). On an answer whose agent had a delegation refused or narrowed: one notice per call, as its `delegation_refused` and `delegation_narrowed` frames left them, with `can_review` and `editors` derived for the viewer. Show each at the callee's tool-call row (`id` is its `tool_run_id`). Absent when none. */
+                delegation_notices_v1?: components["schemas"]["DelegationNotice"][];
                 grounding?: components["schemas"]["GroundingIndicator"];
                 /** @description Client contract 1.14. On a user's message: the user ids the sender tagged (the send's `user_ids`), deduplicated, in the order sent, at most 64. Absent when the message tags nobody and on messages sent before 1.14. These are who was TAGGED, not who was notified: notification only reaches project members other than the sender. */
                 mentioned_user_ids?: number[];
@@ -3559,6 +4152,60 @@ export interface components {
             /** @description The row's `unread` for the caller after the read. It is true when the caller read up to a message that is older than the newest answer. */
             unread: boolean;
         };
+        /** @description The skills pinned to a conversation, oldest first. */
+        ConversationSkillList: {
+            /** @description How many skills a conversation may hold (five, shared with the skills one message invokes). */
+            max: number;
+            rows: components["schemas"]["ConversationSkillPin"][];
+            total: number;
+        };
+        /** @description One skill pinned to a conversation. It carries no skill text. */
+        ConversationSkillPin: {
+            /** @description False when the pin is not applied for the caller: a project skill they cannot read, or a listing version that is yanked, withdrawn or delisted. A turn skips such a pin for that caller, and the client says so. */
+            available: boolean;
+            description: string;
+            /** Format: int64 */
+            id: number;
+            /** @description `project` (a project skill) or `listing` (a Marketplace skill listing version, pinned by reference). */
+            kind: string;
+            /**
+             * Format: int64
+             * @description The listing, for kind `listing`.
+             */
+            listing_id?: number;
+            /**
+             * Format: int64
+             * @description The pinned version of the listing, for kind `listing`.
+             */
+            listing_version_id?: number;
+            /** @description The skill's name; for a listing, the listing's. Empty when the listing is gone, so the pin can still be removed. */
+            name: string;
+            /** Format: date-time */
+            pinned_at: string;
+            /**
+             * Format: int64
+             * @description The user id of the person who pinned it.
+             */
+            pinned_by: number;
+            /**
+             * Format: int64
+             * @description The project skill, for kind `project`.
+             */
+            skill_id?: number;
+            trust: components["schemas"]["ConversationSkillTrust"];
+            /** @description The listing version's name, for kind `listing`. */
+            version_name?: string;
+        };
+        /** @description The state of a pinned skill's text (ADR-0051 amendment 1, A1.6). */
+        ConversationSkillTrust: {
+            /**
+             * Format: int64
+             * @description The project a forked skill came from, when it has one.
+             */
+            publisher_project_id?: number;
+            /** @description `trusted` or `untrusted`. A listing pinned by reference is always `untrusted`. */
+            state: string;
+        };
         /** @description NOTE(W2): opaque jsonb array round-trip — see items marker. One caveat to the "never inspects" claim: runPublishValidation decodes the column as []string (eliteacore/handler.go:1028-1029), so non-string elements are silently read as an empty list there (spurious "no conversation starters" warning); the store/return round-trip itself is untyped. */
         ConversationStarters: unknown[];
         /** @description One row of listConversations — the run-history panel's (issue #868) light projection of a conversation. `duration` is a placeholder: internal/api/v2/conversations/handler.go's List always answers `-1` for it (no per-conversation duration is computed server-side yet); a caller wanting a displayed duration derives one from created_at/updated_at instead of trusting this field. */
@@ -3629,6 +4276,174 @@ export interface components {
             updated_at: string;
             /** Format: uuid */
             uuid?: string;
+        };
+        /** @description An agent in the closure of an edge. */
+        DelegationClosureNode: {
+            /** Format: int64 */
+            application_id: number;
+            /** @description 0 for the callee itself, then one more per approved grant below it. */
+            depth: number;
+            items: components["schemas"]["DelegationItem"][];
+            name: string;
+        };
+        /** @description Client contract 1.62. What the callee of a `stale` grant holds now that the grant does not cover: the changes an editor of the caller reviews when they re-approve. Set containment against what the callee held when the grant was proposed, never version equality: a version with the same or a smaller set is not drift. */
+        DelegationDrift: {
+            added: components["schemas"]["DelegationItem"][];
+            /**
+             * Format: int64
+             * @description The callee version the changed set was read from; re-approving lists this version's set.
+             */
+            callee_version_id: number;
+            /** @description The SHA-256 of the callee's current set. One notification is sent per edge and digest. */
+            digest: string;
+        };
+        /** @description The 409 of approveDelegationGrant under the governed profile, or the plain error body of any other 409. */
+        DelegationGovernedError: {
+            /**
+             * Format: int64
+             * @description The change request to approve.
+             */
+            change_request_id?: number;
+            /** @description `DELEGATION_GOVERNED` when the grant is approved through its change request. */
+            code?: string;
+            error: string;
+        };
+        /** @description The grant of one composition edge (ADR-0044 amendment 1). `items` is what the approver approved; `requested_items` is what the callee held when the grant was proposed; `omitted` is the part of the second that is not in the first. */
+        DelegationGrant: {
+            /** Format: date-time */
+            approved_at?: string;
+            /** Format: int64 */
+            approved_by?: number;
+            /** Format: int64 */
+            callee_application_id: number;
+            /**
+             * Format: int64
+             * @description The callee version the grant was taken from.
+             */
+            callee_version_id: number;
+            /** Format: int64 */
+            caller_application_id: number;
+            /**
+             * Format: int64
+             * @description The change request that approves a governed grant.
+             */
+            change_request_id?: number;
+            /** @description The state of that change request. */
+            change_state?: string;
+            /** Format: date-time */
+            created_at: string;
+            /** @description The SHA-256 of the approved set, as a delegation step records it. */
+            digest: string;
+            drift?: components["schemas"]["DelegationDrift"];
+            /** @description `sub_agent`, `agent_tool`, `pipeline_child` or `pipeline_node`. */
+            edge_kind: string;
+            /** @description Approved through an ADR-0040 change request, with maker-checker. */
+            governed: boolean;
+            /** Format: int64 */
+            id: number;
+            items: components["schemas"]["DelegationItem"][];
+            /** @description A pending grant the migration wrote for a composition that existed before grants. */
+            legacy: boolean;
+            omitted: components["schemas"]["DelegationItem"][];
+            /** @description `attach`, `marketplace_hire`, `marketplace_upgrade` or `migration`. */
+            origin: string;
+            /** Format: int64 */
+            proposed_by?: number;
+            /** @description The SHA-256 of the set the callee held when the grant was proposed; a different current digest is drift. */
+            requested_digest: string;
+            requested_items: components["schemas"]["DelegationItem"][];
+            /** Format: date-time */
+            revoked_at?: string;
+            /** Format: int64 */
+            revoked_by?: number;
+            /** @description `pending` (not approved yet), `approved`, `stale` (the callee now holds more than the grant recorded, see `drift`; the grant still covers what it recorded and the callee runs without the new items), `superseded` (replaced by a re-approval) or `revoked`. */
+            state: string;
+            /** Format: int64 */
+            superseded_by?: number;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        DelegationGrantList: {
+            grants: components["schemas"]["DelegationGrant"][];
+        };
+        /** @description One thing a delegation grant lists: a toolkit, a tool of a toolkit, a credential reference, a data class or an egress host. */
+        DelegationItem: {
+            /** @description `toolkit`, `tool`, `credential`, `data_class` or `egress_host`. */
+            kind: string;
+            /** @description The toolkit key (`toolkit:<id>`, or `builtin:<type>` for a built-in toolkit), the tool name (`*` when a toolkit that selects every tool is cut to the approved tools), the credential reference id, the data class or the host. */
+            name: string;
+            /** @description For a tool or a credential, the key of the toolkit it belongs to. */
+            toolkit?: string;
+        };
+        /** @description Client contract 1.60 (ADR-0044 Amendment 1, A1.2 rule 5). A delegation the run refused (`kind: refused`) or narrowed (`kind: narrowed`), shown in the chat at the callee's place: "Agent2 could not use git from Agent1. This delegation is not approved." It carries names and ids only, never a credential value or a tool argument. The model keeps reading the same typed refusal as the tool result. Untrusted text: render it as plain text. */
+        DelegationNotice: {
+            /** @description Derived for the viewer when the notice is served, never stored: true when the viewer may edit agents in the project and so may open the grant review (Review delegation). Always false for `principal` and `depth`. Absent from a server that cannot say; show the notice without the action. */
+            can_review?: boolean;
+            /**
+             * @description Present on a refusal.
+             * @enum {string}
+             */
+            code?: "DELEGATION_GRANT_MISSING" | "DELEGATION_DEPTH_EXCEEDED";
+            depth?: number;
+            edge: {
+                /** Format: int64 */
+                callee_id?: number;
+                callee_name: string;
+                /**
+                 * Format: int64
+                 * @description The calling saved agent; absent when the caller has no saved identity.
+                 */
+                caller_id?: number;
+                caller_name?: string;
+                /** @enum {string} */
+                kind: "agent_tool" | "pipeline_child" | "sub_agent" | "pipeline_node";
+            };
+            /** @description When `can_review` is false: the people to ask (the caller's registry owners, else its owner), by display name. */
+            editors?: string[];
+            /** Format: int64 */
+            grant_id?: number;
+            /** @description The `tool_run_id` of the call the notice answers; it sits at that row. */
+            id: string;
+            /** @enum {string} */
+            kind: "refused" | "narrowed";
+            max_depth?: number;
+            /** @description What the callee needs (a refusal) or held beyond its grant (a narrowing). */
+            missing: {
+                /** @enum {string} */
+                kind: "toolkit" | "tool" | "credential" | "data_class" | "egress_host";
+                name: string;
+                toolkit?: string;
+            }[];
+            /** @description How many there were when more than `missing` lists. */
+            missing_total?: number;
+            /**
+             * @description `no_grant`: the edge has no approved grant and the run enforces them. `stale`: the callee holds something its approved grant does not cover (drift), so it ran without it ("used without the new toolkit"). `principal`: the person or mandate the run acts for may not use it; an editor cannot fix it, so there is no Review delegation. `depth`: the delegation would pass the maximum depth.
+             * @enum {string}
+             */
+            reason: "no_grant" | "stale" | "principal" | "depth";
+        };
+        /** @description What an attach of the callee version would let it use. */
+        DelegationPreview: {
+            /** @description The items the person asking holds access to and could approve. */
+            approvable: components["schemas"]["DelegationItem"][];
+            /** Format: int64 */
+            callee_application_id: number;
+            callee_name: string;
+            /** Format: int64 */
+            callee_version_id: number;
+            closure: components["schemas"]["DelegationClosureNode"][];
+            /** @description The SHA-256 of what the callee version holds. */
+            digest: string;
+            existing?: components["schemas"]["DelegationGrant"];
+            /**
+             * @description The governed profile is on: an attach records a change request that a
+             *     different approver decides, and the person asking cannot approve it
+             *     directly.
+             */
+            governed: boolean;
+            items: components["schemas"]["DelegationItem"][];
+            /** @description The items the person asking does not hold; an approval by them leaves these out. */
+            withheld: components["schemas"]["DelegationItem"][];
         };
         /** @description The ADR-0025 `device_revoked` answer: FLAT, unlike the nested error envelope, so a native client tells "wipe local data" (`error` is the string device_revoked) from "refresh once" (`error` is an object). Sent only for native credentials, with `WWW-Authenticate: Bearer error="invalid_token", error_description="device_revoked"`. NOTE(W2): internal/api/middleware/auth.go:453 (`DeviceRevokedBody`). */
         DeviceRevokedError: {
@@ -3909,6 +4724,206 @@ export interface components {
         MarkConversationReadRequest: {
             /** @description The numeric id or the UUID of a message group of the conversation: the caller read the conversation up to and including that message. A number is also accepted. */
             message_id?: string;
+        };
+        /** @description One facet value and how many listings carry it. Each count honours every search filter except the facet it belongs to. */
+        MarketplaceFacetCount: {
+            count: number;
+            /** @description The text to show. */
+            label: string;
+            /** @description The filter value to send back. */
+            value: string;
+        };
+        /** @description The counts behind the Browse sidebar (internal/marketplace/search.go Facets). */
+        MarketplaceFacets: {
+            categories: components["schemas"]["MarketplaceFacetCount"][];
+            /** @description Listings the project in the path has already hired or added. */
+            hired_here: number;
+            kinds: components["schemas"]["MarketplaceFacetCount"][];
+            /** @description The 50 publishers with most listings. `value` is the publisher id. */
+            publishers: components["schemas"]["MarketplaceFacetCount"][];
+            /** @description Toolkit and MCP types the listings need. */
+            required_types: components["schemas"]["MarketplaceFacetCount"][];
+            /** @description The 50 most used tags. */
+            tags: components["schemas"]["MarketplaceFacetCount"][];
+            /** @description Listings per risk tier (low, medium, high, critical). */
+            tiers: components["schemas"]["MarketplaceFacetCount"][];
+        };
+        /** @description The Feedback section of a listing (internal/api/v2/eliteacore/marketplace_feedback.go). */
+        MarketplaceFeedback: {
+            /** @description The caller is the publisher or an administrator. */
+            can_flag: boolean;
+            /** @description The caller is a platform administrator and may hide an item. */
+            can_moderate: boolean;
+            /** @description The caller is the publisher. */
+            can_reply: boolean;
+            /** @description The caller's project hired the listing and the caller is not its publisher. */
+            can_review: boolean;
+            items: components["schemas"]["MarketplaceFeedbackItem"][];
+            /** @description The caller's own review, wherever it falls in the list. Null when they wrote none. */
+            my_review: components["schemas"]["MarketplaceFeedbackItem"] | null;
+            overall: components["schemas"]["MarketplaceRatingBucket"];
+            /** @description The versions the caller's project hired. Empty when it never hired the listing. */
+            review_versions: components["schemas"]["MarketplaceReviewVersion"][];
+            signals: components["schemas"]["MarketplaceSignalsSet"];
+            total: number;
+            /** @description One bucket per version, newest first. */
+            versions: components["schemas"]["MarketplaceRatingBucket"][];
+        };
+        /** @description Who an item is from, as a reader may see it (internal/marketplace/feedback.go). */
+        MarketplaceFeedbackAuthor: {
+            /** @description `person` for a review; `agent` or `policy` for a workforce report. */
+            kind: string;
+            /** @description A person's name for a review. For a workforce report it is the label "Workforce report from a hiring project". It is never a project's name. */
+            name: string;
+        };
+        /** @description One item of feedback. It never carries a project id or a project name (internal/marketplace/feedback.go FeedbackItem). */
+        MarketplaceFeedbackItem: {
+            author: components["schemas"]["MarketplaceFeedbackAuthor"];
+            body: string;
+            /** Format: date-time */
+            created_at: string;
+            /** @description Shown to the publisher and to a moderator. */
+            flag_reason?: string;
+            flagged: boolean;
+            /** @description Shown to a moderator. */
+            hide_reason?: string;
+            id: string;
+            /** @description `review`, `workforce_report` or `signal`. */
+            kind: string;
+            /** @description A review the caller wrote, or a report the caller's project wrote. */
+            mine: boolean;
+            /** @description A report: `kept`, `demoted` or `dismissed`. */
+            outcome?: string;
+            /** @description 1 to 5 for a review; null for a workforce report. */
+            rating: number | null;
+            reason_code?: string;
+            reply: components["schemas"]["MarketplaceFeedbackReply"] | null;
+            scorecard?: components["schemas"]["MarketplaceFeedbackScorecard"];
+            stage?: string;
+            /** @description `visible`, or `hidden` (shown to a moderator and to the author only). */
+            state: string;
+            /** Format: date-time */
+            updated_at: string;
+            version_id: string;
+            version_name: string;
+        };
+        /** @description The publisher's one reply to an item (internal/marketplace/feedback.go). */
+        MarketplaceFeedbackReply: {
+            body: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        /** @description The platform-computed summary of a workforce report (internal/marketplace/feedback.go CleanScorecard). Four numbers and nothing else: never a transcript, a prompt, tool arguments or memory. */
+        MarketplaceFeedbackScorecard: {
+            active_days?: number;
+            breaker_trips?: number;
+            cost_vs_median?: number;
+            failure_rate?: number;
+        };
+        /** @description One hire of the listing in the project in the path (internal/marketplace/search.go). */
+        MarketplaceHired: {
+            /** @description The project agent or skill. */
+            application_id: string;
+            /** @description `install` or `fork`. */
+            mode: string;
+            version_id: string;
+            version_name: string;
+        };
+        /** @description A page of listings with the facet counts (internal/marketplace/search.go Search). */
+        MarketplaceListingPage: {
+            facets: components["schemas"]["MarketplaceFacets"];
+            rows: components["schemas"]["MarketplaceListingSummary"][];
+            total: number;
+        };
+        /** @description One listing as a card shows it (internal/marketplace/search.go). */
+        MarketplaceListingSummary: {
+            category: string;
+            /** @description The newest version that is neither yanked nor withdrawn. Null when none is left. */
+            current_version?: components["schemas"]["MarketplaceVersionRef"] | null;
+            description: string;
+            /** @description The public catalogue agent or skill. Try in chat, likes and the public read use it. */
+            entity_id: string;
+            featured: boolean;
+            has_write_tools: boolean;
+            /** @description Hires in the project in the path; empty when none. */
+            hired: components["schemas"]["MarketplaceHired"][];
+            /** @description Projects that hired or added it. */
+            hires: number;
+            icon_url?: string | null;
+            /** @description The listing id. */
+            id: string;
+            is_liked: boolean;
+            /** @description `agent` or `skill`. */
+            kind: string;
+            likes: number;
+            name: string;
+            publisher?: components["schemas"]["MarketplacePublisher"] | null;
+            /** @description Average review rating; null until reviews exist (ADR-0051 M5). */
+            rating_avg?: number | null;
+            rating_count: number;
+            required_types: string[];
+            /** @description `listed` or `delisted`. */
+            state: string;
+            tags: string[];
+            /** @description The risk tier at the source (low, medium, high, critical). */
+            tier: string;
+        };
+        /** @description The person who published the listing (internal/marketplace/search.go). */
+        MarketplacePublisher: {
+            id: string;
+            name: string;
+        };
+        /** @description The rating distribution of one version, from the visible reviews (internal/marketplace/feedback.go RatingBucket). */
+        MarketplaceRatingBucket: {
+            /** @description The number of reviews with one star, two, three, four and five. */
+            distribution: number[];
+            rating_avg: number | null;
+            rating_count: number;
+            /** @description Visible workforce reports. */
+            report_count: number;
+            /** @description `0` for every version together. */
+            version_id: string;
+            version_name: string;
+        };
+        /** @description A version the caller's project hired (internal/marketplace/feedback.go ReviewableVersions). */
+        MarketplaceReviewVersion: {
+            id: string;
+            name: string;
+        };
+        /** @description The daily signals of a listing or a version (internal/marketplace/signals.go). */
+        MarketplaceSignals: {
+            active_hires: number;
+            day: string;
+            /** @description Dismissed over every hire; null with no hire. */
+            dismissal_rate: number | null;
+            dismissed: number;
+            hires_total: number;
+            /** @description True when the daily routine has not written a row yet and the figures were computed at the request. */
+            live: boolean;
+            /** @description Of the cohort, the share still active on day 30; null with an empty cohort. */
+            retention_30d: number | null;
+            /** @description Hires at least 30 days old. */
+            retention_cohort: number;
+            /** @description Of those, the share now on the current version. */
+            upgrade_adoption: number | null;
+            /** @description Active hires made before the current version was published. */
+            upgrade_eligible: number;
+        };
+        /** @description The signals of a listing and of each version (internal/marketplace/signals.go). */
+        MarketplaceSignalsSet: {
+            listing: components["schemas"]["MarketplaceSignals"];
+            /** @description By version id. A version that was never hired has no entry. */
+            versions: {
+                [key: string]: components["schemas"]["MarketplaceSignals"];
+            };
+        };
+        /** @description A listing version by name (internal/marketplace/search.go). */
+        MarketplaceVersionRef: {
+            /** @description The catalogue version id. */
+            id: string;
+            name: string;
+            /** Format: date-time */
+            published_at: string;
         };
         /** @description The user's default context-management settings, stored in centry.social_users.default_context_management (jsonb) and edited by Settings > Memory. Every property is optional: absent means "the user has no opinion", which resolves to the platform default, and is a different answer from an explicit false or zero. Ranges are enforced on write (internal/domain/contextsettings); an out-of-range value is refused with {"error", "field"}. `enable_context_editing` is not in the legacy runtime's ContextManagementModel but IS read out of the same dict by set_context_strategy, and the Memory page has always sent it. */
         MemoryContextManagement: {
@@ -4291,6 +5306,15 @@ export interface components {
             enabled: boolean;
             name: string;
         };
+        /** @description The body of pinConversationSkill: either `skill_id` alone, or `listing_id` with `listing_version_id`. Any other key, or both forms, answers 400. */
+        PinConversationSkillRequest: {
+            /** Format: int64 */
+            listing_id?: number;
+            /** Format: int64 */
+            listing_version_id?: number;
+            /** Format: int64 */
+            skill_id?: number;
+        };
         PipelineSettings: {
             [key: string]: unknown;
         };
@@ -4383,6 +5407,31 @@ export interface components {
             tier?: string;
             /** @description The platform's cap at that tier. */
             tier_cap?: number;
+        };
+        /** @description One guardrail's effect on a run, merged over the run's LLM requests. It never holds the inspected text or the matched value. */
+        RunGuardrailNotice: {
+            /** @description The detector's configured action, `block`, `mask`, `flag` or `warn`. */
+            action: string;
+            detector: string;
+            /** Format: date-time */
+            first_seen_at: string;
+            /** @description The name of the guardrail governance entry. */
+            guardrail: string;
+            /** @description What happened: `blocked` (the request or the answer was refused), `redacted` (a match was masked), `warned` (a warn guardrail found a match and changed nothing) or `unavailable` (a guardrail with fail mode closed could not run, so the request was refused). */
+            kind: string;
+            /** @description The finding labels, for example `email`. Never a value. */
+            labels: string[];
+            /**
+             * Format: int32
+             * @description The number of the run's LLM requests the notice covers.
+             */
+            requests: number;
+            /** @description `input` (the request to the model) or `output` (the answer). */
+            stage: string;
+        };
+        RunGuardrailNotices: {
+            notices: components["schemas"]["RunGuardrailNotice"][];
+            run_id: string;
         };
         /** @description Opaque selected-tools blob (object or null) — see marker. */
         SelectedTools: unknown;
@@ -4851,7 +5900,7 @@ export interface components {
             capabilities?: ({
                 /** @description The agent may propose, with the propose_agent tool, that a temporary sub-agent it started become a saved agent (ADR-0050 decision 5a). The person it works for must also hold models.applications.applications.create. */
                 can_propose_agents?: boolean;
-                /** @description The agent is an HR agent (ADR-0050 decision 5l): it may propose, with the propose_dismissal tool, a ladder stage for another agent of the project. It never decides; a person holding agents.workforce.manage does. Guards refuse a proposal against itself, its hirer, a higher tier, another HR agent, a critical-tier agent or one under legal hold. */
+                /** @description The agent is a workforce manager (ADR-0050 decision 5l): it may propose, with the propose_dismissal tool, a ladder stage for another agent of the project. It never decides; a person holding agents.workforce.manage does. Guards refuse a proposal against itself, its hirer, a higher tier, another workforce manager, a critical-tier agent or one under legal hold. */
                 can_review_agents?: boolean;
             } & {
                 [key: string]: boolean;
@@ -5180,6 +6229,8 @@ export interface components {
         Offset: number;
         /** @description Project identifier (extracted from URL path) */
         ProjectId: string;
+        /** @description The run (execution) id. */
+        RunStepRunId: string;
         /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
         XClientVersion: string;
     };
@@ -5776,6 +6827,87 @@ export interface operations {
             426: components["responses"]["ClientUpgradeRequired"];
         };
     };
+    getAgentWorkforce: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                application_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The agent's workforce state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentWorkforceAgent"];
+                };
+            };
+            400: components["responses"]["400"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            /** @description (code not_found) No such agent or proposal in this project */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentWorkforceRefusal"];
+                };
+            };
+            426: components["responses"]["ClientUpgradeRequired"];
+        };
+    };
+    listAgentWorkforceProposals: {
+        parameters: {
+            query?: {
+                application_id?: number;
+                /** @description Omitted: the ladder's proposals (dismiss and demote). hire_listing or feedback_report: that kind. marketplace: both. dismiss, demote or all. The Marketplace kinds are the agent manager's to read. */
+                kind?: string;
+                limit?: number;
+                offset?: number;
+                /** @description proposed, asked_owner, approved, rejected or all */
+                status?: string;
+            };
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The proposals */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        rows: components["schemas"]["AgentWorkforceProposal"][];
+                        total: number;
+                    };
+                };
+            };
+            400: components["responses"]["400"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            426: components["responses"]["ClientUpgradeRequired"];
+        };
+    };
     listApplicationSkills: {
         parameters: {
             query?: never;
@@ -5874,10 +7006,22 @@ export interface operations {
                 limit?: components["parameters"]["Limit"];
                 /** @description Number of items to skip before starting to collect results */
                 offset?: components["parameters"]["Offset"];
+                /** @description Narrows the list to agents the project owns (`own`), hired from the Marketplace as installed (`installed`) or that came from a fork (`forked`). The `facets.origins` counts ignore this filter. */
+                origin?: string;
+                /** @description `true` narrows the list to the agents or pipelines the caller pinned (the personal Pinned group, tenant/0249). Private to them. */
+                pinned?: boolean;
                 /** @description Search text (preferred over `search` by the handler). */
                 query?: string;
+                /** @description One of `created_at` (default), `updated_at`, `name`, `id`, `author`, `authors`, `likes`. */
+                sort_by?: string;
+                /** @description `desc` (default) or `asc`. */
+                sort_order?: string;
+                /** @description Narrows the list to agents in a publish state, `draft` or `published` (or both, comma-separated, which is no filter): the state each row reports in `status`. The `facets.statuses` counts ignore this filter. */
+                status?: string;
                 /** @description Comma-separated tag filter. Each entry matches a tag NAME or a tag ID. The entries combine with AND: a listed application carries every named tag on one of its versions. Blank entries are ignored (repos/applications.go splitTagFilter). */
                 tags?: string;
+                /** @description Keeps only installed and forked agents whose listing has a newer hireable version. The `facets.update_available` count ignores it. */
+                update_available?: boolean;
             };
             header?: {
                 /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
@@ -6469,6 +7613,153 @@ export interface operations {
             500: components["responses"]["500"];
         };
     };
+    unpinConversationSkill: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The conversation's numeric id or its UUID; both resolve. */
+                conversation_id: string;
+                pin_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The pin was removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A pin id that is not a positive integer, or a native client version that does not parse (invalid_client_version). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"] | components["schemas"]["InvalidClientVersionError"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+        };
+    };
+    listConversationSkills: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The conversation's numeric id or its UUID; both resolve. */
+                conversation_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The pins. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationSkillList"];
+                };
+            };
+            /** @description A native client version that does not parse (invalid_client_version). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"] | components["schemas"]["InvalidClientVersionError"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+        };
+    };
+    pinConversationSkill: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The conversation's numeric id or its UUID; both resolve. */
+                conversation_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PinConversationSkillRequest"];
+            };
+        };
+        responses: {
+            /** @description The skill was pinned already; its pin. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationSkillPin"];
+                };
+            };
+            /** @description The new pin. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationSkillPin"];
+                };
+            };
+            /** @description A body that names neither one skill nor one listing version, or a native client version that does not parse (invalid_client_version). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"] | components["schemas"]["InvalidClientVersionError"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+            /** @description The conversation already holds five skills. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+        };
+    };
     getConversation: {
         parameters: {
             query?: {
@@ -6683,6 +7974,217 @@ export interface operations {
             500: components["responses"]["500"];
         };
     };
+    getDelegationGrant: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The caller agent or pipeline of the edge. A grant of another agent answers 404. */
+                application_id: number;
+                grant_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The grant. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DelegationGrant"];
+                };
+            };
+            400: components["responses"]["400"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+        };
+    };
+    revokeDelegationGrant: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The caller agent or pipeline of the edge. A grant of another agent answers 404. */
+                application_id: number;
+                grant_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The revoked grant. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DelegationGrant"];
+                };
+            };
+            400: components["responses"]["400"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+            /** @description The grant is not active. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+        };
+    };
+    approveDelegationGrant: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The caller agent or pipeline of the edge. */
+                application_id: number;
+                grant_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ApproveDelegationGrantRequest"];
+            };
+        };
+        responses: {
+            /** @description The approved grant. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DelegationGrant"];
+                };
+            };
+            /** @description Nothing is left to approve, or the body is malformed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+            /** @description The grant is neither pending nor stale, or it is governed and is approved through its change request. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DelegationGovernedError"];
+                };
+            };
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+        };
+    };
+    listDelegationGrants: {
+        parameters: {
+            query?: {
+                /** @description `true` includes superseded and revoked grants. */
+                history?: boolean;
+            };
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The caller agent or pipeline Y of the edges, the one whose editors approve. */
+                application_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The grants of the agent's edges, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DelegationGrantList"];
+                };
+            };
+            400: components["responses"]["400"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+        };
+    };
+    previewDelegationGrant: {
+        parameters: {
+            query: {
+                callee_application_id: number;
+                callee_version_id: number;
+                /** @description `sub_agent`, `agent_tool`, `pipeline_child` or `pipeline_node`. */
+                edge_kind: string;
+            };
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The caller agent or pipeline Y of the edge. */
+                application_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The preview. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DelegationPreview"];
+                };
+            };
+            400: components["responses"]["400"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+        };
+    };
     generateApplicationDraftStream: {
         parameters: {
             query?: never;
@@ -6741,6 +8243,216 @@ export interface operations {
                     "application/json": components["schemas"]["PredictLLMUnavailableResponse"];
                 };
             };
+        };
+    };
+    listRunGuardrailNotices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+                /** @description The run (execution) id. */
+                run_id: components["parameters"]["RunStepRunId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The run's guardrail notices */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunGuardrailNotices"];
+                };
+            };
+            400: components["responses"]["400"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            500: components["responses"]["500"];
+        };
+    };
+    getMarketplaceFeedback: {
+        parameters: {
+            query?: {
+                /** @description `review`, `workforce_report` or `signal`. */
+                kind?: string;
+                limit?: number;
+                offset?: number;
+                version_id?: string;
+            };
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                listing_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The feedback */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarketplaceFeedback"];
+                };
+            };
+            400: components["responses"]["400"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+            426: components["responses"]["ClientUpgradeRequired"];
+        };
+    };
+    searchMarketplaceListings: {
+        parameters: {
+            query?: {
+                /** @description Comma-separated categories. */
+                category?: string;
+                /** @description The public catalogue agent or skill id. The old `?agentId=` links use it to find their listing. */
+                entity_id?: string;
+                /** @description Keep only listings an administrator features. */
+                featured?: boolean;
+                /** @description Keep only listings the project has hired or added. */
+                hired_here?: boolean;
+                /** @description `agent` or `skill`. Absent keeps both. */
+                kind?: string;
+                /** @description Maximum number of items to return */
+                limit?: components["parameters"]["Limit"];
+                /** @description The highest risk tier to show (low, medium, high, critical). */
+                max_tier?: string;
+                min_rating?: number;
+                /** @description Number of items to skip before starting to collect results */
+                offset?: components["parameters"]["Offset"];
+                publisher_id?: string;
+                /** @description Words matched against the name, description and soul summary. */
+                query?: string;
+                /** @description Comma-separated toolkit or MCP types; a listing needs one of them. */
+                requires?: string;
+                /** @description `relevance` (default), `hires`, `likes` (agents and skills together), `rating`, `newest` or `name`. */
+                sort?: string;
+                /** @description Comma-separated tags; a listing needs one of them. */
+                tag?: string;
+            };
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of listings with the facet counts */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "rows": [
+                     *         {
+                     *           "id": "7",
+                     *           "kind": "agent",
+                     *           "entity_id": "42",
+                     *           "name": "Changelog Writer",
+                     *           "description": "Drafts release notes from merged pull requests.",
+                     *           "category": "Development",
+                     *           "tags": [
+                     *             "github",
+                     *             "release"
+                     *           ],
+                     *           "publisher": {
+                     *             "id": "3",
+                     *             "name": "Dana Owner"
+                     *           },
+                     *           "tier": "medium",
+                     *           "current_version": {
+                     *             "id": "311",
+                     *             "name": "v2.3",
+                     *             "published_at": "2026-10-30T09:00:00Z"
+                     *           },
+                     *           "hires": 120,
+                     *           "rating_avg": null,
+                     *           "rating_count": 0,
+                     *           "likes": 31,
+                     *           "is_liked": false,
+                     *           "featured": true,
+                     *           "required_types": [
+                     *             "github"
+                     *           ],
+                     *           "has_write_tools": true,
+                     *           "state": "listed",
+                     *           "hired": []
+                     *         }
+                     *       ],
+                     *       "total": 1,
+                     *       "facets": {
+                     *         "kinds": [
+                     *           {
+                     *             "value": "agent",
+                     *             "label": "Agents",
+                     *             "count": 1
+                     *           }
+                     *         ],
+                     *         "categories": [
+                     *           {
+                     *             "value": "Development",
+                     *             "label": "Development",
+                     *             "count": 1
+                     *           }
+                     *         ],
+                     *         "tags": [
+                     *           {
+                     *             "value": "github",
+                     *             "label": "github",
+                     *             "count": 1
+                     *           }
+                     *         ],
+                     *         "publishers": [
+                     *           {
+                     *             "value": "3",
+                     *             "label": "Dana Owner",
+                     *             "count": 1
+                     *           }
+                     *         ],
+                     *         "tiers": [
+                     *           {
+                     *             "value": "medium",
+                     *             "label": "medium",
+                     *             "count": 1
+                     *           }
+                     *         ],
+                     *         "required_types": [
+                     *           {
+                     *             "value": "github",
+                     *             "label": "github",
+                     *             "count": 1
+                     *           }
+                     *         ],
+                     *         "hired_here": 0
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["MarketplaceListingPage"];
+                };
+            };
+            400: components["responses"]["400"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            426: components["responses"]["ClientUpgradeRequired"];
         };
     };
     listMemories: {
@@ -7649,6 +9361,40 @@ export interface operations {
                     "application/json": components["schemas"]["ChatExecutionError"];
                 };
             };
+        };
+    };
+    listSkills: {
+        parameters: {
+            query?: {
+                /** @description Maximum number of items to return */
+                limit?: components["parameters"]["Limit"];
+                /** @description Number of items to skip before starting to collect results */
+                offset?: components["parameters"]["Offset"];
+                /** @description Pagination parameter the handler actually reads. */
+                page?: number;
+                /** @description Pagination parameter the handler actually reads. */
+                page_size?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Skills list */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillsList"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
         };
     };
     cancelChatExecution: {

@@ -50,17 +50,20 @@ import (
 	v2contextmgr "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/contextmgr"
 	v2contextviews "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/contextviews"
 	v2convs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	v2conversationskills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversationskills"
 	v2credentialconsent "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialconsent"
 	v2credentialgrants "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialgrants"
 	v2credentialprobe "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialprobe"
 	v2credentialreferences "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialreferences"
 	v2credentialreview "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialreview"
 	v2deepwiki "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
+	v2delegationgrants "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/delegationgrants"
 	desktopopsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
 	v2discovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/discovery"
 	v2drafts "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/drafts"
 	v2core "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
 	v2entitlements "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/entitlements"
+	v2entityfolders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/entityfolders"
 	v2evaluation "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
 	v2events "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/events"
 	v2folders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/folders"
@@ -87,6 +90,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/sharedchat"
 	v2skillpublish "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skillpublish"
 	v2skills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
+	v2skilltrust "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skilltrust"
 	v2social "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/social"
 	v2support "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/supportassistant"
 	v2tags "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/tags"
@@ -347,6 +351,11 @@ type RouterConfig struct {
 	// ImageGenerationModel is the deployment's image model (#1969), from
 	// ELITEA_IMAGE_GENERATION_MODEL, the value the worker reads too.
 	ImageGenerationModel string
+	// CodeSandboxLanguages are the languages the deployment's code sandbox
+	// serves, from ELITEA_CODE_SANDBOX_LANGUAGES (the chart sets it from the
+	// worker's sandboxRuntimes). Any entry makes the pyodide internal tool
+	// available.
+	CodeSandboxLanguages []string
 	// WorkerImplementation is the plain "python"/"rust" worker name (#865,
 	// #866) — the same value runtimecomposition.WorkerImplementationFromEnv
 	// derived to build ToolkitWorkerCapability above, restated here because
@@ -390,6 +399,22 @@ type RouterConfig struct {
 	ToolkitRegistry admin.ToolkitRegistrySource
 	SkillsRepo      v2skills.Repository
 	FoldersRepo     v2folders.Repository
+	// EntityFoldersRepo backs the shared project folders of the Agents,
+	// Pipelines, Skills, Toolkits and MCPs lists (issue 2048).
+	EntityFoldersRepo v2entityfolders.Repository
+	// ConversationSkillsRepo backs the skills pinned to a conversation (ADR-0050
+	// amendment 1, skills epic 2169 story S3). SkillTrustRepo backs a project's
+	// trust in the text of skills written in other projects (ADR-0051
+	// amendment 1, A1.6).
+	ConversationSkillsRepo v2conversationskills.Repository
+	SkillTrustRepo         v2skilltrust.Repository
+	// DelegationGrants backs the delegation grants of a project's composition
+	// edges (ADR-0044 amendment 1, delegation epic 2156 story S2b).
+	DelegationGrants v2delegationgrants.Service
+	// DelegationGoverned reports whether the governed profile is on (the
+	// credential governance admission): a grant proposed while it is on is
+	// governed and approved through its change request. Nil means never.
+	DelegationGoverned func(context.Context) bool
 	// MemoriesRepo backs persistent, cross-conversation personal memory
 	// (#870) — Settings > Memory's CRUD. Its recall INTO a chat turn is a
 	// separate dependency, wired straight into
@@ -481,6 +506,14 @@ type RouterConfig struct {
 	// invisibly absent. The run START route reports the row it wrote either
 	// way, so a queued run is never claimed to be running.
 	EvalOrchestrator v2evaluation.Enqueuer
+	// EvalSuitesRepo holds the evaluation suites (run settings and limits,
+	// issue 2013). Unassigned, the suite routes are not registered and a run
+	// start cannot name a suite.
+	EvalSuitesRepo v2evaluation.SuiteRepository
+	// EvalHumanScoresRepo stores the human scores of runs (issue 2008). It is
+	// the run repository's own implementation in production. Unassigned, the
+	// two human score routes are not registered.
+	EvalHumanScoresRepo v2evaluation.HumanScoreRepository
 	// ReleaseGate is the evaluation release gate (ADR-0040 decision 4). Nil
 	// leaves its four routes registered, answering 503.
 	ReleaseGate *releasegate.Gate
@@ -802,6 +835,11 @@ type RouterConfig struct {
 	// composition root builds it over the same gate the runtime admission
 	// checks. The routes are always mounted; nil answers 503 on each.
 	ExecutionSuspensions *v2safety.Handler
+	// SuspensionService is the kill switch service behind it. The Marketplace
+	// yank uses it to suspend the agents that hold a yanked version when a
+	// platform administrator asks (ADR-0051 decision 4). nil leaves the yank
+	// without suspension.
+	SuspensionService *safetyapp.Service
 	// MandateAttachments serves the routes that attach a mandate to a
 	// pipeline schedule, pipeline trigger or index schedule (ADR-0039, issue
 	// 1122). Set only with the credential governance flag on; nil mounts
@@ -1215,6 +1253,7 @@ func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 
 	listBuckets, createBucket, getBucket, updateBucket, deleteBucket := notImplementedArtifact, notImplementedArtifact, notImplementedArtifact, notImplementedArtifact, notImplementedArtifact
 	listObjects, uploadObject, batchDeleteObjects, downloadObject, statObject, deleteObject := notImplementedArtifact, notImplementedArtifact, notImplementedArtifact, notImplementedArtifact, notImplementedArtifact, notImplementedArtifact
+	moveObject := notImplementedArtifact
 	createTransferGrant, commitTransferGrant := notImplementedArtifact, notImplementedArtifact
 	presignUploadPart, completeMultipartUpload, abortMultipartUpload := notImplementedArtifact, notImplementedArtifact, notImplementedArtifact
 	listObjectsS3, downloadObjectS3 := notImplementedArtifact, notImplementedArtifact
@@ -1225,6 +1264,7 @@ func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 			deps.Handler.ListBuckets, deps.Handler.CreateBucket, deps.Handler.GetBucket, deps.Handler.UpdateBucket, deps.Handler.DeleteBucket
 		listObjects, uploadObject, batchDeleteObjects, downloadObject, statObject, deleteObject =
 			deps.Handler.ListObjects, deps.Handler.UploadObject, deps.Handler.BatchDeleteObjects, deps.Handler.DownloadObject, deps.Handler.StatObject, deps.Handler.DeleteObject
+		moveObject = deps.Handler.MoveObject
 		createTransferGrant, commitTransferGrant = deps.Handler.CreateTransferGrant, deps.Handler.CommitTransferGrant
 		presignUploadPart, completeMultipartUpload, abortMultipartUpload =
 			deps.Handler.PresignUploadPart, deps.Handler.CompleteMultipartUpload, deps.Handler.AbortMultipartUpload
@@ -1297,6 +1337,9 @@ func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 				// trailing chi wildcard, not the spec's literal {key} — see
 				// S7/S9 for why.
 				r.With(del).Post("/objects/{projectID}/{bucket}:batchDelete", batchDeleteObjects)
+				// Rename/move (#2015): writes the new key (create) and removes
+				// the old one (delete), so it needs both.
+				r.With(create).With(del).Post("/objects/{projectID}/{bucket}:move", moveObject)
 				r.With(del).Delete("/objects/{projectID}/{bucket}/*", deleteObject)
 
 				// The SDK's by-filepath object read (#978), an ALIAS of the
@@ -1566,6 +1609,7 @@ func newToolkitHandler(
 		options = append(options, v2toolkits.WithWorkerImplementation(cfg.WorkerImplementation))
 	}
 	options = append(options, v2toolkits.WithImageGenerationModel(cfg.ImageGenerationModel))
+	options = append(options, v2toolkits.WithCodeSandbox(cfg.CodeSandboxLanguages))
 	if cfg.Pool != nil {
 		// The save-time thinking rule (ADR-0038) reads the catalogue the
 		// agent editor and the chat participants read.
@@ -2088,6 +2132,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		v2configs.WithStoredConfigurationResolver(cfg.ConfigStoredResolver),
 		v2configs.WithSecretSealer(configurationSecretSealer(cfg.Pool)),
 		v2configs.WithPublicProjectID(apimw.PublicProjectID()),
+		v2configs.WithOAuthDiscoveryGuard(mcpAuthorizationEgressGuard(cfg)),
 		v2configs.WithModelDefaults(cfg.PlatformModelDefaults),
 	)
 	artifactHandler := cfg.ArtifactHandler
@@ -2197,6 +2242,23 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		}
 		agentLifecycle, _ = dbrepos.ComposeAgentLifecycle(cfg.Pool, lifecycleGate, cfg.SuspensionChanged)
 	}
+	// Delegation grants of composition edges (ADR-0044 amendment 1): the grant
+	// store records a governed grant's change request through the lifecycle
+	// store, and the lifecycle store's final approval approves the grant
+	// through it. The attach path proposes grants in its own transaction.
+	// Without a pool the routes and the attach hook are absent.
+	delegationService := cfg.DelegationGrants
+	var delegationHook v2core.DelegationGrantHook
+	// driftTrigger asks for a drift check of a project after a write that can
+	// change a callee agent (story S4); nil without the grant store.
+	var driftTrigger func(projectID int64)
+	if delegation := composeDelegationGrants(cfg, agentLifecycle, permissionResolver); delegation != nil {
+		delegationHook = delegation.store
+		driftTrigger = delegation.trigger.ProjectChanged
+		if delegationService == nil {
+			delegationService = delegation.service
+		}
+	}
 	// Run step records (ADR-0042, #1499): without a pool the store stays
 	// nil and the routes answer 503; without an object store the stored
 	// content of a step answers 503 while its record still reads.
@@ -2218,6 +2280,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		cfg.Pool,
 		v2core.WithReleases(agentReleases),
 		v2core.WithPublishGovernor(agentLifecycle),
+		v2core.WithListingSuspender(v2core.NewListingSuspender(cfg.SuspensionService)),
 		v2core.WithMemoryUserJournal(memoryUserJournal),
 		v2core.WithPermissionResolver(permissionResolver),
 		v2core.WithObjectStore(cfg.ObjectStore),
@@ -2232,8 +2295,13 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		v2core.WithEvents(cfg.DomainEvents),
 		v2core.WithPublishAIValidation(publishAIValidator(cfg.PredictCompleter)),
 		v2core.WithConnectorGate(connectorGate),
+		v2core.WithWorkforceManagerCheck(apimw.HoldsPermissionIn(coreResolver, platformauth.PermissionModeDefault, v2agentworkforce.ManagePermission)),
+		v2core.WithDelegationGrants(delegationHook),
 	)
 	agentLifecycle.ComposePublisher(coreHandler)
+	// An approved upgrade or upstream merge is applied by the handler that owns
+	// the tenant schema (ADR-0051 decision 4).
+	agentLifecycle.ComposeMarketplaceApplier(coreHandler)
 
 	// The MCP server (issue 252). Outside the /api/v2 group for the reasons in
 	// mountMCPServerRoutes.
@@ -2263,6 +2331,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			WithNamer(conversationNamer(cfg.PredictCompleter))
 		if cfg.Pool != nil {
 			convHandler.WithParticipantCandidates(dbrepos.NewParticipantCandidatesRepo(cfg.Pool))
+		}
+		// A refused or narrowed delegation's notice is served with what this
+		// viewer may do about it (#2161). A nil reviewer serves it unstamped.
+		if reviewer := composeDelegationReviewer(cfg, permissionResolver); reviewer != nil {
+			convHandler.WithDelegationReviewer(reviewer)
 		}
 	}
 	mountMCPServerRoutes(
@@ -2396,6 +2469,10 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		//     (403) is recorded rather than silently disappearing — which is
 		//     the question an audit trail is most often opened to answer.
 		r.Use(apimw.Audit(auditRecorder))
+		// A write that can change what a callee agent holds asks for the drift
+		// check of its delegation grants (ADR-0044 amendment 1, A1.2 rule 3).
+		// Below Audit so it sees the final status; it never changes a response.
+		r.Use(apimw.DelegationDrift(driftTrigger))
 
 		r.Route("/api/v2", func(r chi.Router) {
 			// THE GROUP'S OWN "no such route" ANSWER (F3).
@@ -3774,6 +3851,21 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Put("/application/prompt_lib/{projectID}/{applicationID}", appHandler.Update)
 					r.With(projectPermission("models.applications.application.delete")).
 						Delete("/application/prompt_lib/{projectID}/{applicationID}", appHandler.Delete)
+					// The delegation grants of the agent's composition edges (ADR-0044
+					// amendment 1): read with the agent, proposed, approved and revoked
+					// with the right to edit it. Under the governed profile a grant is
+					// approved through its change request instead. Audited as a surface.
+					if delegationService != nil {
+						grants := v2delegationgrants.NewHandler(delegationService)
+						readAgent := projectPermission("models.applications.application.details")
+						editAgent := projectPermission("models.applications.application.update")
+						r.With(readAgent).Get("/delegation_grants/prompt_lib/{projectID}/{applicationID}", grants.List)
+						r.With(editAgent).Post("/delegation_grants/prompt_lib/{projectID}/{applicationID}", grants.Propose)
+						r.With(readAgent).Get("/delegation_preview/prompt_lib/{projectID}/{applicationID}", grants.Preview)
+						r.With(readAgent).Get("/delegation_grant/prompt_lib/{projectID}/{applicationID}/{grantID}", grants.Get)
+						r.With(editAgent).Post("/delegation_grant/prompt_lib/{projectID}/{applicationID}/{grantID}/approve", grants.Approve)
+						r.With(editAgent).Delete("/delegation_grant/prompt_lib/{projectID}/{applicationID}/{grantID}", grants.Revoke)
+					}
 					r.With(projectPermission("models.applications.versions.get")).
 						Get("/versions/prompt_lib/{projectID}/{applicationID}", appHandler.ListVersions)
 					r.With(projectPermission("models.applications.versions.create")).
@@ -3834,6 +3926,18 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(projectPermission("models.applications.skills.list")).
 						Get("/skills/{mode}/{projectID}", skillHandler.List)
 					r.With(requireSkillCreate).Post("/skills/{mode}/{projectID}", skillHandler.Create)
+					// A project's trust in the text of a skill written in another project
+					// (ADR-0051 amendment 1, A1.6): read with the skill, granted and revoked
+					// with the right to edit it. Audited as a surface.
+					if cfg.SkillTrustRepo != nil {
+						skillTrust := v2skilltrust.NewHandler(cfg.SkillTrustRepo)
+						r.With(requireSkillDetails).
+							Get("/skill_trust/prompt_lib/{projectID}/{skillID}", skillTrust.Get)
+						r.With(requireSkillUpdate).
+							Post("/skill_trust/prompt_lib/{projectID}/{skillID}", skillTrust.Trust)
+						r.With(requireSkillUpdate).
+							Delete("/skill_trust/prompt_lib/{projectID}/{skillID}", skillTrust.Revoke)
+					}
 					r.With(requireSkillDetails).
 						Get("/skill/{mode}/{projectID}/{skillID}", skillHandler.Get)
 					// The {versionID} segment lets a caller read one NAMED
@@ -4062,6 +4166,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Delete("/folder/prompt_lib/{projectID}/{folderID}", folderHandler.Delete)
 				}
 
+				// Project folders of the entity lists (issue 2048). One route set
+				// per kind, each gated by the permissions of THAT list: list
+				// reads, create makes a folder, update renames, reorders, moves
+				// an entity and deletes a folder. No new permission.
+				if cfg.EntityFoldersRepo != nil {
+					registerEntityFolderRoutes(r, v2entityfolders.NewHandler(cfg.EntityFoldersRepo), projectPermission)
+				}
+
 				// Long-term memory (#870) — Settings > Memory's persistent,
 				// cross-conversation personal memory CRUD. Read declares
 				// `models.chat.conversation.details`, write declares
@@ -4235,6 +4347,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				if cfg.EvalRunsRepo != nil && cfg.EvalDimensionsRepo != nil {
 					runHandler := v2evaluation.NewRunHandler(
 						cfg.EvalRunsRepo, cfg.EvalDimensionsRepo, cfg.EvalOrchestrator)
+					if cfg.EvalSuitesRepo != nil {
+						runHandler.WithSuites(cfg.EvalSuitesRepo)
+					}
+					// Tool outputs a runtime_plane case kept are returned only
+					// to callers who hold runs.evidence.read in the project.
+					evidenceRead := v2evaluation.EvidenceReadCheck(apimw.HoldsResolvedPermission(
+						coreResolver, platformauth.PermissionModeDefault, v2runevidence.Permission))
+					runHandler.WithEvidenceReadCheck(evidenceRead)
 					requireRunRead := evaluationGate(v2evaluation.PermissionRunRead)
 					requireRunWrite := evaluationGate(v2evaluation.PermissionRunCreate)
 
@@ -4248,6 +4368,44 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Post("/eval_run_cancel/prompt_lib/{projectID}/{runID}", runHandler.Cancel)
 					r.With(requireRunRead).
 						Get("/eval_results/prompt_lib/{projectID}/{runID}", runHandler.Results)
+
+					// Human scores (issue 2008).
+					if cfg.EvalHumanScoresRepo != nil {
+						humanHandler := v2evaluation.NewHumanScoreHandler(cfg.EvalRunsRepo, cfg.EvalHumanScoresRepo).
+							WithEvidenceReadCheck(evidenceRead)
+						r.With(evaluationGate(v2evaluation.PermissionHumanScoreRead)).
+							Get("/eval_human_scores/prompt_lib/{projectID}/{runID}", humanHandler.List)
+						r.With(evaluationGate(v2evaluation.PermissionHumanScoreCreate)).
+							Post("/eval_human_scores/prompt_lib/{projectID}/{runID}", humanHandler.Create)
+					}
+				}
+
+				// Suites: run settings and limits (issue 2013, step 1). Read
+				// takes run.read and write takes run.create, the rights to
+				// see and to start runs.
+				if cfg.EvalSuitesRepo != nil {
+					suiteHandler := v2evaluation.NewSuiteHandler(cfg.EvalSuitesRepo)
+					r.With(evaluationGate(v2evaluation.PermissionRunRead)).
+						Get("/eval_suites/prompt_lib/{projectID}", suiteHandler.List)
+					r.With(evaluationGate(v2evaluation.PermissionRunCreate)).
+						Post("/eval_suites/prompt_lib/{projectID}", suiteHandler.Create)
+					r.With(evaluationGate(v2evaluation.PermissionRunCreate)).
+						Put("/eval_suite/prompt_lib/{projectID}/{suiteID}", suiteHandler.Update)
+					r.With(evaluationGate(v2evaluation.PermissionRunCreate)).
+						Delete("/eval_suite/prompt_lib/{projectID}/{suiteID}", suiteHandler.Delete)
+				}
+
+				// Enhance with AI: one proposal from a finished run, written
+				// nowhere. It spends model tokens (run create) and it quotes
+				// the pinned version's instructions, which the run read does
+				// not grant (version read). Accepted fixes are saved by the
+				// existing routes, so the ADR-0040 change request path is
+				// not touched.
+				if cfg.EvalRunsRepo != nil {
+					enhanceHandler := v2evaluation.NewEnhanceHandler(cfg.EvalRunsRepo, cfg.PredictCompleter)
+					r.With(evaluationGate(v2evaluation.PermissionRunCreate),
+						projectPermission("models.applications.versions.get")).
+						Post("/eval_run_enhance/prompt_lib/{projectID}/{runID}", enhanceHandler.Enhance)
 				}
 
 				// The evaluation release gate (ADR-0040 decision 4). Marking
@@ -4301,6 +4459,25 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					// statement, under the PUT's permission (internal_tools.go).
 					r.With(projectPermission("models.chat.conversation.update")).
 						Patch("/conversation_internal_tools/prompt_lib/{projectID}/{conversationID}", convHandler.UpdateInternalTools)
+					// Skills pinned to the conversation (ADR-0050 amendment 1): read with
+					// the conversation, pinned and unpinned under the conversation's
+					// update permission AND the message-write rule (a pin is content the
+					// model reads as part of the conversation). Audited as a surface.
+					if cfg.ConversationSkillsRepo != nil {
+						skillPins := v2conversationskills.NewHandler(cfg.ConversationSkillsRepo,
+							func(ctx context.Context, projectID, conversationID string) error {
+								return cfg.ConvsRepo.AuthorizeChatResource(ctx, projectID, "conversation", conversationID)
+							},
+							func(ctx context.Context, projectID, conversationID string) error {
+								return cfg.ConvsRepo.AuthorizeChatWrite(ctx, projectID, "conversation", conversationID)
+							})
+						r.With(requireConversationRead).
+							Get("/conversation_skills/prompt_lib/{projectID}/{conversationID}", skillPins.List)
+						r.With(projectPermission("models.chat.conversation.update")).
+							Post("/conversation_skills/prompt_lib/{projectID}/{conversationID}", skillPins.Pin)
+						r.With(projectPermission("models.chat.conversation.update")).
+							Delete("/conversation_skill/prompt_lib/{projectID}/{conversationID}/{pinID}", skillPins.Unpin)
+					}
 					r.With(projectPermission("models.chat.conversations.delete")).
 						Delete("/conversation/prompt_lib/{projectID}/{conversationID}", convHandler.Delete)
 					// Conversation archive (client contract 1.10), shared by
@@ -4879,6 +5056,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(readEvidence).Get(v2runevidence.VerifyPath, runEvidence.Verify)
 					r.With(readEvidence).Get(v2runevidence.ContentPath, runEvidence.GetContent)
 					r.With(readEvidence).Get(v2runevidence.ConversationRunsPath, runEvidence.ListConversationRuns)
+					// The chat's guardrail notices (issue 2012) take the
+					// permission that sends a chat message: a person who
+					// chats must learn why a message was refused, and the
+					// notice carries no step content.
+					r.With(projectPermission(v2runevidence.NoticesPermission)).Get(v2runevidence.NoticesPath, runEvidence.GuardrailNotices)
 				}
 				r.With(requirePublish).
 					Get("/publish_validate/prompt_lib/{projectID}/{versionID}", coreHandler.PublishValidate)
@@ -4894,6 +5076,65 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.Get("/public_applications/prompt_lib/", coreHandler.PublicApplications)
 				r.Get("/public_application/prompt_lib/{applicationID}", coreHandler.PublicApplications)
 				r.Get("/public_application/prompt_lib/{applicationID}/{versionName}", coreHandler.PublicApplications)
+
+				// The Marketplace (ADR-0051, issue 1629): facet search over the
+				// listings, the listing page, the publisher and administrator
+				// actions, the hire and the origin of a hired agent. They take
+				// the caller's project, so the project gate runs before any
+				// read: the hired-here facet is that project's. Reads take the
+				// agent list permission. A hire takes the permission that
+				// creates an agent. A version state change is the publisher's
+				// or an administrator's, and the handler decides which.
+				requireMarketplaceRead := projectPermission("models.applications.applications.list")
+				r.With(requireMarketplaceRead).
+					Get("/marketplace_listings/prompt_lib/{projectID}", coreHandler.MarketplaceSearch)
+				r.With(requireMarketplaceRead).
+					Get("/marketplace_listing/prompt_lib/{projectID}/{listingID}", coreHandler.MarketplaceListing)
+				r.With(requireMarketplaceRead).
+					Patch("/marketplace_listing/prompt_lib/{projectID}/{listingID}", coreHandler.MarketplaceListingUpdate)
+				r.With(requireMarketplaceRead).
+					Post("/marketplace_listing_version/prompt_lib/{projectID}/{listingID}/{versionID}", coreHandler.MarketplaceVersionState)
+				r.With(projectPermission("models.applications.applications.create")).
+					Post("/marketplace_hire/prompt_lib/{projectID}", coreHandler.MarketplaceHire)
+				r.With(requireMarketplaceRead).
+					Get("/marketplace_origin/prompt_lib/{projectID}/{applicationID}", coreHandler.MarketplaceOrigin)
+				// Feedback per listing version (ADR-0051 decision 5, issue
+				// 1631). A review needs a hire by the caller's project, which
+				// the store checks; a report is a person approving a workforce
+				// manager's account of a hired agent, from the proposal that
+				// agent drafted with suggest_feedback (#1632). The route takes
+				// the update permission; the handler also needs the agent
+				// manager's (agents.workforce.manage), as the workforce routes
+				// do. Reply, flag and hide are the publisher's or an
+				// administrator's, and the handler decides.
+				r.With(requireMarketplaceRead).
+					Get("/marketplace_feedback/prompt_lib/{projectID}/{listingID}", coreHandler.MarketplaceFeedback)
+				r.With(requireMarketplaceRead).
+					Post("/marketplace_feedback/prompt_lib/{projectID}/{listingID}", coreHandler.MarketplaceFeedbackReview)
+				r.With(projectPermission("models.applications.application.update")).
+					Post("/marketplace_feedback_report/prompt_lib/{projectID}/{listingID}", coreHandler.MarketplaceFeedbackReport)
+				r.With(requireMarketplaceRead).
+					Post("/marketplace_feedback_action/prompt_lib/{projectID}/{listingID}/{feedbackID}", coreHandler.MarketplaceFeedbackAction)
+				// The bindings of a hired agent stay editable while its
+				// definition is read-only (ADR-0051 decision 3).
+				r.With(requireMarketplaceRead).
+					Get("/marketplace_bindings/prompt_lib/{projectID}/{applicationID}", coreHandler.MarketplaceBindings)
+				r.With(projectPermission("models.applications.application.update")).
+					Put("/marketplace_bindings/prompt_lib/{projectID}/{applicationID}", coreHandler.MarketplaceBindings)
+				// Upgrades of an installed agent and the upstream update of a
+				// fork (ADR-0051 decision 4, issue 1630). The plan and the
+				// review are reads; the upgrade, the policy and the merge
+				// change the agent, so they take its update permission.
+				r.With(requireMarketplaceRead).
+					Get("/marketplace_upgrade/prompt_lib/{projectID}/{applicationID}", coreHandler.MarketplaceUpgradePlan)
+				r.With(projectPermission("models.applications.application.update")).
+					Post("/marketplace_upgrade/prompt_lib/{projectID}/{applicationID}", coreHandler.MarketplaceUpgrade)
+				r.With(projectPermission("models.applications.application.update")).
+					Put("/marketplace_upgrade_policy/prompt_lib/{projectID}/{applicationID}", coreHandler.MarketplaceUpgradePolicy)
+				r.With(requireMarketplaceRead).
+					Get("/marketplace_upstream/prompt_lib/{projectID}/{applicationID}", coreHandler.MarketplaceUpstream)
+				r.With(projectPermission("models.applications.application.update")).
+					Post("/marketplace_upstream/prompt_lib/{projectID}/{applicationID}", coreHandler.MarketplaceUpstream)
 
 				// Skill publishing (#249) — the skill-level counterpart of the
 				// application publish block above, plus the skills-parity

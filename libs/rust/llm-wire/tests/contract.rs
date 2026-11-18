@@ -11,7 +11,7 @@ use elitea_llm_wire::openai::{
     DoneMatch, StrictChunk, TypeCheck, UsageProfile, is_done, parse_strict_chunk, parse_usage,
     reasoning_text,
 };
-use elitea_llm_wire::refusal::{Refusal, refusal_code, retryable_status};
+use elitea_llm_wire::refusal::{GUARDRAIL_BLOCKED_CODE, Refusal, refusal_code, retryable_status};
 use elitea_llm_wire::route::CHAT_COMPLETIONS_ROUTE;
 use elitea_llm_wire::sse::{SseDialect, SseOptions, SseSplitter};
 use elitea_llm_wire::tool_calls::ToolCallLimits;
@@ -77,9 +77,17 @@ fn every_refusal_has_its_code_and_retry_hint() {
             case["code"],
             "{name}"
         );
+        // A content guardrail's block is a refinement of the 400 class, read
+        // from the body by `refusal_code` alone: `Refusal` stays the status
+        // class (a plain rejection).
+        let class = if case["code"] == GUARDRAIL_BLOCKED_CODE {
+            Some("model_gateway.rejected")
+        } else {
+            case["code"].as_str()
+        };
         assert_eq!(
             Refusal::classify(status, body.as_bytes()).map(Refusal::code),
-            case["code"].as_str(),
+            class,
             "{name}"
         );
         assert_eq!(

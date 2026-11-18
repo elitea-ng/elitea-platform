@@ -94,6 +94,7 @@ export function BucketList(props: BucketListProps): ReactNode {
                   <IconButton
                     size="small"
                     color="tertiary"
+                    className={bucket.isPinned ? 'artifact-bucket-pinned' : undefined}
                     aria-label={bucket.isPinned ? `Unpin ${bucket.name}` : `Pin ${bucket.name}`}
                     onClick={() => props.onPin(bucket)}
                   >
@@ -185,7 +186,7 @@ const rowSx = (selected: boolean): SxProps<Theme> => (theme) => ({
   // hover-only pin and dot menu. Opacity rather than `display: none` so the
   // controls keep their box (no reflow when a row is hovered) and stay
   // reachable by keyboard through `:focus-within`.
-  '&:hover .artifact-bucket-actions, &:focus-within .artifact-bucket-actions': { opacity: 1 },
+  '&:hover .artifact-bucket-actions > *, &:focus-within .artifact-bucket-actions > *': { opacity: 1 },
 });
 const selectSx: SxProps<Theme> = (theme) => ({
   flex: 1,
@@ -216,7 +217,9 @@ const nameSx: SxProps<Theme> = (theme) => ({
 const actionsSx: SxProps<Theme> = {
   display: 'flex',
   alignItems: 'center',
-  opacity: 0,
-  transition: 'opacity 0.15s ease',
+  // Every action but the pin of a PINNED bucket is hover-revealed; that pin
+  // stays visible so a pinned bucket is recognisable at rest (#2024).
+  '& > *': { opacity: 0, transition: 'opacity 0.15s ease' },
+  '& > .artifact-bucket-pinned': { opacity: 1 },
 };
 const treeSx: SxProps<Theme> = (theme) => ({ paddingLeft: theme.spacing(1.5) });

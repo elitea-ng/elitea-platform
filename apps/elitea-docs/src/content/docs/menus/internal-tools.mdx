@@ -1,12 +1,12 @@
 ---
 title: "Internal tools"
-description: "Built-in chat and agent capabilities — image creation, data analysis, attachments, planner, swarm mode, and smart tools selection."
+description: "Built-in chat and agent capabilities — image creation, data analysis, the code sandbox, attachments, planner, swarm mode, and smart tools selection."
 ---
 
 Internal tools are capabilities you turn on from **Modules** in chat or an agent's Tools section, without configuring an external toolkit. They come from a fixed platform catalogue (`features/agents/lib/internalTools.ts`) and are turned on per conversation or saved as an agent's default.
 
 <Note title="Which worker runs which module">
-**Planner**, **Attachments**, **Data analysis**, **Smart tools selection** and **Image creation** run on the platform's agent worker (Image creation needs an image model, see below). **Elitea MCP tools** and **Swarm mode** are not run by the platform's worker: they show disabled with a "Not available on the Rust worker" note (agent Tools section) so you can see the gap before turning one on, and a run that still hits one gets a visible in-conversation notice rather than the capability silently doing nothing (tracked in #866).
+**Planner**, **Attachments**, **Data analysis**, **Smart tools selection**, **Python sandbox** and **Image creation** run on the platform's agent worker (Image creation needs an image model, and Python sandbox needs the deployment's code sandbox, see below). **Elitea MCP tools** and **Swarm mode** are not run by the platform's worker: they show disabled with a "Not available on the Rust worker" note (agent Tools section) so you can see the gap before turning one on, and a run that still hits one gets a visible in-conversation notice rather than the capability silently doing nothing (tracked in #866).
 </Note>
 
 <Screenshot id="internal-tools-menu" alt="The Modules panel listing internal tools with toggles" />
@@ -56,6 +56,30 @@ Runs pandas-style analysis over a file you upload to the conversation — summar
 <Tip>
 For datasets larger than about 100 MB, or analysis needing custom code, use a Python-based toolkit or a pipeline Code node instead.
 </Tip>
+
+## Python sandbox (code execution)
+
+Lets the agent write a short program and run it in the platform's isolated code sandbox, with the `run_code` tool. The switch keeps the name **Python sandbox**, but the tool runs every language the deployment's sandbox serves: Python, JavaScript, TypeScript and Rust. The tool's `language` argument offers exactly those languages, so an agent never asks for one the sandbox cannot run.
+
+This is the same sandbox that runs a pipeline **Code** node and the code of Data analysis, with the same limits on time, memory and output, the same lack of network and files, and the same package preparation. It is not a second sandbox.
+
+- **Python** returns what the program printed (`stdout`), what it wrote to `stderr`, the value of its last expression (`result`) and the traceback if it raised. Standard-library modules and the packages the sandbox provides can be imported.
+- **JavaScript and TypeScript** are a module whose default export (or the result of a default-exported function of the state) is the result. What the program prints with `console.log` comes back as `output`.
+- **Rust** defines `pub fn run(state: serde_json::Value) -> Result<serde_json::Value, Box<dyn std::error::Error>>`, and its value is the result. What it prints comes back as `output`.
+- The agent can pass a JSON object in `input`. The program reads it as `elitea_state['data']` (`elitea_state.data` in JavaScript and TypeScript, `state["data"]` in Rust). Python returns `stdout` and `stderr` separately; the sandbox merges the printed output of JavaScript, TypeScript and Rust into one `output`.
+- Each of `stdout`, `stderr`, `output` and the traceback is cut at 20,000 characters and a result at 40,000 bytes, and the answer carries a note when it was cut. What a program prints is data for the model to read, not an instruction.
+- **When the program fails**, the model is told so in one error message, and for every language that message ends with `Program error output:` and the last 1,500 characters the program wrote to its error stream: the Rust compiler's diagnostic (`error[E0308]: mismatched types ...`), a JavaScript or TypeScript exception message, a Rust panic. The model can then fix the code instead of guessing. Control characters are removed first. A run that ran out of time, memory or output, was cancelled or was lost carries no program output, because the program did not say why it stopped. The Python wrapper reports its own exception as a `traceback`, as above.
+- **In a pipeline Code node**, the same program output ends the run's error. The error starts with the Code failure sentence ("The pipeline stopped at a Code node. ..."), then `Program output:` and the last 1,500 characters the program wrote to its error stream, with control characters removed. A node that throws `new Error('boom')` shows `boom` and the stack lines that follow it, and a Rust Code node that does not compile shows the compiler's diagnostic. The text is in the chat's error, in the run's `error_summary` and in the `pipeline.run.failed` event, so everyone who can read the run can read it; do not print secrets to the error stream. A node that ran out of time or memory, was cancelled or was lost shows the sentence alone.
+
+**Enabling it.** The toggle is on when the deployment's code sandbox serves at least one language. An administrator configures the sandbox with `worker.runtime.sandboxRuntimes` in the Helm values (see [Configuration](/deployment/configuration#code-sandbox)). Without one, the toggle shows disabled with the note "No code sandbox is configured for this deployment". An agent that already has the module saved still runs: it just has no `run_code` tool, and the conversation says the module is not available.
+
+<Note title="Approval">
+`run_code` is a `code_execution` tool, so the deployment's approval rules for code execution apply to it, as they do to `execute_sql`. The data analysis tool `run_analysis_code` runs code in the same sandbox and is `code_execution` as well.
+</Note>
+
+<Note title="Desktop">
+The desktop app's local agent has no platform sandbox, so the module is not offered there.
+</Note>
 
 ## Attachments
 

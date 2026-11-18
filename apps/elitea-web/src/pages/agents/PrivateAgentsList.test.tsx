@@ -49,7 +49,7 @@ describe('PrivateAgentsList', () => {
       ),
     );
     renderAgentsRoute(
-      <PrivateAgentsList statuses={undefined} cardContentType="all" />,
+      <PrivateAgentsList cardContentType="all" />,
       '/agents/all',
       { projectId: 'proj-1' },
     );
@@ -59,7 +59,7 @@ describe('PrivateAgentsList', () => {
     expect(screen.getByLabelText('Deleted user')).toBeInTheDocument();
   });
 
-  it('shows every row on the "All" tab (statuses=undefined)', async () => {
+  it('shows every row', async () => {
     server.use(
       getListApplicationsMockHandler(
         applications([
@@ -70,7 +70,6 @@ describe('PrivateAgentsList', () => {
     );
     renderAgentsRoute(
       <PrivateAgentsList
-        statuses={undefined}
         cardContentType="all"
       />,
       '/agents/all',
@@ -81,36 +80,11 @@ describe('PrivateAgentsList', () => {
     expect(screen.getByText('Published App')).toBeInTheDocument();
   });
 
-  it('filters to only the requested statuses, client-side', async () => {
-    server.use(
-      getListApplicationsMockHandler(
-        applications([
-          { id: '1', name: 'Draft App', status: 'draft' },
-          { id: '2', name: 'Published App', status: 'published' },
-        ]),
-      ),
-    );
-    renderAgentsRoute(
-      <PrivateAgentsList
-        statuses={['draft']}
-        cardContentType="draft"
-      />,
-      '/agents/drafts',
-      { projectId: 'proj-1' },
-    );
-
-    await waitFor(() => expect(screen.getByText('Draft App')).toBeInTheDocument());
-    expect(screen.queryByText('Published App')).not.toBeInTheDocument();
-  });
-
-  it('shows the status-specific empty state when no row matches', async () => {
+  it('shows the empty state when the project has no agents', async () => {
     server.use(getListApplicationsMockHandler(applications([])));
     renderAgentsRoute(
-      <PrivateAgentsList
-        statuses={['draft']}
-        cardContentType="draft"
-      />,
-      '/agents/drafts',
+      <PrivateAgentsList cardContentType="all" />,
+      '/agents/all',
       { projectId: 'proj-1' },
     );
 
@@ -135,7 +109,6 @@ describe('PrivateAgentsList', () => {
     );
     renderAgentsRoute(
       <PrivateAgentsList
-        statuses={undefined}
         cardContentType="all"
       />,
       '/agents/all?query=Alpha',
@@ -156,7 +129,6 @@ describe('PrivateAgentsList', () => {
     );
     renderAgentsRoute(
       <PrivateAgentsList
-        statuses={undefined}
         cardContentType="all"
       />,
       '/agents/all?query=Alpha',
@@ -174,7 +146,6 @@ describe('PrivateAgentsList', () => {
     const user = userEvent.setup();
     const { router } = renderAgentsRoute(
       <PrivateAgentsList
-        statuses={undefined}
         cardContentType="all"
       />,
       '/agents/all',
@@ -205,7 +176,6 @@ describe('PrivateAgentsList', () => {
     );
     renderAgentsRoute(
       <PrivateAgentsList
-        statuses={undefined}
         cardContentType="all"
       />,
       '/agents/all?tags%5B%5D=finance&tags%5B%5D=legal',
@@ -226,7 +196,6 @@ describe('PrivateAgentsList', () => {
     );
     renderAgentsRoute(
       <PrivateAgentsList
-        statuses={undefined}
         cardContentType="all"
       />,
       '/agents/all',
@@ -243,7 +212,6 @@ describe('PrivateAgentsList', () => {
     );
     renderAgentsRoute(
       <PrivateAgentsList
-        statuses={undefined}
         cardContentType="all"
       />,
       '/agents/all',

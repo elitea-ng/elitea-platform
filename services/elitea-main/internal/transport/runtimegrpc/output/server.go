@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
@@ -1227,9 +1228,19 @@ func budgetScopePolicy(safeMessage string) (runtimeFailurePolicy, bool) {
 	}
 }
 
+// codeFailedSafeMessage is the registered sentence of a Code node failure; the
+// worker's `PipelineCodeFailed` message is the same text.
+const codeFailedSafeMessage = outputapp.CodeFailureSentence
+
 // Input sections use fixed public messages. Never accept an arbitrary worker reason.
 func runtimeFailurePolicyForError(payload *runtimev1.RuntimeErrorV1) (runtimeFailurePolicy, bool) {
+	// A Code node whose program failed: the registered sentence, then the
+	// program's bounded stderr (#2227), the one failure that is not a fixed
+	// sentence. Nothing else may follow the sentence.
 	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_CODE_FAILED {
+		if outputapp.SafeMessageAdmitted(outputapp.CodeFailureCode, payload.GetSafeMessage()) && strings.HasPrefix(payload.GetSafeMessage(), codeFailedSafeMessage+outputapp.CodeFailureDetailSeparator) {
+			return runtimeFailurePolicy{Code: outputapp.CodeFailureCode, SafeMessage: payload.GetSafeMessage()}, true
+		}
 		switch payload.GetSafeMessage() {
 		case "Code dependency preparation failed. Later nodes did not run. Share the support reference with your administrator before retrying.",
 			"Code dependency preparation was cancelled. Later nodes did not run. Review the existing attempt before retrying.",
@@ -1328,7 +1339,7 @@ func runtimeFailurePolicyFor(code runtimev1.RuntimeErrorCodeV1) (runtimeFailureP
 	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_RESULT_INVALID:
 		return runtimeFailurePolicy{Code: "PIPELINE_RESULT_INVALID", SafeMessage: "The pipeline stopped because a tool result does not match the node output mapping. Check the required fields and their types. Later nodes did not run."}, true
 	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_CODE_FAILED:
-		return runtimeFailurePolicy{Code: "PIPELINE_CODE_FAILED", SafeMessage: "The pipeline stopped at a Code node. Check its source, selected input, and sandbox limits. Later nodes did not run. Share the support reference with your administrator before retrying."}, true
+		return runtimeFailurePolicy{Code: "PIPELINE_CODE_FAILED", SafeMessage: codeFailedSafeMessage}, true
 	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_RESULT_LIMIT:
 		return runtimeFailurePolicy{Code: "PIPELINE_RESULT_LIMIT", SafeMessage: "The pipeline stopped because a tool result exceeds the node state size limit. Use smaller batches or reduce the returned data. Later nodes did not run."}, true
 	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_OUTPUT_DELIVERY_LIMIT:

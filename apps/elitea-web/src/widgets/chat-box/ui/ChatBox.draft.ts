@@ -1,4 +1,4 @@
-import { carryDraft } from '@/shared/lib/composerDrafts';
+import { carryDraft, rememberDraftAlias } from '@/shared/lib/composerDrafts';
 
 /**
  * What the chat composer's unsent text belongs to (`NewChatInput`'s
@@ -14,10 +14,37 @@ import { carryDraft } from '@/shared/lib/composerDrafts';
 export function chatDraftKey(params: {
   readonly projectId: string | number | undefined;
   readonly conversationId: string | number | undefined;
+  /**
+   * The conversation the page is opening (its URL's id). It wins over the
+   * loaded `conversationId`: while the conversation loads that one is not
+   * there yet (or still the previous conversation's), so the key would read
+   * "a new chat" and then flip to the conversation's own, and text typed in
+   * between was discarded by the flip. The URL's id never flips.
+   */
+  readonly pendingConversationId?: string | number | undefined;
   readonly scratch: readonly unknown[];
 }): string | undefined {
   if (params.scratch.some(Boolean) || params.projectId === undefined) return undefined;
-  return `chat:${params.projectId}:${params.conversationId ?? 'new'}`;
+  return `chat:${params.projectId}:${params.pendingConversationId ?? params.conversationId ?? 'new'}`;
+}
+
+/**
+ * Once a conversation has loaded, both of its ids are known: its uuid (what a
+ * deep link or notification carries) and its numeric id. They name ONE draft,
+ * so a deep link by either form finds the text; the numeric id's key is the
+ * one the draft is kept under.
+ */
+export function rememberConversationDraftIds(params: {
+  readonly projectId: string | number | undefined;
+  readonly conversationId: string | number | undefined;
+  readonly conversationUuid: string | undefined;
+  readonly scratch: readonly unknown[];
+}): void {
+  const { conversationId, conversationUuid } = params;
+  if (conversationId === undefined || conversationUuid === undefined) return;
+  const canonical = chatDraftKey({ projectId: params.projectId, conversationId, scratch: params.scratch });
+  const alias = chatDraftKey({ projectId: params.projectId, conversationId: conversationUuid, scratch: params.scratch });
+  if (canonical !== undefined && alias !== undefined) rememberDraftAlias(alias, canonical);
 }
 
 type Created = { readonly id?: string | number };

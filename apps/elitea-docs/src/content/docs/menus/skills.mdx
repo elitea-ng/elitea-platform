@@ -7,12 +7,12 @@ A skill is a focused, reusable instruction set — write it once in Markdown, at
 
 <Screenshot id="skills-list" alt="The Skills dashboard for the current project" />
 
-The Skills page has two tabs: **Skills** (the project's own skills) and **Public** (the published catalog). Its toolbar has the search box, **Filters** (tags and authors, in the side panel), **Import** and **+ New skill**; see [Page layout](/menus/page-layout).
+The Skills page has two modes, switched at the top of the **List** tab in the side panel: **Skills** (the project's own skills) and **Public** (the published catalog). The **List** tab holds the search, **+ New skill**, **Import**, sort, the card/table switch, folders and the tag filter; see [Page layout](/menus/page-layout).
 
 ## Create a skill
 
 <Steps>
-  <Step title="Open the form">Select **+ New skill** in the Skills page toolbar, or the **+** next to **Skills** in the sidebar.</Step>
+  <Step title="Open the form">Select **+ New skill** in the **List** tab (or in the bar above the list when the side panel is closed), or the **+** next to **Skills** in the sidebar.</Step>
   <Step title="Fill in General">Give it a **Name** (lowercase letters, digits, and hyphens only, no leading/trailing hyphen, 64 characters max, and it must not contain "claude" or "anthropic"), a **Description**, and optional tags.</Step>
   <Step title="Write Instructions">Enter the skill's instructions in the Markdown editor, up to 5,000 characters. Toggle Edit/Preview to check formatting.</Step>
   <Step title="Save">The skill opens with a test chat panel on the right so you can verify its behavior before attaching it to any agent.</Step>
@@ -22,9 +22,9 @@ The Skills page has two tabs: **Skills** (the project's own skills) and **Public
 Select **Generate with AI** in the General section to describe what the skill should do in plain language and get a drafted name, description, and instructions to review before saving.
 </Tip>
 
-## Test a skill
+## Try a skill
 
-The right-hand test chat is ephemeral — it is not saved and clears when you leave the page. Pick a model and adjust its settings the same way you would in a normal conversation, including voice input and playback if configured for the project.
+A skill is text that an agent or a model loads, so it is tried in a chat, not run on its own. **Try it** on a Marketplace skill listing opens a new conversation with that skill pinned to it; pick a model or an agent there and the skill applies to whoever answers. A listing is pinned by reference, so nothing is added to your project. See [Skills in a conversation](/menus/chat#skills-in-a-conversation).
 
 ## Versions
 
@@ -52,9 +52,9 @@ Use the version dropdown next to the skill's name to switch versions. Saving alw
 
 ## Export, import, fork, and publish
 
-- **Export** downloads the current version as a `.md` file; **Import** in the Skills page toolbar uploads one back (always as a new `base` version, regardless of the version it was exported from).
+- **Export** downloads the current version as a `.md` file; **Import** in the **List** tab uploads one back (always as a new `base` version, regardless of the version it was exported from).
 - **Fork** copies a skill version into a project you choose.
-- **Publish** submits a version to [Catalog](/menus/catalog); **Unpublish** removes it. See [Skill publishing](/how-tos/agents-pipelines/publishing).
+- **Publish** submits a version to the [Marketplace](/menus/marketplace); **Unpublish** removes it. See [Skill publishing](/how-tos/agents-pipelines/publishing).
 
 ## Attach a skill to an agent
 
@@ -62,7 +62,17 @@ Open the agent, scroll to its **Skills** section, and select **+ Skill** to sear
 
 ## Use a skill in chat
 
-In a conversation with an agent that has skills attached, type `~` to open a picker of that agent's skills, then select one to invoke its instructions for that turn.
+In a conversation, type `~` or `/skill` to open a picker of the skills you can use, then select one to invoke its instructions for that turn. The skills pinned to the conversation come first. Both ways write the same `~name` into your message, so `~` stays as it was. A chat with only a model takes project skills too. On an agent chat the picker also lists the agent's own skills.
+
+### Skills from another project are untrusted until you trust them
+
+A skill from another project shows a note in its editor. Read the text, then choose **Trust this version for this project**; **Revoke trust** undoes it. Trust is recorded and audited, needs the right to edit skills, and covers that exact version only.
+
+A skill you add from the Marketplace is text another project wrote. When you pick one in a chat, the model gets its text as quoted data, not as an instruction of your project, until your project has trusted that exact version of the text. Any change to the text, for example a newer version pulled from the Marketplace, is a new version and is untrusted again. A skill you made yourself, imported, or published from your project is never untrusted, and neither is a skill attached to an agent: attaching is part of the agent's own review. Skills that existed before this rule keep working as before. A model chat that has only a model, with no agent, takes picked skills too; the server accepts them in `payload.skills` of the message start, in the same shape an agent chat sends, up to five skills and 64 KiB of text together.
+
+### Skills from another project are untrusted until you trust them
+
+A skill you add from the Marketplace is text another project wrote. When you pick one in a chat, the model gets its text as quoted data, not as an instruction of your project, until your project has trusted that exact version of the text. Any change to the text, for example a newer version pulled from the Marketplace, is a new version and is untrusted again. A skill you made yourself, imported, or published from your project is never untrusted, and neither is a skill attached to an agent: attaching is part of the agent's own review. Skills that existed before this rule keep working as before. A model chat that has only a model, with no agent, takes picked skills too; the server accepts them in `payload.skills` of the message start, in the same shape an agent chat sends, up to five skills and 64 KiB of text together.
 
 ## Delete a skill
 
@@ -78,5 +88,5 @@ Deleting a skill removes it from every agent it is attached to. Confirm in the d
 </AccordionGroup>
 
 <Info title="Related">
-[Agents](/menus/agents) · [Entity versioning](/how-tos/agents-pipelines/entity-versioning) · [Import/export](/how-tos/agents-pipelines/import-export) · [Catalog](/menus/catalog)
+[Agents](/menus/agents) · [Entity versioning](/how-tos/agents-pipelines/entity-versioning) · [Import/export](/how-tos/agents-pipelines/import-export) · [Marketplace](/menus/marketplace)
 </Info>

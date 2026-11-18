@@ -529,7 +529,7 @@ test('the quality gate applies inside the catalogue too', async ({ request }) =>
 
 /* ── the operator's dashboard ─────────────────────────────────────────────── */
 
-test('the dashboard lists a published agent with its versions, and measures no adoption', async ({
+test('the dashboard lists a published agent with its versions, and counts the projects that hired it', async ({
   request,
 }) => {
   const catalogueProjectId = await resolveCatalogueProjectId(request);
@@ -553,14 +553,13 @@ test('the dashboard lists a published agent with its versions, and measures no a
     expect(versions[0]['published_at']).toBeTruthy();
     expect(entry['total_published_versions']).toBe(1);
 
-    // ADOPTION IS NULL, NOT ZERO, and that is the point of the endpoint. No
-    // producer on this platform writes `meta.adoption`, so the honest answer is
-    // "not measured". Two zeroes would read as "nobody uses any of these" and
-    // an operator could not tell the two apart from the response.
+    // The project counter is measured from the Marketplace (ADR-0051 M5): a
+    // published agent with no hire reads 0. The conversation counter is still
+    // null: no producer writes `meta.adoption`, so it is "not measured", not zero.
     const adoption = (entry['adoption'] as Record<string, unknown>) ?? {};
     expect(Object.keys(adoption).sort()).toEqual(['conversation_count', 'project_count']);
     expect(adoption['conversation_count']).toBeNull();
-    expect(adoption['project_count']).toBeNull();
+    expect(adoption['project_count']).toBe(0);
   } finally {
     await withdrawAndDelete(request, catalogueProjectId, agent.id);
   }

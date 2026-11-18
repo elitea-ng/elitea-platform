@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -23,6 +24,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/toolrelation"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/marketplace"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/toolkitnaming"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/entitylimits"
@@ -134,6 +136,10 @@ type Handler struct {
 	// imageGenerationModel is the deployment's image model (#1969), the same
 	// value the worker's runtime.json carries; empty means none configured.
 	imageGenerationModel string
+	// codeSandboxLanguages are the languages the deployment's code sandbox
+	// serves (WithCodeSandbox); the pyodide internal tool is available only
+	// when there is at least one.
+	codeSandboxLanguages []string
 	// settingsValidator resolves a credential reference before it is persisted.
 	// Nil restores the pre-#613 behaviour: every save accepted unresolved. See
 	// settings_validation.go.
@@ -1508,6 +1514,14 @@ func (h *Handler) updateToolRelation(w http.ResponseWriter, r *http.Request, pro
 		return
 	}
 
+	// An agent installed from the Marketplace keeps the tools its snapshot
+	// holds: attaching another one changes its definition (ADR-0051 decision 3).
+	// The permission trimming report removes through its own path.
+	if marketplace.IsInstalledVersion(ctx, h.pool, s, entityVersionID) {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": marketplace.ReadOnlyCode, "msg": marketplace.ReadOnlyMessage})
+		return
+	}
+
 	if hasRelation {
 		selectedTools, hasSelectedTools, err := selectedToolsPayload(body)
 		if err != nil {
@@ -1906,7 +1920,18 @@ func redactSettings(value any) any {
 	case map[string]any:
 		out := make(map[string]any, len(v))
 		for key, nested := range v {
-			if isSensitiveSettingKey(key) || key == configurationapp.RetiredPgvectorToolkitSetting {
+			if key == configurationapp.RetiredPgvectorToolkitSetting {
+				continue
+			}
+			// A `{{secret.NAME}}` reference POINTS at a secret; it is not one. Dropping it
+			// hid a saved Authorization header and a saved Client Secret from the edit
+			// form, which then re-saved the toolkit without them (#2116, #2126).
+			// The discovered tool schemas hold tool and argument NAMES (`token`, `password`), never values.
+			if key == mcpToolSchemasSetting {
+				out[key] = nested
+				continue
+			}
+			if isSensitiveSettingKey(key) && !isSecretReferenceValue(nested) {
 				continue
 			}
 			out[key] = redactSettings(nested)
@@ -1921,6 +1946,28 @@ func redactSettings(value any) any {
 	default:
 		return value
 	}
+}
+
+// mcpToolSchemasSetting is the settings key the web "Load Tools" stores each discovered MCP tool's input schema under.
+const mcpToolSchemasSetting = "available_mcp_tool_schemas"
+
+// secretReferencePattern matches one `{{secret.NAME}}` reference.
+var secretReferencePattern = regexp.MustCompile(`\{\{secret\.[A-Za-z0-9_]+\}\}`)
+
+// authSchemeResidue is what may stand around a reference in a served header
+// value: an HTTP auth scheme word and spaces, so `Bearer {{secret.token}}` reads
+// back as typed. Any other residue could be a literal credential.
+var authSchemeResidue = regexp.MustCompile(`(?i)^\s*(bearer|basic|token|bot|apikey)?\s*$`)
+
+// isSecretReferenceValue reports whether a settings value holds only secret
+// references (plus at most an auth scheme word), the one form that is safe to
+// serve under a credential-like key.
+func isSecretReferenceValue(value any) bool {
+	text, ok := value.(string)
+	if !ok || !secretReferencePattern.MatchString(text) {
+		return false
+	}
+	return authSchemeResidue.MatchString(secretReferencePattern.ReplaceAllString(text, ""))
 }
 
 // isSensitiveSettingKey delegates to the word-based classifier in

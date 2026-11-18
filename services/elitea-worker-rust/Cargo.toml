@@ -68,8 +68,12 @@ elitea-office-core = { path = "../../libs/rust/office-core" }
 # doc-extract is taken WITHOUT `documents` (xberg: PDF, Office, e-mail). Its
 # `xberg-native-pdf` 1.3.10 requires `smallvec ^1.16`, which `kube-client`
 # 4.2.0 blocked through `serde-saphyr ^0.0.29` (smallvec `< 1.16`). kube 5
-# moved to serde-saphyr 2, which lifts that cap; whether to take `documents`
-# back in-process is #1651. Those formats are read by services/elitea-doc-extractor,
+# moved to serde-saphyr 2, which lifts that cap, but `documents` still cannot
+# come back in-process (#1651): xberg depends on `serde_toon_format`, which
+# turns on serde_json `preserve_order` for the whole graph. This crate's
+# canonical digests forbid that feature (see vector-index above), and it
+# grows `serde_json::Value`, so `StoreError` trips clippy `result_large_err`.
+# Those formats are read by services/elitea-doc-extractor,
 # a separate process with its own lock, which an index run reaches over a
 # Unix socket (`extractor_socket` in the runtime document,
 # src/transport/extractor_client.rs); without one such a document is

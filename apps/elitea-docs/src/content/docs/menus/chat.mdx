@@ -123,11 +123,17 @@ The motions use the workspace's brand colour and its signal colours, so a [custo
 
 Hovering an existing participant's card reveals an **edit** icon that opens its inline editor (the same form as its own menu page) without leaving the conversation.
 
+The **+** menu also has a **Skills** row. It is not a participant: it puts a `~` in the message box and opens the skill picker, the same as typing `~`, so you can name a skill the active agent has or one of the project's skills in your message.
+
 Each category (Agents, Pipelines, Toolkits, and the MCPs category's own view) also offers a **Create new** row above the existing-item list. Selecting it opens the same inline editor a participant's own edit icon opens, in create mode; saving creates the agent/pipeline/toolkit and attaches it to the current conversation as a participant, the same as picking an existing one. See [Edit agents, pipelines, toolkits and MCPs from chat](/how-tos/chat-conversations/create-entities-from-chat).
 
 ### Mention a toolkit or tool
 
 Type `/` to search toolkits and MCPs already added to the conversation, then `/` again after a toolkit name to filter its individual tools. The result is inserted as `/ToolkitName/ToolName`, directing the AI to use that specific tool.
+
+## Who wrote a message
+
+Each message has a name line: yours shows your display name (or **You** when your name is not known; a message whose author is not known has no label), and an answer shows the agent, pipeline or model that wrote it, with its avatar. In a conversation with several people or agents the lines tell the messages apart.
 
 ## Modules
 
@@ -179,7 +185,7 @@ When an agent or pipeline is about to call a tool your administrator has marked 
 
 ## Canvas
 
-When a response contains code, a table, a Mermaid diagram, or prose, a pencil icon (or, for a whole prose reply, the **Open as document** icon in the answer's action row) opens it in Canvas for direct, real-time collaborative editing — prose opens in a rich-text document editor with headings, lists, bold/italic/code, links, and basic tables, backed by Markdown. Canvas can also open a previously stored text-like file — from a message attachment's own toolbar, or from a bucket file in Artifacts — and save its document back to the artifact store under a bucket and filename you choose. See [How to use Canvas](/how-tos/chat-conversations/how-to-canvas).
+When a response contains code, a table, a Mermaid diagram, or prose, a pencil icon (or, for a whole prose reply, the **Open as document** icon in the answer's action row) opens it in Canvas for direct, real-time collaborative editing — prose opens in a rich-text document editor with headings, lists, bold/italic/code, links, and basic tables, backed by Markdown. You can type on any line without choosing its heading level first, and an update that arrives while you type does not move your cursor. Canvas can also open a previously stored text-like file — from a message attachment's own toolbar, or from a bucket file in Artifacts — and save its document back to the artifact store under a bucket and filename you choose. See [How to use Canvas](/how-tos/chat-conversations/how-to-canvas).
 
 ## Troubleshooting
 
@@ -201,3 +207,7 @@ When a response contains code, a table, a Mermaid diagram, or prose, a pencil ic
 <Info title="Related">
 [Attach files](/how-tos/chat-conversations/attach-files) · [Context management](/how-tos/chat-conversations/context-management) · [Add teammates to a conversation](/how-tos/chat-conversations/add-teammates-to-conversation)
 </Info>
+
+## Skills in a conversation
+
+The **Skills** section of the conversation panel lists the skills pinned to the conversation, apart from the participants. A pinned skill is used by whichever agent or model answers, so it is not a participant: it has no avatar and cannot be addressed. Use **+** to pin one of the project's skills, or the Marketplace link to find more, and **x** to remove one. A conversation holds at most five. Each row says who pinned it. A skill written in another project shows **Untrusted** until the project trusts that version of its text; the model then gets its text as quoted data, not as an instruction. On mobile the same list is a **Skills** section directly below **Participants** in the conversation sheet.

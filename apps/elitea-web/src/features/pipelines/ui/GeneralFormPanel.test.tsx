@@ -32,6 +32,11 @@ describe('GeneralFormPanel', () => {
     expect(renderConfigurationForm).toHaveBeenCalledWith({ applicationId: '42', viewMode: 'owner' });
   });
 
+  it('scrolls the settings inside the panel instead of the page row', () => {
+    renderWithTheme(<GeneralFormPanel applicationId="42" onCollapsed={vi.fn()} renderConfigurationForm={() => <div />} />);
+    expect(getComputedStyle(screen.getByTestId('pipeline-config-tab')).overflowY).toBe('auto');
+  });
+
   it('collapsing hides the slot content and calls onCollapsed(true)', async () => {
     const user = userEvent.setup();
     const onCollapsed = vi.fn();

@@ -59,7 +59,7 @@ export const AGENT_WEBHOOK_MODES: readonly { readonly value: AgentWebhookMode; r
 
 /** The modes a person may select: `custom_hmac` only when the trigger already is one. */
 export function selectableAgentWebhookModes(stored: AgentWebhookMode): typeof AGENT_WEBHOOK_MODES {
-  return AGENT_WEBHOOK_MODES.filter(mode => mode.value !== 'custom_hmac' || stored === 'custom_hmac');
+  return AGENT_WEBHOOK_MODES.filter((mode) => mode.value !== 'custom_hmac' || stored === 'custom_hmac');
 }
 
 /**
@@ -126,7 +126,10 @@ interface Scoped {
   readonly value: string | undefined;
 }
 
-export function useAgentWebhookTrigger(projectIdText: string | undefined, versionId: number | undefined): AgentWebhookTrigger {
+export function useAgentWebhookTrigger(
+  projectIdText: string | undefined,
+  versionId: number | undefined,
+): AgentWebhookTrigger {
   const projectId = numericProjectId(projectIdText) ?? 0;
   const version = versionId ?? 0;
   const enabled = projectId > 0 && version > 0;
@@ -144,7 +147,10 @@ export function useAgentWebhookTrigger(projectIdText: string | undefined, versio
   const trigger = envelope?.status === 200 ? envelope.data : undefined;
 
   const run = useCallback(
-    async (action: () => Promise<{ readonly status: number; readonly data: unknown } | undefined>, withTarget = false): Promise<unknown> => {
+    async (
+      action: () => Promise<{ readonly status: number; readonly data: unknown } | undefined>,
+      withTarget = false,
+    ): Promise<unknown> => {
       if (!enabled) return undefined;
       setIsBusy(true);
       setError(undefined);
@@ -156,7 +162,8 @@ export function useAgentWebhookTrigger(projectIdText: string | undefined, versio
         return undefined;
       } catch (cause) {
         // A refusal of a thread target shows on its field, not here.
-        if (!withTarget || threadTargetRefusal(cause) === undefined) setError({ scope, value: cause instanceof Error ? cause.message : String(cause) });
+        if (!withTarget || threadTargetRefusal(cause) === undefined)
+          setError({ scope, value: cause instanceof Error ? cause.message : String(cause) });
         return cause;
       } finally {
         setIsBusy(false);
@@ -175,7 +182,11 @@ export function useAgentWebhookTrigger(projectIdText: string | undefined, versio
   // stored mode, header and events, as a rotate with no body does.
   const rotateTarget = useCallback(
     (mode: AgentWebhookMode, target: ThreadTargetFieldsBody) =>
-      run(() => rotatePipelineInboundTrigger(projectId, version, { ...agentWebhookRotateRequest(trigger, mode), ...target }), true),
+      run(
+        () =>
+          rotatePipelineInboundTrigger(projectId, version, { ...agentWebhookRotateRequest(trigger, mode), ...target }),
+        true,
+      ),
     [run, projectId, version, trigger],
   );
   const reveal = useCallback(async () => {

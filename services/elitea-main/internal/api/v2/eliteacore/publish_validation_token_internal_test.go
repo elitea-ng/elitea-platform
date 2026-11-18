@@ -1,6 +1,7 @@
 package eliteacore
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 	"time"
@@ -96,6 +97,23 @@ func TestATokenIsRefusedWhenTheVersionChanged(t *testing.T) {
 	// which no token matches.
 	if verdict := verifyPublishValidationToken(token, "42", "", now); verdict != publishTokenStale {
 		t.Fatalf("verdict for an unreadable version = %d, want stale", verdict)
+	}
+}
+
+// Issue 1989: replicas share APPLICATION_SECRET_KEY, so the grant a check
+// issues on one replica must verify on another. A per-process random secret
+// made the publish refuse with validation_token_invalid.
+func TestPublishValidationSecretIsSharedAcrossReplicas(t *testing.T) {
+	a := newPublishValidationSecret("shared-application-key")
+	b := newPublishValidationSecret("shared-application-key")
+	if !bytes.Equal(a, b) {
+		t.Fatal("two replicas with the same application key derived different secrets")
+	}
+	if bytes.Equal(a, newPublishValidationSecret("another-key")) {
+		t.Fatal("different application keys derived the same secret")
+	}
+	if bytes.Equal(newPublishValidationSecret(""), newPublishValidationSecret("")) {
+		t.Fatal("without an application key the secret must stay random per process")
 	}
 }
 

@@ -7,13 +7,13 @@ An agent combines instructions, a model, and optional toolkits and skills into a
 
 <Screenshot id="agents-list" alt="The Agents dashboard listing project agents" />
 
-The Agents page lists the project's agents. Its toolbar has the search box, **Filters** (tags and authors, in the side panel), the card/table switch, **Import** and **+ New agent**; see [Page layout](/menus/page-layout). The **My liked** and **Trending** tabs are hidden until they are supported.
+The Agents page lists the project's agents as one list, with no tabs. Every agent shows a **Draft** or **Published** badge. Every control is in the **List** tab of the side panel on the right: the search, **+ New agent**, **Import**, the **Status** and **Origin** filters (with how many agents each holds, and only values that occur), sort, the card/table switch, folders and the tag filter; see [Page layout](/menus/page-layout#list-pages). With a folder open, the list is sorted by **Folder order** and you can drag agents (or use **Move up** / **Move down** in the folder icon's menu) to rearrange it; see [Order inside a folder](/how-tos/entity-management/organizing-entities#order-inside-a-folder). **Teams** is a switch at the top of that tab. The **My liked** and **Trending** tabs are hidden until they are supported.
 
 ## Create an agent
 
 <Steps>
   <Step title="Open the form">
-    Select **+ New agent** in the Agents page toolbar, or the **+** next to **Agents** in the sidebar.
+    Select **+ New agent** in the **List** tab (or in the bar above the list when the side panel is closed), or the **+** next to **Agents** in the sidebar.
   </Step>
   <Step title="Fill in General and Instructions">
     **Name** and **Description** are required; **Instructions** define the agent's behavior. Tags, a welcome message, and up to four conversation starters are optional.
@@ -100,9 +100,9 @@ Selecting **Save** again updates the current version. Use **Save As Version** to
 
 ### Publish, export, import, and fork
 
-- **Publish** a draft version through a guided wizard with automated AI validation, making it visible in [Catalog](/menus/catalog). See [Agent publishing](/how-tos/agents-pipelines/publishing).
+- **Publish** a draft version through a guided wizard with automated AI validation, making it visible in the [Marketplace](/menus/marketplace). See [Agent publishing](/how-tos/agents-pipelines/publishing).
 - **Export** downloads the selected version as a single `.md` file, or a `.zip` if it references nested agents.
-- **Import** an exported file from the Agents page toolbar.
+- **Import** an exported file from the **List** tab of the Agents page.
 - **Fork** copies the selected version into another project you choose.
 
 See [Import/export](/how-tos/agents-pipelines/import-export) and [Forking](/how-tos/agents-pipelines/forking) for full detail; toolkit credentials must be reconfigured manually after either operation.
@@ -116,6 +116,65 @@ A saved agent's editor includes an **Evaluation** tab to define what "good" look
   <Tab title="Datasets">Create a dataset of test cases: inputs paired with what you expect the agent to do with them. A run executes against a dataset.</Tab>
   <Tab title="Runs">Start a run against a dataset and your dimensions. Runs poll for progress while this tab stays open — leaving it pauses polling until you return — and produce a scorecard with one score per dimension per case when they finish.</Tab>
 </Tabs>
+
+### Human scores
+
+A dimension that allows only the **Human** engine is scored by a person. A run still answers every case, but it does not call the AI judge for that dimension: the case shows **Waiting for a human score** on the run's scorecard, with no number. A reviewer enters a score (on the dimension's own scale: 0 or 1 for a yes/no dimension, otherwise between its minimum and maximum) and an optional note, and **Save score**. The case then shows the score, and the run's overall score is recalculated from the scored cases; cases still waiting do not count, and are not treated as zero.
+
+Scores are never overwritten. **Re-score** adds a new one, the newest is the score in force, and each shows who gave it and the note. Reading scores needs the evaluation human-score read permission and entering one needs the human-score create permission; project admins and editors have the create permission, and viewers can read. The release gate treats a case that is still waiting for a human score as undecided, so a gate with a human dimension stays pending until every case is scored. A dimension that allows both the AI and Human engines is scored by the AI judge.
+
+### Run limits
+
+**Run limits** (a button on the Runs tab) saves a named set of limits you pick when you start a run: tokens and cost (an estimate in USD from the price list) **per case** and **per run**, and what the run does when the **run** limit is reached: **Stop the run** (the run ends as errored, says which limit it reached, and keeps the cases it scored) or **Only report it** (the run finishes and shows a **Token limit reached** or **Cost limit reached** note). Leave a field empty for no limit.
+
+The limits are checked from the usage already recorded for the run, between model calls, so a run can pass a limit by the call that crosses it. A case that reaches its own limit is not judged further (its remaining judge results are skipped, with the reason), and the run goes on. Changing or deleting saved limits does not change runs that already started. Anyone who can read runs sees the limits; changing them needs the permission to start runs. The steps, time and tool output controls below appear only when the saved limits run cases as agent runs.
+
+### Insights on a finished run
+
+Open a finished run's scorecard to see three cards above the scores:
+
+- **Consumption** shows the tokens and estimated cost of the agent's answers and of the judge, side by side, with a total. The money is an estimate at the catalogue rate. A run that started before consumption was recorded, or whose calls the gateway has pruned, says so instead of showing zero. The card needs the analytics permission.
+- **Efficiency** shows the latency of the agent's answer at p50 and p95, how many answers timed out, and tokens and cost per case. Latency is recorded from now on; a run scored before that reads "not recorded".
+- **Compared with the previous run** shows the change in the overall score, in each dimension's average, in p50 latency and in cost per case against the nearest earlier scored run of the same suite that ran in the same mode (one call per case, or agent run). The card names that run with its mode, agent version and date. The agent version is not matched on purpose: comparing a new version with the one before it is the point.
+
+A run of one model call per case has no tools or steps to measure, so it shows no trajectory or tool metrics. A run of agent runs adds the **Trajectory** card and tool metrics, described next.
+
+### Agent runs
+
+By default a case is one blocking model call built from the agent version's instructions and the case input: no tools, no toolkits, no memory. The score then measures the instructions and the model, and the run says so (its execution mode is `predict_blocking`).
+
+Choose **Agent run** in **How a case runs** (in **Run limits**, or for one run in the start form, which overrides the saved limits) to run each case as a real agent run of the pinned agent version on the worker (`runtime_plane`). The case goes through the same start path as a chat message, so the agent uses its toolkits, and the admission checks, governed tools, guardrails, kill switch and run evidence apply as they do in a chat. The agent's final answer is what the judges score. Each case leaves a conversation named for the run and case, in the project's chat list, which you can open to read the transcript. Nothing changes unless you choose the mode: runs and saved limits stay one model call.
+
+An evaluation run is unattended and holds no grant. A step that needs a person (an approval, a tool authorization) pauses the run; the case is cancelled and stored as an error that names the pause, and it is not scored. Agent runs need the agent runtime; without it the run ends as errored and says so. A release gate run always uses one model call, because it measures a frozen agent definition.
+
+Three controls apply only to agent runs and appear only when **Agent run** is chosen:
+
+- **Steps per case** (1 to 1000, empty for no limit) counts model calls and tool calls. The agent run is cancelled when it passes the limit, and the case stores an error that names the step limit. The count is checked while the run is going, so a few extra steps can complete before it stops.
+- **Time per case** (1 to 3600 seconds) cancels the agent run at the deadline and stores a timeout result for the case (not scored, flagged as timed out, counted under **Timeouts**). Empty means 15 minutes.
+- **Store tool outputs in the results** keeps the output of each tool step in the case's stored evidence (up to 1000 characters per step, for the first 60 steps), so a reviewer can see what a tool returned. Switch it off to keep tool outputs out of the results; the counts stay. Anyone who can read the run can read the kept outputs, and each output read is recorded in the run evidence audit as the run's author.
+
+The model calls of an agent run count toward the run's token and cost limits and its consumption, under the agent role.
+
+The **Trajectory** card (agent runs only) is built from the per-step run evidence: **Steps per case** at p50 and p95, the total **Tool calls**, **Tool errors** and **Retries** (a tool call repeated with the same arguments after one that failed), and for each case its steps, tool calls, errors and retries with the list of its steps. The **Efficiency** card adds tool calls per case, tool errors and retries. A case that recorded no steps (for example it never started) is left out of the figures, and the card says how many cases it measured; it is never counted as zero steps.
+
+The Trajectory card also shows four counters, each with its value per case in the case's row:
+
+- **Distinct tools**: the unique tools a case used (the same toolkit and name counts once, however often it was called), as the mean per case and the number of unique tools used across the run.
+- **Redundant calls**: tool calls that repeat an earlier call of the same case with the same toolkit, tool name and arguments, when the latest earlier attempt of it had succeeded, with their share of all tool calls. A repeat after an attempt that failed is a **Retry**, not a redundant call, so the two never count the same call. A call whose arguments were not recorded is never counted as redundant. Arguments are compared by the digest of their canonical JSON recorded in the run evidence.
+- **Guardrail events**: what the guardrails did during the case's run: LLM gateway guardrail verdicts that blocked a request (including a fail-closed detector that could not run), masked part of it, or warned or flagged it, plus governance gates, meaning approval requests for a sensitive tool (this is also what the quoted-data rule raises). A verdict that passed, or a detector that failed open, is not an event. An evaluation run answers no approvals, so a gate also ends the case with an error that says so. The card breaks a case's events down as blocked, masked, warned and held for approval. Only the first 1000 verdicts of a run are counted (the card then reads **at least**), and a verdict the gateway had not yet written when the case settled is missed.
+- **Step limit hit**: how many cases ended because the suite's step limit was reached and not because the agent finished, out of all cases; those cases are marked **ended at the step limit**. A case that recorded no steps but was blocked by a guardrail or ended at the step limit gets its own row with those figures.
+
+A counter reads **not recorded** for a run stored before these counters existed, or when the guardrail verdicts could not be read; it is never shown as 0.
+
+### Enhance with AI
+
+When a finished run missed a target, the scorecard offers **Enhance with AI** (it needs the permission to start runs). The model reads the agent version the run scored and the results that missed, with the outputs and the judge's rationale, and proposes up to three kinds of fix, which you review one step at a time:
+
+1. **Instructions**: a revised version of the instructions, shown as a diff. Accepting creates a new **draft** version of the agent, copied from the version the run scored (settings, variables, skills and toolkit bindings) with only the instructions changed. If the instructions are longer than 24000 characters, no instruction change is proposed and the step says why. Nothing is published: a draft follows the agent's normal release path, so an agent above low risk goes through a change request and its release gate. Use **Request publish** in the last step, or publish from the agent page.
+2. **Rubrics and targets**: a changed rubric or target for a dimension. The step shows the target the run was judged against; accepting changes the dimension's default, which new runs use. This run keeps the rubric and target it was scored with. A proposed target must lie on the dimension's scale.
+3. **Expected outputs**: a corrected expected answer for a case in the dataset.
+
+Nothing is saved until the last step, and you can untick any change. Saving can be repeated: it retries only the fixes that failed. Each saved fix goes through the same permissions as editing it by hand, and a refused one is reported with its reason while the others are still saved.
 
 ## History
 

@@ -14,7 +14,15 @@
  * where the tool categories are shown again. NOT a risk tier either: the
  * create route starts every agent at `low`, which is the tier the proposal
  * promises.
+ *
+ * THE AVATAR. The draft's `avatar` is the sub-agent's runtime short key. When
+ * it names a default avatar (`default:<name>`, the closed set in client-core)
+ * the create request carries it as the version's avatar pack, whose still is
+ * that key; any other key is dropped and the agent keeps the default look.
+ * This is the same mapping elitea-main applies to an automatic hire
+ * (`agentmedia.PackForAvatarKey`).
  */
+import { defaultAvatarOf } from '@elitea/client-core/conversation';
 import type { AgentProposal, ApplicationCreateRequest } from '@/shared/api/generated/model';
 import { MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH } from '@/shared/lib/limits';
 
@@ -31,6 +39,8 @@ export interface ReviewDraft {
   readonly displayName: string;
   /** The soul's prose, when the sub-agent had one. */
   readonly soul: string;
+  /** The sub-agent's default avatar key (`default:fox`), or '' when it named none. */
+  readonly avatarKey: string;
 }
 
 function text(value: unknown): string {
@@ -47,6 +57,12 @@ function strings(value: unknown): readonly string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim() !== '') : [];
 }
 
+/** The key when it names a default avatar, else '' (the saved agent keeps the default look). */
+function knownAvatarKey(value: unknown): string {
+  const key = text(value).trim();
+  return defaultAvatarOf(key) === undefined ? '' : key;
+}
+
 export function reviewDraftOf(proposal: Pick<AgentProposal, 'draft'>): ReviewDraft {
   const draft = proposal.draft;
   const soul = draft['soul'] !== null && typeof draft['soul'] === 'object' ? (draft['soul'] as Record<string, unknown>) : {};
@@ -60,6 +76,7 @@ export function reviewDraftOf(proposal: Pick<AgentProposal, 'draft'>): ReviewDra
     conversationStarters: strings(draft['conversation_starters']),
     displayName: text(soul['display_name']),
     soul: text(soul['body']),
+    avatarKey: knownAvatarKey(draft['avatar']),
   };
 }
 
@@ -73,6 +90,7 @@ export function createRequestOf(review: ReviewDraft): ApplicationCreateRequest {
           ...(review.soul.trim() !== '' ? { body: review.soul.trim() } : {}),
         }
       : undefined;
+  const avatarKey = knownAvatarKey(review.avatarKey);
   return {
     name: review.name.trim(),
     description: review.description,
@@ -88,6 +106,9 @@ export function createRequestOf(review: ReviewDraft): ApplicationCreateRequest {
         // A fresh agent: the create route's own step limit, nothing toggled.
         meta: { step_limit: 25, internal_tools: [] },
         ...(soul === undefined ? {} : { soul }),
+        ...(avatarKey === ''
+          ? {}
+          : { avatar_pack: { schema: 'elitea.avatar_pack/v1' as const, slots: { still: { url: avatarKey } } } }),
       },
     ],
   };

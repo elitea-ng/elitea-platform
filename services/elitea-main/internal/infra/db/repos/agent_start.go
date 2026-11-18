@@ -419,13 +419,13 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentApplication(
 					// carried no `user` participant and its agent mapping
 					// carried no `entity_settings.version_id`; the log said
 					// only "not supported by the admitted parity slice", so
-					// neither cause was visible. The reason below names the
-					// joins so the next such failure is readable.
-					return agentexecutionapp.UnsupportedCurrentAgentStart(
-						"application turn row not found: the conversation, its " +
-							"entity_name='user' participant for the caller, the target " +
-							"application participant, or the application_versions row named " +
-							"by that participant's entity_settings.version_id is missing")
+					// neither cause was visible. The diagnostic names the first
+					// condition that failed (agent_start_diagnose.go), so the
+					// 422 the sender reads and the log say which one it was.
+					return currentApplicationTurnRefusal(
+						ctx, tx, conversationUUID, request.ActorUserID,
+						targetParticipantID, projectID, repository.catalogueProjectID, questionID,
+					)
 				}
 				if queryErr != nil {
 					return fmt.Errorf("resolve current application turn: %w", queryErr)

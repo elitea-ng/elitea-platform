@@ -57,3 +57,14 @@ export function validateFileName(name: string): string {
 export function ensureTrailingSlash(path: string): string {
   return path !== '' && !path.endsWith('/') ? `${path}/` : path;
 }
+
+/**
+ * A file name split into the part a person may rename and the extension that stays (#2119).
+ * Only a dot after the first character starts an extension, so a name like ".env" has none;
+ * the server applies the same rule to a rename (`keyExtension`).
+ */
+export function splitFileName(name: string): { readonly stem: string; readonly extension: string } {
+  const dot = name.lastIndexOf('.');
+  if (dot <= 0) return { stem: name, extension: '' };
+  return { stem: name.slice(0, dot), extension: name.slice(dot) };
+}

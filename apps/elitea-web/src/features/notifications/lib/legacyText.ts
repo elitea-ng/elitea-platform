@@ -301,3 +301,24 @@ export function parseLegacyInformation(
   const parse = LEGACY_INFO_PARSERS[eventType] ?? parseNothing;
   return parse(meta, projectId);
 }
+
+/**
+ * Whether the legacy renderer can write a sentence for this event type: it has
+ * leading or ending text, or is one of the two types it renders on its own. Any
+ * other type renders an EMPTY cell there (#1992), so the caller names it with
+ * {@link eventTypeLabel} instead.
+ */
+export function hasLegacyText(eventType: string): boolean {
+  const key = eventType as NotificationEventType;
+  return (
+    eventType === 'agent_unpublished' ||
+    leadingText('', '')[key] !== undefined ||
+    endingText('')[key] !== undefined
+  );
+}
+
+/** `agent_approval_required` -> "Agent approval required". */
+export function eventTypeLabel(eventType: string): string {
+  const words = eventType.replace(/[_.-]+/g, ' ').trim();
+  return words === '' ? 'Notification' : words.charAt(0).toUpperCase() + words.slice(1);
+}

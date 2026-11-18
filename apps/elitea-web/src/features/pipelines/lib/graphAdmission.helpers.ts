@@ -25,6 +25,7 @@ import { graphParallelIssues } from './graphParallelAdmission.helpers';
  */
 import { graphShapingIssues } from './graphShapingAdmission.helpers';
 import { graphMapIssues } from './graphMapAdmission.helpers';
+import { declaresNodeErrors, graphNodeSettingsIssues, NODE_ERRORS_KEY } from './nodeSettings.helpers';
 import { RuntimeContractConstants } from './flow-editor/constants';
 import type { YamlPipelineDocument } from './flow-editor/helpers/pipelineFlow.types';
 import { isValidGraphId, isValidOutputKey } from './graphAdmission.nodeReads';
@@ -91,6 +92,8 @@ function readAdmissionGraph(document: YamlPipelineDocument | undefined): Admissi
   const safeDocument: YamlPipelineDocument = document ?? {};
   const nodes: readonly AdmissionNode[] = (safeDocument.nodes ?? []).map((raw) => ({ ...readNodeIdentity(raw), raw }));
   const stateEntries = Object.entries(safeDocument.state ?? {});
+  // D2: a node that continues on error declares `node_errors` as a list.
+  if (declaresNodeErrors(safeDocument) && !Object.hasOwn(safeDocument.state ?? {}, NODE_ERRORS_KEY)) stateEntries.push([NODE_ERRORS_KEY, 'list']);
   return {
     document: safeDocument,
     nodes,
@@ -305,7 +308,10 @@ export const GRAPH_ADMISSION_RULES: readonly GraphAdmissionRule[] = [
 /** Every reason the Rust pipeline compiler would refuse `document`. Empty means "admissible". */
 export function collectGraphAdmissionIssues(rawDocument: YamlPipelineDocument | undefined): readonly GraphAdmissionIssue[] {
   const graph = readAdmissionGraph(normalizePipelineNodeIdentifiers(rawDocument));
-  return [...GRAPH_ADMISSION_RULES.flatMap((rule) => rule.check(graph)), ...graphShapingIssues(graph.document), ...graphMapIssues(graph.document), ...graphParallelIssues(graph.document)];
+  return [
+    ...GRAPH_ADMISSION_RULES.flatMap((rule) => rule.check(graph)), ...graphShapingIssues(graph.document), ...graphMapIssues(graph.document),
+    ...graphParallelIssues(graph.document), ...graphNodeSettingsIssues(graph.document),
+  ];
 }
 
 /** The issues that refuse the document; a `'warning'` notice never blocks a save. */

@@ -1,6 +1,6 @@
 ---
 title: "Page layout"
-description: "How every Elitea page is laid out on the web and in the desktop app: title bar, page toolbar, side panel and sidebar."
+description: "How every Elitea page is laid out on the web and in the desktop app: title bar, page toolbar, the List tab of list pages, side panel and sidebar."
 ---
 
 Every page in Elitea uses the same layout, in the browser and in the desktop app. The title is in the title bar, the controls for the page are in one toolbar, and filters and other side content are in a side panel on the right. You find the same control in the same place on every page.
@@ -16,7 +16,7 @@ The title bar at the top of the page shows a breadcrumb: the section, then the p
 
 ## Page toolbar
 
-Under the title bar, each page has one toolbar row:
+Under the title bar, pages other than the Workshop lists (see [List pages](#list-pages)) have one toolbar row:
 
 - **Left:** the page's tabs, or a count of what the page lists (for example "12 credentials").
 - **Right**, always in this order:
@@ -28,17 +28,32 @@ Under the title bar, each page has one toolbar row:
 
 On a type gallery (for example when you pick a toolkit or credential type to create), the search box is at the left end of the toolbar.
 
+## List pages
+
+The **Agents**, **Pipelines**, **Skills** and **Toolkits & Indexes** and **MCPs** lists have no toolbar row and no status tabs. Every control of the list is in the **List** tab of the side panel on the right, which is open by default on windows 1440px wide or wider and is remembered for you, page by page:
+
+- **Search.** Press `/` (outside a text field) or ⌘F (Ctrl+F) to go to it; if the panel is closed, it opens first. The text is kept in the page address (`query`).
+- **+ New** and **Import**.
+- **Status** and **Origin**, on Agents and Pipelines: only the values that occur, each with how many items it holds. Status is also a badge on every card and a column in the table.
+- **Sort** (by created date or name, ascending or descending) and the card/table **View** switch.
+- **Folders**, then the tag filter (or the toolkit types) and the author card.
+
+When the panel is closed, or is a drawer over a narrow window, a one-line bar above the list shows the search text and every filter that is on, each with a button to remove it, a **Clear** button that removes all of them, and **+ New**. So a filter is never hidden, and creating stays one click away.
+
+**Select several items** with the checkbox on a table row (the header checkbox selects all) or by ⌘-clicking (Ctrl-click) a card; once something is selected, a plain click on another card adds it. A **Selection** section appears at the top of the **List** tab with **Add tag**, **Export** and **Delete** where the items support them (toolkits have **Delete** only). Each item is its own request, so if some fail, they stay selected and you are told how many.
+
 ## Side panel
 
 Content that belongs next to a page is in the side panel on the right, not over the page:
 
-- **Filters**, on the list pages: the tags (or types) to filter by, then the author card or the trending authors.
+- **List**, on the Workshop lists (see [List pages](#list-pages)).
+- **Filters**, on the other list pages: the tags (or types) to filter by, then the author card or the trending authors.
 - **Conversation**, in a chat: the participants, agents, toolkits and the context budget of the conversation.
 
 The panel shows its tabs as chips at the top and has a close button.
 
 - **Desktop:** the side panel is the inspector. Show or hide it with the inspector toggle in the title bar, or ⌘⌥\\. The **Filters** tab works like the other inspector tabs.
-- **Web:** show or hide the panel with the toggle at the right end of the title bar. Elitea remembers whether you keep it open. If you have not chosen, it is open on windows 1440px wide or wider. In windows narrower than 1024px, the panel opens over the page as a drawer and closes when you select outside it.
+- **Web:** show or hide the panel with the toggle at the right end of the title bar. Elitea remembers whether you keep it open, separately for each page. If you have not chosen, it is open on windows 1440px wide or wider. In windows narrower than 1024px, the panel opens over the page as a drawer and closes when you select outside it.
 
 ## Sidebar
 

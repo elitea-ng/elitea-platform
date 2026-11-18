@@ -322,3 +322,19 @@ nodes:
     expect(() => serializePipelineYaml(renameYamlDocument(document, 'Old', 'New'))).toThrow();
   });
 });
+
+describe('renaming an error route target (5b-1 fix round 1, finding 3)', () => {
+  it('rewrites settings.error_transition on the node that routes to it', () => {
+    const document: YamlPipelineDocument = {
+      entry_point: 'shape',
+      nodes: [
+        { id: 'shape', type: 'state_modifier', transition: 'END', settings: { on_error: 'error_output', error_transition: 'handler' } },
+        { id: 'handler', type: 'state_modifier', transition: 'END' },
+      ],
+    };
+    const renamed = renameYamlDocument(document, 'handler', 'fallback');
+    const routed = renamed.nodes?.[0] as unknown as Record<string, unknown>;
+    expect(routed['settings']).toEqual({ on_error: 'error_output', error_transition: 'fallback' });
+    expect(renamed.nodes?.[1]?.id).toBe('fallback');
+  });
+});

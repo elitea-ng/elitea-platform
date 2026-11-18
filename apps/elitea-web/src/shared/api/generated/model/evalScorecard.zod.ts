@@ -59,7 +59,7 @@ export const EvalScorecard = zod
     ),
   })
   .describe(
-    'The READ-ONLY scorecard. `human_scores` is DELIBERATELY ABSENT: this release has no human-score surface, and answering `[]` would tell a client "there are none" where the truth is "this deployment cannot have any". `unavailable` names each omission with its reason — the shape internal/api/v2/budgets/usage_dimensions.go established.\n',
+    "The scorecard. A result a reviewer has not scored yet is `pending_human` and has no score; the human scores are read through their own route. `unavailable` names each part this release cannot serve, with its reason — the shape internal/api/v2/budgets/usage_dimensions.go established.\n",
   );
 
 export type EvalScorecard = zod.input<typeof EvalScorecard>;

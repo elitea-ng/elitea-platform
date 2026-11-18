@@ -285,6 +285,8 @@ var NotGovernanceRelevant = map[string]bool{
 	"models.applications.evaluation.dimension.delete":   true,
 	"models.applications.evaluation.dimension.read":     true,
 	"models.applications.evaluation.dimension.update":   true,
+	"models.applications.evaluation.human_score.create": true,
+	"models.applications.evaluation.human_score.read":   true,
 	"models.applications.evaluation.run.create":         true,
 	"models.applications.evaluation.run.read":           true,
 	"models.applications.export_import.export":          true,

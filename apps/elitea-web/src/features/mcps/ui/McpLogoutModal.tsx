@@ -21,7 +21,8 @@ export interface McpLogoutModalProps {
   authorizationLabel?: string | undefined;
   open: boolean;
   onClose?: ((success?: boolean) => void) | undefined;
-  onConfirm?: (() => void) | undefined;
+  /** Called after the grant is forgotten, with whether this browser held one (#1999). */
+  onConfirm?: ((held: boolean) => void) | undefined;
 }
 
 export function McpLogoutModal({ serverUrl, toolkitType, authorizationLabel, open, onClose, onConfirm }: McpLogoutModalProps): ReactNode {
@@ -31,14 +32,15 @@ export function McpLogoutModal({ serverUrl, toolkitType, authorizationLabel, ope
   const handleCancel = useCallback(() => onClose?.(), [onClose]);
 
   const handleLogout = useCallback(() => {
+    let held: boolean;
     if (isPrebuildMcp) {
-      logout(undefined, toolkitType);
+      held = logout(undefined, toolkitType);
     } else if (serverUrl) {
-      logout(serverUrl);
+      held = logout(serverUrl);
     } else {
       return;
     }
-    onConfirm?.();
+    onConfirm?.(held);
     onClose?.(true);
   }, [isPrebuildMcp, toolkitType, serverUrl, onClose, onConfirm]);
 

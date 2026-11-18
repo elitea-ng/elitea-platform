@@ -95,11 +95,14 @@ WHERE deleted_at IS NULL AND bucket_type <> 'workspace'
 ORDER BY project_id;
 
 -- name: UpsertArtifactObject :one
+-- created_at is NULL for an ordinary write (a new row is born now, an
+-- existing row keeps its birth). A rename passes the source's created_at so
+-- the object keeps its age under the new name (#2015).
 INSERT INTO elitea_storage.objects (
     bucket_id, key, byte_length, media_type, digest_alg, digest,
-    classification, scan_state, expires_at
+    classification, scan_state, expires_at, created_at
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE(sqlc.narg('created_at')::timestamptz, now())
 )
 ON CONFLICT (bucket_id, key) DO UPDATE SET
     byte_length = EXCLUDED.byte_length,
@@ -109,6 +112,7 @@ ON CONFLICT (bucket_id, key) DO UPDATE SET
     classification = EXCLUDED.classification,
     scan_state = EXCLUDED.scan_state,
     expires_at = EXCLUDED.expires_at,
+    created_at = COALESCE(sqlc.narg('created_at')::timestamptz, elitea_storage.objects.created_at),
     updated_at = now()
 RETURNING id, bucket_id, key, byte_length, media_type, digest_alg, digest,
     classification, scan_state, expires_at, created_at, updated_at;

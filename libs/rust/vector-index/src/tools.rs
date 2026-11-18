@@ -26,8 +26,8 @@ use crate::client::toolkit_scope_with_generations;
 use crate::error::{Error, Result};
 use crate::filter;
 use crate::format::{
-    Doctype, NO_INDEXES, format_hits, index_not_found_message, no_documents_message,
-    project_fields, sdk_collection_filter, stepback_result_text,
+    Doctype, NO_INDEXES, format_hits, index_not_found_message, index_not_searchable_message,
+    no_documents_message, project_fields, sdk_collection_filter, stepback_result_text,
 };
 use crate::hit::Hit;
 use crate::pb;
@@ -60,25 +60,52 @@ pub struct IndexEntry {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct IndexCatalog {
     entries: Vec<IndexEntry>,
+    /// Indexes the registry lists that hold no vectors yet (never run, or a
+    /// run that failed before storing any): listed by `list_indexes`, never
+    /// searched.
+    pending: Vec<String>,
 }
 
 impl IndexCatalog {
     /// A catalog of `entries`.
     #[must_use]
     pub fn new(entries: Vec<IndexEntry>) -> Self {
-        Self { entries }
+        Self {
+            entries,
+            pending: Vec::new(),
+        }
+    }
+
+    /// This catalog with the names of the indexes that hold no vectors yet.
+    #[must_use]
+    pub fn with_pending(mut self, pending: Vec<String>) -> Self {
+        self.pending = pending;
+        self
+    }
+
+    /// Whether `name` is a listed index that holds no vectors yet.
+    #[must_use]
+    pub fn is_pending(&self, name: &str) -> bool {
+        self.pending.iter().any(|pending| pending == name)
+    }
+
+    /// The message for an index that is listed but holds no vectors.
+    #[must_use]
+    pub fn not_searchable_message(&self, name: &str) -> String {
+        index_not_searchable_message(name, &self.list_indexes())
     }
 
     /// `list_indexes`: the names joined by commas, or `No indexed
     /// collections`.
     #[must_use]
     pub fn list_indexes(&self) -> String {
-        if self.entries.is_empty() {
+        if self.entries.is_empty() && self.pending.is_empty() {
             NO_INDEXES.to_owned()
         } else {
             self.entries
                 .iter()
                 .map(|entry| entry.name.as_str())
+                .chain(self.pending.iter().map(String::as_str))
                 .collect::<Vec<_>>()
                 .join(",")
         }
@@ -92,6 +119,12 @@ impl IndexCatalog {
                 .entries
                 .iter()
                 .filter(|entry| entry.name != name)
+                .cloned()
+                .collect(),
+            pending: self
+                .pending
+                .iter()
+                .filter(|pending| pending.as_str() != name)
                 .cloned()
                 .collect(),
         }
@@ -342,6 +375,11 @@ impl<'a, B: VectorBackend, E: QueryEmbedder> IndexTools<'a, B, E> {
             ));
         }
         let Some(entry) = self.catalog.entry(index_name) else {
+            if self.catalog.is_pending(index_name) {
+                return Err(Error::NotFound(format!(
+                    "Index '{index_name}' holds no vectors, so there is nothing to remove from the vector store; delete it from the toolkit's Indexes tab"
+                )));
+            }
             return Err(Error::NotFound(index_not_found_message(
                 index_name,
                 &self.catalog.list_indexes(),
@@ -414,6 +452,9 @@ impl<'a, B: VectorBackend, E: QueryEmbedder> IndexTools<'a, B, E> {
             Some(entry) => Ok(Target::Found(
                 vec![(entry.namespace_id.clone(), entry.active_generation.clone())],
                 entry.space.clone(),
+            )),
+            None if self.catalog.is_pending(index_name) => Err(Error::NotFound(
+                self.catalog.not_searchable_message(index_name),
             )),
             None => Err(Error::NotFound(index_not_found_message(
                 index_name,

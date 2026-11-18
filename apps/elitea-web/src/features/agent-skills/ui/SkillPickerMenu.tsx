@@ -1,7 +1,9 @@
 import type { ReactNode } from 'react';
 
+import AddIcon from '@mui/icons-material/Add';
 import Box from '@mui/material/Box';
 import Menu from '@mui/material/Menu';
+import ListItemIcon from '@mui/material/ListItemIcon';
 import MenuItem from '@mui/material/MenuItem';
 import TextField from '@mui/material/TextField';
 import type { SxProps, Theme } from '@mui/material/styles';
@@ -27,6 +29,8 @@ export interface SkillPickerMenuProps {
   /** Already-attached skills are shown and disabled, not hidden. */
   readonly attachedIds: ReadonlySet<number>;
   readonly onClose: () => void;
+  /** Offers a "Create new" item above the list when given (issue 2051). */
+  readonly onCreateNew?: (() => void) | undefined;
   readonly onPick: (skillId: number, skillVersionId: number) => void;
 }
 
@@ -51,6 +55,7 @@ export function SkillPickerMenu({
   isLoading,
   attachedIds,
   onClose,
+  onCreateNew,
   onPick,
 }: SkillPickerMenuProps): ReactNode {
   return (
@@ -81,6 +86,17 @@ export function SkillPickerMenu({
           fullWidth
         />
       </Box>
+      {onCreateNew !== undefined && (
+        <MenuItem
+          data-testid="agent-skill-create-new"
+          onClick={onCreateNew}
+        >
+          <ListItemIcon>
+            <AddIcon fontSize="small" />
+          </ListItemIcon>
+          {t('features.agentSkills.createNew', 'Create new')}
+        </MenuItem>
+      )}
       {options.length === 0 && (
         <MenuItem
           disabled

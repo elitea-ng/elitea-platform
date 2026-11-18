@@ -42,6 +42,8 @@ Reshapes the pipeline's state without calling a model or a tool: combine values,
 | Output | Where the rendered result is written |
 | Variables to clean | Optional list of variables to reset afterward (strings to `""`, lists to `[]`, numbers to `0`) |
 
+Templates written for the older Python runtime keep working. Besides Jinja's usual filters, the template accepts the Python string methods `split`, `rsplit`, `splitlines`, `strip`, `lstrip`, `rstrip`, `lower`, `upper`, `title`, `capitalize`, `startswith`, `endswith`, `replace`, `find`, `count`, `join` and `isdigit`/`isalpha`/`isalnum`/`isspace`, the mapping methods `keys`, `values`, `items` and `get`, and the filters `wordcount`, `capitalize`, `truncate`, `center`, `from_json`, `base64_to_string`, `split_by_words` and `split_by_regex`. For example, `{{ csv.split(',') | length }}` or `{{ text | wordcount }}`.
+
 ## Guides and references
 
 - [Pipeline node types](/how-tos/pipelines/nodes/overview)

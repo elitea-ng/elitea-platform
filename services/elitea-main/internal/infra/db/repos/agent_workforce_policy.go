@@ -26,6 +26,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentmedia"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentmemory"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentproposal"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentsoul"
@@ -44,6 +45,13 @@ type WorkforcePolicy struct {
 	Saved     bool       `json:"saved"`
 	UpdatedBy *int64     `json:"updated_by"`
 	UpdatedAt *time.Time `json:"updated_at"`
+	// AutoFeedbackBy is the person who turned auto_feedback on: an automatic
+	// workforce report is recorded under them (ADR-0051 decision 6).
+	AutoFeedbackBy *int64 `json:"auto_feedback_by"`
+	// AutoHireBy is the person who turned auto_hire on: an automatic hire of a
+	// Marketplace listing is made for them and recorded under them, however
+	// many people save the policy later. Not served.
+	AutoHireBy *int64 `json:"-"`
 	// DefaultRules are the platform's starting rules.
 	DefaultRules []agentworkforce.Rule `json:"default_rules"`
 	// OpenAutoHired counts the automatically hired agents nobody kept yet
@@ -56,10 +64,12 @@ func readPolicy(ctx context.Context, q lifecycleQuerier, projectID int64) (Workf
 	var rules []byte
 	err := q.QueryRow(ctx, `
 SELECT auto_hire_enabled, min_successful_runs, max_auto_hired, auto_dismiss_enabled, auto_dismiss_rules, grace_days,
-       updated_by, updated_at
+       updated_by, updated_at, auto_feedback_enabled, auto_feedback_by, listing_min_reviews,
+       listing_min_rating::float8, listing_max_dismissal_rate::float8, auto_hire_by
 FROM elitea_lifecycle.agent_workforce_policies WHERE project_id = $1`, projectID).Scan(
 		&policy.AutoHireEnabled, &policy.MinSuccessfulRuns, &policy.MaxAutoHired, &policy.AutoDismissEnabled, &rules,
-		&policy.GraceDays, &policy.UpdatedBy, &policy.UpdatedAt)
+		&policy.GraceDays, &policy.UpdatedBy, &policy.UpdatedAt, &policy.AutoFeedbackEnabled, &policy.AutoFeedbackBy,
+		&policy.ListingMinReviews, &policy.ListingMinRating, &policy.ListingMaxDismissalRate, &policy.AutoHireBy)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 	case err != nil:
@@ -112,15 +122,31 @@ func (s *AgentWorkforce) SetPolicy(ctx context.Context, projectID int64, actor W
 		if _, err := tx.Exec(ctx, `
 INSERT INTO elitea_lifecycle.agent_workforce_policies
     (project_id, auto_hire_enabled, min_successful_runs, max_auto_hired, auto_dismiss_enabled, auto_dismiss_rules,
-     grace_days, updated_by)
-VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
+     grace_days, updated_by, auto_feedback_enabled, auto_feedback_by, listing_min_reviews, listing_min_rating,
+     listing_max_dismissal_rate, auto_hire_by)
+VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8::bigint, $9::boolean, CASE WHEN $9::boolean THEN $8::bigint END, $10, $11, $12,
+        CASE WHEN $2::boolean THEN $8::bigint END)
 ON CONFLICT (project_id) DO UPDATE SET
     auto_hire_enabled = EXCLUDED.auto_hire_enabled, min_successful_runs = EXCLUDED.min_successful_runs,
     max_auto_hired = EXCLUDED.max_auto_hired, auto_dismiss_enabled = EXCLUDED.auto_dismiss_enabled,
     auto_dismiss_rules = EXCLUDED.auto_dismiss_rules, grace_days = EXCLUDED.grace_days,
-    updated_by = EXCLUDED.updated_by, updated_at = clock_timestamp()`,
+    updated_by = EXCLUDED.updated_by, updated_at = clock_timestamp(),
+    -- The person who turned auto_feedback on stays its approver while it stays on.
+    auto_feedback_by = CASE WHEN EXCLUDED.auto_feedback_enabled
+        THEN CASE WHEN agent_workforce_policies.auto_feedback_enabled
+                  THEN COALESCE(agent_workforce_policies.auto_feedback_by, EXCLUDED.auto_feedback_by)
+                  ELSE EXCLUDED.auto_feedback_by END
+        END,
+    auto_hire_by = CASE WHEN EXCLUDED.auto_hire_enabled
+        THEN CASE WHEN agent_workforce_policies.auto_hire_enabled
+                  THEN COALESCE(agent_workforce_policies.auto_hire_by, EXCLUDED.auto_hire_by)
+                  ELSE EXCLUDED.auto_hire_by END
+        END,
+    auto_feedback_enabled = EXCLUDED.auto_feedback_enabled, listing_min_reviews = EXCLUDED.listing_min_reviews,
+    listing_min_rating = EXCLUDED.listing_min_rating, listing_max_dismissal_rate = EXCLUDED.listing_max_dismissal_rate`,
 			projectID, policy.AutoHireEnabled, policy.MinSuccessfulRuns, policy.MaxAutoHired, policy.AutoDismissEnabled,
-			string(rules), policy.GraceDays, actor.UserID); err != nil {
+			string(rules), policy.GraceDays, actor.UserID, policy.AutoFeedbackEnabled, policy.ListingMinReviews,
+			policy.ListingMinRating, policy.ListingMaxDismissalRate); err != nil {
 			return fmt.Errorf("agent workforce: save the policy: %w", err)
 		}
 		if !policy.AutoDismissEnabled {
@@ -130,6 +156,7 @@ ON CONFLICT (project_id) DO UPDATE SET
 		}
 		return s.append(ctx, tx, projectID, "agent.workforce.policy_changed", personRef(actor.UserID), strconv.FormatInt(projectID, 10), "",
 			fmt.Sprintf("auto_hire:%t", policy.AutoHireEnabled), fmt.Sprintf("auto_dismiss:%t", policy.AutoDismissEnabled),
+			fmt.Sprintf("auto_feedback:%t", policy.AutoFeedbackEnabled),
 			fmt.Sprintf("rules:%d", len(policy.Rules)), fmt.Sprintf("grace_days:%d", policy.GraceDays),
 			fmt.Sprintf("max_auto_hired:%d", policy.MaxAutoHired), fmt.Sprintf("min_successful_runs:%d", policy.MinSuccessfulRuns))
 	})
@@ -484,6 +511,11 @@ func (s *AgentWorkforce) projectPass(ctx context.Context, projectID int64, summa
 		if err := s.autoHirePass(ctx, policy, summary); err != nil {
 			return err
 		}
+		// A listing a workforce manager proposed to hire (ADR-0051 decision
+		// 6): the same switch, the same probation and undo, its own rule.
+		if err := s.autoHireListingsPass(ctx, policy, summary); err != nil {
+			return err
+		}
 	}
 	if !policy.AutoDismissEnabled {
 		return nil
@@ -682,8 +714,10 @@ WHERE project_id = $1 AND id = $2 AND status = 'proposed'`, policy.ProjectID, ca
 // registry row (tier low, the person the proposing run served as the owner
 // and the version's author). The draft carries no model settings (a saved
 // agent picks its own model), so llm_settings stays empty as on the create
-// route; the sub-agent's avatar is a runtime key with no saved-agent column
-// and is not carried, as on the person's create from the same proposal.
+// route. The sub-agent's avatar, a runtime short key, is carried as the
+// version's avatar pack when it names a default avatar
+// (agentmedia.PackForAvatarKey, #1949, the same mapping the person's create
+// from the same proposal applies); any other key leaves the default look.
 func (s *AgentWorkforce) createHiredAgent(ctx context.Context, tx pgx.Tx, projectID int64, candidate hireCandidate) (int64, error) {
 	if _, err := tenantschema.QuoteInt(projectID); err != nil {
 		return 0, agentworkforce.Refuse(agentworkforce.InvalidCode, "The project id is invalid.")
@@ -740,6 +774,7 @@ func (s *AgentWorkforce) createHiredAgent(ctx context.Context, tx pgx.Tx, projec
 			},
 			PipelineSettings: map[string]any{},
 			Soul:             soul,
+			AvatarPack:       agentmedia.PackForAvatarKey(stringOf(candidate.draft["avatar"])),
 		},
 	})
 	if err != nil {
@@ -853,6 +888,7 @@ SELECT registry.tenant_project_id, registry.application_id, registry.risk_tier,
        COALESCE(suspension.id, 0), COALESCE(suspension.source, ''),
        EXISTS (SELECT 1 FROM elitea_lifecycle.agent_workforce_proposals AS proposal
                WHERE proposal.project_id = $1 AND proposal.application_id = registry.application_id
+                 AND proposal.kind IN ('dismiss', 'demote')
                  AND proposal.status IN ('proposed', 'asked_owner'))
 FROM elitea_lifecycle.agent_registry AS registry
 LEFT JOIN LATERAL (
@@ -1032,6 +1068,11 @@ func (s *AgentWorkforce) applyRule(ctx context.Context, policy WorkforcePolicy, 
 	}
 	s.notify(affected...)
 	s.notifyPolicy(ctx, action, 0, notify)
+	if stage != agentworkforce.StageRetire {
+		// watch and suspend applied at once: the reports drafted for the stage
+		// publish (auto_feedback). A retire waits for its notice's grace period.
+		s.publishAutoReports(ctx, policy.ProjectID, applicationID, string(stage))
+	}
 	return nil
 }
 
@@ -1117,6 +1158,7 @@ func (s *AgentWorkforce) reconcileAction(ctx context.Context, policy WorkforcePo
 		notify   string
 		action   AutomaticAction
 	)
+	retiredBefore := summary.Retired
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
 		if err := lockPolicyProject(ctx, tx, policy.ProjectID); err != nil {
 			return err
@@ -1206,6 +1248,10 @@ WHERE project_id = $1 AND id = $2`, action.ProjectID, action.ID); err != nil {
 	}
 	s.notify(affected...)
 	s.notifyPolicy(ctx, action, 0, notify)
+	if summary.Retired > retiredBefore {
+		// The retirement applied: the reports drafted for it publish (auto_feedback).
+		s.publishAutoReports(ctx, action.ProjectID, action.ApplicationID, string(agentworkforce.StageRetire))
+	}
 	return nil
 }
 

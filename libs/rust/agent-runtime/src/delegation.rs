@@ -30,8 +30,30 @@
 //! step of the delegation records both.
 //!
 //! An ad hoc conversation root has no saved definition, so it imposes no
-//! toolkit grant: the person chose its participants. Narrowing starts at the
-//! first saved agent or pipeline.
+//! toolkit grant of its own: the person chose its participants. Caller
+//! narrowing starts at the first saved agent or pipeline.
+//!
+//! # The run principal (ADR-0044 Amendment 1, #2157)
+//!
+//! Every callee's effective set is also intersected with the authority of the
+//! run principal `P`: the acting user, or the mandate and project of an
+//! unattended run. Main computes it for the reachable closure of the root and
+//! sends it as [`PrincipalBound`] on the policy. The effective set is
+//!
+//! ```text
+//! E(X) = own(X) ∩ (E(Y) ∪ G(Y→X)) ∩ P
+//! ```
+//!
+//! and this module implements the `∩ P` term: the root is `own(root) ∩ P`
+//! (see [`DelegationScope::root`] and
+//! [`AdmittedToolSnapshot::retain_principal`]), and every delegation (agent
+//! tool, pipeline child, pipeline node, sub-agent, swarm member) is refused
+//! with [`GRANT_MISSING`] and reason `principal` when its callee needs
+//! something outside `P`. `P` applies in both [`NarrowingMode`]s: `report`
+//! never relaxes it. `G(Y→X)`, the approved delegation grant of the edge,
+//! unions with `E(Y)` in the scope's `caller_ceiling`; until it lands
+//! `G` is empty, and `P` is applied after that union, so a grant can never
+//! reach past the principal.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -43,6 +65,18 @@ use serde_json::{Map, Value, json};
 
 use crate::egress::PublicPolicy;
 use crate::toolkits::{AdmittedToolSnapshot, FrozenToolKind};
+
+mod grants;
+mod notice;
+
+pub use grants::{
+    DelegationGrant, EdgeKey, EdgeKind, GrantEvidence, Grants, MAX_GRANT_EDGES, Narrowed,
+    narrow_with_grant,
+};
+pub use notice::{
+    DelegationNotice, MAX_NOTICE_ITEMS, NARROWED_EVENT, NOTICE_METADATA_KEY, NoticeContext,
+    REFUSED_EVENT,
+};
 
 /// The depth a run may delegate to when the administrator set none.
 pub const DEFAULT_MAX_DEPTH: u32 = 4;
@@ -60,10 +94,23 @@ pub const GRANT_MISSING: &str = "DELEGATION_GRANT_MISSING";
 /// The refusal code of a delegation past the maximum depth.
 pub const DEPTH_EXCEEDED: &str = "DELEGATION_DEPTH_EXCEEDED";
 
+/// The schema tag of a grant set's canonical form. Main writes the same form
+/// into a delegation grant (`delegationgrant.Schema`), and both run
+/// `libs/proto/contracts/delegation-grant-digest-vectors-v1.json`.
+pub const GRANT_SET_SCHEMA: &str = "elitea.delegation.grants.v1";
+
 /// The most toolkit references one grant set reads.
 const MAX_TOOLKITS: usize = 1_024;
 /// The most tool names one toolkit selection reads.
 const MAX_TOOL_NAMES: usize = 1_024;
+/// The most credential references a principal bound names.
+pub const MAX_PRINCIPAL_CREDENTIALS: usize = 256;
+/// The most toolkits a principal bound names.
+pub const MAX_PRINCIPAL_TOOLKITS: usize = 512;
+/// The longest credential reference id a principal bound names.
+pub const MAX_PRINCIPAL_REFERENCE_BYTES: usize = 128;
+/// The longest tool name a principal bound names.
+pub const MAX_PRINCIPAL_TOOL_BYTES: usize = 256;
 /// The deepest a settings walk for hosts goes.
 const MAX_HOST_WALK_DEPTH: usize = 16;
 /// The most declared hosts one callee is checked for.
@@ -100,6 +147,14 @@ pub enum DelegationPolicyError {
     MalformedDataClass,
     /// More than [`MAX_DATA_CLASSES`] data classes.
     TooManyDataClasses,
+    /// A principal bound with more entries than its limits, or a name that
+    /// is too long.
+    PrincipalBoundTooLarge,
+    /// A delegation grant whose set does not hash to its digest, or with no
+    /// id.
+    MalformedGrant,
+    /// More than [`MAX_GRANT_EDGES`] delegation grants.
+    TooManyGrants,
 }
 
 impl fmt::Display for DelegationPolicyError {
@@ -108,6 +163,9 @@ impl fmt::Display for DelegationPolicyError {
             Self::DepthOutOfRange => "the maximum delegation depth is out of range",
             Self::MalformedDataClass => "a data class is not a short identifier",
             Self::TooManyDataClasses => "the run declares more data classes than the limit",
+            Self::PrincipalBoundTooLarge => "the run principal's bound is larger than the limit",
+            Self::MalformedGrant => "a delegation grant does not match its digest",
+            Self::TooManyGrants => "the run carries more delegation grants than the limit",
         })
     }
 }
@@ -121,6 +179,12 @@ pub struct DelegationPolicy {
     max_depth: u32,
     mode: NarrowingMode,
     root_data_classes: BTreeSet<String>,
+    principal: Option<PrincipalBound>,
+    /// The approved delegation grants of the run, by edge (ADR-0044
+    /// Amendment 1, #2166). Empty unless Main's grant switch is on.
+    grants: Grants,
+    /// The saved agent or pipeline the run starts with; 0 for none.
+    root_application_id: u64,
 }
 
 impl Default for DelegationPolicy {
@@ -129,6 +193,9 @@ impl Default for DelegationPolicy {
             max_depth: DEFAULT_MAX_DEPTH,
             mode: NarrowingMode::Enforce,
             root_data_classes: BTreeSet::new(),
+            principal: None,
+            grants: Grants::new(),
+            root_application_id: 0,
         }
     }
 }
@@ -152,7 +219,88 @@ impl DelegationPolicy {
             max_depth,
             mode,
             root_data_classes: data_classes(root_data_classes)?,
+            principal: None,
+            grants: Grants::new(),
+            root_application_id: 0,
         })
+    }
+
+    /// This policy with the run's approved delegation grants, which also turns
+    /// grant enforcement on: an edge that has one is bounded by `E(Y) ∪ G`.
+    ///
+    /// # Errors
+    ///
+    /// [`DelegationPolicyError::TooManyGrants`] for more than
+    /// [`MAX_GRANT_EDGES`].
+    pub fn with_grants(
+        mut self,
+        root_application_id: u64,
+        grants: impl IntoIterator<Item = (EdgeKey, DelegationGrant)>,
+    ) -> Result<Self, DelegationPolicyError> {
+        self.root_application_id = root_application_id;
+        for (edge, grant) in grants {
+            self.grants.insert(edge, grant);
+            if self.grants.len() > MAX_GRANT_EDGES {
+                return Err(DelegationPolicyError::TooManyGrants);
+            }
+        }
+        Ok(self)
+    }
+
+    /// The approved grant of an edge, when the run carries grants.
+    #[must_use]
+    pub fn grant(&self, edge: &EdgeKey) -> Option<&DelegationGrant> {
+        self.grants.get(edge)
+    }
+
+    /// The approved grant between a caller and a callee, whatever the kind of
+    /// edge. The worker reaches a callee through an application tool: an agent
+    /// calls it as a tool (`agent_tool`) and a pipeline runs it as a child
+    /// (`pipeline_child`), which is what attaching creates, so those two are
+    /// read first. A `sub_agent` or `pipeline_node` grant proposed through the
+    /// API for the same pair is read only when neither exists.
+    #[must_use]
+    pub fn grant_between(&self, from_agent: u64, to_agent: u64) -> Option<&DelegationGrant> {
+        [
+            EdgeKind::AgentTool,
+            EdgeKind::PipelineChild,
+            EdgeKind::SubAgent,
+            EdgeKind::PipelineNode,
+        ]
+        .into_iter()
+        .find_map(|kind| {
+            self.grants.get(&EdgeKey {
+                caller: from_agent,
+                callee: to_agent,
+                kind,
+            })
+        })
+    }
+
+    /// Whether the run carries grants (Main's switch is on and some edge of
+    /// the root's closure has one).
+    #[must_use]
+    pub fn grants_enforced(&self) -> bool {
+        !self.grants.is_empty()
+    }
+
+    /// The saved agent or pipeline the run starts with, 0 for none.
+    #[must_use]
+    pub const fn root_application_id(&self) -> u64 {
+        self.root_application_id
+    }
+
+    /// This policy bounded by the run principal's authority `P`.
+    #[must_use]
+    pub fn with_principal(mut self, principal: PrincipalBound) -> Self {
+        self.principal = Some(principal);
+        self
+    }
+
+    /// The run principal's bound, when Main sent one.
+    #[must_use]
+    pub const fn principal(&self) -> Option<&PrincipalBound> {
+        self.principal.as_ref()
     }
 
     #[must_use]
@@ -252,6 +400,15 @@ pub enum DelegationRefusal {
         /// For a tool or credential, the toolkit it belongs to.
         toolkit: Option<String>,
     },
+    /// The callee needs something the run principal (the acting user, or the
+    /// mandate and project) may not use (ADR-0044 Amendment 1). Refused in
+    /// both modes. The code is [`GRANT_MISSING`]; the structured form carries
+    /// `"reason": "principal"`.
+    PrincipalBound {
+        kind: GrantKind,
+        name: String,
+        toolkit: Option<String>,
+    },
     /// The delegation would pass the maximum depth.
     DepthExceeded { depth: u32, max_depth: u32 },
 }
@@ -261,7 +418,7 @@ impl DelegationRefusal {
     #[must_use]
     pub const fn code(&self) -> &'static str {
         match self {
-            Self::GrantMissing { .. } => GRANT_MISSING,
+            Self::GrantMissing { .. } | Self::PrincipalBound { .. } => GRANT_MISSING,
             Self::DepthExceeded { .. } => DEPTH_EXCEEDED,
         }
     }
@@ -276,13 +433,27 @@ impl DelegationRefusal {
                 kind: GrantKind::Toolkit,
                 name,
                 ..
+            }
+            | Self::PrincipalBound {
+                kind: GrantKind::Toolkit,
+                name,
+                ..
             } => Some(name),
             Self::GrantMissing {
                 kind: GrantKind::Tool | GrantKind::Credential,
                 toolkit,
                 ..
+            }
+            | Self::PrincipalBound {
+                kind: GrantKind::Tool | GrantKind::Credential,
+                toolkit,
+                ..
             } => toolkit.as_deref(),
             Self::GrantMissing {
+                kind: GrantKind::DataClass | GrantKind::EgressHost,
+                ..
+            }
+            | Self::PrincipalBound {
                 kind: GrantKind::DataClass | GrantKind::EgressHost,
                 ..
             }
@@ -299,25 +470,19 @@ impl DelegationRefusal {
                 name,
                 toolkit,
             } => {
-                let grant = match (kind, toolkit) {
-                    (GrantKind::Toolkit, _) => format!("the toolkit '{name}'"),
-                    (GrantKind::Tool, Some(toolkit)) => {
-                        format!("the tool '{name}' of the toolkit '{toolkit}'")
-                    }
-                    (GrantKind::Tool, None) => format!("the tool '{name}'"),
-                    (GrantKind::Credential, Some(toolkit)) => {
-                        format!("the credential reference '{name}' of the toolkit '{toolkit}'")
-                    }
-                    (GrantKind::Credential, None) => {
-                        format!("the credential reference '{name}'")
-                    }
-                    (GrantKind::DataClass, _) => format!("the data class '{name}'"),
-                    (GrantKind::EgressHost, _) => {
-                        format!("egress to the host '{name}' (it is not on this run's allowlist)")
-                    }
-                };
+                let grant = grant_text(*kind, name, toolkit.as_deref());
                 format!(
                     "{GRANT_MISSING}: the delegated agent needs {grant}, and its caller does not hold it. A delegated agent runs with the intersection of its own grants and its caller's. Grant it to the caller, or remove it from the delegated agent."
+                )
+            }
+            Self::PrincipalBound {
+                kind,
+                name,
+                toolkit,
+            } => {
+                let grant = grant_text(*kind, name, toolkit.as_deref());
+                format!(
+                    "{GRANT_MISSING} (principal): the delegated agent needs {grant}, and the person or mandate this run acts for may not use it. A delegated agent never exceeds the authority of the run's principal, whatever its caller holds. Ask a project administrator for access, or remove it from the delegated agent."
                 )
             }
             Self::DepthExceeded { depth, max_depth } => format!(
@@ -336,6 +501,22 @@ impl DelegationRefusal {
                 toolkit,
             } => {
                 let mut value = json!({"code": GRANT_MISSING, "kind": kind.as_str(), "name": name});
+                if let Some(toolkit) = toolkit {
+                    value["toolkit"] = json!(toolkit);
+                }
+                value
+            }
+            Self::PrincipalBound {
+                kind,
+                name,
+                toolkit,
+            } => {
+                let mut value = json!({
+                    "code": GRANT_MISSING,
+                    "reason": "principal",
+                    "kind": kind.as_str(),
+                    "name": name,
+                });
                 if let Some(toolkit) = toolkit {
                     value["toolkit"] = json!(toolkit);
                 }
@@ -362,6 +543,25 @@ impl DelegationRefusal {
             retry_after_ms: None,
             max_attempts: Some(1),
         })
+    }
+}
+
+/// The phrase a refusal names the grant by.
+fn grant_text(kind: GrantKind, name: &str, toolkit: Option<&str>) -> String {
+    match (kind, toolkit) {
+        (GrantKind::Toolkit, _) => format!("the toolkit '{name}'"),
+        (GrantKind::Tool, Some(toolkit)) => {
+            format!("the tool '{name}' of the toolkit '{toolkit}'")
+        }
+        (GrantKind::Tool, None) => format!("the tool '{name}'"),
+        (GrantKind::Credential, Some(toolkit)) => {
+            format!("the credential reference '{name}' of the toolkit '{toolkit}'")
+        }
+        (GrantKind::Credential, None) => format!("the credential reference '{name}'"),
+        (GrantKind::DataClass, _) => format!("the data class '{name}'"),
+        (GrantKind::EgressHost, _) => {
+            format!("egress to the host '{name}' (it is not on this run's allowlist)")
+        }
     }
 }
 
@@ -469,6 +669,21 @@ impl GrantSet {
         }
     }
 
+    /// What a callee holds, as Main records it in a delegation grant: the
+    /// toolkits of [`Self::from_tools`], the hosts its toolkits are configured
+    /// to reach ([`declared_hosts`], host only) and the data classes it
+    /// declares (none imposes nothing). `delegationgrant.FromTools` in Main
+    /// builds the same set; both run the shared `tools_cases` vectors.
+    #[must_use]
+    pub fn from_callee(tools: &[Value], callee_data_classes: &BTreeSet<String>) -> Self {
+        let mut set = Self::from_tools(tools).with_data_classes(callee_data_classes);
+        set.egress_hosts = declared_hosts(tools)
+            .into_iter()
+            .map(|(host, _)| host)
+            .collect();
+        set
+    }
+
     /// The grants of an admitted snapshot (the root's own).
     #[must_use]
     pub fn from_snapshot(snapshot: &AdmittedToolSnapshot<'_>) -> Self {
@@ -492,10 +707,94 @@ impl GrantSet {
         }
     }
 
+    /// The grants of a stored delegation grant: the canonical form
+    /// [`Self::canonical`] writes (the `grant_set` Main stores and sends).
+    /// `from_canonical(&set.canonical())` is `set`, and the digest of the
+    /// result is the digest Main pinned.
+    ///
+    /// # Errors
+    ///
+    /// [`GrantSetError`] for a document that is not the canonical form, or
+    /// that is past the bounds a set is built within.
+    pub fn from_canonical(value: &Value) -> Result<Self, GrantSetError> {
+        let object = value.as_object().ok_or(GrantSetError)?;
+        if object.get("schema").and_then(Value::as_str) != Some(GRANT_SET_SCHEMA) {
+            return Err(GrantSetError);
+        }
+        let entries = object
+            .get("toolkits")
+            .and_then(Value::as_array)
+            .ok_or(GrantSetError)?;
+        if entries.len() > MAX_TOOLKITS {
+            return Err(GrantSetError);
+        }
+        let mut toolkits = BTreeMap::new();
+        for entry in entries {
+            let (key, grant) = canonical_toolkit(entry)?;
+            toolkits.insert(key, grant);
+        }
+        let classes = match object.get("data_classes") {
+            Some(Value::Null) | None => None,
+            Some(Value::Array(listed)) => {
+                let listed = string_list(listed, MAX_DATA_CLASSES)?;
+                let set = data_classes(listed).map_err(|_| GrantSetError)?;
+                (!set.is_empty()).then_some(set)
+            }
+            Some(_) => return Err(GrantSetError),
+        };
+        let hosts = object
+            .get("egress_hosts")
+            .and_then(Value::as_array)
+            .ok_or(GrantSetError)?;
+        Ok(Self {
+            toolkits: Some(toolkits),
+            data_classes: classes,
+            egress_hosts: string_list(hosts, MAX_DECLARED_HOSTS)?
+                .into_iter()
+                .collect(),
+        })
+    }
+
     /// These grants limited to `classes`; an empty set imposes nothing.
     #[must_use]
     pub fn with_data_classes(mut self, classes: &BTreeSet<String>) -> Self {
         self.data_classes = (!classes.is_empty()).then(|| classes.clone());
+        self
+    }
+
+    /// These grants limited to what the run principal may use: a toolkit the
+    /// principal may not use, or whose credential reference it may not use,
+    /// is removed; a tool selection is cut to the principal's; the data
+    /// classes are cut to the project's (own `∩ P`).
+    #[must_use]
+    pub fn bounded_by(mut self, principal: &PrincipalBound) -> Self {
+        if let Some(toolkits) = self.toolkits.as_mut() {
+            toolkits.retain(|key, grant| {
+                if !principal.admits_toolkit(toolkit_id(key)) {
+                    return false;
+                }
+                if let Some(credential) = &grant.credential
+                    && !principal.admits_credential(credential)
+                {
+                    return false;
+                }
+                if let Some(id) = toolkit_id(key)
+                    && let Some(allowed) = principal.toolkits.get(&id)
+                {
+                    grant.selection = allowed.intersect(&grant.selection);
+                }
+                !matches!(&grant.selection, ToolSelection::Only(tools) if tools.is_empty())
+            });
+        }
+        if !principal.data_classes.is_empty() {
+            self.data_classes = Some(match self.data_classes.take() {
+                Some(held) => held
+                    .intersection(&principal.data_classes)
+                    .cloned()
+                    .collect(),
+                None => principal.data_classes.clone(),
+            });
+        }
         self
     }
 
@@ -521,7 +820,7 @@ impl GrantSet {
                 .collect::<Vec<_>>()
         });
         json!({
-            "schema": "elitea.delegation.grants.v1",
+            "schema": GRANT_SET_SCHEMA,
             "toolkits": toolkits,
             "data_classes": self.data_classes,
             "egress_hosts": self.egress_hosts,
@@ -542,6 +841,236 @@ impl GrantSet {
                 .collect()
         })
     }
+}
+
+/// The id of a keyed toolkit (`toolkit:<id>`); a built-in (`builtin:<type>`)
+/// has none.
+fn toolkit_id(key: &str) -> Option<u64> {
+    key.strip_prefix("toolkit:")?.parse().ok()
+}
+
+/// One toolkit the run principal may use.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PrincipalToolkit {
+    pub id: u64,
+    /// `None`: every tool. `Some`: only these.
+    pub tools: Option<BTreeSet<String>>,
+}
+
+/// What the run principal may use (ADR-0044 Amendment 1, rule 1): the acting
+/// user, or the mandate and project of an unattended run. Main computes it
+/// for the reachable closure of the root. Whatever it does not list is out of
+/// bounds, so an empty list means nothing; "no bound" is the absence of the
+/// whole value (see [`DelegationPolicy::principal`]).
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct PrincipalBound {
+    toolkits: BTreeMap<u64, ToolSelection>,
+    /// `None`: no credential bound (an ungoverned run).
+    credentials: Option<BTreeSet<String>>,
+    /// Empty: the project declares no data class bound.
+    data_classes: BTreeSet<String>,
+}
+
+impl PrincipalBound {
+    /// A validated bound.
+    ///
+    /// # Errors
+    ///
+    /// [`DelegationPolicyError::PrincipalBoundTooLarge`] for more toolkits,
+    /// tools or credential references than the limits (or a name past its
+    /// length), and the data class errors of [`data_classes`].
+    pub fn new(
+        toolkits: impl IntoIterator<Item = PrincipalToolkit>,
+        credentials: Option<Vec<String>>,
+        classes: impl IntoIterator<Item = String>,
+    ) -> Result<Self, DelegationPolicyError> {
+        let mut bound_toolkits = BTreeMap::new();
+        for toolkit in toolkits {
+            let selection = match toolkit.tools {
+                None => ToolSelection::All {
+                    excluded: BTreeSet::new(),
+                },
+                Some(tools) => {
+                    if tools.len() > MAX_TOOL_NAMES
+                        || tools
+                            .iter()
+                            .any(|tool| tool.len() > MAX_PRINCIPAL_TOOL_BYTES)
+                    {
+                        return Err(DelegationPolicyError::PrincipalBoundTooLarge);
+                    }
+                    ToolSelection::Only(tools)
+                }
+            };
+            bound_toolkits.insert(toolkit.id, selection);
+            // The limit is on distinct toolkits: a repeated id is not one more.
+            if bound_toolkits.len() > MAX_PRINCIPAL_TOOLKITS {
+                return Err(DelegationPolicyError::PrincipalBoundTooLarge);
+            }
+        }
+        let credentials = match credentials {
+            None => None,
+            Some(references) => {
+                let mut set = BTreeSet::new();
+                for reference in references {
+                    if reference.len() > MAX_PRINCIPAL_REFERENCE_BYTES {
+                        return Err(DelegationPolicyError::PrincipalBoundTooLarge);
+                    }
+                    // Reference ids are UUIDs: compared without case, as the
+                    // database spells them lower-case and a toolkit's
+                    // settings may not.
+                    set.insert(reference.to_ascii_lowercase());
+                    if set.len() > MAX_PRINCIPAL_CREDENTIALS {
+                        return Err(DelegationPolicyError::PrincipalBoundTooLarge);
+                    }
+                }
+                Some(set)
+            }
+        };
+        Ok(Self {
+            toolkits: bound_toolkits,
+            credentials,
+            data_classes: data_classes(classes)?,
+        })
+    }
+
+    /// Whether the principal may use the toolkit. A toolkit with no row (a
+    /// built-in named by its type) is not bounded here.
+    #[must_use]
+    pub fn admits_toolkit(&self, id: Option<u64>) -> bool {
+        id.is_none_or(|id| self.toolkits.contains_key(&id))
+    }
+
+    /// Whether a callee toolkit may name the credential reference.
+    #[must_use]
+    pub fn admits_credential(&self, reference: &str) -> bool {
+        self.credentials
+            .as_ref()
+            .is_none_or(|references| references.contains(&reference.to_ascii_lowercase()))
+    }
+
+    /// Whether the principal may use a toolkit row as frozen: the toolkit
+    /// itself and the credential reference its settings name.
+    pub(crate) fn admits_reference(
+        &self,
+        tool_id: Option<u64>,
+        settings: Option<&Map<String, Value>>,
+    ) -> bool {
+        if !self.admits_toolkit(tool_id) {
+            return false;
+        }
+        let reference = settings.map(credential_reference_id).unwrap_or_default();
+        reference.is_empty() || self.admits_credential(&reference)
+    }
+
+    /// The first thing `requested` (a callee's own grants) needs that the
+    /// principal may not use, in the order of the caller check: toolkits,
+    /// credentials, tools, data classes.
+    fn refusal(
+        &self,
+        requested: &GrantSet,
+        callee_classes: &BTreeSet<String>,
+    ) -> Option<DelegationRefusal> {
+        let refuse = |kind, name: &str, toolkit: Option<&str>| DelegationRefusal::PrincipalBound {
+            kind,
+            name: name.to_owned(),
+            toolkit: toolkit.map(str::to_owned),
+        };
+        if let Some(wanted) = &requested.toolkits {
+            for (key, grant) in wanted {
+                if !self.admits_toolkit(toolkit_id(key)) {
+                    return Some(refuse(GrantKind::Toolkit, &grant.label, None));
+                }
+            }
+            for grant in wanted.values() {
+                if let Some(credential) = &grant.credential
+                    && !self.admits_credential(credential)
+                {
+                    return Some(refuse(
+                        GrantKind::Credential,
+                        credential,
+                        Some(&grant.label),
+                    ));
+                }
+            }
+            for (key, grant) in wanted {
+                let Some(allowed) = toolkit_id(key).and_then(|id| self.toolkits.get(&id)) else {
+                    continue;
+                };
+                if let ToolSelection::Only(tools) = &grant.selection
+                    && let Some(tool) = tools.iter().find(|tool| !allowed.allows(tool))
+                {
+                    return Some(refuse(GrantKind::Tool, tool, Some(&grant.label)));
+                }
+            }
+        }
+        if !self.data_classes.is_empty()
+            && let Some(class) = callee_classes
+                .iter()
+                .find(|class| !self.data_classes.contains(*class))
+        {
+            return Some(refuse(GrantKind::DataClass, class, None));
+        }
+        None
+    }
+}
+
+/// A grant set document that is not the canonical form.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GrantSetError;
+
+impl fmt::Display for GrantSetError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("the delegation grant set is not in its canonical form")
+    }
+}
+
+impl std::error::Error for GrantSetError {}
+
+fn string_list(values: &[Value], limit: usize) -> Result<Vec<String>, GrantSetError> {
+    if values.len() > limit {
+        return Err(GrantSetError);
+    }
+    values
+        .iter()
+        .map(|value| value.as_str().map(str::to_owned).ok_or(GrantSetError))
+        .collect()
+}
+
+fn canonical_toolkit(entry: &Value) -> Result<(String, ToolkitGrant), GrantSetError> {
+    let object = entry.as_object().ok_or(GrantSetError)?;
+    let key = object
+        .get("key")
+        .and_then(Value::as_str)
+        .filter(|key| key.starts_with("toolkit:") || key.starts_with("builtin:"))
+        .ok_or(GrantSetError)?;
+    let tools = object
+        .get("tools")
+        .and_then(Value::as_object)
+        .filter(|tools| tools.len() == 1)
+        .ok_or(GrantSetError)?;
+    let (mode, names) = tools.iter().next().ok_or(GrantSetError)?;
+    let names = names.as_array().ok_or(GrantSetError)?;
+    let names: BTreeSet<String> = string_list(names, MAX_TOOL_NAMES)?.into_iter().collect();
+    let selection = match mode.as_str() {
+        "only" => ToolSelection::Only(names),
+        "all_except" => ToolSelection::All { excluded: names },
+        _ => return Err(GrantSetError),
+    };
+    let credential = match object.get("credential") {
+        Some(Value::Null) | None => None,
+        // No credential is null, never "": Main refuses the empty form too,
+        // so both sides digest the same document.
+        Some(Value::String(reference)) if !reference.is_empty() => Some(reference.clone()),
+        Some(_) => return Err(GrantSetError),
+    };
+    Ok((
+        key.to_owned(),
+        ToolkitGrant {
+            label: key.to_owned(),
+            selection,
+            credential,
+        },
+    ))
 }
 
 fn toolkit_grant(
@@ -609,6 +1138,19 @@ pub struct DelegationEvidence {
     pub refusal: Option<DelegationRefusal>,
     /// Whether the refusal (if any) was enforced.
     pub enforced: bool,
+    /// The grant that bounded the delegation, and what it narrowed out.
+    pub grant: Option<GrantEvidence>,
+    /// The composition edge the delegation crossed, when the callee is a
+    /// saved agent or pipeline (a notice names it).
+    pub edge: Option<DelegationEdge>,
+}
+
+/// The saved agents or pipelines an edge joins. `caller` is 0 when the
+/// caller has no saved identity (an ad hoc root).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DelegationEdge {
+    pub caller: u64,
+    pub callee: u64,
 }
 
 impl DelegationEvidence {
@@ -622,6 +1164,16 @@ impl DelegationEvidence {
         if let Some(refusal) = &self.refusal {
             fields.push(("delegation_refusal", refusal.to_value()));
             fields.push(("delegation_enforced", json!(self.enforced)));
+        }
+        if let Some(grant) = &self.grant {
+            fields.push(("delegation_grant_id", json!(grant.grant_id)));
+            fields.push(("delegation_grant_digest", json!(grant.grant_digest)));
+            if !grant.narrowed.is_empty() {
+                fields.push((
+                    "delegation_narrowed",
+                    Value::Array(grant.narrowed.iter().map(Narrowed::to_value).collect()),
+                ));
+            }
         }
         fields
     }
@@ -649,6 +1201,10 @@ pub struct DelegationScope {
     policy: Arc<DelegationPolicy>,
     grants: Arc<GrantSet>,
     depth: u32,
+    /// The saved agent or pipeline this scope belongs to: the caller of its
+    /// delegations, the `Y` of an edge. 0 when it has none (an ad hoc root, or
+    /// a callee reached without an edge).
+    application_id: u64,
 }
 
 impl Default for DelegationScope {
@@ -664,10 +1220,17 @@ impl DelegationScope {
     #[must_use]
     pub fn root(policy: Arc<DelegationPolicy>, grants: GrantSet) -> Self {
         let grants = grants.with_data_classes(policy.root_data_classes());
+        // The root is own ∩ P (ADR-0044 Amendment 1).
+        let grants = match policy.principal() {
+            Some(principal) => grants.bounded_by(principal),
+            None => grants,
+        };
+        let application_id = policy.root_application_id;
         Self {
             policy,
             grants: Arc::new(grants),
             depth: 0,
+            application_id,
         }
     }
 
@@ -686,11 +1249,24 @@ impl DelegationScope {
         &self.grants
     }
 
-    /// A key that tells two scopes apart for caching: the depth and the
-    /// grant digest.
+    /// A key that tells two scopes apart for caching: the depth, the agent the
+    /// scope belongs to (its edges' grants depend on it) and the grant digest.
     #[must_use]
     pub fn cache_key(&self) -> String {
-        format!("{}:{}", self.depth, self.grants.digest())
+        format!(
+            "{}:{}:{}",
+            self.depth,
+            self.application_id,
+            self.grants.digest()
+        )
+    }
+
+    /// The edge from this scope's saved agent to `callee`, when it is known.
+    fn edge_to(&self, callee: Option<u64>) -> Option<DelegationEdge> {
+        callee.map(|callee| DelegationEdge {
+            caller: self.application_id,
+            callee,
+        })
     }
 
     fn next_depth(&self) -> Result<u32, DelegationRefusal> {
@@ -722,6 +1298,31 @@ impl DelegationScope {
         callee_data_classes: &BTreeSet<String>,
         egress: &PublicPolicy,
     ) -> Result<Delegation, Box<RefusedDelegation>> {
+        self.delegate_edge(None, callee_tools, callee_data_classes, egress)
+    }
+
+    /// [`Self::delegate`] across a known composition edge: `callee` is the id of
+    /// the saved agent or pipeline the caller calls (ADR-0044 Amendment 1). When
+    /// the run carries an approved grant for the edge, the callee is bounded by
+    /// `own(X) ∩ (E(Y) ∪ G(Y→X)) ∩ P`: what it holds beyond that is **narrowed
+    /// out** and recorded, and it still runs. An edge with no grant is
+    /// delegated exactly as [`Self::delegate`] does, so no composition is
+    /// refused by grants alone. The run principal's bound refuses first, in
+    /// both modes, with or without a grant.
+    ///
+    /// # Errors
+    ///
+    /// [`RefusedDelegation`] for a delegation past the maximum depth, for a
+    /// callee outside the run principal's bound, for a host off the run's
+    /// egress allowlist when enforcing, and, when the edge has no grant and the
+    /// run enforces, for a missing grant.
+    pub fn delegate_edge(
+        &self,
+        callee: Option<u64>,
+        callee_tools: &mut Vec<Value>,
+        callee_data_classes: &BTreeSet<String>,
+        egress: &PublicPolicy,
+    ) -> Result<Delegation, Box<RefusedDelegation>> {
         let depth = match self.next_depth() {
             Ok(depth) => depth,
             Err(refusal) => {
@@ -731,13 +1332,46 @@ impl DelegationScope {
                         effective_grant_digest: self.grants.digest(),
                         refusal: Some(refusal.clone()),
                         enforced: true,
+                        grant: None,
+                        edge: self.edge_to(callee),
                     },
                     refusal,
                 }));
             }
         };
         let requested = GrantSet::from_tools(callee_tools);
+        // `∩ P`: the run principal's bound applies in both modes. `report`
+        // never relaxes it.
+        if let Some(refusal) = self
+            .policy
+            .principal()
+            .and_then(|principal| principal.refusal(&requested, callee_data_classes))
+        {
+            return Err(Box::new(RefusedDelegation {
+                evidence: DelegationEvidence {
+                    depth,
+                    effective_grant_digest: self.grants.digest(),
+                    refusal: Some(refusal.clone()),
+                    enforced: true,
+                    grant: None,
+                    edge: self.edge_to(callee),
+                },
+                refusal,
+            }));
+        }
         let hosts = declared_hosts(callee_tools);
+        if let Some(callee_id) = callee
+            && self.application_id != 0
+            && let Some(grant) = self.policy.grant_between(self.application_id, callee_id)
+        {
+            return self.delegate_with_grant(
+                (callee_id, grant),
+                callee_tools,
+                (&requested, callee_data_classes),
+                (&hosts, egress),
+                depth,
+            );
+        }
         let missing = self.missing(&requested, callee_data_classes, &hosts, egress);
         let enforce = self.policy.mode == NarrowingMode::Enforce;
         let effective = self.narrow(&requested, callee_data_classes, &hosts, egress);
@@ -746,6 +1380,8 @@ impl DelegationScope {
             effective_grant_digest: effective.digest(),
             refusal: missing.clone(),
             enforced: enforce && missing.is_some(),
+            grant: None,
+            edge: self.edge_to(callee),
         };
         if let (Some(refusal), true) = (missing, enforce) {
             return Err(Box::new(RefusedDelegation { refusal, evidence }));
@@ -756,6 +1392,69 @@ impl DelegationScope {
                 policy: Arc::clone(&self.policy),
                 grants: Arc::new(effective),
                 depth,
+                application_id: callee.unwrap_or(0),
+            },
+            evidence,
+        })
+    }
+
+    /// The delegation of an edge that has an approved grant: the callee's
+    /// effective set is `own(X) ∩ (E(Y) ∪ G) ∩ P`, narrowed in place, and what
+    /// was narrowed out is recorded on the step with the grant's id and digest.
+    /// The grant covers this edge only: the scope returned belongs to the
+    /// callee, so its own edges need grants of their own.
+    fn delegate_with_grant(
+        &self,
+        (callee_id, grant): (u64, &DelegationGrant),
+        callee_tools: &mut Vec<Value>,
+        (requested, callee_data_classes): (&GrantSet, &BTreeSet<String>),
+        (hosts, egress): (&[(String, u16)], &PublicPolicy),
+        depth: u32,
+    ) -> Result<Delegation, Box<RefusedDelegation>> {
+        let (mut effective, narrowed) =
+            narrow_with_grant(&self.grants, grant.set(), requested, callee_data_classes);
+        // `∩ P`, after the caller's set and the grant.
+        if let Some(principal) = self.policy.principal() {
+            effective = effective.bounded_by(principal);
+        }
+        // The run's egress allowlist bounds every callee, with or without a
+        // grant (it is part of the principal's bound).
+        let refusal = hosts
+            .iter()
+            .find(|(host, port)| !egress.admits(host, *port))
+            .map(|(host, _)| DelegationRefusal::GrantMissing {
+                kind: GrantKind::EgressHost,
+                name: host.clone(),
+                toolkit: None,
+            });
+        effective.egress_hosts = hosts
+            .iter()
+            .filter(|(host, port)| egress.admits(host, *port))
+            .map(|(host, _)| host.clone())
+            .collect();
+        let enforce = self.policy.mode == NarrowingMode::Enforce;
+        let evidence = DelegationEvidence {
+            depth,
+            effective_grant_digest: effective.digest(),
+            refusal: refusal.clone(),
+            enforced: enforce && refusal.is_some(),
+            grant: Some(GrantEvidence {
+                grant_id: grant.id(),
+                grant_digest: grant.digest().to_owned(),
+                narrowed,
+            }),
+            edge: self.edge_to(Some(callee_id)),
+        };
+        if let (Some(refusal), true) = (refusal, enforce) {
+            return Err(Box::new(RefusedDelegation { refusal, evidence }));
+        }
+        apply_selection(callee_tools, &effective);
+        Ok(Delegation {
+            scope: Self {
+                policy: Arc::clone(&self.policy),
+                grants: Arc::new(effective),
+                depth,
+                application_id: callee_id,
             },
             evidence,
         })
@@ -803,12 +1502,15 @@ impl DelegationScope {
                 policy: Arc::clone(&self.policy),
                 grants: Arc::clone(&self.grants),
                 depth,
+                application_id: self.application_id,
             },
             evidence: DelegationEvidence {
                 depth,
                 effective_grant_digest: digest,
                 refusal: None,
                 enforced: false,
+                grant: None,
+                edge: None,
             },
         })
     }
@@ -822,7 +1524,8 @@ impl DelegationScope {
         hosts: &[(String, u16)],
         egress: &PublicPolicy,
     ) -> Option<DelegationRefusal> {
-        if let (Some(held), Some(wanted)) = (&self.grants.toolkits, &requested.toolkits) {
+        let ceiling = self.caller_ceiling();
+        if let (Some(held), Some(wanted)) = (&ceiling.toolkits, &requested.toolkits) {
             for (key, grant) in wanted {
                 if !held.contains_key(key) {
                     return Some(DelegationRefusal::GrantMissing {
@@ -832,7 +1535,7 @@ impl DelegationScope {
                     });
                 }
             }
-            let credentials = self.grants.credentials().unwrap_or_default();
+            let credentials = ceiling.credentials().unwrap_or_default();
             for grant in wanted.values() {
                 if let Some(credential) = &grant.credential
                     && !credentials.contains(credential.as_str())
@@ -861,7 +1564,7 @@ impl DelegationScope {
                 }
             }
         }
-        if let Some(held) = &self.grants.data_classes
+        if let Some(held) = &ceiling.data_classes
             && let Some(class) = callee_classes.iter().find(|class| !held.contains(*class))
         {
             return Some(DelegationRefusal::GrantMissing {
@@ -891,7 +1594,8 @@ impl DelegationScope {
         hosts: &[(String, u16)],
         egress: &PublicPolicy,
     ) -> GrantSet {
-        let toolkits = match (&self.grants.toolkits, &requested.toolkits) {
+        let ceiling = self.caller_ceiling();
+        let toolkits = match (&ceiling.toolkits, &requested.toolkits) {
             (Some(held), Some(wanted)) => Some(
                 wanted
                     .iter()
@@ -919,9 +1623,9 @@ impl DelegationScope {
             (Some(held), None) => Some(held.clone()),
         };
         let data_classes = if callee_classes.is_empty() {
-            self.grants.data_classes.clone()
+            ceiling.data_classes.clone()
         } else {
-            Some(match &self.grants.data_classes {
+            Some(match &ceiling.data_classes {
                 Some(held) => callee_classes.intersection(held).cloned().collect(),
                 None => callee_classes.clone(),
             })
@@ -931,11 +1635,26 @@ impl DelegationScope {
             .filter(|(host, port)| egress.admits(host, *port))
             .map(|(host, _)| host.clone())
             .collect();
-        GrantSet {
+        let effective = GrantSet {
             toolkits,
             data_classes,
             egress_hosts,
+        };
+        // `∩ P`, after the caller's set (and, once it lands, the edge grant).
+        match self.policy.principal() {
+            Some(principal) => effective.bounded_by(principal),
+            None => effective,
         }
+    }
+
+    /// What this caller lets its callee hold: `E(Y)`, the caller's effective
+    /// set. ADR-0044 Amendment 1 widens it to `E(Y) ∪ G(Y→X)`, where `G` is
+    /// the approved, current delegation grant of the edge (story #2158); that
+    /// union goes here, before [`Self::missing`] and [`Self::narrow`] read it
+    /// and before `P` is applied. Until then `G` is empty and this is the
+    /// caller's set.
+    fn caller_ceiling(&self) -> &GrantSet {
+        &self.grants
     }
 }
 

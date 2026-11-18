@@ -12,6 +12,7 @@ pub mod preamble;
 pub mod run_caps;
 pub(crate) mod run_steps;
 pub mod security_context;
+pub mod terminal_detail;
 pub mod toolkit_execution;
 pub(crate) mod vector_token;
 pub(crate) mod wire;

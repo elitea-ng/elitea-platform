@@ -316,7 +316,7 @@ pub(crate) fn valid_code(code: &str) -> bool {
 }
 
 /// Printable ASCII without `"` or `\`, at most [`MAX_MESSAGE_SAFE`] bytes.
-fn safe_message(message: &str) -> String {
+pub(crate) fn safe_message(message: &str) -> String {
     let kept = message
         .chars()
         .filter(|ch| matches!(*ch, ' '..='~') && *ch != '"' && *ch != '\\')

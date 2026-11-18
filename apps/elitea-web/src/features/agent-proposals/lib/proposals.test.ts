@@ -49,6 +49,23 @@ describe('the review draft', () => {
     expect(JSON.stringify(request)).not.toContain('github/read_file');
   });
 
+  it('carries a default avatar key as the version avatar pack (#1949)', () => {
+    const proposal = proposalFixture({ draft: { ...proposalFixture().draft, avatar: ' default:fox ' } });
+    const review = reviewDraftOf(proposal);
+    expect(review.avatarKey).toBe('default:fox');
+    expect(createRequestOf(review).versions?.[0]).toMatchObject({
+      avatar_pack: { schema: 'elitea.avatar_pack/v1', slots: { still: { url: 'default:fox' } } },
+    });
+  });
+
+  it('keeps the default look for an unknown, foreign or absent avatar key', () => {
+    for (const avatar of ['default:dragon', 'default:', 'fox', 'https://x.test/a.png', 7, undefined]) {
+      const review = reviewDraftOf(proposalFixture({ draft: { ...proposalFixture().draft, avatar } }));
+      expect(review.avatarKey).toBe('');
+      expect(createRequestOf(review).versions?.[0]).not.toHaveProperty('avatar_pack');
+    }
+  });
+
   it('sends no soul when the sub-agent had none', () => {
     const review = { ...reviewDraftOf(proposalFixture()), soul: ' ', displayName: '' };
     expect(createRequestOf(review).versions?.[0]).not.toHaveProperty('soul');

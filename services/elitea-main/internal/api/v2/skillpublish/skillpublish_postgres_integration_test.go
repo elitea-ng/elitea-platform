@@ -31,6 +31,8 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skillpublish"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrate"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 const (
@@ -403,6 +405,38 @@ func TestValidateTokenSkipsRevalidationAndDiesOnEdit(t *testing.T) {
 	}
 }
 
+// TestPublishAcceptsATokenIssuedByAnotherReplica is #2100: replicas derive the
+// signing key from the shared APPLICATION_SECRET_KEY, so a token minted by
+// replica A verifies on replica B. A token from a replica with a different key
+// is a forgery and is refused.
+func TestPublishAcceptsATokenIssuedByAnotherReplica(t *testing.T) {
+	pool := newSkillPublishPool(t)
+	const sharedKey = "shared-application-secret-key-0123456789"
+	replicaA := newRouter(skillpublish.NewHandlerWithSecret(pool, sharedKey))
+	replicaB := newRouter(skillpublish.NewHandlerWithSecret(pool, sharedKey))
+	stranger := newRouter(skillpublish.NewHandlerWithSecret(pool, "some-other-application-secret-key-9876"))
+	skillID, versionID := seedSkill(t, pool, userSchema, "pr-reviewer", goodDescription, goodInstructions, []string{"review"})
+
+	validated := do(t, replicaA, http.MethodPost,
+		fmt.Sprintf("/elitea_core/publish_skill_validate/prompt_lib/%s/%d/%d", userProject, skillID, versionID),
+		map[string]any{"version_name": "v1.0-initial", "category": "Development"})
+	token, _ := decode(t, validated)["validation_token"].(string)
+	if token == "" {
+		t.Fatalf("validate issued no token (body %s)", validated.Body.String())
+	}
+	publishURL := fmt.Sprintf("/elitea_core/publish_skill/prompt_lib/%s/%d/%d", userProject, skillID, versionID)
+	payload := map[string]any{"version_name": "v1.0-initial", "category": "Development", "validation_token": token}
+
+	forged := do(t, stranger, http.MethodPost, publishURL, payload)
+	if forged.Code != http.StatusBadRequest || decode(t, forged)["error"] != "validation_token_invalid" {
+		t.Fatalf("a token signed with another key: status %d body %s, want 400 validation_token_invalid", forged.Code, forged.Body.String())
+	}
+	published := do(t, replicaB, http.MethodPost, publishURL, payload)
+	if published.Code != http.StatusOK {
+		t.Fatalf("publish with another replica's token status = %d, want 200 (body %s)", published.Code, published.Body.String())
+	}
+}
+
 // TestPublishRefusesWhenTheGuardrailBlocksTheProject.
 func TestPublishRefusesWhenTheGuardrailBlocksTheProject(t *testing.T) {
 	pool := newSkillPublishPool(t)
@@ -693,6 +727,94 @@ func TestAttachForksTheSkillAndWritesTheMapping(t *testing.T) {
 // attach may copy from. A draft in the public project is an admin's work in
 // progress, and forking it would hand its instructions to any caller who can
 // guess the ids.
+// TestSkillPublishRecordsAListingAndAddRefusesAYankedVersion is the Marketplace
+// half of skill publishing (ADR-0051 decision 2): the publish writes a listing
+// version with the release notes, an add records the hire, a yanked version is
+// refused, and unpublish withdraws the version without deleting the snapshot a
+// project holds.
+func TestSkillPublishRecordsAListingAndAddRefusesAYankedVersion(t *testing.T) {
+	pool := newSkillPublishPool(t)
+	router := newRouter(skillpublish.NewHandler(pool))
+	ctx := context.Background()
+
+	skillID, versionID := seedSkill(t, pool, userSchema, "pr-reviewer", goodDescription, goodInstructions, []string{"review"})
+	published := decode(t, do(t, router, http.MethodPost,
+		fmt.Sprintf("/elitea_core/publish_skill/prompt_lib/%s/%d/%d", userProject, skillID, versionID),
+		map[string]any{"version_name": "v1", "category": "Development", "release_notes": "First skill release."}))
+	publicSkillID := intField(t, published, "public_skill_id")
+	publicVersionID := intField(t, published, "public_version_id")
+	sourceVersionID := intField(t, published, "source_version_id")
+
+	var listingID int
+	var kind, category, notes string
+	if err := pool.QueryRow(ctx, `
+SELECT l.id, l.kind, l.category, v.release_notes FROM elitea_marketplace.listings l
+JOIN elitea_marketplace.listing_versions v ON v.listing_id = l.id WHERE v.version_id = $1`, publicVersionID).
+		Scan(&listingID, &kind, &category, &notes); err != nil {
+		t.Fatalf("a skill publish left no listing version: %v", err)
+	}
+	if kind != "skill" || category != "Development" || notes != "First skill release." {
+		t.Errorf("listing = %q %q %q, want a Development skill with the release notes", kind, category, notes)
+	}
+
+	// Adding the skill records the hire in the consumer project.
+	if _, err := pool.Exec(ctx, `SELECT create_tenant_schema('p_3')`); err != nil {
+		t.Fatalf("create consumer schema: %v", err)
+	}
+	agent := seedAgent(t, pool, "p_3", "alpha")
+	attach := func() *httptest.ResponseRecorder {
+		return do(t, router, http.MethodPost, "/elitea_core/attach_public_skill/prompt_lib/3", map[string]any{
+			"public_skill_id": publicSkillID, "public_version_id": publicVersionID, "agent_version_ids": []int{agent},
+		})
+	}
+	if recorder := attach(); recorder.Code != http.StatusOK {
+		t.Fatalf("attach = %d %s", recorder.Code, recorder.Body.String())
+	}
+	if count := countRows(t, pool, `SELECT COUNT(*) FROM elitea_marketplace.installs WHERE project_id = 3 AND entity_kind = 'skill' AND listing_id = $1`, listingID); count != 1 {
+		t.Errorf("installs = %d, want 1", count)
+	}
+
+	// An installed agent keeps its skills: the attach answers a refusal per agent.
+	if _, err := pool.Exec(ctx, `UPDATE p_3.application_versions SET meta = COALESCE(meta, '{}'::jsonb) || '{"origin_kind":"installed"}'::jsonb WHERE id = $1`, agent); err != nil {
+		t.Fatal(err)
+	}
+	refused := decode(t, attach())
+	results, _ := refused["results"].([]any)
+	if first, _ := results[0].(map[string]any); first["ok"] != false || int(first["http_status"].(float64)) != http.StatusConflict {
+		t.Errorf("attach to an installed agent = %v, want a 409 result", results)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE p_3.application_versions SET meta = meta - 'origin_kind' WHERE id = $1`, agent); err != nil {
+		t.Fatal(err)
+	}
+
+	// A yanked version is not added again.
+	if _, err := pool.Exec(ctx, `UPDATE elitea_marketplace.listing_versions SET state = 'yanked' WHERE listing_id = $1`, listingID); err != nil {
+		t.Fatal(err)
+	}
+	if recorder := attach(); recorder.Code != http.StatusConflict {
+		t.Errorf("attach of a yanked version = %d, want 409 (%s)", recorder.Code, recorder.Body.String())
+	}
+	if _, err := pool.Exec(ctx, `UPDATE elitea_marketplace.listing_versions SET state = 'available' WHERE listing_id = $1`, listingID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Unpublish withdraws the version; the snapshot stays because a project holds it.
+	if recorder := do(t, router, http.MethodPost,
+		fmt.Sprintf("/elitea_core/unpublish_skill/prompt_lib/%s/%d/%d", userProject, skillID, sourceVersionID), map[string]any{}); recorder.Code != http.StatusOK {
+		t.Fatalf("unpublish = %d %s", recorder.Code, recorder.Body.String())
+	}
+	var state string
+	var withdrawn bool
+	if err := pool.QueryRow(ctx, `
+SELECT l.state, v.withdrawn_at IS NOT NULL FROM elitea_marketplace.listings l
+JOIN elitea_marketplace.listing_versions v ON v.listing_id = l.id WHERE l.id = $1`, listingID).Scan(&state, &withdrawn); err != nil {
+		t.Fatalf("the snapshot was deleted by the unpublish: %v", err)
+	}
+	if state != "delisted" || !withdrawn {
+		t.Errorf("listing = %q withdrawn %v, want delisted with the version withdrawn", state, withdrawn)
+	}
+}
+
 func TestAttachRefusesAnUnpublishedPublicVersion(t *testing.T) {
 	pool := newSkillPublishPool(t)
 	router := newRouter(skillpublish.NewHandler(pool))
@@ -952,6 +1074,11 @@ func newSkillPublishPool(t *testing.T) *pgxpool.Pool {
 	}
 	if _, err := pool.Exec(ctx, string(initial)); err != nil {
 		t.Fatalf("apply 001_initial.sql: %v", err)
+	}
+	// The shared history: a skill publish writes its Marketplace listing
+	// (elitea_marketplace, shared 0250) in the publish transaction.
+	if err := migrate.New(pool, platformmigrations.Files).ApplyShared(ctx); err != nil {
+		t.Fatalf("apply the shared migrations: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `SELECT create_tenant_schema($1)`, userSchema); err != nil {
 		t.Fatalf("create source project schema: %v", err)

@@ -122,6 +122,24 @@ describe('GuardrailCloudFields', () => {
     });
   });
 
+  it('offers the warn action and writes it to the detector', () => {
+    const onChange = vi.fn<(patch: Partial<GovernanceDraft>) => void>();
+    render(
+      <ThemeProvider theme={theme}>
+        <GuardrailCloudFields draft={{ ...EMPTY_DRAFT, type: 'guardrail' }} onChange={onChange} />
+      </ThemeProvider>,
+    );
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Action' }));
+    expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual(['Block', 'Mask', 'Flag', 'Warn']);
+    fireEvent.click(screen.getByRole('option', { name: 'Warn' }));
+    fireEvent.change(screen.getByTestId('governance-cloud-endpoint'), { target: { value: 'https://cs.example.com' } });
+    fireEvent.change(screen.getByTestId('governance-cloud-azure-key'), { target: { value: '{{secret.K}}' } });
+    fireEvent.click(screen.getByTestId('governance-cloud-add'));
+    const patch = onChange.mock.calls[0]?.[0] as { guardrailDetectors: string };
+    const list = JSON.parse(patch.guardrailDetectors) as Record<string, unknown>[];
+    expect(list[1]).toMatchObject({ type: 'azure_content_safety', action: 'warn' });
+  });
+
   it('does not change invalid detectors JSON', () => {
     const onChange = vi.fn<(patch: Partial<GovernanceDraft>) => void>();
     render(

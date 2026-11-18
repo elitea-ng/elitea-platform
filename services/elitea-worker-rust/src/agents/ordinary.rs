@@ -63,7 +63,9 @@ use crate::transport::platform_writer::ClaimPlatformWriter;
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
 use elitea_agent_runtime::host::PlatformWriter;
 use elitea_agent_runtime::toolkits::governed::GovernedOperationClient;
-use elitea_agent_runtime::toolkits::{DataAnalysisAuthority, ImageGenerationAuthority};
+use elitea_agent_runtime::toolkits::{
+    CodeSandboxAuthority, DataAnalysisAuthority, ImageGenerationAuthority,
+};
 use sqlx::PgPool;
 
 /// Shared ordinary application/ad-hoc assembler used after `AUTHORIZED_NOW`.
@@ -349,6 +351,10 @@ impl OrdinaryNativeAgentAssembler {
         };
         let context = Arc::new(claim_context);
         let runtime_context = Arc::new(runtime_context);
+        // ADR-0044 Amendment 1: the root's own toolkits are limited to what
+        // the run principal may use.
+        let tool_snapshot =
+            super::application_tools::principal_bounded_snapshot(&runtime_context, tool_snapshot);
         // ADR-0034: a cloud turn of a handed-off thread hydrates its workspace
         // before anything else is bound, and is refused where it cannot run.
         let workspace = match context.workspace() {
@@ -838,6 +844,16 @@ impl OrdinaryNativeAgentAssembler {
         if data_toolset.is_some() {
             internal_tools = internal_tools.serving_data_analysis();
         }
+        // The Code sandbox toggle (`pyodide`) needs only the platform's code
+        // sandbox, the one `run_analysis_code` and the Code node run on.
+        let code_authority = code.clone().map(|runtime| {
+            CodeSandboxAuthority::new(Arc::new(super::graph::SandboxAnalysisRunner::new(runtime)))
+        });
+        let code_toolset =
+            internal_tools.code_sandbox_toolset(code_authority.as_ref(), tool_policy);
+        if code_toolset.is_some() {
+            internal_tools = internal_tools.serving_code_sandbox();
+        }
         let image_toolset = internal_tools
             .image_generation_toolset(image_generation_authority.as_ref(), tool_policy);
         if image_toolset.is_some() {
@@ -860,6 +876,7 @@ impl OrdinaryNativeAgentAssembler {
             ));
         }
         toolsets.extend(data_toolset);
+        toolsets.extend(code_toolset);
         toolsets.extend(image_toolset);
         toolsets.extend(profile.instruction_plan().toolsets());
         // The attachment tools exist only when a document of this turn was
@@ -925,6 +942,7 @@ impl OrdinaryNativeAgentAssembler {
             super::hand_floor_tool::TOOLSET_NAME.to_owned(),
             super::propose_agent_tool::TOOLSET_NAME.to_owned(),
             super::propose_dismissal_tool::TOOLSET_NAME.to_owned(),
+            super::marketplace_workforce_tool::TOOLSET_NAME.to_owned(),
         ]);
         let mut frozen = freeze_toolsets(toolsets, "elitea_ordinary_tool_binding")
             .await
@@ -1000,7 +1018,7 @@ impl OrdinaryNativeAgentAssembler {
                     .map_err(tool_binding_error)?,
             );
         }
-        // propose_dismissal (ADR-0050 decision 5l, #1616): an HR agent's
+        // propose_dismissal (ADR-0050 decision 5l, #1616): a workforce manager's
         // one workforce tool, only when the version grants
         // can_review_agents. Bound after the filter: it writes nothing but a
         // proposal a person decides.
@@ -1011,6 +1029,21 @@ impl OrdinaryNativeAgentAssembler {
         ) {
             frozen.extend(
                 freeze_toolsets(vec![workforce], "elitea_ordinary_tool_binding")
+                    .await
+                    .map_err(tool_binding_error)?,
+            );
+        }
+        // The Marketplace tools of the same workforce manager (ADR-0051
+        // decision 6, #1632): search and read a listing, propose a hire,
+        // draft a workforce report. Bound the same way and on the same
+        // capability; they hire and publish nothing, a person decides.
+        if let Some(marketplace) = super::marketplace_workforce_tool::toolset(
+            profile.can_review_agents(),
+            &self.platform,
+            runtime_context,
+        ) {
+            frozen.extend(
+                freeze_toolsets(vec![marketplace], "elitea_ordinary_tool_binding")
                     .await
                     .map_err(tool_binding_error)?,
             );

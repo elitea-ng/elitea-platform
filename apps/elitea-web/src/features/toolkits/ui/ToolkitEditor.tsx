@@ -4,6 +4,8 @@ import { useCallback, useMemo } from 'react';
 import type { ToolkitWriteResult, UseToolkitCreateMutation, UseToolkitEditMutation } from '../api/toolkits';
 import { useToolkitSaveValidation } from '../model/useToolkitSaveValidation';
 
+import { useToolkitEditorNotice } from './ToolkitEditorNotice';
+
 import type { ToolkitFormValues } from './SaveToolkitButton';
 import type { ToolkitFormEditDetail } from './form/ToolkitForm/ToolkitForm';
 import {
@@ -114,6 +116,9 @@ export function ToolkitEditor({ toolkit, isVisible, onCloseToolkitEditor, onTool
    * already knows how to paint.
    */
   const { toolkitValidation, reportSaveError, clearSaveErrors } = useToolkitSaveValidation();
+  // #2016: a Save click is always answered in words (saved / blocked / refused).
+  const notice = useToolkitEditorNotice();
+  const { failed: noticeFailed, saved: noticeSaved } = notice;
 
   const { isDirty, setIsDirty, validationState, setValidationState, revertCredentialsRef, isCreating, isMCP, projectId, toolkitId, scopedProjectId, isPublic, isError, editToolDetail, formInitialValues, setFormInitialValues, handleChangeToolDetail, handleDiscard } = state;
 
@@ -133,7 +138,7 @@ export function ToolkitEditor({ toolkit, isVisible, onCloseToolkitEditor, onTool
         try {
           return await deps.createToolkit(args);
         } catch (error) {
-          reportSaveError(error);
+          noticeFailed(error, reportSaveError(error));
           throw error;
         }
       },
@@ -141,12 +146,12 @@ export function ToolkitEditor({ toolkit, isVisible, onCloseToolkitEditor, onTool
         try {
           return await deps.saveToolkit(args);
         } catch (error) {
-          reportSaveError(error);
+          noticeFailed(error, reportSaveError(error));
           throw error;
         }
       },
     }),
-    [deps, reportSaveError],
+    [deps, reportSaveError, noticeFailed],
   );
 
   /**
@@ -180,8 +185,9 @@ export function ToolkitEditor({ toolkit, isVisible, onCloseToolkitEditor, onTool
         onToolkitUpdated?.(updated, true);
       }
       setIsDirty(false);
+      if (!isCreating) noticeSaved();
     },
-    [isCreating, toolkit, onToolkitUpdated, setIsDirty],
+    [isCreating, toolkit, onToolkitUpdated, setIsDirty, noticeSaved],
   );
 
   if (!toolkit) return null;
@@ -205,23 +211,27 @@ export function ToolkitEditor({ toolkit, isVisible, onCloseToolkitEditor, onTool
         deps={depsWithSaveErrors}
         onToolkitCreated={handleToolkitCreated}
         onToolkitSaved={handleToolkitSaved}
+        onBlocked={notice.blocked}
       />
     ),
     ...(editToolDetail === null ? { contentSx: emptyContentSx } : {}),
     children: (
-      <ToolkitEditorBody
-        isCreating={isCreating}
-        isMCP={isMCP}
-        editToolDetail={editToolDetail}
-        onChangeToolDetail={handleEditAndClearErrors}
-        formInitialValues={formInitialValues}
-        setFormInitialValues={setFormInitialValues}
-        disabled={resolveToolkitFormDisabled(isPublic, deps.hasPublicProjectAccess)}
-        projectId={scopedProjectId}
-        revertCredentialsRef={revertCredentialsRef}
-        onValidationStateChange={setValidationState}
-        toolkitValidation={toolkitValidation}
-      />
+      <>
+        {notice.view}
+        <ToolkitEditorBody
+          isCreating={isCreating}
+          isMCP={isMCP}
+          editToolDetail={editToolDetail}
+          onChangeToolDetail={handleEditAndClearErrors}
+          formInitialValues={formInitialValues}
+          setFormInitialValues={setFormInitialValues}
+          disabled={resolveToolkitFormDisabled(isPublic, deps.hasPublicProjectAccess)}
+          projectId={scopedProjectId}
+          revertCredentialsRef={revertCredentialsRef}
+          onValidationStateChange={setValidationState}
+          toolkitValidation={toolkitValidation}
+        />
+      </>
     ),
   });
 }

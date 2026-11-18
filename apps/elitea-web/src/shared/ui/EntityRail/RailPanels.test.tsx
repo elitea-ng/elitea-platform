@@ -31,6 +31,22 @@ describe('RailTagsPanelView', () => {
     expect(screen.getByTestId('tags-panel-chip-alpha')).toHaveAttribute('aria-pressed', 'false');
   });
 
+  // Issue 2049: the unselected chip used the rail's own surface colour, so it looked like bare text.
+  it('paints an unselected chip with a tint, not the rail surface colour (issue 2049)', () => {
+    renderWithTheme(
+      <RailTagsPanelView
+        tags={tags}
+        selectedTags={[]}
+        onToggleTag={vi.fn()}
+        onClearTags={vi.fn()}
+        isLoading={false}
+        isError={false}
+      />,
+    );
+    const background = getComputedStyle(screen.getByTestId('tags-panel-chip-alpha')).backgroundColor;
+    expect(background).toContain('userInputBackground');
+  });
+
   it('shows the clear-all control only while something is selected', async () => {
     const onClearTags = vi.fn();
     const view = renderWithTheme(

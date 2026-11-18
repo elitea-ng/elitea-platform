@@ -2,6 +2,10 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
+import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
+import { server } from '@/test/setup';
+import { renderWithQueryAndTheme } from '@/test/renderWithQueryAndTheme';
+import { http, HttpResponse } from 'msw';
 
 import type { AgentToolAssociation } from '../lib/types';
 
@@ -36,10 +40,12 @@ describe('ToolCard', () => {
   beforeEach(() => {
     vi.stubGlobal('ResizeObserver', ResizeObserverStub);
     vi.stubGlobal('open', vi.fn());
+    configureGeneratedClient({ baseUrl: '/api/v2' });
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    resetGeneratedClient();
   });
 
   it('renders the resolved toolkit name and card container', () => {
@@ -167,7 +173,7 @@ describe('ToolCard', () => {
 
   it('shows a blocked-by-organization banner for a blocked toolkit type, hidden while actions are expanded', async () => {
     const user = userEvent.setup();
-    const { getByText, queryByText, getByTestId } = renderWithTheme(
+    const { getByText, queryByText, getByTestId } = renderWithQueryAndTheme(
       <ToolCard
         {...baseProps({
           tool: { id: 't', type: 'github', settings: { selected_tools: ['create_issue'] } },
@@ -179,6 +185,43 @@ describe('ToolCard', () => {
 
     await user.click(getByTestId('base-card-body-toggle'));
     expect(queryByText('Github toolkit is blocked by your organization.')).not.toBeInTheDocument();
+  });
+
+  it('offers the toolkit\'s tools as the per-agent choices when the card opens (#2146)', async () => {
+    const user = userEvent.setup();
+    const { getByText, getByTestId } = renderWithQueryAndTheme(
+      <ToolCard
+        {...baseProps({
+          tool: { id: 't', tool_id: 9, type: 'github', settings: { available_tools: ['create_issue', 'list_issues'], selected_tools: ['list_issues'] } },
+        })}
+      />,
+    );
+    await user.click(getByTestId('base-card-body-toggle'));
+    expect(getByText('Create issue')).toBeInTheDocument();
+    expect(getByText('List issues')).toBeInTheDocument();
+  });
+
+  it('reads the toolkit catalogue when the toolkit enables no tools explicitly, only once the card opens (#2146)', async () => {
+    const user = userEvent.setup();
+    let reads = 0;
+    server.use(
+      http.get('*/elitea_core/toolkit_available_tools/prompt_lib/:projectId/:toolkitId', () => {
+        reads += 1;
+        return HttpResponse.json({ tools: [{ id: 'a', name: 'get_repo', type: 'github' }], total: 1 });
+      }),
+    );
+    const { findByText, getByTestId } = renderWithQueryAndTheme(
+      <ToolCard
+        {...baseProps({
+          tool: { id: 't', tool_id: 9, type: 'github', settings: {} },
+          context: { viewMode: 'Owner', selectedProjectId: 'p1' },
+        })}
+      />,
+    );
+    expect(reads).toBe(0);
+    await user.click(getByTestId('base-card-body-toggle'));
+    expect(await findByText('Get repo')).toBeInTheDocument();
+    expect(reads).toBe(1);
   });
 
   it('shows a "some tools are not available" banner when a selected tool is missing from availableTools', () => {

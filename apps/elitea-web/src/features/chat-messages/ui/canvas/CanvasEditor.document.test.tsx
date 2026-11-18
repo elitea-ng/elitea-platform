@@ -11,7 +11,10 @@ import type { ReactNode } from 'react';
 
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { getContrastRatio } from '@mui/material/styles';
 import { describe, expect, it, vi } from 'vitest';
+
+import { DEFAULT_BRAND_PACK, buildEliteaTheme } from '@/shared/brand';
 
 import { SocketClientContext } from '@/shared/api/socket/client';
 import { createTestSocketClient } from '@/shared/api/socket/testing';
@@ -81,5 +84,17 @@ describe('CanvasEditor — document canvas (issue #879)', () => {
     for (const testId of ['canvas-document-bold', 'canvas-document-italic', 'canvas-document-insert-table']) {
       expect(screen.getByTestId(testId)).not.toBeDisabled();
     }
+  });
+
+  it('draws the document body from theme tokens, which read well on the pane in the dark scheme too (issue 2030)', async () => {
+    renderDocumentCanvas('Some prose.');
+    const body = (await screen.findByTestId('canvas-document-editor')).querySelector('.ProseMirror') as HTMLElement;
+    const pane = (screen.getByTestId('canvas-document-editor').parentElement) as HTMLElement;
+    // Tokens, not the light-only literal the pane used to carry (`#fafafa`).
+    expect(getComputedStyle(body).color).toContain('text-primary');
+    expect(getComputedStyle(pane).backgroundColor).toContain('background-paper');
+
+    const dark = buildEliteaTheme(DEFAULT_BRAND_PACK).colorSchemes.dark?.palette;
+    expect(getContrastRatio(String(dark?.text.primary), String(dark?.background.paper))).toBeGreaterThanOrEqual(4.5);
   });
 });

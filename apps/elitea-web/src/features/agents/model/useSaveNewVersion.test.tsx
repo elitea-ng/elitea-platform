@@ -39,7 +39,7 @@ function baseInput(overrides: Partial<SaveNewVersionInput> = {}): SaveNewVersion
 }
 
 describe('useSaveNewVersion', () => {
-  it.each([undefined, 12])('sends the optional skill source version %s', async (sourceVersionId) => {
+  it.each([undefined, 12])('sends the optional skill and toolkit source version %s', async (sourceVersionId) => {
     let body: unknown;
     server.use(
       http.post('*/elitea_core/versions/prompt_lib/:projectId/:applicationId', async ({ request }) => {
@@ -54,7 +54,7 @@ describe('useSaveNewVersion', () => {
     expect(body).toEqual({
       instructions: 'Be helpful',
       name: 'v2',
-      ...(sourceVersionId === undefined ? {} : { copy_skills_from_version_id: sourceVersionId }),
+      ...(sourceVersionId === undefined ? {} : { copy_skills_from_version_id: sourceVersionId, copy_tools_from_version_id: sourceVersionId }),
     });
   });
 

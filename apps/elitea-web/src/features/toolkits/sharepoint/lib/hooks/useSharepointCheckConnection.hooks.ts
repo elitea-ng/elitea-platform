@@ -1,5 +1,9 @@
 import { useCallback, useState } from 'react';
 
+import { EliteaApiError } from '@/shared/api/generated/mutator';
+import { serverErrorSentence } from '@/shared/api/serverErrorMessage';
+import { t } from '@/shared/i18n';
+
 import { testConfigurationConnection } from '../api/configurations';
 import type { SharepointResolvedConfig } from './useResolvedSharepointConfig.hooks';
 
@@ -42,6 +46,8 @@ export interface UseSharepointCheckConnectionResult {
     tokenStorageKey?: string,
   ) => Promise<void>;
   readonly isRunning: boolean;
+  /** Why the last check did not connect, when it was neither a success nor a request to authorise (#1998); cleared by the next run. */
+  readonly error: string | undefined;
 }
 
 interface EliteaApiErrorLike {
@@ -87,6 +93,7 @@ export function authRequiredErrorData(caught: unknown): unknown {
 export function useSharepointCheckConnection(input: UseSharepointCheckConnectionInput): UseSharepointCheckConnectionResult {
   const { projectId, spConfig, onSuccess } = input;
   const [isRunning, setIsRunning] = useState(false);
+  const [error, setError] = useState<string | undefined>(undefined);
 
   const runCheck = useCallback(
     async (
@@ -95,6 +102,7 @@ export function useSharepointCheckConnection(input: UseSharepointCheckConnection
     ) => {
       if (isRunning || !spConfig || !projectId) return;
       setIsRunning(true);
+      setError(undefined);
       try {
         await testConfigurationConnection(projectId, 'sharepoint', spConfig);
         onSuccess?.();
@@ -103,8 +111,12 @@ export function useSharepointCheckConnection(input: UseSharepointCheckConnection
         if (errorData !== undefined) {
           const discoveryEndpoint = spConfig.oauth_discovery_endpoint;
           handleConfigAuthRequired?.(errorData, discoveryEndpoint, tokenStorageKey ?? discoveryEndpoint);
+        } else {
+          // The baseline ignored every other failure, so "Login" answered with
+          // nothing at all when the server could not start the sign-in (#1998).
+          const explained = caught instanceof EliteaApiError && caught.failure.kind === 'http' ? serverErrorSentence(caught.failure.body) : undefined;
+          setError(explained ?? t('features.toolkits.sharepointOAuthStatus.checkFailed', 'Could not start the sign-in for this credential. Check its settings and try again.'));
         }
-        // Other errors (network, 400, etc) are silently ignored — same as the baseline.
       } finally {
         setIsRunning(false);
       }
@@ -112,5 +124,5 @@ export function useSharepointCheckConnection(input: UseSharepointCheckConnection
     [isRunning, spConfig, projectId, onSuccess],
   );
 
-  return { runCheck, isRunning };
+  return { runCheck, isRunning, error };
 }

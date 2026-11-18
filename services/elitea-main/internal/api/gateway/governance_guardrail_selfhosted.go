@@ -130,7 +130,7 @@ func validateGuardrailScope(stage, typ, action string, obj map[string]any) error
 	if action == "mask" {
 		return fmt.Errorf("slot %q allows the actions block and flag; mask cannot remove an injection", guardrailSlotPromptInjection)
 	}
-	if typ == "secrets" || typ == "presidio" {
+	if typ == "secrets" || typ == "presidio" || typ == "personal_data" {
 		return fmt.Errorf("a %s detector cannot fill slot %q: it finds data, not instructions", typ, guardrailSlotPromptInjection)
 	}
 	return nil

@@ -44,6 +44,23 @@ describe('useSharepointCheckConnection', () => {
     expect(result.current.isRunning).toBe(false);
   });
 
+  it('says why the sign-in could not start when the check fails for another reason (#1998)', async () => {
+    server.use(
+      http.post('*/api/v2/configurations/check_connection/proj-1/sharepoint', () =>
+        HttpResponse.json({ success: false, message: 'The credential has no client id.' }, { status: 400 }),
+      ),
+    );
+    const handleConfigAuthRequired = vi.fn();
+    const { result } = renderHook(() => useSharepointCheckConnection({ projectId: 'proj-1', spConfig }));
+
+    await act(async () => {
+      await result.current.runCheck(handleConfigAuthRequired, 'token-key-1');
+    });
+
+    expect(handleConfigAuthRequired).not.toHaveBeenCalled();
+    expect(result.current.error).toBe('The credential has no client id.');
+  });
+
   describe('a live 401 with requires_authorization now reaches handleConfigAuthRequired', () => {
     it("calls handleConfigAuthRequired with the real 401 body (was: the reauth interceptor stripped it, so the OAuth modal could never open)", async () => {
       server.use(

@@ -336,15 +336,42 @@ describe('client contract 1.52', () => {
   });
 });
 
+describe('client contract 1.57', () => {
+  it('lists, pins and unpins the skills of a conversation (skills epic 2169)', () => {
+    const { doc } = buildContract();
+    const [major, minor] = String(doc.info['x-elitea-client-contract']).split('.').map(Number);
+    assert.ok(major > 1 || (major === 1 && minor >= 57), `contract ${String(doc.info['x-elitea-client-contract'])} predates 1.57`);
+    assert.ok(doc.paths['/elitea_core/conversation_skills/prompt_lib/{project_id}/{conversation_id}'].get);
+    assert.ok(doc.paths['/elitea_core/conversation_skills/prompt_lib/{project_id}/{conversation_id}'].post);
+    assert.ok(doc.paths['/elitea_core/conversation_skill/prompt_lib/{project_id}/{conversation_id}/{pin_id}'].delete);
+  });
+});
+
+describe('client contract 1.56', () => {
+  it('reads the workforce proposals and probation of an agent (issue 1632)', () => {
+    const { doc } = buildContract();
+    const [major, minor] = String(doc.info['x-elitea-client-contract']).split('.').map(Number);
+    assert.ok(major > 1 || (major === 1 && minor >= 56), `contract ${String(doc.info['x-elitea-client-contract'])} predates 1.56`);
+    assert.ok(doc.paths['/elitea_core/agent_workforce/prompt_lib/{project_id}/proposals'].get);
+    assert.ok(doc.paths['/elitea_core/agent_workforce/prompt_lib/{project_id}/agents/{application_id}'].get);
+  });
+});
+
+describe('client contract 1.55', () => {
+  it('reads the feedback of a Marketplace listing (issue 1631)', () => {
+    const { doc } = buildContract();
+    const [major, minor] = String(doc.info['x-elitea-client-contract']).split('.').map(Number);
+    assert.ok(major > 1 || (major === 1 && minor >= 55), `contract ${String(doc.info['x-elitea-client-contract'])} predates 1.55`);
+    assert.ok(doc.paths['/elitea_core/marketplace_feedback/prompt_lib/{project_id}/{listing_id}'].get);
+    assert.ok(doc.paths['/elitea_core/marketplace_listings/prompt_lib/{project_id}'].get);
+  });
+});
+
 describe('client contract 1.54', () => {
-  it('names the delegation-refused frame (FU-335)', () => {
+  it('renames an artifact file with moveObject (issue 2015)', () => {
     const { doc } = buildContract();
     const [major, minor] = String(doc.info['x-elitea-client-contract']).split('.').map(Number);
     assert.ok(major > 1 || (major === 1 && minor >= 54), `contract ${String(doc.info['x-elitea-client-contract'])} predates 1.54`);
-    // The frame catalogue is not part of the pruned client: read it from the spec. The app does
-    // not render the frame yet and ignores it.
-    const spec = YAML.parse(readFileSync(SPEC, 'utf8'));
-    assert.equal(spec['x-elitea-client-frames']?.agent_delegation_refused, '#/components/schemas/ClientFrameDelegationRefused');
   });
 });
 
@@ -356,5 +383,17 @@ describe('client contract 1.53', () => {
     const posted = doc.components.schemas.ChatMessagePosted;
     assert.ok(posted.required.includes('turn_started'));
     assert.equal(posted.properties.turn_started.type, 'boolean');
+  });
+});
+
+describe('client contract 1.63', () => {
+  it('names the FU-335 start-refusal frame', () => {
+    const { doc } = buildContract();
+    const [major, minor] = String(doc.info['x-elitea-client-contract']).split('.').map(Number);
+    assert.ok(major > 1 || (major === 1 && minor >= 63), `contract ${String(doc.info['x-elitea-client-contract'])} predates 1.63`);
+    // The frame catalogue is not part of the pruned client: read it from the spec. The app does
+    // not render the frame yet and ignores it.
+    const spec = YAML.parse(readFileSync(SPEC, 'utf8'));
+    assert.equal(spec['x-elitea-client-frames']?.agent_delegation_refused, '#/components/schemas/ClientFrameAgentDelegationRefused');
   });
 });

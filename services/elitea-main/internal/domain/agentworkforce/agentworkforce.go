@@ -1,7 +1,7 @@
 // Package agentworkforce is the agent workforce of ADR-0050 decisions 5b,
 // 5g-5j, 5l and 5m (issue 1616): the daily scorecard, the dismissal ladder
 // with the retired registry state, dismissal and demotion proposals from
-// people and HR agents, the guards on who may propose what, the appeal and
+// people and workforce managers, the guards on who may propose what, the appeal and
 // the reinstatement.
 //
 // THE LADDER. Every stage but the last can be undone, and each reuses
@@ -27,7 +27,7 @@
 //     traces and the scorecards stay (ADR-0042).
 //
 // WHO. A person with ManagePermission (the agent manager) or the agent's
-// owner proposes; an HR agent (a version with capabilities.can_review_agents,
+// owner proposes; a workforce manager (a version with capabilities.can_review_agents,
 // tier medium or higher) proposes through propose_dismissal. Only a person
 // decides: the agent manager, or the owner for their own agent. An appeal is
 // reviewed by an agent manager other than the one who decided.
@@ -53,13 +53,13 @@ import (
 )
 
 const (
-	// ManagePermission is the agent manager ("HR"): decide workforce
+	// ManagePermission is the agent manager: decide workforce
 	// proposals, apply a stage, reinstate, review an appeal. Shared 0236
 	// grants it to the project admin.
 	ManagePermission = "agents.workforce.manage"
 	// CapabilitiesKey is the version meta key of an agent's capabilities.
 	CapabilitiesKey = "capabilities"
-	// ReviewCapability makes an agent an HR agent.
+	// ReviewCapability makes an agent a workforce manager.
 	ReviewCapability = "can_review_agents"
 	// ProposeCapability is ADR-0050 decision 5a's hiring capability.
 	ProposeCapability = "can_propose_agents"
@@ -117,8 +117,8 @@ const (
 
 // Proposal sources.
 const (
-	SourcePerson  = "person"
-	SourceHRAgent = "hr_agent"
+	SourcePerson           = "person"
+	SourceWorkforceManager = "workforce_manager"
 	// SourcePolicy is a stage the project's automatic dismissal policy
 	// applied or noticed (ADR-0050 decision 5k, issue 1617).
 	SourcePolicy = "policy"
@@ -266,8 +266,8 @@ func HasCapability(meta map[string]any, key string) bool {
 	return allowed
 }
 
-// IsHRAgent reports whether a version's meta makes the agent an HR agent.
-func IsHRAgent(meta map[string]any) bool { return HasCapability(meta, ReviewCapability) }
+// IsWorkforceManager reports whether a version's meta makes the agent a workforce manager.
+func IsWorkforceManager(meta map[string]any) bool { return HasCapability(meta, ReviewCapability) }
 
 // Narrowing is the exact narrowing of a demotion (ADR-0050 decision 5g).
 // Every field only takes away.
@@ -426,17 +426,17 @@ var tierRank = map[string]int{"low": 0, "medium": 1, "high": 2, "critical": 3}
 // as low.
 func TierAbove(a, b string) bool { return tierRank[a] > tierRank[b] }
 
-// GuardSubject is what the guards read about the proposing HR agent and its
+// GuardSubject is what the guards read about the proposing workforce manager and its
 // target.
 type GuardSubject struct {
 	ProposerApplicationID int64
 	ProposerTier          string
-	// ProposerIsHR is the proposer version's can_review_agents.
-	ProposerIsHR        bool
-	TargetApplicationID int64
-	TargetTier          string
-	// TargetIsHR: some version of the target sets can_review_agents.
-	TargetIsHR bool
+	// ProposerIsWorkforceManager is the proposer version's can_review_agents.
+	ProposerIsWorkforceManager bool
+	TargetApplicationID        int64
+	TargetTier                 string
+	// TargetIsWorkforceManager: some version of the target sets can_review_agents.
+	TargetIsWorkforceManager bool
 	// TargetHiredProposer: the target proposed the agent that is proposing
 	// now (agent_proposals created_application_id), i.e. it hired it.
 	TargetHiredProposer bool
@@ -449,18 +449,18 @@ type GuardSubject struct {
 // proposal an agent makes. A nil error lets it through.
 func CheckAgentProposal(subject GuardSubject, stage Stage) error {
 	switch {
-	case !subject.ProposerIsHR:
-		return Refuse(OutcomeNotAllowed, "This agent is not an HR agent: its version does not set capabilities.can_review_agents.")
+	case !subject.ProposerIsWorkforceManager:
+		return Refuse(OutcomeNotAllowed, "This agent is not a workforce manager: its version does not set capabilities.can_review_agents.")
 	case tierRank[subject.ProposerTier] < tierRank["medium"]:
-		return Refuse(OutcomeNotAllowed, "An HR agent must be at least medium tier.")
+		return Refuse(OutcomeNotAllowed, "A workforce manager must be at least medium tier.")
 	case subject.ProposerApplicationID == subject.TargetApplicationID:
 		return Refuse(OutcomeGuardRefused, "An agent cannot propose its own demotion or dismissal.")
 	case subject.TargetHiredProposer:
 		return Refuse(OutcomeGuardRefused, "An agent cannot propose dismissing the agent that proposed or hired it.")
-	case subject.TargetIsHR:
-		return Refuse(OutcomeGuardRefused, "An HR agent cannot propose dismissing another HR agent.")
+	case subject.TargetIsWorkforceManager:
+		return Refuse(OutcomeGuardRefused, "A workforce manager cannot propose dismissing another workforce manager.")
 	case TierAbove(subject.TargetTier, subject.ProposerTier):
-		return Refuse(OutcomeGuardRefused, "An HR agent cannot propose dismissing an agent of a higher tier than its own.")
+		return Refuse(OutcomeGuardRefused, "A workforce manager cannot propose dismissing an agent of a higher tier than its own.")
 	case subject.TargetTier == "critical":
 		return Refuse(OutcomeGuardRefused, "A critical-tier agent is never dismissed on an agent's proposal.")
 	case subject.TargetLegalHold:
@@ -468,7 +468,7 @@ func CheckAgentProposal(subject GuardSubject, stage Stage) error {
 	case subject.TargetState != StateActive:
 		return Refuse(OutcomeGuardRefused, "The agent is already retired.")
 	case stage == StageDelete:
-		return Refuse(OutcomeGuardRefused, "An HR agent cannot propose deleting an agent; propose retire.")
+		return Refuse(OutcomeGuardRefused, "A workforce manager cannot propose deleting an agent; propose retire.")
 	}
 	return nil
 }

@@ -731,8 +731,32 @@ type WorkerDelegationPolicyV1 struct {
 	// registry's grammar (^[a-z0-9][a-z0-9_.-]{0,63}$), at most 32. Empty
 	// imposes no data class constraint.
 	RootDataClasses []string `protobuf:"bytes,3,rep,name=root_data_classes,json=rootDataClasses,proto3" json:"root_data_classes,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// The run principal's bound (ADR-0044 Amendment 1, #2157): what the acting
+	// user, or the mandate and project of an unattended run, may use. Every
+	// callee's effective grants are intersected with it in both modes. Absent
+	// is no bound. Main sends it only when the delegation section turns the
+	// principal bound on, so a command is unchanged byte for byte otherwise.
+	//
+	// Field 11, not 4: the reserved range 4 to 10 is closed and buf breaking
+	// refuses to shrink it.
+	PrincipalBound *WorkerPrincipalBoundV1 `protobuf:"bytes,11,opt,name=principal_bound,json=principalBound,proto3" json:"principal_bound,omitempty"`
+	// The approved delegation grants of the run (ADR-0044 amendment 1, #2166):
+	// one per composition edge Y to X that has an approved or stale grant, for
+	// the closure of the root. The worker reads them as G(Y to X) in
+	// E(X) = own(X) ∩ (E(Y) ∪ G(Y to X)) ∩ P. Empty while Main's grant switch is
+	// off (the default until the migration of existing compositions has run),
+	// and then commands are unchanged byte for byte. Fields 21 to 23, because
+	// the reserved ranges above are closed.
+	Grants []*WorkerDelegationGrantV1 `protobuf:"bytes,21,rep,name=grants,proto3" json:"grants,omitempty"`
+	// The saved agent or pipeline the run starts with, the caller of its first
+	// delegation. 0 when the run has none (an ad hoc conversation).
+	RootApplicationId uint64 `protobuf:"varint,22,opt,name=root_application_id,json=rootApplicationId,proto3" json:"root_application_id,omitempty"`
+	// True when grants are enforced: an edge with a grant is bounded by
+	// E(Y) ∪ G and an edge without one is refused (or recorded, in report
+	// mode) as today. False leaves delegation exactly as before grants.
+	GrantsEnforced bool `protobuf:"varint,23,opt,name=grants_enforced,json=grantsEnforced,proto3" json:"grants_enforced,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *WorkerDelegationPolicyV1) Reset() {
@@ -786,6 +810,281 @@ func (x *WorkerDelegationPolicyV1) GetRootDataClasses() []string {
 	return nil
 }
 
+func (x *WorkerDelegationPolicyV1) GetPrincipalBound() *WorkerPrincipalBoundV1 {
+	if x != nil {
+		return x.PrincipalBound
+	}
+	return nil
+}
+
+func (x *WorkerDelegationPolicyV1) GetGrants() []*WorkerDelegationGrantV1 {
+	if x != nil {
+		return x.Grants
+	}
+	return nil
+}
+
+func (x *WorkerDelegationPolicyV1) GetRootApplicationId() uint64 {
+	if x != nil {
+		return x.RootApplicationId
+	}
+	return 0
+}
+
+func (x *WorkerDelegationPolicyV1) GetGrantsEnforced() bool {
+	if x != nil {
+		return x.GrantsEnforced
+	}
+	return false
+}
+
+// One approved delegation grant: what the callee X may use through the caller
+// Y, pinned to its digest.
+type WorkerDelegationGrantV1 struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The saved agents or pipelines of the edge.
+	CallerApplicationId uint64 `protobuf:"varint,1,opt,name=caller_application_id,json=callerApplicationId,proto3" json:"caller_application_id,omitempty"`
+	CalleeApplicationId uint64 `protobuf:"varint,2,opt,name=callee_application_id,json=calleeApplicationId,proto3" json:"callee_application_id,omitempty"`
+	// sub_agent, agent_tool, pipeline_child or pipeline_node.
+	EdgeKind string `protobuf:"bytes,3,opt,name=edge_kind,json=edgeKind,proto3" json:"edge_kind,omitempty"`
+	GrantId  uint64 `protobuf:"varint,4,opt,name=grant_id,json=grantId,proto3" json:"grant_id,omitempty"`
+	// The lowercase hex SHA-256 of grant_set, as a delegation step records it.
+	Digest string `protobuf:"bytes,5,opt,name=digest,proto3" json:"digest,omitempty"`
+	// The approved set in its canonical JSON form (schema
+	// elitea.delegation.grants.v1). The worker refuses a command whose
+	// digest does not match it.
+	GrantSet      string `protobuf:"bytes,6,opt,name=grant_set,json=grantSet,proto3" json:"grant_set,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WorkerDelegationGrantV1) Reset() {
+	*x = WorkerDelegationGrantV1{}
+	mi := &file_elitea_runtime_v1_command_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WorkerDelegationGrantV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WorkerDelegationGrantV1) ProtoMessage() {}
+
+func (x *WorkerDelegationGrantV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_command_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WorkerDelegationGrantV1.ProtoReflect.Descriptor instead.
+func (*WorkerDelegationGrantV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_command_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *WorkerDelegationGrantV1) GetCallerApplicationId() uint64 {
+	if x != nil {
+		return x.CallerApplicationId
+	}
+	return 0
+}
+
+func (x *WorkerDelegationGrantV1) GetCalleeApplicationId() uint64 {
+	if x != nil {
+		return x.CalleeApplicationId
+	}
+	return 0
+}
+
+func (x *WorkerDelegationGrantV1) GetEdgeKind() string {
+	if x != nil {
+		return x.EdgeKind
+	}
+	return ""
+}
+
+func (x *WorkerDelegationGrantV1) GetGrantId() uint64 {
+	if x != nil {
+		return x.GrantId
+	}
+	return 0
+}
+
+func (x *WorkerDelegationGrantV1) GetDigest() string {
+	if x != nil {
+		return x.Digest
+	}
+	return ""
+}
+
+func (x *WorkerDelegationGrantV1) GetGrantSet() string {
+	if x != nil {
+		return x.GrantSet
+	}
+	return ""
+}
+
+// What the run principal may use (ADR-0044 Amendment 1, rule 1). Main
+// computes it for the reachable closure of the root only, never the whole
+// project, and refuses the run with a typed error when the closure exceeds
+// the limits below instead of truncating.
+type WorkerPrincipalBoundV1 struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// True: the lists below are the bound, and an empty list means nothing is
+	// allowed. False: no bound, whatever the lists hold.
+	Bounded bool `protobuf:"varint,1,opt,name=bounded,proto3" json:"bounded,omitempty"`
+	// The toolkits (by id) the principal may use, with their tools. A toolkit
+	// with no row (a built-in named by its type) is not bounded here. At most
+	// 512.
+	Toolkits []*WorkerPrincipalToolkitV1 `protobuf:"bytes,2,rep,name=toolkits,proto3" json:"toolkits,omitempty"`
+	// True: credential_reference_ids is the set of credential references a
+	// callee toolkit may name (ADR-0039 credential use grants). False: no
+	// credential bound (an ungoverned run).
+	CredentialsBounded bool `protobuf:"varint,3,opt,name=credentials_bounded,json=credentialsBounded,proto3" json:"credentials_bounded,omitempty"`
+	// At most 256, each at most 128 bytes.
+	CredentialReferenceIds []string `protobuf:"bytes,4,rep,name=credential_reference_ids,json=credentialReferenceIds,proto3" json:"credential_reference_ids,omitempty"`
+	// The data classes the project allows, in the registry's grammar
+	// (^[a-z0-9][a-z0-9_.-]{0,63}$), at most 32. Empty: the project declares
+	// none, so no data class bound.
+	DataClasses   []string `protobuf:"bytes,5,rep,name=data_classes,json=dataClasses,proto3" json:"data_classes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WorkerPrincipalBoundV1) Reset() {
+	*x = WorkerPrincipalBoundV1{}
+	mi := &file_elitea_runtime_v1_command_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WorkerPrincipalBoundV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WorkerPrincipalBoundV1) ProtoMessage() {}
+
+func (x *WorkerPrincipalBoundV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_command_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WorkerPrincipalBoundV1.ProtoReflect.Descriptor instead.
+func (*WorkerPrincipalBoundV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_command_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *WorkerPrincipalBoundV1) GetBounded() bool {
+	if x != nil {
+		return x.Bounded
+	}
+	return false
+}
+
+func (x *WorkerPrincipalBoundV1) GetToolkits() []*WorkerPrincipalToolkitV1 {
+	if x != nil {
+		return x.Toolkits
+	}
+	return nil
+}
+
+func (x *WorkerPrincipalBoundV1) GetCredentialsBounded() bool {
+	if x != nil {
+		return x.CredentialsBounded
+	}
+	return false
+}
+
+func (x *WorkerPrincipalBoundV1) GetCredentialReferenceIds() []string {
+	if x != nil {
+		return x.CredentialReferenceIds
+	}
+	return nil
+}
+
+func (x *WorkerPrincipalBoundV1) GetDataClasses() []string {
+	if x != nil {
+		return x.DataClasses
+	}
+	return nil
+}
+
+// One toolkit the principal may use.
+type WorkerPrincipalToolkitV1 struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	ToolkitId uint64                 `protobuf:"varint,1,opt,name=toolkit_id,json=toolkitId,proto3" json:"toolkit_id,omitempty"`
+	// True: every tool of the toolkit. False: only tool_names.
+	AllTools bool `protobuf:"varint,2,opt,name=all_tools,json=allTools,proto3" json:"all_tools,omitempty"`
+	// At most 1024, each at most 256 bytes. Ignored when all_tools is set.
+	ToolNames     []string `protobuf:"bytes,3,rep,name=tool_names,json=toolNames,proto3" json:"tool_names,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WorkerPrincipalToolkitV1) Reset() {
+	*x = WorkerPrincipalToolkitV1{}
+	mi := &file_elitea_runtime_v1_command_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WorkerPrincipalToolkitV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WorkerPrincipalToolkitV1) ProtoMessage() {}
+
+func (x *WorkerPrincipalToolkitV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_command_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WorkerPrincipalToolkitV1.ProtoReflect.Descriptor instead.
+func (*WorkerPrincipalToolkitV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_command_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *WorkerPrincipalToolkitV1) GetToolkitId() uint64 {
+	if x != nil {
+		return x.ToolkitId
+	}
+	return 0
+}
+
+func (x *WorkerPrincipalToolkitV1) GetAllTools() bool {
+	if x != nil {
+		return x.AllTools
+	}
+	return false
+}
+
+func (x *WorkerPrincipalToolkitV1) GetToolNames() []string {
+	if x != nil {
+		return x.ToolNames
+	}
+	return nil
+}
+
 // A run's approval policy (ADR-0041 decision 5). A tool call needs a
 // human approval when the platform's sensitive action tools name the tool,
 // or when the tool's category is in approval_categories. An author setting
@@ -803,7 +1102,7 @@ type WorkerApprovalPolicyV1 struct {
 
 func (x *WorkerApprovalPolicyV1) Reset() {
 	*x = WorkerApprovalPolicyV1{}
-	mi := &file_elitea_runtime_v1_command_proto_msgTypes[3]
+	mi := &file_elitea_runtime_v1_command_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -815,7 +1114,7 @@ func (x *WorkerApprovalPolicyV1) String() string {
 func (*WorkerApprovalPolicyV1) ProtoMessage() {}
 
 func (x *WorkerApprovalPolicyV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_command_proto_msgTypes[3]
+	mi := &file_elitea_runtime_v1_command_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -828,7 +1127,7 @@ func (x *WorkerApprovalPolicyV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkerApprovalPolicyV1.ProtoReflect.Descriptor instead.
 func (*WorkerApprovalPolicyV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_command_proto_rawDescGZIP(), []int{3}
+	return file_elitea_runtime_v1_command_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *WorkerApprovalPolicyV1) GetRiskTier() string {
@@ -876,7 +1175,7 @@ type WorkerContentControlsV1 struct {
 
 func (x *WorkerContentControlsV1) Reset() {
 	*x = WorkerContentControlsV1{}
-	mi := &file_elitea_runtime_v1_command_proto_msgTypes[4]
+	mi := &file_elitea_runtime_v1_command_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -888,7 +1187,7 @@ func (x *WorkerContentControlsV1) String() string {
 func (*WorkerContentControlsV1) ProtoMessage() {}
 
 func (x *WorkerContentControlsV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_command_proto_msgTypes[4]
+	mi := &file_elitea_runtime_v1_command_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -901,7 +1200,7 @@ func (x *WorkerContentControlsV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkerContentControlsV1.ProtoReflect.Descriptor instead.
 func (*WorkerContentControlsV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_command_proto_rawDescGZIP(), []int{4}
+	return file_elitea_runtime_v1_command_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *WorkerContentControlsV1) GetDisclosureText() string {
@@ -958,7 +1257,7 @@ type WorkerRunCapsV1 struct {
 
 func (x *WorkerRunCapsV1) Reset() {
 	*x = WorkerRunCapsV1{}
-	mi := &file_elitea_runtime_v1_command_proto_msgTypes[5]
+	mi := &file_elitea_runtime_v1_command_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -970,7 +1269,7 @@ func (x *WorkerRunCapsV1) String() string {
 func (*WorkerRunCapsV1) ProtoMessage() {}
 
 func (x *WorkerRunCapsV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_command_proto_msgTypes[5]
+	mi := &file_elitea_runtime_v1_command_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -983,7 +1282,7 @@ func (x *WorkerRunCapsV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkerRunCapsV1.ProtoReflect.Descriptor instead.
 func (*WorkerRunCapsV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_command_proto_rawDescGZIP(), []int{5}
+	return file_elitea_runtime_v1_command_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *WorkerRunCapsV1) GetMaxToolCalls() uint32 {
@@ -1019,7 +1318,7 @@ type WorkerOutputContractsV1 struct {
 
 func (x *WorkerOutputContractsV1) Reset() {
 	*x = WorkerOutputContractsV1{}
-	mi := &file_elitea_runtime_v1_command_proto_msgTypes[6]
+	mi := &file_elitea_runtime_v1_command_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1031,7 +1330,7 @@ func (x *WorkerOutputContractsV1) String() string {
 func (*WorkerOutputContractsV1) ProtoMessage() {}
 
 func (x *WorkerOutputContractsV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_command_proto_msgTypes[6]
+	mi := &file_elitea_runtime_v1_command_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1044,7 +1343,7 @@ func (x *WorkerOutputContractsV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkerOutputContractsV1.ProtoReflect.Descriptor instead.
 func (*WorkerOutputContractsV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_command_proto_rawDescGZIP(), []int{6}
+	return file_elitea_runtime_v1_command_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *WorkerOutputContractsV1) GetRevision() uint32 {
@@ -1106,11 +1405,34 @@ const file_elitea_runtime_v1_command_proto_rawDesc = "" +
 	"\x12capability_commandJ\x04\b\x0f\x10\x10J\x04\b\x1a\x10 J\x04\b%\x10@R\x11grant_template_id\"m\n" +
 	"\x14WorkerEgressPolicyV1\x129\n" +
 	"\x04mode\x18\x01 \x01(\x0e2%.elitea.runtime.v1.WorkerEgressModeV1R\x04mode\x12\x14\n" +
-	"\x05allow\x18\x02 \x03(\tR\x05allowJ\x04\b\x03\x10\v\"\xa8\x01\n" +
+	"\x05allow\x18\x02 \x03(\tR\x05allowJ\x04\b\x03\x10\v\"\xa5\x03\n" +
 	"\x18WorkerDelegationPolicyV1\x12\x1b\n" +
 	"\tmax_depth\x18\x01 \x01(\rR\bmaxDepth\x12=\n" +
 	"\x04mode\x18\x02 \x01(\x0e2).elitea.runtime.v1.WorkerDelegationModeV1R\x04mode\x12*\n" +
-	"\x11root_data_classes\x18\x03 \x03(\tR\x0frootDataClassesJ\x04\b\x04\x10\v\"l\n" +
+	"\x11root_data_classes\x18\x03 \x03(\tR\x0frootDataClasses\x12R\n" +
+	"\x0fprincipal_bound\x18\v \x01(\v2).elitea.runtime.v1.WorkerPrincipalBoundV1R\x0eprincipalBound\x12B\n" +
+	"\x06grants\x18\x15 \x03(\v2*.elitea.runtime.v1.WorkerDelegationGrantV1R\x06grants\x12.\n" +
+	"\x13root_application_id\x18\x16 \x01(\x04R\x11rootApplicationId\x12'\n" +
+	"\x0fgrants_enforced\x18\x17 \x01(\bR\x0egrantsEnforcedJ\x04\b\x04\x10\vJ\x04\b\f\x10\x15J\x04\b\x18\x10\x1f\"\xf4\x01\n" +
+	"\x17WorkerDelegationGrantV1\x122\n" +
+	"\x15caller_application_id\x18\x01 \x01(\x04R\x13callerApplicationId\x122\n" +
+	"\x15callee_application_id\x18\x02 \x01(\x04R\x13calleeApplicationId\x12\x1b\n" +
+	"\tedge_kind\x18\x03 \x01(\tR\bedgeKind\x12\x19\n" +
+	"\bgrant_id\x18\x04 \x01(\x04R\agrantId\x12\x16\n" +
+	"\x06digest\x18\x05 \x01(\tR\x06digest\x12\x1b\n" +
+	"\tgrant_set\x18\x06 \x01(\tR\bgrantSetJ\x04\b\a\x10\v\"\x8f\x02\n" +
+	"\x16WorkerPrincipalBoundV1\x12\x18\n" +
+	"\abounded\x18\x01 \x01(\bR\abounded\x12G\n" +
+	"\btoolkits\x18\x02 \x03(\v2+.elitea.runtime.v1.WorkerPrincipalToolkitV1R\btoolkits\x12/\n" +
+	"\x13credentials_bounded\x18\x03 \x01(\bR\x12credentialsBounded\x128\n" +
+	"\x18credential_reference_ids\x18\x04 \x03(\tR\x16credentialReferenceIds\x12!\n" +
+	"\fdata_classes\x18\x05 \x03(\tR\vdataClassesJ\x04\b\x06\x10\x10\"{\n" +
+	"\x18WorkerPrincipalToolkitV1\x12\x1d\n" +
+	"\n" +
+	"toolkit_id\x18\x01 \x01(\x04R\ttoolkitId\x12\x1b\n" +
+	"\tall_tools\x18\x02 \x01(\bR\ballTools\x12\x1d\n" +
+	"\n" +
+	"tool_names\x18\x03 \x03(\tR\ttoolNamesJ\x04\b\x04\x10\b\"l\n" +
 	"\x16WorkerApprovalPolicyV1\x12\x1b\n" +
 	"\trisk_tier\x18\x01 \x01(\tR\briskTier\x12/\n" +
 	"\x13approval_categories\x18\x02 \x03(\tR\x12approvalCategoriesJ\x04\b\x03\x10\v\"\xbf\x02\n" +
@@ -1162,7 +1484,7 @@ func file_elitea_runtime_v1_command_proto_rawDescGZIP() []byte {
 }
 
 var file_elitea_runtime_v1_command_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_elitea_runtime_v1_command_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_elitea_runtime_v1_command_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_elitea_runtime_v1_command_proto_goTypes = []any{
 	(WorkerCommandTypeV1)(0),                    // 0: elitea.runtime.v1.WorkerCommandTypeV1
 	(WorkerEgressModeV1)(0),                     // 1: elitea.runtime.v1.WorkerEgressModeV1
@@ -1170,42 +1492,48 @@ var file_elitea_runtime_v1_command_proto_goTypes = []any{
 	(*WorkerCommandV1)(nil),                     // 3: elitea.runtime.v1.WorkerCommandV1
 	(*WorkerEgressPolicyV1)(nil),                // 4: elitea.runtime.v1.WorkerEgressPolicyV1
 	(*WorkerDelegationPolicyV1)(nil),            // 5: elitea.runtime.v1.WorkerDelegationPolicyV1
-	(*WorkerApprovalPolicyV1)(nil),              // 6: elitea.runtime.v1.WorkerApprovalPolicyV1
-	(*WorkerContentControlsV1)(nil),             // 7: elitea.runtime.v1.WorkerContentControlsV1
-	(*WorkerRunCapsV1)(nil),                     // 8: elitea.runtime.v1.WorkerRunCapsV1
-	(*WorkerOutputContractsV1)(nil),             // 9: elitea.runtime.v1.WorkerOutputContractsV1
-	(*ExecutionInputBundleReferenceV1)(nil),     // 10: elitea.runtime.v1.ExecutionInputBundleReferenceV1
-	(*ConfigurationValidationCommandV1)(nil),    // 11: elitea.runtime.v1.ConfigurationValidationCommandV1
-	(*ToolkitAvailableToolsCommandV1)(nil),      // 12: elitea.runtime.v1.ToolkitAvailableToolsCommandV1
-	(*IndexIngestCommandV1)(nil),                // 13: elitea.runtime.v1.IndexIngestCommandV1
-	(*AgentExecutionCommandV1)(nil),             // 14: elitea.runtime.v1.AgentExecutionCommandV1
-	(*ToolkitCallToolCommandV1)(nil),            // 15: elitea.runtime.v1.ToolkitCallToolCommandV1
-	(*ToolkitExecuteReadCommandV1)(nil),         // 16: elitea.runtime.v1.ToolkitExecuteReadCommandV1
-	(*ExecutionSecurityContextReferenceV1)(nil), // 17: elitea.runtime.v1.ExecutionSecurityContextReferenceV1
+	(*WorkerDelegationGrantV1)(nil),             // 6: elitea.runtime.v1.WorkerDelegationGrantV1
+	(*WorkerPrincipalBoundV1)(nil),              // 7: elitea.runtime.v1.WorkerPrincipalBoundV1
+	(*WorkerPrincipalToolkitV1)(nil),            // 8: elitea.runtime.v1.WorkerPrincipalToolkitV1
+	(*WorkerApprovalPolicyV1)(nil),              // 9: elitea.runtime.v1.WorkerApprovalPolicyV1
+	(*WorkerContentControlsV1)(nil),             // 10: elitea.runtime.v1.WorkerContentControlsV1
+	(*WorkerRunCapsV1)(nil),                     // 11: elitea.runtime.v1.WorkerRunCapsV1
+	(*WorkerOutputContractsV1)(nil),             // 12: elitea.runtime.v1.WorkerOutputContractsV1
+	(*ExecutionInputBundleReferenceV1)(nil),     // 13: elitea.runtime.v1.ExecutionInputBundleReferenceV1
+	(*ConfigurationValidationCommandV1)(nil),    // 14: elitea.runtime.v1.ConfigurationValidationCommandV1
+	(*ToolkitAvailableToolsCommandV1)(nil),      // 15: elitea.runtime.v1.ToolkitAvailableToolsCommandV1
+	(*IndexIngestCommandV1)(nil),                // 16: elitea.runtime.v1.IndexIngestCommandV1
+	(*AgentExecutionCommandV1)(nil),             // 17: elitea.runtime.v1.AgentExecutionCommandV1
+	(*ToolkitCallToolCommandV1)(nil),            // 18: elitea.runtime.v1.ToolkitCallToolCommandV1
+	(*ToolkitExecuteReadCommandV1)(nil),         // 19: elitea.runtime.v1.ToolkitExecuteReadCommandV1
+	(*ExecutionSecurityContextReferenceV1)(nil), // 20: elitea.runtime.v1.ExecutionSecurityContextReferenceV1
 }
 var file_elitea_runtime_v1_command_proto_depIdxs = []int32{
 	0,  // 0: elitea.runtime.v1.WorkerCommandV1.command_type:type_name -> elitea.runtime.v1.WorkerCommandTypeV1
-	10, // 1: elitea.runtime.v1.WorkerCommandV1.input_bundle_ref:type_name -> elitea.runtime.v1.ExecutionInputBundleReferenceV1
-	11, // 2: elitea.runtime.v1.WorkerCommandV1.configuration_validation:type_name -> elitea.runtime.v1.ConfigurationValidationCommandV1
-	12, // 3: elitea.runtime.v1.WorkerCommandV1.toolkit_available_tools:type_name -> elitea.runtime.v1.ToolkitAvailableToolsCommandV1
-	13, // 4: elitea.runtime.v1.WorkerCommandV1.index_ingest:type_name -> elitea.runtime.v1.IndexIngestCommandV1
-	14, // 5: elitea.runtime.v1.WorkerCommandV1.agent_execution:type_name -> elitea.runtime.v1.AgentExecutionCommandV1
-	15, // 6: elitea.runtime.v1.WorkerCommandV1.toolkit_call_tool:type_name -> elitea.runtime.v1.ToolkitCallToolCommandV1
-	16, // 7: elitea.runtime.v1.WorkerCommandV1.toolkit_execute_read:type_name -> elitea.runtime.v1.ToolkitExecuteReadCommandV1
-	17, // 8: elitea.runtime.v1.WorkerCommandV1.security_context_ref:type_name -> elitea.runtime.v1.ExecutionSecurityContextReferenceV1
+	13, // 1: elitea.runtime.v1.WorkerCommandV1.input_bundle_ref:type_name -> elitea.runtime.v1.ExecutionInputBundleReferenceV1
+	14, // 2: elitea.runtime.v1.WorkerCommandV1.configuration_validation:type_name -> elitea.runtime.v1.ConfigurationValidationCommandV1
+	15, // 3: elitea.runtime.v1.WorkerCommandV1.toolkit_available_tools:type_name -> elitea.runtime.v1.ToolkitAvailableToolsCommandV1
+	16, // 4: elitea.runtime.v1.WorkerCommandV1.index_ingest:type_name -> elitea.runtime.v1.IndexIngestCommandV1
+	17, // 5: elitea.runtime.v1.WorkerCommandV1.agent_execution:type_name -> elitea.runtime.v1.AgentExecutionCommandV1
+	18, // 6: elitea.runtime.v1.WorkerCommandV1.toolkit_call_tool:type_name -> elitea.runtime.v1.ToolkitCallToolCommandV1
+	19, // 7: elitea.runtime.v1.WorkerCommandV1.toolkit_execute_read:type_name -> elitea.runtime.v1.ToolkitExecuteReadCommandV1
+	20, // 8: elitea.runtime.v1.WorkerCommandV1.security_context_ref:type_name -> elitea.runtime.v1.ExecutionSecurityContextReferenceV1
 	4,  // 9: elitea.runtime.v1.WorkerCommandV1.egress_policy:type_name -> elitea.runtime.v1.WorkerEgressPolicyV1
 	5,  // 10: elitea.runtime.v1.WorkerCommandV1.delegation_policy:type_name -> elitea.runtime.v1.WorkerDelegationPolicyV1
-	6,  // 11: elitea.runtime.v1.WorkerCommandV1.approval_policy:type_name -> elitea.runtime.v1.WorkerApprovalPolicyV1
-	8,  // 12: elitea.runtime.v1.WorkerCommandV1.run_caps:type_name -> elitea.runtime.v1.WorkerRunCapsV1
-	9,  // 13: elitea.runtime.v1.WorkerCommandV1.output_contracts:type_name -> elitea.runtime.v1.WorkerOutputContractsV1
-	7,  // 14: elitea.runtime.v1.WorkerCommandV1.content_controls:type_name -> elitea.runtime.v1.WorkerContentControlsV1
+	9,  // 11: elitea.runtime.v1.WorkerCommandV1.approval_policy:type_name -> elitea.runtime.v1.WorkerApprovalPolicyV1
+	11, // 12: elitea.runtime.v1.WorkerCommandV1.run_caps:type_name -> elitea.runtime.v1.WorkerRunCapsV1
+	12, // 13: elitea.runtime.v1.WorkerCommandV1.output_contracts:type_name -> elitea.runtime.v1.WorkerOutputContractsV1
+	10, // 14: elitea.runtime.v1.WorkerCommandV1.content_controls:type_name -> elitea.runtime.v1.WorkerContentControlsV1
 	1,  // 15: elitea.runtime.v1.WorkerEgressPolicyV1.mode:type_name -> elitea.runtime.v1.WorkerEgressModeV1
 	2,  // 16: elitea.runtime.v1.WorkerDelegationPolicyV1.mode:type_name -> elitea.runtime.v1.WorkerDelegationModeV1
-	17, // [17:17] is the sub-list for method output_type
-	17, // [17:17] is the sub-list for method input_type
-	17, // [17:17] is the sub-list for extension type_name
-	17, // [17:17] is the sub-list for extension extendee
-	0,  // [0:17] is the sub-list for field type_name
+	7,  // 17: elitea.runtime.v1.WorkerDelegationPolicyV1.principal_bound:type_name -> elitea.runtime.v1.WorkerPrincipalBoundV1
+	6,  // 18: elitea.runtime.v1.WorkerDelegationPolicyV1.grants:type_name -> elitea.runtime.v1.WorkerDelegationGrantV1
+	8,  // 19: elitea.runtime.v1.WorkerPrincipalBoundV1.toolkits:type_name -> elitea.runtime.v1.WorkerPrincipalToolkitV1
+	20, // [20:20] is the sub-list for method output_type
+	20, // [20:20] is the sub-list for method input_type
+	20, // [20:20] is the sub-list for extension type_name
+	20, // [20:20] is the sub-list for extension extendee
+	0,  // [0:20] is the sub-list for field type_name
 }
 
 func init() { file_elitea_runtime_v1_command_proto_init() }
@@ -1233,7 +1561,7 @@ func file_elitea_runtime_v1_command_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_elitea_runtime_v1_command_proto_rawDesc), len(file_elitea_runtime_v1_command_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   7,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

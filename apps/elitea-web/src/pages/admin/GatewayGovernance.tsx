@@ -42,7 +42,10 @@
  * in administration mode). `window.admin_ui_config.permissions` hides the nav
  * item and never gates anything — see `./adminUiConfig`.
  */
+import { useState } from 'react';
+
 import AddIcon from '@mui/icons-material/Add';
+import ShieldOutlinedIcon from '@mui/icons-material/ShieldOutlined';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
@@ -53,11 +56,13 @@ import { t } from '@/shared/i18n';
 import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 
 import { GovernanceDialog } from './GovernanceDialog';
+import { GovernanceGuardrailPresetDialog } from './GovernanceGuardrailPresetDialog';
 import { GovernanceTable } from './GovernanceTable';
 import { useGatewayGovernancePage } from './useGatewayGovernancePage';
 
 export function AdminGatewayGovernance() {
   const state = useGatewayGovernancePage();
+  const [presetOpen, setPresetOpen] = useState(false);
 
   return (
     <DrawerPage sx={{ padding: '1rem 1.5rem', gap: '0.75rem' }}>
@@ -73,15 +78,26 @@ export function AdminGatewayGovernance() {
         <Typography variant="headingLarge" component="h1">
           {t('pages.admin.governance.title', 'LLM Governance')}
         </Typography>
-        <Button
-          variant="elitea" color="primary"
-          size="small"
-          startIcon={<AddIcon />}
-          onClick={state.onCreate}
-          data-testid="governance-create"
-        >
-          {t('pages.admin.governance.action.create', 'New entry')}
-        </Button>
+        <Box sx={{ display: 'flex', gap: '0.5rem' }}>
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={<ShieldOutlinedIcon />}
+            onClick={() => setPresetOpen(true)}
+            data-testid="governance-guardrail-preset"
+          >
+            {t('pages.admin.governance.action.guardrailPreset', 'Credentials / Personal data')}
+          </Button>
+          <Button
+            variant="elitea" color="primary"
+            size="small"
+            startIcon={<AddIcon />}
+            onClick={state.onCreate}
+            data-testid="governance-create"
+          >
+            {t('pages.admin.governance.action.create', 'New entry')}
+          </Button>
+        </Box>
       </Box>
 
       <Typography variant="bodySmall" color="text.secondary">
@@ -118,6 +134,8 @@ export function AdminGatewayGovernance() {
         onEdit={state.onEdit}
         onDelete={state.onDelete}
       />
+
+      {presetOpen ? <GovernanceGuardrailPresetDialog onClose={() => setPresetOpen(false)} /> : null}
 
       {state.draft === undefined ? null : (
         <GovernanceDialog

@@ -550,8 +550,19 @@ impl RemoteCodeRuntime {
         )
         .await?;
         let selected = self
-            .select_compiled_snapshot(&invocation, profile, &job, bundle.as_ref(), None)
-            .await?;
+            .select_compiled_snapshot_typed(&invocation, profile, &job, bundle.as_ref(), None)
+            .await
+            .map_err(|failure| {
+                // The compiler failed the program (#2228): its diagnostic is
+                // the cause the caller reads, as for an execution failure.
+                if let Some((code, detail)) = failure.compile_failure() {
+                    note(super::code_runtime::ToolCodeError::Sandbox {
+                        code: code.to_owned(),
+                        detail: detail.map(str::to_owned),
+                    });
+                }
+                failure.into_graph_error()
+            })?;
         let scope = self
             .authority
             .dispatch_scope()
@@ -644,8 +655,14 @@ impl RemoteCodeRuntime {
             }
             match outcome {
                 Ok(SandboxOutcome::Completed(receipt)) => return Ok(receipt),
-                Ok(SandboxOutcome::Failed { code }) => {
-                    note(super::code_runtime::ToolCodeError::Sandbox { code: code.clone() });
+                Ok(SandboxOutcome::Failed { code, detail }) => {
+                    // The tool path reads the program's stderr from `detail`
+                    // (#2223), and a pipeline Code node's run ends with it
+                    // (#2227, `execute_node`).
+                    note(super::code_runtime::ToolCodeError::Sandbox {
+                        code: code.clone(),
+                        detail,
+                    });
                     return Err(failed(&format!(
                         "Sandbox execution failed ({code}); dependent pipeline nodes were not run."
                     )));
@@ -708,6 +725,18 @@ impl RemoteCodeRuntime {
 
 #[async_trait]
 impl CodeSandboxRuntime for RemoteCodeRuntime {
+    fn served_languages(&self) -> Vec<CodeLanguage> {
+        // The same filter `execute_reporting` applies to a tool's invocation:
+        // one profile per language, none with a platform client.
+        let mut languages = Vec::new();
+        for profile in self.profiles.iter() {
+            if profile.platform_client.is_none() && !languages.contains(&profile.language) {
+                languages.push(profile.language);
+            }
+        }
+        languages
+    }
+
     /// W3-2 (D3): `items` children with Code need
     /// `ceil(items / min(concurrency, slots)) × item time + margin` before the
     /// run's deadline. The item time is the longest child's Code time (Q2)
@@ -823,8 +852,22 @@ impl CodeSandboxRuntime for RemoteCodeRuntime {
         ))
         .await
         .map_err(|error| {
+            let cause = report.lock().ok().and_then(|mut slot| slot.take());
+            // #2227: the failed program's output ends the run after the
+            // registered sentence (`protocol::terminal_detail`).
+            let (execution_id, generation) = self.authority.trace_identity();
+            crate::protocol::terminal_detail::note(
+                execution_id,
+                generation,
+                match &cause {
+                    Some(super::code_runtime::ToolCodeError::Sandbox { detail, .. }) => {
+                        detail.as_deref()
+                    }
+                    _ => None,
+                },
+            );
             let refused = matches!(
-                report.lock().ok().and_then(|mut slot| slot.take()),
+                cause,
                 Some(super::code_runtime::ToolCodeError::DeadlineInsufficient)
             );
             (

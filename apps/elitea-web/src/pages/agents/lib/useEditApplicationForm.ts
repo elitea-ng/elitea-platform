@@ -91,7 +91,12 @@ export function useEditApplicationForm(
 
   const handleSave = useCallback(() => {
     void form.handleSubmit(async (values) => {
-      if (activeVersion === undefined || projectId === undefined || applicationId === undefined || versionId === undefined) {
+      if (
+        activeVersion === undefined ||
+        projectId === undefined ||
+        applicationId === undefined ||
+        versionId === undefined
+      ) {
         return;
       }
       const conversationStarters = (values.version_details?.conversation_starters ?? []).filter(

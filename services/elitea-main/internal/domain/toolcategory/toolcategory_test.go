@@ -73,6 +73,19 @@ func TestEveryDeclarationNamesAKnownTool(t *testing.T) {
 		}
 		known[CanonicalKey(toolkitType)] = tools
 	}
+	// The native runtime's internal tools are not catalogue types. The Code
+	// sandbox toggle (stored as pyodide) binds run_code
+	// (libs/rust/agent-runtime, data_analysis/sandbox_tool.rs); it is declared
+	// here because it runs code the model wrote and must reach the approval
+	// policy as code_execution, not as the default write.
+	known[CanonicalKey("pyodide")] = map[string]bool{CanonicalKey("run_code"): true}
+	// run_analysis_code (data_analysis family, libs/rust/agent-runtime) runs
+	// model-written code in the same sandbox: code_execution as well. The SDK
+	// snapshot only knows pandas_analyze_data.
+	if known[CanonicalKey("data_analysis")] == nil {
+		known[CanonicalKey("data_analysis")] = map[string]bool{}
+	}
+	known[CanonicalKey("data_analysis")][CanonicalKey("run_analysis_code")] = true
 	for toolkit, tools := range declared {
 		for tool := range tools {
 			if !known[toolkit][tool] {
@@ -98,6 +111,9 @@ func TestOf(t *testing.T) {
 		{"yagmail", "send_gmail_message", ExternalSend, true},
 		{"slack", "send_message", ExternalSend, true},
 		{"sandbox", "pyodide_sandbox", CodeExecution, true},
+		{"pyodide", "run_code", CodeExecution, true},
+		{"data_analysis", "run_analysis_code", CodeExecution, true},
+		{"data_analysis", "pandas_analyze_data", CodeExecution, true},
 		{"k8s", "kubernetes_integration_healthcheck", Read, true},
 		{"mcp", "send", Write, false},
 		{"unknown", "anything", Write, false},

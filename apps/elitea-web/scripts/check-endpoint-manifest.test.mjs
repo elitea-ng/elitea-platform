@@ -932,7 +932,31 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // "What the agent saw" inspector on an agent answer (see MANIFEST_ENTRY_COUNT).
 // 518 -> 520 (issue 1963): getCurrentAuthorLanguage and updateCurrentAuthorLanguage, the account's
 // language preference.
-const GENERATED_OPERATION_COUNT = 520;
+// 520 -> 521 (issue 2015): moveObject, the artifact file rename.
+// 521 -> 527 (issues 2008 and 2013): list/create/update/deleteEvalSuite (run limits) and
+// list/recordEvalHumanScore.
+// 527 -> 528 (issue 2009): enhanceEvalRun, Enhance with AI on a finished evaluation run.
+// 528 -> 529 (issue 2012): listRunGuardrailNotices, the chat notice of a
+// blocked, redacted or warned message (see MANIFEST_ENTRY_COUNT).
+// 529 -> 534 (issue 2048): list/create/update/deleteEntityFolder and moveEntityToFolder, the project
+// folders of the agents, pipelines, skills, toolkits and MCPs lists.
+// 534 -> 540 (issue 1629, ADR-0051 M3): searchMarketplaceListings, get/updateMarketplaceListing,
+// setMarketplaceVersionState, hireMarketplaceListing and getMarketplaceOrigin.
+// 540 -> 542 (issue 1629): getMarketplaceBindings and setMarketplaceBindings, the bindings editor of a hired agent.
+
+// 534 -> 535 (issue 1628): setEntityPin, the personal Pinned group.
+// 535 -> 543 (issue 1629): the eight Marketplace operations above.
+// 543 -> 548 (issue 1630, ADR-0051 M4): getMarketplaceUpgradePlan, upgradeMarketplaceAgent,
+// setMarketplaceUpgradePolicy, getMarketplaceUpstreamReview and proposeMarketplaceUpstreamMerge.
+// 548 -> 552 (issue 1631, ADR-0051 M5): getMarketplaceFeedback, saveMarketplaceReview,
+// saveMarketplaceWorkforceReport and actOnMarketplaceFeedback.
+// 552 -> 558 (issues 2170 and 2172, skills epic 2169): list/pin/unpinConversationSkill, the skills
+// pinned to a conversation, and getSkillTrust, trustSkillRevision and revokeSkillTrust, a project's
+// trust in skill text from another project. MANIFEST_ENTRY_COUNT is unchanged (the UI lands next).
+// 558 -> 564 (issue 2165, delegation epic 2156): list/propose DelegationGrant, getDelegationGrant,
+// approveDelegationGrant, revokeDelegationGrant and previewDelegationGrant. No UI ships with them
+// (stories S3 and S5), so MANIFEST_ENTRY_COUNT is unchanged.
+const GENERATED_OPERATION_COUNT = 564;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1236,8 +1260,41 @@ const GENERATED_OPERATION_COUNT = 520;
  *
  * 359 -> 361 (issue 1963): the account language preference read and write
  * (shared/api/languagePreference.ts). Generated.
+ *
+ * 361 -> 362 (issue 2015): the artifact file rename (moveObject). Generated.
+ *
+ * 362 -> 368 (issues 2008 and 2013): the run limits editor (list, create, update and
+ * delete a suite) and the human score list and record on the scorecard. Generated.
+ *
+ * 368 -> 370 (issues 2009 and 2011): evaluation.enhanceRun (the Enhance with AI
+ * wizard) and analytics.getEvaluationRunAnalytics (a run's consumption card).
+ * Both generated.
+ *
+ * 370 -> 371 (issue 2012): chat.listRunGuardrailNotices, the guardrail notice
+ * under a chat answer (features/chat-messages/api/guardrailNoticesApi.ts).
+ * Generated.
+ *
+ * 371 -> 376 (issue 2048): the five project-folder operations of the entity lists
+ * (entityFolder.list, create, update, delete, move). All generated.
+ *
+ * 376 -> 377 (issue 1629, ADR-0051 M3): marketplace.getOrigin, the origin banner of an installed or forked
+ * agent's editor. Generated.
+ *
+ * 377 -> 382 (issue 1629, ADR-0051 M3): the Marketplace operations the page calls
+ * (marketplace.searchListings, getListing, updateListing, setVersionState and
+ * hire). All generated.
+ *
+ * 382 -> 384 (issue 1629): marketplace.getBindings and marketplace.setBindings (the bindings
+ * editor on a hired agent's page). Both generated.
+ *
+ * 384 -> 389 (issue 1630, ADR-0051 M4): marketplace.getUpgradePlan, upgrade, setUpgradePolicy,
+ * getUpstreamReview and proposeUpstreamMerge (the Upgrade to... dialog, the policy and the
+ * fork's three-way review). All generated.
+ *
+ * 389 -> 393 (issue 1631, ADR-0051 M5): marketplace.getFeedback, saveReview, saveWorkforceReport and
+ * actOnFeedback, the Feedback section of a listing. All generated.
  */
-const MANIFEST_ENTRY_COUNT = 361;
+const MANIFEST_ENTRY_COUNT = 393;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

@@ -4,6 +4,9 @@ import Typography from '@mui/material/Typography';
 import { t } from '@/shared/i18n';
 import type { SkippedCapabilities, SkippedCapability } from '../../lib/skippedCapabilities';
 
+// MERGE NOTE (FU-335 x #2216): re-exported so ApplicationAnswer stays within its line budget until re-scoped.
+export { DelegationRefusalNotice } from './DelegationRefusalNotice';
+
 function label(item: SkippedCapability): string {
   if (item.kind === 'internal_tool') return t('features.chatMessages.skippedCapabilities.internalTool', 'Built-in capability {{name}}', { name: item.name });
   if (item.kind === 'tool') return t('features.chatMessages.skippedCapabilities.tool', 'Tool {{name}}', { name: item.name });

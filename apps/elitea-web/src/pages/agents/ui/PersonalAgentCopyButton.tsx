@@ -23,10 +23,23 @@ export interface PersonalAgentCopyButtonProps {
   readonly onNotice: (message: string) => void;
 }
 
-export function PersonalAgentCopyButton({ projectId, applicationId, name, projects, onNotice }: PersonalAgentCopyButtonProps): ReactNode {
+export function PersonalAgentCopyButton({
+  projectId,
+  applicationId,
+  name,
+  projects,
+  onNotice,
+}: PersonalAgentCopyButtonProps): ReactNode {
   const { personalProjectId } = useRailViewer();
   const id = Number(applicationId);
-  if (projectId === undefined || personalProjectId === undefined || projectId !== personalProjectId || !Number.isInteger(id) || id <= 0) return null;
+  if (
+    projectId === undefined ||
+    personalProjectId === undefined ||
+    projectId !== personalProjectId ||
+    !Number.isInteger(id) ||
+    id <= 0
+  )
+    return null;
   return (
     <CopyToProjectButton
       projectId={projectId}

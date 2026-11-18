@@ -520,6 +520,25 @@ pub struct GitCheckpoints {
     limits: CheckpointLimits,
 }
 
+/// A held `<ref>.lock`, removed when dropped.
+struct RefLock(PathBuf);
+
+impl Drop for RefLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// What [`GitCheckpoints::prune_loose`] did with one ref.
+enum Pruned {
+    /// Removed, reflog included.
+    Done,
+    /// Another writer holds the ref's lock: leave it for next time.
+    Busy,
+    /// Not a loose ref this checkpoint owns (packed, or changed): ask git.
+    NotLoose,
+}
+
 /// What a git checkpoint leaves out.
 #[derive(Default)]
 struct Plan {
@@ -694,6 +713,10 @@ impl GitCheckpoints {
             if newest || (index >= excess && info.created_unix >= cutoff) {
                 continue;
             }
+            match self.prune_loose(info) {
+                Pruned::Done | Pruned::Busy => continue,
+                Pruned::NotLoose => {}
+            }
             let deleted = self.repo.git(self.top()).writes(&writes).run(&[
                 "update-ref",
                 "-d",
@@ -703,6 +726,53 @@ impl GitCheckpoints {
             if let Err(error) = deleted {
                 tracing::warn!(reason = error.message(), "a checkpoint could not be pruned");
             }
+        }
+    }
+
+    /// Remove a loose checkpoint ref the way git does, under its own
+    /// `<ref>.lock`, so a concurrent writer of the same ref and this
+    /// removal exclude each other; the ref's reflog goes with it.
+    /// `update-ref -d` is not used for this: it also locks `packed-refs`,
+    /// which a fresh repository lacks and the sandbox cannot bind writable.
+    /// A ref that is not loose (after `gc`) is left to `update-ref -d`.
+    fn prune_loose(&self, info: &CheckpointInfo) -> Pruned {
+        use std::io::ErrorKind;
+        let name = self.ref_name(info.seq);
+        let common = self.repo.common_dir();
+        let loose = common.join(&name);
+        let mut lock_name = loose.clone().into_os_string();
+        lock_name.push(".lock");
+        let lock = PathBuf::from(lock_name);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock)
+        {
+            Ok(file) => drop(file),
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+                tracing::warn!(lock = %lock.display(), "a checkpoint ref is locked, not pruned");
+                return Pruned::Busy;
+            }
+            Err(_) => return Pruned::NotLoose,
+        }
+        // Released on every exit, a panic included.
+        let _release = RefLock(lock);
+        // Under the lock: the ref still names this checkpoint, or leave it.
+        if !std::fs::read_to_string(&loose).is_ok_and(|text| text.trim() == info.id) {
+            return Pruned::NotLoose;
+        }
+        // The reflog first: a reflog left behind would keep the commit
+        // reachable, and one that cannot go keeps the ref for the next try.
+        if let Err(error) = std::fs::remove_file(common.join("logs").join(&name))
+            && error.kind() != ErrorKind::NotFound
+        {
+            tracing::warn!(%error, "a pruned checkpoint's reflog stays");
+            return Pruned::Busy;
+        }
+        if std::fs::remove_file(&loose).is_ok() {
+            Pruned::Done
+        } else {
+            Pruned::NotLoose
         }
     }
 
@@ -1642,6 +1712,56 @@ mod tests {
                 assert_eq!(objects, 2, "contents only the kept checkpoints use");
             }
         }
+    }
+
+    /// A pruned loose ref goes under git's own `<ref>.lock` protocol: a ref
+    /// whose lock another writer holds stays, and one removed takes its
+    /// reflog with it, so nothing keeps the commit reachable.
+    #[test]
+    fn pruning_respects_the_ref_lock_and_removes_the_reflog() {
+        let dir = repo();
+        let root = dir.path();
+        let workspace = Workspace::open(root, &[]).expect("workspace");
+        let data = tempfile::tempdir().expect("data");
+        let checkpoints = Checkpoints::open(&workspace, "s", data.path())
+            .expect("open")
+            .with_limits(CheckpointLimits {
+                keep: 2,
+                ..CheckpointLimits::default()
+            });
+        let seqs = || -> Vec<u64> {
+            checkpoints
+                .list()
+                .expect("list")
+                .iter()
+                .map(|info| info.seq)
+                .collect()
+        };
+        for turn in 0..2 {
+            std::fs::write(root.join("f.txt"), format!("turn {turn}\n")).expect("edit");
+            checkpoints.create(&format!("turn {turn}")).expect("create");
+        }
+        let git_dir = root.join(".git");
+        let reflog = git_dir.join("logs").join(REF_PREFIX).join("s/1");
+        std::fs::create_dir_all(reflog.parent().expect("parent")).expect("logs");
+        std::fs::write(&reflog, "reflog\n").expect("reflog");
+        let lock = git_dir.join(REF_PREFIX).join("s/1.lock");
+        std::fs::write(&lock, "").expect("lock");
+
+        std::fs::write(root.join("f.txt"), "turn 2\n").expect("edit");
+        checkpoints.create("turn 2").expect("create");
+        assert_eq!(seqs(), [1, 2, 3], "a locked ref is not dropped");
+        assert!(reflog.exists());
+
+        std::fs::remove_file(&lock).expect("unlock");
+        std::fs::write(root.join("f.txt"), "turn 3\n").expect("edit");
+        checkpoints.create("turn 3").expect("create");
+        assert_eq!(seqs(), [3, 4]);
+        assert!(!reflog.exists(), "the reflog goes with the ref");
+        assert!(
+            !git_dir.join(REF_PREFIX).join("s/1.lock").exists(),
+            "the lock is released"
+        );
     }
 
     /// A file ignored when the checkpoint was taken and un-ignored during

@@ -34,11 +34,14 @@ import (
 	v2applicationskills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
 	v2auth "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/auth"
 	v2convs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	v2conversationskills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversationskills"
 	v2credentialconsent "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialconsent"
 	v2credentialgrants "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialgrants"
 	v2credentialprobe "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialprobe"
 	v2credentialreferences "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialreferences"
 	v2deepwiki "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
+	v2delegationgrants "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/delegationgrants"
+	v2entityfolders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/entityfolders"
 	v2evaluation "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
 	v2events "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/events"
 	v2folders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/folders"
@@ -51,6 +54,7 @@ import (
 	v2retention "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/retention"
 	v2safety "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/safety"
 	v2skills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
+	v2skilltrust "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skilltrust"
 	v2social "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/social"
 	v2tags "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/tags"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/webhook"
@@ -178,18 +182,28 @@ func buildFullSurfaceConfig() api.RouterConfig {
 		// library. Leave EvalDimensionsRepo nil and the five run operations the
 		// spec declares resolve to no route at all, and the forward check fails
 		// with a message about the spec rather than about this config.
-		EvalDatasetsRepo:   struct{ v2evaluation.DatasetRepository }{},
-		EvalRunsRepo:       struct{ v2evaluation.RunRepository }{},
+		EvalDatasetsRepo: struct{ v2evaluation.DatasetRepository }{},
+		EvalRunsRepo:     struct{ v2evaluation.RunRepository }{},
+		EvalSuitesRepo:   struct{ v2evaluation.SuiteRepository }{},
+		EvalHumanScoresRepo: struct {
+			v2evaluation.HumanScoreRepository
+		}{},
 		EvalDimensionsRepo: struct{ v2evaluation.Repository }{},
 		SkillsRepo:         struct{ v2skills.Repository }{},
 		FoldersRepo:        struct{ v2folders.Repository }{},
-		MemoriesRepo:       struct{ v2memories.Repository }{},
-		TagsRepo:           struct{ v2tags.Repository }{},
-		AnalyticsRepo:      struct{ v2analytics.Repository }{},
-		ConvsRepo:          struct{ v2convs.Repository }{},
-		WebhookRepo:        struct{ webhook.Repository }{},
-		EventSource:        struct{ v2events.EventSource }{},
-		LLMProxy:           http.NotFoundHandler(),
+		EntityFoldersRepo:  struct{ v2entityfolders.Repository }{},
+		ConversationSkillsRepo: struct {
+			v2conversationskills.Repository
+		}{},
+		SkillTrustRepo:   struct{ v2skilltrust.Repository }{},
+		DelegationGrants: struct{ v2delegationgrants.Service }{},
+		MemoriesRepo:     struct{ v2memories.Repository }{},
+		TagsRepo:         struct{ v2tags.Repository }{},
+		AnalyticsRepo:    struct{ v2analytics.Repository }{},
+		ConvsRepo:        struct{ v2convs.Repository }{},
+		WebhookRepo:      struct{ webhook.Repository }{},
+		EventSource:      struct{ v2events.EventSource }{},
+		LLMProxy:         http.NotFoundHandler(),
 
 		// CurrentAvatarRoute has no interface-typed dependency this stub
 		// scheme can zero-value: a bare &v2social.CurrentAvatarRoute{} still

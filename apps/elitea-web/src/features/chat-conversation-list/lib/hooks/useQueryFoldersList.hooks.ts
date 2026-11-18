@@ -7,7 +7,7 @@ import type { DateGroup, Folder, FolderConversationRef } from '@/entities/folder
 import { PERMISSIONS } from '@/shared/lib/permissions';
 
 import { conversationListErrorMessage } from '../errorMessage';
-import { sortConversations } from '../helpers/conversationList.helpers';
+import { pinnedFoldersFirst, sortConversations } from '../helpers/conversationList.helpers';
 import { useHasPermission } from '../useHasPermission';
 import type { DateGroupListItem, FolderListItem } from './conversationListState.types';
 import { useConversationActivityLiveEvents } from './useConversationActivityLive.hooks';
@@ -190,7 +190,8 @@ export function useQueryFoldersList(params: UseQueryFoldersListParams): UseQuery
         return { ...serverFolder, conversations: sortConversations([...serverFolder.conversations, ...localOnly]) };
       });
 
-      return [...newFolders, ...mergedFolders];
+      // One ordering rule with `useEditFolder.onPinFolder`: pinned first, the rest as they came.
+      return pinnedFoldersFirst([...newFolders, ...mergedFolders]);
     });
   }, []);
 

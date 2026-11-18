@@ -1284,7 +1284,7 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
 
     /// The notice a run refused at start for a delegation grant shows before
     /// its terminal (FU-335). `None` as for [`Self::assembly_authorization_notice`].
-    pub(crate) fn assembly_delegation_notice(
+    pub(crate) fn assembly_fu335_delegation_notice(
         &self,
         callee: elitea_agent_runtime::delegation::DelegatedCallee,
         refusal: &elitea_agent_runtime::delegation::DelegationRefusal,
@@ -1330,6 +1330,47 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
             execution_generation: &execution_generation,
             thread_id,
         })
+        .ok()
+    }
+
+    /// The notice frame of a delegation refused while the agent was being
+    /// assembled (a pipeline node running a saved pipeline its caller may not
+    /// delegate to, #2218). `None` when this run cannot carry one; the caller
+    /// then keeps the ordinary failure terminal.
+    pub(crate) fn assembly_delegation_notice(
+        &self,
+        notice: &elitea_agent_runtime::delegation::DelegationNotice,
+        occurred_at: chrono::DateTime<chrono::Utc>,
+    ) -> Option<crate::protocol::elitea::runtime::v1::NodeEventV1> {
+        let command = self.verified.command();
+        let crate::protocol::elitea::runtime::v1::worker_command_v1::CapabilityCommand::AgentExecution(
+            agent,
+        ) = command.capability_command.as_ref()?
+        else {
+            return None;
+        };
+        let execution_generation = self
+            .request
+            .payload
+            .execution_generation
+            .clone()
+            .unwrap_or_else(|| command.generation.to_string());
+        crate::agents::events::assembly_delegation_notice(
+            &crate::agents::events::AssemblyNoticeIdentity {
+                stream_id: &agent.client_stream_id,
+                message_id: &agent.client_message_id,
+                sio_event: &agent.sio_event,
+                execution_generation: &execution_generation,
+                thread_id: self
+                    .request
+                    .payload
+                    .thread_id
+                    .as_deref()
+                    .unwrap_or_default(),
+            },
+            notice,
+            occurred_at,
+        )
         .ok()
     }
 

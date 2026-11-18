@@ -77,8 +77,8 @@ use crate::transport::platform_client::PlatformClient;
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
 use crate::transport::runtime_context::SavedAgentFingerprint;
 use elitea_agent_runtime::delegation::{
-    DelegatedCallee, Delegation, DelegationEvidence, DelegationRefusal, DelegationScope, GrantSet,
-    RefusedDelegation,
+    DelegatedCallee, Delegation, DelegationEvidence, DelegationNotice, DelegationRefusal,
+    DelegationScope, GrantSet, NoticeContext, RefusedDelegation,
 };
 #[cfg(test)]
 pub(in crate::agents) use materialization::MAX_MATERIALIZATION_VERSION_BYTES;
@@ -3794,6 +3794,7 @@ impl ApplicationAssemblyState<'_> {
             version,
             data_classes,
             self.policy.egress(),
+            Some(reference.identity.0),
         )? {
             Ok(delegation) => {
                 self.materialization = self
@@ -3994,6 +3995,30 @@ impl ApplicationAssemblyState<'_> {
     }
 }
 
+/// The root's own toolkits limited to what the run principal may use
+/// (ADR-0044 Amendment 1, `own ∩ P`): a toolkit the acting user, or the
+/// mandate and project, may not use is dropped before any credential or
+/// client exists. An ad hoc conversation's toolkits are bounded the same way.
+/// A run whose command carries no principal bound is unchanged.
+pub(in crate::agents) fn principal_bounded_snapshot<'a>(
+    runtime_context: &ClaimBoundRuntimeContextAuthority,
+    snapshot: AdmittedToolSnapshot<'a>,
+) -> AdmittedToolSnapshot<'a> {
+    let Some(principal) = runtime_context.delegation_policy().principal() else {
+        return snapshot;
+    };
+    let before = snapshot.len();
+    let bounded = snapshot.retain_principal(principal);
+    if bounded.len() < before {
+        tracing::warn!(
+            event = "root_toolkits_bounded_by_principal",
+            removed = before - bounded.len(),
+            "the run's own toolkits exceed the run principal's authority and were removed"
+        );
+    }
+    bounded
+}
+
 /// The run's root delegation scope: the root agent's own frozen grants under
 /// the command's delegation policy. An ad hoc conversation's root holds no
 /// toolkit constraint: the person chose its participants.
@@ -4018,13 +4043,17 @@ pub(in crate::agents) fn narrow_version(
     version: &mut Map<String, Value>,
     data_classes: &BTreeSet<String>,
     egress: &elitea_agent_runtime::egress::RunEgress,
+    target_id: Option<u64>,
 ) -> Result<Result<Delegation, RefusedDelegation>, NativeAgentAssemblyError> {
     let tools = version
         .get_mut("tools")
         .and_then(Value::as_array_mut)
         .ok_or_else(invalid_configuration)?;
+    // `target_id` is the saved agent or pipeline's id when the edge is known: an
+    // approved delegation grant of that edge bounds it by `E(Y) ∪ G` (ADR-0044
+    // amendment 1). Without one the delegation is what it was before grants.
     Ok(caller
-        .delegate(tools, data_classes, egress.policy())
+        .delegate_edge(target_id, tools, data_classes, egress.policy())
         .map_err(|refused| *refused))
 }
 
@@ -4032,11 +4061,15 @@ pub(in crate::agents) fn narrow_version(
 /// pipeline node running a saved pipeline, or an Agent node, Map item or
 /// Parallel branch running a saved agent). The run ends at start with the
 /// authorization terminal; the cause names the refusal code and the grant
-/// kind, the log names the grant, and the error carries the refusal for the
-/// lifecycle's readable notice (FU-335).
+/// kind, and the log names the grant. The error carries the refusal for the
+/// lifecycle's FU-335 notice and, for a node with a graph path, the person's
+/// notice (edge kind `pipeline_node`), which the lifecycle publishes before
+/// that terminal (#2218). `graph_path` is the node's place in the graph.
+/// MERGE NOTE (FU-335 x #2235): both notices are kept until re-scoped.
 pub(in crate::agents) fn delegation_refused_error(
     callee: DelegatedCallee,
     refused: &RefusedDelegation,
+    graph_path: &str,
 ) -> NativeAgentAssemblyError {
     let refusal = &refused.refusal;
     tracing::warn!(
@@ -4046,7 +4079,8 @@ pub(in crate::agents) fn delegation_refused_error(
         "a graph node delegates to a saved agent or pipeline its caller may not run"
     );
     let detail = match refusal {
-        DelegationRefusal::GrantMissing { kind, .. } => kind.as_str(),
+        DelegationRefusal::GrantMissing { kind, .. }
+        | DelegationRefusal::PrincipalBound { kind, .. } => kind.as_str(),
         DelegationRefusal::DepthExceeded { .. } => "depth",
     };
     NativeAgentAssemblyError::new(
@@ -4055,6 +4089,55 @@ pub(in crate::agents) fn delegation_refused_error(
     )
     .with_cause(refusal.code(), Some(detail))
     .with_delegation_refusal(callee, refused.clone())
+    .with_delegation_notice(pipeline_node_notice(&refused.evidence, graph_path))
+}
+
+/// The most bytes of a graph path a notice id carries before it is hashed
+/// (Main and the clients bound the whole id to 128 bytes).
+const NODE_NOTICE_PATH_BYTES: usize = 80;
+
+/// The notice of a refused pipeline node: one per node, keyed by its graph
+/// path, naming the node as the callee. A refusal `report` mode recorded and
+/// did not enforce shows nothing: the node ran, and the run step's summary
+/// is its only record. A binding with no graph path is not a node (a saved
+/// pipeline bound as a participant), so it shows no node notice either.
+pub(in crate::agents) fn pipeline_node_notice(
+    evidence: &DelegationEvidence,
+    graph_path: &str,
+) -> Option<DelegationNotice> {
+    if graph_path.is_empty() {
+        return None;
+    }
+    let node = graph_path.rsplit('/').next().unwrap_or_default();
+    let call_id = pipeline_node_notice_id(graph_path);
+    evidence.notice(&NoticeContext {
+        call_id: &call_id,
+        callee_name: node,
+        caller_name: None,
+        edge_kind: "pipeline_node",
+    })
+}
+
+/// `pipeline_node:<path>`, or, for a path past the bound (multi-byte names
+/// count in bytes), its first bytes on a character boundary plus a digest of
+/// the whole path, so two long paths never share an id.
+fn pipeline_node_notice_id(graph_path: &str) -> String {
+    use std::fmt::Write as _;
+    if graph_path.len() <= NODE_NOTICE_PATH_BYTES {
+        return format!("pipeline_node:{graph_path}");
+    }
+    let mut end = NODE_NOTICE_PATH_BYTES;
+    while !graph_path.is_char_boundary(end) {
+        end -= 1;
+    }
+    let digest = ring::digest::digest(&ring::digest::SHA256, graph_path.as_bytes());
+    let suffix = digest.as_ref()[..6]
+        .iter()
+        .fold(String::new(), |mut hex, byte| {
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        });
+    format!("pipeline_node:{}~{suffix}", &graph_path[..end])
 }
 
 /// A saved agent its caller may not delegate to, offered with its refusal.

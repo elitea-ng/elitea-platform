@@ -57,6 +57,7 @@ import { IndexStatuses } from '../../indexes/lib/constants/indexDetails.constant
 import type { GenerateChatMessageBasedOnResponseParams, IndexChatMessage } from '../../indexes/lib/helpers/indexChat.helpers';
 import { generateChatMessageBasedOnResponse, generateMockMessageTemplate } from '../../indexes/lib/helpers/indexChat.helpers';
 import { isFrameForCurrentIndexExecution } from '../../indexes/lib/helpers/indexExecution.helpers';
+import { socketFrameFinishState, buildIndexRunStoppedMessage, buildIndexRunUnfollowedMessage, ensureRunMessage, settleIndexRunProgress, settleIndexRunWithSummary } from '../helpers/indexRunNotices.helpers';
 import type { ToolkitChatMessage } from './useToolkitChat.types';
 
 /**
@@ -193,6 +194,8 @@ function toSocketMessageLike(message: ReceivePayloadOf<'chat_predict'>): Generat
   return result;
 }
 
+const noop = (): void => undefined;
+
 export interface UseToolkitChatSocketParams {
   readonly isAuthCheckSession: boolean;
   readonly onMcpAuthRequired: ((message: Readonly<Record<string, unknown>>) => void) | undefined;
@@ -232,8 +235,17 @@ export function useToolkitChatSocket(params: UseToolkitChatSocketParams): Socket
     onMcpAuthRequiredRef.current = onMcpAuthRequired;
   }, [onMcpAuthRequired]);
 
+  /**
+   * `finishesRun` is true only for the socket.io `chat_predict` fallback, where
+   * a finishing frame (an error, a `finish_reason`) IS how that transport ends a
+   * run. On the execution stream it is false: an index run ends ONLY with
+   * `index.ingest.completed` or `execution.failed`, so a mid-run frame renders
+   * as a step and never closes the stream before the summary arrives (#2041).
+   * Either way the finish is reported OUTSIDE the state updater, which must
+   * stay free of side effects.
+   */
   const handleSocketResponse = useCallback(
-    (message: ReceivePayloadOf<'chat_predict'>) => {
+    (message: ReceivePayloadOf<'chat_predict'>, finishesRun = true) => {
       if (isAuthCheckSessionRef.current) return;
 
       if (message.type === 'mcp_authorization_required') {
@@ -250,19 +262,27 @@ export function useToolkitChatSocket(params: UseToolkitChatSocketParams): Socket
           // present on both shapes at runtime; the bridge cast documents
           // that real looseness rather than silently dropping entries via a
           // shape-narrowing filter.
-          chatHistory: prev as IndexChatMessage[],
-          onFinish: onRunFinish,
-          onStartTask,
+          chatHistory: ensureRunMessage(prev, message.type, message.message_id) as IndexChatMessage[],
+          // Reported below, never from inside the updater.
+          onFinish: noop,
         }),
       );
+      const finishState = socketFrameFinishState(message);
+      if (finishesRun && finishState !== undefined) onRunFinish(finishState);
+      if (message.type === 'start_task') {
+        const content = message.content as { task_id?: unknown } | undefined;
+        onStartTask(typeof content?.task_id === 'string' ? content.task_id : undefined);
+      }
     },
     [onRunFinish, onStartTask, setChatHistory],
   );
 
+  const onSocketMessage = useCallback((message: ReceivePayloadOf<'chat_predict'>) => handleSocketResponse(message), [handleSocketResponse]);
+
   useEffect(() => {
-    socket.on('chat_predict', handleSocketResponse);
-    return () => socket.off('chat_predict', handleSocketResponse);
-  }, [socket, handleSocketResponse]);
+    socket.on('chat_predict', onSocketMessage);
+    return () => socket.off('chat_predict', onSocketMessage);
+  }, [socket, onSocketMessage]);
 
   /**
    * The `message_id` the CURRENT `executionId`'s stream is tracking — locked
@@ -284,7 +304,7 @@ export function useToolkitChatSocket(params: UseToolkitChatSocketParams): Socket
       if (!envelope) return;
       if (!isFrameForCurrentIndexExecution(envelope.message_id, trackedMessageIdRef.current)) return;
       trackedMessageIdRef.current ??= envelope.message_id;
-      handleSocketResponse(envelope);
+      handleSocketResponse(envelope, false);
     },
     [handleSocketResponse],
   );
@@ -299,24 +319,38 @@ export function useToolkitChatSocket(params: UseToolkitChatSocketParams): Socket
     // (issue #310: that would dispatch a SECOND run alongside the one still
     // progressing server-side).
     if (hasStreamOpenedRef.current) return;
+    // With no socket server either, nothing will ever report this run here:
+    // say so instead of leaving a spinner that never ends.
+    if (socket.getConnectionState() === 'disconnected') {
+      setChatHistory((prev) => settleIndexRunProgress(prev, buildIndexRunUnfollowedMessage(Date.now())));
+    }
     onStreamError();
-  }, [onStreamError]);
+  }, [onStreamError, setChatHistory, socket]);
 
   const handleIngestCompleted = useCallback(
     (frame: ExecutionEventData) => {
       if (isAuthCheckSessionRef.current) return;
+      // The outcome where the user is looking (#2041), not only in History.
+      const now = Date.now();
+      setChatHistory((prev) => settleIndexRunWithSummary(prev, frame, now));
       onRunFinish(toIndexState(frame));
     },
-    [onRunFinish],
+    [onRunFinish, setChatHistory],
   );
 
   const handleExecutionFailed = useCallback(
     (frame: ExecutionEventData) => {
       if (isAuthCheckSessionRef.current) return;
+      // A run the user stopped ends with `CANCELLED`: that reads as stopped.
+      if (frame['code'] === 'CANCELLED') {
+        setChatHistory((prev) => settleIndexRunProgress(prev, buildIndexRunStoppedMessage(Date.now())));
+        onRunFinish(IndexStatuses.cancelled);
+        return;
+      }
       // Rendered as a chat entry rather than routed to `onRunFinish`, which
       // takes a bare status string and has nowhere to put a reason.
       const notice = generateMockMessageTemplate(failureNotice(frame), 'toolkit');
-      setChatHistory((prev) => [...prev, notice]);
+      setChatHistory((prev) => settleIndexRunProgress(prev, notice));
       onRunFinish(IndexStatuses.fail);
     },
     [onRunFinish, setChatHistory],

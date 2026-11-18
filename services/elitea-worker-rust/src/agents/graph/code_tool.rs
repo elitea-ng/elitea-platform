@@ -11,13 +11,13 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use elitea_agent_runtime::toolkits::{
     AnalysisCodeError, AnalysisCodeFailure, AnalysisCodeRequest, AnalysisCodeRunner,
-    AnalysisLanguage, MAX_ANALYSIS_RESULT_BYTES,
+    AnalysisLanguage, CapturedRun, MAX_ANALYSIS_RESULT_BYTES,
 };
 use ring::digest;
 use serde_json::Value;
 
 use super::code::{CodeLanguage, CodeProvenance};
-use super::code_result::{ReceiptError, parse_receipt_detailed};
+use super::code_result::{ReceiptError, parse_receipt_captured};
 use super::code_runtime::{CodeInvocation, CodeSandboxRuntime, ToolCodeError};
 
 /// The most bytes of input state one program is sent.
@@ -41,14 +41,14 @@ const MAX_DETAIL_CHARS: usize = 1_500;
 /// uses. The run's status is judged before any size: a program that failed
 /// and wrote a great deal to stderr failed; it did not return too large a
 /// result. This is the one place the result limit is checked.
-fn result_of(bytes: &[u8]) -> Result<Value, AnalysisCodeError> {
-    match parse_receipt_detailed(bytes) {
-        Ok(result) => {
+fn result_of(bytes: &[u8]) -> Result<(Value, String), AnalysisCodeError> {
+    match parse_receipt_captured(bytes) {
+        Ok((result, printed)) => {
             let size = serde_json::to_vec(&result).map_or(usize::MAX, |encoded| encoded.len());
             if size > MAX_ANALYSIS_RESULT_BYTES {
                 return Err(AnalysisCodeFailure::ResultTooLarge.into());
             }
-            Ok(result)
+            Ok((result, printed))
         }
         Err(ReceiptError::TooLarge) => Err(AnalysisCodeFailure::ResultTooLarge.into()),
         Err(ReceiptError::Malformed) => Err(AnalysisCodeFailure::Failed.into()),
@@ -77,7 +77,7 @@ fn classify(error: &ToolCodeError) -> AnalysisCodeFailure {
         ToolCodeError::Refused | ToolCodeError::DeadlineInsufficient => {
             AnalysisCodeFailure::Rejected
         }
-        ToolCodeError::Sandbox { code } => match code.as_str() {
+        ToolCodeError::Sandbox { code, .. } => match code.as_str() {
             "sandbox.output_limit" | "sandbox.receipt_limit" => AnalysisCodeFailure::ResultTooLarge,
             "sandbox.invalid_request" => AnalysisCodeFailure::Rejected,
             "sandbox.deadline_exceeded"
@@ -90,6 +90,25 @@ fn classify(error: &ToolCodeError) -> AnalysisCodeFailure {
         },
         ToolCodeError::Submission | ToolCodeError::Untyped(_) => AnalysisCodeFailure::Failed,
     }
+}
+
+/// What the failed program printed to stderr, when the supervisor kept it
+/// (#2223): a compiler diagnostic, an exception, a panic. The supervisor and
+/// the worker client already bound it; it is bounded again here to the count
+/// the model-facing failure text shows, so no path can exceed it.
+fn failure_detail(error: &ToolCodeError) -> Option<String> {
+    let ToolCodeError::Sandbox {
+        detail: Some(detail),
+        ..
+    } = error
+    else {
+        return None;
+    };
+    let mut kept: String = detail.chars().take(MAX_DETAIL_CHARS).collect();
+    if detail.chars().count() > MAX_DETAIL_CHARS {
+        kept.push_str(" [stderr truncated]");
+    }
+    (!kept.trim().is_empty()).then_some(kept)
 }
 
 /// Stable per tool call: a replay of the same call with the same program and
@@ -107,9 +126,48 @@ fn activation(call_id: &str, source: &str, input: &[u8]) -> [u8; 32] {
     out
 }
 
+/// The most characters of a program's printed output carried out of this
+/// adapter; the tool applies its own, smaller bound to what the model reads.
+const MAX_PRINTED_CHARS: usize = 64 * 1024;
+
 #[async_trait]
 impl AnalysisCodeRunner for SandboxAnalysisRunner {
+    fn languages(&self) -> Vec<AnalysisLanguage> {
+        self.runtime
+            .served_languages()
+            .into_iter()
+            .map(|language| match language {
+                CodeLanguage::Python => AnalysisLanguage::Python,
+                CodeLanguage::JavaScript => AnalysisLanguage::JavaScript,
+                CodeLanguage::TypeScript => AnalysisLanguage::TypeScript,
+                CodeLanguage::Rust => AnalysisLanguage::Rust,
+            })
+            .collect()
+    }
+
     async fn run(&self, request: AnalysisCodeRequest) -> Result<Value, AnalysisCodeError> {
+        self.execute(request).await.map(|(result, _)| result)
+    }
+
+    async fn run_captured(
+        &self,
+        request: AnalysisCodeRequest,
+    ) -> Result<CapturedRun, AnalysisCodeError> {
+        self.execute(request)
+            .await
+            .map(|(result, printed)| CapturedRun {
+                result,
+                output: Some(printed.chars().take(MAX_PRINTED_CHARS).collect()),
+            })
+    }
+}
+
+impl SandboxAnalysisRunner {
+    /// One run: the result and what the program printed (the receipt's stderr).
+    async fn execute(
+        &self,
+        request: AnalysisCodeRequest,
+    ) -> Result<(Value, String), AnalysisCodeError> {
         let input_json = serde_json::to_vec(&request.input)
             .map_err(|_| AnalysisCodeError::from(AnalysisCodeFailure::Rejected))?;
         if input_json.len() > MAX_INPUT_BYTES || request.source.contains('\0') {
@@ -118,6 +176,8 @@ impl AnalysisCodeRunner for SandboxAnalysisRunner {
         let language = match request.language {
             AnalysisLanguage::Python => CodeLanguage::Python,
             AnalysisLanguage::JavaScript => CodeLanguage::JavaScript,
+            AnalysisLanguage::TypeScript => CodeLanguage::TypeScript,
+            AnalysisLanguage::Rust => CodeLanguage::Rust,
         };
         let activation = activation(&request.call_id, &request.source, &input_json);
         let invocation = CodeInvocation {
@@ -143,7 +203,10 @@ impl AnalysisCodeRunner for SandboxAnalysisRunner {
                     failure = ?failure,
                     "the sandbox did not return a result for run_analysis_code"
                 );
-                Err(failure.into())
+                Err(AnalysisCodeError {
+                    failure,
+                    detail: failure_detail(&error),
+                })
             }
         }
     }
@@ -167,6 +230,14 @@ mod tests {
 
     #[async_trait]
     impl CodeSandboxRuntime for Fake {
+        fn served_languages(&self) -> Vec<CodeLanguage> {
+            vec![
+                CodeLanguage::Python,
+                CodeLanguage::TypeScript,
+                CodeLanguage::Rust,
+            ]
+        }
+
         async fn execute(&self, _: CodeInvocation<'_>) -> Result<Vec<u8>, GraphError> {
             unreachable!("the tool path asks for typed failures")
         }
@@ -226,6 +297,35 @@ mod tests {
         runner.run(request("c")).await.unwrap_err()
     }
 
+    #[test]
+    fn the_runner_offers_the_languages_the_runtime_serves() {
+        let (runner, _) = runner(Ok(Vec::new()));
+        assert_eq!(
+            AnalysisCodeRunner::languages(&runner),
+            [
+                AnalysisLanguage::Python,
+                AnalysisLanguage::TypeScript,
+                AnalysisLanguage::Rust
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn every_analysis_language_maps_to_its_code_language() {
+        for (language, expected) in [
+            (AnalysisLanguage::Python, "python"),
+            (AnalysisLanguage::JavaScript, "javascript"),
+            (AnalysisLanguage::TypeScript, "other"),
+            (AnalysisLanguage::Rust, "other"),
+        ] {
+            let (runner, fake) = runner(Ok(receipt(r#"{"revision":1,"result":1}"#, 0)));
+            let mut asked = request("map");
+            asked.language = language;
+            runner.run(asked).await.unwrap();
+            assert_eq!(fake.seen.lock().unwrap()[0].1, expected);
+        }
+    }
+
     #[tokio::test]
     async fn a_completed_receipt_yields_the_program_result() {
         let (runner, fake) = runner(Ok(receipt(r#"{"revision":1,"result":{"n":3}}"#, 0)));
@@ -238,6 +338,38 @@ mod tests {
             serde_json::from_slice::<Value>(&seen[0].3).unwrap(),
             serde_json::json!({"data": {"rows": [[1]]}})
         );
+    }
+
+    // #2203: a completed run's stderr is what the program printed; `run`
+    // keeps returning only the result.
+    #[tokio::test]
+    async fn a_captured_run_returns_what_the_program_printed() {
+        let reply = || {
+            Ok(receipt_with(
+                r#"{"revision":1,"result":2}"#,
+                0,
+                "hello\n",
+                "completed",
+            ))
+        };
+        let (first, _) = runner(reply());
+        let captured = first.run_captured(request("p")).await.unwrap();
+        assert_eq!(captured.result, serde_json::json!(2));
+        assert_eq!(captured.output.as_deref(), Some("hello\n"));
+        let (second, _) = runner(reply());
+        assert_eq!(
+            second.run(request("p")).await.unwrap(),
+            serde_json::json!(2)
+        );
+        let big = "y".repeat(MAX_PRINTED_CHARS * 2);
+        let (third, _) = runner(Ok(receipt_with(
+            r#"{"revision":1,"result":2}"#,
+            0,
+            &big,
+            "completed",
+        )));
+        let captured = third.run_captured(request("p")).await.unwrap();
+        assert_eq!(captured.output.unwrap().chars().count(), MAX_PRINTED_CHARS);
     }
 
     #[tokio::test]
@@ -312,9 +444,42 @@ mod tests {
         );
     }
 
+    // #2223: the stderr the supervisor kept for a failed run reaches the
+    // model's failure through the tool's error detail, for every language.
+    #[tokio::test]
+    async fn a_failed_runs_stderr_rides_to_the_tool_error() {
+        let diagnostic = "error[E0308]: mismatched types";
+        let error = failure_of(Err(ToolCodeError::Sandbox {
+            code: "sandbox.code_failed".into(),
+            detail: Some(diagnostic.into()),
+        }))
+        .await;
+        assert_eq!(error.failure, AnalysisCodeFailure::Failed);
+        assert_eq!(error.detail.as_deref(), Some(diagnostic));
+        // No detail: the failure stands alone, as before.
+        let bare = failure_of(Err(ToolCodeError::Sandbox {
+            code: "sandbox.code_failed".into(),
+            detail: None,
+        }))
+        .await;
+        assert_eq!(bare.detail, None);
+        // A code that is not the program's own failure keeps its class, and
+        // an over-long detail is bounded once more.
+        let long = failure_of(Err(ToolCodeError::Sandbox {
+            code: "sandbox.deadline_exceeded".into(),
+            detail: Some("y".repeat(MAX_DETAIL_CHARS * 2)),
+        }))
+        .await;
+        assert_eq!(long.failure, AnalysisCodeFailure::Overrun);
+        assert!(long.detail.unwrap().ends_with("[stderr truncated]"));
+    }
+
     #[tokio::test]
     async fn typed_runtime_failures_map_by_code_without_reading_text() {
-        let sandbox = |code: &str| ToolCodeError::Sandbox { code: code.into() };
+        let sandbox = |code: &str| ToolCodeError::Sandbox {
+            code: code.into(),
+            detail: None,
+        };
         for (error, expected) in [
             (ToolCodeError::Unavailable, AnalysisCodeFailure::Unavailable),
             (ToolCodeError::Cancelled, AnalysisCodeFailure::Cancelled),

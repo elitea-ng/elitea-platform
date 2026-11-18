@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { useState } from 'react';
+import { useEffect } from 'react';
 
 import DifferenceOutlinedIcon from '@mui/icons-material/DifferenceOutlined';
 import IconButton from '@mui/material/IconButton';
@@ -8,6 +8,7 @@ import Tooltip from '@mui/material/Tooltip';
 import { t } from '@/shared/i18n';
 
 import type { AgentPipelineVersionOption } from '../../lib/types';
+import { useApplicationsStore } from '../../model/applicationsStore';
 import { CompareVersionsModal } from './CompareVersionsModal';
 
 /**
@@ -21,6 +22,10 @@ import { CompareVersionsModal } from './CompareVersionsModal';
  * — that gate belongs to its editable comparison panes, which this port does
  * not have (see `./CompareVersionsSteps.tsx`), so a read-only comparison is
  * offered to anyone who can already read the versions.
+ *
+ * #1997 — the open flag lives in `useApplicationsStore` so the editor's `⋮`
+ * menu ("Compare versions", where the baseline and testers look for it) opens
+ * this same modal; the icon stays as the one-click shortcut.
  */
 export interface CompareVersionsButtonProps {
   readonly projectId: string | undefined;
@@ -31,9 +36,20 @@ export interface CompareVersionsButtonProps {
 
 export function CompareVersionsButton(props: CompareVersionsButtonProps): ReactNode {
   const { projectId, applicationId, versions, activeVersionId } = props;
-  const [open, setOpen] = useState(false);
+  const open = useApplicationsStore((state) => state.compareVersionsOpen);
+  const setOpen = useApplicationsStore((state) => state.setCompareVersionsOpen);
 
-  if (versions.length < 2 || activeVersionId === undefined) return null;
+  const canCompare = versions.length >= 2 && activeVersionId !== undefined;
+
+  // The flag lives in a module store, so it outlives this component. A flag left
+  // set when the button unmounts (navigating to another agent) or stops being
+  // offered would pop the modal the next time one renders.
+  useEffect(() => {
+    if (!canCompare) setOpen(false);
+  }, [canCompare, setOpen]);
+  useEffect(() => () => setOpen(false), [setOpen]);
+
+  if (!canCompare) return null;
 
   return (
     <>

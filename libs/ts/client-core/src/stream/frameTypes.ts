@@ -146,6 +146,15 @@ export const FRAME_TYPE = {
    * `./subAgentLane`). Not part of the answer's text.
    */
   AgentSubAgent: 'agent_subagent',
+  /**
+   * Client contract 1.60 (ADR-0044 Amendment 1): the run refused a delegation
+   * to a saved agent or pipeline called as a tool
+   * (`response_metadata.delegation_v1`; see `./delegationNotice`). Not part of
+   * the answer's text.
+   */
+  DelegationRefused: 'delegation_refused',
+  /** Client contract 1.60: a delegation ran without what its grant no longer covers. */
+  DelegationNarrowed: 'delegation_narrowed',
 } as const;
 
 /** The `state` of an `agent_state` frame (client contract 1.38). */

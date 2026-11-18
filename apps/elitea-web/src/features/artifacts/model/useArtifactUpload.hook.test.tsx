@@ -118,6 +118,37 @@ describe('useArtifactUpload', () => {
     await waitFor(() => expect(hook.result.current.error).toContain('Failed to upload'));
   });
 
+  /* #2004 — a WAF/proxy HTML 403 must be named, not collapsed into a bare "Failed to upload" */
+  it('says the upload was blocked before reaching Elitea when a proxy answers with HTML', async () => {
+    const hook = renderUpload([]);
+    vi.mocked(uploadArtifactObject).mockResolvedValue({
+      ok: false,
+      error: { kind: 'http', status: 403, url: '/upload', body: '<html><body>Forbidden</body></html>' },
+    });
+    act(() => hook.result.current.stageFiles([new File(['pdf'], 'report.pdf')]));
+    act(() => hook.result.current.confirmPath(''));
+    await waitFor(() => expect(hook.result.current.error).toBe(
+      'Failed to upload: report.pdf: The upload was blocked before it reached Elitea (HTTP 403 from a proxy). Ask your administrator.',
+    ));
+  });
+
+  /* #2004 — a plain-text or empty refusal is not "blocked by a proxy"; each file names its own reason */
+  it('names the server refusal per file, and only calls HTML a proxy block', async () => {
+    const hook = renderUpload([]);
+    vi.mocked(uploadArtifactObject).mockImplementation((input) => Promise.resolve({
+      ok: false,
+      error: input.fileKey.endsWith('a.pdf')
+        ? { kind: 'http', status: 413, url: '/upload', body: 'Payload Too Large' }
+        : { kind: 'http', status: 502, url: '/upload', body: '<html>Bad gateway</html>' },
+    } as never));
+    act(() => hook.result.current.stageFiles([new File(['1'], 'a.pdf'), new File(['2'], 'b.png')]));
+    act(() => hook.result.current.confirmPath(''));
+    await waitFor(() => expect(hook.result.current.error).toBe(
+      'Failed to upload: a.pdf: The server refused the upload (HTTP 413). '
+      + 'b.png: The upload was blocked before it reached Elitea (HTTP 502 from a proxy). Ask your administrator.',
+    ));
+  });
+
   it('uploads a batch best-effort — one failing file does not stop the others from completing', async () => {
     const hook = renderUpload([]);
     vi.mocked(uploadArtifactObject).mockImplementation(({ fileKey }) =>

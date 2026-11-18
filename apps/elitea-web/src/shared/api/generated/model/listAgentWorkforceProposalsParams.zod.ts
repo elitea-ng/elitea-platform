@@ -50,6 +50,7 @@ export const listAgentWorkforceProposalsParamsOffsetMin = 0;
 export const ListAgentWorkforceProposalsParams = zod.object({
   status: zod.string().optional(),
   application_id: zod.int().min(1).optional(),
+  kind: zod.string().optional(),
   limit: zod
     .int()
     .min(listAgentWorkforceProposalsParamsLimitMin)

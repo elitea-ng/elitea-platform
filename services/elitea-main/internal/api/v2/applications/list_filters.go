@@ -11,7 +11,12 @@ import (
 )
 
 func parseApplicationList(values url.Values) (applications.ListRequest, error) {
-	req := applications.ListRequest{Page: 1, PageSize: 20, Search: values.Get("query"), Tags: values.Get("tags"), AgentsType: values.Get("agents_type"), SortBy: values.Get("sort_by"), SortOrder: values.Get("sort_order"), FolderID: values.Get("folder_id")}
+	req := applications.ListRequest{Page: 1, PageSize: 20, Search: values.Get("query"), Tags: values.Get("tags"), AgentsType: values.Get("agents_type"), SortBy: values.Get("sort_by"), SortOrder: values.Get("sort_order"), FolderID: values.Get("folder_id"), Status: values.Get("status"), Origin: values.Get("origin")}
+	switch strings.ToLower(values.Get("update_available")) {
+	case "1", "true":
+		req.UpdateAvailable = true
+	}
+	req.Pinned = values.Get("pinned") == "true"
 	if req.Search == "" {
 		req.Search = values.Get("search")
 	}

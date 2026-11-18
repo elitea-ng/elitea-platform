@@ -12,10 +12,7 @@ import { useNavBlockerStore } from '@/widgets/app-shell';
 import { renderAgentsRoute } from '../__tests__/testRouter';
 
 import { useEditApplicationVersionControls } from './useEditApplicationVersionControls';
-import {
-  useEditApplicationVersionFields,
-  type EditApplicationVersionFields,
-} from './useEditApplicationVersionFields';
+import { useEditApplicationVersionFields, type EditApplicationVersionFields } from './useEditApplicationVersionFields';
 
 /**
  * Driven through the unit's REAL router fixture rather than a mocked
@@ -76,29 +73,25 @@ function Probe({ starters, isReadOnly, isFetching, applicationId, version, edits
       <span data-testid="can-save">{String(state.canSaveNewVersion)}</span>
       <span data-testid="show">{String(state.showVersionControls)}</span>
       <span data-testid="id-text">{`[${state.applicationIdText}]`}</span>
-      <button
-        data-testid="select"
-        onClick={() => state.handleSelectVersion({ id: 2, name: 'v1' })}
-      >
+      <button data-testid="select" onClick={() => state.handleSelectVersion({ id: 2, name: 'v1' })}>
         select
       </button>
-      <button
-        data-testid="saved"
-        onClick={() => state.handleNewVersionSaved({ id: '7' } as ApplicationVersionDetail)}
-      >
+      <button data-testid="saved" onClick={() => state.handleNewVersionSaved({ id: '7' } as ApplicationVersionDetail)}>
         saved
       </button>
-      <button
-        data-testid="deleted"
-        onClick={() => state.versionDelete?.onVersionDeleted()}
-      >
+      <button data-testid="deleted" onClick={() => state.versionDelete?.onVersionDeleted()}>
         deleted
       </button>
     </div>
   );
 }
 
-function renderProbe(overrides: Partial<ProbeProps> = {}, queryClient?: QueryClient, withNavBlocker = false, initialPath = '/agents/my/42') {
+function renderProbe(
+  overrides: Partial<ProbeProps> = {},
+  queryClient?: QueryClient,
+  withNavBlocker = false,
+  initialPath = '/agents/my/42',
+) {
   const props: ProbeProps = {
     starters: ['start here'],
     isReadOnly: false,

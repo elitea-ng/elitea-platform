@@ -27,7 +27,7 @@ export interface ProposalRowProps {
 
 function ProposalSummary({ proposal }: { readonly proposal: AgentWorkforceProposal }): ReactNode {
   const by =
-    proposal.source === 'hr_agent'
+    proposal.source === 'workforce_manager'
       ? t('features.agentWorkforce.proposal.byAgent', 'Proposed by a reviewer agent: {{rationale}}', { rationale: proposal.rationale })
       : proposal.source === 'policy'
         ? t('features.agentWorkforce.proposal.byPolicy', 'Raised by the workforce policy (rule {{rule}}): {{rationale}}', {

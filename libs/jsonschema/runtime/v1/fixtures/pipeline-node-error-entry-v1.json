@@ -1,0 +1,1 @@
+{"attempts":1,"error":{"code":"pipeline.state_modifier.failed","message_safe":"The State Modifier node failed.","support_ref":"dfeb21b319ff2a7474d2dc0247dab041"},"handled":"continue","input_step":3,"node":"enrich","node_type":"state_modifier","retryable":false,"status":"failed"}

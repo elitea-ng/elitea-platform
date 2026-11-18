@@ -91,7 +91,7 @@ import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
 
 import { BASE_URL } from '../../playwright.config';
-import { describeRefusal, expectStoredAssistantAnswer, readStoredMessageGroups } from '../fixtures/api';
+import { describeRefusal, expectStoredAssistantAnswer, readStoredMessageGroups, fillComposer } from '../fixtures/api';
 
 const CONVERSATIONS_RE = /\/elitea_core\/conversations\/prompt_lib\/(\d+)$/;
 const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/;
@@ -157,6 +157,7 @@ test('a canvas carved out of an answer keeps the edit made to it', async ({ page
   await expect(page.getByTestId('model-selector-name')).toContainText(MODEL_NAME, { timeout: 10_000 });
 
   // ── the turn that stores the answer this canvas is carved out of ────────
+  const send = await fillComposer(page, prompt);
   const created = page.waitForResponse(
     (r) => CONVERSATIONS_RE.test(new URL(r.url()).pathname) && r.request().method() === 'POST',
     { timeout: 45_000 },
@@ -165,11 +166,7 @@ test('a canvas carved out of an answer keeps the edit made to it', async ({ page
     timeout: 45_000,
   });
 
-  const input = page.getByTestId('chat-message-input');
-  await expect(input).toBeEditable({ timeout: 20_000 });
-  await input.fill(prompt);
-  await expect(page.getByTestId('chat-send-button')).toBeEnabled({ timeout: 10_000 });
-  await page.getByTestId('chat-send-button').click();
+  await send.click();
 
   const createdResponse = await created;
   expect(createdResponse.status(), 'the send must create a real conversation').toBe(201);
@@ -305,17 +302,14 @@ async function seedAnswer(page: Page, token: string, prompt: string): Promise<Se
   await modelOption.click();
   await expect(page.getByTestId('model-selector-name')).toContainText(MODEL_NAME, { timeout: 10_000 });
 
+  const send = await fillComposer(page, prompt);
   const created = page.waitForResponse(
     (r) => CONVERSATIONS_RE.test(new URL(r.url()).pathname) && r.request().method() === 'POST',
     { timeout: 45_000 },
   );
   const started = page.waitForResponse((r) => START_RE.test(r.url()) && r.request().method() === 'POST', { timeout: 45_000 });
 
-  const input = page.getByTestId('chat-message-input');
-  await expect(input).toBeEditable({ timeout: 20_000 });
-  await input.fill(prompt);
-  await expect(page.getByTestId('chat-send-button')).toBeEnabled({ timeout: 10_000 });
-  await page.getByTestId('chat-send-button').click();
+  await send.click();
 
   const createdResponse = await created;
   expect(createdResponse.status(), 'the send must create a real conversation').toBe(201);
@@ -352,12 +346,9 @@ async function seedAnswer(page: Page, token: string, prompt: string): Promise<Se
  * exercise, because nothing upstream of it has had a chance to go stale yet.
  */
 async function sendFollowUp(page: Page, projectId: string, conversationId: string, token: string, prompt: string): Promise<void> {
+  const send = await fillComposer(page, prompt);
   const started = page.waitForResponse((r) => START_RE.test(r.url()) && r.request().method() === 'POST', { timeout: 45_000 });
-  const input = page.getByTestId('chat-message-input');
-  await expect(input).toBeEditable({ timeout: 20_000 });
-  await input.fill(prompt);
-  await expect(page.getByTestId('chat-send-button')).toBeEnabled({ timeout: 10_000 });
-  await page.getByTestId('chat-send-button').click();
+  await send.click();
   const startResponse = await started;
   expect(startResponse.status(), `the follow-up turn was refused: ${(await startResponse.text()).slice(0, 300)}`).toBe(200);
   await expectStoredAssistantAnswer(page, projectId, conversationId, {

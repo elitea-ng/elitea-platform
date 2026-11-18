@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { useCallback } from 'react';
 
 import { CredentialWarningBanner } from '@/entities/credential';
+import type { DelegationGrant } from '@/shared/api/generated/model';
 
 import { useBlockedToolkitTypes } from '../api/useBlockedToolkitTypes';
 import { useDisassociateToolkit } from '../lib/hooks/useDisassociateToolkit.hooks';
@@ -10,6 +11,7 @@ import { useSaveSelectedTools } from '../lib/hooks/useSaveSelectedTools.hooks';
 import { useToolkitCredentialIssue } from '../lib/hooks/useToolkitCredentialIssue';
 import type { AgentToolAssociation } from '../lib/types';
 
+import { DelegationGrantStatus } from './DelegationGrantStatus';
 import { ToolCard } from './ToolCard';
 
 /**
@@ -92,6 +94,18 @@ interface AgentToolRowToolsState {
   readonly onToolRemoved: (update: ToolRemovalUpdate) => void;
 }
 
+/** The grant of this row's edge (an attached agent or pipeline), with what the status needs to act on it. */
+interface AgentToolRowDelegation {
+  readonly grant: DelegationGrant;
+  readonly projectId: string;
+  /** The caller: the agent or pipeline whose panel this is. */
+  readonly applicationId: number;
+  readonly readOnly: boolean;
+  /** The deep link names this edge: open its review dialog on arrival. */
+  readonly autoOpen?: boolean | undefined;
+  readonly onAutoOpened?: (() => void) | undefined;
+}
+
 export interface AgentToolRowProps {
   readonly tool: AgentToolAssociation;
   readonly index: number;
@@ -100,9 +114,11 @@ export interface AgentToolRowProps {
   readonly viewMode: string;
   readonly entity: AgentToolRowEntity;
   readonly toolsState: AgentToolRowToolsState;
+  /** Set for an attached agent or pipeline whose edge has a delegation grant (ADR-0044 amendment 1). */
+  readonly delegation?: AgentToolRowDelegation | undefined;
 }
 
-export function AgentToolRow({ tool, index, isDuplicate, disabled, viewMode, entity, toolsState }: AgentToolRowProps): ReactNode {
+export function AgentToolRow({ tool, index, isDuplicate, disabled, viewMode, entity, toolsState, delegation }: AgentToolRowProps): ReactNode {
   const { onDisassociateTool, isLoading } = useDisassociateToolkit({
     applicationId: entity.applicationId,
     versionId: entity.versionId,
@@ -146,7 +162,7 @@ export function AgentToolRow({ tool, index, isDuplicate, disabled, viewMode, ent
     [onDisassociateTool, tool],
   );
 
-  return (
+  const card = (
     <ToolCard
       tool={tool}
       disabled={disabled}
@@ -177,5 +193,20 @@ export function AgentToolRow({ tool, index, isDuplicate, disabled, viewMode, ent
             },
           })}
     />
+  );
+
+  if (delegation === undefined) return card;
+  return (
+    <>
+      {card}
+      <DelegationGrantStatus
+        projectId={delegation.projectId}
+        applicationId={delegation.applicationId}
+        grant={delegation.grant}
+        readOnly={delegation.readOnly}
+        autoOpen={delegation.autoOpen}
+        onAutoOpened={delegation.onAutoOpened}
+      />
+    </>
   );
 }

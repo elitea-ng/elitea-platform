@@ -189,6 +189,14 @@ describe('configurationSectionsOf', () => {
 });
 
 describe('initialValueForSchemaField', () => {
+  it('opens a required field with the schema prefill_value (#2128)', () => {
+    expect(initialValueForSchemaField('base_url', { type: 'string', prefill_value: 'https://api.github.com' })).toBe('https://api.github.com');
+  });
+
+  it('prefers an explicit default to the prefill hint', () => {
+    expect(initialValueForSchemaField('base_url', { type: 'string', default: 'a', prefill_value: 'b' })).toBe('a');
+  });
+
   it('prefers the schema default for a non-secret field', () => {
     expect(initialValueForSchemaField('label', { default: 'x' })).toBe('x');
     expect(initialValueForSchemaField('enabled', { type: 'boolean', default: true })).toBe(true);

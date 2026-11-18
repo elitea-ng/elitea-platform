@@ -81,6 +81,8 @@ import type {
   ConversationParticipant,
   ConversationParticipantCreate,
   ConversationReadState,
+  ConversationSkillList,
+  ConversationSkillPin,
   ConversationSummary,
   CreateSupportConversationBody,
   CreatedConversation,
@@ -109,6 +111,7 @@ import type {
   ListMessageTracesParams,
   ListParticipantCandidatesParams,
   ListSupportConversationsParams,
+  LocalChildTurnForbidden,
   LocalChildTurnRequest,
   LocalChildTurnStarted,
   LocalChildTurnState,
@@ -136,10 +139,12 @@ import type {
   N500Response,
   OkResponse,
   ParticipantCandidatesPage,
+  PinConversationSkillRequest,
   RegenerateChatMessageParams,
   RunBriefRequest,
   RunBriefState,
   RunCheckRequest,
+  RunGuardrailNotices,
   SendChatMessageParams,
   StaticPipelineContinuationBody,
   StaticPipelineContinuationReceipt,
@@ -2997,6 +3002,977 @@ export function useUpdateConversationInternalTools<
     projectId,
     conversationId,
     updateConversationInternalToolsRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listConversationSkillsResponse200 = {
+  data: ConversationSkillList;
+  status: 200;
+};
+
+export type listConversationSkillsResponse400 = {
+  data: ErrorResponse | InvalidClientVersionError;
+  status: 400;
+};
+
+export type listConversationSkillsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listConversationSkillsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listConversationSkillsResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type listConversationSkillsResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type listConversationSkillsResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type listConversationSkillsResponseSuccess =
+  listConversationSkillsResponse200 & {
+    headers: Headers;
+  };
+export type listConversationSkillsResponseError = (
+  | listConversationSkillsResponse400
+  | listConversationSkillsResponse401
+  | listConversationSkillsResponse403
+  | listConversationSkillsResponse404
+  | listConversationSkillsResponse426
+  | listConversationSkillsResponse500
+) & {
+  headers: Headers;
+};
+
+export type listConversationSkillsResponse =
+  listConversationSkillsResponseSuccess | listConversationSkillsResponseError;
+
+export const getListConversationSkillsUrl = (
+  projectId: string,
+  conversationId: string,
+) => {
+  return `/elitea_core/conversation_skills/prompt_lib/${projectId}/${conversationId}`;
+};
+
+/**
+ * Client contract 1.57 (ADR-0050 amendment 1). The skills pinned to the
+ * conversation, oldest first: each is a project skill or a Marketplace
+ * skill listing version. A pin applies to every run of the conversation,
+ * whichever agent or model answers, and is shown apart from the
+ * participants. It is an attachment, never a participant, and grants
+ * nothing. Needs access to the conversation; a conversation the caller
+ * cannot see answers 404. NOTE(W2):
+ * internal/api/v2/conversationskills/handler.go:105 (`List`).
+ * @summary The skills pinned to a conversation
+ */
+export const listConversationSkills = async (
+  projectId: string,
+  conversationId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listConversationSkillsResponse> => {
+  return eliteaFetch<listConversationSkillsResponse>(
+    getListConversationSkillsUrl(projectId, conversationId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListConversationSkillsQueryKey = (
+  projectId: string,
+  conversationId: string,
+) => {
+  return [
+    `/elitea_core/conversation_skills/prompt_lib/${projectId}/${conversationId}`,
+  ] as const;
+};
+
+export const getListConversationSkillsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listConversationSkills>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConversationSkills>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListConversationSkillsQueryKey(projectId, conversationId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listConversationSkills>>
+  > = ({ signal }) =>
+    listConversationSkills(projectId, conversationId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationId !== null &&
+      conversationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listConversationSkills>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListConversationSkillsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listConversationSkills>>
+>;
+export type ListConversationSkillsQueryError =
+  | ErrorResponse
+  | InvalidClientVersionError
+  | N401Response
+  | N403Response
+  | N404Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useListConversationSkills<
+  TData = Awaited<ReturnType<typeof listConversationSkills>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConversationSkills>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listConversationSkills>>,
+          TError,
+          Awaited<ReturnType<typeof listConversationSkills>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListConversationSkills<
+  TData = Awaited<ReturnType<typeof listConversationSkills>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConversationSkills>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listConversationSkills>>,
+          TError,
+          Awaited<ReturnType<typeof listConversationSkills>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListConversationSkills<
+  TData = Awaited<ReturnType<typeof listConversationSkills>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConversationSkills>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary The skills pinned to a conversation
+ */
+
+export function useListConversationSkills<
+  TData = Awaited<ReturnType<typeof listConversationSkills>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConversationSkills>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListConversationSkillsQueryOptions(
+    projectId,
+    conversationId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type pinConversationSkillResponse200 = {
+  data: ConversationSkillPin;
+  status: 200;
+};
+
+export type pinConversationSkillResponse201 = {
+  data: ConversationSkillPin;
+  status: 201;
+};
+
+export type pinConversationSkillResponse400 = {
+  data: ErrorResponse | InvalidClientVersionError;
+  status: 400;
+};
+
+export type pinConversationSkillResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type pinConversationSkillResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type pinConversationSkillResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type pinConversationSkillResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type pinConversationSkillResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type pinConversationSkillResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type pinConversationSkillResponseSuccess = (
+  pinConversationSkillResponse200 | pinConversationSkillResponse201
+) & {
+  headers: Headers;
+};
+export type pinConversationSkillResponseError = (
+  | pinConversationSkillResponse400
+  | pinConversationSkillResponse401
+  | pinConversationSkillResponse403
+  | pinConversationSkillResponse404
+  | pinConversationSkillResponse409
+  | pinConversationSkillResponse426
+  | pinConversationSkillResponse500
+) & {
+  headers: Headers;
+};
+
+export type pinConversationSkillResponse =
+  pinConversationSkillResponseSuccess | pinConversationSkillResponseError;
+
+export const getPinConversationSkillUrl = (
+  projectId: string,
+  conversationId: string,
+) => {
+  return `/elitea_core/conversation_skills/prompt_lib/${projectId}/${conversationId}`;
+};
+
+/**
+ * Client contract 1.57 (ADR-0050 amendment 1). Pins a project skill
+ * (`skill_id`) or a Marketplace skill listing version (`listing_id` and
+ * `listing_version_id`); a listing is pinned by reference and nothing is
+ * forked into the project. The text is read when each turn starts, under
+ * the caller's own visibility, so the pin never carries text. Pinning what
+ * is pinned already answers the existing pin with 200. A skill the caller
+ * cannot read, or a listing that is not listed or whose version is yanked
+ * or withdrawn, answers one 404. A conversation holds at most five pins
+ * (409). Needs `models.chat.conversation.update` and the right to write to
+ * the conversation (a participant). Audited. NOTE(W2):
+ * internal/api/v2/conversationskills/handler.go:137 (`Pin`).
+ * @summary Pin a skill to a conversation
+ */
+export const pinConversationSkill = async (
+  projectId: string,
+  conversationId: string,
+  pinConversationSkillRequest: PinConversationSkillRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<pinConversationSkillResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<pinConversationSkillResponse>(
+    getPinConversationSkillUrl(projectId, conversationId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(pinConversationSkillRequest),
+    },
+  );
+};
+
+export const getPinConversationSkillQueryKey = (
+  projectId: string,
+  conversationId: string,
+  pinConversationSkillRequest?: PinConversationSkillRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/conversation_skills/prompt_lib/${projectId}/${conversationId}`,
+    pinConversationSkillRequest,
+  ] as const;
+};
+
+export const getPinConversationSkillQueryOptions = <
+  TData = Awaited<ReturnType<typeof pinConversationSkill>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  pinConversationSkillRequest: PinConversationSkillRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof pinConversationSkill>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getPinConversationSkillQueryKey(
+      projectId,
+      conversationId,
+      pinConversationSkillRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof pinConversationSkill>>
+  > = ({ signal }) =>
+    pinConversationSkill(
+      projectId,
+      conversationId,
+      pinConversationSkillRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationId !== null &&
+      conversationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof pinConversationSkill>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type PinConversationSkillQueryResult = NonNullable<
+  Awaited<ReturnType<typeof pinConversationSkill>>
+>;
+export type PinConversationSkillQueryError =
+  | ErrorResponse
+  | InvalidClientVersionError
+  | N401Response
+  | N403Response
+  | N404Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function usePinConversationSkill<
+  TData = Awaited<ReturnType<typeof pinConversationSkill>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  pinConversationSkillRequest: PinConversationSkillRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof pinConversationSkill>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof pinConversationSkill>>,
+          TError,
+          Awaited<ReturnType<typeof pinConversationSkill>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function usePinConversationSkill<
+  TData = Awaited<ReturnType<typeof pinConversationSkill>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  pinConversationSkillRequest: PinConversationSkillRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof pinConversationSkill>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof pinConversationSkill>>,
+          TError,
+          Awaited<ReturnType<typeof pinConversationSkill>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function usePinConversationSkill<
+  TData = Awaited<ReturnType<typeof pinConversationSkill>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  pinConversationSkillRequest: PinConversationSkillRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof pinConversationSkill>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Pin a skill to a conversation
+ */
+
+export function usePinConversationSkill<
+  TData = Awaited<ReturnType<typeof pinConversationSkill>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  pinConversationSkillRequest: PinConversationSkillRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof pinConversationSkill>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getPinConversationSkillQueryOptions(
+    projectId,
+    conversationId,
+    pinConversationSkillRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type unpinConversationSkillResponse204 = {
+  data: void;
+  status: 204;
+};
+
+export type unpinConversationSkillResponse400 = {
+  data: ErrorResponse | InvalidClientVersionError;
+  status: 400;
+};
+
+export type unpinConversationSkillResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type unpinConversationSkillResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type unpinConversationSkillResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type unpinConversationSkillResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type unpinConversationSkillResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type unpinConversationSkillResponseSuccess =
+  unpinConversationSkillResponse204 & {
+    headers: Headers;
+  };
+export type unpinConversationSkillResponseError = (
+  | unpinConversationSkillResponse400
+  | unpinConversationSkillResponse401
+  | unpinConversationSkillResponse403
+  | unpinConversationSkillResponse404
+  | unpinConversationSkillResponse426
+  | unpinConversationSkillResponse500
+) & {
+  headers: Headers;
+};
+
+export type unpinConversationSkillResponse =
+  unpinConversationSkillResponseSuccess | unpinConversationSkillResponseError;
+
+export const getUnpinConversationSkillUrl = (
+  projectId: string,
+  conversationId: string,
+  pinId: number,
+) => {
+  return `/elitea_core/conversation_skill/prompt_lib/${projectId}/${conversationId}/${pinId}`;
+};
+
+/**
+ * Client contract 1.57 (ADR-0050 amendment 1). Removes the pin; the skill
+ * stops applying from the next turn. Needs `models.chat.conversation.update`
+ * and the right to write to the conversation. Audited. NOTE(W2):
+ * internal/api/v2/conversationskills/handler.go:179 (`Unpin`).
+ * @summary Remove a pinned skill from a conversation
+ */
+export const unpinConversationSkill = async (
+  projectId: string,
+  conversationId: string,
+  pinId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<unpinConversationSkillResponse> => {
+  return eliteaFetch<unpinConversationSkillResponse>(
+    getUnpinConversationSkillUrl(projectId, conversationId, pinId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getUnpinConversationSkillQueryKey = (
+  projectId: string,
+  conversationId: string,
+  pinId: number,
+) => {
+  return [
+    "DELETE",
+    `/elitea_core/conversation_skill/prompt_lib/${projectId}/${conversationId}/${pinId}`,
+  ] as const;
+};
+
+export const getUnpinConversationSkillQueryOptions = <
+  TData = Awaited<ReturnType<typeof unpinConversationSkill>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  pinId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof unpinConversationSkill>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getUnpinConversationSkillQueryKey(projectId, conversationId, pinId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof unpinConversationSkill>>
+  > = ({ signal }) =>
+    unpinConversationSkill(projectId, conversationId, pinId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationId !== null &&
+      conversationId !== undefined &&
+      pinId !== null &&
+      pinId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof unpinConversationSkill>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type UnpinConversationSkillQueryResult = NonNullable<
+  Awaited<ReturnType<typeof unpinConversationSkill>>
+>;
+export type UnpinConversationSkillQueryError =
+  | ErrorResponse
+  | InvalidClientVersionError
+  | N401Response
+  | N403Response
+  | N404Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useUnpinConversationSkill<
+  TData = Awaited<ReturnType<typeof unpinConversationSkill>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  pinId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof unpinConversationSkill>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof unpinConversationSkill>>,
+          TError,
+          Awaited<ReturnType<typeof unpinConversationSkill>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUnpinConversationSkill<
+  TData = Awaited<ReturnType<typeof unpinConversationSkill>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  pinId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof unpinConversationSkill>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof unpinConversationSkill>>,
+          TError,
+          Awaited<ReturnType<typeof unpinConversationSkill>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUnpinConversationSkill<
+  TData = Awaited<ReturnType<typeof unpinConversationSkill>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  pinId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof unpinConversationSkill>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Remove a pinned skill from a conversation
+ */
+
+export function useUnpinConversationSkill<
+  TData = Awaited<ReturnType<typeof unpinConversationSkill>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  pinId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof unpinConversationSkill>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getUnpinConversationSkillQueryOptions(
+    projectId,
+    conversationId,
+    pinId,
     options,
   );
 
@@ -9424,6 +10400,245 @@ export function useGetWorkspaceHandoffPolicy<
   return withQueryKey(query, queryOptions.queryKey);
 }
 
+export type listRunGuardrailNoticesResponse200 = {
+  data: RunGuardrailNotices;
+  status: 200;
+};
+
+export type listRunGuardrailNoticesResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type listRunGuardrailNoticesResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listRunGuardrailNoticesResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listRunGuardrailNoticesResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type listRunGuardrailNoticesResponseSuccess =
+  listRunGuardrailNoticesResponse200 & {
+    headers: Headers;
+  };
+export type listRunGuardrailNoticesResponseError = (
+  | listRunGuardrailNoticesResponse400
+  | listRunGuardrailNoticesResponse401
+  | listRunGuardrailNoticesResponse403
+  | listRunGuardrailNoticesResponse500
+) & {
+  headers: Headers;
+};
+
+export type listRunGuardrailNoticesResponse =
+  listRunGuardrailNoticesResponseSuccess | listRunGuardrailNoticesResponseError;
+
+export const getListRunGuardrailNoticesUrl = (
+  projectId: string,
+  runId: string,
+) => {
+  return `/elitea_core/guardrail_notices/prompt_lib/${projectId}/${runId}`;
+};
+
+/**
+ * The guardrail verdicts of a run that the person must be told about, merged to one notice per guardrail, stage and kind (ADR-0043 decision 1): a request or an answer the gateway blocked, content it redacted (masked), content a `warn` guardrail warned about, and a guardrail with fail mode closed that could not run. A notice names the stage, the action, the guardrail (the governance entry's name) and the finding labels such as `email`. It never holds the inspected text or the matched value. A run with no notice, and an unknown run, answer an empty list. The gateway writes verdicts up to one second after the request, so a client asks again once when a turn failed or ended and the list is empty. Requires `models.chat.messages.create`, the permission that sends a chat message; reading the full verdicts needs `runs.evidence.read` (listRunSteps).
+ * @summary What the content guardrails did to a run, for the chat
+ */
+export const listRunGuardrailNotices = async (
+  projectId: string,
+  runId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listRunGuardrailNoticesResponse> => {
+  return eliteaFetch<listRunGuardrailNoticesResponse>(
+    getListRunGuardrailNoticesUrl(projectId, runId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListRunGuardrailNoticesQueryKey = (
+  projectId: string,
+  runId: string,
+) => {
+  return [
+    `/elitea_core/guardrail_notices/prompt_lib/${projectId}/${runId}`,
+  ] as const;
+};
+
+export const getListRunGuardrailNoticesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listRunGuardrailNotices>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listRunGuardrailNotices>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListRunGuardrailNoticesQueryKey(projectId, runId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listRunGuardrailNotices>>
+  > = ({ signal }) =>
+    listRunGuardrailNotices(projectId, runId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      runId !== null &&
+      runId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listRunGuardrailNotices>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListRunGuardrailNoticesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listRunGuardrailNotices>>
+>;
+export type ListRunGuardrailNoticesQueryError =
+  N400Response | N401Response | N403Response | N500Response;
+
+export function useListRunGuardrailNotices<
+  TData = Awaited<ReturnType<typeof listRunGuardrailNotices>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listRunGuardrailNotices>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listRunGuardrailNotices>>,
+          TError,
+          Awaited<ReturnType<typeof listRunGuardrailNotices>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListRunGuardrailNotices<
+  TData = Awaited<ReturnType<typeof listRunGuardrailNotices>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listRunGuardrailNotices>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listRunGuardrailNotices>>,
+          TError,
+          Awaited<ReturnType<typeof listRunGuardrailNotices>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListRunGuardrailNotices<
+  TData = Awaited<ReturnType<typeof listRunGuardrailNotices>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listRunGuardrailNotices>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary What the content guardrails did to a run, for the chat
+ */
+
+export function useListRunGuardrailNotices<
+  TData = Awaited<ReturnType<typeof listRunGuardrailNotices>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listRunGuardrailNotices>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListRunGuardrailNoticesQueryOptions(
+    projectId,
+    runId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
 export type beginWorkspaceHandoffResponse201 = {
   data: WorkspaceHandoffBegun;
   status: 201;
@@ -14819,7 +16034,7 @@ export type startLocalChildTurnResponse401 = {
 };
 
 export type startLocalChildTurnResponse403 = {
-  data: DesktopOperationError;
+  data: LocalChildTurnForbidden;
   status: 403;
 };
 
@@ -15002,6 +16217,7 @@ export const getStartLocalChildTurnQueryOptions = <
     | DesktopOperationError
     | InvalidClientVersionError
     | N401Response
+    | LocalChildTurnForbidden
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -15060,6 +16276,7 @@ export type StartLocalChildTurnQueryError =
   | DesktopOperationError
   | InvalidClientVersionError
   | N401Response
+  | LocalChildTurnForbidden
   | ClientUpgradeRequiredResponse
   | N500Response;
 
@@ -15069,6 +16286,7 @@ export function useStartLocalChildTurn<
     | DesktopOperationError
     | InvalidClientVersionError
     | N401Response
+    | LocalChildTurnForbidden
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -15103,6 +16321,7 @@ export function useStartLocalChildTurn<
     | DesktopOperationError
     | InvalidClientVersionError
     | N401Response
+    | LocalChildTurnForbidden
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -15137,6 +16356,7 @@ export function useStartLocalChildTurn<
     | DesktopOperationError
     | InvalidClientVersionError
     | N401Response
+    | LocalChildTurnForbidden
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -15167,6 +16387,7 @@ export function useStartLocalChildTurn<
     | DesktopOperationError
     | InvalidClientVersionError
     | N401Response
+    | LocalChildTurnForbidden
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(

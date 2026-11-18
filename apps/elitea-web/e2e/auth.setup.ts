@@ -206,6 +206,11 @@ async function performOidcLogin(
       .toBe(personalProjectId);
   }
 
+  // The Workshop lists keep their controls in the right sidebar's List tab (ADR-0051), which a person opens
+  // once and the app remembers per page. Journeys run at the default 1280px, where it starts closed, so the
+  // persona's state has it open: the search, New, Import and the view switch are where the journeys look.
+  await page.evaluate(() => localStorage.setItem('el.sidePanel.open.list', 'true'));
+
   // Save the authenticated state (cookies + localStorage).
   await page.context().storageState({ path: storageStatePath });
 }

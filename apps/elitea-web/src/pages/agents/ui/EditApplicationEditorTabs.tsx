@@ -61,6 +61,8 @@ import { t } from '@/shared/i18n';
 import { BaseTab } from '@/shared/ui/BaseTab';
 import { BaseTabs } from '@/shared/ui/BaseTabs';
 
+import { EvaluationRequestPublish } from './EvaluationRequestPublish';
+
 const EDITOR_TABS = {
   configuration: 'configuration',
   persona: 'persona',
@@ -105,7 +107,8 @@ export interface EditApplicationEditorTabsProps {
 }
 
 export function EditApplicationEditorTabs(props: EditApplicationEditorTabsProps): ReactNode {
-  const { projectId, applicationId, applicationVersionId, configurationPanel, personaPanel, avatarPanel, versions } = props;
+  const { projectId, applicationId, applicationVersionId, configurationPanel, personaPanel, avatarPanel, versions } =
+    props;
   const [tab, setTab] = useState<EditorTab>(EDITOR_TABS.configuration);
 
   const handleChange = (_event: SyntheticEvent, value: EditorTab): void => setTab(value);
@@ -183,6 +186,7 @@ export function EditApplicationEditorTabs(props: EditApplicationEditorTabsProps)
             projectId={projectId}
             applicationId={applicationId}
             applicationVersionId={applicationVersionId}
+            renderRequestPublish={(args) => <EvaluationRequestPublish projectId={projectId} {...args} />}
           />
         )}
       </Box>

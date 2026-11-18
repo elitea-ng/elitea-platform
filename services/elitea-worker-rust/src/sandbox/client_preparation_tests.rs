@@ -304,6 +304,7 @@ impl SandboxSupervisorService for RecordingSupervisor {
                     .to_vec(),
             failure_code: String::new(),
             cleanup_pending: false,
+            failure_detail: String::new(),
         }))
     }
     async fn cancel_sandbox_job(

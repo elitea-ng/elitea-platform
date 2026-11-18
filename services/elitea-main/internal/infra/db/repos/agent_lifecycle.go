@@ -77,6 +77,11 @@ type AgentLifecycle struct {
 	policy    PolicySource
 	gate      agentlifecycle.ReleaseGate
 	publisher CandidatePublisher
+	// marketplaceApplier applies an approved upgrade or upstream merge.
+	marketplaceApplier MarketplaceApplier
+	// delegationApplier approves, in the final approval's transaction, the
+	// delegation grant a request of kind delegation carries.
+	delegationApplier DelegationApplier
 	// digester takes the candidate digest at submit and the final
 	// approval. Without it only the version's revisions are compared.
 	digester CandidateDigester
@@ -1336,6 +1341,15 @@ WHERE id = $1`, change.ID, requirement.Approvals, requirement.GovernanceApproval
 // and the configurations they pin) differs from the one taken at submit.
 // The revisions see the version row only; the digest sees the attachments.
 func (s *AgentLifecycle) checkFresh(ctx context.Context, tx pgx.Tx, change agentlifecycle.ChangeRequest) error {
+	if change.Kind.IsMarketplace() {
+		// Pinned to a listing version by id and digest, and checked against the
+		// listing when the final approval enables the tools.
+		return nil
+	}
+	if change.Kind.IsDelegation() {
+		// Pinned to a grant, whose state the final approval checks.
+		return nil
+	}
 	stale := agentlifecycle.Refuse(agentlifecycle.StaleCode,
 		"The agent changed after this change request was submitted. Withdraw it and submit a new one.")
 	head, _, err := headRelease(ctx, tx, change.ProjectID, change.ApplicationID)
@@ -1384,6 +1398,10 @@ func (s *AgentLifecycle) checkFresh(ctx context.Context, tx pgx.Tx, change agent
 // missingAttestations lists the required kinds with no valid attestation on
 // the agent, or, for a recertification, on the release it certifies.
 func (s *AgentLifecycle) missingAttestations(ctx context.Context, tx pgx.Tx, change agentlifecycle.ChangeRequest, required []agentlifecycle.AttestationKind) ([]agentlifecycle.AttestationKind, error) {
+	if change.Kind.IsDelegation() {
+		// An attestation is about a release; a delegation grant has none.
+		return nil, nil
+	}
 	if len(required) == 0 {
 		return nil, nil
 	}
@@ -1417,6 +1435,16 @@ WHERE tenant_project_id = $1 AND revoked_at IS NULL
 
 // finalize publishes or certifies after the final approval, in tx.
 func (s *AgentLifecycle) finalize(ctx context.Context, tx pgx.Tx, change agentlifecycle.ChangeRequest, registry agentlifecycle.Registry, requirement agentlifecycle.Requirement, approverID int64, outcome *ApprovalOutcome) ([]int64, error) {
+	if change.Kind.IsMarketplace() {
+		// A hire enables the tools of the hired agent. It publishes nothing
+		// and certifies nothing (agent_lifecycle_marketplace.go).
+		return nil, s.finalizeMarketplace(ctx, tx, change, approverID)
+	}
+	if change.Kind.IsDelegation() {
+		// A delegation approves its grant. It publishes nothing and certifies
+		// nothing (agent_lifecycle_delegation.go).
+		return nil, s.finalizeDelegation(ctx, tx, change, approverID)
+	}
 	releaseID := change.CurrentReleaseID
 	state := agentlifecycle.ChangeApproved
 	if change.Kind == agentlifecycle.KindRelease {
@@ -1426,6 +1454,7 @@ func (s *AgentLifecycle) finalize(ctx context.Context, tx pgx.Tx, change agentli
 		published, err := s.publisher.PublishCandidateTx(ctx, tx, agentlifecycle.PublishCandidate{
 			ProjectID: change.ProjectID, ApplicationID: change.ApplicationID, VersionID: change.CandidateVersionID,
 			VersionName: change.VersionName, Category: change.Category, PublisherID: change.ProposedBy,
+			ReleaseNotes: change.Summary,
 		})
 		if err != nil {
 			return nil, err
@@ -1534,6 +1563,12 @@ RETURNING `+changeRequestColumns, projectID, applicationID, changeID, string(to)
 			return fmt.Errorf("agent lifecycle: close the change request: %w", err)
 		}
 		closed.Approvals = change.Approvals
+		if change.Kind.IsDelegation() {
+			// A rejected or withdrawn delegation revokes the grant it asked for.
+			if err := s.closeDelegation(ctx, tx, change, actorID); err != nil {
+				return err
+			}
+		}
 		return s.append(ctx, tx, lifecycleEvent(projectID, action, actorID,
 			"agent_change_request", changeRef(applicationID, changeID), "from:"+string(change.State)))
 	})

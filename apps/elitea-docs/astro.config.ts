@@ -63,8 +63,7 @@ export default defineConfig({
   base,
   site: process.env['DOCS_SITE'],
   trailingSlash: 'ignore',
-  build: { format: 'directory' },
-  // Screenshots are committed as sized webp and the logos are SVG: nothing
+  build: { format: 'directory' },  // Screenshots are committed as sized webp and the logos are SVG: nothing
   // to transform, so no native image toolchain in the build.
   image: { service: passthroughImageService() },
   markdown: {

@@ -464,6 +464,7 @@ fn snapshot_response(
                 result_json: receipt.result_json,
                 failure_code: receipt.failure_code,
                 cleanup_pending: receipt.cleanup_pending,
+                failure_detail: receipt.failure_detail,
                 ..Default::default()
             }
         }

@@ -6,7 +6,12 @@ import Button from '@mui/material/Button';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
-import { ThreadTargetLine, ThreadTargetSection, useThreadTargetForm, type ThreadTargetForm } from '@/entities/thread-target';
+import {
+  ThreadTargetLine,
+  ThreadTargetSection,
+  useThreadTargetForm,
+  type ThreadTargetForm,
+} from '@/entities/thread-target';
 import type { PipelineInboundTrigger } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 import { handleCopy } from '@/shared/lib/clipboard';
@@ -31,7 +36,6 @@ const valueSx: SxProps<Theme> = {
   backgroundColor: 'background.default',
   color: 'text.secondary',
 };
-
 
 /** What a sender of each type must be configured with. The strings are the pipeline dialog's, by key. */
 function modeHint(mode: AgentWebhookMode, settings?: AgentWebhookTrigger): string {
@@ -86,17 +90,26 @@ function TriggerRisks({ trigger }: { readonly trigger: PipelineInboundTrigger | 
         <Typography variant="bodySmall" color="text.secondary" data-testid="agent-trigger-events">
           {events === undefined || events.length === 0
             ? t('pages.agents.editApplication.triggers.eventsAll', 'Every event starts a run, except a GitHub ping.')
-            : t('pages.agents.editApplication.triggers.eventsListed', 'Only these events start a run: {{events}}.', { events: events.join(', ') })}
+            : t('pages.agents.editApplication.triggers.eventsListed', 'Only these events start a run: {{events}}.', {
+                events: events.join(', '),
+              })}
         </Typography>
       )}
       {trigger?.configured === true && (
-        <Typography variant="bodySmall" color={trigger.allow_variable_overrides === true ? 'warning.main' : 'text.secondary'} data-testid="agent-trigger-variables">
+        <Typography
+          variant="bodySmall"
+          color={trigger.allow_variable_overrides === true ? 'warning.main' : 'text.secondary'}
+          data-testid="agent-trigger-variables"
+        >
           {trigger.allow_variable_overrides === true
             ? t(
                 'pages.agents.editApplication.triggers.variablesOpen',
                 'Anyone with this URL can change the agent’s variables, and so its instructions.',
               )
-            : t('pages.agents.editApplication.triggers.variablesClosed', 'Callers cannot change the agent’s variables.')}
+            : t(
+                'pages.agents.editApplication.triggers.variablesClosed',
+                'Callers cannot change the agent’s variables.',
+              )}
         </Typography>
       )}
     </Box>
@@ -138,18 +151,35 @@ function TriggerActions({ settings, state, onRotate }: TriggerActionsProps): Rea
   const { secret } = settings;
   return (
     <Box sx={actionsSx}>
-      <Button variant="contained" size="small" disabled={state.disabled} onClick={onRotate} data-testid="agent-trigger-rotate">
+      <Button
+        variant="contained"
+        size="small"
+        disabled={state.disabled}
+        onClick={onRotate}
+        data-testid="agent-trigger-rotate"
+      >
         {state.live
           ? t('pages.pipelines.editPipeline.triggers.trigger.rotate', 'Rotate')
           : t('pages.pipelines.editPipeline.triggers.trigger.create', 'Create trigger URL')}
       </Button>
       {state.live && secret === undefined && (
-        <Button variant="outlined" size="small" disabled={state.disabled} onClick={() => void settings.reveal()} data-testid="agent-trigger-reveal">
+        <Button
+          variant="outlined"
+          size="small"
+          disabled={state.disabled}
+          onClick={() => void settings.reveal()}
+          data-testid="agent-trigger-reveal"
+        >
           {t('pipelines.pipelineWebhookModal.reveal', 'Reveal secret')}
         </Button>
       )}
       {secret !== undefined && (
-        <Button variant="outlined" size="small" onClick={() => void handleCopy(secret)} data-testid="agent-trigger-copy">
+        <Button
+          variant="outlined"
+          size="small"
+          onClick={() => void handleCopy(secret)}
+          data-testid="agent-trigger-copy"
+        >
           {t('pages.pipelines.editPipeline.triggers.trigger.copy', 'Copy')}
         </Button>
       )}
@@ -159,7 +189,14 @@ function TriggerActions({ settings, state, onRotate }: TriggerActionsProps): Rea
         </Button>
       )}
       {state.live && (
-        <Button variant="outlined" color="error" size="small" disabled={state.disabled} onClick={() => void settings.revoke()} data-testid="agent-trigger-revoke">
+        <Button
+          variant="outlined"
+          color="error"
+          size="small"
+          disabled={state.disabled}
+          onClick={() => void settings.revoke()}
+          data-testid="agent-trigger-revoke"
+        >
           {t('pages.pipelines.editPipeline.triggers.trigger.revoke', 'Revoke')}
         </Button>
       )}
@@ -212,7 +249,7 @@ function TriggerBody({ projectId, settings, isReadOnly }: TriggerBodyProps): Rea
   const state = triggerState(settings, isReadOnly, mode);
   const lastUsed = settings.trigger?.last_used_at;
   const modeOptions = useMemo(
-    () => selectableAgentWebhookModes(storedMode).map(option => ({ label: option.label, value: option.value })),
+    () => selectableAgentWebhookModes(storedMode).map((option) => ({ label: option.label, value: option.value })),
     [storedMode],
   );
 
@@ -234,7 +271,7 @@ function TriggerBody({ projectId, settings, isReadOnly }: TriggerBodyProps): Rea
         label={t('pipelines.pipelineWebhookModal.modeLabel', 'Webhook type')}
         value={mode}
         options={modeOptions}
-        onChange={value => setMode(AGENT_WEBHOOK_MODES.find(option => option.value === value)?.value ?? 'custom')}
+        onChange={(value) => setMode(AGENT_WEBHOOK_MODES.find((option) => option.value === value)?.value ?? 'custom')}
         disabled={state.disabled}
       />
       <Typography variant="bodySmall" color="text.secondary" data-testid="agent-trigger-mode-hint">
@@ -269,12 +306,17 @@ function TriggerBody({ projectId, settings, isReadOnly }: TriggerBodyProps): Rea
       )}
       {state.revoked && (
         <Typography variant="bodySmall" color="error" data-testid="agent-trigger-revoked">
-          {t('pages.pipelines.editPipeline.triggers.trigger.revoked', 'This trigger is revoked and refuses every call.')}
+          {t(
+            'pages.pipelines.editPipeline.triggers.trigger.revoked',
+            'This trigger is revoked and refuses every call.',
+          )}
         </Typography>
       )}
       {state.live && typeof lastUsed === 'string' && (
         <Typography variant="bodySmall" color="text.secondary" data-testid="agent-trigger-last-used">
-          {t('pages.pipelines.editPipeline.triggers.trigger.lastUsed', 'Last called: {{when}}', { when: new Date(lastUsed).toLocaleString() })}
+          {t('pages.pipelines.editPipeline.triggers.trigger.lastUsed', 'Last called: {{when}}', {
+            when: new Date(lastUsed).toLocaleString(),
+          })}
         </Typography>
       )}
       <TriggerActions settings={settings} state={state} onRotate={rotateAction(settings, form, mode)} />
@@ -304,7 +346,11 @@ export interface EditApplicationTriggersPanelProps {
  * The section renders nothing until the version is resolved: a "create"
  * button for a version id the page does not have could not work.
  */
-export function EditApplicationTriggersPanel({ projectId, versionId, isReadOnly }: EditApplicationTriggersPanelProps): ReactNode {
+export function EditApplicationTriggersPanel({
+  projectId,
+  versionId,
+  isReadOnly,
+}: EditApplicationTriggersPanelProps): ReactNode {
   const settings = useAgentWebhookTrigger(projectId, versionId);
   const items = useMemo(
     () => [
@@ -312,14 +358,7 @@ export function EditApplicationTriggersPanel({ projectId, versionId, isReadOnly 
         title: t('pages.agents.editApplication.triggers.title', 'Triggers'),
         // Keyed by the version: the panel stays mounted when the editor
         // switches versions, and the selected mode must not carry over.
-        content: (
-          <TriggerBody
-            key={versionId}
-            projectId={projectId}
-            settings={settings}
-            isReadOnly={isReadOnly}
-          />
-        ),
+        content: <TriggerBody key={versionId} projectId={projectId} settings={settings} isReadOnly={isReadOnly} />,
       },
     ],
     [settings, isReadOnly, versionId, projectId],

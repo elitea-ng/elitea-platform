@@ -10,7 +10,7 @@ import { t } from '@/shared/i18n';
 import {
   fetchExportDocument,
   fetchForkDocument,
-  forkEntity,
+  forkEntityWithNested,
   importEntities,
   publishVersion,
   runPublishValidation,
@@ -44,6 +44,8 @@ interface PublishVariables {
   readonly category?: PublishCategory | '' | undefined;
   /** From a preceding validation run; lets the server skip re-validating. */
   readonly validationToken?: string | undefined;
+  /** What changed; the Marketplace listing shows it per version (ADR-0051). */
+  readonly releaseNotes?: string | undefined;
 }
 
 interface ValidateVariables {
@@ -54,6 +56,8 @@ interface ValidateVariables {
 
 interface ForkVariables {
   readonly entityId: number;
+  /** The version to copy; the newest when absent. */
+  readonly versionId?: number | undefined;
   readonly targetProjectId: string;
 }
 
@@ -132,6 +136,9 @@ export function useEntityLifecycle(projectId: string | undefined, entityId: stri
         version_name: variables.versionName,
         ...(variables.category === undefined || variables.category === '' ? {} : { category: variables.category }),
         ...(variables.validationToken === undefined ? {} : { validation_token: variables.validationToken }),
+        ...(variables.releaseNotes === undefined || variables.releaseNotes.trim() === ''
+          ? {}
+          : { release_notes: variables.releaseNotes.trim() }),
       }),
     onSuccess: invalidate,
   });
@@ -147,7 +154,11 @@ export function useEntityLifecycle(projectId: string | undefined, entityId: stri
     // fork handler reads only the body, so a fork built from anything else
     // loses the parent pointers and every version variable.
     mutationFn: async (variables) =>
-      forkEntity(variables.targetProjectId, await fetchForkDocument(projectId ?? '', variables.entityId)),
+      forkEntityWithNested(
+        projectId ?? '',
+        variables.targetProjectId,
+        await fetchForkDocument(projectId ?? '', variables.entityId, variables.versionId),
+      ),
   });
 
   const exportDocument = useCallback(

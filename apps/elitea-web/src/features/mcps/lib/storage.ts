@@ -284,17 +284,17 @@ export function setAccessToken(
   }
 }
 
-export function logout(serverUrl?: string, toolkitType?: string): void {
+/** Forgets the grant and tells other tabs. Returns whether this browser held one. */
+export function logout(serverUrl?: string, toolkitType?: string): boolean {
   const key = getStorageKey({ serverUrl, toolkitType });
-  if (!key) return;
+  if (!key) return false;
   forgetClientSecret('token', key);
   const tokens = loadTokens();
-  if (tokens[key]) {
-    delete tokens[key];
-    saveTokens(tokens);
-  }
+  const held = Boolean(tokens[key]);
+  if (held) saveTokens(Object.fromEntries(Object.entries(tokens).filter(([stored]) => stored !== key)));
   publishLogout(key);
   dispatchTokenChangeEvent(key, 'logout');
+  return held;
 }
 
 /**

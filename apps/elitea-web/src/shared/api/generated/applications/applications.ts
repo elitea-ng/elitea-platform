@@ -111,6 +111,7 @@ import type {
   ApplicationUpdatedResponse,
   ApplicationVersionDetail,
   ApplicationVersionDetailExpanded,
+  ApproveDelegationGrantRequest,
   AuthorDetail,
   BatchReplaceVersionReferencesParams,
   CapabilityUnavailableResponse,
@@ -123,10 +124,20 @@ import type {
   CredentialReviewRefusal,
   DecideAgentWorkforceAppealBody,
   DefaultIcon,
+  DelegationGovernedError,
+  DelegationGrant,
+  DelegationGrantList,
+  DelegationPreview,
   DeleteApplicationVersionParams,
   DesktopOperationError,
   DocumentLoadersResponse,
   DraftRefusedResponse,
+  EntityFolder,
+  EntityFolderCreateRequest,
+  EntityFolderList,
+  EntityFolderMoveRequest,
+  EntityFolderPinRequest,
+  EntityFolderUpdateRequest,
   ErrorResponse,
   EvalDataset,
   EvalDatasetCase,
@@ -135,10 +146,17 @@ import type {
   EvalDatasetDetail,
   EvalDatasetList,
   EvalDatasetWriteRequest,
+  EvalEnhanceProposal,
+  EvalHumanScoreList,
+  EvalHumanScoreRecorded,
+  EvalHumanScoreWriteRequest,
   EvalRun,
   EvalRunList,
   EvalRunStartRequest,
   EvalScorecard,
+  EvalSuite,
+  EvalSuiteList,
+  EvalSuiteWriteRequest,
   ExportApplicationParams,
   ExportConverterRequest,
   ExportConverterResponse,
@@ -173,6 +191,7 @@ import type {
   ListAgentWorkforceProposals200,
   ListAgentWorkforceProposalsParams,
   ListApplicationsParams,
+  ListDelegationGrantsParams,
   ListEvalDatasetsParams,
   ListEvalRunsParams,
   ListProjectIconsParams,
@@ -204,6 +223,7 @@ import type {
   PredictLLMRequest,
   PredictLLMResponse,
   PredictLLMUnavailableResponse,
+  PreviewDelegationGrantParams,
   ProjectContext,
   ProjectContextUpdateRequest,
   ProjectGroupCreate,
@@ -217,6 +237,7 @@ import type {
   ProjectStatistics,
   ProjectWithGroups,
   ProposeAgentWorkforceStageBody,
+  ProposeDelegationGrantRequest,
   PublicApplicationDetail,
   PublicApplicationList,
   PublishBadRequestResponse,
@@ -2804,10 +2825,16 @@ export const getStartEvalRunUrl = (projectId: string) => {
  * scorecard that re-read the live library would silently re-scale a
  * finished run.
  *
- * ENGINES ARE RESTRICTED TO `ai`. A dimension that allows only `code` or
- * `human` is refused with 501 and a named reason: there is no code sandbox
- * in elitea-main, and a code validation that silently passed would be the
- * most dangerous fallback in the feature.
+ * A dimension the AI judge can score is scored by it. A dimension that
+ * allows only the `human` engine is scored by a reviewer: its results wait
+ * as `pending_human`. A dimension that allows only `code` is refused with
+ * 501 and a named reason: there is no code sandbox in elitea-main, and a
+ * code validation that silently passed would be the most dangerous
+ * fallback in the feature.
+ *
+ * `suite_id` freezes that suite's token and cost limits into the run. The
+ * orchestrator enforces them from the usage the gateway attributed to the
+ * run.
  *
  * NOTE(#617): gated on `models.applications.evaluation.run.create`. There
  * is no `run.cancel` string in the product's vocabulary, so the cancel
@@ -3552,10 +3579,10 @@ export const getGetEvalScorecardUrl = (
 };
 
 /**
- * READ-ONLY. There is no human-score write in this release, and the
- * response OMITS `human_scores` rather than answering `[]` — an empty
- * array tells a client "there are none" where the truth is "this
- * deployment cannot have any". `unavailable` names each omission with its
+ * A result that waits for a human score is `pending_human`, with no
+ * score, and the run's headline counts only scored results. A reviewer
+ * scores it through the human score route.
+ * `unavailable` names each part this release cannot serve, with its
  * reason.
  *
  * `total` is a separate count and never `results.length`. The reference's
@@ -3754,6 +3781,5566 @@ export function useGetEvalScorecard<
     projectId,
     runId,
     params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listEvalSuitesResponse200 = {
+  data: EvalSuiteList;
+  status: 200;
+};
+
+export type listEvalSuitesResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listEvalSuitesResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listEvalSuitesResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type listEvalSuitesResponseSuccess = listEvalSuitesResponse200 & {
+  headers: Headers;
+};
+export type listEvalSuitesResponseError = (
+  | listEvalSuitesResponse401
+  | listEvalSuitesResponse403
+  | listEvalSuitesResponse500
+) & {
+  headers: Headers;
+};
+
+export type listEvalSuitesResponse =
+  listEvalSuitesResponseSuccess | listEvalSuitesResponseError;
+
+export const getListEvalSuitesUrl = (projectId: string) => {
+  return `/elitea_core/eval_suites/prompt_lib/${projectId}`;
+};
+
+/**
+ * A suite holds the run settings: token and cost limits per case and per
+ * run, and what a run does when its run limit is reached. Gated on
+ * `models.applications.evaluation.run.read`.
+ * @summary List the project's evaluation suites
+ */
+export const listEvalSuites = async (
+  projectId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listEvalSuitesResponse> => {
+  return eliteaFetch<listEvalSuitesResponse>(getListEvalSuitesUrl(projectId), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListEvalSuitesQueryKey = (projectId: string) => {
+  return [`/elitea_core/eval_suites/prompt_lib/${projectId}`] as const;
+};
+
+export const getListEvalSuitesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listEvalSuites>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listEvalSuites>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListEvalSuitesQueryKey(projectId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listEvalSuites>>> = ({
+    signal,
+  }) => listEvalSuites(projectId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listEvalSuites>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListEvalSuitesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listEvalSuites>>
+>;
+export type ListEvalSuitesQueryError =
+  N401Response | N403Response | N500Response;
+
+export function useListEvalSuites<
+  TData = Awaited<ReturnType<typeof listEvalSuites>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listEvalSuites>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listEvalSuites>>,
+          TError,
+          Awaited<ReturnType<typeof listEvalSuites>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListEvalSuites<
+  TData = Awaited<ReturnType<typeof listEvalSuites>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listEvalSuites>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listEvalSuites>>,
+          TError,
+          Awaited<ReturnType<typeof listEvalSuites>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListEvalSuites<
+  TData = Awaited<ReturnType<typeof listEvalSuites>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listEvalSuites>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the project's evaluation suites
+ */
+
+export function useListEvalSuites<
+  TData = Awaited<ReturnType<typeof listEvalSuites>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listEvalSuites>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListEvalSuitesQueryOptions(projectId, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type createEvalSuiteResponse201 = {
+  data: EvalSuite;
+  status: 201;
+};
+
+export type createEvalSuiteResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type createEvalSuiteResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type createEvalSuiteResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type createEvalSuiteResponse409 = {
+  data: N409Response;
+  status: 409;
+};
+
+export type createEvalSuiteResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type createEvalSuiteResponseSuccess = createEvalSuiteResponse201 & {
+  headers: Headers;
+};
+export type createEvalSuiteResponseError = (
+  | createEvalSuiteResponse400
+  | createEvalSuiteResponse401
+  | createEvalSuiteResponse403
+  | createEvalSuiteResponse409
+  | createEvalSuiteResponse500
+) & {
+  headers: Headers;
+};
+
+export type createEvalSuiteResponse =
+  createEvalSuiteResponseSuccess | createEvalSuiteResponseError;
+
+export const getCreateEvalSuiteUrl = (projectId: string) => {
+  return `/elitea_core/eval_suites/prompt_lib/${projectId}`;
+};
+
+/**
+ * Gated on `models.applications.evaluation.run.create`. A name is unique
+ * in the project, whatever its case: a second one is a 409.
+ * @summary Create an evaluation suite
+ */
+export const createEvalSuite = async (
+  projectId: string,
+  evalSuiteWriteRequest: EvalSuiteWriteRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<createEvalSuiteResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<createEvalSuiteResponse>(
+    getCreateEvalSuiteUrl(projectId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(evalSuiteWriteRequest),
+    },
+  );
+};
+
+export const getCreateEvalSuiteQueryKey = (
+  projectId: string,
+  evalSuiteWriteRequest?: EvalSuiteWriteRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/eval_suites/prompt_lib/${projectId}`,
+    evalSuiteWriteRequest,
+  ] as const;
+};
+
+export const getCreateEvalSuiteQueryOptions = <
+  TData = Awaited<ReturnType<typeof createEvalSuite>>,
+  TError =
+    N400Response | N401Response | N403Response | N409Response | N500Response,
+>(
+  projectId: string,
+  evalSuiteWriteRequest: EvalSuiteWriteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createEvalSuite>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getCreateEvalSuiteQueryKey(projectId, evalSuiteWriteRequest);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof createEvalSuite>>> = ({
+    signal,
+  }) =>
+    createEvalSuite(projectId, evalSuiteWriteRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof createEvalSuite>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CreateEvalSuiteQueryResult = NonNullable<
+  Awaited<ReturnType<typeof createEvalSuite>>
+>;
+export type CreateEvalSuiteQueryError =
+  N400Response | N401Response | N403Response | N409Response | N500Response;
+
+export function useCreateEvalSuite<
+  TData = Awaited<ReturnType<typeof createEvalSuite>>,
+  TError =
+    N400Response | N401Response | N403Response | N409Response | N500Response,
+>(
+  projectId: string,
+  evalSuiteWriteRequest: EvalSuiteWriteRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createEvalSuite>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createEvalSuite>>,
+          TError,
+          Awaited<ReturnType<typeof createEvalSuite>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateEvalSuite<
+  TData = Awaited<ReturnType<typeof createEvalSuite>>,
+  TError =
+    N400Response | N401Response | N403Response | N409Response | N500Response,
+>(
+  projectId: string,
+  evalSuiteWriteRequest: EvalSuiteWriteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createEvalSuite>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createEvalSuite>>,
+          TError,
+          Awaited<ReturnType<typeof createEvalSuite>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateEvalSuite<
+  TData = Awaited<ReturnType<typeof createEvalSuite>>,
+  TError =
+    N400Response | N401Response | N403Response | N409Response | N500Response,
+>(
+  projectId: string,
+  evalSuiteWriteRequest: EvalSuiteWriteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createEvalSuite>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Create an evaluation suite
+ */
+
+export function useCreateEvalSuite<
+  TData = Awaited<ReturnType<typeof createEvalSuite>>,
+  TError =
+    N400Response | N401Response | N403Response | N409Response | N500Response,
+>(
+  projectId: string,
+  evalSuiteWriteRequest: EvalSuiteWriteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createEvalSuite>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCreateEvalSuiteQueryOptions(
+    projectId,
+    evalSuiteWriteRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type updateEvalSuiteResponse200 = {
+  data: EvalSuite;
+  status: 200;
+};
+
+export type updateEvalSuiteResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type updateEvalSuiteResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type updateEvalSuiteResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type updateEvalSuiteResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type updateEvalSuiteResponse409 = {
+  data: N409Response;
+  status: 409;
+};
+
+export type updateEvalSuiteResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type updateEvalSuiteResponseSuccess = updateEvalSuiteResponse200 & {
+  headers: Headers;
+};
+export type updateEvalSuiteResponseError = (
+  | updateEvalSuiteResponse400
+  | updateEvalSuiteResponse401
+  | updateEvalSuiteResponse403
+  | updateEvalSuiteResponse404
+  | updateEvalSuiteResponse409
+  | updateEvalSuiteResponse500
+) & {
+  headers: Headers;
+};
+
+export type updateEvalSuiteResponse =
+  updateEvalSuiteResponseSuccess | updateEvalSuiteResponseError;
+
+export const getUpdateEvalSuiteUrl = (projectId: string, suiteId: string) => {
+  return `/elitea_core/eval_suite/prompt_lib/${projectId}/${suiteId}`;
+};
+
+/**
+ * A full replace: a limit left out is cleared. Runs that already started
+ * keep the settings they were started with. Gated on
+ * `models.applications.evaluation.run.create`.
+ * @summary Replace an evaluation suite's settings
+ */
+export const updateEvalSuite = async (
+  projectId: string,
+  suiteId: string,
+  evalSuiteWriteRequest: EvalSuiteWriteRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<updateEvalSuiteResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<updateEvalSuiteResponse>(
+    getUpdateEvalSuiteUrl(projectId, suiteId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(evalSuiteWriteRequest),
+    },
+  );
+};
+
+export const getUpdateEvalSuiteQueryKey = (
+  projectId: string,
+  suiteId: string,
+  evalSuiteWriteRequest?: EvalSuiteWriteRequest,
+) => {
+  return [
+    "PUT",
+    `/elitea_core/eval_suite/prompt_lib/${projectId}/${suiteId}`,
+    evalSuiteWriteRequest,
+  ] as const;
+};
+
+export const getUpdateEvalSuiteQueryOptions = <
+  TData = Awaited<ReturnType<typeof updateEvalSuite>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | N500Response,
+>(
+  projectId: string,
+  suiteId: string,
+  evalSuiteWriteRequest: EvalSuiteWriteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateEvalSuite>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getUpdateEvalSuiteQueryKey(projectId, suiteId, evalSuiteWriteRequest);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof updateEvalSuite>>> = ({
+    signal,
+  }) =>
+    updateEvalSuite(projectId, suiteId, evalSuiteWriteRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      suiteId !== null &&
+      suiteId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof updateEvalSuite>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type UpdateEvalSuiteQueryResult = NonNullable<
+  Awaited<ReturnType<typeof updateEvalSuite>>
+>;
+export type UpdateEvalSuiteQueryError =
+  | N400Response
+  | N401Response
+  | N403Response
+  | N404Response
+  | N409Response
+  | N500Response;
+
+export function useUpdateEvalSuite<
+  TData = Awaited<ReturnType<typeof updateEvalSuite>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | N500Response,
+>(
+  projectId: string,
+  suiteId: string,
+  evalSuiteWriteRequest: EvalSuiteWriteRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateEvalSuite>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updateEvalSuite>>,
+          TError,
+          Awaited<ReturnType<typeof updateEvalSuite>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdateEvalSuite<
+  TData = Awaited<ReturnType<typeof updateEvalSuite>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | N500Response,
+>(
+  projectId: string,
+  suiteId: string,
+  evalSuiteWriteRequest: EvalSuiteWriteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateEvalSuite>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updateEvalSuite>>,
+          TError,
+          Awaited<ReturnType<typeof updateEvalSuite>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdateEvalSuite<
+  TData = Awaited<ReturnType<typeof updateEvalSuite>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | N500Response,
+>(
+  projectId: string,
+  suiteId: string,
+  evalSuiteWriteRequest: EvalSuiteWriteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateEvalSuite>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Replace an evaluation suite's settings
+ */
+
+export function useUpdateEvalSuite<
+  TData = Awaited<ReturnType<typeof updateEvalSuite>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | N500Response,
+>(
+  projectId: string,
+  suiteId: string,
+  evalSuiteWriteRequest: EvalSuiteWriteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateEvalSuite>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getUpdateEvalSuiteQueryOptions(
+    projectId,
+    suiteId,
+    evalSuiteWriteRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type deleteEvalSuiteResponse204 = {
+  data: void;
+  status: 204;
+};
+
+export type deleteEvalSuiteResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type deleteEvalSuiteResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type deleteEvalSuiteResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type deleteEvalSuiteResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type deleteEvalSuiteResponseSuccess = deleteEvalSuiteResponse204 & {
+  headers: Headers;
+};
+export type deleteEvalSuiteResponseError = (
+  | deleteEvalSuiteResponse401
+  | deleteEvalSuiteResponse403
+  | deleteEvalSuiteResponse404
+  | deleteEvalSuiteResponse500
+) & {
+  headers: Headers;
+};
+
+export type deleteEvalSuiteResponse =
+  deleteEvalSuiteResponseSuccess | deleteEvalSuiteResponseError;
+
+export const getDeleteEvalSuiteUrl = (projectId: string, suiteId: string) => {
+  return `/elitea_core/eval_suite/prompt_lib/${projectId}/${suiteId}`;
+};
+
+/**
+ * Runs started from it keep their frozen settings. Gated on
+ * `models.applications.evaluation.run.create`.
+ * @summary Delete an evaluation suite
+ */
+export const deleteEvalSuite = async (
+  projectId: string,
+  suiteId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<deleteEvalSuiteResponse> => {
+  return eliteaFetch<deleteEvalSuiteResponse>(
+    getDeleteEvalSuiteUrl(projectId, suiteId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getDeleteEvalSuiteQueryKey = (
+  projectId: string,
+  suiteId: string,
+) => {
+  return [
+    "DELETE",
+    `/elitea_core/eval_suite/prompt_lib/${projectId}/${suiteId}`,
+  ] as const;
+};
+
+export const getDeleteEvalSuiteQueryOptions = <
+  TData = Awaited<ReturnType<typeof deleteEvalSuite>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  suiteId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteEvalSuite>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getDeleteEvalSuiteQueryKey(projectId, suiteId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof deleteEvalSuite>>> = ({
+    signal,
+  }) => deleteEvalSuite(projectId, suiteId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      suiteId !== null &&
+      suiteId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof deleteEvalSuite>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DeleteEvalSuiteQueryResult = NonNullable<
+  Awaited<ReturnType<typeof deleteEvalSuite>>
+>;
+export type DeleteEvalSuiteQueryError =
+  N401Response | N403Response | N404Response | N500Response;
+
+export function useDeleteEvalSuite<
+  TData = Awaited<ReturnType<typeof deleteEvalSuite>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  suiteId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteEvalSuite>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteEvalSuite>>,
+          TError,
+          Awaited<ReturnType<typeof deleteEvalSuite>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteEvalSuite<
+  TData = Awaited<ReturnType<typeof deleteEvalSuite>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  suiteId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteEvalSuite>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteEvalSuite>>,
+          TError,
+          Awaited<ReturnType<typeof deleteEvalSuite>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteEvalSuite<
+  TData = Awaited<ReturnType<typeof deleteEvalSuite>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  suiteId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteEvalSuite>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Delete an evaluation suite
+ */
+
+export function useDeleteEvalSuite<
+  TData = Awaited<ReturnType<typeof deleteEvalSuite>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  suiteId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteEvalSuite>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDeleteEvalSuiteQueryOptions(
+    projectId,
+    suiteId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listEntityFoldersResponse200 = {
+  data: EntityFolderList;
+  status: 200;
+};
+
+export type listEntityFoldersResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listEntityFoldersResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listEntityFoldersResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type listEntityFoldersResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type listEntityFoldersResponseSuccess = listEntityFoldersResponse200 & {
+  headers: Headers;
+};
+export type listEntityFoldersResponseError = (
+  | listEntityFoldersResponse401
+  | listEntityFoldersResponse403
+  | listEntityFoldersResponse404
+  | listEntityFoldersResponse500
+) & {
+  headers: Headers;
+};
+
+export type listEntityFoldersResponse =
+  listEntityFoldersResponseSuccess | listEntityFoldersResponseError;
+
+export const getListEntityFoldersUrl = (projectId: string, kind: string) => {
+  return `/elitea_core/entity_folders/prompt_lib/${projectId}/${kind}`;
+};
+
+/**
+ * The folders of the list with the ids of the entities in each, highest
+ * position first. Gated on the permission the list itself uses
+ * (`models.applications.applications.list` for agents and pipelines,
+ * `models.applications.skills.list`, `models.applications.tools.list` for
+ * toolkits and MCPs).
+ * @summary List the project's folders of one list
+ */
+export const listEntityFolders = async (
+  projectId: string,
+  kind: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listEntityFoldersResponse> => {
+  return eliteaFetch<listEntityFoldersResponse>(
+    getListEntityFoldersUrl(projectId, kind),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListEntityFoldersQueryKey = (
+  projectId: string,
+  kind: string,
+) => {
+  return [
+    `/elitea_core/entity_folders/prompt_lib/${projectId}/${kind}`,
+  ] as const;
+};
+
+export const getListEntityFoldersQueryOptions = <
+  TData = Awaited<ReturnType<typeof listEntityFolders>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listEntityFolders>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListEntityFoldersQueryKey(projectId, kind);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listEntityFolders>>
+  > = ({ signal }) =>
+    listEntityFolders(projectId, kind, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      kind !== null &&
+      kind !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listEntityFolders>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListEntityFoldersQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listEntityFolders>>
+>;
+export type ListEntityFoldersQueryError =
+  N401Response | N403Response | N404Response | N500Response;
+
+export function useListEntityFolders<
+  TData = Awaited<ReturnType<typeof listEntityFolders>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listEntityFolders>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listEntityFolders>>,
+          TError,
+          Awaited<ReturnType<typeof listEntityFolders>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListEntityFolders<
+  TData = Awaited<ReturnType<typeof listEntityFolders>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listEntityFolders>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listEntityFolders>>,
+          TError,
+          Awaited<ReturnType<typeof listEntityFolders>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListEntityFolders<
+  TData = Awaited<ReturnType<typeof listEntityFolders>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listEntityFolders>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the project's folders of one list
+ */
+
+export function useListEntityFolders<
+  TData = Awaited<ReturnType<typeof listEntityFolders>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listEntityFolders>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListEntityFoldersQueryOptions(
+    projectId,
+    kind,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type createEntityFolderResponse201 = {
+  data: EntityFolder;
+  status: 201;
+};
+
+export type createEntityFolderResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type createEntityFolderResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type createEntityFolderResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type createEntityFolderResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type createEntityFolderResponse409 = {
+  data: N409Response;
+  status: 409;
+};
+
+export type createEntityFolderResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type createEntityFolderResponseSuccess =
+  createEntityFolderResponse201 & {
+    headers: Headers;
+  };
+export type createEntityFolderResponseError = (
+  | createEntityFolderResponse400
+  | createEntityFolderResponse401
+  | createEntityFolderResponse403
+  | createEntityFolderResponse404
+  | createEntityFolderResponse409
+  | createEntityFolderResponse500
+) & {
+  headers: Headers;
+};
+
+export type createEntityFolderResponse =
+  createEntityFolderResponseSuccess | createEntityFolderResponseError;
+
+export const getCreateEntityFolderUrl = (projectId: string, kind: string) => {
+  return `/elitea_core/entity_folders/prompt_lib/${projectId}/${kind}`;
+};
+
+/**
+ * The new folder goes to the top. A name is unique in its list whatever
+ * its case: a second one is a 409. Gated on the list's create permission.
+ * @summary Create a folder in a list
+ */
+export const createEntityFolder = async (
+  projectId: string,
+  kind: string,
+  entityFolderCreateRequest: EntityFolderCreateRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<createEntityFolderResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<createEntityFolderResponse>(
+    getCreateEntityFolderUrl(projectId, kind),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(entityFolderCreateRequest),
+    },
+  );
+};
+
+export const getCreateEntityFolderQueryKey = (
+  projectId: string,
+  kind: string,
+  entityFolderCreateRequest?: EntityFolderCreateRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/entity_folders/prompt_lib/${projectId}/${kind}`,
+    entityFolderCreateRequest,
+  ] as const;
+};
+
+export const getCreateEntityFolderQueryOptions = <
+  TData = Awaited<ReturnType<typeof createEntityFolder>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  entityFolderCreateRequest: EntityFolderCreateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createEntityFolder>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getCreateEntityFolderQueryKey(projectId, kind, entityFolderCreateRequest);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof createEntityFolder>>
+  > = ({ signal }) =>
+    createEntityFolder(projectId, kind, entityFolderCreateRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      kind !== null &&
+      kind !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof createEntityFolder>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CreateEntityFolderQueryResult = NonNullable<
+  Awaited<ReturnType<typeof createEntityFolder>>
+>;
+export type CreateEntityFolderQueryError =
+  | N400Response
+  | N401Response
+  | N403Response
+  | N404Response
+  | N409Response
+  | N500Response;
+
+export function useCreateEntityFolder<
+  TData = Awaited<ReturnType<typeof createEntityFolder>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  entityFolderCreateRequest: EntityFolderCreateRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createEntityFolder>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createEntityFolder>>,
+          TError,
+          Awaited<ReturnType<typeof createEntityFolder>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateEntityFolder<
+  TData = Awaited<ReturnType<typeof createEntityFolder>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  entityFolderCreateRequest: EntityFolderCreateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createEntityFolder>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createEntityFolder>>,
+          TError,
+          Awaited<ReturnType<typeof createEntityFolder>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateEntityFolder<
+  TData = Awaited<ReturnType<typeof createEntityFolder>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  entityFolderCreateRequest: EntityFolderCreateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createEntityFolder>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Create a folder in a list
+ */
+
+export function useCreateEntityFolder<
+  TData = Awaited<ReturnType<typeof createEntityFolder>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  entityFolderCreateRequest: EntityFolderCreateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createEntityFolder>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCreateEntityFolderQueryOptions(
+    projectId,
+    kind,
+    entityFolderCreateRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type updateEntityFolderResponse200 = {
+  data: EntityFolder;
+  status: 200;
+};
+
+export type updateEntityFolderResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type updateEntityFolderResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type updateEntityFolderResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type updateEntityFolderResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type updateEntityFolderResponse409 = {
+  data: N409Response;
+  status: 409;
+};
+
+export type updateEntityFolderResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type updateEntityFolderResponseSuccess =
+  updateEntityFolderResponse200 & {
+    headers: Headers;
+  };
+export type updateEntityFolderResponseError = (
+  | updateEntityFolderResponse400
+  | updateEntityFolderResponse401
+  | updateEntityFolderResponse403
+  | updateEntityFolderResponse404
+  | updateEntityFolderResponse409
+  | updateEntityFolderResponse500
+) & {
+  headers: Headers;
+};
+
+export type updateEntityFolderResponse =
+  updateEntityFolderResponseSuccess | updateEntityFolderResponseError;
+
+export const getUpdateEntityFolderUrl = (
+  projectId: string,
+  kind: string,
+  folderId: string,
+) => {
+  return `/elitea_core/entity_folders/prompt_lib/${projectId}/${kind}/${folderId}`;
+};
+
+/**
+ * Gated on the list's update permission. A rename never moves the folder.
+ * @summary Rename or reorder a folder
+ */
+export const updateEntityFolder = async (
+  projectId: string,
+  kind: string,
+  folderId: string,
+  entityFolderUpdateRequest: EntityFolderUpdateRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<updateEntityFolderResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<updateEntityFolderResponse>(
+    getUpdateEntityFolderUrl(projectId, kind, folderId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(entityFolderUpdateRequest),
+    },
+  );
+};
+
+export const getUpdateEntityFolderQueryKey = (
+  projectId: string,
+  kind: string,
+  folderId: string,
+  entityFolderUpdateRequest?: EntityFolderUpdateRequest,
+) => {
+  return [
+    "PUT",
+    `/elitea_core/entity_folders/prompt_lib/${projectId}/${kind}/${folderId}`,
+    entityFolderUpdateRequest,
+  ] as const;
+};
+
+export const getUpdateEntityFolderQueryOptions = <
+  TData = Awaited<ReturnType<typeof updateEntityFolder>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  folderId: string,
+  entityFolderUpdateRequest: EntityFolderUpdateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateEntityFolder>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getUpdateEntityFolderQueryKey(
+      projectId,
+      kind,
+      folderId,
+      entityFolderUpdateRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof updateEntityFolder>>
+  > = ({ signal }) =>
+    updateEntityFolder(projectId, kind, folderId, entityFolderUpdateRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      kind !== null &&
+      kind !== undefined &&
+      folderId !== null &&
+      folderId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof updateEntityFolder>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type UpdateEntityFolderQueryResult = NonNullable<
+  Awaited<ReturnType<typeof updateEntityFolder>>
+>;
+export type UpdateEntityFolderQueryError =
+  | N400Response
+  | N401Response
+  | N403Response
+  | N404Response
+  | N409Response
+  | N500Response;
+
+export function useUpdateEntityFolder<
+  TData = Awaited<ReturnType<typeof updateEntityFolder>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  folderId: string,
+  entityFolderUpdateRequest: EntityFolderUpdateRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateEntityFolder>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updateEntityFolder>>,
+          TError,
+          Awaited<ReturnType<typeof updateEntityFolder>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdateEntityFolder<
+  TData = Awaited<ReturnType<typeof updateEntityFolder>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  folderId: string,
+  entityFolderUpdateRequest: EntityFolderUpdateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateEntityFolder>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updateEntityFolder>>,
+          TError,
+          Awaited<ReturnType<typeof updateEntityFolder>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdateEntityFolder<
+  TData = Awaited<ReturnType<typeof updateEntityFolder>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  folderId: string,
+  entityFolderUpdateRequest: EntityFolderUpdateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateEntityFolder>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Rename or reorder a folder
+ */
+
+export function useUpdateEntityFolder<
+  TData = Awaited<ReturnType<typeof updateEntityFolder>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  folderId: string,
+  entityFolderUpdateRequest: EntityFolderUpdateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateEntityFolder>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getUpdateEntityFolderQueryOptions(
+    projectId,
+    kind,
+    folderId,
+    entityFolderUpdateRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type deleteEntityFolderResponse204 = {
+  data: void;
+  status: 204;
+};
+
+export type deleteEntityFolderResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type deleteEntityFolderResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type deleteEntityFolderResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type deleteEntityFolderResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type deleteEntityFolderResponseSuccess =
+  deleteEntityFolderResponse204 & {
+    headers: Headers;
+  };
+export type deleteEntityFolderResponseError = (
+  | deleteEntityFolderResponse401
+  | deleteEntityFolderResponse403
+  | deleteEntityFolderResponse404
+  | deleteEntityFolderResponse500
+) & {
+  headers: Headers;
+};
+
+export type deleteEntityFolderResponse =
+  deleteEntityFolderResponseSuccess | deleteEntityFolderResponseError;
+
+export const getDeleteEntityFolderUrl = (
+  projectId: string,
+  kind: string,
+  folderId: string,
+) => {
+  return `/elitea_core/entity_folders/prompt_lib/${projectId}/${kind}/${folderId}`;
+};
+
+/**
+ * The entities inside return to the root. No entity is deleted. Gated on
+ * the list's update permission.
+ * @summary Delete a folder
+ */
+export const deleteEntityFolder = async (
+  projectId: string,
+  kind: string,
+  folderId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<deleteEntityFolderResponse> => {
+  return eliteaFetch<deleteEntityFolderResponse>(
+    getDeleteEntityFolderUrl(projectId, kind, folderId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getDeleteEntityFolderQueryKey = (
+  projectId: string,
+  kind: string,
+  folderId: string,
+) => {
+  return [
+    "DELETE",
+    `/elitea_core/entity_folders/prompt_lib/${projectId}/${kind}/${folderId}`,
+  ] as const;
+};
+
+export const getDeleteEntityFolderQueryOptions = <
+  TData = Awaited<ReturnType<typeof deleteEntityFolder>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  folderId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteEntityFolder>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getDeleteEntityFolderQueryKey(projectId, kind, folderId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof deleteEntityFolder>>
+  > = ({ signal }) =>
+    deleteEntityFolder(projectId, kind, folderId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      kind !== null &&
+      kind !== undefined &&
+      folderId !== null &&
+      folderId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof deleteEntityFolder>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DeleteEntityFolderQueryResult = NonNullable<
+  Awaited<ReturnType<typeof deleteEntityFolder>>
+>;
+export type DeleteEntityFolderQueryError =
+  N401Response | N403Response | N404Response | N500Response;
+
+export function useDeleteEntityFolder<
+  TData = Awaited<ReturnType<typeof deleteEntityFolder>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  folderId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteEntityFolder>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteEntityFolder>>,
+          TError,
+          Awaited<ReturnType<typeof deleteEntityFolder>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteEntityFolder<
+  TData = Awaited<ReturnType<typeof deleteEntityFolder>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  folderId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteEntityFolder>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteEntityFolder>>,
+          TError,
+          Awaited<ReturnType<typeof deleteEntityFolder>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteEntityFolder<
+  TData = Awaited<ReturnType<typeof deleteEntityFolder>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  folderId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteEntityFolder>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Delete a folder
+ */
+
+export function useDeleteEntityFolder<
+  TData = Awaited<ReturnType<typeof deleteEntityFolder>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  folderId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteEntityFolder>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDeleteEntityFolderQueryOptions(
+    projectId,
+    kind,
+    folderId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type moveEntityToFolderResponse204 = {
+  data: void;
+  status: 204;
+};
+
+export type moveEntityToFolderResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type moveEntityToFolderResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type moveEntityToFolderResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type moveEntityToFolderResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type moveEntityToFolderResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type moveEntityToFolderResponseSuccess =
+  moveEntityToFolderResponse204 & {
+    headers: Headers;
+  };
+export type moveEntityToFolderResponseError = (
+  | moveEntityToFolderResponse400
+  | moveEntityToFolderResponse401
+  | moveEntityToFolderResponse403
+  | moveEntityToFolderResponse404
+  | moveEntityToFolderResponse500
+) & {
+  headers: Headers;
+};
+
+export type moveEntityToFolderResponse =
+  moveEntityToFolderResponseSuccess | moveEntityToFolderResponseError;
+
+export const getMoveEntityToFolderUrl = (
+  projectId: string,
+  kind: string,
+  entityId: number,
+) => {
+  return `/elitea_core/entity_folders/prompt_lib/${projectId}/${kind}/items/${entityId}`;
+};
+
+/**
+ * The entity and the folder must belong to the same list, else 404. An
+ * entity is in one folder, so this replaces its place. Inside the folder
+ * it lands at the top, or between the named neighbours. The move is
+ * audited with the entity. Gated on the list's
+ * update permission.
+ * @summary Put an entity into a folder, or back at the root
+ */
+export const moveEntityToFolder = async (
+  projectId: string,
+  kind: string,
+  entityId: number,
+  entityFolderMoveRequest: EntityFolderMoveRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<moveEntityToFolderResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<moveEntityToFolderResponse>(
+    getMoveEntityToFolderUrl(projectId, kind, entityId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(entityFolderMoveRequest),
+    },
+  );
+};
+
+export const getMoveEntityToFolderQueryKey = (
+  projectId: string,
+  kind: string,
+  entityId: number,
+  entityFolderMoveRequest?: EntityFolderMoveRequest,
+) => {
+  return [
+    "PUT",
+    `/elitea_core/entity_folders/prompt_lib/${projectId}/${kind}/items/${entityId}`,
+    entityFolderMoveRequest,
+  ] as const;
+};
+
+export const getMoveEntityToFolderQueryOptions = <
+  TData = Awaited<ReturnType<typeof moveEntityToFolder>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  entityId: number,
+  entityFolderMoveRequest: EntityFolderMoveRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof moveEntityToFolder>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getMoveEntityToFolderQueryKey(
+      projectId,
+      kind,
+      entityId,
+      entityFolderMoveRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof moveEntityToFolder>>
+  > = ({ signal }) =>
+    moveEntityToFolder(projectId, kind, entityId, entityFolderMoveRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      kind !== null &&
+      kind !== undefined &&
+      entityId !== null &&
+      entityId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof moveEntityToFolder>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type MoveEntityToFolderQueryResult = NonNullable<
+  Awaited<ReturnType<typeof moveEntityToFolder>>
+>;
+export type MoveEntityToFolderQueryError =
+  N400Response | N401Response | N403Response | N404Response | N500Response;
+
+export function useMoveEntityToFolder<
+  TData = Awaited<ReturnType<typeof moveEntityToFolder>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  entityId: number,
+  entityFolderMoveRequest: EntityFolderMoveRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof moveEntityToFolder>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof moveEntityToFolder>>,
+          TError,
+          Awaited<ReturnType<typeof moveEntityToFolder>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useMoveEntityToFolder<
+  TData = Awaited<ReturnType<typeof moveEntityToFolder>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  entityId: number,
+  entityFolderMoveRequest: EntityFolderMoveRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof moveEntityToFolder>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof moveEntityToFolder>>,
+          TError,
+          Awaited<ReturnType<typeof moveEntityToFolder>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useMoveEntityToFolder<
+  TData = Awaited<ReturnType<typeof moveEntityToFolder>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  entityId: number,
+  entityFolderMoveRequest: EntityFolderMoveRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof moveEntityToFolder>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Put an entity into a folder, or back at the root
+ */
+
+export function useMoveEntityToFolder<
+  TData = Awaited<ReturnType<typeof moveEntityToFolder>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  entityId: number,
+  entityFolderMoveRequest: EntityFolderMoveRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof moveEntityToFolder>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getMoveEntityToFolderQueryOptions(
+    projectId,
+    kind,
+    entityId,
+    entityFolderMoveRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type setEntityPinResponse204 = {
+  data: void;
+  status: 204;
+};
+
+export type setEntityPinResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type setEntityPinResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type setEntityPinResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type setEntityPinResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type setEntityPinResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type setEntityPinResponseSuccess = setEntityPinResponse204 & {
+  headers: Headers;
+};
+export type setEntityPinResponseError = (
+  | setEntityPinResponse400
+  | setEntityPinResponse401
+  | setEntityPinResponse403
+  | setEntityPinResponse404
+  | setEntityPinResponse500
+) & {
+  headers: Headers;
+};
+
+export type setEntityPinResponse =
+  setEntityPinResponseSuccess | setEntityPinResponseError;
+
+export const getSetEntityPinUrl = (
+  projectId: string,
+  kind: string,
+  entityId: number,
+) => {
+  return `/elitea_core/entity_pins/prompt_lib/${projectId}/${kind}/${entityId}`;
+};
+
+/**
+ * The personal Pinned group: private to the caller, never shown to another
+ * member, and deliberately not audited (a trail row per toggle would show
+ * an admin what a member pinned). Gated on the list permission, not on
+ * update rights. Pinning an
+ * entity that is not of the list's kind is a 404; unpinning is always 204.
+ * @summary Pin or unpin an entity for the caller
+ */
+export const setEntityPin = async (
+  projectId: string,
+  kind: string,
+  entityId: number,
+  entityFolderPinRequest?: EntityFolderPinRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<setEntityPinResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<setEntityPinResponse>(
+    getSetEntityPinUrl(projectId, kind, entityId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(entityFolderPinRequest),
+    },
+  );
+};
+
+export const getSetEntityPinQueryKey = (
+  projectId: string,
+  kind: string,
+  entityId: number,
+  entityFolderPinRequest?: EntityFolderPinRequest,
+) => {
+  return [
+    "PUT",
+    `/elitea_core/entity_pins/prompt_lib/${projectId}/${kind}/${entityId}`,
+    entityFolderPinRequest,
+  ] as const;
+};
+
+export const getSetEntityPinQueryOptions = <
+  TData = Awaited<ReturnType<typeof setEntityPin>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  entityId: number,
+  entityFolderPinRequest?: EntityFolderPinRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof setEntityPin>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getSetEntityPinQueryKey(projectId, kind, entityId, entityFolderPinRequest);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof setEntityPin>>> = ({
+    signal,
+  }) =>
+    setEntityPin(projectId, kind, entityId, entityFolderPinRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      kind !== null &&
+      kind !== undefined &&
+      entityId !== null &&
+      entityId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof setEntityPin>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type SetEntityPinQueryResult = NonNullable<
+  Awaited<ReturnType<typeof setEntityPin>>
+>;
+export type SetEntityPinQueryError =
+  N400Response | N401Response | N403Response | N404Response | N500Response;
+
+export function useSetEntityPin<
+  TData = Awaited<ReturnType<typeof setEntityPin>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  entityId: number,
+  entityFolderPinRequest: undefined | EntityFolderPinRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof setEntityPin>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof setEntityPin>>,
+          TError,
+          Awaited<ReturnType<typeof setEntityPin>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSetEntityPin<
+  TData = Awaited<ReturnType<typeof setEntityPin>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  entityId: number,
+  entityFolderPinRequest?: EntityFolderPinRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof setEntityPin>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof setEntityPin>>,
+          TError,
+          Awaited<ReturnType<typeof setEntityPin>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSetEntityPin<
+  TData = Awaited<ReturnType<typeof setEntityPin>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  entityId: number,
+  entityFolderPinRequest?: EntityFolderPinRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof setEntityPin>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Pin or unpin an entity for the caller
+ */
+
+export function useSetEntityPin<
+  TData = Awaited<ReturnType<typeof setEntityPin>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  entityId: number,
+  entityFolderPinRequest?: EntityFolderPinRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof setEntityPin>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getSetEntityPinQueryOptions(
+    projectId,
+    kind,
+    entityId,
+    entityFolderPinRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listEvalHumanScoresResponse200 = {
+  data: EvalHumanScoreList;
+  status: 200;
+};
+
+export type listEvalHumanScoresResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listEvalHumanScoresResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listEvalHumanScoresResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type listEvalHumanScoresResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type listEvalHumanScoresResponseSuccess =
+  listEvalHumanScoresResponse200 & {
+    headers: Headers;
+  };
+export type listEvalHumanScoresResponseError = (
+  | listEvalHumanScoresResponse401
+  | listEvalHumanScoresResponse403
+  | listEvalHumanScoresResponse404
+  | listEvalHumanScoresResponse500
+) & {
+  headers: Headers;
+};
+
+export type listEvalHumanScoresResponse =
+  listEvalHumanScoresResponseSuccess | listEvalHumanScoresResponseError;
+
+export const getListEvalHumanScoresUrl = (projectId: string, runId: string) => {
+  return `/elitea_core/eval_human_scores/prompt_lib/${projectId}/${runId}`;
+};
+
+/**
+ * Every score of the run, oldest first, so a re-scored case reads in order
+ * and the last row of a (case, dimension) is the score in force. Gated on
+ * `models.applications.evaluation.human_score.read`.
+ * @summary List a run's human scores
+ */
+export const listEvalHumanScores = async (
+  projectId: string,
+  runId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listEvalHumanScoresResponse> => {
+  return eliteaFetch<listEvalHumanScoresResponse>(
+    getListEvalHumanScoresUrl(projectId, runId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListEvalHumanScoresQueryKey = (
+  projectId: string,
+  runId: string,
+) => {
+  return [
+    `/elitea_core/eval_human_scores/prompt_lib/${projectId}/${runId}`,
+  ] as const;
+};
+
+export const getListEvalHumanScoresQueryOptions = <
+  TData = Awaited<ReturnType<typeof listEvalHumanScores>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listEvalHumanScores>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListEvalHumanScoresQueryKey(projectId, runId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listEvalHumanScores>>
+  > = ({ signal }) =>
+    listEvalHumanScores(projectId, runId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      runId !== null &&
+      runId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listEvalHumanScores>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListEvalHumanScoresQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listEvalHumanScores>>
+>;
+export type ListEvalHumanScoresQueryError =
+  N401Response | N403Response | N404Response | N500Response;
+
+export function useListEvalHumanScores<
+  TData = Awaited<ReturnType<typeof listEvalHumanScores>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listEvalHumanScores>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listEvalHumanScores>>,
+          TError,
+          Awaited<ReturnType<typeof listEvalHumanScores>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListEvalHumanScores<
+  TData = Awaited<ReturnType<typeof listEvalHumanScores>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listEvalHumanScores>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listEvalHumanScores>>,
+          TError,
+          Awaited<ReturnType<typeof listEvalHumanScores>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListEvalHumanScores<
+  TData = Awaited<ReturnType<typeof listEvalHumanScores>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listEvalHumanScores>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List a run's human scores
+ */
+
+export function useListEvalHumanScores<
+  TData = Awaited<ReturnType<typeof listEvalHumanScores>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listEvalHumanScores>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListEvalHumanScoresQueryOptions(
+    projectId,
+    runId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type recordEvalHumanScoreResponse201 = {
+  data: EvalHumanScoreRecorded;
+  status: 201;
+};
+
+export type recordEvalHumanScoreResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type recordEvalHumanScoreResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type recordEvalHumanScoreResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type recordEvalHumanScoreResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type recordEvalHumanScoreResponse409 = {
+  data: N409Response;
+  status: 409;
+};
+
+export type recordEvalHumanScoreResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type recordEvalHumanScoreResponseSuccess =
+  recordEvalHumanScoreResponse201 & {
+    headers: Headers;
+  };
+export type recordEvalHumanScoreResponseError = (
+  | recordEvalHumanScoreResponse400
+  | recordEvalHumanScoreResponse401
+  | recordEvalHumanScoreResponse403
+  | recordEvalHumanScoreResponse404
+  | recordEvalHumanScoreResponse409
+  | recordEvalHumanScoreResponse500
+) & {
+  headers: Headers;
+};
+
+export type recordEvalHumanScoreResponse =
+  recordEvalHumanScoreResponseSuccess | recordEvalHumanScoreResponseError;
+
+export const getRecordEvalHumanScoreUrl = (
+  projectId: string,
+  runId: string,
+) => {
+  return `/elitea_core/eval_human_scores/prompt_lib/${projectId}/${runId}`;
+};
+
+/**
+ * Appends the score with the reviewer and a note, turns the case's
+ * `pending_human` result into an `ok` result carrying it, and recomputes
+ * the run's headline, in one transaction. The dimension must be bound with
+ * the human engine in the run. A result the AI judge scored is not
+ * overwritten (409), nor is a case the run has not answered yet (409).
+ * Gated on `models.applications.evaluation.human_score.create`.
+ * @summary Record a human score for one case of a run
+ */
+export const recordEvalHumanScore = async (
+  projectId: string,
+  runId: string,
+  evalHumanScoreWriteRequest: EvalHumanScoreWriteRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<recordEvalHumanScoreResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<recordEvalHumanScoreResponse>(
+    getRecordEvalHumanScoreUrl(projectId, runId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(evalHumanScoreWriteRequest),
+    },
+  );
+};
+
+export const getRecordEvalHumanScoreQueryKey = (
+  projectId: string,
+  runId: string,
+  evalHumanScoreWriteRequest?: EvalHumanScoreWriteRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/eval_human_scores/prompt_lib/${projectId}/${runId}`,
+    evalHumanScoreWriteRequest,
+  ] as const;
+};
+
+export const getRecordEvalHumanScoreQueryOptions = <
+  TData = Awaited<ReturnType<typeof recordEvalHumanScore>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  evalHumanScoreWriteRequest: EvalHumanScoreWriteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof recordEvalHumanScore>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getRecordEvalHumanScoreQueryKey(
+      projectId,
+      runId,
+      evalHumanScoreWriteRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof recordEvalHumanScore>>
+  > = ({ signal }) =>
+    recordEvalHumanScore(projectId, runId, evalHumanScoreWriteRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      runId !== null &&
+      runId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof recordEvalHumanScore>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RecordEvalHumanScoreQueryResult = NonNullable<
+  Awaited<ReturnType<typeof recordEvalHumanScore>>
+>;
+export type RecordEvalHumanScoreQueryError =
+  | N400Response
+  | N401Response
+  | N403Response
+  | N404Response
+  | N409Response
+  | N500Response;
+
+export function useRecordEvalHumanScore<
+  TData = Awaited<ReturnType<typeof recordEvalHumanScore>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  evalHumanScoreWriteRequest: EvalHumanScoreWriteRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof recordEvalHumanScore>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof recordEvalHumanScore>>,
+          TError,
+          Awaited<ReturnType<typeof recordEvalHumanScore>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRecordEvalHumanScore<
+  TData = Awaited<ReturnType<typeof recordEvalHumanScore>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  evalHumanScoreWriteRequest: EvalHumanScoreWriteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof recordEvalHumanScore>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof recordEvalHumanScore>>,
+          TError,
+          Awaited<ReturnType<typeof recordEvalHumanScore>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRecordEvalHumanScore<
+  TData = Awaited<ReturnType<typeof recordEvalHumanScore>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  evalHumanScoreWriteRequest: EvalHumanScoreWriteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof recordEvalHumanScore>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Record a human score for one case of a run
+ */
+
+export function useRecordEvalHumanScore<
+  TData = Awaited<ReturnType<typeof recordEvalHumanScore>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  evalHumanScoreWriteRequest: EvalHumanScoreWriteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof recordEvalHumanScore>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRecordEvalHumanScoreQueryOptions(
+    projectId,
+    runId,
+    evalHumanScoreWriteRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type enhanceEvalRunResponse200 = {
+  data: EvalEnhanceProposal;
+  status: 200;
+};
+
+export type enhanceEvalRunResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type enhanceEvalRunResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type enhanceEvalRunResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type enhanceEvalRunResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type enhanceEvalRunResponse422 = {
+  data: ErrorResponse;
+  status: 422;
+};
+
+export type enhanceEvalRunResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type enhanceEvalRunResponse502 = {
+  data: ErrorResponse;
+  status: 502;
+};
+
+export type enhanceEvalRunResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type enhanceEvalRunResponseSuccess = enhanceEvalRunResponse200 & {
+  headers: Headers;
+};
+export type enhanceEvalRunResponseError = (
+  | enhanceEvalRunResponse401
+  | enhanceEvalRunResponse403
+  | enhanceEvalRunResponse404
+  | enhanceEvalRunResponse409
+  | enhanceEvalRunResponse422
+  | enhanceEvalRunResponse500
+  | enhanceEvalRunResponse502
+  | enhanceEvalRunResponse503
+) & {
+  headers: Headers;
+};
+
+export type enhanceEvalRunResponse =
+  enhanceEvalRunResponseSuccess | enhanceEvalRunResponseError;
+
+export const getEnhanceEvalRunUrl = (projectId: string, runId: string) => {
+  return `/elitea_core/eval_run_enhance/prompt_lib/${projectId}/${runId}`;
+};
+
+/**
+ * One model call, through the same gateway hop the judge and the AI-draft
+ * routes use, reads the run's PINNED agent definition (the frozen agent
+ * of a gate run, else the version row the run names) and the scored
+ * results that missed their targets with their outputs, scores and judge
+ * rationale. It answers up to three kinds of fix: an instruction patch,
+ * dimension rubric or target changes, and dataset expected-output
+ * changes.
+ *
+ * NOTHING IS WRITTEN. Each accepted fix is saved by the route that owns
+ * that write: a new agent version (which an agent above the low risk tier
+ * can publish only through a change request and its release gate), a
+ * dimension update, a dataset case update. A fix that names a dimension
+ * or case outside the evidence, an operator outside the set, an empty
+ * text or a no-op is dropped before it is answered. The call carries no
+ * run attribution, so it is not counted in the run's own analytics.
+ *
+ * Needs the run create permission (it spends model tokens) and the
+ * version read permission (the answer quotes the instructions).
+ * @summary Propose fixes for the cases a finished run missed (Enhance with AI)
+ */
+export const enhanceEvalRun = async (
+  projectId: string,
+  runId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<enhanceEvalRunResponse> => {
+  return eliteaFetch<enhanceEvalRunResponse>(
+    getEnhanceEvalRunUrl(projectId, runId),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getEnhanceEvalRunQueryKey = (projectId: string, runId: string) => {
+  return [
+    "POST",
+    `/elitea_core/eval_run_enhance/prompt_lib/${projectId}/${runId}`,
+  ] as const;
+};
+
+export const getEnhanceEvalRunQueryOptions = <
+  TData = Awaited<ReturnType<typeof enhanceEvalRun>>,
+  TError =
+    N401Response | N403Response | N404Response | ErrorResponse | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof enhanceEvalRun>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getEnhanceEvalRunQueryKey(projectId, runId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof enhanceEvalRun>>> = ({
+    signal,
+  }) => enhanceEvalRun(projectId, runId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      runId !== null &&
+      runId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof enhanceEvalRun>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type EnhanceEvalRunQueryResult = NonNullable<
+  Awaited<ReturnType<typeof enhanceEvalRun>>
+>;
+export type EnhanceEvalRunQueryError =
+  N401Response | N403Response | N404Response | ErrorResponse | N500Response;
+
+export function useEnhanceEvalRun<
+  TData = Awaited<ReturnType<typeof enhanceEvalRun>>,
+  TError =
+    N401Response | N403Response | N404Response | ErrorResponse | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof enhanceEvalRun>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof enhanceEvalRun>>,
+          TError,
+          Awaited<ReturnType<typeof enhanceEvalRun>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useEnhanceEvalRun<
+  TData = Awaited<ReturnType<typeof enhanceEvalRun>>,
+  TError =
+    N401Response | N403Response | N404Response | ErrorResponse | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof enhanceEvalRun>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof enhanceEvalRun>>,
+          TError,
+          Awaited<ReturnType<typeof enhanceEvalRun>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useEnhanceEvalRun<
+  TData = Awaited<ReturnType<typeof enhanceEvalRun>>,
+  TError =
+    N401Response | N403Response | N404Response | ErrorResponse | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof enhanceEvalRun>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Propose fixes for the cases a finished run missed (Enhance with AI)
+ */
+
+export function useEnhanceEvalRun<
+  TData = Awaited<ReturnType<typeof enhanceEvalRun>>,
+  TError =
+    N401Response | N403Response | N404Response | ErrorResponse | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof enhanceEvalRun>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getEnhanceEvalRunQueryOptions(projectId, runId, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listDelegationGrantsResponse200 = {
+  data: DelegationGrantList;
+  status: 200;
+};
+
+export type listDelegationGrantsResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type listDelegationGrantsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listDelegationGrantsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listDelegationGrantsResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type listDelegationGrantsResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type listDelegationGrantsResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type listDelegationGrantsResponseSuccess =
+  listDelegationGrantsResponse200 & {
+    headers: Headers;
+  };
+export type listDelegationGrantsResponseError = (
+  | listDelegationGrantsResponse400
+  | listDelegationGrantsResponse401
+  | listDelegationGrantsResponse403
+  | listDelegationGrantsResponse404
+  | listDelegationGrantsResponse426
+  | listDelegationGrantsResponse500
+) & {
+  headers: Headers;
+};
+
+export type listDelegationGrantsResponse =
+  listDelegationGrantsResponseSuccess | listDelegationGrantsResponseError;
+
+export const getListDelegationGrantsUrl = (
+  projectId: string,
+  applicationId: number,
+  params?: ListDelegationGrantsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/delegation_grants/prompt_lib/${projectId}/${applicationId}?${stringifiedParams}`
+    : `/elitea_core/delegation_grants/prompt_lib/${projectId}/${applicationId}`;
+};
+
+/**
+ * Client contract 1.58, ADR-0044 amendment 1. Attaching a sub-agent, an agent
+ * used as a tool or a pipeline child X to this agent Y creates one grant for the
+ * edge Y to X. It lists what X held when it was attached (its toolkits, the tools
+ * selected on each, its credential references, declared data classes and the
+ * egress hosts its toolkits reach), pinned to the digest of that set. This lists
+ * the edges' active grants (`pending`, `approved` or `stale`); `history=true` adds
+ * the `superseded` and `revoked` ones. A grant is `stale` when its callee
+ * changed after approval: the grant keeps covering the set it recorded and what
+ * was added is left out of the callee's run. Needs the permission that reads an
+ * agent. NOTE(W2): internal/api/v2/delegationgrants/handler.go:177 (`List`).
+ * @summary The delegation grants of an agent's composition edges
+ */
+export const listDelegationGrants = async (
+  projectId: string,
+  applicationId: number,
+  params?: ListDelegationGrantsParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listDelegationGrantsResponse> => {
+  return eliteaFetch<listDelegationGrantsResponse>(
+    getListDelegationGrantsUrl(projectId, applicationId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListDelegationGrantsQueryKey = (
+  projectId: string,
+  applicationId: number,
+  params?: ListDelegationGrantsParams,
+) => {
+  return [
+    `/elitea_core/delegation_grants/prompt_lib/${projectId}/${applicationId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListDelegationGrantsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listDelegationGrants>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params?: ListDelegationGrantsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listDelegationGrants>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListDelegationGrantsQueryKey(projectId, applicationId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listDelegationGrants>>
+  > = ({ signal }) =>
+    listDelegationGrants(projectId, applicationId, params, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listDelegationGrants>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListDelegationGrantsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listDelegationGrants>>
+>;
+export type ListDelegationGrantsQueryError =
+  | N400Response
+  | N401Response
+  | N403Response
+  | N404Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useListDelegationGrants<
+  TData = Awaited<ReturnType<typeof listDelegationGrants>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params: undefined | ListDelegationGrantsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listDelegationGrants>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listDelegationGrants>>,
+          TError,
+          Awaited<ReturnType<typeof listDelegationGrants>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListDelegationGrants<
+  TData = Awaited<ReturnType<typeof listDelegationGrants>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params?: ListDelegationGrantsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listDelegationGrants>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listDelegationGrants>>,
+          TError,
+          Awaited<ReturnType<typeof listDelegationGrants>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListDelegationGrants<
+  TData = Awaited<ReturnType<typeof listDelegationGrants>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params?: ListDelegationGrantsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listDelegationGrants>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary The delegation grants of an agent's composition edges
+ */
+
+export function useListDelegationGrants<
+  TData = Awaited<ReturnType<typeof listDelegationGrants>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params?: ListDelegationGrantsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listDelegationGrants>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListDelegationGrantsQueryOptions(
+    projectId,
+    applicationId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type proposeDelegationGrantResponse201 = {
+  data: DelegationGrant;
+  status: 201;
+};
+
+export type proposeDelegationGrantResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type proposeDelegationGrantResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type proposeDelegationGrantResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type proposeDelegationGrantResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type proposeDelegationGrantResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type proposeDelegationGrantResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type proposeDelegationGrantResponseSuccess =
+  proposeDelegationGrantResponse201 & {
+    headers: Headers;
+  };
+export type proposeDelegationGrantResponseError = (
+  | proposeDelegationGrantResponse400
+  | proposeDelegationGrantResponse401
+  | proposeDelegationGrantResponse403
+  | proposeDelegationGrantResponse404
+  | proposeDelegationGrantResponse409
+  | proposeDelegationGrantResponse500
+) & {
+  headers: Headers;
+};
+
+export type proposeDelegationGrantResponse =
+  proposeDelegationGrantResponseSuccess | proposeDelegationGrantResponseError;
+
+export const getProposeDelegationGrantUrl = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return `/elitea_core/delegation_grants/prompt_lib/${projectId}/${applicationId}`;
+};
+
+/**
+ * Client contract 1.58, ADR-0044 amendment 1. Records the pending grant of the
+ * edge from this agent to the callee version, from what that version holds now.
+ * Attaching creates the pending grant already; this asks for it again, for
+ * example after a detach and re-attach. Retrying the same proposal answers the
+ * pending grant it made. An edge that has a different active grant answers 409.
+ * Under the governed profile the proposal also records the ADR-0040 change
+ * request of kind `delegation` that approves it (`change_request_id`).
+ * Needs the permission that edits an agent. Audited. NOTE(W2):
+ * internal/api/v2/delegationgrants/handler.go:225 (`Propose`).
+ * @summary Propose the delegation grant of an edge
+ */
+export const proposeDelegationGrant = async (
+  projectId: string,
+  applicationId: number,
+  proposeDelegationGrantRequest: ProposeDelegationGrantRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<proposeDelegationGrantResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<proposeDelegationGrantResponse>(
+    getProposeDelegationGrantUrl(projectId, applicationId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(proposeDelegationGrantRequest),
+    },
+  );
+};
+
+export const getProposeDelegationGrantQueryKey = (
+  projectId: string,
+  applicationId: number,
+  proposeDelegationGrantRequest?: ProposeDelegationGrantRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/delegation_grants/prompt_lib/${projectId}/${applicationId}`,
+    proposeDelegationGrantRequest,
+  ] as const;
+};
+
+export const getProposeDelegationGrantQueryOptions = <
+  TData = Awaited<ReturnType<typeof proposeDelegationGrant>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  proposeDelegationGrantRequest: ProposeDelegationGrantRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof proposeDelegationGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getProposeDelegationGrantQueryKey(
+      projectId,
+      applicationId,
+      proposeDelegationGrantRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof proposeDelegationGrant>>
+  > = ({ signal }) =>
+    proposeDelegationGrant(
+      projectId,
+      applicationId,
+      proposeDelegationGrantRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof proposeDelegationGrant>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ProposeDelegationGrantQueryResult = NonNullable<
+  Awaited<ReturnType<typeof proposeDelegationGrant>>
+>;
+export type ProposeDelegationGrantQueryError =
+  | N400Response
+  | N401Response
+  | N403Response
+  | N404Response
+  | ErrorResponse
+  | N500Response;
+
+export function useProposeDelegationGrant<
+  TData = Awaited<ReturnType<typeof proposeDelegationGrant>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  proposeDelegationGrantRequest: ProposeDelegationGrantRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof proposeDelegationGrant>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof proposeDelegationGrant>>,
+          TError,
+          Awaited<ReturnType<typeof proposeDelegationGrant>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useProposeDelegationGrant<
+  TData = Awaited<ReturnType<typeof proposeDelegationGrant>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  proposeDelegationGrantRequest: ProposeDelegationGrantRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof proposeDelegationGrant>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof proposeDelegationGrant>>,
+          TError,
+          Awaited<ReturnType<typeof proposeDelegationGrant>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useProposeDelegationGrant<
+  TData = Awaited<ReturnType<typeof proposeDelegationGrant>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  proposeDelegationGrantRequest: ProposeDelegationGrantRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof proposeDelegationGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Propose the delegation grant of an edge
+ */
+
+export function useProposeDelegationGrant<
+  TData = Awaited<ReturnType<typeof proposeDelegationGrant>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  proposeDelegationGrantRequest: ProposeDelegationGrantRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof proposeDelegationGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getProposeDelegationGrantQueryOptions(
+    projectId,
+    applicationId,
+    proposeDelegationGrantRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type previewDelegationGrantResponse200 = {
+  data: DelegationPreview;
+  status: 200;
+};
+
+export type previewDelegationGrantResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type previewDelegationGrantResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type previewDelegationGrantResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type previewDelegationGrantResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type previewDelegationGrantResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type previewDelegationGrantResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type previewDelegationGrantResponseSuccess =
+  previewDelegationGrantResponse200 & {
+    headers: Headers;
+  };
+export type previewDelegationGrantResponseError = (
+  | previewDelegationGrantResponse400
+  | previewDelegationGrantResponse401
+  | previewDelegationGrantResponse403
+  | previewDelegationGrantResponse404
+  | previewDelegationGrantResponse426
+  | previewDelegationGrantResponse500
+) & {
+  headers: Headers;
+};
+
+export type previewDelegationGrantResponse =
+  previewDelegationGrantResponseSuccess | previewDelegationGrantResponseError;
+
+export const getPreviewDelegationGrantUrl = (
+  projectId: string,
+  applicationId: number,
+  params: PreviewDelegationGrantParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/delegation_preview/prompt_lib/${projectId}/${applicationId}?${stringifiedParams}`
+    : `/elitea_core/delegation_preview/prompt_lib/${projectId}/${applicationId}`;
+};
+
+/**
+ * Client contract 1.58, ADR-0044 amendment 1. For the attach dialog: what the
+ * callee version holds (`items`), the part the person asking could approve
+ * because they hold access to it (`approvable`), the part that would stay out of
+ * the grant because they do not (`withheld`), the closure (the callee and the
+ * callees it reaches through APPROVED grants, with what each holds) as
+ * information, and the edge's active grant when it has one. The closure is not
+ * approved by approving this edge: every hop needs its own grant, approved by an
+ * editor of the agent that makes the call. Needs the permission that reads an
+ * agent. NOTE(W2): internal/api/v2/delegationgrants/handler.go:358 (`Preview`).
+ * @summary What an attached agent will be able to use
+ */
+export const previewDelegationGrant = async (
+  projectId: string,
+  applicationId: number,
+  params: PreviewDelegationGrantParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<previewDelegationGrantResponse> => {
+  return eliteaFetch<previewDelegationGrantResponse>(
+    getPreviewDelegationGrantUrl(projectId, applicationId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getPreviewDelegationGrantQueryKey = (
+  projectId: string,
+  applicationId: number,
+  params?: PreviewDelegationGrantParams,
+) => {
+  return [
+    `/elitea_core/delegation_preview/prompt_lib/${projectId}/${applicationId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getPreviewDelegationGrantQueryOptions = <
+  TData = Awaited<ReturnType<typeof previewDelegationGrant>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params: PreviewDelegationGrantParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof previewDelegationGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getPreviewDelegationGrantQueryKey(projectId, applicationId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof previewDelegationGrant>>
+  > = ({ signal }) =>
+    previewDelegationGrant(projectId, applicationId, params, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof previewDelegationGrant>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type PreviewDelegationGrantQueryResult = NonNullable<
+  Awaited<ReturnType<typeof previewDelegationGrant>>
+>;
+export type PreviewDelegationGrantQueryError =
+  | N400Response
+  | N401Response
+  | N403Response
+  | N404Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function usePreviewDelegationGrant<
+  TData = Awaited<ReturnType<typeof previewDelegationGrant>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params: PreviewDelegationGrantParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof previewDelegationGrant>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof previewDelegationGrant>>,
+          TError,
+          Awaited<ReturnType<typeof previewDelegationGrant>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function usePreviewDelegationGrant<
+  TData = Awaited<ReturnType<typeof previewDelegationGrant>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params: PreviewDelegationGrantParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof previewDelegationGrant>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof previewDelegationGrant>>,
+          TError,
+          Awaited<ReturnType<typeof previewDelegationGrant>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function usePreviewDelegationGrant<
+  TData = Awaited<ReturnType<typeof previewDelegationGrant>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params: PreviewDelegationGrantParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof previewDelegationGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary What an attached agent will be able to use
+ */
+
+export function usePreviewDelegationGrant<
+  TData = Awaited<ReturnType<typeof previewDelegationGrant>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params: PreviewDelegationGrantParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof previewDelegationGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getPreviewDelegationGrantQueryOptions(
+    projectId,
+    applicationId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getDelegationGrantResponse200 = {
+  data: DelegationGrant;
+  status: 200;
+};
+
+export type getDelegationGrantResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type getDelegationGrantResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getDelegationGrantResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getDelegationGrantResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type getDelegationGrantResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type getDelegationGrantResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type getDelegationGrantResponseSuccess =
+  getDelegationGrantResponse200 & {
+    headers: Headers;
+  };
+export type getDelegationGrantResponseError = (
+  | getDelegationGrantResponse400
+  | getDelegationGrantResponse401
+  | getDelegationGrantResponse403
+  | getDelegationGrantResponse404
+  | getDelegationGrantResponse426
+  | getDelegationGrantResponse500
+) & {
+  headers: Headers;
+};
+
+export type getDelegationGrantResponse =
+  getDelegationGrantResponseSuccess | getDelegationGrantResponseError;
+
+export const getGetDelegationGrantUrl = (
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+) => {
+  return `/elitea_core/delegation_grant/prompt_lib/${projectId}/${applicationId}/${grantId}`;
+};
+
+/**
+ * Client contract 1.58, ADR-0044 amendment 1. Needs the permission that reads an
+ * agent. NOTE(W2): internal/api/v2/delegationgrants/handler.go:196 (`Get`).
+ * @summary One delegation grant
+ */
+export const getDelegationGrant = async (
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getDelegationGrantResponse> => {
+  return eliteaFetch<getDelegationGrantResponse>(
+    getGetDelegationGrantUrl(projectId, applicationId, grantId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetDelegationGrantQueryKey = (
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+) => {
+  return [
+    `/elitea_core/delegation_grant/prompt_lib/${projectId}/${applicationId}/${grantId}`,
+  ] as const;
+};
+
+export const getGetDelegationGrantQueryOptions = <
+  TData = Awaited<ReturnType<typeof getDelegationGrant>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getDelegationGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetDelegationGrantQueryKey(projectId, applicationId, grantId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getDelegationGrant>>
+  > = ({ signal }) =>
+    getDelegationGrant(projectId, applicationId, grantId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined &&
+      grantId !== null &&
+      grantId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getDelegationGrant>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetDelegationGrantQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getDelegationGrant>>
+>;
+export type GetDelegationGrantQueryError =
+  | N400Response
+  | N401Response
+  | N403Response
+  | N404Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useGetDelegationGrant<
+  TData = Awaited<ReturnType<typeof getDelegationGrant>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getDelegationGrant>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getDelegationGrant>>,
+          TError,
+          Awaited<ReturnType<typeof getDelegationGrant>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetDelegationGrant<
+  TData = Awaited<ReturnType<typeof getDelegationGrant>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getDelegationGrant>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getDelegationGrant>>,
+          TError,
+          Awaited<ReturnType<typeof getDelegationGrant>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetDelegationGrant<
+  TData = Awaited<ReturnType<typeof getDelegationGrant>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getDelegationGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary One delegation grant
+ */
+
+export function useGetDelegationGrant<
+  TData = Awaited<ReturnType<typeof getDelegationGrant>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getDelegationGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetDelegationGrantQueryOptions(
+    projectId,
+    applicationId,
+    grantId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type revokeDelegationGrantResponse200 = {
+  data: DelegationGrant;
+  status: 200;
+};
+
+export type revokeDelegationGrantResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type revokeDelegationGrantResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type revokeDelegationGrantResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type revokeDelegationGrantResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type revokeDelegationGrantResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type revokeDelegationGrantResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type revokeDelegationGrantResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type revokeDelegationGrantResponseSuccess =
+  revokeDelegationGrantResponse200 & {
+    headers: Headers;
+  };
+export type revokeDelegationGrantResponseError = (
+  | revokeDelegationGrantResponse400
+  | revokeDelegationGrantResponse401
+  | revokeDelegationGrantResponse403
+  | revokeDelegationGrantResponse404
+  | revokeDelegationGrantResponse409
+  | revokeDelegationGrantResponse426
+  | revokeDelegationGrantResponse500
+) & {
+  headers: Headers;
+};
+
+export type revokeDelegationGrantResponse =
+  revokeDelegationGrantResponseSuccess | revokeDelegationGrantResponseError;
+
+export const getRevokeDelegationGrantUrl = (
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+) => {
+  return `/elitea_core/delegation_grant/prompt_lib/${projectId}/${applicationId}/${grantId}`;
+};
+
+/**
+ * Client contract 1.58, ADR-0044 amendment 1. Ends an active grant: the edge is
+ * refused again where the caller does not hold what the callee does. This is
+ * what a detach does. A grant already revoked or superseded answers 409. Needs
+ * the permission that edits an agent. Audited. NOTE(W2):
+ * internal/api/v2/delegationgrants/handler.go:328 (`Revoke`).
+ * @summary Revoke a delegation grant
+ */
+export const revokeDelegationGrant = async (
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<revokeDelegationGrantResponse> => {
+  return eliteaFetch<revokeDelegationGrantResponse>(
+    getRevokeDelegationGrantUrl(projectId, applicationId, grantId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getRevokeDelegationGrantQueryKey = (
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+) => {
+  return [
+    "DELETE",
+    `/elitea_core/delegation_grant/prompt_lib/${projectId}/${applicationId}/${grantId}`,
+  ] as const;
+};
+
+export const getRevokeDelegationGrantQueryOptions = <
+  TData = Awaited<ReturnType<typeof revokeDelegationGrant>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeDelegationGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getRevokeDelegationGrantQueryKey(projectId, applicationId, grantId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof revokeDelegationGrant>>
+  > = ({ signal }) =>
+    revokeDelegationGrant(projectId, applicationId, grantId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined &&
+      grantId !== null &&
+      grantId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof revokeDelegationGrant>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RevokeDelegationGrantQueryResult = NonNullable<
+  Awaited<ReturnType<typeof revokeDelegationGrant>>
+>;
+export type RevokeDelegationGrantQueryError =
+  | N400Response
+  | N401Response
+  | N403Response
+  | N404Response
+  | ErrorResponse
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useRevokeDelegationGrant<
+  TData = Awaited<ReturnType<typeof revokeDelegationGrant>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeDelegationGrant>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof revokeDelegationGrant>>,
+          TError,
+          Awaited<ReturnType<typeof revokeDelegationGrant>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRevokeDelegationGrant<
+  TData = Awaited<ReturnType<typeof revokeDelegationGrant>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeDelegationGrant>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof revokeDelegationGrant>>,
+          TError,
+          Awaited<ReturnType<typeof revokeDelegationGrant>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRevokeDelegationGrant<
+  TData = Awaited<ReturnType<typeof revokeDelegationGrant>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeDelegationGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Revoke a delegation grant
+ */
+
+export function useRevokeDelegationGrant<
+  TData = Awaited<ReturnType<typeof revokeDelegationGrant>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeDelegationGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRevokeDelegationGrantQueryOptions(
+    projectId,
+    applicationId,
+    grantId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type approveDelegationGrantResponse200 = {
+  data: DelegationGrant;
+  status: 200;
+};
+
+export type approveDelegationGrantResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type approveDelegationGrantResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type approveDelegationGrantResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type approveDelegationGrantResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type approveDelegationGrantResponse409 = {
+  data: DelegationGovernedError;
+  status: 409;
+};
+
+export type approveDelegationGrantResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type approveDelegationGrantResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type approveDelegationGrantResponseSuccess =
+  approveDelegationGrantResponse200 & {
+    headers: Headers;
+  };
+export type approveDelegationGrantResponseError = (
+  | approveDelegationGrantResponse400
+  | approveDelegationGrantResponse401
+  | approveDelegationGrantResponse403
+  | approveDelegationGrantResponse404
+  | approveDelegationGrantResponse409
+  | approveDelegationGrantResponse426
+  | approveDelegationGrantResponse500
+) & {
+  headers: Headers;
+};
+
+export type approveDelegationGrantResponse =
+  approveDelegationGrantResponseSuccess | approveDelegationGrantResponseError;
+
+export const getApproveDelegationGrantUrl = (
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+) => {
+  return `/elitea_core/delegation_grant/prompt_lib/${projectId}/${applicationId}/${grantId}/approve`;
+};
+
+/**
+ * Client contract 1.58, ADR-0044 amendment 1. An editor of the caller approves a
+ * pending grant, all of it (no body) or only the items they choose (`items`).
+ * They can approve only what they hold access to: each toolkit and each
+ * credential reference of the grant. What they leave out, or do not hold, is
+ * recorded as `omitted`, stays out of the grant, and the callee runs without it.
+ * A data class bound is never left out. Approving a grant does not create a
+ * credential use grant: a governed credential still needs the exact use grant of
+ * the agent that holds the reference. Under the governed profile the grant is
+ * approved through its change request instead, and this answers 409 with the
+ * code `DELEGATION_GOVERNED` and the `change_request_id`. Needs the permission
+ * that edits an agent. Audited. Since 1.62 the grant may also be `stale`: the
+ * callee now holds more than the grant recorded (`drift` lists what). Approving
+ * re-approves it against what the callee holds now: the old grant is kept as
+ * `superseded` and the answer is the new, approved grant. Under the governed
+ * profile a stale grant is re-approved through a new change request, and this
+ * answers 409 `DELEGATION_GOVERNED` with that request. NOTE(W2):
+ * internal/api/v2/delegationgrants/handler.go:270 (`Approve`).
+ * @summary Approve a pending delegation grant, or re-approve a stale one
+ */
+export const approveDelegationGrant = async (
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  approveDelegationGrantRequest?: ApproveDelegationGrantRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<approveDelegationGrantResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<approveDelegationGrantResponse>(
+    getApproveDelegationGrantUrl(projectId, applicationId, grantId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(approveDelegationGrantRequest),
+    },
+  );
+};
+
+export const getApproveDelegationGrantQueryKey = (
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  approveDelegationGrantRequest?: ApproveDelegationGrantRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/delegation_grant/prompt_lib/${projectId}/${applicationId}/${grantId}/approve`,
+    approveDelegationGrantRequest,
+  ] as const;
+};
+
+export const getApproveDelegationGrantQueryOptions = <
+  TData = Awaited<ReturnType<typeof approveDelegationGrant>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | DelegationGovernedError
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  approveDelegationGrantRequest?: ApproveDelegationGrantRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveDelegationGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getApproveDelegationGrantQueryKey(
+      projectId,
+      applicationId,
+      grantId,
+      approveDelegationGrantRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof approveDelegationGrant>>
+  > = ({ signal }) =>
+    approveDelegationGrant(
+      projectId,
+      applicationId,
+      grantId,
+      approveDelegationGrantRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined &&
+      grantId !== null &&
+      grantId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof approveDelegationGrant>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ApproveDelegationGrantQueryResult = NonNullable<
+  Awaited<ReturnType<typeof approveDelegationGrant>>
+>;
+export type ApproveDelegationGrantQueryError =
+  | ErrorResponse
+  | N401Response
+  | N403Response
+  | N404Response
+  | DelegationGovernedError
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useApproveDelegationGrant<
+  TData = Awaited<ReturnType<typeof approveDelegationGrant>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | DelegationGovernedError
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  approveDelegationGrantRequest: undefined | ApproveDelegationGrantRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveDelegationGrant>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof approveDelegationGrant>>,
+          TError,
+          Awaited<ReturnType<typeof approveDelegationGrant>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useApproveDelegationGrant<
+  TData = Awaited<ReturnType<typeof approveDelegationGrant>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | DelegationGovernedError
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  approveDelegationGrantRequest?: ApproveDelegationGrantRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveDelegationGrant>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof approveDelegationGrant>>,
+          TError,
+          Awaited<ReturnType<typeof approveDelegationGrant>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useApproveDelegationGrant<
+  TData = Awaited<ReturnType<typeof approveDelegationGrant>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | DelegationGovernedError
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  approveDelegationGrantRequest?: ApproveDelegationGrantRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveDelegationGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Approve a pending delegation grant, or re-approve a stale one
+ */
+
+export function useApproveDelegationGrant<
+  TData = Awaited<ReturnType<typeof approveDelegationGrant>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | DelegationGovernedError
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  grantId: number,
+  approveDelegationGrantRequest?: ApproveDelegationGrantRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveDelegationGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getApproveDelegationGrantQueryOptions(
+    projectId,
+    applicationId,
+    grantId,
+    approveDelegationGrantRequest,
     options,
   );
 
@@ -8954,6 +14541,11 @@ export type getAgentWorkforceResponse200 = {
   status: 200;
 };
 
+export type getAgentWorkforceResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
 export type getAgentWorkforceResponse401 = {
   data: N401Response;
   status: 401;
@@ -8969,13 +14561,20 @@ export type getAgentWorkforceResponse404 = {
   status: 404;
 };
 
+export type getAgentWorkforceResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type getAgentWorkforceResponseSuccess = getAgentWorkforceResponse200 & {
   headers: Headers;
 };
 export type getAgentWorkforceResponseError = (
+  | getAgentWorkforceResponse400
   | getAgentWorkforceResponse401
   | getAgentWorkforceResponse403
   | getAgentWorkforceResponse404
+  | getAgentWorkforceResponse426
 ) & {
   headers: Headers;
 };
@@ -8991,7 +14590,7 @@ export const getGetAgentWorkforceUrl = (
 };
 
 /**
- * The agent's place on the dismissal ladder (ADR-0050 decision 5g): whether it is under review (watch), suspended, retired (and until when it can be reinstated) or deleted, its owners, legal hold, whether it is an HR agent, its latest daily scorecard, and whether the caller manages agents here or owns the agent. Requires `models.applications.applications.list`.
+ * The agent's place on the dismissal ladder (ADR-0050 decision 5g): whether it is under review (watch), suspended, retired (and until when it can be reinstated) or deleted, its owners, legal hold, whether it is a workforce manager, its latest daily scorecard, and whether the caller manages agents here or owns the agent. Requires `models.applications.applications.list`. The mobile app reads it for the probation badge of an automatically hired agent (contract 1.56).
  * @summary Read an agent's workforce state and latest scorecard
  */
 export const getAgentWorkforce = async (
@@ -9019,7 +14618,12 @@ export const getGetAgentWorkforceQueryKey = (
 
 export const getGetAgentWorkforceQueryOptions = <
   TData = Awaited<ReturnType<typeof getAgentWorkforce>>,
-  TError = N401Response | N403Response | AgentWorkforceRefusal,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | AgentWorkforceRefusal
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   applicationId: number,
@@ -9065,11 +14669,20 @@ export type GetAgentWorkforceQueryResult = NonNullable<
   Awaited<ReturnType<typeof getAgentWorkforce>>
 >;
 export type GetAgentWorkforceQueryError =
-  N401Response | N403Response | AgentWorkforceRefusal;
+  | N400Response
+  | N401Response
+  | N403Response
+  | AgentWorkforceRefusal
+  | ClientUpgradeRequiredResponse;
 
 export function useGetAgentWorkforce<
   TData = Awaited<ReturnType<typeof getAgentWorkforce>>,
-  TError = N401Response | N403Response | AgentWorkforceRefusal,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | AgentWorkforceRefusal
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   applicationId: number,
@@ -9097,7 +14710,12 @@ export function useGetAgentWorkforce<
 };
 export function useGetAgentWorkforce<
   TData = Awaited<ReturnType<typeof getAgentWorkforce>>,
-  TError = N401Response | N403Response | AgentWorkforceRefusal,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | AgentWorkforceRefusal
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   applicationId: number,
@@ -9125,7 +14743,12 @@ export function useGetAgentWorkforce<
 };
 export function useGetAgentWorkforce<
   TData = Awaited<ReturnType<typeof getAgentWorkforce>>,
-  TError = N401Response | N403Response | AgentWorkforceRefusal,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | AgentWorkforceRefusal
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   applicationId: number,
@@ -9149,7 +14772,12 @@ export function useGetAgentWorkforce<
 
 export function useGetAgentWorkforce<
   TData = Awaited<ReturnType<typeof getAgentWorkforce>>,
-  TError = N401Response | N403Response | AgentWorkforceRefusal,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | AgentWorkforceRefusal
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   applicationId: number,
@@ -9962,6 +15590,11 @@ export type listAgentWorkforceProposalsResponse403 = {
   status: 403;
 };
 
+export type listAgentWorkforceProposalsResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type listAgentWorkforceProposalsResponseSuccess =
   listAgentWorkforceProposalsResponse200 & {
     headers: Headers;
@@ -9970,6 +15603,7 @@ export type listAgentWorkforceProposalsResponseError = (
   | listAgentWorkforceProposalsResponse400
   | listAgentWorkforceProposalsResponse401
   | listAgentWorkforceProposalsResponse403
+  | listAgentWorkforceProposalsResponse426
 ) & {
   headers: Headers;
 };
@@ -9998,8 +15632,8 @@ export const getListAgentWorkforceProposalsUrl = (
 };
 
 /**
- * The project's workforce proposals, newest first: open ones (proposed or asked_owner) unless status names proposed, asked_owner, approved, rejected or all. application_id narrows them to one agent. Requires `models.applications.applications.list`.
- * @summary List dismissal and demotion proposals
+ * The project's workforce proposals, newest first: open ones (proposed or asked_owner) unless status names proposed, asked_owner, approved, rejected or all. application_id narrows them to one agent. kind picks the ladder's dismiss and demote (the default) or the Marketplace's hire_listing and feedback_report (ADR-0051 decision 6). Requires `models.applications.applications.list`. The mobile app reads the Marketplace kinds, read-only (contract 1.56).
+ * @summary List workforce proposals
  */
 export const listAgentWorkforceProposals = async (
   projectId: string,
@@ -10027,7 +15661,8 @@ export const getListAgentWorkforceProposalsQueryKey = (
 
 export const getListAgentWorkforceProposalsQueryOptions = <
   TData = Awaited<ReturnType<typeof listAgentWorkforceProposals>>,
-  TError = N400Response | N401Response | N403Response,
+  TError =
+    N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   params?: ListAgentWorkforceProposalsParams,
@@ -10072,11 +15707,12 @@ export type ListAgentWorkforceProposalsQueryResult = NonNullable<
   Awaited<ReturnType<typeof listAgentWorkforceProposals>>
 >;
 export type ListAgentWorkforceProposalsQueryError =
-  N400Response | N401Response | N403Response;
+  N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse;
 
 export function useListAgentWorkforceProposals<
   TData = Awaited<ReturnType<typeof listAgentWorkforceProposals>>,
-  TError = N400Response | N401Response | N403Response,
+  TError =
+    N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   params: undefined | ListAgentWorkforceProposalsParams,
@@ -10104,7 +15740,8 @@ export function useListAgentWorkforceProposals<
 };
 export function useListAgentWorkforceProposals<
   TData = Awaited<ReturnType<typeof listAgentWorkforceProposals>>,
-  TError = N400Response | N401Response | N403Response,
+  TError =
+    N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   params?: ListAgentWorkforceProposalsParams,
@@ -10132,7 +15769,8 @@ export function useListAgentWorkforceProposals<
 };
 export function useListAgentWorkforceProposals<
   TData = Awaited<ReturnType<typeof listAgentWorkforceProposals>>,
-  TError = N400Response | N401Response | N403Response,
+  TError =
+    N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   params?: ListAgentWorkforceProposalsParams,
@@ -10151,12 +15789,13 @@ export function useListAgentWorkforceProposals<
   queryKey: DataTag<QueryKey, TData, TError>;
 };
 /**
- * @summary List dismissal and demotion proposals
+ * @summary List workforce proposals
  */
 
 export function useListAgentWorkforceProposals<
   TData = Awaited<ReturnType<typeof listAgentWorkforceProposals>>,
-  TError = N400Response | N401Response | N403Response,
+  TError =
+    N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   params?: ListAgentWorkforceProposalsParams,
@@ -10766,7 +16405,7 @@ export const getApproveAgentWorkforceProposalUrl = (
 };
 
 /**
- * Applies the stage. Retiring an agent that other agents nest needs confirm_nested. Requires `models.applications.applications.list`, and `agents.workforce.manage` or ownership of the agent.
+ * Applies the stage. Retiring an agent that other agents nest needs confirm_nested. A feedback_report proposal is published to its listing version (an agent manager only). A hire_listing proposal is approved by hiring (the hire wizard settles it), so it is refused here. Requires `models.applications.applications.list`, and `agents.workforce.manage` or ownership of the agent.
  * @summary Approve a workforce proposal and apply its stage
  */
 export const approveAgentWorkforceProposal = async (
@@ -11063,7 +16702,7 @@ export const getRejectAgentWorkforceProposalUrl = (
 };
 
 /**
- * Keeps the agent; a watch flag the proposal raised is cleared. Requires `models.applications.applications.list`, and `agents.workforce.manage` or ownership of the agent.
+ * Keeps the agent; a watch flag the proposal raised is cleared. For a hire_listing or feedback_report proposal it discards the proposal (an agent manager only). Requires `models.applications.applications.list`, and `agents.workforce.manage` or ownership of the agent.
  * @summary Reject a workforce proposal
  */
 export const rejectAgentWorkforceProposal = async (

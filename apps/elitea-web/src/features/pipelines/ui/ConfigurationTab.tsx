@@ -21,7 +21,7 @@ import { usePipelineMCPToolsStatusMonitor } from '../lib/hooks/usePipelineMCPToo
 import type { PipelineMcpToolLike } from '../lib/hooks/usePipelineMCPToolsStatusMonitor';
 import { PipelineTriggerScopeContext } from '../lib/flow-editor/flowEditorContext';
 import { useSelectedProjectId } from '../lib/flow-editor/hooks/useSelectedProjectId';
-import { extractExistingToolkitIds, triggerScope } from './configurationTab.lib';
+import { extractExistingToolkitIds, mainOverflow, triggerScope } from './configurationTab.lib';
 import { DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE } from '../lib/flowEditorVersionInputs.helpers';
 import { useFlowEditorVersionInputs } from '../lib/hooks/useFlowEditorVersionInputs';
 import { ChatPanel } from './ChatPanel';
@@ -372,7 +372,8 @@ function configurationTabStyles(isSmallWindow: boolean, isChatPaneCollapsed: boo
     mainContainer: {
       // The page body's height: a viewport-derived one overflowed the shell's body.
       height: '100%',
-      overflow: 'scroll',
+      // Wide: columns scroll on their own so the canvas stays pinned.
+      overflow: mainOverflow(isSmallWindow),
       padding: '0.75rem 1.5rem 1.5rem',
       gap: '2rem',
       display: 'flex',

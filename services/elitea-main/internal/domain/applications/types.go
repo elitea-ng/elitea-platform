@@ -156,6 +156,11 @@ type Version struct {
 	// CopySkillsFromVersionID is a create-version option, not stored metadata.
 	// Zero disables copying. The repository requires the same application and tenant.
 	CopySkillsFromVersionID int32 `json:"-"`
+	// CopyToolsFromVersionID copies the source version's toolkit and tool
+	// bindings (entity_tool_mapping, with their selected tools) onto the new
+	// version, in the same transaction. Zero disables copying. The source must
+	// be a version of the same application.
+	CopyToolsFromVersionID int32 `json:"-"`
 
 	// EditorID is the user who saves an UPDATE, recorded as the author of
 	// the version revision the save appends (ADR-0040 decision 2). It is a
@@ -229,22 +234,34 @@ type GuardrailRule struct {
 }
 
 type ListRequest struct {
-	ProjectID   string     `json:"-"`
-	Page        int        `json:"page,omitempty"`
-	PageSize    int        `json:"page_size,omitempty"`
-	Search      string     `json:"search,omitempty"`
-	Tags        string     `json:"tags,omitempty"`
-	FolderID    string     `json:"folder_id,omitempty"`
-	AgentsType  string     `json:"-"`
-	IDs         []int32    `json:"ids,omitempty"`
-	AuthorID    int64      `json:"author_id,omitempty"`
-	Statuses    []string   `json:"statuses,omitempty"`
-	MyLiked     bool       `json:"my_liked,omitempty"`
-	WithoutTags bool       `json:"without_tags,omitempty"`
-	TrendStart  *time.Time `json:"trend_start_period,omitempty"`
-	TrendEnd    *time.Time `json:"trend_end_period,omitempty"`
-	SortBy      string     `json:"sort_by,omitempty"`
-	SortOrder   string     `json:"sort_order,omitempty"`
+	ProjectID string `json:"-"`
+	Page      int    `json:"page,omitempty"`
+	PageSize  int    `json:"page_size,omitempty"`
+	Search    string `json:"search,omitempty"`
+	Tags      string `json:"tags,omitempty"`
+	FolderID  string `json:"folder_id,omitempty"`
+	// Pinned narrows the list to what the CALLER pinned (the personal Pinned
+	// group, tenant/0249).
+	Pinned     bool     `json:"pinned,omitempty"`
+	AgentsType string   `json:"-"`
+	IDs        []int32  `json:"ids,omitempty"`
+	AuthorID   int64    `json:"author_id,omitempty"`
+	Statuses   []string `json:"statuses,omitempty"`
+	// Status narrows the list to agents in ONE publish state, `draft` or
+	// `published`, the state the row itself reports (`Application.Status`).
+	Status string `json:"status,omitempty"`
+	// Origin narrows the list to agents the project `own`s, that are `installed`
+	// from the Marketplace, or that are `forked`.
+	Origin string `json:"origin,omitempty"`
+	// UpdateAvailable keeps installed and forked agents whose listing has a
+	// newer hireable version.
+	UpdateAvailable bool       `json:"update_available,omitempty"`
+	MyLiked         bool       `json:"my_liked,omitempty"`
+	WithoutTags     bool       `json:"without_tags,omitempty"`
+	TrendStart      *time.Time `json:"trend_start_period,omitempty"`
+	TrendEnd        *time.Time `json:"trend_end_period,omitempty"`
+	SortBy          string     `json:"sort_by,omitempty"`
+	SortOrder       string     `json:"sort_order,omitempty"`
 	// Offset preserves arbitrary HTTP offsets. Nil uses Page and PageSize.
 	Offset *int `json:"-"`
 }
@@ -255,6 +272,21 @@ type ListResponse struct {
 	Page       int           `json:"page"`
 	PageSize   int           `json:"page_size"`
 	TotalPages int           `json:"total_pages"`
+	// Facets counts the matching agents by status and by origin, so a list
+	// offers only the filter values that occur.
+	Facets *ListFacets `json:"facets,omitempty"`
+}
+
+// ListFacets are the per-value counts of one list query. Each count ignores
+// the status and origin filters themselves and honours every other filter
+// (search, tags, folder), so a facet never shrinks to zero because it is the
+// one selected.
+type ListFacets struct {
+	Statuses map[string]int `json:"statuses"`
+	Origins  map[string]int `json:"origins"`
+	// UpdateAvailable counts the installed and forked agents whose listing has a
+	// newer hireable version.
+	UpdateAvailable int `json:"update_available"`
 }
 
 type CreateRequest struct {

@@ -1,14 +1,16 @@
 import { useMemo, useState, type ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
-import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { t } from '@/shared/i18n';
-import { CalendarIcon } from '@/shared/ui/icons/calendar-icon';
+import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 
-import { EntityCardAuthors } from './EntityCardAuthors';
+import { HeaderCell } from './EntityListHeaderCell';
 import type { EntityListItem } from './model';
+import { TableRow, checkCellSx } from './EntityListRow';
+import { useEntityRowSlot } from './rowSlot';
+import { useEntitySelection } from './selection';
 
 /**
  * The `?view=table` rendering of a list page — the port of
@@ -22,7 +24,7 @@ import type { EntityListItem } from './model';
  * `background.userInputBackground`.
  *
  * DISCLOSED NARROWING vs. the baseline's `DataTable`: no per-row checkbox,
- * no `StatusBar`/`Like`/`Rate` column, no kebab actions cell, and no
+ * no `StatusBar`/`Like`/`Rate` column, a kebab actions cell only when the page supplies `renderRowActions`, and no
  * server-side sort round-trip — the header sorts the rows this component
  * was handed. Those all hang off cross-cutting widgets (`widgets/pin-
  * toggler`, `Like`, `DataTableActionsCell`) with no port in this app.
@@ -31,12 +33,17 @@ type SortField = 'name' | 'createdAt';
 
 export interface EntityListTableProps {
   readonly items: readonly EntityListItem[];
+  /** The row's three-dot menu content. Absent means the list has no Actions column. */
+  readonly renderRowActions?: ((item: EntityListItem) => ReactNode) | undefined;
 }
 
-export function EntityListTable({ items }: EntityListTableProps): ReactNode {
+export function EntityListTable({ items, renderRowActions }: EntityListTableProps): ReactNode {
   const [sortField, setSortField] = useState<SortField>('createdAt');
   const [descending, setDescending] = useState(true);
+  const slot = useEntityRowSlot();
+  const selection = useEntitySelection();
   const showType = items.some((item) => item.typeLabel !== undefined && item.typeLabel !== '');
+  const showStatus = items.some((item) => item.badge !== undefined);
 
   const sorted = useMemo(() => {
     const direction = descending ? -1 : 1;
@@ -56,7 +63,10 @@ export function EntityListTable({ items }: EntityListTableProps): ReactNode {
     setDescending(true);
   };
 
-  const columns = gridTemplateColumns(showType);
+  const showActions = renderRowActions !== undefined;
+  const columns = gridTemplateColumns(showType, slot !== undefined, selection !== undefined, showStatus, showActions);
+  const ids = items.map((item) => item.id);
+  const selectedCount = selection === undefined ? 0 : ids.filter((id) => selection.selected.has(id)).length;
 
   return (
     <Box
@@ -68,22 +78,45 @@ export function EntityListTable({ items }: EntityListTableProps): ReactNode {
           component="tr"
           sx={headerSx(columns)}
         >
+          {selection !== undefined && (
+            <Box
+              component="th"
+              scope="col"
+              sx={checkCellSx}
+            >
+              <BaseCheckbox
+                size="small"
+                checked={ids.length > 0 && selectedCount === ids.length}
+                indeterminate={selectedCount > 0 && selectedCount < ids.length}
+                data-testid="entity-list-select-all"
+                aria-label={t('shared.entityList.selectAll', 'Select all')}
+                onChange={() => {
+                  selection.toggleAll(ids);
+                }}
+              />
+            </Box>
+          )}
           <HeaderCell
             label={t('shared.entityList.table.name', 'Name & Description')}
             active={sortField === 'name'}
+            descending={descending}
             onClick={() => {
               toggleSort('name');
             }}
           />
+          {showStatus && <HeaderCell label={t('shared.entityList.table.status', 'Status')} />}
           {showType && <HeaderCell label={t('shared.entityList.table.type', 'Type')} />}
           <HeaderCell label={t('shared.entityList.table.authors', 'Authors')} />
           <HeaderCell
             label={t('shared.entityList.table.created', 'Created')}
             active={sortField === 'createdAt'}
+            descending={descending}
             onClick={() => {
               toggleSort('createdAt');
             }}
           />
+          {slot !== undefined && <HeaderCell label={slot.columnLabel} />}
+          {showActions && <HeaderCell label={t('shared.entityList.table.actions', 'Actions')} />}
         </Box>
       </Box>
       <Box
@@ -91,138 +124,24 @@ export function EntityListTable({ items }: EntityListTableProps): ReactNode {
         sx={bodySx}
       >
         {sorted.map((item) => (
-          <Box
-            component="tr"
+          <TableRow
             key={item.id}
-            data-testid="entity-list-row"
-            sx={rowSx(columns, item.onClick !== undefined)}
-            onClick={() => {
-              item.onClick?.();
-            }}
-          >
-            <Box
-              component="td"
-              sx={nameCellSx}
-            >
-              <Box sx={rowIconSx}>{item.icon}</Box>
-              <Box sx={nameTextSx}>
-                <Typography
-                  variant="bodyMedium"
-                  sx={rowNameSx}
-                >
-                  {item.name}
-                </Typography>
-                {item.description !== undefined && item.description !== '' && (
-                  <Typography
-                    variant="bodySmall"
-                    sx={rowDescriptionSx}
-                  >
-                    {item.description}
-                  </Typography>
-                )}
-                {item.forkedFrom !== undefined && (
-                  <Box
-                    component="span"
-                    // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- same client-side-only-navigation reasoning as `EntityCard.tsx`'s own copy of this link.
-                    role="link"
-                    tabIndex={0}
-                    data-testid="entity-row-forked-from"
-                    sx={forkedFromSx}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      item.forkedFrom?.onClick();
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key !== 'Enter' && event.key !== ' ') return;
-                      event.preventDefault();
-                      event.stopPropagation();
-                      item.forkedFrom?.onClick();
-                    }}
-                  >
-                    {t('shared.entityList.forkedFrom', 'Forked from')}
-                  </Box>
-                )}
-              </Box>
-            </Box>
-            {showType && (
-              <Box
-                component="td"
-                sx={cellSx}
-              >
-                <Typography
-                  variant="bodyMedium"
-                  sx={clampSx}
-                >
-                  {item.typeLabel ?? ''}
-                </Typography>
-              </Box>
-            )}
-            <Box
-              component="td"
-              sx={cellSx}
-            >
-              <EntityCardAuthors authors={item.authors ?? []} />
-            </Box>
-            <Box
-              component="td"
-              sx={createdCellSx}
-            >
-              {item.createdAt !== undefined && (
-                <>
-                  <Box
-                    component={CalendarIcon}
-                    sx={calendarIconSx}
-                  />
-                  <Typography
-                    variant="bodyMedium"
-                    component="span"
-                  >
-                    {formatCreated(item.createdAt)}
-                  </Typography>
-                </>
-              )}
-            </Box>
-          </Box>
+            item={item}
+            columns={columns}
+            showType={showType}
+            showStatus={showStatus}
+            slot={slot}
+            {...(renderRowActions === undefined ? {} : { renderActions: renderRowActions })}
+          />
         ))}
       </Box>
     </Box>
   );
 }
 
-/** `TIME_FORMAT.MMMDD` (`apps/elitea-ui/src/common/constants.js`) — "Mar 14". */
-function formatCreated(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return '';
-  return date.toLocaleDateString(undefined, { month: 'short', day: '2-digit' });
-}
-
-interface HeaderCellProps {
-  readonly label: string;
-  readonly active?: boolean;
-  readonly onClick?: () => void;
-}
-
-function HeaderCell({ label, active = false, onClick }: HeaderCellProps): ReactNode {
-  return (
-    <Box
-      component="th"
-      scope="col"
-      sx={headerCellSx(onClick !== undefined)}
-      onClick={onClick}
-    >
-      <Typography
-        variant="labelMedium"
-        sx={headerTextSx(active)}
-      >
-        {label}
-      </Typography>
-    </Box>
-  );
-}
-
 /** `DataTable.jsx`'s `gridTemplateColumns` — `minmax(<minWidth>, 1fr)` for the name column, fixed rem widths for the rest. */
-function gridTemplateColumns(showType: boolean): string {
-  return ['minmax(12.5rem, 1fr)', ...(showType ? ['9.375rem'] : []), '15rem', '8.75rem'].join(' ');
+function gridTemplateColumns(showType: boolean, showSlot: boolean, showSelect: boolean, showStatus: boolean, showActions: boolean): string {
+  return [...(showSelect ? ['2.5rem'] : []), 'minmax(12.5rem, 1fr)', ...(showStatus ? ['6.5rem'] : []), ...(showType ? ['9.375rem'] : []), '15rem', '8.75rem', ...(showSlot ? ['11rem'] : []), ...(showActions ? ['5rem'] : [])].join(' ');
 }
 
 const tableSx: SxProps<Theme> = {
@@ -247,115 +166,4 @@ function headerSx(columns: string): SxProps<Theme> {
   });
 }
 
-function headerCellSx(sortable: boolean): SxProps<Theme> {
-  return (theme: Theme) => ({
-    display: 'flex',
-    alignItems: 'center',
-    gap: theme.spacing(0.5),
-    padding: `${theme.spacing(0.5)} ${theme.spacing(1.5)}`,
-    minWidth: 0,
-    overflow: 'hidden',
-    cursor: sortable ? 'pointer' : 'default',
-  });
-}
-
-/**
- * A table header is `labelMedium` in the dim `text.primary` token (spec §2,
- * the same as MuiTableCell.head and the DataGrid header). The active sort
- * column, and a header under the pointer, read in the strong
- * `text.secondary` token instead. That colour step replaces the legacy
- * `opacity: 0.7` fade, which on top of the dim token would drop the header
- * under 4.5:1 in the light scheme.
- */
-function headerTextSx(active: boolean): SxProps<Theme> {
-  return (theme: Theme) => ({
-    color: active ? theme.vars.palette.text.secondary : theme.vars.palette.text.primary,
-    transition: 'color 0.2s ease',
-    'th:hover > &': { color: theme.vars.palette.text.secondary },
-    whiteSpace: 'nowrap',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-  });
-}
-
 const bodySx: SxProps<Theme> = { display: 'flex', flexDirection: 'column', width: '100%' };
-
-function rowSx(columns: string, clickable: boolean): SxProps<Theme> {
-  return (theme: Theme) => ({
-    display: 'grid',
-    gridTemplateColumns: columns,
-    alignItems: 'center',
-    width: '100%',
-    height: '3.5rem',
-    minHeight: '3.5rem',
-    flexShrink: 0,
-    cursor: clickable ? 'pointer' : 'default',
-    borderBottom: `0.0625rem solid ${theme.vars.palette.border.table}`,
-    transition: 'background-color 0.2s ease',
-    '&:hover': { backgroundColor: theme.vars.palette.background.userInputBackground },
-    '&:last-of-type': { borderBottom: 'none' },
-  });
-}
-
-const cellSx: SxProps<Theme> = (theme: Theme) => ({
-  display: 'flex',
-  alignItems: 'center',
-  padding: `${theme.spacing(0.75)} ${theme.spacing(2)}`,
-  minWidth: 0,
-  overflow: 'hidden',
-});
-
-const nameCellSx: SxProps<Theme> = (theme: Theme) => ({
-  display: 'flex',
-  alignItems: 'center',
-  gap: theme.spacing(1.5),
-  padding: `${theme.spacing(0.75)} ${theme.spacing(2)}`,
-  minWidth: 0,
-  overflow: 'hidden',
-});
-
-const rowIconSx: SxProps<Theme> = (theme: Theme) => ({
-  flexShrink: 0,
-  width: '1.75rem',
-  height: '1.75rem',
-  borderRadius: theme.vars.shape.radiusPill,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  background: theme.vars.palette.background.icon.entityGradient,
-  color: theme.vars.palette.text.primary,
-  '& > svg': { width: '0.875rem', height: '0.875rem' },
-});
-
-const nameTextSx: SxProps<Theme> = { display: 'flex', flexDirection: 'column', minWidth: 0 };
-
-const clampSx: SxProps<Theme> = {
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
-};
-
-const rowNameSx: SxProps<Theme> = (theme: Theme) => ({ ...clampSx, color: theme.vars.palette.text.secondary });
-
-const rowDescriptionSx: SxProps<Theme> = (theme: Theme) => ({ ...clampSx, color: theme.vars.palette.text.primary });
-
-/** #915's "Forked from" link, same treatment as `EntityCard.tsx`'s own copy. */
-const forkedFromSx: SxProps<Theme> = (theme: Theme) => ({
-  display: 'inline-block',
-  color: theme.vars.palette.text.link,
-  cursor: 'pointer',
-  fontSize: theme.typography.bodySmall.fontSize,
-  '&:hover': { textDecoration: 'underline' },
-  '&:focus-visible': { outline: `0.125rem solid ${theme.vars.palette.border.lines}`, outlineOffset: '0.125rem' },
-});
-
-const createdCellSx: SxProps<Theme> = (theme: Theme) => ({
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  gap: theme.spacing(1),
-  padding: `${theme.spacing(0.75)} ${theme.spacing(2)}`,
-  minWidth: 0,
-});
-
-const calendarIconSx: SxProps<Theme> = { width: '1rem', height: '1rem', flexShrink: 0 };

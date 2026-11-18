@@ -25,7 +25,7 @@ import type { ConversationRowActions } from '../lib/conversationMenu';
 import type { ChatRail } from '../model/chatRail';
 import { folderDropId, UNGROUPED_DROP_ID, type useSidebarChatDrag } from '../model/useSidebarChatDrag';
 import { ConversationRow, type NativeContextMenu } from './ConversationRow';
-import { FolderClosedIcon, FolderOpenIcon } from './folderIcons';
+import { FolderClosedIcon, FolderOpenIcon, PinnedStatus } from './folderIcons';
 import { FolderMenu } from './FolderMenu';
 import { CHILD_INDENT, ShellRow } from './rows';
 
@@ -163,7 +163,7 @@ export function FolderItem({ rail, folder, expanded, onToggle, onExpand, openId,
             ariaExpanded={expanded}
             label={folder.name}
             meta={String(count)}
-            status={<GroupActivitySummary rows={folder.conversations} serverNeedsYou={folder.needsYou} />}
+            status={<PinnedStatus pinned={folder.isPinned === true}><GroupActivitySummary rows={folder.conversations} serverNeedsYou={folder.needsYou} /></PinnedStatus>}
             dropActive={dropActive}
             onClick={onToggle}
             trailingOnHover

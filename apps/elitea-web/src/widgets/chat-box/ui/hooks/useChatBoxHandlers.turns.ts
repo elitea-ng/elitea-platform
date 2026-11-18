@@ -168,6 +168,7 @@ export function createSendQuestion(
         question,
         userParticipant,
         participantId,
+        attachmentList,
       ),
     ]);
     markPendingAnswer(deps, questionId, payload);

@@ -7,12 +7,12 @@ A toolkit is a configured integration with an external service, or with an Elite
 
 <Screenshot id="toolkits-list" alt="The Toolkits dashboard with type tiles" />
 
-The Toolkits page shows how many toolkits the project has, a search box, **Filters** and **+ New toolkit** in its toolbar; see [Page layout](/menus/page-layout). **Filters**, in the side panel, has the toolkit **Types** to filter by and the author card.
+The Toolkits page lists the project's toolkits with no toolbar row. Its controls are in the **List** tab of the side panel: the search, **+ New toolkit**, the folders, the toolkit **Types** to filter by and the author card; see [Page layout](/menus/page-layout#list-pages). Select toolkits with their checkboxes (or ⌘-click) to delete several at once.
 
 ## Create a toolkit
 
 <Steps>
-  <Step title="Start creation">Select **+ New toolkit** in the Toolkits page toolbar, or the **+** next to **Toolkits** in the sidebar.</Step>
+  <Step title="Start creation">Select **+ New toolkit** in the **List** tab of the side panel (or in the bar above the list when the panel is closed), or the **+** next to **Toolkits** in the sidebar.</Step>
   <Step title="Pick a type">Choose a type from the categorized tile grid, or search by name with the search box in the toolbar.</Step>
   <Step title="Configure it">Give it a **Name** and **Description**, select or create a **Credential**, and set any type-specific parameters. For index-capable types, optionally select an **embedding model** to turn on indexing; indexes are kept in the platform's vector store, so there is no vector-storage setting.</Step>
   <Step title="Select tools">In **Tools**, turn on only the operations the toolkit needs — grouped as Read, Create & update, Delete, and Execute — then **Save**.</Step>
@@ -30,13 +30,17 @@ Advanced users can switch a toolkit's configuration to **Raw JSON** editing from
 
 If a toolkit uses a shared credential that each team member must supply individually, a **Credential setup required** banner appears on its card until you create the matching private credential. Changing a shared credential can make the toolkit stop working for teammates who have not configured their own — consider the impact before doing so.
 
+## Share a toolkit
+
+On a toolkit's detail page, the three-dot menu's **Copy link** copies an address that names the project. Someone who opens it from another project is switched to that project and lands on the toolkit; they still need access to the project.
+
 ## Test a toolkit
 
 Select **Test** on a toolkit's detail page to open a dedicated test view: pick a tool, a model, and any required parameters, then run it and review the result. See [Test toolkit tools](/how-tos/credentials-toolkits/test-toolkit-tools).
 
 ## Indexing
 
-Toolkit types that carry an `index_data` tool (Artifact, the ADO family, Bitbucket, Confluence, Figma, GitHub, GitLab, Jira, QTest, SharePoint, TestRail, XRAY Cloud, and the Zephyr family) show an **Indexes** panel once an embedding model is configured and the `Index data` tool is turned on. Use it to create, reindex, or delete indexes. See [Indexing overview](/how-tos/indexing/indexing-overview).
+Toolkit types that carry an `index_data` tool (Artifact, the ADO family, Bitbucket, Confluence, Figma, GitHub, GitLab, Jira, QTest, SharePoint, TestRail, XRAY Cloud, and the Zephyr family) show an **Indexes** panel once an embedding model is configured and the `Index data` tool is turned on. Use it to create, reindex, or delete indexes. The **List indexes** tool names every index shown on the tab, including one that failed before storing anything (searching such an index says it holds no searchable content yet). See [Indexing overview](/how-tos/indexing/indexing-overview).
 
 ## MCP servers
 

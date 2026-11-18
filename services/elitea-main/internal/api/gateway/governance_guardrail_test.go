@@ -117,3 +117,31 @@ func TestGuardrailTopLevelShapeIsRefusedWith400(t *testing.T) {
 		}
 	}
 }
+
+// TestGuardrailPersonalDataRuleIDsMatchTheGateway pins the write-side list of
+// personal_data rule ids to the gateway's own constants (issue 2012). The two
+// modules cannot import each other, so the gateway's source is read.
+func TestGuardrailPersonalDataRuleIDsMatchTheGateway(t *testing.T) {
+	raw, err := os.ReadFile("../../../../elitea-llm-gateway/internal/guardrail/personal_data.go")
+	if err != nil {
+		t.Fatalf("read the gateway's personal data rules: %v (if the file moved, update the path; do not delete the guard)", err)
+	}
+	source := string(raw)
+	for _, id := range guardrailPersonalDataRuleIDs {
+		if !strings.Contains(source, `"`+id+`"`) {
+			t.Errorf("the gateway has no personal data rule %q", id)
+		}
+	}
+	// The gateway's list is the four ids: a rule added there needs the same here.
+	if got := strings.Count(source, "PersonalData"); got == 0 {
+		t.Fatal("the gateway's personal data constants moved")
+	}
+	for _, line := range strings.Split(source, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "PersonalData") && strings.Contains(line, "= \"") {
+			id := line[strings.Index(line, "\"")+1 : strings.LastIndex(line, "\"")]
+			if !containsString(guardrailPersonalDataRuleIDs, id) {
+				t.Errorf("the gateway's rule %q is missing from guardrailPersonalDataRuleIDs", id)
+			}
+		}
+	}
+}

@@ -229,6 +229,18 @@ export const getBatchDeleteObjectsResponseMock = (
   ...overrideResponse,
 });
 
+export const getMoveObjectResponseMock = (
+  overrideResponse: Partial<Extract<UploadObjectResponse, object>> = {},
+): UploadObjectResponse => ({
+  key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  size_bytes: faker.number.int(),
+  media_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  etag: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
 export const getDownloadObjectResponseMock = (): ArrayBuffer =>
   faker.helpers.arrayElement([
     new ArrayBuffer(faker.number.int({ min: 1, max: 64 })),
@@ -535,6 +547,32 @@ export const getBatchDeleteObjectsMockHandler = (
             ? await overrideResponse(info)
             : overrideResponse
           : getBatchDeleteObjectsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getMoveObjectMockHandler = (
+  overrideResponse?:
+    | UploadObjectResponse
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<UploadObjectResponse> | UploadObjectResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/artifacts/objects/:projectID/:bucket\\:move",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getMoveObjectResponseMock(),
         { status: 200 },
       );
     },
@@ -857,6 +895,7 @@ export const getArtifactsMock = () => [
   getListObjectsMockHandler(),
   getUploadObjectMockHandler(),
   getBatchDeleteObjectsMockHandler(),
+  getMoveObjectMockHandler(),
   getDownloadObjectMockHandler(),
   getStatObjectMockHandler(),
   getDeleteObjectMockHandler(),

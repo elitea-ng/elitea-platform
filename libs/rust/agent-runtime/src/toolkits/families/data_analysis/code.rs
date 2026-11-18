@@ -14,12 +14,29 @@ use serde_json::Value;
 /// worker's runner and by the tool alike, and the tool description says so.
 pub const MAX_ANALYSIS_RESULT_BYTES: usize = 100 * 1024;
 
-/// The languages the tool offers (the sandbox has more; these two have a
-/// result convention a model can use without knowing the adapter).
+/// The languages the code sandbox can run. `run_analysis_code` offers the
+/// first two (they have a result convention a model can use without knowing
+/// the adapter); the `pyodide` toggle's `run_code` offers every language the
+/// deployment's sandbox serves ([`AnalysisCodeRunner::languages`]).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AnalysisLanguage {
     Python,
     JavaScript,
+    TypeScript,
+    Rust,
+}
+
+impl AnalysisLanguage {
+    /// The name the tool's `language` argument uses.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Python => "python",
+            Self::JavaScript => "javascript",
+            Self::TypeScript => "typescript",
+            Self::Rust => "rust",
+        }
+    }
 }
 
 /// One program and the data it reads.
@@ -72,11 +89,41 @@ impl From<AnalysisCodeFailure> for AnalysisCodeError {
     }
 }
 
+/// A finished run: the program's JSON result and what it wrote to its
+/// output streams while running.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CapturedRun {
+    pub result: Value,
+    /// Everything the program printed (the sandbox merges stdout and stderr
+    /// for JavaScript, TypeScript and Rust). `None`: this runner does not
+    /// capture output.
+    pub output: Option<String>,
+}
+
 /// The host side of `run_analysis_code`.
 #[async_trait]
 pub trait AnalysisCodeRunner: Send + Sync {
     /// Run `request` and return the program's JSON result.
     async fn run(&self, request: AnalysisCodeRequest) -> Result<Value, AnalysisCodeError>;
+
+    /// [`Self::run`], plus the program's printed output where the runner has
+    /// it. The default has none.
+    async fn run_captured(
+        &self,
+        request: AnalysisCodeRequest,
+    ) -> Result<CapturedRun, AnalysisCodeError> {
+        self.run(request).await.map(|result| CapturedRun {
+            result,
+            output: None,
+        })
+    }
+
+    /// The languages this deployment's sandbox actually serves, from the same
+    /// profiles the pipeline Code node runs on. The default is the two
+    /// languages `run_analysis_code` has always offered.
+    fn languages(&self) -> Vec<AnalysisLanguage> {
+        vec![AnalysisLanguage::Python, AnalysisLanguage::JavaScript]
+    }
 }
 
 /// The sentence the model reads for a failure.

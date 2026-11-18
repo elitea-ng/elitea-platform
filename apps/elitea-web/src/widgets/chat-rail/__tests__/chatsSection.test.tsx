@@ -136,6 +136,29 @@ describe('ChatsSection', () => {
     expect(screen.queryByText('local thread')).not.toBeInTheDocument();
   });
 
+  it('lists a pinned folder before the others and marks it, and marks a pinned conversation (issue 2031)', async () => {
+    server.use(
+      http.get('*/elitea_core/folder/prompt_lib/:projectId', () =>
+        HttpResponse.json({
+          ...LISTING,
+          folders: [
+            { id: 'f1', name: 'Alpha', conversations: [] },
+            { id: 'f2', name: 'Beta', conversations: [], meta: { is_pinned: true } },
+          ],
+          total_folders: 2,
+        }),
+      ),
+    );
+    mount();
+    await screen.findByText('quick overview');
+    const folders = screen.getAllByTestId('shell-chats-folder');
+    expect(folders.map((node) => node.textContent)).toEqual([expect.stringContaining('Beta'), expect.stringContaining('Alpha')]);
+    expect(within(folders[0] as HTMLElement).getByTestId('shell-pin-mark')).toBeInTheDocument();
+    expect(within(folders[1] as HTMLElement).queryByTestId('shell-pin-mark')).not.toBeInTheDocument();
+    const pinnedRow = screen.getByText('Release checklist').closest('[data-testid="shell-conversation"]') as HTMLElement;
+    expect(within(pinnedRow).getByTestId('shell-pin-mark')).toBeInTheDocument();
+  });
+
   it('opens and closes a group from its caption, and remembers it when the list mounts again', async () => {
     const user = userEvent.setup();
     mount('/chat');

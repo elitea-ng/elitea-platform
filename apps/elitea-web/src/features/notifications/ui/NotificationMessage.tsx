@@ -14,6 +14,7 @@ import { useTheme } from '@mui/material/styles';
 import type { Notification } from '@/entities/notification';
 
 import type { FullNotificationMeta } from '../api/normalize';
+import { eventTypeLabel, hasLegacyText } from '../lib/legacyText';
 import { parseNotificationMessage, resolveNotificationHref } from '../lib/routes';
 import { LegacyNotificationMessage } from './LegacyNotificationMessage';
 import { RunFinishedMessage } from './RunFinishedMessage';
@@ -75,6 +76,20 @@ export function NotificationMessage(props: NotificationMessageProps): ReactEleme
             <Fragment key={index}>{segment.text}</Fragment>
           ),
         )}
+      </Typography>
+    );
+  }
+
+  // An event type the legacy renderer has no sentence for (every one the new
+  // platform added: approvals, credential reviews, hand-offs...) would render
+  // an empty cell. Name the event instead (#1992).
+  if (!hasLegacyText(notification.eventType)) {
+    return (
+      <Typography
+        variant={textVariant}
+        sx={{ color: textColor }}
+      >
+        {eventTypeLabel(notification.eventType)}
       </Typography>
     );
   }

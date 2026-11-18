@@ -95,9 +95,7 @@ function readAuthor(version: ApplicationVersionSummary): EditApplicationVersionO
   return author === undefined ? undefined : author;
 }
 
-export function toVersionOptions(
-  versions: readonly ApplicationVersionSummary[],
-): EditApplicationVersionOption[] {
+export function toVersionOptions(versions: readonly ApplicationVersionSummary[]): EditApplicationVersionOption[] {
   return versions.map((version) => ({
     // `ApplicationVersionSummary.id` is "numeric id serialized as string
     // (strconv.Itoa)" per the generated schema's own description, while the
@@ -386,9 +384,7 @@ export function toVersionDraft(
     // key, leaving that version on the catalogue-default fallback it works on
     // today rather than pinning it to a model this mapper guessed.
     llmSettings: toAgentLlmSettings(version.llm_settings),
-    tags: (version.tags ?? [])
-      .map((tag) => tag.name)
-      .filter((name): name is string => typeof name === 'string'),
+    tags: (version.tags ?? []).map((tag) => tag.name).filter((name): name is string => typeof name === 'string'),
     tools: version.tools ?? [],
     // Never a pipeline's layout here: the pipelines domain (A2) has its own edit page.
     pipelineSettings: undefined,

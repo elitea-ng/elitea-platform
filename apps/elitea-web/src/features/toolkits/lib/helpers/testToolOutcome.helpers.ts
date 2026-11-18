@@ -56,6 +56,15 @@ export function buildTestToolChatMessage(toolName: string, outcome: TestToolkitT
   return undefined;
 }
 
+function describeTimeout(outcome: Extract<TestToolkitToolOutcome, { kind: 'timeout' }>): string {
+  if (outcome.lookup === 'request') return outcome.message;
+  return outcome.taskId === undefined
+    ? t('features.toolkits.toolkitChat.testTool.timeoutNoTask', 'The tool did not finish in time. It may still be running.')
+    : t('features.toolkits.toolkitChat.testTool.timeout', 'The tool is still running (task {{taskId}}). Its result is not ready yet.', {
+        taskId: outcome.taskId,
+      });
+}
+
 /**
  * The Snackbar message for a REFUSAL (`'unsupportedToolkit'`/
  * `'unknownTool'`/`'timeout'`/`'failure'`), or `undefined` for a settled run
@@ -73,12 +82,7 @@ export function describeTestToolRefusal(toolName: string, outcome: TestToolkitTo
         message: outcome.message,
       });
     case 'timeout':
-      if (outcome.lookup === 'request') return outcome.message;
-      return outcome.taskId === undefined
-        ? t('features.toolkits.toolkitChat.testTool.timeoutNoTask', 'The tool did not finish in time. It may still be running.')
-        : t('features.toolkits.toolkitChat.testTool.timeout', 'The tool is still running (task {{taskId}}). Its result is not ready yet.', {
-            taskId: outcome.taskId,
-          });
+      return describeTimeout(outcome);
     case 'unconfirmed':
       return outcome.message;
     case 'failure':
@@ -88,6 +92,8 @@ export function describeTestToolRefusal(toolName: string, outcome: TestToolkitTo
     case 'skipped':
     case 'ok':
     case 'toolError':
+    case 'indexStarted':
+    case 'indexBusy':
       return undefined;
     default:
       return outcome satisfies never;

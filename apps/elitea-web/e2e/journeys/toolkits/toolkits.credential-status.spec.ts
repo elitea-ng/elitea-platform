@@ -88,9 +88,12 @@ const PLACEHOLDER_TOKEN = 'autotest-placeholder-token-not-a-credential';
  * The toolkit probe's closed vocabulary for a verdict ABOUT THE CREDENTIAL
  * (`internal/api/v2/configurations/toolkit_check.go`). Every other refusal
  * shape carries no reason at all, and says only that the check could not be
- * made — see the second test below.
+ * made — see the second test below. `unreachable` is NOT one of them (#2143):
+ * it also answers a host the egress policy refuses and a timeout, and this
+ * stack's allowlist refuses every tenant-authored endpoint, so gating Save on
+ * it left a user unable to edit a credential at all.
  */
-const REFUSAL_REASONS: readonly string[] = ['auth_failed', 'unreachable'];
+const REFUSAL_REASONS: readonly string[] = ['auth_failed'];
 
 interface SeededToolkit {
   readonly toolkitId: string;

@@ -136,6 +136,36 @@ describe('useAvailableInternalTools', () => {
     vi.restoreAllMocks();
   });
 
+  it('shows pyodide enabled when the deployment has a code sandbox', () => {
+    vi.spyOn(isMcpVisibleModule, 'useIsMcpVisible').mockReturnValue(true);
+    vi.spyOn(runtimeCapabilitiesModule, 'useRuntimeCapabilities').mockReturnValue({
+      worker: 'rust',
+      internal_tools: { pyodide: true },
+      hidden_toolkit_types: [],
+    });
+
+    const { result } = renderHookWithProviders(() => useAvailableInternalTools());
+    const tool = result.current.find((entry) => entry.name === 'pyodide');
+    expect(tool?.available).toBe(true);
+    expect(tool?.unavailableReason).toBeUndefined();
+    vi.restoreAllMocks();
+  });
+
+  it('shows pyodide disabled, naming the missing code sandbox, when the deployment has none', () => {
+    vi.spyOn(isMcpVisibleModule, 'useIsMcpVisible').mockReturnValue(true);
+    vi.spyOn(runtimeCapabilitiesModule, 'useRuntimeCapabilities').mockReturnValue({
+      worker: 'rust',
+      internal_tools: { pyodide: false },
+      hidden_toolkit_types: [],
+    });
+
+    const { result } = renderHookWithProviders(() => useAvailableInternalTools());
+    const tool = result.current.find((entry) => entry.name === 'pyodide');
+    expect(tool?.available).toBe(false);
+    expect(tool?.unavailableReason).toBe('No code sandbox is configured for this deployment');
+    vi.restoreAllMocks();
+  });
+
   it('shows image_generation disabled when the deployment does not name it (#1969)', () => {
     vi.spyOn(isMcpVisibleModule, 'useIsMcpVisible').mockReturnValue(true);
     vi.spyOn(runtimeCapabilitiesModule, 'useRuntimeCapabilities').mockReturnValue({

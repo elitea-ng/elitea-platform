@@ -299,7 +299,7 @@ server it is hidden, not broken.
   after the unlock. Read aloud stops and dictation aborts when the app locks.
 - **Suggested agents.** The empty new-chat screen lists the project's recommended agents
   (`getRecommendations`, at most 10) until a search is typed.
-- **Discover.** `/discover` lists the workspace's public agents (`listPublicApplications`,
+- **Marketplace.** The Marketplace tab (the web's Marketplace, once called the Catalog or Agent HUB; the route and the code keep the name `discover`) `/discover` lists the workspace's public agents (`listPublicApplications`,
   20 per page by offset until the filtered `total`, most liked first, server-side search
   after a 300 ms pause) with icon, description, category and tags. `/discover/[id]` adds
   the published version's welcome message and conversation starters
@@ -308,11 +308,11 @@ server it is hidden, not broken.
   published version (`addConversationParticipants`); an agent that cannot be added
   deletes the empty conversation again. A starter opens the chat with its text in the
   composer (in-memory hand-over, never sent by itself). Icons load only from the
-  workspace origin, without credentials; anything else shows the monogram. Discover is a
-  tab (Chats, Discover, Settings) on every workspace: the tab set never changes, because
+  workspace origin, without credentials; anything else shows the monogram. The Marketplace is a
+  tab (Chats, Marketplace, Settings) on every workspace: the tab set never changes, because
   expo-router keys the native tab view by its visible tabs and a change remounts the bar and
-  every tab's content. The Discover screen gates instead: "Checking this workspace" until
-  the discovery document is known, "Discover isn't available" below client contract 1.3. The catalogue is keyed under the active project, so a project or
+  every tab's content. The Marketplace screen gates instead: "Checking this workspace" until
+  the discovery document is known, "Marketplace isn't available" below client contract 1.3. The catalogue is keyed under the active project, so a project or
   workspace switch reads it afresh.
 - **Accessibility.** VoiceOver hears phase changes of the live answer (done, stopped,
   failed, waiting for approval, a question or a sign-in), debounced and never per token.

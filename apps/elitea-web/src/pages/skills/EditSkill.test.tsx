@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { resetBackendCapabilitiesForTests, setBackendCapabilityForTests } from '@/shared/config/backendCapabilities';
+import { resetBackendCapabilitiesForTests } from '@/shared/config/backendCapabilities';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { PageChromeProvider, useShellCrumbs } from '@/shared/ui/page-chrome';
 import { server } from '@/test/setup';
@@ -32,10 +32,11 @@ const detail = {
 
 beforeEach(() => {
   configureGeneratedClient({ baseUrl: BASE });
-  // The test pane POSTs `predict_llm`, which no router mounts, so it is
-  // hidden by default — see `shared/config/backendCapabilities`.
-  setBackendCapabilityForTests('llmPredictStreaming', true);
   server.use(
+    // A skill written in this project needs no trust (skills epic 2169, ADR-0051 amendment 1).
+    http.get(`${BASE}/elitea_core/skill_trust/prompt_lib/:projectId/:skillId`, () =>
+      HttpResponse.json({ skill_id: 1, name: 'Reviewer', foreign: false, revision: 'a'.repeat(64), state: 'not_required', history: [] }),
+    ),
     http.get(`${BASE}/elitea_core/skill/prompt_lib/:projectId/:skillId`, () =>
       HttpResponse.json(detail),
     ),
@@ -123,10 +124,10 @@ describe('EditSkill', () => {
     expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
   });
 
-  it('loads the form and ephemeral test panel', async () => {
+  it('loads the form, with no test pane (a skill is tried in a chat, ADR-0051 amendment 1)', async () => {
     renderSkillsRoute(<EditSkill />, '/skills/all/skill-1');
     expect(await screen.findByTestId('skill-name-input')).toHaveValue('Reviewer');
-    expect(screen.getByTestId('skill-test-panel')).toBeInTheDocument();
+    expect(screen.queryByTestId('skill-test-panel')).not.toBeInTheDocument();
     // The icon control is live now that the route family exists: the fixture
     // skill has a version id, so there is something for the bind to address.
     expect(screen.getByTestId('skill-icon-button')).toBeEnabled();
@@ -150,18 +151,40 @@ describe('EditSkill', () => {
 
   it('creates a named version from the current instructions', async () => {
     const user = userEvent.setup();
-    let created = false;
+    let created: unknown;
     server.use(
-      http.post(`${BASE}/elitea_core/skill/prompt_lib/:projectId/:skillId`, () => {
-        created = true;
+      http.post(`${BASE}/elitea_core/skill/prompt_lib/:projectId/:skillId`, async ({ request }) => {
+        created = await request.json();
         return HttpResponse.json(detail);
       }),
     );
     renderSkillsRoute(<EditSkill />, '/skills/all/skill-1');
     await user.click(await screen.findByRole('button', { name: 'New version' }));
-    await user.type(screen.getByLabelText('Version name'), 'v3');
+    const input = screen.getByLabelText('Version name');
+    await user.clear(input);
+    await user.type(input, 'v3');
     await user.click(screen.getByRole('button', { name: 'Confirm' }));
-    await waitFor(() => expect(created).toBe(true));
+    await waitFor(() => expect(created).toMatchObject({ name: 'v3' }));
+  });
+
+  // #2102: the dialog offers the next free number instead of an empty field.
+  it('offers the next free version name when saving as a new version', async () => {
+    const user = userEvent.setup();
+    renderSkillsRoute(<EditSkill />, '/skills/all/skill-1');
+    await user.click(await screen.findByRole('button', { name: 'New version' }));
+    expect(screen.getByLabelText('Version name')).toHaveValue('v1');
+  });
+
+  // #2103: a name the skill already has is refused in the dialog and Save stays off.
+  it('warns about a duplicate version name and disables Confirm', async () => {
+    const user = userEvent.setup();
+    renderSkillsRoute(<EditSkill />, '/skills/all/skill-1');
+    await user.click(await screen.findByRole('button', { name: 'New version' }));
+    const input = screen.getByLabelText('Version name');
+    await user.clear(input);
+    await user.type(input, 'second');
+    expect(screen.getByText('Version name already exists. Please choose a different name.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Confirm' })).toBeDisabled();
   });
 
   it('sets the route-selected version as default', async () => {

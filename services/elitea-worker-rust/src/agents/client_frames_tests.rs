@@ -92,6 +92,62 @@ fn first_of(frames: &[Value], frame_type: &str) -> Value {
         .clone()
 }
 
+/// The notice frame of one delegation, projected from its tool result.
+fn delegation_notice_frame(
+    evidence: elitea_agent_runtime::delegation::DelegationEvidence,
+    response: Value,
+    frame_type: &str,
+) -> Value {
+    let mut applications = super::events::ApplicationToolPresentationCatalog::default();
+    applications
+        .insert_runtime(
+            "elitea_agent_1_v_1".to_owned(),
+            "Agent1".to_owned(),
+            "agent".to_owned(),
+            "child-model".to_owned(),
+            super::events::ApplicationToolPresentationCatalog::default(),
+            super::events::ApplicationToolGuardCatalogs::default().with_delegation(Some(evidence)),
+        )
+        .expect("presentation");
+    let mut projector = AgentEventProjector::with_tool_catalogs(
+        AgentEventProjectionContext::fixture(json!({})),
+        super::sensitive_tools::SensitiveToolCatalog::default(),
+        applications,
+    )
+    .expect("projector");
+    projector.start(timestamp(0)).expect("start");
+    projector
+        .project(&model_event(
+            "llm-delegation",
+            1,
+            vec![Part::FunctionCall {
+                name: "elitea_agent_1_v_1".to_owned(),
+                args: json!({"task": "commit the change"}),
+                id: Some("call-1".to_owned()),
+                thought_signature: None,
+            }],
+        ))
+        .expect("delegation start");
+    let mut result = Event::with_id("delegation-result", "invocation-1");
+    result.timestamp = timestamp(2);
+    result.author = "root-agent".to_owned();
+    result.llm_response.content = Some(Content {
+        role: "function".to_owned(),
+        parts: vec![Part::FunctionResponse {
+            function_response: adk_rust::FunctionResponseData::new("elitea_agent_1_v_1", response),
+            id: Some("call-1".to_owned()),
+            annotations: None,
+        }],
+    });
+    let frames: Vec<Value> = projector
+        .project(&result)
+        .expect("delegation result")
+        .into_iter()
+        .map(|event| current(&event))
+        .collect();
+    first_of(&frames, frame_type)
+}
+
 // One linear script of four fixtures reads better than four helpers that each
 // rebuild a projector.
 #[allow(clippy::too_many_lines)]
@@ -329,7 +385,60 @@ fn capture() -> BTreeMap<&'static str, Value> {
         timestamp(4),
     )
     .expect("delegation notice");
-    captured.insert("delegation_refused", current(&notice));
+    captured.insert("agent_delegation_refused", current(&notice));
+    // A delegation the run refused and one it narrowed (ADR-0044 Amendment 1,
+    // #2161): the notice frames beside the callee's tool-call row.
+    {
+        use elitea_agent_runtime::delegation::{
+            DelegationEdge, DelegationEvidence, DelegationRefusal, GrantEvidence, GrantKind,
+            Narrowed,
+        };
+        let edge = Some(DelegationEdge {
+            caller: 2,
+            callee: 1,
+        });
+        let refusal = DelegationRefusal::GrantMissing {
+            kind: GrantKind::Toolkit,
+            name: "Git".to_owned(),
+            toolkit: None,
+        };
+        let refused = DelegationEvidence {
+            depth: 1,
+            effective_grant_digest: "0".repeat(64),
+            refusal: Some(refusal.clone()),
+            enforced: true,
+            grant: None,
+            edge,
+        };
+        captured.insert(
+            "delegation_refused",
+            delegation_notice_frame(
+                refused,
+                crate::agents::application_tools::delegation_refusal_result(&refusal),
+                "delegation_refused",
+            ),
+        );
+        let narrowed = DelegationEvidence {
+            depth: 1,
+            effective_grant_digest: "0".repeat(64),
+            refusal: None,
+            enforced: false,
+            grant: Some(GrantEvidence {
+                grant_id: 5,
+                grant_digest: "1".repeat(64),
+                narrowed: vec![Narrowed {
+                    kind: GrantKind::Toolkit,
+                    name: "Database".to_owned(),
+                    toolkit: None,
+                }],
+            }),
+            edge,
+        };
+        captured.insert(
+            "delegation_narrowed",
+            delegation_notice_frame(narrowed, json!({"result": "done"}), "delegation_narrowed"),
+        );
+    }
     captured
 }
 

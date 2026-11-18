@@ -18,7 +18,7 @@ export function workforceAgent(overrides: Partial<AgentWorkforceAgent> = {}): Ag
     suspension_id: 0,
     suspension_source: '',
     legal_hold: false,
-    is_hr_agent: false,
+    is_workforce_manager: false,
     auto_hired_at: null,
     probation_until: null,
     probation_reviewed_at: null,
@@ -60,7 +60,7 @@ export function workforceProposal(overrides: Partial<AgentWorkforceProposal> = {
     application_name: 'Triage',
     kind: 'dismiss',
     stage: 'retire',
-    source: 'hr_agent',
+    source: 'workforce_manager',
     proposed_by_user_id: null,
     proposer_application_id: 50,
     execution_id: 'exec-1',
@@ -83,6 +83,9 @@ export function workforceProposal(overrides: Partial<AgentWorkforceProposal> = {
     appeal_note: null,
     created_at: '2026-11-09T04:00:00Z',
     policy_rule: null,
+    listing_id: null,
+    listing_version_id: null,
+    payload: {},
     ...overrides,
   };
 }

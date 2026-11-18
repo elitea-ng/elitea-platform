@@ -16,12 +16,14 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/marketplace"
 )
 
 type publishRequest struct {
 	VersionName     string `json:"version_name"`
 	ValidationToken string `json:"validation_token"`
 	Category        string `json:"category"`
+	ReleaseNotes    string `json:"release_notes"`
 }
 
 // Publish publishes one skill version to the public catalog.
@@ -249,6 +251,14 @@ func (h *Handler) adminPublish(ctx context.Context, w http.ResponseWriter, schem
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "internal_error", "msg": err.Error()})
 		return
 	}
+	if err := recordSkillListing(ctx, tx, listingWrite{
+		schema: schema, sourceProject: int64(publicIDInt(publicProjectID())), sourceSkill: int64(row.SkillID),
+		twinSkill: int64(row.SkillID), publicVersion: int64(publishedID), versionName: body.VersionName,
+		releaseNotes: body.ReleaseNotes, publisher: int64(userID), activeCategories: activeCategories, category: body.Category,
+	}); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "internal_error", "msg": "failed to record the marketplace listing"})
+		return
+	}
 	if err := tx.Commit(ctx); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "internal_error", "msg": err.Error()})
 		return
@@ -349,6 +359,14 @@ func (h *Handler) userPublish(ctx context.Context, w http.ResponseWriter, projec
 	}
 	if err := setDefaultVersionIfUnset(ctx, tx, publicQuoted, twinID, publicVersionID); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "internal_error", "msg": err.Error()})
+		return
+	}
+	if err := recordSkillListing(ctx, tx, listingWrite{
+		schema: publicQuoted, sourceProject: int64(sourceProjectNumeric), sourceSkill: int64(row.SkillID),
+		twinSkill: int64(twinID), publicVersion: int64(publicVersionID), versionName: body.VersionName,
+		releaseNotes: body.ReleaseNotes, publisher: int64(userID), activeCategories: activeCategories, category: body.Category,
+	}); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "internal_error", "msg": "failed to record the marketplace listing"})
 		return
 	}
 
@@ -558,6 +576,12 @@ func (h *Handler) userUnpublish(ctx context.Context, w http.ResponseWriter, proj
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "internal_error", "msg": err.Error()})
 		return
 	}
+	// The snapshot stays while a project holds it; the version is withdrawn.
+	sourceProject, _ := strconv.ParseInt(projectID, 10, 64)
+	if err := marketplace.Withdraw(ctx, tx, marketplace.KindSkill, sourceProject, []int64{int64(publicVersionID)}); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "internal_error", "msg": "failed to withdraw the marketplace listing"})
+		return
+	}
 
 	if err := tx.Commit(ctx); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "internal_error", "msg": err.Error()})
@@ -601,6 +625,14 @@ func (h *Handler) adminUnpublish(ctx context.Context, w http.ResponseWriter, sch
 	// An in-place admin publish has source == public and needs no such hop.
 	sourceProjectID := metaInt(result.Meta, "source_project_id")
 	sourceVersionID := metaInt(result.Meta, "source_version_id")
+	withdrawProject := int64(sourceProjectID)
+	if withdrawProject <= 0 {
+		withdrawProject = int64(publicIDInt(publicProjectID()))
+	}
+	if err := marketplace.Withdraw(ctx, tx, marketplace.KindSkill, withdrawProject, []int64{int64(publicVersionID)}); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "internal_error", "msg": "failed to withdraw the marketplace listing"})
+		return
+	}
 	// adminUnpublish only runs when the caller IS the public project, so the
 	// public project id comes from publicProjectID. It is NOT recovered from
 	// schema: schema is a quoted identifier, and trimming "p_" off it would

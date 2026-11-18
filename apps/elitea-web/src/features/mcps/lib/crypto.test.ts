@@ -61,6 +61,10 @@ describe('sha256', () => {
 });
 
 describe('normalizeScope', () => {
+  it('splits comma-separated scopes (#2138)', () => {
+    expect(normalizeScope('offline_access, Files.ReadWrite.All,Sites.Selected', false)).toBe('offline_access Files.ReadWrite.All Sites.Selected');
+  });
+
   it('returns empty string when no scope and not OIDC', () => {
     expect(normalizeScope(undefined, false)).toBe('');
     expect(normalizeScope('', false)).toBe('');

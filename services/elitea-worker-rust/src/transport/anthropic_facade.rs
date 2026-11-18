@@ -50,6 +50,7 @@ use super::runtime_context::ClaimScopedEliteaContext;
 use crate::agents::context_budget::RequestContextBudget;
 use crate::agents::runtime::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
 use crate::agents::session::{BoundOrdinaryAgentModel, DurableModelCompletion};
+use elitea_agent_runtime::tool_schema::{SchemaProfile, normalize_tool_schema};
 use elitea_llm_wire::headers::{BEARER_PREFIX, EXECUTION_HEADER, PROJECT_HEADER};
 use elitea_llm_wire::sse::SseEvent;
 use elitea_llm_wire::thinking::{
@@ -755,7 +756,7 @@ fn anthropic_block(part: &Part) -> Result<ContentBlock, AdkError> {
     }
 }
 
-fn anthropic_tools(
+pub(super) fn anthropic_tools(
     declarations: &std::collections::HashMap<String, serde_json::Value>,
 ) -> Result<Option<Vec<ToolUnionParam>>, AdkError> {
     if declarations.is_empty() {
@@ -773,10 +774,12 @@ fn anthropic_tools(
                 .get(name)
                 .and_then(serde_json::Value::as_object)
                 .ok_or_else(invalid_anthropic_request)?;
-            let schema = declaration
-                .get("parameters")
-                .cloned()
-                .unwrap_or_else(|| serde_json::json!({"type":"object","properties":{}}));
+            let schema = normalize_tool_schema(
+                declaration
+                    .get("parameters")
+                    .unwrap_or(&serde_json::Value::Null),
+                SchemaProfile::Anthropic,
+            );
             let mut tool = ToolParam::new(name.clone(), schema);
             if let Some(description) = declaration
                 .get("description")

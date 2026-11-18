@@ -440,6 +440,18 @@ func (h *Handler) CheckConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// An llm_model names a credential and resolves it itself; every other
+	// type may carry the form's own `{{secret.NAME}}` picks, which the
+	// provider cannot authenticate as written (#2095).
+	if configType != llmModelConfigurationType {
+		resolved, ok := h.resolveUnsavedSecretReferences(r.Context(), projectID, data)
+		if !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "message": unsavedSecretUnresolvedMessage})
+			return
+		}
+		data = resolved
+	}
+
 	if err := validateNotSelfReferential(data, selfLLMOrigins()); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "message": err.Error()})
 		return
@@ -460,6 +472,12 @@ func (h *Handler) CheckConnection(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, checkable := checkableConnectionTypes[configType]; !checkable {
+		// A DELEGATED credential (per-user OAuth, e.g. SharePoint) holds no
+		// secret to test with: the check answers the 401 the browser opens
+		// its sign-in window on (check_connection_oauth.go, #1998).
+		if h.delegatedAuthorization(w, r, projectID, data) {
+			return
+		}
 		// A TOOLKIT credential is checked by this build's own probe, not by the
 		// gateway (toolkit_check.go). Before this branch existed every one of
 		// them answered "not supported yet", so the credential card's attention

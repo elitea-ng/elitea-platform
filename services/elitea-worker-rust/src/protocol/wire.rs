@@ -166,7 +166,71 @@ mod merge_contract_tests {
         .unwrap();
         assert_eq!(policy.repeated_field(3).len(), 2);
         assert!(matches!(
-            scan_message(&[0x22, 0x00], Schema::WorkerDelegationPolicy),
+            scan_message(&[0x2a, 0x00], Schema::WorkerDelegationPolicy),
+            Err(super::ProtocolError::IncompatibleVersion(_))
+        ));
+    }
+
+    #[test]
+    fn the_delegation_policy_holds_the_approved_grants_the_root_and_the_switch() {
+        // grants 21 (repeated, length), root_application_id 22 and
+        // grants_enforced 23 (varints); 24 is reserved.
+        let policy = scan_message(
+            &[
+                0xaa, 0x01, 0x02, 0x08, 0x01, 0xb0, 0x01, 0x07, 0xb8, 0x01, 0x01,
+            ],
+            Schema::WorkerDelegationPolicy,
+        )
+        .unwrap();
+        assert_eq!(policy.repeated_field(21).len(), 1);
+        assert!(matches!(
+            scan_message(&[0xc0, 0x01, 0x00], Schema::WorkerDelegationPolicy),
+            Err(super::ProtocolError::IncompatibleVersion(_))
+        ));
+        // A grant: caller 1, callee 2, kind 3, id 4, digest 5, set 6; 7 is reserved.
+        assert!(
+            scan_message(
+                &[
+                    0x08, 0x01, 0x10, 0x02, 0x1a, 0x01, b'k', 0x20, 0x04, 0x2a, 0x00, 0x32, 0x00
+                ],
+                Schema::WorkerDelegationGrant
+            )
+            .is_ok()
+        );
+        assert!(matches!(
+            scan_message(&[0x3a, 0x00], Schema::WorkerDelegationGrant),
+            Err(super::ProtocolError::IncompatibleVersion(_))
+        ));
+    }
+
+    #[test]
+    fn the_principal_bound_nests_in_the_delegation_policy() {
+        // principal_bound 11 (length): bounded 1, toolkits 2 (repeated),
+        // credentials_bounded 3, credential ids 4 and data classes 5.
+        let policy = scan_message(&[0x5a, 0x00], Schema::WorkerDelegationPolicy).unwrap();
+        assert!(policy.contains(11));
+        let bound = scan_message(
+            &[
+                0x08, 0x01, 0x12, 0x00, 0x12, 0x00, 0x18, 0x01, 0x22, 0x01, b'r', 0x2a, 0x01, b'c',
+            ],
+            Schema::WorkerPrincipalBound,
+        )
+        .unwrap();
+        assert_eq!(bound.repeated_field(2).len(), 2);
+        assert!(matches!(
+            scan_message(&[0x32, 0x00], Schema::WorkerPrincipalBound),
+            Err(super::ProtocolError::IncompatibleVersion(_))
+        ));
+        // A toolkit: id 1, all_tools 2, tool names 3; field 4 is unknown.
+        assert!(
+            scan_message(
+                &[0x08, 0x07, 0x10, 0x00, 0x1a, 0x01, b't'],
+                Schema::WorkerPrincipalToolkit
+            )
+            .is_ok()
+        );
+        assert!(matches!(
+            scan_message(&[0x22, 0x00], Schema::WorkerPrincipalToolkit),
             Err(super::ProtocolError::IncompatibleVersion(_))
         ));
     }
@@ -320,6 +384,13 @@ pub(crate) enum Schema {
     WorkerEgressPolicy,
     /// `WorkerCommandV1.delegation_policy` (field 67, ADR-0044 #1501).
     WorkerDelegationPolicy,
+    /// `WorkerDelegationPolicyV1.grants` (field 21, ADR-0044 A1 #2166): one
+    /// approved delegation grant.
+    WorkerDelegationGrant,
+    /// `WorkerDelegationPolicyV1.principal_bound` (field 11, ADR-0044 A1 #2157).
+    WorkerPrincipalBound,
+    /// `WorkerPrincipalBoundV1.toolkits`, one toolkit the principal may use.
+    WorkerPrincipalToolkit,
     /// `WorkerCommandV1.approval_policy` (field 68, ADR-0041 #1498).
     WorkerApprovalPolicy,
     /// `WorkerCommandV1.run_caps` (field 69, ADR-0041 #1498).
@@ -463,6 +534,10 @@ fn read_varint(raw: &[u8], position: &mut usize) -> Result<u64, ProtocolError> {
     ))
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "one table of every v1 message the command scanner admits"
+)]
 const fn field_rule(schema: Schema, field: u32) -> Option<FieldRule> {
     match schema {
         #[cfg(feature = "sandbox-supervisor")]
@@ -562,6 +637,10 @@ const fn field_rule(schema: Schema, field: u32) -> Option<FieldRule> {
         },
         Schema::WorkerEgressPolicy => egress_policy_rule(field),
         Schema::WorkerDelegationPolicy => delegation_policy_rule(field),
+        Schema::WorkerDelegationGrant => delegation_grant_rule(field),
+        Schema::WorkerPrincipalBound | Schema::WorkerPrincipalToolkit => {
+            principal_bound_rule(schema, field)
+        }
         Schema::WorkerApprovalPolicy => approval_policy_rule(field),
         Schema::WorkerRunCaps => run_caps_rule(field),
         Schema::WorkerOutputContracts => output_contracts_rule(field),
@@ -588,15 +667,49 @@ const fn egress_policy_rule(field: u32) -> Option<FieldRule> {
 }
 
 /// `WorkerDelegationPolicyV1` (#1501): the maximum depth 1 and the mode 2
-/// (varints), and the repeated root data classes 3.
+/// (varints), the repeated root data classes 3 and the principal bound 11
+/// (#2157).
 const fn delegation_policy_rule(field: u32) -> Option<FieldRule> {
     match field {
-        1 | 2 => Some(varint()),
-        3 => Some(FieldRule {
+        1 | 2 | 22 | 23 => Some(varint()),
+        3 | 21 => Some(FieldRule {
             wire_type: 2,
             oneof: None,
             repeated: true,
         }),
+        11 => Some(length()),
+        _ => None,
+    }
+}
+
+/// `WorkerDelegationGrantV1` (ADR-0044 amendment 1, #2166): the caller 1,
+/// callee 2 and grant id 4 (varints), the edge kind 3, the digest 5 and the
+/// grant set 6 (length-delimited). 7 to 10 are reserved.
+const fn delegation_grant_rule(field: u32) -> Option<FieldRule> {
+    match field {
+        1 | 2 | 4 => Some(varint()),
+        3 | 5 | 6 => Some(length()),
+        _ => None,
+    }
+}
+
+/// `WorkerPrincipalBoundV1` (#2157): the varint flags 1 and 3, and the
+/// repeated toolkits 2, credential reference ids 4 and data classes 5; and
+/// its `WorkerPrincipalToolkitV1`: the toolkit id 1 and the all-tools flag 2
+/// (varints), and the repeated tool names 3.
+const fn principal_bound_rule(schema: Schema, field: u32) -> Option<FieldRule> {
+    let repeated = FieldRule {
+        wire_type: 2,
+        oneof: None,
+        repeated: true,
+    };
+    match (schema, field) {
+        (Schema::WorkerPrincipalBound, 1 | 3) | (Schema::WorkerPrincipalToolkit, 1 | 2) => {
+            Some(varint())
+        }
+        (Schema::WorkerPrincipalBound, 2 | 4 | 5) | (Schema::WorkerPrincipalToolkit, 3) => {
+            Some(repeated)
+        }
         _ => None,
     }
 }

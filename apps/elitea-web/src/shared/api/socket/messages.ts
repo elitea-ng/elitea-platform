@@ -768,6 +768,28 @@ const AgentSubAgentMessageSchema = z.looseObject({
   response_metadata: responseMetadataSchema.optional(),
 });
 
+/**
+ * Client contract 1.60 (ADR-0044 Amendment 1): the run refused, or narrowed, a
+ * delegation to a saved agent or pipeline called as a tool.
+ * `response_metadata.delegation_v1` is read by `@elitea/client-core/stream`
+ * `delegationNoticeOf`, which bounds it.
+ */
+const DelegationRefusedMessageSchema = z.looseObject({
+  type: z.literal("delegation_refused"),
+  message_id: z.string().optional(),
+  stream_id: z.string().optional(),
+  execution_generation: z.string().optional(),
+  response_metadata: responseMetadataSchema.optional(),
+});
+
+const DelegationNarrowedMessageSchema = z.looseObject({
+  type: z.literal("delegation_narrowed"),
+  message_id: z.string().optional(),
+  stream_id: z.string().optional(),
+  execution_generation: z.string().optional(),
+  response_metadata: responseMetadataSchema.optional(),
+});
+
 /** `z.discriminatedUnion('type', [...])` over every `FRAME_TYPE` variant (spec §5.5). */
 export const socketMessageSchema = z.discriminatedUnion('type', [
   AgentStartMessageSchema,
@@ -816,6 +838,8 @@ export const socketMessageSchema = z.discriminatedUnion('type', [
   AgentSwarmHandoffMessageSchema,
   AgentStateMessageSchema,
   AgentSubAgentMessageSchema,
+  DelegationRefusedMessageSchema,
+  DelegationNarrowedMessageSchema,
 ]);
 
 /** Not exported: no consumer needs the bare type name yet — SocketMessageParseResult (below, exported) already carries it structurally. Export when a Wave-2 consumer needs to name it directly. */

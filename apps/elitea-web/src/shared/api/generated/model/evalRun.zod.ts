@@ -55,7 +55,7 @@ export const EvalRun = zod.object({
   execution_mode: zod
     .enum(["predict_blocking", "runtime_plane"])
     .describe(
-      "WHAT ACTUALLY RAN. `predict_blocking` is ONE blocking LLM turn per case, built from the agent version's instructions and the case input: no tools, no toolkits, no conversation memory. It is returned on every read so a score cannot claim to have measured what it did not, and so a later runtime-plane run is distinguishable from these rather than silently re-labelling them.\n",
+      "WHAT ACTUALLY RAN. `predict_blocking` is ONE blocking LLM turn per case, built from the agent version's instructions and the case input: no tools, no toolkits, no conversation memory. It is returned on every read so a score cannot claim to have measured what it did not, and so a later runtime-plane run is distinguishable from these rather than silently re-labelling them. `runtime_plane` runs each case as a real agent run on the worker; its results carry the run's steps in `evidence.trajectory`.\n",
     ),
   snapshot: EvalRunSnapshot.optional(),
   progress: zod.object({
@@ -69,6 +69,12 @@ export const EvalRun = zod.object({
       "The mean of the run's `ok` normalised scores, or `null` when nothing was scored. NOT zero — zero is a real and very bad score.\n",
     ),
   error: zod.string().optional(),
+  limit_reached: zod
+    .string()
+    .optional()
+    .describe(
+      "`tokens` or `cost` once the run reached its run limit, whether it stopped or only reported it. Absent when it did not.\n",
+    ),
   created_at: zod.string().optional(),
   started_at: zod.string().optional(),
   finished_at: zod.string().optional(),

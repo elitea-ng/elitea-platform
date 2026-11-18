@@ -5,11 +5,14 @@ package migrate
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"strconv"
+	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -59,7 +62,50 @@ SELECT
 	return r.apply(ctx, ScopeTenant, strconv.FormatInt(projectID, 10), schema)
 }
 
+// Deadlock retry. A history is applied in ONE transaction, so by the time the
+// last pending migration's DDL asks for its ACCESS EXCLUSIVE lock the
+// transaction already holds the exclusive locks of every earlier migration's
+// DDL. A running stack (a rolling upgrade's old pods, or the E2E stack's
+// background loops) takes row/table locks in the application's order, and the
+// two orders can cross: PostgreSQL then aborts one side with SQLSTATE 40P01.
+// The migrator is the cheap victim, because nothing of it has committed: the
+// whole transaction rolls back and is re-run from the ledger read, which is
+// safe and idempotent. The advisory lock cannot prevent this, as it only
+// serialises migrators against each other.
+const (
+	sqlStateDeadlockDetected = "40P01"
+	maxDeadlockAttempts      = 6
+)
+
+var deadlockBackoff = func(attempt int) time.Duration {
+	return time.Duration(attempt) * 500 * time.Millisecond
+}
+
+func isDeadlock(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == sqlStateDeadlockDetected
+}
+
 func (r *Runner) apply(ctx context.Context, scope Scope, targetID, schema string) error {
+	var err error
+	for attempt := 1; attempt <= maxDeadlockAttempts; attempt++ {
+		err = r.applyOnce(ctx, scope, targetID, schema)
+		if err == nil || !isDeadlock(err) {
+			return err
+		}
+		if attempt == maxDeadlockAttempts {
+			return fmt.Errorf("migrate: gave up after %d deadlock retries: %w", attempt, err)
+		}
+		select {
+		case <-ctx.Done():
+			return errors.Join(ctx.Err(), err)
+		case <-time.After(deadlockBackoff(attempt)):
+		}
+	}
+	return err
+}
+
+func (r *Runner) applyOnce(ctx context.Context, scope Scope, targetID, schema string) error {
 	manifest, err := LoadManifest(r.files, scope)
 	if err != nil {
 		return err

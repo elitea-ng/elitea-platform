@@ -17,8 +17,14 @@ use serde_json::{Value, json};
 use thiserror::Error;
 
 use super::PIPELINE_YAML_BUDGET;
+use super::state_modifier_compat as compat;
 use super::yaml::{valid_graph_id, valid_output_key};
 use crate::bounded_yaml;
+
+/// The State Modifier body's own failures (template evaluation, output bound). A
+/// node's settings may settle exactly these (D6); every other error propagates.
+pub const TEMPLATE_FAILED: &str = "state modifier template evaluation failed";
+pub const OUTPUT_BOUND_EXCEEDED: &str = "state modifier output exceeds its resource bound";
 
 const MAX_NODE_YAML_BYTES: usize = 64 * 1024;
 const MAX_TEMPLATE_BYTES: usize = 64 * 1024;
@@ -215,16 +221,14 @@ impl Node for StateModifierNode {
                 input.insert(key.clone(), value.clone());
             }
         }
-        let rendered = render_template(&self.definition.template, &input).map_err(|_| {
-            GraphError::Other("state modifier template evaluation failed".to_owned())
-        })?;
+        let rendered = render_template(&self.definition.template, &input)
+            .map_err(|_| GraphError::Other(TEMPLATE_FAILED.to_owned()))?;
 
         let mut output = NodeOutput::new();
         if let Some(key) = self.definition.output_keys().first() {
             let projected = project_rendered(context.get(key), rendered);
-            ensure_bounded_value(&projected).map_err(|_| {
-                GraphError::Other("state modifier output exceeds its resource bound".to_owned())
-            })?;
+            ensure_bounded_value(&projected)
+                .map_err(|_| GraphError::Other(OUTPUT_BOUND_EXCEEDED.to_owned()))?;
             output = output.with_update(key, projected);
         }
         for key in self.definition.variables_to_clean() {
@@ -250,6 +254,12 @@ fn render_template(
     environment.add_filter("base64_to_string", base64_to_string_filter);
     environment.add_filter("split_by_words", split_by_words_filter);
     environment.add_filter("split_by_regex", split_by_regex_filter);
+    // Jinja2 compatibility for templates written for the legacy Python runtime.
+    environment.set_unknown_method_callback(compat::unknown_method);
+    environment.add_filter("wordcount", compat::wordcount_filter);
+    environment.add_filter("capitalize", compat::capitalize_filter);
+    environment.add_filter("truncate", compat::truncate_filter);
+    environment.add_filter("center", compat::center_filter);
     let template = environment
         .template_from_str(source)
         .map_err(|_| StateModifierExecutionError::Template)?;

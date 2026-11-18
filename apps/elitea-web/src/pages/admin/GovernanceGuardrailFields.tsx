@@ -75,8 +75,8 @@ export function GuardrailFields({ draft, errors, onChange }: GuardrailFieldsProp
         helperText={
           errors.guardrailDetectors ??
           t(
-            'pages.admin.governance.field.guardrailDetectorsHelp',
-            'An ordered JSON array. Each detector has a type (regex, secrets, http, azure_content_safety, bedrock_guardrails, model_armor, llama_guard or presidio) and an action (block, mask or flag). A credential is a {{secret.NAME}} reference, never a raw value.',
+            'pages.admin.governance.field.guardrailDetectorsHelpV2',
+            'An ordered JSON array. Each detector has a type (regex, secrets, personal_data, http, azure_content_safety, bedrock_guardrails, model_armor, llama_guard or presidio) and an action (block, mask, flag or warn). A warn action changes nothing and tells the person in the chat. A credential is a {{secret.NAME}} reference, never a raw value.',
           )
         }
         value={draft.guardrailDetectors}

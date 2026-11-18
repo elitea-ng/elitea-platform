@@ -52,6 +52,7 @@ export const RunGuardrailVerdict = zod
     detector_type: zod.enum([
       "regex",
       "secrets",
+      "personal_data",
       "http",
       "azure_content_safety",
       "bedrock_guardrails",
@@ -59,10 +60,11 @@ export const RunGuardrailVerdict = zod
       "llama_guard",
       "presidio",
     ]),
-    action: zod.enum(["block", "mask", "flag"]),
+    action: zod.enum(["block", "mask", "flag", "warn"]),
     outcome: zod.enum([
       "pass",
       "flagged",
+      "warned",
       "masked",
       "blocked",
       "error_open",

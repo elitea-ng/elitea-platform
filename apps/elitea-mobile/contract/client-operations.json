@@ -32,6 +32,7 @@
     "listToolkitAvailableTools",
     "listMessageTraces",
     "getMessageTrace",
+    "listRunGuardrailNotices",
     "getCurrentAuthor",
     "cancelChatExecution",
     "steerChatExecution",
@@ -73,6 +74,19 @@
     "createApplication",
     "listAgentMemory",
     "deleteAgentMemoryEntry",
-    "setAgentMemoryOptOut"
+    "setAgentMemoryOptOut",
+    "searchMarketplaceListings",
+    "getMarketplaceFeedback",
+    "listAgentWorkforceProposals",
+    "getAgentWorkforce",
+    "listSkills",
+    "listConversationSkills",
+    "pinConversationSkill",
+    "unpinConversationSkill",
+    "listDelegationGrants",
+    "getDelegationGrant",
+    "approveDelegationGrant",
+    "revokeDelegationGrant",
+    "previewDelegationGrant"
   ]
 }

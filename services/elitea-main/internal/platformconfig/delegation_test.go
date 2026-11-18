@@ -37,6 +37,9 @@ func TestDelegationSettingsFromValues(t *testing.T) {
 		{"clamped high", Values{"max_depth": float64(99)}, DelegationSettings{MaxDepth: 16, Mode: DelegationEnforce, Stored: true}},
 		{"unreadable depth tightens", Values{"max_depth": "deep"}, DelegationSettings{MaxDepth: 1, Mode: DelegationEnforce, Stored: true}},
 		{"unknown mode enforces", Values{"mode": "off"}, DelegationSettings{MaxDepth: 4, Mode: DelegationEnforce, Stored: true}},
+		{"principal bound on", Values{"principal_bound": true}, DelegationSettings{MaxDepth: 4, Mode: DelegationEnforce, PrincipalBound: true, Stored: true}},
+		{"principal bound off", Values{"principal_bound": false}, DelegationSettings{MaxDepth: 4, Mode: DelegationEnforce, Stored: true}},
+		{"unreadable principal bound stays off", Values{"principal_bound": "yes"}, DelegationSettings{MaxDepth: 4, Mode: DelegationEnforce, Stored: true}},
 	} {
 		if got := DelegationSettingsFromValues(test.values); got != test.want {
 			t.Errorf("%s: got %+v, want %+v", test.name, got, test.want)

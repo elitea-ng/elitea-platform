@@ -36,6 +36,41 @@ const (
 // 1660). The default is DefaultMemoryAutoMaxTier.
 const KeyMemoryAutoMaxTier = "memory_auto_max_tier"
 
+// KeyMarketplacePersonalSelfApprove lets a person hire an agent that needs
+// approval (above low tier, or with write tools) in a personal project, which
+// has no second approver (ADR-0051 decision 3). Off by default: the hire needs
+// a shared project. When on, the hire is self-approved and audited.
+const KeyMarketplacePersonalSelfApprove = "marketplace_personal_self_approve"
+
+// MarketplacePersonalSelfApproveFromValues is the configured policy, off when
+// the key is absent.
+func MarketplacePersonalSelfApproveFromValues(values Values) bool {
+	return values.Bool(KeyMarketplacePersonalSelfApprove, false)
+}
+
+// LoadMarketplacePersonalSelfApprove reads the policy through the pool. A
+// database without the platform_config table, and no pool, answer off.
+func LoadMarketplacePersonalSelfApprove(ctx context.Context, pool *pgxpool.Pool) (bool, error) {
+	if pool == nil {
+		return false, nil
+	}
+	query := func(ctx context.Context, sql string, args ...any) (Rows, error) {
+		return pool.Query(ctx, sql, args...)
+	}
+	present, err := tableExists(ctx, query, "centry.platform_config")
+	if err != nil {
+		return false, err
+	}
+	if !present {
+		return false, nil
+	}
+	values, err := LoadVia(ctx, query, SectionAgentLifecycle)
+	if err != nil {
+		return false, err
+	}
+	return MarketplacePersonalSelfApproveFromValues(values), nil
+}
+
 // DefaultMemoryAutoMaxTier: a high or critical tier agent keeps the
 // attended default, and a person must set write to auto_attended or review.
 const DefaultMemoryAutoMaxTier = agentlifecycle.TierMedium

@@ -69,6 +69,12 @@ export const ReleaseGate = zod
     created_by: zod.int().nullable(),
     created_at: zod.iso.datetime({ offset: true }),
     evaluated_at: zod.iso.datetime({ offset: true }).nullable(),
+    pending_reason: zod
+      .string()
+      .optional()
+      .describe(
+        'Why a pending gate has not decided, for example "waiting for 3 human scores". Absent when the gate is decided or only waits for its runs.\n',
+      ),
     override: zod
       .union([ReleaseGateOverride, zod.null()])
       .describe(

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { delay, http, HttpResponse } from 'msw';
 
@@ -11,6 +11,7 @@ import { getPermissionListMockHandler } from '@/shared/api/generated/auth/auth.m
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { resetConfigForTests } from '@/shared/config/get-config';
 import { server } from '@/test/setup';
+import { SidePanelHarness } from '@/test/sidePanelHarness';
 
 import { Applications } from './Applications';
 import { renderAgentsRoute } from './__tests__/testRouter';
@@ -73,16 +74,15 @@ describe('Applications', () => {
     expect(await screen.findByTestId('agents-tab-admin')).toBeInTheDocument();
   });
 
-  it('shows the six private tabs on a private project', async () => {
+  it('shows no tabs on a private project: its agents are one list (ADR-0051)', async () => {
     setConfig('1');
     renderAgentsRoute(<Applications />, '/agents/all', { projectId: '9' });
 
-    expect(await screen.findByTestId('agents-tab-all')).toBeInTheDocument();
-    expect(screen.getByTestId('agents-tab-drafts')).toBeInTheDocument();
-    expect(screen.getByTestId('agents-tab-published')).toBeInTheDocument();
-    expect(screen.getByTestId('agents-tab-moderation')).toBeInTheDocument();
-    expect(screen.getByTestId('agents-tab-approval')).toBeInTheDocument();
-    expect(screen.getByTestId('agents-tab-rejected')).toBeInTheDocument();
+    expect(await screen.findByTestId('agent-summary-bar')).toBeInTheDocument();
+    for (const tab of ['all', 'drafts', 'published', 'moderation', 'approval', 'rejected']) {
+      expect(screen.queryByTestId(`agents-tab-${tab}`)).not.toBeInTheDocument();
+    }
+    expect(screen.queryByTestId('page-toolbar')).not.toBeInTheDocument();
   });
 
   it("clicking a tab navigates to its :tab URL", async () => {
@@ -96,7 +96,7 @@ describe('Applications', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/agents/admin'));
   });
 
-  it('keeps a direct load of /agents/teams on the Teams tab while the permission list loads (issue 1620)', async () => {
+  it('keeps a direct load of /agents/teams on the Teams mode while the permission list loads (issue 1620)', async () => {
     setConfig('1');
     server.use(
       http.get('*/auth/permissions/prompt_lib/:projectId', async () => {
@@ -105,17 +105,25 @@ describe('Applications', () => {
       }),
       http.get('*/elitea_core/agent_teams/prompt_lib/:projectId', () => HttpResponse.json({ rows: [], total: 0 })),
     );
-    const { router } = renderAgentsRoute(<Applications />, '/agents/teams', { projectId: '9' });
+    const { router } = renderAgentsRoute(<SidePanelHarness><Applications /></SidePanelHarness>, '/agents/teams', { projectId: '9' });
 
-    expect(await screen.findByTestId('agents-tab-teams')).toBeInTheDocument();
+    expect(await screen.findByTestId('agents-mode-teams')).toHaveAttribute('aria-pressed', 'true');
     expect(router.state.location.pathname).toBe('/agents/teams');
   });
 
-  it('sends a direct load of /agents/teams to the first tab once the list says no teams right', async () => {
+  it('shows the agents, not Teams, when the caller has no teams right', async () => {
     setConfig('1');
-    const { router } = renderAgentsRoute(<Applications />, '/agents/teams', { projectId: '9' });
+    renderAgentsRoute(<Applications />, '/agents/teams', { projectId: '9' });
+
+    expect(await screen.findByText('No agents yet')).toBeInTheDocument();
+  });
+
+  it('sends an old status tab link to the list with its status filter on', async () => {
+    setConfig('1');
+    const { router } = renderAgentsRoute(<Applications />, '/agents/drafts', { projectId: '9' });
 
     await waitFor(() => expect(router.state.location.pathname).toBe('/agents/all'));
+    expect(router.state.location.search).toMatchObject({ statuses: ['draft'] });
   });
 
   it('sends an old link to a hidden placeholder tab to the first tab', async () => {
@@ -134,18 +142,18 @@ describe('Applications', () => {
   });
 
   /**
-   * COMPOSITION ROOT — the header is `widgets/page-header` now, and not this
-   * page's own tab bar (issue 841). The tab test ids, the tablist aria label
-   * and the import control must survive the move, because the journeys and
-   * the visual baselines pin them.
+   * COMPOSITION ROOT — every control of the list is in the right sidebar's List
+   * tab (ADR-0051), and not in a toolbar row. The import control and the search
+   * input keep their test ids, because the journeys and the visual baselines
+   * pin them.
    */
-  it('renders its tabs and its import control inside the page toolbar, and no heading of its own', async () => {
-    renderAgentsRoute(<Applications />, '/agents/all', { projectId: '9' });
+  it('renders its search and import control inside the List tab, with no toolbar row and no heading of its own', async () => {
+    renderAgentsRoute(<SidePanelHarness><Applications /></SidePanelHarness>, '/agents/all', { projectId: '9' });
 
-    const toolbar = await screen.findByTestId('page-toolbar');
-    expect(toolbar).toContainElement(await screen.findByTestId('agents-tab-all'));
-    expect(toolbar).toContainElement(screen.getByRole('tablist', { name: 'Agents' }));
-    expect(toolbar).toContainElement(screen.getByTestId('agents-import-button'));
+    const tab = await screen.findByTestId('side-panel-tab-list');
+    expect(await within(tab).findByTestId('agent-search-input')).toBeInTheDocument();
+    expect(within(tab).getByTestId('agents-import-button')).toBeInTheDocument();
+    expect(screen.queryByTestId('page-toolbar')).toBeNull();
     expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
   });
 
@@ -166,8 +174,9 @@ describe('Applications', () => {
   it('offers no create action without the create permission', async () => {
     renderAgentsRoute(<Applications />, '/agents/all', { projectId: '9' });
 
-    await screen.findByTestId('page-toolbar');
+    await screen.findByTestId('agent-summary-bar');
     expect(screen.queryByTestId('agents-create')).toBeNull();
+    expect(screen.queryByTestId('agents-create-summary')).toBeNull();
   });
 });
 
@@ -179,17 +188,17 @@ describe('Applications', () => {
  * unported in this page's module comment) and the half a component test can
  * never see.
  */
-describe('Applications — header controls', () => {
-  it('mounts the search box and the view toggle on a tab that has a list', async () => {
+describe('Applications — list controls', () => {
+  it('mounts the search box and the view toggle in the List tab', async () => {
     setConfig('1');
-    renderAgentsRoute(<Applications />, '/agents/all', { projectId: '2' });
+    renderAgentsRoute(<SidePanelHarness><Applications /></SidePanelHarness>, '/agents/all', { projectId: '2' });
 
     expect(await screen.findByTestId('agent-search-input')).toBeInTheDocument();
     expect(screen.getByTestId('agent-table-view-button')).toBeInTheDocument();
     expect(screen.getByTestId('agent-card-view-button')).toBeInTheDocument();
   });
 
-  it('hands the typed query to the tab body, which sends it to the server', async () => {
+  it('hands the typed query to the list, which sends it to the server', async () => {
     setConfig('1');
     const seen: (string | null)[] = [];
     server.use(
@@ -199,7 +208,7 @@ describe('Applications — header controls', () => {
       }),
     );
     const user = userEvent.setup();
-    renderAgentsRoute(<Applications />, '/agents/all', { projectId: '2' });
+    renderAgentsRoute(<SidePanelHarness><Applications /></SidePanelHarness>, '/agents/all', { projectId: '2' });
 
     await user.type(await screen.findByTestId('agent-search-input'), 'alpha');
 

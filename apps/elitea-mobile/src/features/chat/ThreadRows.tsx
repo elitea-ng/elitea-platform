@@ -2,14 +2,17 @@ import { router } from 'expo-router';
 import { useState, type ReactNode } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
+import type { GuardrailNotice } from '@/api/queries/guardrailNotices';
 import { restorePreparedTurn, TurnInputError } from '@/api/queries/sendMessage';
 import { AttachmentStrip } from '@/features/chat/attachments/AttachmentStrip';
-import { MessageBubble } from '@/features/chat/MessageBubble';
+import { MessageBubble, OWN_LABEL } from '@/features/chat/MessageBubble';
 import type { ChatAttachment, ChatMessage } from '@/features/chat/messageModel';
 import { MESSAGE_CLASS, sideTalkLabel, type MessageClass } from '@elitea/client-core/conversation';
 import { useDesign } from '@/design/DesignProvider';
+import { explainsFailure, GUARDRAIL_STOPPED, noticeText } from '@/features/chat/guardrailNotice';
 import { TURN_TAKING_COPY } from '@/features/chat/turnTakingCopy';
 import { ThinkingDots } from '@/features/chat/ThinkingDots';
+import { DelegationNoticeCards } from '@/features/chat/DelegationNoticeCards';
 import { ToolActivity } from '@/features/chat/ToolCalls';
 import { subAgentSteps } from '@/features/chat/subAgentLanes';
 import type { ToolStep } from '@/features/chat/toolActivity';
@@ -94,7 +97,7 @@ export function PersistedMessage({
       role={message.role}
       mine={message.mine}
       author={message.author}
-      meta={answer || !message.mine ? messageMeta(answer ? answerAuthorLine(message.author, message.authorRole, message.messageClass) : message.author, message.createdAt) : null}
+      meta={messageMeta(answer ? answerAuthorLine(message.author, message.authorRole, message.messageClass) : (message.author ?? OWN_LABEL), message.createdAt)}
       avatar={answer ? avatar : undefined}
       status={status}
       error={message.error}
@@ -102,10 +105,11 @@ export function PersistedMessage({
       onActions={message.text.trim() !== '' || answer ? onActions : null}
       actions={answer && !message.isStreaming ? actions : undefined}
       footer={
-        message.attachments.length > 0 || tools.length > 0 ? (
+        message.attachments.length > 0 || tools.length > 0 || (message.delegationNotices?.length ?? 0) > 0 ? (
           <>
             <AttachmentStrip attachments={message.attachments} mine={message.mine} opening={opening} onOpen={onOpenFile} />
             {tools.length > 0 ? <ToolActivity steps={tools} onOpen={onOpenTool} /> : null}
+            <DelegationNoticeCards notices={message.delegationNotices ?? []} />
           </>
         ) : null
       }>
@@ -136,6 +140,24 @@ export function SystemLine({ message }: { message: ChatMessage }) {
       <Text variant="footnote" tone="secondary" style={styles.systemText}>
         {message.text}
       </Text>
+    </View>
+  );
+}
+
+/**
+ * What the content guardrails did to the turn just watched (issue 2012): one muted line per
+ * notice, under the answer. A block is in the danger tone, a warning in the warning tone.
+ */
+export function GuardrailNoticeRows({ notices }: { notices: readonly GuardrailNotice[] }) {
+  return (
+    <View style={styles.notices} testID="guardrail-notices">
+      {notices.map((notice) => (
+        <View key={`${notice.stage}:${notice.guardrail}:${notice.detector}:${notice.kind}`} style={styles.notice} accessible accessibilityRole="alert" testID={`guardrail-notice-${notice.kind}`}>
+          <Text variant="footnote" tone={explainsFailure(notice) ? 'danger' : 'secondary'}>
+            {noticeText(notice)}
+          </Text>
+        </View>
+      ))}
     </View>
   );
 }
@@ -226,6 +248,7 @@ export function LiveReply({
   onDismiss,
   onOpenTool,
   usageAvailable,
+  guardrailStopped = false,
 }: {
   live: LiveTurn;
   author: string | null;
@@ -237,6 +260,8 @@ export function LiveReply({
   onOpenTool: (step: ToolStep) => void;
   /** Settings has a usage card (client contract 1.3). Older servers refuse on budget too, but have no usage to show. */
   usageAvailable: boolean;
+  /** A content guardrail stopped the turn: its notice row says which, so the failure line is short. */
+  guardrailStopped?: boolean;
 }) {
   const { turn } = live;
   const waiting = turn.phase === 'sending' || (turn.phase === 'streaming' && turn.content === '');
@@ -269,9 +294,14 @@ export function LiveReply({
       meta={author}
       avatar={avatar}
       status={status}
-      error={turn.phase === 'failed' ? (turn.error?.message ?? null) : null}
+      error={turn.phase === 'failed' ? (guardrailStopped ? GUARDRAIL_STOPPED : (turn.error?.message ?? null)) : null}
       actions={<RowActions actions={actions} />}
-      footer={<ToolActivity steps={[...turn.tools, ...subAgentSteps(turn.subAgents, turn.phase !== 'streaming' && turn.phase !== 'sending')]} streaming={turn.phase === 'streaming'} onOpen={onOpenTool} />}>
+      footer={
+        <>
+          <ToolActivity steps={[...turn.tools, ...subAgentSteps(turn.subAgents, turn.phase !== 'streaming' && turn.phase !== 'sending')]} streaming={turn.phase === 'streaming'} onOpen={onOpenTool} />
+          <DelegationNoticeCards notices={turn.delegationNotices} />
+        </>
+      }>
       {turn.content !== '' ? <Markdown value={turn.content} streaming={turn.phase === 'streaming'} caret={streaming} /> : waiting && !turn.stopped ? <ThinkingDots /> : ''}
     </MessageBubble>
   );
@@ -279,6 +309,8 @@ export function LiveReply({
 
 const styles = StyleSheet.create({
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  notices: { alignSelf: 'stretch', gap: 4, paddingStart: 40, paddingEnd: 12, paddingVertical: 4 },
+  notice: { paddingVertical: 2 },
   system: { alignSelf: 'center', maxWidth: '85%', paddingVertical: 6, paddingHorizontal: 12 },
   systemText: { textAlign: 'center' },
   side: { alignSelf: 'stretch', gap: 6, paddingStart: 40, paddingVertical: 4 },

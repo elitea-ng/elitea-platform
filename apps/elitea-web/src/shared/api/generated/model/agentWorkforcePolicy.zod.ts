@@ -58,6 +58,16 @@ export const AgentWorkforcePolicy = zod.object({
   grace_days: zod.int(),
   updated_by: zod.int().nullable(),
   updated_at: zod.iso.datetime({ offset: true }).nullable(),
+  auto_feedback_enabled: zod.boolean(),
+  auto_feedback_by: zod
+    .int()
+    .nullable()
+    .describe(
+      "The person who turned auto_feedback on; an automatic report is recorded under them.",
+    ),
+  listing_min_reviews: zod.int(),
+  listing_min_rating: zod.number(),
+  listing_max_dismissal_rate: zod.number(),
   default_rules: zod
     .array(AgentWorkforceRule)
     .describe("The platform's starting rules."),

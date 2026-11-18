@@ -1,8 +1,8 @@
 package requestlog
 
 // verdicts_postgres_integration_test.go runs the verdict INSERT and the prune
-// against a REAL PostgreSQL, with the SHIPPED DDL (shared migrations 0214 and
-// 0217). A
+// against a REAL PostgreSQL, with the SHIPPED DDL (shared migrations 0214, 0217
+// and 0247). A
 // unit test with a fake execer cannot report a wrong column name or a value a
 // CHECK constraint refuses.
 //
@@ -34,7 +34,7 @@ func TestPostgresGuardrailVerdictsInsertAndPrune(t *testing.T) {
 		t.Fatalf("connect: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	for _, file := range []string{"0214_guardrail_pipeline.sql", "0217_guardrail_cloud_detector_types.sql"} {
+	for _, file := range []string{"0214_guardrail_pipeline.sql", "0217_guardrail_cloud_detector_types.sql", "0247_guardrail_warn_action.sql"} {
 		path := filepath.Join("..", "..", "..", "elitea-main", "migrations", "shared", file)
 		ddl, err := os.ReadFile(path) //nolint:gosec // a fixed in-repo path
 		if err != nil {
@@ -60,6 +60,9 @@ func TestPostgresGuardrailVerdictsInsertAndPrune(t *testing.T) {
 				Outcome: "error_open", FailMode: "open", Labels: []string{"detector_error"}, LatencyMS: 50, Runs: 1},
 			{Stage: "input", Row: "cloud", Detector: "azure", DetectorType: guardrail.TypeAzureContentSafety, Action: "block",
 				Outcome: "blocked", FailMode: "closed", Labels: []string{guardrail.SlotPromptInjection}, Findings: 1, LatencyMS: 80, Runs: 1},
+			// 0247: the warn action and the warned outcome are accepted.
+			{Stage: "input", Row: "heads-up", Detector: "pii", DetectorType: guardrail.TypePersonalData, Action: guardrail.ActionWarn,
+				Outcome: guardrail.OutcomeWarned, FailMode: "open", Labels: []string{"email"}, Findings: 1, LatencyMS: 1, Runs: 1},
 		},
 	}}
 	if err := store.writeVerdicts(ctx, records); err != nil {
@@ -71,8 +74,8 @@ func TestPostgresGuardrailVerdictsInsertAndPrune(t *testing.T) {
 		WHERE execution_id = $1 AND project_id = 3 AND user_id = 8`, execution).Scan(&count, &labels); err != nil {
 		t.Fatal(err)
 	}
-	if count != 3 {
-		t.Fatalf("stored %d verdicts; want 3", count)
+	if count != 4 {
+		t.Fatalf("stored %d verdicts; want 4", count)
 	}
 	// 0217 widened detector_type: the longest cloud type is stored whole.
 	var cloudType string

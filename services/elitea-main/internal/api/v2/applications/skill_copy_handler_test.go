@@ -41,3 +41,19 @@ func TestCreateVersionForwardsSkillSourceWithoutExposingIt(t *testing.T) {
 		t.Fatal("request-only copy option leaked into the version response or metadata")
 	}
 }
+
+func TestCreateVersionForwardsToolSource(t *testing.T) {
+	repo := &skillCopyCaptureRepo{}
+	router := setupRouter(repo)
+	router.Post("/api/v2/projects/{projectID}/applications/{applicationID}/versions", handler.NewHandler(repo).CreateVersion)
+	request := httptest.NewRequest(http.MethodPost, "/api/v2/projects/1/applications/1/versions",
+		strings.NewReader(`{"name":"copy","copy_tools_from_version_id":7}`))
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusCreated || repo.input.CopyToolsFromVersionID != 7 || repo.input.CopySkillsFromVersionID != 0 {
+		t.Fatalf("status=%d tools=%d skills=%d", recorder.Code, repo.input.CopyToolsFromVersionID, repo.input.CopySkillsFromVersionID)
+	}
+	if strings.Contains(recorder.Body.String(), "copy_tools") {
+		t.Fatal("request-only copy option leaked into the response")
+	}
+}

@@ -23,6 +23,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 // These tests drive the HTTP handler over the real repository against the
@@ -329,6 +330,100 @@ func TestHandlerPostgres_UpdateVersionPersists(t *testing.T) {
 	}
 	if instructions != "Revised brief." || welcome != "hey" || !strings.Contains(llm, "gpt-4o") {
 		t.Errorf("row = instructions=%q welcome=%q llm=%s", instructions, welcome, llm)
+	}
+}
+
+// TestHandlerPostgres_InstalledAgentDefinitionIsReadOnly pins ADR-0051
+// decision 3: the definition of an agent installed from the Marketplace is
+// read-only. A save that changes it, and a new version, answer 409; a save that
+// repeats the stored values, as the editor sends, goes through.
+func TestHandlerPostgres_InstalledAgentDefinitionIsReadOnly(t *testing.T) {
+	pool := newHandlerTestPool(t)
+	seedHandlerUser(t, pool, 1, "one@elitea.ai")
+	router := newHandlerTestServer(t, pool, auth.User{ID: "1", UserID: "1", Email: "one@elitea.ai"})
+
+	_, created := do(t, router, http.MethodPost, "/applications/prompt_lib/1", j14CreateBody("installed-agent"))
+	applicationID := created["id"].(string)
+	versionID := created["version_details"].(map[string]any)["id"].(string)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if _, err := pool.Exec(ctx, `
+UPDATE p_1.application_versions SET instructions = 'pinned text',
+    meta = COALESCE(meta, '{}'::jsonb) || '{"origin_kind": "installed"}'::jsonb WHERE id = $1`, versionID); err != nil {
+		t.Fatalf("mark the agent installed: %v", err)
+	}
+	target := fmt.Sprintf("/version/prompt_lib/1/%s/%s", applicationID, versionID)
+
+	recorder, body := do(t, router, http.MethodPut, target, map[string]any{"instructions": "changed text"})
+	if recorder.Code != http.StatusConflict || body["error"] != "installed_definition_read_only" {
+		t.Fatalf("a changed instruction = %d %s, want 409 installed_definition_read_only", recorder.Code, recorder.Body.String())
+	}
+	recorder, _ = do(t, router, http.MethodPut, target, map[string]any{"instructions": "pinned text", "name": "base"})
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("a save that repeats the stored definition = %d %s, want 201", recorder.Code, recorder.Body.String())
+	}
+	recorder, body = do(t, router, http.MethodPost, fmt.Sprintf("/versions/prompt_lib/1/%s", applicationID), map[string]any{"name": "second"})
+	if recorder.Code != http.StatusConflict || body["error"] != "installed_definition_read_only" {
+		t.Fatalf("a new version of an installed agent = %d %s, want 409", recorder.Code, recorder.Body.String())
+	}
+	recorder, body = do(t, router, http.MethodDelete, target, nil)
+	if recorder.Code != http.StatusConflict || body["error"] != "installed_definition_read_only" {
+		t.Fatalf("a delete of the installed version = %d %s, want 409", recorder.Code, recorder.Body.String())
+	}
+}
+
+// TestHandlerPostgres_DeletingAHiredAgentRecordsTheDismissal pins ADR-0051
+// decision 5: deleting an agent hired from the Marketplace marks its install
+// dismissed, so the listing's active hires and dismissal rate stay true, and
+// deleting an agent that was not hired changes nothing.
+func TestHandlerPostgres_DeletingAHiredAgentRecordsTheDismissal(t *testing.T) {
+	pool := newHandlerTestPool(t)
+	seedHandlerUser(t, pool, 1, "one@elitea.ai")
+	router := newHandlerTestServer(t, pool, auth.User{ID: "1", UserID: "1", Email: "one@elitea.ai"})
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	// This fixture runs only the baseline; the Marketplace schema is two files.
+	for _, file := range []string{"shared/0250_marketplace_listings.sql", "shared/0252_marketplace_feedback.sql"} {
+		body, err := platformmigrations.Files.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, string(body)); err != nil {
+			t.Fatalf("apply %s: %v", file, err)
+		}
+	}
+
+	_, created := do(t, router, http.MethodPost, "/applications/prompt_lib/1", j14CreateBody("hired-agent"))
+	applicationID := created["id"].(string)
+	var listing int64
+	if err := pool.QueryRow(ctx, `
+INSERT INTO elitea_marketplace.listings (kind, source_project_id, source_entity_id, name)
+VALUES ('agent', 2, 1, 'L') RETURNING id`).Scan(&listing); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO elitea_marketplace.listing_versions (listing_id, version_id, name, digest, definition)
+VALUES ($1, 100, 'v1', decode(repeat('ab', 32), 'hex'), '{}'::jsonb)`, listing); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO elitea_marketplace.installs (project_id, entity_kind, entity_id, listing_id, version_id, digest, mode, installed_by)
+VALUES (1, 'agent', $1::bigint, $2, 100, decode(repeat('ab', 32), 'hex'), 'install', 1)`, applicationID, listing); err != nil {
+		t.Fatal(err)
+	}
+
+	recorder, _ := do(t, router, http.MethodDelete, "/application/prompt_lib/1/"+applicationID, nil)
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("delete = %d %s, want 204", recorder.Code, recorder.Body.String())
+	}
+	var dismissed bool
+	var by *int64
+	if err := pool.QueryRow(ctx, `SELECT dismissed_at IS NOT NULL, dismissed_by FROM elitea_marketplace.installs
+WHERE project_id = 1 AND entity_id = $1::bigint`, applicationID).Scan(&dismissed, &by); err != nil {
+		t.Fatal(err)
+	}
+	if !dismissed || by == nil || *by != 1 {
+		t.Errorf("install after the delete: dismissed = %v by %v, want dismissed by user 1", dismissed, by)
 	}
 }
 

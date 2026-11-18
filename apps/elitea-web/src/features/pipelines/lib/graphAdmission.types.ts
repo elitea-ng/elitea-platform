@@ -60,7 +60,9 @@ export type GraphAdmissionRuleId =
   /** `llm.rs:171-190` and `direct_tool.rs:182-186` — structured-output cardinality. */
   | 'node.structured-output'
   /** Private extension contract checks. Production type admission stays disabled. */
-  | 'node.extension-configuration';
+  | 'node.extension-configuration'
+  /** `node_settings_definition.rs` — the per-node `settings:` block (5b-1, contract pipeline-node-settings-v1). */
+  | 'node.settings';
 
 /** One refusal, named precisely enough for a node panel to point at the offending control. */
 export interface GraphAdmissionIssue {

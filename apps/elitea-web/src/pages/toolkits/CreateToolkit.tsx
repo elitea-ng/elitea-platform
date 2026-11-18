@@ -4,9 +4,11 @@ import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
+import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from '@tanstack/react-router';
 
 import { CreateToolkitToolTabBar, ToolkitForm, ToolkitTypeSelector, type ToolkitEditorDeps, toolkitEditorHooks, useToolkitCreate } from '@/features/toolkits';
+import { getListToolkitInstancesQueryKey } from '@/shared/api/generated/toolkits/toolkits';
 import { t } from '@/shared/i18n';
 import { usePageCrumbs } from '@/shared/ui/page-chrome';
 import { PageToolbar, pageSx, useListSearchQuery } from '@/widgets/page-header';
@@ -165,10 +167,23 @@ function resolveSearchPlaceholder(isApplication: boolean, isMCP: boolean): strin
 export function CreateToolkit({ isMCP = false, isApplication = false, deps }: CreateToolkitProps): ReactNode {
   const defaultCreateToolkit = useToolkitCreate();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const params = useParams({ strict: false }) as CreateToolkitRouteParams;
   const projectId = useSelectedProjectId();
   const connector = useConnectorRefusal(deps?.createToolkit ?? defaultCreateToolkit, projectId);
-  const createToolkitMutation = connector.wrapped;
+  // The create goes through a plain function, not the generated mutation hook,
+  // so nothing told the list its rows were stale: the list the user returned to
+  // showed the old page until a manual refresh (#2144). Wrapped here, not at the
+  // call site, to keep `handleSave` inside its dependency budget.
+  const createWithConnector = connector.wrapped;
+  const createToolkitMutation = useCallback<typeof createWithConnector>(
+    async (input) => {
+      const created = await createWithConnector(input);
+      void queryClient.invalidateQueries({ queryKey: getListToolkitInstancesQueryKey(input.projectId) }).catch(() => undefined);
+      return created;
+    },
+    [createWithConnector, queryClient],
+  );
   // #902: names the secret picker's CREATE entry after the project scope.
   const isTeamProject = useProjectScopeIsTeam(projectId);
 

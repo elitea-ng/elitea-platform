@@ -101,4 +101,22 @@ describe('SkillsList', () => {
     renderList({ items: [{ ...skill, name: '' }] });
     expect(screen.getByText('Untitled skill')).toBeInTheDocument();
   });
+
+  // #2114: the table view carries an Actions column with a three-dot menu per row.
+  it('offers a three-dot Actions menu per row in the table view (issue 2114)', async () => {
+    window.history.pushState({}, '', '/?view=table');
+    try {
+      const user = userEvent.setup();
+      const props = renderList();
+      expect(screen.getByRole('columnheader', { name: 'Actions' })).toBeInTheDocument();
+      await user.click(screen.getByTestId('skill-row-menu'));
+      await user.click(screen.getByRole('menuitem', { name: 'Export' }));
+      expect(props.onExport).toHaveBeenCalledWith(skill);
+      await user.click(screen.getByTestId('skill-row-menu'));
+      await user.click(screen.getByRole('menuitem', { name: 'Delete' }));
+      expect(props.onDelete).toHaveBeenCalledWith(skill);
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
 });

@@ -47,6 +47,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentmemory"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrate"
@@ -192,6 +193,14 @@ type Dependencies struct {
 	// Config.VectorIntrospectionClients is set; ProjectTokenValidator then
 	// checks the signature.
 	CallbackTokenFacts vectorintrospection.CallbackFacts
+	// VectorPlatformTokens verifies elitea-main's own vector tokens for the
+	// introspection service (issue 1657). Optional; nil answers every platform
+	// token inactive.
+	VectorPlatformTokens *vectorintrospection.PlatformTokens
+	// AgentMemoryRanker ranks an agent's memory entries by vector similarity
+	// for recall (issue 1657). Optional: nil, or an error from it, is the
+	// keyword ranking.
+	AgentMemoryRanker agentmemory.Ranker
 	// IndexVectorDeleter deletes a toolkit index's vectors in elitea-vector
 	// (ADR-0031 decision 4): infra/vectorclient.Client, composed from
 	// ELITEA_VECTOR_GRPC_TARGET. Optional; nil installs
@@ -812,6 +821,16 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if err != nil {
 			return nil, err
 		}
+		// The run principal's bound (ADR-0044 Amendment 1) rides the same
+		// policy while the section's principal_bound switch is on.
+		delegationPolicy = delegationPolicy.WithPrincipalBound(egressSources)
+		// The approved delegation grants of a run (ADR-0044 amendment 1,
+		// story S2c): sent only while the operator turns the grant switch on
+		// (ELITEA_DELEGATION_GRANTS_ENFORCED, off by default until the
+		// migration of existing compositions has run).
+		if config.DelegationGrantsEnforced {
+			delegationPolicy = delegationPolicy.WithGrants(repos.NewDelegationGrantReader(dependencies.AdmissionPool), true)
+		}
 		agentProducer.WithDelegationPolicy(delegationPolicy)
 		// The approval policy (ADR-0041 decision 5), on the same gate.
 		approvalPolicy, err := workerapprovalpolicyapp.NewResolver(approvalSettings, egressSources, egressSources)
@@ -1086,6 +1105,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if agentMemoryStore, memoryErr = repos.ComposeAgentMemory(dependencies.AdmissionPool); memoryErr != nil {
 			return nil, fmt.Errorf("construct agent memory: %w", memoryErr)
 		}
+		if dependencies.AgentMemoryRanker != nil {
+			agentMemoryStore.WithRanker(dependencies.AgentMemoryRanker)
+		}
 		agentStart = agentStart.WithAgentMemory(agentMemoryStore)
 		// The approval policy's pipeline hitl rule (ADR-0041 decision 5).
 		pipelineApproval, targetErr := workerapprovalpolicyapp.NewPipelineAdmission(approvalSettings, egressSources)
@@ -1108,6 +1130,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		// base version, under the caller's folder visibility. Same setter
 		// idiom and admission pool.
 		agentStart = agentStart.WithProjectSkills(repos.NewProjectSkillsRepo(dependencies.AdmissionPool))
+		// The skills pinned to the turn's conversation (ADR-0050 amendment 1),
+		// read at every start next to the message's picks.
+		agentStart = agentStart.WithConversationSkills(repos.NewConversationSkillsRepo(dependencies.AdmissionPool))
 		// A governed continuation that admission refuses settles its paused
 		// turn through the stop's repository (#1485). Only a governed
 		// admission refuses that way, so it is inert with governance off.
@@ -2616,6 +2641,13 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, fmt.Errorf("construct propose dismissal tool: %w", dismissalErr)
 		}
 		contentServer = contentServer.WithRuntimeProposeDismissal(proposeDismissal)
+		// The Marketplace tools of the same workforce manager (ADR-0051
+		// decision 6, #1632), on the same claim, pool and store.
+		marketplaceWorkforce, marketplaceErr := storage.NewRuntimeMarketplaceWorkforceService(contentRepository, workforce)
+		if marketplaceErr != nil {
+			return nil, fmt.Errorf("construct marketplace workforce tools: %w", marketplaceErr)
+		}
+		contentServer = contentServer.WithRuntimeMarketplaceWorkforce(marketplaceWorkforce)
 	}
 	// The `artifact` toolkit family's four routes (#906), registered the same
 	// way and nil for the same reasons: no agent dispatch, or no Go object
@@ -2779,6 +2811,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		toolkitCallTool,
 		int(dependencies.ReplayPool.Config().MaxConns),
 		config.SSEStreamLimits,
+		delegationReviewerFor(dependencies),
 	)
 	if err != nil {
 		return nil, err

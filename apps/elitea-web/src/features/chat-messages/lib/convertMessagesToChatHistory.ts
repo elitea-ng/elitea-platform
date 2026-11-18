@@ -48,6 +48,7 @@ import type { PersistedTraceSteps } from '@/entities/message/lib/traceSteps';
 import { withMemberThinkingSteps } from '@/entities/message/lib/traceSteps';
 import { convertTime, isParticipant, normaliseAssistantMessage, normaliseUserMessage } from '@/entities/message/lib/normalise';
 import type { SubAgentGroupable } from '@/entities/message/lib/subAgentGrouping';
+import { delegationNoticesOf } from './delegationNoticesOf';
 
 import { splitWholeResponse } from './chatStreamReasoning';
 import type { ToolAction } from './chatStreamToolAction';
@@ -338,6 +339,7 @@ export function convertMessagesToChatHistory(
       ...(meta?.delegation_refused === undefined ? {} : { delegationRefusal: meta.delegation_refused }),
       ...(meta?.grounding === undefined ? {} : { grounding: meta.grounding }),
       ...subAgentsOf(meta?.subagents_v1, messageGroup.is_streaming === true),
+      ...delegationNoticesOf(meta?.delegation_notices_v1),
       ...answerMarks(meta, reply_to_id === undefined ? false : continuedRows.has(String(reply_to_id))),
     };
     if (messageGroup.persisted_trace) Object.assign(aiMessage, { persistedTrace: messageGroup.persisted_trace });

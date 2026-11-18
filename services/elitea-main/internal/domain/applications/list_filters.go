@@ -50,14 +50,46 @@ func (req *ListRequest) ValidateList() error {
 		}
 		req.Statuses[i] = status
 	}
+	// `status` is one state or a comma-separated list of them; both states are no filter at all.
+	seen := map[string]bool{}
+	for _, part := range strings.Split(strings.ToLower(req.Status), ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if part != "draft" && part != "published" {
+			return apierr.BadRequest("status must be draft or published")
+		}
+		seen[part] = true
+	}
+	req.Status = ""
+	if len(seen) == 1 {
+		for state := range seen {
+			req.Status = state
+		}
+	}
+	req.Origin = strings.ToLower(strings.TrimSpace(req.Origin))
+	if req.Origin != "" && req.Origin != "own" && req.Origin != "installed" && req.Origin != "forked" {
+		return apierr.BadRequest("origin must be own, installed or forked")
+	}
 	req.AgentsType = strings.ToLower(strings.TrimSpace(req.AgentsType))
 	switch req.AgentsType {
 	case "", "all", "classic", "pipeline":
 	default:
 		return apierr.BadRequest("agents_type must be all, classic, or pipeline")
 	}
+	// `folder_id` is a project folder of the agents or pipelines list
+	// (tenant/0247). A folder id is a plain decimal row id.
 	if req.FolderID != "" {
-		return apierr.BadRequest("folder_id is not supported; use ids for folder contents")
+		req.FolderID = strings.TrimSpace(req.FolderID)
+		for _, c := range req.FolderID {
+			if c < '0' || c > '9' {
+				return apierr.BadRequest("folder_id must be a folder id")
+			}
+		}
+		if req.FolderID == "" || len(req.FolderID) > 9 {
+			return apierr.BadRequest("folder_id must be a folder id")
+		}
 	}
 	if req.SortBy == "" {
 		req.SortBy = "created_at"

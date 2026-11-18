@@ -1120,3 +1120,66 @@ func TestApplicationsRepoPostgres_WritingTheDerivedVersionConfigIsRejected(t *te
 		t.Errorf("%d version rows written by rejected config writes, want 0", count)
 	}
 }
+
+func TestApplicationsRepoPostgres_CreateVersionCopiesToolBindingsFromTheSameApplicationOnly(t *testing.T) {
+	repo, pool := newApplicationsTestRepo(t)
+	ctx := testContext(t)
+	seedUser(t, pool, 1, "one@elitea.ai")
+
+	app := createTestApplication(t, repo, "copy-tools", 1, &applications.Version{Name: "base"})
+	other := createTestApplication(t, repo, "copy-tools-other", 1, &applications.Version{Name: "base"})
+	var toolID int
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO p_1.elitea_tools (name, type, owner_id, author_id, created_at) VALUES ('t', 'github', 1, 1, now() AT TIME ZONE 'UTC')
+		RETURNING id`).Scan(&toolID); err != nil {
+		t.Fatalf("seed tool: %v", err)
+	}
+	for _, version := range []applications.Version{app.Versions[0], other.Versions[0]} {
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO p_1.entity_tool_mapping (entity_version_id, entity_type, tool_id, selected_tools)
+			VALUES ($1::integer, 'application', $2, '["a","b"]'::jsonb)`,
+			version.ID, toolID); err != nil {
+			t.Fatalf("seed mapping: %v", err)
+		}
+	}
+
+	copied, err := repo.CreateVersion(ctx, testProjectID, app.ID, applications.Version{
+		Name: "with-tools", AuthorID: 1, CopyToolsFromVersionID: int32(mustAtoi(t, app.Versions[0].ID)),
+	})
+	if err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+	var count int
+	var selected string
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*), coalesce(max(selected_tools::text), '') FROM p_1.entity_tool_mapping WHERE entity_version_id = $1::integer`,
+		copied.ID).Scan(&count, &selected); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || selected != `["a", "b"]` {
+		t.Errorf("copied %d binding(s) with selected_tools %s, want 1 with [a b]", count, selected)
+	}
+
+	// A source of ANOTHER application matches nothing: ownership is the join.
+	foreign, err := repo.CreateVersion(ctx, testProjectID, app.ID, applications.Version{
+		Name: "foreign", AuthorID: 1, CopyToolsFromVersionID: int32(mustAtoi(t, other.Versions[0].ID)),
+	})
+	if err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM p_1.entity_tool_mapping WHERE entity_version_id = $1::integer`, foreign.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Errorf("a foreign source copied %d binding(s), want 0", count)
+	}
+}
+
+func mustAtoi(t *testing.T, value string) int {
+	t.Helper()
+	var parsed int
+	if _, err := fmt.Sscanf(value, "%d", &parsed); err != nil {
+		t.Fatalf("not an integer id %q: %v", value, err)
+	}
+	return parsed
+}

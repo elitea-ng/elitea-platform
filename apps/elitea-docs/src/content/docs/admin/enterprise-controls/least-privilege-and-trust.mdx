@@ -201,6 +201,13 @@ An agent can delegate work: it calls a saved agent or a saved pipeline as a tool
 - **The depth is limited.** The root agent is depth 0. Each delegation adds 1. Saved agents, saved pipelines, pipeline nodes and sub-agents count together. A delegation deeper than the maximum is refused with `DELEGATION_DEPTH_EXCEEDED`. The existing limits on agent nesting and on the number of pipeline participants still apply.
 - **The first saved agent sets the limit.** The root grants are the toolkits, tools and credentials of the agent or pipeline that the run starts with, the data classes of its [registry record](/admin/enterprise-controls/agent-lifecycle#registry-and-risk-tiers), and the run's egress allowlist. A root agent with no registry record, or with no data classes, imposes no data class limit.
 
+- **The run principal bounds every callee.** A callee never exceeds what the person who started the run may use, whatever its caller holds. For an unattended run the bound is the mandate (ADR-0039) and the project. The bound covers three things:
+  - **Toolkits.** A toolkit that the project's folder access hides from the person is out of bounds. This also applies to the toolkits of an ad hoc conversation. The bound is computed for the agents and pipelines that the run can reach, not for the whole project.
+  - **Credential references.** In a governed run, a callee toolkit can use only a credential reference that an active credential use grant of the project lets a toolkit use. The exact grant is still checked on every use.
+  - **Data classes.** A project that declares no allowed data classes sets no bound. Today no project declares any, so this part does nothing yet.
+
+  The bound applies in both modes. `report` never relaxes it. A delegation that needs something out of bounds is refused with `DELEGATION_GRANT_MISSING` and the reason `principal`, and the root agent's own toolkits that are out of bounds are not offered to it. The bound starts when an administrator turns on **Bound Delegation By The Run's Principal**, as described in **Configure and use** below.
+
 A nested pipeline is checked before its parent runs. When any agent or pipeline inside it is refused, the whole pipeline is refused, and the refusal names the grant.
 
 Example of a refused call, as the model reads it:
@@ -218,6 +225,8 @@ Example of a refused call, as the model reads it:
 }
 ```
 
+A refusal by the run principal carries the reason: `{"code": "DELEGATION_GRANT_MISSING", "reason": "principal", "kind": "toolkit", "name": "jira-prod"}`. Its message says that the person or mandate this run acts for may not use the grant.
+
 A depth refusal carries `{"code": "DELEGATION_DEPTH_EXCEEDED", "depth": 5, "max_depth": 4}`.
 
 ### Configure and use
@@ -227,15 +236,94 @@ Open **Configuration › Delegation** in the admin console (permission `configur
 | Setting | Values | Default | Effect |
 | --- | --- | --- | --- |
 | **Maximum Delegation Depth** (`max_depth`) | 1 to 16 | 4 | The deepest delegation a run can make. |
+| **Bound Delegation By The Run's Principal** (`principal_bound`) | on, off | off | When on, every callee is limited to what the run's principal may use, in both modes. See the note below before you turn it on. |
 | **Mode** (`mode`) | `enforce`, `report` | `enforce` | `enforce` refuses a delegation that needs a missing grant. `report` records the missing grant on the delegation step and lets the callee run. The depth limit applies in both modes. Runs under the governed credential profile always use `enforce`. |
 
 Until an administrator saves this section, the main service does not send it to the workers. The workers then use the defaults in the table, and they do not compare data classes. Narrowing of toolkits, tools, credentials and egress hosts, and the depth limit, apply from the time that a worker runs the release.
 
 **Save the section only after every worker runs the release.** The main service is upgraded first and the workers after it (the default order of the Helm chart). A worker from an earlier release refuses a command that carries this section. When you save the section, also with the default values, data class narrowing starts.
 
+**Turn on the principal bound once every worker runs the release.** It is off by default, so a composition that reaches a toolkit that its principal may not use keeps running as before. While it is on, such a composition stops: the delegation is refused with the reason `principal`, and the root agent's own out-of-bounds toolkits are not offered. A closure with more than 512 toolkits or 256 credential references is not truncated; the run is not dispatched.
+
 Each replica of the main service reads the section again after at most 15 seconds. The setting applies to runs that start after that. A run keeps the policy that it started with.
 
 To find compositions that enforcement would refuse, set **Mode** to `report` for a period, and look for delegation steps with `delegation_enforced: false`. For each one, give the grant to the calling agent, or remove it from the callee. Then set **Mode** to `enforce`.
+
+### Delegation grants
+
+Attaching an agent or a pipeline to another agent (an agent used as a tool, or a pipeline child) records a **delegation grant** for that edge. The grant lists exactly what the attached agent (the callee) holds when it is attached: its toolkits, the tools selected on each, the credential references they use, the data classes it declares and the hosts its toolkits are configured to reach. It stores the digest of that set. A callee that holds none of these needs no grant.
+
+- **A grant starts pending.** Nothing is approved by attaching. An editor of the calling agent approves the grant, all of it or only the items they choose. The approver can approve only what they hold access to, item by item: a toolkit when they hold the permission to list toolkits in the project **and** the project's folder access rules do not hide that toolkit from them, and a credential reference when they hold the governed credential use permission **and**, under the governed profile, an active credential use grant of the project covers the reference. What they leave out, or do not hold, is recorded as *omitted* and stays out of the grant. A toolkit whose credential reference is left out leaves with it. A data class bound is never left out. Approving a grant never creates a credential use grant: a governed credential use still needs the use grant of the agent that holds the reference.
+- **One grant per edge.** The grant covers the callee's own toolkits. It does not cover the callee's own sub-agents: each of those edges has its own grant, approved by an editor of the callee.
+- **Drift.** The grant covers the set it recorded. When the callee later holds more (a new toolkit or tool, another credential reference, a new host or data class), the grant becomes *stale* and the added items stay out. A newer version of the callee with the same or a smaller set needs no approval. Re-approval replaces the grant and keeps the old one as *superseded*.
+- **Governed profile.** Under the governed profile the grant is approved through an [agent change request](/admin/enterprise-controls/agent-lifecycle) of kind `delegation` on the calling agent, with maker-checker at every tier, low included: the approver differs from the proposer, holds the approval permission of the agent's tier, and the tier's approval count applies. The direct approve route then answers 409 with the code `DELEGATION_GOVERNED` and the request to use. Rejecting or withdrawing the request revokes the grant. A delegation request is separate from the one open request an agent may have, so it never blocks a release.
+- **Detaching revokes the grant** once no version of the calling agent attaches the callee.
+- **Audit.** Each proposal, approval, re-approval, stale mark, restore and revoke is a security audit event (`agent.delegation.*`).
+
+#### When the attached agent changes
+
+The platform compares what the callee holds now with its grant after any change that can widen it: publishing or editing a version, changing a toolkit, its tool selection, its credential reference, its egress hosts or the agent's data classes, a Marketplace hire, upgrade or upstream merge, and when someone opens the calling agent's grants. The check is set containment against what the callee held when the grant was proposed, never version equality.
+
+- **The same or a smaller set needs nothing.** A new version that drops a tool, or one that holds exactly what was approved, leaves the grant as it is. A stale grant comes back to approved when its callee is within it again.
+- **A wider set marks the grant `stale`.** The grant records what changed (`drift`: the callee version and the added toolkits, tools, credential references, data classes or hosts). The callee keeps running with what was approved; the added items are narrowed out for every run until the grant is re-approved.
+- **The editors are told once.** The people told are the calling agent's business and technical owners, the people who proposed and approved the grant, and the authors of the calling agent's recent versions. They get one notification per edge and per digest of the callee's set (`delegation_grant_stale`). The same drift is not announced twice, even if the notification was deleted; a different drift is a new notice, and so is a drift that returns after the callee was back within the grant.
+- **Re-approval replaces the grant.** An editor approves the stale grant. The new grant lists what the callee holds now, limited to what the approver has access to, and the old one is kept as `superseded`. Under the governed profile the editor's approval records a new change request of kind `delegation` instead, and a second person approves it.
+- **A growing closure only notifies.** When an agent your callee reaches through approved grants gains a grant, or one of them is re-approved, the editors get a `delegation_closure_grew` notification. Nothing changes state, because each hop still needs its own approved grant and passes the principal bound.
+
+#### Marketplace hire, upgrade and upstream merge
+
+An installed agent's internal edges (the agents it uses as tools) come from its listing version.
+
+- **Hire.** The hire, or the hire's change request when it needs one, approves the internal edges. The grants list what the approvers hold access to; an approver who lacks a toolkit leaves it out, and that agent runs without it.
+- **Upgrade.** The upgrade plan lists every internal edge whose agent holds more in the new version, next to the other changes. An upgrade that widens an edge always needs a person, at any tier, and approving it re-approves that edge. The `auto` upgrade policy never applies such a version.
+- **Upstream merge.** The review lists widened edges the same way, and a merge that widens one needs a person. Approving the request re-approves the agent's edges. A merge only writes a draft, so edges the fork gains when its editors publish it are caught by the drift check.
+- **Removed agents.** The grants of edges whose agent an upgrade removed are revoked.
+
+The review in the attach dialog is described next; the API (`listDelegationGrants`, `proposeDelegationGrant`, `previewDelegationGrant`, `approveDelegationGrant`, `revokeDelegationGrant`) is what it uses.
+
+#### The review when an editor attaches an agent
+
+The editor's view of this is [Attach a specialist agent](/how-tos/agents-pipelines/attach-a-specialist-agent). What the platform does:
+
+- **Before the attach.** Choosing an agent or pipeline in the Tools panel reads `previewDelegationGrant` for the edge: what the callee will be able to use (toolkits and tools, credential references by name, data classes, egress hosts), which of those the editor could approve, which they could not (`withheld`), the closure below the callee as information, and whether the governed profile is on (`governed`). A callee that holds nothing is attached with no dialog. Nothing is written until the editor decides.
+- **Approve and attach.** The attach writes the link and the pending grant in one transaction, as before. The dialog then approves that grant with the toolkits the editor kept (`approveDelegationGrant` with `items`, or with no body when nothing was unticked). The server reads the approver's access again, so a client cannot approve more than the person holds. Under the governed profile the button is **Request approval**: the attach records the change request, nothing is approved by the dialog, and the row says **Awaiting approval**.
+- **Items the approver cannot access** are shown disabled with the reason and stay out of the grant (`omitted`).
+- **An approval that fails never undoes the attach.** The grant stays pending, the row says **Delegation not approved**, and **Review delegation** tries again.
+- **Review delegation.** Each attached agent or pipeline shows its edge's state: approved, delegation not approved (pending), awaiting approval (a governed change request is open) or needs re-approval (stale). The review opens read-only unless the grant is pending and ungoverned. Re-approving a stale grant comes with the drift notifications of a later release.
+- **Clients.** The web app and the desktop app (its screens are the web app's) show the dialog and the row. The mobile app has no agent editor: it lists an agent's delegations, and an editor approves or revokes them there (client contract 1.59); under the governed profile it points to the change request. A nested agent in the desktop app's local turn runs as its own cloud turn; Main applies the edge's grant when it starts that turn (see **The desktop app's local turn** below).
+
+### Notices in the chat
+
+A refused or narrowed delegation is shown in the chat, on web, desktop and mobile, at the place of the agent that was called. The model still reads the same typed result, so it can explain itself; the notice is for the person.
+
+| Notice | Reason | What it says | Action |
+| --- | --- | --- | --- |
+| Delegation refused | `no_grant` | "Agent1 could not use git from Agent2. This delegation is not approved." The edge has no approved grant and the run enforces them. | **Review delegation** for an editor of the calling agent. Anyone else sees who to ask: the calling agent's registry owners, else its owner, by name. |
+| Delegation narrowed | `stale` | "Agent1 ran without Database. It was added after this delegation was approved." The callee gained something its grant does not cover (drift), so it ran without it. | The same. |
+| Delegation refused | `principal` | "Agent3 could not use payroll. You do not have access to it." The person or mandate the run acts for may not use it. | None: an editor of the calling agent cannot fix this. Someone with project access must grant it to the person. |
+| Delegation refused | `depth` | "Agent1 was not called: the delegation depth limit of 2 was reached." | None: an administrator raises **Maximum Delegation Depth**. |
+
+- **Review delegation** opens the calling agent with the review window of that exact delegation already open (the dialog above), in its Tools panel, so an editor lands on the grant to approve. The link carries the called agent (`?review_delegation=<id>` on the agent's page); the page drops it once the window opens, so a reload does not open it again. On the mobile app the delegations screen lists the called agent's delegation first and marks it. It shows for a person who may edit agents in the project (the permission `models.applications.application.update`), only for an agent saved in the project. When the called agent has no grant row on the calling agent (an edge created before grants), the agent opens without a window.
+- **What a notice carries.** The edge (calling and called agent), why, and the names of the grants involved, up to 16. It never carries a credential value or a tool argument. The answer keeps up to 16 notices, one per call, so a reloaded chat shows them again.
+- **The desktop app's local turn.** The desktop app runs an agent's loop on the person's computer, and runs a saved agent it calls as its own cloud turn. That cloud turn has the called agent as its root, so the worker never sees the edge from the desktop's agent to it: Main crosses that edge when the desktop starts the nested agent (`startLocalChildTurn`), under the same switch (`ELITEA_DELEGATION_GRANTS_ENFORCED`, off by default) and the same rule. An edge with an approved or stale grant runs the nested agent with what its caller and the grant cover, and shows **narrowed** at the call; an edge with no grant refuses a nested agent that holds something its caller does not (`enforce` mode; `report` mode only records) and the call returns `delegation_refused` to the model. Both show the notice above on the desktop turn's transcript. The run principal's bound (**Bound Delegation By The Run's Principal**) is applied to the nested agent's turn by the worker as it is to any chat turn, with no notice. Data classes and egress hosts are not narrowed for this edge: they are not part of the frozen tools.
+- **A pipeline node.** A node that runs a saved pipeline inside the graph has no tool result to carry a refusal, so the run ends with the authorization failure. The chat now also shows the notice, before that failure, with the node's name as the called agent. It is the same card (**Delegation refused**, with **Review delegation** for an editor), keyed by the node's place in the graph, so a reload shows it again. **Review delegation** on it opens the calling pipeline's editor, because a graph node is not a row of the Tools panel with a window to open.
+- **What does not show a notice.** A delegation that `report` mode only recorded ran, so nothing is shown, for an agent tool and for a pipeline node alike: nothing was refused. The run step's summary still records it (`delegation_refusal` with `delegation_enforced: false`); look there when you use `report` to find compositions that enforcement would refuse. Ephemeral sub-agents (`spawn_agent`) are exempt from grants.
+- **Events.** The worker sends `delegation_refused` and `delegation_narrowed` run events (client contract 1.60). Main keeps them on the answer's `metadata.delegation_notices_v1` and adds `can_review` and `editors` for the person who reads, never stored.
+
+#### What a grant changes at run time
+
+The effective set of a callee X called by Y is `own(X) ∩ (E(Y) ∪ G(Y→X))`, where `E(Y)` is what the caller itself may use and `G(Y→X)` is the approved grant of that edge. In words:
+
+- **With an approved grant**, X may use what Y holds **and** what the grant lists, even if Y holds none of it. This is what lets a specialist agent with a git toolkit work under a parent that has no toolkits.
+- **Containment, not equality.** What X holds beyond `E(Y) ∪ G` (a new toolkit, a tool the grant omitted, a swapped credential reference, a data class nobody approved) is **narrowed out** for the run. X still runs. The delegation step records the narrowed items (`delegation_narrowed`).
+- **The step records the grant.** A delegation that used a grant carries `delegation_grant_id` and `delegation_grant_digest` next to the existing `effective_grant_digest` and `delegation_depth`.
+- **Per edge.** The grant covers X's own toolkits only. If X delegates to Z, the edge X to Z needs its own grant. The depth limit still applies. Ephemeral sub-agents need no grant.
+- **No grant, no change.** An edge without an approved grant is refused (or, in `report` mode, recorded) exactly as in the previous section. The run principal's bound and the run's egress allowlist bound every callee, with or without a grant.
+- **Which edges have grants.** Attaching an agent or pipeline as a tool creates the grant of that edge. A saved pipeline that a pipeline node runs from its definition creates none yet; such an edge is checked against its caller's own set as before until the migration of existing compositions covers it.
+
+#### The switch
+
+Grants are read at run time only while the operator sets `ELITEA_DELEGATION_GRANTS_ENFORCED` to `"true"` on the main service (the chart value `main.env.ELITEA_DELEGATION_GRANTS_ENFORCED`; **off by default**). While it is off, commands carry no grant and delegation behaves exactly as before grants, so turning the release on changes nothing. Turn it on only after the migration of existing compositions has created their pending grants and the owners have reviewed them; until a grant is approved, a callee that holds more than its caller is refused as it was. The workers must run this release before the switch is on (a worker from an earlier release refuses a command that carries grants).
 
 ### Evidence
 
@@ -263,7 +351,8 @@ Example summary of a permitted delegation:
 ### What is not enforced
 
 - **Data classes are declared metadata.** They are the labels that the agent owners set in the registry. They are not the output of a classifier, and the platform does not examine the data that an agent reads. The check makes sure that a callee declares no class that its caller does not declare.
-- **An ad hoc conversation has no root limit.** A conversation without a saved agent imposes no toolkit grants, because the user selected its participants. Narrowing starts at the first saved agent or pipeline.
+- **An ad hoc conversation imposes no grant of its own.** A conversation without a saved agent holds no toolkit grants, because the user selected its participants. Caller narrowing starts at the first saved agent or pipeline. With the principal bound on, the conversation's own toolkits and every callee are still limited to what the person may use.
+- **The principal bound reads project access, not tool permissions.** Project roles grant no access per tool, so a toolkit the person may use carries all its tools. A project's allowed data classes and a per-tool access rule are not read yet.
 - **Agent and pipeline references are not grants.** A caller does not need to hold the callee itself. The callee's own toolkits are compared.
 - **Hosts are read from the toolkit settings.** The host check uses the URL settings of the callee's toolkits that have an explicit scheme (`https://…`). Hosts in an OpenAPI specification are not read at assembly. The worker egress allowlist still checks every call at run time.
 

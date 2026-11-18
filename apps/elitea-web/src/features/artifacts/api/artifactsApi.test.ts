@@ -21,6 +21,7 @@ import {
   removeArtifact,
   removeArtifacts,
   removeArtifactBucket,
+  renameArtifact,
   setArtifactBucketPinned,
   setArtifactBucketRetention,
 } from './artifactsApi';
@@ -34,6 +35,7 @@ beforeEach(() => {
   vi.spyOn(generatedArtifacts, 'batchDeleteObjects');
   vi.spyOn(generatedArtifacts, 'deleteBucket');
   vi.spyOn(generatedArtifacts, 'updateBucket');
+  vi.spyOn(generatedArtifacts, 'moveObject');
   vi.spyOn(generatedMutator, 'eliteaFetch');
   vi.spyOn(sharedArtifacts, 'listArtifacts');
   vi.spyOn(sharedArtifacts, 'listBuckets');
@@ -114,6 +116,7 @@ describe('artifacts API', () => {
     vi.mocked(batchDeleteObjects).mockResolvedValue(okResponse as never);
 
     await createArtifactBucket('1', 'docs');
+    await createArtifactBucket('1', 'kept', 7);
     await setArtifactBucketRetention('1', 'docs', 30);
     await setArtifactBucketPinned('1', 'reports', true);
     await removeArtifactBucket('1', 'reports');
@@ -122,11 +125,39 @@ describe('artifacts API', () => {
 
     // projectId is a NUMERIC path segment in the S11 artifacts API.
     expect(createBucket).toHaveBeenCalledWith(1, { name: 'docs' });
+    expect(createBucket).toHaveBeenCalledWith(1, { name: 'kept', retention_days: 7 });
     expect(updateBucket).toHaveBeenCalledWith(1, 'docs', { retention_days: 30 });
     expect(updateBucket).toHaveBeenCalledWith(1, 'reports', { is_pinned: true });
     expect(deleteBucket).toHaveBeenCalledWith(1, 'reports');
     expect(deleteObject).toHaveBeenCalledWith(1, 'docs', 'a.txt');
     expect(batchDeleteObjects).toHaveBeenCalledWith(1, 'docs', { keys: ['a.txt', 'b.txt'] });
+  });
+
+  /* #2018 — a refusal the server explains is shown as written; anything else stays generic */
+  it('surfaces the server message of a refused bucket create', async () => {
+    vi.mocked(generatedArtifacts.createBucket).mockRejectedValue(new generatedMutator.EliteaApiError({
+      kind: 'http', status: 403, url: '/x',
+      body: { error: { code: 'QuotaExceeded', message: "retention_days exceeds the project's policy ceiling" } },
+    }));
+    await expect(createArtifactBucket('1', 'docs', 999)).rejects.toThrow("retention_days exceeds the project's policy ceiling");
+    vi.mocked(generatedArtifacts.createBucket).mockRejectedValue(new generatedMutator.EliteaApiError({
+      kind: 'http', status: 500, url: '/x', body: { error: { message: 'pq: connection refused' } },
+    }));
+    await expect(createArtifactBucket('1', 'docs')).rejects.toThrow('Failed to create the bucket.');
+  });
+
+  /* #2015 — rename is a server move: POST :move with {from, to}, never replacing silently */
+  it('renames a file through the :move operation and names a taken name', async () => {
+    vi.mocked(generatedArtifacts.moveObject).mockResolvedValue(okResponse as never);
+    await renameArtifact('1', 'docs', 'a/old.txt', 'a/new.txt');
+    expect(generatedArtifacts.moveObject).toHaveBeenCalledWith(1, 'docs', { from: 'a/old.txt', to: 'a/new.txt' });
+
+    vi.mocked(generatedArtifacts.moveObject).mockRejectedValue(
+      new generatedMutator.EliteaApiError({ kind: 'http', status: 409, url: '/x', body: null }),
+    );
+    await expect(renameArtifact('1', 'docs', 'a.txt', 'b.txt')).rejects.toThrow('already exists');
+    vi.mocked(generatedArtifacts.moveObject).mockRejectedValue(new Error('boom'));
+    await expect(renameArtifact('1', 'docs', 'a.txt', 'b.txt')).rejects.toThrow('Failed to rename');
   });
 
   it('rejects a non-numeric project id rather than building a bad URL', async () => {

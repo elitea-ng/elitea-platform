@@ -75,7 +75,8 @@ pub(crate) fn pipeline_configuration_assembly_error(
         }
         PipelineConfigurationError::MalformedYaml { .. }
         | PipelineConfigurationError::Invalid(_)
-        | PipelineConfigurationError::InvalidIdentifier(_) => {
+        | PipelineConfigurationError::InvalidIdentifier(_)
+        | PipelineConfigurationError::NodeSettings { .. } => {
             NativeAgentAssemblyErrorCode::InvalidInput
         }
         PipelineConfigurationError::Graph(_) => NativeAgentAssemblyErrorCode::InvalidConfiguration,

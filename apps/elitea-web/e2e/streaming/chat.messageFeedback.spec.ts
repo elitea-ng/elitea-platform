@@ -28,7 +28,7 @@
 import { expect, test } from '@playwright/test';
 
 import { BASE_URL } from '../../playwright.config';
-import { API_BASE, deleteConversation, expectStoredAssistantAnswer, readStoredMessageGroups } from '../fixtures/api';
+import { API_BASE, deleteConversation, expectStoredAssistantAnswer, readStoredMessageGroups, fillComposer } from '../fixtures/api';
 
 /** The model the standalone stack seeds; overridable for the real-model lane. */
 const MODEL_NAME = process.env['E2E_CHAT_MODEL'] || 'E2E-MOCK-MODEL';
@@ -77,6 +77,7 @@ test('rating a real assistant message persists, upserts, and reads back through 
     await expect(page.getByTestId('model-selector-name')).toContainText(MODEL_NAME, { timeout: 10_000 });
 
     // ── the turn whose answer this journey rates ────────────────────────
+    const send = await fillComposer(page, prompt);
     const created = page.waitForResponse(
       (r) => CONVERSATIONS_RE.test(new URL(r.url()).pathname) && r.request().method() === 'POST',
       { timeout: 45_000 },
@@ -86,11 +87,7 @@ test('rating a real assistant message persists, upserts, and reads back through 
       { timeout: 45_000 },
     );
 
-    const input = page.getByTestId('chat-message-input');
-    await expect(input).toBeEditable({ timeout: 20_000 });
-    await input.fill(prompt);
-    await expect(page.getByTestId('chat-send-button')).toBeEnabled({ timeout: 10_000 });
-    await page.getByTestId('chat-send-button').click();
+    await send.click();
 
     const createdResponse = await created;
     expect(createdResponse.status(), 'the send must create a real conversation').toBe(201);

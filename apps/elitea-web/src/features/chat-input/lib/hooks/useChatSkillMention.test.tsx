@@ -72,6 +72,22 @@ describe('useChatSkillMention', () => {
     const nonAgent: Participant = { id: 'part-2', entityName: 'toolkit', entityMeta: { id: 'tk-1', projectId: 'proj-1' } };
     const { result } = renderHookWithProviders(() => useChatSkillMention({ chatInput, activeParticipant: nonAgent }));
     expect(result.current.filteredItems).toEqual([]);
+    expect(result.current.hasMentionableSkills).toBe(false);
+  });
+
+  it('offers the "~" picker (hasMentionableSkills) only once an agent with skills is active (#2017)', async () => {
+    mockSkills([{ id: 's-1', name: 'Alpha' }]);
+    const chatInput = makeRef();
+    const { result } = renderHookWithProviders(() => useChatSkillMention({ chatInput, activeParticipant: AGENT_PARTICIPANT }));
+    await waitFor(() => expect(result.current.hasMentionableSkills).toBe(true));
+  });
+
+  it('has no mentionable skills for an agent whose version carries none', async () => {
+    mockSkills([]);
+    const chatInput = makeRef();
+    const { result } = renderHookWithProviders(() => useChatSkillMention({ chatInput, activeParticipant: AGENT_PARTICIPANT }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(result.current.hasMentionableSkills).toBe(false);
   });
 
   it('loads and sorts the agent version’s skills alphabetically', async () => {

@@ -5,6 +5,7 @@
  * indicator, "To:" and `NewChatInput` with its props. `ChatBox` renders it in
  * place of a read-only notice; its hook wiring is `useChatBoxComposer`.
  */
+import { useCallback, useEffect, useRef } from 'react';
 import type { ComponentRef, ReactNode, RefObject } from 'react';
 
 import type { AttachmentButtonHandle, PlusChatButtonEntitySubmenus, VoiceButtonHandle } from '@/widgets/chat';
@@ -12,11 +13,13 @@ import { NewChatInput, type voiceHooks } from '@/features/chat-input';
 import { t } from '@/shared/i18n';
 
 import { buildAgentEditorProps, buildCreateHandlerProps, shouldDisableClearChat, type ChatBoxEditorCallbacks, type deriveChatBoxInputState } from './ChatBox.helpers';
-import { chatDraftKey } from './ChatBox.draft';
+import { switchToModel } from './switchToModel';
+import { chatDraftKey, rememberConversationDraftIds } from './ChatBox.draft';
 import { ChatBoxComposerQueue } from './ChatBoxComposerQueue';
 import { ChatBoxFloorTarget } from './ChatBoxFloorTarget';
 import { buildChatBoxAttachmentProps, buildChatBoxInputSlots } from './ChatBoxInputSlots';
 import { buildChatBoxPopupsProps, ChatBoxPopups } from './ChatBoxPopups';
+import { startSkillMention } from './ChatBoxSkillPick';
 import { ChatBoxSteeringNotice, ChatBoxSteeringOffer } from './ChatBoxQueuedMessages';
 import type { ChatBoxVoiceFeedback } from './ChatBoxVoiceFeedback';
 import { ChatBoxVoicePlayer } from './ChatBoxVoicePlayer';
@@ -45,6 +48,8 @@ interface ChatBoxComposerProps {
     readonly projectId: string | number | undefined;
     readonly projectIdString: string | undefined;
     readonly conversationId: string | number | undefined;
+    readonly pendingConversationId: string | number | undefined;
+    readonly conversationUuid: string | undefined;
     readonly conversationMeta: Readonly<Record<string, unknown>> | undefined;
     readonly conversationParticipants: unknown[] | undefined;
     readonly isAgentsPage: boolean | undefined;
@@ -87,6 +92,17 @@ export function ChatBoxComposer(props: ChatBoxComposerProps): ReactNode {
   const { isStreaming, areAttachmentsDisabled, isInputLoading } = inputState;
   const { projectId, conversationId, isAgentsPage } = conversation;
   const { participantForEditor, entityActions } = participant;
+  const cancelSkillPick = useRef<(() => void) | undefined>(undefined);
+  useEffect(() => () => cancelSkillPick.current?.(), []);
+  const { conversationUuid, editorTest } = conversation;
+  useEffect(() => {
+    rememberConversationDraftIds({ projectId, conversationId, conversationUuid, scratch: [isAgentsPage, editorTest] });
+  }, [projectId, conversationId, conversationUuid, isAgentsPage, editorTest]);
+  const onInputChange = mentions.onInputChange;
+  const onPickSkill = useCallback(() => {
+    cancelSkillPick.current?.();
+    cancelSkillPick.current = startSkillMention(chatInputRef.current, onInputChange);
+  }, [chatInputRef, onInputChange]);
   return (
     <>
       <ChatBoxVoicePlayer showPlayer={readAloud.showPlayer} voicePlayerProps={readAloud.voicePlayerProps} />
@@ -118,13 +134,13 @@ export function ChatBoxComposer(props: ChatBoxComposerProps): ReactNode {
         ref={chatInputRef}
         conversationId={conversationId !== undefined ? String(conversationId) : undefined}
         state={{ isLoading: inputState.isComposerBusy, disabledInput: inputState.isDraftInputBusy, isStreaming, disabledSend: inputState.disabledSend, isCreatingConversation: data.lifecycle.isCreating, allowSendWhileStreaming: true }}
-        content={{ placeholder: t('widgets.chatBox.inputPlaceholder', 'Type your message...'), clearInputAfterSubmit: true, slashHighlights: mentions.highlightRanges, draftKey: chatDraftKey({ projectId, conversationId, scratch: [isAgentsPage, conversation.editorTest] }) }}
+        content={{ placeholder: t('widgets.chatBox.inputPlaceholder', 'Type your message...'), clearInputAfterSubmit: true, slashHighlights: mentions.highlightRanges, draftKey: chatDraftKey({ projectId, conversationId, pendingConversationId: conversation.pendingConversationId, scratch: [isAgentsPage, conversation.editorTest] }) }}
         callbacks={{ onSend: steering.onSend, onStopGeneration: composer.stopTurn, onNormalKeyDown: state.onNormalKeyDown, onInputChange: mentions.onInputChange }}
         agentEditor={buildAgentEditorProps({
           participantForEditor,
           activeParticipantDetails: participant.agentEditorParticipantDetails,
           isAgentsPage,
-          selectSavedOrDefaultModel: data.selectSavedOrDefaultModel,
+          selectSavedOrDefaultModel: switchToModel(participant.onChangeParticipant, data.selectSavedOrDefaultModel),
           onShowParticipantsList: () => state.setShowRecommendationList(!state.showRecommendationList),
           onSelectVersion: (version) => {
             void participant.onSelectVersion(version);
@@ -148,6 +164,7 @@ export function ChatBoxComposer(props: ChatBoxComposerProps): ReactNode {
           runToCompletion: { unattended: tools.unattended, disabled: isInputLoading },
           entitySubmenus: { ...extensions.entitySubmenus, onSelectParticipant: entityActions.onSelectParticipant, getParticipantMenuState: entityActions.getParticipantMenuState },
           ...buildCreateHandlerProps(extensions.editorCallbacks),
+          ...(state.skill.hasMentionableSkills ? { onPickSkill } : {}),
         })}
         refs={refs}
       />

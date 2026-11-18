@@ -237,6 +237,11 @@ impl ApplicationNodeDefinition {
         )
     }
 
+    /// The child variable names this node maps into a nested pipeline.
+    pub(super) fn variable_keys(&self) -> impl Iterator<Item = &str> {
+        self.variables.keys().map(String::as_str)
+    }
+
     pub(super) fn variable_channels(&self) -> impl Iterator<Item = String> + '_ {
         self.variables.keys().map(|key| self.variable_channel(key))
     }

@@ -584,10 +584,25 @@ fn scan_egress_policy(fields: &ScannedFields<'_>) -> Result<(), ProtocolError> {
 /// field. Only an agent execution carries it.
 fn scan_delegation_policy(fields: &ScannedFields<'_>) -> Result<(), ProtocolError> {
     if fields.contains(67) {
-        scan_message(
+        let policy = scan_message(
             fields.length_field(67, "the worker delegation policy is missing")?,
             Schema::WorkerDelegationPolicy,
         )?;
+        // Its nested principal bound (ADR-0044 Amendment 1, #2157) admits no
+        // unknown field either, nor does any toolkit it lists.
+        if policy.contains(11) {
+            let bound = scan_message(
+                policy.length_field(11, "the worker principal bound is missing")?,
+                Schema::WorkerPrincipalBound,
+            )?;
+            for toolkit in bound.repeated_field(2) {
+                scan_message(toolkit, Schema::WorkerPrincipalToolkit)?;
+            }
+        }
+        // And each approved delegation grant (ADR-0044 Amendment 1, #2166).
+        for grant in policy.repeated_field(21) {
+            scan_message(grant, Schema::WorkerDelegationGrant)?;
+        }
     }
     Ok(())
 }

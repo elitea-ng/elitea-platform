@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 
 import { act, fireEvent } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import { renderWithTheme } from '../lib/testTheme';
@@ -130,6 +131,21 @@ describe('EntityCard', () => {
   });
 });
 
+describe('row action (#2091)', () => {
+  it('shows the action in the table without opening the row, and not at all on a card', () => {
+    const onClick = vi.fn();
+    const onAction = vi.fn();
+    const items: readonly EntityListItem[] = [{ id: '1', name: 'Hired', onClick, action: { label: 'Undo hire', onClick: onAction } }];
+    const table = renderWithTheme(<EntityCardList items={items} view="table" />);
+    fireEvent.click(table.getByTestId('entity-row-action'));
+    expect(onAction).toHaveBeenCalledTimes(1);
+    expect(onClick).not.toHaveBeenCalled();
+    table.unmount();
+    const cards = renderWithTheme(<EntityCardList items={items} view="cards" />);
+    expect(cards.queryByTestId('entity-row-action')).not.toBeInTheDocument();
+  });
+});
+
 describe('EntityCardList', () => {
   it('renders one card per item in the grid view', () => {
     const { getAllByTestId } = renderWithTheme(
@@ -150,6 +166,40 @@ describe('EntityCardList', () => {
     );
     expect(container.querySelector('table')).toBeInTheDocument();
     expect(getAllByTestId('entity-list-row')).toHaveLength(2);
+  });
+
+  // Issue 2050: sortable columns carry a sort icon, and the active one says which way.
+  it('draws a sort icon on each sortable column header and flips it on click (issue 2050)', () => {
+    const { getAllByTestId, getAllByRole } = renderWithTheme(
+      <EntityCardList
+        items={ITEMS}
+        view="table"
+      />,
+    );
+    expect(getAllByTestId('entity-list-sort-icon')).toHaveLength(2);
+    const [nameHeader] = getAllByRole('columnheader');
+    expect(nameHeader).toHaveAttribute('aria-sort', 'none');
+    const button = (nameHeader as HTMLElement).querySelector('button') as HTMLButtonElement;
+    expect(button.tagName).toBe('BUTTON');
+    act(() => {
+      fireEvent.click(button);
+    });
+    expect(nameHeader).toHaveAttribute('aria-sort', 'descending');
+    act(() => {
+      fireEvent.click(button);
+    });
+    expect(nameHeader).toHaveAttribute('aria-sort', 'ascending');
+  });
+
+  it('sorts from the keyboard: the header holds a focusable button that Enter activates (issue 2050)', async () => {
+    const user = userEvent.setup();
+    const { getAllByRole } = renderWithTheme(<EntityCardList items={ITEMS} view="table" />);
+    const [nameHeader] = getAllByRole('columnheader');
+    const button = (nameHeader as HTMLElement).querySelector('button') as HTMLButtonElement;
+    button.focus();
+    expect(button).toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(nameHeader).toHaveAttribute('aria-sort', 'descending');
   });
 
   /**

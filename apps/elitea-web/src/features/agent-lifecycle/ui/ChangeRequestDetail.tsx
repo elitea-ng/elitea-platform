@@ -27,16 +27,17 @@ export interface ChangeRequestDetailProps {
   readonly changeRequestId: number;
 }
 
-export function ChangeRequestDetail({ projectId, applicationId, changeRequestId }: ChangeRequestDetailProps): ReactNode {
+export function ChangeRequestDetail({
+  projectId,
+  applicationId,
+  changeRequestId,
+}: ChangeRequestDetailProps): ReactNode {
   const detail = useChangeRequest(projectId, applicationId, changeRequestId);
   if (detail.isPending) return <CircularProgress size="1.5rem" />;
   if (detail.isError) return <Alert severity="error">{lifecycleErrorMessage(detail.error)}</Alert>;
   const request = detail.data;
   return (
-    <Box
-      sx={stackSx}
-      data-testid="change-request-detail"
-    >
+    <Box sx={stackSx} data-testid="change-request-detail">
       <Divider />
       <Typography variant="labelMedium">
         {t('features.agentLifecycle.changeRequest.heading', 'Change request #{{id}} · {{kind}} · {{state}}', {
@@ -45,24 +46,20 @@ export function ChangeRequestDetail({ projectId, applicationId, changeRequestId 
           state: changeRequestStateLabel(request.state),
         })}
       </Typography>
-      <Typography
-        variant="bodySmall"
-        sx={{ whiteSpace: 'pre-wrap' }}
-      >
+      <Typography variant="bodySmall" sx={{ whiteSpace: 'pre-wrap' }}>
         {request.summary}
       </Typography>
-      <Typography
-        variant="bodySmall"
-        color="text.secondary"
-      >
+      {String(request.kind) === 'hire' && request.state !== 'approved' && request.state !== 'published' && (
+        <Alert severity="info" data-testid="change-request-hire-note">
+          {t('features.agentLifecycle.changeRequest.hireNote', 'Tools stay disabled until this hire is approved.')}
+        </Alert>
+      )}
+      <MarketplaceNote request={request} />
+      <Typography variant="bodySmall" color="text.secondary">
         {proposalLine(request)}
       </Typography>
       {request.decided_at !== null && (
-        <Typography
-          variant="bodySmall"
-          color="text.secondary"
-          data-testid="change-request-decision"
-        >
+        <Typography variant="bodySmall" color="text.secondary" data-testid="change-request-decision">
           {t('features.agentLifecycle.changeRequest.decided', 'Decided by {{who}} on {{when}}{{reason}}', {
             who: formatUser(request.decided_by),
             when: formatWhen(request.decided_at),
@@ -70,17 +67,9 @@ export function ChangeRequestDetail({ projectId, applicationId, changeRequestId 
           })}
         </Typography>
       )}
-      <ChangeRequestGate
-        projectId={projectId}
-        applicationId={applicationId}
-        request={request}
-      />
+      <ChangeRequestGate projectId={projectId} applicationId={applicationId} request={request} />
       <Approvals request={request} />
-      <ChangeRequestActions
-        projectId={projectId}
-        applicationId={applicationId}
-        request={request}
-      />
+      <ChangeRequestActions projectId={projectId} applicationId={applicationId} request={request} />
     </Box>
   );
 }
@@ -110,24 +99,13 @@ function Approvals({ request }: { readonly request: AgentChangeRequest }): React
         })}
       </Typography>
       {request.approvals.length === 0 ? (
-        <Typography
-          variant="bodySmall"
-          color="text.secondary"
-          component="div"
-        >
+        <Typography variant="bodySmall" color="text.secondary" component="div">
           {t('features.agentLifecycle.changeRequest.noApprovals', 'No approvals yet.')}
         </Typography>
       ) : (
-        <Box
-          component="ul"
-          sx={listSx}
-        >
+        <Box component="ul" sx={listSx}>
           {request.approvals.map((approval) => (
-            <Typography
-              key={`${approval.approver_id}:${approval.created_at}`}
-              component="li"
-              variant="bodySmall"
-            >
+            <Typography key={`${approval.approver_id}:${approval.created_at}`} component="li" variant="bodySmall">
               {t('features.agentLifecycle.changeRequest.approvalLine', '{{who}} on {{when}}{{role}}{{note}}', {
                 who: formatUser(approval.approver_id),
                 when: formatWhen(approval.created_at),
@@ -146,3 +124,28 @@ function Approvals({ request }: { readonly request: AgentChangeRequest }): React
 
 const stackSx: SxProps<Theme> = { display: 'flex', flexDirection: 'column', gap: '0.5rem' };
 const listSx: SxProps<Theme> = { margin: 0, paddingLeft: '1.25rem' };
+
+/** What an open upgrade or upstream merge leaves untouched until it is approved (ADR-0051 decision 4). */
+function MarketplaceNote({ request }: { readonly request: AgentChangeRequest }): ReactNode {
+  const kind = String(request.kind);
+  if (
+    (kind !== 'upgrade' && kind !== 'upstream_merge') ||
+    request.state === 'approved' ||
+    request.state === 'published'
+  ) {
+    return null;
+  }
+  return (
+    <Alert severity="info" data-testid="change-request-marketplace-note">
+      {kind === 'upgrade'
+        ? t(
+            'features.agentLifecycle.changeRequest.upgradeNote',
+            'The agent keeps running on its current version until this upgrade is approved.',
+          )
+        : t(
+            'features.agentLifecycle.changeRequest.upstreamNote',
+            'The fork keeps its current origin until this upstream merge is approved. The merge is saved as a draft of the fork.',
+          )}
+    </Alert>
+  );
+}

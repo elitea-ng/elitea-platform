@@ -236,9 +236,10 @@ func TestIndexRegistryListIsScopedAndNewestCreatedFirst(t *testing.T) {
 }
 
 // Review round 2, finding 4: the frozen catalog's one narrow query. Only
-// stamped live rows, only the toolkits asked, oldest first per toolkit, and
-// one row past the cap so the resolver can report a truncation.
-func TestIndexRegistryCatalogEntriesAreStampedScopedAndCapped(t *testing.T) {
+// live rows (the same ones the Indexes tab lists, stamped or not: #2150), only
+// the toolkits asked, oldest first per toolkit, and one row past the cap so
+// the resolver can report a truncation.
+func TestIndexRegistryCatalogEntriesAreListedScopedAndCapped(t *testing.T) {
 	repo, pool := newRegistryTestRepo(t)
 	ctx := context.Background()
 	for _, name := range []string{"b", "a", "never-ran"} {
@@ -274,12 +275,17 @@ func TestIndexRegistryCatalogEntriesAreStampedScopedAndCapped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 2 || rows[0].Name != "b" || rows[1].Name != "a" || rows[0].ToolkitID != 19 ||
+	if len(rows) != 3 || rows[0].Name != "b" || rows[1].Name != "a" || rows[0].ToolkitID != 19 ||
 		rows[0].Model != "text-embedding-3-small" || rows[0].Dimension != 8 || rows[0].IndexID == "" {
 		t.Fatalf("catalog rows = %+v", rows)
 	}
+	// A row that never ran holds no vectors and carries no embedding space,
+	// but the Indexes tab lists it, so the catalog does too (#2150).
+	if never := rows[2]; never.Name != "never-ran" || never.Stamped() || never.State == "" || never.IndexID == "" {
+		t.Fatalf("the never-run row = %+v", never)
+	}
 	both, err := repo.CatalogEntries(ctx, 1, []int32{20, 19})
-	if err != nil || len(both) != 3 || both[0].ToolkitID != 19 || both[2].ToolkitID != 20 || both[2].Name != "elsewhere" {
+	if err != nil || len(both) != 4 || both[0].ToolkitID != 19 || both[3].ToolkitID != 20 || both[3].Name != "elsewhere" {
 		t.Fatalf("two toolkits = %+v err=%v", both, err)
 	}
 	if none, err := repo.CatalogEntries(ctx, 2, []int32{19}); err != nil || none == nil || len(none) != 0 {
@@ -311,8 +317,8 @@ FROM generate_series(1, $1) AS n`, indexcatalog.MaxEntries+5); err != nil {
 			others++
 		}
 	}
-	if bulk != indexcatalog.MaxEntries+1 || others != 2 || capped[0].Name != "b" ||
-		capped[2].Name != "bulk-00001" || capped[len(capped)-1].Name != fmt.Sprintf("bulk-%05d", indexcatalog.MaxEntries+1) {
+	if bulk != indexcatalog.MaxEntries+1 || others != 3 || capped[0].Name != "b" ||
+		capped[3].Name != "bulk-00001" || capped[len(capped)-1].Name != fmt.Sprintf("bulk-%05d", indexcatalog.MaxEntries+1) {
 		t.Fatalf("capped: bulk=%d others=%d first=%s last=%s", bulk, others, capped[0].Name, capped[len(capped)-1].Name)
 	}
 }

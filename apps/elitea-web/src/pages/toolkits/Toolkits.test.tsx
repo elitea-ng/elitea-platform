@@ -4,8 +4,9 @@ import { ThemeProvider } from '@mui/material/styles';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Outlet, RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter } from '@tanstack/react-router';
 import type { AnyRouter } from '@tanstack/react-router';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { delay } from 'msw';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { getGetPlatformSettingsMockHandler, getGetPlatformSettingsResponseMock } from '@/shared/api/generated/admin/admin.msw';
@@ -14,6 +15,7 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/shared/brand';
 import { resetConfigForTests } from '@/shared/config/get-config';
 import { server } from '@/test/setup';
+import { SidePanelHarness } from '@/test/sidePanelHarness';
 
 import { Toolkits, shouldRedirectToCreatePage } from './Toolkits';
 
@@ -72,7 +74,7 @@ function renderToolkitsPage(content: ReactElement, initialPath: string, projectI
       </ThemeProvider>
     </QueryClientProvider>,
   );
-  return { ...view, router };
+  return { ...view, router, queryClient };
 }
 
 const globals = globalThis as unknown as Record<string, unknown>;
@@ -191,7 +193,6 @@ describe('Toolkits', () => {
 
     mountPage();
     expect(await screen.findByText('My GitHub')).toBeInTheDocument();
-    expect(screen.getByTestId('page-toolbar-summary')).toHaveTextContent('1 toolkits');
   });
 
   it('renders the real, fetched toolkit cards (regression: R1 — used to render a permanently-blank placeholder Box with no data fetch at all)', async () => {
@@ -200,7 +201,6 @@ describe('Toolkits', () => {
     renderToolkitsPage(<Toolkits />, '/toolkits/all', 'proj-1');
 
     expect(await screen.findByText('My GitHub')).toBeInTheDocument();
-    expect(screen.getByTestId('page-toolbar-summary')).toHaveTextContent('1 toolkits');
     expect(screen.getByTestId('toolkit-card')).toBeInTheDocument();
   });
 
@@ -230,7 +230,6 @@ describe('Toolkits', () => {
 
     expect(await screen.findByText('My MCP Server')).toBeInTheDocument();
     expect(screen.queryByText('My GitHub')).not.toBeInTheDocument();
-    expect(screen.getByTestId('page-toolbar-summary')).toHaveTextContent('1 MCPs');
   });
 
   it('navigates to the toolkit detail route when a card is clicked', async () => {
@@ -262,28 +261,85 @@ describe('Toolkits', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/toolkits/create'));
   });
 
+  it('does not take a non-empty list to the Create page while a refetch is in flight (#2000)', async () => {
+    // The first page holds toolkits only (no MCP among them) and the server has more rows:
+    // that is "not known to be empty". Re-entering the page refetches, and during that fetch
+    // `hasMore` reads false — the gate must not read that as "nothing more to load".
+    const rows = [toolkitRow({ id: 'tk-1', name: 'My GitHub', type: 'github' })];
+    let calls = 0;
+    server.use(
+      getListToolkitInstancesMockHandler(async () => {
+        calls += 1;
+        if (calls > 1) await delay(300);
+        return { rows, total: 40 };
+      }),
+    );
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const mountPage = () => {
+      const router = buildTestRouter('/mcps/all', <Toolkits isMCP />, 'proj-1');
+      const view = render(
+        <QueryClientProvider client={queryClient}>
+          <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+            <RouterProvider router={router} />
+          </ThemeProvider>
+        </QueryClientProvider>,
+      );
+      return { router, view };
+    };
+    const first = mountPage();
+    await waitFor(() => expect(calls).toBe(1));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    });
+    first.view.unmount();
+
+    // The second visit: the cached rows paint at once, a refetch (300ms) runs behind them.
+    const { router } = mountPage();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    });
+    expect(calls).toBe(2);
+    expect(router.state.location.pathname).toBe('/mcps/all');
+  });
+
+  it('asks the server for MCPs only on /mcps and for plain toolkits on /toolkits (issue 2092: MCPs past the first page of toolkits left the list empty)', async () => {
+    const seen: string[] = [];
+    server.use(
+      getListToolkitInstancesMockHandler(({ request }) => {
+        seen.push(new URL(request.url).searchParams.get('mcp') ?? 'absent');
+        return { rows: [toolkitRow({ id: 'tk-2', name: 'My MCP Server', type: 'mcp' })], total: 1 };
+      }),
+    );
+
+    renderToolkitsPage(<Toolkits isMCP />, '/mcps/all', 'proj-1');
+
+    expect(await screen.findByText('My MCP Server')).toBeInTheDocument();
+    expect(seen).toEqual(['true']);
+  });
+
   it('renders the MCPs search and list-panel test hook when isMCP is true', async () => {
     server.use(getListToolkitInstancesMockHandler({ rows: [], total: 0 }));
     setPublicProjectConfig('proj-1');
 
-    renderToolkitsPage(<Toolkits isMCP />, '/mcps/all', 'proj-1');
+    renderToolkitsPage(<SidePanelHarness><Toolkits isMCP /></SidePanelHarness>, '/mcps/all', 'proj-1');
 
     expect(await screen.findByRole('textbox', { name: 'Search MCPs' })).toBeInTheDocument();
     expect(screen.getByTestId('mcps-list-panel')).toBeInTheDocument();
   });
 
   /**
-   * COMPOSITION ROOT — one surface, so no tab: the toolbar carries a count
-   * and the search, and the shell's breadcrumb names the page.
+   * COMPOSITION ROOT — one surface, so no tab and no toolbar row: the search
+   * is in the right sidebar's List tab (ADR-0051), and the shell's breadcrumb
+   * names the page.
    */
-  it('renders a summary and search in the page toolbar, and no tab or heading of its own', async () => {
+  it('renders its search in the List tab, with no toolbar row, tab or heading of its own', async () => {
     server.use(getListToolkitInstancesMockHandler({ rows: [], total: 0 }));
     setPublicProjectConfig('proj-1');
-    renderToolkitsPage(<Toolkits />, '/toolkits/all', 'proj-1');
+    renderToolkitsPage(<SidePanelHarness><Toolkits /></SidePanelHarness>, '/toolkits/all', 'proj-1');
 
-    const toolbar = await screen.findByTestId('page-toolbar');
-    expect(toolbar).toContainElement(screen.getByTestId('page-toolbar-summary'));
-    expect(toolbar).toContainElement(screen.getByRole('textbox', { name: 'Search toolkits' }));
+    const tab = await screen.findByTestId('side-panel-tab-list');
+    expect(await within(tab).findByRole('textbox', { name: 'Search toolkits' })).toBeInTheDocument();
+    expect(screen.queryByTestId('page-toolbar')).toBeNull();
     expect(screen.queryByRole('tablist')).toBeNull();
     expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
   });

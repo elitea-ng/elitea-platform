@@ -148,22 +148,34 @@ export const paramSchemas = {
   source_application_id: text(),
   viewMode: z.enum(['owner', 'public']).catch('owner').prefault('owner'),
   history_run_id: text(),
+  /** The callee agent id of a delegation edge: the editor opens that edge's review dialog on arrival (the chat notice's Review delegation link). */
+  review_delegation: text(),
 
-  // ── agents-hub / elitea-catalog (PARAM-021) ──────────────────────────────
+  // ── marketplace + the legacy catalogue redirects (PARAM-021) ─────────────
+  /** The shared agent deep link's key: `/agents-hub` and `/elitea-catalog` read it to open that agent's listing page. */
   agentId: text(),
   /**
-   * Which `/elitea-catalog` tab is showing. Not in P1's manifest: the
-   * baseline grew this key after the manifest was extracted, when
-   * `/agents-hub` became a redirect into the new two-tab catalogue
-   * (`EliteaCatalog.jsx`'s `searchParams.get('tab')`).
-   *
-   * Declared as free text rather than `z.enum(['agents','skills'])` so an
-   * unknown value round-trips to the page, which applies the baseline's own
-   * "anything not `skills` means `agents`" rule
-   * (`pages/elitea-catalog`'s `catalogTabFromSearch`). An enum with
-   * `.catch()` would silently rewrite the URL instead.
+   * Which catalogue the legacy `/elitea-catalog?tab=` and `/agents-hub?tab=`
+   * links named. Read only by the redirect (`-lib/marketplaceRedirect.ts`),
+   * which maps it to the Marketplace's `kind`. Free text rather than an enum so
+   * an unknown value reaches the redirect, which degrades it to agents instead
+   * of rewriting the URL.
    */
   tab: text(),
+  /**
+   * Which kind of listing `/marketplace` shows, `agents` or `skills`. Free text
+   * for the same reason as `tab`: the page applies "anything but `skills` is
+   * agents" (`pages/marketplace`'s `kindFromSearch`).
+   */
+  kind: text(),
+  /** The Marketplace facets (ADR-0051 M3), each a comma-joined list or one value, read by `pages/marketplace/filters.ts`. */
+  category: text(),
+  tag: text(),
+  publisher_id: text(),
+  max_tier: text(),
+  requires: text(),
+  min_rating: text(),
+  hired_here: flag(),
 
   // ── apps (PARAM-022/023) + every entity list page ────────────────────────
   //
@@ -260,7 +272,13 @@ export const paramSchemas = {
   project_id: text(),
   save_toolkit: flag(),
   statuses: list(),
+  /** The Workshop's origin facet (ADR-0051): `own`, `installed` or `forked`. Agents and pipelines lists. */
+  origin: text(),
+  /** The Workshop's `Update available` quick filter (ADR-0051): `true` keeps hired agents with a newer listing version. */
+  update_available: text(),
   'tags[]': list(),
+  /** The open project folder of an entity list (issue 2048): agents, pipelines, skills, toolkits, MCPs. */
+  entity_folder: text(),
   toolkit_type: text(),
   tour: text(),
   page_size: z.coerce.number().int().positive().max(1000).catch(20).prefault(20),

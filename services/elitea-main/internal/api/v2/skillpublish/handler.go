@@ -94,19 +94,37 @@ const entityTypeAgent = "agent"
 
 type Handler struct {
 	pool *pgxpool.Pool
-	// validationSecret keys the validation token. It is generated per process
-	// rather than read from configuration because the token is only meaningful
-	// between a validate call and the publish that follows it, which is one
-	// user action against one process. A restart invalidates outstanding
-	// tokens, and the publish path answers that with the same
-	// "validate again" error a tampered token gets.
+	// validationSecret keys the validation token. It is derived from
+	// APPLICATION_SECRET_KEY, which every replica shares, so a token minted by
+	// one replica verifies on another and survives a restart (#2100: a
+	// per-process key made the publish after a passing check answer
+	// "Validation token is invalid" whenever the two calls reached different
+	// processes). Without that key (a development process) it is random per
+	// process, and a restart is answered with the same "validate again" error a
+	// tampered token gets.
 	validationSecret []byte
 }
 
 func NewHandler(pool *pgxpool.Pool) *Handler {
+	return NewHandlerWithSecret(pool, os.Getenv("APPLICATION_SECRET_KEY"))
+}
+
+// NewHandlerWithSecret builds a handler whose validation-token key is derived
+// from applicationKey (the APPLICATION_SECRET_KEY value). An empty key gives a
+// random per-process key.
+func NewHandlerWithSecret(pool *pgxpool.Pool, applicationKey string) *Handler {
+	return &Handler{pool: pool, validationSecret: newValidationSecret(applicationKey)}
+}
+
+func newValidationSecret(applicationKey string) []byte {
+	if applicationKey != "" {
+		mac := hmac.New(sha256.New, []byte(applicationKey))
+		mac.Write([]byte("elitea/skill-publish-validation-token/v1"))
+		return mac.Sum(nil)
+	}
 	secret := make([]byte, 32)
 	_, _ = rand.Read(secret) // crypto/rand.Read never fails on supported platforms
-	return &Handler{pool: pool, validationSecret: secret}
+	return secret
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

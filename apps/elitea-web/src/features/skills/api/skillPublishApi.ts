@@ -95,6 +95,8 @@ export interface PublishSkillInput {
   readonly versionName: string;
   readonly category?: string;
   readonly validationToken?: string;
+  /** What changed in this version; the listing page shows it (ADR-0051). */
+  readonly releaseNotes?: string;
 }
 
 export async function publishSkill(
@@ -107,15 +109,12 @@ export async function publishSkill(
     version_name: input.versionName,
     ...(input.category ? { category: input.category } : {}),
     ...(input.validationToken ? { validation_token: input.validationToken } : {}),
+    ...(input.releaseNotes ? { release_notes: input.releaseNotes } : {}),
   });
   return unwrap<Record<string, unknown>>(response) ?? {};
 }
 
-export async function unpublishSkill(
-  projectId: string,
-  skillId: number,
-  versionId: number,
-): Promise<void> {
+export async function unpublishSkill(projectId: string, skillId: number, versionId: number): Promise<void> {
   await unpublishSkillRequest(projectId, skillId, versionId, {});
 }
 

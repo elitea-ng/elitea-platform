@@ -506,6 +506,15 @@ func TestTheRunGetsItsFullLeaseWhenItStarts(t *testing.T) {
 	// The decision has inserted its journal row and is now parked on the tenant
 	// row. Let it wait two seconds before the lock goes.
 	time.Sleep(2 * time.Second)
+	// The database clock just before the lock goes: the run can only restamp after
+	// this, so a restamped lease ends a full lease past it, while the decision's own
+	// stamp ends at least the two-second wait short of that. Measuring against the
+	// clock at READ time instead let a stalled CI runner eat the tolerance and look
+	// exactly like the defect.
+	var releasedAt time.Time
+	if err := pool.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&releasedAt); err != nil {
+		t.Fatal(err)
+	}
 	if err := holder.Rollback(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -513,15 +522,15 @@ func TestTheRunGetsItsFullLeaseWhenItStarts(t *testing.T) {
 		t.Fatalf("delete: %v", err)
 	}
 
-	var remaining float64
+	var claimedUntil time.Time
 	if err := pool.QueryRow(ctx,
-		`SELECT extract(epoch FROM claimed_until - clock_timestamp()) FROM centry.project_deletions WHERE project_id = $1`,
-		projectID).Scan(&remaining); err != nil {
+		`SELECT claimed_until FROM centry.project_deletions WHERE project_id = $1`,
+		projectID).Scan(&claimedUntil); err != nil {
 		t.Fatal(err)
 	}
 	lease := projectprovisioning.CleanupLeaseForTest().Seconds()
-	if remaining < lease-1.0 {
-		t.Fatalf("the run holds %.1fs of a %.0fs lease: the decision's wait was not given back", remaining, lease)
+	if held := claimedUntil.Sub(releasedAt).Seconds(); held < lease-0.5 {
+		t.Fatalf("the lease ends %.1fs after the lock went, of a %.0fs lease: the decision's wait was not given back", held, lease)
 	}
 	close(buckets.gate)
 	if err := provisioner.WaitForCleanups(ctx); err != nil {

@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/changesync"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/delegationnotice"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/contextsettings"
@@ -374,6 +375,16 @@ type Handler struct {
 	readEvents      ReadEvents
 	warmer          AttachmentExtractionWarmer
 	namer           NameCompleter
+	// delegationReviewer stamps what the viewer may do about a refused or
+	// narrowed delegation's notice on a served transcript (#2161).
+	delegationReviewer delegationnotice.Reviewer
+}
+
+// WithDelegationReviewer sets who answers what a viewer may do about the
+// delegation notices of a transcript. Left nil, they are served as stored.
+func (h *Handler) WithDelegationReviewer(reviewer delegationnotice.Reviewer) *Handler {
+	h.delegationReviewer = reviewer
+	return h
 }
 
 // EventEmitter is the seam to internal/events.Publisher — declared locally,
@@ -1203,7 +1214,34 @@ func (h *Handler) ListMessages(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, err)
 		return
 	}
+	h.stampDelegationNotices(r.Context(), projectID, resp.Items)
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// stampDelegationNotices adds what the viewer may do about each delegation
+// notice a message carries (`can_review`, and the people to ask when they may
+// not). The notices are display data: a failed lookup serves them unstamped.
+func (h *Handler) stampDelegationNotices(ctx context.Context, projectID string, items []Message) {
+	if h.delegationReviewer == nil {
+		return
+	}
+	user, ok := auth.UserFromContext(ctx)
+	if !ok {
+		return
+	}
+	viewer, ok := user.OwningUserID()
+	if !ok {
+		return
+	}
+	project, err := strconv.ParseInt(projectID, 10, 64)
+	if err != nil {
+		return
+	}
+	// One question per calling agent for the whole page.
+	reviewer := delegationnotice.Cached(h.delegationReviewer)
+	for i := range items {
+		items[i].Metadata = delegationnotice.StampMeta(ctx, items[i].Metadata, project, viewer, reviewer)
+	}
 }
 
 func (h *Handler) DeleteMessages(w http.ResponseWriter, r *http.Request) {

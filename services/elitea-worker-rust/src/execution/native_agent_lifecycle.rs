@@ -261,6 +261,19 @@ where
         AgentNativeAssemblyOutcome::Failed { run, error } => {
             let mut run = *run;
             let failure = assembly_failure(&error);
+            // #2218: a pipeline node that runs a saved pipeline its caller may
+            // not delegate to has no tool result to carry the refusal, so the
+            // person gets the same delegation notice before the terminal
+            // failure. A notice that cannot be published never replaces the
+            // failure: the run still settles as the authorization failure.
+            if let Some(notice) = error.delegation_notice() {
+                Box::pin(publish_assembly_delegation_notice(
+                    &mut run,
+                    notice,
+                    clock.as_ref(),
+                ))
+                .await;
+            }
             // #982: a remote MCP server that answers the assembly dial with a
             // `401` is not an anonymous runtime failure. The sanitized
             // requirement names the connection, so the turn ANSWERS with that
@@ -301,7 +314,9 @@ where
             if failure == RuntimeFailureKind::DelegationGrantMissing
                 && let Some((callee, refused)) = error.delegation_refusal()
             {
-                let published = Box::pin(publish_assembly_delegation_notice(
+                // MERGE NOTE (FU-335 x #2235): published after main's
+                // `delegation_refused` notice above; both kept until re-scoped.
+                let published = Box::pin(publish_assembly_fu335_notice(
                     &mut run,
                     callee,
                     &refused.refusal,
@@ -1912,7 +1927,7 @@ where
 
 /// Publish the notice of a delegation refused at start (FU-335) ahead of the
 /// run's failure terminal. `true` only when it was durably acknowledged.
-async fn publish_assembly_delegation_notice<C, K>(
+async fn publish_assembly_fu335_notice<C, K>(
     run: &mut CursorBoundAuthorizedAgentRun<C>,
     callee: elitea_agent_runtime::delegation::DelegatedCallee,
     refusal: &elitea_agent_runtime::delegation::DelegationRefusal,
@@ -1929,7 +1944,7 @@ where
     else {
         return false;
     };
-    let Some(event) = run.assembly_delegation_notice(callee, refusal, occurred_at) else {
+    let Some(event) = run.assembly_fu335_delegation_notice(callee, refusal, occurred_at) else {
         return false;
     };
     // A progress event, not the turn's final message: Main shows it only
@@ -1938,6 +1953,36 @@ where
         run.publish_progress(event, occurred_at_unix_millis).await,
         Ok(AgentProgressPublishOutcome::Acknowledged { .. })
     )
+}
+
+/// Publishes the delegation notice of a refusal that ended assembly (#2218).
+/// Best effort: the failure terminal follows either way.
+async fn publish_assembly_delegation_notice<C, K>(
+    run: &mut CursorBoundAuthorizedAgentRun<C>,
+    notice: &elitea_agent_runtime::delegation::DelegationNotice,
+    clock: &K,
+) where
+    C: AgentProgressConnector,
+    K: UnixMillisClock,
+{
+    let occurred_at_unix_millis = clock.now_unix_millis();
+    let Some(occurred_at) = (occurred_at_unix_millis > 0)
+        .then(|| DateTime::<Utc>::from_timestamp_millis(occurred_at_unix_millis))
+        .flatten()
+    else {
+        return;
+    };
+    let Some(event) = run.assembly_delegation_notice(notice, occurred_at) else {
+        return;
+    };
+    match run.publish_progress(event, occurred_at_unix_millis).await {
+        Ok(AgentProgressPublishOutcome::Acknowledged { .. }) => {
+            tracing::info!(event = "agent_assembly_delegation_notice_published");
+        }
+        Ok(AgentProgressPublishOutcome::Rejected { .. }) | Err(_) => {
+            tracing::warn!(event = "agent_assembly_delegation_notice_unpublished");
+        }
+    }
 }
 
 /// The terminal of a failed event stream: a fixed Parallel resource-bound
@@ -2158,6 +2203,12 @@ mod taxonomy_tests {
             ),
             (
                 "anthropic_gateway.sampling_unsupported",
+                RuntimeFailureKind::ModelRequestRejected,
+            ),
+            // A content guardrail's block (ADR-0043, issue 2012) is a typed
+            // refusal, not the opaque internal failure an unknown code gets.
+            (
+                "model_gateway.guardrail_blocked",
                 RuntimeFailureKind::ModelRequestRejected,
             ),
             (

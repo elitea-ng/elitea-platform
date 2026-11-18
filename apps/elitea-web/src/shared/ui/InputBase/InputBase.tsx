@@ -19,6 +19,8 @@ export interface InputBaseActionsOptions {
   showFullScreen?: boolean;
   /** Keeps the toolbar visible without a real hover — for Storybook/tests. */
   forceShow?: boolean;
+  /** Moves the toolbar vertically, in spacing units (negative = up), for a field whose label row sits higher than a stock one. */
+  offsetY?: number;
 }
 
 /** @public */
@@ -80,11 +82,12 @@ const outlinedLabelRowSx = {
   paddingLeft: '0.75rem',
 };
 
-function toolbarPositionSx(hasLabel: boolean) {
+function toolbarPositionSx(hasLabel: boolean, actions: InputBaseActionsOptions | undefined) {
+  const offsetY = actions?.offsetY ?? 0;
   return (theme: Theme) => ({
     position: 'absolute' as const,
     display: 'flex',
-    top: hasLabel ? theme.spacing(0.25) : theme.spacing(-2.5),
+    top: theme.spacing((hasLabel ? 0.25 : -2.5) + offsetY),
     right: theme.spacing(1.5),
     zIndex: 1,
   });
@@ -159,6 +162,19 @@ function renderLabel(label: ReactNode, tooltipDescription: ReactNode | undefined
  *    `maxRows` drive MUI's own `multiline`/`maxRows` row-limiting instead —
  *    a real row cap, not a CSS clamp hack.
  */
+/**
+ * The caller's `slotProps` with the outlined label link merged INTO
+ * `htmlInput`. A caller passing its own `slotProps` (for `inputLabel`, a
+ * `maxLength`, …) used to replace the whole object and drop `aria-labelledby`,
+ * leaving the field with no accessible name.
+ */
+function mergeSlotProps(slotProps: TextFieldProps['slotProps'], labelledBy: string | undefined): TextFieldProps['slotProps'] {
+  if (labelledBy === undefined) return slotProps;
+  const htmlInput = slotProps?.htmlInput;
+  const own = typeof htmlInput === 'function' || htmlInput === undefined ? {} : htmlInput;
+  return { ...slotProps, htmlInput: { 'aria-labelledby': labelledBy, ...own } };
+}
+
 export function InputBase({
   label,
   tooltipDescription,
@@ -222,7 +238,7 @@ export function InputBase({
           onCopy={handleCopy}
           onToggleExpand={toggleExpand}
           onFullScreen={onFullScreen}
-          sx={toolbarPositionSx(Boolean(label))}
+          sx={toolbarPositionSx(Boolean(label), actions)}
         />
       )}
       <MuiTextField
@@ -234,10 +250,8 @@ export function InputBase({
         minRows={minRows}
         maxRows={rows}
         sx={sx}
-        {...(hasOutlinedLabelRow(outlined, labelNode)
-          ? { slotProps: { htmlInput: { 'aria-labelledby': outlinedLabelId } } }
-          : {})}
         {...rest}
+        slotProps={mergeSlotProps(rest.slotProps, hasOutlinedLabelRow(outlined, labelNode) ? outlinedLabelId : undefined)}
       />
     </Box>
   );

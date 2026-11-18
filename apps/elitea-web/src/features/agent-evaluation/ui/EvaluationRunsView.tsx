@@ -17,14 +17,17 @@ import CircularProgress from '@mui/material/CircularProgress';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
+import type { EvalRun, EvalSuite } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
 
 import { useEvalDimensions } from '../model/useEvalDimensions';
 import { isRunTerminal, useEvalDatasets, useEvalRunMutations, useEvalRuns } from '../model/useEvalRuns';
+import { useEvalSuites } from '../model/useEvalSuites';
 import { useEvaluationPermissions } from '../model/useEvaluationPermissions';
 import { EvaluationStatus } from './EvaluationStatus';
 import { RunScorecard } from './RunScorecard';
+import { RunSuitesPanel } from './RunSuitesPanel';
 import { RunStartForm } from './RunStartForm';
 
 const rootSx: SxProps<Theme> = { display: 'flex', flexDirection: 'column', gap: '0.5rem' };
@@ -34,6 +37,38 @@ const runRowSx: SxProps<Theme> = {
   gap: '0.75rem',
   padding: '0.5rem 0.75rem',
 };
+
+/** The run limits editor behind a toggle, so the runs list stays the first thing on the tab. */
+function RunLimitsToggle(props: {
+  readonly projectId: string | undefined;
+  readonly suites: readonly EvalSuite[];
+  readonly canEdit: boolean;
+}): ReactNode {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <BaseBtn variant="text" data-testid="run-limits-toggle" onClick={() => setOpen((previous) => !previous)}>
+        {open
+          ? t('features.agentEvaluation.runs.hideLimits', 'Hide run limits')
+          : t('features.agentEvaluation.runs.showLimits', 'Run limits')}
+      </BaseBtn>
+      {open && <RunSuitesPanel projectId={props.projectId} suites={props.suites} canEdit={props.canEdit} />}
+    </>
+  );
+}
+
+/** Says which run limit a run reached, whether it stopped or only reported it. */
+function RunLimitNote(props: { readonly run: EvalRun }): ReactNode {
+  const { run } = props;
+  if (run.limit_reached === undefined || run.limit_reached === '') return null;
+  return (
+    <Typography variant="bodySmall" color="warning.main" data-testid={`evaluation-run-limit-${run.id}`}>
+      {run.limit_reached === 'cost'
+        ? t('features.agentEvaluation.runs.costLimitReached', 'Cost limit reached')
+        : t('features.agentEvaluation.runs.tokenLimitReached', 'Token limit reached')}
+    </Typography>
+  );
+}
 
 export interface EvaluationRunsViewProps {
   readonly projectId: string | undefined;
@@ -50,12 +85,17 @@ export function EvaluationRunsView(props: EvaluationRunsViewProps): ReactNode {
   const runsQuery = useEvalRuns(permissions.canReadRuns ? projectId : undefined, applicationId);
   const datasetsQuery = useEvalDatasets(permissions.canReadDatasets ? projectId : undefined, applicationId);
   const dimensionsQuery = useEvalDimensions(permissions.canRead ? projectId : undefined, applicationId);
+  const suitesQuery = useEvalSuites(permissions.canReadRuns ? projectId : undefined);
   const mutations = useEvalRunMutations(projectId);
 
-  // Only `ai` dimensions can be scored by this release. Offering a `code` one
-  // would produce a 501 the person could not have predicted from the form.
-  const aiDimensions = useMemo(
-    () => (dimensionsQuery.data ?? []).filter((dimension) => dimension.allowed_engines.includes('ai')),
+  // The `ai` and `human` engines can be scored by this release. Offering a
+  // `code` one would produce a 501 the person could not have predicted from
+  // the form.
+  const runnableDimensions = useMemo(
+    () =>
+      (dimensionsQuery.data ?? []).filter(
+        (dimension) => dimension.allowed_engines.includes('ai') || dimension.allowed_engines.includes('human'),
+      ),
     [dimensionsQuery.data],
   );
 
@@ -79,7 +119,8 @@ export function EvaluationRunsView(props: EvaluationRunsViewProps): ReactNode {
       {permissions.canStartRuns && (
         <RunStartForm
           datasets={datasetsQuery.data ?? []}
-          dimensions={aiDimensions}
+          dimensions={runnableDimensions}
+          suites={suitesQuery.data ?? []}
           applicationId={applicationId}
           applicationVersionId={applicationVersionId}
           isStarting={mutations.start.isPending}
@@ -87,6 +128,12 @@ export function EvaluationRunsView(props: EvaluationRunsViewProps): ReactNode {
           onStart={(input) => mutations.start.mutate(input)}
         />
       )}
+
+      <RunLimitsToggle
+        projectId={projectId}
+        suites={suitesQuery.data ?? []}
+        canEdit={permissions.canStartRuns}
+      />
 
       {runsQuery.isPending ? (
         <CircularProgress aria-label={t('features.agentEvaluation.runs.loading', 'Loading runs')} />
@@ -122,6 +169,7 @@ export function EvaluationRunsView(props: EvaluationRunsViewProps): ReactNode {
               ? t('features.agentEvaluation.runs.noScore', 'No score')
               : t('features.agentEvaluation.runs.score', 'Score {{score}}', { score: run.headline_score })}
           </Typography>
+          <RunLimitNote run={run} />
           {run.error !== undefined && run.error !== '' && (
             <Typography role="alert" variant="bodySmall" color="error">
               {run.error}

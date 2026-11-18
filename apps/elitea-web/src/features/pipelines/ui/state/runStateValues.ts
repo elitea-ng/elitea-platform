@@ -67,3 +67,51 @@ export function stepStateValues(
   if (isFinal) return { before, after: finalValueOf(timeline, variable), isFinal };
   return { before, after: timeline[selectedStep]?.state?.[variable], isFinal };
 }
+
+/**
+ * 5b-1 (D12): the timeline steps whose node's failure the run settled
+ * through its settings, so the dialog can mark them "Failed · continued"
+ * with the existing failed styling.
+ *
+ * Each `node_errors` entry is counted once (by its node, input step, support
+ * reference and handling) at the first step whose state shows it, and is
+ * attributed to the nearest step AT OR BEFORE that position whose node is the
+ * entry's own node. So a marker step that shows the entry first (an
+ * `interrupt` after the failing node) or the next node's step never takes it,
+ * and an entry recorded before a resumed timeline began, whose node has no
+ * step at or before its first appearance, is never attributed. The steps
+ * carry no checkpoint step, so a timeline that begins with a revisit of the
+ * very node whose failure predates it cannot be told apart from that node
+ * failing there; it is marked.
+ */
+export function continuedFailureSteps(timeline: readonly (RunStateStep & { readonly id?: string })[]): ReadonlySet<number> {
+  const marked = new Set<number>();
+  const seen = new Set<string>();
+  timeline.forEach((step, index) => {
+    const entries = step.state?.['node_errors'];
+    if (!Array.isArray(entries)) return;
+    for (const entry of entries as readonly unknown[]) {
+      const continued = continuedEntry(entry);
+      if (continued === undefined || seen.has(continued.identity)) continue;
+      seen.add(continued.identity);
+      const owner = nearestStepOf(timeline, continued.node, index);
+      if (owner !== undefined) marked.add(owner);
+    }
+  });
+  return marked;
+}
+
+function continuedEntry(entry: unknown): { readonly node: string; readonly identity: string } | undefined {
+  if (typeof entry !== 'object' || entry === null) return undefined;
+  const { node, handled, input_step: inputStep, error } = entry as Readonly<Record<string, unknown>>;
+  if (typeof node !== 'string' || (handled !== 'continue' && handled !== 'error_output')) return undefined;
+  const support = typeof error === 'object' && error !== null ? (error as Readonly<Record<string, unknown>>)['support_ref'] : undefined;
+  return { node, identity: JSON.stringify([node, inputStep, support, handled]) };
+}
+
+function nearestStepOf(timeline: readonly { readonly id?: string }[], node: string, from: number): number | undefined {
+  for (let index = from; index >= 0; index -= 1) {
+    if (timeline[index]?.id === node) return index;
+  }
+  return undefined;
+}

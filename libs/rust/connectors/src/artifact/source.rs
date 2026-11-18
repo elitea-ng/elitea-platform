@@ -230,7 +230,8 @@ impl ArtifactSource {
                 object.size_bytes,
                 key.to_owned(),
             )
-            .versioned_by(kind),
+            .versioned_by(kind)
+            .with_fallback_modified_at(present(&object.modified_at).map(str::to_owned)),
         ))
     }
 
@@ -304,28 +305,42 @@ fn pinned_to(listed: &Listed, fetched: &FetchedObject) -> Result<(), Failure> {
         VersionKind::ETag => match present(&fetched.etag) {
             Some(etag) if etag == listed.reference.version => Ok(()),
             Some(_) => Err(Failure::Changed),
-            None => Err(Failure::InvalidResponse(
-                "the object answer has no etag to pin the fetch to",
-            )),
+            // A download that carries no entity tag (GCS readers expose
+            // none) is pinned by the listed modification time instead; an
+            // object with neither is unverifiable.
+            None => match listed.fallback_modified_at.as_deref() {
+                Some(listed_at) => {
+                    // The size is the second witness: a rewrite within the same
+                    // second that changed the length is still `Changed`.
+                    if fetched.bytes.len() as u64 != listed.reference.size {
+                        return Err(Failure::Changed);
+                    }
+                    pinned_by_time(listed_at, fetched)
+                }
+                None => Err(Failure::InvalidResponse(
+                    "the object answer has no etag to pin the fetch to",
+                )),
+            },
         },
-        VersionKind::ModifiedAt => {
-            let instant = |value: &str| {
-                chrono::DateTime::parse_from_rfc3339(value).map(|time| time.timestamp())
-            };
-            let sent = present(&fetched.modified_at)
-                .and_then(|value| instant(value).ok())
-                .ok_or(Failure::InvalidResponse(
-                    "the object answer has no modified time to pin the fetch to",
-                ))?;
-            let listed_at = instant(&listed.reference.version).map_err(|_| {
-                Failure::InvalidResponse("a listed modified time is not an RFC 3339 date")
-            })?;
-            if sent == listed_at {
-                Ok(())
-            } else {
-                Err(Failure::Changed)
-            }
-        }
+        VersionKind::ModifiedAt => pinned_by_time(&listed.reference.version, fetched),
+    }
+}
+
+/// The fetched object's modified time equals `listed_at`, to the second.
+fn pinned_by_time(listed_at: &str, fetched: &FetchedObject) -> Result<(), Failure> {
+    let instant =
+        |value: &str| chrono::DateTime::parse_from_rfc3339(value).map(|time| time.timestamp());
+    let sent = present(&fetched.modified_at)
+        .and_then(|value| instant(value).ok())
+        .ok_or(Failure::InvalidResponse(
+            "the object answer has no modified time to pin the fetch to",
+        ))?;
+    let listed_at = instant(listed_at)
+        .map_err(|_| Failure::InvalidResponse("a listed modified time is not an RFC 3339 date"))?;
+    if sent == listed_at {
+        Ok(())
+    } else {
+        Err(Failure::Changed)
     }
 }
 
@@ -541,12 +556,30 @@ mod tests {
             "{changed:?}"
         );
 
-        // No etag to compare: refused, and not as Changed (re-listing would
-        // not help).
+        // No etag to compare and no time either: refused, and not as
+        // Changed (re-listing would not help).
         let error = pinned(listed, fetched("", "", b"v1"))
             .await
             .expect_err("unverifiable");
         assert!(matches!(error, SourceError::Unavailable(_)), "{error}");
+    }
+
+    /// #2106: a GCS download carries a modified time but no entity tag, so
+    /// every listed object (which has both) was refused `fetch_failed`. It is
+    /// pinned by the listed modified time instead.
+    #[tokio::test]
+    async fn a_download_without_an_etag_is_pinned_by_the_listed_modified_time() {
+        let listed = entry("a.md", 2, "\"v1\"", "2026-10-01T00:00:00Z");
+        let document = pinned(listed.clone(), fetched("", "2026-10-01T00:00:00Z", b"v1"))
+            .await
+            .expect("document");
+        assert_eq!(document.bytes, b"v1");
+
+        let changed = pinned(listed, fetched("", "2026-10-01T00:05:00Z", b"v2")).await;
+        assert!(
+            matches!(changed, Err(SourceError::Changed(_))),
+            "{changed:?}"
+        );
     }
 
     #[tokio::test]

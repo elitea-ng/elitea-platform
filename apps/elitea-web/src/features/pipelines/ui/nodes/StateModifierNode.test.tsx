@@ -199,3 +199,23 @@ describe('StateModifierNode', () => {
     expect(container.querySelector('.react-flow__handle')).not.toBeInTheDocument();
   });
 });
+
+describe('StateModifierNode error output handle (5b-1, browser W2)', () => {
+  it.each([
+    ['without a target yet', { on_error: 'error_output' }],
+    ['with a stored target', { on_error: 'error_output', error_transition: 'handler' }],
+  ])('renders the error output handle %s', async (_name, settings) => {
+    const yamlJsonObject = { nodes: [{ id: 'Node1', type: 'state_modifier', settings }, { id: 'handler', type: 'state_modifier' }] } as unknown as YamlPipelineDocument;
+    const { findByText, container } = renderStateModifierNode({ yamlJsonObject });
+    await findByText('Node1');
+    expect(container.querySelector('[data-handleid="node_error_output"]')).not.toBeNull();
+    expect(container.querySelectorAll('.react-flow__handle')).toHaveLength(3);
+  });
+
+  it('renders no error output handle for continue or stop', async () => {
+    const yamlJsonObject = { nodes: [{ id: 'Node1', type: 'state_modifier', settings: { on_error: 'continue' } }] } as unknown as YamlPipelineDocument;
+    const { findByText, container } = renderStateModifierNode({ yamlJsonObject });
+    await findByText('Node1');
+    expect(container.querySelector('[data-handleid="node_error_output"]')).toBeNull();
+  });
+});

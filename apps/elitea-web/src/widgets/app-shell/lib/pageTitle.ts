@@ -26,19 +26,23 @@
  * <section>/$tab.tsx`) — the exact same pathname-splitting technique
  * `settingsTitle` below already uses for `/settings/$tab.tsx`. `hasTab:
  * true` marks those sections; `/chat` (keyed by `conversationId`, not a
- * tab), `/agents-hub`, `/artifacts`, and `/help-center` (no `$tab` route at
+ * tab), `/marketplace`, `/artifacts`, and `/help-center` (no `$tab` route at
  * all) are left without it, matching the old app (which never branches on
  * `params.tab` for those four either).
  */
-import { productName } from '@/shared/brand';
+import { t } from '@/shared/i18n';
 
 const SECTION_BY_PREFIX: ReadonlyArray<{ prefix: string; label: string; hasTab?: true }> = [
   { prefix: '/chat', label: 'Chat' },
-  { prefix: '/agents-hub', label: 'Agent HUB' },
-  // `/elitea-catalog` is where `/agents-hub` now redirects; listed here so
-  // the title is the catalogue's, not a fallback (baseline
-  // `useBrowserPageTitle.js:23` branches on the same prefix).
-  { prefix: '/elitea-catalog', label: `${productName()} Catalog` },
+  // The Catalog (Agent HUB) is the Marketplace (ADR-0051); `/elitea-catalog`
+  // and `/agents-hub` redirect to it, so neither needs a title of its own.
+  // A getter, so the name is translated when a title is built, not when this module loads.
+  {
+    prefix: '/marketplace',
+    get label() {
+      return t('marketplace.title', 'Marketplace');
+    },
+  },
   { prefix: '/agents', label: 'Agents', hasTab: true },
   { prefix: '/pipelines', label: 'Pipelines', hasTab: true },
   { prefix: '/toolkits', label: 'Toolkits', hasTab: true },
@@ -96,9 +100,6 @@ export function derivePageTitle(pathname: string, searchName: string, projectNam
 
   if (pathname.startsWith('/settings')) return settingsTitle(pathname, project);
 
-  // `/agents-hub` is listed BEFORE `/agents` in SECTION_BY_PREFIX so this
-  // find() resolves it correctly — `/agents-hub`.startsWith('/agents') is
-  // also true, so the order of the table is what resolves it.
   const section = SECTION_BY_PREFIX.find((entry) => pathname.startsWith(entry.prefix));
   if (!section) return project;
 

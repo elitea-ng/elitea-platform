@@ -54,11 +54,11 @@ spec:
               drop: ["ALL"]
           resources:
             requests:
-              cpu: 1m
-              memory: 8Mi
+              cpu: 50m
+              memory: 64Mi
             limits:
-              cpu: 25m
-              memory: 16Mi
+              cpu: 100m
+              memory: 64Mi
         {{- end }}
 ---
 apiVersion: networking.k8s.io/v1

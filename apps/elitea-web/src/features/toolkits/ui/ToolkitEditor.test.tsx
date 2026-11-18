@@ -235,6 +235,27 @@ describe('a refused save is not re-issued', () => {
   }, 30_000);
 });
 
+/** #2016 — a refusal the server did not key to a field used to be silent in the chat editor (no banner exists there). */
+describe('a save the server refused without naming a field', () => {
+  it('is said in a snackbar, in the server own words', async () => {
+    server.use(
+      http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => HttpResponse.json({ github: { metadata: { label: 'GitHub' }, name_required: false } })),
+    );
+    const user = userEvent.setup();
+    const createToolkit = vi.fn().mockRejectedValue(
+      new EliteaApiError({ kind: 'http', status: 502, url: '/api/v2/elitea_core/tools/prompt_lib/proj-1', body: { error: 'The toolkit service is not reachable.' } }),
+    );
+    renderEditor({ isCreating: true, isMCP: false }, { createToolkit });
+
+    await user.click(await screen.findByText('GitHub'));
+    const save = await screen.findByRole('button', { name: /^Create$/i });
+    await waitFor(() => expect(save).not.toBeDisabled());
+    await user.click(save);
+
+    expect(await screen.findByText('The toolkit service is not reachable.')).toBeInTheDocument();
+  }, 30_000);
+});
+
 /**
  * [R3 regression] Baseline: `ToolkitEditor.jsx:303`'s `disabled={isPublic &&
  * !hasPublicProjectAccess}` — editing a public-project toolkit from chat is

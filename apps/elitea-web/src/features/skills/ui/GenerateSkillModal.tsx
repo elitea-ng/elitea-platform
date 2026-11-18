@@ -77,11 +77,23 @@ export function GenerateSkillModal({
           ) : (
             <TextField
               multiline
-              minRows={5}
+              minRows={8}
+              maxRows={16}
               fullWidth
-              label={t('skills.generate.description', 'What should this skill do?')}
+              // A placeholder in the shared placeholder colour, not a floating
+              // label: the label rendered cyan on the dark surface and was
+              // nearly invisible (#2099). Same shape as the agent generator.
+              placeholder={t(
+                'skills.generate.placeholder',
+                'Describe what this skill should do, when it applies and any rules it must follow.',
+              )}
               value={description}
               onChange={(event) => setDescription(event.target.value)}
+              variant="standard"
+              slotProps={{
+                input: { disableUnderline: true },
+                htmlInput: { 'aria-label': t('skills.generate.description', 'What should this skill do?') },
+              }}
             />
           )}
           {error && <Typography role="alert">{error}</Typography>}

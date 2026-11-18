@@ -12,7 +12,9 @@ export interface ArtifactColumn {
 }
 
 const CHECKBOX_COLUMN = '3rem';
-const ACTIONS_COLUMN = '7rem';
+// Four small icon buttons (preview, download, rename, delete) plus the cell's 2-unit side padding.
+// At 7rem the fourth (rename, #2015) overflowed and pushed Preview under the neighbouring cell.
+const ACTIONS_COLUMN = '10rem';
 
 /**
  * The baseline's column table, including its `hideBelow` ladder — the reason
@@ -34,7 +36,7 @@ export function visibleArtifactColumns(width: number): readonly ArtifactColumn[]
   return artifactColumns().filter((column) => column.hideBelow === undefined || width >= column.hideBelow);
 }
 
-/** `3rem` for the checkbox, `1fr` per data column, `7rem` for the actions column. */
+/** `3rem` for the checkbox, `1fr` per data column, `10rem` for the actions column. */
 export function artifactGridTemplate(columns: readonly ArtifactColumn[]): string {
   return [
     CHECKBOX_COLUMN,

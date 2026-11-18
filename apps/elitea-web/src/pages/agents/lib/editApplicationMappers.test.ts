@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import type { ApplicationDetail, ApplicationVersionDetail, ApplicationVersionSummary } from '@/shared/api/generated/model';
+import type {
+  ApplicationDetail,
+  ApplicationVersionDetail,
+  ApplicationVersionSummary,
+} from '@/shared/api/generated/model';
 import { VersionWriteRequest } from '@/shared/api/generated/model/versionWriteRequest.zod';
 import { EMPTY_SOUL_DRAFT, soulToDraft } from '@/shared/lib/agentSoulDraft';
 
@@ -17,7 +21,7 @@ import {
 } from './editApplicationMappers';
 
 describe('toVersionOptions', () => {
-  it('narrows the wire\'s string ids to numbers so the selector can match the active version', () => {
+  it("narrows the wire's string ids to numbers so the selector can match the active version", () => {
     const wire: readonly ApplicationVersionSummary[] = [
       { id: '7', name: 'base', status: 'draft', agent_type: 'classic', created_at: '2026-01-01T00:00:00Z' },
     ];
@@ -35,8 +39,22 @@ describe('toVersionOptions', () => {
   // itself and losing it on reload.
   it("carries the server's default-version flag through", () => {
     const wire = [
-      { id: '7', name: 'base', status: 'draft', agent_type: 'classic', created_at: '2026-01-01T00:00:00Z', is_default: false },
-      { id: '8', name: 'v1', status: 'draft', agent_type: 'classic', created_at: '2026-02-01T00:00:00Z', is_default: true },
+      {
+        id: '7',
+        name: 'base',
+        status: 'draft',
+        agent_type: 'classic',
+        created_at: '2026-01-01T00:00:00Z',
+        is_default: false,
+      },
+      {
+        id: '8',
+        name: 'v1',
+        status: 'draft',
+        agent_type: 'classic',
+        created_at: '2026-02-01T00:00:00Z',
+        is_default: true,
+      },
     ] as unknown as readonly ApplicationVersionSummary[];
     expect(toVersionOptions(wire).map((option) => option.is_default)).toEqual([false, true]);
   });
@@ -317,10 +335,7 @@ describe('toVersionSaveBody', () => {
     expect(parsed.meta?.notes).toBe('Ask the design team before changing the tone.');
     // #345 — `tags` reaches the wire, keyed by name; a stored tag keeps its
     // id and a brand-new one sends none.
-    expect(parsed.tags).toEqual([
-      { id: 4, name: 'sales' },
-      { name: 'fresh' },
-    ]);
+    expect(parsed.tags).toEqual([{ id: 4, name: 'sales' }, { name: 'fresh' }]);
   });
 
   /*
@@ -614,7 +629,10 @@ describe('soul on save (ADR-0050)', () => {
 
 describe('avatar_pack on save (ADR-0050 decision 6)', () => {
   const media = (ext: string) => `/api/v2/agent_media/9/${'ab'.repeat(32)}.${ext}`;
-  const stored = { schema: 'elitea.avatar_pack/v1' as const, slots: { still: { url: media('png'), media_type: 'image/png' } } };
+  const stored = {
+    schema: 'elitea.avatar_pack/v1' as const,
+    slots: { still: { url: media('png'), media_type: 'image/png' } },
+  };
   const edits: EditApplicationVersionFields = {
     instructions: '',
     welcomeMessage: '',

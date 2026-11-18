@@ -23,6 +23,27 @@ interface AgentEditorParticipantDetails {
   readonly versions?: ReturnType<typeof normaliseVersionSummaries>;
 }
 
+/**
+ * What the agent's open version says to a new conversation (#1987, #1988): its
+ * welcome message and conversation starters, off the version the participant is
+ * bound to. A pure read of the already-fetched participant details, so it is
+ * exported for its test and not for callers.
+ */
+export function readAgentGreeting(raw: Record<string, unknown> | undefined): {
+  readonly welcomeMessage: string | undefined;
+  readonly starters: readonly string[] | undefined;
+} {
+  const version = raw?.['version_details'];
+  if (typeof version !== 'object' || version === null) return { welcomeMessage: undefined, starters: undefined };
+  const record = version as Record<string, unknown>;
+  const welcome = typeof record['welcome_message'] === 'string' ? record['welcome_message'].trim() : '';
+  const rawStarters = record['conversation_starters'];
+  const starters = Array.isArray(rawStarters)
+    ? rawStarters.filter((entry): entry is string => typeof entry === 'string' && entry.trim() !== '')
+    : undefined;
+  return { welcomeMessage: welcome === '' ? undefined : welcome, starters };
+}
+
 export interface UseChatBoxParticipantParams {
   readonly activeParticipant: unknown;
   readonly conversationParticipants: unknown[] | undefined;
@@ -53,6 +74,10 @@ export interface UseChatBoxParticipantResult {
    * paperclip, and the drop/paste bridge.
    */
   readonly areAttachmentsGated: boolean;
+  /** The bound agent version's welcome message, shown in an empty conversation (#1987). */
+  readonly welcomeMessage: string | undefined;
+  /** The bound agent version's conversation starters (#1988); the caller's own prop wins when it has one. */
+  readonly participantStarters: readonly string[] | undefined;
   /** The tools of the target agent's version (the active one in the editor) that an unattended grant can name (ADR-0045); undefined without an agent. */
   readonly grantableTools: readonly SensitiveToolRef[] | undefined;
 }
@@ -84,6 +109,8 @@ export function useChatBoxParticipant({
     return { ...(id !== undefined ? { id } : {}), ...(name !== undefined ? { name } : {}), ...(versions !== undefined ? { versions } : {}) };
   }, [rawParticipantDetails]);
 
+  const greeting = useMemo(() => readAgentGreeting(rawParticipantDetails), [rawParticipantDetails]);
+
   const gate = useChatBoxAttachmentsGate({ target, isAgentsPage });
   const areAttachmentsGated = gate.gated;
   // The tools the grant names are the TARGET's (the agent the send goes to); the editor surface keeps its own participant's.
@@ -97,6 +124,8 @@ export function useChatBoxParticipant({
     isFetchingParticipantDetails,
     assistantName,
     areAttachmentsGated,
+    welcomeMessage: greeting.welcomeMessage,
+    participantStarters: greeting.starters,
     grantableTools: tools,
   };
 }

@@ -35,11 +35,9 @@
  *
  *  1. **No model selector.** A synchronous tool run asks no model anything.
  *     `TestToolSettings`' `llm`/`LLMModelSelector` became optional for this.
- *  2. **`index_data` is offered but cannot run here.** The Go start handler
- *     admits `index_data` on a different, asynchronous route
- *     (`internal/api/v2/indexing/start_handler.go`), which the Indexes tab
- *     owns. Pressing Run on it here answers the route's own refusal rather
- *     than pretending; the honest message is the one the server writes.
+ *  2. **`index_data` starts an index run.** It is admitted on the asynchronous
+ *     route the Indexes tab uses (`useToolkitTestToolRun` calls
+ *     `startIndexExecution`); progress and result live in the Indexes tab.
  *  3. **No run history.** `ConfigurationTab` already renders the
  *     `ViewRunHistoryButton` above this pane, through its own slot.
  */
@@ -64,8 +62,7 @@ import type { ToolkitConversationValues } from '../../lib/helpers/toolkitConvers
 import { resolveDefaultValue } from './TestTools.helpers';
 import { TestToolResultPanel } from './TestToolResultPanel';
 import { TestToolSettings } from './TestToolSettings';
-import type { McpToolOption } from './useGetSelectedToolSchema';
-import { useGetSelectedToolSchema } from './useGetSelectedToolSchema';
+import { mcpToolOptionsFromSettings, useGetSelectedToolSchema } from './useGetSelectedToolSchema';
 import { useToolkitTestToolRun } from './useToolkitTestToolRun';
 
 export interface TestToolPaneProps {
@@ -86,6 +83,7 @@ export function TestToolPane({ projectId, toolkitId, values, renderAuthorization
   const { clearIndexNameError, indexNameError } = indexNameValidation;
   const { outcome, isRunning, run, reset, authorize, skip, rememberAuthorization, getAuthorizationReference } = useToolkitTestToolRun({ projectId, toolkitId });
 
+  const availableMcpTools = useMemo(() => mcpToolOptionsFromSettings(values.settings), [values.settings]);
   const {
     toolSchema,
     isError: toolSchemaReadFailed,
@@ -96,7 +94,7 @@ export function TestToolPane({ projectId, toolkitId, values, renderAuthorization
     toolkitId,
     toolkitType: values.type,
     toolOptionType: selectedTool,
-    availableMcpTools: values.settings?.['available_mcp_tools'] as readonly McpToolOption[] | undefined,
+    availableMcpTools,
   });
 
   const selectedToolSchema = useMemo(() => {

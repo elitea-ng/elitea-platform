@@ -79,4 +79,13 @@ describe('NotificationMessage', () => {
     expect(link).not.toHaveAttribute('onclick');
     expect(onClose).not.toHaveBeenCalled();
   });
+
+  it('names an event type the legacy renderer has no text for instead of an empty cell (#1992)', () => {
+    renderWithTheme(
+      <NotificationMessage
+        notification={notification({ eventType: 'agent_approval_required' as NormalizedNotification['eventType'], meta: {} })}
+      />,
+    );
+    expect(screen.getByText('Agent approval required')).toBeInTheDocument();
+  });
 });

@@ -2,7 +2,7 @@ package repos
 
 // The propose_dismissal runtime tool's shared side (ADR-0050 decision 5j,
 // issue 1616): the claimed run says which agent is proposing and whether its
-// frozen version is an HR agent; the guards run here, under the target's
+// frozen version is a workforce manager; the guards run here, under the target's
 // registry row lock, against the target's tier, capabilities, hiring
 // history and legal holds.
 
@@ -51,11 +51,11 @@ func (s *AgentWorkforce) ResolveProposeDismissalRun(ctx context.Context, project
 	if err != nil {
 		return storage.ProposeDismissalRun{}, storage.ErrContentRejected
 	}
-	run.IsHRAgent = agentworkforce.IsHRAgent(meta)
+	run.IsWorkforceManager = agentworkforce.IsWorkforceManager(meta)
 	return run, nil
 }
 
-// ProposeDismissal stores an HR agent's proposal after the guards. A
+// ProposeDismissal stores a workforce manager's proposal after the guards. A
 // refused guard answers its outcome code and stores nothing.
 func (s *AgentWorkforce) ProposeDismissal(ctx context.Context, run storage.ProposeDismissalRun, request storage.DismissalRequest) (storage.DismissalOutcome, error) {
 	input, err := agentworkforce.CheckProposal(agentworkforce.ProposalInput{
@@ -91,15 +91,15 @@ func (s *AgentWorkforce) ProposeDismissal(ctx context.Context, run storage.Propo
 		// can_review_agents counts only once it is on a published version,
 		// i.e. it went through the agent's release path (ADR-0050 5b: every
 		// capability is an ADR-0040 change at the agent's tier).
-		publishedHR := false
-		if run.IsHRAgent {
-			if publishedHR, err = publishedVersionIsHR(ctx, tx, run.ProjectID, run.ApplicationID); err != nil {
+		publishedManager := false
+		if run.IsWorkforceManager {
+			if publishedManager, err = publishedVersionIsWorkforceManager(ctx, tx, run.ProjectID, run.ApplicationID); err != nil {
 				return err
 			}
 		}
 		guard := agentworkforce.CheckAgentProposal(agentworkforce.GuardSubject{
-			ProposerApplicationID: run.ApplicationID, ProposerTier: proposer.Tier, ProposerIsHR: run.IsHRAgent && publishedHR,
-			TargetApplicationID: target.ApplicationID, TargetTier: target.Tier, TargetIsHR: target.IsHRAgent,
+			ProposerApplicationID: run.ApplicationID, ProposerTier: proposer.Tier, ProposerIsWorkforceManager: run.IsWorkforceManager && publishedManager,
+			TargetApplicationID: target.ApplicationID, TargetTier: target.Tier, TargetIsWorkforceManager: target.IsWorkforceManager,
 			TargetHiredProposer: hired, TargetLegalHold: target.LegalHold, TargetState: target.State,
 		}, input.Stage)
 		if errors.As(guard, &refusal) {
@@ -109,7 +109,7 @@ func (s *AgentWorkforce) ProposeDismissal(ctx context.Context, run storage.Propo
 				run.ExecutionID, "stage:"+string(input.Stage), "outcome:"+refusal.Code)
 		}
 		proposal, err := s.insertProposal(ctx, tx, target, input, insertSource{
-			hrAgent: run.ApplicationID, executionID: run.ExecutionID,
+			workforceManager: run.ApplicationID, executionID: run.ExecutionID,
 			principalHint: "agent:" + strconv.FormatInt(run.ApplicationID, 10),
 		})
 		if errors.As(err, &refusal) && refusal.Code == agentworkforce.OpenProposalCode {
@@ -158,7 +158,7 @@ SELECT EXISTS (SELECT 1 FROM elitea_lifecycle.agent_proposals
 }
 
 // notifyManagers tells the project's administrators (the agent managers by
-// default) about an HR agent's proposal. Best effort.
+// default) about a workforce manager's proposal. Best effort.
 func (s *AgentWorkforce) notifyManagers(ctx context.Context, proposal WorkforceProposal) {
 	admins, err := projectAdminIDs(ctx, s.pool, proposal.ProjectID)
 	if err != nil {
@@ -166,7 +166,7 @@ func (s *AgentWorkforce) notifyManagers(ctx context.Context, proposal WorkforceP
 	}
 	for _, id := range admins {
 		meta := map[string]any{
-			"message": fmt.Sprintf("An HR agent proposed to %s agent %q. Review it in the workforce inbox.",
+			"message": fmt.Sprintf("A workforce manager proposed to %s agent %q. Review it in the workforce inbox.",
 				proposal.Stage, proposal.ApplicationName),
 			"project_id": proposal.ProjectID, "application_id": proposal.ApplicationID, "proposal_id": proposal.ID,
 			"stage": proposal.Stage, "event": "proposed",
@@ -206,21 +206,21 @@ WHERE tenant_project_id = $1 AND application_id = ANY($2::bigint[]) AND lifecycl
 	return out, rows.Err()
 }
 
-// publishedVersionIsHR reports whether a published version of the agent
+// publishedVersionIsWorkforceManager reports whether a published version of the agent
 // sets capabilities.can_review_agents.
-func publishedVersionIsHR(ctx context.Context, q lifecycleQuerier, projectID, applicationID int64) (bool, error) {
+func publishedVersionIsWorkforceManager(ctx context.Context, q lifecycleQuerier, projectID, applicationID int64) (bool, error) {
 	schema, err := tenantschema.QuoteInt(projectID)
 	if err != nil {
 		return false, nil
 	}
-	var hr bool
+	var manager bool
 	err = q.QueryRow(ctx, fmt.Sprintf(`
 SELECT EXISTS (SELECT 1 FROM %s.application_versions
                WHERE application_id = $1 AND status IN ('published', 'embedded')
                  AND meta -> 'capabilities' -> 'can_review_agents' = 'true'::jsonb)`, schema),
-		applicationID).Scan(&hr)
+		applicationID).Scan(&manager)
 	if err != nil {
 		return false, fmt.Errorf("agent workforce: read the published capabilities: %w", err)
 	}
-	return hr, nil
+	return manager, nil
 }

@@ -179,11 +179,60 @@ does not animate WebP: Android builds with `expo.webp.animated=false`, iOS anima
 video state its poster, each with the default motion. An SVG is not drawn (the still, then the old icon).
 Reduced motion shows the still only and downloads nothing else.
 
-## Client contract 1.54
+## Client contract 1.63
 
 | Area | What |
 |---|---|
-| Delegation refused at start (FU-335) | A run whose saved agent or pipeline needs a grant its caller does not hold ends with `AUTHORIZATION_FAILED` and a standalone sentence; beside it the stream serves an `agent_delegation_refused` frame (`ClientFrameDelegationRefused`: `node`, and the toolkit's display name or null) and the answer keeps it as `meta.delegation_refused`. The app does not render the frame yet and ignores it; the failure sentence reads on its own. |
+| Delegation refused at start (FU-335) | A run whose saved agent or pipeline needs a grant its caller does not hold ends with `AUTHORIZATION_FAILED` and a standalone sentence; beside it the stream serves an `agent_delegation_refused` frame (`ClientFrameAgentDelegationRefused`: `node`, and the toolkit's display name or null) and the answer keeps it as `meta.delegation_refused`. The app does not render the frame yet and ignores it; the failure sentence reads on its own. |
+| Rename an artifact file (issue 2015) | `moveObject` — `POST /artifacts/objects/{projectID}/{bucket}:move` with `{from, to, overwrite?}` renames or moves a file inside a bucket; 409 when the target exists and `overwrite` is not set. The app has no artifacts screens, so nothing calls it yet. |
+
+## Client contract 1.62
+
+| Area | What |
+|---|---|
+| Delegation drift (delegation epic 2156, story S4) | A delegation grant answered by `listDelegationGrants`, `getDelegationGrant` and `approveDelegationGrant` can be `stale` and carries `drift` (`callee_version_id`, `digest`, `added`): what its callee holds now beyond the grant. `approveDelegationGrant` re-approves a stale grant (the old one becomes `superseded`); under the governed profile it answers 409 `DELEGATION_GOVERNED` with the new change request. Notifications `delegation_grant_stale` and `delegation_closure_grew` carry a `meta.message`. The app shows them in the inbox, and the agent's delegations screen shows what a stale grant's callee now also holds with a **Re-approve** action (a governed grant points to its change request on the web or desktop app). A server before 1.62 sends no `drift`. |
+
+## Client contract 1.61
+
+| Area | What |
+|---|---|
+| Nested agent of a desktop turn (delegation epic 2156, issue 2214) | `startLocalChildTurn` answers `delegation_notice` (a `DelegationNotice`) when it admitted the nested agent narrowed by its edge's grant, and its 403 `delegation_refused` carries one when the edge has no approved grant. Desktop only: the mobile app does not run a local agent loop, so nothing here changes on mobile. |
+
+## Client contract 1.60
+
+| Area | What |
+|---|---|
+| Delegation notices (delegation epic 2156, story S5, ADR-0044 amendment 1) | A run that refused or narrowed a delegation streams a `delegation_refused` or `delegation_narrowed` frame (`response_metadata.delegation_v1`), and the answer keeps the same list on `metadata.delegation_notices_v1` (`DelegationNotice`). The thread shows one plain-text card per notice under the answer's tool activity (`src/features/chat/DelegationNoticeCards.tsx`, `delegationNotices.ts`; parsing and folding are shared in `@elitea/client-core/stream`). "Review delegation" shows only when the server says the viewer may review (`can_review`); otherwise the card names the editors to ask. The frames never touch the answer's text or tool rows. A server before 1.60 sends none; no card is shown. |
+
+## Client contract 1.59
+
+| Area | What |
+|---|---|
+| Delegation grants reach the client (delegation epic 2156, story S3) | The five grant operations of 1.58 other than `proposeDelegationGrant` (`listDelegationGrants`, `getDelegationGrant`, `approveDelegationGrant`, `revokeDelegationGrant`, `previewDelegationGrant`) are now tagged `client`, and the preview answers `governed` (the governed profile is on: an attach records a change request another approver decides). The app has no agent editor, so it shows a read-only list of an agent's grants and a review screen that approves (all the approver holds access to) or revokes; under the governed profile it points to the web or desktop change request instead. A server before 1.59 has none of these. |
+
+## Client contract 1.58
+
+| Area | What |
+|---|---|
+| Delegation grants (delegation epic 2156, ADR-0044 amendment 1) | `listDelegationGrants`, `proposeDelegationGrant`, `getDelegationGrant`, `approveDelegationGrant`, `revokeDelegationGrant` and `previewDelegationGrant`. Attaching a sub-agent, an agent tool or a pipeline child to an agent creates a pending grant for that edge, listing what the callee holds. An editor of the caller approves it (all, or the items they hold access to); under the governed profile it is approved through a change request and the approve route answers 409 `DELEGATION_GOVERNED`. The app ships no screen for them yet (the review UI and the chat notice land in stories S3 and S5); a server before 1.58 has none. |
+
+## Client contract 1.57
+
+| Area | What |
+|---|---|
+| Skills pinned to a conversation (skills epic 2169, ADR-0050 amendment 1) | `listConversationSkills`, `pinConversationSkill` and `unpinConversationSkill`. A conversation holds up to five skills, each a project skill or a Marketplace skill listing version pinned by reference, applied to every run of the conversation whichever agent or model answers. The conversation details sheet shows them as a **Skills** section directly below **Participants**, never among them. A pin carries no skill text; a listing pin is always untrusted. A server before 1.57 has none; the section is left out. |
+
+## Client contract 1.56
+
+| Area | What |
+|---|---|
+| Workforce managers on the Marketplace (issue 1632, ADR-0051 M6) | `listAgentWorkforceProposals` with `kind=marketplace` answers the open hire proposals and drafted reports of the project (agent managers only; others get 403); `getAgentWorkforce` answers an agent's probation (`auto_hired_at`, `probation_reviewed_at`). The app shows both read-only (`src/api/queries/workforce.ts`): a Marketplace proposals screen and a Probation badge. Hiring and publishing stay on web and desktop. Text an agent wrote is untrusted and shown as plain text. A server before 1.56 has neither; they are left out. |
+
+## Client contract 1.55
+
+| Area | What |
+|---|---|
+| Listing feedback (issue 1631, ADR-0051 M5) | `searchMarketplaceListings` finds the listing of a public agent (`entity_id`); `getMarketplaceFeedback` answers its reviews and workforce reports, the rating distribution per version and the signals. The Discover agent sheet shows the rating, the signals and the newest items, read-only (`src/api/queries/marketplaceFeedback.ts`). No item carries a project id or name. A server before 1.55 has no feedback; the section is left out. |
 
 ## Client contract 1.53
 

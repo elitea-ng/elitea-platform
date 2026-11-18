@@ -45,19 +45,72 @@ function readAll(): Drafts {
   }
 }
 
-export function readDraft(key: string): string {
-  return readAll()[key]?.text ?? '';
-}
-
-export function writeDraft(key: string, text: string): void {
-  const rest = Object.entries(readAll()).filter(([other]) => other !== key);
-  const kept = text.trim() === '' ? rest : [...rest, [key, { text, at: Date.now() }] as const];
-  const newest = kept.sort(([, a], [, b]) => b.at - a.at).slice(0, MAX_DRAFTS);
+function writeAll(drafts: Drafts): void {
+  const newest = Object.entries(drafts).sort(([, a], [, b]) => b.at - a.at).slice(0, MAX_DRAFTS);
   try {
     createStorage('local').setJSON(DRAFTS_KEY, Object.fromEntries(newest));
   } catch {
     // Storage refused (quota, private mode): the draft lasts while the composer stays open.
   }
+}
+
+/** The ids of one conversation (its uuid and its numeric id) name one draft: `alias key -> canonical key`. */
+const ALIASES_KEY = 'composer.draftAliases';
+const MAX_ALIASES = 200;
+
+function validateAliases(raw: unknown): Readonly<Record<string, string>> {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw new Error('invalid');
+  return Object.fromEntries(Object.entries(raw as Record<string, unknown>).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+}
+
+function readAliases(): Readonly<Record<string, string>> {
+  try {
+    return createStorage('local').getJSON(ALIASES_KEY, validateAliases) ?? {};
+  } catch {
+    return {};
+  }
+}
+
+/** The slot `key`'s draft lives in: a conversation reached by its uuid shares the draft of its numeric id. */
+function slotOf(key: string): string {
+  return readAliases()[key] ?? key;
+}
+
+/**
+ * Says that `alias` and `canonical` are one conversation (its uuid and numeric
+ * id, known once it loads): they share one draft from now on, so a deep link by
+ * either form finds the text. A draft already saved under `alias` (typed while
+ * the conversation loaded, or before this existed) moves to `canonical` unless
+ * that one already holds text.
+ */
+export function rememberDraftAlias(alias: string, canonical: string): void {
+  if (alias === canonical || readAliases()[alias] === canonical) return;
+  const all = { ...readAll() };
+  const moving = all[alias];
+  if (moving !== undefined) {
+    delete all[alias];
+    // Both forms hold text: the newer one stays, so what was just typed is never dropped for an old draft.
+    const there = all[canonical];
+    if (there === undefined || there.at <= moving.at) all[canonical] = moving;
+    writeAll(all);
+  }
+  try {
+    // Re-added last, so the newest aliases are the ones the cap keeps.
+    const others = Object.entries(readAliases()).filter(([key]) => key !== alias);
+    createStorage('local').setJSON(ALIASES_KEY, Object.fromEntries([...others, [alias, canonical]].slice(-MAX_ALIASES)));
+  } catch {
+    // Storage refused: the two forms keep separate drafts.
+  }
+}
+
+export function readDraft(key: string): string {
+  return readAll()[slotOf(key)]?.text ?? '';
+}
+
+export function writeDraft(key: string, text: string): void {
+  const slot = slotOf(key);
+  const rest = Object.entries(readAll()).filter(([other]) => other !== slot);
+  writeAll(Object.fromEntries(text.trim() === '' ? rest : [...rest, [slot, { text, at: Date.now() }] as const]));
 }
 
 /**
@@ -75,7 +128,7 @@ const isNewDraft = (key: string | undefined): key is string => key?.endsWith(':n
 
 /**
  * Restores `key`'s draft into the composer (`restore`) when the key arrives
- * or changes, saves the text as it is typed, and saves it once more as the
+ * or changes (text typed BEFORE the key arrived is kept, not replaced), saves the text as it is typed, and saves it once more as the
  * key changes or the composer goes, so the last keystrokes before a switch
  * are not lost to the delay.
  */
@@ -95,8 +148,10 @@ export function useComposerDraft(key: string | undefined, text: string, restore:
     if (isNewDraft(before) && before !== key && saved !== '' && saved === latest.current.text) {
       // The new chat became this conversation and its text was carried here (`carryDraft`): the new chat starts empty again.
       writeDraft(before, '');
-    } else if (saved !== latest.current.text) {
+    } else if (saved !== latest.current.text && !(before === undefined && latest.current.text.trim() !== '')) {
       // Another conversation's text never stays behind: no draft here empties the input.
+      // Text typed while there was no key at all (the chat page before its project resolves) belongs to
+      // nobody else: it is kept and becomes this key's draft, never discarded for the saved one.
       latest.current.restore(saved);
       // The input holds this key's text from now on, even before that render lands: a composer
       // unmounted first (Create remounts the chat) must not save the text it is leaving under this key.

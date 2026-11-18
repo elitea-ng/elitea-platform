@@ -25,7 +25,9 @@ import type { FlowNode } from '../../lib/flow-editor/reactFlowTypes';
 import { AIAssistantInput } from '../AIAssistantInput';
 import { InputSelect } from '../select/InputSelect';
 import { OutputSelect } from '../select/OutputSelect';
+import { NodeSettings } from '../settings/NodeSettings';
 import { CustomHandle } from './CustomHandle';
+import { NodeErrorOutputHandle } from './NodeErrorOutputHandle';
 import { NodeCard } from './BaseNode/NodeCard';
 
 /** `FlowEditorContext`, defaulted once — see `./AgentNode.tsx`'s identical constant for the full rationale (§3.5 complexity budget). */
@@ -41,6 +43,7 @@ export interface StateModifierNodeProps extends NodeProps<FlowNode> {
 }
 
 interface StateModifierNodeHandlesProps {
+  readonly id: string;
   readonly isRunningPipeline: boolean;
   readonly disabled: boolean;
   readonly isSourceConnectable: boolean;
@@ -49,7 +52,7 @@ interface StateModifierNodeHandlesProps {
 
 /** Extracted purely to keep `StateModifierNode`'s own cyclomatic complexity under the §3.5 budget (12) — same technique `./AgentNode.tsx`'s `AgentNodeHandles` uses. */
 function StateModifierNodeHandles(props: StateModifierNodeHandlesProps): ReactNode {
-  const { isRunningPipeline, disabled, isSourceConnectable, isPerforming } = props;
+  const { id, isRunningPipeline, disabled, isSourceConnectable, isPerforming } = props;
   return (
     <>
       <CustomHandle
@@ -66,6 +69,7 @@ function StateModifierNodeHandles(props: StateModifierNodeHandlesProps): ReactNo
         isRunningPipeline={isRunningPipeline}
         isPerforming={isPerforming}
       />
+      <NodeErrorOutputHandle id={id} isRunningPipeline={isRunningPipeline} disabled={disabled} isPerforming={isPerforming} />
     </>
   );
 }
@@ -109,6 +113,7 @@ export const StateModifierNode = memo(function StateModifierNode(props: StateMod
       id={id}
       handles={() => (
         <StateModifierNodeHandles
+          id={id}
           isRunningPipeline={isRunningPipeline}
           disabled={disabled}
           isSourceConnectable={isSourceConnectable}
@@ -143,6 +148,7 @@ export const StateModifierNode = memo(function StateModifierNode(props: StateMod
         outputFieldName="output"
         disabled={isFieldsDisabled}
       />
+      <NodeSettings id={id} type={FlowEditorConstants.PipelineNodeTypes.StateModifier} disabled={isFieldsDisabled} />
     </NodeCard>
   );
 });

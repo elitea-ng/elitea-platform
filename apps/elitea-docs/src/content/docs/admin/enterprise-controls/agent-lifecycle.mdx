@@ -275,6 +275,12 @@ Attestations are never deleted. A revocation is stamped with who revoked it and 
 - For toolkit and index subjects, the platform does not check that the subject exists.
 - The `custom` kind cannot be made mandatory.
 
+## Marketplace hires
+
+A hire from the [Marketplace](/menus/marketplace) above low tier, or with a write tool, creates the agent with every tool disabled and a change request of kind `hire`. The request is submitted at once and needs the approvals of the agent's tier, and at least one. The proposer cannot approve. The final approval turns the tools on. It records no release. If the listing version was yanked or withdrawn meanwhile, the approval is refused as stale. 
+
+An upgrade of an installed agent is a change request of kind `upgrade`, and a merge of an upstream update into a fork is one of kind `upstream_merge`. Both carry the listing, the version and the digest. An upgrade of a low-tier agent to a low-tier version with no write tool is recorded as approved by the person who made it, with the reason `direct_low_tier`, and applies at once. The `auto` upgrade policy records its request as approved with the reason `marketplace_auto_upgrade`, and only at low tier with nothing added. Above that, the request waits for the approvals of the tier, and the final approval applies the change in the same transaction. An upstream merge is never applied by a policy: at low tier the person who merges is the person who approves. If the listing version was yanked, withdrawn or delisted meanwhile, the approval is refused as stale. The `marketplace_personal_self_approve` policy covers upgrades and merges in a personal project as it covers a hire.
+
 ## Configure the tier policy
 
 A platform administrator sets the tier policy in **Admin › Configuration › Agent Lifecycle** (permission `configuration.governance`), or with `PUT /api/v2/admin/plugin_config_values/administration/agent_lifecycle`.
@@ -289,6 +295,7 @@ A platform administrator sets the tier policy in **Admin › Configuration › A
 | `low_attestations` … `critical_attestations` | critical: `model_risk`, `legal`; others none | kinds except `custom` |
 | `lapse_action` | `warn` | `warn` or `suspend` |
 | `memory_auto_max_tier` | `medium` | `low`, `medium`, `high` or `critical`. The highest tier whose agents may save a version with memory write set to `auto` (see [Agent memory](/how-tos/agents-pipelines/agent-memory/)). |
+| `marketplace_personal_self_approve` | off | on or off. When on, a person may approve their own Marketplace hire of an agent that needs approval, in a personal project (one member). The audit log records the policy. In the admin console the field is **Self-approve Marketplace Hires in Personal Projects**. |
 
 Governance approvals never exceed approvals. A value below the default is raised to the default.
 
@@ -345,7 +352,7 @@ Every change to the registry, a change request, a certification or an attestatio
 
 | Action | When |
 | --- | --- |
-| `agent.change.submitted`, `approved`, `rejected`, `withdrawn`, `published` | A change request moves |
+| `agent.change.submitted`, `approved`, `rejected`, `withdrawn`, `published` | A change request moves (a Marketplace request names the listing and the version, and a self-approval names its rule, such as `policy:direct_low_tier`) |
 | `agent.change.gate_overridden` | A failed gate is accepted, with the reason |
 | `agent.registry.tier_changed` | A tier changes |
 | `agent.certification.certified`, `due`, `lapsed`, `suspended` | The certification state moves, with the reason codes |

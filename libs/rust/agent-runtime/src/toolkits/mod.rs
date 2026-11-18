@@ -237,7 +237,12 @@ pub use families::browser::{
 #[cfg(feature = "toolkit-data-analysis")]
 pub use families::data_analysis::code::{
     AnalysisCodeError, AnalysisCodeFailure, AnalysisCodeRequest, AnalysisCodeRunner,
-    AnalysisLanguage, MAX_ANALYSIS_RESULT_BYTES,
+    AnalysisLanguage, CapturedRun, MAX_ANALYSIS_RESULT_BYTES,
+};
+#[cfg(feature = "toolkit-data-analysis")]
+pub use families::data_analysis::sandbox_tool::{
+    CODE_SANDBOX_TOOL, CodeSandboxAuthority, CodeSandboxToolsetError, RUN_CODE_TOOL_NAME,
+    build_code_sandbox_toolset,
 };
 #[cfg(feature = "toolkit-data-analysis")]
 pub use families::data_analysis::tools::{

@@ -33,7 +33,7 @@ When an entity has two or more versions, a **Compare versions** action becomes a
 
 ## Share a version
 
-- **Copy link** copies a direct URL to the currently selected version to your clipboard. Anyone with access to the project can open it; the link does not grant access by itself, and it stops resolving if the version is later deleted.
+- **Copy link** copies a direct URL to the currently selected version to your clipboard. The URL names the project, so opening it from another project switches to the project it was copied from. Anyone with access to the project can open it; the link does not grant access by itself, and it stops resolving if the version is later deleted.
 - **Export** downloads the current version as a Markdown file. If the version references nested agents or pipelines, the export becomes a ZIP containing one Markdown file per entity (the main one plus each dependency). Import the file into another project with [Import and export entities](/how-tos/agents-pipelines/import-export).
 
 Publishing an agent (see [Publish agents and skills](/how-tos/agents-pipelines/publishing)) only exports its **published** versions.

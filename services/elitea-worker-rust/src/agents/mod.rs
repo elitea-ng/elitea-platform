@@ -9,6 +9,7 @@ pub(crate) mod attachment_context;
 pub(crate) mod attachment_tools;
 pub(crate) mod attachments;
 pub(crate) mod hand_floor_tool;
+pub(crate) mod marketplace_workforce_tool;
 pub(crate) mod propose_agent_tool;
 pub(crate) mod propose_dismissal_tool;
 pub(crate) use elitea_agent_runtime::context_budget;

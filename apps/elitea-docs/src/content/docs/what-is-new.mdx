@@ -5,9 +5,229 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Review delegation opens the delegation, and a refused pipeline node shows its notice
+
+The **Review delegation** link in a chat notice now opens the review window of that exact delegation on the calling agent's Tools panel, instead of only the agent. The mobile app lists that delegation first and marks it. A pipeline node that runs a saved pipeline and is refused now shows the same **Delegation refused** card before the run fails, where it showed only the generic failure. In `report` mode nothing is shown, because nothing was refused; the run step records it. Upgrade the worker and the web app together. See [Notices in the chat](/admin/enterprise-controls/least-privilege-and-trust#notices-in-the-chat).
+
+## Toolkit indexes, internal storage, shared links and SharePoint sign-in
+
+- **List indexes** now names every index the toolkit has on its **Indexes** tab, not only those that already stored vectors. An index that was created and never ran, or whose first run failed, is listed too; searching it answers that it holds no searchable content yet instead of "not found". Before, the tool said "No indexed collections" next to a tab full of indexes. Upgrade the worker before Main.
+- The platform's own `index-artifacts` bucket (index results and toolkit discovery files) is no longer listed under **Artifacts** and its address answers "not found" to everyone. Nothing in it was deleted or moved, so existing deployments need no action.
+- **Copy link** on a toolkit, and **Share** on an agent or pipeline, now copy an address that names the project. Opening it from another project switches to the project the link was copied from, then opens the entity. Before, it opened in whichever project you had selected.
+- Signing in to SharePoint (and other Microsoft OAuth toolkits) no longer fails with `AADSTS650053` when the credential lists its scopes with commas ("User.Read, Chat.Read"): scopes are sent space-separated on both the sign-in and the token request.
+
+## Delegation grants notice drift and follow Marketplace upgrades
+
+When an agent you attached gains a toolkit, a tool, a credential or a host after you approved it, the delegation grant is marked stale and the calling agent's owners and editors get one notification. The agent keeps running with what you approved; re-approve to give it the new items. Marketplace upgrades list every internal agent that would hold more, need a person's approval when one does, and re-approve those edges when approved. See [When the attached agent changes](/admin/enterprise-controls/least-privilege-and-trust#when-the-attached-agent-changes).
+
+## A failed pipeline Code node shows why it failed
+
+When the program of a pipeline **Code** node fails, the run's error now ends with `Program output:` and the last 1,500 characters the program wrote to its error stream: the exception message of a JavaScript or TypeScript node, a Rust panic, or the compiler's diagnostic for a Rust node that does not compile (with Rust compiled snapshots enabled too, and for the `run_code` tool). Before, the error was the sentence "The pipeline stopped at a Code node" alone, so the author had to guess. The same text is in the run's error summary and the `pipeline.run.failed` event. Upgrade Main before the worker. See [Python sandbox](/menus/internal-tools#python-sandbox-code-execution).
+
+## One unsent draft per conversation, whichever link you open it by
+
+A conversation opened from a link or notification carries a long identifier, while the app also knows it by a short number. An unsent message used to be kept under whichever form you opened it by, so the same conversation could hold two drafts, and text typed while it loaded could go missing. The draft now belongs to the conversation itself: open it by either link and the text you left is there. This applies to web and the desktop app. Drafts are still cleared when you sign out.
+
+## `run_code` shows the model why a program failed
+
+When a program run by **Python sandbox** fails, the model now gets the program's own error output: the Rust compiler's diagnostic for code that does not compile, a JavaScript or TypeScript exception message, a Rust panic. Before, it was told only that the sandbox could not run the program, so it could not correct the code. The sandbox's supervisor keeps the last 1,500 characters of that output with the failed run (a new `failure_detail` column, applied by Main's agent-state migration 0015); the worker reads it from an additive field of the internal gRPC response, so the worker and the supervisor can be upgraded in either order. See [Python sandbox](/menus/internal-tools#python-sandbox-code-execution).
+
+## Text you type while a chat is still opening is kept
+
+Opening a conversation (from an agent's **Chat** button, a link or a notification) and typing at once no longer loses what you typed when the conversation finishes loading. The message stays in the box, and is kept as that conversation's draft. This applies to web and the desktop app.
+
+## A nested agent in the desktop app follows its delegation grant
+
+The desktop app runs a saved agent that the local agent calls as its own cloud turn. That turn did not read the delegation grant of the edge. With the delegation grant switch on (`ELITEA_DELEGATION_GRANTS_ENFORCED`, off by default), the main service now applies the grant when the desktop starts the nested agent: the agent runs with what its caller and the approved grant cover, or is refused when the edge has no grant and it holds something its caller does not. The desktop transcript shows the same notice as the web app, with **Review delegation** for an editor. Client contract 1.61 (additive). Upgrade Main with the desktop app. See [Notices in the chat](/admin/enterprise-controls/least-privilege-and-trust#notices-in-the-chat).
+
+## Review what an agent brings when you attach it
+
+Choosing an agent or pipeline in the Tools panel now opens **What *name* will be able to use**: its toolkits and tools, the credentials they use, its data classes and the hosts it can reach, and the agents it calls. **Approve and attach** attaches it and approves the delegation in one step; untick a toolkit to leave it out. What you cannot access is shown disabled with the reason and stays out. Under the governed profile the button is **Request approval** and a different approver decides. Each attached agent shows **Delegation approved**, **Delegation not approved**, **Awaiting approval** or **Needs re-approval**, with **Review delegation**. The desktop app has the same window; the mobile app lists an agent's delegations and lets an editor approve or revoke them. An approver's access is now checked per toolkit (including the folder access rules) and per credential. Upgrade Main and the web app together. See [Attach a specialist agent](/how-tos/agents-pipelines/attach-a-specialist-agent).
+
+## Run the code sandbox with Docker Compose, proven in CI
+
+A single-host Compose deployment can now run the code sandbox with two overlays and one script: `docker-compose.sandbox.yml` (it now also passes the served languages to Main), `docker-compose.sandbox-postgres-tls.yml` (TLS for the supervisor's receipt ledger) and `deploy/scripts/sandbox-compose-material.sh` (profiles, certificates and the worker's `sandbox_runtimes`). A new CI job runs an agent with **Python sandbox** on and checks that `run_code` returns the program's own output on the real sandbox. See [Run the code sandbox with Docker Compose](/deployment/configuration#run-the-code-sandbox-with-docker-compose). Set `ELITEA_CODE_SANDBOX_LANGUAGES` to the languages you serve (the script prints it).
+
+## A refused or narrowed delegation shows in the chat
+
+When an agent calls another agent and the run refuses the delegation (no approved grant, or the toolkit is outside your own access) or runs it without something the approved grant no longer covers, the chat now says so at the called agent, on web, desktop and mobile: "Agent1 could not use git from Agent2. This delegation is not approved." An editor of the calling agent gets **Review delegation**; everyone else sees who to ask. See [Notices in the chat](/admin/enterprise-controls/least-privilege-and-trust#notices-in-the-chat). Nothing that runs today changes.
+
+## Delegation grants for agents you attach to other agents
+
+Attaching an agent or pipeline to another agent now records a **delegation grant** for that edge: what the attached agent holds, approved by an editor of the calling agent, who can approve only what they have access to. Under the governed profile the grant is approved through a change request with a second person. See [Delegation grants](/admin/enterprise-controls/least-privilege-and-trust#delegation-grants). Nothing that runs today changes.
+
+## Code sandbox returns printed output for JavaScript, TypeScript and Rust
+
+`run_code` now returns what a JavaScript, TypeScript or Rust program printed, as `output`, cut at 20,000 characters like Python's streams. The Data Analysis `run_analysis_code` tool is now a `code_execution` tool for approval rules, like `run_code`.
+
+## Python sandbox module runs code in the platform's sandbox
+
+The **Python sandbox** module of an agent now works. It gives the agent a `run_code` tool that runs a short program in the same isolated sandbox as pipeline Code nodes, in the languages the deployment's sandbox serves (Python, JavaScript, TypeScript and Rust). Python returns what the program printed, its last expression and any traceback. The switch is enabled when the deployment has a code sandbox, and shows "No code sandbox is configured for this deployment" when it has none; the agent still runs either way. `GET /elitea_core/runtime_capabilities` now lists `code_sandbox_languages`. `run_code` is a `code_execution` tool for approval rules. Upgrade Main, the worker and the web app together. See [Internal tools](/menus/internal-tools#python-sandbox-code-execution).
+
+## Evaluation: Distinct tools, Redundant calls, Guardrail events and Step limit hit
+
+The Trajectory card of an agent-run evaluation now shows **Distinct tools**, **Redundant calls** (an identical call repeated after it already succeeded, with its share of tool calls), **Guardrail events** (gateway guardrail verdicts that blocked, masked or warned, and sensitive-tool approval gates) and **Step limit hit** (cases that ended at the step limit), with each case's own values in its row. Runs stored before this change show **not recorded**, not 0. Upgrade Main and the web app together; no operator action is needed. See [Agents](/menus/agents).
+
+## Indexing results, Artifacts storage and rename, and Applications
+
+An index run in which every document failed to fetch and nothing is indexed is now reported as **Failed** with the reason in the message, not as **Partially indexed** with 0 documents. A run the embedding gateway stopped after the index held documents is reported as **Partially indexed** with the counts, not as failed. The result message names the ignored chunking settings only for the file types the run listed. An Artifacts index over a Google Cloud Storage bucket no longer skips every file as `fetch_failed`: the worker pins each download to the listed modified time when the store sends no entity tag. In Artifacts, the **Storage** menu always offers **Platform storage**, and renaming a file keeps its extension: the dialog shows it beside the name and Main refuses a rename that changes it. The **Applications** tab lists the Wikis and Inventory you created (they are toolkits of those types), and the App Catalog marks them **Configured**. Upgrade Main, the worker and the web app together.
+
+## Agent versions, per-agent toolkit tools and forks that keep their toolkits
+
+**Save as version** now copies the agent's toolkits (with their selected tools) and sub-agents to the new version, and adding a toolkit or agent on a version other than the default now attaches it to that version, not to the default one. Importing the zip of an agent exported with several versions creates one agent with those versions, not one agent per version. The Compare versions window is wider and no longer cuts text. Every toolkit card on an agent now has **Show tools**, where you choose which of the toolkit's tools this agent uses without changing the toolkit. Forking an agent into another project now forks its toolkits (without credentials or secrets) and its nested agents with it. The Workshop list shows **On probation** on an agent the workforce policy hired, with **Undo hire** in the table view for 14 days, and an automatic hire now gets the listing's avatar. No operator action is needed.
+
+## Credentials and toolkits: Test connection, secrets, base URL and the toolkit list
+
+**Test connection** on a credential now works when its key is a named secret picked on the **Secret** tab, before you save: the platform redeems the secret on the server (the browser never sees it) and tests the real key. A model's **Test connection** sends 16 output tokens instead of 1, so a provider whose minimum is 16 (OpenAI models on Bedrock) no longer reports a working model as failing. A new GitHub credential opens with the Base URL `https://api.github.com` filled in. A toolkit is no longer blocked from saving when its credential's check could not reach the provider or the provider host is refused by the connection-check egress policy; only a credential the provider rejected blocks Save. **Open in new tab** next to a credential in the toolkit form opens that credential's configuration page in Elitea, not the service address. A toolkit you create or save shows in the list at once. SharePoint sign-in scopes may be separated by commas or spaces. See [Credentials](/menus/credentials).
+
+## Agents with tools: tool schemas fit the model's provider
+
+An agent with toolkit tools, a sub-agent, an MCP server or the internal tools selected could fail with **The model service rejected this request**, while the same agent with no tools answered. The cause was a tool's argument schema that the model's provider refuses: `additionalProperties` and `default` on Gemini, a `$ref`, `const` or a root-level `anyOf` that Anthropic or OpenAI-compatible servers refuse, and patterns and size bounds that llama.cpp cannot turn into a grammar. The worker now rewrites each tool's schema for the provider family of the selected model before it sends the request: references are inlined, `const` and `oneOf` are rewritten, and a constraint the provider cannot carry (a pattern, a length bound) moves into the argument's description so the model still reads it. The tool still checks every call against its full schema, and no required argument is dropped. A model whose name is not recognised gets the strictest portable form. See [Troubleshooting](/support/troubleshooting/).
+
+## Chat fixes: renamed agents, tagged people, the X button and Save
+
+A renamed agent now shows its current name in the participants panel and on its messages, not the name it had when it joined the conversation. After you tag a person with `@` and send, the next message to the model no longer fails with "The execution input is invalid." (upgrade the worker with Main). The **X** next to the agent or pipeline in the message bar now switches the conversation back to the model. In the agent and pipeline editor opened from a chat, **Save** is enabled only while there is something to save, and a save refreshes the panel.
+
+## Try a skill, and /skill in the composer
+
+**Try it** on a Marketplace skill listing opens a new chat with that skill pinned; nothing is added to your project. In the composer, `/skill` opens the same list as `~` (the conversation's pinned skills first), and a pick writes `~name`. A chat with only a model can use skills too. The skill editor no longer shows an empty test pane; a skill from another project shows a note with **Trust this version for this project** and **Revoke trust**. See [Skills](/menus/skills).
+
+## Skills pinned to a conversation, and trusting skill text
+
+A conversation can carry up to five skills, shown in their own **Skills** section of the conversation panel on web and desktop, and directly below **Participants** in the mobile conversation sheet. A pinned skill is not a participant: it applies to every reply, whichever agent or model answers, and shares the five-skill, 64 KiB limit with the skills one message invokes. A skill from another project shows an **Untrusted** badge until your project trusts that version of its text (`GET`, `POST` and `DELETE` on `skill_trust`; granting and revoking are audited, and an edit of the skill by a member of your project is trusted by that member). A pin never refuses a turn for an agent that already has a skill of the same name: the agent's own skill wins. **Run the migrations** (tenant `0251`) and upgrade Main, the worker and the clients together (client contract 1.57). See [Chat](/menus/chat#skills-in-a-conversation).
+
+## Skills in a model chat, and untrusted skill text
+
+The message start for a chat with only a model now accepts project skills (`payload.skills`, ids only), applied through the same skill loading an agent chat uses, with the same limits (five skills, 64 KiB, a skill you cannot read refuses the message). Text of a skill forked from another project reaches the model as quoted data until your project trusts that version of it; skills that existed before keep working as before. **Run the migrations** (tenant `0250`) and upgrade Main and the worker together. See [Skills](/menus/skills#skills-from-another-project-are-untrusted-until-you-trust-them).
+
+## Likes on skills, and Most liked
+
+Skill cards and skill listings now have the heart that agents have, with the count and your own like. On a card the heart sits beside the card's link, so liking never opens the listing. The Marketplace sort has a new **Most liked** option that orders agents and skills together by their likes. A like on a skill is not a like on an agent, even when they share a number. See [Marketplace](/menus/marketplace).
+
+## Skills: versions, tags, AI edit and a tidier list
+
+A skill saved as a new version proposes the next version name and warns about a duplicate one. Tags accept a comma or Enter, **Edit with AI** is available on a skill, and a failed publish check no longer reports a bogus invalid token. The icon picker rejects a file that is not a PNG, JPG, GIF, WEBP, BMP or ICO image, and you can delete an icon you uploaded. In the table view the Skills list has an **Actions** column with a three-dot menu (Export, Delete), and the side panel no longer paints **Trending Authors** over the tags. See [Skills](/menus/skills).
+
+## MCP fixes: list, Create form, secrets and Login
+
+The **MCPs** list now asks the server for MCPs only, so a project with many toolkits no longer shows an empty list or sends you to **New MCP**. The Create form no longer lists your other MCPs as tools before **Load Tools**. A saved **Headers** value such as `Authorization: Bearer {{secret.token}}` and a **Client Secret** that is a secret reference now read back as saved, instead of coming back empty and being dropped on the next save. **Load Tools** keeps each tool's input schema, so **Test settings** shows the input fields and enables **Run** for MCPs that need a login. **Login** on a saved MCP answers with a message: connected, or the reason it failed. A plain literal header or client secret is still never returned; reference it with `{{secret.name}}`.
+
+## Workforce managers on the Marketplace
+
+Agents with the `can_review_agents` capability get `marketplace_search` and `marketplace_listing` (read-only, feedback as untrusted quoted text, at most 20 items), `propose_hire` and `suggest_feedback`. A hire proposal opens the hire wizard filled in under **Settings → Agent workforce → Marketplace proposals**, and the hire settles it. With **Hire proposed agents automatically** on, a proposal is hired by the platform only for an install of a low-tier, read-only listing whose requirements can be bound, with enough reviews, a high enough rating and a low enough dismissal rate (defaults 3, 4.0 and 0.2, now settings), on probation with a 14-day undo. A workforce manager's report on a dismissed or demoted installed or forked agent is drafted for a person to edit and publish, or published when the stage is applied under the new `agents.workforce.auto_feedback` policy (off by default). A report now publishes only from the proposal the agent drafted: the report endpoint takes `proposal_id` instead of an agent. The mobile app shows the proposals and the probation badge, read-only (client contract 1.56). **Run the migrations** (shared `0253`) and upgrade Main, the worker and the clients together. See [Agent workforce](/how-tos/agents-pipelines/agent-workforce/#workforce-managers-and-the-marketplace).
+
+## Marketplace feedback: reviews, workforce reports and signals
+
+A listing page now has a **Feedback** section. People whose project hired the listing can post one review per listing (1 to 5 and optional text) and edit it. The section shows the rating and its distribution per version, **signals** beside it (active hires, 30-day retention, dismissal rate, upgrade adoption, computed daily), and the newest reviews and **workforce reports**, with a version filter. A review shows its author's name; a project name is never shown. The publisher can reply once to an item and flag it, and an administrator can hide it, with an audit event. The admin published agents view now fills its project counter. The mobile agent sheet in Discover shows the rating and feedback, read-only. **Run the migrations** (shared `0252`) and upgrade Main and the clients together. See [Marketplace](/menus/marketplace#feedback).
+
+## Marketplace: upgrade installed agents and update forks
+
+An installed agent gets **Upgrade to...**, which shows the difference, the release notes, the rating and what a version adds before you choose any version, up, down or across. At low tier it is one click, and above it a change request of kind `upgrade` waits for an approver. An **Upgrade policy** (pinned, notify, auto) says whether the platform may move the agent by itself. Auto works only at low tier and never takes a version that adds a tool, a capability or a requirement, or raises the tier. A fork shows **Upstream update available** and a three-way view (base, theirs, ours) with conflicts first; the merge is a new draft and a change request of kind `upstream_merge`, never applied without a person. A yanked version raises a banner and a notification for every project that holds it, and an administrator can also suspend those agents. **Run the migrations** (shared `0251`) and upgrade Main and the web app together. See [Marketplace](/menus/marketplace#upgrade-an-installed-agent).
+
+## Marketplace: versions, release notes and a hire wizard
+
+Every published agent and skill is now a **listing** with versions. Each version keeps a snapshot, release notes, a digest, and its requirements (toolkit and MCP types, skills, nested agents, model class, tier; never credentials). A publisher can deprecate or yank a version. An administrator can yank, delist, or feature a listing. The Browse sidebar searches by kind, category, tag, publisher, tier, required types, rating, and hired here. **Hire** opens a four-step wizard (version, mode, bindings, review). **Install** makes a read-only agent pinned to the version, and **Fork** makes an editable agent that records its origin. A hire above low tier, or with a write tool, starts with tools disabled and a change request of kind `hire`. The Workshop gains the **Installed** origin and an **Update available** filter. Unpublish now delists and keeps the snapshot while a project holds it. **Run the migrations** (shared `0250`) and upgrade Main and the web app together. See [Marketplace](/menus/marketplace).
+
+## Rearrange the items inside a folder
+
+On the **Agents** and **Pipelines** lists, an open folder is sorted by **Folder order** by default: drag a card or row onto another one, use the keyboard (**Space**, arrow keys, **Space**), or choose **Move up** / **Move down** in the folder icon's menu. Every member sees the same order. See [Order inside a folder](/how-tos/entity-management/organizing-entities/#order-inside-a-folder).
+
+## Drag items into folders, move them from the keyboard, and pin your own
+
+On the **Agents**, **Pipelines**, **Skills**, **Toolkits & Indexes** and **MCPs** lists, drag a card or a row by its grip onto a folder in the **Folders** section of the side panel, or pick it up with **Space**, move with the arrow keys and drop with **Space** (a screen reader announces each step). **Move to folder** is also in the selection section, for several selected items at once, and an item you move lands at the top of its folder. A private **Pinned** group, at the top of the **Folders** section, shows only what you pinned; other members never see your pins. Every move is in the audit trail. **Run the migrations** (tenant `0249`) and upgrade Main and the web app together. See [Organize agents, pipelines and toolkits](/how-tos/entity-management/organizing-entities/#drag-and-drop-keyboard-and-move-to-folder).
+
+## The Catalog is now the Marketplace
+
+The shared library of published agents and skills has a new name and a new place: **Marketplace** is a row in the sidebar, on the web and in the desktop app, beside the **Workshop** group, instead of an entry in the account menu. It was called **Catalog**, and **Agent HUB** before that. The page no longer opens with "Welcome to Agent HUB". Search, kind, category and sort moved into a **Browse** tab in the right sidebar, categories are multi-select for agents and skills alike, and the per-category **Show more** buttons are gone. A **Featured** row and a **Popular in your organisation** row show while no search or category is active. A card is now a link to a listing page of its own, with an address you can share, instead of a dialog, and **Try in chat** is still there. The old addresses `/elitea-catalog` and `/agents-hub` redirect to the Marketplace and keep what they carried: a shared `?agentId=` link opens that agent's listing and `?tab=skills` opens the skills. See [Marketplace](/menus/marketplace).
+
+## The Workshop lists: one list, every control in the side panel, multi-select
+
+**Agents**, **Pipelines**, **Skills** and **Toolkits & Indexes** and **MCPs** no longer have a toolbar row or status tabs (All, Drafts, Published, Moderation, Approval, Rejected: three of them could never hold an agent). Each agent and pipeline shows a **Draft** or **Published** badge, and **Status** and **Origin** (own or forked) are filters in the **List** tab of the side panel, with how many items each holds, counted by the server over the whole project and offered only when they occur. The same tab holds the search (`/` or ⌘F), **+ New**, **Import**, sort, the card/table switch and the folders. The panel is open by default on wide windows and remembered per page. When it is closed or a drawer, a bar above the list shows the search and active filters with **Clear** and **+ New**. Select several items (table checkboxes, ⌘-click on a card) to **Add tag**, **Export** or **Delete** them together. Old `/agents/drafts` and `/agents/published` links open the list with that status filter on. The agents and pipelines lists now load a server page at a time with **Load more**, so every item the counts claim is reachable (they used to stop at the first 20), and sorting runs on the server. **Status** is a multi-select: a link with several statuses applies all of them. After a partly failed bulk action, only the items it failed on stay selected, with the error. **Upgrade Main and the web app together** (the list response gains `facets`, and the list accepts `status` and `origin`). See [Page layout](/menus/page-layout#list-pages).
+
+
+## "HR agent" is now "Workforce manager"
+
+The agent kind that reviews other agents' scorecards and proposes dismissals, called the reviewer (HR) agent, is now a **workforce manager** everywhere: the Workforce tab badge, proposal sources and the documentation. Nothing about what it may do changed, and the `can_review_agents` capability keeps its name. **Run the migrations** (shared `0249`), which rewrites stored proposals, and upgrade Main and the web app together. See [Agent workforce](/how-tos/agents-pipelines/agent-workforce/).
+
+## Proposed agents keep their avatar and mobile saves data
+
+An agent that a proposal creates (an automatic hire, or **Create from proposal**) now keeps the sub-agent's avatar when it is one of the default animals (`default:owl`, `default:fox` and the rest); any other avatar key leaves the default look. On mobile, the animated avatar shows its still while the phone is in a low-data state (iOS Low Data Mode or an expensive network, Android Data Saver). Rebuild the mobile app: the data-saver signal is native.
+
+## Agent memory is recalled by meaning
+
+An agent's notes are now ranked by how close they are to your message, not only by shared words. The platform keeps a searchable copy of each active note in the vector service, made in the background with the project's default embedding model, and removes it when the note is archived, deleted, cleared, opted out or purged. If the embedding model or the vector store is down, recall falls back to the ranking by words and recency, so no turn fails. Notes saved before the upgrade are copied once in the background. **Run the migrations** (a shared and a tenant one) and upgrade Main and the vector service together. See [Agent memory](/how-tos/agents-pipelines/agent-memory/#recall-by-meaning).
+
+## Agent Evaluation: run cases as agent runs, with steps, time and tool output controls
+
+An evaluation case can now run as a real agent run on the worker instead of one model call. Choose **Agent run** in **How a case runs**, in **Run limits** or in the start form: each case runs the pinned agent version with its tools through the same path as a chat, and the judges score its final answer. Saved limits gain a **Steps per case** limit, a **Time per case** limit (the agent run is cancelled and the case stores a timeout) and **Store tool outputs in the results**, shown only for agent runs. A finished agent run's scorecard adds a **Trajectory** card (steps per case p50 and p95, tool calls, errors, retries, and each case's steps), and the **Efficiency** card adds the tool metrics. One model call per case stays the default, and nothing changes unless you choose the mode. **Run the tenant migration `0246` and upgrade Main and the web app together.** See [Evaluation](/menus/agents#agent-runs).
+
+## Aligned Type and Value fields in node settings
+
+In every node's **Type** and **Value** setting rows (LLM, HITL, Code, Printer and the other nodes that use them), the **Type** select and the **Value** field beside it now share one label line, one text line and one underline, and the Value text no longer starts indented under the caret. The Type underline no longer runs on under the Value field.
+
+## GKE and Argo CD: no Autopilot drift, clearer storage error
+
+Every container the Helm chart renders now requests at least 50m CPU and 52Mi memory, the GKE Autopilot minimum, so Argo CD no longer shows the NATS sidecars, the worker's material init container, the web pod and the cleanup Job as permanently out of sync. When elitea-main cannot reach a GCS bucket with Workload Identity, the startup error now names the service-account annotation and the `roles/iam.workloadIdentityUser` binding to check. The GKE guide adds a wrapper-chart and hand-written-Ingress section and four more troubleshooting rows.
+
+## Chat names, the canvas caret and node hints
+
+Every message in a chat now has a name line: your own messages show your display name (or **You** when your name is not known; a message whose author is not known gets no label), and every answer shows the agent, pipeline or model that wrote it, with its avatar. This applies in the web app, the desktop app and the mobile app. In the canvas document editor, a live update of the same text no longer throws the cursor to the end of the document, so you can keep typing in the heading you are on without selecting its heading level first. Empty **Value** fields in the LLM, HITL, Code and Printer nodes now show a hint (for example "Describe how the assistant should behave"), with the label kept above the field.
+
+## Index runs show their progress and result, and a failed index says why
+
+When you start an index, the panel now shows a running state at once instead of "No messages yet", and when the run finishes it shows a summary in the same place, without a reload: the outcome, documents and chunks indexed, documents already indexed, what was skipped and why, chunks that failed, how many documents the index holds now, and how long it took. A failed index shows its reason next to its name and in the list tooltip, in plain words: a model the project may not use (`model_gateway.forbidden`) reads "this project is not allowed to use that model…" with what to do about it, and the code stays in brackets for support. A start in a project with no embedding model is refused with that reason instead of creating a run that fails. While the run is going, the panel lists its steps as the worker reports them: reading the source and the index (with what it found to index, keep and remove), then one "Indexing documents" step whose count of documents and chunks updates every few documents (at most twenty updates for a very large index). Progress is best effort: a broken output stream does not fail the index, it only stops the step list, and the final result is still recorded. **Upgrade Main, the worker and the web app together.**
+
+## Folders for agents, pipelines, skills, toolkits and MCPs
+
+Each of the **Agents**, **Pipelines**, **Skills**, **Toolkits & Indexes** and **MCPs** lists now has project folders, shared with every member of the project. Open **Filters** to find the **Folders** section: create a folder with **+**, select one to show only its items, and use a folder's **⋯** menu to **Rename**, **Move up**, **Move down** or **Delete…** it (its items go back to the list; nothing else is deleted). Put an item in a folder with the folder icon on its card, or in the **Folder** column of the table view. There is no new permission: creating a folder needs the list's create permission, and renaming, reordering, deleting and moving need its update permission. **Run the migrations** (one tenant migration) and upgrade Main and the web app together. See [Organize agents, pipelines and toolkits](/how-tos/entity-management/organizing-entities#folders).
+
+## Edit with AI fills the agent's fields, plus list and skill fixes
+
+**Edit with AI** on an agent now shows the generated draft as a form (name, description, instructions, welcome message, conversation starters) that you can edit, and **Apply** writes each value to its own field instead of pasting JSON into **Instructions**. Resources already attached to the agent are left as they are. In the agents, pipelines and skills lists, unselected tags in the Filters panel now stand out from the panel, and the table view shows a sort icon on the **Name & Description** and **Created** columns. In the agent's **Skills** section, the **+ Skill** menu has **Create new** (opens the New Skill page), and an attached skill is a card with open-in-new-tab and delete icons, like an attached toolkit.
+
+## Chat fixes: second agent, attachments, pins, canvas toolbar and agent cards
+
+Adding a second agent to a chat no longer fails with a "version not found" error, and the chat no longer stays loading. A file you attach now stays on the message after you send it. A pinned folder moves ahead of the other folders, and pinned folders and chats show a pin icon beside the name. The formatting icons in the canvas document editor stay visible when you hover them, in the light and the dark theme. Agent cards in the Agents hub have a visible border again, and a click on a card's heart adds a like without opening the agent.
+
+## Pipeline layout, toolkit Test Settings and index history
+
+Scrolling the settings panel on the left of the pipeline editor no longer scrolls the canvas away: the panel scrolls on its own. A pipeline whose editor is read-only (no permission to update pipelines in the project, or a published pipeline) now says so above the Flow and YAML views. Running `index_data` from a toolkit's **Test Settings** starts an index run, as the Indexes tab does, instead of failing with "does not support the index_data tool"; the result panel points to the Indexes tab. In an index's **History**, the first "Created" entry no longer reads "Successfully reindexed" with zero counts, and a failure's **Details for support** no longer shows the placeholder `welcome_message_id`.
+
+## Agent Evaluation: human scores and run limits
+
+A dimension that only a person can score can now be used in a run: the run answers each case and waits, the scorecard shows **Waiting for a human score**, and a reviewer scores each case with a note. Scores are kept as a history (a re-score adds one), the run's overall score is recalculated after each score, and a release gate with a human dimension stays pending until every case is scored. New permissions: evaluation human-score read (admins, editors, viewers) and create (admins, editors). A **Run limits** button on the Runs tab saves token and cost limits per case and per run, and whether a run **stops** or only **reports** when its run limit is reached; the run list shows which limit a run reached. **Run the migrations** (a tenant and a shared one), and upgrade Main and the web app together. See [Evaluation](/menus/agents#evaluation).
+
+## Agent evaluation: Enhance with AI and run insights
+
+A finished evaluation run's scorecard now has **Enhance with AI**: the model reads the agent version the run scored and the cases that missed their targets, and proposes an instruction patch, rubric or target changes for dimensions, and corrected expected outputs for cases. You review them step by step and nothing is saved until the last step; an instruction patch creates a draft version that still goes through the agent's change request and release gate. The scorecard also shows the run's consumption (agent and judge tokens and cost), an efficiency strip (latency p50 and p95, timeouts, tokens and cost per case) and a comparison with the previous run on the same dataset. **Upgrade Main and the web app together.** See [Evaluation](/menus/agents#evaluation).
+
+## Personal data rules, a warn level, and guardrail notices in the chat
+
+The LLM gateway has a built-in **personal data** detector next to the secret rules: `personal_data` finds e-mail addresses, phone numbers, payment cards (Luhn-checked) and IBANs (mod-97-checked), with no service to run. A guardrail detector has a new action, **warn**, which changes nothing and tells the person. **Admin › LLM Governance › Credentials / Personal data** creates the matching entries on one screen. **When a guardrail blocks, redacts or warns about a message, the chat now says so**, on web, desktop and mobile, with the name of the entry and the kind of data found, never the data. A blocked message no longer shows a generic runtime error. A message is still stored as the person wrote it: only what goes to the model is masked. See [Content controls](/admin/enterprise-controls/content-controls#chat-notices).
+
 ## Pipeline editor fixes
 
 In the pipeline editor, the Agent, Toolkit and MCP node pickers and the LLM node's **Output contract** now open inside the node, and an LLM node's **Toolkits** list shows the tools a toolkit has enabled instead of **None (0/0)**. Removing a route from a Router node with the chip's **X** also removes its connection line. Router **Condition**, State Modifier **Jinja Template** and Decision **Description** fields get a copy and full-screen button on hover, and the plain **Value** full-screen editor now fills the whole window. The Type and Value rows of node inputs line up on one underline.
+
+## Chat says why an agent could not answer, and Skills are in the + menu
+
+When a message to an agent cannot start, the error now names the reason (for example, that the agent's model is not available in the project, or that the conversation no longer has the agent) instead of the same sentence every time. The **+** menu in the chat has a **Skills** row: it puts a `~` in the message box and opens the skill picker. The SharePoint **Login** button for a delegated credential now opens the Microsoft sign-in window; the platform reads the identity provider's OAuth metadata for it, so a provider on a private network needs the platform's MCP OAuth egress allowlist. See [Chat](/menus/chat).
+
+## Fixes: notifications, toolkit sign-in, the toolkit list and participants
+
+Every notification in the Notifications Center now has text; a kind of event the page has no sentence for shows its name (for example "Agent approval required"). The log-out icon next to a credential that signs in when you use the toolkit appears only while you are signed in, so it no longer reports a log-out that did not happen. Clicking **Toolkits & Indexes** or **MCPs** in the sidebar no longer takes you to the Create page while the list is loading again. When removing someone from a conversation is refused (the conversation's owner cannot be removed), the page says why. The toolkit editor in a chat says in words when **Save** saved, was blocked by fields that are not valid, or was refused by the server, and the SharePoint **Login** button says why when it cannot start the sign-in.
+
+## Artifacts: rename a file, and why an upload failed
+
+Files in an Artifacts bucket now have a **Rename** action, on the row and in the toolbar for one selected file. The rename is done by the server (copy, then delete), keeps the file in its folder, and refuses a name that is already taken. An upload that fails now says why: when a proxy or firewall in front of Elitea answers with a block page, the message says the upload was blocked before it reached Elitea; any other refusal says the server refused the upload, with its HTTP status, per file. Rename is offered only to people who may both create and delete files, and a renamed file keeps its retention. **Upgrade Main and the web app together.** See [Upload, preview, and manage files](/menus/artifacts#upload-preview-and-manage-files).
+
+## Artifacts: bucket names, retention and pinned buckets
+
+A bucket name you type with capital letters is lowercased as you type, so **Create bucket** no longer fails silently. **Retention (days)** is now on the New bucket form too, not only when you edit a bucket; leave it empty on a new bucket to use the project's default retention. Bucket names follow the server's rule (a lowercase letter first, 2 to 63 characters). A pinned bucket keeps its pin icon visible in the list, and the text cursor shows in the Code and Canvas editors on the dark theme.
+
+## Agent versions, import and publishing fixes
+
+The version list puts the pinned default first and `base` last, and a pinned default stays selected when you reopen the agent. **Fork** copies the version you have open, not the newest one. **Share** is now two clear items, **Share version link** (opens that version) and **Share agent link**. **Compare versions** is also in the ⋮ menu. **Import** accepts `.md` agent files and `.zip` files of them as well as `.json`. A saved welcome message and conversation starters show in a new chat with the agent. An uploaded icon shows on the agent's card. An agent can hold up to 50 skills (it was 5). Publishing now marks the missing fields instead of doing nothing, and a passing check can be published when the platform runs on several replicas. **Build with AI** is back on the new-agent page, and the Stop agent button is readable in the light theme. See [Import and export](/how-tos/agents-pipelines/import-export) and [Forking](/how-tos/agents-pipelines/forking).
 
 ## The agent page has its chat back
 
@@ -43,7 +263,7 @@ An agent can now have a **heartbeat**: the platform wakes it on a timer, a small
 
 ## Agent scorecards and the dismissal ladder
 
-Every agent now has a daily scorecard on a new **Workforce** tab: runs and failure rate, budget-cap stops, breaker trips, approval rejections, guardrail hits, spend against the project median, feedback and last use. A person, or a reviewer agent with the `can_review_agents` capability, can propose **Watch**, **Demote** (taking away exactly what it names), **Suspend**, **Retire** or **Delete**; a person with the new `agents.workforce.manage` permission or the agent's owner decides, after an impact preview. A retired agent leaves conversations, saved teams, nesting and schedules and can be **reinstated** for 30 days. The owner can appeal once to a different manager. Critical-tier agents and agents under legal hold are exempt. **Upgrade every worker before Main.** See [Agent workforce](/how-tos/agents-pipelines/agent-workforce/).
+Every agent now has a daily scorecard on a new **Workforce** tab: runs and failure rate, budget-cap stops, breaker trips, approval rejections, guardrail hits, spend against the project median, feedback and last use. A person, or a workforce manager agent with the `can_review_agents` capability, can propose **Watch**, **Demote** (taking away exactly what it names), **Suspend**, **Retire** or **Delete**; a person with the new `agents.workforce.manage` permission or the agent's owner decides, after an impact preview. A retired agent leaves conversations, saved teams, nesting and schedules and can be **reinstated** for 30 days. The owner can appeal once to a different manager. Critical-tier agents and agents under legal hold are exempt. **Upgrade every worker before Main.** See [Agent workforce](/how-tos/agents-pipelines/agent-workforce/).
 
 ## Agents can propose new agents
 

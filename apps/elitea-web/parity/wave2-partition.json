@@ -1030,7 +1030,7 @@
       "ownedPaths": [
         "src/pages/onboarding/",
         "src/pages/help-center/",
-        "src/pages/agents-hub/",
+        "src/pages/marketplace/",
         "src/pages/mode-switch/"
       ],
       "domain": "misc",

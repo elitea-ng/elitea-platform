@@ -7,6 +7,7 @@ import { folderApi } from '@/entities/folder';
 import { PERMISSIONS } from '@/shared/lib/permissions';
 
 import { conversationListErrorMessage } from '../errorMessage';
+import { pinnedFoldersFirst } from '../helpers/conversationList.helpers';
 import { useHasPermission } from '../useHasPermission';
 import type { FolderListItem } from './conversationListState.types';
 import { useLatestRef } from './useLatestRef';
@@ -119,12 +120,17 @@ export function useEditFolder(params: UseEditFolderParams): UseEditFolderResult 
 
       try {
         await folderApi.updatePin({ projectId, id: folder.id, is_pinned: isPinned });
-        setFolders((prev) => prev.map((item) => (item.id === folder.id ? { ...item, isPinned } : item)));
+        setFolders((prev) => pinnedFoldersFirst(prev.map((item) => (item.id === folder.id ? { ...item, isPinned } : item))));
+        // Pinning needs no read: the folder goes to the front of the pinned ones and the
+        // others keep their order. UNpinning does: the folder's own place among the unpinned
+        // is the server's (its position), which the client no longer has, so the list is read
+        // again and `useQueryFoldersList` applies the same pinned-first rule to it.
+        if (!isPinned) void queryClient.invalidateQueries({ queryKey: ['folder', 'list'] });
       } catch (caught) {
         toastError(conversationListErrorMessage(caught));
       }
     },
-    [projectId, hasUpdatePermission, setFolders, toastError],
+    [projectId, hasUpdatePermission, setFolders, toastError, queryClient],
   );
 
   useEffect(() => {

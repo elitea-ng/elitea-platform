@@ -760,6 +760,18 @@
       ]
     },
     {
+      "id": "artifacts.renameArtifact",
+      "method": "POST",
+      "path": "/artifacts/objects/{projectID}/{bucket}:move",
+      "operationId": "moveObject",
+      "source": "generated",
+      "responseSchema": "UploadObjectResponse",
+      "fixture": null,
+      "usedBy": [
+        "features/artifacts"
+      ]
+    },
+    {
       "id": "artifacts.updateBucketPin",
       "method": "PATCH",
       "path": "/artifacts/buckets/{projectID}/{bucket}",
@@ -2715,13 +2727,111 @@
       ]
     },
     {
-      "$comment": "READ-ONLY. The response OMITS `human_scores` and names the omission in `unavailable`, because this release has no human-score surface and `[]` would tell a client there are none where the truth is that this deployment cannot have any.",
+      "$comment": "The scorecard. A result waiting for a reviewer is `pending_human`; the human scores have their own route. `unavailable` names each part this release cannot serve.",
       "id": "evaluation.getScorecard",
       "method": "GET",
       "path": "/elitea_core/eval_results/prompt_lib/{projectId}/{runId}",
       "operationId": "getEvalScorecard",
       "source": "generated",
       "responseSchema": "EvalScorecard",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-evaluation"
+      ]
+    },
+    {
+      "id": "evaluation.listSuites",
+      "method": "GET",
+      "path": "/elitea_core/eval_suites/prompt_lib/{projectId}",
+      "operationId": "listEvalSuites",
+      "source": "generated",
+      "responseSchema": "EvalSuiteList",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-evaluation"
+      ]
+    },
+    {
+      "id": "evaluation.createSuite",
+      "method": "POST",
+      "path": "/elitea_core/eval_suites/prompt_lib/{projectId}",
+      "operationId": "createEvalSuite",
+      "source": "generated",
+      "responseSchema": "EvalSuite",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-evaluation"
+      ]
+    },
+    {
+      "id": "evaluation.updateSuite",
+      "method": "PUT",
+      "path": "/elitea_core/eval_suite/prompt_lib/{projectId}/{suiteId}",
+      "operationId": "updateEvalSuite",
+      "source": "generated",
+      "responseSchema": "EvalSuite",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-evaluation"
+      ]
+    },
+    {
+      "id": "evaluation.deleteSuite",
+      "method": "DELETE",
+      "path": "/elitea_core/eval_suite/prompt_lib/{projectId}/{suiteId}",
+      "operationId": "deleteEvalSuite",
+      "source": "generated",
+      "responseSchema": null,
+      "fixture": null,
+      "usedBy": [
+        "features/agent-evaluation"
+      ]
+    },
+    {
+      "id": "evaluation.listHumanScores",
+      "method": "GET",
+      "path": "/elitea_core/eval_human_scores/prompt_lib/{projectId}/{runId}",
+      "operationId": "listEvalHumanScores",
+      "source": "generated",
+      "responseSchema": "EvalHumanScoreList",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-evaluation"
+      ]
+    },
+    {
+      "id": "evaluation.recordHumanScore",
+      "method": "POST",
+      "path": "/elitea_core/eval_human_scores/prompt_lib/{projectId}/{runId}",
+      "operationId": "recordEvalHumanScore",
+      "source": "generated",
+      "responseSchema": "EvalHumanScoreRecorded",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-evaluation"
+      ]
+    },
+    {
+      "$comment": "One model call proposes fixes for the cases a finished run missed (Enhance with AI). Writes nothing: each accepted fix is saved by its own route.",
+      "id": "evaluation.enhanceRun",
+      "method": "POST",
+      "path": "/elitea_core/eval_run_enhance/prompt_lib/{projectId}/{runId}",
+      "operationId": "enhanceEvalRun",
+      "source": "generated",
+      "responseSchema": "EvalEnhanceProposal",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-evaluation"
+      ]
+    },
+    {
+      "$comment": "READ. One evaluation run's tokens and estimated cost, agent and judge apart. Gated on the analytics permission as well as the run read.",
+      "id": "analytics.getEvaluationRunAnalytics",
+      "method": "GET",
+      "path": "/elitea_core/eval_run_analytics/prompt_lib/{projectId}/{runId}",
+      "operationId": "getEvaluationRunAnalytics",
+      "source": "generated",
+      "responseSchema": "AnalyticsEvaluationRun",
       "fixture": null,
       "usedBy": [
         "features/agent-evaluation"
@@ -3427,6 +3537,16 @@
       "responseSchema": "MessageContextView",
       "fixture": null,
       "usedBy": ["features/chat-messages/api/contextViewApi.ts"]
+    },
+    {
+      "id": "chat.listRunGuardrailNotices",
+      "method": "GET",
+      "path": "/elitea_core/guardrail_notices/prompt_lib/{projectId}/{runId}",
+      "operationId": "listRunGuardrailNotices",
+      "source": "generated",
+      "responseSchema": "RunGuardrailNotices",
+      "fixture": null,
+      "usedBy": ["features/chat-messages/api/guardrailNoticesApi.ts"]
     },
     {
       "id": "chat.decideExecutionInterrupt",
@@ -4221,6 +4341,293 @@
       "fixture": null,
       "usedBy": [
         "features/agent-workforce"
+      ]
+    },
+    {
+      "$comment": "READ. The project's folders of one list (agents, pipelines, skills, toolkits, MCPs) with the ids of the entities in each. Gated on the list's own list permission.",
+      "id": "entityFolder.list",
+      "method": "GET",
+      "path": "/elitea_core/entity_folders/prompt_lib/{projectId}/{kind}",
+      "operationId": "listEntityFolders",
+      "source": "generated",
+      "responseSchema": "EntityFolderList",
+      "fixture": null,
+      "usedBy": [
+        "entities/entity-folder"
+      ]
+    },
+    {
+      "$comment": "Makes a folder in one list. Gated on the list's create permission; a duplicate name is a 409.",
+      "id": "entityFolder.create",
+      "method": "POST",
+      "path": "/elitea_core/entity_folders/prompt_lib/{projectId}/{kind}",
+      "operationId": "createEntityFolder",
+      "source": "generated",
+      "responseSchema": "EntityFolder",
+      "fixture": null,
+      "usedBy": [
+        "entities/entity-folder"
+      ]
+    },
+    {
+      "$comment": "Renames or reorders a folder (neighbour ids win over a position). Gated on the list's update permission.",
+      "id": "entityFolder.update",
+      "method": "PUT",
+      "path": "/elitea_core/entity_folders/prompt_lib/{projectId}/{kind}/{folderId}",
+      "operationId": "updateEntityFolder",
+      "source": "generated",
+      "responseSchema": "EntityFolder",
+      "fixture": null,
+      "usedBy": [
+        "entities/entity-folder"
+      ]
+    },
+    {
+      "$comment": "Deletes a folder. Its entities return to the root; none is deleted.",
+      "id": "entityFolder.delete",
+      "method": "DELETE",
+      "path": "/elitea_core/entity_folders/prompt_lib/{projectId}/{kind}/{folderId}",
+      "operationId": "deleteEntityFolder",
+      "source": "generated",
+      "responseSchema": "unknown",
+      "fixture": null,
+      "usedBy": [
+        "entities/entity-folder"
+      ]
+    },
+    {
+      "$comment": "Puts one entity into a folder of its list, or back at the root with folder_id null.",
+      "id": "entityFolder.move",
+      "method": "PUT",
+      "path": "/elitea_core/entity_folders/prompt_lib/{projectId}/{kind}/items/{entityId}",
+      "operationId": "moveEntityToFolder",
+      "source": "generated",
+      "responseSchema": "unknown",
+      "fixture": null,
+      "usedBy": [
+        "entities/entity-folder"
+      ]
+    },
+    {
+      "$comment": "READ. Where a hired agent came from: listing, pinned version, digest, states and a newer hireable version. 404 for an agent the project owns.",
+      "id": "marketplace.getOrigin",
+      "method": "GET",
+      "path": "/elitea_core/marketplace_origin/prompt_lib/{projectId}/{applicationId}",
+      "operationId": "getMarketplaceOrigin",
+      "source": "generated",
+      "responseSchema": "MarketplaceOrigin",
+      "fixture": null,
+      "usedBy": [
+        "pages/agents"
+      ]
+    },
+    {
+      "$comment": "READ. The Marketplace facet search: kind, category, tag, publisher, tier, required types, rating, hired here, sort and paging, with the facet counts. The old agents-hub links resolve their listing through entity_id.",
+      "id": "marketplace.searchListings",
+      "method": "GET",
+      "path": "/elitea_core/marketplace_listings/prompt_lib/{projectId}",
+      "operationId": "searchMarketplaceListings",
+      "source": "generated",
+      "responseSchema": "MarketplaceListingPage",
+      "fixture": null,
+      "usedBy": [
+        "pages/marketplace",
+        "routes/-lib/marketplaceRedirect.ts"
+      ]
+    },
+    {
+      "$comment": "READ. One listing with its versions, release notes, requirements and the hires of the project.",
+      "id": "marketplace.getListing",
+      "method": "GET",
+      "path": "/elitea_core/marketplace_listing/prompt_lib/{projectId}/{listingId}",
+      "operationId": "getMarketplaceListing",
+      "source": "generated",
+      "responseSchema": "MarketplaceListingDetail",
+      "fixture": null,
+      "usedBy": [
+        "pages/marketplace"
+      ]
+    },
+    {
+      "$comment": "WRITE. A platform administrator features or delists a listing.",
+      "id": "marketplace.updateListing",
+      "method": "PATCH",
+      "path": "/elitea_core/marketplace_listing/prompt_lib/{projectId}/{listingId}",
+      "operationId": "updateMarketplaceListing",
+      "source": "generated",
+      "responseSchema": "MarketplaceListingSummary",
+      "fixture": null,
+      "usedBy": [
+        "pages/marketplace"
+      ]
+    },
+    {
+      "$comment": "WRITE. The publisher deprecates, yanks or restores a version; an administrator yanks.",
+      "id": "marketplace.setVersionState",
+      "method": "POST",
+      "path": "/elitea_core/marketplace_listing_version/prompt_lib/{projectId}/{listingId}/{versionId}",
+      "operationId": "setMarketplaceVersionState",
+      "source": "generated",
+      "responseSchema": "MarketplaceVersion",
+      "fixture": null,
+      "usedBy": [
+        "pages/marketplace"
+      ]
+    },
+    {
+      "$comment": "READ. The Feedback section: reviews and workforce reports, the rating distribution per version, the signals, and what the caller may do. No item carries a project id or name.",
+      "id": "marketplace.getFeedback",
+      "method": "GET",
+      "path": "/elitea_core/marketplace_feedback/prompt_lib/{projectId}/{listingId}",
+      "operationId": "getMarketplaceFeedback",
+      "source": "generated",
+      "responseSchema": "MarketplaceFeedback",
+      "fixture": null,
+      "usedBy": [
+        "pages/marketplace"
+      ]
+    },
+    {
+      "$comment": "WRITE. A person whose project hired the listing posts or edits their one review.",
+      "id": "marketplace.saveReview",
+      "method": "POST",
+      "path": "/elitea_core/marketplace_feedback/prompt_lib/{projectId}/{listingId}",
+      "operationId": "saveMarketplaceReview",
+      "source": "generated",
+      "responseSchema": "MarketplaceFeedbackSaved",
+      "fixture": null,
+      "usedBy": [
+        "pages/marketplace"
+      ]
+    },
+    {
+      "$comment": "WRITE. A person approves and publishes a workforce manager's report on a hired agent. Called by the agent's approval card, not by the listing page.",
+      "id": "marketplace.saveWorkforceReport",
+      "method": "POST",
+      "path": "/elitea_core/marketplace_feedback_report/prompt_lib/{projectId}/{listingId}",
+      "operationId": "saveMarketplaceWorkforceReport",
+      "source": "generated",
+      "responseSchema": "MarketplaceFeedbackSaved",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-workforce"
+      ]
+    },
+    {
+      "$comment": "WRITE. The publisher replies to or flags an item; an administrator flags, hides and shows it again. Every change writes an audit event.",
+      "id": "marketplace.actOnFeedback",
+      "method": "POST",
+      "path": "/elitea_core/marketplace_feedback_action/prompt_lib/{projectId}/{listingId}/{feedbackId}",
+      "operationId": "actOnMarketplaceFeedback",
+      "source": "generated",
+      "responseSchema": "MarketplaceFeedbackActionResult",
+      "fixture": null,
+      "usedBy": [
+        "pages/marketplace"
+      ]
+    },
+    {
+      "$comment": "WRITE. The hire wizard: Install or Fork a listing version with its bindings.",
+      "id": "marketplace.hire",
+      "method": "POST",
+      "path": "/elitea_core/marketplace_hire/prompt_lib/{projectId}",
+      "operationId": "hireMarketplaceListing",
+      "source": "generated",
+      "responseSchema": "MarketplaceHireResult",
+      "fixture": null,
+      "usedBy": [
+        "pages/marketplace"
+      ]
+    },
+    {
+      "$comment": "READ. The requirements of a hired agent's pinned version and what each is bound to now.",
+      "id": "marketplace.getBindings",
+      "method": "GET",
+      "path": "/elitea_core/marketplace_bindings/prompt_lib/{projectId}/{applicationId}",
+      "operationId": "getMarketplaceBindings",
+      "source": "generated",
+      "responseSchema": "MarketplaceBindingsState",
+      "fixture": null,
+      "usedBy": [
+        "pages/marketplace"
+      ]
+    },
+    {
+      "$comment": "WRITE. Change what a hired agent's requirements are bound to; the definition stays read-only.",
+      "id": "marketplace.setBindings",
+      "method": "PUT",
+      "path": "/elitea_core/marketplace_bindings/prompt_lib/{projectId}/{applicationId}",
+      "operationId": "setMarketplaceBindings",
+      "source": "generated",
+      "responseSchema": "MarketplaceBindingsState",
+      "fixture": null,
+      "usedBy": [
+        "pages/marketplace"
+      ]
+    },
+    {
+      "$comment": "READ. What a person reads before upgrading an installed agent: the diff, the release notes, the feedback and the new bindings.",
+      "id": "marketplace.getUpgradePlan",
+      "method": "GET",
+      "path": "/elitea_core/marketplace_upgrade/prompt_lib/{projectId}/{applicationId}",
+      "operationId": "getMarketplaceUpgradePlan",
+      "source": "generated",
+      "responseSchema": "MarketplaceUpgradePlan",
+      "fixture": null,
+      "usedBy": [
+        "pages/marketplace"
+      ]
+    },
+    {
+      "$comment": "WRITE. Upgrade an installed agent to a version (a change request of kind upgrade).",
+      "id": "marketplace.upgrade",
+      "method": "POST",
+      "path": "/elitea_core/marketplace_upgrade/prompt_lib/{projectId}/{applicationId}",
+      "operationId": "upgradeMarketplaceAgent",
+      "source": "generated",
+      "responseSchema": "MarketplaceUpgradeResult",
+      "fixture": null,
+      "usedBy": [
+        "pages/marketplace"
+      ]
+    },
+    {
+      "$comment": "WRITE. Set the upgrade policy of an installed agent: pinned, notify or auto.",
+      "id": "marketplace.setUpgradePolicy",
+      "method": "PUT",
+      "path": "/elitea_core/marketplace_upgrade_policy/prompt_lib/{projectId}/{applicationId}",
+      "operationId": "setMarketplaceUpgradePolicy",
+      "source": "generated",
+      "responseSchema": "MarketplaceUpgradePolicy",
+      "fixture": null,
+      "usedBy": [
+        "pages/marketplace"
+      ]
+    },
+    {
+      "$comment": "READ. The three-way view of a fork's upstream update.",
+      "id": "marketplace.getUpstreamReview",
+      "method": "GET",
+      "path": "/elitea_core/marketplace_upstream/prompt_lib/{projectId}/{applicationId}",
+      "operationId": "getMarketplaceUpstreamReview",
+      "source": "generated",
+      "responseSchema": "MarketplaceUpstreamReview",
+      "fixture": null,
+      "usedBy": [
+        "pages/marketplace"
+      ]
+    },
+    {
+      "$comment": "WRITE. Merge an upstream update into a fork as a new draft and a change request of kind upstream_merge.",
+      "id": "marketplace.proposeUpstreamMerge",
+      "method": "POST",
+      "path": "/elitea_core/marketplace_upstream/prompt_lib/{projectId}/{applicationId}",
+      "operationId": "proposeMarketplaceUpstreamMerge",
+      "source": "generated",
+      "responseSchema": "MarketplaceUpstreamResult",
+      "fixture": null,
+      "usedBy": [
+        "pages/marketplace"
       ]
     }
   ]

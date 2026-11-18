@@ -109,5 +109,5 @@ spec:
             capabilities:
               drop: ["ALL"]
           resources:
-            {{- toYaml ($c.resources | default (dict "requests" (dict "cpu" "10m" "memory" "32Mi") "limits" (dict "memory" "64Mi"))) | nindent 12 }}
+            {{- toYaml ($c.resources | default (dict "requests" (dict "cpu" "50m" "memory" "64Mi") "limits" (dict "memory" "64Mi"))) | nindent 12 }}
 {{- end }}

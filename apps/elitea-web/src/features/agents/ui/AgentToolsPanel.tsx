@@ -1,10 +1,13 @@
 import type { ReactNode } from 'react';
 import { useCallback, useMemo, useRef, useState } from 'react';
 
+import { useNavigate, useSearch } from '@tanstack/react-router';
+
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import type { VersionToolRef } from '@/shared/api/generated/model';
 
+import { useAgentDelegationGrants } from '../api/delegationGrants';
 import { useSelectedProjectId } from '../api/useSelectedProjectId';
 import type { ToolRemovalUpdate } from '../lib/hooks/useDisassociateToolkit.hooks';
 import type { AgentToolAssociation } from '../lib/types';
@@ -138,6 +141,22 @@ function useToolsMirror(versionTools: readonly VersionToolRef[] | undefined): To
   return { tools, initialTools, onToolsChange: setTools, onToolRemoved };
 }
 
+/**
+ * The `review_delegation=<calleeId>` deep link of the chat notice's "Review delegation" action: the
+ * callee whose review dialog to open on this agent's Tools panel, and how to drop the param once the
+ * dialog is opening (a reload would otherwise reopen it).
+ */
+function useDelegationDeepLink(): { readonly reviewCalleeId: number | undefined; readonly clearReview: () => void } {
+  const { review_delegation: raw } = useSearch({ strict: false });
+  const navigate = useNavigate();
+  const parsed = Number(raw);
+  const reviewCalleeId = raw !== undefined && raw !== '' && Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+  const clearReview = useCallback(() => {
+    void navigate({ to: '.', search: (previous: Record<string, unknown>) => ({ ...previous, review_delegation: undefined }), replace: true });
+  }, [navigate]);
+  return { reviewCalleeId, clearReview };
+}
+
 export function AgentToolsPanel({ entity, versionTools, dirty, internalTools, onToolsChanged, readOnly = false, isPipeline = false, viewMode, sx }: AgentToolsPanelProps): ReactNode {
   const projectId = useSelectedProjectId();
   const mirror = useToolsMirror(versionTools);
@@ -158,6 +177,32 @@ export function AgentToolsPanel({ entity, versionTools, dirty, internalTools, on
     [mirror.tools, mirror.initialTools, mirror.onToolsChange, mirror.onToolRemoved, dirty],
   );
 
+  // The grants of this agent's edges, read only while it holds an agent or pipeline (ADR-0044 amendment 1).
+  const holdsApplications = mirror.tools.some((tool) => tool.type === 'application');
+  const grants = useAgentDelegationGrants(projectId, entity.applicationId, holdsApplications);
+  const { reviewCalleeId, clearReview } = useDelegationDeepLink();
+  // Only the first row of the named callee opens (the same agent can be attached twice).
+  const reviewTool = useMemo(
+    () => (reviewCalleeId === undefined ? undefined : mirror.tools.find((tool) => tool.type === 'application' && Number(tool.settings?.application_id) === reviewCalleeId)),
+    [mirror.tools, reviewCalleeId],
+  );
+  const delegationOf = useCallback(
+    (tool: AgentToolAssociation) => {
+      const calleeId = tool.type === 'application' ? Number(tool.settings?.application_id) : Number.NaN;
+      const grant = grants.find((candidate) => candidate.callee_application_id === calleeId);
+      if (grant === undefined || projectId === undefined || entity.applicationId === undefined) return undefined;
+      return {
+        grant,
+        projectId,
+        applicationId: entity.applicationId,
+        readOnly: rowDisabled,
+        autoOpen: tool === reviewTool,
+        onAutoOpened: clearReview,
+      };
+    },
+    [grants, projectId, entity.applicationId, rowDisabled, reviewTool, clearReview],
+  );
+
   const renderToolCard = useCallback(
     (tool: AgentToolAssociation, index: number, isDuplicate: boolean) => (
       <AgentToolRow
@@ -168,9 +213,10 @@ export function AgentToolsPanel({ entity, versionTools, dirty, internalTools, on
         viewMode={viewMode}
         entity={rowEntity}
         toolsState={rowToolsState}
+        delegation={delegationOf(tool)}
       />
     ),
-    [rowDisabled, viewMode, rowEntity, rowToolsState],
+    [rowDisabled, viewMode, rowEntity, rowToolsState, delegationOf],
   );
 
   return (
@@ -179,6 +225,7 @@ export function AgentToolsPanel({ entity, versionTools, dirty, internalTools, on
       internalTools={internalTools.value}
       onInternalToolsChange={internalTools.onChange}
       applicationId={entity.applicationId}
+      versionId={entity.versionId}
       renderToolCard={renderToolCard}
       onToolsChanged={onToolsChanged}
       disabled={readOnly}
