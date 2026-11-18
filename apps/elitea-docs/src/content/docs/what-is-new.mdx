@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Test connection for ADO, qTest, TestRail, Xray, Zephyr, SharePoint, Report Portal and TestIO; Save is never blocked by a check
+
+**Test Connection** now works for Azure DevOps, qTest, TestRail, Xray Cloud, Zephyr Enterprise, Zephyr Essential, Report Portal, TestIO and client-secret SharePoint credentials. Before, they answered "Checking connection is not supported yet". OpenAPI still has no check, because a custom API has no endpoint that says who you are. On a toolkit's edit page, a credential the provider rejected now shows a warning beside **Save** and no longer disables it. A check that cannot run, is unsupported, cannot reach the provider or errors never warns. Operators who set `ELITEA_TOOLKIT_CHECK_ALLOWLIST` must add the new vendor hosts. See [Test connection](/menus/credentials#test-connection).
+
 ## Agent model: one setting on the agent page; the circuit breaker no longer blames agents for refused runs
 
 On the agent page, the model picker in the chat now shows the model chosen in the agent's settings, and a model picked in the chat changes the setting (and the unsaved-changes state), instead of being a second, unconnected picker. The circuit breaker no longer counts a run that the platform refused (for example "The execution input is invalid.") as a failure of the agent, and it resumes by itself an agent that it stopped only because of such runs. The placeholder text of the **Generate with AI** boxes (skill, agent, project context) is pinned to the theme's placeholder colour in both themes.

@@ -1978,7 +1978,7 @@
   "pages.toolkits.editToolkit.copyLinkCopied": "Copied!",
   "pages.toolkits.editToolkit.indexesTab": "Indexes",
   "pages.toolkits.editToolkit.save": "Save",
-  "pages.toolkits.editToolkit.saveBlockedByCredential": "The selected credential did not pass its connection check, so this toolkit cannot be saved.",
+  "pages.toolkits.editToolkit.saveWarnedByCredential": "The selected credential did not pass its connection check. You can still save this toolkit.",
   "pages.toolkits.editToolkit.title": "Edit Toolkit",
   "pages.toolkits.editToolkit.titleMcp": "Edit MCP",
   "pages.toolkits.toolkits.emptyDescription": "Create your first toolkit to get started.",

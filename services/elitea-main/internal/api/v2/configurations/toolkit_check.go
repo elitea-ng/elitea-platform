@@ -109,7 +109,13 @@ const ToolkitCheckAllowlistEnv = "ELITEA_TOOLKIT_CHECK_ALLOWLIST"
 // The web and host-intelligence providers (#1238) are listed too: their
 // credentials are API keys for one fixed vendor host each.
 const defaultToolkitCheckAllowlist = "api.github.com, github.com, gitlab.com, api.bitbucket.org, bitbucket.org, *.atlassian.net, *.aha.io, api.figma.com, cloud.langfuse.com, " +
-	"api.tavily.com, api.firecrawl.dev, api.search.brave.com, api.duckduckgo.com, api.shodan.io"
+	"api.tavily.com, api.firecrawl.dev, api.search.brave.com, api.duckduckgo.com, api.shodan.io, " +
+	// #2143: the vendors' public hosts for the test-management families. A
+	// self-hosted TestRail, qTest, Zephyr Enterprise, ReportPortal or Azure
+	// DevOps Server has to be named, like a self-hosted GitLab.
+	"dev.azure.com, *.visualstudio.com, *.qtestnet.com, *.testrail.io, xray.cloud.getxray.app, us.xray.cloud.getxray.app, " +
+	"eu.xray.cloud.getxray.app, au.xray.cloud.getxray.app, api.zephyrscale.smartbear.com, login.microsoftonline.com, " +
+	"graph.microsoft.com, api.test.io"
 
 // toolkitCheckTimeout bounds ONE probe. It is short on purpose: the credential
 // card checks a whole project's rows at once through the batch route, whose own
@@ -288,6 +294,13 @@ type toolkitProbe struct {
 	// path is appended to the base URL. It reads an identity, never content.
 	path      func(data map[string]any) string
 	authorize func(header http.Header, data map[string]any) authorizeOutcome
+	// normalizeBase, when set, rewrites the base URL before the path is
+	// joined (qtest: a pasted `/api/v3` suffix is stripped).
+	normalizeBase func(base string) string
+	// mint, when set, replaces the single authenticated GET above with a
+	// token exchange (toolkit_check_mint.go). Such a probe sets neither path
+	// nor authorize.
+	mint *tokenMint
 }
 
 // toolkitCheckProbes is the set of types this build can check.
@@ -413,6 +426,17 @@ var toolkitCheckProbes = map[string]toolkitProbe{
 			return authorizedRequest()
 		},
 	},
+}
+
+// init merges the probes of toolkit_check_vendors.go. They live in their own
+// file for the per-vendor commentary; a duplicate key is a programming error.
+func init() {
+	for configType, probe := range vendorProbes() {
+		if _, dup := toolkitCheckProbes[configType]; dup {
+			panic("toolkit_check: duplicate probe for " + configType)
+		}
+		toolkitCheckProbes[configType] = probe
+	}
 }
 
 // IsToolkitCheckableType reports whether this build carries a probe for the
@@ -738,6 +762,10 @@ func (c *httpToolkitConnectionChecker) CheckToolkit(ctx context.Context, configT
 		data = map[string]any{}
 	}
 
+	if probe.mint != nil {
+		return c.checkMinted(ctx, configType, probe.mint, data)
+	}
+
 	target, ok := c.resolveTarget(probe, data)
 	if !ok {
 		return ToolkitCheckOutcome{
@@ -745,51 +773,62 @@ func (c *httpToolkitConnectionChecker) CheckToolkit(ctx context.Context, configT
 			Message: "This credential does not name an endpoint to check.",
 		}
 	}
-	if !c.allowsHost(target) {
-		logToolkitCheckEgressRefusal(ctx, configType, target.Hostname(), nil)
-		return ToolkitCheckOutcome{Reason: ToolkitCheckReasonUnreachable, Message: toolkitCheckEgressRefusedMessage(target.Hostname())}
-	}
-
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
 	if err != nil {
 		return ToolkitCheckOutcome{Reason: ToolkitCheckReasonUnreachable, Message: toolkitCheckUnreachableMessage}
 	}
 	request.Header.Set("Accept", "application/json")
-	switch auth := probe.authorize(request.Header, data); {
-	case auth.authorized:
-		// The header carries the credential; fall through to the round trip.
-	case auth.rejection != "":
+	if auth := probe.authorize(request.Header, data); !auth.authorized {
+		return unauthorizedOutcome(auth)
+	}
+
+	response, refused := c.send(ctx, configType, request)
+	if refused != nil {
+		return *refused
+	}
+	defer func() { _ = response.Body.Close() }()
+
+	return outcomeForStatus(response.StatusCode)
+}
+
+// unauthorizedOutcome answers an authorize step that did not build the header.
+func unauthorizedOutcome(auth authorizeOutcome) ToolkitCheckOutcome {
+	if auth.rejection != "" {
 		// The method IS supported and the stored material cannot be used. That
 		// is a verdict on the credential, so it is auth_failed — and it is
 		// reached WITHOUT a dial, because there is nothing to ask the provider.
 		return ToolkitCheckOutcome{Reason: ToolkitCheckReasonAuthFailed, Message: auth.rejection}
-	default:
-		// The credential is not necessarily wrong — this build simply has no
-		// probe for the authentication method it carries.
-		return ToolkitCheckOutcome{
-			Reason:  ToolkitCheckReasonUnsupportedType,
-			Message: toolkitCheckUnsupportedAuthMessage,
-		}
 	}
+	// The credential is not necessarily wrong — this build simply has no
+	// probe for the authentication method it carries.
+	return ToolkitCheckOutcome{Reason: ToolkitCheckReasonUnsupportedType, Message: toolkitCheckUnsupportedAuthMessage}
+}
 
+// send applies the egress bound and makes ONE round trip. A non-nil refusal is
+// the finished outcome for a destination the policy refuses or a dial that
+// failed; otherwise the caller owns (and must close) the response.
+func (c *httpToolkitConnectionChecker) send(ctx context.Context, configType string, request *http.Request) (*http.Response, *ToolkitCheckOutcome) {
+	host := request.URL.Hostname()
+	if !c.allowsHost(request.URL) {
+		logToolkitCheckEgressRefusal(ctx, configType, host, nil)
+		return nil, &ToolkitCheckOutcome{Reason: ToolkitCheckReasonUnreachable, Message: toolkitCheckEgressRefusedMessage(host)}
+	}
 	response, err := c.client.Do(request)
 	if errors.Is(err, egress.ErrDestinationRefused) {
 		// The name did not resolve, or resolved only to addresses the guard
 		// refuses. The tenant gets the SAME answer as for a host off the
 		// list, so the check is no DNS or SSRF oracle; the address class and
 		// the resolved addresses go to the operator log only.
-		logToolkitCheckEgressRefusal(ctx, configType, target.Hostname(), err)
-		return ToolkitCheckOutcome{Reason: ToolkitCheckReasonUnreachable, Message: toolkitCheckEgressRefusedMessage(target.Hostname())}
+		logToolkitCheckEgressRefusal(ctx, configType, host, err)
+		return nil, &ToolkitCheckOutcome{Reason: ToolkitCheckReasonUnreachable, Message: toolkitCheckEgressRefusedMessage(host)}
 	}
 	if err != nil {
 		// The cause is deliberately dropped rather than logged with the
 		// request: a transport error's text carries the full URL, which is
 		// tenant data, and this function is called once per row of a list.
-		return ToolkitCheckOutcome{Reason: ToolkitCheckReasonUnreachable, Message: toolkitCheckUnreachableMessage}
+		return nil, &ToolkitCheckOutcome{Reason: ToolkitCheckReasonUnreachable, Message: toolkitCheckUnreachableMessage}
 	}
-	defer func() { _ = response.Body.Close() }()
-
-	return outcomeForStatus(response.StatusCode)
+	return response, nil
 }
 
 // resolveTarget joins the credential's base URL and the probe's path.
@@ -804,6 +843,9 @@ func (c *httpToolkitConnectionChecker) resolveTarget(probe toolkitProbe, data ma
 	}
 	if base == "" {
 		return nil, false
+	}
+	if probe.normalizeBase != nil {
+		base = probe.normalizeBase(base)
 	}
 	parsed, err := url.Parse(strings.TrimRight(base, "/") + probe.path(data))
 	if err != nil || parsed.Host == "" {
@@ -830,6 +872,11 @@ func (c *httpToolkitConnectionChecker) resolveTarget(probe toolkitProbe, data ma
 // renders differently.
 func outcomeForStatus(status int) ToolkitCheckOutcome {
 	switch {
+	case status == http.StatusNonAuthoritativeInfo:
+		// Azure DevOps answers a PAT it does not recognise with 203 and a
+		// sign-in page rather than 401. A 203 is not the provider recognising
+		// the credential.
+		return ToolkitCheckOutcome{Reason: ToolkitCheckReasonAuthFailed, Message: toolkitCheckAuthFailedMessage}
 	case status >= 200 && status < 300:
 		return ToolkitCheckOutcome{Reason: ToolkitCheckReasonOK, Message: toolkitCheckOKMessage}
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:

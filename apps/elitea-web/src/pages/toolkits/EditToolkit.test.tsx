@@ -557,7 +557,7 @@ describe('EditToolkit', () => {
     // Nothing has been changed, so there is nothing to save — and the
     // control says so rather than issuing a no-op write.
     expect(saveButton).toBeDisabled();
-    expect(screen.queryByTestId('toolkit-save-disabled-reason')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('toolkit-save-credential-warning')).not.toBeInTheDocument();
 
     const content = getCodeMirrorContent(container);
     await user.click(content);
@@ -638,8 +638,8 @@ async function editToolkitName(user: ReturnType<typeof userEvent.setup>): Promis
   await user.type(nameField, ' edited');
 }
 
-describe('EditToolkit save gate on the stored credential check', () => {
-  it('refuses Save, with the reason stated, when the selected credential’s check came back auth_failed', async () => {
+describe('EditToolkit credential warning on the stored credential check', () => {
+  it('warns, with the reason stated, but still saves when the selected credential’s check came back auth_failed', async () => {
     mockCredentialEndpoints([
       { id: 'cfg-1', success: false, reason: 'auth_failed', message: 'Authentication failed. The provider rejected this credential.' },
     ]);
@@ -651,26 +651,40 @@ describe('EditToolkit save gate on the stored credential check', () => {
     await screen.findByText('My GitHub');
     await editToolkitName(user);
 
-    const saveButton = screen.getByTestId('toolkit-save-button');
-    // Dirty, and still refused: the credential is what refuses it.
-    await waitFor(() => expect(saveButton).toBeDisabled());
-
-    // The reason is SAID, not merely implied by a dead button — and it is
-    // said in a place assistive technology reaches, which is what
-    // `aria-describedby` on the button points at.
-    const reason = screen.getByTestId('toolkit-save-disabled-reason');
-    expect(saveButton).toHaveAttribute('aria-describedby', reason.id);
-    expect(reason).toHaveTextContent('did not pass its connection check');
+    const warning = await screen.findByTestId('toolkit-save-credential-warning');
+    expect(warning).toHaveTextContent('did not pass its connection check');
+    expect(warning).toHaveTextContent('You can still save this toolkit');
     // The SERVER's own words, not only the app's headline.
-    expect(reason).toHaveTextContent('Authentication failed. The provider rejected this credential.');
+    expect(warning).toHaveTextContent('Authentication failed. The provider rejected this credential.');
 
-    // `fireEvent`, not `userEvent`: a disabled MUI button carries
-    // `pointer-events: none`, so `userEvent` refuses the gesture before the
-    // DOM ever sees it — which would prove the CSS, not the handler. This
-    // dispatches the click straight at the element, and a disabled button
-    // still runs nothing.
-    fireEvent.click(saveButton);
-    expect(saveToolkit).not.toHaveBeenCalled();
+    // #2143: a verdict is a warning, never a block.
+    const saveButton = screen.getByTestId('toolkit-save-button');
+    expect(saveButton).toBeEnabled();
+    expect(saveButton).toHaveAttribute('aria-describedby', warning.id);
+
+    await user.click(saveButton);
+    await waitFor(() => expect(saveToolkit).toHaveBeenCalledTimes(1));
+  });
+
+  it.each([
+    ['unreachable', 'Could not reach the provider with this credential.'],
+    ['unsupported_type', 'Checking connection is not supported yet for configuration type github'],
+  ])('neither warns nor blocks Save on a %s check answer', async (reason, message) => {
+    mockCredentialEndpoints([{ id: 'cfg-1', success: false, reason, message }]);
+    const saveToolkit = vi.fn().mockResolvedValue({ id: 'tk-1' });
+    const user = userEvent.setup();
+
+    renderToolkitsRoute(withShell(<EditToolkit deps={{ saveToolkit }} />), '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+
+    await screen.findByText('My GitHub');
+    await editToolkitName(user);
+
+    const saveButton = screen.getByTestId('toolkit-save-button');
+    await waitFor(() => expect(saveButton).toBeEnabled());
+    expect(screen.queryByTestId('toolkit-save-credential-warning')).not.toBeInTheDocument();
+
+    await user.click(saveButton);
+    await waitFor(() => expect(saveToolkit).toHaveBeenCalledTimes(1));
   });
 
   it('keeps Save available when the check itself is unavailable (a refusal carrying no reason)', async () => {
@@ -688,7 +702,7 @@ describe('EditToolkit save gate on the stored credential check', () => {
 
     const saveButton = screen.getByTestId('toolkit-save-button');
     await waitFor(() => expect(saveButton).toBeEnabled());
-    expect(screen.queryByTestId('toolkit-save-disabled-reason')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('toolkit-save-credential-warning')).not.toBeInTheDocument();
 
     await user.click(saveButton);
     await waitFor(() => expect(saveToolkit).toHaveBeenCalledTimes(1));

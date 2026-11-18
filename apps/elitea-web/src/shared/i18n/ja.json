@@ -1937,7 +1937,6 @@
   "pages.toolkits.editToolkit.copyLinkCopied": "コピーしました!",
   "pages.toolkits.editToolkit.indexesTab": "インデックス",
   "pages.toolkits.editToolkit.save": "保存",
-  "pages.toolkits.editToolkit.saveBlockedByCredential": "選択した認証情報が接続チェックに合格しなかったため、このツールキットは保存できません。",
   "pages.toolkits.editToolkit.title": "ツールキットを編集",
   "pages.toolkits.editToolkit.titleMcp": "MCP を編集",
   "pages.toolkits.toolkits.emptyDescription": "最初のツールキットを作成して始めましょう。",

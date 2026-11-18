@@ -1937,7 +1937,6 @@
   "pages.toolkits.editToolkit.copyLinkCopied": "Скопировано!",
   "pages.toolkits.editToolkit.indexesTab": "Индексы",
   "pages.toolkits.editToolkit.save": "Сохранить",
-  "pages.toolkits.editToolkit.saveBlockedByCredential": "Выбранные учётные данные не прошли проверку подключения, поэтому этот набор инструментов нельзя сохранить.",
   "pages.toolkits.editToolkit.title": "Изменить набор инструментов",
   "pages.toolkits.editToolkit.titleMcp": "Изменить MCP",
   "pages.toolkits.toolkits.emptyDescription": "Создайте свой первый набор инструментов, чтобы начать.",

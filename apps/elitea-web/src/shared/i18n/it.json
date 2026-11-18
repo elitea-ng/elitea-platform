@@ -1937,7 +1937,6 @@
   "pages.toolkits.editToolkit.copyLinkCopied": "Copiato!",
   "pages.toolkits.editToolkit.indexesTab": "Indici",
   "pages.toolkits.editToolkit.save": "Salva",
-  "pages.toolkits.editToolkit.saveBlockedByCredential": "La credenziale selezionata non ha superato il controllo di connessione, quindi questo toolkit non può essere salvato.",
   "pages.toolkits.editToolkit.title": "Modifica toolkit",
   "pages.toolkits.editToolkit.titleMcp": "Modifica MCP",
   "pages.toolkits.toolkits.emptyDescription": "Crea il tuo primo toolkit per iniziare.",
