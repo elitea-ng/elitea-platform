@@ -61,6 +61,7 @@ describe('listingCard', () => {
       likes: 31,
       isLiked: false,
       version: 'v2.3',
+      versionId: '311',
       tier: 'medium',
       requiredTypes: ['github'],
       hiredVersion: undefined,

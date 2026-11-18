@@ -46617,7 +46617,11 @@ paths:
         Forks the published (skill, version) into this project once, reusing an
         existing local copy when one exists, then writes one
         entity_skill_mapping row per agent version. Partial success is carried
-        per agent in `results`, not in the HTTP status.
+        per agent in `results`, not in the HTTP status. With `fork_only` the
+        agent list may be empty: the call only forks (the "Add to a conversation"
+        action, ADR-0051 amendment 1, A1.4) and answers the project's copy in
+        `skill_id` and `skill_version_id`, which the caller then pins to a
+        conversation. A published version that does not exist answers 404 then.
       tags: [skills]
       requestBody:
         required: true
@@ -46625,13 +46629,18 @@ paths:
           application/json:
             schema:
               type: object
-              required: [public_skill_id, public_version_id, agent_version_ids]
+              required: [public_skill_id, public_version_id]
               properties:
                 public_skill_id: { type: integer }
                 public_version_id: { type: integer }
                 agent_version_ids:
                   type: array
                   items: { type: integer }
+                  description: Required unless `fork_only` is true.
+                fork_only:
+                  type: boolean
+                  default: false
+                  description: Fork the published version into the project and attach it to no agent.
                 entity_type:
                   type: string
                   default: agent
@@ -46656,9 +46665,16 @@ paths:
                         ok: { type: boolean }
                         http_status: { type: integer }
                         error: { type: string }
+                  skill_id:
+                    type: integer
+                    description: The project's own copy of the skill (forked now, or earlier).
+                  skill_version_id:
+                    type: integer
+                    description: The copy's version that holds the published text.
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
 
   /elitea_core/skill_categories/prompt_lib/{project_id}:
     parameters:

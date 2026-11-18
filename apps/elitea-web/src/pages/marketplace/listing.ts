@@ -38,6 +38,7 @@ export function listingCard(row: MarketplaceListingSummary): ListingCardData {
     likes: row.likes,
     isLiked: row.is_liked,
     version: row.current_version?.name,
+    versionId: row.current_version?.id,
     tier: row.tier,
     requiredTypes: row.required_types,
     hiredVersion: row.hired[0]?.version_name,

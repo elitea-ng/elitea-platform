@@ -4876,6 +4876,11 @@ export type attachPublicSkillResponse403 = {
   status: 403;
 };
 
+export type attachPublicSkillResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
 export type attachPublicSkillResponseSuccess = attachPublicSkillResponse200 & {
   headers: Headers;
 };
@@ -4883,6 +4888,7 @@ export type attachPublicSkillResponseError = (
   | attachPublicSkillResponse400
   | attachPublicSkillResponse401
   | attachPublicSkillResponse403
+  | attachPublicSkillResponse404
 ) & {
   headers: Headers;
 };
@@ -4898,7 +4904,11 @@ export const getAttachPublicSkillUrl = (projectId: string) => {
  * Forks the published (skill, version) into this project once, reusing an
  * existing local copy when one exists, then writes one
  * entity_skill_mapping row per agent version. Partial success is carried
- * per agent in `results`, not in the HTTP status.
+ * per agent in `results`, not in the HTTP status. With `fork_only` the
+ * agent list may be empty: the call only forks (the "Add to a conversation"
+ * action, ADR-0051 amendment 1, A1.4) and answers the project's copy in
+ * `skill_id` and `skill_version_id`, which the caller then pins to a
+ * conversation. A published version that does not exist answers 404 then.
  * @summary Fork a published skill into a project and attach it to agent versions
  */
 export const attachPublicSkill = async (
@@ -4954,7 +4964,7 @@ export const getAttachPublicSkillQueryKey = (
 
 export const getAttachPublicSkillQueryOptions = <
   TData = Awaited<ReturnType<typeof attachPublicSkill>>,
-  TError = N400Response | N401Response | N403Response,
+  TError = N400Response | N401Response | N403Response | N404Response,
 >(
   projectId: string,
   attachPublicSkillBody: AttachPublicSkillBody,
@@ -4999,11 +5009,11 @@ export type AttachPublicSkillQueryResult = NonNullable<
   Awaited<ReturnType<typeof attachPublicSkill>>
 >;
 export type AttachPublicSkillQueryError =
-  N400Response | N401Response | N403Response;
+  N400Response | N401Response | N403Response | N404Response;
 
 export function useAttachPublicSkill<
   TData = Awaited<ReturnType<typeof attachPublicSkill>>,
-  TError = N400Response | N401Response | N403Response,
+  TError = N400Response | N401Response | N403Response | N404Response,
 >(
   projectId: string,
   attachPublicSkillBody: AttachPublicSkillBody,
@@ -5031,7 +5041,7 @@ export function useAttachPublicSkill<
 };
 export function useAttachPublicSkill<
   TData = Awaited<ReturnType<typeof attachPublicSkill>>,
-  TError = N400Response | N401Response | N403Response,
+  TError = N400Response | N401Response | N403Response | N404Response,
 >(
   projectId: string,
   attachPublicSkillBody: AttachPublicSkillBody,
@@ -5059,7 +5069,7 @@ export function useAttachPublicSkill<
 };
 export function useAttachPublicSkill<
   TData = Awaited<ReturnType<typeof attachPublicSkill>>,
-  TError = N400Response | N401Response | N403Response,
+  TError = N400Response | N401Response | N403Response | N404Response,
 >(
   projectId: string,
   attachPublicSkillBody: AttachPublicSkillBody,
@@ -5083,7 +5093,7 @@ export function useAttachPublicSkill<
 
 export function useAttachPublicSkill<
   TData = Awaited<ReturnType<typeof attachPublicSkill>>,
-  TError = N400Response | N401Response | N403Response,
+  TError = N400Response | N401Response | N403Response | N404Response,
 >(
   projectId: string,
   attachPublicSkillBody: AttachPublicSkillBody,

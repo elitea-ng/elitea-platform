@@ -53,6 +53,14 @@ export const AttachPublicSkill200 = zod.object({
       }),
     )
     .optional(),
+  skill_id: zod
+    .int()
+    .optional()
+    .describe("The project's own copy of the skill (forked now, or earlier)."),
+  skill_version_id: zod
+    .int()
+    .optional()
+    .describe("The copy's version that holds the published text."),
 });
 
 export type AttachPublicSkill200 = zod.input<typeof AttachPublicSkill200>;
