@@ -53,6 +53,10 @@ Each attached agent or pipeline shows one line under its card:
 
 If the approval fails after the agent was attached, the agent stays attached and a message says why. Use **Review delegation** to try again.
 
+## Agents attached before delegations existed
+
+When the platform was upgraded, each attached agent that holds more than the agent it is attached to got a pending delegation that nobody approved, and the owners of the calling agent got one notification. A banner above the Tools panel counts them: "2 delegations from before this release await review". Each row says **Delegation not approved**. Open **Review delegation** on a row and approve what the attached agent should be able to use. Until you do, the attached agent runs without what it holds beyond the calling agent, or the call is refused, as it was before the upgrade. Nothing was approved for you. An administrator sees the same queue for every project in **Admin > Delegations awaiting review**.
+
 ## The desktop and mobile apps
 
 The desktop app shows the same window and row, because its screens are the web app's. A nested agent runs as a cloud turn, so it is bounded by what its owner and the person running it may use.

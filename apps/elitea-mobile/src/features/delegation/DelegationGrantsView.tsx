@@ -7,6 +7,8 @@ import { Button, EmptyState, ListSection, Text, useLayoutMargin } from '@/ui';
 
 export const DELEGATION_HINT = 'Attaching an agent to another one is done on the web or desktop app.';
 export const REAPPROVAL_GOVERNED_NOTE = 'Re-approval is decided in a change request on the web or desktop app. Until then the agent runs without the new items.';
+export const LEGACY_BANNER = (count: number): string =>
+  `${count === 1 ? '1 delegation' : `${count} delegations`} from before this release await${count === 1 ? 's' : ''} review. Nothing was approved for you, so the attached ${count === 1 ? 'agent runs' : 'agents run'} without what ${count === 1 ? 'it holds' : 'they hold'} beyond this agent until you approve ${count === 1 ? 'it' : 'them'}.`;
 export const GOVERNED_NOTE = 'Awaiting approval, decided in a change request on the web or desktop app.';
 
 export interface DelegationGrantsViewProps {
@@ -73,6 +75,7 @@ export function DelegationGrantsView({ agentName, status, grants, names, busy, b
       </View>
     );
   }
+  const awaitingFromBefore = grants.filter((grant) => grant.state === 'pending' && grant.legacy).length;
   const content =
     grants.length === 0 ? (
       status.kind === 'error' ? (
@@ -85,6 +88,11 @@ export function DelegationGrantsView({ agentName, status, grants, names, busy, b
         {banner ? (
           <Text variant="footnote" tone="danger" accessibilityRole="alert">
             {banner}
+          </Text>
+        ) : null}
+        {awaitingFromBefore > 0 ? (
+          <Text variant="callout" testID="delegation-legacy-banner">
+            {LEGACY_BANNER(awaitingFromBefore)}
           </Text>
         ) : null}
         <ListSection title={grants.length === 1 ? '1 delegation' : `${grants.length} delegations`} footer={DELEGATION_HINT}>

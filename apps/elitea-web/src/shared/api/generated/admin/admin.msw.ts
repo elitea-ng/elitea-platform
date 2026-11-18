@@ -72,6 +72,8 @@ import type {
   CredentialRevokeResult,
   CredentialUseGrant,
   CredentialUseGrantListResponse,
+  DelegationReview,
+  DelegationScanResult,
   EntitlementGrantList,
   ExecutionSuspension,
   ExecutionSuspensionList,
@@ -435,6 +437,50 @@ export const getListAdminAgentRegistryResponseMock = (
     },
     faker.word.sample(),
   ]);
+
+export const getGetDelegationReviewResponseMock = (
+  overrideResponse: Partial<Extract<DelegationReview, object>> = {},
+): DelegationReview => ({
+  pending: faker.number.int(),
+  legacy: faker.number.int(),
+  stale: faker.number.int(),
+  mode: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  mode_stored: faker.datatype.boolean(),
+  principal_bound: faker.datatype.boolean(),
+  report_window_days: faker.number.int(),
+  projects: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    project_id: faker.number.int(),
+    project_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    pending: faker.number.int(),
+    legacy: faker.number.int(),
+    stale: faker.number.int(),
+    callers: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      application_id: faker.number.int(),
+      name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      pending: faker.number.int(),
+      stale: faker.number.int(),
+    })),
+  })),
+  ...overrideResponse,
+});
+
+export const getScanDelegationReviewResponseMock = (
+  overrideResponse: Partial<Extract<DelegationScanResult, object>> = {},
+): DelegationScanResult => ({
+  projects: faker.number.int(),
+  scanned: faker.number.int(),
+  failed: faker.number.int(),
+  edges: faker.number.int(),
+  created: faker.number.int(),
+  notified: faker.number.int(),
+  ...overrideResponse,
+});
 
 export const getExportEntitlementsResponseMock = (
   overrideResponse: Partial<
@@ -4033,6 +4079,58 @@ export const getListAdminAgentRegistryMockHandler = (
   );
 };
 
+export const getGetDelegationReviewMockHandler = (
+  overrideResponse?:
+    | DelegationReview
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<DelegationReview> | DelegationReview),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/delegation_review",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetDelegationReviewResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getScanDelegationReviewMockHandler = (
+  overrideResponse?:
+    | DelegationScanResult
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<DelegationScanResult> | DelegationScanResult),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/delegation_review/scan",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getScanDelegationReviewResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getExportEntitlementsMockHandler = (
   overrideResponse?:
     | EntitlementGrantList
@@ -6388,6 +6486,8 @@ export const getAdminMock = () => [
   getListBackgroundJobsMockHandler(),
   getCancelBackgroundJobMockHandler(),
   getListAdminAgentRegistryMockHandler(),
+  getGetDelegationReviewMockHandler(),
+  getScanDelegationReviewMockHandler(),
   getExportEntitlementsMockHandler(),
   getListCredentialInventoryMockHandler(),
   getRevokeInventoryCredentialMockHandler(),

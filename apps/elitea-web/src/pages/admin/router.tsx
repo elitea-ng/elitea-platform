@@ -97,6 +97,7 @@ const AdminGatewayGovernance = lazyRouteComponent(
 );
 const AdminAgentRegistry = lazyRouteComponent(() => import('./AgentRegistry'), 'AdminAgentRegistry');
 const AdminConnectorRequests = lazyRouteComponent(() => import('./ConnectorRequests'), 'AdminConnectorRequests');
+const AdminDelegationReview = lazyRouteComponent(() => import('./DelegationReview'), 'AdminDelegationReview');
 const AdminCredentialInventory = lazyRouteComponent(
   () => import('./CredentialInventory'),
   'AdminCredentialInventory',
@@ -261,6 +262,16 @@ const connectorRequestsRoute = createRoute({
   component: AdminConnectorRequests,
 });
 
+/**
+ * Admin › Delegations awaiting review (ADR-0044 Amendment 1, A1.3; epic 2156
+ * story S6). See `./DelegationReview.tsx`'s header.
+ */
+const delegationReviewRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/delegation-review',
+  component: AdminDelegationReview,
+});
+
 /** Admin › Credential inventory and Permission trimming (ADR-0044 decision 5, #1501). */
 const credentialInventoryRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -325,6 +336,7 @@ const adminRouteTree = rootRoute.addChildren([
   governanceRoute,
   agentRegistryRoute,
   connectorRequestsRoute,
+  delegationReviewRoute,
   credentialInventoryRoute,
   permissionTrimmingRoute,
   budgetsRoute,

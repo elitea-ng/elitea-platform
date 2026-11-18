@@ -31,6 +31,7 @@ import {
   configFailureStatus,
   useAdminConfigSections,
   useAdminConfigValues,
+  type AdminConfigStatus,
   useSaveAdminConfigValues,
   type AdminConfigField,
   type AdminConfigSection,
@@ -45,6 +46,8 @@ export interface AdminConfigurationPageState {
   /** The server's reason this section cannot be edited, when it gave one. */
   readonly unavailableReason: string | undefined;
   readonly values: Readonly<Record<string, unknown>>;
+  /** What the server shows next to the values (the Delegation section's pending count). */
+  readonly status: AdminConfigStatus | undefined;
   readonly isLoadingValues: boolean;
   readonly valuesError: string | undefined;
   readonly onFieldChange: (key: string, next: unknown) => void;
@@ -150,7 +153,7 @@ function useAdminConfigSectionsPage(page: string | undefined): AdminConfiguratio
     activeSection !== undefined && (activeSection.unavailable_reason ?? '') === '';
 
   const valuesQuery = useAdminConfigValues(activeSection?.id, isAvailable);
-  const serverValues = valuesQuery.data;
+  const serverValues = valuesQuery.data?.values;
 
   const values = useMemo(
     (): Readonly<Record<string, unknown>> => ({ ...serverValues, ...draft }),
@@ -221,6 +224,7 @@ function useAdminConfigSectionsPage(page: string | undefined): AdminConfiguratio
         ? configFailureReason(valuesQuery.error)
         : undefined),
     values,
+    status: valuesQuery.data?.status,
     isLoadingValues: valuesQuery.isLoading && isAvailable,
     valuesError,
     onFieldChange,
