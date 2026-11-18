@@ -147,6 +147,16 @@ describe('composer drafts', () => {
     expect(textarea()).toHaveValue('kept numeric');
   });
 
+  it('registering the alias keeps the newer text when both forms hold a draft (#2229)', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    writeDraft('chat:1:12', 'older numeric');
+    vi.setSystemTime(2_000);
+    writeDraft('chat:1:u-abc', 'typed just now');
+    rememberDraftAlias('chat:1:u-abc', 'chat:1:12');
+    expect(readDraft('chat:1:12')).toBe('typed just now');
+  });
+
   it('the logout sweep clears drafts and the id aliases (#2229)', () => {
     writeDraft('chat:1:12', 'private');
     rememberDraftAlias('chat:1:u-abc', 'chat:1:12');

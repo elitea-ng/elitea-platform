@@ -89,12 +89,15 @@ export function rememberDraftAlias(alias: string, canonical: string): void {
   const moving = all[alias];
   if (moving !== undefined) {
     delete all[alias];
-    if (all[canonical] === undefined) all[canonical] = moving;
+    // Both forms hold text: the newer one stays, so what was just typed is never dropped for an old draft.
+    const there = all[canonical];
+    if (there === undefined || there.at <= moving.at) all[canonical] = moving;
     writeAll(all);
   }
   try {
-    const next = { ...readAliases(), [alias]: canonical };
-    createStorage('local').setJSON(ALIASES_KEY, Object.fromEntries(Object.entries(next).slice(-MAX_ALIASES)));
+    // Re-added last, so the newest aliases are the ones the cap keeps.
+    const others = Object.entries(readAliases()).filter(([key]) => key !== alias);
+    createStorage('local').setJSON(ALIASES_KEY, Object.fromEntries([...others, [alias, canonical]].slice(-MAX_ALIASES)));
   } catch {
     // Storage refused: the two forms keep separate drafts.
   }
