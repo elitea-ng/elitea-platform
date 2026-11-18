@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/go-chi/chi/v5"
 
@@ -151,8 +152,8 @@ func (h *Handler) mcpOAuthProxy(w http.ResponseWriter, r *http.Request) {
 	if credentials.clientSecret != "" {
 		form.Set("client_secret", credentials.clientSecret)
 	}
-	if credentials.scope != "" {
-		form.Set("scope", credentials.scope)
+	if scope := normalizeOAuthScope(credentials.scope); scope != "" {
+		form.Set("scope", scope)
 	}
 	if grantType == "refresh_token" {
 		form.Set("refresh_token", body.RefreshToken)
@@ -268,7 +269,7 @@ func (h *Handler) mcpDCRProxy(w http.ResponseWriter, r *http.Request) {
 		"application_type":           applicationType,
 	}
 	setOptionalMCPDCRField(registration, "client_name", body.ClientName)
-	setOptionalMCPDCRField(registration, "scope", body.Scope)
+	setOptionalMCPDCRField(registration, "scope", normalizeOAuthScope(body.Scope))
 	setOptionalMCPDCRField(registration, "software_id", body.SoftwareID)
 	setOptionalMCPDCRField(registration, "software_version", body.SoftwareVersion)
 	requestBody, err := json.Marshal(registration)
@@ -401,7 +402,7 @@ func (h *Handler) resolveMCPOAuthCredentials(
 	}
 	credentials := mcpOAuthCredentials{
 		clientID: body.ClientID,
-		scope:    body.Scope,
+		scope:    normalizeOAuthScope(body.Scope),
 	}
 	secret, placeholder, err := normalizeMCPClientSecret(body.ClientSecret)
 	if err != nil {
@@ -725,6 +726,18 @@ func firstOAuthText(layers []map[string]any, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+// normalizeOAuthScope turns a scope string into the space-separated list RFC
+// 6749 section 3.3 defines. Toolkit credentials ship their scopes as
+// "User.Read, Chat.Read" (and the browser flow splits on commas for the
+// authorization request), so a stored string reaches the token request with
+// commas still on it; Entra reads `User.Read,` as a scope of that name and
+// answers AADSTS650053 (#2147).
+func normalizeOAuthScope(scope string) string {
+	return strings.Join(strings.FieldsFunc(scope, func(r rune) bool {
+		return r == ',' || unicode.IsSpace(r)
+	}), " ")
 }
 
 func firstOAuthScope(layers []map[string]any) string {

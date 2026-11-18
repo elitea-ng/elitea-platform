@@ -372,6 +372,10 @@ pub struct IndexCatalogEntry {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct IndexCatalog {
     entries: Vec<IndexCatalogEntry>,
+    /// Indexes the registry lists but that hold no vectors yet (created and
+    /// never run, or a run that failed before storing any): named by
+    /// `list_indexes`, not searchable, so no embedding space.
+    pending: Vec<String>,
 }
 
 /// Why the frozen `indexes` value was refused. Names a key, never a value.
@@ -394,13 +398,31 @@ impl IndexCatalog {
     /// A catalog of `entries`.
     #[must_use]
     pub fn new(entries: Vec<IndexCatalogEntry>) -> Self {
-        Self { entries }
+        Self {
+            entries,
+            pending: Vec::new(),
+        }
+    }
+
+    /// This catalog with the names of the indexes that hold no vectors yet.
+    #[must_use]
+    pub fn with_pending(mut self, pending: Vec<String>) -> Self {
+        self.pending = pending;
+        self
+    }
+
+    /// The names of the listed indexes that hold no vectors yet.
+    #[must_use]
+    pub fn pending(&self) -> &[String] {
+        &self.pending
     }
 
     /// Reads the frozen toolkit's `indexes` value: an array of objects, each
     /// with a non-empty `name`, a canonical `index_id`, an `embedding_model`
-    /// and an `embedding_dimension` in 1..=65536. Duplicate names are
-    /// refused: a name must address one namespace.
+    /// and an `embedding_dimension` in 1..=65536. An entry carrying neither
+    /// `embedding_model` nor `embedding_dimension` is an index that holds no
+    /// vectors yet (failed or never run): it is listed, not searched.
+    /// Duplicate names are refused: a name must address one namespace.
     ///
     /// # Errors
     ///
@@ -413,6 +435,7 @@ impl IndexCatalog {
             return Err(IndexCatalogError("`indexes` holds too many entries"));
         }
         let mut entries = Vec::with_capacity(items.len());
+        let mut pending: Vec<String> = Vec::new();
         for item in items {
             let object = item
                 .as_object()
@@ -428,6 +451,26 @@ impl IndexCatalog {
                     "an `indexes` entry has a non-canonical `index_id`",
                 ));
             }
+            // An entry with no embedding space at all is an index that holds
+            // no vectors yet: listed, never searched. One with half a space
+            // is malformed.
+            let unstamped = object
+                .get("embedding_model")
+                .is_none_or(|model| model.is_null() || model.as_str() == Some(""))
+                && object
+                    .get("embedding_dimension")
+                    .is_none_or(|dimension| dimension.is_null() || dimension.as_u64() == Some(0));
+            if unstamped {
+                if entries
+                    .iter()
+                    .any(|entry: &IndexCatalogEntry| entry.name == name)
+                    || pending.contains(&name)
+                {
+                    return Err(IndexCatalogError("`indexes` repeats a name"));
+                }
+                pending.push(name);
+                continue;
+            }
             let embedding_model = bounded_text(object, "embedding_model", MAX_MODEL_NAME_BYTES)?;
             let dimension = object
                 .get("embedding_dimension")
@@ -439,6 +482,7 @@ impl IndexCatalog {
             if entries
                 .iter()
                 .any(|entry: &IndexCatalogEntry| entry.name == name)
+                || pending.contains(&name)
             {
                 return Err(IndexCatalogError("`indexes` repeats a name"));
             }
@@ -451,7 +495,7 @@ impl IndexCatalog {
                 })?,
             });
         }
-        Ok(Self { entries })
+        Ok(Self { entries, pending })
     }
 
     /// The entries, in listing order.
@@ -462,9 +506,10 @@ impl IndexCatalog {
 
     /// Takes the index `name` out; whether it was there.
     fn remove(&mut self, name: &str) -> bool {
-        let before = self.entries.len();
+        let before = self.entries.len() + self.pending.len();
         self.entries.retain(|entry| entry.name != name);
-        self.entries.len() != before
+        self.pending.retain(|pending| pending != name);
+        self.entries.len() + self.pending.len() != before
     }
 }
 

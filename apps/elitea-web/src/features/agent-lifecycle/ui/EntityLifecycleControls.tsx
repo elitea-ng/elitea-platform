@@ -91,6 +91,7 @@ export function EntityLifecycleControls({
       const link = buildEntityShareLink({
         origin: window.location.origin,
         basename: getLifecycleBasename(),
+        ...(projectId === undefined ? {} : { projectId }),
         entity,
         tab: tab ?? 'all',
         entityId,
@@ -101,7 +102,7 @@ export function EntityLifecycleControls({
       setError(undefined);
       setNotice(t('features.agentLifecycle.notice.linkCopied', 'The link has been copied to the clipboard.'));
     },
-    [entity, entityId, entityName, tab],
+    [entity, entityId, entityName, projectId, tab],
   );
 
   // One conversion, at this boundary. Every lifecycle route takes the version

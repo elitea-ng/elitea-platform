@@ -240,6 +240,11 @@ impl ClaimIndexToolHost {
             ));
         }
         let Some(entry) = catalog.entry(index_name) else {
+            if catalog.is_pending(index_name) {
+                return Err(IndexToolFailure::new(format!(
+                    "Index '{index_name}' holds no vectors, so there is nothing to remove from the vector store; delete it from the toolkit's Indexes tab"
+                )));
+            }
             return Err(IndexToolFailure::new(index_not_found_message(
                 index_name,
                 &catalog.list_indexes(),
@@ -316,7 +321,8 @@ impl ClaimIndexToolHost {
                 }
             })
             .collect();
-        (IndexCatalog::new(entries), models)
+        let pending = frozen.pending().to_vec();
+        (IndexCatalog::new(entries).with_pending(pending), models)
     }
 }
 

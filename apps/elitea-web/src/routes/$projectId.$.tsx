@@ -8,6 +8,7 @@ import { create } from 'zustand';
 import { createHttpClient } from '@/shared/api/http';
 import { getConfig } from '@/shared/config';
 import { t } from '@/shared/i18n';
+import { writePersistedProject } from '@/shared/lib/selectedProjectPersistence';
 
 import { NotFoundPage } from './__404';
 
@@ -311,6 +312,11 @@ function switchToFoundProject(
   queryClient: QueryClient,
 ): void {
   getProjectStore().getState().setProject({ id: project.id, name: project.name });
+  // The selection the app boots from (#2148): `performProjectSwitch` reloads,
+  // and the reloaded app reads its selected project from storage. Without this
+  // write the project segment of a shared link was stripped and the page opened
+  // in whatever project the reader had selected before.
+  writePersistedProject({ id: String(project.id), name: project.name });
   performProjectSwitch(
     {
       projectId,

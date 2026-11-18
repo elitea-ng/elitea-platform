@@ -140,9 +140,11 @@ WHERE project_id = $1 AND user_id = $2 AND bucket = $3`,
 }
 
 // BucketGate is what a bucket route needs before it reads the bucket: whether
-// the name is the project's hidden workspace bucket (by type), and the
-// caller's exception for it.
+// the name is a hidden bucket (the project's workspace bucket, by type, or the
+// platform's own index result bucket, #2167), and the caller's exception for
+// it.
 type BucketGate struct {
+	// Workspace is true for a hidden bucket: every route answers it as absent.
 	Workspace   bool
 	Permissions []string
 	// Found is false when the caller has no exception for the bucket (the
@@ -161,7 +163,8 @@ func (r *ArtifactBucketPermissionsRepository) BucketGate(
 	)
 	err := r.pool.QueryRow(ctx, `
 SELECT EXISTS (SELECT 1 FROM elitea_storage.buckets
-               WHERE project_id = $1 AND name = $3 AND bucket_type = 'workspace' AND deleted_at IS NULL),
+               WHERE project_id = $1 AND name = $3 AND deleted_at IS NULL
+                 AND `+hiddenBucketSQL+`),
        p.user_id IS NOT NULL,
        p.permissions
 FROM (SELECT 1) AS one
