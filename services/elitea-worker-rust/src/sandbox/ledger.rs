@@ -175,6 +175,17 @@ impl From<sqlx::Error> for LedgerError {
     }
 }
 
+/// The fence every terminal write shares: the exact job, the live owner and
+/// epoch, a lease still held, and the cancellation rule. One copy, so the
+/// write that keeps a failure detail and the one that does not cannot drift.
+/// A macro, not a const: `sqlx` takes only SQL it can see as a literal, and
+/// `concat!` joins literals.
+macro_rules! finish_fence {
+    () => {
+        " WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND owner_id=$5 AND lease_epoch=$6 AND lease_until > clock_timestamp() AND (phase='dispatched' OR (phase='reserved' AND $7 <> 'completed')) AND (NOT cancellation_requested OR $7='cancelled')"
+    };
+}
+
 pub struct JobLedger {
     pub(super) pool: PgPool,
 }
@@ -616,8 +627,9 @@ impl JobLedger {
             Phase::Reserved | Phase::Dispatched => return Err(LedgerError::Invalid),
         };
         if let Some(detail) = detail {
-            let kept = sqlx::query(&format!(
-                "UPDATE elitea_runtime.sandbox_jobs SET phase=$7,result_json=$8,failure_code=$9,failure_detail=$10,updated_at=clock_timestamp(){FINISH_FENCE}"
+            let kept = sqlx::query(concat!(
+                "UPDATE elitea_runtime.sandbox_jobs SET phase=$7,result_json=$8,failure_code=$9,failure_detail=$10,updated_at=clock_timestamp()",
+                finish_fence!()
             ))
             .bind(&lease.scope.tenant).bind(lease.scope.project).bind(lease.scope.key.as_slice()).bind(lease.scope.digest.as_slice())
             .bind(&lease.owner).bind(lease.epoch).bind(phase).bind(result).bind(failure).bind(detail)
@@ -630,19 +642,15 @@ impl JobLedger {
                 Err(error) => return Err(error),
             }
         }
-        let count = sqlx::query(&format!(
-            "UPDATE elitea_runtime.sandbox_jobs SET phase=$7,result_json=$8,failure_code=$9,updated_at=clock_timestamp(){FINISH_FENCE}"
+        let count = sqlx::query(concat!(
+            "UPDATE elitea_runtime.sandbox_jobs SET phase=$7,result_json=$8,failure_code=$9,updated_at=clock_timestamp()",
+            finish_fence!()
         ))
         .bind(&lease.scope.tenant).bind(lease.scope.project).bind(lease.scope.key.as_slice()).bind(lease.scope.digest.as_slice())
         .bind(&lease.owner).bind(lease.epoch).bind(phase).bind(result).bind(failure).execute(&self.pool).await?.rows_affected();
         changed(count)
     }
 }
-
-/// The fence every terminal write shares: the exact job, the live owner and
-/// epoch, a lease still held, and the cancellation rule. One copy, so the
-/// write that keeps a failure detail and the one that does not cannot drift.
-const FINISH_FENCE: &str = " WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND owner_id=$5 AND lease_epoch=$6 AND lease_until > clock_timestamp() AND (phase='dispatched' OR (phase='reserved' AND $7 <> 'completed')) AND (NOT cancellation_requested OR $7='cancelled')";
 
 fn validate_ttl(seconds: i32) -> Result<(), LedgerError> {
     if (5..=300).contains(&seconds) {
