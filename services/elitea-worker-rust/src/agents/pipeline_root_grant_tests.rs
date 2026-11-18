@@ -14,8 +14,8 @@ use super::scoped_tests::{
 use super::*;
 use crate::protocol::output::RuntimeFailureKind;
 use elitea_agent_runtime::delegation::{
-    DelegationGrant, DelegationPolicy, DelegationScope, EdgeKey, EdgeKind, GrantSet,
-    NarrowingMode, PrincipalBound, PrincipalToolkit,
+    DelegationGrant, DelegationPolicy, DelegationScope, EdgeKey, EdgeKind, GrantSet, NarrowingMode,
+    PrincipalBound, PrincipalToolkit,
 };
 use std::collections::BTreeMap;
 
@@ -989,10 +989,7 @@ async fn an_agent_node_inside_a_saved_pipeline_node_is_refused_by_its_graph_path
         ),
     ]);
     let fixture = fixture(&versions, vec![text("unexpected")]);
-    let request = root_request(
-        &root_yaml("p2"),
-        vec![reference((7, 8), "pipeline", "p2")],
-    );
+    let request = root_request(&root_yaml("p2"), vec![reference((7, 8), "pipeline", "p2")]);
     let Err(error) = fixture.assembler.assemble(enforcing(&request)).await else {
         panic!("a refused nested Agent node must end the run at start");
     };
@@ -1038,8 +1035,14 @@ fn granted(mode: NarrowingMode, grants: Vec<(EdgeKey, DelegationGrant)>) -> Dele
 fn principal() -> PrincipalBound {
     PrincipalBound::new(
         [
-            PrincipalToolkit { id: 92, tools: None },
-            PrincipalToolkit { id: 93, tools: None },
+            PrincipalToolkit {
+                id: 92,
+                tools: None,
+            },
+            PrincipalToolkit {
+                id: 93,
+                tools: None,
+            },
         ],
         None,
         Vec::<String>::new(),
@@ -1248,13 +1251,13 @@ async fn a_depth_refusal_at_an_agent_node_carries_the_notice() {
                 vec![reference((3, 4), "agent", "inner")],
             ),
         ),
-        ((3, 4), saved_version("agent", "Plain.", &json!({}), Vec::new())),
+        (
+            (3, 4),
+            saved_version("agent", "Plain.", &json!({}), Vec::new()),
+        ),
     ]);
     let fixture = fixture(&versions, vec![text("unexpected")]);
-    let request = root_request(
-        &root_yaml("p2"),
-        vec![reference((7, 8), "pipeline", "p2")],
-    );
+    let request = root_request(&root_yaml("p2"), vec![reference((7, 8), "pipeline", "p2")]);
     let Err(error) = fixture
         .assembler
         .assemble(enforcing_at_depth(&request, 1))
@@ -1274,4 +1277,128 @@ async fn a_depth_refusal_at_an_agent_node_carries_the_notice() {
     assert_eq!(notice.value["reason"], "depth", "{}", describe(&error));
     assert_eq!(notice.value["id"], "pipeline_node:delegate/delegate");
     assert_eq!(model_calls(&fixture.captured), 0);
+}
+
+// ---- parity: a pipeline root delegates exactly as an ordinary root ----
+
+/// What `scope` does with S asking for `callee`: the evidence (effective
+/// digest, refusal, grant and what it narrowed out) and the tools S keeps.
+fn delegated(scope: &DelegationScope, callee: &[Value]) -> (Result<String, String>, Vec<Value>) {
+    let mut tools = callee.to_vec();
+    let outcome = scope
+        .delegate_edge(
+            Some(3),
+            &mut tools,
+            &std::collections::BTreeSet::new(),
+            &elitea_agent_runtime::egress::PublicPolicy::Open,
+        )
+        .map(|delegation| format!("{:?}", delegation.evidence))
+        .map_err(|refused| format!("{:?} {:?}", refused.refusal, refused.evidence));
+    (outcome, tools)
+}
+
+/// The condition of the ruling: the fix never gives a pipeline root more than
+/// an ordinary root with the same attachments, grants and policy. Both roots
+/// are composed by their production code (`ordinary.rs` and
+/// `pipeline::root_delegation_and_credentials`) under one claim carrying a
+/// partial grant (only `echo`) and a principal bound without `outside`. They
+/// must hold the same ceiling and give S the same effective set and the same
+/// narrowing records, whether the root itself holds `get_issues` and
+/// `reverse` (they reach S: a grant never takes away what the caller holds)
+/// or not (they are narrowed out). A toolkit outside P is refused by both.
+#[test]
+fn a_pipeline_root_delegates_exactly_as_an_ordinary_root_with_the_same_inputs() {
+    let all = ["get_issues", "echo", "reverse"];
+    for (root_holds, root_batch) in [(true, batch_with(&all)), (false, batch_with(&["echo"]))] {
+        let tools = vec![
+            root_batch,
+            mcp_toolkit_at(93, "unused", UNUSED_URL),
+            mcp_toolkit_at(94, "outside", OUTSIDE_URL),
+            reference((3, 4), "agent", "worker"),
+        ];
+        let authority = test_runtime_context_authority().with_delegation_policy_for_test(
+            granted(NarrowingMode::Enforce, vec![grant_of(3, &["echo"])])
+                .with_principal(principal()),
+        );
+        let admission = ToolAdmissionPolicy::new(&[], &BTreeMap::new()).expect("policy");
+        // The ordinary root, as `ordinary.rs` composes it.
+        let mut ordinary = ordinary_request(AgentExecutionKind::Application);
+        ordinary.payload.application["version_details"]["tools"] = Value::Array(tools.clone());
+        let ordinary_snapshot = super::super::application_tools::principal_bounded_snapshot(
+            &authority,
+            crate::toolkits::FrozenToolSnapshot::from_request(&ordinary)
+                .expect("ordinary snapshot")
+                .apply_policy(&admission),
+        );
+        let ordinary_scope = super::super::application_tools::root_delegation_scope(
+            &authority,
+            AgentExecutionKind::Application,
+            &ordinary_snapshot,
+        );
+        // The pipeline root, through its production composition.
+        let pipeline = root_request(&root_yaml("worker"), tools);
+        let (profile, _, toolsets, ..) = authorized(&pipeline)
+            .admit_pipeline_with_policy(&admission)
+            .expect("pipeline admission")
+            .into_parts();
+        let (pipeline_scope, credentials) =
+            super::super::pipeline::root_delegation_and_credentials(&authority, &profile, toolsets);
+        let case = format!("root holds get_issues and reverse: {root_holds}");
+        assert_eq!(
+            pipeline_scope.cache_key(),
+            ordinary_scope.cache_key(),
+            "{case}"
+        );
+        // The ceiling is own(root) ∩ P: never `outside`, whatever the root attaches.
+        let own_in_p = DelegationScope::root(
+            Arc::new(granted(NarrowingMode::Enforce, Vec::new()).with_principal(principal())),
+            GrantSet::from_tools(&[
+                if root_holds {
+                    batch_with(&all)
+                } else {
+                    batch_with(&["echo"])
+                },
+                mcp_toolkit_at(93, "unused", UNUSED_URL),
+            ]),
+        );
+        assert_eq!(
+            pipeline_scope.grants().digest(),
+            own_in_p.grants().digest(),
+            "{case}"
+        );
+        // Credentials stay on what the root's own nodes select: its one Agent
+        // node's alias, no toolkit.
+        assert_eq!(credentials.len(), 1, "{case}");
+        for callee in [
+            vec![mcp_toolkit()],
+            vec![mcp_toolkit_at(94, "outside", OUTSIDE_URL)],
+        ] {
+            let (pipeline_outcome, pipeline_tools) = delegated(&pipeline_scope, &callee);
+            let (ordinary_outcome, ordinary_tools) = delegated(&ordinary_scope, &callee);
+            assert_eq!(pipeline_outcome, ordinary_outcome, "{case}");
+            assert_eq!(pipeline_tools, ordinary_tools, "{case}");
+        }
+        // The values, not only their equality.
+        let (batch, kept) = delegated(&pipeline_scope, &[mcp_toolkit()]);
+        let batch = batch.expect("S is delegated");
+        let narrowed = batch.contains("get_issues") && batch.contains("reverse");
+        assert_eq!(narrowed, !root_holds, "{case}: {batch}");
+        assert_eq!(
+            kept[0]["settings"]["selected_tools"],
+            if root_holds {
+                json!(all)
+            } else {
+                json!(["echo"])
+            },
+            "{case}"
+        );
+        let (outside, _) = delegated(
+            &pipeline_scope,
+            &[mcp_toolkit_at(94, "outside", OUTSIDE_URL)],
+        );
+        assert!(
+            outside.is_err_and(|refused| refused.starts_with("PrincipalBound")),
+            "{case}"
+        );
+    }
 }

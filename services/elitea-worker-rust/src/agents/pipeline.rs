@@ -670,11 +670,8 @@ impl PipelineNativeAgentAssembler {
             None
         };
         tracing::Span::current().record("stage", "toolsets");
-        let aliases = profile.definition().runtime_toolkit_aliases();
-        let selected_snapshot = super::application_tools::principal_bounded_snapshot(
-            runtime_context,
-            toolsets.retain_toolkit_names(&aliases),
-        );
+        let (delegation_root, selected_snapshot) =
+            root_delegation_and_credentials(runtime_context, profile, toolsets);
         // The claim is lent to the `artifact` family here as on the ordinary
         // path (#906): its authority is the live claim, and a direct node or a
         // model calls it mid-run, after assembly. Without it the family is
@@ -835,11 +832,7 @@ impl PipelineNativeAgentAssembler {
         // ADR-0044 decision 3: every saved agent or pipeline a node runs is a
         // delegation from this pipeline, narrowed against its own grants.
         let materialization = ApplicationMaterializationPath::native_graph(continuation)
-            .with_delegation(super::application_tools::root_delegation_scope(
-                runtime_context,
-                super::request::AgentExecutionKind::Application,
-                &selected_snapshot,
-            ))
+            .with_delegation(delegation_root)
             .with_governed(governed.clone());
         let application_runtime = context
             .clone()
@@ -2852,6 +2845,27 @@ pub(crate) fn saved_pipeline_resolver_for_tests(
             .collect(),
         call_owners: BTreeMap::new(),
     })
+}
+
+/// The pipeline root's delegation scope (ADR-0044 decision 3) and the
+/// snapshot its own nodes materialize credentials from: the toolkits those
+/// nodes select, bounded by the run principal.
+pub(super) fn root_delegation_and_credentials<'a>(
+    runtime_context: &ClaimBoundRuntimeContextAuthority,
+    profile: &PipelineExecutionProfile,
+    toolsets: AdmittedToolSnapshot<'a>,
+) -> (DelegationScope, AdmittedToolSnapshot<'a>) {
+    let aliases = profile.definition().runtime_toolkit_aliases();
+    let selected = super::application_tools::principal_bounded_snapshot(
+        runtime_context,
+        toolsets.retain_toolkit_names(&aliases),
+    );
+    let delegation = super::application_tools::root_delegation_scope(
+        runtime_context,
+        super::request::AgentExecutionKind::Application,
+        &selected,
+    );
+    (delegation, selected)
 }
 
 type ScopedAgentBinding = (
