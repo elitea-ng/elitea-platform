@@ -258,7 +258,26 @@ Attaching an agent or a pipeline to another agent (an agent used as a tool, or a
 - **Drift.** The grant covers the set it recorded. When the callee later holds more (a new toolkit or tool, another credential reference, a new host or data class), the grant becomes *stale* and the added items stay out. A newer version of the callee with the same or a smaller set needs no approval. Re-approval replaces the grant and keeps the old one as *superseded*.
 - **Governed profile.** Under the governed profile the grant is approved through an [agent change request](/admin/enterprise-controls/agent-lifecycle) of kind `delegation` on the calling agent, with maker-checker at every tier, low included: the approver differs from the proposer, holds the approval permission of the agent's tier, and the tier's approval count applies. The direct approve route then answers 409 with the code `DELEGATION_GOVERNED` and the request to use. Rejecting or withdrawing the request revokes the grant. A delegation request is separate from the one open request an agent may have, so it never blocks a release.
 - **Detaching revokes the grant** once no version of the calling agent attaches the callee.
-- **Audit.** Each proposal, approval, re-approval, stale mark and revoke is a security audit event (`agent.delegation.*`).
+- **Audit.** Each proposal, approval, re-approval, stale mark, restore and revoke is a security audit event (`agent.delegation.*`).
+
+#### When the attached agent changes
+
+The platform compares what the callee holds now with its grant after any change that can widen it: publishing or editing a version, changing a toolkit, its tool selection, its credential reference, its egress hosts or the agent's data classes, a Marketplace hire, upgrade or upstream merge, and when someone opens the calling agent's grants. The check is set containment against what the callee held when the grant was proposed, never version equality.
+
+- **The same or a smaller set needs nothing.** A new version that drops a tool, or one that holds exactly what was approved, leaves the grant as it is. A stale grant comes back to approved when its callee is within it again.
+- **A wider set marks the grant `stale`.** The grant records what changed (`drift`: the callee version and the added toolkits, tools, credential references, data classes or hosts). The callee keeps running with what was approved; the added items are narrowed out for every run until the grant is re-approved.
+- **The editors are told once.** The people told are the calling agent's business and technical owners, the people who proposed and approved the grant, and the authors of the calling agent's recent versions. They get one notification per edge and per digest of the callee's set (`delegation_grant_stale`). The same drift is not announced twice, even if the notification was deleted; a different drift is a new notice, and so is a drift that returns after the callee was back within the grant.
+- **Re-approval replaces the grant.** An editor approves the stale grant. The new grant lists what the callee holds now, limited to what the approver has access to, and the old one is kept as `superseded`. Under the governed profile the editor's approval records a new change request of kind `delegation` instead, and a second person approves it.
+- **A growing closure only notifies.** When an agent your callee reaches through approved grants gains a grant, or one of them is re-approved, the editors get a `delegation_closure_grew` notification. Nothing changes state, because each hop still needs its own approved grant and passes the principal bound.
+
+#### Marketplace hire, upgrade and upstream merge
+
+An installed agent's internal edges (the agents it uses as tools) come from its listing version.
+
+- **Hire.** The hire, or the hire's change request when it needs one, approves the internal edges. The grants list what the approvers hold access to; an approver who lacks a toolkit leaves it out, and that agent runs without it.
+- **Upgrade.** The upgrade plan lists every internal edge whose agent holds more in the new version, next to the other changes. An upgrade that widens an edge always needs a person, at any tier, and approving it re-approves that edge. The `auto` upgrade policy never applies such a version.
+- **Upstream merge.** The review lists widened edges the same way, and a merge that widens one needs a person. Approving the request re-approves the agent's edges. A merge only writes a draft, so edges the fork gains when its editors publish it are caught by the drift check.
+- **Removed agents.** The grants of edges whose agent an upgrade removed are revoked.
 
 The review in the attach dialog is described next; the API (`listDelegationGrants`, `proposeDelegationGrant`, `previewDelegationGrant`, `approveDelegationGrant`, `revokeDelegationGrant`) is what it uses.
 

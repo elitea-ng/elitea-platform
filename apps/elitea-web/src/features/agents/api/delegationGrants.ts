@@ -147,7 +147,9 @@ export async function settleDelegation({ projectId, applicationId, calleeId, ite
     const grants = bodyOf<{ grants?: readonly DelegationGrant[] }>(await listDelegationGrants(projectId, applicationId)).grants ?? [];
     const grant = pendingGrantFor(grants, calleeId);
     if (grant === undefined) return { kind: 'approved' };
-    if (grant.governed) return { kind: 'awaiting' };
+    // A governed pending grant is decided in its change request; a governed stale one
+    // records its re-approval request when approve is asked (the 409 below).
+    if (grant.governed && grant.state === 'pending') return { kind: 'awaiting' };
     await approveDelegationGrant(projectId, applicationId, grant.id, items === undefined ? undefined : { items: [...items] });
     return { kind: 'approved' };
   } catch (error) {

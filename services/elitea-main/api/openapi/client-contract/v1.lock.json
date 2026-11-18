@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.61",
+  "client_contract": "1.62",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -1055,6 +1055,44 @@
                 },
                 "digest": {
                   "type": "string"
+                },
+                "drift": {
+                  "type": "object",
+                  "required": [
+                    "added",
+                    "callee_version_id",
+                    "digest"
+                  ],
+                  "properties": {
+                    "added": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "kind",
+                          "name"
+                        ],
+                        "properties": {
+                          "kind": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "toolkit": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "callee_version_id": {
+                      "type": "integer",
+                      "format": "int64"
+                    },
+                    "digest": {
+                      "type": "string"
+                    }
+                  }
                 },
                 "edge_kind": {
                   "type": "string"
@@ -10002,6 +10040,44 @@
                 "digest": {
                   "type": "string"
                 },
+                "drift": {
+                  "type": "object",
+                  "required": [
+                    "added",
+                    "callee_version_id",
+                    "digest"
+                  ],
+                  "properties": {
+                    "added": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "kind",
+                          "name"
+                        ],
+                        "properties": {
+                          "kind": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "toolkit": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "callee_version_id": {
+                      "type": "integer",
+                      "format": "int64"
+                    },
+                    "digest": {
+                      "type": "string"
+                    }
+                  }
+                },
                 "edge_kind": {
                   "type": "string"
                 },
@@ -10337,6 +10413,44 @@
                       },
                       "digest": {
                         "type": "string"
+                      },
+                      "drift": {
+                        "type": "object",
+                        "required": [
+                          "added",
+                          "callee_version_id",
+                          "digest"
+                        ],
+                        "properties": {
+                          "added": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "kind",
+                                "name"
+                              ],
+                              "properties": {
+                                "kind": {
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "type": "string"
+                                },
+                                "toolkit": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          },
+                          "callee_version_id": {
+                            "type": "integer",
+                            "format": "int64"
+                          },
+                          "digest": {
+                            "type": "string"
+                          }
+                        }
                       },
                       "edge_kind": {
                         "type": "string"
@@ -10777,6 +10891,44 @@
                     },
                     "digest": {
                       "type": "string"
+                    },
+                    "drift": {
+                      "type": "object",
+                      "required": [
+                        "added",
+                        "callee_version_id",
+                        "digest"
+                      ],
+                      "properties": {
+                        "added": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "kind",
+                              "name"
+                            ],
+                            "properties": {
+                              "kind": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "toolkit": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        },
+                        "callee_version_id": {
+                          "type": "integer",
+                          "format": "int64"
+                        },
+                        "digest": {
+                          "type": "string"
+                        }
+                      }
                     },
                     "edge_kind": {
                       "type": "string"
@@ -25207,6 +25359,44 @@
                 },
                 "digest": {
                   "type": "string"
+                },
+                "drift": {
+                  "type": "object",
+                  "required": [
+                    "added",
+                    "callee_version_id",
+                    "digest"
+                  ],
+                  "properties": {
+                    "added": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "kind",
+                          "name"
+                        ],
+                        "properties": {
+                          "kind": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "toolkit": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "callee_version_id": {
+                      "type": "integer",
+                      "format": "int64"
+                    },
+                    "digest": {
+                      "type": "string"
+                    }
+                  }
                 },
                 "edge_kind": {
                   "type": "string"

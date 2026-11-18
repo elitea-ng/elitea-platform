@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.61
+ * client contract:    1.62
  * operations sha256:  a836121d14038ae2f1db1dde8f4300b624195ee490ebe669220b1372ba3cd2fb
  */
 export interface paths {
@@ -1182,7 +1182,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Approve a pending delegation grant
+         * Approve a pending delegation grant, or re-approve a stale one
          * @description Client contract 1.58, ADR-0044 amendment 1. An editor of the caller approves a
          *     pending grant, all of it (no body) or only the items they choose (`items`).
          *     They can approve only what they hold access to: each toolkit and each
@@ -1193,7 +1193,12 @@ export interface paths {
          *     the agent that holds the reference. Under the governed profile the grant is
          *     approved through its change request instead, and this answers 409 with the
          *     code `DELEGATION_GOVERNED` and the `change_request_id`. Needs the permission
-         *     that edits an agent. Audited. NOTE(W2):
+         *     that edits an agent. Audited. Since 1.62 the grant may also be `stale`: the
+         *     callee now holds more than the grant recorded (`drift` lists what). Approving
+         *     re-approves it against what the callee holds now: the old grant is kept as
+         *     `superseded` and the answer is the new, approved grant. Under the governed
+         *     profile a stale grant is re-approved through a new change request, and this
+         *     answers 409 `DELEGATION_GOVERNED` with that request. NOTE(W2):
          *     internal/api/v2/delegationgrants/handler.go:270 (`Approve`).
          */
         post: operations["approveDelegationGrant"];
@@ -4281,6 +4286,17 @@ export interface components {
             items: components["schemas"]["DelegationItem"][];
             name: string;
         };
+        /** @description Client contract 1.62. What the callee of a `stale` grant holds now that the grant does not cover: the changes an editor of the caller reviews when they re-approve. Set containment against what the callee held when the grant was proposed, never version equality: a version with the same or a smaller set is not drift. */
+        DelegationDrift: {
+            added: components["schemas"]["DelegationItem"][];
+            /**
+             * Format: int64
+             * @description The callee version the changed set was read from; re-approving lists this version's set.
+             */
+            callee_version_id: number;
+            /** @description The SHA-256 of the callee's current set. One notification is sent per edge and digest. */
+            digest: string;
+        };
         /** @description The 409 of approveDelegationGrant under the governed profile, or the plain error body of any other 409. */
         DelegationGovernedError: {
             /**
@@ -4318,6 +4334,7 @@ export interface components {
             created_at: string;
             /** @description The SHA-256 of the approved set, as a delegation step records it. */
             digest: string;
+            drift?: components["schemas"]["DelegationDrift"];
             /** @description `sub_agent`, `agent_tool`, `pipeline_child` or `pipeline_node`. */
             edge_kind: string;
             /** @description Approved through an ADR-0040 change request, with maker-checker. */
@@ -4339,7 +4356,7 @@ export interface components {
             revoked_at?: string;
             /** Format: int64 */
             revoked_by?: number;
-            /** @description `pending` (not approved yet), `approved`, `stale` (the callee changed after approval; the grant still covers what it recorded), `superseded` (replaced by a re-approval) or `revoked`. */
+            /** @description `pending` (not approved yet), `approved`, `stale` (the callee now holds more than the grant recorded, see `drift`; the grant still covers what it recorded and the callee runs without the new items), `superseded` (replaced by a re-approval) or `revoked`. */
             state: string;
             /** Format: int64 */
             superseded_by?: number;
@@ -8079,7 +8096,7 @@ export interface operations {
             401: components["responses"]["401"];
             403: components["responses"]["403"];
             404: components["responses"]["404"];
-            /** @description The grant is not pending, or it is governed and is approved through its change request. */
+            /** @description The grant is neither pending nor stale, or it is governed and is approved through its change request. */
             409: {
                 headers: {
                     [name: string]: unknown;

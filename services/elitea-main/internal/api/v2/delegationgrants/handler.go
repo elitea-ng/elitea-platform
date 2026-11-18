@@ -90,6 +90,15 @@ type Grant struct {
 	// ChangeRequestID is the change request that approves a governed grant.
 	ChangeRequestID *int64  `json:"change_request_id,omitempty"`
 	ChangeState     *string `json:"change_state,omitempty"`
+	// Drift is what the callee holds now that a stale grant does not cover.
+	Drift *Drift `json:"drift,omitempty"`
+}
+
+// Drift is what a stale grant's callee holds beyond the grant (A1.2 rule 3).
+type Drift struct {
+	CalleeVersionID int64  `json:"callee_version_id"`
+	Digest          string `json:"digest"`
+	Added           []Item `json:"added"`
 }
 
 // GrantList is the grants of one caller agent.
@@ -136,6 +145,9 @@ func grant(v appgrants.View) Grant {
 		Items: items(v.Items), RequestedItems: items(v.RequestedItems), Omitted: items(g.Omitted),
 		ProposedBy: g.ProposedBy, ApprovedBy: g.ApprovedBy, ApprovedAt: g.ApprovedAt, RevokedBy: g.RevokedBy,
 		RevokedAt: g.RevokedAt, SupersededBy: g.SupersededBy, CreatedAt: g.CreatedAt.UTC(), UpdatedAt: g.UpdatedAt.UTC(),
+	}
+	if g.Drift != nil && g.State == dg.StateStale {
+		out.Drift = &Drift{CalleeVersionID: g.Drift.CalleeVersionID, Digest: g.Drift.Digest, Added: items(g.Drift.Added)}
 	}
 	if v.ChangeRequestID > 0 {
 		id, state := v.ChangeRequestID, string(v.ChangeState)

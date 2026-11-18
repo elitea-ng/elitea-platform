@@ -1498,7 +1498,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// grant per composition edge (caller, callee, edge kind), the set the
 	// worker reads as G(Y to X) (ADR-0044 amendment 1, delegation epic 2156
 	// story S2a). No permission.
-	require.EqualValues(t, 252, Head(tenant))
+	//
+	// 253: tenant/0253_delegation_drift.sql, delegation_grants.drift and
+	// closure, and delegation_drift_notices, the once-per-edge-and-digest
+	// notice record (delegation epic 2156 story S4). No permission.
+	require.EqualValues(t, 253, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

@@ -24,10 +24,12 @@ import { DelegationReviewDialog } from './DelegationReviewDialog';
  * needs re-approval (the callee changed after approval).
  *
  * The review opens the same dialog as the attach. What it can decide follows
- * the state: only a pending, ungoverned grant is approved here. A governed
- * grant is decided in its change request by a different approver, and a stale
- * one is re-approved by the flow that replaces the grant (S4); both open
- * read-only, so the person sees what is covered and why they cannot act.
+ * the state: a pending grant is approved here, and a stale one is re-approved
+ * against what the callee holds now (S4: the old grant is kept as superseded).
+ * A governed grant is decided in its change request by a different approver, so
+ * it opens read-only; a governed stale grant records that request when the
+ * person re-approves. A read-only viewer sees what is covered and why they
+ * cannot act.
  */
 export interface DelegationGrantStatusProps {
   readonly projectId: string;
@@ -45,8 +47,8 @@ interface Review {
 }
 
 /** What the dialog lists for a grant: what was approved once it is decided, what is asked while it is pending. */
-function previewFor(grant: DelegationGrant, current: DelegationPreview): DelegationPreview {
-  if (grant.state === 'pending') return current;
+function previewFor(grant: DelegationGrant, current: DelegationPreview, canAct: boolean): DelegationPreview {
+  if (grant.state === 'pending' || (grant.state === 'stale' && canAct)) return current;
   return { ...current, items: grant.requested_items, approvable: [], withheld: grant.omitted };
 }
 
@@ -63,18 +65,21 @@ function noticeFor(grant: DelegationGrant, view: GrantView): string | undefined 
   return undefined;
 }
 
-async function loadReview(queryClient: ReturnType<typeof useQueryClient>, projectId: string, applicationId: number, grant: DelegationGrant): Promise<Review> {
+async function loadReview(queryClient: ReturnType<typeof useQueryClient>, projectId: string, applicationId: number, grant: DelegationGrant, canAct: boolean): Promise<Review> {
+  // A stale grant is re-approved against the version the drift was read from.
+  const driftVersion = grant.drift === undefined ? undefined : grant.drift.callee_version_id;
+  const calleeVersionId = grant.state === 'stale' && canAct && driftVersion !== undefined ? driftVersion : grant.callee_version_id;
   const request = await fetchDelegationReview({
     queryClient,
     projectId,
     applicationId,
     calleeId: grant.callee_application_id,
     calleeName: '',
-    calleeVersionId: grant.callee_version_id,
+    calleeVersionId,
     edgeKind: grant.edge_kind,
   });
   if (request === null) throw new Error('the delegation has no callee version');
-  return { preview: previewFor(grant, request.preview), names: request.names, calleeName: request.calleeName };
+  return { preview: previewFor(grant, request.preview, canAct), names: request.names, calleeName: request.calleeName };
 }
 
 export function DelegationGrantStatus({ projectId, applicationId, grant, readOnly }: DelegationGrantStatusProps): ReactNode {
@@ -85,14 +90,15 @@ export function DelegationGrantStatus({ projectId, applicationId, grant, readOnl
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
 
+  const canApprove = (view === 'pending' || view === 'stale') && !readOnly;
   const open = useCallback(() => {
     setLoading(true);
     setError(undefined);
-    loadReview(queryClient, projectId, applicationId, grant)
+    loadReview(queryClient, projectId, applicationId, grant, canApprove)
       .then(setReview)
       .catch(() => setError(t('agents.delegation.reviewFailed', 'The delegation could not be loaded.')))
       .finally(() => setLoading(false));
-  }, [queryClient, projectId, applicationId, grant]);
+  }, [queryClient, projectId, applicationId, grant, canApprove]);
 
   const close = useCallback(() => {
     setReview(undefined);
@@ -113,8 +119,10 @@ export function DelegationGrantStatus({ projectId, applicationId, grant, readOnl
     [projectId, applicationId, grant.callee_application_id, queryClient, close],
   );
 
-  const canApprove = view === 'pending' && !readOnly;
-  const confirmLabel = useMemo(() => (canApprove ? t('agents.delegation.approve', 'Approve') : undefined), [canApprove]);
+  const confirmLabel = useMemo(() => {
+    if (!canApprove) return undefined;
+    return view === 'stale' ? t('agents.delegation.reapprove', 'Re-approve') : t('agents.delegation.approve', 'Approve');
+  }, [canApprove, view]);
 
   return (
     <Box
@@ -152,7 +160,7 @@ export function DelegationGrantStatus({ projectId, applicationId, grant, readOnl
           names={review.names}
           confirmLabel={confirmLabel}
           notice={noticeFor(grant, view)}
-          omittedReason={grant.state === 'pending' ? undefined : t('agents.delegation.omittedReason', 'Left out of the approval, so the agent runs without it.')}
+          omittedReason={grant.state === 'pending' || (grant.state === 'stale' && canApprove) ? undefined : t('agents.delegation.omittedReason', 'Left out of the approval, so the agent runs without it.')}
           busy={busy}
           error={error}
           onCancel={close}

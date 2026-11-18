@@ -367,6 +367,7 @@ export * from "./deepWikiInvokeRequest.zod";
 export * from "./deepWikiSlots.zod";
 export * from "./defaultIcon.zod";
 export * from "./delegationClosureNode.zod";
+export * from "./delegationDrift.zod";
 export * from "./delegationGovernedError.zod";
 export * from "./delegationGrant.zod";
 export * from "./delegationGrantList.zod";

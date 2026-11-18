@@ -132,16 +132,30 @@ describe('DelegationGrantStatus', () => {
     expect(within(dialog).queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
   });
 
-  it('shows a stale grant with what was approved and says anything new is left out', async () => {
-    serve(preview());
-    renderStatus(grant({ state: 'stale', items: [GIT, GIT_PUSH], requested_items: [GIT, GIT_PUSH], omitted: [] }));
+  it('re-approves a stale grant against what the callee holds now', async () => {
+    const seen = serve(preview());
+    renderStatus(grant({ state: 'stale', items: [GIT, GIT_PUSH], requested_items: [GIT, GIT_PUSH], omitted: [], drift: { callee_version_id: 101, digest: 'd', added: [DB] } }));
 
     fireEvent.click(screen.getByRole('button', { name: 'Review delegation' }));
 
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText(/anything new is left out until it is approved again/)).toBeVisible();
+    expect(await within(dialog).findByRole('checkbox', { name: 'Toolkit 13' })).toBeChecked();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Re-approve' }));
+
+    await waitFor(() => expect(seen.approvals).toHaveLength(1));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('shows a stale grant to a read-only viewer with what was approved and no action', async () => {
+    serve(preview());
+    renderStatus(grant({ state: 'stale', items: [GIT, GIT_PUSH], requested_items: [GIT, GIT_PUSH], omitted: [] }), true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Review delegation' }));
+
+    const dialog = await screen.findByRole('dialog');
     expect(within(dialog).queryByRole('checkbox', { name: 'Toolkit 13' })).not.toBeInTheDocument();
-    expect(within(dialog).queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Re-approve' })).not.toBeInTheDocument();
   });
 
   it('lets a read-only viewer look but not approve', async () => {

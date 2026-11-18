@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Delegation grants notice drift and follow Marketplace upgrades
+
+When an agent you attached gains a toolkit, a tool, a credential or a host after you approved it, the delegation grant is marked stale and the calling agent's owners and editors get one notification. The agent keeps running with what you approved; re-approve to give it the new items. Marketplace upgrades list every internal agent that would hold more, need a person's approval when one does, and re-approve those edges when approved. See [When the attached agent changes](/admin/enterprise-controls/least-privilege-and-trust#when-the-attached-agent-changes).
+
 ## A failed pipeline Code node shows why it failed
 
 When the program of a pipeline **Code** node fails, the run's error now ends with `Program output:` and the last 1,500 characters the program wrote to its error stream: the exception message of a JavaScript or TypeScript node, a Rust panic, or the compiler's diagnostic for a Rust node that does not compile (with Rust compiled snapshots enabled too, and for the `run_code` tool). Before, the error was the sentence "The pipeline stopped at a Code node" alone, so the author had to guess. The same text is in the run's error summary and the `pipeline.run.failed` event. Upgrade Main before the worker. See [Python sandbox](/menus/internal-tools#python-sandbox-code-execution).

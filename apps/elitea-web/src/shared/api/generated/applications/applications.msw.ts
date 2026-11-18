@@ -1962,6 +1962,24 @@ export const getListDelegationGrantsResponseMock = (
       faker.string.alpha({ length: { min: 10, max: 20 } }),
       undefined,
     ]),
+    drift: faker.helpers.arrayElement([
+      {
+        callee_version_id: faker.number.int(),
+        digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        added: Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => ({
+          kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          toolkit: faker.helpers.arrayElement([
+            faker.string.alpha({ length: { min: 10, max: 20 } }),
+            undefined,
+          ]),
+        })),
+      },
+      undefined,
+    ]),
   })),
   ...overrideResponse,
 });
@@ -2033,6 +2051,24 @@ export const getProposeDelegationGrantResponseMock = (
   ]),
   change_state: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  drift: faker.helpers.arrayElement([
+    {
+      callee_version_id: faker.number.int(),
+      digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      added: Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => ({
+        kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        toolkit: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+      })),
+    },
     undefined,
   ]),
   ...overrideResponse,
@@ -2169,6 +2205,24 @@ export const getPreviewDelegationGrantResponseMock = (
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
+      drift: faker.helpers.arrayElement([
+        {
+          callee_version_id: faker.number.int(),
+          digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          added: Array.from(
+            { length: faker.number.int({ min: 1, max: 10 }) },
+            (_, i) => i + 1,
+          ).map(() => ({
+            kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+            name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+            toolkit: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 20 } }),
+              undefined,
+            ]),
+          })),
+        },
+        undefined,
+      ]),
     },
     undefined,
   ]),
@@ -2244,6 +2298,24 @@ export const getGetDelegationGrantResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
+  drift: faker.helpers.arrayElement([
+    {
+      callee_version_id: faker.number.int(),
+      digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      added: Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => ({
+        kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        toolkit: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+      })),
+    },
+    undefined,
+  ]),
   ...overrideResponse,
 });
 
@@ -2316,6 +2388,24 @@ export const getRevokeDelegationGrantResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
+  drift: faker.helpers.arrayElement([
+    {
+      callee_version_id: faker.number.int(),
+      digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      added: Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => ({
+        kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        toolkit: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+      })),
+    },
+    undefined,
+  ]),
   ...overrideResponse,
 });
 
@@ -2386,6 +2476,24 @@ export const getApproveDelegationGrantResponseMock = (
   ]),
   change_state: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  drift: faker.helpers.arrayElement([
+    {
+      callee_version_id: faker.number.int(),
+      digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      added: Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => ({
+        kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        toolkit: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+      })),
+    },
     undefined,
   ]),
   ...overrideResponse,

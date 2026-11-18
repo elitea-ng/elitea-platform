@@ -1,4 +1,4 @@
-import { DELEGATION_COPY, DELEGATION_CONTRACT, DelegationError, canApprove, canRevoke, delegationErrorText, grantOf, grantsOf, stateLabel } from '@/api/queries/delegation';
+import { DELEGATION_COPY, DELEGATION_CONTRACT, DelegationError, canApprove, canReapprove, canRevoke, delegationErrorText, grantOf, grantsOf, stateLabel } from '@/api/queries/delegation';
 
 const grant = (id: number, extra: Record<string, unknown> = {}) => ({
   id,
@@ -48,6 +48,9 @@ describe('state', () => {
     expect(canApprove({ state: 'pending', governed: true })).toBe(false);
     expect(canApprove({ state: 'approved', governed: false })).toBe(false);
     expect(canApprove({ state: 'stale', governed: false })).toBe(false);
+    expect(canReapprove({ state: 'stale' })).toBe(true);
+    expect(canReapprove({ state: 'approved' })).toBe(false);
+    expect(canReapprove({ state: 'pending' })).toBe(false);
   });
 
   it('offers Revoke on a live grant, but not on a governed one still awaiting its request', () => {

@@ -6978,6 +6978,7 @@
   "agents.delegation.noticeOmitted": "Some items were left out of the approval, so the agent runs without them.",
   "agents.delegation.reviewFailed": "The delegation could not be loaded.",
   "agents.delegation.approve": "Approve",
+  "agents.delegation.reapprove": "Re-approve",
   "agents.delegation.review": "Review delegation",
   "agents.delegation.toolkitFallback": "Toolkit {{id}}",
   "agents.delegation.reason.credential": "You cannot use this credential, so it stays out of the approval.",

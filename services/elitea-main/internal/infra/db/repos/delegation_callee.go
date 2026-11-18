@@ -109,3 +109,39 @@ ORDER BY tool.id`, schema, schema), versionID)
 	snapshot.Set = dg.FromTools(tools, classes)
 	return snapshot, nil
 }
+
+// AttachedVersions lists the versions of the callee that the caller's versions
+// attach as a tool (the `application` toolkit rows of the caller, whose
+// settings name the callee and the version it runs). These are the versions a
+// run of the caller can reach, so they are what a drift check reads. It is
+// empty when the caller attaches the callee through no tool row (an edge
+// proposed through the API for a pipeline node).
+func (r *DelegationCallees) AttachedVersions(ctx context.Context, projectID, callerID, calleeID int64) ([]int64, error) {
+	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.pool.Query(ctx, fmt.Sprintf(`
+SELECT DISTINCT (%[1]s)::bigint AS callee_version
+FROM %[2]s.entity_tool_mapping AS mapping
+JOIN %[2]s.elitea_tools AS tool ON tool.id = mapping.tool_id
+JOIN %[2]s.application_versions AS caller_version ON caller_version.id = mapping.entity_version_id
+WHERE mapping.entity_type = 'agent' AND tool.type = 'application'
+  AND caller_version.application_id = $1 AND tool.settings ->> 'application_id' = $2
+  AND (%[1]s) ~ '^[0-9]+$'
+ORDER BY callee_version`, ApplicationToolSettingsVersionSQL, schema),
+		callerID, strconv.FormatInt(calleeID, 10))
+	if err != nil {
+		return nil, fmt.Errorf("delegation callee: read the attached versions: %w", err)
+	}
+	defer rows.Close()
+	var versions []int64
+	for rows.Next() {
+		var version int64
+		if err := rows.Scan(&version); err != nil {
+			return nil, err
+		}
+		versions = append(versions, version)
+	}
+	return versions, rows.Err()
+}

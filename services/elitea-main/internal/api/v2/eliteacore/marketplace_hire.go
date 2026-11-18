@@ -15,6 +15,8 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/delegationgrant"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/marketplace"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
@@ -472,6 +474,17 @@ INSERT INTO %s.application_version_tag_association (version_id, tag_id) VALUES (
 		if err := marketplace.AttachTools(ctx, tx, schema, appID, versionRow, node, marketplace.BindingMap(bindings)); err != nil {
 			slog.ErrorContext(ctx, "marketplace hire: attach the tools failed", "schema", schema, "error", err)
 			return nil, fail()
+		}
+		// The hire is the approval of the agent's internal edges (a hire that needs
+		// a person approves them in its change request instead).
+		if in.ActorID > 0 {
+			if err := h.reconcileComposition(ctx, tx, repos.CompositionApproval{
+				ProjectID: projectID, RootApplicationID: appID, Origin: delegationgrant.OriginMarketplaceHire,
+				ProposerID: in.ActorID, ApproverIDs: []int64{in.ActorID},
+			}); err != nil {
+				slog.ErrorContext(ctx, "marketplace hire: approve the internal edges failed", "schema", schema, "error", err)
+				return nil, fail()
+			}
 		}
 	}
 	bindingsJSON, err := json.Marshal(bindings)
