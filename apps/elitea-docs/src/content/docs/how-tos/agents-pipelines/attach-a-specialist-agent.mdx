@@ -1,0 +1,66 @@
+---
+title: "Attach a specialist agent"
+description: "Give an agent the reach of a specialist without widening its own tools: review what the attached agent will be able to use, approve it, and see where the delegation stands."
+---
+
+A common pattern is a **specialist**: an agent that holds one capability, such as a git toolkit, attached to another agent that holds none. The calling agent gets git through the specialist, and its own tools stay as narrow as they were.
+
+Attaching is a decision about what the specialist may use when the calling agent runs it, so you review it first.
+
+## Attach an agent or a pipeline
+
+1. Open the agent or pipeline that will call the specialist and save it. The **Agent** and **Pipeline** buttons in the Tools panel are off until it is saved.
+2. Choose **Agent** (or **Pipeline**) and pick the specialist.
+3. If the specialist holds toolkits, a window opens: **What *name* will be able to use**. It lists:
+   - each **toolkit**, with the tools selected on it;
+   - the **credential** each toolkit names, by its name;
+   - the **data classes** the agent declares and the **hosts** its toolkits can reach;
+   - under **Also reachable through this agent**, the agents the specialist itself calls, as information only. Each of those has its own approval, given by an editor of the agent that attached it.
+4. Untick any toolkit you do not want to give. A toolkit takes its tools and credential with it.
+5. Choose **Approve and attach**.
+
+A specialist that holds no toolkit, host or data class is attached at once with no window, because there is nothing to approve.
+
+Nothing is attached or recorded until you choose **Approve and attach**. **Cancel** leaves the agent as it was.
+
+## What you can approve
+
+You can approve only what you have access to yourself:
+
+- a **toolkit** that you can use in the project, and that the project's folder access rules do not hide from you;
+- a **credential** that you may use. Under the governed credential profile it must also be covered by an active credential use grant.
+
+What you cannot access is shown **disabled, with the reason**, and stays out of the approval. The specialist runs without it. Someone with the access can add it later from **Review delegation**.
+
+If you hold none of what the specialist brings, **Approve and attach** is off.
+
+## Under the governed profile
+
+Where the governed credential profile is on, the button reads **Request approval**. The delegation is then a change request on the calling agent, and a **different** person who holds the approval permission of the agent's tier decides it. Until they do, the row says **Awaiting approval** and the specialist runs without what it brings. You cannot approve your own request. See [Delegation grants](/admin/enterprise-controls/least-privilege-and-trust#delegation-grants).
+
+## The row says where the delegation stands
+
+Each attached agent or pipeline shows one line under its card:
+
+| It says | It means |
+|---|---|
+| **Delegation approved** | What was approved is available to the specialist. Items left out are listed in the review. |
+| **Delegation not approved** | The agent is attached but nobody approved the delegation yet. Choose **Review delegation** to approve it. |
+| **Awaiting approval** | A change request is open. A different approver decides it. |
+| **Needs re-approval** | The specialist changed after it was approved. It keeps using only what was approved, and anything new is left out until the delegation is approved again. |
+
+**Review delegation** opens the same window. For a delegation you can approve it has the **Approve** button. For the others it is read-only, so you can see what is covered and why you cannot act.
+
+If the approval fails after the agent was attached, the agent stays attached and a message says why. Use **Review delegation** to try again.
+
+## The desktop and mobile apps
+
+The desktop app shows the same window and row, because its screens are the web app's. A nested agent runs as a cloud turn, so it is bounded by what its owner and the person running it may use.
+
+The mobile app has no agent editor, so you attach on the web or desktop. On mobile, open an agent from a conversation's participants and choose **Delegations** to see the agents attached to it and what each was approved to use. An editor can approve or revoke a delegation there. A delegation under the governed profile is decided in its change request on the web or desktop app.
+
+## Related
+
+- [Delegation grants](/admin/enterprise-controls/least-privilege-and-trust#delegation-grants)
+- [Sub-agent profiles, briefs and lanes](/how-tos/agents-pipelines/sub-agent-profiles)
+- [Limit an agent's tools](/how-tos/agents-pipelines/agent-tool-envelope)

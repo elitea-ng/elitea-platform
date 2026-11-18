@@ -82,6 +82,11 @@
     "listSkills",
     "listConversationSkills",
     "pinConversationSkill",
-    "unpinConversationSkill"
+    "unpinConversationSkill",
+    "listDelegationGrants",
+    "getDelegationGrant",
+    "approveDelegationGrant",
+    "revokeDelegationGrant",
+    "previewDelegationGrant"
   ]
 }

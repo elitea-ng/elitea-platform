@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.59"
+  x-elitea-client-contract: "1.60"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -4146,7 +4146,7 @@ components:
     DelegationDrift:
       type: object
       description: >
-        Client contract 1.59. What the callee of a `stale` grant holds now that the
+        Client contract 1.60. What the callee of a `stale` grant holds now that the
         grant does not cover: the changes an editor of the caller reviews when they
         re-approve. Set containment against what the callee held when the grant was
         proposed, never version equality: a version with the same or a smaller set
@@ -4235,6 +4235,7 @@ components:
         - approvable
         - withheld
         - closure
+        - governed
       properties:
         callee_application_id:
           type: integer
@@ -4265,6 +4266,12 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/DelegationClosureNode"
+        governed:
+          type: boolean
+          description: |
+            The governed profile is on: an attach records a change request that a
+            different approver decides, and the person asking cannot approve it
+            directly.
         existing:
           $ref: "#/components/schemas/DelegationGrant"
 
@@ -30024,9 +30031,9 @@ paths:
         changed after approval: the grant keeps covering the set it recorded and what
         was added is left out of the callee's run. Needs the permission that reads an
         agent. NOTE(W2): internal/api/v2/delegationgrants/handler.go:177 (`List`).
-      tags:
-        - applications
+      tags: [applications, client]
       parameters:
+        - $ref: '#/components/parameters/XClientVersion'
         - name: history
           in: query
           required: false
@@ -30048,6 +30055,8 @@ paths:
           $ref: "#/components/responses/403"
         "404":
           $ref: "#/components/responses/404"
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
         "500":
           $ref: "#/components/responses/500"
     post:
@@ -30117,9 +30126,9 @@ paths:
         approved by approving this edge: every hop needs its own grant, approved by an
         editor of the agent that makes the call. Needs the permission that reads an
         agent. NOTE(W2): internal/api/v2/delegationgrants/handler.go:358 (`Preview`).
-      tags:
-        - applications
+      tags: [applications, client]
       parameters:
+        - $ref: '#/components/parameters/XClientVersion'
         - name: callee_application_id
           in: query
           required: true
@@ -30153,6 +30162,8 @@ paths:
           $ref: "#/components/responses/403"
         "404":
           $ref: "#/components/responses/404"
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
         "500":
           $ref: "#/components/responses/500"
   /elitea_core/delegation_grant/prompt_lib/{project_id}/{application_id}/{grant_id}:
@@ -30177,8 +30188,9 @@ paths:
       description: |
         Client contract 1.58, ADR-0044 amendment 1. Needs the permission that reads an
         agent. NOTE(W2): internal/api/v2/delegationgrants/handler.go:196 (`Get`).
-      tags:
-        - applications
+      tags: [applications, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
       responses:
         "200":
           description: The grant.
@@ -30194,6 +30206,8 @@ paths:
           $ref: "#/components/responses/403"
         "404":
           $ref: "#/components/responses/404"
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
         "500":
           $ref: "#/components/responses/500"
     delete:
@@ -30205,8 +30219,9 @@ paths:
         what a detach does. A grant already revoked or superseded answers 409. Needs
         the permission that edits an agent. Audited. NOTE(W2):
         internal/api/v2/delegationgrants/handler.go:328 (`Revoke`).
-      tags:
-        - applications
+      tags: [applications, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
       responses:
         "200":
           description: The revoked grant.
@@ -30228,6 +30243,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
         "500":
           $ref: "#/components/responses/500"
   /elitea_core/delegation_grant/prompt_lib/{project_id}/{application_id}/{grant_id}/approve:
@@ -30260,15 +30277,16 @@ paths:
         the agent that holds the reference. Under the governed profile the grant is
         approved through its change request instead, and this answers 409 with the
         code `DELEGATION_GOVERNED` and the `change_request_id`. Needs the permission
-        that edits an agent. Audited. Since 1.59 the grant may also be `stale`: the
+        that edits an agent. Audited. Since 1.60 the grant may also be `stale`: the
         callee now holds more than the grant recorded (`drift` lists what). Approving
         re-approves it against what the callee holds now: the old grant is kept as
         `superseded` and the answer is the new, approved grant. Under the governed
         profile a stale grant is re-approved through a new change request, and this
         answers 409 `DELEGATION_GOVERNED` with that request. NOTE(W2):
         internal/api/v2/delegationgrants/handler.go:270 (`Approve`).
-      tags:
-        - applications
+      tags: [applications, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
       requestBody:
         required: false
         content:
@@ -30300,6 +30318,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DelegationGovernedError"
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
         "500":
           $ref: "#/components/responses/500"
   /elitea_core/conversation_fork/prompt_lib/{project_id}/{conversation_id}:

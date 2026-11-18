@@ -22,6 +22,8 @@ import { t } from '@/shared/i18n';
 import { SearchParams } from '@/shared/lib/params';
 
 import { useAgentPipelineAssociation } from '../api/useAgentPipelineAssociation';
+import { useDelegationAttach } from '../api/useDelegationAttach';
+import type { AttachReport } from '../api/useDelegationAttach';
 import type { AssociationCandidate } from '../api/useAgentPipelineAssociation';
 import { useIsMcpVisible } from '../api/useIsMcpVisible';
 import { useSelectedProjectId } from '../api/useSelectedProjectId';
@@ -29,6 +31,7 @@ import { setToolkitRelation } from '../lib/toolRelation';
 import { useFilterAddedItems } from '../lib/useFilterAddedItems';
 import type { AgentToolAssociation } from '../lib/types';
 
+import { DelegationReviewDialog } from './DelegationReviewDialog';
 import { useToolMenuEntityDetail } from './useToolMenuEntityDetail';
 import { EntityAddSection, InstanceAddSection, useEntityAssociationItems } from './ToolMenuSections';
 
@@ -264,16 +267,25 @@ export function ToolMenu({ applicationId, versionId: pinnedVersionId, currentToo
   // toasted it; this app has no toasts, so the menu closes and an inline alert shows it.
   const [associationFailure, setAssociationFailure] = useState<string>();
   const reportAssociation = useCallback(
-    (outcome: { readonly ok: boolean; readonly message: string }) => {
-      setAssociationFailure(outcome.ok ? undefined : outcome.message);
+    (outcome: AttachReport) => {
+      setAssociationFailure(outcome.ok ? outcome.warning : outcome.message);
       if (outcome.ok) return void onAssociated();
       closeAgentMenu();
       closePipelineMenu();
     },
     [onAssociated, closeAgentMenu, closePipelineMenu],
   );
-  const associateAsAgent = useCallback((candidate: AssociationCandidate) => void associateAgent(candidate, { isPipeline: false, currentTools }).then(reportAssociation), [associateAgent, currentTools, reportAssociation]);
-  const associateAsPipeline = useCallback((candidate: AssociationCandidate) => void associateAgent(candidate, { isPipeline: true, currentTools }).then(reportAssociation), [associateAgent, currentTools, reportAssociation]);
+  // Attaching an agent or pipeline goes through the review of what it brings (ADR-0044 amendment 1, S3).
+  const delegation = useDelegationAttach({ projectId, applicationId: numericApplicationId, parentIsPipeline: entityLabel === 'pipeline', currentTools, associate: associateAgent, report: reportAssociation });
+  const { begin: beginAttach, pending: pendingReview } = delegation;
+  // The review dialog takes over from the menu that chose the agent.
+  useEffect(() => {
+    if (pendingReview === undefined) return;
+    closeAgentMenu();
+    closePipelineMenu();
+  }, [pendingReview, closeAgentMenu, closePipelineMenu]);
+  const associateAsAgent = useCallback((candidate: AssociationCandidate) => beginAttach(candidate, false), [beginAttach]);
+  const associateAsPipeline = useCallback((candidate: AssociationCandidate) => beginAttach(candidate, true), [beginAttach]);
 
   const agentsQuery = useListApplications(projectId ?? '', { agents_type: 'classic', query: agentSearch }, { query: { enabled: projectId !== undefined } });
   const pipelinesQuery = useListApplications(projectId ?? '', { agents_type: 'pipeline', query: pipelineSearch }, { query: { enabled: projectId !== undefined } });
@@ -353,6 +365,19 @@ export function ToolMenu({ applicationId, versionId: pinnedVersionId, currentToo
         anchor={pipelineAnchor}
         onClose={closePipelineMenu}
       />
+      {delegation.pending === undefined ? null : (
+        <DelegationReviewDialog
+          open
+          calleeName={delegation.pending.calleeName}
+          preview={delegation.pending.preview}
+          names={delegation.pending.names}
+          confirmLabel={delegation.pending.preview.governed ? t('agents.delegation.requestApproval', 'Request approval') : t('agents.delegation.approveAndAttach', 'Approve and attach')}
+          attachOnlyLabel={t('agents.delegation.attachOnly', 'Attach without approving')}
+          busy={delegation.busy}
+          onCancel={delegation.cancel}
+          onConfirm={delegation.confirm}
+        />
+      )}
       {associationFailure !== undefined && (
         <Typography
           role="alert"

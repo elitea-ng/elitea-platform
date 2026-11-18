@@ -213,6 +213,21 @@ func (s *WorkerEgressSources) HiddenToolkits(ctx context.Context, projectID, use
 	if userID <= 0 || len(toolkitIDs) == 0 {
 		return nil, nil
 	}
+	return s.hiddenToolkits(ctx, projectID, userID, toolkitIDs)
+}
+
+// HiddenToolkitsForUser answers every toolkit of the project the folder
+// access rules hide from the user (HiddenToolkits, with no id filter): the
+// approver's side of a delegation grant (ADR-0044 amendment 1, A1.2 rule 2).
+func (s *WorkerEgressSources) HiddenToolkitsForUser(ctx context.Context, projectID, userID int64) ([]int64, error) {
+	if userID <= 0 {
+		return nil, nil
+	}
+	return s.hiddenToolkits(ctx, projectID, userID, nil)
+}
+
+// hiddenToolkits reads the hidden toolkits; nil toolkitIDs means every toolkit.
+func (s *WorkerEgressSources) hiddenToolkits(ctx context.Context, projectID, userID int64, toolkitIDs []int64) ([]int64, error) {
 	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
 	if err != nil {
 		return nil, err
@@ -241,7 +256,7 @@ SELECT DISTINCT item.entity_id::bigint
 FROM %[1]s.social_folder_items AS item
 JOIN %[1]s.folder_access_overrides AS access ON access.folder_id = item.folder_id
 WHERE item.entity IN ('toolkit', 'mcp')
-  AND item.entity_id = ANY($1::bigint[])
+  AND ($1::bigint[] IS NULL OR item.entity_id = ANY($1::bigint[]))
   AND access.user_id = $2
   AND access.access_level = 'no_access'`, schema), toolkitIDs, userID)
 	if err != nil {
@@ -300,6 +315,43 @@ ORDER BY 1`, projectID, toolkitIDs)
 			return nil, nil
 		}
 		return nil, fmt.Errorf("worker delegation: read the credential use grants: %w", err)
+	}
+	return references, nil
+}
+
+// UsableCredentialReferencesInProject answers every credential reference an
+// active, unexpired ADR-0039 `use` grant of the project lets some toolkit use,
+// sorted: the references an approver of a delegation grant can stand behind
+// under the governed profile.
+func (s *WorkerEgressSources) UsableCredentialReferencesInProject(ctx context.Context, projectID int64) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT DISTINCT credential_reference_id::text
+FROM elitea_identity.credential_use_grants
+WHERE tenant_project_id = $1
+  AND state = 'active'
+  AND (expires_at IS NULL OR expires_at > clock_timestamp())
+  AND 'use' = ANY (capabilities)
+ORDER BY 1`, projectID)
+	if err != nil {
+		if undefinedTable(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("delegation access: read the credential use grants: %w", err)
+	}
+	defer rows.Close()
+	var references []string
+	for rows.Next() {
+		var reference string
+		if err := rows.Scan(&reference); err != nil {
+			return nil, fmt.Errorf("delegation access: read a credential reference: %w", err)
+		}
+		references = append(references, reference)
+	}
+	if err := rows.Err(); err != nil {
+		if undefinedTable(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("delegation access: read the credential use grants: %w", err)
 	}
 	return references, nil
 }

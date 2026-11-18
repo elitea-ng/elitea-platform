@@ -55,6 +55,7 @@ export const guidesTab: NavTab = {
         { kind: 'page', slug: 'how-tos/agents-pipelines/agent-context-view', title: 'What an agent sees of a conversation' },
         { kind: 'page', slug: 'how-tos/agents-pipelines/agent-tool-envelope', title: "Limit an agent's tools" },
         { kind: 'page', slug: 'how-tos/agents-pipelines/agent-teams', title: 'Saved teams of agents' },
+        { kind: 'page', slug: 'how-tos/agents-pipelines/attach-a-specialist-agent', title: 'Attach a specialist agent' },
         { kind: 'page', slug: 'how-tos/agents-pipelines/sub-agent-profiles', title: 'Sub-agent profiles, briefs and lanes' },
         { kind: 'page', slug: 'how-tos/agents-pipelines/agent-proposals', title: 'Agent proposals and Copy to project' },
         { kind: 'page', slug: 'how-tos/agents-pipelines/agent-workforce', title: 'Agent workforce and the dismissal ladder' },

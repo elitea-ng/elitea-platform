@@ -271,6 +271,9 @@ type Preview struct {
 	Closure []ClosureNode
 	// Existing is the edge's active grant, when it has one.
 	Existing *View
+	// Governed is the governed profile: an attach records a change request that
+	// a different approver decides, so the person asking cannot approve it.
+	Governed bool
 }
 
 // ClosureNode is one agent in the closure of an edge.
@@ -306,7 +309,7 @@ func (s *Service) Preview(ctx context.Context, req PreviewRequest) (Preview, err
 	if err != nil {
 		return Preview{}, err
 	}
-	out := Preview{Callee: callee, Items: callee.Set.Items(), Approvable: []dg.Item{}, Withheld: []dg.Item{}}
+	out := Preview{Callee: callee, Items: callee.Set.Items(), Approvable: []dg.Item{}, Withheld: []dg.Item{}, Governed: s.governed(ctx)}
 	if approvable, _, err := dg.Approvable(callee.Set, nil, access); err == nil {
 		held := make(map[dg.Item]bool)
 		for _, item := range approvable.Items() {

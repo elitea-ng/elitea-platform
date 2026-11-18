@@ -179,11 +179,17 @@ does not animate WebP: Android builds with `expo.webp.animated=false`, iOS anima
 video state its poster, each with the default motion. An SVG is not drawn (the still, then the old icon).
 Reduced motion shows the still only and downloads nothing else.
 
+## Client contract 1.60
+
+| Area | What |
+|---|---|
+| Delegation drift (delegation epic 2156, story S4) | A delegation grant answered by `listDelegationGrants`, `getDelegationGrant` and `approveDelegationGrant` can be `stale` and carries `drift` (`callee_version_id`, `digest`, `added`): what its callee holds now beyond the grant. `approveDelegationGrant` re-approves a stale grant (the old one becomes `superseded`); under the governed profile it answers 409 `DELEGATION_GOVERNED` with the new change request. Notifications `delegation_grant_stale` and `delegation_closure_grew` carry a `meta.message`. The app shows them in the inbox; the review screen is story S3. A server before 1.60 sends no `drift`. |
+
 ## Client contract 1.59
 
 | Area | What |
 |---|---|
-| Delegation drift (delegation epic 2156, story S4) | A delegation grant answered by `listDelegationGrants`, `getDelegationGrant` and `approveDelegationGrant` can be `stale` and carries `drift` (`callee_version_id`, `digest`, `added`): what its callee holds now beyond the grant. `approveDelegationGrant` re-approves a stale grant (the old one becomes `superseded`); under the governed profile it answers 409 `DELEGATION_GOVERNED` with the new change request. Notifications `delegation_grant_stale` and `delegation_closure_grew` carry a `meta.message`. The app shows them in the inbox; the review screen is story S3. A server before 1.59 sends no `drift`. |
+| Delegation grants reach the client (delegation epic 2156, story S3) | The five grant operations of 1.58 other than `proposeDelegationGrant` (`listDelegationGrants`, `getDelegationGrant`, `approveDelegationGrant`, `revokeDelegationGrant`, `previewDelegationGrant`) are now tagged `client`, and the preview answers `governed` (the governed profile is on: an attach records a change request another approver decides). The app has no agent editor, so it shows a read-only list of an agent's grants and a review screen that approves (all the approver holds access to) or revokes; under the governed profile it points to the web or desktop change request instead. A server before 1.59 has none of these. |
 
 ## Client contract 1.58
 

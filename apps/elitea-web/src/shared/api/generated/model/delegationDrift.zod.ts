@@ -58,7 +58,7 @@ export const DelegationDrift = zod
     added: zod.array(DelegationItem),
   })
   .describe(
-    "Client contract 1.59. What the callee of a `stale` grant holds now that the grant does not cover: the changes an editor of the caller reviews when they re-approve. Set containment against what the callee held when the grant was proposed, never version equality: a version with the same or a smaller set is not drift.\n",
+    "Client contract 1.60. What the callee of a `stale` grant holds now that the grant does not cover: the changes an editor of the caller reviews when they re-approve. Set containment against what the callee held when the grant was proposed, never version equality: a version with the same or a smaller set is not drift.\n",
   );
 
 export type DelegationDrift = zod.input<typeof DelegationDrift>;

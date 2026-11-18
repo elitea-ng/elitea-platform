@@ -7409,6 +7409,11 @@ export type listDelegationGrantsResponse404 = {
   status: 404;
 };
 
+export type listDelegationGrantsResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type listDelegationGrantsResponse500 = {
   data: N500Response;
   status: 500;
@@ -7423,6 +7428,7 @@ export type listDelegationGrantsResponseError = (
   | listDelegationGrantsResponse401
   | listDelegationGrantsResponse403
   | listDelegationGrantsResponse404
+  | listDelegationGrantsResponse426
   | listDelegationGrantsResponse500
 ) & {
   headers: Headers;
@@ -7493,7 +7499,12 @@ export const getListDelegationGrantsQueryKey = (
 export const getListDelegationGrantsQueryOptions = <
   TData = Awaited<ReturnType<typeof listDelegationGrants>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | N500Response,
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   applicationId: number,
@@ -7543,12 +7554,22 @@ export type ListDelegationGrantsQueryResult = NonNullable<
   Awaited<ReturnType<typeof listDelegationGrants>>
 >;
 export type ListDelegationGrantsQueryError =
-  N400Response | N401Response | N403Response | N404Response | N500Response;
+  | N400Response
+  | N401Response
+  | N403Response
+  | N404Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
 
 export function useListDelegationGrants<
   TData = Awaited<ReturnType<typeof listDelegationGrants>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | N500Response,
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   applicationId: number,
@@ -7578,7 +7599,12 @@ export function useListDelegationGrants<
 export function useListDelegationGrants<
   TData = Awaited<ReturnType<typeof listDelegationGrants>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | N500Response,
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   applicationId: number,
@@ -7608,7 +7634,12 @@ export function useListDelegationGrants<
 export function useListDelegationGrants<
   TData = Awaited<ReturnType<typeof listDelegationGrants>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | N500Response,
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   applicationId: number,
@@ -7634,7 +7665,12 @@ export function useListDelegationGrants<
 export function useListDelegationGrants<
   TData = Awaited<ReturnType<typeof listDelegationGrants>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | N500Response,
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   applicationId: number,
@@ -8032,6 +8068,11 @@ export type previewDelegationGrantResponse404 = {
   status: 404;
 };
 
+export type previewDelegationGrantResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type previewDelegationGrantResponse500 = {
   data: N500Response;
   status: 500;
@@ -8046,6 +8087,7 @@ export type previewDelegationGrantResponseError = (
   | previewDelegationGrantResponse401
   | previewDelegationGrantResponse403
   | previewDelegationGrantResponse404
+  | previewDelegationGrantResponse426
   | previewDelegationGrantResponse500
 ) & {
   headers: Headers;
@@ -8115,7 +8157,12 @@ export const getPreviewDelegationGrantQueryKey = (
 export const getPreviewDelegationGrantQueryOptions = <
   TData = Awaited<ReturnType<typeof previewDelegationGrant>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | N500Response,
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   applicationId: number,
@@ -8165,12 +8212,22 @@ export type PreviewDelegationGrantQueryResult = NonNullable<
   Awaited<ReturnType<typeof previewDelegationGrant>>
 >;
 export type PreviewDelegationGrantQueryError =
-  N400Response | N401Response | N403Response | N404Response | N500Response;
+  | N400Response
+  | N401Response
+  | N403Response
+  | N404Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
 
 export function usePreviewDelegationGrant<
   TData = Awaited<ReturnType<typeof previewDelegationGrant>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | N500Response,
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   applicationId: number,
@@ -8200,7 +8257,12 @@ export function usePreviewDelegationGrant<
 export function usePreviewDelegationGrant<
   TData = Awaited<ReturnType<typeof previewDelegationGrant>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | N500Response,
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   applicationId: number,
@@ -8230,7 +8292,12 @@ export function usePreviewDelegationGrant<
 export function usePreviewDelegationGrant<
   TData = Awaited<ReturnType<typeof previewDelegationGrant>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | N500Response,
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   applicationId: number,
@@ -8256,7 +8323,12 @@ export function usePreviewDelegationGrant<
 export function usePreviewDelegationGrant<
   TData = Awaited<ReturnType<typeof previewDelegationGrant>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | N500Response,
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   applicationId: number,
@@ -8315,6 +8387,11 @@ export type getDelegationGrantResponse404 = {
   status: 404;
 };
 
+export type getDelegationGrantResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type getDelegationGrantResponse500 = {
   data: N500Response;
   status: 500;
@@ -8329,6 +8406,7 @@ export type getDelegationGrantResponseError = (
   | getDelegationGrantResponse401
   | getDelegationGrantResponse403
   | getDelegationGrantResponse404
+  | getDelegationGrantResponse426
   | getDelegationGrantResponse500
 ) & {
   headers: Headers;
@@ -8378,7 +8456,12 @@ export const getGetDelegationGrantQueryKey = (
 export const getGetDelegationGrantQueryOptions = <
   TData = Awaited<ReturnType<typeof getDelegationGrant>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | N500Response,
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   applicationId: number,
@@ -8430,12 +8513,22 @@ export type GetDelegationGrantQueryResult = NonNullable<
   Awaited<ReturnType<typeof getDelegationGrant>>
 >;
 export type GetDelegationGrantQueryError =
-  N400Response | N401Response | N403Response | N404Response | N500Response;
+  | N400Response
+  | N401Response
+  | N403Response
+  | N404Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
 
 export function useGetDelegationGrant<
   TData = Awaited<ReturnType<typeof getDelegationGrant>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | N500Response,
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   applicationId: number,
@@ -8465,7 +8558,12 @@ export function useGetDelegationGrant<
 export function useGetDelegationGrant<
   TData = Awaited<ReturnType<typeof getDelegationGrant>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | N500Response,
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   applicationId: number,
@@ -8495,7 +8593,12 @@ export function useGetDelegationGrant<
 export function useGetDelegationGrant<
   TData = Awaited<ReturnType<typeof getDelegationGrant>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | N500Response,
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   applicationId: number,
@@ -8521,7 +8624,12 @@ export function useGetDelegationGrant<
 export function useGetDelegationGrant<
   TData = Awaited<ReturnType<typeof getDelegationGrant>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | N500Response,
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   applicationId: number,
@@ -8585,6 +8693,11 @@ export type revokeDelegationGrantResponse409 = {
   status: 409;
 };
 
+export type revokeDelegationGrantResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type revokeDelegationGrantResponse500 = {
   data: N500Response;
   status: 500;
@@ -8600,6 +8713,7 @@ export type revokeDelegationGrantResponseError = (
   | revokeDelegationGrantResponse403
   | revokeDelegationGrantResponse404
   | revokeDelegationGrantResponse409
+  | revokeDelegationGrantResponse426
   | revokeDelegationGrantResponse500
 ) & {
   headers: Headers;
@@ -8658,6 +8772,7 @@ export const getRevokeDelegationGrantQueryOptions = <
     | N403Response
     | N404Response
     | ErrorResponse
+    | ClientUpgradeRequiredResponse
     | N500Response,
 >(
   projectId: string,
@@ -8715,6 +8830,7 @@ export type RevokeDelegationGrantQueryError =
   | N403Response
   | N404Response
   | ErrorResponse
+  | ClientUpgradeRequiredResponse
   | N500Response;
 
 export function useRevokeDelegationGrant<
@@ -8725,6 +8841,7 @@ export function useRevokeDelegationGrant<
     | N403Response
     | N404Response
     | ErrorResponse
+    | ClientUpgradeRequiredResponse
     | N500Response,
 >(
   projectId: string,
@@ -8760,6 +8877,7 @@ export function useRevokeDelegationGrant<
     | N403Response
     | N404Response
     | ErrorResponse
+    | ClientUpgradeRequiredResponse
     | N500Response,
 >(
   projectId: string,
@@ -8795,6 +8913,7 @@ export function useRevokeDelegationGrant<
     | N403Response
     | N404Response
     | ErrorResponse
+    | ClientUpgradeRequiredResponse
     | N500Response,
 >(
   projectId: string,
@@ -8826,6 +8945,7 @@ export function useRevokeDelegationGrant<
     | N403Response
     | N404Response
     | ErrorResponse
+    | ClientUpgradeRequiredResponse
     | N500Response,
 >(
   projectId: string,
@@ -8890,6 +9010,11 @@ export type approveDelegationGrantResponse409 = {
   status: 409;
 };
 
+export type approveDelegationGrantResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type approveDelegationGrantResponse500 = {
   data: N500Response;
   status: 500;
@@ -8905,6 +9030,7 @@ export type approveDelegationGrantResponseError = (
   | approveDelegationGrantResponse403
   | approveDelegationGrantResponse404
   | approveDelegationGrantResponse409
+  | approveDelegationGrantResponse426
   | approveDelegationGrantResponse500
 ) & {
   headers: Headers;
@@ -8932,7 +9058,7 @@ export const getApproveDelegationGrantUrl = (
  * the agent that holds the reference. Under the governed profile the grant is
  * approved through its change request instead, and this answers 409 with the
  * code `DELEGATION_GOVERNED` and the `change_request_id`. Needs the permission
- * that edits an agent. Audited. Since 1.59 the grant may also be `stale`: the
+ * that edits an agent. Audited. Since 1.60 the grant may also be `stale`: the
  * callee now holds more than the grant recorded (`drift` lists what). Approving
  * re-approves it against what the callee holds now: the old grant is kept as
  * `superseded` and the answer is the new, approved grant. Under the governed
@@ -9004,6 +9130,7 @@ export const getApproveDelegationGrantQueryOptions = <
     | N403Response
     | N404Response
     | DelegationGovernedError
+    | ClientUpgradeRequiredResponse
     | N500Response,
 >(
   projectId: string,
@@ -9070,6 +9197,7 @@ export type ApproveDelegationGrantQueryError =
   | N403Response
   | N404Response
   | DelegationGovernedError
+  | ClientUpgradeRequiredResponse
   | N500Response;
 
 export function useApproveDelegationGrant<
@@ -9080,6 +9208,7 @@ export function useApproveDelegationGrant<
     | N403Response
     | N404Response
     | DelegationGovernedError
+    | ClientUpgradeRequiredResponse
     | N500Response,
 >(
   projectId: string,
@@ -9116,6 +9245,7 @@ export function useApproveDelegationGrant<
     | N403Response
     | N404Response
     | DelegationGovernedError
+    | ClientUpgradeRequiredResponse
     | N500Response,
 >(
   projectId: string,
@@ -9152,6 +9282,7 @@ export function useApproveDelegationGrant<
     | N403Response
     | N404Response
     | DelegationGovernedError
+    | ClientUpgradeRequiredResponse
     | N500Response,
 >(
   projectId: string,
@@ -9184,6 +9315,7 @@ export function useApproveDelegationGrant<
     | N403Response
     | N404Response
     | DelegationGovernedError
+    | ClientUpgradeRequiredResponse
     | N500Response,
 >(
   projectId: string,

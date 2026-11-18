@@ -125,6 +125,7 @@ type Preview struct {
 	Withheld            []Item        `json:"withheld"`
 	Closure             []ClosureNode `json:"closure"`
 	Existing            *Grant        `json:"existing,omitempty"`
+	Governed            bool          `json:"governed"`
 }
 
 func items(in []dg.Item) []Item {
@@ -396,7 +397,7 @@ func (h *Handler) Preview(w http.ResponseWriter, r *http.Request) {
 	out := Preview{
 		CalleeApplicationID: p.Callee.ApplicationID, CalleeVersionID: p.Callee.VersionID, CalleeName: p.Callee.Name,
 		Digest: p.Callee.Set.Digest(), Items: items(p.Items), Approvable: items(p.Approvable), Withheld: items(p.Withheld),
-		Closure: make([]ClosureNode, 0, len(p.Closure)),
+		Closure: make([]ClosureNode, 0, len(p.Closure)), Governed: p.Governed,
 	}
 	for _, node := range p.Closure {
 		out.Closure = append(out.Closure, ClosureNode{ApplicationID: node.ApplicationID, Name: node.Name, Depth: node.Depth, Items: items(node.Items)})
