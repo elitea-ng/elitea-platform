@@ -60,7 +60,37 @@ type Store interface {
 	NotifyTrip(ctx context.Context, trip Trip, suspension safety.Suspension) (int, error)
 	// Prune deletes window rows older than retention.
 	Prune(ctx context.Context, retention time.Duration) (int64, error)
+	// RecoverableTrips re-reads the failure of every FAILED run in the
+	// window of an agent a breaker error_rate suspension holds, marks the
+	// ones the platform refused (NotAgentFailureCodes) as not the agent's,
+	// and answers those suspensions (a two_person one is left to people).
+	RecoverableTrips(ctx context.Context) ([]HeldAgent, error)
+	// ObserveWindow is Observe that ignores the agent's active suspension:
+	// what the window says now.
+	ObserveWindow(ctx context.Context, key AgentKey, window int) (Observation, error)
+	// Resume lifts a breaker suspension the pass itself found unjustified.
+	Resume(ctx context.Context, suspensionID int64, reason string) error
 }
+
+// HeldAgent is an agent a breaker error_rate suspension holds.
+type HeldAgent struct {
+	Key          AgentKey
+	SuspensionID int64
+}
+
+// NotAgentFailureCodes are the failure codes of a run the platform refused
+// before the agent did anything: its input, the contract version or a
+// capability the worker did not have. Such a failure is a fault of a
+// release, not of the agent, so the error rate leaves it out (like a run
+// cap stop). Issue 2152: agents created before a release tripped on the
+// refusals that the release itself caused.
+var NotAgentFailureCodes = []string{
+	"INVALID_INPUT", "INCOMPATIBLE_VERSION", "UNSUPPORTED_CAPABILITY", "EXECUTION_INPUT_LIMIT",
+	"APPLICATION_COMPOSITION_INVALID",
+}
+
+// RecoveryReason is the resume reason of an automatic recovery.
+const RecoveryReason = "Resumed automatically: the failures that tripped the breaker were refusals by the platform, not failures of the agent."
 
 // Summary counts what one pass did.
 type Summary struct {
@@ -71,12 +101,13 @@ type Summary struct {
 	Storm     bool
 	Notified  int
 	Pruned    int64
+	Recovered int
 	Errors    int
 }
 
 func (s Summary) String() string {
-	return fmt.Sprintf("enabled=%t agents=%d evaluated=%d tripped=%d storm=%t notified=%d pruned=%d errors=%d",
-		s.Enabled, s.Ingested, s.Evaluated, s.Tripped, s.Storm, s.Notified, s.Pruned, s.Errors)
+	return fmt.Sprintf("enabled=%t agents=%d evaluated=%d tripped=%d recovered=%d storm=%t notified=%d pruned=%d errors=%d",
+		s.Enabled, s.Ingested, s.Evaluated, s.Tripped, s.Recovered, s.Storm, s.Notified, s.Pruned, s.Errors)
 }
 
 // Pass is the breaker routine's work.
@@ -214,6 +245,8 @@ func (p *Pass) run(ctx context.Context) (Summary, error) {
 		}
 	}
 
+	p.recover(ctx, settings, logger, &summary)
+
 	pruned, err := p.Store.Prune(ctx, Retention)
 	if err != nil {
 		summary.Errors++
@@ -236,4 +269,41 @@ func spendLimits(settings Settings) (map[agentlifecycle.Tier]float64, bool) {
 		any = any || usd > 0
 	}
 	return limits, any
+}
+
+// recover lifts the error_rate suspension of an agent whose window, once the
+// platform's own refusals are left out, no longer trips (issue 2152). An
+// agent that still trips on any rule stays suspended for an administrator.
+func (p *Pass) recover(ctx context.Context, settings Settings, logger *slog.Logger, summary *Summary) {
+	held, err := p.Store.RecoverableTrips(ctx)
+	if err != nil {
+		summary.Errors++
+		logger.WarnContext(ctx, "breaker: read the suspensions that may be unjustified", "err", err)
+		return
+	}
+	window := settings.Tier(agentlifecycle.TierLow).Rules.ErrorRateWindowRuns
+	for _, agent := range held {
+		observation, err := p.Store.ObserveWindow(ctx, agent.Key, window)
+		if err != nil {
+			summary.Errors++
+			logger.WarnContext(ctx, "breaker: read a suspended agent", "project_id", agent.Key.ProjectID,
+				"application_id", agent.Key.ApplicationID, "err", err)
+			continue
+		}
+		observation.Suspended = false
+		if _, trips := Evaluate(settings, observation); trips {
+			continue
+		}
+		if err := p.Store.Resume(ctx, agent.SuspensionID, RecoveryReason); err != nil {
+			summary.Errors++
+			logger.WarnContext(ctx, "breaker: resume an agent", "suspension_id", agent.SuspensionID, "err", err)
+			continue
+		}
+		summary.Recovered++
+		if p.Notify != nil {
+			p.Notify(agent.SuspensionID)
+		}
+		logger.InfoContext(ctx, "breaker: agent resumed, its failures were platform refusals",
+			"project_id", agent.Key.ProjectID, "application_id", agent.Key.ApplicationID, "suspension_id", agent.SuspensionID)
+	}
 }

@@ -221,6 +221,8 @@ type fakeStore struct {
 	trips        []Trip
 	notified     int
 	nextID       int64
+	held         []HeldAgent
+	resumed      []int64
 }
 
 func (f *fakeStore) IngestRuns(context.Context, time.Duration) ([]AgentKey, error) {
@@ -251,6 +253,18 @@ func (f *fakeStore) NotifyTrip(context.Context, Trip, safety.Suspension) (int, e
 	return 1, nil
 }
 func (f *fakeStore) Prune(context.Context, time.Duration) (int64, error) { return 0, nil }
+func (f *fakeStore) RecoverableTrips(context.Context) ([]HeldAgent, error) {
+	return f.held, nil
+}
+func (f *fakeStore) ObserveWindow(_ context.Context, key AgentKey, _ int) (Observation, error) {
+	o := f.observations[key]
+	o.Key = key
+	return o, nil
+}
+func (f *fakeStore) Resume(_ context.Context, id int64, _ string) error {
+	f.resumed = append(f.resumed, id)
+	return nil
+}
 
 func TestPassTripsNotifiesAndCounts(t *testing.T) {
 	failing, healthy := AgentKey{1, 10}, AgentKey{1, 11}
@@ -404,4 +418,36 @@ func TestPassSpendCandidates(t *testing.T) {
 		store.spendLimits[agentlifecycle.TierLow] != 0 || len(store.spendLimits) != len(agentlifecycle.Tiers) {
 		t.Fatalf("asks %d reads %d limits %v", store.overrideAsks, store.spendReads, store.spendLimits)
 	}
+}
+
+// A suspension whose window, without the platform's refusals, no longer
+// trips is lifted by the pass; one that still trips stays (#2152).
+func TestPassResumesAnAgentWhoseWindowNoLongerTrips(t *testing.T) {
+	cleared, stillBad := AgentKey{1, 20}, AgentKey{1, 21}
+	store := &fakeStore{
+		held: []HeldAgent{{Key: cleared, SuspensionID: 7}, {Key: stillBad, SuspensionID: 8}},
+		observations: map[AgentKey]Observation{
+			// Two runs are left once the refusals are out: under the window.
+			cleared:  {Suspended: true, Outcomes: []string{StateFailed, StateSucceeded}},
+			stillBad: {Suspended: true, Outcomes: failedOutcomes(20)},
+		},
+	}
+	var notified []int64
+	pass := &Pass{Store: store, Settings: func(context.Context) (Settings, error) { return DefaultSettings(), nil },
+		Notify: func(id int64) { notified = append(notified, id) }}
+	summary, err := pass.Run(t.Context())
+	if err != nil || summary.Recovered != 1 {
+		t.Fatalf("summary = %s, %v", summary.String(), err)
+	}
+	if len(store.resumed) != 1 || store.resumed[0] != 7 || len(notified) != 1 || notified[0] != 7 {
+		t.Fatalf("resumed = %v, notified = %v, want only suspension 7", store.resumed, notified)
+	}
+}
+
+func failedOutcomes(n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = StateFailed
+	}
+	return out
 }

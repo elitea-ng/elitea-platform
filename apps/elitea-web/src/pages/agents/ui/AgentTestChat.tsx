@@ -28,7 +28,7 @@ import Typography from '@mui/material/Typography';
 
 import { applicationServerErrorMessage } from '@/features/agents';
 import { t } from '@/shared/i18n';
-import { ChatBox, type ChatBoxHandle } from '@/widgets/chat-box';
+import { ChatBox, type ChatBoxHandle, type ChatBoxProps } from '@/widgets/chat-box';
 
 import { useAgentTestConversation, type AgentTestIdentity } from '../lib/useAgentTestConversation';
 
@@ -40,6 +40,8 @@ export interface AgentTestChatProps {
   readonly isDirty: boolean;
   /** The version's conversation starters, shown on the empty transcript. */
   readonly conversationStarters?: readonly string[] | undefined;
+  /** The composer's model picker, bound to the form's model so there is one setting, not two (#2151). */
+  readonly llm?: ChatBoxProps['llm'];
 }
 
 const paneSx: SxProps<Theme> = (theme: Theme) => ({
@@ -70,6 +72,7 @@ export function AgentTestChat({
   user,
   isDirty,
   conversationStarters = NO_STARTERS,
+  llm,
 }: AgentTestChatProps): ReactNode {
   const test = useAgentTestConversation(identity);
   const chatBoxRef = useRef<ChatBoxHandle | null>(null);
@@ -152,6 +155,7 @@ export function AgentTestChat({
           {...(identity.projectId !== undefined ? { projectId: identity.projectId } : {})}
           {...(user ? { user } : {})}
           participant={participant}
+          {...(llm ? { llm } : {})}
           conversationStarters={conversationStarters}
           isAgentsPage
           // The same flag the pipeline pane sets: the composer, stop, unattended-grant and transport paths treat this as an editor_test conversation.

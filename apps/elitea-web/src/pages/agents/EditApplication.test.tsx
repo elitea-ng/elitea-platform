@@ -842,7 +842,8 @@ describe('EditApplication', () => {
       projectId: '9',
     });
 
-    expect(await screen.findByText('Qwen 3.5', {}, { timeout: 15_000 })).toBeVisible();
+    // Two views of one setting: the form's picker and the test chat's composer both show the stored model.
+    await waitFor(() => expect(screen.getAllByText('Qwen 3.5')).toHaveLength(2), { timeout: 15_000 });
   });
 
   it('sends a newly picked model in the version PUT body, with a NUMERIC model_project_id', async () => {

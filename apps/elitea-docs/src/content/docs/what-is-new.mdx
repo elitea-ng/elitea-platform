@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Agent model: one setting on the agent page; the circuit breaker no longer blames agents for refused runs
+
+On the agent page, the model picker in the chat now shows the model chosen in the agent's settings, and a model picked in the chat changes the setting (and the unsaved-changes state), instead of being a second, unconnected picker. The circuit breaker no longer counts a run that the platform refused (for example "The execution input is invalid.") as a failure of the agent, and it resumes by itself an agent that it stopped only because of such runs. The placeholder text of the **Generate with AI** boxes (skill, agent, project context) is pinned to the theme's placeholder colour in both themes.
+
 ## Review delegation opens the delegation, and a refused pipeline node shows its notice
 
 The **Review delegation** link in a chat notice now opens the review window of that exact delegation on the calling agent's Tools panel, instead of only the agent. The mobile app lists that delegation first and marks it. A pipeline node that runs a saved pipeline and is refused now shows the same **Delegation refused** card before the run fails, where it showed only the generic failure. In `report` mode nothing is shown, because nothing was refused; the run step records it. Upgrade the worker and the web app together. See [Notices in the chat](/admin/enterprise-controls/least-privilege-and-trust#notices-in-the-chat).
