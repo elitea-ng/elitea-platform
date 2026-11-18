@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	appgrants "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/delegationgrants"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/delegationnotice"
 	platformauth "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	dbrepos "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
@@ -91,4 +92,24 @@ func (c permissionChecker) HasProjectPermission(ctx context.Context, userID, pro
 		return false, err
 	}
 	return slices.Contains(resolution.Permissions, permission), nil
+}
+
+// composeDelegationReviewer builds what stamps a viewer's review onto the
+// delegation notices of a served transcript (ADR-0044 Amendment 1, #2161): the
+// project's edit permission, and the agent's owners to ask. It answers nil
+// (an interface that holds nothing, never a typed nil) when a side is missing.
+func composeDelegationReviewer(cfg RouterConfig, resolver platformauth.PermissionResolver) delegationnotice.Reviewer {
+	if cfg.Pool == nil || resolver == nil {
+		return nil
+	}
+	editors, err := dbrepos.NewDelegationEditors(cfg.Pool)
+	if err != nil {
+		slog.Error("delegation notices are served unstamped", "error", err)
+		return nil
+	}
+	service := delegationnotice.NewService(permissionChecker{resolver: resolver}, editors)
+	if service == nil {
+		return nil
+	}
+	return service
 }

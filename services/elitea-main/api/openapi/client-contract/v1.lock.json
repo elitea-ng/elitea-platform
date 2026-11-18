@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.59",
+  "client_contract": "1.60",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -13801,6 +13801,132 @@
                       "metadata": {
                         "type": "object",
                         "properties": {
+                          "delegation_notices_v1": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "edge",
+                                "id",
+                                "kind",
+                                "missing",
+                                "reason"
+                              ],
+                              "properties": {
+                                "can_review": {
+                                  "type": "boolean"
+                                },
+                                "code": {
+                                  "type": "string",
+                                  "enum": [
+                                    "DELEGATION_DEPTH_EXCEEDED",
+                                    "DELEGATION_GRANT_MISSING"
+                                  ]
+                                },
+                                "depth": {
+                                  "type": "integer"
+                                },
+                                "edge": {
+                                  "type": "object",
+                                  "required": [
+                                    "callee_name",
+                                    "kind"
+                                  ],
+                                  "properties": {
+                                    "callee_id": {
+                                      "type": "integer",
+                                      "format": "int64"
+                                    },
+                                    "callee_name": {
+                                      "type": "string"
+                                    },
+                                    "caller_id": {
+                                      "type": "integer",
+                                      "format": "int64"
+                                    },
+                                    "caller_name": {
+                                      "type": "string"
+                                    },
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "agent_tool",
+                                        "pipeline_child",
+                                        "pipeline_node",
+                                        "sub_agent"
+                                      ]
+                                    }
+                                  }
+                                },
+                                "editors": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "max_items": 3
+                                },
+                                "grant_id": {
+                                  "type": "integer",
+                                  "format": "int64"
+                                },
+                                "id": {
+                                  "type": "string"
+                                },
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "narrowed",
+                                    "refused"
+                                  ]
+                                },
+                                "max_depth": {
+                                  "type": "integer"
+                                },
+                                "missing": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "required": [
+                                      "kind",
+                                      "name"
+                                    ],
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "credential",
+                                          "data_class",
+                                          "egress_host",
+                                          "tool",
+                                          "toolkit"
+                                        ]
+                                      },
+                                      "name": {
+                                        "type": "string"
+                                      },
+                                      "toolkit": {
+                                        "type": "string"
+                                      }
+                                    }
+                                  },
+                                  "max_items": 16
+                                },
+                                "missing_total": {
+                                  "type": "integer"
+                                },
+                                "reason": {
+                                  "type": "string",
+                                  "enum": [
+                                    "depth",
+                                    "no_grant",
+                                    "principal",
+                                    "stale"
+                                  ]
+                                }
+                              }
+                            },
+                            "max_items": 16
+                          },
                           "grounding": {
                             "type": "object",
                             "required": [
@@ -41402,6 +41528,342 @@
             },
             "tool_run_id": {
               "type": "string"
+            }
+          },
+          "open": true
+        },
+        "stream_id": {
+          "type": "string",
+          "nullable": true
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "open": true
+    },
+    "delegation_narrowed": {
+      "type": "object",
+      "required": [
+        "response_metadata",
+        "type"
+      ],
+      "properties": {
+        "addressed_to": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "content": {
+          "nullable": true
+        },
+        "created_at": {
+          "type": "string",
+          "nullable": true
+        },
+        "message_id": {
+          "type": "string",
+          "nullable": true
+        },
+        "participant_id": {
+          "type": "integer"
+        },
+        "response_metadata": {
+          "type": "object",
+          "required": [
+            "delegation_v1"
+          ],
+          "properties": {
+            "delegation_v1": {
+              "type": "object",
+              "required": [
+                "edge",
+                "id",
+                "kind",
+                "missing",
+                "reason"
+              ],
+              "properties": {
+                "can_review": {
+                  "type": "boolean"
+                },
+                "code": {
+                  "type": "string",
+                  "enum": [
+                    "DELEGATION_DEPTH_EXCEEDED",
+                    "DELEGATION_GRANT_MISSING"
+                  ]
+                },
+                "depth": {
+                  "type": "integer"
+                },
+                "edge": {
+                  "type": "object",
+                  "required": [
+                    "callee_name",
+                    "kind"
+                  ],
+                  "properties": {
+                    "callee_id": {
+                      "type": "integer",
+                      "format": "int64"
+                    },
+                    "callee_name": {
+                      "type": "string"
+                    },
+                    "caller_id": {
+                      "type": "integer",
+                      "format": "int64"
+                    },
+                    "caller_name": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "agent_tool",
+                        "pipeline_child",
+                        "pipeline_node",
+                        "sub_agent"
+                      ]
+                    }
+                  }
+                },
+                "editors": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "max_items": 3
+                },
+                "grant_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "narrowed",
+                    "refused"
+                  ]
+                },
+                "max_depth": {
+                  "type": "integer"
+                },
+                "missing": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "kind",
+                      "name"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "credential",
+                          "data_class",
+                          "egress_host",
+                          "tool",
+                          "toolkit"
+                        ]
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "toolkit": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "max_items": 16
+                },
+                "missing_total": {
+                  "type": "integer"
+                },
+                "reason": {
+                  "type": "string",
+                  "enum": [
+                    "depth",
+                    "no_grant",
+                    "principal",
+                    "stale"
+                  ]
+                }
+              }
+            }
+          },
+          "open": true
+        },
+        "stream_id": {
+          "type": "string",
+          "nullable": true
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "open": true
+    },
+    "delegation_refused": {
+      "type": "object",
+      "required": [
+        "response_metadata",
+        "type"
+      ],
+      "properties": {
+        "addressed_to": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "content": {
+          "nullable": true
+        },
+        "created_at": {
+          "type": "string",
+          "nullable": true
+        },
+        "message_id": {
+          "type": "string",
+          "nullable": true
+        },
+        "participant_id": {
+          "type": "integer"
+        },
+        "response_metadata": {
+          "type": "object",
+          "required": [
+            "delegation_v1"
+          ],
+          "properties": {
+            "delegation_v1": {
+              "type": "object",
+              "required": [
+                "edge",
+                "id",
+                "kind",
+                "missing",
+                "reason"
+              ],
+              "properties": {
+                "can_review": {
+                  "type": "boolean"
+                },
+                "code": {
+                  "type": "string",
+                  "enum": [
+                    "DELEGATION_DEPTH_EXCEEDED",
+                    "DELEGATION_GRANT_MISSING"
+                  ]
+                },
+                "depth": {
+                  "type": "integer"
+                },
+                "edge": {
+                  "type": "object",
+                  "required": [
+                    "callee_name",
+                    "kind"
+                  ],
+                  "properties": {
+                    "callee_id": {
+                      "type": "integer",
+                      "format": "int64"
+                    },
+                    "callee_name": {
+                      "type": "string"
+                    },
+                    "caller_id": {
+                      "type": "integer",
+                      "format": "int64"
+                    },
+                    "caller_name": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "agent_tool",
+                        "pipeline_child",
+                        "pipeline_node",
+                        "sub_agent"
+                      ]
+                    }
+                  }
+                },
+                "editors": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "max_items": 3
+                },
+                "grant_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "narrowed",
+                    "refused"
+                  ]
+                },
+                "max_depth": {
+                  "type": "integer"
+                },
+                "missing": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "kind",
+                      "name"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "credential",
+                          "data_class",
+                          "egress_host",
+                          "tool",
+                          "toolkit"
+                        ]
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "toolkit": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "max_items": 16
+                },
+                "missing_total": {
+                  "type": "integer"
+                },
+                "reason": {
+                  "type": "string",
+                  "enum": [
+                    "depth",
+                    "no_grant",
+                    "principal",
+                    "stale"
+                  ]
+                }
+              }
             }
           },
           "open": true

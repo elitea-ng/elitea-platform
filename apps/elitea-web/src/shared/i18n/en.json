@@ -6994,5 +6994,17 @@
   "agents.delegation.cannotApprove": "You cannot approve any of this. The agent is attached anyway, and the delegation stays pending until someone with access approves it.",
   "agents.delegation.omittedReason": "Left out of the approval, so the agent runs without it.",
   "agents.delegation.nothingApproved": "You cannot approve any of it.",
-  "agents.delegation.attachFailed": "The agent could not be added."
+  "agents.delegation.attachFailed": "The agent could not be added.",
+  "features.chatMessages.delegationNotice.ask": "Ask {{names}} to review this delegation.",
+  "features.chatMessages.delegationNotice.depth": "{{callee}} was not called: the delegation depth limit of {{max}} was reached.",
+  "features.chatMessages.delegationNotice.depthUnknown": "{{callee}} was not called: the delegation depth limit was reached.",
+  "features.chatMessages.delegationNotice.namesMore": "{{names}} and {{count}} more",
+  "features.chatMessages.delegationNotice.noGrant": "{{callee}} could not use {{names}} from {{caller}}. This delegation is not approved.",
+  "features.chatMessages.delegationNotice.noGrantNoCaller": "{{callee}} could not use {{names}} from its caller. This delegation is not approved.",
+  "features.chatMessages.delegationNotice.principal": "{{callee}} could not use {{names}}. You do not have access to it.",
+  "features.chatMessages.delegationNotice.review": "Review delegation",
+  "features.chatMessages.delegationNotice.somethingNew": "something it holds",
+  "features.chatMessages.delegationNotice.stale": "{{callee}} ran without {{names}}. It was added after this delegation was approved.",
+  "features.chatMessages.delegationNotice.titleNarrowed": "Delegation narrowed",
+  "features.chatMessages.delegationNotice.titleRefused": "Delegation refused"
 }

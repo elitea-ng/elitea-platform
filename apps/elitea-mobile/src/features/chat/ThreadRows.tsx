@@ -12,6 +12,7 @@ import { useDesign } from '@/design/DesignProvider';
 import { explainsFailure, GUARDRAIL_STOPPED, noticeText } from '@/features/chat/guardrailNotice';
 import { TURN_TAKING_COPY } from '@/features/chat/turnTakingCopy';
 import { ThinkingDots } from '@/features/chat/ThinkingDots';
+import { DelegationNoticeCards } from '@/features/chat/DelegationNoticeCards';
 import { ToolActivity } from '@/features/chat/ToolCalls';
 import { subAgentSteps } from '@/features/chat/subAgentLanes';
 import type { ToolStep } from '@/features/chat/toolActivity';
@@ -104,10 +105,11 @@ export function PersistedMessage({
       onActions={message.text.trim() !== '' || answer ? onActions : null}
       actions={answer && !message.isStreaming ? actions : undefined}
       footer={
-        message.attachments.length > 0 || tools.length > 0 ? (
+        message.attachments.length > 0 || tools.length > 0 || (message.delegationNotices?.length ?? 0) > 0 ? (
           <>
             <AttachmentStrip attachments={message.attachments} mine={message.mine} opening={opening} onOpen={onOpenFile} />
             {tools.length > 0 ? <ToolActivity steps={tools} onOpen={onOpenTool} /> : null}
+            <DelegationNoticeCards notices={message.delegationNotices ?? []} />
           </>
         ) : null
       }>
@@ -294,7 +296,12 @@ export function LiveReply({
       status={status}
       error={turn.phase === 'failed' ? (guardrailStopped ? GUARDRAIL_STOPPED : (turn.error?.message ?? null)) : null}
       actions={<RowActions actions={actions} />}
-      footer={<ToolActivity steps={[...turn.tools, ...subAgentSteps(turn.subAgents, turn.phase !== 'streaming' && turn.phase !== 'sending')]} streaming={turn.phase === 'streaming'} onOpen={onOpenTool} />}>
+      footer={
+        <>
+          <ToolActivity steps={[...turn.tools, ...subAgentSteps(turn.subAgents, turn.phase !== 'streaming' && turn.phase !== 'sending')]} streaming={turn.phase === 'streaming'} onOpen={onOpenTool} />
+          <DelegationNoticeCards notices={turn.delegationNotices} />
+        </>
+      }>
       {turn.content !== '' ? <Markdown value={turn.content} streaming={turn.phase === 'streaming'} caret={streaming} /> : waiting && !turn.stopped ? <ThinkingDots /> : ''}
     </MessageBubble>
   );

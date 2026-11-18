@@ -562,6 +562,7 @@ func (h *Handler) listMessageChanges(w http.ResponseWriter, r *http.Request, pro
 		writeSyncError(w, err)
 		return
 	}
+	h.stampDelegationNotices(r.Context(), projectID, page.Items)
 	writeJSON(w, http.StatusOK, page)
 }
 

@@ -284,7 +284,7 @@ export function ApplicationAnswer({
 
       {nonSwarmChildActions.length > 0 && <ApplicationAnswerThinking actions={nonSwarmChildActions} isStreaming={isActivelyProcessing} pendingInstanceKeys={pendingInstanceKeys} />}
 
-      <CloudSubAgents lanes={answer.subAgents} />
+      <CloudSubAgents lanes={answer.subAgents} notices={answer.delegationNotices} />
 
       {!isProcessing && swarmChildActions.length > 0 && (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, mb: 0.5 }}>

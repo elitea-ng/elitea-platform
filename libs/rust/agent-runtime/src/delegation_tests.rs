@@ -1041,3 +1041,160 @@ fn a_grant_set_that_is_not_canonical_is_refused() {
         );
     }
 }
+
+// --- The notice a refusal or narrowing shows the person (#2161) -----------
+
+fn notice_context() -> NoticeContext<'static> {
+    NoticeContext {
+        call_id: "call-1",
+        callee_name: "Agent1",
+        caller_name: Some("Agent2"),
+        edge_kind: "agent_tool",
+    }
+}
+
+#[test]
+fn a_missing_grant_is_a_refused_notice_with_reason_no_grant() {
+    let git = [toolkit(7, "Git", &json!({}))];
+    let parent = root_scope(grant_policy(NarrowingMode::Enforce, &[]), &[]);
+    let refused = parent
+        .delegate_edge(
+            Some(1),
+            &mut git.to_vec(),
+            &BTreeSet::new(),
+            &PublicPolicy::Open,
+        )
+        .expect_err("no grant");
+    let notice = refused.evidence.notice(&notice_context()).expect("notice");
+    assert_eq!(notice.event, REFUSED_EVENT);
+    assert_eq!(notice.value["kind"], "refused");
+    assert_eq!(notice.value["reason"], "no_grant");
+    assert_eq!(notice.value["code"], GRANT_MISSING);
+    assert_eq!(notice.value["id"], "call-1");
+    assert_eq!(
+        notice.value["missing"],
+        json!([{"kind": "toolkit", "name": "Git"}])
+    );
+    assert_eq!(
+        notice.value["edge"],
+        json!({"caller_id": 2, "caller_name": "Agent2", "callee_id": 1, "callee_name": "Agent1", "kind": "agent_tool"})
+    );
+    // The model still reads the same typed refusal.
+    assert_eq!(refused.refusal.code(), GRANT_MISSING);
+}
+
+#[test]
+fn a_principal_refusal_is_reason_principal_and_never_names_a_grant_to_approve() {
+    let caller = scope(
+        &[toolkit(9, "Repo", &json!({}))],
+        bounded_policy(NarrowingMode::Enforce, principal(&[(7, None)], None, &[])),
+    );
+    let refused = caller
+        .delegate_edge(
+            Some(1),
+            &mut vec![toolkit(9, "Repo", &json!({}))],
+            &BTreeSet::new(),
+            &PublicPolicy::Open,
+        )
+        .expect_err("refused by the principal");
+    let notice = refused.evidence.notice(&notice_context()).expect("notice");
+    assert_eq!(notice.event, REFUSED_EVENT);
+    assert_eq!(notice.value["reason"], "principal");
+    assert_eq!(notice.value["code"], GRANT_MISSING);
+}
+
+#[test]
+fn a_depth_refusal_carries_the_depth_and_no_missing_grants() {
+    let policy = DelegationPolicy::new(1, NarrowingMode::Enforce, []).expect("policy");
+    let first = DelegationScope::root(Arc::new(policy), GrantSet::unconstrained())
+        .delegate(&mut vec![], &BTreeSet::new(), &PublicPolicy::Open)
+        .expect("depth 1");
+    let refused = first
+        .scope
+        .delegate_edge(Some(3), &mut vec![], &BTreeSet::new(), &PublicPolicy::Open)
+        .expect_err("depth 2");
+    let notice = refused.evidence.notice(&notice_context()).expect("notice");
+    assert_eq!(notice.event, REFUSED_EVENT);
+    assert_eq!(notice.value["reason"], "depth");
+    assert_eq!(notice.value["code"], DEPTH_EXCEEDED);
+    assert_eq!(notice.value["depth"], 2);
+    assert_eq!(notice.value["max_depth"], 1);
+    assert_eq!(notice.value["missing"], json!([]));
+}
+
+#[test]
+fn drift_is_a_narrowed_notice_and_an_unchanged_callee_is_none() {
+    let approved = [toolkit(7, "Git", &json!({}))];
+    let parent = root_scope(
+        grant_policy(NarrowingMode::Enforce, &[(2, 1, &approved)]),
+        &[],
+    );
+    let mut callee = vec![
+        toolkit(7, "Git", &json!({})),
+        toolkit(9, "Database", &json!({})),
+    ];
+    let delegation = parent
+        .delegate_edge(Some(1), &mut callee, &BTreeSet::new(), &PublicPolicy::Open)
+        .expect("it still runs");
+    let notice = delegation
+        .evidence
+        .notice(&notice_context())
+        .expect("notice");
+    assert_eq!(notice.event, NARROWED_EVENT);
+    assert_eq!(notice.value["kind"], "narrowed");
+    assert_eq!(notice.value["reason"], "stale");
+    assert_eq!(notice.value["grant_id"], 1);
+    assert_eq!(
+        notice.value["missing"],
+        json!([{"kind": "toolkit", "name": "Database"}])
+    );
+    assert_eq!(notice.value["missing_total"], 1);
+    assert!(notice.value.get("code").is_none());
+
+    let mut same = approved.to_vec();
+    let unchanged = parent
+        .delegate_edge(Some(1), &mut same, &BTreeSet::new(), &PublicPolicy::Open)
+        .expect("runs");
+    assert!(unchanged.evidence.notice(&notice_context()).is_none());
+}
+
+#[test]
+fn a_refusal_report_mode_did_not_enforce_shows_no_notice() {
+    let git = [toolkit(7, "Git", &json!({}))];
+    let parent = root_scope(grant_policy(NarrowingMode::Report, &[]), &[]);
+    let delegation = parent
+        .delegate_edge(
+            Some(1),
+            &mut git.to_vec(),
+            &BTreeSet::new(),
+            &PublicPolicy::Open,
+        )
+        .expect("report mode runs it");
+    assert!(delegation.evidence.refusal.is_some());
+    assert!(delegation.evidence.notice(&notice_context()).is_none());
+}
+
+#[test]
+fn a_notice_names_at_most_sixteen_grants_and_counts_them_all() {
+    let approved = [toolkit(7, "Git", &json!({}))];
+    let parent = root_scope(
+        grant_policy(NarrowingMode::Enforce, &[(2, 1, &approved)]),
+        &[],
+    );
+    let mut callee = vec![toolkit(7, "Git", &json!({}))];
+    for id in 100..120 {
+        callee.push(toolkit(id, &format!("Extra{id}"), &json!({})));
+    }
+    let delegation = parent
+        .delegate_edge(Some(1), &mut callee, &BTreeSet::new(), &PublicPolicy::Open)
+        .expect("runs");
+    let notice = delegation
+        .evidence
+        .notice(&notice_context())
+        .expect("notice");
+    assert_eq!(
+        notice.value["missing"].as_array().expect("list").len(),
+        MAX_NOTICE_ITEMS
+    );
+    assert_eq!(notice.value["missing_total"], 20);
+}

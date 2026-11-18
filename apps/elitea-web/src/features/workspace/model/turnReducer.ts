@@ -15,6 +15,7 @@
  * ([`MAX_UNCLAIMED_TURNS`]): one of them may be the turn whose start has not
  * returned yet.
  */
+import type { DelegationNotice } from '@elitea/client-core/stream';
 import { isPlanEvent, type PlanEvent } from '@/shared/desktop/planEvents';
 import type { PlanProposalPayload, PlanView } from '@/shared/desktop/planIpc';
 import type { TurnModel } from '@/shared/desktop/turnModel';
@@ -77,6 +78,8 @@ export interface TurnView extends SteerView, ChainView {
   model?: TurnModel;
   /** The turn's read-only sub-agents, in start order: each shown under its `spawn_agent` row. */
   subAgents?: SubAgentLane[];
+  /** A cloud thread's refused or narrowed delegations (client contract 1.60). */
+  delegationNotices?: readonly DelegationNotice[];
   /** A model call is made again (`model_retry`): shown until the model streams again or the turn ends. */
   retrying?: RetryingView;
 }

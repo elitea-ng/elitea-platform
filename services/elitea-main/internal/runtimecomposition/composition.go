@@ -2811,6 +2811,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		toolkitCallTool,
 		int(dependencies.ReplayPool.Config().MaxConns),
 		config.SSEStreamLimits,
+		delegationReviewerFor(dependencies),
 	)
 	if err != nil {
 		return nil, err

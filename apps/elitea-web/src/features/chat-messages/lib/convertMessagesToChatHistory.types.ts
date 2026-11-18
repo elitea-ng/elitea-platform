@@ -1,5 +1,5 @@
 import type { MessageClass } from '@elitea/client-core/conversation';
-import type { CloudSubAgentLane } from '@elitea/client-core/stream';
+import type { CloudSubAgentLane, DelegationNotice } from '@elitea/client-core/stream';
 
 import type { GoalCheckView, RunBriefView } from '@/entities/run-brief';
 import type { NodeRecoveryBinding } from '@/shared/lib/nodeRecovery';
@@ -29,6 +29,8 @@ export interface ChatMessage {
    * frames into it; a reload reads `meta.subagents_v1`.
    */
   readonly subAgents?: readonly CloudSubAgentLane[] | undefined;
+  /** Client contract 1.60: delegations the run refused or narrowed, shown at the callee's place. */
+  readonly delegationNotices?: readonly DelegationNotice[] | undefined;
   readonly resultChunk?: unknown;
   readonly assembledResult?: string | undefined;
   readonly continuedResultPrefix?: string | undefined;
