@@ -16,6 +16,7 @@
 import AccountBalanceWalletOutlinedIcon from '@mui/icons-material/AccountBalanceWalletOutlined';
 import AssignmentOutlinedIcon from '@mui/icons-material/AssignmentOutlined';
 import BuildOutlinedIcon from '@mui/icons-material/BuildOutlined';
+import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import ContentCutOutlinedIcon from '@mui/icons-material/ContentCutOutlined';
 import FactCheckOutlinedIcon from '@mui/icons-material/FactCheckOutlined';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
@@ -256,6 +257,17 @@ export function navGroups(): readonly AdminNavGroup[] {
           label: t('pages.admin.nav.connectorRequests', 'Connector requests'),
           icon: LinkOutlinedIcon,
           anyPermission: ['connector.approve'],
+        },
+        {
+          // ADR-0044 Amendment 1, A1.3 (epic 2156 story S6): the delegation
+          // grants that await review, the queue the migration of existing
+          // compositions left. Gated on `configuration.governance`, the
+          // permission of the Delegation section it explains.
+          id: 'delegation-review',
+          path: '/delegation-review',
+          label: t('pages.admin.nav.delegationReview', 'Delegations awaiting review'),
+          icon: AccountTreeOutlinedIcon,
+          anyPermission: ['configuration.governance'],
         },
         {
           // ADR-0044 decision 5 (#1501): shared migration 0208 grants

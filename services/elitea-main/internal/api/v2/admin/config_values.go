@@ -131,6 +131,9 @@ type configValuesResponse struct {
 	FieldsMeta map[string]configFieldMeta `json:"fields_meta,omitempty"`
 	Saved      bool                       `json:"saved,omitempty"`
 	Restart    []map[string]any           `json:"requires_restart,omitempty"`
+	// Status is what a section shows next to its values: the Delegation
+	// section's pending count and report-window hint (delegation_review.go).
+	Status map[string]any `json:"status,omitempty"`
 }
 
 type configFieldMeta struct {
@@ -160,10 +163,18 @@ func (h *Handler) AdministrationPluginConfigValues(w http.ResponseWriter, r *htt
 		return
 	}
 
-	writeJSON(w, http.StatusOK, configValuesResponse{
+	response := configValuesResponse{
 		Values:     mergeSectionValues(section, stored),
 		FieldsMeta: sectionFieldsMeta(section),
-	})
+	}
+	if section.id == platformconfig.SectionDelegation && h.delegationReview != nil {
+		// A status that cannot be read leaves the section as it was: the
+		// values are what the page saves, the status only explains them.
+		if status, err := h.delegationReviewStatus(r.Context()); err == nil {
+			response.Status = status
+		}
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 // PromptLibResourcesValues serves

@@ -183,12 +183,20 @@ func TestAGovernedRunWithNoGrantsHasAnEmptyCredentialBound(t *testing.T) {
 	}
 }
 
-// The switch is off by default: nothing is read and nothing is sent, so a
-// composition that reaches a hidden toolkit keeps running.
-func TestTheBoundWaitsForTheSwitch(t *testing.T) {
+// The switch is ON by default (S6), so a saved section that does not say
+// otherwise is bounded; a saved false turns it off and nothing is read or sent.
+func TestTheBoundIsOnByDefaultAndASavedFalseTurnsItOff(t *testing.T) {
 	t.Parallel()
 	stub := &principalStub{principal: Principal{UserID: 31}, reachable: []int64{9}, hidden: []int64{9}}
 	policy, err := boundedResolver(t, savedDefaults(), stub).WorkerDelegationPolicy(context.Background(), agentCommand())
+	if err != nil || policy == nil || policy.GetPrincipalBound() == nil || stub.reads == 0 {
+		t.Fatalf("default: policy = %v, err = %v, reads = %d", policy, err, stub.reads)
+	}
+
+	off := savedDefaults()
+	off.PrincipalBound = false
+	stub = &principalStub{principal: Principal{UserID: 31}, reachable: []int64{9}, hidden: []int64{9}}
+	policy, err = boundedResolver(t, off, stub).WorkerDelegationPolicy(context.Background(), agentCommand())
 	if err != nil || policy == nil {
 		t.Fatalf("policy = %v, err = %v", policy, err)
 	}
@@ -196,13 +204,35 @@ func TestTheBoundWaitsForTheSwitch(t *testing.T) {
 		t.Fatalf("bound = %v, reads = %d; want none while the switch is off", policy.GetPrincipalBound(), stub.reads)
 	}
 	// And the saved defaults are byte for byte what they were.
-	plain, _ := resolver(t, savedDefaults(), agentInput(t, `{"id":5}`), nil)
+	plain, _ := resolver(t, off, agentInput(t, `{"id":5}`), nil)
 	want, err := plain.WorkerDelegationPolicy(context.Background(), agentCommand())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !proto.Equal(want, policy) {
 		t.Fatalf("policy = %v, want %v", policy, want)
+	}
+}
+
+// A deployment that never saved the section is bounded too (S6): the policy
+// carries the compiled-in defaults with the bound, and no data class is read.
+func TestAnUnsavedSectionIsBoundedByDefault(t *testing.T) {
+	t.Parallel()
+	stub := &principalStub{principal: Principal{UserID: 31}, reachable: []int64{7, 9}, hidden: []int64{9}}
+	r, classes := resolver(t, platformconfig.DefaultDelegationSettings(), agentInput(t, `{"id":5,"version_id":9,"version_details":{"tools":[
+		{"id":7,"type":"jira"}]}}`), map[[2]int64][]string{{17, 5}: {"pii"}})
+	policy, err := r.WithPrincipalBound(stub).WorkerDelegationPolicy(context.Background(), agentCommand())
+	if err != nil || policy == nil {
+		t.Fatalf("policy = %v, err = %v", policy, err)
+	}
+	if policy.GetMode() != runtimev1.WorkerDelegationModeV1_WORKER_DELEGATION_MODE_V1_ENFORCE || policy.GetMaxDepth() != 4 {
+		t.Fatalf("defaults: %v", policy)
+	}
+	if got := toolkitIDs(policy.GetPrincipalBound()); len(got) != 1 || got[0] != 7 {
+		t.Fatalf("bound toolkits = %v, want [7]", got)
+	}
+	if classes.reads != 0 || len(policy.GetRootDataClasses()) != 0 {
+		t.Fatalf("an unsaved section reads no registry: reads = %d, classes = %v", classes.reads, policy.GetRootDataClasses())
 	}
 }
 

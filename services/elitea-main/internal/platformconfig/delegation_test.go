@@ -8,7 +8,7 @@ import (
 func TestDelegationSettingsDefaults(t *testing.T) {
 	t.Parallel()
 	settings := DelegationSettingsFromValues(Values{})
-	if settings != DefaultDelegationSettings() || settings.MaxDepth != 4 || settings.Mode != DelegationEnforce || settings.Stored {
+	if settings != DefaultDelegationSettings() || settings.MaxDepth != 4 || settings.Mode != DelegationEnforce || settings.Stored || !settings.PrincipalBound {
 		t.Fatalf("defaults = %+v", settings)
 	}
 }
@@ -31,15 +31,16 @@ func TestDelegationSettingsFromValues(t *testing.T) {
 		values Values
 		want   DelegationSettings
 	}{
-		{"saved", Values{"max_depth": float64(2), "mode": "report"}, DelegationSettings{MaxDepth: 2, Mode: DelegationReport, Stored: true}},
-		{"highest", Values{"max_depth": float64(16)}, DelegationSettings{MaxDepth: 16, Mode: DelegationEnforce, Stored: true}},
-		{"clamped low", Values{"max_depth": float64(0)}, DelegationSettings{MaxDepth: 1, Mode: DelegationEnforce, Stored: true}},
-		{"clamped high", Values{"max_depth": float64(99)}, DelegationSettings{MaxDepth: 16, Mode: DelegationEnforce, Stored: true}},
-		{"unreadable depth tightens", Values{"max_depth": "deep"}, DelegationSettings{MaxDepth: 1, Mode: DelegationEnforce, Stored: true}},
-		{"unknown mode enforces", Values{"mode": "off"}, DelegationSettings{MaxDepth: 4, Mode: DelegationEnforce, Stored: true}},
+		{"saved", Values{"max_depth": float64(2), "mode": "report"}, DelegationSettings{MaxDepth: 2, Mode: DelegationReport, PrincipalBound: true, Stored: true}},
+		{"highest", Values{"max_depth": float64(16)}, DelegationSettings{MaxDepth: 16, Mode: DelegationEnforce, PrincipalBound: true, Stored: true}},
+		{"clamped low", Values{"max_depth": float64(0)}, DelegationSettings{MaxDepth: 1, Mode: DelegationEnforce, PrincipalBound: true, Stored: true}},
+		{"clamped high", Values{"max_depth": float64(99)}, DelegationSettings{MaxDepth: 16, Mode: DelegationEnforce, PrincipalBound: true, Stored: true}},
+		{"unreadable depth tightens", Values{"max_depth": "deep"}, DelegationSettings{MaxDepth: 1, Mode: DelegationEnforce, PrincipalBound: true, Stored: true}},
+		{"report keeps the principal bound", Values{"mode": "report"}, DelegationSettings{MaxDepth: 4, Mode: DelegationReport, PrincipalBound: true, Stored: true}},
+		{"unknown mode enforces", Values{"mode": "off"}, DelegationSettings{MaxDepth: 4, Mode: DelegationEnforce, PrincipalBound: true, Stored: true}},
 		{"principal bound on", Values{"principal_bound": true}, DelegationSettings{MaxDepth: 4, Mode: DelegationEnforce, PrincipalBound: true, Stored: true}},
 		{"principal bound off", Values{"principal_bound": false}, DelegationSettings{MaxDepth: 4, Mode: DelegationEnforce, Stored: true}},
-		{"unreadable principal bound stays off", Values{"principal_bound": "yes"}, DelegationSettings{MaxDepth: 4, Mode: DelegationEnforce, Stored: true}},
+		{"unreadable principal bound stays on", Values{"principal_bound": "yes"}, DelegationSettings{MaxDepth: 4, Mode: DelegationEnforce, PrincipalBound: true, Stored: true}},
 	} {
 		if got := DelegationSettingsFromValues(test.values); got != test.want {
 			t.Errorf("%s: got %+v, want %+v", test.name, got, test.want)

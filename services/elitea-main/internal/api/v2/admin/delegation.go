@@ -40,7 +40,10 @@ func delegationSection() map[string]any {
 			"one, or an agent starts a sub-agent, the delegated agent runs with only the toolkits, tools, " +
 			"credentials, data classes and egress hosts that both it and its caller hold. A delegation that " +
 			"needs more stops with DELEGATION_GRANT_MISSING, and one deeper than the maximum depth stops with " +
-			"DELEGATION_DEPTH_EXCEEDED. The model reads the refusal, and the run's evidence records it.",
+			"DELEGATION_DEPTH_EXCEEDED. The model reads the refusal, and the run's evidence records it. " +
+			"An agent that attaches another agent gets a delegation grant for that edge, approved by an editor " +
+			"of the caller: the callee may use what its caller holds and what the grant lists. The delegations " +
+			"the migration of existing compositions left for review are on the Delegations awaiting review page.",
 		"order":               6,
 		"icon":                "account_tree",
 		"always_visible":      true,
@@ -64,8 +67,10 @@ func delegationSection() map[string]any {
 				"type":  "string",
 				"title": "Mode",
 				"description": "enforce (the default) refuses a delegation that needs a grant its caller does " +
-					"not hold. report records the missing grant on the delegation step and lets the delegated " +
-					"agent run, so you can find the compositions to fix before you enforce. The depth is " +
+					"not hold, and an installation that never saved a mode enforces. report records the missing " +
+					"grant on the delegation step and lets the delegated agent run: use it as a migration " +
+					"window (recommended 14 days) while the owners of the calling agents review the delegations " +
+					"that await review, then return to enforce. The run principal bound and the depth are " +
 					"enforced in both modes. Runs under the governed credential profile always enforce.",
 				"section": section,
 				"default": string(defaults.Mode),
@@ -75,14 +80,14 @@ func delegationSection() map[string]any {
 				"key":   platformconfig.KeyDelegationPrincipalBound,
 				"type":  "boolean",
 				"title": "Bound Delegation By The Run's Principal",
-				"description": "Off by default. When on, a delegated agent never exceeds what the person who " +
-					"started the run (or the mandate and project of an unattended run) may use: a toolkit " +
-					"hidden from that person, a credential reference they may not use, or a tool outside their " +
-					"access stops the delegation with DELEGATION_GRANT_MISSING and reason principal, in both " +
-					"modes. This also bounds an ad hoc conversation's toolkits. Turn it on once every worker " +
-					"runs this release, and after the delegation migration has created the grants for your " +
-					"existing compositions. A composition that reaches something its principal may not use " +
-					"stops working while it is on.",
+				"description": "On by default. A delegated agent never exceeds what the person who started the " +
+					"run (or the mandate and project of an unattended run) may use: a toolkit hidden from that " +
+					"person, a credential reference they may not use, or a tool outside their access stops the " +
+					"delegation with DELEGATION_GRANT_MISSING and reason principal, in both modes, and report " +
+					"mode never relaxes it. This also bounds an ad hoc conversation's toolkits. Turn it off only " +
+					"while a worker from an earlier release still runs (it rejects the bound), then turn it on " +
+					"again. A composition that reaches something its principal may not use stops working " +
+					"while it is on.",
 				"section": section,
 				"default": defaults.PrincipalBound,
 			},

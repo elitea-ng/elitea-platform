@@ -15,6 +15,7 @@ import { toAgentToolAssociations } from '../lib/versionTools';
 
 import { AgentToolRow } from './AgentToolRow';
 import { ApplicationTools } from './ApplicationTools';
+import { DelegationPendingBanner } from './DelegationPendingBanner';
 
 /**
  * The composition root for an agent's Tools panel — the piece #307 named as
@@ -220,17 +221,20 @@ export function AgentToolsPanel({ entity, versionTools, dirty, internalTools, on
   );
 
   return (
-    <ApplicationTools
-      tools={mirror.tools}
-      internalTools={internalTools.value}
-      onInternalToolsChange={internalTools.onChange}
-      applicationId={entity.applicationId}
-      versionId={entity.versionId}
-      renderToolCard={renderToolCard}
-      onToolsChanged={onToolsChanged}
-      disabled={readOnly}
-      isPipeline={isPipeline}
-      sx={sx}
-    />
+    <>
+      <DelegationPendingBanner grants={grants} />
+      <ApplicationTools
+        tools={mirror.tools}
+        internalTools={internalTools.value}
+        onInternalToolsChange={internalTools.onChange}
+        applicationId={entity.applicationId}
+        versionId={entity.versionId}
+        renderToolCard={renderToolCard}
+        onToolsChanged={onToolsChanged}
+        disabled={readOnly}
+        isPipeline={isPipeline}
+        sx={sx}
+      />
+    </>
   );
 }

@@ -137,6 +137,10 @@ func (c Closure) Key() string {
 const (
 	NotifyStale       = "delegation_grant_stale"
 	NotifyClosureGrew = "delegation_closure_grew"
+	// NotifyLegacyPending is the one notification per calling agent that lists
+	// the pending delegations the migration of existing compositions wrote
+	// (story S6).
+	NotifyLegacyPending = "delegation_legacy_pending"
 )
 
 // Tracked is an approved or stale grant with what the last drift check

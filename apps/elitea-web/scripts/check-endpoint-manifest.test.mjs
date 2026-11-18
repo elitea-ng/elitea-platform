@@ -956,7 +956,10 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 558 -> 564 (issue 2165, delegation epic 2156): list/propose DelegationGrant, getDelegationGrant,
 // approveDelegationGrant, revokeDelegationGrant and previewDelegationGrant. No UI ships with them
 // (stories S3 and S5), so MANIFEST_ENTRY_COUNT is unchanged.
-const GENERATED_OPERATION_COUNT = 564;
+// 564 -> 566 (issue 2162, delegation epic 2156 story S6): getDelegationReview and scanDelegationReview,
+// the Delegations awaiting review page. Like the other admin queues they are not in the manifest, so
+// MANIFEST_ENTRY_COUNT is unchanged.
+const GENERATED_OPERATION_COUNT = 566;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

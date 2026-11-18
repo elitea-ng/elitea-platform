@@ -4,3 +4,11 @@
 [data-testid='permission-trimming-usage'] {
   font-size: 0 !important;
 }
+
+/* The delegation review's summary and table follow the agents the other journeys
+   have attached at that moment, so they are hidden (the layout above them is
+   what is compared). */
+[data-testid='delegation-review-summary'],
+[data-testid='delegation-review-table'] {
+  visibility: hidden !important;
+}

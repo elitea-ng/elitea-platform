@@ -21,11 +21,13 @@ const SectionDelegation = "delegation"
 const (
 	KeyDelegationMaxDepth = "max_depth"
 	KeyDelegationMode     = "mode"
-	// KeyDelegationPrincipalBound turns on the run principal bound
+	// KeyDelegationPrincipalBound is the run principal bound switch
 	// (ADR-0044 Amendment 1, #2157): every delegated agent is limited to
-	// what the acting user, or the mandate and project, may use. Off until
-	// every worker runs the release and the delegation migration of epic
-	// #2156 (S6) has created the pending grants for existing compositions.
+	// what the acting user, or the mandate and project, may use. ON by
+	// default since the delegation migration (epic #2156, S6) shipped: the
+	// bound only ever narrows, and the ADR says it always applies. A saved
+	// false turns it off (an escape hatch for the rollout window); report
+	// mode never does.
 	KeyDelegationPrincipalBound = "principal_bound"
 )
 
@@ -52,9 +54,9 @@ const (
 type DelegationSettings struct {
 	MaxDepth int            `json:"max_depth"`
 	Mode     DelegationMode `json:"mode"`
-	// PrincipalBound is the principal bound switch: false (the default)
-	// sends no bound, so a composition that reaches a toolkit its principal
-	// may not use keeps running as before.
+	// PrincipalBound is the principal bound switch: true (the default)
+	// bounds every delegated agent by what the run's principal may use. Only
+	// an explicit saved false turns it off.
 	PrincipalBound bool `json:"principal_bound"`
 	// Stored reports that the section has a stored value: an administrator
 	// saved it. Only then does Main send the policy (WorkerCommandV1 field
@@ -67,10 +69,17 @@ type DelegationSettings struct {
 	Stored bool `json:"-"`
 }
 
-// DefaultDelegationSettings is a deployment that never saved the section.
+// DefaultDelegationSettings is a deployment that never saved the section:
+// enforce, depth 4, and the principal bound on (ADR-0044 Amendment 1, A1.3:
+// an installation with no saved mode stays enforce).
 func DefaultDelegationSettings() DelegationSettings {
-	return DelegationSettings{MaxDepth: DefaultDelegationMaxDepth, Mode: DelegationEnforce}
+	return DelegationSettings{MaxDepth: DefaultDelegationMaxDepth, Mode: DelegationEnforce, PrincipalBound: true}
 }
+
+// DelegationReportWindowDays is the recommended length of the migration
+// window in which an administrator keeps the mode at report while the owners
+// of the calling agents review their pending delegations (A1.3).
+const DelegationReportWindowDays = 14
 
 // DelegationSettingsFromValues is the overlay. A depth out of range is
 // clamped into range and an unreadable one is the smallest depth; an unknown
@@ -98,9 +107,12 @@ func DelegationSettingsFromValues(values Values) DelegationSettings {
 			settings.Mode = DelegationReport
 		}
 	}
-	// Only an explicit true turns the bound on: an unreadable value is off,
-	// the default, so a hand-written row never enables it by accident.
-	settings.PrincipalBound, _ = values[KeyDelegationPrincipalBound].(bool)
+	// Only an explicit false turns the bound off: an unreadable value keeps
+	// it on, so a hand-written row can tighten the policy and never silently
+	// loosen it.
+	if on, isBool := values[KeyDelegationPrincipalBound].(bool); isBool && !on {
+		settings.PrincipalBound = false
+	}
 	return settings
 }
 

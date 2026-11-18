@@ -95,6 +95,9 @@ import type {
   CredentialUseGrant,
   CredentialUseGrantCreate,
   CredentialUseGrantListResponse,
+  DelegationGovernedError,
+  DelegationReview,
+  DelegationScanResult,
   EntitlementGrantList,
   ErrorResponse,
   ExecutionSuspension,
@@ -4752,6 +4755,393 @@ export function useListAdminAgentRegistry<
   queryKey: DataTag<QueryKey, TData, TError>;
 } {
   const queryOptions = getListAdminAgentRegistryQueryOptions(params, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getDelegationReviewResponse200 = {
+  data: DelegationReview;
+  status: 200;
+};
+
+export type getDelegationReviewResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getDelegationReviewResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getDelegationReviewResponse503 = {
+  data: DelegationGovernedError;
+  status: 503;
+};
+
+export type getDelegationReviewResponseSuccess =
+  getDelegationReviewResponse200 & {
+    headers: Headers;
+  };
+export type getDelegationReviewResponseError = (
+  | getDelegationReviewResponse401
+  | getDelegationReviewResponse403
+  | getDelegationReviewResponse503
+) & {
+  headers: Headers;
+};
+
+export type getDelegationReviewResponse =
+  getDelegationReviewResponseSuccess | getDelegationReviewResponseError;
+
+export const getGetDelegationReviewUrl = () => {
+  return `/admin/delegation_review`;
+};
+
+/**
+ * The delegation grants that await review across the projects (ADR-0044 Amendment 1, A1.3): grants pending a first approval, those of them the migration of existing compositions wrote (flagged legacy), and grants whose callee changed after approval (stale), counted per project with the calling agents to open. Also the delegation mode in force and the recommended length of the report window. Nothing the migration wrote is approved. Gated on `configuration.governance` in the administration mode.
+ * @summary List the delegations that await review, per project
+ */
+export const getDelegationReview = async (
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getDelegationReviewResponse> => {
+  return eliteaFetch<getDelegationReviewResponse>(getGetDelegationReviewUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetDelegationReviewQueryKey = () => {
+  return [`/admin/delegation_review`] as const;
+};
+
+export const getGetDelegationReviewQueryOptions = <
+  TData = Awaited<ReturnType<typeof getDelegationReview>>,
+  TError = N401Response | N403Response | DelegationGovernedError,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<
+      Awaited<ReturnType<typeof getDelegationReview>>,
+      TError,
+      TData
+    >
+  >;
+  request?: SecondParameter<typeof eliteaFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetDelegationReviewQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getDelegationReview>>
+  > = ({ signal }) => getDelegationReview({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getDelegationReview>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetDelegationReviewQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getDelegationReview>>
+>;
+export type GetDelegationReviewQueryError =
+  N401Response | N403Response | DelegationGovernedError;
+
+export function useGetDelegationReview<
+  TData = Awaited<ReturnType<typeof getDelegationReview>>,
+  TError = N401Response | N403Response | DelegationGovernedError,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getDelegationReview>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getDelegationReview>>,
+          TError,
+          Awaited<ReturnType<typeof getDelegationReview>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetDelegationReview<
+  TData = Awaited<ReturnType<typeof getDelegationReview>>,
+  TError = N401Response | N403Response | DelegationGovernedError,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getDelegationReview>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getDelegationReview>>,
+          TError,
+          Awaited<ReturnType<typeof getDelegationReview>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetDelegationReview<
+  TData = Awaited<ReturnType<typeof getDelegationReview>>,
+  TError = N401Response | N403Response | DelegationGovernedError,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getDelegationReview>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the delegations that await review, per project
+ */
+
+export function useGetDelegationReview<
+  TData = Awaited<ReturnType<typeof getDelegationReview>>,
+  TError = N401Response | N403Response | DelegationGovernedError,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getDelegationReview>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetDelegationReviewQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type scanDelegationReviewResponse200 = {
+  data: DelegationScanResult;
+  status: 200;
+};
+
+export type scanDelegationReviewResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type scanDelegationReviewResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type scanDelegationReviewResponse503 = {
+  data: DelegationGovernedError;
+  status: 503;
+};
+
+export type scanDelegationReviewResponseSuccess =
+  scanDelegationReviewResponse200 & {
+    headers: Headers;
+  };
+export type scanDelegationReviewResponseError = (
+  | scanDelegationReviewResponse401
+  | scanDelegationReviewResponse403
+  | scanDelegationReviewResponse503
+) & {
+  headers: Headers;
+};
+
+export type scanDelegationReviewResponse =
+  scanDelegationReviewResponseSuccess | scanDelegationReviewResponseError;
+
+export const getScanDelegationReviewUrl = () => {
+  return `/admin/delegation_review/scan`;
+};
+
+/**
+ * Runs the migration of existing compositions again for every project and writes a pending legacy grant for each edge whose callee holds more than its caller and that has none. An edge that already has a grant, or whose legacy grant was decided, is left alone, so the scan is safe to repeat. It approves nothing. Gated on `configuration.governance` in the administration mode.
+ * @summary Scan the compositions again for delegations that need a grant
+ */
+export const scanDelegationReview = async (
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<scanDelegationReviewResponse> => {
+  return eliteaFetch<scanDelegationReviewResponse>(
+    getScanDelegationReviewUrl(),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getScanDelegationReviewQueryKey = () => {
+  return ["POST", `/admin/delegation_review/scan`] as const;
+};
+
+export const getScanDelegationReviewQueryOptions = <
+  TData = Awaited<ReturnType<typeof scanDelegationReview>>,
+  TError = N401Response | N403Response | DelegationGovernedError,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<
+      Awaited<ReturnType<typeof scanDelegationReview>>,
+      TError,
+      TData
+    >
+  >;
+  request?: SecondParameter<typeof eliteaFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getScanDelegationReviewQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof scanDelegationReview>>
+  > = ({ signal }) => scanDelegationReview({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof scanDelegationReview>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ScanDelegationReviewQueryResult = NonNullable<
+  Awaited<ReturnType<typeof scanDelegationReview>>
+>;
+export type ScanDelegationReviewQueryError =
+  N401Response | N403Response | DelegationGovernedError;
+
+export function useScanDelegationReview<
+  TData = Awaited<ReturnType<typeof scanDelegationReview>>,
+  TError = N401Response | N403Response | DelegationGovernedError,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof scanDelegationReview>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof scanDelegationReview>>,
+          TError,
+          Awaited<ReturnType<typeof scanDelegationReview>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useScanDelegationReview<
+  TData = Awaited<ReturnType<typeof scanDelegationReview>>,
+  TError = N401Response | N403Response | DelegationGovernedError,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof scanDelegationReview>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof scanDelegationReview>>,
+          TError,
+          Awaited<ReturnType<typeof scanDelegationReview>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useScanDelegationReview<
+  TData = Awaited<ReturnType<typeof scanDelegationReview>>,
+  TError = N401Response | N403Response | DelegationGovernedError,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof scanDelegationReview>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Scan the compositions again for delegations that need a grant
+ */
+
+export function useScanDelegationReview<
+  TData = Awaited<ReturnType<typeof scanDelegationReview>>,
+  TError = N401Response | N403Response | DelegationGovernedError,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof scanDelegationReview>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getScanDelegationReviewQueryOptions(options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

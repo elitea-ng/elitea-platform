@@ -6,7 +6,7 @@ import { Alert } from 'react-native';
 import { discoveryDocument13 } from '@/api/__fixtures__/nativeClient';
 import { DiscoveryDocumentSchema } from '@/api/discovery';
 import AgentDelegationsScreen from '@/app/(app)/agent-delegations/[id]';
-import { DelegationGrantsView, GOVERNED_NOTE, REAPPROVAL_GOVERNED_NOTE } from '@/features/delegation/DelegationGrantsView';
+import { DelegationGrantsView, GOVERNED_NOTE, LEGACY_BANNER, REAPPROVAL_GOVERNED_NOTE } from '@/features/delegation/DelegationGrantsView';
 import { __resetSessionForTests, setCredential, setSession } from '@/state/session';
 import { __resetWorkspaceInfoForTests, setWorkspaceInfo } from '@/state/workspaceInfo';
 import { FAKE_ORIGIN, fakeServer, type FakeServer } from '@/test/fakeServer';
@@ -67,6 +67,23 @@ beforeEach(() => {
   jest.restoreAllMocks();
 });
 afterEach(() => queries.clear());
+
+it('counts the delegations from before this release that await review above the rows', async () => {
+  const server = install();
+  server.on('GET', LIST, { status: 200, body: { grants: [grant(1, { legacy: true }), grant(2, { legacy: true }), grant(3, { state: 'approved', legacy: true })] } });
+  await render(withQueries(<AgentDelegationsScreen />));
+  expect(await screen.findByText(LEGACY_BANNER(2))).toBeTruthy();
+  expect(LEGACY_BANNER(2)).toContain('2 delegations from before this release await review');
+  expect(LEGACY_BANNER(1)).toContain('1 delegation from before this release awaits review');
+});
+
+it('shows no banner when no pending delegation came from before this release', async () => {
+  const server = install();
+  server.on('GET', LIST, { status: 200, body: { grants: [grant(1), grant(2, { state: 'approved', legacy: true })] } });
+  await render(withQueries(<AgentDelegationsScreen />));
+  expect(await screen.findByText('Git specialist')).toBeTruthy();
+  expect(screen.queryByTestId('delegation-legacy-banner')).toBeNull();
+});
 
 it('lists what each attached agent brings, with the state and the callee name', async () => {
   const server = install();

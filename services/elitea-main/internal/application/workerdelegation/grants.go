@@ -14,14 +14,14 @@ import (
 // S2c). The worker reads one per composition edge Y to X as G(Y to X) in
 // E(X) = own(X) ∩ (E(Y) ∪ G(Y to X)) ∩ P.
 //
-// The switch. Grants are sent, and the worker enforces them, only while the
-// operator turns the grant switch on (ELITEA_DELEGATION_GRANTS_ENFORCED, off by
-// default). It stays off until the migration of existing compositions (story
-// S6) has created their pending legacy grants, in the same release; with it
-// off a command is unchanged byte for byte and delegation behaves exactly as
-// before grants. With it on, an edge with an approved grant is bounded by
-// E(Y) ∪ G and an edge with none is refused (or recorded, in report mode) as
-// it is today, so no composition that works is refused by the switch alone.
+// The switch. Grants are sent, and the worker enforces them, while the grant
+// switch is on (ELITEA_DELEGATION_GRANTS_ENFORCED, on by default since the
+// migration of existing compositions, story S6, ships in the same release and
+// creates their pending legacy grants, never an approved one); with it off a
+// command is unchanged byte for byte and delegation behaves exactly as before
+// grants. With it on, an edge with an approved grant is bounded by E(Y) ∪ G and
+// an edge with none is refused (or recorded, in report mode) as it is today,
+// so no composition that works is refused by the switch alone.
 
 const (
 	// MaxGrantEdges bounds the grants one command carries. A closure past it is

@@ -37,6 +37,9 @@ type Handler struct {
 	// delegation is the cached delegation policy a save drops
 	// (delegation.go).
 	delegation SectionInvalidator
+	// delegationReview is the review queue and scan of the delegation grants
+	// that await review (delegation_review.go).
+	delegationReview DelegationReviewSource
 	// approvalPolicy is the cached approval policy a save drops
 	// (approval_policy.go).
 	approvalPolicy SectionInvalidator

@@ -3,6 +3,8 @@ package middleware
 import (
 	"net/http"
 	"strings"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // delegationDriftSurfaces are the path fragments of the routes that can change
@@ -61,6 +63,17 @@ func driftSurface(path string) bool {
 // route resolution that sets the project (like Audit) and never changes the
 // response: the check runs later, in the background.
 func DelegationDrift(trigger func(projectID int64)) func(http.Handler) http.Handler {
+	if trigger == nil {
+		return DelegationDriftBy(nil)
+	}
+	return DelegationDriftBy(func(projectID, _ int64) { trigger(projectID) })
+}
+
+// DelegationDriftBy is DelegationDrift with the person who wrote: trigger also
+// receives the owning user id of the request's principal, 0 when it has none
+// (a token that names no user). The grant sync of a saved composition proposes
+// the grants of its new edges as that person.
+func DelegationDriftBy(trigger func(projectID, actorID int64)) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		if trigger == nil {
 			return next
@@ -76,7 +89,13 @@ func DelegationDrift(trigger func(projectID int64)) func(http.Handler) http.Hand
 				return
 			}
 			if projectID, ok := requestProjectID(r); ok {
-				trigger(projectID)
+				var actor int64
+				if user, found := auth.UserFromContext(r.Context()); found {
+					if id, resolved := user.OwningUserID(); resolved {
+						actor = id
+					}
+				}
+				trigger(projectID, actor)
 			}
 		})
 	}
