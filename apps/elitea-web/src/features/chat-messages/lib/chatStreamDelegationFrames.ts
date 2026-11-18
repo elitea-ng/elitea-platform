@@ -11,7 +11,7 @@
  * reloaded notice agree. The frame never touches the answer's text or tool
  * actions.
  */
-import { delegationNoticeOf, foldDelegationNotice, parseDelegationNotices } from '@elitea/client-core/stream';
+import { delegationNoticeOf, foldDelegationNotice } from '@elitea/client-core/stream';
 
 import { replaceAt } from './chatStreamShared';
 import { SocketMessageType, type ChatStreamFrame } from './chatStreamFrame';
@@ -28,10 +28,4 @@ export function reduceDelegationFrame(
   const notice = delegationNoticeOf(frame.response_metadata);
   if (!current || notice === undefined) return history;
   return replaceAt(history, index, { delegationNotices: foldDelegationNotice(current.delegationNotices ?? [], notice) });
-}
-
-/** The reload's read of `meta.delegation_notices_v1`: the same notices the live frames fold. */
-export function delegationNoticesOf(raw: unknown): Pick<ChatMessage, 'delegationNotices'> {
-  const notices = parseDelegationNotices(raw);
-  return notices.length === 0 ? {} : { delegationNotices: notices };
 }

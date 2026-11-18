@@ -48,7 +48,7 @@ import type { PersistedTraceSteps } from '@/entities/message/lib/traceSteps';
 import { withMemberThinkingSteps } from '@/entities/message/lib/traceSteps';
 import { convertTime, isParticipant, normaliseAssistantMessage, normaliseUserMessage } from '@/entities/message/lib/normalise';
 import type { SubAgentGroupable } from '@/entities/message/lib/subAgentGrouping';
-import { delegationNoticesOf } from './chatStreamDelegationFrames';
+import { delegationNoticesOf } from './delegationNoticesOf';
 
 import { splitWholeResponse } from './chatStreamReasoning';
 import type { ToolAction } from './chatStreamToolAction';
