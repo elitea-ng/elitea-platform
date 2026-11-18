@@ -137,6 +137,23 @@ describe('composer drafts', () => {
     expect(textarea()).toHaveValue('typed before load');
   });
 
+  it('a draft saved under the numeric id shows on an open uuid link once the id pair is registered (#2231)', () => {
+    writeDraft('chat:1:12', 'saved before the alias existed');
+    renderWithTheme(<Composer draftKey="chat:1:u-abc" />);
+    expect(textarea()).toHaveValue('');
+    act(() => rememberDraftAlias('chat:1:u-abc', 'chat:1:12'));
+    expect(textarea()).toHaveValue('saved before the alias existed');
+  });
+
+  it('registering the id pair leaves text typed meanwhile alone (#2231)', async () => {
+    const user = userEvent.setup();
+    writeDraft('chat:1:13', 'older numeric draft');
+    renderWithTheme(<Composer draftKey="chat:1:u-def" />);
+    await user.type(textarea(), 'typing now');
+    act(() => rememberDraftAlias('chat:1:u-def', 'chat:1:13'));
+    expect(textarea()).toHaveValue('typing now');
+  });
+
   it('a numeric deep link and a later uuid one share the draft, and an older uuid draft moves to the numeric id (#2229)', () => {
     writeDraft('chat:1:u-old', 'saved by the uuid form');
     writeDraft('chat:1:13', 'kept numeric');

@@ -11,7 +11,7 @@
  * {@link MAX_DRAFTS} are kept. An emptied input (a send, a clear) drops its
  * draft; a failed send leaves the text, and so the draft.
  */
-import { useEffect, useLayoutEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
 
 import { createStorage } from '@/shared/lib/storage';
 
@@ -71,6 +71,14 @@ function readAliases(): Readonly<Record<string, string>> {
   }
 }
 
+const slotListeners = new Set<() => void>();
+function subscribeSlots(listener: () => void): () => void {
+  slotListeners.add(listener);
+  return () => {
+    slotListeners.delete(listener);
+  };
+}
+
 /** The slot `key`'s draft lives in: a conversation reached by its uuid shares the draft of its numeric id. */
 function slotOf(key: string): string {
   return readAliases()[key] ?? key;
@@ -85,6 +93,15 @@ function slotOf(key: string): string {
  */
 export function rememberDraftAlias(alias: string, canonical: string): void {
   if (alias === canonical || readAliases()[alias] === canonical) return;
+  try {
+    registerAlias(alias, canonical);
+  } finally {
+    // A composer already showing `alias` re-reads: its slot just changed.
+    for (const listener of slotListeners) listener();
+  }
+}
+
+function registerAlias(alias: string, canonical: string): void {
   const all = { ...readAll() };
   const moving = all[alias];
   if (moving !== undefined) {
@@ -140,6 +157,20 @@ export function useComposerDraft(key: string | undefined, text: string, restore:
     latest.current = { text, restore };
   });
   const previous = useRef(key);
+  // The slot of `key` changes when its conversation's other id is registered (the uuid link of a draft saved under the numeric id).
+  const slot = useSyncExternalStore(subscribeSlots, () => (key === undefined ? '' : slotOf(key)), () => '');
+  const seen = useRef({ key, slot });
+  useEffect(() => {
+    const was = seen.current;
+    seen.current = { key, slot };
+    if (key === undefined || was.key !== key || was.slot === slot) return;
+    // Same key, new slot: restore only into an empty box, never over what is being typed.
+    const saved = readDraft(key);
+    if (saved !== '' && latest.current.text.trim() === '') {
+      latest.current.restore(saved);
+      latest.current = { ...latest.current, text: saved };
+    }
+  }, [key, slot]);
   useEffect(() => {
     const before = previous.current;
     previous.current = key;
