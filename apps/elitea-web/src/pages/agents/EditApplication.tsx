@@ -346,8 +346,7 @@ export function EditApplication(): ReactNode {
                 detail={detail}
                 activeVersion={activeVersion}
                 isDirty={isDirty}
-                llmSettings={editor.values.version_details.llm_settings}
-                onLlmSettingsChange={handleModelSettingsChange}
+                llmSettings={editor.values.version_details.llm_settings} onLlmSettingsChange={handleModelSettingsChange}
               />
             }
           >

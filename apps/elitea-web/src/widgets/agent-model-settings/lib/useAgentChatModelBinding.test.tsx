@@ -39,7 +39,7 @@ function ChatPickerStandIn({ value, onChange }: { value: AgentLlmSettings | unde
   const llm = useAgentChatModelBinding(PROJECT_ID, value, onChange, false);
   return (
     <div>
-      <output data-testid="chat-model">{String(llm?.settings?.['model_name'] ?? 'default')}</output>
+      <output data-testid="chat-model">{typeof llm?.settings?.['model_name'] === 'string' ? llm.settings['model_name'] : 'default'}</output>
       <button type="button" onClick={() => llm?.onSetSettings({ model_name: 'o3-mini', model_project_id: 17 })}>
         pick in chat
       </button>
