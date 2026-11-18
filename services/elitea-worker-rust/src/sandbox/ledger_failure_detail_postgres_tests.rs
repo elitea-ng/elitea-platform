@@ -81,7 +81,7 @@ async fn postgres_failed_run_keeps_the_stderr_tail_and_nothing_else_does() {
         .await
         .unwrap();
     let record = ledger.read(&scope).await.unwrap();
-    assert!(record.phase == Phase::Failed);
+    assert_eq!(record.phase, Phase::Failed);
     assert_eq!(record.failure_code.as_deref(), Some("sandbox.code_failed"));
     assert_eq!(
         record.failure_detail.as_deref(),
@@ -130,7 +130,7 @@ async fn postgres_failed_run_keeps_the_stderr_tail_and_nothing_else_does() {
             .await
             .unwrap();
         let record = ledger.read(&scope).await.unwrap();
-        assert!(record.phase == Phase::Failed);
+        assert_eq!(record.phase, Phase::Failed);
         assert_eq!(record.failure_detail, None);
     }
 
@@ -162,7 +162,7 @@ async fn postgres_schema_without_the_column_still_finishes_and_reads_failures() 
         .await
         .unwrap();
     let record = ledger.read(&scope).await.unwrap();
-    assert!(record.phase == Phase::Failed);
+    assert_eq!(record.phase, Phase::Failed);
     assert_eq!(record.failure_code.as_deref(), Some("sandbox.code_failed"));
     assert_eq!(record.failure_detail, None);
 }
