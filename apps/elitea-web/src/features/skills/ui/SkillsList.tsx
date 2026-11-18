@@ -2,6 +2,7 @@ import { useMemo, type ReactNode } from 'react';
 
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import DownloadOutlinedIcon from '@mui/icons-material/DownloadOutlined';
+import PlayArrowOutlinedIcon from '@mui/icons-material/PlayArrowOutlined';
 import IconButton from '@mui/material/IconButton';
 import Tooltip from '@mui/material/Tooltip';
 
@@ -31,11 +32,14 @@ export interface SkillsListProps {
   readonly onSelect: (skillId: string) => void;
   readonly onDelete: (skill: SkillRecord) => void;
   readonly onExport: (skill: SkillRecord) => void;
+  /** Try and Use in a chat (ADR-0051 amendment 1): in the row menu and, for Try, on the card. */
+  readonly onTry?: ((skill: SkillRecord) => void) | undefined;
+  readonly onUseInChat?: ((skill: SkillRecord) => void) | undefined;
   /** Wired to the empty state's `+ Create` CTA. */
   readonly onCreate?: () => void;
 }
 
-export function SkillsList({ items, isLoading, isError, query, onSelect, onDelete, onExport, onCreate }: SkillsListProps): ReactNode {
+export function SkillsList({ items, isLoading, isError, query, onSelect, onDelete, onExport, onTry, onUseInChat, onCreate }: SkillsListProps): ReactNode {
   const listItems = useMemo<EntityListItem[]>(
     () =>
       items.map((skill) => ({
@@ -79,6 +83,8 @@ export function SkillsList({ items, isLoading, isError, query, onSelect, onDelet
             skill={skill}
             onDelete={onDelete}
             onExport={onExport}
+            onTry={onTry}
+            onUseInChat={onUseInChat}
           />
         );
       }}
@@ -90,6 +96,7 @@ export function SkillsList({ items, isLoading, isError, query, onSelect, onDelet
             skill={skill}
             onDelete={onDelete}
             onExport={onExport}
+            onTry={onTry}
           />
         );
       }}
@@ -101,12 +108,28 @@ interface SkillCardActionsProps {
   readonly skill: SkillRecord;
   readonly onDelete: (skill: SkillRecord) => void;
   readonly onExport: (skill: SkillRecord) => void;
+  readonly onTry: ((skill: SkillRecord) => void) | undefined;
 }
 
 /** `Card.jsx`'s `topRightSection` slot — the per-row actions the old `<List>` rendered as a `secondaryAction`. */
-function SkillCardActions({ skill, onDelete, onExport }: SkillCardActionsProps): ReactNode {
+function SkillCardActions({ skill, onDelete, onExport, onTry }: SkillCardActionsProps): ReactNode {
   return (
     <>
+      {onTry !== undefined && (
+        <Tooltip title={t('skills.try.button', 'Try it')}>
+          <IconButton
+            size="small"
+            aria-label={t('skills.try.cardLabel', 'Try {{name}}', { name: skill.name })}
+            data-testid="skill-card-try"
+            onClick={(event) => {
+              event.stopPropagation();
+              onTry(skill);
+            }}
+          >
+            <PlayArrowOutlinedIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      )}
       <Tooltip title={t('skills.list.export', 'Export')}>
         <IconButton
           size="small"

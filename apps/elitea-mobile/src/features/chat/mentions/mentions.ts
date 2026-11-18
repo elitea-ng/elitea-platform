@@ -31,6 +31,8 @@ export interface Selection {
 }
 
 const WHITESPACE = /\s/;
+/** `/skill`, a space or tab, then the start of a name, at the start of the text or after whitespace, ending at the caret. */
+const SKILL_COMMAND_TEXT = /(^|\s)\/skill[ \t]+\S*$/i;
 /** The characters that may follow a complete mention. */
 const MENTION_END = /[\s.,!?;:]/;
 /** Longest query kept open: past this the strip closes (nobody types a 60-char name). */
@@ -49,6 +51,12 @@ export function detectTrigger(
 ): ActiveTrigger | null {
   if (selection.start !== selection.end) return null;
   const caret = Math.min(Math.max(selection.end, 0), text.length);
+  // "/skill <filter>": the one command with a space in it, so the whitespace scan below cannot see it (the skill phase).
+  const command = triggers.includes('/') ? SKILL_COMMAND_TEXT.exec(text.slice(0, caret)) : null;
+  if (command) {
+    const start = command.index + command[1].length;
+    return { trigger: '/', query: text.slice(start + 1, caret), start, end: caret };
+  }
   for (let i = caret - 1; i >= 0 && caret - i <= MAX_QUERY + 1; i--) {
     const char = text[i];
     if (WHITESPACE.test(char)) return null;

@@ -42,11 +42,21 @@
  */
 import * as zod from "zod";
 
+export const attachPublicSkillBodyForkOnlyDefault = false;
 export const attachPublicSkillBodyEntityTypeDefault = `agent`;
 export const AttachPublicSkillBody = zod.object({
   public_skill_id: zod.int(),
   public_version_id: zod.int(),
-  agent_version_ids: zod.array(zod.int()),
+  agent_version_ids: zod
+    .array(zod.int())
+    .optional()
+    .describe("Required unless `fork_only` is true."),
+  fork_only: zod
+    .boolean()
+    .default(attachPublicSkillBodyForkOnlyDefault)
+    .describe(
+      "Fork the published version into the project and attach it to no agent.",
+    ),
   entity_type: zod
     .string()
     .default(attachPublicSkillBodyEntityTypeDefault)

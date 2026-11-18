@@ -4,7 +4,17 @@ import { useState } from 'react';
 import { fetchAgentSkills, fetchToolkitTools } from '@/api/queries/skillsTools';
 import { Composer, type PickResult } from '@/features/chat/Composer';
 import type { ActiveTrigger } from '@/features/chat/mentions/mentions';
-import { skillInsert, slashPhase, toolInsert, toolkitInsert, type ToolkitOption } from '@/features/chat/slashPicker';
+import {
+  SKILLS_COMMAND,
+  SKILLS_ENTRY_KEY,
+  skillInsert,
+  skillRows,
+  skillsEntryMatches,
+  slashPhase,
+  toolInsert,
+  toolkitInsert,
+  type ToolkitOption,
+} from '@/features/chat/slashPicker';
 import type { Suggestion, SuggestionState } from '@/features/chat/SuggestionStrip';
 import { __resetSessionForTests, setCredential, setSession } from '@/state/session';
 import { FAKE_ORIGIN, fakeServer } from '@/test/fakeServer';
@@ -29,6 +39,87 @@ describe('slashPhase (the two-phase state machine)', () => {
     expect(toolkitInsert(toolkits[1])).toBe('/Jira_Cloud/');
     expect(toolInsert(toolkits[0], 'list issues')).toBe('/github/list_issues ');
     expect(skillInsert('summarize')).toBe('~summarize ');
+  });
+});
+
+describe('the skill phase (ADR-0050 amendment 1, A1.5)', () => {
+  const options = [
+    { id: 1, name: 'summarize', description: 'Short summaries' },
+    { id: 2, name: 'review', description: '' },
+    { id: 3, name: 'translate', description: 'Any language' },
+  ];
+
+  it('reads "skill <filter>" as the skill phase, before the toolkit lookup', () => {
+    expect(slashPhase('skill ', toolkits)).toEqual({ phase: 'skill', filter: '' });
+    expect(slashPhase('Skill rev', toolkits)).toEqual({ phase: 'skill', filter: 'rev' });
+    // Without the space it is still a toolkit filter, which the Skills entry answers.
+    expect(slashPhase('skill', toolkits)).toEqual({ phase: 'toolkit', filter: 'skill' });
+  });
+
+  it('offers the Skills entry while what was typed starts "skills"', () => {
+    expect(skillsEntryMatches('')).toBe(true);
+    expect(skillsEntryMatches('sk')).toBe(true);
+    expect(skillsEntryMatches('skill')).toBe(true);
+    expect(skillsEntryMatches('git')).toBe(false);
+    expect(SKILLS_COMMAND).toBe('/skill ');
+  });
+
+  it('lists pinned skills first, then the rest by name, and says which are pinned and untrusted', () => {
+    const rows = skillRows(options, [{ skillId: 3, untrusted: false }, { skillId: 2, untrusted: true }], '');
+    expect(rows.map((row) => [row.title, row.badge])).toEqual([
+      ['review', 'Pinned, untrusted'],
+      ['translate', 'Pinned'],
+      ['summarize', null],
+    ]);
+    expect(rows[0].subtitle).toBe('Skill');
+    expect(skillRows(options, [], 'SUM').map((row) => row.title)).toEqual(['summarize']);
+  });
+});
+
+describe('the composer with /skill', () => {
+  function Harness({ onSend }: { onSend: jest.Mock }) {
+    const [trigger, setTrigger] = useState<ActiveTrigger | null>(null);
+    const phase = trigger ? slashPhase(trigger.query, []) : null;
+    const suggestions: SuggestionState | null =
+      phase?.phase === 'toolkit'
+        ? { items: [{ key: SKILLS_ENTRY_KEY, title: 'Skills' }] }
+        : phase?.phase === 'skill'
+          ? { items: skillRows([{ id: 5, name: 'summarize', description: '' }], [{ skillId: 5, untrusted: false }], phase.filter).map((row) => ({ key: row.key, title: row.title })) }
+          : null;
+    const pick = (picked: ActiveTrigger, item: Suggestion): PickResult => {
+      const current = slashPhase(picked.query, []);
+      if (current.phase === 'skill') return { insert: skillInsert(item.title) };
+      return item.key === SKILLS_ENTRY_KEY ? { insert: SKILLS_COMMAND } : { error: 'no' };
+    };
+    return (
+      <Composer
+        busy={false}
+        onSend={onSend}
+        externalTriggers={['/']}
+        onTriggerChange={setTrigger}
+        externalSuggestions={suggestions}
+        onPickExternal={pick}
+      />
+    );
+  }
+
+  it('opens through the Skills entry and inserts the ~name token, never the text /skill', async () => {
+    const onSend = jest.fn(() => null);
+    await render(<Harness onSend={onSend} />);
+    await fireEvent.changeText(screen.getByLabelText('Message'), '/sk');
+    await fireEvent.press(await screen.findByLabelText('Skills'));
+    expect(screen.getByLabelText('Message').props.value).toBe('/skill ');
+    await fireEvent.press(await screen.findByLabelText('summarize'));
+    expect(screen.getByLabelText('Message').props.value).toBe('~summarize ');
+    await fireEvent.press(screen.getByLabelText('Send'));
+    expect(onSend).toHaveBeenCalledWith({ text: '~summarize ', mentions: null });
+  });
+
+  it('opens straight from a typed /skill <filter>', async () => {
+    await render(<Harness onSend={jest.fn(() => null)} />);
+    await fireEvent.changeText(screen.getByLabelText('Message'), '/skill sum');
+    await fireEvent.press(await screen.findByLabelText('summarize'));
+    expect(screen.getByLabelText('Message').props.value).toBe('~summarize ');
   });
 });
 

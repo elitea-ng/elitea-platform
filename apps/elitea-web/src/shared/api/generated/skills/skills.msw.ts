@@ -939,6 +939,8 @@ export const getAttachPublicSkillResponseMock = (
     })),
     undefined,
   ]),
+  skill_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
+  skill_version_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
   ...overrideResponse,
 });
 

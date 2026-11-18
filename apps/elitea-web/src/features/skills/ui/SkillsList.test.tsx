@@ -102,6 +102,36 @@ describe('SkillsList', () => {
     expect(screen.getByText('Untitled skill')).toBeInTheDocument();
   });
 
+  it('offers Try on the card and routes it to the caller (skills epic 2169)', async () => {
+    const onTry = vi.fn();
+    renderList({ onTry });
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Try Reviewer' }));
+    expect(onTry).toHaveBeenCalledWith(skill);
+  });
+
+  it('shows no Try without a caller to start it', () => {
+    renderList();
+    expect(screen.queryByRole('button', { name: 'Try Reviewer' })).not.toBeInTheDocument();
+  });
+
+  it('puts Try and Use in a chat in the row menu', async () => {
+    window.history.pushState({}, '', '/?view=table');
+    try {
+      const user = userEvent.setup();
+      const onTry = vi.fn();
+      const onUseInChat = vi.fn();
+      renderList({ onTry, onUseInChat });
+      await user.click(screen.getByTestId('skill-row-menu'));
+      await user.click(screen.getByRole('menuitem', { name: 'Try it' }));
+      expect(onTry).toHaveBeenCalledWith(skill);
+      await user.click(screen.getByTestId('skill-row-menu'));
+      await user.click(screen.getByRole('menuitem', { name: 'Use in a chat' }));
+      expect(onUseInChat).toHaveBeenCalledWith(skill);
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
   // #2114: the table view carries an Actions column with a three-dot menu per row.
   it('offers a three-dot Actions menu per row in the table view (issue 2114)', async () => {
     window.history.pushState({}, '', '/?view=table');

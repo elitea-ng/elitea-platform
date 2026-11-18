@@ -70,10 +70,15 @@ import { TargetChip } from '@/features/chat/TargetChip';
 import { addressWithChosen, canAddressAgents } from '@/features/chat/peoplePick';
 import { setTarget, targetKey, useTarget } from '@/features/chat/targetStore';
 import { draftKey } from '@/features/chat/composerDrafts';
+import { useConversationSkills, useProjectSkills } from '@/api/queries/conversationSkills';
 import { useAgentSkills, useToolkitTools } from '@/api/queries/skillsTools';
 import {
   matches,
+  SKILLS_COMMAND,
+  SKILLS_ENTRY_KEY,
   skillInsert,
+  skillRows,
+  skillsEntryMatches,
   slashPhase,
   toolInsert,
   toolkitInsert,
@@ -620,13 +625,18 @@ export function ThreadView({
   const skillVersion = target.ok && target.kind === 'agent' ? target.agent.versionId : null;
   const offerSkills = contractAtLeast1_1 && skillVersion !== null;
   const offerTools = contractAtLeast1_1 && target.ok && target.kind === 'model' && toolkits.length > 0;
+  // "/skill": the project's skills, the conversation's pinned ones first (any chat that can take a skill, online).
+  const offerSkillPicker = canManage && target.ok;
   const skills = useAgentSkills(projectId, skillVersion, trigger?.trigger === '~' && offerSkills);
   const slash = trigger?.trigger === '/' ? slashPhase(trigger.query, toolkits) : null;
+  const skillPhase = trigger?.trigger === '/' && slash?.phase === 'skill';
+  const projectSkills = useProjectSkills(projectId, offerSkillPicker && skillPhase);
+  const pinnedSkills = useConversationSkills(projectId, conversationNumericId, offerSkillPicker && skillPhase);
   const tools = useToolkitTools(projectId, slash?.phase === 'tool' ? slash.toolkit.toolkitId : null, offerTools && slash?.phase === 'tool');
   const externalTriggers: TriggerChar[] = [
     ...(canAddAgent ? (['#'] as TriggerChar[]) : []),
     ...(offerSkills ? (['~'] as TriggerChar[]) : []),
-    ...(offerTools ? (['/'] as TriggerChar[]) : []),
+    ...(offerTools || offerSkillPicker ? (['/'] as TriggerChar[]) : []),
   ];
   const suggestionState = ((): SuggestionState | null => {
     switch (trigger?.trigger) {
@@ -652,11 +662,29 @@ export function ThreadView({
             .map((sk) => ({ key: `skill-${sk.name}`, title: sk.name, subtitle: sk.description || 'Skill', initial: '~' })),
         };
       case '/':
-        if (slash?.phase === 'toolkit') {
+        // Only what can be shown opens the strip: a path like "/etc/hosts" in a chat with no toolkits must not.
+        if (slash?.phase === 'skill' && !offerSkillPicker) return null;
+        if (slash?.phase === 'unknown_toolkit' && !offerTools) return null;
+        if (slash?.phase === 'skill') {
           return {
-            items: toolkits
-              .filter((t) => matches(t.name, slash.filter))
-              .map((t) => ({ key: `toolkit-${t.toolkitId}`, title: t.name, subtitle: 'Toolkit', initial: '/' })),
+            loading: projectSkills.isLoading,
+            message: projectSkills.error ? "Couldn't load skills." : projectSkills.data?.length === 0 ? 'This project has no skills.' : null,
+            items: skillRows(
+              projectSkills.data ?? [],
+              (pinnedSkills.data ?? []).flatMap((pin) => (pin.skill_id === undefined ? [] : [{ skillId: pin.skill_id, untrusted: pin.trust.state === 'untrusted' }])),
+              slash.filter,
+            ).map((row) => ({ key: row.key, title: row.title, subtitle: row.subtitle, badge: row.badge, initial: '~' })),
+          };
+        }
+        if (slash?.phase === 'toolkit') {
+          const skillsEntry = offerSkillPicker && skillsEntryMatches(slash.filter) ? [{ key: SKILLS_ENTRY_KEY, title: 'Skills', subtitle: 'Pick a skill for this chat', initial: '~' }] : [];
+          return {
+            items: [
+              ...skillsEntry,
+              ...(offerTools ? toolkits : [])
+                .filter((t) => matches(t.name, slash.filter))
+                .map((t) => ({ key: `toolkit-${t.toolkitId}`, title: t.name, subtitle: 'Toolkit', initial: '/' })),
+            ],
           };
         }
         if (slash?.phase === 'tool') {
@@ -678,6 +706,8 @@ export function ThreadView({
     if (picked.trigger === '~') return { insert: skillInsert(item.title) };
     if (picked.trigger === '/') {
       const phase = slashPhase(picked.query, toolkits);
+      if (phase.phase === 'skill') return { insert: skillInsert(item.title) };
+      if (phase.phase === 'toolkit' && item.key === SKILLS_ENTRY_KEY) return { insert: SKILLS_COMMAND };
       if (phase.phase === 'toolkit') {
         const toolkit = toolkits.find((t) => `toolkit-${t.toolkitId}` === item.key);
         return toolkit ? { insert: toolkitInsert(toolkit) } : { error: 'That toolkit is no longer here.' };

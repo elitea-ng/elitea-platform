@@ -45,6 +45,16 @@ describe('detectTrigger', () => {
     expect(at('see http://x.io/a')).toBeNull();
   });
 
+  it('reads "/skill <filter>" as one token, with its space (ADR-0050 amendment 1, A1.5)', () => {
+    expect(at('/skill ')).toEqual({ trigger: '/', query: 'skill ', start: 0, end: 7 });
+    expect(at('/skill rev')).toEqual({ trigger: '/', query: 'skill rev', start: 0, end: 10 });
+    expect(at('please /SKILL rev')).toEqual({ trigger: '/', query: 'SKILL rev', start: 7, end: 17 });
+    // Prose that merely mentions it, a second word, or a mid-word slash opens nothing of its own.
+    expect(at('/skill rev now')).toBeNull();
+    expect(at('a/skill rev')).toBeNull();
+    expect(detectTrigger('/skill rev', { start: 10, end: 10 }, ['@'])).toBeNull();
+  });
+
   it('only opens the triggers it is given', () => {
     expect(detectTrigger('#x', { start: 2, end: 2 }, ['@'])).toBeNull();
   });
