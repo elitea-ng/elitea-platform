@@ -1,5 +1,5 @@
 /**
- * A pipeline CODE node on the real code sandbox (#2206, #2208).
+ * A pipeline CODE node on the real code sandbox (#2206, #2208, #2227).
  *
  * The sibling journey (`code-sandbox.run-code.spec.ts`) proves the agent tool;
  * this one proves the other consumer of the same sandbox, the graph `code`
@@ -8,12 +8,22 @@
  * `sum:2`; the pipeline's terminal `answer` is read from the STORE. No model is
  * involved, so nothing here can pass on prose.
  *
+ * A node whose program throws ends the run with the registered Code failure
+ * and the tail of the program's stderr after it (#2227). That text is read from
+ * the stored assistant row (`metadata.error`), the same row the chat shows.
+ *
  * Needs the stack from scripts/code-sandbox-e2e.sh.
  */
-import { expect, test } from '@playwright/test';
+import { expect, type Page, test } from '@playwright/test';
 
 import { BASE_URL } from '../../playwright.config';
-import { AUTOTEST_PREFIX, expectStoredAssistantAnswer, fillComposer } from '../fixtures/api';
+import {
+  AUTOTEST_PREFIX,
+  expectStoredAssistantAnswer,
+  fillComposer,
+  readStoredTranscript,
+  settleStoredTurn,
+} from '../fixtures/api';
 
 const APPLICATIONS_RE = /\/elitea_core\/applications\/prompt_lib\/(\d+)/;
 const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/;
@@ -26,6 +36,21 @@ nodes:
     type: code
     language: javascript
     code: "export default async (state) => 'sum:' + (1 + 1);"
+    output: [answer]
+    transition: END
+`;
+
+/** The thrown message the failing node's program carries; unique so nothing else can contain it. */
+const THROWN_MESSAGE = 'node-boom-2227';
+
+const THROWING_PIPELINE_YAML = `state:
+  answer: str
+entry_point: compute
+nodes:
+  - id: compute
+    type: code
+    language: javascript
+    code: "export default async (state) => { throw new Error('${THROWN_MESSAGE}'); };"
     output: [answer]
     transition: END
 `;
@@ -47,9 +72,16 @@ test.afterEach(async ({ page }) => {
   }
 });
 
-test('a pipeline code node runs JavaScript on the real sandbox and its result is the answer', async ({ page }) => {
-  test.setTimeout(300_000);
-  const name = `${AUTOTEST_PREFIX}codenode-${Date.now() % 1_000_000}`;
+/**
+ * A pipeline made through the editor, its graph saved, one turn sent in a new
+ * chat with it. Returns where the turn is stored.
+ */
+async function runPipelineTurn(
+  page: Page,
+  tag: string,
+  yaml: string,
+): Promise<{ projectId: string; conversationId: string }> {
+  const name = `${AUTOTEST_PREFIX}${tag}-${Date.now() % 1_000_000}`;
 
   const created = page.waitForResponse(
     (r) => APPLICATIONS_RE.test(new URL(r.url()).pathname) && r.request().method() === 'POST',
@@ -80,7 +112,7 @@ test('a pipeline code node runs JavaScript on the real sandbox and its result is
       data: {
         name: body.version_details?.name ?? 'latest',
         agent_type: 'pipeline',
-        instructions: PIPELINE_YAML,
+        instructions: yaml,
         conversation_starters: [],
         variables: [],
         meta: { step_limit: 25, internal_tools: [] },
@@ -104,17 +136,55 @@ test('a pipeline code node runs JavaScript on the real sandbox and its result is
   expect(conversationId).not.toBe('');
   await page.waitForURL(new RegExp(`/app/chat/${conversationId}$`), { timeout: 30_000 });
 
-  const send = await fillComposer(page, `autotest code node ${Date.now()}`);
+  const send = await fillComposer(page, `autotest ${tag} ${Date.now()}`);
   const started = page.waitForResponse((r) => START_RE.test(r.url()) && r.request().method() === 'POST', {
     timeout: 45_000,
   });
   await send.click();
   const startResponse = await started;
   expect(startResponse.status(), `the pipeline turn was refused: ${(await startResponse.text()).slice(0, 400)}`).toBe(200);
+  return { projectId, conversationId };
+}
+
+test('a pipeline code node runs JavaScript on the real sandbox and its result is the answer', async ({ page }) => {
+  test.setTimeout(300_000);
+  const { projectId, conversationId } = await runPipelineTurn(page, 'codenode', PIPELINE_YAML);
 
   await expectStoredAssistantAnswer(page, projectId, conversationId, {
     contains: 'sum:2',
     timeout: 180_000,
     message: 'the code node never produced `sum:2`: the sandbox did not run the node',
   });
+});
+
+test('a pipeline code node that throws ends the run with the exception message in the stored error (#2227)', async ({
+  page,
+}) => {
+  test.setTimeout(300_000);
+  const { projectId, conversationId } = await runPipelineTurn(page, 'codenodethrow', THROWING_PIPELINE_YAML);
+
+  expect(
+    await settleStoredTurn(page, projectId, conversationId, { timeout: 180_000 }),
+    'the failed code node never settled the turn',
+  ).toBe(true);
+  const assistant = (await readStoredTranscript(page, projectId, conversationId)).find(
+    (row) => row.role === 'assistant',
+  );
+  expect(assistant, 'the failed turn must leave an assistant row').toBeDefined();
+  expect(assistant?.isError, 'the thrown error must end the turn as an error, never an answer').toBe(true);
+  expect(assistant?.metadata['error_code'], 'the run must end with the registered Code failure').toBe(
+    'PIPELINE_CODE_FAILED',
+  );
+
+  const stored = String(assistant?.metadata['error'] ?? '');
+  // The registered sentence still leads: the detail follows it, never replaces it.
+  expect(stored, `the stored error must start with the Code failure sentence: ${stored.slice(0, 400)}`).toContain(
+    'The pipeline stopped at a Code node.',
+  );
+  expect(stored, `the stored error must carry the program output section: ${stored.slice(0, 400)}`).toContain(
+    'Program output:',
+  );
+  expect(stored, `the thrown message must reach the stored error: ${stored.slice(0, 800)}`).toContain(THROWN_MESSAGE);
+  // The same bound as the model-facing tool: the sentence, the separator, 1,500 characters.
+  expect(stored.length, 'the stored error must stay bounded').toBeLessThanOrEqual(256 + 20 + 1_500);
 });

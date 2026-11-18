@@ -15,6 +15,12 @@ use adk_rust::graph::GraphError;
 pub(super) enum CodePreparationFailure {
     Existing(GraphError),
     Workspace(CodeWorkspaceFailure),
+    /// The compiler failed the program (#2228). `detail` is the bounded tail
+    /// of its diagnostic, when the supervisor sent one.
+    Compile {
+        code: String,
+        detail: Option<String>,
+    },
 }
 impl From<GraphError> for CodePreparationFailure {
     fn from(error: GraphError) -> Self {
@@ -29,39 +35,34 @@ impl From<CodeWorkspaceFailure> for CodePreparationFailure {
 impl CodePreparationFailure {
     pub(super) fn class(&self) -> NodeFailureClass {
         match self {
-            Self::Existing(_) => NodeFailureClass::Unknown,
+            Self::Existing(_) | Self::Compile { .. } => NodeFailureClass::Unknown,
             Self::Workspace(error) => error.class(),
         }
     }
     pub(super) fn phase(&self) -> CodeAttemptPhase {
         match self {
-            Self::Existing(_) => CodeAttemptPhase::Preparation,
+            Self::Existing(_) | Self::Compile { .. } => CodeAttemptPhase::Preparation,
             Self::Workspace(_) => CodeAttemptPhase::Hydration,
         }
     }
-    fn into_graph_error(self) -> GraphError {
+    /// The failure code and the compiler's diagnostic, when the compiler
+    /// failed the program. Typed values, never message text.
+    pub(super) fn compile_failure(&self) -> Option<(&str, Option<&str>)> {
+        match self {
+            Self::Compile { code, detail } => Some((code, detail.as_deref())),
+            Self::Existing(_) | Self::Workspace(_) => None,
+        }
+    }
+    pub(super) fn into_graph_error(self) -> GraphError {
         match self {
             Self::Existing(error) => error,
+            Self::Compile { code, .. } => failed(&code),
             Self::Workspace(_) => failed("Code repository preparation is refused or unconfirmed."),
         }
     }
 }
 
 impl RemoteCodeRuntime {
-    // Preserve the legacy GraphError surface outside the typed attempt owner.
-    pub(super) async fn select_compiled_snapshot(
-        &self,
-        invocation: &CodeInvocation<'_>,
-        profile: &CodeRuntimeProfile,
-        job: &PreparedJob,
-        bundle: Option<&crate::sandbox::dependency_bundle::DependencyBundle>,
-        original_visit: Option<&crate::sandbox::code_recovery::OriginalCodeVisitRef>,
-    ) -> Result<Option<SelectedSnapshot>, GraphError> {
-        self.select_compiled_snapshot_typed(invocation, profile, job, bundle, original_visit)
-            .await
-            .map_err(CodePreparationFailure::into_graph_error)
-    }
-
     pub(super) async fn select_compiled_snapshot_typed(
         &self,
         invocation: &CodeInvocation<'_>,
@@ -337,10 +338,12 @@ impl RemoteCodeRuntime {
                     Ok(CompilationOutcome::Cancelled) => {
                         return Err(failed("Compilation was cancelled.").into());
                     }
-                    Ok(
-                        CompilationOutcome::Failed { code }
-                        | CompilationOutcome::Uncertain { code },
-                    ) => return Err(failed(&code).into()),
+                    Ok(CompilationOutcome::Failed { code, detail }) => {
+                        return Err(CodePreparationFailure::Compile { code, detail });
+                    }
+                    Ok(CompilationOutcome::Uncertain { code }) => {
+                        return Err(failed(&code).into());
+                    }
                     Err(error) if super::preparation::retryable(&error) => {}
                     Err(error) => return Err(failed(&error.to_string()).into()),
                 }
@@ -436,6 +439,43 @@ mod tests {
         assert!(public_error.contains("Code repository preparation is refused or unconfirmed."));
         assert!(!public_error.contains("synthetic-secret"));
         assert!(!public_error.contains("private.invalid"));
+    }
+    /// #2228: the compiler's diagnostic is a typed value of the failure, read
+    /// without its message; the failure still fails the node as before.
+    #[test]
+    fn a_compile_failure_carries_its_diagnostic_as_a_typed_value() {
+        let compile = CodePreparationFailure::Compile {
+            code: "sandbox.code_failed".into(),
+            detail: Some("error[E0308]: mismatched types".into()),
+        };
+        assert_eq!(
+            compile.compile_failure(),
+            Some((
+                "sandbox.code_failed",
+                Some("error[E0308]: mismatched types")
+            ))
+        );
+        assert_eq!(compile.class(), NodeFailureClass::Unknown);
+        assert_eq!(compile.phase(), CodeAttemptPhase::Preparation);
+        let public_error = compile.into_graph_error().to_string();
+        assert!(public_error.contains("sandbox.code_failed"));
+        assert!(
+            !public_error.contains("E0308"),
+            "the graph error keeps the registered code, not the program's text"
+        );
+        assert_eq!(
+            CodePreparationFailure::Compile {
+                code: "sandbox.code_failed".into(),
+                detail: None
+            }
+            .compile_failure(),
+            Some(("sandbox.code_failed", None))
+        );
+        assert!(
+            CodePreparationFailure::from(failed("x"))
+                .compile_failure()
+                .is_none()
+        );
     }
     #[test]
     fn compile_activation_is_distinct_stable_and_cannot_move_with_changed_content() {
