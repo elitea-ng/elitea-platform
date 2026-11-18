@@ -145,6 +145,16 @@ describe('composer drafts', () => {
     expect(textarea()).toHaveValue('saved before the alias existed');
   });
 
+  it('registering the id pair does not bring an old draft back into a box the person emptied (#2231)', async () => {
+    const user = userEvent.setup();
+    writeDraft('chat:1:14', 'old numeric draft');
+    renderWithTheme(<Composer draftKey="chat:1:u-ghi" />);
+    await user.type(textarea(), 'sent soon');
+    await user.clear(textarea());
+    act(() => rememberDraftAlias('chat:1:u-ghi', 'chat:1:14'));
+    expect(textarea()).toHaveValue('');
+  });
+
   it('registering the id pair leaves text typed meanwhile alone (#2231)', async () => {
     const user = userEvent.setup();
     writeDraft('chat:1:13', 'older numeric draft');

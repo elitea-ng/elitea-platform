@@ -95,10 +95,11 @@ export function rememberDraftAlias(alias: string, canonical: string): void {
   if (alias === canonical || readAliases()[alias] === canonical) return;
   try {
     registerAlias(alias, canonical);
-  } finally {
-    // A composer already showing `alias` re-reads: its slot just changed.
-    for (const listener of slotListeners) listener();
+  } catch {
+    // Storage refused: the two forms keep separate drafts.
   }
+  // A composer already showing `alias` re-reads: its slot may have changed.
+  for (const listener of slotListeners) listener();
 }
 
 function registerAlias(alias: string, canonical: string): void {
@@ -153,8 +154,11 @@ export function useComposerDraft(key: string | undefined, text: string, restore:
   const latest = useRef({ text, restore });
   // A layout effect: it runs before the passive cleanup below, so a send that empties the input
   // in the same render as a key change saves the emptied text, not the sent one.
+  // Whether this composer held text since its key arrived: an input the person emptied (a send) is not a box that never had text.
+  const touched = useRef(false);
   useLayoutEffect(() => {
     latest.current = { text, restore };
+    if (text.trim() !== '') touched.current = true;
   });
   const previous = useRef(key);
   // The slot of `key` changes when its conversation's other id is registered (the uuid link of a draft saved under the numeric id).
@@ -163,10 +167,11 @@ export function useComposerDraft(key: string | undefined, text: string, restore:
   useEffect(() => {
     const was = seen.current;
     seen.current = { key, slot };
+    if (was.key !== key) touched.current = false;
     if (key === undefined || was.key !== key || was.slot === slot) return;
-    // Same key, new slot: restore only into an empty box, never over what is being typed.
+    // Same key, new slot: restore only into a box that never held text, never over what is being typed or was just sent.
     const saved = readDraft(key);
-    if (saved !== '' && latest.current.text.trim() === '') {
+    if (saved !== '' && !touched.current && latest.current.text.trim() === '') {
       latest.current.restore(saved);
       latest.current = { ...latest.current, text: saved };
     }
