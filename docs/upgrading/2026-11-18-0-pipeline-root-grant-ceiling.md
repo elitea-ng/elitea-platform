@@ -10,10 +10,12 @@
 - A saved agent run by an Agent node or Map member that its caller may not delegate to (a missing grant, a toolkit
   outside the run principal's bound, or past the maximum depth) now ends the run when it starts, before any model
   call or tool run, with the authorization failure (`AUTHORIZATION_FAILED`, `runtime.authorization_failed`) and the
-  same `delegation_refused` notice, with **Review delegation**, that a refused pipeline node shows since #2235.
+  same `delegation_refused` notice that a refused pipeline node shows since #2235. Review delegation is offered on
+  it once the run names its caller; while every grant of the run is still pending it is not (FU-359, as for an
+  agent), and the pending grant is approved from the pipeline's Tools row instead.
   Before, it failed with "The runtime operation failed." (Agent node) or "Configuration type is not supported."
   (Map member). Inside a saved pipeline used as a tool, the refusal is that tool's answer and the turn goes on.
-- With delegation grants on (`ELITEA_DELEGATION_GRANTS_ENFORCED`), an edge grant adds what the pipeline lacks and
+- With delegation grants on (`ELITEA_DELEGATION_GRANTS_ENFORCED`, on by default since #2239), an edge grant adds what the pipeline lacks and
   never takes away what it holds, as for an agent: a partially approved grant narrows only items the pipeline itself
   does not hold.
 
