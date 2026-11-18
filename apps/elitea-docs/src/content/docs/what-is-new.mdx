@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## One unsent draft per conversation, whichever link you open it by
+
+A conversation opened from a link or notification carries a long identifier, while the app also knows it by a short number. An unsent message used to be kept under whichever form you opened it by, so the same conversation could hold two drafts, and text typed while it loaded could go missing. The draft now belongs to the conversation itself: open it by either link and the text you left is there. This applies to web and the desktop app. Drafts are still cleared when you sign out.
+
 ## `run_code` shows the model why a program failed
 
 When a program run by **Python sandbox** fails, the model now gets the program's own error output: the Rust compiler's diagnostic for code that does not compile, a JavaScript or TypeScript exception message, a Rust panic. Before, it was told only that the sandbox could not run the program, so it could not correct the code. The sandbox's supervisor keeps the last 1,500 characters of that output with the failed run (a new `failure_detail` column, applied by Main's agent-state migration 0015); the worker reads it from an additive field of the internal gRPC response, so the worker and the supervisor can be upgraded in either order. Pipeline **Code** nodes report failures as before. See [Python sandbox](/menus/internal-tools#python-sandbox-code-execution).

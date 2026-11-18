@@ -45,7 +45,7 @@ import { test, expect } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
 import { BASE_URL } from '../../../playwright.config';
-import { AUTOTEST_PREFIX, DEFAULT_PROJECT_ID, deleteConversation } from '../../fixtures/api';
+import { AUTOTEST_PREFIX, DEFAULT_PROJECT_ID, deleteConversation, fillComposer } from '../../fixtures/api';
 import { skipOnLiveTarget } from '../../fixtures/deployment';
 import { socketServerConfigured } from '../../../scripts/lib/e2e-live-assumptions.mjs';
 
@@ -108,12 +108,12 @@ async function sendFirstMessage(
   const input = page.getByTestId('chat-message-input');
   await expect(input).toBeEditable({ timeout: 15_000 });
 
+  const send = await fillComposer(page, text);
   const created = page.waitForResponse(
     (response) => response.url().includes(CONVERSATIONS_PATH) && response.request().method() === 'POST',
     { timeout: 20_000 },
   );
-  await input.fill(text);
-  await page.getByTestId('chat-send-button').click();
+  await send.click();
   const response = await created;
   expect(response.status(), 'the send must create the conversation').toBe(201);
 
