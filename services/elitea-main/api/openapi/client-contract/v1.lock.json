@@ -969,6 +969,357 @@
         }
       }
     },
+    "DELETE /elitea_core/delegation_grant/prompt_lib/{project_id}/{application_id}/{grant_id}": {
+      "operation_id": "revokeDelegationGrant",
+      "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:application_id": {
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "path:grant_id": {
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "path:project_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "callee_application_id",
+                "callee_version_id",
+                "caller_application_id",
+                "created_at",
+                "digest",
+                "edge_kind",
+                "governed",
+                "id",
+                "items",
+                "legacy",
+                "omitted",
+                "origin",
+                "requested_digest",
+                "requested_items",
+                "state",
+                "updated_at"
+              ],
+              "properties": {
+                "approved_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "approved_by": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "callee_application_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "callee_version_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "caller_application_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "change_request_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "change_state": {
+                  "type": "string"
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "digest": {
+                  "type": "string"
+                },
+                "edge_kind": {
+                  "type": "string"
+                },
+                "governed": {
+                  "type": "boolean"
+                },
+                "id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "kind",
+                      "name"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "toolkit": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "legacy": {
+                  "type": "boolean"
+                },
+                "omitted": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "kind",
+                      "name"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "toolkit": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "origin": {
+                  "type": "string"
+                },
+                "proposed_by": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "requested_digest": {
+                  "type": "string"
+                },
+                "requested_items": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "kind",
+                      "name"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "toolkit": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "revoked_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "revoked_by": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "state": {
+                  "type": "string"
+                },
+                "superseded_by": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "updated_at": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              }
+            }
+          }
+        },
+        "400": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "403": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "404": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "409": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "DELETE /elitea_core/memories/prompt_lib/{project_id}": {
       "operation_id": "clearMemories",
       "parameters": {
@@ -9509,6 +9860,1159 @@
                 },
                 "message": {
                   "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "GET /elitea_core/delegation_grant/prompt_lib/{project_id}/{application_id}/{grant_id}": {
+      "operation_id": "getDelegationGrant",
+      "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:application_id": {
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "path:grant_id": {
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "path:project_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "callee_application_id",
+                "callee_version_id",
+                "caller_application_id",
+                "created_at",
+                "digest",
+                "edge_kind",
+                "governed",
+                "id",
+                "items",
+                "legacy",
+                "omitted",
+                "origin",
+                "requested_digest",
+                "requested_items",
+                "state",
+                "updated_at"
+              ],
+              "properties": {
+                "approved_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "approved_by": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "callee_application_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "callee_version_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "caller_application_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "change_request_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "change_state": {
+                  "type": "string"
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "digest": {
+                  "type": "string"
+                },
+                "edge_kind": {
+                  "type": "string"
+                },
+                "governed": {
+                  "type": "boolean"
+                },
+                "id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "kind",
+                      "name"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "toolkit": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "legacy": {
+                  "type": "boolean"
+                },
+                "omitted": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "kind",
+                      "name"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "toolkit": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "origin": {
+                  "type": "string"
+                },
+                "proposed_by": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "requested_digest": {
+                  "type": "string"
+                },
+                "requested_items": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "kind",
+                      "name"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "toolkit": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "revoked_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "revoked_by": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "state": {
+                  "type": "string"
+                },
+                "superseded_by": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "updated_at": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              }
+            }
+          }
+        },
+        "400": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "403": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "404": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "GET /elitea_core/delegation_grants/prompt_lib/{project_id}/{application_id}": {
+      "operation_id": "listDelegationGrants",
+      "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:application_id": {
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "path:project_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        "query:history": {
+          "schema": {
+            "type": "boolean"
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "grants"
+              ],
+              "properties": {
+                "grants": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "callee_application_id",
+                      "callee_version_id",
+                      "caller_application_id",
+                      "created_at",
+                      "digest",
+                      "edge_kind",
+                      "governed",
+                      "id",
+                      "items",
+                      "legacy",
+                      "omitted",
+                      "origin",
+                      "requested_digest",
+                      "requested_items",
+                      "state",
+                      "updated_at"
+                    ],
+                    "properties": {
+                      "approved_at": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "approved_by": {
+                        "type": "integer",
+                        "format": "int64"
+                      },
+                      "callee_application_id": {
+                        "type": "integer",
+                        "format": "int64"
+                      },
+                      "callee_version_id": {
+                        "type": "integer",
+                        "format": "int64"
+                      },
+                      "caller_application_id": {
+                        "type": "integer",
+                        "format": "int64"
+                      },
+                      "change_request_id": {
+                        "type": "integer",
+                        "format": "int64"
+                      },
+                      "change_state": {
+                        "type": "string"
+                      },
+                      "created_at": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "digest": {
+                        "type": "string"
+                      },
+                      "edge_kind": {
+                        "type": "string"
+                      },
+                      "governed": {
+                        "type": "boolean"
+                      },
+                      "id": {
+                        "type": "integer",
+                        "format": "int64"
+                      },
+                      "items": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "kind",
+                            "name"
+                          ],
+                          "properties": {
+                            "kind": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "toolkit": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      },
+                      "legacy": {
+                        "type": "boolean"
+                      },
+                      "omitted": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "kind",
+                            "name"
+                          ],
+                          "properties": {
+                            "kind": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "toolkit": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      },
+                      "origin": {
+                        "type": "string"
+                      },
+                      "proposed_by": {
+                        "type": "integer",
+                        "format": "int64"
+                      },
+                      "requested_digest": {
+                        "type": "string"
+                      },
+                      "requested_items": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "kind",
+                            "name"
+                          ],
+                          "properties": {
+                            "kind": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "toolkit": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      },
+                      "revoked_at": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "revoked_by": {
+                        "type": "integer",
+                        "format": "int64"
+                      },
+                      "state": {
+                        "type": "string"
+                      },
+                      "superseded_by": {
+                        "type": "integer",
+                        "format": "int64"
+                      },
+                      "updated_at": {
+                        "type": "string",
+                        "format": "date-time"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "400": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "403": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "404": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "GET /elitea_core/delegation_preview/prompt_lib/{project_id}/{application_id}": {
+      "operation_id": "previewDelegationGrant",
+      "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:application_id": {
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "path:project_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        "query:callee_application_id": {
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "query:callee_version_id": {
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "query:edge_kind": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "approvable",
+                "callee_application_id",
+                "callee_name",
+                "callee_version_id",
+                "closure",
+                "digest",
+                "governed",
+                "items",
+                "withheld"
+              ],
+              "properties": {
+                "approvable": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "kind",
+                      "name"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "toolkit": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "callee_application_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "callee_name": {
+                  "type": "string"
+                },
+                "callee_version_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "closure": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "application_id",
+                      "depth",
+                      "items",
+                      "name"
+                    ],
+                    "properties": {
+                      "application_id": {
+                        "type": "integer",
+                        "format": "int64"
+                      },
+                      "depth": {
+                        "type": "integer"
+                      },
+                      "items": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "kind",
+                            "name"
+                          ],
+                          "properties": {
+                            "kind": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "toolkit": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "digest": {
+                  "type": "string"
+                },
+                "existing": {
+                  "type": "object",
+                  "required": [
+                    "callee_application_id",
+                    "callee_version_id",
+                    "caller_application_id",
+                    "created_at",
+                    "digest",
+                    "edge_kind",
+                    "governed",
+                    "id",
+                    "items",
+                    "legacy",
+                    "omitted",
+                    "origin",
+                    "requested_digest",
+                    "requested_items",
+                    "state",
+                    "updated_at"
+                  ],
+                  "properties": {
+                    "approved_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "approved_by": {
+                      "type": "integer",
+                      "format": "int64"
+                    },
+                    "callee_application_id": {
+                      "type": "integer",
+                      "format": "int64"
+                    },
+                    "callee_version_id": {
+                      "type": "integer",
+                      "format": "int64"
+                    },
+                    "caller_application_id": {
+                      "type": "integer",
+                      "format": "int64"
+                    },
+                    "change_request_id": {
+                      "type": "integer",
+                      "format": "int64"
+                    },
+                    "change_state": {
+                      "type": "string"
+                    },
+                    "created_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "digest": {
+                      "type": "string"
+                    },
+                    "edge_kind": {
+                      "type": "string"
+                    },
+                    "governed": {
+                      "type": "boolean"
+                    },
+                    "id": {
+                      "type": "integer",
+                      "format": "int64"
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "kind",
+                          "name"
+                        ],
+                        "properties": {
+                          "kind": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "toolkit": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "legacy": {
+                      "type": "boolean"
+                    },
+                    "omitted": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "kind",
+                          "name"
+                        ],
+                        "properties": {
+                          "kind": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "toolkit": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "origin": {
+                      "type": "string"
+                    },
+                    "proposed_by": {
+                      "type": "integer",
+                      "format": "int64"
+                    },
+                    "requested_digest": {
+                      "type": "string"
+                    },
+                    "requested_items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "kind",
+                          "name"
+                        ],
+                        "properties": {
+                          "kind": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "toolkit": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "revoked_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "revoked_by": {
+                      "type": "integer",
+                      "format": "int64"
+                    },
+                    "state": {
+                      "type": "string"
+                    },
+                    "superseded_by": {
+                      "type": "integer",
+                      "format": "int64"
+                    },
+                    "updated_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  }
+                },
+                "governed": {
+                  "type": "boolean"
+                },
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "kind",
+                      "name"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "toolkit": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "withheld": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "kind",
+                      "name"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "toolkit": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "400": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "403": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "404": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -23531,6 +25035,389 @@
                 },
                 "max_length": {
                   "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "POST /elitea_core/delegation_grant/prompt_lib/{project_id}/{application_id}/{grant_id}/approve": {
+      "operation_id": "approveDelegationGrant",
+      "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:application_id": {
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "path:grant_id": {
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "path:project_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      },
+      "request_body": {
+        "content": {
+          "application/json": {
+            "type": "object",
+            "properties": {
+              "items": {
+                "type": "array",
+                "nullable": true,
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "kind",
+                    "name"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "toolkit": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "callee_application_id",
+                "callee_version_id",
+                "caller_application_id",
+                "created_at",
+                "digest",
+                "edge_kind",
+                "governed",
+                "id",
+                "items",
+                "legacy",
+                "omitted",
+                "origin",
+                "requested_digest",
+                "requested_items",
+                "state",
+                "updated_at"
+              ],
+              "properties": {
+                "approved_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "approved_by": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "callee_application_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "callee_version_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "caller_application_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "change_request_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "change_state": {
+                  "type": "string"
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "digest": {
+                  "type": "string"
+                },
+                "edge_kind": {
+                  "type": "string"
+                },
+                "governed": {
+                  "type": "boolean"
+                },
+                "id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "kind",
+                      "name"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "toolkit": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "legacy": {
+                  "type": "boolean"
+                },
+                "omitted": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "kind",
+                      "name"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "toolkit": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "origin": {
+                  "type": "string"
+                },
+                "proposed_by": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "requested_digest": {
+                  "type": "string"
+                },
+                "requested_items": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "kind",
+                      "name"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "toolkit": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "revoked_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "revoked_by": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "state": {
+                  "type": "string"
+                },
+                "superseded_by": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "updated_at": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              }
+            }
+          }
+        },
+        "400": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "403": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "404": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "409": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "change_request_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "code": {
+                  "type": "string"
+                },
+                "error": {
+                  "type": "string"
                 }
               }
             }

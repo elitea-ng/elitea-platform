@@ -5,7 +5,7 @@
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
  * client contract:    1.60
- * operations sha256:  336a0bdc3a636f61edb987afae526f597ae65151abbb2c91bc548e81a9be9991
+ * operations sha256:  a836121d14038ae2f1db1dde8f4300b624195ee490ebe669220b1372ba3cd2fb
  */
 export interface paths {
     "/.well-known/elitea-client": {
@@ -1125,6 +1125,145 @@ export interface paths {
          *     upload take.
          */
         post: operations["createConversation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/delegation_grant/prompt_lib/{project_id}/{application_id}/{grant_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The caller agent or pipeline of the edge. A grant of another agent answers 404. */
+                application_id: number;
+                grant_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * One delegation grant
+         * @description Client contract 1.58, ADR-0044 amendment 1. Needs the permission that reads an
+         *     agent. NOTE(W2): internal/api/v2/delegationgrants/handler.go:196 (`Get`).
+         */
+        get: operations["getDelegationGrant"];
+        put?: never;
+        post?: never;
+        /**
+         * Revoke a delegation grant
+         * @description Client contract 1.58, ADR-0044 amendment 1. Ends an active grant: the edge is
+         *     refused again where the caller does not hold what the callee does. This is
+         *     what a detach does. A grant already revoked or superseded answers 409. Needs
+         *     the permission that edits an agent. Audited. NOTE(W2):
+         *     internal/api/v2/delegationgrants/handler.go:328 (`Revoke`).
+         */
+        delete: operations["revokeDelegationGrant"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/delegation_grant/prompt_lib/{project_id}/{application_id}/{grant_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The caller agent or pipeline of the edge. */
+                application_id: number;
+                grant_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve a pending delegation grant
+         * @description Client contract 1.58, ADR-0044 amendment 1. An editor of the caller approves a
+         *     pending grant, all of it (no body) or only the items they choose (`items`).
+         *     They can approve only what they hold access to: each toolkit and each
+         *     credential reference of the grant. What they leave out, or do not hold, is
+         *     recorded as `omitted`, stays out of the grant, and the callee runs without it.
+         *     A data class bound is never left out. Approving a grant does not create a
+         *     credential use grant: a governed credential still needs the exact use grant of
+         *     the agent that holds the reference. Under the governed profile the grant is
+         *     approved through its change request instead, and this answers 409 with the
+         *     code `DELEGATION_GOVERNED` and the `change_request_id`. Needs the permission
+         *     that edits an agent. Audited. NOTE(W2):
+         *     internal/api/v2/delegationgrants/handler.go:270 (`Approve`).
+         */
+        post: operations["approveDelegationGrant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/delegation_grants/prompt_lib/{project_id}/{application_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The caller agent or pipeline Y of the edges, the one whose editors approve. */
+                application_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * The delegation grants of an agent's composition edges
+         * @description Client contract 1.58, ADR-0044 amendment 1. Attaching a sub-agent, an agent
+         *     used as a tool or a pipeline child X to this agent Y creates one grant for the
+         *     edge Y to X. It lists what X held when it was attached (its toolkits, the tools
+         *     selected on each, its credential references, declared data classes and the
+         *     egress hosts its toolkits reach), pinned to the digest of that set. This lists
+         *     the edges' active grants (`pending`, `approved` or `stale`); `history=true` adds
+         *     the `superseded` and `revoked` ones. A grant is `stale` when its callee
+         *     changed after approval: the grant keeps covering the set it recorded and what
+         *     was added is left out of the callee's run. Needs the permission that reads an
+         *     agent. NOTE(W2): internal/api/v2/delegationgrants/handler.go:177 (`List`).
+         */
+        get: operations["listDelegationGrants"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/delegation_preview/prompt_lib/{project_id}/{application_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The caller agent or pipeline Y of the edge. */
+                application_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * What an attached agent will be able to use
+         * @description Client contract 1.58, ADR-0044 amendment 1. For the attach dialog: what the
+         *     callee version holds (`items`), the part the person asking could approve
+         *     because they hold access to it (`approvable`), the part that would stay out of
+         *     the grant because they do not (`withheld`), the closure (the callee and the
+         *     callees it reaches through APPROVED grants, with what each holds) as
+         *     information, and the edge's active grant when it has one. The closure is not
+         *     approved by approving this edge: every hop needs its own grant, approved by an
+         *     editor of the agent that makes the call. Needs the permission that reads an
+         *     agent. NOTE(W2): internal/api/v2/delegationgrants/handler.go:358 (`Preview`).
+         */
+        get: operations["previewDelegationGrant"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3038,6 +3177,11 @@ export interface components {
             name: string;
             status: string;
         };
+        /** @description The body of approveDelegationGrant. Omit it, or send `items: null`, to approve everything the approver holds access to; an empty list keeps nothing and is refused. */
+        ApproveDelegationGrantRequest: {
+            /** @description The items to keep, as listed in `requested_items`. */
+            items?: components["schemas"]["DelegationItem"][] | null;
+        };
         /** @description One file sent with a message (`item_type` `attachment_message`). `item_details.filepath` is `/{bucket}/{conversation_uuid}/{name}`; download it with downloadConversationAttachment using the last segment as the name. */
         AttachmentMessageItem: {
             id: number;
@@ -4128,6 +4272,92 @@ export interface components {
             /** Format: uuid */
             uuid?: string;
         };
+        /** @description An agent in the closure of an edge. */
+        DelegationClosureNode: {
+            /** Format: int64 */
+            application_id: number;
+            /** @description 0 for the callee itself, then one more per approved grant below it. */
+            depth: number;
+            items: components["schemas"]["DelegationItem"][];
+            name: string;
+        };
+        /** @description The 409 of approveDelegationGrant under the governed profile, or the plain error body of any other 409. */
+        DelegationGovernedError: {
+            /**
+             * Format: int64
+             * @description The change request to approve.
+             */
+            change_request_id?: number;
+            /** @description `DELEGATION_GOVERNED` when the grant is approved through its change request. */
+            code?: string;
+            error: string;
+        };
+        /** @description The grant of one composition edge (ADR-0044 amendment 1). `items` is what the approver approved; `requested_items` is what the callee held when the grant was proposed; `omitted` is the part of the second that is not in the first. */
+        DelegationGrant: {
+            /** Format: date-time */
+            approved_at?: string;
+            /** Format: int64 */
+            approved_by?: number;
+            /** Format: int64 */
+            callee_application_id: number;
+            /**
+             * Format: int64
+             * @description The callee version the grant was taken from.
+             */
+            callee_version_id: number;
+            /** Format: int64 */
+            caller_application_id: number;
+            /**
+             * Format: int64
+             * @description The change request that approves a governed grant.
+             */
+            change_request_id?: number;
+            /** @description The state of that change request. */
+            change_state?: string;
+            /** Format: date-time */
+            created_at: string;
+            /** @description The SHA-256 of the approved set, as a delegation step records it. */
+            digest: string;
+            /** @description `sub_agent`, `agent_tool`, `pipeline_child` or `pipeline_node`. */
+            edge_kind: string;
+            /** @description Approved through an ADR-0040 change request, with maker-checker. */
+            governed: boolean;
+            /** Format: int64 */
+            id: number;
+            items: components["schemas"]["DelegationItem"][];
+            /** @description A pending grant the migration wrote for a composition that existed before grants. */
+            legacy: boolean;
+            omitted: components["schemas"]["DelegationItem"][];
+            /** @description `attach`, `marketplace_hire`, `marketplace_upgrade` or `migration`. */
+            origin: string;
+            /** Format: int64 */
+            proposed_by?: number;
+            /** @description The SHA-256 of the set the callee held when the grant was proposed; a different current digest is drift. */
+            requested_digest: string;
+            requested_items: components["schemas"]["DelegationItem"][];
+            /** Format: date-time */
+            revoked_at?: string;
+            /** Format: int64 */
+            revoked_by?: number;
+            /** @description `pending` (not approved yet), `approved`, `stale` (the callee changed after approval; the grant still covers what it recorded), `superseded` (replaced by a re-approval) or `revoked`. */
+            state: string;
+            /** Format: int64 */
+            superseded_by?: number;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        DelegationGrantList: {
+            grants: components["schemas"]["DelegationGrant"][];
+        };
+        /** @description One thing a delegation grant lists: a toolkit, a tool of a toolkit, a credential reference, a data class or an egress host. */
+        DelegationItem: {
+            /** @description `toolkit`, `tool`, `credential`, `data_class` or `egress_host`. */
+            kind: string;
+            /** @description The toolkit key (`toolkit:<id>`, or `builtin:<type>` for a built-in toolkit), the tool name (`*` when a toolkit that selects every tool is cut to the approved tools), the credential reference id, the data class or the host. */
+            name: string;
+            /** @description For a tool or a credential, the key of the toolkit it belongs to. */
+            toolkit?: string;
+        };
         /** @description Client contract 1.60 (ADR-0044 Amendment 1, A1.2 rule 5). A delegation the run refused (`kind: refused`) or narrowed (`kind: narrowed`), shown in the chat at the callee's place: "Agent2 could not use git from Agent1. This delegation is not approved." It carries names and ids only, never a credential value or a tool argument. The model keeps reading the same typed refusal as the tool result. Untrusted text: render it as plain text. */
         DelegationNotice: {
             /** @description Derived for the viewer when the notice is served, never stored: true when the viewer may edit agents in the project and so may open the grant review (Review delegation). Always false for `principal` and `depth`. Absent from a server that cannot say; show the notice without the action. */
@@ -4174,6 +4404,29 @@ export interface components {
              * @enum {string}
              */
             reason: "no_grant" | "stale" | "principal" | "depth";
+        };
+        /** @description What an attach of the callee version would let it use. */
+        DelegationPreview: {
+            /** @description The items the person asking holds access to and could approve. */
+            approvable: components["schemas"]["DelegationItem"][];
+            /** Format: int64 */
+            callee_application_id: number;
+            callee_name: string;
+            /** Format: int64 */
+            callee_version_id: number;
+            closure: components["schemas"]["DelegationClosureNode"][];
+            /** @description The SHA-256 of what the callee version holds. */
+            digest: string;
+            existing?: components["schemas"]["DelegationGrant"];
+            /**
+             * @description The governed profile is on: an attach records a change request that a
+             *     different approver decides, and the person asking cannot approve it
+             *     directly.
+             */
+            governed: boolean;
+            items: components["schemas"]["DelegationItem"][];
+            /** @description The items the person asking does not hold; an approval by them leaves these out. */
+            withheld: components["schemas"]["DelegationItem"][];
         };
         /** @description The ADR-0025 `device_revoked` answer: FLAT, unlike the nested error envelope, so a native client tells "wipe local data" (`error` is the string device_revoked) from "refresh once" (`error` is an object). Sent only for native credentials, with `WWW-Authenticate: Bearer error="invalid_token", error_description="device_revoked"`. NOTE(W2): internal/api/middleware/auth.go:453 (`DeviceRevokedBody`). */
         DeviceRevokedError: {
@@ -7700,6 +7953,217 @@ export interface operations {
             400: components["responses"]["400"];
             401: components["responses"]["401"];
             403: components["responses"]["403"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+        };
+    };
+    getDelegationGrant: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The caller agent or pipeline of the edge. A grant of another agent answers 404. */
+                application_id: number;
+                grant_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The grant. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DelegationGrant"];
+                };
+            };
+            400: components["responses"]["400"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+        };
+    };
+    revokeDelegationGrant: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The caller agent or pipeline of the edge. A grant of another agent answers 404. */
+                application_id: number;
+                grant_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The revoked grant. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DelegationGrant"];
+                };
+            };
+            400: components["responses"]["400"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+            /** @description The grant is not active. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+        };
+    };
+    approveDelegationGrant: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The caller agent or pipeline of the edge. */
+                application_id: number;
+                grant_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ApproveDelegationGrantRequest"];
+            };
+        };
+        responses: {
+            /** @description The approved grant. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DelegationGrant"];
+                };
+            };
+            /** @description Nothing is left to approve, or the body is malformed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+            /** @description The grant is not pending, or it is governed and is approved through its change request. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DelegationGovernedError"];
+                };
+            };
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+        };
+    };
+    listDelegationGrants: {
+        parameters: {
+            query?: {
+                /** @description `true` includes superseded and revoked grants. */
+                history?: boolean;
+            };
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The caller agent or pipeline Y of the edges, the one whose editors approve. */
+                application_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The grants of the agent's edges, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DelegationGrantList"];
+                };
+            };
+            400: components["responses"]["400"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+        };
+    };
+    previewDelegationGrant: {
+        parameters: {
+            query: {
+                callee_application_id: number;
+                callee_version_id: number;
+                /** @description `sub_agent`, `agent_tool`, `pipeline_child` or `pipeline_node`. */
+                edge_kind: string;
+            };
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The caller agent or pipeline Y of the edge. */
+                application_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The preview. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DelegationPreview"];
+                };
+            };
+            400: components["responses"]["400"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
             426: components["responses"]["ClientUpgradeRequired"];
             500: components["responses"]["500"];
         };

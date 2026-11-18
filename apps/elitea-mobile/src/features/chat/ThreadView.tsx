@@ -13,6 +13,7 @@ import { usePalette } from '@/constants/use-palette';
 import { useDesign } from '@/design/DesignProvider';
 import { GlassSurface, headerActionOptions, Icon, IconButton, Text, type HeaderAction } from '@/ui';
 import { useAgentMemoryAvailable } from '@/features/agentMemory/useAgentMemoryAvailable';
+import { useDelegationAvailable } from '@/features/delegation/useDelegationAvailable';
 import { PaneHeader } from '@/features/chat/PaneHeader';
 import { ForkedFromLink, forkedFromOf } from '@/features/chat/ForkedFromLink';
 import { forkableKeys } from '@/features/chat/forkPoints';
@@ -185,6 +186,8 @@ export function ThreadView({
   const contract127 = speaksContract(workspace?.discovery, 1, 27);
   // Client contract 1.44: what an agent participant remembers (ADR-0050 1b).
   const agentMemoryAvailable = useAgentMemoryAvailable();
+  // Client contract 1.59: an agent's delegation grants (ADR-0044 amendment 1).
+  const delegationAvailable = useDelegationAvailable();
   // Client contract 1.46: participants carry `persona.avatar_pack` (ADR-0050 decision 6).
   const avatarPacksAvailable = speaksContract(workspace?.discovery, AVATAR_PACK_CONTRACT.major, AVATAR_PACK_CONTRACT.minor);
   const { policy } = usePolicy();
@@ -892,6 +895,14 @@ export function ThreadView({
           onAgentAdded={(participantId) => chosenKey !== null && setTarget(chosenKey, participantId)}
           // The update replaces the whole meta: no lead control without the meta that was read.
           conversationMeta={isOfflineCopy(detail) || detail?.meta == null ? undefined : detail.meta}
+          onAgentDelegations={
+            delegationAvailable
+              ? (agentId, name) => {
+                  setPeopleOpen(false);
+                  router.push({ pathname: '/agent-delegations/[id]', params: { id: String(agentId), name } });
+                }
+              : undefined
+          }
           onAgentMemory={
             agentMemoryAvailable
               ? (agentId, name) => {

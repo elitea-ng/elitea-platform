@@ -5,6 +5,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 
 import type { VersionToolRef } from '@/shared/api/generated/model';
 
+import { useAgentDelegationGrants } from '../api/delegationGrants';
 import { useSelectedProjectId } from '../api/useSelectedProjectId';
 import type { ToolRemovalUpdate } from '../lib/hooks/useDisassociateToolkit.hooks';
 import type { AgentToolAssociation } from '../lib/types';
@@ -158,6 +159,19 @@ export function AgentToolsPanel({ entity, versionTools, dirty, internalTools, on
     [mirror.tools, mirror.initialTools, mirror.onToolsChange, mirror.onToolRemoved, dirty],
   );
 
+  // The grants of this agent's edges, read only while it holds an agent or pipeline (ADR-0044 amendment 1).
+  const holdsApplications = mirror.tools.some((tool) => tool.type === 'application');
+  const grants = useAgentDelegationGrants(projectId, entity.applicationId, holdsApplications);
+  const delegationOf = useCallback(
+    (tool: AgentToolAssociation) => {
+      const calleeId = tool.type === 'application' ? Number(tool.settings?.application_id) : Number.NaN;
+      const grant = grants.find((candidate) => candidate.callee_application_id === calleeId);
+      if (grant === undefined || projectId === undefined || entity.applicationId === undefined) return undefined;
+      return { grant, projectId, applicationId: entity.applicationId, readOnly: rowDisabled };
+    },
+    [grants, projectId, entity.applicationId, rowDisabled],
+  );
+
   const renderToolCard = useCallback(
     (tool: AgentToolAssociation, index: number, isDuplicate: boolean) => (
       <AgentToolRow
@@ -168,9 +182,10 @@ export function AgentToolsPanel({ entity, versionTools, dirty, internalTools, on
         viewMode={viewMode}
         entity={rowEntity}
         toolsState={rowToolsState}
+        delegation={delegationOf(tool)}
       />
     ),
-    [rowDisabled, viewMode, rowEntity, rowToolsState],
+    [rowDisabled, viewMode, rowEntity, rowToolsState, delegationOf],
   );
 
   return (

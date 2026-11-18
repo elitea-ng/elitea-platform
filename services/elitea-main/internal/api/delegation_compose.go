@@ -51,13 +51,14 @@ func composeDelegationGrants(cfg RouterConfig, lifecycle *dbrepos.AgentLifecycle
 	if err != nil {
 		return fail("callee reader", err)
 	}
-	access, err := dbrepos.NewDelegationAccess(permissionChecker{resolver: resolver})
-	if err != nil {
-		return fail("approver access", err)
-	}
 	governed := cfg.DelegationGoverned
 	if governed == nil {
 		governed = func(context.Context) bool { return false }
+	}
+	access, err := dbrepos.NewDelegationAccess(permissionChecker{resolver: resolver},
+		dbrepos.WithDelegationVisibility(sources, governed))
+	if err != nil {
+		return fail("approver access", err)
 	}
 	store, err := dbrepos.NewDelegationGrants(cfg.Pool, appender,
 		dbrepos.WithDelegationChanges(lifecycle), dbrepos.WithDelegationAccess(access),

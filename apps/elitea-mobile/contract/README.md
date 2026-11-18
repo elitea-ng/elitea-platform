@@ -179,12 +179,22 @@ does not animate WebP: Android builds with `expo.webp.animated=false`, iOS anima
 video state its poster, each with the default motion. An SVG is not drawn (the still, then the old icon).
 Reduced motion shows the still only and downloads nothing else.
 
+<<<<<<< HEAD
 ## Client contract 1.60
 
 | Area | What |
 |---|---|
 | Delegation notices (delegation epic 2156, story S5, ADR-0044 amendment 1) | A run that refused or narrowed a delegation streams a `delegation_refused` or `delegation_narrowed` frame (`response_metadata.delegation_v1`), and the answer keeps the same list on `metadata.delegation_notices_v1` (`DelegationNotice`). The thread shows one plain-text card per notice under the answer's tool activity (`src/features/chat/DelegationNoticeCards.tsx`, `delegationNotices.ts`; parsing and folding are shared in `@elitea/client-core/stream`). "Review delegation" shows only when the server says the viewer may review (`can_review`); otherwise the card names the editors to ask. The frames never touch the answer's text or tool rows. A server before 1.60 sends none; no card is shown. |
 
+||||||| 948d63f93
+=======
+## Client contract 1.59
+
+| Area | What |
+|---|---|
+| Delegation grants reach the client (delegation epic 2156, story S3) | The five grant operations of 1.58 other than `proposeDelegationGrant` (`listDelegationGrants`, `getDelegationGrant`, `approveDelegationGrant`, `revokeDelegationGrant`, `previewDelegationGrant`) are now tagged `client`, and the preview answers `governed` (the governed profile is on: an attach records a change request another approver decides). The app has no agent editor, so it shows a read-only list of an agent's grants and a review screen that approves (all the approver holds access to) or revokes; under the governed profile it points to the web or desktop change request instead. A server before 1.59 has none of these. |
+
+>>>>>>> origin/main
 ## Client contract 1.58
 
 | Area | What |
