@@ -37,6 +37,7 @@ import {
   expectStoredAssistantAnswer,
   readMockLlmJournal,
   readStoredTranscript,
+  fillComposer,
 } from '../fixtures/api';
 
 const CONVERSATIONS_RE = /\/elitea_core\/conversations\/prompt_lib\/(\d+)$/;
@@ -98,6 +99,7 @@ test('a 300k-character attachment is not handed to the model in full', async ({ 
 
   await clearMockLlmJournal(page);
 
+  const send = await fillComposer(page, prompt);
   const created = page.waitForResponse(
     (r) => CONVERSATIONS_RE.test(new URL(r.url()).pathname) && r.request().method() === 'POST',
     { timeout: 60_000 },
@@ -106,11 +108,7 @@ test('a 300k-character attachment is not handed to the model in full', async ({ 
     timeout: 60_000,
   });
 
-  const input = page.getByTestId('chat-message-input');
-  await expect(input).toBeEditable({ timeout: 20_000 });
-  await input.fill(prompt);
-  await expect(page.getByTestId('chat-send-button')).toBeEnabled({ timeout: 10_000 });
-  await page.getByTestId('chat-send-button').click();
+  await send.click();
 
   const createdResponse = await created;
   expect(createdResponse.status(), 'the send must create a real conversation').toBe(201);

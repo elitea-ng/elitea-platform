@@ -91,6 +91,7 @@ import {
   readCallerPersonalProjectId,
   readStoredTranscript,
   setToolkitGuardrails,
+  fillComposer,
 } from '../fixtures/api';
 
 /** Matched WITHOUT a project id: the chat persona works inside its own personal project (#290). */
@@ -210,20 +211,17 @@ test('an agent with the artifact toolkit writes a file that a real bucket listin
     expect(conversationId, 'the Chat button must create a conversation').not.toBe('');
     await page.waitForURL(new RegExp(`/app/chat/${conversationId}(?:[/?#]|$)`), { timeout: 45_000 });
 
-    const started = page.waitForResponse((r) => START_RE.test(r.url()) && r.request().method() === 'POST', {
-      timeout: 60_000,
-    });
-    const input = page.getByTestId('chat-message-input');
-    await expect(input).toBeEditable({ timeout: 30_000 });
-    await input.fill(
+    const send = await fillComposer(page,
       callToolWithArgumentsPrompt(
         'create_file',
         { filename: fileName, filedata: 'hello from the artifact toolkit' },
         `autotest: upload a file named ${fileName} with the content "hello from the artifact toolkit"`,
       ),
     );
-    await expect(page.getByTestId('chat-send-button')).toBeEnabled({ timeout: 10_000 });
-    await page.getByTestId('chat-send-button').click();
+    const started = page.waitForResponse((r) => START_RE.test(r.url()) && r.request().method() === 'POST', {
+      timeout: 60_000,
+    });
+    await send.click();
 
     const startResponse = await started;
     expect(startResponse.status(), `the turn was refused: ${(await startResponse.text()).slice(0, 300)}`).toBe(200);

@@ -395,6 +395,7 @@ jobs:
             sandbox::ledger::code_recovery::tests:: \
             sandbox::docker_supervisor::code_recovery_cleanup::tests:: \
             sandbox::ledger::workspace::postgres_tests:: \
+            sandbox::ledger::failure_detail_tests:: \
             state::postgres_checkpointer_tests::
 
       # The three sandbox_supervisor_* tests drive real containers through the

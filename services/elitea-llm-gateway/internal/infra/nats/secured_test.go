@@ -59,8 +59,23 @@ func TestSecuredGatewayRunsOnTheChartsPermissions(t *testing.T) {
 	if total, err := c.ReadBudget(ctx, subject); err != nil || total != 500 {
 		t.Fatalf("ReadBudget = %d, %v", total, err)
 	}
-	if total, applied, err := c.IncrBudgetIdempotent(ctx, subject, "recovery.1", 100); err != nil || !applied || total != 600 {
-		t.Fatalf("IncrBudgetIdempotent = %d, %v, %v", total, applied, err)
+	// A deadline here (seen in CI on a loaded runner, unrelated to the change
+	// under test) may follow a write that landed. The message id makes the retry
+	// safe, but a retry after a landed write reports applied=false, so what is
+	// asserted is the counter, not which attempt applied it.
+	var idemErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		_, _, idemErr = c.IncrBudgetIdempotent(ctx, subject, "recovery.1", 100)
+		if idemErr == nil || !strings.Contains(idemErr.Error(), context.DeadlineExceeded.Error()) {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if idemErr != nil {
+		t.Fatalf("IncrBudgetIdempotent: %v\nserver log:\n%s", idemErr, s.Log())
+	}
+	if total, err := c.ReadBudget(ctx, subject); err != nil || total != 600 {
+		t.Fatalf("ReadBudget after the idempotent increment = %d, %v; want 600 applied once", total, err)
 	}
 	if _, applied, err := c.IncrBudgetIdempotent(ctx, subject, "recovery.1", 100); err != nil || applied {
 		t.Fatalf("IncrBudgetIdempotent replay: applied=%v err=%v; the bootstrap's duplicate window must suppress it", applied, err)

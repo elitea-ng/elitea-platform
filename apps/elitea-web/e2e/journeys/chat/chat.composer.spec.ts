@@ -77,7 +77,7 @@
 import { test, expect } from '@playwright/test';
 
 import { BASE_URL } from '../../../playwright.config';
-import { API_BASE, AUTOTEST_PREFIX, DEFAULT_PROJECT_ID, deleteConversation } from '../../fixtures/api';
+import { API_BASE, AUTOTEST_PREFIX, DEFAULT_PROJECT_ID, deleteConversation, fillComposer } from '../../fixtures/api';
 
 /**
  * Contains all three mention triggers. "@" and "~" are preceded by a space and
@@ -218,7 +218,9 @@ test('an empty or blank composer sends nothing, and the send control is not even
   await input.click();
   await page.keyboard.press('Enter');
   // Whitespace is empty too: `createSendQuestion` refuses on `question.trim()`.
-  await input.fill('   ');
+  // Typed, not `fill`ed: the refusal of blank text is the behaviour under test, so this
+  // deliberately has no Send control to wait for (`fillComposer` would wait for one).
+  await input.pressSequentially('   ');
   await page.keyboard.press('Enter');
 
   // `count()` for the absence — it reports what is mounted now instead of
@@ -229,11 +231,11 @@ test('an empty or blank composer sends nothing, and the send control is not even
   // The proof that the two refusals are refusals and not a dead keyboard: the
   // SAME composer, given real text, sends on the same key.
   const text = `${AUTOTEST_PREFIX}empty${SUFFIX}-${Date.now()}`;
+  await fillComposer(page, text);
   const created = page.waitForResponse(
     (response) => response.url().includes(CONVERSATIONS_PATH) && response.request().method() === 'POST',
     { timeout: 20_000 },
   );
-  await input.fill(text);
   await page.keyboard.press('Enter');
   const response = await created;
   expect(response.status()).toBe(201);

@@ -14,7 +14,7 @@ import { t } from '@/shared/i18n';
 
 import { buildAgentEditorProps, buildCreateHandlerProps, shouldDisableClearChat, type ChatBoxEditorCallbacks, type deriveChatBoxInputState } from './ChatBox.helpers';
 import { switchToModel } from './switchToModel';
-import { chatDraftKey } from './ChatBox.draft';
+import { chatDraftKey, rememberConversationDraftIds } from './ChatBox.draft';
 import { ChatBoxComposerQueue } from './ChatBoxComposerQueue';
 import { ChatBoxFloorTarget } from './ChatBoxFloorTarget';
 import { buildChatBoxAttachmentProps, buildChatBoxInputSlots } from './ChatBoxInputSlots';
@@ -48,6 +48,8 @@ interface ChatBoxComposerProps {
     readonly projectId: string | number | undefined;
     readonly projectIdString: string | undefined;
     readonly conversationId: string | number | undefined;
+    readonly pendingConversationId: string | number | undefined;
+    readonly conversationUuid: string | undefined;
     readonly conversationMeta: Readonly<Record<string, unknown>> | undefined;
     readonly conversationParticipants: unknown[] | undefined;
     readonly isAgentsPage: boolean | undefined;
@@ -92,6 +94,10 @@ export function ChatBoxComposer(props: ChatBoxComposerProps): ReactNode {
   const { participantForEditor, entityActions } = participant;
   const cancelSkillPick = useRef<(() => void) | undefined>(undefined);
   useEffect(() => () => cancelSkillPick.current?.(), []);
+  const { conversationUuid, editorTest } = conversation;
+  useEffect(() => {
+    rememberConversationDraftIds({ projectId, conversationId, conversationUuid, scratch: [isAgentsPage, editorTest] });
+  }, [projectId, conversationId, conversationUuid, isAgentsPage, editorTest]);
   const onInputChange = mentions.onInputChange;
   const onPickSkill = useCallback(() => {
     cancelSkillPick.current?.();
@@ -128,7 +134,7 @@ export function ChatBoxComposer(props: ChatBoxComposerProps): ReactNode {
         ref={chatInputRef}
         conversationId={conversationId !== undefined ? String(conversationId) : undefined}
         state={{ isLoading: inputState.isComposerBusy, disabledInput: inputState.isDraftInputBusy, isStreaming, disabledSend: inputState.disabledSend, isCreatingConversation: data.lifecycle.isCreating, allowSendWhileStreaming: true }}
-        content={{ placeholder: t('widgets.chatBox.inputPlaceholder', 'Type your message...'), clearInputAfterSubmit: true, slashHighlights: mentions.highlightRanges, draftKey: chatDraftKey({ projectId, conversationId, scratch: [isAgentsPage, conversation.editorTest] }) }}
+        content={{ placeholder: t('widgets.chatBox.inputPlaceholder', 'Type your message...'), clearInputAfterSubmit: true, slashHighlights: mentions.highlightRanges, draftKey: chatDraftKey({ projectId, conversationId, pendingConversationId: conversation.pendingConversationId, scratch: [isAgentsPage, conversation.editorTest] }) }}
         callbacks={{ onSend: steering.onSend, onStopGeneration: composer.stopTurn, onNormalKeyDown: state.onNormalKeyDown, onInputChange: mentions.onInputChange }}
         agentEditor={buildAgentEditorProps({
           participantForEditor,

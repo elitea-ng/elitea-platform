@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
@@ -48,6 +50,47 @@ type RuntimeFailureFrame struct {
 // services/elitea-worker-rust/src/protocol/output.rs reads this line).
 const MaxRuntimeFailureSafeMessageBytes = 256
 
+// A pipeline Code node whose program failed may carry the tail of the program's
+// stderr after its registered sentence (#2227): the registered sentence, the
+// separator, then at most MaxCodeFailureDetailRunes characters. This is the ONE
+// registered failure whose message is not a fixed sentence; the worker bounds
+// and cleans the detail, and Main refuses anything that is not exactly that, at
+// the gRPC edge and again wherever a safe message is bounded or stored.
+const (
+	CodeFailureCode            = "PIPELINE_CODE_FAILED"
+	CodeFailureSentence        = "The pipeline stopped at a Code node. Check its source, selected input, and sandbox limits. Later nodes did not run. Share the support reference with your administrator before retrying."
+	CodeFailureDetailSeparator = "\n\nProgram output:\n"
+	MaxCodeFailureDetailRunes  = 1500
+)
+
+// ValidCodeFailureDetail reports whether detail is a program-output tail Main
+// admits: non-empty text, valid UTF-8, within the character bound, with no
+// control character other than a newline or a tab.
+func ValidCodeFailureDetail(detail string) bool {
+	if strings.TrimSpace(detail) == "" || !utf8.ValidString(detail) || utf8.RuneCountInString(detail) > MaxCodeFailureDetailRunes {
+		return false
+	}
+	for _, r := range detail {
+		if unicode.IsControl(r) && r != '\n' && r != '\t' {
+			return false
+		}
+	}
+	return true
+}
+
+// SafeMessageAdmitted reports whether message is a safe message a failure of
+// this public code may carry: within the fixed-sentence bound, or the Code
+// failure's registered sentence followed by the program's bounded output.
+func SafeMessageAdmitted(code, message string) bool {
+	if code == CodeFailureCode {
+		// The Code failure's shape is judged whatever its length.
+		if detail, ok := strings.CutPrefix(message, CodeFailureSentence+CodeFailureDetailSeparator); ok {
+			return ValidCodeFailureDetail(detail)
+		}
+	}
+	return len(message) <= MaxRuntimeFailureSafeMessageBytes
+}
+
 func (f RuntimeFailureFrame) Validate() error {
 	if f.StreamID == "" || f.TenantID == "" || f.ResourceProjectID == "" || f.ProjectionProjectID == "" || f.WorkloadSessionID == "" || f.ProducerID == "" || f.EventID == "" || f.LogicalOutputID == "" || f.Sequence == 0 || f.OccurredAt.IsZero() {
 		return ErrInvalidValidationOutput
@@ -73,7 +116,7 @@ func (f RuntimeFailureFrame) Validate() error {
 	if f.PayloadDigest.IsZero() || len(f.EncodedFailure) == 0 || len(f.EncodedFailure) > MaxConfigurationValidationResultBytes || runtimedomain.SHA256(f.EncodedFailure) != f.PayloadDigest {
 		return ErrInvalidValidationOutput
 	}
-	if f.Failure.Code == "" || f.Failure.SafeMessage == "" || len(f.Failure.Code) > 256 || len(f.Failure.SafeMessage) > MaxRuntimeFailureSafeMessageBytes {
+	if f.Failure.Code == "" || f.Failure.SafeMessage == "" || len(f.Failure.Code) > 256 || !SafeMessageAdmitted(f.Failure.Code, f.Failure.SafeMessage) {
 		return ErrInvalidValidationOutput
 	}
 	expectedOutcome := executionapp.SettlementFailed

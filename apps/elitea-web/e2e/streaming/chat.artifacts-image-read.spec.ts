@@ -50,6 +50,7 @@ import {
   readCallerPersonalProjectId,
   readMockLlmJournal,
   readStoredTranscript,
+  fillComposer,
 } from '../fixtures/api';
 
 const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/;
@@ -245,14 +246,11 @@ async function callTool(
   args: Readonly<Record<string, unknown>>,
   tail: string,
 ): Promise<string> {
+  const send = await fillComposer(page, callToolWithArgumentsPrompt(tool, args, tail));
   const started = page.waitForResponse((r) => START_RE.test(r.url()) && r.request().method() === 'POST', {
     timeout: 60_000,
   });
-  const input = page.getByTestId('chat-message-input');
-  await expect(input).toBeEditable({ timeout: 30_000 });
-  await input.fill(callToolWithArgumentsPrompt(tool, args, tail));
-  await expect(page.getByTestId('chat-send-button')).toBeEnabled({ timeout: 10_000 });
-  await page.getByTestId('chat-send-button').click();
+  await send.click();
   expect(
     (await started).status(),
     'the image-read turn must be admitted',
@@ -433,6 +431,7 @@ test('an image attached in the composer is analysed by the model', async ({ page
   await expect(attachRow).toBeVisible();
   await attachRow.locator('xpath=ancestor::div[1]').locator('input[type="file"]').setInputFiles(file);
 
+  const send = await fillComposer(page, `describe the attached picture ${stamp}`);
   const created = page.waitForResponse(
     (r) => /\/elitea_core\/conversations\/prompt_lib\/(\d+)$/.test(new URL(r.url()).pathname) && r.request().method() === 'POST',
     { timeout: 45_000 },
@@ -440,11 +439,7 @@ test('an image attached in the composer is analysed by the model', async ({ page
   const started = page.waitForResponse((r) => START_RE.test(r.url()) && r.request().method() === 'POST', {
     timeout: 60_000,
   });
-  const input = page.getByTestId('chat-message-input');
-  await expect(input).toBeEditable({ timeout: 20_000 });
-  await input.fill(`describe the attached picture ${stamp}`);
-  await expect(page.getByTestId('chat-send-button')).toBeEnabled({ timeout: 10_000 });
-  await page.getByTestId('chat-send-button').click();
+  await send.click();
 
   const createdResponse = await created;
   const projectId = /\/prompt_lib\/(\d+)$/.exec(new URL(createdResponse.url()).pathname)?.[1] ?? '';
@@ -587,15 +582,13 @@ test('a pipeline run reads an image from a bucket', async ({ page }) => {
     await expect(page.getByTestId('chat-message-input')).toBeEditable({ timeout: 45_000 });
     await clearMockLlmJournal(page);
 
+    // No `[[mock:call_tool]]` marker: the graph's own node performs the read,
+    // so nothing here depends on the model choosing to call anything.
+    const send = await fillComposer(page, `describe the picture ${suffix}`);
     const started = page.waitForResponse((r) => START_RE.test(r.url()) && r.request().method() === 'POST', {
       timeout: 60_000,
     });
-    const input = page.getByTestId('chat-message-input');
-    // No `[[mock:call_tool]]` marker: the graph's own node performs the read,
-    // so nothing here depends on the model choosing to call anything.
-    await input.fill(`describe the picture ${suffix}`);
-    await expect(page.getByTestId('chat-send-button')).toBeEnabled({ timeout: 10_000 });
-    await page.getByTestId('chat-send-button').click();
+    await send.click();
     expect((await started).status(), 'the pipeline turn must be admitted').toBe(200);
     await expectStoredAssistantAnswer(page, projectId, conversationId, {
       timeout: 180_000,

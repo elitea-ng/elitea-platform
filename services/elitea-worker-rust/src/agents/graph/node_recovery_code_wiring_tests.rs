@@ -452,6 +452,7 @@ impl SandboxSupervisorService for FakeSupervisor {
             result_json: Vec::new(),
             failure_code: "runtime_failed".into(),
             cleanup_pending: false,
+            failure_detail: String::new(),
         }))
     }
     async fn cancel_sandbox_job(
@@ -1220,6 +1221,7 @@ fn terminal(code: &str) -> pb::SubmitSandboxJobResponseV1 {
         result_json: Vec::new(),
         failure_code: code.into(),
         cleanup_pending: false,
+        failure_detail: String::new(),
     }
 }
 fn completed() -> pb::SubmitSandboxJobResponseV1 {
@@ -1228,6 +1230,7 @@ fn completed() -> pb::SubmitSandboxJobResponseV1 {
         result_json: br#"{"revision":1,"status":"completed","exit_code":0,"stdout":"{\"revision\":1,\"result\":41}","stderr":""}"#.to_vec(),
         failure_code: String::new(),
         cleanup_pending: false,
+        failure_detail: String::new(),
     }
 }
 
@@ -1518,6 +1521,7 @@ async fn real_pg_busy_from_another_worker_backs_off_without_releasing_the_slot()
         result_json: Vec::new(),
         failure_code: String::new(),
         cleanup_pending: false,
+        failure_detail: String::new(),
     };
     h.answers
         .lock()

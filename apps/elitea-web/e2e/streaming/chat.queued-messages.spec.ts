@@ -66,7 +66,7 @@
 import { expect, test } from '@playwright/test';
 
 import { BASE_URL } from '../../playwright.config';
-import { readStoredAssistantAnswer, readStoredTranscript } from '../fixtures/api';
+import { readStoredAssistantAnswer, readStoredTranscript, fillComposer } from '../fixtures/api';
 
 /** Matched WITHOUT a project id: the chat persona works inside its own personal project (#290). */
 const CONVERSATIONS_RE = /\/elitea_core\/conversations\/prompt_lib\/(\d+)$/;
@@ -121,9 +121,7 @@ async function startSlowTurn(page: import('@playwright/test').Page, prompt: stri
   await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 30_000 });
   await pickMockModel(page);
 
-  await expect(input(page)).toBeEditable({ timeout: 15_000 });
-  await input(page).fill(prompt);
-  await expect(sendButton(page)).toBeEnabled({ timeout: 5_000 });
+  await fillComposer(page, prompt);
 
   const created = page.waitForResponse(
     (r) => CONVERSATIONS_RE.test(new URL(r.url()).pathname) && r.request().method() === 'POST',

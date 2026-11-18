@@ -15,7 +15,7 @@ import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
 
 import { BASE_URL } from '../../playwright.config';
-import { readStoredAssistantAnswer } from '../fixtures/api';
+import { readStoredAssistantAnswer, fillComposer } from '../fixtures/api';
 
 const CONVERSATIONS_RE = /\/elitea_core\/conversations\/prompt_lib\/(\d+)$/;
 const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/;
@@ -42,16 +42,14 @@ test('#6654: a reload mid-turn shows the final answer without another reload', a
   await page.goto(`${BASE_URL}/app/chat`);
   await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 30_000 });
   await pickMockModel(page);
-  const input = page.getByTestId('chat-message-input');
-  await expect(input).toBeEditable({ timeout: 15_000 });
-  await input.fill(prompt);
+  const send = await fillComposer(page, prompt);
 
   const created = page.waitForResponse(
     (r) => CONVERSATIONS_RE.test(new URL(r.url()).pathname) && r.request().method() === 'POST',
     { timeout: 30_000 },
   );
   const started = page.waitForResponse((r) => START_RE.test(r.url()) && r.request().method() === 'POST', { timeout: 30_000 });
-  await page.getByTestId('chat-send-button').click();
+  await send.click();
 
   const createdResponse = await created;
   expect(createdResponse.status()).toBe(201);

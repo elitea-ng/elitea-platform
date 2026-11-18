@@ -1,0 +1,146 @@
+/**
+ * No e2e spec fills the chat composer and then sends by hand (#2221, #2229).
+ *
+ * ## The defect this keeps out
+ *
+ * `chat-send-button` is rendered only while the composer holds text. A chat
+ * pane that is still resolving its conversation can discard a fill that lands
+ * too early, so `input.fill(...)`, `toBeEnabled()`, `click()` waits its whole
+ * budget for a control that never comes (run 44164037437, and run 33812152063
+ * before it). `fillComposer` in `e2e/fixtures/api.ts` retries the fill until
+ * Send exists; every spec that sends through the real composer goes through it.
+ *
+ * ## Why a static test
+ *
+ * The race is a property of how a spec is WRITTEN, and it only shows up on a
+ * slow runner, so no run of the suite proves its absence. This reads the
+ * specs the way `e2e-journey-shape.test.mjs` does, in the `scripts` vitest
+ * project, on every ci-web.yml run.
+ *
+ * ## The rule
+ *
+ * Under `e2e/` (every folder), a `.fill(` on the composer locator that is
+ * followed within a few lines by a click on the Send control, or by pressing
+ * Enter, is a failure. The locator may be declared over several lines and the
+ * fill chained on its own line. Three specs fill by hand on purpose and are
+ * named in `EXEMPT`. The first cases check the rule against the shapes the
+ * specs had before, so it cannot pass by finding nothing.
+ */
+import { readdirSync, readFileSync } from 'node:fs';
+import { dirname, join, relative, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { describe, expect, it } from 'vitest';
+
+const E2E_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'e2e');
+
+/** How many lines after a composer fill a Send click (or Enter) still counts as "straight after". */
+const WINDOW_LINES = 8;
+
+/**
+ * Specs that fill by hand on purpose (paths relative to `e2e/`):
+ * - `chat.queued-messages.spec.ts` types and clicks Send WHILE a turn runs
+ *   (steering): the pane resolved long before, and the send during a run is
+ *   the behaviour under test.
+ * - `chat.streaming.spec.ts` asserts Send is ABSENT before it fills.
+ * - `chat.tail-sensitive-tools.spec.ts` drives the composer by hand to keep
+ *   the timing of the turn's tail.
+ */
+const EXEMPT = new Set([
+  'streaming/chat.queued-messages.spec.ts',
+  'streaming/chat.streaming.spec.ts',
+  'streaming/chat.tail-sensitive-tools.spec.ts',
+]);
+
+const COMPOSER = String.raw`(?:getByTestId\(\s*['"]chat-message-input['"],?\s*\)|locator\(\s*(?:'[^']*chat-message-input[^']*'|"[^"]*chat-message-input[^"]*"),?\s*\))`;
+
+/** Every spec under `dir`, as paths relative to `base`, with `/` separators. */
+function specsUnder(dir, base = dir) {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) return specsUnder(path, base);
+    return entry.name.endsWith('.spec.ts') ? [relative(base, path).split(sep).join('/')] : [];
+  });
+}
+
+/**
+ * 1-based lines of every composer `.fill(` followed within WINDOW_LINES by a
+ * click on the Send control or an Enter press.
+ */
+export function findBareComposerSends(source) {
+  const names = new Set();
+  const declaration = new RegExp(String.raw`\b(?:const|let) (\w+)\s*=\s*[^;]*?${COMPOSER}`, 'g');
+  for (const match of source.matchAll(declaration)) names.add(match[1]);
+  const fills = [new RegExp(String.raw`${COMPOSER}\s*\.fill\(`, 'g')];
+  for (const name of names) fills.push(new RegExp(String.raw`\b${name}(?:\([^)]*\))?\s*\.fill\(`, 'g'));
+  const lines = source.split('\n');
+  const found = new Set();
+  for (const fill of fills) {
+    for (const match of source.matchAll(fill)) {
+      const index = source.slice(0, match.index).split('\n').length - 1;
+      const after = lines.slice(index + 1, index + 1 + WINDOW_LINES).join('\n');
+      const clicksSend = /chat-send-button|\bsendButton\b/.test(after) && /\.click\(\)/.test(after);
+      const pressesEnter = /\.press\(\s*(['"])Enter\1/.test(after);
+      if (clicksSend || pressesEnter) found.add(index + 1);
+    }
+  }
+  return [...found].sort((a, b) => a - b);
+}
+
+const BEFORE = `
+  const input = page.getByTestId('chat-message-input');
+  await expect(input).toBeEditable({ timeout: 20_000 });
+  await input.fill(prompt);
+  await expect(page.getByTestId('chat-send-button')).toBeEnabled({ timeout: 10_000 });
+  await page.getByTestId('chat-send-button').click();
+`;
+
+const AFTER = `
+  const send = await fillComposer(page, prompt);
+  await send.click();
+`;
+
+describe('e2e specs send through fillComposer (#2221, #2229)', () => {
+  it('flags the bare fill, enabled-check, click shape that #2221 counted', () => {
+    expect(findBareComposerSends(BEFORE)).toHaveLength(1);
+    expect(
+      findBareComposerSends(`await page.getByTestId('chat-message-input').fill(x);\nawait page.getByTestId("chat-send-button").click();`),
+    ).toHaveLength(1);
+    expect(
+      findBareComposerSends(`const composer = page.getByTestId('chat-message-input');\nawait composer.fill(x);\nconst sendButton = page.getByTestId('chat-send-button');\nawait sendButton.click();`),
+    ).toHaveLength(1);
+  });
+
+  it('flags a locator declared over several lines, a chained fill, and fill then Enter (#2229)', () => {
+    expect(
+      findBareComposerSends(`const input = page\n  .getByTestId(\n    'chat-message-input',\n  );\nawait input.fill(x);\nawait page.getByTestId('chat-send-button').click();`),
+    ).toHaveLength(1);
+    expect(
+      findBareComposerSends(`await page\n  .getByTestId('chat-message-input')\n  .fill(x);\nawait page.getByTestId('chat-send-button').click();`),
+    ).toHaveLength(1);
+    expect(findBareComposerSends(`const box = page.locator('[data-testid="chat-message-input"]');\nawait box.fill(x);\nawait box.press('Enter');`)).toHaveLength(1);
+    expect(findBareComposerSends(`await page.getByTestId('chat-message-input').fill(x);\nawait page.keyboard.press("Enter");`)).toHaveLength(1);
+  });
+
+  it('accepts the helper, and a fill that is never followed by a send', () => {
+    expect(findBareComposerSends(AFTER)).toEqual([]);
+    expect(findBareComposerSends(`await page.getByTestId('chat-message-input').fill(x);\nawait expect(page.getByTestId('chat-send-button')).toBeDisabled();`)).toEqual([]);
+  });
+
+  it('names its exemptions, and each one still exists', () => {
+    const present = new Set(specsUnder(E2E_DIR));
+    expect([...EXEMPT].filter((name) => !present.has(name))).toEqual([]);
+  });
+
+  it('finds no bare composer send in any e2e spec', () => {
+    const offenders = [];
+    for (const file of specsUnder(E2E_DIR).filter((name) => !EXEMPT.has(name))) {
+      const lines = findBareComposerSends(readFileSync(join(E2E_DIR, file), 'utf8'));
+      if (lines.length > 0) offenders.push(`${file}:${lines.join(',')}`);
+    }
+    expect(
+      offenders,
+      'fill the composer with `fillComposer` (e2e/fixtures/api.ts) and click the Send control it returns: a bare fill is discarded while the pane resolves its conversation, and the click then waits for a button that never renders',
+    ).toEqual([]);
+  });
+});

@@ -43,7 +43,7 @@ import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
 
 import { BASE_URL } from '../../playwright.config';
-import { describeRefusal, expectStoredAssistantAnswer, readStoredMessageGroups } from '../fixtures/api';
+import { describeRefusal, expectStoredAssistantAnswer, readStoredMessageGroups, fillComposer } from '../fixtures/api';
 
 const CONVERSATIONS_RE = /\/elitea_core\/conversations\/prompt_lib\/(\d+)$/;
 const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/;
@@ -143,6 +143,7 @@ test('a canvas can be carved out of the middle of an answer and out of a whole m
   await modelOption.click();
   await expect(page.getByTestId('model-selector-name')).toContainText(MODEL_NAME, { timeout: 10_000 });
 
+  const send = await fillComposer(page, prompt);
   const created = page.waitForResponse(
     (r) => CONVERSATIONS_RE.test(new URL(r.url()).pathname) && r.request().method() === 'POST',
     { timeout: 45_000 },
@@ -151,11 +152,7 @@ test('a canvas can be carved out of the middle of an answer and out of a whole m
     timeout: 45_000,
   });
 
-  const input = page.getByTestId('chat-message-input');
-  await expect(input).toBeEditable({ timeout: 20_000 });
-  await input.fill(prompt);
-  await expect(page.getByTestId('chat-send-button')).toBeEnabled({ timeout: 10_000 });
-  await page.getByTestId('chat-send-button').click();
+  await send.click();
 
   const createdResponse = await created;
   expect(createdResponse.status(), 'the send must create a real conversation').toBe(201);

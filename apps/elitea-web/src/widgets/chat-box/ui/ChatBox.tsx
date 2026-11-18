@@ -91,7 +91,7 @@ const ChatBoxInner = memo(function ChatBox({
   const chatInputRef = useRef<NewChatInputHandle>(null);
   const attachmentButtonRef = useRef<AttachmentButtonHandle>(null);
   const voiceButtonRef = useRef<VoiceButtonHandle>(null);
-  const { activeConversation, isLoadingConversation, onConversationCreated: onCreated, onTurn } = unwrapChatBoxConversation(conversation);
+  const { activeConversation, isLoadingConversation, pendingConversationId, onConversationCreated: onCreated, onTurn } = unwrapChatBoxConversation(conversation);
   const onConversationCreated = withDraftCarry(onCreated, { projectId, scratch: [isAgentsPage, editorTest], text: () => chatInputRef.current?.getInputContent() ?? '' });
   const { userId, userName, userAvatar, llmSettings, onSetLLMSettings, onDeleteAnswer, onDeleteAllMessages } = flattenChatBoxProps({ user, llm, onDelete });
   const { conversationId, conversationParticipants, conversationUuid, conversationMeta, isConversationSending, projectIdString } = deriveChatBoxIds(activeConversation, projectId);
@@ -347,7 +347,7 @@ const ChatBoxInner = memo(function ChatBox({
             composer={composer}
             state={state}
             data={data}
-            conversation={{ projectId, projectIdString, conversationId, conversationMeta, conversationParticipants, isAgentsPage, editorTest, messageCount: messages.length }}
+            conversation={{ projectId, projectIdString, conversationId, pendingConversationId, conversationUuid, conversationMeta, conversationParticipants, isAgentsPage, editorTest, messageCount: messages.length }}
             participant={{ participantForEditor, agentEditorParticipantDetails, normalisedParticipants, target, onChangeParticipant, onSelectVersion: handleSelectVersion, entityActions: entityParticipantActions }}
             inputState={{ ...inputState, isStreaming, areAttachmentsDisabled }}
             media={{ readAloud, voiceFeedback }}

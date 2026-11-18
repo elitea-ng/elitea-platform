@@ -38,7 +38,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 import { BASE_URL } from '../../playwright.config';
-import { API_BASE, expectStoredAssistantAnswer } from '../fixtures/api';
+import { API_BASE, expectStoredAssistantAnswer, fillComposer } from '../fixtures/api';
 
 /** Matched WITHOUT a project id: the chat driver acts inside its own personal project (#290). */
 const CONVERSATIONS_RE = /\/elitea_core\/conversations\/prompt_lib\/(\d+)$/;
@@ -129,6 +129,7 @@ async function turnThenRegenerate(page: Page, tag: string): Promise<{
   await modelOption.click();
   await expect(page.getByTestId('model-selector-name')).toContainText(MODEL_NAME, { timeout: 10_000 });
 
+  const send = await fillComposer(page, prompt);
   const created = page.waitForResponse(
     (r) => CONVERSATIONS_RE.test(new URL(r.url()).pathname) && r.request().method() === 'POST',
     { timeout: 45_000 },
@@ -137,11 +138,7 @@ async function turnThenRegenerate(page: Page, tag: string): Promise<{
     timeout: 45_000,
   });
 
-  const input = page.getByTestId('chat-message-input');
-  await expect(input).toBeEditable({ timeout: 20_000 });
-  await input.fill(prompt);
-  await expect(page.getByTestId('chat-send-button')).toBeEnabled({ timeout: 10_000 });
-  await page.getByTestId('chat-send-button').click();
+  await send.click();
 
   const createdResponse = await created;
   expect(createdResponse.status(), 'the send must create a real conversation').toBe(201);
