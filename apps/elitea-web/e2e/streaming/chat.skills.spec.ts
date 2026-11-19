@@ -105,6 +105,13 @@ async function sendAndReadStartBody(page: Page, send: Locator): Promise<Record<s
   return JSON.parse(request.postData() ?? '{}') as Record<string, unknown>;
 }
 
+/** The start body's `payload`, where the picked skills travel. */
+function payloadOf(body: Record<string, unknown>): Record<string, unknown> {
+  const payload = body['payload'];
+  expect(typeof payload, 'the start body must carry a payload').toBe('object');
+  return payload as Record<string, unknown>;
+}
+
 async function waitForTurnToEnd(page: Page): Promise<void> {
   // A send during a run steers it instead of starting one, so the next turn waits for Stop to go away.
   await expect(page.getByRole('button', { name: 'Stop generating' })).toBeHidden({ timeout: 120_000 });
@@ -294,7 +301,7 @@ test('a skill is liked, tried, added, trusted, pinned and sent with /skill, and 
     await input.pressSequentially(`autotest echo exactly: ${quoted}`);
     await clearMockLlmJournal(page);
     const quotedBody = await sendAndReadStartBody(page, page.getByTestId('chat-send-button'));
-    expect(quotedBody['skills'], 'the start body names the picked skill by id').toEqual([{ source: 'project', id: Number(copyId) }]);
+    expect(payloadOf(quotedBody)['skills'], 'the start body (payload.skills) names the picked skill by id').toEqual([{ source: 'project', id: Number(copyId) }]);
     expect(JSON.stringify(quotedBody), 'the skill text never travels from the client').not.toContain(sentinel);
     await expectStoredAssistantAnswer(page, projectId, conversationId, { timeout: 120_000, contains: quoted, message: 'the /skill turn was never answered' });
     const quotedInput = await modelInput(page, projectId);
@@ -326,7 +333,7 @@ test('a skill is liked, tried, added, trusted, pinned and sent with /skill, and 
     const instructedSend = await fillComposer(page, `autotest echo exactly: ${instructed}`);
     await clearMockLlmJournal(page);
     const instructedBody = await sendAndReadStartBody(page, instructedSend);
-    expect(instructedBody['skills'], 'a pin travels no id: the server reads it').toBeUndefined();
+    expect(payloadOf(instructedBody)['skills'], 'a pin travels no id: the server reads it').toBeUndefined();
     await expectStoredAssistantAnswer(page, projectId, conversationId, { timeout: 120_000, contains: instructed, message: 'the turn after trust was never answered' });
     const trustedInput = await modelInput(page, projectId);
     expect(trustedInput, 'a trusted skill is an active instruction').toContain('<active_instruction');
