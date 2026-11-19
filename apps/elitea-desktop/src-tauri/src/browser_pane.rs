@@ -605,10 +605,7 @@ fn quarantine(path: &Path, url: &str) -> std::io::Result<()> {
 /// stripped (they can carry a token), at most 2048 characters; a URL that is
 /// not `http(s)` is left out. `HostUrl` and `ReferrerUrl` both carry it, as a
 /// download the pane started has no separate referrer.
-#[cfg_attr(
-    not(any(windows, test)),
-    expect(dead_code, reason = "Windows only")
-)]
+#[cfg_attr(not(any(windows, test)), expect(dead_code, reason = "Windows only"))]
 #[must_use]
 pub fn zone_identifier(url: &str) -> String {
     use std::fmt::Write as _;
@@ -2303,7 +2300,10 @@ mod tests {
             "[ZoneTransfer]\r\nZoneId=3\r\n",
             "a non-http origin is left out, the zone stays"
         );
-        assert_eq!(zone_identifier("not a url"), "[ZoneTransfer]\r\nZoneId=3\r\n");
+        assert_eq!(
+            zone_identifier("not a url"),
+            "[ZoneTransfer]\r\nZoneId=3\r\n"
+        );
     }
 
     #[cfg(windows)]
@@ -2313,10 +2313,18 @@ mod tests {
         let path = dir.path().join("report.pdf");
         std::fs::write(&path, "%PDF").unwrap();
         quarantine(&path, "https://example.com/report.pdf?t=1").unwrap();
-        let stream = std::fs::read_to_string(dir.path().join("report.pdf:Zone.Identifier")).unwrap();
+        let stream =
+            std::fs::read_to_string(dir.path().join("report.pdf:Zone.Identifier")).unwrap();
         assert!(stream.contains("ZoneId=3"), "{stream}");
-        assert!(stream.contains("HostUrl=https://example.com/report.pdf\r\n"), "{stream}");
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "%PDF", "the file itself is untouched");
+        assert!(
+            stream.contains("HostUrl=https://example.com/report.pdf\r\n"),
+            "{stream}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "%PDF",
+            "the file itself is untouched"
+        );
     }
 
     #[test]

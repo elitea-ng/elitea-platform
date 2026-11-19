@@ -832,7 +832,10 @@ impl GitCheckpoints {
             drop(release);
             let prefix = Path::new(REF_PREFIX);
             remove_empty_parents(&loose, &common.join(prefix));
-            remove_empty_parents(&common.join("logs").join(&name), &common.join("logs").join(prefix));
+            remove_empty_parents(
+                &common.join("logs").join(&name),
+                &common.join("logs").join(prefix),
+            );
             Pruned::Done
         } else {
             Pruned::NotLoose
@@ -1875,7 +1878,11 @@ mod tests {
 
         std::fs::write(dir.path().join("f.txt"), "turn 2\n").expect("edit");
         checkpoints.create("turn 2").expect("create");
-        assert_eq!(seqs_of(&checkpoints), [2, 3], "the stale lock no longer pins checkpoint 1");
+        assert_eq!(
+            seqs_of(&checkpoints),
+            [2, 3],
+            "the stale lock no longer pins checkpoint 1"
+        );
         assert!(!lock.exists(), "the taken-over lock is released");
     }
 
@@ -1892,12 +1899,24 @@ mod tests {
         std::fs::create_dir_all(&other).expect("other");
         std::fs::write(other.join("keep"), "x").expect("other ref");
         for info in &checkpoints.list().expect("list") {
-            assert!(matches!(git_side(&checkpoints).prune_loose(info), Pruned::Done));
+            assert!(matches!(
+                git_side(&checkpoints).prune_loose(info),
+                Pruned::Done
+            ));
         }
-        assert!(!session_refs.exists(), "the emptied session directory is removed");
+        assert!(
+            !session_refs.exists(),
+            "the emptied session directory is removed"
+        );
         assert!(!session_logs.exists(), "and its empty logs directory");
-        assert!(other.join("keep").exists(), "another session's directory stays");
-        assert!(repo_dir.join(REF_PREFIX).exists(), "the shared prefix stays");
+        assert!(
+            other.join("keep").exists(),
+            "another session's directory stays"
+        );
+        assert!(
+            repo_dir.join(REF_PREFIX).exists(),
+            "the shared prefix stays"
+        );
     }
 
     /// A ref whose content is not the checkpoint's id is not removed (it
@@ -1912,17 +1931,30 @@ mod tests {
         let loose = repo_dir.join(REF_PREFIX).join("s/1");
         let original = std::fs::read_to_string(&loose).expect("ref");
         std::fs::write(&loose, "0000000000000000000000000000000000000000\n").expect("change");
-        assert!(matches!(git_side(&checkpoints).prune_loose(first), Pruned::NotLoose));
+        assert!(matches!(
+            git_side(&checkpoints).prune_loose(first),
+            Pruned::NotLoose
+        ));
         assert!(loose.exists(), "a ref that changed is left alone");
-        assert!(!repo_dir.join(REF_PREFIX).join("s/1.lock").exists(), "and its lock is released");
+        assert!(
+            !repo_dir.join(REF_PREFIX).join("s/1.lock").exists(),
+            "and its lock is released"
+        );
         std::fs::write(&loose, original).expect("restore");
 
         git(dir.path(), &["pack-refs", "--all"]);
         assert!(!loose.exists(), "packed");
-        assert!(matches!(git_side(&checkpoints).prune_loose(first), Pruned::NotLoose));
+        assert!(matches!(
+            git_side(&checkpoints).prune_loose(first),
+            Pruned::NotLoose
+        ));
         std::fs::write(dir.path().join("f.txt"), "turn 2\n").expect("edit");
         checkpoints.create("turn 2").expect("create");
-        assert_eq!(seqs_of(&checkpoints), [2, 3], "the packed ref is pruned through update-ref");
+        assert_eq!(
+            seqs_of(&checkpoints),
+            [2, 3],
+            "the packed ref is pruned through update-ref"
+        );
     }
 
     /// A file ignored when the checkpoint was taken and un-ignored during
