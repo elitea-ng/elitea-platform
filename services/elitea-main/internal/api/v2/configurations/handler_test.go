@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
@@ -579,8 +580,10 @@ func TestAvailableServesPinnedRegistrySnapshot(t *testing.T) {
 	// decision 2), ai_disclosure project setting (ADR-0043 decision 3) and
 	// browser project setting (ADR-0049) and computer_use project setting
 	// (ADR-0047).
-	if len(types) != 61 {
-		t.Errorf("expected the 51 pinned entries, the five web providers, cloud_executor, worker_egress, ai_disclosure, browser and computer_use, got %d", len(types))
+	// The natively defined types (outlook, teams, ms_graph, dataverse; ADR-0057)
+	// are counted by the registry, so the next one does not edit this test.
+	if want := 61 + len(configurationapp.NativeConfigurationTypes()); len(types) != want {
+		t.Errorf("expected the 51 pinned entries, the five web providers, cloud_executor, worker_egress, ai_disclosure, browser, computer_use and the native types (%d), got %d", want, len(types))
 	}
 	if got := found["computer_use"].Section; got != "project_settings" {
 		t.Errorf("computer_use section = %q, want project_settings", got)

@@ -1,0 +1,200 @@
+{
+ "fixture_version": "elitea.sdk-fixture.v1",
+ "kind": "configuration",
+ "model_schema": {
+  "metadata": {
+   "categories": [
+    "office"
+   ],
+   "extra_categories": [
+    "teams",
+    "microsoft",
+    "chat",
+    "messaging"
+   ],
+   "icon_url": "teams.svg",
+   "label": "Teams",
+   "section": "credentials",
+   "sections": {
+    "auth": {
+     "required": true,
+     "subsections": [
+      {
+       "fields": [
+        "oauth_app_id"
+       ],
+       "key_fields": [
+        "oauth_app_id"
+       ],
+       "name": "Default app"
+      },
+      {
+       "fields": [
+        "client_id",
+        "client_secret",
+        "oauth_discovery_endpoint",
+        "scopes",
+        "auto_refresh_token"
+       ],
+       "key_fields": [
+        "client_id"
+       ],
+       "name": "Custom app"
+      }
+     ]
+    }
+   },
+   "type": "teams"
+  },
+  "properties": {
+   "auto_refresh_token": {
+    "anyOf": [
+     {
+      "type": "boolean"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": true,
+    "description": "Automatically refresh the access token using the offline_access scope.",
+    "title": "Auto Refresh Token"
+   },
+   "client_id": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Azure AD Application (client) ID",
+    "title": "Client Id"
+   },
+   "client_secret": {
+    "anyOf": [
+     {
+      "format": "password",
+      "type": "string",
+      "writeOnly": true
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Azure AD Client Secret",
+    "title": "Client Secret"
+   },
+   "oauth_app_id": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "OAuth app configured by your administrator",
+    "title": "App",
+    "ui_component": "oauth_app_select"
+   },
+   "oauth_discovery_endpoint": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "OAuth Discovery Endpoint. Format: https://login.microsoftonline.com/{tenant_id}",
+    "title": "Oauth Discovery Endpoint"
+   },
+   "scopes": {
+    "anyOf": [
+     {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "checkbox_options": [
+     {
+      "description": "Look up people by email: chat members, senders and recipients.",
+      "label": "User.ReadBasic.All",
+      "value": "User.ReadBasic.All"
+     },
+     {
+      "description": "Read your chats and chat messages: list_chats, find_chat_messages. search_teams_messages also needs ChannelMessage.Read.All.",
+      "label": "Chat.Read",
+      "value": "Chat.Read"
+     },
+     {
+      "description": "Send chat messages as you: send_chat_message.",
+      "label": "ChatMessage.Send",
+      "value": "ChatMessage.Send"
+     },
+     {
+      "description": "Start a new 1:1 or group chat when send_chat_message finds no existing chat.",
+      "label": "Chat.Create",
+      "value": "Chat.Create"
+     },
+     {
+      "description": "List the teams you are a member of: list_teams, team names, connection test.",
+      "label": "Team.ReadBasic.All",
+      "value": "Team.ReadBasic.All"
+     },
+     {
+      "description": "List the channels of a team: list_channels, channel names.",
+      "label": "Channel.ReadBasic.All",
+      "value": "Channel.ReadBasic.All"
+     },
+     {
+      "description": "Post and reply in channels as you: send_channel_message.",
+      "label": "ChannelMessage.Send",
+      "value": "ChannelMessage.Send"
+     },
+     {
+      "description": "Search and read channel messages (search_teams_messages across channels). Requires Entra admin consent. Leave off unless your Entra admin has granted it.",
+      "label": "ChannelMessage.Read.All",
+      "value": "ChannelMessage.Read.All"
+     }
+    ],
+    "default": [
+     "User.ReadBasic.All",
+     "Chat.Read",
+     "Team.ReadBasic.All",
+     "Channel.ReadBasic.All"
+    ],
+    "description": "Microsoft Graph permissions requested at sign-in. ELITEA passes them to Microsoft as-is.\n\n- The token always holds every permission you already approved for this Entra app, so unticking a box does not remove access granted before.\n- To remove a granted permission, revoke it on the app's Manage your application page at https://myapps.microsoft.com (or ask your Entra admin), then sign in again.\n- To strictly limit what a toolkit can do, use a separate Entra app that has only the permissions you need.\n- offline_access is always added so the token can be refreshed.",
+    "title": "Scopes",
+    "ui_component": "checkbox_list"
+   }
+  },
+  "title": "TeamsConfiguration",
+  "type": "object"
+ },
+ "type": "teams",
+ "upstream": {
+  "branch": "main",
+  "captured_at": "2026-11-18",
+  "captured_with": "pydantic 2.12.5 model_json_schema() with the ADR-0057 deltas: refresh_token removed (never stored in a credential's data, decision 4)",
+  "commit": "b3f1d7413019b2ba0d59c44bbcd2b03c0d83abeb",
+  "committed_at": "2026-11-18",
+  "paths": [
+   "elitea_sdk/configurations/teams.py",
+   "elitea_sdk/configurations/microsoft_graph_scopes.py",
+   "elitea_sdk/configurations/oauth_app_mode.py"
+  ],
+  "repo": "EliteaAI/elitea-sdk"
+ }
+}
