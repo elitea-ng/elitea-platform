@@ -347,7 +347,7 @@ test('a toolkit credential the platform will not certify carries the failure on 
  * answers the second. Both are asserted below, chosen by what the wire
  * actually said, exactly as the first test chooses its expected message.
  */
-test('the toolkit form gates Save on the server’s own verdict about the credential', async ({
+test('the toolkit form warns, and never blocks Save, on the server’s own verdict about the credential', async ({
   page,
   request,
 }, testInfo) => {
@@ -379,17 +379,14 @@ test('the toolkit form gates Save on the server’s own verdict about the creden
     // Dirty the form, so what the control reports afterwards is about the
     // credential and not about "nothing has changed".
     await nameField.fill(`${AUTOTEST_PREFIX}renamed_${tag}`);
-    const reason = page.getByTestId('toolkit-save-disabled-reason');
+    const reason = page.getByTestId('toolkit-save-credential-warning');
 
     if (REFUSAL_REASONS.includes(String(verdict.reason ?? ''))) {
-      // A verdict ABOUT THE CREDENTIAL: refuse the save and say why.
-      await expect(
-        saveButton,
-        'a credential the provider refused must refuse the save that would ship it',
-      ).toBeDisabled({ timeout: 30_000 });
-      await expect(reason, 'a refused Save must state its reason').toHaveCount(1);
+      // A verdict ABOUT THE CREDENTIAL: warn and say why, but never block (#2143).
+      await expect(reason, 'a refused credential must state its reason').toHaveCount(1, { timeout: 30_000 });
       await expect(reason).toContainText(String(verdict.message ?? ''));
-      await expect(saveButton).toHaveAttribute('aria-describedby', 'toolkit-save-disabled-reason');
+      await expect(saveButton).toBeEnabled();
+      await expect(saveButton).toHaveAttribute('aria-describedby', 'toolkit-save-credential-warning');
     } else {
       // The check could not be made. That is a fact about the deployment, not
       // about the credential, and the rule must not turn it into one.

@@ -1937,7 +1937,6 @@
   "pages.toolkits.editToolkit.copyLinkCopied": "Copié !",
   "pages.toolkits.editToolkit.indexesTab": "Index",
   "pages.toolkits.editToolkit.save": "Enregistrer",
-  "pages.toolkits.editToolkit.saveBlockedByCredential": "Les identifiants sélectionnés n’ont pas passé leur test de connexion ; cette boîte à outils ne peut donc pas être enregistrée.",
   "pages.toolkits.editToolkit.title": "Modifier la boîte à outils",
   "pages.toolkits.editToolkit.titleMcp": "Modifier le MCP",
   "pages.toolkits.toolkits.emptyDescription": "Créez votre première boîte à outils pour commencer.",

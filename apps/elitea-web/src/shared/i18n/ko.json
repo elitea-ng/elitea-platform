@@ -1937,7 +1937,6 @@
   "pages.toolkits.editToolkit.copyLinkCopied": "복사했습니다!",
   "pages.toolkits.editToolkit.indexesTab": "인덱스",
   "pages.toolkits.editToolkit.save": "저장",
-  "pages.toolkits.editToolkit.saveBlockedByCredential": "선택한 자격 증명이 연결 확인을 통과하지 못해 이 툴킷을 저장할 수 없습니다.",
   "pages.toolkits.editToolkit.title": "툴킷 편집",
   "pages.toolkits.editToolkit.titleMcp": "MCP 편집",
   "pages.toolkits.toolkits.emptyDescription": "첫 번째 툴킷을 만들어 시작하세요.",

@@ -53,7 +53,7 @@ export interface UseToolkitSaveControlsParams {
 export interface ToolkitSaveControls {
   readonly canSave: boolean;
   readonly isSaving: boolean;
-  readonly disabledReason: string | undefined;
+  readonly credentialWarning: string | undefined;
   readonly onSave: () => void;
   readonly onDiscard: () => void;
   /** Wire to `ConfigurationTab`'s `onValidationStateChange`. */
@@ -116,7 +116,7 @@ export function useToolkitSaveControls({ isDirty, onSaved, onDiscarded }: UseToo
     // statement of what is wrong.
     canSave: isDirty,
     isSaving,
-    disabledReason: gate.blockedReason,
+    credentialWarning: gate.warning,
     onSave,
     onDiscard,
     onValidationStateChange: setValidation,

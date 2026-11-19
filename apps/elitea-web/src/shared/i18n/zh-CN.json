@@ -1937,7 +1937,6 @@
   "pages.toolkits.editToolkit.copyLinkCopied": "已复制！",
   "pages.toolkits.editToolkit.indexesTab": "索引",
   "pages.toolkits.editToolkit.save": "保存",
-  "pages.toolkits.editToolkit.saveBlockedByCredential": "所选凭据未通过连接检查，因此无法保存此工具包。",
   "pages.toolkits.editToolkit.title": "编辑工具包",
   "pages.toolkits.editToolkit.titleMcp": "编辑 MCP",
   "pages.toolkits.toolkits.emptyDescription": "创建您的第一个工具包即可开始。",

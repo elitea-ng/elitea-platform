@@ -1937,7 +1937,6 @@
   "pages.toolkits.editToolkit.copyLinkCopied": "¡Copiado!",
   "pages.toolkits.editToolkit.indexesTab": "Índices",
   "pages.toolkits.editToolkit.save": "Guardar",
-  "pages.toolkits.editToolkit.saveBlockedByCredential": "La credencial seleccionada no superó su comprobación de conexión, por lo que este kit de herramientas no se puede guardar.",
   "pages.toolkits.editToolkit.title": "Editar kit de herramientas",
   "pages.toolkits.editToolkit.titleMcp": "Editar MCP",
   "pages.toolkits.toolkits.emptyDescription": "Crea tu primer kit de herramientas para empezar.",

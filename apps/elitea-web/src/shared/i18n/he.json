@@ -1937,7 +1937,6 @@
   "pages.toolkits.editToolkit.copyLinkCopied": "הועתק!",
   "pages.toolkits.editToolkit.indexesTab": "אינדקסים",
   "pages.toolkits.editToolkit.save": "שמירה",
-  "pages.toolkits.editToolkit.saveBlockedByCredential": "פרטי הגישה שנבחרו לא עברו את בדיקת החיבור, ולכן אי אפשר לשמור את ערכת הכלים הזו.",
   "pages.toolkits.editToolkit.title": "עריכת ערכת כלים",
   "pages.toolkits.editToolkit.titleMcp": "עריכת MCP",
   "pages.toolkits.toolkits.emptyDescription": "צור את ערכת הכלים הראשונה שלך כדי להתחיל.",

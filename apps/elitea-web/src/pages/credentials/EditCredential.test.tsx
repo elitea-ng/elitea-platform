@@ -191,6 +191,40 @@ describe('EditCredential — Test connection on a SAVED row', () => {
   });
 });
 
+describe('EditCredential — Save is never blocked by a connection check (#2143)', () => {
+  it.each([
+    ['auth_failed', 400, { success: false, reason: 'auth_failed', message: 'Authentication failed. The provider rejected this credential.' }],
+    ['unsupported_type', 400, { success: false, unsupported: true, reason: 'unsupported_type', message: 'Checking connection is not supported yet for configuration type openai' }],
+    ['unreachable', 400, { success: false, reason: 'unreachable', message: 'Could not reach the provider with this credential.' }],
+    ['a check that errors', 500, { message: 'boom' }],
+  ])('saves an edited credential after a %s verdict', async (_label, status, body) => {
+    configureGeneratedClient({ baseUrl: BASE });
+    const puts: string[] = [];
+    server.use(
+      http.get(`${BASE}/configurations/available/`, () => HttpResponse.json([OPENAI_TYPE_WITH_TEST])),
+      http.get(`${BASE}/configurations/configuration/7/abc`, () =>
+        HttpResponse.json({ uid: 'abc', id: 'abc', type: 'openai', elitea_title: 'my-cred', label: 'my-cred', data: { api_key: SEALED_SECRET } }),
+      ),
+      http.post(`${BASE}/configurations/check_stored_connection/7/abc`, () => HttpResponse.json(body, { status })),
+      http.put(`${BASE}/configurations/configuration/7/abc`, async ({ request }) => {
+        puts.push(await request.text());
+        return HttpResponse.json({ uid: 'abc', id: 'abc', type: 'openai', elitea_title: 'my-cred', label: 'my-cred', data: { api_key: SEALED_SECRET } });
+      }),
+    );
+
+    renderEdit();
+    await waitFor(() => expect(screen.getByLabelText('Name')).toHaveValue('my-cred'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Test connection' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Test connection' })).toBeEnabled());
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'my-cred-renamed' } });
+    const save = screen.getByRole('button', { name: 'Save' });
+    expect(save).toBeEnabled();
+    fireEvent.click(save);
+    await waitFor(() => expect(puts).toHaveLength(1));
+  });
+});
+
 /**
  * ROUTE-065 is where Settings -> AI Configuration cards now land (gap 6). What
  * this pins is the other half of that fix: the screen a card opens actually
