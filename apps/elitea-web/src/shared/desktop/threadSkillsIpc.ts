@@ -5,7 +5,7 @@
  */
 
 /** One project skill pinned to a thread. */
-export interface ThreadSkillPin {
+interface ThreadSkillPin {
   projectId: number;
   skillId: number;
 }
