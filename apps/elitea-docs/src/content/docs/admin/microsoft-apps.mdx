@@ -97,6 +97,8 @@ Changing the client ID needs the new client's secret in the same save, because a
 | Disabled | Switched off with the row switch. Not offered for new credentials; a credential that names it fails with `app_disabled` and is never moved to another client. Edits keep it disabled. |
 | Needs attention | The platform found the app unusable, for example a stored secret that does not open. Saving a new secret fixes it. |
 
+When a credential that names an app is checked, the app is looked up again: its authority, its permission ceiling and its refresh setting come from the registry, never from the credential, and a refused app answers with a stable code (`app_draft`, `app_disabled`, `app_needs_attention`, `app_type_not_served`, `app_project_not_served`, `app_tenant_mismatch` or `app_not_found`) instead of falling back to another client.
+
 Every create, edit, enable, disable and secret change writes a security audit event (`config.microsoft_oauth_app.*`); the event carries the app id and the names of the fields that changed, never a value.
 
 ### Test

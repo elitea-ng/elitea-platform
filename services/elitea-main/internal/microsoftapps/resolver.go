@@ -142,6 +142,21 @@ func (r *Resolver) resolveOnce(ctx context.Context, req Request) (Resolved, erro
 	return resolved, nil
 }
 
+// EffectiveScopes is what a credential under this app may ask for: what it selected,
+// cut to the app's ceiling for the type (a credential that selected nothing asks for the
+// type's defaults, which the ceiling then limits). removed names what the ceiling cut,
+// so the form can show it. Dataverse has no ceiling: its one scope comes from the
+// credential's own org URL, so the selection stands.
+func (r Resolved) EffectiveScopes(credentialType string, selected []string) (effective, removed []string) {
+	if r.Ceiling == nil {
+		return selected, nil
+	}
+	if len(selected) == 0 {
+		selected = Defaults(credentialType)
+	}
+	return Intersect(r.Ceiling, selected)
+}
+
 // Describe is Resolve without the secret: the app's public facts for a check that
 // needs only the client id, authority and ceiling.
 func (r *Resolver) Describe(ctx context.Context, req Request) (Resolved, error) {

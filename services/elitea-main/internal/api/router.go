@@ -2130,16 +2130,29 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// install, because the option was applied only inside a feature-flagged
 	// branch. It resolves from the same helper the Project middleware uses, so
 	// the two cannot disagree about which schema holds the shared rows.
+	// The Microsoft Default app registry (ADR-0057 decision 5, shared migration
+	// 0255): the credential check resolves a credential's `oauth_app_id` through
+	// it, and the admin routes and the credential form's offers read the same
+	// store and resolver, composed once here. Both are nil without a database or
+	// the vault master key: the check then refuses an app reference, the admin
+	// routes answer 503 and the form offers only Custom app.
+	microsoftStore, microsoftResolver := microsoftAppRegistry(cfg.Pool)
+	configurationOptions := []v2configs.Option{}
+	if microsoftResolver != nil {
+		configurationOptions = append(configurationOptions, v2configs.WithMicrosoftApps(microsoftResolver))
+	}
 	configurationsHandler := v2configs.NewHandler(
 		cfg.Pool,
-		v2configs.WithPermissionResolver(coreResolver),
-		v2configs.WithConnectionChecker(cfg.ConfigConnectionChecker),
-		v2configs.WithProviderAdmission(cfg.ConfigProviderAdmission),
-		v2configs.WithStoredConfigurationResolver(cfg.ConfigStoredResolver),
-		v2configs.WithSecretSealer(configurationSecretSealer(cfg.Pool)),
-		v2configs.WithPublicProjectID(apimw.PublicProjectID()),
-		v2configs.WithOAuthDiscoveryGuard(mcpAuthorizationEgressGuard(cfg)),
-		v2configs.WithModelDefaults(cfg.PlatformModelDefaults),
+		append([]v2configs.Option{
+			v2configs.WithPermissionResolver(coreResolver),
+			v2configs.WithConnectionChecker(cfg.ConfigConnectionChecker),
+			v2configs.WithProviderAdmission(cfg.ConfigProviderAdmission),
+			v2configs.WithStoredConfigurationResolver(cfg.ConfigStoredResolver),
+			v2configs.WithSecretSealer(configurationSecretSealer(cfg.Pool)),
+			v2configs.WithPublicProjectID(apimw.PublicProjectID()),
+			v2configs.WithOAuthDiscoveryGuard(mcpAuthorizationEgressGuard(cfg)),
+			v2configs.WithModelDefaults(cfg.PlatformModelDefaults),
+		}, configurationOptions...)...,
 	)
 	artifactHandler := cfg.ArtifactHandler
 	if artifactHandler == nil {
@@ -2683,12 +2696,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				adminOptions = append(adminOptions,
 					admin.WithPlatformRoutines(routines.NewStore(cfg.Pool)))
 			}
-			// The Microsoft Default app registry (ADR-0057 decision 5, shared
-			// migration 0255): the admin routes below and the project-facing
-			// offers route read the same store and resolver. Both are nil
-			// without a database or the vault master key; the admin routes
-			// then answer 503 and the credential form offers only Custom app.
-			microsoftStore, microsoftResolver := microsoftAppRegistry(cfg.Pool)
+			// The Microsoft Default app registry, composed with the credential
+			// handler above: the admin routes below and the project-facing
+			// offers route read the same store and resolver.
 			if microsoftStore != nil {
 				adminOptions = append(adminOptions,
 					admin.WithMicrosoftApps(microsoftStore, microsoftMetadataClient(cfg), cfg.PublicOrigin))

@@ -10,8 +10,15 @@ migration `0255_microsoft_oauth_apps.sql` creates `elitea_identity.microsoft_oau
 read for credential forms, `GET /api/v2/microsoft_oauth_apps/{projectID}?credential_type=`.
 
 **Nothing changes until an administrator registers an app.** An empty registry (the default)
-changes no credential form and no sign-in. The registry itself is inert: the credential types and
-the sign-in that use it ship in the following releases of the same programme.
+changes no credential form and no sign-in. The connection check of a Microsoft credential that
+names an `oauth_app_id` (a Default app) now resolves the app from this registry: it uses the app's
+authority, cuts the credential's scopes to the app's ceiling, takes `offline_access` from the app's
+refresh setting, and refuses an app that is a draft, disabled, needs attention, does not serve the
+credential type or the project, or belongs to another Dataverse tenant, with a stable `code` in the
+answer (`app_draft`, `app_disabled`, `app_needs_attention`, `app_type_not_served`,
+`app_project_not_served`, `app_tenant_mismatch`, `app_not_found`) and never with another client.
+Before this release the same check answered "Default apps are not available". The sign-in itself
+ships in the following releases of the same programme.
 
 **What you must do.**
 

@@ -55,6 +55,8 @@ func TestPinnedCurrentAvailableCatalogMatchesCurrentFixedRegistry(t *testing.T) 
 		"browser",
 		// Registered in Go: the desktop computer use project setting (ADR-0047).
 		"computer_use",
+		// Defined natively (ADR-0057, native_types_microsoft.go).
+		"outlook", "teams", "ms_graph", "dataverse",
 	}
 	gotTypes := make([]string, len(entries))
 	for index, entry := range entries {
