@@ -21,12 +21,12 @@ import Typography from '@mui/material/Typography';
 import { useNavigate } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 
-import { conversationSkillKeys } from '@/entities/conversation-skill';
-import { pinConversationSkill, useListConversations } from '@/shared/api/generated/chat/chat';
+import { CONVERSATION_SKILL_LIMIT, conversationSkillKeys } from '@/entities/conversation-skill';
+import { listConversationSkills, pinConversationSkill, useListConversations } from '@/shared/api/generated/chat/chat';
 import { EliteaApiError } from '@/shared/api/generated/mutator';
 import type { PinConversationSkillRequest } from '@/shared/api/generated/model';
 import { findLocalThreadPin } from '@/shared/desktop/localThreadPin';
-import { unwrapList } from '@/shared/api/unwrap';
+import { unwrapList, unwrapListPage } from '@/shared/api/unwrap';
 import { t } from '@/shared/i18n';
 import { BaseModal } from '@/shared/ui/BaseModal';
 
@@ -84,6 +84,19 @@ function useConversationChoices(projectId: string | undefined, open: boolean): r
   );
 }
 
+/**
+ * Checks the conversation before the pin is resolved: "Add to a conversation" forks a listing into the project, and a
+ * pin the target then refuses would leave that copy behind, one more on every retry (#2294). A conversation this
+ * computer ran as a local thread keeps its pins in the host, which refuses its own full list; the fork there is the
+ * host's to reuse, so only a conversation the server holds is read.
+ */
+async function checkTarget(projectId: string, choice: string): Promise<void> {
+  if (choice === NEW_CHAT) return;
+  if ((await findLocalThreadPin(choice, Number(projectId))) !== null) return;
+  const pins = unwrapListPage(await listConversationSkills(projectId, choice), 'conversationSkills').rows;
+  if (pins.length >= CONVERSATION_SKILL_LIMIT) throw Object.assign(new Error('The conversation holds the most skills.'), { code: 'thread_skills_full' });
+}
+
 export function SkillToChatDialog({
   open,
   projectId,
@@ -114,7 +127,8 @@ export function SkillToChatDialog({
     if (choice === '' || projectId === undefined) return;
     setMessage(undefined);
     setBusy(true);
-    void resolvePin()
+    void checkTarget(projectId, choice)
+      .then(resolvePin)
       .then(async (pin) => {
         if (choice === NEW_CHAT) {
           onNewChat?.(pin);
