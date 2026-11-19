@@ -342,7 +342,7 @@ export function EditToolkit({ isMCP = false, deps }: EditToolkitProps): ReactNod
                 onDiscard={saveControls.onDiscard}
                 canSave={saveControls.canSave}
                 isSaving={saveControls.isSaving}
-                disabledReason={saveControls.disabledReason}
+                credentialWarning={saveControls.credentialWarning}
               />
             </Box>
           )

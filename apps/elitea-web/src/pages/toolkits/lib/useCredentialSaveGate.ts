@@ -2,8 +2,9 @@
  * The toolkit editor's save gate for a credential the platform has REFUSED.
  *
  * The legacy screen's rule, restored: a toolkit whose selected credential
- * failed its connection check cannot be saved in ignorance — the Save control
- * is refused and the reason is stated where the user is about to press it.
+ * failed its connection check is warned, not blocked (#2143): Save stays available
+ * and the reason is stated where the user is about to press it. A check that
+ * is missing, unsupported, unreachable or errored never warns at all.
  *
  * THE RULE IS KEYED ON THE PROBE'S REASON, NOT ON THE STATUS. The stored
  * check answers `auth_failed` when it reached a verdict about
@@ -33,13 +34,14 @@ export interface CredentialSaveGate {
   /** The sink `useToolkitCredentialPickerSlot` reports each field's verdict to. */
   readonly reportRefusal: (fieldKey: string, refusal: SelectedCredentialRefusal | null) => void;
   /**
-   * The sentence to show beside a refused Save, or `undefined` when nothing
-   * blocks it. Composed by concatenation, never by interpolation: this app's
+   * The sentence to show beside Save when the provider explicitly refused a
+   * selected credential, or `undefined` when there is nothing to warn about.
+   * It is a WARNING only: it never disables Save (#2143). Composed by concatenation, never by interpolation: this app's
    * `t` takes a key and a literal fallback, and a `{{placeholder}}` in the
    * bundle wins over the call site's own fallback, which is how a missing
    * bundle entry turns into literal braces on screen.
    */
-  readonly blockedReason: string | undefined;
+  readonly warning: string | undefined;
 }
 
 export function useCredentialSaveGate(): CredentialSaveGate {
@@ -63,17 +65,17 @@ export function useCredentialSaveGate(): CredentialSaveGate {
     });
   }, []);
 
-  const blockedReason = useMemo(() => {
+  const warning = useMemo(() => {
     const first = Object.values(refusals)[0];
     if (first === undefined) return undefined;
     const headline = t(
-      'pages.toolkits.editToolkit.saveBlockedByCredential',
-      'The selected credential did not pass its connection check, so this toolkit cannot be saved.',
+      'pages.toolkits.editToolkit.saveWarnedByCredential',
+      'The selected credential did not pass its connection check. You can still save this toolkit.',
     );
     // The SERVER's own words, appended rather than replaced: the headline says
     // what the gate is, the message says what the provider actually answered.
     return first.message === '' ? headline : `${headline} ${first.message}`;
   }, [refusals]);
 
-  return { reportRefusal, blockedReason };
+  return { reportRefusal, warning };
 }

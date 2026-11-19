@@ -1196,6 +1196,9 @@ CROSS JOIN (VALUES
     ('models.applications.application.details'),
     ('models.applications.application.update'),
     ('models.applications.application_relation.patch'),
+    -- The delegation journey reads the run's step records (`runs.evidence.read`,
+    -- ADR-0042) to assert the grant id and digest a delegation step records.
+    ('runs.evidence.read'),
     ('models.applications.applications.create'),
     ('models.applications.applications.details'),
     ('models.applications.applications.list'),

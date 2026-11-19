@@ -75,9 +75,11 @@ func TestTheClosureOfTheRootIsSent(t *testing.T) {
 	}
 }
 
-// A run with no saved root (an ad hoc conversation) and a root with no grant
-// leave the command as it was.
-func TestNoRootOrNoGrantLeavesTheCommandAlone(t *testing.T) {
+// A run with no saved root (an ad hoc conversation) leaves the command as it
+// was. A root with no grant still carries its id and the switch, so the worker
+// names the calling agent on the edge of a refusal (the chat notice's
+// `caller_id`, which Review delegation and its deep links need).
+func TestNoRootLeavesTheCommandAloneAndARootWithNoGrantStillNamesItself(t *testing.T) {
 	t.Parallel()
 	source := &grantSourceStub{byCaller: map[int64][]dg.Grant{}}
 	adhoc, _ := resolver(t, platformconfig.DefaultDelegationSettings(), agentInput(t, `{"instructions":"x"}`), nil)
@@ -87,8 +89,9 @@ func TestNoRootOrNoGrantLeavesTheCommandAlone(t *testing.T) {
 	}
 	rooted, _ := resolver(t, platformconfig.DefaultDelegationSettings(), agentInput(t, `{"id":5}`), nil)
 	rooted.WithGrants(source, true)
-	if policy, err := rooted.WorkerDelegationPolicy(context.Background(), agentCommand()); err != nil || policy != nil {
-		t.Fatalf("no grants: %v %v", policy, err)
+	policy, err := rooted.WorkerDelegationPolicy(context.Background(), agentCommand())
+	if err != nil || policy == nil || policy.GetRootApplicationId() != 5 || !policy.GetGrantsEnforced() || len(policy.GetGrants()) != 0 {
+		t.Fatalf("a root with no grants must still name itself: %v %v", policy, err)
 	}
 }
 
