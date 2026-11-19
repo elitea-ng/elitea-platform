@@ -907,6 +907,18 @@ SELECT count(*) FROM elitea_runtime.run_step_heads h
 	return n, nil
 }
 
+// HeldRunIDs implements runevidence.HeldRunLister: the runs of the project
+// last updated before cutoff that an active legal hold covers.
+func (s *RunSteps) HeldRunIDs(ctx context.Context, projectID int64, cutoff time.Time) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT h.run_id FROM elitea_runtime.run_step_heads h
+ WHERE h.project_id = $1 AND h.updated_at < $2 AND `+runHeldSQL, projectID, cutoff.UTC())
+	if err != nil {
+		return nil, fmt.Errorf("run steps: held run ids: %w", err)
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[string])
+}
+
 // ExpireRunContent implements runevidence.RetentionStore.
 func (s *RunSteps) ExpireRunContent(ctx context.Context, runID, policy string) error {
 	if _, err := s.pool.Exec(ctx, `
