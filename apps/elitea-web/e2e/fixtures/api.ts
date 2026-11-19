@@ -3421,26 +3421,19 @@ export async function fillComposer(scope: Page | Locator, prompt: string) {
 /**
  * Type `prompt`, click Send, and return the response to the turn's START POST.
  *
- * `fillComposer` is not enough on its own. Its retry loop ends when the Send
- * control is enabled, but the chat pane of a freshly created conversation can
- * still swap its composer after that (the plain model composer becomes the
- * agent's once the conversation's participants resolve), and the swap drops
- * the text a moment after the fill was confirmed. The click then lands on a
- * control that is gone or on an empty composer, nothing is ever sent, and the
- * spec's wait for the START POST reports 150 s of "admission" about a turn
- * that never left the browser: nightly runs 44078130039 (all three attempts),
- * 44297420672 and 44517103610 (first attempt) all show the empty composer and
- * the "Hello" empty state in their failure screenshot, with no worker delivery
- * for the turn. The earlier "the start POST queued behind a turn an earlier
- * journey left running" reading (#2155) did not fit that: the stored turns
- * were already settled and the retry's POST answered in 92 ms.
+ * Two budgets, kept apart so a failure names what actually went wrong. First
+ * the START REQUEST must leave the browser (`sendTimeout`): if it does not,
+ * the composer never handed the message to the network, and the failure says
+ * so, with what the composer held. Only then does the admission budget start:
+ * the response may legitimately take as long as the queue ahead of it, which
+ * is what `TURN_ADMISSION_TIMEOUT_MS` bounds. Before, both were one 150 s
+ * `waitForResponse`, and a send that never left was reported as "admission":
+ * nightly runs 44078130039, 44297420672 and 44517103610 failed that way, with
+ * an empty composer in the failure screenshot and no worker delivery.
  *
- * So the send is one retried unit: fill, click, and require the START REQUEST
- * to leave the browser within `sendTimeout`. A send that never left is
- * repeated from the fill; once a request is out it is never repeated (a
- * second click would be a second turn), and only then does the admission
- * budget start: the response may legitimately take as long as the queue ahead
- * of it, which is what `TURN_ADMISSION_TIMEOUT_MS` bounds.
+ * There is deliberately NO fill/click retry here. A composer that loses typed
+ * text or swallows a click is a product bug (fixed in `useComposerDraft`), and
+ * a retry would hide a regression of it.
  */
 export async function sendComposerMessage(
   page: Page,
@@ -3448,34 +3441,22 @@ export async function sendComposerMessage(
   startUrl: RegExp,
   options: { readonly sendTimeout?: number; readonly admissionTimeout?: number } = {},
 ): Promise<Response> {
-  const { sendTimeout = 10_000, admissionTimeout = TURN_ADMISSION_TIMEOUT_MS } = options;
-  // A listener, not a per-attempt waitForRequest: it outlives a click that
-  // throws AFTER the request went out, so such an attempt is never repeated
-  // (a second click would be a second turn) and no promise is left dangling.
-  let startRequest: Request | undefined;
-  const onRequest = (request: Request): void => {
-    if (startRequest === undefined && request.method() === 'POST' && startUrl.test(request.url())) {
-      startRequest = request;
-    }
-  };
-  page.on('request', onRequest);
+  const { sendTimeout = 15_000, admissionTimeout = TURN_ADMISSION_TIMEOUT_MS } = options;
+  const sendButton = await fillComposer(page, prompt);
+  const left = page.waitForRequest((request) => request.method() === 'POST' && startUrl.test(request.url()), {
+    timeout: sendTimeout,
+  });
+  await sendButton.click();
+  let request: Request;
   try {
-    await expect(async () => {
-      if (startRequest !== undefined) return;
-      const sendButton = await fillComposer(page, prompt);
-      await sendButton.click({ timeout: sendTimeout }).catch(() => undefined);
-      await expect
-        .poll(() => startRequest !== undefined, {
-          timeout: sendTimeout,
-          message: 'no START request left the browser after Send was clicked (the pane discarded the fill)',
-        })
-        .toBe(true);
-    }).toPass({ timeout: 60_000, intervals: [500, 1_000] });
-  } finally {
-    page.off('request', onRequest);
+    request = await left;
+  } catch (error) {
+    const held = await page.getByTestId('chat-message-input').inputValue().catch(() => '<composer gone>');
+    throw new Error(
+      `the START request never left the browser within ${sendTimeout} ms of clicking Send; ` +
+        `the composer holds ${JSON.stringify(held)} (empty means the message was swallowed, not queued): ${String(error)}`,
+    );
   }
-  const request = startRequest as Request | undefined;
-  if (request === undefined) throw new Error('the START request was recorded and then lost');
   let timer: NodeJS.Timeout | undefined;
   const budget = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
