@@ -600,16 +600,6 @@ type EliteaRuntimeIndexIngestJob struct {
 	IndexManualCleanupNextAttemptAt       pgtype.Timestamptz `db:"index_manual_cleanup_next_attempt_at" json:"index_manual_cleanup_next_attempt_at"`
 	IndexManualCleanupLastErrorCode       *string            `db:"index_manual_cleanup_last_error_code" json:"index_manual_cleanup_last_error_code"`
 	IndexManualCleanupResolvedAt          pgtype.Timestamptz `db:"index_manual_cleanup_resolved_at" json:"index_manual_cleanup_resolved_at"`
-	IndexMetaTaskRestampSourceEventID     *string            `db:"index_meta_task_restamp_source_event_id" json:"index_meta_task_restamp_source_event_id"`
-	IndexMetaTaskRestampOccurredAt        pgtype.Timestamptz `db:"index_meta_task_restamp_occurred_at" json:"index_meta_task_restamp_occurred_at"`
-	IndexMetaTaskRestampCreatedOn         *float64           `db:"index_meta_task_restamp_created_on" json:"index_meta_task_restamp_created_on"`
-	IndexMetaTaskRestampStatus            *string            `db:"index_meta_task_restamp_status" json:"index_meta_task_restamp_status"`
-	IndexMetaTaskRestampClaimToken        *string            `db:"index_meta_task_restamp_claim_token" json:"index_meta_task_restamp_claim_token"`
-	IndexMetaTaskRestampClaimExpiresAt    pgtype.Timestamptz `db:"index_meta_task_restamp_claim_expires_at" json:"index_meta_task_restamp_claim_expires_at"`
-	IndexMetaTaskRestampAttemptCount      *int32             `db:"index_meta_task_restamp_attempt_count" json:"index_meta_task_restamp_attempt_count"`
-	IndexMetaTaskRestampNextAttemptAt     pgtype.Timestamptz `db:"index_meta_task_restamp_next_attempt_at" json:"index_meta_task_restamp_next_attempt_at"`
-	IndexMetaTaskRestampLastErrorCode     *string            `db:"index_meta_task_restamp_last_error_code" json:"index_meta_task_restamp_last_error_code"`
-	IndexMetaTaskRestampedAt              pgtype.Timestamptz `db:"index_meta_task_restamped_at" json:"index_meta_task_restamped_at"`
 	ToolkitID                             int32              `db:"toolkit_id" json:"toolkit_id"`
 	IndexName                             string             `db:"index_name" json:"index_name"`
 	Initiator                             string             `db:"initiator" json:"initiator"`

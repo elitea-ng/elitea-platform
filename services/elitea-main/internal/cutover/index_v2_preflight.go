@@ -23,7 +23,6 @@ type IndexV1PersistedState struct {
 	PendingInitializations     int64 `json:"pending_initializations"`
 	PendingTerminalProjections int64 `json:"pending_terminal_projections"`
 	PendingManualCleanups      int64 `json:"pending_manual_cleanups"`
-	PendingTaskRestamps        int64 `json:"pending_task_restamps"`
 }
 
 // IndexControlState covers the complete version-1 source stream/group. Every
@@ -112,13 +111,12 @@ func (p *IndexV2Preflight) Check(ctx context.Context) (IndexV2PreflightReport, e
 		persisted.PendingInitializations != 0 ||
 		persisted.PendingTerminalProjections != 0 ||
 		persisted.PendingManualCleanups != 0 ||
-		persisted.PendingTaskRestamps != 0 ||
 		control.StreamEntries != 0 ||
 		control.PendingEntries != 0 ||
 		control.DeliveryMappings != 0 ||
 		nonEmpty != 0 {
 		return report, fmt.Errorf(
-			"%w: live_jobs=%d outstanding_outbox=%d active_claims=%d pending_initializations=%d pending_terminal_projections=%d pending_manual_cleanups=%d pending_task_restamps=%d stream_entries=%d pending_entries=%d delivery_mappings=%d non_empty_spool_roots=%d",
+			"%w: live_jobs=%d outstanding_outbox=%d active_claims=%d pending_initializations=%d pending_terminal_projections=%d pending_manual_cleanups=%d stream_entries=%d pending_entries=%d delivery_mappings=%d non_empty_spool_roots=%d",
 			ErrIndexV2CutoverBlocked,
 			persisted.LiveJobs,
 			persisted.OutstandingOutbox,
@@ -126,7 +124,6 @@ func (p *IndexV2Preflight) Check(ctx context.Context) (IndexV2PreflightReport, e
 			persisted.PendingInitializations,
 			persisted.PendingTerminalProjections,
 			persisted.PendingManualCleanups,
-			persisted.PendingTaskRestamps,
 			control.StreamEntries,
 			control.PendingEntries,
 			control.DeliveryMappings,
@@ -142,8 +139,7 @@ func validateIndexV1PersistedState(state IndexV1PersistedState) error {
 		state.ActiveClaims < 0 ||
 		state.PendingInitializations < 0 ||
 		state.PendingTerminalProjections < 0 ||
-		state.PendingManualCleanups < 0 ||
-		state.PendingTaskRestamps < 0 {
+		state.PendingManualCleanups < 0 {
 		return errors.New("persisted index v1 state contains a negative count")
 	}
 	return nil

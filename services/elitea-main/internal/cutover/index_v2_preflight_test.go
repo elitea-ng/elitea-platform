@@ -40,7 +40,6 @@ func TestIndexV2PreflightRequiresEveryPersistedControlAndSpoolCountToBeZero(t *t
 		{name: "pending initialization", persisted: IndexV1PersistedState{PendingInitializations: 1}},
 		{name: "pending terminal projection", persisted: IndexV1PersistedState{PendingTerminalProjections: 1}},
 		{name: "pending manual cleanup", persisted: IndexV1PersistedState{PendingManualCleanups: 1}},
-		{name: "pending task restamp", persisted: IndexV1PersistedState{PendingTaskRestamps: 1}},
 		{name: "stream reference", control: IndexControlState{StreamEntries: 1}},
 		{name: "pending reference", control: IndexControlState{PendingEntries: 1}},
 		{name: "delivery mapping", control: IndexControlState{DeliveryMappings: 1}},
