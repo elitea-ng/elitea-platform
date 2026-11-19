@@ -5,7 +5,7 @@
 
 use serde_json::{Value, json};
 
-use super::capability::{fetch, host_intel, web_search};
+use super::capability::{crawl, fetch, host_intel, web_search};
 
 fn titled(mut schema: Value, title: &str) -> Value {
     schema["title"] = json!(title);
@@ -66,7 +66,7 @@ pub(crate) fn web_type_entry() -> Value {
                     "description": "The search provider this toolkit uses when a call names none. Empty uses the platform default.",
                     "title": "Default Search Provider",
                 },
-                "selected_tools": selected_tools(&[web_search::NAME, fetch::NAME]),
+                "selected_tools": selected_tools(&[web_search::NAME, fetch::NAME, crawl::CRAWL, crawl::MAP]),
                 "strict_options": {
                     "default": true,
                     "description": "Refuse a search option the provider cannot honour. Off, the option is dropped and listed in ignored_options.",
@@ -81,6 +81,8 @@ pub(crate) fn web_type_entry() -> Value {
         "args_schemas": schemas(&[
             (web_search::NAME, titled(web_search::schema(), "WebSearch")),
             (fetch::NAME, titled(fetch::schema(), "WebFetch")),
+            (crawl::CRAWL, titled(crawl::crawl_schema(), "WebCrawl")),
+            (crawl::MAP, titled(crawl::map_schema(), "WebMap")),
         ]),
     })
 }

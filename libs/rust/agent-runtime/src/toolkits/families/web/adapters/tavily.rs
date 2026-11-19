@@ -1,7 +1,10 @@
-//! Tavily (`api.tavily.com`): `/search` and `/extract`, billed in credits
-//! (basic search 1; one extracted URL 1).
+//! Tavily (`api.tavily.com`): `/search`, `/extract`, `/crawl` and `/map`,
+//! billed in credits (basic search 1; one extracted URL 1; a crawl is a map
+//! plus an extract of what it found). The `tavily` toolkit type
+//! (`tavily_toolkit.rs`) reuses [`Tavily::send`] and the request bodies here.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::{Map, Value, json};
@@ -11,17 +14,24 @@ use super::{
     object, post_json, text, web_url,
 };
 use crate::toolkits::families::web::capability::{
-    FetchFormat, FetchProvider, FetchRequest, FetchResult, ProviderFailure, SearchOptions,
-    SearchProvider, SearchRequest, SearchResponse, SearchResult, Topic,
+    CrawlPage, CrawlProvider, CrawlResponse, FetchFormat, FetchProvider, FetchRequest, FetchResult,
+    MapProvider, MapResponse, ProviderFailure, SearchOptions, SearchProvider, SearchRequest,
+    SearchResponse, SearchResult, SiteRequest, Topic,
 };
 use crate::toolkits::families::web::config::ProviderConfig;
 use crate::toolkits::families::web::meter::Units;
 use crate::toolkits::families::web::registry::ProviderHandle;
-use crate::toolkits::families::web::transport::{ProviderError, Transport};
+use crate::toolkits::families::web::transport::{HttpAnswer, ProviderError, Transport};
 
 pub(crate) const ORIGINS: &[&str] = &["https://api.tavily.com"];
 const SEARCH_URL: &str = "https://api.tavily.com/search";
 const EXTRACT_URL: &str = "https://api.tavily.com/extract";
+pub(crate) const CRAWL_URL: &str = "https://api.tavily.com/crawl";
+pub(crate) const MAP_URL: &str = "https://api.tavily.com/map";
+/// The limit Tavily is told for a crawl or a map; we wait a little longer so
+/// its answer, and the usage it reports, still arrives.
+pub(crate) const SITE_TIMEOUT_SECS: u64 = 60;
+pub(crate) const HTTP_GRACE: Duration = Duration::from_secs(15);
 
 const OPTIONS: SearchOptions = SearchOptions {
     news: true,
@@ -36,9 +46,104 @@ const OPTIONS: SearchOptions = SearchOptions {
     max_results: 20,
 };
 
-struct Tavily {
+pub(crate) struct Tavily {
     key: String,
     transport: Arc<dyn Transport>,
+}
+
+impl Tavily {
+    pub(crate) fn new(key: &str, transport: Arc<dyn Transport>) -> Self {
+        Self {
+            key: key.to_owned(),
+            transport,
+        }
+    }
+
+    /// Whether a key is set (an empty one would be sent as `Bearer `).
+    pub(crate) fn has_key(&self) -> bool {
+        !self.key.trim().is_empty()
+    }
+
+    /// POST `body` to `url` and read at most `max_bytes` of the answer. The
+    /// status is the caller's to judge.
+    pub(crate) async fn send(
+        &self,
+        url: &str,
+        body: &Value,
+        wait: Duration,
+        max_bytes: usize,
+    ) -> Result<HttpAnswer, ProviderError> {
+        let outgoing = post_json(url, self.key.trim(), body, wait)?;
+        self.transport.send(outgoing, max_bytes).await
+    }
+
+    /// POST and read a JSON object answer; a non-2xx status is an error.
+    async fn post(
+        &self,
+        url: &str,
+        body: &Value,
+        wait: Duration,
+        max_bytes: usize,
+    ) -> Result<Map<String, Value>, ProviderFailure> {
+        let answer = self.send(url, body, wait, max_bytes).await?;
+        if let Some(error) = answer.error() {
+            return Err(error.into());
+        }
+        let value = answer.json()?;
+        Ok(object(&value)?.clone())
+    }
+}
+
+/// Tavily's crawl and map domain filters are regexes: a domain and its
+/// subdomains only.
+pub(crate) fn domain_patterns(domains: &[String]) -> Vec<String> {
+    domains
+        .iter()
+        .map(|domain| domain.trim().trim_matches('.').to_ascii_lowercase())
+        .filter(|domain| !domain.is_empty())
+        .map(|domain| format!("^(.+\\.)?{}$", domain.replace('.', "\\.")))
+        .collect()
+}
+
+/// A crawl's or map's body: the options both take.
+pub(crate) fn site_body(
+    url: &str,
+    instructions: Option<&str>,
+    max_depth: u32,
+    limit: u32,
+    include: &[String],
+    exclude: &[String],
+) -> Value {
+    let mut body = json!({
+        "url": url,
+        "max_depth": max_depth,
+        "limit": limit,
+        "allow_external": false,
+        "include_usage": true,
+        "timeout": SITE_TIMEOUT_SECS,
+    });
+    if let Some(instructions) = instructions.filter(|text| !text.is_empty()) {
+        body["instructions"] = Value::String(instructions.to_owned());
+    }
+    if !include.is_empty() {
+        body["select_domains"] = json!(domain_patterns(include));
+    }
+    if !exclude.is_empty() {
+        body["exclude_domains"] = json!(domain_patterns(exclude));
+    }
+    body
+}
+
+/// The credits of a map: a started block of ten URLs, doubled when it reads
+/// pages for instructions.
+pub(crate) fn map_credits(limit: u32, instructions: bool) -> u64 {
+    u64::from(limit.div_ceil(10)) * if instructions { 2 } else { 1 }
+}
+
+/// The credits of a crawl: its map, plus an extract per started block of five
+/// pages (doubled for the advanced depth).
+pub(crate) fn crawl_credits(limit: u32, instructions: bool, advanced: bool) -> u64 {
+    map_credits(limit, instructions) + u64::from(limit.div_ceil(5)) * if advanced { 2 } else { 1 }
 }
 
 pub(crate) fn construct(config: &ProviderConfig, transport: Arc<dyn Transport>) -> ProviderHandle {
@@ -48,8 +153,16 @@ pub(crate) fn construct(config: &ProviderConfig, transport: Arc<dyn Transport>) 
             key: key.clone(),
             transport: Arc::clone(&transport),
         })),
-        fetch: Some(Box::new(Tavily { key, transport })),
+        fetch: Some(Box::new(Tavily {
+            key: key.clone(),
+            transport: Arc::clone(&transport),
+        })),
         host_intel: None,
+        crawl: Some(Box::new(Tavily {
+            key: key.clone(),
+            transport: Arc::clone(&transport),
+        })),
+        map: Some(Box::new(Tavily { key, transport })),
     }
 }
 
@@ -200,6 +313,107 @@ impl FetchProvider for Tavily {
             },
             truncated: false,
             units: Units::credits(reported_credits(answer, 1)),
+        })
+    }
+}
+
+#[async_trait]
+impl CrawlProvider for Tavily {
+    fn estimate(&self, request: &SiteRequest) -> Units {
+        Units::credits(crawl_credits(
+            request.limit,
+            request.instructions.is_some(),
+            false,
+        ))
+    }
+
+    async fn crawl(&self, request: &SiteRequest) -> Result<CrawlResponse, ProviderFailure> {
+        let mut body = site_body(
+            request.url.as_str(),
+            request.instructions.as_deref(),
+            request.max_depth,
+            request.limit,
+            &request.include_domains,
+            &request.exclude_domains,
+        );
+        body["extract_depth"] = Value::String("basic".to_owned());
+        body["format"] = Value::String("markdown".to_owned());
+        let answer = self
+            .post(
+                CRAWL_URL,
+                &body,
+                Duration::from_secs(SITE_TIMEOUT_SECS) + HTTP_GRACE,
+                MAX_FETCH_RESPONSE_BYTES,
+            )
+            .await?;
+        let pages = answer
+            .get("results")
+            .and_then(Value::as_array)
+            .ok_or(ProviderError::InvalidResponse)?
+            .iter()
+            .filter_map(Value::as_object)
+            .filter_map(|page| {
+                let url = text(page, "url").filter(|url| web_url(url))?;
+                Some(CrawlPage {
+                    content: page
+                        .get("raw_content")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    url,
+                })
+            })
+            .take(request.limit as usize)
+            .collect();
+        let estimate = CrawlProvider::estimate(self, request).credits;
+        Ok(CrawlResponse {
+            pages,
+            units: Units::credits(reported_credits(&answer, estimate)),
+        })
+    }
+}
+
+#[async_trait]
+impl MapProvider for Tavily {
+    fn honours_depth(&self) -> bool {
+        true
+    }
+
+    fn estimate(&self, request: &SiteRequest) -> Units {
+        Units::credits(map_credits(request.limit, request.instructions.is_some()))
+    }
+
+    async fn map(&self, request: &SiteRequest) -> Result<MapResponse, ProviderFailure> {
+        let body = site_body(
+            request.url.as_str(),
+            request.instructions.as_deref(),
+            request.max_depth,
+            request.limit,
+            &request.include_domains,
+            &request.exclude_domains,
+        );
+        let answer = self
+            .post(
+                MAP_URL,
+                &body,
+                Duration::from_secs(SITE_TIMEOUT_SECS) + HTTP_GRACE,
+                MAX_QUERY_RESPONSE_BYTES,
+            )
+            .await?;
+        let urls = answer
+            .get("results")
+            .and_then(Value::as_array)
+            .ok_or(ProviderError::InvalidResponse)?
+            .iter()
+            .filter_map(Value::as_str)
+            .filter(|url| web_url(url))
+            .map(str::to_owned)
+            .take(request.limit as usize)
+            .collect();
+        let estimate = MapProvider::estimate(self, request).credits;
+        Ok(MapResponse {
+            urls,
+            units: Units::credits(reported_credits(&answer, estimate)),
         })
     }
 }

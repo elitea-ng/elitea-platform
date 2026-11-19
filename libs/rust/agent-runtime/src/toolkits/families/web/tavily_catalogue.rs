@@ -12,10 +12,10 @@
 //! and `families::rust_only_catalogue_document` compares it with the file Main
 //! embeds.
 //!
-//! Only the CATALOGUE entry exists. The type is served hidden, with the reason
-//! "the agent worker does not support the tavily toolkit", until the family that
-//! builds it lands (#2261, which also adds `web_crawl` and `web_map` to the
-//! `web` family) and adds `tavily` to the worker capability snapshot.
+//! The family that builds the type is `tavily_toolkit.rs` (#2261, which also
+//! adds `web_crawl` and `web_map` to the `web` family); it reads its tools'
+//! argument schemas from this entry, so the catalogue and the worker cannot
+//! disagree. `tavily` is in the worker capability snapshot, so the type is served.
 
 use serde_json::Value;
 

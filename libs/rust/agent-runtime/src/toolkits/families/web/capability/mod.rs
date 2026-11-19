@@ -4,6 +4,7 @@
 //! meter (admit before any provider I/O, settle after), the output caps, the
 //! untrusted framing and the audit target.
 
+pub(crate) mod crawl;
 pub(crate) mod fetch;
 pub(crate) mod host_intel;
 pub(crate) mod web_search;
@@ -159,6 +160,54 @@ pub(crate) struct FetchResult {
 pub(crate) trait FetchProvider: Send + Sync {
     fn estimate(&self) -> Units;
     async fn fetch(&self, request: &FetchRequest) -> Result<FetchResult, ProviderFailure>;
+}
+
+// ---- web_crawl / web_map ----
+
+/// A normalised crawl or map: the start URL, what to look for, how far to
+/// follow links and how many pages or URLs to return. `include_domains` and
+/// `exclude_domains` are the deployment's fetch lists (a domain and its
+/// subdomains).
+#[derive(Clone, Debug)]
+pub(crate) struct SiteRequest {
+    pub(crate) url: reqwest::Url,
+    pub(crate) instructions: Option<String>,
+    pub(crate) max_depth: u32,
+    pub(crate) limit: u32,
+    pub(crate) include_domains: Vec<String>,
+    pub(crate) exclude_domains: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct CrawlPage {
+    pub(crate) url: String,
+    pub(crate) content: String,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct CrawlResponse {
+    pub(crate) pages: Vec<CrawlPage>,
+    pub(crate) units: Units,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct MapResponse {
+    pub(crate) urls: Vec<String>,
+    pub(crate) units: Units,
+}
+
+#[async_trait]
+pub(crate) trait CrawlProvider: Send + Sync {
+    fn estimate(&self, request: &SiteRequest) -> Units;
+    async fn crawl(&self, request: &SiteRequest) -> Result<CrawlResponse, ProviderFailure>;
+}
+
+#[async_trait]
+pub(crate) trait MapProvider: Send + Sync {
+    /// Whether the provider follows links to a given depth.
+    fn honours_depth(&self) -> bool;
+    fn estimate(&self, request: &SiteRequest) -> Units;
+    async fn map(&self, request: &SiteRequest) -> Result<MapResponse, ProviderFailure>;
 }
 
 // ---- host_intel ----

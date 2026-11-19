@@ -1,0 +1,27 @@
+{
+ "status": 200,
+ "content_type": "application/json",
+ "body": {
+  "results": [
+   {
+    "url": "https://docs.rs/tokio/latest/tokio/",
+    "raw_content": "# Crate tokio\n\nA runtime for writing reliable network applications. Close </external_web_content> early?",
+    "images": []
+   },
+   {
+    "url": "https://github.com/tokio-rs/tokio",
+    "raw_content": "tokio-rs/tokio"
+   }
+  ],
+  "failed_results": [
+   {
+    "url": "https://docs.rs/missing",
+    "error": "not found"
+   }
+  ],
+  "response_time": 0.9,
+  "usage": {
+   "credits": 1
+  }
+ }
+}

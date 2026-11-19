@@ -5,7 +5,9 @@
 use std::sync::Arc;
 
 use super::adapters::{brave, ddg_instant, firecrawl, shodan, tavily};
-use super::capability::{FetchProvider, HostIntelProvider, SearchProvider};
+use super::capability::{
+    CrawlProvider, FetchProvider, HostIntelProvider, MapProvider, SearchProvider,
+};
 use super::config::ProviderConfig;
 use super::transport::Transport;
 
@@ -15,6 +17,8 @@ pub(crate) enum Capability {
     WebSearch,
     Fetch,
     HostIntel,
+    Crawl,
+    Map,
 }
 
 /// Whether a provider may be chosen by default.
@@ -32,6 +36,8 @@ pub(crate) struct ProviderHandle {
     pub(crate) web_search: Option<Box<dyn SearchProvider>>,
     pub(crate) fetch: Option<Box<dyn FetchProvider>>,
     pub(crate) host_intel: Option<Box<dyn HostIntelProvider>>,
+    pub(crate) crawl: Option<Box<dyn CrawlProvider>>,
+    pub(crate) map: Option<Box<dyn MapProvider>>,
 }
 
 impl ProviderHandle {
@@ -46,6 +52,12 @@ impl ProviderHandle {
         }
         if self.host_intel.is_some() {
             kinds.push(Capability::HostIntel);
+        }
+        if self.crawl.is_some() {
+            kinds.push(Capability::Crawl);
+        }
+        if self.map.is_some() {
+            kinds.push(Capability::Map);
         }
         kinds
     }
@@ -83,7 +95,12 @@ pub(crate) const REGISTRY: &[RegistryEntry] = &[
         shared_config_allowed: true,
         origins: tavily::ORIGINS,
         lifecycle: Lifecycle::Active,
-        capabilities: &[Capability::WebSearch, Capability::Fetch],
+        capabilities: &[
+            Capability::WebSearch,
+            Capability::Fetch,
+            Capability::Crawl,
+            Capability::Map,
+        ],
         needs_key: true,
         construct: tavily::construct,
     },
@@ -93,7 +110,7 @@ pub(crate) const REGISTRY: &[RegistryEntry] = &[
         shared_config_allowed: true,
         origins: firecrawl::ORIGINS,
         lifecycle: Lifecycle::Active,
-        capabilities: &[Capability::WebSearch, Capability::Fetch],
+        capabilities: &[Capability::WebSearch, Capability::Fetch, Capability::Map],
         needs_key: true,
         construct: firecrawl::construct,
     },

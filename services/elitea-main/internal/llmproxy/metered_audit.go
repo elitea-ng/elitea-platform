@@ -39,7 +39,7 @@ const maxAuditTargetBytes = 256
 
 // meteredAuditTools are the tools a metered call may name.
 var meteredAuditTools = map[string]bool{
-	"web_search": true, "web_fetch": true,
+	"web_search": true, "web_fetch": true, "web_extract": true, "web_crawl": true, "web_map": true,
 	"internet_host_search": true, "internet_host_lookup": true,
 }
 

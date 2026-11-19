@@ -3,9 +3,10 @@ title: "Web Search and Host Intelligence"
 description: "Let agents search the web, read pages and look up internet hosts: the providers, what each one costs and the terms that decide how it can be used."
 ---
 
-Two toolkit types let an agent reach the public internet. Both run on the Rust worker and are read-only.
+Three toolkit types let an agent reach the public internet. All run on the Rust worker and are read-only.
 
-- **Web Search** (`web`): `web_search` and `web_fetch`. `web_fetch` reads a page through the platform's egress guard, which refuses private and metadata addresses and checks every redirect, or through a provider's extract API.
+- **Web Search** (`web`): `web_search`, `web_fetch`, `web_crawl` and `web_map`. `web_fetch` reads a page through the platform's egress guard, which refuses private and metadata addresses and checks every redirect, or through a provider's extract API. `web_crawl` and `web_map` read a whole site from a start URL through a provider: Tavily crawls and maps, Firecrawl maps. The admin's providers and domain lists govern the toolkit.
+- **Tavily** (`tavily`): the same four tool names, pinned to Tavily and credentialed by the project's own **tavily** credential. It has its own domain, page-size and call-cap settings. See [The Tavily toolkit](#the-tavily-toolkit).
 - **Host Intelligence** (`host_intel`): `internet_host_search` and `internet_host_lookup`, through Shodan. It is **off until a platform administrator grants it to a project** in **Admin › Toolkits**.
 
 Every call is admitted by the same budget engine as model calls before the provider is called, and billed afterwards. Tool spend appears in **Settings › Usage** as rows such as "Web search · Tavily", next to the model rows, and in run analytics. When a project or member budget runs out, the tool is refused with the same message and Usage link as a refused model call, and the provider isn't called.
@@ -36,8 +37,8 @@ Prices, limits and terms change, so check them with the provider before you rely
 
 | | Tavily | Firecrawl | Brave Search | DuckDuckGo Instant Answers | Shodan |
 |---|---|---|---|---|---|
-| **Toolkit** | Web Search: search and fetch | Web Search: search and fetch | Web Search: search | Web Search: search (instant answers only) | Host Intelligence |
-| **Pricing** | Credits: basic search 1, advanced 2, extract 1 per 5 URLs. Pay as you go $0.008 per credit | Credits: 1 per scraped page, 2 per 10 search results. Hobby $19/month for 5,000 credits, up to Scale $599/month for 1M | $5 per 1,000 search requests | Free | Query credits: Freelancer $69/month for 10,000 (about $0.0069 each), Small Business $359/month for 200,000 |
+| **Toolkit** | Web Search: search, fetch, crawl and map. Tavily toolkit | Web Search: search, fetch and map | Web Search: search | Web Search: search (instant answers only) | Host Intelligence |
+| **Pricing** | Credits: basic search 1, advanced 2, extract 1 per 5 URLs, map 1 per 10 URLs (double with instructions), crawl a map plus an extract per 5 pages. Pay as you go $0.008 per credit | Credits: 1 per scraped page or map, 2 per 10 search results. Hobby $19/month for 5,000 credits, up to Scale $599/month for 1M | $5 per 1,000 search requests | Free | Query credits: Freelancer $69/month for 10,000 (about $0.0069 each), Small Business $359/month for 200,000 |
 | **Default price** | $0.008 per credit | $0.0038 per credit or page | $0.005 per request | $0 | $0.0069 per credit |
 | **Free tier** | 1,000 credits a month, no card | 1,000 credits a month, no card | $5 of credits a month (about 1,000 searches), card required | Free, no published quota | A free API plan, but most methods need at least Membership ($49 once). Academic accounts are non-commercial only |
 | **Rate limits** | 100 requests a minute on a development key, 1,000 on production | Free: 10 a minute for search and scrape. Standard: 500 a minute | 50 queries a second on the Search plan | Not published | 1 request a second on every plan |
@@ -49,14 +50,49 @@ Prices, limits and terms change, so check them with the provider before you rely
 
 Elitea never stores results beyond the turn. Logs and audit record hashes, hosts and looked-up addresses, never full URLs or queries.
 
+Crawls and maps are billed as page reads: the price row of `web_fetch` for the provider, in the unit the provider is priced in (credits for Tavily). They show in **Settings › Usage** as "Web fetch · Tavily".
+
+## The Tavily toolkit
+
+A **Tavily** toolkit gives an agent Tavily's four tools with the project's own key, so a project can use Tavily without the administrator enabling it for the whole platform. Create a **tavily** credential, create a **Tavily** toolkit, pick the credential and attach it to an agent. **Test connection** on the credential reads Tavily's free usage endpoint and spends no credits. A project's own credential is always used: the shared public-project credential is never a fallback for this toolkit.
+
+| Setting | Default | What it does |
+|---|---|---|
+| Max results | 5 (1 to 10) | Search results per query |
+| Max search depth | basic | The deepest search the model may ask for. `advanced` costs 2 credits per query |
+| Extract depth | basic | Page extraction depth for `web_extract` and `web_crawl`. `advanced` costs double |
+| Max page chars | 20,000 (1,000 to 50,000) | The most characters kept per page. A crawl shares it between its pages |
+| Allowed domains | any | Only these domains and their subdomains: searches are limited to them, and a URL outside them is refused |
+| Blocked domains | none | Never these domains. A search result or page from one is dropped |
+| Per run call cap | 10 (1 to 100) | The most Tavily calls one run may make. The call after it answers that the limit is reached, and the model answers with what it has |
+
+Tavily's results and page text reach the model wrapped as untrusted external content. A URL longer than 2,048 characters, with credentials in it or with a backslash, is refused, because a long URL is the easiest way to carry conversation data out in a query string. Every Tavily call is admitted by the budget engine first and billed in credits as Tavily reports them. A rate limit or a server error is retried once, and each attempt is billed on its own. A crawl or a map that times out is not retried, because it has probably finished upstream, and it is billed at its upper bound.
+
+The toolkit runs on the cloud worker. On the desktop it follows the same switch as the Web Search toolkit (`local_work.web`), and its calls go through the cloud like those of `web`. The mobile app uses it through the cloud, like every toolkit.
+
 ## Available tools
 
-<Accordion title="Web Search (2)">
+<Accordion title="Web Search (4)">
 
 | Tool | What it does |
 |---|---|
 | `web_search` | Searches the web through the toolkit's default provider, or the platform default |
 | `web_fetch` | Reads one page as Markdown or text, directly or through a provider |
+| `web_crawl` | Crawls a site from a start URL and returns the pages found, as Markdown. Offered when an enabled provider crawls (Tavily) |
+| `web_map` | Lists the URLs of a site from a start URL, without page content. Offered when an enabled provider maps (Tavily, Firecrawl) |
+
+`web_crawl` and `web_map` take the start URL under the same rules as `web_fetch`, and the admin's fetch domain lists filter what a crawl finds. Firecrawl cannot follow links to a depth, so a `max_depth` sent to it is refused while **Strict options** is on.
+
+</Accordion>
+
+<Accordion title="Tavily (4)">
+
+| Tool | What it does |
+|---|---|
+| `web_search` | Searches the web. Optional `search_depth`, `topic` (general, news, finance) and `time_range` |
+| `web_extract` | Reads up to 5 pages as Markdown |
+| `web_crawl` | Crawls a site from a start URL: `instructions`, `max_depth` (1 to 2) and `limit` (1 to 20 pages) |
+| `web_map` | Lists the URLs of a site: `instructions`, `max_depth` (1 to 2) and `limit` (1 to 50 URLs) |
 
 </Accordion>
 

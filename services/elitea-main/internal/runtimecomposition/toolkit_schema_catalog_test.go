@@ -590,7 +590,7 @@ func TestPinnedSnapshotHoldsTheRustOnlyTypesWithTheirTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load plain: %v", err)
 	}
-	for toolkitType, want := range map[string]int{"docx": 13, "xlsx": 10, "web": 2, "host_intel": 2} {
+	for toolkitType, want := range map[string]int{"docx": 13, "xlsx": 10, "web": 4, "host_intel": 2} {
 		schemas, found, err := snapshot.ToolkitArgumentSchemas(toolkitType)
 		if err != nil || !found || len(schemas) != want {
 			t.Fatalf("%s: found=%v err=%v tools=%d, want %d", toolkitType, found, err, len(schemas), want)

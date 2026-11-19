@@ -50,6 +50,8 @@ pub(crate) fn construct(config: &ProviderConfig, transport: Arc<dyn Transport>) 
         })),
         fetch: None,
         host_intel: None,
+        crawl: None,
+        map: None,
     }
 }
 
