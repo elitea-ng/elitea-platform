@@ -80,6 +80,8 @@ export interface SkillChoice {
   id: number;
   name: string;
   description: string;
+  /** Written in another project and not trusted by this one (listSkills `trust`). */
+  untrusted?: boolean;
 }
 
 export interface SkillPinState {
@@ -92,7 +94,7 @@ export interface SkillRow {
   key: string;
   title: string;
   subtitle: string;
-  /** "Pinned", "Pinned, untrusted" or null. */
+  /** "Pinned", "Pinned, untrusted", "Untrusted" or null. */
   badge: string | null;
 }
 
@@ -108,7 +110,7 @@ export function skillRows(options: readonly SkillChoice[], pins: readonly SkillP
         key: `skill-${option.id}`,
         title: option.name,
         subtitle: option.description || 'Skill',
-        badge: pin === undefined ? null : pin.untrusted ? 'Pinned, untrusted' : 'Pinned',
+        badge: pin === undefined ? (option.untrusted === true ? 'Untrusted' : null) : pin.untrusted ? 'Pinned, untrusted' : 'Pinned',
       };
     });
 }

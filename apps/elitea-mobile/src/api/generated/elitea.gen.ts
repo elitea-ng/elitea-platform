@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.62
+ * client contract:    1.63
  * operations sha256:  a836121d14038ae2f1db1dde8f4300b624195ee490ebe669220b1372ba3cd2fb
  */
 export interface paths {
@@ -5453,6 +5453,8 @@ export interface components {
             project_id: string;
             /** @description The current version's tags (also available at version_details.tags). */
             tags?: string[];
+            /** @description What this project trusts of the skill's current base text (client contract 1.63, ADR-0051 amendment 1, A1.6), so a list shows the Untrusted badge without one getSkillTrust call per row. Absent when the skill has no base version. */
+            trust?: components["schemas"]["SkillTrustState"];
             type: string;
             /** Format: date-time */
             updated_at: string;
@@ -5468,6 +5470,15 @@ export interface components {
             page_size: number;
             total: number;
             total_pages: number;
+        };
+        /** @description The short form of SkillTrustStatus a skill list row and a skill read carry (client contract 1.63): whether the skill is foreign and what the project trusts of its current base text. */
+        SkillTrustState: {
+            /** @description True when the skill was written in another project. */
+            foreign: boolean;
+            /** Format: int64 */
+            publisher_project_id?: number;
+            /** @description `not_required` (not foreign), `trusted` or `untrusted`. */
+            state: string;
         };
         /** @description A skill's content: the instructions an agent follows plus its topical tags. Persisted in skill_versions/skill_version_tag_association (repos/skills.go). Since issue 874 one skill_versions row is no longer the whole story — see Skill.versions. */
         SkillVersion: {

@@ -179,6 +179,12 @@ does not animate WebP: Android builds with `expo.webp.animated=false`, iOS anima
 video state its poster, each with the default motion. An SVG is not drawn (the still, then the old icon).
 Reduced motion shows the still only and downloads nothing else.
 
+## Client contract 1.63
+
+| Area | What |
+|---|---|
+| Trust state in skill rows (skills epic 2169, #2245) | A `listSkills` row and a `getSkill` read carry `trust` (`foreign`, `state`: `not_required`, `trusted` or `untrusted`, and `publisher_project_id`): what the project trusts of the skill's current base text, so no client asks once per row. The skill picker and the Skills sheet mark a skill written in another project that the project has not trusted as **Untrusted**; a pinned one already said so through its pin. A server before 1.63 sends no `trust`, and nothing is marked. |
+
 ## Client contract 1.62
 
 | Area | What |

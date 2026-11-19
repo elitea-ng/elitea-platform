@@ -123,6 +123,8 @@ export interface UseSlashMentionResult {
   /** Replaces the "/toolkit[/toolQuery]" fragment with the final mention token (`toolName: null \| undefined` commits the whole toolkit). */
   readonly onCommitMention: (toolName?: string | null) => void;
   readonly onInputChange: (value: string) => void;
+  /** The `Skills` entry of the list: writes `/skill ` over the typed "/" fragment (`~` when it is not at the start of a line, where `/skill` would not open the picker), closes the list, and returns the new text and the cursor after the inserted token (the textarea moves its own cursor a tick later), so the skill picker can open on it; `null` when there is no input. */
+  readonly onSelectSkillsEntry: () => { readonly text: string; readonly cursor: number } | null;
   /** Character ranges within the current input text that correspond to committed mention tokens — for the caller's highlight backdrop. */
   readonly highlightRanges: readonly MentionRange[];
   readonly activeIndex: number;
@@ -260,6 +262,21 @@ export function useSlashMention({ chatInput, participants }: UseSlashMentionPara
     [chatInput, syncWithValue, clearMentions, resetSlash],
   );
 
+  const onSelectSkillsEntry = useCallback((): { readonly text: string; readonly cursor: number } | null => {
+    const ref = chatInput.current;
+    if (!ref) return null;
+    const content = ref.getInputContent();
+    const anchor = mentionAnchorRef.current ?? content.length;
+    const cursorPos = ref.getCursorPosition() ?? content.length;
+    const atLineStart = anchor === 0 || content[anchor - 1] === '\n';
+    const replacement = atLineStart ? '/skill ' : '~';
+    ref.replaceRange(anchor, cursorPos, replacement);
+    const next = content.slice(0, anchor) + replacement + content.slice(cursorPos);
+    setInputContent(next);
+    resetSlash();
+    return { text: next, cursor: anchor + replacement.length };
+  }, [chatInput, mentionAnchorRef, resetSlash]);
+
   // Character ranges within inputContent that correspond to committed mention tokens —
   // for the caller's highlight backdrop.
   const highlightRanges = useSlashHighlights(inputContent, committedMentions);
@@ -279,6 +296,7 @@ export function useSlashMention({ chatInput, participants }: UseSlashMentionPara
     onSelectToolkit,
     onCommitMention,
     onInputChange,
+    onSelectSkillsEntry,
     highlightRanges,
     activeIndex,
     setActiveIndex,
