@@ -21,6 +21,7 @@ use elitea_engine_core::errors::{EngineError, ErrorType};
 use elitea_engine_core::stream::StopSignal;
 use elitea_llm_wire::openai::{DONE, TypeCheck, UsageProfile, parse_usage, reasoning_text};
 use elitea_llm_wire::route::CHAT_COMPLETIONS_PATH;
+use elitea_llm_wire::tool_schema::{SchemaProfile, normalize_tool_schema};
 use elitea_llm_wire::tool_calls::{
     ToolCallAssembler, ToolCallLimits, ToolCallProfile, parse_lenient_delta,
 };
@@ -448,7 +449,12 @@ impl ChatClient {
                     "function": {
                         "name": tool.name,
                         "description": tool.description,
-                        "parameters": tool.parameters,
+                        // The wire form the model's provider family accepts
+                        // (#2181); the tool validates against its own schema.
+                        "parameters": normalize_tool_schema(
+                            &tool.parameters,
+                            SchemaProfile::for_model(model),
+                        ),
                     },
                 }));
             }
@@ -1064,6 +1070,29 @@ mod tests {
             client_with_settings(&json!({"reasoning_off_with_tools": 1})).is_err(),
             "reasoning_off_with_tools is a boolean"
         );
+    }
+
+    /// #2181: a tool carrying a `$ref` and a root `anyOf` reaches the
+    /// provider in the wire form its family accepts, not raw.
+    #[test]
+    fn tool_parameters_are_normalised_for_the_models_provider() {
+        let client = client_with(json!({}));
+        let mut request = ChatRequest::new(vec![ChatMessage::User("q".to_owned())]);
+        request.tools.push(ToolDefinition {
+            name: "lookup".to_owned(),
+            description: "Looks up.".to_owned(),
+            parameters: json!({
+                "type": "object",
+                "properties": {"node": {"$ref": "#/$defs/node"}},
+                "$defs": {"node": {"type": "string", "const": "a"}},
+            }),
+        });
+        let body = client.body(&request, false).unwrap_or_default();
+        let parameters = &body["tools"][0]["function"]["parameters"];
+        assert_eq!(parameters["type"], "object");
+        assert!(parameters.get("$defs").is_none(), "{parameters}");
+        assert!(parameters["properties"]["node"].get("$ref").is_none());
+        assert!(parameters["properties"]["node"].get("const").is_none());
     }
 
     #[test]

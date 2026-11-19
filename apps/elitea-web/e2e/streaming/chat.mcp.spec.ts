@@ -96,6 +96,7 @@ import {
   readAttachedToolkits,
   readStoredTranscript,
   sendComposerMessage,
+  settleStoredTurn,
 } from '../fixtures/api';
 import { readsPlatformFlags } from '../fixtures/platformFlags';
 
@@ -230,13 +231,19 @@ async function chatWithOpenAgent(page: Page, prompt: string): Promise<string> {
   return conversationId;
 }
 
-/** Remove the agent and the connection whatever the assertions did. */
+/**
+ * Settle the turn (#2181: an assertion that failed mid-turn used to leave it
+ * running, and the next journey's start POST queued behind it), then remove
+ * the agent and the connection whatever the assertions did.
+ */
 async function cleanUp(
   page: Page,
   projectId: string,
   agentId: string,
   toolkitId: string,
+  conversationId = '',
 ): Promise<void> {
+  if (conversationId !== '') await settleStoredTurn(page, projectId, conversationId);
   await page.request.delete(
     `${BASE_URL}/api/v2/elitea_core/application/prompt_lib/${projectId}/${agentId}`,
   );
@@ -268,6 +275,7 @@ test('an MCP connection attached through the picker is discovered, and the agent
     'the endpoint must round-trip through the write — the runtime reads the STORED settings, not the request',
   ).toBe(MOCK_MCP_URL);
 
+  let conversationId = '';
   try {
     // ── 3. Attach it through the editor's own "+ MCP" picker ──────────────
     await attachMcpThroughPicker(page, projectId, toolkitName);
@@ -305,7 +313,7 @@ test('an MCP connection attached through the picker is discovered, and the agent
     ).toEqual([]);
 
     // ── 4. Take a turn ────────────────────────────────────────────────────
-    const conversationId = await chatWithOpenAgent(page, `autotest mcp ${suffix}`);
+    conversationId = await chatWithOpenAgent(page, `autotest mcp ${suffix}`);
 
     // ── 5. …and require a real answer ─────────────────────────────────────
     // This is the whole point. A stored, non-error assistant row means
@@ -326,7 +334,7 @@ test('an MCP connection attached through the picker is discovered, and the agent
         'certificate',
     });
   } finally {
-    await cleanUp(page, projectId, agentId, connection.id);
+    await cleanUp(page, projectId, agentId, connection.id, conversationId);
   }
 });
 
@@ -353,10 +361,11 @@ test('an MCP endpoint the platform stores but the runtime will not dial refuses 
     'it, the disagreement below is gone and this spec should be retired rather than repaired',
   ).toBe(UNSUPPORTED_SCHEME_URL);
 
+  let conversationId = '';
   try {
     await attachMcpThroughPicker(page, projectId, toolkitName);
 
-    const conversationId = await chatWithOpenAgent(page, `autotest mcp scheme ${suffix}`);
+    conversationId = await chatWithOpenAgent(page, `autotest mcp scheme ${suffix}`);
 
     // Admitted, then refused — the same late shape
     // `chat.attachments.spec.ts` pins for an attached file, and for the same
@@ -389,6 +398,6 @@ test('an MCP endpoint the platform stores but the runtime will not dial refuses 
       'was dialled, which is the rule this test says is applied before any dialling happens',
     ).toBe(UNSUPPORTED_CAPABILITY_MESSAGE);
   } finally {
-    await cleanUp(page, projectId, agentId, connection.id);
+    await cleanUp(page, projectId, agentId, connection.id, conversationId);
   }
 });

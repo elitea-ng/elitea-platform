@@ -482,3 +482,20 @@ fn a_provider_prefixed_model_name_picks_the_provider() {
         SchemaProfile::Gemini
     );
 }
+
+/// #2181: the normalised schema of a stable declaration is computed once; a
+/// second call is the same value, and a different profile is its own entry.
+#[test]
+fn a_repeated_normalisation_is_memoised_and_identical() {
+    let raw = json!({
+        "type": "object",
+        "properties": {"unique_memo_probe_2181": {"const": "x"}},
+    });
+    let first = normalize_tool_schema(&raw, SchemaProfile::Gemini);
+    let after_first = cached_schema_count();
+    let second = normalize_tool_schema(&raw, SchemaProfile::Gemini);
+    assert_eq!(first, second);
+    assert!(after_first >= 1, "the first call is held");
+    let other = normalize_tool_schema(&raw, SchemaProfile::OpenAi);
+    assert_ne!(first, other, "the profile is part of the key");
+}
