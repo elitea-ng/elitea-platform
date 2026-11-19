@@ -52,10 +52,16 @@ import { clearsTestResult, missingForConnectionTest, modelTestBody, testsFormVal
  * build has no checker for has not failed anything — reporting it in the
  * error colour tells the user to go fix a credential that is fine.
  */
-type CredentialTestResult = 'idle' | 'success' | 'failure' | 'unsupported';
+type CredentialTestResult = 'idle' | 'success' | 'failure' | 'unsupported' | 'signin';
 
 type TestOutcome =
   | { readonly status: 'success' }
+  /**
+   * A delegated (Microsoft) credential has no secret to test with, only the person's own
+   * sign-in: no token yet (`refused: false`), or Microsoft/Main refused the one held
+   * (`refused: true`, the check's 401 `requires_authorization`).
+   */
+  | { readonly status: 'signin'; readonly refused: boolean }
   | { readonly status: 'failure'; readonly message: string }
   | { readonly status: 'unsupported'; readonly message: string };
 
@@ -67,6 +73,12 @@ export interface CredentialConnectionTestParams {
   readonly data: Readonly<Record<string, unknown>>;
   /** Used only to work out which field keys are secret-shaped (`SchemaField.classify(...) === 'secret'`). */
   readonly schemaProperties: Readonly<Record<string, ConfigSchemaNode>>;
+  /**
+   * Set for a delegated Microsoft credential: reads the signed-in person's access token at
+   * check time. The check then always runs on the form's values with that token (the stored
+   * route holds no token), and answers `signin` when there is none or it is refused.
+   */
+  readonly delegatedToken?: (() => string | undefined) | undefined;
 }
 
 export interface CredentialConnectionTestResult {
@@ -76,6 +88,10 @@ export interface CredentialConnectionTestResult {
   readonly testDurationMs: number | undefined;
   /** Labels of the fields the test still needs; empty when it can run. */
   readonly missingForTest: readonly string[];
+  /** The last check ended `signin` because the held token was refused, not because there was none. */
+  readonly signInRefused: boolean;
+  /** Forget the last answer (after a sign-out, which makes it stale). */
+  readonly resetResult: () => void;
   readonly isTesting: boolean;
   readonly testConnection: () => void;
   readonly noteFieldChanged: (fieldKey: string) => void;
@@ -90,6 +106,21 @@ function httpFailureBody(error: unknown): Record<string, unknown> | undefined {
   if (record.kind !== 'http') return undefined;
   const { body } = record;
   return typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : undefined;
+}
+
+/** The check's 401 `requires_authorization`: the credential needs the person's own sign-in. */
+function isAuthorizationRequired(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null || !('failure' in error)) return false;
+  const failure = (error as { failure?: unknown }).failure;
+  if (typeof failure !== 'object' || failure === null) return false;
+  const record = failure as { status?: unknown; body?: unknown };
+  const body = record.body;
+  return (
+    record.status === 401 &&
+    typeof body === 'object' &&
+    body !== null &&
+    (body as { requires_authorization?: unknown }).requires_authorization === true
+  );
 }
 
 /** `message` first (the stored-check contract's own field), then `error` (the unsaved check's). Non-empty strings only, so an absent message falls through to the caller's own wording rather than rendering `""`. */
@@ -143,12 +174,14 @@ async function performUnsavedTest(
   projectId: string,
   configType: string,
   data: Readonly<Record<string, unknown>>,
+  delegated: boolean,
 ): Promise<TestOutcome> {
   try {
     const result = await unsavedCheck.mutateAsync({ projectId, configType, body: data });
     if (result.error) return { status: 'failure', message: result.error };
     return { status: 'success' };
   } catch (error) {
+    if (delegated && isAuthorizationRequired(error)) return { status: 'signin', refused: true };
     const body = httpFailureBody(error);
     if (isUnsupported(body)) return { status: 'unsupported', message: unsupportedMessage(body) };
     return { status: 'failure', message: readMessage(body) ?? t('credentials.form.testFailed', 'Connection test failed') };
@@ -172,8 +205,14 @@ function startConnectionTest(
     readonly configType: string | undefined;
     readonly data: Readonly<Record<string, unknown>>;
     readonly secretTouched: boolean;
+    readonly delegatedToken: (() => string | undefined) | undefined;
   },
 ): Promise<TestOutcome> | undefined {
+  if (request.delegatedToken !== undefined && request.configType !== undefined) {
+    const token = request.delegatedToken();
+    if (token === undefined) return Promise.resolve({ status: 'signin', refused: false });
+    return performUnsavedTest(checks.unsaved, request.projectId, request.configType, { ...request.data, access_token: token }, true);
+  }
   // A saved row whose secret the user has NOT re-typed is the only case the
   // stored route applies to — and it is the common one, since the sealed
   // value the form loaded is not a secret the browser could send anyway.
@@ -184,16 +223,17 @@ function startConnectionTest(
   }
   if (request.configType === undefined) return undefined;
   const body = testsFormValues(request.configType) ? modelTestBody(request.data, request.configId) : request.data;
-  return performUnsavedTest(checks.unsaved, request.projectId, request.configType, body);
+  return performUnsavedTest(checks.unsaved, request.projectId, request.configType, body, false);
 }
 
 export function useCredentialConnectionTest(params: CredentialConnectionTestParams): CredentialConnectionTestResult {
-  const { projectId, configId, configType, data, schemaProperties } = params;
+  const { projectId, configId, configType, data, schemaProperties, delegatedToken } = params;
 
   const [testResult, setTestResult] = useState<CredentialTestResult>('idle');
   const [testMessage, setTestMessage] = useState('');
   const [testDurationMs, setTestDurationMs] = useState<number | undefined>(undefined);
   const [secretTouched, setSecretTouched] = useState(false);
+  const [signInRefused, setSignInRefused] = useState(false);
   const configTypeRef = useRef(configType);
   configTypeRef.current = configType;
   // A run that a field edit made stale must not paint its late answer.
@@ -219,6 +259,14 @@ export function useCredentialConnectionTest(params: CredentialConnectionTestPara
     }
   }, []);
 
+  const resetResult = useCallback((): void => {
+    runRef.current += 1;
+    setTestResult('idle');
+    setTestMessage('');
+    setTestDurationMs(undefined);
+    setSignInRefused(false);
+  }, []);
+
   const unsavedCheck = CredentialConnectionChecks.useUnsaved();
   const storedCheck = CredentialConnectionChecks.useStored();
 
@@ -226,8 +274,8 @@ export function useCredentialConnectionTest(params: CredentialConnectionTestPara
   // dependencies — the same collapse `useCredentialFormController.ts`'s
   // `formValues` makes, and for the same §3.5 hook-deps budget reason.
   const request = useMemo(
-    () => ({ projectId, configId, configType, data, secretTouched }),
-    [projectId, configId, configType, data, secretTouched],
+    () => ({ projectId, configId, configType, data, secretTouched, delegatedToken }),
+    [projectId, configId, configType, data, secretTouched, delegatedToken],
   );
 
   const testConnection = useCallback(() => {
@@ -242,7 +290,8 @@ export function useCredentialConnectionTest(params: CredentialConnectionTestPara
     void run.then((outcome) => {
       if (runRef.current !== runId) return;
       setTestResult(outcome.status);
-      setTestMessage(outcome.status === 'success' ? '' : outcome.message);
+      setSignInRefused(outcome.status === 'signin' && outcome.refused);
+      setTestMessage(outcome.status === 'success' || outcome.status === 'signin' ? '' : outcome.message);
       setTestDurationMs(performance.now() - startedAt);
     });
   }, [storedCheck, unsavedCheck, request]);
@@ -252,6 +301,8 @@ export function useCredentialConnectionTest(params: CredentialConnectionTestPara
     testMessage,
     testDurationMs,
     missingForTest: missingForConnectionTest(configType, data),
+    signInRefused,
+    resetResult,
     isTesting: unsavedCheck.isPending || storedCheck.isPending,
     testConnection,
     noteFieldChanged,

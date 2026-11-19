@@ -69,6 +69,13 @@ export const integrationsTab: NavTab = {
     },
     {
       kind: 'group',
+      title: 'Microsoft',
+      pages: [
+        { kind: 'page', slug: 'integrations/third-party-integrations/microsoft-sign-in', title: 'Microsoft sign-in' },
+      ],
+    },
+    {
+      kind: 'group',
       title: 'API',
       pages: [
         { kind: 'page', slug: 'integrations/third-party-integrations/api-usage', title: 'API usage' },

@@ -18,11 +18,10 @@ import (
 //     `client_id` and `client_secret` become optional like the other three,
 //     because a Default app holds the client.
 //
-// They are registered Hidden (kept out of the create pickers of every client)
-// and own their save rules (OwnNormalizer, microsoft_normalizer.go): until the
-// sign-in works end to end on web, desktop and mobile (S1c to S1e of epic #2254)
-// a person could create a credential they cannot sign in with. S1d (#2269) or
-// S1e (#2271) removes Hidden. Existing rows, the check and the save still work.
+// They own their save rules (OwnNormalizer, microsoft_normalizer.go) and are
+// offered in the create pickers: the web credential form signs the person in
+// (S1d, #2269). Desktop shares the web UI; mobile has no credential-type picker
+// and gets its own sign-in in S1e (#2271).
 //
 // Their connection check is the delegated one of
 // api/v2/configurations/check_connection_oauth.go, driven by the descriptors in
@@ -127,7 +126,9 @@ func microsoftGraphProperties(scopeField map[string]any) map[string]any {
 
 func microsoftAuthSubsections() []NativeAuthSubsection {
 	return []NativeAuthSubsection{
-		{Name: "Default app", Fields: []string{microsoftauth.FieldAppID}},
+		// The scopes are the person's choice in both modes. A Default app caps them at its own
+		// ceiling (ADR-0057 decision 3); it never picks them.
+		{Name: "Default app", Fields: []string{microsoftauth.FieldAppID, microsoftauth.FieldScopes}},
 		{Name: "Custom app", Fields: []string{
 			"client_id", "client_secret", microsoftauth.FieldDiscoveryEndpoint, microsoftauth.FieldScopes,
 			microsoftauth.FieldAutoRefresh,
@@ -145,26 +146,29 @@ func microsoftNativeTypes() []NativeConfigurationType {
 	msGraph := microsoftGraphProperties(scopesField(nil, scopes.MSGraphDefault(), msGraphScopesNote))
 
 	outlookSubsections := microsoftAuthSubsections()
-	outlookSubsections[1].Fields = append(outlookSubsections[1].Fields, microsoftauth.FieldMailbox)
+	// The shared mailbox is the same in both modes.
+	for i := range outlookSubsections {
+		outlookSubsections[i].Fields = append(outlookSubsections[i].Fields, microsoftauth.FieldMailbox)
+	}
 
 	return []NativeConfigurationType{
 		{
 			Type: microsoftauth.Outlook, Section: "credentials", Title: "OutlookConfiguration", Label: "Outlook",
 			Categories: []string{"office"}, ExtraCategories: []string{"outlook", "microsoft", "email", "mail"},
 			Properties: outlook, AuthSubsections: outlookSubsections, CheckConnection: true,
-			Hidden: true, OwnNormalizer: true,
+			OwnNormalizer: true,
 		},
 		{
 			Type: microsoftauth.Teams, Section: "credentials", Title: "TeamsConfiguration", Label: "Teams",
 			Categories: []string{"office"}, ExtraCategories: []string{"teams", "microsoft", "chat", "messaging"},
 			Properties: teams, AuthSubsections: microsoftAuthSubsections(), CheckConnection: true,
-			Hidden: true, OwnNormalizer: true,
+			OwnNormalizer: true,
 		},
 		{
 			Type: microsoftauth.MSGraph, Section: "credentials", Title: "MsGraphConfiguration", Label: "Microsoft Graph",
 			Categories: []string{"office"}, ExtraCategories: []string{"microsoft", "graph", "office 365", "microsoft 365", "entra"},
 			Properties: msGraph, AuthSubsections: microsoftAuthSubsections(), CheckConnection: true,
-			Hidden: true, OwnNormalizer: true,
+			OwnNormalizer: true,
 		},
 		{
 			Type: microsoftauth.Dataverse, Section: "credentials", Title: "DataverseConfiguration", Label: "Dataverse (OneCRM)",
@@ -187,7 +191,7 @@ func microsoftNativeTypes() []NativeConfigurationType {
 				{Name: "Custom app", Fields: []string{"client_id", "client_secret"}},
 			},
 			CheckConnection: true,
-			Hidden:          true, OwnNormalizer: true,
+			OwnNormalizer:   true,
 		},
 	}
 }

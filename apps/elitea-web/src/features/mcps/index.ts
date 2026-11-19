@@ -66,7 +66,7 @@ export { useGetRemoteMcpTools, type McpConnectorApprovalRequired } from './model
 // lib — the storage/flow primitives a non-UI caller (e.g. a chat tool-action
 // handler reacting to `mcp_authorization_required`, per manifest JRNY-018)
 // needs without pulling in React.
-export { getAccessToken } from './lib/storage';
+export { getAccessToken, logout as forgetAccessToken, setAccessToken } from './lib/storage';
 export { getAllTokens } from './lib/tokenRefresh';
 export { getExecutionTokens } from './lib/executionTokens';
 export { startMcpAuthFlow } from './lib/oauthFlow';
