@@ -20,6 +20,7 @@ use super::families::web::meter::{
     Admission, Meter, MeterError, MeteredOp, SettleRequest, Settlement,
 };
 use super::families::web::registry::RegistryEntry;
+use super::families::web::tavily_toolkit::{TavilyConfig, build_tavily_with};
 use super::families::web::transport::{HttpAnswer, ProviderError, Transport};
 use super::families::web::{Parts, WebToolHost, build_host_intel_with, build_web_with};
 use super::policy::ToolAdmissionPolicy;
@@ -38,6 +39,12 @@ pub(super) fn fixture(provider: &str, name: &str) -> Fixture {
         ("tavily", "web_search_ok") => include_str!("fixtures/web/tavily/web_search_ok.json"),
         ("tavily", "web_search_empty") => include_str!("fixtures/web/tavily/web_search_empty.json"),
         ("tavily", "web_fetch_ok") => include_str!("fixtures/web/tavily/web_fetch_ok.json"),
+        ("tavily", "extract_ok") => include_str!("fixtures/web/tavily/extract_ok.json"),
+        ("tavily", "crawl_ok") => include_str!("fixtures/web/tavily/crawl_ok.json"),
+        ("tavily", "map_ok") => include_str!("fixtures/web/tavily/map_ok.json"),
+        ("tavily", "error_400") => include_str!("fixtures/web/tavily/error_400.json"),
+        ("tavily", "error_432") => include_str!("fixtures/web/tavily/error_432.json"),
+        ("firecrawl", "map_ok") => include_str!("fixtures/web/firecrawl/map_ok.json"),
         ("tavily", "error_401") => include_str!("fixtures/web/tavily/error_401.json"),
         ("tavily", "error_429") => include_str!("fixtures/web/tavily/error_429.json"),
         ("firecrawl", "web_search_ok") => include_str!("fixtures/web/firecrawl/web_search_ok.json"),
@@ -301,6 +308,50 @@ pub(super) fn web_toolset_under(
         },
     )
     .expect("web toolset")
+}
+
+/// The `tavily` toolkit's settings: a project credential and the SDK's
+/// policy settings in `extra`. `uuid` names the credential, so a test's call
+/// budget is its own.
+pub(super) fn tavily_settings(uuid: &str, extra: &Value) -> Value {
+    let mut settings = json!({
+        "tavily_configuration": {
+            "api_key": "tvly-fixture",
+            "configuration_uuid": uuid,
+            "configuration_project_id": 7,
+            "configuration_type": "tavily",
+        }
+    });
+    for (key, value) in extra.as_object().expect("extra settings") {
+        settings[key] = value.clone();
+    }
+    settings
+}
+
+/// The `tavily` toolset over a recording transport.
+pub(super) fn tavily_toolset(
+    value: &Value,
+    meter: Option<&Arc<FakeMeter>>,
+    transport: &Arc<FixtureTransport>,
+) -> BasicToolset {
+    tavily_toolset_over(value, meter, Arc::clone(transport) as Arc<dyn Transport>)
+}
+
+pub(super) fn tavily_toolset_over(
+    value: &Value,
+    meter: Option<&Arc<FakeMeter>>,
+    transport: Arc<dyn Transport>,
+) -> BasicToolset {
+    let host = meter.map(host);
+    let factory = move |_: &RegistryEntry| Arc::clone(&transport);
+    build_tavily_with(
+        "tavily",
+        TavilyConfig::parse(&settings(value)).expect("tavily settings"),
+        &policy(),
+        host.as_ref(),
+        &factory,
+    )
+    .expect("tavily toolset")
 }
 
 pub(super) fn host_intel_toolset(

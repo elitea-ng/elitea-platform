@@ -90,7 +90,7 @@ The device and data-control keys: `require_device_lock`, `idle_lock_seconds`, `a
 | `local_work_memory_write` | On | A local turn may save to the user's cloud memory. |
 | `local_work_cloud_handoff` | Off | A Local work thread may be sent to the cloud executor. |
 | `local_work_index_local_embeddings`, `local_work_index_remote_embeddings`, `local_work_index_model_mirror_url` | On, Off, empty | How a local index may be embedded. See [Desktop local index](/how-tos/indexing/desktop-local-index). |
-| `local_work_web`, `local_work_host_intel` | Off | A local turn may use the Web Search and Host Intelligence toolkits. |
+| `local_work_web`, `local_work_host_intel` | Off | A local turn may use the Web Search toolkit and the Tavily toolkit (`local_work_web`) or the Host Intelligence toolkit (`local_work_host_intel`). |
 | `local_work_computer_use` | Off | A local turn may see and use the user's other applications (macOS, Windows and Linux, through each OS's accessibility interface; on Linux, Wayland sessions can only see). |
 | `local_work_computer_use_apps_allow` | Empty | When not empty, the only applications computer use may touch. |
 | `local_work_computer_use_apps_deny` | Empty | Applications computer use never touches, added to the built-in list. |

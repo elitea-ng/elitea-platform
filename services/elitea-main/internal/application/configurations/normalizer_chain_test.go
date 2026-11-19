@@ -22,7 +22,7 @@ func TestCurrentConfigurationDataNormalizerOwnsEveryPinnedTypeExactlyOnce(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 61 {
+	if len(entries) != 61+len(nativeConfigurationTypes) {
 		t.Fatalf("catalog entries = %d, want 51 pinned, the five web providers, cloud_executor, worker_egress, ai_disclosure, browser and computer_use", len(entries))
 	}
 
@@ -50,6 +50,12 @@ func TestCurrentConfigurationDataNormalizerOwnsEveryPinnedTypeExactlyOnce(t *tes
 			owners++
 		}
 		if currentWebProviderConfigurationType(entry.Type) {
+			owners++
+		}
+		if currentNativeConfigurationType(entry.Type) {
+			owners++
+		}
+		if currentMicrosoftConfigurationType(entry.Type) {
 			owners++
 		}
 		if owners != 1 {
@@ -87,7 +93,9 @@ func TestCurrentConfigurationDataNormalizerOwnsEveryPinnedTypeExactlyOnce(t *tes
 		if updateErr != nil || !update.Complete {
 			t.Fatalf("Normalize(update %q) result=%#v error=%v", entry.Type, update, updateErr)
 		}
-		if entry.Type != "service_prompt" && update.Data["max_output_tokens"] != int64(42) {
+		// A Microsoft type keeps only the fields it defines, so it has no such field.
+		if entry.Type != "service_prompt" && !currentMicrosoftConfigurationType(entry.Type) &&
+			update.Data["max_output_tokens"] != int64(42) {
 			t.Fatalf("Normalize(update %q) data=%#v, want shallow numeric coercion", entry.Type, update.Data)
 		}
 	}
@@ -121,6 +129,13 @@ func currentNormalizerChainValidCreateData(typeName string) map[string]any {
 		return map[string]any{"key": "code_assistant", "prompt": "Prompt"}
 	case "environment_settings", "project_context", "project_icon":
 		return map[string]any{}
+	case "outlook", "teams", "ms_graph":
+		return map[string]any{"client_id": "app", "client_secret": "secret"}
+	case "dataverse":
+		return map[string]any{
+			"url": "https://org.crm4.dynamics.com", "tenant_id": "contoso.onmicrosoft.com",
+			"client_id": "app", "client_secret": "secret",
+		}
 	case "open_ai", "azure_open_ai", "ai_dial", "ollama", "open_ai_azure", "vllm":
 		return map[string]any{"api_base": "https://example.test"}
 	case "anthropic":

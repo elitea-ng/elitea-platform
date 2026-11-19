@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rustonly"
 )
 
 type currentActorVisibleSchemaSourceStub struct {
@@ -40,7 +41,10 @@ func TestPinnedCurrentToolkitSchemaSnapshotMatchesAdmittedSDKProjection(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.SDKRevision() != "b5113a129329b85d23c2d5c2bf55f18e307414ec" || snapshot.EntryCount() != 58 {
+	// 53 types are pinned at the SDK revision; every type authored natively
+	// (rustonly new_types) is added on top, so adding one does not edit this.
+	if snapshot.SDKRevision() != "b5113a129329b85d23c2d5c2bf55f18e307414ec" ||
+		snapshot.EntryCount() != 53+len(rustonly.TypeNames()) {
 		t.Fatalf("snapshot revision=%q entries=%d", snapshot.SDKRevision(), snapshot.EntryCount())
 	}
 
@@ -586,7 +590,7 @@ func TestPinnedSnapshotHoldsTheRustOnlyTypesWithTheirTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load plain: %v", err)
 	}
-	for toolkitType, want := range map[string]int{"docx": 13, "xlsx": 10, "web": 2, "host_intel": 2} {
+	for toolkitType, want := range map[string]int{"docx": 13, "xlsx": 10, "web": 4, "host_intel": 2} {
 		schemas, found, err := snapshot.ToolkitArgumentSchemas(toolkitType)
 		if err != nil || !found || len(schemas) != want {
 			t.Fatalf("%s: found=%v err=%v tools=%d, want %d", toolkitType, found, err, len(schemas), want)

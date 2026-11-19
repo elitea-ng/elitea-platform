@@ -1,4 +1,4 @@
-import { act } from '@testing-library/react';
+import { act, fireEvent } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { toolkitValidation } from '@/entities/toolkit';
@@ -69,6 +69,52 @@ describe('SlashSuggestionList', () => {
     expect(getByText('Mention Toolkit')).toBeInTheDocument();
     expect(getByText('GitHub')).toBeInTheDocument();
     expect(queryByText('My MCP')).not.toBeInTheDocument();
+  });
+
+  it('lists a first Skills entry, with no toolkit in the chat, and a pick hands over to the skill picker', () => {
+    const onSelectSkills = vi.fn();
+    const { getByTestId, getByText } = renderWithProviders(
+      <SlashSuggestionList {...baseProps({ phase: 'toolkit', participantToolkits: [], onSelectSkills })} />,
+    );
+    expect(getByText('Skills')).toBeInTheDocument();
+    fireEvent.click(getByTestId('slash-skills-entry'));
+    expect(onSelectSkills).toHaveBeenCalledTimes(1);
+  });
+
+  it('puts Skills before the toolkits, and Enter on the first row picks it', () => {
+    const onSelectSkills = vi.fn();
+    const onSelectToolkit = vi.fn();
+    const props = baseProps({ phase: 'toolkit', onSelectSkills, onSelectToolkit });
+    const { container } = renderWithProviders(<SlashSuggestionList {...props} />);
+    const rows = [...container.querySelectorAll('button')].map((row) => row.textContent);
+    expect(rows[0]).toMatch(/^Skills/);
+    expect(rows[1]).toMatch(/^GitHub/);
+    // The list counts the Skills row, so Enter on index 0 is Skills and on index 1 the first toolkit.
+    expect(props.itemCountRef.current).toBe(3);
+    props.onConfirmActiveRef.current?.(0);
+    expect(onSelectSkills).toHaveBeenCalledTimes(1);
+    props.onConfirmActiveRef.current?.(1);
+    expect(onSelectToolkit).toHaveBeenCalledWith(GITHUB);
+  });
+
+  it('shows Skills only while what was typed starts "skill", and not once it is all of it', () => {
+    const onSelectSkills = vi.fn();
+    const shown = (toolkitQuery: string): boolean => {
+      const view = renderWithProviders(<SlashSuggestionList {...baseProps({ phase: 'toolkit', toolkitQuery, onSelectSkills })} />);
+      const isShown = view.queryByTestId('slash-skills-entry') !== null;
+      view.unmount();
+      return isShown;
+    };
+    expect(shown('')).toBe(true);
+    expect(shown('sk')).toBe(true);
+    expect(shown('skill')).toBe(false);
+    expect(shown('git')).toBe(false);
+  });
+
+  it('has no Skills entry when the chat cannot take a skill', () => {
+    const { queryByTestId, getByText } = renderWithProviders(<SlashSuggestionList {...baseProps({ phase: 'toolkit' })} />);
+    expect(queryByTestId('slash-skills-entry')).not.toBeInTheDocument();
+    expect(getByText('GitHub')).toBeInTheDocument();
   });
 
   it('filters the toolkit dropdown by toolkitQuery (case-insensitive substring)', () => {

@@ -74,6 +74,14 @@ describe('the skill phase (ADR-0050 amendment 1, A1.5)', () => {
     expect(rows[0].subtitle).toBe('Skill');
     expect(skillRows(options, [], 'SUM').map((row) => row.title)).toEqual(['summarize']);
   });
+
+  it('badges an unpinned foreign skill the project has not trusted, from the listing row alone', () => {
+    const rows = skillRows([{ id: 8, name: 'imported', description: '', untrusted: true }, { id: 9, name: 'own', description: '', untrusted: false }], [], '');
+    expect(rows.map((row) => [row.title, row.badge])).toEqual([
+      ['imported', 'Untrusted'],
+      ['own', null],
+    ]);
+  });
 });
 
 describe('the composer with /skill', () => {

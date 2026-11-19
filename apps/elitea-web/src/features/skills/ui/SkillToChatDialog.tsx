@@ -25,6 +25,7 @@ import { conversationSkillKeys } from '@/entities/conversation-skill';
 import { pinConversationSkill, useListConversations } from '@/shared/api/generated/chat/chat';
 import { EliteaApiError } from '@/shared/api/generated/mutator';
 import type { PinConversationSkillRequest } from '@/shared/api/generated/model';
+import { findLocalThreadPin } from '@/shared/desktop/localThreadPin';
 import { unwrapList } from '@/shared/api/unwrap';
 import { t } from '@/shared/i18n';
 import { BaseModal } from '@/shared/ui/BaseModal';
@@ -42,6 +43,12 @@ export interface SkillToChatDialogProps {
   readonly confirmText: string;
   /** What to pin; "Add to a conversation" forks here first. Rejects with the reason when it cannot. */
   readonly resolvePin: () => Promise<PinConversationSkillRequest>;
+  /**
+   * A local thread on this computer keeps its pins in the desktop host, which takes a project skill only: for a pin
+   * that is a Marketplace listing, this forks the version into the project first (the fork-only Add) and gives the copy's
+   * id. Omitted where the pin is always a project skill.
+   */
+  readonly forkForLocal?: (() => Promise<number>) | undefined;
   /** Offers "New chat" and starts it with the resolved pin; omitted where the action is for an existing conversation only. */
   readonly onNewChat?: ((pin: PinConversationSkillRequest) => void) | undefined;
   readonly onClose: () => void;
@@ -54,6 +61,10 @@ interface ConversationRow {
 
 /** Why a pin was refused, in the person's words. */
 function pinRefusalText(error: unknown): string {
+  // The desktop host's own refusals for a local thread (IPC.md "Thread history").
+  const code = typeof error === 'object' && error !== null ? (error as { code?: unknown }).code : undefined;
+  if (code === 'thread_skills_full') return t('skills.toChat.limit', 'A conversation holds at most five skills. Remove one to add another.');
+  if (code === 'skill_unknown') return t('skills.toChat.unavailable', 'That skill is not available to you.');
   const status = error instanceof EliteaApiError && error.failure.kind === 'http' ? error.failure.status : undefined;
   if (status === 409) return t('skills.toChat.limit', 'A conversation holds at most five skills. Remove one to add another.');
   if (status === 404) return t('skills.toChat.unavailable', 'That skill is not available to you.');
@@ -80,6 +91,7 @@ export function SkillToChatDialog({
   title,
   confirmText,
   resolvePin,
+  forkForLocal,
   onNewChat,
   onClose,
 }: SkillToChatDialogProps): ReactNode {
@@ -109,7 +121,14 @@ export function SkillToChatDialog({
           onClose();
           return;
         }
-        await pinConversationSkill(projectId, choice, pin);
+        const local = await findLocalThreadPin(choice, Number(projectId));
+        if (local === null) {
+          await pinConversationSkill(projectId, choice, pin);
+        } else {
+          const skillId = pin.skill_id ?? (await forkForLocal?.());
+          if (skillId === undefined) throw new Error('A local thread pins a skill of this project.');
+          await local(skillId);
+        }
         await queryClient.invalidateQueries({ queryKey: conversationSkillKeys.all(projectId) });
         onClose();
         await navigate({ to: '/chat/$conversationId', params: { conversationId: choice } });

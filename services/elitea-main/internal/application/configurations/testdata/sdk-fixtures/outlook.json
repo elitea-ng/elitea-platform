@@ -1,0 +1,200 @@
+{
+ "fixture_version": "elitea.sdk-fixture.v1",
+ "kind": "configuration",
+ "model_schema": {
+  "metadata": {
+   "categories": [
+    "office"
+   ],
+   "extra_categories": [
+    "outlook",
+    "microsoft",
+    "email",
+    "mail"
+   ],
+   "icon_url": "outlook.svg",
+   "label": "Outlook",
+   "section": "credentials",
+   "sections": {
+    "auth": {
+     "required": true,
+     "subsections": [
+      {
+       "fields": [
+        "oauth_app_id"
+       ],
+       "key_fields": [
+        "oauth_app_id"
+       ],
+       "name": "Default app"
+      },
+      {
+       "fields": [
+        "client_id",
+        "client_secret",
+        "oauth_discovery_endpoint",
+        "scopes",
+        "auto_refresh_token"
+       ],
+       "key_fields": [
+        "client_id"
+       ],
+       "name": "Custom app"
+      }
+     ]
+    }
+   },
+   "type": "outlook"
+  },
+  "properties": {
+   "auto_refresh_token": {
+    "anyOf": [
+     {
+      "type": "boolean"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": true,
+    "description": "Automatically refresh the access token using the offline_access scope.",
+    "title": "Auto Refresh Token"
+   },
+   "client_id": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Azure AD Application (client) ID",
+    "title": "Client Id"
+   },
+   "client_secret": {
+    "anyOf": [
+     {
+      "format": "password",
+      "type": "string",
+      "writeOnly": true
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Azure AD Client Secret",
+    "title": "Client Secret"
+   },
+   "mailbox": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Leave empty to use your own mailbox. Set only to open a shared mailbox you have Full Access to (needs the Mail.Read.Shared scope, plus Mail.ReadWrite.Shared / Mail.Send.Shared to change or send). A distribution list is not a mailbox: its mail is already in your inbox, so leave this empty",
+    "title": "Mailbox"
+   },
+   "oauth_app_id": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "OAuth app configured by your administrator",
+    "title": "App",
+    "ui_component": "oauth_app_select"
+   },
+   "oauth_discovery_endpoint": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "OAuth Discovery Endpoint. Format: https://login.microsoftonline.com/{tenant_id}",
+    "title": "Oauth Discovery Endpoint"
+   },
+   "scopes": {
+    "anyOf": [
+     {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "checkbox_options": [
+     {
+      "description": "Read your mail: list, get, search and check new messages, read threads, list folders.",
+      "label": "Mail.Read",
+      "value": "Mail.Read"
+     },
+     {
+      "description": "Change your mail: mark as read, move and delete messages. send_mail and reply_to_message also use it to return the sent message ID.",
+      "label": "Mail.ReadWrite",
+      "value": "Mail.ReadWrite"
+     },
+     {
+      "description": "Send mail as you: send_mail and reply_to_message.",
+      "label": "Mail.Send",
+      "value": "Mail.Send"
+     },
+     {
+      "description": "Read mail in mailboxes shared with you (when Mailbox is another person's address).",
+      "label": "Mail.Read.Shared",
+      "value": "Mail.Read.Shared"
+     },
+     {
+      "description": "Change mail in mailboxes shared with you (mark as read, move, delete).",
+      "label": "Mail.ReadWrite.Shared",
+      "value": "Mail.ReadWrite.Shared"
+     },
+     {
+      "description": "Send mail on behalf of a shared mailbox.",
+      "label": "Mail.Send.Shared",
+      "value": "Mail.Send.Shared"
+     }
+    ],
+    "default": [
+     "Mail.Read"
+    ],
+    "description": "Microsoft Graph permissions requested at sign-in. ELITEA passes them to Microsoft as-is.\n\n- The token always holds every permission you already approved for this Entra app, so unticking a box does not remove access granted before.\n- To remove a granted permission, revoke it on the app's Manage your application page at https://myapps.microsoft.com (or ask your Entra admin), then sign in again.\n- To strictly limit what a toolkit can do, use a separate Entra app that has only the permissions you need.\n- offline_access is always added so the token can be refreshed.",
+    "title": "Scopes",
+    "ui_component": "checkbox_list"
+   }
+  },
+  "title": "OutlookConfiguration",
+  "type": "object"
+ },
+ "type": "outlook",
+ "upstream": {
+  "branch": "main",
+  "captured_at": "2026-11-18",
+  "captured_with": "pydantic 2.12.5 model_json_schema() with the ADR-0057 deltas: refresh_token removed (never stored in a credential's data, decision 4)",
+  "commit": "b3f1d7413019b2ba0d59c44bbcd2b03c0d83abeb",
+  "committed_at": "2026-11-18",
+  "paths": [
+   "elitea_sdk/configurations/outlook.py",
+   "elitea_sdk/configurations/microsoft_graph_scopes.py",
+   "elitea_sdk/configurations/oauth_app_mode.py"
+  ],
+  "repo": "EliteaAI/elitea-sdk"
+ }
+}

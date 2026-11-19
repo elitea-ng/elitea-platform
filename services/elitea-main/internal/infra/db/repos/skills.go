@@ -172,6 +172,17 @@ func (r *SkillsRepo) List(ctx context.Context, projectID string, params skills.L
 	if items == nil {
 		items = []skills.Skill{}
 	}
+	ids := make([]int64, 0, len(items))
+	for _, item := range items {
+		if id, err := strconv.ParseInt(item.ID, 10, 64); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	states, err := skillTrustStates(ctx, r.pool, s, projectID, ids)
+	if err != nil {
+		return skills.ListResponse{}, err
+	}
+	withTrust(items, states)
 
 	totalPages := total / limit
 	if total%limit > 0 {
@@ -554,6 +565,15 @@ func (r *SkillsRepo) getSkillWithVersions(ctx context.Context, projectID, skillI
 		sk.Tags = current.Tags
 		picked := *current
 		sk.VersionDetails = &picked
+	}
+	if id, err := strconv.ParseInt(sk.ID, 10, 64); err == nil {
+		states, err := skillTrustStates(ctx, r.pool, s, projectID, []int64{id})
+		if err != nil {
+			return skills.Skill{}, err
+		}
+		if state, ok := states[id]; ok {
+			sk.Trust = &state
+		}
 	}
 	return sk, nil
 }

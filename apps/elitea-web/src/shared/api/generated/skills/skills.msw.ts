@@ -282,6 +282,19 @@ export const getListApplicationSkillsResponseMock =
           faker.string.alpha({ length: { min: 10, max: 20 } }),
           undefined,
         ]),
+        trust: faker.helpers.arrayElement([
+          {
+            ...{
+              foreign: faker.datatype.boolean(),
+              state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+              publisher_project_id: faker.helpers.arrayElement([
+                faker.number.int(),
+                undefined,
+              ]),
+            },
+          },
+          undefined,
+        ]),
         created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
         updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
       })),
@@ -433,6 +446,19 @@ export const getListSkillsResponseMock = (
       faker.string.alpha({ length: { min: 10, max: 20 } }),
       undefined,
     ]),
+    trust: faker.helpers.arrayElement([
+      {
+        ...{
+          foreign: faker.datatype.boolean(),
+          state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          publisher_project_id: faker.helpers.arrayElement([
+            faker.number.int(),
+            undefined,
+          ]),
+        },
+      },
+      undefined,
+    ]),
     created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
     updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   })),
@@ -536,6 +562,19 @@ export const getCreateSkillResponseMock = (
   ]),
   default_version_id: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  trust: faker.helpers.arrayElement([
+    {
+      ...{
+        foreign: faker.datatype.boolean(),
+        state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        publisher_project_id: faker.helpers.arrayElement([
+          faker.number.int(),
+          undefined,
+        ]),
+      },
+    },
     undefined,
   ]),
   created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
@@ -1222,6 +1261,19 @@ export const getGetSkillResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
+  trust: faker.helpers.arrayElement([
+    {
+      ...{
+        foreign: faker.datatype.boolean(),
+        state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        publisher_project_id: faker.helpers.arrayElement([
+          faker.number.int(),
+          undefined,
+        ]),
+      },
+    },
+    undefined,
+  ]),
   created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   ...overrideResponse,
@@ -1322,6 +1374,19 @@ export const getUpdateSkillResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
+  trust: faker.helpers.arrayElement([
+    {
+      ...{
+        foreign: faker.datatype.boolean(),
+        state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        publisher_project_id: faker.helpers.arrayElement([
+          faker.number.int(),
+          undefined,
+        ]),
+      },
+    },
+    undefined,
+  ]),
   created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   ...overrideResponse,
@@ -1420,6 +1485,19 @@ export const getCreateSkillVersionResponseMock = (
   ]),
   default_version_id: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  trust: faker.helpers.arrayElement([
+    {
+      ...{
+        foreign: faker.datatype.boolean(),
+        state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        publisher_project_id: faker.helpers.arrayElement([
+          faker.number.int(),
+          undefined,
+        ]),
+      },
+    },
     undefined,
   ]),
   created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
@@ -1535,6 +1613,19 @@ export const getGetSkillVersionResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
+  trust: faker.helpers.arrayElement([
+    {
+      ...{
+        foreign: faker.datatype.boolean(),
+        state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        publisher_project_id: faker.helpers.arrayElement([
+          faker.number.int(),
+          undefined,
+        ]),
+      },
+    },
+    undefined,
+  ]),
   created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   ...overrideResponse,
@@ -1633,6 +1724,19 @@ export const getUpdateSkillVersionResponseMock = (
   ]),
   default_version_id: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  trust: faker.helpers.arrayElement([
+    {
+      ...{
+        foreign: faker.datatype.boolean(),
+        state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        publisher_project_id: faker.helpers.arrayElement([
+          faker.number.int(),
+          undefined,
+        ]),
+      },
+    },
     undefined,
   ]),
   created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
@@ -1735,6 +1839,19 @@ export const getRestoreSkillVersionResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
+  trust: faker.helpers.arrayElement([
+    {
+      ...{
+        foreign: faker.datatype.boolean(),
+        state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        publisher_project_id: faker.helpers.arrayElement([
+          faker.number.int(),
+          undefined,
+        ]),
+      },
+    },
+    undefined,
+  ]),
   created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   ...overrideResponse,
@@ -1833,6 +1950,19 @@ export const getSetDefaultVersionResponseMock = (
   ]),
   default_version_id: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  trust: faker.helpers.arrayElement([
+    {
+      ...{
+        foreign: faker.datatype.boolean(),
+        state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        publisher_project_id: faker.helpers.arrayElement([
+          faker.number.int(),
+          undefined,
+        ]),
+      },
+    },
     undefined,
   ]),
   created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
@@ -1940,6 +2070,19 @@ export const getImportSkillResponseMock = (
           faker.string.alpha({ length: { min: 10, max: 20 } }),
           undefined,
         ]),
+        trust: faker.helpers.arrayElement([
+          {
+            ...{
+              foreign: faker.datatype.boolean(),
+              state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+              publisher_project_id: faker.helpers.arrayElement([
+                faker.number.int(),
+                undefined,
+              ]),
+            },
+          },
+          undefined,
+        ]),
         created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
         updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
       },
@@ -2041,6 +2184,19 @@ export const getImportSkillResponseMock = (
       ]),
       default_version_id: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      trust: faker.helpers.arrayElement([
+        {
+          ...{
+            foreign: faker.datatype.boolean(),
+            state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+            publisher_project_id: faker.helpers.arrayElement([
+              faker.number.int(),
+              undefined,
+            ]),
+          },
+        },
         undefined,
       ]),
       created_at: faker.date.past().toISOString().slice(0, 19) + "Z",

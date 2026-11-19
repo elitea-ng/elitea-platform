@@ -1937,7 +1937,6 @@
   "pages.toolkits.editToolkit.copyLinkCopied": "Kopiert!",
   "pages.toolkits.editToolkit.indexesTab": "Indizes",
   "pages.toolkits.editToolkit.save": "Speichern",
-  "pages.toolkits.editToolkit.saveBlockedByCredential": "Die ausgewählten Zugangsdaten haben die Verbindungsprüfung nicht bestanden, daher kann dieses Toolkit nicht gespeichert werden.",
   "pages.toolkits.editToolkit.title": "Toolkit bearbeiten",
   "pages.toolkits.editToolkit.titleMcp": "MCP bearbeiten",
   "pages.toolkits.toolkits.emptyDescription": "Erstellen Sie Ihr erstes Toolkit, um loszulegen.",

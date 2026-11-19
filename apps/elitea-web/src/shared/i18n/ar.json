@@ -1937,7 +1937,6 @@
   "pages.toolkits.editToolkit.copyLinkCopied": "تم النسخ!",
   "pages.toolkits.editToolkit.indexesTab": "الفهارس",
   "pages.toolkits.editToolkit.save": "حفظ",
-  "pages.toolkits.editToolkit.saveBlockedByCredential": "لم تجتز بيانات الاعتماد المحددة فحص الاتصال، لذلك لا يمكن حفظ مجموعة الأدوات هذه.",
   "pages.toolkits.editToolkit.title": "تعديل مجموعة الأدوات",
   "pages.toolkits.editToolkit.titleMcp": "تعديل MCP",
   "pages.toolkits.toolkits.emptyDescription": "أنشئ أول مجموعة أدوات لك للبدء.",

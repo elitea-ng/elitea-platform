@@ -14,8 +14,8 @@ use super::{
     text, web_url,
 };
 use crate::toolkits::families::web::capability::{
-    FetchProvider, FetchRequest, FetchResult, ProviderFailure, SearchOptions, SearchProvider,
-    SearchRequest, SearchResponse, SearchResult, Topic,
+    FetchProvider, FetchRequest, FetchResult, MapProvider, MapResponse, ProviderFailure,
+    SearchOptions, SearchProvider, SearchRequest, SearchResponse, SearchResult, SiteRequest, Topic,
 };
 use crate::toolkits::families::web::config::ProviderConfig;
 use crate::toolkits::families::web::meter::Units;
@@ -25,6 +25,7 @@ use crate::toolkits::families::web::transport::{ProviderError, Transport};
 pub(crate) const ORIGINS: &[&str] = &["https://api.firecrawl.dev"];
 const SEARCH_URL: &str = "https://api.firecrawl.dev/v2/search";
 const SCRAPE_URL: &str = "https://api.firecrawl.dev/v2/scrape";
+const MAP_URL: &str = "https://api.firecrawl.dev/v2/map";
 /// The scrape timeout Firecrawl is told; we stop waiting a little later.
 const SCRAPE_TIMEOUT_MS: u64 = 20_000;
 const SCRAPE_WAIT: Duration = Duration::from_secs(25);
@@ -54,8 +55,13 @@ pub(crate) fn construct(config: &ProviderConfig, transport: Arc<dyn Transport>) 
             key: key.clone(),
             transport: Arc::clone(&transport),
         })),
-        fetch: Some(Box::new(Firecrawl { key, transport })),
+        fetch: Some(Box::new(Firecrawl {
+            key: key.clone(),
+            transport: Arc::clone(&transport),
+        })),
         host_intel: None,
+        crawl: None,
+        map: Some(Box::new(Firecrawl { key, transport })),
     }
 }
 
@@ -207,6 +213,59 @@ impl FetchProvider for Firecrawl {
             content,
             format: "markdown",
             truncated: false,
+            units: Units::pages(1),
+        })
+    }
+}
+
+#[async_trait]
+impl MapProvider for Firecrawl {
+    /// `/v2/map` lists a site's URLs; it takes no link depth.
+    fn honours_depth(&self) -> bool {
+        false
+    }
+
+    /// One credit per map call, billed as the page read it is priced as
+    /// (`firecrawl` / `web_fetch` is a per-page price).
+    fn estimate(&self, _request: &SiteRequest) -> Units {
+        Units::pages(1)
+    }
+
+    async fn map(&self, request: &SiteRequest) -> Result<MapResponse, ProviderFailure> {
+        let mut body = json!({
+            "url": request.url.as_str(),
+            "limit": request.limit,
+            "includeSubdomains": false,
+        });
+        if let Some(instructions) = &request.instructions {
+            body["search"] = Value::String(instructions.clone());
+        }
+        let outgoing = post_json(MAP_URL, &self.key, &body, QUERY_TIMEOUT)?;
+        let answer = self
+            .transport
+            .send(outgoing, MAX_QUERY_RESPONSE_BYTES)
+            .await?;
+        if let Some(error) = answer.error() {
+            return Err(error.into());
+        }
+        let value = answer.json()?;
+        let links = object(&value)?
+            .get("links")
+            .and_then(Value::as_array)
+            .ok_or(ProviderError::InvalidResponse)?;
+        // A link is a URL string, or an object with a `url` (v2).
+        let urls = links
+            .iter()
+            .filter_map(|link| match link {
+                Value::String(url) => Some(url.clone()),
+                Value::Object(link) => text(link, "url"),
+                _ => None,
+            })
+            .filter(|url| web_url(url))
+            .take(request.limit as usize)
+            .collect();
+        Ok(MapResponse {
+            urls,
             units: Units::pages(1),
         })
     }

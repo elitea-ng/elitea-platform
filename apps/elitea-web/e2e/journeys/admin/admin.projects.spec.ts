@@ -131,6 +131,19 @@ adminTest('J31d: suspending a project reaches the server and survives a full rel
   await expect(page.getByText(SEEDED_TEAM_ACTIVE)).toBeVisible({ timeout: 20_000 });
 
   const row = page.getByRole('row').filter({ hasText: SEEDED_TEAM_ACTIVE });
+  // A RETRY starts where the failed attempt stopped. WebKit can die on the
+  // reload below ("WebKit encountered an internal error") after the suspend was
+  // written, and the retry then found the project suspended and failed on the
+  // "Active" check, hiding the real outcome behind a leaked state. Put the
+  // project back first, so every attempt starts from the seed.
+  const leftSuspended = row.getByRole('button', { name: 'Unsuspend project' });
+  if (await leftSuspended.isVisible()) {
+    await Promise.all([
+      page.waitForResponse((r) => r.url().includes('/admin/project_suspend/administration/') && r.request().method() === 'PUT'),
+      leftSuspended.click(),
+    ]);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+  }
   // The seed leaves this one ACTIVE; a test that started from "already
   // suspended" would prove nothing about the write.
   await expect(row.getByText('Active', { exact: true })).toBeVisible();

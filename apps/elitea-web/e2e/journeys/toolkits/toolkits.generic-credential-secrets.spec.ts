@@ -205,7 +205,7 @@ test('ELITEA-1088/1090/1091/1093/1097: a toolkit whose credential cannot be reso
  * suite can author (no real GitHub/Jira/etc. endpoint reachable) is refused
  * `unreachable` before the dial, which BLOCKS Save outright (measured: the
  * button stays `disabled`, `aria-describedby` names
- * "toolkit-save-disabled-reason": "The selected credential did not pass its
+ * "toolkit-save-credential-warning": "The selected credential did not pass its
  * connection check…"). The modal itself has no author-conditional branch
  * (`credentialWarning.helpers.ts`'s `hasCredentialConfigChanged` reads only
  * the settings diff), so this is an environment limit, not a product gap —

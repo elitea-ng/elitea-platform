@@ -1656,7 +1656,7 @@ fn invalid_browser_toolset() -> NativeAgentAssemblyError {
 pub(super) fn snapshot_carries_web_family(snapshot: &AdmittedToolSnapshot<'_>) -> bool {
     snapshot.iter().any(|reference| {
         reference.kind() == FrozenToolKind::Configured
-            && matches!(reference.tool_type(), "web" | "host_intel")
+            && matches!(reference.tool_type(), "web" | "host_intel" | "tavily")
     })
 }
 

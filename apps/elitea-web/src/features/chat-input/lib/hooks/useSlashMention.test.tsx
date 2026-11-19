@@ -156,6 +156,42 @@ describe('useSlashMention', () => {
     ]);
   });
 
+  it('onSelectSkillsEntry writes "/skill " over the typed fragment, closes the list and says where the cursor is', () => {
+    const chatInput = makeRef();
+    const handle = chatInput.current as FakeChatInput;
+    handle.content = '/sk';
+    handle.cursor = 3;
+    const { result } = renderHookWithProviders(() => useSlashMention({ chatInput, participants: [] }));
+
+    act(() => result.current.onInputChange('/sk'));
+    expect(result.current.phase).toBe('toolkit');
+    let inserted: ReturnType<typeof result.current.onSelectSkillsEntry> = null;
+    act(() => {
+      inserted = result.current.onSelectSkillsEntry();
+    });
+
+    expect(handle.content).toBe('/skill ');
+    expect(inserted).toEqual({ text: '/skill ', cursor: 7 });
+    expect(result.current.phase).toBe('idle');
+  });
+
+  it('onSelectSkillsEntry writes "~" when the "/" is not at the start of a line, where "/skill" would not open the picker', () => {
+    const chatInput = makeRef();
+    const handle = chatInput.current as FakeChatInput;
+    handle.content = 'use /';
+    handle.cursor = 5;
+    const { result } = renderHookWithProviders(() => useSlashMention({ chatInput, participants: [] }));
+
+    act(() => result.current.onInputChange('use /'));
+    let inserted: ReturnType<typeof result.current.onSelectSkillsEntry> = null;
+    act(() => {
+      inserted = result.current.onSelectSkillsEntry();
+    });
+
+    expect(handle.content).toBe('use ~');
+    expect(inserted).toEqual({ text: 'use ~', cursor: 5 });
+  });
+
   it('onInputChange("") clears mentions and resets', () => {
     const chatInput = makeRef();
     const participants: Participant[] = [toolkitParticipant()];

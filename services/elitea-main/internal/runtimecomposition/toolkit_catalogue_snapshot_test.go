@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/runtimecomposition"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rustonly"
 )
 
 func TestPinnedToolkitCatalogueSnapshotLoads(t *testing.T) {
@@ -15,8 +16,10 @@ func TestPinnedToolkitCatalogueSnapshotLoads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load pinned toolkit catalogue snapshot: %v", err)
 	}
-	if catalogue.EntryCount() != 58 {
-		t.Errorf("entry count=%d, want 58", catalogue.EntryCount())
+	// 53 types are pinned at the SDK revision; every type authored natively
+	// (rustonly new_types) is added on top, so adding one does not edit this.
+	if want := 53 + len(rustonly.TypeNames()); catalogue.EntryCount() != want {
+		t.Errorf("entry count=%d, want %d", catalogue.EntryCount(), want)
 	}
 	if catalogue.SDKRevision() == "" {
 		t.Error("catalogue names no SDK revision")

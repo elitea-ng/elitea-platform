@@ -45,7 +45,7 @@ import { MentionPhase, SKILL_TRIGGER } from '../constants/mention.constants';
 import type { MentionPhaseValue } from '../constants/mention.constants';
 import { parseMentionRanges } from '../utils/instructionsMention.utils';
 import { useProjectSkillList } from './useProjectSkillList';
-import { useUntrustedSkillIds } from './useSkillPickerTrust';
+import { untrustedSkillIds } from './useSkillPickerTrust';
 import type { ProjectSkillEntry, ProjectSkillList } from './useProjectSkillList';
 import type { MentionableItem, MentionRange } from '../utils/instructionsMention.utils';
 import type { ChatInputHandle } from '../chatInputHandle';
@@ -184,7 +184,8 @@ export interface UseChatSkillMentionResult {
   readonly filteredItems: readonly SkillMentionItem[];
   readonly committedMentions: readonly CommittedSkillMention[];
   readonly highlightedIndex: number;
-  readonly onSkillInputChange: (value: string) => void;
+  /** `cursor` is the caret after the change when the textarea has not moved it yet (a programmatic insert). */
+  readonly onSkillInputChange: (value: string, cursor?: number) => void;
   readonly onSkillKeyDown: (event: { readonly key: string; preventDefault: () => void }) => void;
   readonly onSelectSkill: (item: SkillMentionItem) => void;
   readonly resetSkill: () => void;
@@ -294,13 +295,13 @@ export function useChatSkillMention({ chatInput, activeParticipant, fallbackAppV
   }, []);
 
   const onSkillInputChange = useCallback(
-    (value: string) => {
+    (value: string, cursor?: number) => {
       setInputContent(value);
       if (!value) {
         resetSkill();
         return;
       }
-      const cursorPos = chatInput.current?.getCursorPosition() ?? value.length;
+      const cursorPos = cursor ?? chatInput.current?.getCursorPosition() ?? value.length;
       const detected = detectMention(value, cursorPos);
       if (!detected) {
         resetSkill();
@@ -318,8 +319,7 @@ export function useChatSkillMention({ chatInput, activeParticipant, fallbackAppV
     if (!itemQuery) return mentionableItems;
     return mentionableItems.filter((item) => item.name.toLowerCase().includes(itemQuery.toLowerCase()));
   }, [mentionableItems, itemQuery]);
-  const shownIds = useMemo(() => matchingItems.flatMap((item) => (item.isProject ? [item.skillId] : [])), [matchingItems]);
-  const untrustedIds = useUntrustedSkillIds(projectId, pins, shownIds, phase === MentionPhase.Items);
+  const untrustedIds = useMemo(() => untrustedSkillIds(pins, projectEntries), [pins, projectEntries]);
   const filteredItems = useMemo(() => markItems(matchingItems, pinnedIds, untrustedIds), [matchingItems, pinnedIds, untrustedIds]);
   const pinSkill = useMemo(
     () => (conversationId === undefined ? undefined : async (item: SkillMentionItem): Promise<void> => { await pinAsync({ skill_id: Number(item.skillId) }); }),

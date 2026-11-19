@@ -33,7 +33,7 @@ Two more actions put a skill in a conversation you already have:
 - **Use in a chat** (a listing page, or a skill's row menu) pins the skill to a new chat or to a conversation you pick. A listing is pinned by reference, so nothing is forked.
 - **Add to a conversation** (a listing page, needs the fork permission) copies the listing version into your project and pins that copy to the conversation you pick.
 
-A conversation holds at most five skills. See [Skills in a conversation](/menus/chat#skills-in-a-conversation).
+A conversation holds at most five skills. In the desktop app a local thread pins one of your project’s skills from its `/` menu, and both actions above work on a local thread: a Marketplace listing is copied into your project first, and the copy is pinned. See [Skills in a conversation](/menus/chat#skills-in-a-conversation).
 
 ## Versions
 
@@ -71,7 +71,7 @@ Open the agent, scroll to its **Skills** section, and select **+ Skill** to sear
 
 ## Use a skill in chat
 
-In a conversation, type `~` or `/skill` to open a picker of the skills you can use, then select one to invoke its instructions for that turn. The skills pinned to the conversation come first. Both ways write the same `~name` into your message, so `~` stays as it was. A chat with only a model takes project skills too. On an agent chat the picker also lists the agent's own skills. A skill from another project that your project has not trusted carries an **Untrusted** badge, and a pinned one carries **Pinned**. **Pin to this conversation** on a row pins that skill without picking it for the message. The mobile app has the same list: type `/`, choose **Skills** (or type `/skill`), and the skills pinned to the conversation come first.
+In a conversation, type `~` or `/skill` to open a picker of the skills you can use, then select one to invoke its instructions for that turn. The skills pinned to the conversation come first. Both ways write the same `~name` into your message, so `~` stays as it was. A chat with only a model takes project skills too. On an agent chat the picker also lists the agent's own skills. A skill from another project that your project has not trusted carries an **Untrusted** badge, and a pinned one carries **Pinned**. **Pin to this conversation** on a row pins that skill without picking it for the message. The `/` list starts with a **Skills** entry (on the web and desktop apps, and on mobile): choose it, or type `/skill`, and the skills pinned to the conversation come first. The **Untrusted** badge comes with the skills list itself, so it shows at once on every app, mobile included, even for a skill that is not pinned.
 
 ### Skills from another project are untrusted until you trust them
 

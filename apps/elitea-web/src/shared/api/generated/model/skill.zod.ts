@@ -41,6 +41,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { SkillTrustState } from "./skillTrustState.zod";
 import { SkillVersion } from "./skillVersion.zod";
 
 export const Skill = zod
@@ -79,6 +80,9 @@ export const Skill = zod
       .describe(
         "skills.meta.default_version_id (issue 874), mirroring applications.meta.default_version_id. The version a NEW attachment proposes. Does NOT change which version an EXISTING agent attachment resolves at chat time — that stays keyed off entity_skill_mapping.skill_version_id, fixed at attach time.",
       ),
+    trust: SkillTrustState.optional().describe(
+      "What this project trusts of the skill's current base text (client contract 1.63, ADR-0051 amendment 1, A1.6), so a list shows the Untrusted badge without one getSkillTrust call per row. Absent when the skill has no base version.",
+    ),
     created_at: zod.iso.datetime({ offset: true }),
     updated_at: zod.iso.datetime({ offset: true }),
   })

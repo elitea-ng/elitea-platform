@@ -631,6 +631,23 @@
       "label": "SQL"
     }
   },
+  "tavily": {
+    "metadata": {
+      "categories": [
+        "other"
+      ],
+      "extra_categories": [
+        "tavily",
+        "web",
+        "search",
+        "internet",
+        "extract",
+        "crawl"
+      ],
+      "icon_url": null,
+      "label": "Tavily"
+    }
+  },
   "testio": {
     "metadata": {
       "categories": [

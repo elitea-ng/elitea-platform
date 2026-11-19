@@ -3500,6 +3500,126 @@
     "title": "sql",
     "type": "object"
   },
+  "tavily": {
+    "metadata": {
+      "categories": [
+        "other"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "tavily",
+        "web",
+        "search",
+        "internet",
+        "extract",
+        "crawl"
+      ],
+      "has_function_validators": false,
+      "icon_url": null,
+      "label": "Tavily",
+      "tool_spend": {
+        "backend": "tavily",
+        "chat_tools": [
+          "web_search",
+          "web_extract"
+        ],
+        "configuration_type": "tavily",
+        "feature": "web_search",
+        "label": "Web search",
+        "max_units_per_call": 12,
+        "operations": [
+          "search",
+          "extract",
+          "crawl",
+          "map"
+        ],
+        "unit": "credit"
+      }
+    },
+    "name_required": true,
+    "properties": {
+      "allowed_domains": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Allowed Domains",
+        "type": "array"
+      },
+      "blocked_domains": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Blocked Domains",
+        "type": "array"
+      },
+      "extract_depth": {
+        "enum": [
+          "basic",
+          "advanced"
+        ],
+        "title": "Extract Depth",
+        "type": "string"
+      },
+      "max_page_chars": {
+        "title": "Max Page Chars",
+        "type": "integer"
+      },
+      "max_results": {
+        "title": "Max Results",
+        "type": "integer"
+      },
+      "max_search_depth": {
+        "enum": [
+          "basic",
+          "advanced"
+        ],
+        "title": "Max Search Depth",
+        "type": "string"
+      },
+      "per_run_call_cap": {
+        "title": "Per Run Call Cap",
+        "type": "integer"
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "web_crawl": {
+            "type": "object"
+          },
+          "web_extract": {
+            "type": "object"
+          },
+          "web_map": {
+            "type": "object"
+          },
+          "web_search": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "web_search",
+            "web_extract",
+            "web_crawl",
+            "web_map"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      },
+      "tavily_configuration": {
+        "$ref": "#/$defs/tavily",
+        "configuration_types": [
+          "tavily"
+        ]
+      }
+    },
+    "required": [
+      "tavily_configuration"
+    ],
+    "title": "tavily",
+    "type": "object"
+  },
   "testio": {
     "metadata": {
       "categories": [
@@ -3766,7 +3886,13 @@
       },
       "selected_tools": {
         "args_schemas": {
+          "web_crawl": {
+            "type": "object"
+          },
           "web_fetch": {
+            "type": "object"
+          },
+          "web_map": {
             "type": "object"
           },
           "web_search": {
@@ -3775,7 +3901,9 @@
         },
         "items": {
           "enum": [
+            "web_crawl",
             "web_fetch",
+            "web_map",
             "web_search"
           ],
           "type": "string"
