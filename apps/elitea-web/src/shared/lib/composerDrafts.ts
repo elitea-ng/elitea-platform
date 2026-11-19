@@ -13,7 +13,7 @@
  */
 import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
 
-import { createStorage } from '@/shared/lib/storage';
+import { createStorage, onNamespaceCleared } from '@/shared/lib/storage';
 
 const DRAFTS_KEY = 'composer.drafts';
 export const MAX_DRAFTS = 50;
@@ -63,12 +63,28 @@ function validateAliases(raw: unknown): Readonly<Record<string, string>> {
   return Object.fromEntries(Object.entries(raw as Record<string, unknown>).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
 }
 
+/**
+ * The parsed alias map, kept in memory: the composer asks for its slot on
+ * every render, and a storage read plus a JSON parse per keystroke is not
+ * needed for a map that changes when a conversation loads. Dropped when this
+ * module writes it, when the sign-out sweep clears the namespace, and when
+ * another tab writes the key (`storage`).
+ */
+let aliasCache: Readonly<Record<string, string>> | undefined;
+const dropAliasCache = (): void => {
+  aliasCache = undefined;
+};
+onNamespaceCleared(dropAliasCache);
+if (typeof window !== 'undefined') window.addEventListener('storage', dropAliasCache);
+
 function readAliases(): Readonly<Record<string, string>> {
+  if (aliasCache !== undefined) return aliasCache;
   try {
-    return createStorage('local').getJSON(ALIASES_KEY, validateAliases) ?? {};
+    aliasCache = createStorage('local').getJSON(ALIASES_KEY, validateAliases) ?? {};
   } catch {
     return {};
   }
+  return aliasCache;
 }
 
 const slotListeners = new Set<() => void>();
@@ -116,7 +132,9 @@ function registerAlias(alias: string, canonical: string): void {
     // Re-added last, so the newest aliases are the ones the cap keeps.
     const others = Object.entries(readAliases()).filter(([key]) => key !== alias);
     createStorage('local').setJSON(ALIASES_KEY, Object.fromEntries([...others, [alias, canonical]].slice(-MAX_ALIASES)));
+    dropAliasCache();
   } catch {
+    dropAliasCache();
     // Storage refused: the two forms keep separate drafts.
   }
 }
