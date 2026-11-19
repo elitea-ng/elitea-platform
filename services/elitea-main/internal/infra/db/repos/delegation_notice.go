@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 
@@ -83,25 +84,8 @@ func projectDelegationNotice(ctx context.Context, tx sqlExecutor, projectID int6
 	// The worker names the root caller by its runtime label ("elitea-agent"),
 	// not by the agent: the stored notice carries the saved agent's own name
 	// when its id is known, so the chat says which agent could not delegate.
-	if callerID := notice.Edge.CallerID; callerID > 0 {
-		// The application tables belong to the agent editor: a tenant without
-		// them keeps the worker's label rather than failing the frame.
-		var present bool
-		if err := tx.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, schema+".applications").Scan(&present); err != nil {
-			return fmt.Errorf("look for the application table: %w", err)
-		}
-		if present {
-			var name string
-			switch err := tx.QueryRow(ctx, fmt.Sprintf(`SELECT name FROM %s.applications WHERE id = $1`, schema), callerID).Scan(&name); {
-			case err == nil:
-				if clipped := strings.TrimSpace(name); clipped != "" {
-					notice.Edge.CallerName = delegationnotice.ClipName(clipped)
-				}
-			case errors.Is(err, pgx.ErrNoRows):
-			default:
-				return fmt.Errorf("read the calling agent's name: %w", err)
-			}
-		}
+	if name := savedAgentName(ctx, tx, schema, notice.Edge.CallerID); name != "" {
+		notice.Edge.CallerName = name
 	}
 	groupID, err := lockCurrentAgentMessageGroup(ctx, tx, schema, frame.Fence.ExecutionID, binding)
 	if err != nil {
@@ -206,4 +190,33 @@ ORDER BY array_position($1::bigint[], id)`, owners)
 		}
 	}
 	return names, rows.Err()
+}
+
+// savedAgentName is the display name of a saved agent, best effort: any
+// failure is logged and answers "", so the notice keeps the worker's label and
+// the frame is never refused for a display name. The read runs under a
+// savepoint because a failed statement would otherwise abort the frame's
+// transaction.
+func savedAgentName(ctx context.Context, tx sqlExecutor, schema string, applicationID int64) string {
+	if applicationID <= 0 {
+		return ""
+	}
+	if _, err := tx.Exec(ctx, "SAVEPOINT delegation_notice_name"); err != nil {
+		slog.WarnContext(ctx, "delegation notice: keep the worker's caller name", "error", err)
+		return ""
+	}
+	var name string
+	if err := tx.QueryRow(ctx, fmt.Sprintf(`SELECT name FROM %s.applications WHERE id = $1`, schema), applicationID).Scan(&name); err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			slog.WarnContext(ctx, "delegation notice: keep the worker's caller name", "application_id", applicationID, "error", err)
+			if _, rollbackErr := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT delegation_notice_name"); rollbackErr != nil {
+				slog.WarnContext(ctx, "delegation notice: roll back the name lookup", "error", rollbackErr)
+			}
+		}
+		return ""
+	}
+	if _, err := tx.Exec(ctx, "RELEASE SAVEPOINT delegation_notice_name"); err != nil {
+		slog.WarnContext(ctx, "delegation notice: release the name lookup", "error", err)
+	}
+	return delegationnotice.ClipName(strings.TrimSpace(name))
 }
