@@ -140,6 +140,8 @@ mod mcp_governed_tests;
 mod mcp_tests;
 #[cfg(test)]
 mod memory_tests;
+#[cfg(test)]
+mod microsoft_graph_common_tests;
 #[cfg(all(test, feature = "toolkit-office"))]
 mod office_test_support;
 #[cfg(test)]

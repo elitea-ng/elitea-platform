@@ -41,6 +41,14 @@ pub mod index_tools;
 pub(crate) mod index_tools;
 pub(crate) mod jira;
 pub(crate) mod keycloak;
+// The Outlook, Teams, ms_graph and Dataverse families (#2257 to #2260) are the
+// callers of its client, rules and batch; `SharePoint` already uses its token
+// lookup and requirement.
+#[allow(
+    dead_code,
+    reason = "the client, rules and batch are used by the Microsoft families that land after it"
+)]
+pub(crate) mod microsoft_graph_common;
 // Public only to the worker's composition suites (`test-support`).
 pub(crate) mod kubernetes;
 #[cfg(any(test, feature = "test-support"))]

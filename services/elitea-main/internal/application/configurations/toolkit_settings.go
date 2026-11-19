@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/microsoftauth"
 )
 
 const (
@@ -526,6 +528,12 @@ func (w *currentToolkitSettingsWalker) resolveConfigurationField(
 		if ok && actual != "" && actual != plan.expectedConfigurationType {
 			w.addViolation(fieldPath, CurrentToolkitConfigurationTypeMismatchCode)
 		}
+	}
+	// A delegated Microsoft credential reaches the worker as an access token
+	// only (ADR-0057 decision 7): its client secret and any stored refresh
+	// token never enter a claim or a frozen input, in either mode.
+	if configurationType, ok := expanded["configuration_type"].(string); ok {
+		microsoftauth.WithholdFromWorker(configurationType, expanded)
 	}
 	if w.request.Mode == CurrentToolkitSettingsReferenceMode && len(expanded) != 0 {
 		if err := w.budget.addScalar(len(CurrentFrozenConfigurationMarker)); err != nil {
