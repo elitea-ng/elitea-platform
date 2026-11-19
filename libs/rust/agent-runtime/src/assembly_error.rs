@@ -14,7 +14,7 @@
 
 use std::fmt;
 
-use crate::delegation::DelegationNotice;
+use crate::delegation::{DelegationNotice, RefusedDelegation};
 use crate::toolkits::DelegatedAuthorizationRequirement;
 
 /// Stable native assembly and result-selection failures.
@@ -91,6 +91,9 @@ pub struct NativeAgentAssemblyError {
     /// The notice of a delegation refused where no tool result can carry it
     /// (a pipeline node that runs a saved pipeline): names and ids only.
     delegation_notice: Option<Box<DelegationNotice>>,
+    /// The refusal itself, for a caller that can still answer it as a tool
+    /// result (a saved pipeline offered as a tool, FU-335).
+    delegation_refusal: Option<Box<RefusedDelegation>>,
 }
 
 impl NativeAgentAssemblyError {
@@ -101,6 +104,7 @@ impl NativeAgentAssemblyError {
             authorization: None,
             cause: None,
             delegation_notice: None,
+            delegation_refusal: None,
         }
     }
 
@@ -116,6 +120,19 @@ impl NativeAgentAssemblyError {
     #[must_use]
     pub fn delegation_notice(&self) -> Option<&DelegationNotice> {
         self.delegation_notice.as_deref()
+    }
+
+    /// Attach the refusal this failure carries, so a caller that offers the
+    /// callee as a tool can answer it as that tool's result instead.
+    #[must_use]
+    pub fn with_delegation_refusal(mut self, refused: RefusedDelegation) -> Self {
+        self.delegation_refusal = Some(Box::new(refused));
+        self
+    }
+
+    #[must_use]
+    pub fn delegation_refusal(&self) -> Option<&RefusedDelegation> {
+        self.delegation_refusal.as_deref()
     }
 
     /// Attach the worker's typed, data-free reason (see [`NativeAgentAssemblyCause`]).

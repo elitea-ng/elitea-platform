@@ -44,6 +44,9 @@ func hostsFromSettingsOfType(toolkitType string, content []byte) ([]string, erro
 	}
 	walk := hostWalk{toolkitType: toolkitType}
 	walk.value(document, 0)
+	if walk.refused != nil {
+		return nil, walk.refused
+	}
 	return walk.hosts, nil
 }
 
@@ -117,6 +120,9 @@ type hostWalk struct {
 	toolkitType string
 	nodes       int
 	hosts       []string
+	// refused is the first refusal a type's own rules made of a field
+	// (microsoftFieldHosts).
+	refused error
 }
 
 func (w *hostWalk) value(value any, depth int) {
@@ -134,6 +140,14 @@ func (w *hostWalk) value(value any, depth int) {
 				continue
 			}
 			if text, ok := child.(string); ok {
+				if skip, err := microsoftFieldHosts(w.toolkitType, key, text); err != nil {
+					if w.refused == nil {
+						w.refused = err
+					}
+					continue
+				} else if skip {
+					continue
+				}
 				if urlField(key) {
 					if host, ok := bareLabelHost(w.toolkitType, key, text); ok {
 						w.hosts = append(w.hosts, host)

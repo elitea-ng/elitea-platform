@@ -11,7 +11,8 @@ use crate::toolkits::invocation::{MaterializedToolsetError, admit_materialized_t
 use crate::toolkits::policy::ToolAdmissionPolicy;
 
 use super::client::{
-    BitbucketApi, BitbucketClient, BitbucketClientError, BitbucketOperation, CREATE_PR_DATA,
+    BitbucketApi, BitbucketClient, BitbucketClientError, BitbucketOperation, BitbucketTarget,
+    CREATE_PR_DATA,
 };
 use super::config::{BitbucketConfigError, BitbucketConfigErrorCode, BitbucketToolkitConfig};
 use crate::toolkits::families::connector_client::IntoAdk;
@@ -202,6 +203,7 @@ enum BitbucketToolKind {
     ListFiles,
     CreatePullRequest,
     CreateFile,
+    DeleteFile,
     ReadFile,
     UpdateFile,
     SetActiveBranch,
@@ -217,13 +219,14 @@ enum BitbucketToolKind {
 impl BitbucketToolKind {
     /// The SDK's `get_available_tools` order, then the file-operation tools
     /// its decorator appends.
-    const ALL: [Self; 16] = [
+    const ALL: [Self; 17] = [
         Self::CreateBranch,
         Self::DeleteBranch,
         Self::ListBranches,
         Self::ListFiles,
         Self::CreatePullRequest,
         Self::CreateFile,
+        Self::DeleteFile,
         Self::ReadFile,
         Self::UpdateFile,
         Self::SetActiveBranch,
@@ -244,6 +247,7 @@ impl BitbucketToolKind {
             Self::ListFiles => "list_files",
             Self::CreatePullRequest => "create_pull_request",
             Self::CreateFile => "create_file",
+            Self::DeleteFile => "delete_file",
             Self::ReadFile => "read_file",
             Self::UpdateFile => "update_file",
             Self::SetActiveBranch => "set_active_branch",
@@ -267,7 +271,7 @@ impl BitbucketToolKind {
             | Self::GetPullRequestChanges
             | Self::ReadMultipleFiles
             | Self::GrepFile => "read",
-            Self::DeleteBranch => "delete",
+            Self::DeleteBranch | Self::DeleteFile => "delete",
             _ => "write",
         }
     }
@@ -291,6 +295,9 @@ impl BitbucketToolKind {
             }
             Self::CreateFile => {
                 "Create file_path with file_contents on branch. An existing file is not overwritten; use update_file. This is a remote write."
+            }
+            Self::DeleteFile => {
+                "Delete file_path from branch (blank means the active branch) in a commit with commit_message (default `Delete <path>`). The file must exist. Bitbucket Server has no file-deletion endpoint and is refused with an explanation; Bitbucket Cloud deletes it. This is a remote destructive effect."
             }
             Self::ReadFile => {
                 "Read a text file from branch (blank means the active branch). Optional start_line and end_line are 1-indexed and inclusive. Results over 200000 characters return content_too_large guidance with the valid line range."
@@ -381,7 +388,9 @@ impl Tool for BitbucketTool {
         {
             return Err(resource_exhausted_arguments());
         }
-        let arguments = arguments.as_object().ok_or_else(invalid_arguments)?;
+        let (target, arguments) =
+            split_target(arguments.as_object().ok_or_else(invalid_arguments)?)?;
+        let arguments = &arguments;
         let operation = match self.kind {
             BitbucketToolKind::CreateBranch => {
                 allow(arguments, &["branch_name"])?;
@@ -427,6 +436,14 @@ impl Tool for BitbucketTool {
                     file_path: required_text(arguments, "file_path")?,
                     contents: required_string(arguments, "file_contents")?,
                     branch: optional_text(arguments, "branch")?,
+                }
+            }
+            BitbucketToolKind::DeleteFile => {
+                allow(arguments, &["file_path", "branch", "commit_message"])?;
+                BitbucketOperation::DeleteFile {
+                    file_path: required_text(arguments, "file_path")?,
+                    branch: optional_text(arguments, "branch")?,
+                    commit_message: optional_text(arguments, "commit_message")?,
                 }
             }
             BitbucketToolKind::ReadFile => {
@@ -533,14 +550,54 @@ impl Tool for BitbucketTool {
             }
         };
         self.client
-            .execute(operation)
+            .execute_for(&target, operation)
             .await
             .map_err(BitbucketClientError::into_adk)
     }
 }
 
-#[allow(clippy::too_many_lines)] // One schema per SDK args model, in source order.
+const PROJECT_DESCRIPTION: &str = "Project key (Bitbucket Server) or workspace (Bitbucket Cloud) of the repository to use. Leave empty to use the toolkit's project.";
+const REPOSITORY_DESCRIPTION: &str = "Slug of the repository to use. Leave empty to use the toolkit's repository; required only when the toolkit has no repository configured.";
+
+/// Every tool takes the repository it acts on (the SDK's `_target_fields`).
 fn schema_for(kind: BitbucketToolKind) -> Value {
+    let mut schema = base_schema_for(kind);
+    if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
+        properties.insert(
+            "project".to_owned(),
+            nullable_text("Project", PROJECT_DESCRIPTION),
+        );
+        properties.insert(
+            "repository".to_owned(),
+            nullable_text("Repository", REPOSITORY_DESCRIPTION),
+        );
+    }
+    schema
+}
+
+/// The repository a call names, and the remaining arguments.
+fn split_target(
+    arguments: &Map<String, Value>,
+) -> Result<(BitbucketTarget, Map<String, Value>), AdkError> {
+    let mut rest = arguments.clone();
+    let mut take = |name: &str| match rest.remove(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value)),
+        Some(_) => Err(invalid_arguments()),
+    };
+    let project = take("project")?;
+    let repository = take("repository")?;
+    Ok((
+        BitbucketTarget {
+            project,
+            repository,
+        },
+        rest,
+    ))
+}
+
+#[allow(clippy::too_many_lines)] // One schema per SDK args model, in source order.
+fn base_schema_for(kind: BitbucketToolKind) -> Value {
     let pr_id = |purpose: &str| {
         (
             "pr_id",
@@ -621,6 +678,24 @@ fn schema_for(kind: BitbucketToolKind) -> Value {
                 ("branch", text("Branch", "The branch to create the file in")),
             ],
             &["file_path", "file_contents", "branch"],
+        ),
+        BitbucketToolKind::DeleteFile => object(
+            "DeleteFileModel",
+            &[
+                ("file_path", text("File Path", "The path of the file")),
+                (
+                    "branch",
+                    text("Branch", "The branch to delete the file from"),
+                ),
+                (
+                    "commit_message",
+                    nullable_text(
+                        "Commit Message",
+                        "Commit message for deleting the file. Optional.",
+                    ),
+                ),
+            ],
+            &["file_path", "branch"],
         ),
         BitbucketToolKind::ReadFile => object(
             "ReadFileModel",

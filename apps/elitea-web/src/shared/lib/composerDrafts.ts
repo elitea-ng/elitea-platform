@@ -145,6 +145,22 @@ export function carryDraft(to: string, text: string): void {
 const isNewDraft = (key: string | undefined): key is string => key?.endsWith(':new') === true;
 
 /**
+ * Text a composer held when it went away WITHOUT a draft key (the chat page
+ * before its project or conversation resolves): the composer is rebuilt once
+ * they do, and the new one has a key but no memory of what was typed in the
+ * old. Handed over once, and only within UNKEYED_HANDOVER_MS: a rebuild is the
+ * same interaction, a composer opened later is another one.
+ */
+const UNKEYED_HANDOVER_MS = 5_000;
+let unkeyedHandover: { readonly text: string; readonly at: number } | undefined;
+
+function takeUnkeyedHandover(): string {
+  const held = unkeyedHandover;
+  unkeyedHandover = undefined;
+  return held !== undefined && Date.now() - held.at <= UNKEYED_HANDOVER_MS ? held.text : '';
+}
+
+/**
  * Restores `key`'s draft into the composer (`restore`) when the key arrives
  * or changes (text typed BEFORE the key arrived is kept, not replaced), saves the text as it is typed, and saves it once more as the
  * key changes or the composer goes, so the last keystrokes before a switch
@@ -179,9 +195,19 @@ export function useComposerDraft(key: string | undefined, text: string, restore:
   useEffect(() => {
     const before = previous.current;
     previous.current = key;
-    if (key === undefined) return undefined;
+    if (key === undefined) {
+      return () => {
+        if (latest.current.text.trim() !== '') unkeyedHandover = { text: latest.current.text, at: Date.now() };
+      };
+    }
     const saved = readDraft(key);
-    if (isNewDraft(before) && before !== key && saved !== '' && saved === latest.current.text) {
+    const stashed = takeUnkeyedHandover();
+    const handed = saved === '' && latest.current.text === '' ? stashed : '';
+    if (handed !== '') {
+      // A composer rebuilt as its key resolved inherits what the unkeyed one held.
+      latest.current.restore(handed);
+      latest.current = { ...latest.current, text: handed };
+    } else if (isNewDraft(before) && before !== key && saved !== '' && saved === latest.current.text) {
       // The new chat became this conversation and its text was carried here (`carryDraft`): the new chat starts empty again.
       writeDraft(before, '');
     } else if (saved !== latest.current.text && !(before === undefined && latest.current.text.trim() !== '')) {

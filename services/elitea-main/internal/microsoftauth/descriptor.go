@@ -145,6 +145,33 @@ func For(configType string) (Descriptor, bool) {
 	return Descriptor{}, false
 }
 
+// workerWithheldFields are the credential fields a worker never receives for a
+// delegated Microsoft credential (ADR-0057 decision 7): the worker holds an
+// access token only. It calls no token endpoint, so it has no use for the
+// client secret or a stored refresh token.
+var workerWithheldFields = []string{"client_secret", "refresh_token"}
+
+// WithholdFromWorker removes from data (a credential's fields on their way to
+// a worker claim or a frozen run input) every field that would let the worker
+// mint or refresh a Microsoft token. It reports whether it removed any. It
+// acts only on the types whose delegated mode is the only mode (Outlook,
+// Teams, Microsoft Graph, Dataverse): SharePoint's worker config still reads
+// its client id and secret, and its behaviour is unchanged.
+func WithholdFromWorker(configType string, data map[string]any) bool {
+	descriptor, ok := For(configType)
+	if !ok || !descriptor.delegatedAlways {
+		return false
+	}
+	removed := false
+	for _, field := range workerWithheldFields {
+		if _, present := data[field]; present {
+			delete(data, field)
+			removed = true
+		}
+	}
+	return removed
+}
+
 // Types lists the descriptor-driven credential types, in a stable order.
 func Types() []string {
 	types := make([]string, len(descriptors))
