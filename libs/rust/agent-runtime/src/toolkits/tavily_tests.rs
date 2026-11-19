@@ -250,7 +250,7 @@ async fn search_refuses_a_bad_argument_without_a_call() {
         assert_eq!(result["error"]["code"], "invalid_arguments", "{result}");
     }
     assert_eq!(transport.count(), 0);
-    assert!(meter.admitted().is_empty());
+    assert!(meter.admitted().is_empty(), "nothing was metered");
 }
 
 #[tokio::test]
@@ -374,7 +374,7 @@ async fn web_extract_refuses_urls_the_policy_does_not_allow() {
         "urls must contain at least one URL"
     );
     assert_eq!(transport.count(), 0, "nothing reaches Tavily");
-    assert!(meter.admitted().is_empty());
+    assert!(meter.admitted().is_empty(), "nothing was metered");
 }
 
 #[tokio::test]

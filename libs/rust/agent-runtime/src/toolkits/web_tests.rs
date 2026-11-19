@@ -949,5 +949,5 @@ async fn web_crawl_and_map_follow_the_fetch_url_rules() {
         .collect();
     assert_eq!(names, ["web_search", "web_fetch"]);
     assert_eq!(transport.count(), 0);
-    assert!(meter.admitted().is_empty());
+    assert!(meter.admitted().is_empty(), "nothing was metered");
 }
