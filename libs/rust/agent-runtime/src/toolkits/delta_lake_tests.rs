@@ -26,6 +26,7 @@ use super::families::delta_lake::config::{
 };
 use super::families::delta_lake::table::{DeltaTable, QueryRequest};
 use super::families::delta_lake::tools::{build_with_table, tool_catalog};
+use super::mcp_error::{FAMILY_TOOL_ERROR_CODE, McpErrorRedaction, family_visible_error};
 use super::policy::ToolAdmissionPolicy;
 
 const URL: &str = "s3://fixture-bucket/tables/events/";
@@ -151,10 +152,24 @@ fn context() -> Arc<SimpleToolContext> {
     Arc::new(SimpleToolContext::new("delta-lake-test").with_session_id("session-1"))
 }
 
+fn redaction() -> Arc<McpErrorRedaction> {
+    Arc::new(McpErrorRedaction::new(
+        ["AKIAFIXTURE", "secret-fixture-value", "token-fixture-value"],
+        "",
+    ))
+}
+
 async fn tools_for(table: DeltaTable, selected: &[&str]) -> Vec<Arc<dyn Tool>> {
     let selected: Vec<String> = selected.iter().map(|name| (*name).to_owned()).collect();
-    let toolset =
-        build_with_table("lake", &selected, &policy(), &Arc::new(table), PREFIX).expect("toolset");
+    let toolset = build_with_table(
+        "lake",
+        &selected,
+        &policy(),
+        &Arc::new(table),
+        PREFIX,
+        &redaction(),
+    )
+    .expect("toolset");
     let readonly: Arc<dyn ReadonlyContext> = context();
     toolset.tools(readonly).await.expect("tools")
 }
@@ -169,12 +184,9 @@ async fn call(tools: &[Arc<dyn Tool>], name: &str, arguments: Value) -> Result<V
         .iter()
         .find(|tool| tool.name() == name)
         .unwrap_or_else(|| panic!("tool {name} is not served"));
-    match tool.execute(context(), arguments).await {
-        // A failure is the tool's answer: `Error: <sentence>`, as in the SDK.
-        Ok(Value::String(text)) if text.starts_with("Error: ") => Err(text),
-        Ok(value) => Ok(value),
-        Err(error) => Err(error.to_string()),
-    }
+    tool.execute(context(), arguments)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 fn ids(value: &Value) -> Vec<i64> {
@@ -971,6 +983,7 @@ async fn a_long_path_and_name_never_cut_the_usage_text() {
         &policy(),
         &Arc::new(table),
         &config.description_prefix(),
+        &redaction(),
     )
     .expect("toolset");
     let readonly: Arc<dyn ReadonlyContext> = context();
@@ -1055,4 +1068,67 @@ async fn a_cancelled_read_stops_at_the_next_batch() {
             .message()
             .contains("cancelled")
     );
+}
+
+/// A failure stays an error (so the turn trace, the tool breaker and the error
+/// accounting see it) and its sentence still reaches the model: the runtime
+/// keeps the message of a family-visible error and reduces every other raised
+/// error to its category.
+#[tokio::test]
+async fn a_failure_stays_an_error_and_its_sentence_reaches_the_model() {
+    let tools = fixture_tools().await;
+    let tool = tools
+        .iter()
+        .find(|tool| tool.name() == "query_table")
+        .expect("query_table");
+    let error = tool
+        .execute(context(), json!({"columns": ["nope"]}))
+        .await
+        .expect_err("a missing column is an error, not a result");
+    assert_eq!(error.code, FAMILY_TOOL_ERROR_CODE);
+    assert_eq!(error.message, "Column 'nope' not found in table.");
+    assert_eq!(error.category, adk_core::ErrorCategory::InvalidInput);
+
+    let error = tool
+        .execute(context(), json!({"query": "name.str.contains('a')"}))
+        .await
+        .expect_err("a refused token is an error");
+    assert!(
+        error.message.contains("Unsupported token '.'"),
+        "{}",
+        error.message
+    );
+
+    // A table that cannot be read is an unavailable dependency, still an
+    // error with its sentence.
+    let tools = tools_for(
+        DeltaTable::with_store(Arc::new(InMemory::new()), URL.to_owned()),
+        &[],
+    )
+    .await;
+    let error = tools[0]
+        .execute(context(), json!({}))
+        .await
+        .expect_err("no table");
+    assert_eq!(error.category, adk_core::ErrorCategory::Unavailable);
+    assert!(error.message.contains("Error initializing DeltaTable"));
+}
+
+/// A credential in a failure text never reaches the model.
+#[test]
+fn a_family_visible_error_redacts_credentials_and_is_bounded() {
+    let error = family_visible_error(
+        adk_core::ErrorCategory::Unavailable,
+        &format!(
+            "denied for AKIAFIXTURE with secret-fixture-value and token-fixture-value {}",
+            "x".repeat(5_000)
+        ),
+        &redaction(),
+    );
+    for secret in ["AKIAFIXTURE", "secret-fixture-value", "token-fixture-value"] {
+        assert!(!error.message.contains(secret), "{}", error.message);
+    }
+    assert!(error.message.contains("[redacted]"));
+    assert!(error.message.chars().count() <= 1_003);
+    assert_eq!(error.code, FAMILY_TOOL_ERROR_CODE);
 }

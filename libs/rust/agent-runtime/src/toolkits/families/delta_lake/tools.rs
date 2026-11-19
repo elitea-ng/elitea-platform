@@ -12,6 +12,7 @@ use serde_json::{Map, Value, json};
 
 use crate::toolkits::families::integer_like::integer_like;
 use crate::toolkits::invocation::{MaterializedToolsetError, admit_materialized_toolset};
+use crate::toolkits::mcp_error::{McpErrorRedaction, family_visible_error};
 use crate::toolkits::policy::ToolAdmissionPolicy;
 
 use super::config::{DeltaLakeConfigError, DeltaLakeConfigErrorCode, DeltaLakeToolkitConfig};
@@ -203,12 +204,17 @@ pub(crate) fn build_delta_lake_toolset(
         .iter()
         .map(ToString::to_string)
         .collect::<Vec<_>>();
+    // The credential values never reach the model, even in an error.
+    let mut secrets = vec![config.access_key_id(), config.secret_access_key()];
+    secrets.extend(config.session_token());
+    let redaction = Arc::new(McpErrorRedaction::new(secrets, ""));
     build_with_table(
         toolkit_name,
         &selected,
         policy,
         &Arc::new(table),
         &config.description_prefix(),
+        &redaction,
     )
 }
 
@@ -218,6 +224,7 @@ pub(in crate::toolkits) fn build_with_table(
     policy: &Arc<ToolAdmissionPolicy>,
     table: &Arc<DeltaTable>,
     prefix: &str,
+    redaction: &Arc<McpErrorRedaction>,
 ) -> Result<BasicToolset, DeltaLakeToolsetError> {
     let tools: Vec<Arc<dyn Tool>> = ALL
         .iter()
@@ -228,6 +235,7 @@ pub(in crate::toolkits) fn build_with_table(
                 toolkit_name,
                 prefix,
                 Arc::clone(table),
+                Arc::clone(redaction),
             )) as Arc<dyn Tool>
         })
         .collect();
@@ -243,11 +251,18 @@ pub(crate) fn tool_catalog() -> Vec<(&'static str, bool)> {
 struct DeltaLakeTool {
     kind: Kind,
     table: Arc<DeltaTable>,
+    redaction: Arc<McpErrorRedaction>,
     description: Box<str>,
 }
 
 impl DeltaLakeTool {
-    fn new(kind: Kind, toolkit_name: &str, prefix: &str, table: Arc<DeltaTable>) -> Self {
+    fn new(
+        kind: Kind,
+        toolkit_name: &str,
+        prefix: &str,
+        table: Arc<DeltaTable>,
+        redaction: Arc<McpErrorRedaction>,
+    ) -> Self {
         // The SDK: `S3 Path: .. Table Path: ..\nToolkit: <name>\n<doc>`, cut at
         // 1000 characters.
         let name = truncate_utf8(toolkit_name, MAX_DESCRIBED_NAME_BYTES);
@@ -255,6 +270,7 @@ impl DeltaLakeTool {
         Self {
             kind,
             table,
+            redaction,
             description: truncate_utf8(&description, MAX_DESCRIPTION_BYTES)
                 .to_owned()
                 .into_boxed_str(),
@@ -295,20 +311,18 @@ impl Tool for DeltaLakeTool {
         Some(self.kind.schema())
     }
 
-    /// A failure is the tool's answer, as in the SDK (its action returns
-    /// `Error: ...` text): the runtime reduces a raised tool error to its
-    /// category, which would hide the sentence that says what to change (the
-    /// column that is missing, the token a query is refused at). The text is
-    /// this family's own, bounded and free of credentials.
+    /// A failure stays an error, with its sentence kept: the runtime reduces a
+    /// raised tool error to its category, which would hide what to change (the
+    /// column that is missing, the token a query is refused at), so the error
+    /// is the family-visible kind (bounded, credentials redacted).
     async fn execute(
         &self,
         _context: Arc<dyn ToolContext>,
         arguments: Value,
     ) -> adk_core::Result<Value> {
-        Ok(self
-            .run(arguments)
+        self.run(arguments)
             .await
-            .unwrap_or_else(|error| Value::String(format!("Error: {}", error.message))))
+            .map_err(|error| family_visible_error(error.category, &error.message, &self.redaction))
     }
 }
 
@@ -365,7 +379,11 @@ async fn run_blocking<T: Send + 'static>(
         .map_err(|error| {
             AdkError::new(
                 ErrorComponent::Tool,
-                ErrorCategory::Unavailable,
+                if error.is_unavailable() {
+                    ErrorCategory::Unavailable
+                } else {
+                    ErrorCategory::InvalidInput
+                },
                 "delta_lake.read.failed",
                 error.message().to_owned(),
             )

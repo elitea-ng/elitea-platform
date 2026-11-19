@@ -52,19 +52,30 @@ const MAX_ERROR_CHARS: usize = 400;
 #[derive(Debug)]
 pub(in crate::toolkits) struct TableError {
     message: String,
+    /// The store or the table could not be read (as opposed to a request the
+    /// caller can correct: a missing column, a read that is too large).
+    unavailable: bool,
 }
 
 impl TableError {
     fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            unavailable: false,
         }
     }
 
     fn engine(context: &str, error: impl std::fmt::Display) -> Self {
         let text = error.to_string();
         let bounded = text.chars().take(MAX_ERROR_CHARS).collect::<String>();
-        Self::new(format!("{context}: {bounded}"))
+        Self {
+            unavailable: true,
+            ..Self::new(format!("{context}: {bounded}"))
+        }
+    }
+
+    pub(in crate::toolkits) const fn is_unavailable(&self) -> bool {
+        self.unavailable
     }
 
     pub(in crate::toolkits) fn message(&self) -> &str {
