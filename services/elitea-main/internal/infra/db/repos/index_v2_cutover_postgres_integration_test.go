@@ -580,7 +580,7 @@ func execPostgresCutoverFixture(
 	}
 }
 
-// Migration 0255 retired the v1 task-restamp intent (#1382): no column of it
+// Migration 0256 retired the v1 task-restamp intent (#1382): no column of it
 // may remain on index_ingest_jobs, and the cutover read must still work
 // without it.
 func TestPostgresIndexIngestJobsHasNoTaskRestampColumns(t *testing.T) {

@@ -8,7 +8,7 @@
 > the index registry (ADR-0030), and the Rust worker sends no
 > `agent_index_data_status` callback. The `index_meta_task_restamp_*` columns of
 > `elitea_runtime.index_ingest_jobs` (migration 0049) were dropped by shared
-> migration 0255 and the index v2 cutover preflight no longer counts them
+> migration 0256 and the index v2 cutover preflight no longer counts them
 > (#1382). This document is kept as the
 > record of what the Python path did.
 
