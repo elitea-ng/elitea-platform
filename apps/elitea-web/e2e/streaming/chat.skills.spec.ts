@@ -159,7 +159,7 @@ test('a skill is liked, tried, added, trusted, pinned and sent with /skill, and 
     const publicVersionId = String(publication.public_version_id ?? '');
     expect(publicSkillId, `the publish wrote no catalogue twin: ${JSON.stringify(publication)}`).not.toBe('');
     cleanup.push(() =>
-      page.request.delete(`${API}/elitea_core/unpublish_skill/prompt_lib/${projectId}/${authored.id}/${String(publication.source_version_id ?? publicVersionId)}`),
+      page.request.post(`${API}/elitea_core/unpublish_skill/prompt_lib/${projectId}/${authored.id}/${String(publication.source_version_id ?? '')}`),
     );
 
     let listingId = '';
@@ -243,7 +243,12 @@ test('a skill is liked, tried, added, trusted, pinned and sent with /skill, and 
     expect(ownRow?.trust, 'a skill written here needs no trust').toMatchObject({ foreign: false, state: 'not_required' });
 
     // The copy keeps the published skill's name, and a `~name` is resolved by name, so the original goes
-    // now: the catalogue twin and the copy do not depend on it, and one name must mean one skill below.
+    // now (a published skill is unpublished first): the copy does not depend on it, and one name must
+    // mean one skill below.
+    const unpublished = await page.request.post(
+      `${API}/elitea_core/unpublish_skill/prompt_lib/${projectId}/${authored.id}/${String(publication.source_version_id ?? '')}`,
+    );
+    expect(unpublished.ok(), `the original was not unpublished: ${unpublished.status()}`).toBe(true);
     const removed = await page.request.delete(`${API}/elitea_core/skill/prompt_lib/${projectId}/${authored.id}`);
     expect(removed.ok(), `the original skill was not removed: ${removed.status()}`).toBe(true);
 
