@@ -1937,7 +1937,6 @@
   "pages.toolkits.editToolkit.copyLinkCopied": "已複製！",
   "pages.toolkits.editToolkit.indexesTab": "索引",
   "pages.toolkits.editToolkit.save": "儲存",
-  "pages.toolkits.editToolkit.saveBlockedByCredential": "所選憑證未通過連線檢查，因此無法儲存此工具組。",
   "pages.toolkits.editToolkit.title": "編輯工具組",
   "pages.toolkits.editToolkit.titleMcp": "編輯 MCP",
   "pages.toolkits.toolkits.emptyDescription": "建立您的第一個工具組即可開始。",

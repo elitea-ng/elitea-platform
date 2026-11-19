@@ -499,6 +499,20 @@ func TestToolkitTypeBulkCanRevert(t *testing.T) {
 // The constant the router gates on. Pinned so a rename cannot silently leave
 // the routes gated on a string migration 0114 does not grant — which on a clean
 // database is 403 for every caller, and reads as a broken page.
+// A type that is catalogued but whose family has not landed (a native type
+// served hidden, such as tavily until #2261) stays in the admin list, so an
+// operator can set policy ahead of it, and carries the worker verdict that
+// says it is not verified. It is not dropped and not shown as supported.
+func TestAdminListKeepsAHiddenNativeTypeWithItsUnverifiedVerdict(t *testing.T) {
+	views := buildToolkitTypeViews([]string{"tavily"}, true, nil, nil)
+	require.Len(t, views, 1)
+	require.Equal(t, "tavily", views[0].Type)
+	require.True(t, views[0].Registered)
+	require.False(t, views[0].Capability.Rust)
+	require.Equal(t, string(toolkitcatalogue.VerdictUnverified), views[0].Capability.Verdict)
+	require.NotEmpty(t, views[0].Capability.Reason)
+}
+
 func TestToolkitTypeManagePermissionIsTheGrantedString(t *testing.T) {
 	require.Equal(t, "toolkit_catalogue.type.manage", ToolkitTypeManagePermission)
 }

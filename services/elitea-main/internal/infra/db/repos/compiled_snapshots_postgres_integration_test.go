@@ -208,6 +208,7 @@ func (f *compiledPGFixture) expire(t *testing.T, c domain.SnapshotCandidate) {
 
 func TestCompiledSnapshotPostgresLifecycle(t *testing.T) {
 	f := newCompiledPGFixture(t)
+	t.Run("sandbox_run_state_retention_2241", func(t *testing.T) { sandboxRunStatePurgesOnlyRunsIdlePastTheCutoff(t, f) })
 	t.Run("released_compile_then_reclaimed_staging_and_successful_ready_CAS", func(t *testing.T) {
 		f.reset(t)
 		r := f.repository(t, compiledPGQuota())

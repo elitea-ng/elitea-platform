@@ -1937,7 +1937,6 @@
   "pages.toolkits.editToolkit.copyLinkCopied": "Скопійовано!",
   "pages.toolkits.editToolkit.indexesTab": "Індекси",
   "pages.toolkits.editToolkit.save": "Зберегти",
-  "pages.toolkits.editToolkit.saveBlockedByCredential": "Вибрані облікові дані не пройшли перевірку підключення, тому цей набір інструментів не можна зберегти.",
   "pages.toolkits.editToolkit.title": "Редагувати набір інструментів",
   "pages.toolkits.editToolkit.titleMcp": "Редагувати MCP",
   "pages.toolkits.toolkits.emptyDescription": "Створіть свій перший набір інструментів, щоб почати.",

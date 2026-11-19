@@ -1937,7 +1937,6 @@
   "pages.toolkits.editToolkit.copyLinkCopied": "Skopiowano!",
   "pages.toolkits.editToolkit.indexesTab": "Indeksy",
   "pages.toolkits.editToolkit.save": "Zapisz",
-  "pages.toolkits.editToolkit.saveBlockedByCredential": "Wybrane poświadczenie nie przeszło kontroli połączenia, więc tego zestawu narzędzi nie można zapisać.",
   "pages.toolkits.editToolkit.title": "Edytuj zestaw narzędzi",
   "pages.toolkits.editToolkit.titleMcp": "Edytuj MCP",
   "pages.toolkits.toolkits.emptyDescription": "Utwórz swój pierwszy zestaw narzędzi, aby zacząć.",

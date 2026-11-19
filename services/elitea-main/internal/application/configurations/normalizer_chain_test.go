@@ -52,10 +52,10 @@ func TestCurrentConfigurationDataNormalizerOwnsEveryPinnedTypeExactlyOnce(t *tes
 		if currentWebProviderConfigurationType(entry.Type) {
 			owners++
 		}
-		if currentMicrosoftConfigurationType(entry.Type) {
+		if currentNativeConfigurationType(entry.Type) {
 			owners++
 		}
-		if currentNativeConfigurationType(entry.Type) {
+		if currentMicrosoftConfigurationType(entry.Type) {
 			owners++
 		}
 		if owners != 1 {

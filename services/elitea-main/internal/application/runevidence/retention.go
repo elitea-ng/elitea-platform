@@ -116,6 +116,24 @@ type AgentMemoryStore interface {
 	BackfillDeletedAgents(ctx context.Context, projectID int64, limit int) (int, error)
 }
 
+// SandboxStateStore is the sandbox side of the step_record sweep
+// (repos.SandboxRunState, #2241): the Rust worker's per-run rows in the
+// AgentState database follow the run retention window.
+type SandboxStateStore interface {
+	// PurgeSettledRuns deletes the dispatch journal and failure-detail rows of
+	// up to limit runs of the project with no sandbox activity since cutoff,
+	// except the runs in held (an active legal hold covers them). It returns
+	// how many runs.
+	PurgeSettledRuns(ctx context.Context, projectID int64, cutoff time.Time, held []string, limit int) (int, error)
+}
+
+// HeldRunLister names the runs of a project older than cutoff that an active
+// legal hold covers (repos.RunSteps). The sandbox purge needs it: the
+// AgentState database cannot see holds, so without it the purge does not run.
+type HeldRunLister interface {
+	HeldRunIDs(ctx context.Context, projectID int64, cutoff time.Time) ([]string, error)
+}
+
 // memoryBackfillEvery is how often the full-scan backfill runs per project:
 // the hourly purge is driven by the orphan rows a delete records, and only
 // agents deleted before that record existed need the scan.
@@ -151,8 +169,10 @@ type RetentionStats struct {
 	Orphans     int64
 	// MemoryAgents is how many deleted agents' memory the pass cleared.
 	MemoryAgents int64
-	Errors       int64
-	Truncated    bool
+	// SandboxRuns is how many runs' sandbox rows the pass cleared.
+	SandboxRuns int64
+	Errors      int64
+	Truncated   bool
 }
 
 // Sweeper enforces step_content (Content) and step_record (Records).
@@ -168,6 +188,9 @@ type Sweeper struct {
 	// memory purges a deleted agent's memory in the step_record pass; nil
 	// when no store is composed.
 	memory AgentMemoryStore
+	// sandbox clears the worker's per-run sandbox rows in the step_record
+	// pass; nil when the AgentState database is not composed.
+	sandbox SandboxStateStore
 	// backfilled is when each project's memory backfill last finished.
 	backfilled map[int64]time.Time
 
@@ -232,6 +255,50 @@ func NewSweeper(policies Policies, store RetentionStore, content ContentStore, g
 func (s *Sweeper) WithAgentMemory(store AgentMemoryStore) *Sweeper {
 	s.memory = store
 	return s
+}
+
+// WithSandboxState makes the step_record pass also delete the sandbox rows of
+// runs idle past the project's step_record maximum (#2241). A nil store leaves
+// it off.
+func (s *Sweeper) WithSandboxState(store SandboxStateStore) *Sweeper {
+	s.sandbox = store
+	return s
+}
+
+// sweepSandboxState clears, per project, the sandbox rows of runs past the
+// step_record cutoff, within its own budget like the memory purge.
+func (s *Sweeper) sweepSandboxState(ctx context.Context, maxima map[int64]int, stats *RetentionStats) {
+	if s.sandbox == nil {
+		return
+	}
+	holds, ok := s.store.(HeldRunLister)
+	if !ok {
+		return
+	}
+	class := attribute.String("class", string(retention.ClassStepRecord))
+	now := s.now().UTC()
+	budget := s.cfg.MaxPerPass
+	for _, projectID := range sortedKeys(maxima) {
+		cutoff := now.Add(-time.Duration(maxima[projectID]) * 24 * time.Hour)
+		held, err := holds.HeldRunIDs(ctx, projectID, cutoff)
+		if err != nil {
+			s.fail(ctx, stats, class, "sandbox_state", projectID, err)
+			continue
+		}
+		for budget > 0 && ctx.Err() == nil {
+			limit := min(s.cfg.BatchSize, budget)
+			cleared, err := s.sandbox.PurgeSettledRuns(ctx, projectID, cutoff, held, limit)
+			budget -= cleared
+			stats.SandboxRuns += int64(cleared)
+			if err != nil {
+				s.fail(ctx, stats, class, "sandbox_state", projectID, err)
+				break
+			}
+			if cleared < limit {
+				break
+			}
+		}
+	}
 }
 
 // sweepAgentMemory deletes, per project, the memory of agents deleted before
@@ -319,7 +386,7 @@ func (s *Sweeper) pass(ctx context.Context, class retention.DataClass, sweep fun
 	}
 	s.logger.Info("step retention: pass complete", "class", class, "projects", stats.Projects,
 		"expired", stats.Expired, "purged", stats.Purged, "deleted_runs", stats.DeletedRuns,
-		"skipped_hold", stats.SkippedHold, "anchored", stats.Anchored, "memory_agents", stats.MemoryAgents, "errors", stats.Errors, "truncated", stats.Truncated)
+		"skipped_hold", stats.SkippedHold, "anchored", stats.Anchored, "memory_agents", stats.MemoryAgents, "sandbox_runs", stats.SandboxRuns, "errors", stats.Errors, "truncated", stats.Truncated)
 	return routines.OutcomeOK, nil
 }
 
@@ -468,6 +535,7 @@ func (s *Sweeper) SweepRecords(ctx context.Context) (RetentionStats, error) {
 	// run-record pass that truncates, fails or is cancelled does not starve
 	// it; the stats it counted are returned either way.
 	s.sweepAgentMemory(ctx, maxima, &stats)
+	s.sweepSandboxState(ctx, maxima, &stats)
 	now := s.now().UTC()
 	budget := s.cfg.MaxPerPass
 	for _, projectID := range sortedKeys(maxima) {

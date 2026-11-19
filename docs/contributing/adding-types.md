@@ -105,6 +105,12 @@ class's schema. Re-capture means a new commit in `upstream` and a reviewed diff 
    `<type>` toolkit", until the worker can build it. When the family lands, add the type to
    `supported_tool_types` in `current_rust_worker_toolkit_capability_snapshot.json`, update the
    capability tests, and flip the two fixture entries.
+   A hidden type stays in the **admin** toolkit types list (Admin > Toolkits), by decision: an operator
+   can set policy ahead of the family, and the row carries the worker verdict ("not verified, no native
+   family"). It is hidden only from the create pickers. That adds a row to the
+   `admin-toolkit-types` visual baseline, so regenerate the baselines once from the final head
+   (`ci-web-e2e.yml`, `update_visual_baselines=true`). `TestAdminListKeepsAHiddenNativeTypeWithItsUnverifiedVerdict`
+   pins it.
 7. `TestNativeToolkitTypesMatchTheirCapturedUpstreamFixtures` compares the served settings fields,
    required fields and every tool's argument schema with the fixture.
 8. If a tool sends, deletes or writes, register it with the sensitive-tool guard
