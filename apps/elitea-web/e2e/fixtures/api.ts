@@ -3449,17 +3449,33 @@ export async function sendComposerMessage(
   options: { readonly sendTimeout?: number; readonly admissionTimeout?: number } = {},
 ): Promise<Response> {
   const { sendTimeout = 10_000, admissionTimeout = TURN_ADMISSION_TIMEOUT_MS } = options;
-  const isStartRequest = (request: Request): boolean => request.method() === 'POST' && startUrl.test(request.url());
-  let response: Promise<Response | null> | undefined;
-  await expect(async () => {
-    const sendButton = await fillComposer(page, prompt);
-    const sent = page.waitForRequest(isStartRequest, { timeout: sendTimeout });
-    await sendButton.click({ timeout: sendTimeout });
-    response = (await sent).response();
-  }, 'the composer must hand the message to the network (a fill the pane discards is retried)').toPass({
-    timeout: 60_000,
-    intervals: [500, 1_000],
-  });
+  // A listener, not a per-attempt waitForRequest: it outlives a click that
+  // throws AFTER the request went out, so such an attempt is never repeated
+  // (a second click would be a second turn) and no promise is left dangling.
+  let startRequest: Request | undefined;
+  const onRequest = (request: Request): void => {
+    if (startRequest === undefined && request.method() === 'POST' && startUrl.test(request.url())) {
+      startRequest = request;
+    }
+  };
+  page.on('request', onRequest);
+  try {
+    await expect(async () => {
+      if (startRequest !== undefined) return;
+      const sendButton = await fillComposer(page, prompt);
+      await sendButton.click({ timeout: sendTimeout }).catch(() => undefined);
+      await expect
+        .poll(() => startRequest !== undefined, {
+          timeout: sendTimeout,
+          message: 'no START request left the browser after Send was clicked (the pane discarded the fill)',
+        })
+        .toBe(true);
+    }).toPass({ timeout: 60_000, intervals: [500, 1_000] });
+  } finally {
+    page.off('request', onRequest);
+  }
+  const request = startRequest as Request | undefined;
+  if (request === undefined) throw new Error('the START request was recorded and then lost');
   let timer: NodeJS.Timeout | undefined;
   const budget = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
@@ -3467,8 +3483,10 @@ export async function sendComposerMessage(
     }, admissionTimeout);
   });
   try {
-    const answered = await Promise.race([response ?? Promise.resolve(null), budget]);
-    if (answered === null) throw new Error('the START POST failed before any response');
+    const answered = await Promise.race([request.response(), budget]);
+    if (answered === null) {
+      throw new Error(`the START POST failed before any response: ${request.failure()?.errorText ?? 'unknown'}`);
+    }
     return answered;
   } finally {
     clearTimeout(timer);
