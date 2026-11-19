@@ -1815,3 +1815,36 @@ elitea-llm-gateway.masterKeyRef).
 {{- end -}}
 {{- end }}
 
+{{/*
+The Microsoft Default apps seed (ADR-0057 decision 5). `microsoftOAuthApps` renders
+ONE env var, ELITEA_MICROSOFT_OAUTH_APPS, a JSON array that carries no secret, and
+one secretKeyRef env var per entry, ELITEA_MICROSOFT_OAUTH_APP_SECRET_<KEY>, bound
+to the Kubernetes Secret the entry names. <KEY> is the entry's key upper-cased with
+every character outside A-Z and 0-9 turned into an underscore (the same rule
+microsoftapps.SeedSecretEnv applies). Renders nothing for the default empty list.
+*/}}
+{{- define "elitea-main.microsoftOAuthApps" -}}
+{{- $apps := .Values.microsoftOAuthApps | default list }}
+{{- if $apps }}
+{{- $seed := list }}
+{{- $keys := dict }}
+{{- range $i, $app := $apps }}
+{{- $key := required (printf "microsoftOAuthApps[%d].key is required" $i) $app.key }}
+{{- if hasKey $keys $key }}{{ fail (printf "microsoftOAuthApps: key %q is listed twice" $key) }}{{ end }}
+{{- $_ := set $keys $key true }}
+{{- $entry := omit $app "secret" }}
+{{- $seed = append $seed $entry }}
+{{- end }}
+- name: ELITEA_MICROSOFT_OAUTH_APPS
+  value: {{ toJson $seed | quote }}
+{{- range $i, $app := $apps }}
+{{- with $app.secret }}
+- name: {{ printf "ELITEA_MICROSOFT_OAUTH_APP_SECRET_%s" (regexReplaceAll "[^A-Z0-9]" ($app.key | upper) "_") }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ required (printf "microsoftOAuthApps[%d].secret.existingSecret is required" $i) .existingSecret }}
+      key: {{ required (printf "microsoftOAuthApps[%d].secret.key is required" $i) .key }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end -}}

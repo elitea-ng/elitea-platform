@@ -49,9 +49,31 @@ import type {
   CheckStoredConfigurationConnection200,
   ConfigurationListResponse,
   ConfigurationModelListResponse,
+  MicrosoftAppOffers,
   RevalidateConfiguration200,
   StoredConnectionCheckRow,
 } from "../model";
+
+export const getListMicrosoftAppOffersResponseMock = (
+  overrideResponse: Partial<Extract<MicrosoftAppOffers, object>> = {},
+): MicrosoftAppOffers => ({
+  credential_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  apps: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.string.uuid(),
+    name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    description: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    auto_refresh_token: faker.datatype.boolean(),
+    scope_ceiling: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  })),
+  custom_app_allowed: faker.datatype.boolean(),
+  ...overrideResponse,
+});
 
 export const getListConfigurationsResponseMock = (
   overrideResponse: Partial<Extract<ConfigurationListResponse, object>> = {},
@@ -423,6 +445,32 @@ export const getRevalidateConfigurationResponseMock = (
   ...overrideResponse,
 });
 
+export const getListMicrosoftAppOffersMockHandler = (
+  overrideResponse?:
+    | MicrosoftAppOffers
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<MicrosoftAppOffers> | MicrosoftAppOffers),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/microsoft_oauth_apps/:projectId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListMicrosoftAppOffersResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListConfigurationsMockHandler = (
   overrideResponse?:
     | ConfigurationListResponse
@@ -557,6 +605,7 @@ export const getRevalidateConfigurationMockHandler = (
   );
 };
 export const getConfigurationsMock = () => [
+  getListMicrosoftAppOffersMockHandler(),
   getListConfigurationsMockHandler(),
   getListConfigurationModelsMockHandler(),
   getCheckStoredConfigurationConnectionMockHandler(),

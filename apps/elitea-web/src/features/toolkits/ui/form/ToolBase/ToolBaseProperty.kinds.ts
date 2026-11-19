@@ -56,6 +56,7 @@ export function resolveAnyOfDefault(schema: ToolPropertySchema): unknown {
 
 export type FieldKind =
   | 'openapiSpec'
+  | 'oauthAppSelect'
   | 'selectedTools'
   | 'array'
   | 'secret'
@@ -95,6 +96,7 @@ function resolveStringFieldKind(schema: ToolPropertySchema): FieldKind | undefin
  */
 export function resolveFieldKind({ key, schema, isSecret }: ResolveFieldKindParams): FieldKind {
   if (schema.ui_component === 'openapi_spec') return 'openapiSpec';
+  if (schema.ui_component === 'oauth_app_select') return 'oauthAppSelect';
   if (key === 'selected_tools') return 'selectedTools';
   if (isArrayKind(key, schema)) return 'array';
   if (isSecret) return 'secret';

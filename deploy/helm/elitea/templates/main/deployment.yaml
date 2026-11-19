@@ -219,6 +219,7 @@ spec:
                   key: {{ $ref.key }}
                   optional: {{ $ref.optional | default false }}
             {{- end }}
+            {{- include "elitea-main.microsoftOAuthApps" . | nindent 12 }}
             {{- if .Values.main.fileConfig.authConfig.enabled }}
             # ELITEA_AUTH_CONFIG_FILE has no entry in the ConfigMap above (it
             # is unset by default); this sets it. Env entries win over

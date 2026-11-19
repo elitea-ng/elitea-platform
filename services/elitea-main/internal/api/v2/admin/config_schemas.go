@@ -180,6 +180,14 @@ const (
 		"may also list clients in the NATIVE_CLIENTS_PATH file; a client saved here overrides a file entry " +
 		"with the same id."
 
+	// microsoftAppsElsewhereUnavailable — the Default app registry holds a
+	// client secret per app, sealed in the platform database and never returned,
+	// so it is served by its own routes (/admin/microsoft_oauth_apps) and not by
+	// the plugin-config value endpoints.
+	microsoftAppsElsewhereUnavailable = "Microsoft apps are registered on their own editor " +
+		"(/admin/microsoft_oauth_apps), which seals each app's client secret and generates the Microsoft Entra " +
+		"setup checklist. The plugin-config value endpoints cannot serve this section."
+
 	emailElsewhereUnavailable = "outbound e-mail is configured on the E-mail editor, which stores the relay " +
 		"settings and seals the SMTP password in the platform vault. The plugin-config value endpoints cannot " +
 		"serve this section: the password is a credential, and it is sealed rather than stored in a settings row. " +
@@ -314,6 +322,7 @@ func configSections() []map[string]any {
 		maintenanceSection(),
 		analyticsSection(),
 		emailSection(),
+		microsoftAppsSection(),
 	}
 }
 
@@ -1156,6 +1165,27 @@ func emailSection() map[string]any {
 		"order":               9,
 		"icon":                "mail_outline",
 		"required_permission": "runtime.plugins",
+		"fields":              []map[string]any{},
+	}
+}
+
+// microsoftAppsSection is the Microsoft Default app registry (ADR-0057
+// decisions 5 and 11, epic 2254 story S1b). It POINTS at its editor, as `auth`
+// and `native_clients` do, and declares no fields: an app's client secret is a
+// credential (rejectCredentialField refuses one into a plaintext row), and an
+// app is a typed record with a sealed secret, a scope ceiling and a project set,
+// which a flat value list cannot express. The `microsoft.custom_apps` switch
+// lives on the editor too, beside the apps it limits.
+func microsoftAppsSection() map[string]any {
+	return map[string]any{
+		"id":                  "microsoft_apps",
+		"managed_surface":     "microsoft_apps",
+		"unavailable_reason":  microsoftAppsElsewhereUnavailable,
+		"title":               "Microsoft apps",
+		"description":         "Register the Microsoft Entra apps people sign in with for Outlook, Teams, Microsoft Graph, Dataverse and SharePoint credentials.",
+		"order":               14,
+		"icon":                "hub",
+		"required_permission": "configuration.microsoft_apps",
 		"fields":              []map[string]any{},
 	}
 }
