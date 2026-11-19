@@ -55,13 +55,18 @@ WHERE dismissed_at IS NULL AND created_at < clock_timestamp() - interval '`+dism
 		if err != nil {
 			continue
 		}
-		var present bool
-		if err := db.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, schema+"."+table).Scan(&present); err != nil {
+		var schemaPresent, tablePresent bool
+		if err := db.QueryRow(ctx, `SELECT to_regnamespace($1) IS NOT NULL, to_regclass($2) IS NOT NULL`, schema, schema+"."+table).
+			Scan(&schemaPresent, &tablePresent); err != nil {
 			return dismissed, fmt.Errorf("marketplace: look for the %s table of project %d: %w", table, s.project, err)
 		}
 		gone := ""
-		if present {
+		switch {
+		case tablePresent:
 			gone = fmt.Sprintf(` AND NOT EXISTS (SELECT 1 FROM %s.%s t WHERE t.id = i.entity_id)`, schema, table)
+		case schemaPresent:
+			// The schema is there but not (yet) the table: a tenant mid-migration is not a removal.
+			continue
 		}
 		tag, err := db.Exec(ctx, `
 UPDATE elitea_marketplace.installs i

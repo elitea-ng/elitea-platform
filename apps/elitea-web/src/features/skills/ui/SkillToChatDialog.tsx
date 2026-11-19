@@ -94,7 +94,11 @@ function useConversationChoices(projectId: string | undefined, open: boolean): r
 async function checkTarget(projectId: string, choice: string): Promise<void> {
   if (choice === NEW_CHAT) return;
   if ((await findLocalThreadPin(choice, Number(projectId))) !== null) return;
-  const pins = unwrapListPage(await listConversationSkills(projectId, choice), 'conversationSkills').rows;
+  // A list that cannot be read leaves the answer to the pin itself, which says why it was refused.
+  const pins = await listConversationSkills(projectId, choice).then(
+    (page) => unwrapListPage(page, 'conversationSkills').rows,
+    () => [],
+  );
   if (pins.length >= CONVERSATION_SKILL_LIMIT) throw Object.assign(new Error('The conversation holds the most skills.'), { code: 'thread_skills_full' });
 }
 

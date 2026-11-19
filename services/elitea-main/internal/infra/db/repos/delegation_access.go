@@ -111,8 +111,8 @@ func (a approverAccess) HoldsToolkit(key string) bool {
 //
 // Under the governed profile the question is per (toolkit, reference): the use
 // grant that covers a reference for one toolkit does not make an approver of
-// another toolkit that names it a holder (#2215). A toolkit key with no id (a
-// built-in) falls back to the project's covered references. The broker still
+// another toolkit that names it a holder (#2215). A built-in toolkit key has no
+// id and falls back to the project's covered references; any other key fails closed. The broker still
 // decides the exact grant (agent binding, target, scopes) at every call.
 func (a approverAccess) HoldsCredential(toolkit, reference string) bool {
 	if !a.credentials {
@@ -126,7 +126,10 @@ func (a approverAccess) HoldsCredential(toolkit, reference string) bool {
 		id, err := strconv.ParseInt(rest, 10, 64)
 		return err == nil && a.usableByToolkit[id][reference]
 	}
-	return a.usableAnywhere[reference]
+	if strings.HasPrefix(toolkit, "builtin:") {
+		return a.usableAnywhere[reference]
+	}
+	return false
 }
 
 // AccessFor reads the person's two permissions in the project, and what the

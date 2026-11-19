@@ -204,17 +204,6 @@ type Reviewer interface {
 // editors' names when the viewer may not review. A principal or depth refusal
 // is never reviewable (an editor cannot fix it), so it carries neither.
 func Stamp(notice map[string]any, review Review) {
-	if name := clip(review.CallerName); name != "" {
-		if edge, ok := notice["edge"].(map[string]any); ok {
-			// A copy: a stored notice's edge map may be shared with a cache.
-			renamed := make(map[string]any, len(edge)+1)
-			for key, value := range edge {
-				renamed[key] = value
-			}
-			renamed["caller_name"] = name
-			notice["edge"] = renamed
-		}
-	}
 	switch notice["reason"] {
 	case "principal", "depth":
 		notice["can_review"] = false
@@ -272,6 +261,7 @@ func StampFrame(ctx context.Context, data []byte, projectID, userID int64, revie
 		return data
 	}
 	Stamp(notice, review)
+	nameCaller(notice, review.CallerName)
 	encoded, err := json.Marshal(notice)
 	if err != nil {
 		return data
@@ -285,6 +275,17 @@ func StampFrame(ctx context.Context, data []byte, projectID, userID int64, revie
 		return data
 	}
 	return out
+}
+
+// nameCaller replaces the worker's runtime label with the calling agent's saved name on a live frame (#2276). A
+// stored notice already carries the name it was saved with, so a rename never rewrites history.
+func nameCaller(notice map[string]any, name string) {
+	name = clip(name)
+	edge, ok := notice["edge"].(map[string]any)
+	if name == "" || !ok {
+		return
+	}
+	edge["caller_name"] = name
 }
 
 // StampMeta returns the served answer's meta with its notices stamped. The

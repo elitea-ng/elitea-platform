@@ -1940,6 +1940,9 @@ async fn publish_assembly_delegation_notice<C, K>(
                     event = "agent_assembly_delegation_notice_unpublished",
                     attempt,
                 );
+                if attempt < ASSEMBLY_NOTICE_ATTEMPTS {
+                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                }
             }
         }
     }

@@ -6103,8 +6103,9 @@ impl AgentHost {
                 .map(|other| self.api.project_skill(project_id, *other)),
         )
         .await;
-        for read in reads.into_iter().flatten() {
-            total += text_len(&read);
+        for read in reads {
+            // A held skill that cannot be read must not read as empty text.
+            total += text_len(&read.map_err(TurnError::from)?);
         }
         if total > skills::MAX_SKILL_BYTES {
             return Err(TurnError::new(
