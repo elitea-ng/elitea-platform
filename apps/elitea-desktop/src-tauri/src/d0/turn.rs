@@ -6010,7 +6010,8 @@ impl AgentHost {
             )
         })?;
         let owner = self.owner(&self.api).await?;
-        self.api
+        let new_skill = self
+            .api
             .project_skill(project_id, id)
             .await
             .map_err(|error| match error.status {
@@ -6030,12 +6031,18 @@ impl AgentHost {
             .into_iter()
             .filter(|pin| pin.project_id == project_id)
             .collect();
+        let availability = self.pins_available(&held).await;
         let gone: Vec<i64> = held
             .iter()
-            .zip(self.pins_available(&held).await)
-            .filter(|(_, available)| !available)
+            .zip(&availability)
+            .filter(|(_, available)| !**available)
             .map(|(pin, _)| pin.skill_id)
             .collect();
+        // A turn applies the pinned text whole, up to `MAX_SKILL_BYTES`
+        // together: refuse the pin that would push the thread past it, now,
+        // and not at every later turn (#2293).
+        self.check_pinned_text_fits(project_id, id, &new_skill, &held, &availability)
+            .await?;
         let workspace = workspace_id.to_owned();
         let outcome = tokio::task::spawn_blocking(move || {
             for skill_id in gone {
@@ -6062,6 +6069,50 @@ impl AgentHost {
             ));
         }
         Ok(outcome)
+    }
+
+    /// Refuses a pin whose text, with the text of the skills the thread already
+    /// holds that the person can still read, passes [`skills::MAX_SKILL_BYTES`]:
+    /// every turn would refuse with `skill_too_large` until a pin was removed. A
+    /// pin already held counts once. A held skill that cannot be read now is
+    /// left to the turn, which names it.
+    async fn check_pinned_text_fits(
+        &self,
+        project_id: i64,
+        skill_id: i64,
+        new_skill: &Value,
+        held: &[ThreadSkillPin],
+        available: &[bool],
+    ) -> Result<(), TurnError> {
+        let text_len = |skill: &Value| {
+            skill
+                .get("instructions")
+                .and_then(Value::as_str)
+                .map_or(0, str::len)
+        };
+        let others: Vec<i64> = held
+            .iter()
+            .zip(available)
+            .filter(|(pin, available)| **available && pin.skill_id != skill_id)
+            .map(|(pin, _)| pin.skill_id)
+            .collect();
+        let mut total = text_len(new_skill);
+        let reads = futures::future::join_all(
+            others
+                .iter()
+                .map(|other| self.api.project_skill(project_id, *other)),
+        )
+        .await;
+        for read in reads.into_iter().flatten() {
+            total += text_len(&read);
+        }
+        if total > skills::MAX_SKILL_BYTES {
+            return Err(TurnError::new(
+                "skill_too_large",
+                "The skills pinned to this thread would be over 64 KiB together, more than a turn can apply. Remove one to add another.",
+            ));
+        }
+        Ok(())
     }
 
     /// `thread_skill_unpin`: whether the skill was pinned.

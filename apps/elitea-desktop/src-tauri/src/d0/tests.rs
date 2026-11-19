@@ -2658,6 +2658,41 @@ async fn a_thread_pin_is_applied_to_every_turn_without_a_pick() {
 }
 
 #[tokio::test]
+async fn a_thread_pin_that_would_pass_the_size_cap_is_refused_at_the_pin() {
+    let server = serve(with_project_skills(platform(agent_details(), &[]))).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    // 13 is exactly the cap on its own: it fits, and anything more does not (#2293).
+    h.host
+        .pin_thread_skill(&h.workspace_id, "42", 1, 13)
+        .await
+        .unwrap();
+    assert_eq!(
+        h.host
+            .pin_thread_skill(&h.workspace_id, "42", 1, 12)
+            .await
+            .unwrap_err()
+            .code,
+        "skill_too_large"
+    );
+    assert_eq!(
+        h.host
+            .thread_skills(&h.workspace_id, "42")
+            .await
+            .unwrap()
+            .iter()
+            .map(|(pin, _)| pin.skill_id)
+            .collect::<Vec<_>>(),
+        vec![13],
+        "the refused pin was not written"
+    );
+    // Pinning the one already held changes nothing and is never refused.
+    h.host
+        .pin_thread_skill(&h.workspace_id, "42", 1, 13)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn a_thread_pin_is_refused_when_unreadable_and_skipped_when_it_goes_unreadable() {
     let server = serve(with_project_skills(platform(agent_details(), &[]))).await;
     let h = harness(server, allowed(), UiDecision::AllowOnce).await;

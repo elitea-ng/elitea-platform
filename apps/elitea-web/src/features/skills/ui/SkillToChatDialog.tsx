@@ -64,6 +64,7 @@ function pinRefusalText(error: unknown): string {
   // The desktop host's own refusals for a local thread (IPC.md "Thread history").
   const code = typeof error === 'object' && error !== null ? (error as { code?: unknown }).code : undefined;
   if (code === 'thread_skills_full') return t('skills.toChat.limit', 'A conversation holds at most five skills. Remove one to add another.');
+  if (code === 'skill_too_large') return t('skills.toChat.tooLarge', 'The skills pinned to that conversation would be over 64 KiB together, more than a turn can apply. Remove one to add another.');
   if (code === 'skill_unknown') return t('skills.toChat.unavailable', 'That skill is not available to you.');
   const status = error instanceof EliteaApiError && error.failure.kind === 'http' ? error.failure.status : undefined;
   if (status === 409) return t('skills.toChat.limit', 'A conversation holds at most five skills. Remove one to add another.');
