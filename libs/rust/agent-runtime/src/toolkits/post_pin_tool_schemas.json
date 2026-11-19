@@ -67,6 +67,340 @@
     "title": "DeleteFileModel",
     "type": "object"
    }
+  },
+  "gitlab": {
+   "get_merge_request": {
+    "properties": {
+     "pr_number": {
+      "description": "GitLab Merge Request (Pull Request) IID",
+      "title": "Pr Number",
+      "type": "integer"
+     },
+     "include_discussions": {
+      "default": false,
+      "description": "If True, include discussion/notes summary (heavier payload)",
+      "title": "Include Discussions",
+      "type": "boolean"
+     },
+     "include_approvals": {
+      "default": false,
+      "description": "If True, include approval state (heavier payload)",
+      "title": "Include Approvals",
+      "type": "boolean"
+     },
+     "include_pipelines": {
+      "default": false,
+      "description": "If True, include latest pipeline status (heavier payload)",
+      "title": "Include Pipelines",
+      "type": "boolean"
+     },
+     "include_commits": {
+      "default": false,
+      "description": "If True, include the list of commits (heavier payload)",
+      "title": "Include Commits",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "pr_number"
+    ],
+    "title": "GetMergeRequestModel",
+    "type": "object"
+   },
+   "list_merge_requests": {
+    "properties": {
+     "state": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": "all",
+      "description": "Merge request state filter: opened | merged | closed | all",
+      "title": "State"
+     },
+     "page": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Page number for pagination (ignored when all=True)",
+      "title": "Page"
+     },
+     "per_page": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": 20,
+      "description": "Number of results per page (ignored when all=True)",
+      "title": "Per Page"
+     },
+     "created_after": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Inclusive lower bound on created_at. ISO 8601; a bare date (2026-09-03) starts at midnight",
+      "title": "Created After"
+     },
+     "created_before": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Inclusive upper bound on created_at, at the precision given: a bare date (2026-09-03) covers the whole day, a microsecond-precision value is taken literally",
+      "title": "Created Before"
+     },
+     "updated_after": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Inclusive lower bound on updated_at. ISO 8601; a bare date (2026-09-03) starts at midnight",
+      "title": "Updated After"
+     },
+     "updated_before": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Inclusive upper bound on updated_at, at the precision given: a bare date (2026-09-03) covers the whole day, a microsecond-precision value is taken literally",
+      "title": "Updated Before"
+     },
+     "target_branch": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Filter by target branch",
+      "title": "Target Branch"
+     },
+     "source_branch": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Filter by source branch",
+      "title": "Source Branch"
+     },
+     "author_username": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Filter by author username",
+      "title": "Author Username"
+     },
+     "labels": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Comma-separated list of labels to filter by",
+      "title": "Labels"
+     },
+     "include_details": {
+      "default": false,
+      "description": "If True, include heavier fields (assignees, reviewers) for each MR",
+      "title": "Include Details",
+      "type": "boolean"
+     },
+     "all": {
+      "default": false,
+      "description": "If True, fetch all pages instead of a single page",
+      "title": "All",
+      "type": "boolean"
+     }
+    },
+    "title": "ListMergeRequestsModel",
+    "type": "object"
+   }
+  }
+ },
+ "overrides": {
+  "gitlab": {
+   "get_issues": {
+    "properties": {
+     "state": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": "opened",
+      "description": "Issue state filter: opened | closed | all",
+      "title": "State"
+     },
+     "page": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Page number for pagination (ignored when fetch_all=True)",
+      "title": "Page"
+     },
+     "per_page": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": 20,
+      "description": "Number of results per page (ignored when fetch_all=True)",
+      "title": "Per Page"
+     },
+     "created_after": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Inclusive lower bound on created_at. ISO 8601; a bare date (2026-09-03) starts at midnight",
+      "title": "Created After"
+     },
+     "created_before": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Inclusive upper bound on created_at, at the precision given: a bare date (2026-09-03) covers the whole day, a microsecond-precision value is taken literally",
+      "title": "Created Before"
+     },
+     "updated_after": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Inclusive lower bound on updated_at. ISO 8601; a bare date (2026-09-03) starts at midnight",
+      "title": "Updated After"
+     },
+     "updated_before": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Inclusive upper bound on updated_at, at the precision given: a bare date (2026-09-03) covers the whole day, a microsecond-precision value is taken literally",
+      "title": "Updated Before"
+     },
+     "author_username": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Filter by author username",
+      "title": "Author Username"
+     },
+     "labels": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Comma-separated list of labels to filter by",
+      "title": "Labels"
+     },
+     "fetch_all": {
+      "default": false,
+      "description": "If True, fetch all pages instead of a single page",
+      "title": "Fetch All",
+      "type": "boolean"
+     }
+    },
+    "title": "GetIssuesModel",
+    "type": "object"
+   }
   }
  }
 }

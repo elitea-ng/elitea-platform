@@ -230,11 +230,24 @@ fn rust_only_types() -> serde_json::Value {
     serde_json::Value::Object(types)
 }
 
+/// The tools whose argument schema upstream changed after the pin: the SDK's
+/// current schema replaces the pinned one in the Go catalogue.
+#[cfg(all(test, feature = "toolkit-office"))]
+fn rust_only_overrides() -> serde_json::Value {
+    serde_json::Value::Object(
+        crate::toolkits::sdk_conformance::post_pin_overrides()
+            .into_iter()
+            .map(|(sdk_type, tools)| (sdk_type, serde_json::Value::Object(tools)))
+            .collect(),
+    )
+}
+
 #[cfg(all(test, feature = "toolkit-office"))]
 pub(crate) fn rust_only_catalogue_document() -> serde_json::Value {
     serde_json::json!({
         "schema_version": "elitea.rust-only-toolkit-tools.v1",
         "types": rust_only_types(),
+        "overrides": rust_only_overrides(),
         "new_types": {
             "docx": docx::schema::type_entry(),
             "xlsx": xlsx::schema::type_entry(),

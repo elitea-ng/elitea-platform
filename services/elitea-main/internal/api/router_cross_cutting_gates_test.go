@@ -112,6 +112,7 @@ var outsideTheGroupByDesign = []struct{ prefix, reason string }{
 	{"/api/v2/agent_media/", "agent avatar media (ADR-0050 decision 6) an <img> or <video> loads with no credential, like /icons; content-addressed, so it is immutable-cached."},
 	{SharedChatViewPath, "share-by-link, the ANONYMOUS half (shared_chat_routes.go); no principal to gate."},
 	{SharedChatUnlockPath, "share-by-link unlock, anonymous for the same reason."},
+	{"/api/v2/microsoft_login:callback", "Entra's redirect (ADR-0057 decision 6): on desktop and mobile it runs in the system browser, which holds no session, and on web in a popup that may belong to a victim. It attaches nothing to anyone; only the starter can redeem the handoff it parks, over the gated routes."},
 	{"/api/v2/pipeline_trigger/", "the inbound pipeline trigger; its only credential is the per-pipeline secret, so there is no principal to gate."},
 }
 

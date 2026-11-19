@@ -16,7 +16,10 @@ import (
 //     translate_presentation);
 //   - "new_types": whole toolkit types the SDK does not have (P4: `docx` and
 //     `xlsx`), each with its catalogue metadata, its settings form and the
-//     argument schema of every tool.
+//     argument schema of every tool;
+//   - "overrides": the argument schema upstream gave a tool the SDK snapshot
+//     still has under an older one (S10: the per-call repository arguments,
+//     new list filters). The SDK's current schema replaces the pinned one.
 //
 // The SDK snapshots were generated from the SDK registry by a script that was
 // deleted with the Python worker (#1312). They are no longer regenerated
@@ -42,7 +45,10 @@ const rustOnlyToolkitToolsVersion = "elitea.rust-only-toolkit-tools.v1"
 type rustOnlyToolkitToolsDocument struct {
 	SchemaVersion string                               `json:"schema_version"`
 	Types         map[string]map[string]map[string]any `json:"types"`
-	NewTypes      map[string]rustOnlyNewType           `json:"new_types"`
+	// Overrides replace the pinned argument schema of a tool the SDK still
+	// has, for a schema upstream changed after the pin (S10, issue 2265).
+	Overrides map[string]map[string]map[string]any `json:"overrides"`
+	NewTypes  map[string]rustOnlyNewType           `json:"new_types"`
 }
 
 // rustOnlyNewType is a toolkit type the SDK does not have: the same three
@@ -94,6 +100,24 @@ func applyRustOnlyToolkitTools(
 			}
 			for name, schema := range tools {
 				if _, shadows := entries[index].ArgsSchemas[name]; shadows || schema == nil {
+					return nil, errRustOnlyToolkitTools
+				}
+				entries[index].ArgsSchemas[name] = schema
+			}
+			applied = true
+		}
+		if !applied {
+			return nil, errRustOnlyToolkitTools
+		}
+	}
+	for toolkitType, tools := range document.Overrides {
+		applied := false
+		for index := range entries {
+			if entries[index].Type != toolkitType {
+				continue
+			}
+			for name, schema := range tools {
+				if _, exists := entries[index].ArgsSchemas[name]; !exists || schema == nil {
 					return nil, errRustOnlyToolkitTools
 				}
 				entries[index].ArgsSchemas[name] = schema
