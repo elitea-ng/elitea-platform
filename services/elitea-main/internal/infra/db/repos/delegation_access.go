@@ -27,9 +27,9 @@ type DelegationVisibility interface {
 	// HiddenToolkitsForUser lists the toolkits of the project the folder access
 	// rules hide from the user.
 	HiddenToolkitsForUser(ctx context.Context, projectID, userID int64) ([]int64, error)
-	// UsableCredentialReferencesInProject lists the credential references an
-	// active ADR-0039 use grant of the project covers.
-	UsableCredentialReferencesInProject(ctx context.Context, projectID int64) ([]string, error)
+	// UsableCredentialsInProject lists the (toolkit, credential reference)
+	// pairs an active ADR-0039 use grant of the project covers.
+	UsableCredentialsInProject(ctx context.Context, projectID int64) ([]ToolkitCredential, error)
 }
 
 var _ DelegationVisibility = (*WorkerEgressSources)(nil)
@@ -42,7 +42,7 @@ var _ DelegationVisibility = (*WorkerEgressSources)(nil)
 //     that toolkit from them (the overlay the toolkit reader applies);
 //   - a credential reference is held when the person holds the governed
 //     credential use permission, and, under the governed profile, an active
-//     ADR-0039 use grant of the project covers the reference (a reference no
+//     ADR-0039 use grant covers the reference FOR THAT TOOLKIT (a pair no
 //     grant covers can never be used, so nobody can stand behind it).
 //
 // A built-in toolkit with no row holds no secret and is open to every approver.
@@ -84,8 +84,13 @@ type approverAccess struct {
 	// hiddenToolkits are toolkit ids the person may not see (their folder is
 	// closed to them); usableReferences is nil when no per-reference check
 	// applies.
-	hiddenToolkits   map[int64]bool
-	usableReferences map[string]bool
+	hiddenToolkits map[int64]bool
+	// usableByToolkit is nil when no per-reference check applies; else the
+	// covered references (lower case) of each toolkit id. usableAnywhere is
+	// every covered reference whatever the toolkit, for a toolkit key that
+	// carries no id (a built-in).
+	usableByToolkit map[int64]map[string]bool
+	usableAnywhere  map[string]bool
 }
 
 // HoldsToolkit fails closed: only a built-in toolkit, or a well-formed
@@ -104,15 +109,24 @@ func (a approverAccess) HoldsToolkit(key string) bool {
 // HoldsCredential compares references in lower case: a toolkit may spell its
 // reference id in upper case, the use grant table answers canonical lower case.
 //
-// Under the governed profile the covering use grants are the project's, not
-// the toolkit's (the grant carries no toolkit for a reference), so a reference
-// some toolkit's grant covers is held by an approver of any toolkit that names
-// it. The broker still decides the exact grant at every call.
-func (a approverAccess) HoldsCredential(reference string) bool {
+// Under the governed profile the question is per (toolkit, reference): the use
+// grant that covers a reference for one toolkit does not make an approver of
+// another toolkit that names it a holder (#2215). A toolkit key with no id (a
+// built-in) falls back to the project's covered references. The broker still
+// decides the exact grant (agent binding, target, scopes) at every call.
+func (a approverAccess) HoldsCredential(toolkit, reference string) bool {
 	if !a.credentials {
 		return false
 	}
-	return a.usableReferences == nil || a.usableReferences[strings.ToLower(reference)]
+	if a.usableByToolkit == nil {
+		return true
+	}
+	reference = strings.ToLower(reference)
+	if rest, ok := strings.CutPrefix(toolkit, "toolkit:"); ok {
+		id, err := strconv.ParseInt(rest, 10, 64)
+		return err == nil && a.usableByToolkit[id][reference]
+	}
+	return a.usableAnywhere[reference]
 }
 
 // AccessFor reads the person's two permissions in the project, and what the
@@ -141,13 +155,19 @@ func (r *DelegationAccess) AccessFor(ctx context.Context, projectID, userID int6
 		}
 	}
 	if credentials && r.governed != nil && r.governed(ctx) {
-		references, err := r.visibility.UsableCredentialReferencesInProject(ctx, projectID)
+		uses, err := r.visibility.UsableCredentialsInProject(ctx, projectID)
 		if err != nil {
 			return nil, err
 		}
-		access.usableReferences = make(map[string]bool, len(references))
-		for _, reference := range references {
-			access.usableReferences[strings.ToLower(reference)] = true
+		access.usableByToolkit = make(map[int64]map[string]bool)
+		access.usableAnywhere = make(map[string]bool, len(uses))
+		for _, use := range uses {
+			reference := strings.ToLower(use.Reference)
+			if access.usableByToolkit[use.ToolkitID] == nil {
+				access.usableByToolkit[use.ToolkitID] = map[string]bool{}
+			}
+			access.usableByToolkit[use.ToolkitID][reference] = true
+			access.usableAnywhere[reference] = true
 		}
 	}
 	return access, nil

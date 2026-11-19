@@ -181,11 +181,12 @@ VALUES (('0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e16' || $1::text)::uuid, 7, $2::uuid, $
 		t.Fatalf("references = %v, err = %v; want only the live reference", references, err)
 	}
 	// The project-wide read (the approver's side) lists every active, unexpired
-	// reference whatever toolkit it is for, and none of another project's.
-	if all, err := sources.UsableCredentialReferencesInProject(ctx, 7); err != nil || !slices.Equal(all, []string{principalRefLive, principalRefOutside}) {
-		t.Fatalf("project references = %v, err = %v; want the live and the outside reference", all, err)
+	// (toolkit, reference) pair, and none of another project's (#2215).
+	wantUses := []ToolkitCredential{{ToolkitID: 7, Reference: principalRefLive}, {ToolkitID: 99, Reference: principalRefOutside}}
+	if all, err := sources.UsableCredentialsInProject(ctx, 7); err != nil || !slices.Equal(all, wantUses) {
+		t.Fatalf("project uses = %v, err = %v; want %v", all, err, wantUses)
 	}
-	if all, err := sources.UsableCredentialReferencesInProject(ctx, 8); err != nil || len(all) != 0 {
+	if all, err := sources.UsableCredentialsInProject(ctx, 8); err != nil || len(all) != 0 {
 		t.Fatalf("another project read the grants: %v, err = %v", all, err)
 	}
 	if references, err := sources.UsableCredentialReferences(ctx, 8, reachable); err != nil || len(references) != 0 {

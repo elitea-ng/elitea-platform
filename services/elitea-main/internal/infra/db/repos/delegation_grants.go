@@ -593,9 +593,9 @@ func (a allHold) HoldsToolkit(key string) bool {
 	return len(a) > 0
 }
 
-func (a allHold) HoldsCredential(reference string) bool {
+func (a allHold) HoldsCredential(toolkit, reference string) bool {
 	for _, access := range a {
-		if !access.HoldsCredential(reference) {
+		if !access.HoldsCredential(toolkit, reference) {
 			return false
 		}
 	}
