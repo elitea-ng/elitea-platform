@@ -149,13 +149,13 @@ fn number(
     settings: &Map<String, Value>,
     key: &str,
     default: u64,
-    range: std::ops::RangeInclusive<u64>,
+    (min, max): (u64, u64),
 ) -> Result<u64, WebConfigError> {
     match settings.get(key) {
         None | Some(Value::Null) => Ok(default),
         Some(value) => value
             .as_u64()
-            .map(|value| value.clamp(*range.start(), *range.end()))
+            .map(|value| value.clamp(min, max))
             .ok_or(WebConfigError),
     }
 }
@@ -205,7 +205,7 @@ impl TavilyConfig {
                 .get("configuration_uuid")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
-            max_results: u32::try_from(number(settings, "max_results", 5, 1..=10)?)
+            max_results: u32::try_from(number(settings, "max_results", 5, (1, 10))?)
                 .map_err(|_| WebConfigError)?,
             advanced_search: depth(settings, "max_search_depth")?,
             advanced_extract: depth(settings, "extract_depth")?,
@@ -213,12 +213,12 @@ impl TavilyConfig {
                 settings,
                 "max_page_chars",
                 20_000,
-                1_000..=50_000,
+                (1_000, 50_000),
             )?)
             .map_err(|_| WebConfigError)?,
             allowed_domains: domain_list(settings, "allowed_domains")?,
             blocked_domains: domain_list(settings, "blocked_domains")?,
-            per_run_call_cap: u32::try_from(number(settings, "per_run_call_cap", 10, 1..=100)?)
+            per_run_call_cap: u32::try_from(number(settings, "per_run_call_cap", 10, (1, 100))?)
                 .map_err(|_| WebConfigError)?,
             selected_tools,
         })
