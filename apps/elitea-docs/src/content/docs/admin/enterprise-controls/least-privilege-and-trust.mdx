@@ -86,7 +86,8 @@ The main service builds the allowlist for each run when it sends the run to a wo
 - the **platform entries**, set under **Configuration › Worker Egress**;
 - the **project entries**, from the project's `worker_egress` setting;
 - the host of every URL that the run's toolkits, MCP servers and configurations are configured with (for example, a Jira toolkit's base URL);
-- the fixed API hosts that a toolkit type always calls, even when its settings do not name them (for example, `api.figma.com` for Figma, `graph.microsoft.com` for SharePoint, and `*.googleapis.com` for Google Cloud toolkits);
+- the fixed API hosts that a toolkit type always calls, even when its settings do not name them (for example, `api.figma.com` for Figma, `graph.microsoft.com` for SharePoint, Outlook, Teams and Microsoft Graph toolkits, and `*.googleapis.com` for Google Cloud toolkits);
+- for a Dataverse toolkit, the one host of its credential's environment URL, which must be an `https://<org>.<region>.dynamics.com` origin; a sovereign-cloud or any other host refuses the run. A worker never calls `login.microsoftonline.com` for these toolkits: it holds an access token only, and the platform handles the sign-in and token exchange;
 - for an OpenAPI toolkit, the host of its specification URL and the host that its operations call: the `base_url` setting when it is set, otherwise the first `servers` entry of the specification, with each `{variable}` replaced by its `default`;
 - for a GitHub toolkit with the base URL `https://api.github.com`, the host `github.com`, which the pull-request push of a workspace uses (a GitHub Enterprise base URL already names its push host);
 - for a governed run, the target hosts of the credentials that the run may use (for example, Microsoft Graph for a SharePoint credential).

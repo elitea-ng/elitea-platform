@@ -31,6 +31,7 @@ func TestImplicitHostsMatchTheRustClients(t *testing.T) {
 		{"google_places/client.rs", "GOOGLE_MAPS_ORIGIN", []string{"google_places"}},
 		{"google_places/client.rs", "GOOGLE_PLACES_ORIGIN", []string{"google_places"}},
 		{"sharepoint/client.rs", "GRAPH_BASE", []string{"sharepoint"}},
+		{"microsoft_graph_common.rs", "GRAPH_ORIGIN", []string{"outlook", "teams", "ms_graph"}},
 		{"slack/client.rs", "SLACK_API_ORIGIN", []string{"slack"}},
 		{"xray_cloud/config.rs", "DEFAULT_BASE_URL", []string{"xray_cloud"}},
 		{"zephyr_essential/config.rs", "DEFAULT_BASE_URL", []string{"zephyr_essential"}},

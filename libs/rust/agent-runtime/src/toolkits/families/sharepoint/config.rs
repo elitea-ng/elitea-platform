@@ -1,11 +1,14 @@
 use std::fmt;
 
 use reqwest::Url;
-use reqwest::header::HeaderValue;
 use serde_json::{Map, Value};
 use zeroize::Zeroizing;
 
 use crate::toolkits::DelegatedAuthorizationRequirement;
+use crate::toolkits::families::microsoft_graph_common::{
+    RequirementError, TokenLookupError, authorization_requirement, lookup_access_token,
+    push_unique_key,
+};
 
 const MAX_URL_BYTES: usize = 8 * 1_024;
 const MAX_IDENTITY_BYTES: usize = 1_024;
@@ -120,23 +123,19 @@ impl SharePointToolkitConfig {
             &site_key,
         )?;
 
-        let resource_metadata_url =
-            format!("{discovery_key}/v2.0/.well-known/openid-configuration");
-        let authorization_url = format!("{discovery_key}/oauth2/v2.0/authorize");
-        if resource_metadata_url.len() > MAX_URL_BYTES || authorization_url.len() > MAX_URL_BYTES {
-            return Err(resource_exhausted());
-        }
-        let authorization = DelegatedAuthorizationRequirement::new(
-            toolkit_name.to_owned(),
-            "sharepoint".to_owned(),
+        // The same requirement every Microsoft delegated family raises
+        // (families/microsoft_graph_common.rs).
+        let authorization = authorization_requirement(
+            toolkit_name,
+            "sharepoint",
             site_key,
-            Some(resource_metadata_url.clone()),
-            Some(format!(
-                "Bearer error=\"unauthorized_client\", resource_metadata=\"{resource_metadata_url}\", authorization_uri=\"{authorization_url}\""
-            )),
+            &discovery_key,
+            configuration,
         )
-        .and_then(|requirement| requirement.with_configured_oauth(&discovery_key, configuration))
-        .ok_or_else(invalid_configuration)?;
+        .map_err(|error| match error {
+            RequirementError::TooLarge => resource_exhausted(),
+            RequirementError::Invalid => invalid_configuration(),
+        })?;
 
         Ok(Self {
             site_url,
@@ -245,37 +244,21 @@ fn resolve_access_token(
 ) -> Result<Option<Zeroizing<String>>, SharePointConfigError> {
     let mut lookup_keys = Vec::with_capacity(6);
     if let Some(uuid) = configuration_uuid {
-        push_unique(&mut lookup_keys, format!("{uuid}:{configured_discovery}"));
+        push_unique_key(&mut lookup_keys, format!("{uuid}:{configured_discovery}"));
     }
-    push_unique(&mut lookup_keys, configured_discovery.to_owned());
-    push_unique(&mut lookup_keys, configured_site_url.to_owned());
+    push_unique_key(&mut lookup_keys, configured_discovery.to_owned());
+    push_unique_key(&mut lookup_keys, configured_site_url.to_owned());
     if let Some(uuid) = configuration_uuid {
-        push_unique(&mut lookup_keys, format!("{uuid}:{canonical_discovery}"));
+        push_unique_key(&mut lookup_keys, format!("{uuid}:{canonical_discovery}"));
     }
-    push_unique(&mut lookup_keys, canonical_discovery.to_owned());
-    push_unique(&mut lookup_keys, canonical_site_url.to_owned());
-    let value = lookup_keys.iter().find_map(|key| tokens.get(key));
-    let Some(value) = value else {
-        return Ok(None);
-    };
-    let token = match value {
-        Value::String(token) => token.as_str(),
-        Value::Object(object) => object
-            .get("access_token")
-            .or_else(|| object.get("token"))
-            .and_then(Value::as_str)
-            .ok_or_else(invalid_configuration)?,
-        _ => return Err(invalid_configuration()),
-    };
-    validate_text(token, MAX_SECRET_BYTES)?;
-    HeaderValue::from_str(token).map_err(|_| invalid_configuration())?;
-    Ok(Some(Zeroizing::new(token.to_owned())))
-}
-
-fn push_unique(values: &mut Vec<String>, value: String) {
-    if !values.contains(&value) {
-        values.push(value);
-    }
+    push_unique_key(&mut lookup_keys, canonical_discovery.to_owned());
+    push_unique_key(&mut lookup_keys, canonical_site_url.to_owned());
+    // The shared lookup: an access token only, never a refresh token or a
+    // client secret.
+    lookup_access_token(tokens, &lookup_keys).map_err(|error| match error {
+        TokenLookupError::TooLarge => resource_exhausted(),
+        TokenLookupError::Invalid => invalid_configuration(),
+    })
 }
 
 fn selected_tools(settings: &Map<String, Value>) -> Result<Vec<Box<str>>, SharePointConfigError> {
