@@ -74,6 +74,7 @@ import { useComposerModes, type RunToCompletionBinding } from './useComposerMode
 import { useIdleCompacted } from './useIdleCompacted';
 import { useIdleHold } from './useIdleHold';
 import { useSteering, type Steering } from './useSteering';
+import { useThreadSkillPins } from './useThreadSkillPins';
 import { useTurnModel, type TurnModelControl } from './useTurnModel';
 import { useWorkIn } from './useWorkIn';
 import StepLimitMenu, { prefetchStepLimit } from './StepLimitMenu';
@@ -253,6 +254,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
   const modes = useComposerModes(workspaceId, local, commands);
   const idle = useIdleNotice(workspaceId, conversationId);
   const onDraftChange = useIdleHold(workspaceId, conversationId, local);
+  const skillPins = useThreadSkillPins(ipc, workspaceId, projectId, conversationId, local);
   const { customCommands, offered, onFocus } = useSlashSources(ipc, workspaceId, projectId, local, skills, session.prewarm, commands.notice === 'help');
   const sendHere: WorkspaceComposerProps['onSend'] = async (prompt, mentions, picked, command, images) => {
     model.dismissNotice();
@@ -316,6 +318,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
         more={moreRows(workspaceId, !cloudMode, commands.showText)}
         onPlanModeChange={commands.setPlanMode}
         skills={offered}
+        skillPins={skillPins}
         customCommands={customCommands}
         onCommand={controls.onCommand}
         onStepsCommand={controls.onStepsCommand}

@@ -3,12 +3,35 @@ package runtimecomposition
 import (
 	"errors"
 	"fmt"
+	"sync"
+
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
 )
 
+// pinnedAvailableCatalog is the available catalogue (pinned entries plus the
+// native ones), loaded once: nativeConfigurationSection asks it per settings
+// field and the catalogue is a 2 MiB parse.
+var pinnedAvailableCatalog = sync.OnceValues(configurationapp.LoadPinnedCurrentAvailableCatalog)
+
+// nativeConfigurationSection is the section of a credential type that the SDK
+// configuration catalogue does not carry. ok=false means no catalogue knows the
+// type, which stays a hard error for the caller.
+func nativeConfigurationSection(configurationType string) (string, bool) {
+	catalog, err := pinnedAvailableCatalog()
+	if err != nil {
+		return "", false
+	}
+	entry, found := catalog.EntryByType(configurationType)
+	if !found {
+		return "", false
+	}
+	return entry.Section, true
+}
+
 // configurationTypesAnnotation is the SDK annotation that marks a settings
-// field as a reference to a saved configuration. The sync script projects it
-// verbatim into the pinned snapshot (ANNOTATION_FIELDS in
-// scripts/contract/sync_toolkit_schema_snapshot.py).
+// field as a reference to a saved configuration. The pinned snapshot carries it
+// verbatim (its generator was deleted in #1312), and a type authored natively
+// writes it in its own `properties` (docs/contributing/adding-types.md).
 const configurationTypesAnnotation = "configuration_types"
 
 var (
@@ -133,6 +156,13 @@ func (c *CurrentToolkitSettingsDefinitionCatalog) buildConfigurationProperty(
 	references := make([]any, 0, len(configurationTypes))
 	for _, configurationType := range configurationTypes {
 		binding, found := c.configurations.Binding(configurationType)
+		if !found {
+			// A credential type the SDK catalogue does not carry (added after
+			// the pin, or defined natively in Go) is known from the available
+			// catalogue instead: it holds the section of every type.
+			binding.ConfigurationType = configurationType
+			binding.Section, found = nativeConfigurationSection(configurationType)
+		}
 		if !found || !validCurrentToolkitSchemaIdentifier(binding.Section) {
 			return nil, fmt.Errorf(
 				"%w: settings field %q names configuration type %q",

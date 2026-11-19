@@ -73,7 +73,16 @@
 //!         title TEXT NULL, created_at INTEGER /* Unix ms */,
 //!         noticed TEXT NULL /* the last notice shown for it */,
 //!         phase TEXT NULL /* reclaim_pending | reclaimed: the take-back began */)
+//! thread_skill_pins (origin TEXT, user_id INTEGER, workspace_id TEXT,
+//!         conversation_id TEXT, project_id INTEGER, skill_id INTEGER,
+//!         pinned_at INTEGER /* Unix ms */,
+//!         PRIMARY KEY (origin, user_id, workspace_id, conversation_id, project_id, skill_id))
 //! ```
+//!
+//! `thread_skill_pins` (schema 6, ADR-0050 amendment 1, A1.5; #2183) holds the
+//! project skills pinned to a local thread: ids only, never text. The host
+//! reads each at every turn, under the person's own token, and applies it
+//! like a skill the message picked ([`ThreadSkillPin`]).
 //!
 //! `resume_turns` (schema 4, ADR-0045 decision 7) holds one record per
 //! running turn: what the host needs to continue it after a restart
@@ -106,7 +115,7 @@ use crate::error::HostError;
 
 pub const FILE_NAME: &str = "threads.sqlite";
 /// `PRAGMA user_version` of the schema this build writes.
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 /// A string inside one event's payload is cut to this many bytes.
 pub const MAX_EVENT_STRING: usize = 16 * 1024;
 /// One turn's stored events, in payload bytes.
@@ -212,6 +221,39 @@ CREATE TABLE IF NOT EXISTS take_back_threads (
     phase TEXT
 );
 ";
+
+/// The project skills pinned to a local thread (schema 6). Keyed by the
+/// conversation spelling the UI used (the id or the UUID): a read finds the
+/// pins of every spelling the thread's stored turns know.
+const THREAD_SKILL_PINS_SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS thread_skill_pins (
+    origin TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    workspace_id TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    project_id INTEGER NOT NULL,
+    skill_id INTEGER NOT NULL,
+    pinned_at INTEGER NOT NULL,
+    PRIMARY KEY (origin, user_id, workspace_id, conversation_id, project_id, skill_id)
+);
+";
+
+/// How a pin request ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PinOutcome {
+    Pinned,
+    /// The skill was pinned already (nothing changed).
+    Already,
+    /// The thread holds its most (nothing was pinned).
+    Full,
+}
+
+/// One skill pinned to a thread: its project and its id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ThreadSkillPin {
+    pub project_id: i64,
+    pub skill_id: i64,
+}
 
 const TAKE_BACK_SELECT: &str = "SELECT conversation_uuid, origin, user_id, workspace_id,
     project_id, title, created_at, noticed, phase FROM take_back_threads";
@@ -1262,6 +1304,7 @@ impl HistoryStore {
         self.flush();
         self.with("could not delete the thread history", |conn| {
             let uuid = thread_uuid(conn, owner, workspace_id, conversation)?;
+            delete_pins(conn, owner, workspace_id, conversation, &uuid)?;
             conn.execute(
                 &format!("DELETE FROM turns WHERE {THREAD}"),
                 params![
@@ -1435,6 +1478,10 @@ impl HistoryStore {
         self.with("could not delete the workspace's history", |conn| {
             conn.execute(
                 "DELETE FROM resume_turns WHERE workspace_id = ?1",
+                params![workspace_id],
+            )?;
+            conn.execute(
+                "DELETE FROM thread_skill_pins WHERE workspace_id = ?1",
                 params![workspace_id],
             )?;
             conn.execute(
@@ -1647,6 +1694,125 @@ impl HistoryStore {
                 params![conversation_uuid, phase],
             )
             .map(|_| ())
+        })
+    }
+
+    /// The project skills pinned to the thread, oldest first.
+    ///
+    /// # Errors
+    ///
+    /// The database could not be read.
+    pub fn thread_skill_pins(
+        &self,
+        owner: &Owner,
+        workspace_id: &str,
+        conversation: &str,
+    ) -> Result<Vec<ThreadSkillPin>, HostError> {
+        self.flush();
+        self.with("could not read the thread's pinned skills", |conn| {
+            let spellings = spellings(conn, owner, workspace_id, conversation)?;
+            read_pins(conn, owner, workspace_id, &spellings)
+        })
+    }
+
+    /// [`Self::thread_skill_pins`] on a blocking thread, for an async caller.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::thread_skill_pins`].
+    pub async fn read_thread_skill_pins(
+        self: &Arc<Self>,
+        owner: Owner,
+        workspace_id: String,
+        conversation: String,
+    ) -> Result<Vec<ThreadSkillPin>, HostError> {
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || {
+            store.thread_skill_pins(&owner, &workspace_id, &conversation)
+        })
+        .await
+        .map_err(|e| HostError::Internal(format!("the pin read stopped: {e}")))?
+    }
+
+    /// Pin a project skill to the thread, unless it holds `limit` already.
+    ///
+    /// # Errors
+    ///
+    /// The database could not be written.
+    pub fn thread_skill_pin(
+        &self,
+        owner: &Owner,
+        workspace_id: &str,
+        conversation: &str,
+        pin: ThreadSkillPin,
+        limit: usize,
+    ) -> Result<PinOutcome, HostError> {
+        self.flush();
+        self.with("could not pin the skill", |conn| {
+            let tx = conn.transaction()?;
+            let spellings = spellings(&tx, owner, workspace_id, conversation)?;
+            // A skill id is the project's: another project's skill of the same
+            // id is another pin, and counts for its own project's bound only.
+            let held: Vec<ThreadSkillPin> = read_pins(&tx, owner, workspace_id, &spellings)?
+                .into_iter()
+                .filter(|have| have.project_id == pin.project_id)
+                .collect();
+            if held.iter().any(|have| have.skill_id == pin.skill_id) {
+                return Ok(PinOutcome::Already);
+            }
+            if held.len() >= limit {
+                return Ok(PinOutcome::Full);
+            }
+            tx.execute(
+                "INSERT INTO thread_skill_pins (origin, user_id, workspace_id, conversation_id,
+                     project_id, skill_id, pinned_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    owner.origin,
+                    owner.user_id,
+                    workspace_id,
+                    conversation,
+                    pin.project_id,
+                    pin.skill_id,
+                    now_ms()
+                ],
+            )?;
+            tx.commit()?;
+            Ok(PinOutcome::Pinned)
+        })
+    }
+
+    /// Unpin a skill from the thread (every spelling of it); whether it was
+    /// pinned.
+    ///
+    /// # Errors
+    ///
+    /// The database could not be written.
+    pub fn thread_skill_unpin(
+        &self,
+        owner: &Owner,
+        workspace_id: &str,
+        conversation: &str,
+        skill_id: i64,
+    ) -> Result<bool, HostError> {
+        self.flush();
+        self.with("could not unpin the skill", |conn| {
+            let spellings = spellings(conn, owner, workspace_id, conversation)?;
+            let mut removed = 0;
+            for spelling in &spellings {
+                removed += conn.execute(
+                    "DELETE FROM thread_skill_pins WHERE origin = ?1 AND user_id = ?2
+                     AND workspace_id = ?3 AND conversation_id = ?4 AND skill_id = ?5",
+                    params![
+                        owner.origin,
+                        owner.user_id,
+                        workspace_id,
+                        spelling,
+                        skill_id
+                    ],
+                )?;
+            }
+            Ok(removed > 0)
         })
     }
 
@@ -2202,6 +2368,93 @@ fn apply(conn: &Connection, op: Op) -> rusqlite::Result<()> {
 const THREAD: &str = "origin = ?1 AND user_id = ?2 AND workspace_id = ?3
     AND (conversation_id IN (?4, ?5) OR conversation_uuid IN (?4, ?5))";
 
+/// Every spelling the thread is known by: `conversation`, its UUID, and the
+/// ids and UUIDs of its stored turns.
+fn spellings(
+    conn: &Connection,
+    owner: &Owner,
+    workspace_id: &str,
+    conversation: &str,
+) -> rusqlite::Result<Vec<String>> {
+    let uuid = thread_uuid(conn, owner, workspace_id, conversation)?;
+    let mut all = vec![conversation.to_owned(), uuid.clone()];
+    let mut statement = conn.prepare(&format!(
+        "SELECT DISTINCT conversation_id, conversation_uuid FROM turns WHERE {THREAD}"
+    ))?;
+    let rows = statement.query_map(
+        params![
+            owner.origin,
+            owner.user_id,
+            workspace_id,
+            conversation,
+            uuid
+        ],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+    )?;
+    for row in rows {
+        let (id, known) = row?;
+        all.push(id);
+        all.extend(known);
+    }
+    all.sort();
+    all.dedup();
+    Ok(all)
+}
+
+/// The pins under any of `spellings`, oldest first.
+fn read_pins(
+    conn: &Connection,
+    owner: &Owner,
+    workspace_id: &str,
+    spellings: &[String],
+) -> rusqlite::Result<Vec<ThreadSkillPin>> {
+    let mut statement = conn.prepare(
+        "SELECT project_id, skill_id FROM thread_skill_pins
+         WHERE origin = ?1 AND user_id = ?2 AND workspace_id = ?3 AND conversation_id = ?4
+         ORDER BY pinned_at, rowid",
+    )?;
+    let mut pins: Vec<ThreadSkillPin> = Vec::new();
+    for spelling in spellings {
+        let rows = statement.query_map(
+            params![owner.origin, owner.user_id, workspace_id, spelling],
+            |row| {
+                Ok(ThreadSkillPin {
+                    project_id: row.get(0)?,
+                    skill_id: row.get(1)?,
+                })
+            },
+        )?;
+        for row in rows {
+            pins.push(row?);
+        }
+    }
+    let mut seen = HashSet::new();
+    Ok(pins
+        .into_iter()
+        .filter(|pin| seen.insert((pin.project_id, pin.skill_id)))
+        .collect())
+}
+
+/// Forget the thread's pins under every spelling it is known by.
+fn delete_pins(
+    conn: &Connection,
+    owner: &Owner,
+    workspace_id: &str,
+    conversation: &str,
+    uuid: &str,
+) -> rusqlite::Result<()> {
+    let mut all = spellings(conn, owner, workspace_id, conversation)?;
+    all.push(uuid.to_owned());
+    for spelling in all {
+        conn.execute(
+            "DELETE FROM thread_skill_pins WHERE origin = ?1 AND user_id = ?2
+             AND workspace_id = ?3 AND conversation_id = ?4",
+            params![owner.origin, owner.user_id, workspace_id, spelling],
+        )?;
+    }
+    Ok(())
+}
+
 /// The UUID the stored turns know `conversation` by (itself when none
 /// does, or when it is the UUID).
 fn thread_uuid(
@@ -2308,7 +2561,7 @@ fn migrate(conn: &Connection) -> Result<(), HostError> {
     match version {
         0 => conn
             .execute_batch(&format!(
-                "BEGIN; {SCHEMA} {RESUME_SCHEMA} {TAKE_BACK_SCHEMA} \
+                "BEGIN; {SCHEMA} {RESUME_SCHEMA} {TAKE_BACK_SCHEMA} {THREAD_SKILL_PINS_SCHEMA} \
                  PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|e| storage("could not create the thread history", &e)),
@@ -2319,24 +2572,33 @@ fn migrate(conn: &Connection) -> Result<(), HostError> {
             .execute_batch(&format!(
                 "BEGIN; ALTER TABLE turns ADD COLUMN turn_origin TEXT NOT NULL DEFAULT 'local'; \
                  ALTER TABLE turns ADD COLUMN images TEXT NOT NULL DEFAULT '[]'; \
-                 {RESUME_SCHEMA} {TAKE_BACK_SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+                 {RESUME_SCHEMA} {TAKE_BACK_SCHEMA} {THREAD_SKILL_PINS_SCHEMA} \
+                 PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|e| storage("could not upgrade the thread history", &e)),
         2 => conn
             .execute_batch(&format!(
                 "BEGIN; ALTER TABLE turns ADD COLUMN images TEXT NOT NULL DEFAULT '[]'; \
-                 {RESUME_SCHEMA} {TAKE_BACK_SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+                 {RESUME_SCHEMA} {TAKE_BACK_SCHEMA} {THREAD_SKILL_PINS_SCHEMA} \
+                 PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|e| storage("could not upgrade the thread history", &e)),
         3 => conn
             .execute_batch(&format!(
-                "BEGIN; {RESUME_SCHEMA} {TAKE_BACK_SCHEMA} \
+                "BEGIN; {RESUME_SCHEMA} {TAKE_BACK_SCHEMA} {THREAD_SKILL_PINS_SCHEMA} \
                  PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|e| storage("could not upgrade the thread history", &e)),
         4 => conn
             .execute_batch(&format!(
-                "BEGIN; {TAKE_BACK_SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+                "BEGIN; {TAKE_BACK_SCHEMA} {THREAD_SKILL_PINS_SCHEMA} \
+                 PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+            ))
+            .map_err(|e| storage("could not upgrade the thread history", &e)),
+        // 6 (#2183): the skills pinned to a thread.
+        5 => conn
+            .execute_batch(&format!(
+                "BEGIN; {THREAD_SKILL_PINS_SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|e| storage("could not upgrade the thread history", &e)),
         SCHEMA_VERSION => Ok(()),
@@ -3848,6 +4110,147 @@ mod tests {
                     .optional())
                 .unwrap()
                 .is_some()
+        );
+    }
+
+    fn pin(skill_id: i64) -> ThreadSkillPin {
+        ThreadSkillPin {
+            project_id: 7,
+            skill_id,
+        }
+    }
+
+    #[test]
+    fn a_pin_is_kept_in_order_once_and_bounded() {
+        let (_root, store) = store();
+        let me = owner(1);
+        assert!(store.thread_skill_pins(&me, "w1", "42").unwrap().is_empty());
+        for id in [3, 1, 2] {
+            assert_eq!(
+                store.thread_skill_pin(&me, "w1", "42", pin(id), 3).unwrap(),
+                PinOutcome::Pinned
+            );
+        }
+        assert_eq!(
+            store.thread_skill_pin(&me, "w1", "42", pin(1), 3).unwrap(),
+            PinOutcome::Already,
+            "a skill is pinned once, even at the bound"
+        );
+        assert_eq!(
+            store.thread_skill_pin(&me, "w1", "42", pin(9), 3).unwrap(),
+            PinOutcome::Full
+        );
+        let held: Vec<i64> = store
+            .thread_skill_pins(&me, "w1", "42")
+            .unwrap()
+            .iter()
+            .map(|held| held.skill_id)
+            .collect();
+        assert_eq!(held, vec![3, 1, 2], "oldest first");
+        assert!(store.thread_skill_unpin(&me, "w1", "42", 1).unwrap());
+        assert!(!store.thread_skill_unpin(&me, "w1", "42", 1).unwrap());
+        assert_eq!(store.thread_skill_pins(&me, "w1", "42").unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_skill_id_is_pinned_per_project() {
+        let (_root, store) = store();
+        let me = owner(1);
+        let other = ThreadSkillPin {
+            project_id: 8,
+            skill_id: 12,
+        };
+        assert_eq!(
+            store.thread_skill_pin(&me, "w1", "42", pin(12), 5).unwrap(),
+            PinOutcome::Pinned
+        );
+        // Skill 12 of another project is another skill, and its own bound.
+        assert_eq!(
+            store.thread_skill_pin(&me, "w1", "42", other, 1).unwrap(),
+            PinOutcome::Pinned
+        );
+        assert_eq!(
+            store.thread_skill_pins(&me, "w1", "42").unwrap(),
+            vec![pin(12), other]
+        );
+    }
+
+    #[test]
+    fn pins_belong_to_one_account_workspace_and_thread() {
+        let (_root, store) = store();
+        store
+            .thread_skill_pin(&owner(1), "w1", "42", pin(1), 5)
+            .unwrap();
+        assert!(
+            store
+                .thread_skill_pins(&owner(2), "w1", "42")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            store
+                .thread_skill_pins(&owner(1), "w2", "42")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            store
+                .thread_skill_pins(&owner(1), "w1", "43")
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_pin_follows_the_thread_under_its_id_and_its_uuid() {
+        let (_root, store) = store();
+        let me = owner(1);
+        // Pinned by id before any turn, read by the UUID the turns know it by.
+        store.thread_skill_pin(&me, "w1", "42", pin(5), 5).unwrap();
+        play(&store, new_turn(me.clone(), "t1", "42"));
+        let by_uuid = store.thread_skill_pins(&me, "w1", "uuid-42").unwrap();
+        assert_eq!(by_uuid, vec![pin(5)]);
+        // Unpinning by the other spelling removes it.
+        assert!(store.thread_skill_unpin(&me, "w1", "uuid-42", 5).unwrap());
+        assert!(store.thread_skill_pins(&me, "w1", "42").unwrap().is_empty());
+    }
+
+    #[test]
+    fn forgetting_a_thread_or_a_workspace_forgets_its_pins() {
+        let (_root, store) = store();
+        let me = owner(1);
+        play(&store, new_turn(me.clone(), "t1", "42"));
+        store.thread_skill_pin(&me, "w1", "42", pin(5), 5).unwrap();
+        store.thread_skill_pin(&me, "w1", "43", pin(6), 5).unwrap();
+        store.delete_thread(&me, "w1", "42").unwrap();
+        assert!(store.thread_skill_pins(&me, "w1", "42").unwrap().is_empty());
+        assert_eq!(
+            store.thread_skill_pins(&me, "w1", "43").unwrap(),
+            vec![pin(6)]
+        );
+        store.delete_workspace("w1").unwrap();
+        assert!(store.thread_skill_pins(&me, "w1", "43").unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_schema_five_file_gains_the_pins_table() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("ai.elitea.desktop");
+        drop(HistoryStore::open(&dir).unwrap());
+        let conn = rusqlite::Connection::open(dir.join(FILE_NAME)).unwrap();
+        conn.execute_batch("DROP TABLE thread_skill_pins; PRAGMA user_version = 5;")
+            .unwrap();
+        drop(conn);
+        let store = HistoryStore::open(&dir).unwrap();
+        store
+            .thread_skill_pin(&owner(1), "w1", "42", pin(1), 5)
+            .unwrap();
+        assert_eq!(
+            store
+                .thread_skill_pins(&owner(1), "w1", "42")
+                .unwrap()
+                .len(),
+            1
         );
     }
 }

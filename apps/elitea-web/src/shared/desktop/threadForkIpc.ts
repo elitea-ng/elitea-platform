@@ -1,5 +1,7 @@
 /** The fork commands of the host (IPC.md "Thread history"), kept beside `workspaceIpc.ts`. */
 
+export { threadSkillCommands, type ThreadSkillCommands } from './threadSkillsIpc';
+
 /** What `thread_history_fork` copies (IPC.md "Thread history"). */
 export interface ThreadForkRequest {
   workspaceId: string;

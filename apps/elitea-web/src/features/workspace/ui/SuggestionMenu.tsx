@@ -9,6 +9,7 @@ import type { ReactNode } from 'react';
 import { Fragment, useEffect, useRef } from 'react';
 
 import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
 import ClickAwayListener from '@mui/material/ClickAwayListener';
 import Typography from '@mui/material/Typography';
 
@@ -21,6 +22,10 @@ export interface SuggestionItem {
   icon?: ReactNode;
   /** A heading shown above this row when it differs from the previous row's (the first section goes under the menu's title). */
   section?: string;
+  /** Small labels after the name (a skill's "Pinned"). */
+  badges?: readonly { readonly label: string }[];
+  /** A button beside the row that acts on it without picking it (a skill's "Pin to this thread"). */
+  action?: { readonly label: string; readonly onClick: () => void };
 }
 
 export interface SuggestionMenuProps {
@@ -85,14 +90,22 @@ export function SuggestionMenu({ title, items, activeIndex, onPick, onClose, 'da
               </Box>
             )}
             {/* The row's own button bubbles its click here, so the option element itself is clickable too. */}
-            {/* oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- rows of the listbox above; a native <option> needs a <select> */}
-            <Box role="option" aria-selected={index === activeIndex} aria-label={item.label} onClick={() => onPick(index)}>
-              <MentionToolItem
-                label={item.label}
-                {...(item.description !== undefined ? { description: item.description } : {})}
-                {...(item.icon !== undefined ? { icon: item.icon } : {})}
-                isHighlighted={index === activeIndex}
-              />
+            <Box sx={{ display: 'flex', alignItems: 'stretch', gap: '0.25rem' }}>
+              {/* oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- rows of the listbox above; a native <option> needs a <select> */}
+              <Box role="option" aria-selected={index === activeIndex} aria-label={item.label} onClick={() => onPick(index)} sx={{ flex: 1, minWidth: 0, display: 'flex' }}>
+                <MentionToolItem
+                  label={item.label}
+                  {...(item.description !== undefined ? { description: item.description } : {})}
+                  {...(item.icon !== undefined ? { icon: item.icon } : {})}
+                  {...(item.badges !== undefined ? { badges: item.badges } : {})}
+                  isHighlighted={index === activeIndex}
+                />
+              </Box>
+              {item.action !== undefined && (
+                <Button size="small" variant="text" onClick={item.action.onClick} sx={{ flexShrink: 0 }}>
+                  {item.action.label}
+                </Button>
+              )}
             </Box>
           </Fragment>
         ))}

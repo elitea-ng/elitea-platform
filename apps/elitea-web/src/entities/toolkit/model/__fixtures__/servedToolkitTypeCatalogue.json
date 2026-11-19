@@ -631,6 +631,26 @@
       "label": "SQL"
     }
   },
+  "tavily": {
+    "metadata": {
+      "categories": [
+        "other"
+      ],
+      "extra_categories": [
+        "tavily",
+        "web",
+        "search",
+        "internet",
+        "extract",
+        "crawl"
+      ],
+      "hidden": true,
+      "icon_url": null,
+      "label": "Tavily",
+      "unavailable": true,
+      "unavailable_reason": "This deployment's agent worker does not support the tavily toolkit."
+    }
+  },
   "testio": {
     "metadata": {
       "categories": [

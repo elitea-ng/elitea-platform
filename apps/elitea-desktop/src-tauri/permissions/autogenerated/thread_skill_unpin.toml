@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-thread-skill-unpin"
+description = "Enables the thread_skill_unpin command without any pre-configured scope."
+commands.allow = ["thread_skill_unpin"]
+
+[[permission]]
+identifier = "deny-thread-skill-unpin"
+description = "Denies the thread_skill_unpin command without any pre-configured scope."
+commands.deny = ["thread_skill_unpin"]

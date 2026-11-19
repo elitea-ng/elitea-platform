@@ -10,8 +10,9 @@ import (
 // TestPinnedToolkitSnapshotSecretFieldsAreClassifiedSecret sweeps the SDK
 // toolkit schema snapshot for the audit #705 asks for.
 //
-// scripts/contract/sync_toolkit_schema_snapshot.py projects the SDK's `secret`
-// annotation into current_toolkit_schema_snapshot.json (ANNOTATION_FIELDS).
+// The pinned current_toolkit_schema_snapshot.json carries the SDK's `secret`
+// annotation (projected by a generator deleted in #1312; the snapshot is no
+// longer regenerated, see docs/contributing/adding-types.md).
 // That annotation is the SDK's own statement that a settings field holds a
 // credential, so it is the ORACLE for the name rule in
 // internal/api/v2/toolkits/secret_settings_key.go.
