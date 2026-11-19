@@ -20,6 +20,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 )
 
@@ -32,6 +33,11 @@ type mintRequest struct {
 	url         string
 	contentType string
 	body        []byte
+	// basicUser and basicPass, when basicAuth is set, ride as an HTTP Basic
+	// Authorization header (the OpenAPI credential's `method: Basic`).
+	basicAuth bool
+	basicUser string
+	basicPass string
 }
 
 // tokenMint describes a probe that mints before it asks.
@@ -43,6 +49,11 @@ type tokenMint struct {
 	// spend names the GET the minted token is spent on. Nil means the mint is
 	// itself the verdict (Xray: the authenticate call is the credential check).
 	spend func(data map[string]any) (string, bool)
+	// mintIsVerdict, when set and true for the stored data, makes the mint
+	// the verdict although spend is set: a SharePoint credential with a
+	// tenant and no site has nothing to read, and a minted token is the
+	// proof (#2251).
+	mintIsVerdict func(data map[string]any) bool
 }
 
 // checkMinted runs a mint-then-spend probe.
@@ -57,6 +68,9 @@ func (c *httpToolkitConnectionChecker) checkMinted(ctx context.Context, configTy
 	}
 	request.Header.Set("Content-Type", minted.contentType)
 	request.Header.Set("Accept", "application/json")
+	if minted.basicAuth {
+		setBasicAuth(request.Header, minted.basicUser, minted.basicPass)
+	}
 
 	response, refused := c.send(ctx, configType, request)
 	if refused != nil {
@@ -78,7 +92,7 @@ func (c *httpToolkitConnectionChecker) checkMinted(ctx context.Context, configTy
 	if token == "" {
 		return ToolkitCheckOutcome{Reason: ToolkitCheckReasonUnreachable, Message: toolkitCheckUnreachableMessage}
 	}
-	if mint.spend == nil {
+	if mint.spend == nil || (mint.mintIsVerdict != nil && mint.mintIsVerdict(data)) {
 		return ToolkitCheckOutcome{Reason: ToolkitCheckReasonOK, Message: toolkitCheckOKMessage}
 	}
 
@@ -202,8 +216,39 @@ func sharepointSite(data map[string]any) (site *url.URL, tenant string, ok bool)
 	return parsed, label, true
 }
 
+// entraTenantPattern is what an explicit tenant may be: a tenant GUID or a
+// domain name (`contoso.onmicrosoft.com`, `contoso.com`). It is one path
+// segment of the token URL, so nothing else (a slash, a dot-dot, a scheme) is
+// let through.
+var entraTenantPattern = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$`)
+
+// sharepointExplicitTenant reads the tenant the credential names itself
+// (`tenant_id`, or `tenant`), which lets the check run without a site (#2251).
+// An empty answer means none is named; ok is false for a value that is not a
+// tenant, so a malformed one is unsupported rather than sent.
+func sharepointExplicitTenant(data map[string]any) (tenant string, named, ok bool) {
+	raw := strings.TrimSpace(firstStrVal(data, "tenant_id", "tenant"))
+	if raw == "" {
+		return "", false, true
+	}
+	if !entraTenantPattern.MatchString(raw) || strings.Contains(raw, "..") {
+		return "", true, false
+	}
+	return raw, true, true
+}
+
+// sharepointSkipsSpend is true when the credential names a tenant and no site:
+// the minted token is the whole proof.
+func sharepointSkipsSpend(data map[string]any) bool {
+	if _, named, ok := sharepointExplicitTenant(data); !named || !ok {
+		return false
+	}
+	return strings.TrimSpace(strVal(data, "site_url")) == ""
+}
+
 // buildSharepointMint is the Entra client-credentials grant against the Graph
-// default scope. A credential that carries a discovery endpoint is the
+// default scope. The tenant is the credential's explicit one when it names
+// one, and otherwise the one the site host implies. A credential that carries a discovery endpoint is the
 // delegated flow and has no app-only secret to prove, so it is not probed here.
 func buildSharepointMint(data map[string]any) (mintRequest, authorizeOutcome) {
 	if strVal(data, "oauth_discovery_endpoint") != "" || strVal(data, "auth_mode") != "" || strVal(data, "oauth_app_id") != "" {
@@ -211,8 +256,16 @@ func buildSharepointMint(data map[string]any) (mintRequest, authorizeOutcome) {
 	}
 	clientID := strings.TrimSpace(strVal(data, "client_id"))
 	clientSecret := strings.TrimSpace(strVal(data, "client_secret"))
-	_, tenant, ok := sharepointSite(data)
-	if clientID == "" || clientSecret == "" || !ok {
+	tenant, named, tenantOK := sharepointExplicitTenant(data)
+	if !tenantOK {
+		return mintRequest{}, unsupportedAuth()
+	}
+	siteOK := true
+	if !named {
+		_, tenant, siteOK = sharepointSite(data)
+		tenant += ".onmicrosoft.com"
+	}
+	if clientID == "" || clientSecret == "" || !siteOK {
 		return mintRequest{}, unsupportedAuth()
 	}
 	form := url.Values{}
@@ -221,7 +274,7 @@ func buildSharepointMint(data map[string]any) (mintRequest, authorizeOutcome) {
 	form.Set("client_secret", clientSecret)
 	form.Set("scope", graphDefaultScope)
 	return mintRequest{
-		url:         entraLoginBase + "/" + url.PathEscape(tenant+".onmicrosoft.com") + "/oauth2/v2.0/token",
+		url:         entraLoginBase + "/" + url.PathEscape(tenant) + "/oauth2/v2.0/token",
 		contentType: "application/x-www-form-urlencoded",
 		body:        []byte(form.Encode()),
 	}, authorizedRequest()
@@ -240,4 +293,51 @@ func sharepointSpendURL(data map[string]any) (string, bool) {
 		return graphBase + "/v1.0/sites/" + site.Host, true
 	}
 	return graphBase + "/v1.0/sites/" + site.Host + ":" + path, true
+}
+
+// buildOpenAPIMint is the OAuth 2.0 client-credentials grant of an OpenAPI
+// credential, against the token URL the tenant typed (#2252), as elitea-sdk's
+// `OpenApiConfiguration.check_connection` makes it. It is the only honest
+// probe an OpenAPI credential has: a custom spec has no identity endpoint, so
+// API-key and anonymous credentials stay `unsupported_type`, as does the
+// delegated flow (an `oauth_discovery_endpoint`), which has no app-only secret.
+//
+// `method` picks where the client authenticates: `Basic` sends it in an HTTP
+// Basic header (Spotify and others), anything else in the form body. The token
+// URL must be https; whether its host may be dialled is the egress allowlist's
+// say (`ELITEA_TOOLKIT_CHECK_ALLOWLIST`), which `send` applies as for every
+// probe, so a host the operator has not named answers `unreachable`.
+// openAPITokenScheme is the scheme a token URL must have. A variable, not a
+// constant, only so the tests can serve a token endpoint over plain HTTP
+// through export_test.go; nothing else assigns it.
+var openAPITokenScheme = "https"
+
+func buildOpenAPIMint(data map[string]any) (mintRequest, authorizeOutcome) {
+	if strings.TrimSpace(strVal(data, "oauth_discovery_endpoint")) != "" {
+		return mintRequest{}, unsupportedAuth()
+	}
+	clientID := strings.TrimSpace(strVal(data, "client_id"))
+	clientSecret := strings.TrimSpace(strVal(data, "client_secret"))
+	tokenURL := strings.TrimSpace(strVal(data, "token_url"))
+	if clientID == "" || clientSecret == "" || tokenURL == "" {
+		return mintRequest{}, unsupportedAuth()
+	}
+	parsed, err := url.Parse(tokenURL)
+	if err != nil || parsed.Scheme != openAPITokenScheme || parsed.Hostname() == "" || parsed.User != nil {
+		return mintRequest{}, unsupportedAuth()
+	}
+	form := url.Values{}
+	form.Set("grant_type", "client_credentials")
+	if scope := strings.TrimSpace(strVal(data, "scope")); scope != "" {
+		form.Set("scope", scope)
+	}
+	request := mintRequest{url: parsed.String(), contentType: "application/x-www-form-urlencoded"}
+	if strings.EqualFold(strings.TrimSpace(strVal(data, "method")), "basic") {
+		request.basicAuth, request.basicUser, request.basicPass = true, clientID, clientSecret
+	} else {
+		form.Set("client_id", clientID)
+		form.Set("client_secret", clientSecret)
+	}
+	request.body = []byte(form.Encode())
+	return request, authorizedRequest()
 }
