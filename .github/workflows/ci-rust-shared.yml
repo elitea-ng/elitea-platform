@@ -117,8 +117,8 @@ jobs:
       - name: Agent runtime — digests with and without preserve_order
         working-directory: libs/rust
         run: |
-          cargo test --locked -p elitea-agent-runtime --all-targets --features toolkit-sql,toolkit-office
-          cargo test --locked -p elitea-agent-runtime --all-targets --features test-preserve-order,toolkit-sql,toolkit-office
+          cargo test --locked -p elitea-agent-runtime --all-targets --features toolkit-sql,toolkit-office,toolkit-delta-lake
+          cargo test --locked -p elitea-agent-runtime --all-targets --features test-preserve-order,toolkit-sql,toolkit-office,toolkit-delta-lake
 
       # The workspace Clippy run above uses --all-features, which turns on
       # `test-support`, and that switches off the crate's
@@ -128,5 +128,5 @@ jobs:
       - name: Agent runtime — production feature sets (panic guard on)
         working-directory: libs/rust
         run: |
-          cargo clippy --locked -p elitea-agent-runtime --all-targets --features toolkit-sql,toolkit-office -- -D warnings
+          cargo clippy --locked -p elitea-agent-runtime --all-targets --features toolkit-sql,toolkit-office,toolkit-delta-lake -- -D warnings
           cargo clippy --locked -p elitea-agent-runtime --all-targets -- -D warnings

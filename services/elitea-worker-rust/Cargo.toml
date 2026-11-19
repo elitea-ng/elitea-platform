@@ -52,8 +52,9 @@ elitea-platform-rpc = { path = "../../libs/rust/platform-rpc" }
 # (`canonical`), so neither this crate's `arbitrary_precision` nor a
 # `preserve_order` from elsewhere changes them.
 # `toolkit-sql`: the worker serves the `sql` toolkit family (sqlx postgres +
-# mysql), which the desktop host never links.
-elitea-agent-runtime = { path = "../../libs/rust/agent-runtime", features = ["toolkit-sql", "toolkit-office", "toolkit-data-analysis"] }
+# mysql), which the desktop host never links. `toolkit-delta-lake`: the
+# `delta_lake` family (delta-kernel-rs over S3, #2262), likewise worker-only.
+elitea-agent-runtime = { path = "../../libs/rust/agent-runtime", features = ["toolkit-sql", "toolkit-office", "toolkit-data-analysis", "toolkit-delta-lake"] }
 # ADR-0032: the Office families run in this process; the worker also reads
 # `elitea_office_core::health()` and drains and exits when a library call will
 # not give its thread back (production.rs, `office_core_stuck`).
@@ -164,7 +165,7 @@ required-features = ["graph-shaping-bench"]
 [dev-dependencies]
 # The shared child-process log capture (FU-299).
 elitea-faults = { path = "../../libs/rust/faults", features = ["logtest"] }
-elitea-agent-runtime = { path = "../../libs/rust/agent-runtime", features = ["test-support", "toolkit-sql", "toolkit-office", "toolkit-data-analysis"] }
+elitea-agent-runtime = { path = "../../libs/rust/agent-runtime", features = ["test-support", "toolkit-sql", "toolkit-office", "toolkit-data-analysis", "toolkit-delta-lake"] }
 # The in-process fake of elitea-vector the index handler's tests run against.
 elitea-vector-index = { path = "../../libs/rust/vector-index", features = ["test-server"] }
 http-body = "=1.1.0"
