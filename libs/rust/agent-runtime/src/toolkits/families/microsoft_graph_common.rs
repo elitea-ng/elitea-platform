@@ -434,7 +434,6 @@ fn error_from_status(status: StatusCode, body: &[u8]) -> GraphError {
     let code = status.as_u16();
     let text = graph_error_text(body);
     let (kind, hint) = match code {
-        400 => (GraphErrorKind::InvalidInput, String::new()),
         401 => (GraphErrorKind::AuthorizationRequired, String::new()),
         403 => (GraphErrorKind::Forbidden, missing_permission_hint(None)),
         404 => (
@@ -1127,7 +1126,7 @@ impl GraphClient {
                 .await?
             {
                 Step::Again => {}
-                Step::Done(raw) => return Ok(self.finish(raw, url)),
+                Step::Done(raw) => return Ok(Self::finish(raw, url)),
             }
         }
     }
@@ -1302,7 +1301,7 @@ impl GraphClient {
         }
     }
 
-    fn finish(&self, raw: RawResponse, url: Url) -> GraphResponse {
+    fn finish(raw: RawResponse, url: Url) -> GraphResponse {
         let headers = RESPONSE_HEADERS
             .iter()
             .filter_map(|name| {
@@ -1400,7 +1399,7 @@ impl GraphClient {
         first: Map<String, Value>,
         pages: usize,
         char_limit: usize,
-        check: Option<&(dyn Fn(&Url) -> Result<(), GraphError> + Send + Sync)>,
+        check: Option<&LinkCheck>,
     ) -> Result<Map<String, Value>, GraphError> {
         let mut items = first
             .get("value")
@@ -1458,6 +1457,9 @@ impl GraphClient {
         parse_batch_response(&response.json_object()?)
     }
 }
+
+/// A toolkit's own check of a paging link before it is followed.
+pub(crate) type LinkCheck = dyn Fn(&Url) -> Result<(), GraphError> + Send + Sync;
 
 /// The items a collection scan kept.
 #[derive(Clone, Debug)]
