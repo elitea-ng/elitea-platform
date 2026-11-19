@@ -223,10 +223,10 @@ function useProjectSkillIds(
   return { projectSkillIdsFor, resolveProjectSkillIds };
 }
 
-/** An agent and a participant that is only a model take project skills; a toolkit or a person does not. */
+/** An agent, a model, and a chat with no active participant (a model chat) take project skills; a toolkit or a person does not. */
 function canUseSkills(participant: Participant | null | undefined): boolean {
   const kind = participant?.entityName;
-  return kind === 'application' || kind === 'llm' || kind === 'dummy';
+  return participant == null || kind === 'application' || kind === 'llm' || kind === 'dummy';
 }
 
 const NO_PINS: readonly ConversationSkillPin[] = [];
