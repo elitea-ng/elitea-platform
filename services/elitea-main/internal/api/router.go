@@ -73,6 +73,7 @@ import (
 	v2mcp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/mcp"
 	v2memories "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/memories"
 	v2messagetraces "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/messagetraces"
+	v2microsoftlogin "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/microsoftlogin"
 	v2microsoftapps "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/microsoftoauthapps"
 	v2moderation "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/moderation"
 	v2openapidocs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/openapidocs"
@@ -2154,6 +2155,19 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			v2configs.WithModelDefaults(cfg.PlatformModelDefaults),
 		}, configurationOptions...)...,
 	)
+	// The Microsoft sign-in (ADR-0057 decision 6, shared migration 0257). The
+	// callback is the one https redirect URI an Entra app registers, for web,
+	// desktop and mobile. It is PUBLIC by design: on desktop and mobile it runs
+	// in the system browser, which holds no session, and on web in a popup that
+	// may belong to a victim. It attaches nothing to anyone: it parks the result
+	// as a handoff, and only the person who started the sign-in can redeem it
+	// over the authenticated routes below. Without the database, the vault master
+	// key or an https public origin the handler answers 503.
+	microsoftLogin := microsoftLoginHandler(cfg, microsoftLoginService(cfg, configurationsHandler, microsoftResolver))
+	r.Group(func(r chi.Router) {
+		r.Use(apimw.NoStore)
+		r.Get(v2microsoftlogin.CallbackPath, microsoftLogin.Callback)
+	})
 	artifactHandler := cfg.ArtifactHandler
 	if artifactHandler == nil {
 		artifactHandler, _ = newArtifactHandler(cfg)
@@ -3761,6 +3775,19 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			}
 			r.With(projectPermission(v2configs.CurrentConfigurationCreatePermission)).
 				Get(v2microsoftapps.Path, v2microsoftapps.New(microsoftOffers).List)
+
+			// The Microsoft sign-in's authenticated half (ADR-0057 decision 6):
+			// start builds the Entra authorization URL for a saved credential,
+			// redeem hands the access token of a finished sign-in to the person
+			// who started it. Both take the credential's update permission in the
+			// body's project_id, the permission the stored check takes.
+			microsoftLoginGate := apimw.RequireResolvedPermissionsForProject(
+				coreResolver, platformauth.PermissionModeDefault,
+				v2microsoftlogin.BodyProject, v2configs.CurrentConfigurationUpdatePermission)
+			r.With(v2microsoftlogin.DecodeStart, microsoftLoginGate).
+				Post(v2microsoftlogin.StartPath, microsoftLogin.Start)
+			r.With(v2microsoftlogin.DecodeRedeem, microsoftLoginGate).
+				Post(v2microsoftlogin.RedeemPath, microsoftLogin.Redeem)
 
 			// === Secrets ===
 			// Mounted under "/secrets" — the legacy PLUGIN name — while the

@@ -50,6 +50,8 @@ import type {
   ConfigurationListResponse,
   ConfigurationModelListResponse,
   MicrosoftAppOffers,
+  MicrosoftLoginRedeemed,
+  MicrosoftLoginStart,
   RevalidateConfiguration200,
   StoredConnectionCheckRow,
 } from "../model";
@@ -72,6 +74,40 @@ export const getListMicrosoftAppOffersResponseMock = (
     ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
   })),
   custom_app_allowed: faker.datatype.boolean(),
+  ...overrideResponse,
+});
+
+export const getStartMicrosoftLoginResponseMock = (
+  overrideResponse: Partial<Extract<MicrosoftLoginStart, object>> = {},
+): MicrosoftLoginStart => ({
+  authorization_url: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  expires_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  app: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  handoff_ttl_seconds: faker.number.int(),
+  channel_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  ...overrideResponse,
+});
+
+export const getCompleteMicrosoftLoginResponseMock = (): string =>
+  faker.word.sample();
+
+export const getRedeemMicrosoftLoginResponseMock = (
+  overrideResponse: Partial<Extract<MicrosoftLoginRedeemed, object>> = {},
+): MicrosoftLoginRedeemed => ({
+  access_token: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  token_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  expires_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  expires_in: faker.number.int(),
+  scope: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  credential_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  credential_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  app: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  tenant_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  account_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
   ...overrideResponse,
 });
 
@@ -471,6 +507,87 @@ export const getListMicrosoftAppOffersMockHandler = (
   );
 };
 
+export const getStartMicrosoftLoginMockHandler = (
+  overrideResponse?:
+    | MicrosoftLoginStart
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<MicrosoftLoginStart> | MicrosoftLoginStart),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/microsoft_login\\:start",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getStartMicrosoftLoginResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getCompleteMicrosoftLoginMockHandler = (
+  overrideResponse?:
+    | string
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<string> | string),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/microsoft_login\\:callback",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      const resolvedBody =
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCompleteMicrosoftLoginResponseMock();
+      const textBody =
+        typeof resolvedBody === "string"
+          ? resolvedBody
+          : JSON.stringify(resolvedBody ?? null);
+      return HttpResponse.html(textBody, { status: 200 });
+    },
+    options,
+  );
+};
+
+export const getRedeemMicrosoftLoginMockHandler = (
+  overrideResponse?:
+    | MicrosoftLoginRedeemed
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<MicrosoftLoginRedeemed> | MicrosoftLoginRedeemed),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/microsoft_login\\:redeem",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getRedeemMicrosoftLoginResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListConfigurationsMockHandler = (
   overrideResponse?:
     | ConfigurationListResponse
@@ -606,6 +723,9 @@ export const getRevalidateConfigurationMockHandler = (
 };
 export const getConfigurationsMock = () => [
   getListMicrosoftAppOffersMockHandler(),
+  getStartMicrosoftLoginMockHandler(),
+  getCompleteMicrosoftLoginMockHandler(),
+  getRedeemMicrosoftLoginMockHandler(),
   getListConfigurationsMockHandler(),
   getListConfigurationModelsMockHandler(),
   getCheckStoredConfigurationConnectionMockHandler(),

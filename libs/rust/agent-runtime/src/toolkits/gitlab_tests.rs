@@ -14,7 +14,8 @@ use serde_json::{Map, Value, json};
 
 use super::families::connector_client::IntoAdk;
 use super::families::gitlab::client::{
-    GitLabApi, GitLabClient, GitLabClientError, GitLabClientErrorCode, GitLabOperation,
+    GitLabApi, GitLabClient, GitLabClientError, GitLabClientErrorCode, GitLabOperation, ListFilter,
+    expand_inclusive_upper_bound,
 };
 use super::families::gitlab::config::{GitLabConfigErrorCode, GitLabToolkitConfig};
 use super::families::gitlab::tools::{GitLabToolsetErrorCode, test_build_with_api, test_catalog};
@@ -87,6 +88,8 @@ fn catalog_follows_the_sdk_order_without_index_tools() {
             ("get_pr_changes", "read"),
             ("create_pr_change_comment", "write"),
             ("get_commits", "read"),
+            ("list_merge_requests", "read"),
+            ("get_merge_request", "read"),
             ("read_multiple_files", "read"),
             ("grep_file", "read"),
         ]
@@ -167,7 +170,7 @@ async fn tools_for(
 async fn schemas_selection_and_argument_shapes_follow_the_sdk() {
     let api = Arc::new(FixtureApi::default());
     let tools = tools_for(&api, &[]).await.expect("complete toolset");
-    assert_eq!(tools.len(), 21);
+    assert_eq!(tools.len(), 23);
     for (tool, (name, group)) in tools.iter().zip(test_catalog()) {
         assert_eq!(tool.name(), name);
         assert_eq!(tool.is_read_only(), group == "read");
@@ -372,6 +375,16 @@ fn text(value: &Value) -> &str {
     value.as_str().expect("a text result")
 }
 
+/// What `get_issues` sends when called with no arguments.
+fn default_issue_filter() -> ListFilter<'static> {
+    ListFilter {
+        state: Some("opened"),
+        page: 1,
+        per_page: 20,
+        ..ListFilter::default()
+    }
+}
+
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // One ordered story over shared fixture state.
 async fn branches_follow_the_active_branch_and_protection_rules() {
@@ -493,10 +506,16 @@ async fn listings_issues_and_commits_keep_the_sdk_shapes() {
             Some("2"),
         ),
         ok(json!([{"name": "release/2"}, {"name": "dev"}])),
-        ok(json!([{"title": "It's broken", "iid": 4}])),
+        ok(json!([{
+            "title": "It's broken", "iid": 4, "state": "opened", "labels": ["bug"],
+            "author": {"username": "ann", "id": 7},
+            "created_at": "2026-01-01T00:00:00.000Z", "updated_at": "2026-01-02T00:00:00.000Z"
+        }])),
         ok(json!([])),
         ok(json!({"title": "T", "description": null})),
-        ok(json!([{"body": "hi", "author": {"username": "ann"}}])),
+        ok(
+            json!([{"body": "hi", "author": {"username": "ann"}, "created_at": "2026-01-03T00:00:00.000Z"}]),
+        ),
         ok(json!([{
             "id": "c1", "author_name": "Ann", "created_at": "2025-01-01T00:00:00Z",
             "message": "fix", "web_url": "https://gitlab.example.test/c1"
@@ -511,26 +530,29 @@ async fn listings_issues_and_commits_keep_the_sdk_shapes() {
         .expect("branches");
     assert_eq!(branches, json!(["release/1", "release/2"]));
     let issues = client
-        .execute(GitLabOperation::GetIssues)
+        .execute(GitLabOperation::GetIssues(default_issue_filter()))
         .await
         .expect("issues");
     assert_eq!(
-        text(&issues),
-        // CPython's repr picks double quotes for text holding only a `'`.
-        "Found 1 issues:\n[{'title': \"It's broken\", 'number': 4}]"
+        issues,
+        json!([{
+            "title": "It's broken", "number": 4, "state": "opened", "labels": ["bug"],
+            "author": "ann", "created_at": "2026-01-01T00:00:00.000Z",
+            "updated_at": "2026-01-02T00:00:00.000Z"
+        }])
     );
     let none = client
-        .execute(GitLabOperation::GetIssues)
+        .execute(GitLabOperation::GetIssues(default_issue_filter()))
         .await
         .expect("no issues");
-    assert_eq!(text(&none), "No open issues available");
+    assert_eq!(none, json!([]));
     let issue = client
         .execute(GitLabOperation::GetIssue { issue_number: 4 })
         .await
         .expect("issue");
     assert_eq!(
         issue,
-        json!({"title": "T", "body": null, "comments": [{"body": "hi", "user": "ann"}]})
+        json!({"title": "T", "body": null, "comments": [{"body": "hi", "user": "ann", "created_at": "2026-01-03T00:00:00.000Z"}]})
     );
     let commits = client
         .execute(GitLabOperation::GetCommits {
@@ -558,8 +580,8 @@ async fn listings_issues_and_commits_keep_the_sdk_shapes() {
         [
             format!("{PROJECT}/repository/branches?per_page=100&page=1"),
             format!("{PROJECT}/repository/branches?per_page=100&page=2"),
-            format!("{PROJECT}/issues?state=opened"),
-            format!("{PROJECT}/issues?state=opened"),
+            format!("{PROJECT}/issues?state=opened&page=1&per_page=20"),
+            format!("{PROJECT}/issues?state=opened&page=1&per_page=20"),
             format!("{PROJECT}/issues/4"),
             format!("{PROJECT}/issues/4/notes?page=1"),
             format!("{PROJECT}/repository/commits?ref_name=main&since=2025-01-01"),
@@ -959,12 +981,419 @@ async fn provider_failures_map_to_stable_gitlab_errors() {
     let adk = unknown.into_adk();
     assert_eq!(adk.code, "gitlab.effect.unknown_outcome");
     let shape = client
-        .execute(GitLabOperation::GetIssues)
+        .execute(GitLabOperation::GetIssues(default_issue_filter()))
         .await
         .expect_err("non-json");
     assert_eq!(shape.code(), GitLabClientErrorCode::InvalidResponse);
     assert_eq!(
         GitLabClientError::fixture(GitLabClientErrorCode::NotFound).to_string(),
         "the GitLab resource was not found"
+    );
+}
+
+// -- get_issues filters, list_merge_requests, get_merge_request (upstream SDK
+// main, added after the 2026-08-07 pin; S10 #2265) -----------------------------
+
+fn merge_request_json(iid: u64) -> Value {
+    json!({
+        "id": 900 + iid, "iid": iid, "title": format!("MR {iid}"),
+        "web_url": format!("https://gitlab.example.test/team/project/-/merge_requests/{iid}"),
+        "state": "merged", "work_in_progress": false,
+        "created_at": "2026-01-01T00:00:00.000Z", "updated_at": "2026-01-02T00:00:00.000Z",
+        "merged_at": "2026-01-02T00:00:00.000Z", "closed_at": null,
+        "source_branch": "feature", "target_branch": "main",
+        "author": {"id": 7, "username": "ann", "name": "Ann", "avatar_url": "https://x/a.png"},
+        "merged_by": {"id": 8, "username": "bob", "name": "Bob"},
+        "labels": ["bug"], "sha": "abc", "merge_commit_sha": "def",
+        "assignees": [{"id": 9, "username": "cy", "name": "Cy", "state": "active"}],
+        "reviewers": [],
+        "description": "Fixes it",
+        "diff_refs": {"base_sha": "do-not-leak"}
+    })
+}
+
+#[test]
+fn an_upper_date_bound_is_widened_to_the_last_instant_of_its_precision() {
+    for (given, want) in [
+        ("2026-09-03", "2026-09-03T23:59:59.999999"),
+        ("2026-09-03T10", "2026-09-03T10:59:59.999999"),
+        ("2026-09-03T10:15", "2026-09-03T10:15:59.999999"),
+        ("2026-09-03 10:15:30", "2026-09-03 10:15:30.999999"),
+        ("2026-09-03T10:15:30Z", "2026-09-03T10:15:30.999999Z"),
+        ("2026-09-03T10:15:30.123Z", "2026-09-03T10:15:30.123999Z"),
+        (
+            "2026-09-03T10:15:30.1+02:00",
+            "2026-09-03T10:15:30.199999+02:00",
+        ),
+        (
+            "2026-09-03T10:15:30-0500",
+            "2026-09-03T10:15:30.999999-0500",
+        ),
+        ("  2026-09-03  ", "2026-09-03T23:59:59.999999"),
+    ] {
+        assert_eq!(expand_inclusive_upper_bound(given), want, "{given}");
+    }
+    // Microsecond precision, and anything that is not a timestamp, stay as given.
+    for untouched in [
+        "2026-09-03T10:15:30.123456Z",
+        "2026-09-03T10:15:30.1234567",
+        "yesterday",
+        "2026-9-3",
+        "2026-09-03T",
+        "2026-09-03T10:15:30.Z",
+        "2026-09-03T10:15:30+2",
+        "2026-09-03T10:15:30ZZ",
+        "",
+    ] {
+        assert_eq!(expand_inclusive_upper_bound(untouched), untouched);
+    }
+}
+
+#[tokio::test]
+async fn get_issues_sends_the_filters_the_sdk_sends() {
+    let (client, transport) = client([ok(json!([])), ok(json!([])), ok(json!([]))]);
+    client
+        .execute(GitLabOperation::GetIssues(ListFilter {
+            state: Some("closed"),
+            page: 3,
+            per_page: 50,
+            created_after: Some("2026-09-01"),
+            created_before: Some("2026-09-03"),
+            updated_after: Some("2026-09-01T10:00:00Z"),
+            updated_before: Some("2026-09-03T10:00:00.000001Z"),
+            author_username: Some("ann"),
+            labels: Some("bug,ui"),
+            all: false,
+        }))
+        .await
+        .expect("filtered");
+    // `state=all` and a blank state send none; fetch_all pages by 100.
+    client
+        .execute(GitLabOperation::GetIssues(ListFilter {
+            state: None,
+            all: true,
+            ..ListFilter::default()
+        }))
+        .await
+        .expect("all pages");
+    let refused = client
+        .execute(GitLabOperation::GetIssues(ListFilter {
+            created_after: Some("bad\nvalue"),
+            page: 1,
+            per_page: 20,
+            ..ListFilter::default()
+        }))
+        .await
+        .expect_err("control character");
+    assert_eq!(refused.code(), GitLabClientErrorCode::InvalidInput);
+    let urls: Vec<String> = transport
+        .requests
+        .lock()
+        .expect("requests")
+        .iter()
+        .map(|request| request.url.clone())
+        .collect();
+    assert_eq!(
+        urls,
+        [
+            format!(
+                "{PROJECT}/issues?state=closed&created_after=2026-09-01&created_before=2026-09-03T23%3A59%3A59.999999&updated_after=2026-09-01T10%3A00%3A00Z&updated_before=2026-09-03T10%3A00%3A00.000001Z&author_username=ann&labels=bug%2Cui&page=3&per_page=50"
+            ),
+            format!("{PROJECT}/issues?per_page=100&page=1"),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn list_merge_requests_returns_compact_dicts_and_filters_by_branch() {
+    let (client, transport) = client([
+        ok(json!([merge_request_json(5)])),
+        ok(json!([])),
+        GitLabOrgHttpResponse::fixture(
+            StatusCode::OK,
+            Some(json!([merge_request_json(1)])),
+            Some("2"),
+        ),
+        ok(json!([merge_request_json(2)])),
+    ]);
+    let compact = client
+        .execute(GitLabOperation::ListMergeRequests {
+            filter: ListFilter {
+                state: None,
+                page: 1,
+                per_page: 20,
+                ..ListFilter::default()
+            },
+            target_branch: Some("main"),
+            source_branch: Some("feature"),
+            include_details: false,
+        })
+        .await
+        .expect("merge requests");
+    assert_eq!(
+        compact,
+        json!([{
+            "id": 905, "iid": 5, "title": "MR 5",
+            "web_url": "https://gitlab.example.test/team/project/-/merge_requests/5",
+            "state": "merged", "draft": false,
+            "created_at": "2026-01-01T00:00:00.000Z", "updated_at": "2026-01-02T00:00:00.000Z",
+            "merged_at": "2026-01-02T00:00:00.000Z", "closed_at": null,
+            "source_branch": "feature", "target_branch": "main",
+            "author": {"id": 7, "username": "ann", "name": "Ann"},
+            "merge_user": {"id": 8, "username": "bob", "name": "Bob"},
+            "labels": ["bug"], "sha": "abc", "merge_commit_sha": "def"
+        }])
+    );
+    assert!(!compact.to_string().contains("avatar_url"));
+    assert!(!compact.to_string().contains("do-not-leak"));
+    // include_details adds assignees and reviewers (as safe users) per merge request.
+    let detailed = client
+        .execute(GitLabOperation::ListMergeRequests {
+            filter: ListFilter {
+                state: Some("opened"),
+                page: 2,
+                per_page: 5,
+                ..ListFilter::default()
+            },
+            target_branch: None,
+            source_branch: None,
+            include_details: true,
+        })
+        .await
+        .expect("empty");
+    assert_eq!(detailed, json!([]));
+    let all = client
+        .execute(GitLabOperation::ListMergeRequests {
+            filter: ListFilter {
+                state: None,
+                all: true,
+                ..ListFilter::default()
+            },
+            target_branch: None,
+            source_branch: None,
+            include_details: true,
+        })
+        .await
+        .expect("all pages");
+    let all = all.as_array().expect("list");
+    assert_eq!(all.len(), 2);
+    assert_eq!(
+        all[0]["assignees"],
+        json!([{"id": 9, "username": "cy", "name": "Cy"}])
+    );
+    assert_eq!(all[0]["reviewers"], json!([]));
+    let urls: Vec<String> = transport
+        .requests
+        .lock()
+        .expect("requests")
+        .iter()
+        .map(|request| request.url.clone())
+        .collect();
+    assert_eq!(
+        urls,
+        [
+            format!(
+                "{PROJECT}/merge_requests?target_branch=main&source_branch=feature&page=1&per_page=20"
+            ),
+            format!("{PROJECT}/merge_requests?state=opened&page=2&per_page=5"),
+            format!("{PROJECT}/merge_requests?per_page=100&page=1"),
+            format!("{PROJECT}/merge_requests?per_page=100&page=2"),
+        ]
+    );
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One ledger over the optional heavy fields.
+async fn get_merge_request_adds_only_the_heavy_fields_asked_for() {
+    let flags = |discussions, approvals, pipelines, commits| GitLabOperation::GetMergeRequest {
+        pr_number: 5,
+        include_discussions: discussions,
+        include_approvals: approvals,
+        include_pipelines: pipelines,
+        include_commits: commits,
+    };
+    let (client, transport) = client([
+        // bare
+        ok(merge_request_json(5)),
+        // every heavy field
+        ok(merge_request_json(5)),
+        ok(json!([{"id": "d1", "notes": [{}, {}]}, {"id": "d2", "notes": null}])),
+        ok(
+            json!({"approved": true, "approved_by": [{"user": {"id": 3, "username": "dee", "name": "Dee", "email": "x"}}]}),
+        ),
+        ok(
+            json!([{"id": 71, "status": "success", "web_url": "https://gitlab.example.test/p/71"}, {"id": 70, "status": "failed"}]),
+        ),
+        ok(json!([{"id": "c1", "message": "fix", "author_email": "x"}])),
+        // each heavy field failing degrades to a notice
+        ok(merge_request_json(5)),
+        status(StatusCode::FORBIDDEN),
+        status(StatusCode::FORBIDDEN),
+        ok(json!([])),
+        status(StatusCode::INTERNAL_SERVER_ERROR),
+        // a missing merge request is an error
+        status(StatusCode::NOT_FOUND),
+    ]);
+    let bare = client
+        .execute(flags(false, false, false, false))
+        .await
+        .expect("bare");
+    assert_eq!(bare["iid"], 5);
+    assert_eq!(bare["description"], "Fixes it");
+    assert_eq!(
+        bare["assignees"],
+        json!([{"id": 9, "username": "cy", "name": "Cy"}])
+    );
+    for heavy in ["discussions", "approvals", "pipeline", "commits"] {
+        assert!(bare.get(heavy).is_none(), "{heavy}");
+    }
+    assert!(!bare.to_string().contains("do-not-leak"));
+    let full = client
+        .execute(flags(true, true, true, true))
+        .await
+        .expect("full");
+    assert_eq!(
+        full["discussions"],
+        json!([{"id": "d1", "notes_count": 2}, {"id": "d2", "notes_count": 0}])
+    );
+    assert_eq!(
+        full["approvals"],
+        json!({"approved": true, "approved_by": [{"id": 3, "username": "dee", "name": "Dee"}]})
+    );
+    assert_eq!(
+        full["pipeline"],
+        json!({"id": 71, "status": "success", "web_url": "https://gitlab.example.test/p/71"})
+    );
+    assert_eq!(full["commits"], json!([{"sha": "c1", "message": "fix"}]));
+    let degraded = client
+        .execute(flags(true, true, true, true))
+        .await
+        .expect("degraded");
+    assert_eq!(
+        degraded["discussions"],
+        "Unable to retrieve discussions: GitLab authorization failed"
+    );
+    assert_eq!(
+        degraded["approvals"],
+        "Unable to retrieve approvals: GitLab authorization failed"
+    );
+    assert_eq!(degraded["pipeline"], Value::Null);
+    assert_eq!(
+        degraded["commits"],
+        "Unable to retrieve commits: GitLab is unavailable"
+    );
+    let missing = client
+        .execute(flags(false, false, false, false))
+        .await
+        .expect_err("404");
+    assert_eq!(missing.code(), GitLabClientErrorCode::NotFound);
+    let zero = client
+        .execute(GitLabOperation::GetMergeRequest {
+            pr_number: 0,
+            include_discussions: false,
+            include_approvals: false,
+            include_pipelines: false,
+            include_commits: false,
+        })
+        .await
+        .expect_err("zero iid");
+    assert_eq!(zero.code(), GitLabClientErrorCode::InvalidInput);
+    let urls: Vec<String> = transport
+        .requests
+        .lock()
+        .expect("requests")
+        .iter()
+        .map(|request| request.url.clone())
+        .collect();
+    assert_eq!(urls[0], format!("{PROJECT}/merge_requests/5"));
+    assert_eq!(
+        urls[2..6],
+        [
+            format!("{PROJECT}/merge_requests/5/discussions?per_page=100&page=1"),
+            format!("{PROJECT}/merge_requests/5/approvals"),
+            format!("{PROJECT}/merge_requests/5/pipelines"),
+            format!("{PROJECT}/merge_requests/5/commits"),
+        ]
+    );
+    assert!(
+        transport
+            .requests
+            .lock()
+            .expect("requests")
+            .iter()
+            .all(|request| !request.effect)
+    );
+}
+
+#[tokio::test]
+async fn the_new_tools_take_the_sdk_arguments_and_defaults() {
+    let api = Arc::new(FixtureApi::default());
+    let tools = tools_for(
+        &api,
+        &["get_issues", "list_merge_requests", "get_merge_request"],
+    )
+    .await
+    .expect("tools");
+    assert_eq!(tools.len(), 3);
+    for tool in &tools {
+        assert!(tool.is_read_only(), "{}", tool.name());
+    }
+    let by_name = |name: &str| {
+        tools
+            .iter()
+            .find(|tool| tool.name() == name)
+            .cloned()
+            .expect("tool")
+    };
+    for (name, arguments) in [
+        ("get_issues", json!({})),
+        (
+            "get_issues",
+            json!({"state": null, "page": null, "per_page": 0, "fetch_all": true, "labels": "a,b"}),
+        ),
+        (
+            "list_merge_requests",
+            json!({"state": "all", "all": true, "include_details": true, "target_branch": "main"}),
+        ),
+        (
+            "get_merge_request",
+            json!({"pr_number": "12", "include_commits": true}),
+        ),
+    ] {
+        by_name(name)
+            .execute(context(), arguments.clone())
+            .await
+            .unwrap_or_else(|error| panic!("{name} {arguments}: {error:?}"));
+    }
+    for (name, arguments) in [
+        ("get_issues", json!({"all": true})),
+        ("get_issues", json!({"page": "x"})),
+        ("get_issues", json!({"state": 4})),
+        ("list_merge_requests", json!({"fetch_all": true})),
+        ("list_merge_requests", json!({"include_details": "yes"})),
+        ("get_merge_request", json!({})),
+        (
+            "get_merge_request",
+            json!({"pr_number": 1, "include_diff": true}),
+        ),
+    ] {
+        assert!(
+            by_name(name)
+                .execute(context(), arguments.clone())
+                .await
+                .is_err(),
+            "{name} {arguments}"
+        );
+    }
+    let schema = by_name("list_merge_requests")
+        .parameters_schema()
+        .expect("schema");
+    assert_eq!(schema["properties"]["state"]["default"], "all");
+    assert_eq!(schema["properties"]["per_page"]["default"], 20);
+    assert_eq!(
+        by_name("get_merge_request")
+            .parameters_schema()
+            .expect("schema")["required"],
+        json!(["pr_number"])
     );
 }

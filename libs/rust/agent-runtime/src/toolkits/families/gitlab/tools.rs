@@ -10,7 +10,7 @@ use crate::toolkits::families::vcs_text::{MAX_BATCH_FILES, MAX_CONTEXT_LINES, MA
 use crate::toolkits::invocation::{MaterializedToolsetError, admit_materialized_toolset};
 use crate::toolkits::policy::ToolAdmissionPolicy;
 
-use super::client::{GitLabApi, GitLabClient, GitLabClientError, GitLabOperation};
+use super::client::{GitLabApi, GitLabClient, GitLabClientError, GitLabOperation, ListFilter};
 use super::config::{GitLabConfigError, GitLabConfigErrorCode, GitLabToolkitConfig};
 use crate::toolkits::families::connector_client::IntoAdk;
 
@@ -214,6 +214,8 @@ enum GitLabToolKind {
     GetPrChanges,
     CreatePrChangeComment,
     GetCommits,
+    ListMergeRequests,
+    GetMergeRequest,
     ReadMultipleFiles,
     GrepFile,
 }
@@ -221,7 +223,7 @@ enum GitLabToolKind {
 impl GitLabToolKind {
     /// The SDK's `get_available_tools` order, then the file-operation tools
     /// its decorator appends.
-    const ALL: [Self; 21] = [
+    const ALL: [Self; 23] = [
         Self::CreateBranch,
         Self::DeleteBranch,
         Self::ListBranches,
@@ -241,6 +243,8 @@ impl GitLabToolKind {
         Self::GetPrChanges,
         Self::CreatePrChangeComment,
         Self::GetCommits,
+        Self::ListMergeRequests,
+        Self::GetMergeRequest,
         Self::ReadMultipleFiles,
         Self::GrepFile,
     ];
@@ -266,6 +270,8 @@ impl GitLabToolKind {
             Self::GetPrChanges => "get_pr_changes",
             Self::CreatePrChangeComment => "create_pr_change_comment",
             Self::GetCommits => "get_commits",
+            Self::ListMergeRequests => "list_merge_requests",
+            Self::GetMergeRequest => "get_merge_request",
             Self::ReadMultipleFiles => "read_multiple_files",
             Self::GrepFile => "grep_file",
         }
@@ -281,6 +287,8 @@ impl GitLabToolKind {
             | Self::ReadFile
             | Self::GetPrChanges
             | Self::GetCommits
+            | Self::ListMergeRequests
+            | Self::GetMergeRequest
             | Self::ReadMultipleFiles
             | Self::GrepFile => "read",
             Self::DeleteBranch | Self::DeleteFile => "delete",
@@ -306,10 +314,10 @@ impl GitLabToolKind {
                 "List repository folder paths under path (default the root) on branch (default the active branch); recursive defaults to true. Reads at most 10 pages or 1000 entries."
             }
             Self::GetIssues => {
-                "Get the first page of open issues as `Found N issues:` followed by their titles and numbers."
+                "List issues as compact dicts (title, number, state, labels, author, created_at, updated_at). state is opened (default), closed or all; created/updated bounds are inclusive ISO 8601 and a bare upper date covers the whole day; author_username and labels filter; page and per_page page the list (per_page default 20) and fetch_all reads every page (at most 10 pages or 1000 issues)."
             }
             Self::GetIssue => {
-                "Get one issue by number: its title, body and its first page of comments as {body, user}."
+                "Get one issue by number: its title, body and its first page of comments as {body, user, created_at}."
             }
             Self::CreatePullRequest => {
                 "Create a merge request from branch into the toolkit's base branch with pr_title, pr_body and the created-by-agent label. Returns the new merge request number. This is a remote write."
@@ -346,6 +354,12 @@ impl GitLabToolKind {
             }
             Self::GetCommits => {
                 "List the first page of commits, optionally filtered by sha (a ref name), path, since, until and author. Returns sha, author, createdAt, message and url."
+            }
+            Self::ListMergeRequests => {
+                "List merge requests as compact metadata dicts without diffs, for throughput, cycle-time and aging questions. state is opened, merged, closed or all (default); created/updated bounds are inclusive ISO 8601 and a bare upper date covers the whole day; target_branch, source_branch, author_username and labels filter; include_details adds assignees and reviewers; page and per_page page the list (per_page default 20) and all reads every page (at most 10 pages or 1000 merge requests)."
+            }
+            Self::GetMergeRequest => {
+                "Get compact metadata of merge request pr_number (an IID) without its diff, with assignees, reviewers and description. include_discussions, include_approvals, include_pipelines and include_commits add the heavier fields; one that cannot be read becomes a one-line notice."
             }
             Self::ReadMultipleFiles => {
                 "Read several files from branch (default the active branch), each optionally limited to limit lines from offset. Returns a map of path to content; reading stops at a cumulative 200000 characters and later files are reported as skipped."
@@ -461,8 +475,8 @@ impl Tool for GitLabTool {
                 }
             }
             GitLabToolKind::GetIssues => {
-                allow(arguments, &[])?;
-                GitLabOperation::GetIssues
+                allow(arguments, &ISSUE_ARGUMENTS)?;
+                GitLabOperation::GetIssues(list_filter(arguments, "opened", "fetch_all")?)
             }
             GitLabToolKind::GetIssue => {
                 allow(arguments, &["issue_number"])?;
@@ -572,6 +586,35 @@ impl Tool for GitLabTool {
                     author: optional_text(arguments, "author")?,
                 }
             }
+            GitLabToolKind::ListMergeRequests => {
+                allow(arguments, &MERGE_REQUEST_ARGUMENTS)?;
+                GitLabOperation::ListMergeRequests {
+                    filter: list_filter(arguments, "all", "all")?,
+                    target_branch: optional_text(arguments, "target_branch")?,
+                    source_branch: optional_text(arguments, "source_branch")?,
+                    include_details: optional_bool(arguments, "include_details")?.unwrap_or(false),
+                }
+            }
+            GitLabToolKind::GetMergeRequest => {
+                allow(
+                    arguments,
+                    &[
+                        "pr_number",
+                        "include_discussions",
+                        "include_approvals",
+                        "include_pipelines",
+                        "include_commits",
+                    ],
+                )?;
+                let flag = |name: &str| optional_bool(arguments, name).map(|v| v.unwrap_or(false));
+                GitLabOperation::GetMergeRequest {
+                    pr_number: required_u64(arguments, "pr_number")?,
+                    include_discussions: flag("include_discussions")?,
+                    include_approvals: flag("include_approvals")?,
+                    include_pipelines: flag("include_pipelines")?,
+                    include_commits: flag("include_commits")?,
+                }
+            }
             GitLabToolKind::ReadMultipleFiles => {
                 allow(arguments, &["file_paths", "branch", "offset", "limit"])?;
                 GitLabOperation::ReadMultipleFiles {
@@ -666,7 +709,46 @@ fn schema_for(kind: GitLabToolKind) -> Value {
         ),
         GitLabToolKind::ListFiles => tree_schema("ListFilesModel", "files"),
         GitLabToolKind::ListFolders => tree_schema("ListFoldersModel", "folders"),
-        GitLabToolKind::GetIssues => object("GetIssuesModel", &[], &[]),
+        GitLabToolKind::GetIssues => object(
+            "GetIssuesModel",
+            &[
+                (
+                    "state",
+                    json!({"title":"State","type":["string","null"],"default":"opened","description":"Issue state filter: opened | closed | all"}),
+                ),
+                ("page", page_schema("ignored when fetch_all=True")),
+                ("per_page", per_page_schema("ignored when fetch_all=True")),
+                (
+                    "created_after",
+                    nullable_text("Created After", CREATED_AFTER),
+                ),
+                (
+                    "created_before",
+                    nullable_text("Created Before", CREATED_BEFORE),
+                ),
+                (
+                    "updated_after",
+                    nullable_text("Updated After", UPDATED_AFTER),
+                ),
+                (
+                    "updated_before",
+                    nullable_text("Updated Before", UPDATED_BEFORE),
+                ),
+                (
+                    "author_username",
+                    nullable_text("Author Username", "Filter by author username"),
+                ),
+                (
+                    "labels",
+                    nullable_text("Labels", "Comma-separated list of labels to filter by"),
+                ),
+                (
+                    "fetch_all",
+                    json!({"title":"Fetch All","type":"boolean","default":false,"description":"If True, fetch all pages instead of a single page"}),
+                ),
+            ],
+            &[],
+        ),
         GitLabToolKind::GetIssue => object(
             "GetIssueModel",
             &[(
@@ -847,6 +929,84 @@ fn schema_for(kind: GitLabToolKind) -> Value {
             ],
             &[],
         ),
+        GitLabToolKind::ListMergeRequests => object(
+            "ListMergeRequestsModel",
+            &[
+                (
+                    "state",
+                    json!({"title":"State","type":["string","null"],"default":"all","description":"Merge request state filter: opened | merged | closed | all"}),
+                ),
+                ("page", page_schema("ignored when all=True")),
+                ("per_page", per_page_schema("ignored when all=True")),
+                (
+                    "created_after",
+                    nullable_text("Created After", CREATED_AFTER),
+                ),
+                (
+                    "created_before",
+                    nullable_text("Created Before", CREATED_BEFORE),
+                ),
+                (
+                    "updated_after",
+                    nullable_text("Updated After", UPDATED_AFTER),
+                ),
+                (
+                    "updated_before",
+                    nullable_text("Updated Before", UPDATED_BEFORE),
+                ),
+                (
+                    "target_branch",
+                    nullable_text("Target Branch", "Filter by target branch"),
+                ),
+                (
+                    "source_branch",
+                    nullable_text("Source Branch", "Filter by source branch"),
+                ),
+                (
+                    "author_username",
+                    nullable_text("Author Username", "Filter by author username"),
+                ),
+                (
+                    "labels",
+                    nullable_text("Labels", "Comma-separated list of labels to filter by"),
+                ),
+                (
+                    "include_details",
+                    json!({"title":"Include Details","type":"boolean","default":false,"description":"If True, include heavier fields (assignees, reviewers) for each MR"}),
+                ),
+                (
+                    "all",
+                    json!({"title":"All","type":"boolean","default":false,"description":"If True, fetch all pages instead of a single page"}),
+                ),
+            ],
+            &[],
+        ),
+        GitLabToolKind::GetMergeRequest => object(
+            "GetMergeRequestModel",
+            &[
+                (
+                    "pr_number",
+                    integer("Pr Number", "GitLab Merge Request (Pull Request) IID", 1),
+                ),
+                (
+                    "include_discussions",
+                    json!({"title":"Include Discussions","type":"boolean","default":false,"description":"If True, include discussion/notes summary (heavier payload)"}),
+                ),
+                (
+                    "include_approvals",
+                    json!({"title":"Include Approvals","type":"boolean","default":false,"description":"If True, include approval state (heavier payload)"}),
+                ),
+                (
+                    "include_pipelines",
+                    json!({"title":"Include Pipelines","type":"boolean","default":false,"description":"If True, include latest pipeline status (heavier payload)"}),
+                ),
+                (
+                    "include_commits",
+                    json!({"title":"Include Commits","type":"boolean","default":false,"description":"If True, include the list of commits (heavier payload)"}),
+                ),
+            ],
+            &["pr_number"],
+        ),
         GitLabToolKind::ReadMultipleFiles => object(
             "ReadMultipleFilesInput",
             &[
@@ -905,6 +1065,83 @@ fn schema_for(kind: GitLabToolKind) -> Value {
             &["file_path", "pattern"],
         ),
     }
+}
+
+const ISSUE_ARGUMENTS: [&str; 10] = [
+    "state",
+    "page",
+    "per_page",
+    "created_after",
+    "created_before",
+    "updated_after",
+    "updated_before",
+    "author_username",
+    "labels",
+    "fetch_all",
+];
+const MERGE_REQUEST_ARGUMENTS: [&str; 13] = [
+    "state",
+    "page",
+    "per_page",
+    "created_after",
+    "created_before",
+    "updated_after",
+    "updated_before",
+    "target_branch",
+    "source_branch",
+    "author_username",
+    "labels",
+    "include_details",
+    "all",
+];
+const CREATED_AFTER: &str =
+    "Inclusive lower bound on created_at. ISO 8601; a bare date (2026-09-03) starts at midnight";
+const CREATED_BEFORE: &str = "Inclusive upper bound on created_at, at the precision given: a bare date (2026-09-03) covers the whole day, a microsecond-precision value is taken literally";
+const UPDATED_AFTER: &str =
+    "Inclusive lower bound on updated_at. ISO 8601; a bare date (2026-09-03) starts at midnight";
+const UPDATED_BEFORE: &str = "Inclusive upper bound on updated_at, at the precision given: a bare date (2026-09-03) covers the whole day, a microsecond-precision value is taken literally";
+
+fn page_schema(ignored: &str) -> Value {
+    json!({"title":"Page","type":["integer","null"],"default":null,"description":format!("Page number for pagination ({ignored})")})
+}
+
+fn per_page_schema(ignored: &str) -> Value {
+    json!({"title":"Per Page","type":["integer","null"],"default":20,"description":format!("Number of results per page ({ignored})")})
+}
+
+/// The filters `get_issues` and `list_merge_requests` share, with the SDK's
+/// defaults: a missing or null `state` is `default_state`, a blank one or
+/// `all` sends none, `page or 1` and `per_page or 20`.
+fn list_filter<'a>(
+    arguments: &'a Map<String, Value>,
+    default_state: &'static str,
+    all_flag: &str,
+) -> Result<ListFilter<'a>, AdkError> {
+    let state = match arguments.get("state") {
+        None | Some(Value::Null) => Some(default_state),
+        Some(Value::String(state)) => Some(state.as_str()),
+        Some(_) => return Err(invalid_arguments()),
+    }
+    .filter(|state| !state.trim().is_empty() && *state != "all");
+    let count = |name: &str, default: usize| match arguments.get(name) {
+        None | Some(Value::Null) => Ok(default),
+        Some(value) => integer_value(value)
+            .and_then(|value| usize::try_from(value).ok())
+            .map(|value| if value == 0 { default } else { value })
+            .ok_or_else(invalid_arguments),
+    };
+    Ok(ListFilter {
+        state,
+        page: count("page", 1)?,
+        per_page: count("per_page", 20)?,
+        created_after: optional_text(arguments, "created_after")?,
+        created_before: optional_text(arguments, "created_before")?,
+        updated_after: optional_text(arguments, "updated_after")?,
+        updated_before: optional_text(arguments, "updated_before")?,
+        author_username: optional_text(arguments, "author_username")?,
+        labels: optional_text(arguments, "labels")?,
+        all: optional_bool(arguments, all_flag)?.unwrap_or(false),
+    })
 }
 
 fn tree_schema(title: &str, noun: &str) -> Value {
