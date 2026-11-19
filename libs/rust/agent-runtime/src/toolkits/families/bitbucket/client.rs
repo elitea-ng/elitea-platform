@@ -256,6 +256,9 @@ fn valid_target_segment(value: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '~' | '-'))
 }
 
+/// The clients of the other repositories a call named, oldest first.
+type ForeignClients = Vec<((String, String), Arc<BitbucketClient>)>;
+
 /// One claim-scoped Bitbucket client with the SDK's invocation-local active
 /// branch.
 pub(crate) struct BitbucketClient {
@@ -264,8 +267,9 @@ pub(crate) struct BitbucketClient {
     active_branch: Mutex<Box<str>>,
     /// Other repositories a call named, keyed by the lowercased project and
     /// repository, oldest first. Each keeps its own active branch.
-    foreign: Mutex<Vec<((String, String), Arc<BitbucketClient>)>>,
-    /// ` in `project/repository`` for another repository, else empty.
+    foreign: Mutex<ForeignClients>,
+    /// Names another repository in the messages that name one (empty for
+    /// the toolkit's own).
     target_suffix: Box<str>,
 }
 
@@ -282,7 +286,7 @@ impl BitbucketClient {
             operation_gate: Mutex::new(()),
             active_branch,
             foreign: Mutex::new(Vec::new()),
-            target_suffix: "".into(),
+            target_suffix: Box::default(),
         }
     }
 
