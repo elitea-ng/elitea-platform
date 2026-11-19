@@ -1171,7 +1171,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// client secret sealed and write-only) and the administration-mode grant
 	// `configuration.microsoft_apps` to super_admin and admin (ADR-0057
 	// decisions 4, 5 and 11, epic 2254 story S1b).
-	require.EqualValues(t, 255, Head(shared))
+	//
+	// 256: shared/0256_drop_index_task_restamp_columns.sql, which drops the
+	// ten index_meta_task_restamp columns of index_ingest_jobs that 0049 added
+	// (no writer or reader since #1378; issue 1382). No permission.
+	require.EqualValues(t, 256, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

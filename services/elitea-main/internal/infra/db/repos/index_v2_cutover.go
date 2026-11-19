@@ -52,10 +52,7 @@ WITH index_effects AS (
         ) AS pending_terminal_projections,
         count(*) FILTER (
             WHERE ingest.index_manual_cleanup_status = 'PENDING'
-        ) AS pending_manual_cleanups,
-        count(*) FILTER (
-            WHERE ingest.index_meta_task_restamp_status = 'PENDING'
-        ) AS pending_task_restamps
+        ) AS pending_manual_cleanups
     FROM elitea_runtime.index_ingest_jobs AS ingest
     JOIN elitea_runtime.execution_jobs AS job
       ON job.execution_id = ingest.execution_id
@@ -107,8 +104,7 @@ SELECT
     ) AS active_claims,
     index_effects.pending_initializations,
     index_effects.pending_terminal_projections,
-    index_effects.pending_manual_cleanups,
-    index_effects.pending_task_restamps
+    index_effects.pending_manual_cleanups
 FROM index_effects`,
 	).Scan(
 		&state.LiveJobs,
@@ -117,7 +113,6 @@ FROM index_effects`,
 		&state.PendingInitializations,
 		&state.PendingTerminalProjections,
 		&state.PendingManualCleanups,
-		&state.PendingTaskRestamps,
 	)
 	if err != nil {
 		if contextErr := ctx.Err(); contextErr != nil {
