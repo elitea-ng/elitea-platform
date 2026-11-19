@@ -617,6 +617,16 @@ func skillPublishingSection() map[string]any {
 				},
 			},
 			{
+				"key":         "trusted_skill_publisher_project_ids",
+				"type":        "array",
+				"items":       map[string]any{"type": "integer"},
+				"title":       "Trusted Skill Publishers",
+				"description": "Projects whose skills every project trusts. A skill added from one of these projects is applied as an instruction, with no per-project review. Any other skill from another project stays quoted data until the project trusts that exact version. Use it for your organization's own skill library only: a later edit by a trusted publisher takes effect without a reading.",
+				"path":        "skill_publishing_guardrail.trusted_publisher_project_ids",
+				"section":     "skill_publishing",
+				"default":     []any{},
+			},
+			{
 				"key":         "skill_categories",
 				"type":        "array",
 				"items":       map[string]any{"type": "string"},

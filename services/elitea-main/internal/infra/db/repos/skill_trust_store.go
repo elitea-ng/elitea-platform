@@ -104,6 +104,8 @@ FROM %s.skill_trust WHERE skill_id = $1 ORDER BY id`, schema), skillID)
 		status.State = "untrusted"
 		if domain.Trusted(skill.Instructions, active) {
 			status.State = "trusted"
+		} else if domain.PublisherTrusted(publisher, trustedSkillPublishers(ctx, r.pool)) {
+			status.State, status.PublisherTrusted = "trusted", true
 		}
 	}
 	return status, schema, nil

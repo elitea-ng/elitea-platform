@@ -49,6 +49,9 @@ export function SkillsList({ items, isLoading, isError, query, onSelect, onDelet
         icon: entityTypeIcon('skill'),
         tags: (skill.tags ?? []).map((tag) => ({ id: tag, name: tag })),
         createdAt: skill.created_at,
+        // A skill written in another project that this project has not trusted: its text reaches the model as
+        // quoted data on the chat surfaces (ADR-0051 amendment 1, A1.6). `trust` rides on the list row.
+        ...(skill.trust?.state === 'untrusted' ? { badge: t('skills.list.untrusted', 'Untrusted') } : {}),
         onClick: () => {
           onSelect(skill.id);
         },
