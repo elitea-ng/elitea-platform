@@ -1903,8 +1903,14 @@ where
     }
 }
 
+/// How many times a refused-delegation notice is offered to the publisher before the failure terminal follows (#2236).
+const ASSEMBLY_NOTICE_ATTEMPTS: u32 = 3;
+
 /// Publishes the delegation notice of a refusal that ended assembly (#2218).
-/// Best effort: the failure terminal follows either way.
+/// A rejected or failed publish is offered again (each attempt a fresh event,
+/// as the publisher advances its cursor), so a passing refusal of the
+/// publisher does not leave the person with the generic failure (#2236). Still
+/// best effort: the failure terminal follows either way.
 async fn publish_assembly_delegation_notice<C, K>(
     run: &mut CursorBoundAuthorizedAgentRun<C>,
     notice: &elitea_agent_runtime::delegation::DelegationNotice,
@@ -1913,22 +1919,28 @@ async fn publish_assembly_delegation_notice<C, K>(
     C: AgentProgressConnector,
     K: UnixMillisClock,
 {
-    let occurred_at_unix_millis = clock.now_unix_millis();
-    let Some(occurred_at) = (occurred_at_unix_millis > 0)
-        .then(|| DateTime::<Utc>::from_timestamp_millis(occurred_at_unix_millis))
-        .flatten()
-    else {
-        return;
-    };
-    let Some(event) = run.assembly_delegation_notice(notice, occurred_at) else {
-        return;
-    };
-    match run.publish_progress(event, occurred_at_unix_millis).await {
-        Ok(AgentProgressPublishOutcome::Acknowledged { .. }) => {
-            tracing::info!(event = "agent_assembly_delegation_notice_published");
-        }
-        Ok(AgentProgressPublishOutcome::Rejected { .. }) | Err(_) => {
-            tracing::warn!(event = "agent_assembly_delegation_notice_unpublished");
+    for attempt in 1..=ASSEMBLY_NOTICE_ATTEMPTS {
+        let occurred_at_unix_millis = clock.now_unix_millis();
+        let Some(occurred_at) = (occurred_at_unix_millis > 0)
+            .then(|| DateTime::<Utc>::from_timestamp_millis(occurred_at_unix_millis))
+            .flatten()
+        else {
+            return;
+        };
+        let Some(event) = run.assembly_delegation_notice(notice, occurred_at) else {
+            return;
+        };
+        match run.publish_progress(event, occurred_at_unix_millis).await {
+            Ok(AgentProgressPublishOutcome::Acknowledged { .. }) => {
+                tracing::info!(event = "agent_assembly_delegation_notice_published");
+                return;
+            }
+            Ok(AgentProgressPublishOutcome::Rejected { .. }) | Err(_) => {
+                tracing::warn!(
+                    event = "agent_assembly_delegation_notice_unpublished",
+                    attempt,
+                );
+            }
         }
     }
 }
