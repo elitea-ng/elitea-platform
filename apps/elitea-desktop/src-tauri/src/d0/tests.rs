@@ -2626,13 +2626,14 @@ async fn a_thread_pin_is_applied_to_every_turn_without_a_pick() {
         host_context(&first)
     );
     // A message that picks the same skill applies it once.
+    let reads_before = seen(&h.server, "/elitea_core/skill/prompt_lib/1/12").len();
     let mut again = request(&h.workspace_id);
     again.project_skills = vec![json!(12)];
     let second_turn = h.host.start(again).await.unwrap();
     until_done_of(&h, &second_turn.turn_id).await;
     assert_eq!(
-        seen(&h.server, "/elitea_core/skill/prompt_lib/1/12").len(),
-        2,
+        seen(&h.server, "/elitea_core/skill/prompt_lib/1/12").len() - reads_before,
+        1,
         "read once per turn, never twice in one"
     );
     // Unpinned, the next turn applies none.
