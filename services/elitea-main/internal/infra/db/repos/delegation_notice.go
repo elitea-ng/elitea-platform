@@ -22,7 +22,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -78,6 +80,12 @@ func projectDelegationNotice(ctx context.Context, tx sqlExecutor, projectID int6
 	schema, err := currentProjectSchema(projectID)
 	if err != nil {
 		return err
+	}
+	// The worker names the root caller by its runtime label ("elitea-agent"),
+	// not by the agent: the stored notice carries the saved agent's own name
+	// when its id is known, so the chat says which agent could not delegate.
+	if name := savedAgentName(ctx, tx, schema, notice.Edge.CallerID); name != "" {
+		notice.Edge.CallerName = name
 	}
 	groupID, err := lockCurrentAgentMessageGroup(ctx, tx, schema, frame.Fence.ExecutionID, binding)
 	if err != nil {
@@ -182,4 +190,33 @@ ORDER BY array_position($1::bigint[], id)`, owners)
 		}
 	}
 	return names, rows.Err()
+}
+
+// savedAgentName is the display name of a saved agent, best effort: any
+// failure is logged and answers "", so the notice keeps the worker's label and
+// the frame is never refused for a display name. The read runs under a
+// savepoint because a failed statement would otherwise abort the frame's
+// transaction.
+func savedAgentName(ctx context.Context, tx sqlExecutor, schema string, applicationID int64) string {
+	if applicationID <= 0 {
+		return ""
+	}
+	if _, err := tx.Exec(ctx, "SAVEPOINT delegation_notice_name"); err != nil {
+		slog.WarnContext(ctx, "delegation notice: keep the worker's caller name", "error", err)
+		return ""
+	}
+	var name string
+	if err := tx.QueryRow(ctx, fmt.Sprintf(`SELECT name FROM %s.applications WHERE id = $1`, schema), applicationID).Scan(&name); err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			slog.WarnContext(ctx, "delegation notice: keep the worker's caller name", "application_id", applicationID, "error", err)
+			if _, rollbackErr := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT delegation_notice_name"); rollbackErr != nil {
+				slog.WarnContext(ctx, "delegation notice: roll back the name lookup", "error", rollbackErr)
+			}
+		}
+		return ""
+	}
+	if _, err := tx.Exec(ctx, "RELEASE SAVEPOINT delegation_notice_name"); err != nil {
+		slog.WarnContext(ctx, "delegation notice: release the name lookup", "error", err)
+	}
+	return delegationnotice.ClipName(strings.TrimSpace(name))
 }

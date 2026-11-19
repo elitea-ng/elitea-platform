@@ -34,6 +34,12 @@ func TestPostgresDelegationNoticeFoldsOntoTheAnswer(t *testing.T) {
 UPDATE p_1.chat_message_group SET meta = COALESCE(meta, '{}'::jsonb) || '{"grounding":{"version":1}}'::jsonb WHERE id = $1`, groupID); err != nil {
 		t.Fatal(err)
 	}
+	// The calling agent is a saved one: the stored notice names it, whatever label the worker sent.
+	if _, err := pool.Exec(t.Context(), `CREATE TABLE IF NOT EXISTS p_1.applications (
+    id SERIAL PRIMARY KEY, name VARCHAR(128) NOT NULL, description VARCHAR(2304), owner_id INTEGER NOT NULL);
+INSERT INTO p_1.applications (id, name, description, owner_id) VALUES (2, 'Real Agent2', 'fixture', 11)`); err != nil {
+		t.Fatal(err)
+	}
 	store, err := newPostgresSharedStore(pool)
 	if err != nil {
 		t.Fatal(err)
@@ -50,7 +56,7 @@ UPDATE p_1.chat_message_group SET meta = COALESCE(meta, '{}'::jsonb) || '{"groun
 		})
 	}
 	refused := `{"id":"call-1","kind":"refused","reason":"no_grant","code":"DELEGATION_GRANT_MISSING","secret":"hunter2",
-"edge":{"caller_id":2,"caller_name":"Agent2","callee_id":1,"callee_name":"Agent1","kind":"agent_tool"},
+"edge":{"caller_id":2,"caller_name":"elitea-agent","callee_id":1,"callee_name":"Agent1","kind":"agent_tool"},
 "missing":[{"kind":"toolkit","name":"Git"}]}`
 	narrowed := `{"id":"call-2","kind":"narrowed","reason":"stale","grant_id":5,"missing_total":1,
 "edge":{"caller_id":2,"callee_id":3,"callee_name":"Agent3","kind":"pipeline_child"},
@@ -80,6 +86,9 @@ SELECT COALESCE(meta -> 'delegation_notices_v1', 'null'::jsonb) FROM p_1.chat_me
 	}
 	if notices[0].Reason != "no_grant" || notices[0].Missing[0].Name != "Git" || notices[1].Reason != "stale" || notices[1].GrantID != 5 {
 		t.Fatalf("notices = %+v", notices)
+	}
+	if notices[0].Edge.CallerName != "Real Agent2" || notices[1].Edge.CallerName != "Real Agent2" {
+		t.Fatalf("the calling agent's own name must replace the worker's label: %+v", notices)
 	}
 	if strings.Contains(string(meta), "hunter2") {
 		t.Fatalf("an unknown key was stored: %s", meta)
