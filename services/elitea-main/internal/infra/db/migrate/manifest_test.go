@@ -1171,7 +1171,13 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// client secret sealed and write-only) and the administration-mode grant
 	// `configuration.microsoft_apps` to super_admin and admin (ADR-0057
 	// decisions 4, 5 and 11, epic 2254 story S1b).
-	require.EqualValues(t, 255, Head(shared))
+	//
+	// 256: shared/0256_microsoft_login.sql, the server side of a Microsoft
+	// sign-in: elitea_identity.microsoft_login_states (a started sign-in, the
+	// sealed PKCE verifier, single use) and microsoft_login_handoffs (the
+	// finished sign-in, parked for the starter to redeem, 60 seconds) (ADR-0057
+	// decision 6, epic 2254 story S1c). No permission.
+	require.EqualValues(t, 256, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

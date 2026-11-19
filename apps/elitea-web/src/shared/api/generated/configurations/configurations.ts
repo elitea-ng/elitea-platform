@@ -59,6 +59,7 @@ import type {
   CheckStoredConfigurationConnection400,
   CheckStoredConfigurationConnection404,
   ClientUpgradeRequiredResponse,
+  CompleteMicrosoftLoginParams,
   ConfigurationListResponse,
   ConfigurationModelListResponse,
   ErrorResponse,
@@ -67,6 +68,11 @@ import type {
   ListMicrosoftAppOffersParams,
   MicrosoftAppError,
   MicrosoftAppOffers,
+  MicrosoftLoginError,
+  MicrosoftLoginRedeemRequest,
+  MicrosoftLoginRedeemed,
+  MicrosoftLoginStart,
+  MicrosoftLoginStartRequest,
   N400Response,
   N401Response,
   N403Response,
@@ -335,6 +341,743 @@ export function useListMicrosoftAppOffers<
   const queryOptions = getListMicrosoftAppOffersQueryOptions(
     projectId,
     params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type startMicrosoftLoginResponse200 = {
+  data: MicrosoftLoginStart;
+  status: 200;
+};
+
+export type startMicrosoftLoginResponse400 = {
+  data: MicrosoftLoginError;
+  status: 400;
+};
+
+export type startMicrosoftLoginResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type startMicrosoftLoginResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type startMicrosoftLoginResponse404 = {
+  data: MicrosoftLoginError;
+  status: 404;
+};
+
+export type startMicrosoftLoginResponse409 = {
+  data: MicrosoftLoginError;
+  status: 409;
+};
+
+export type startMicrosoftLoginResponse429 = {
+  data: MicrosoftLoginError;
+  status: 429;
+};
+
+export type startMicrosoftLoginResponse503 = {
+  data: MicrosoftLoginError;
+  status: 503;
+};
+
+export type startMicrosoftLoginResponseSuccess =
+  startMicrosoftLoginResponse200 & {
+    headers: Headers;
+  };
+export type startMicrosoftLoginResponseError = (
+  | startMicrosoftLoginResponse400
+  | startMicrosoftLoginResponse401
+  | startMicrosoftLoginResponse403
+  | startMicrosoftLoginResponse404
+  | startMicrosoftLoginResponse409
+  | startMicrosoftLoginResponse429
+  | startMicrosoftLoginResponse503
+) & {
+  headers: Headers;
+};
+
+export type startMicrosoftLoginResponse =
+  startMicrosoftLoginResponseSuccess | startMicrosoftLoginResponseError;
+
+export const getStartMicrosoftLoginUrl = () => {
+  return `/microsoft_login:start`;
+};
+
+/**
+ * ADR-0057 decision 6. Builds the Microsoft Entra authorization URL for a saved Outlook, Teams, Microsoft Graph, Dataverse or delegated SharePoint credential: PKCE S256, and a random state bound server side to the caller, the project, the credential, the app (Custom app or the Default app the credential names) and the client kind, valid for 10 minutes and single use. The browser talks to Entra and never to a token endpoint: the code exchange runs in Main, with the client secret and the PKCE verifier, at a token endpoint computed from the validated Entra authority. A Default app's secret never leaves Main. Refused with a stable code when the Default app cannot be used (it is resolved at every start), when the platform setting microsoft.custom_apps is off and the credential uses its own client, or when the authority is not an Entra authority. Requires the permission that updates a credential in the project. At most 20 sign-ins may be open per person.
+ * @summary Start a Microsoft sign-in for a saved credential
+ */
+export const startMicrosoftLogin = async (
+  microsoftLoginStartRequest: MicrosoftLoginStartRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<startMicrosoftLoginResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<startMicrosoftLoginResponse>(getStartMicrosoftLoginUrl(), {
+    ...options,
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getHeaders(options?.headers),
+    },
+    body: JSON.stringify(microsoftLoginStartRequest),
+  });
+};
+
+export const getStartMicrosoftLoginQueryKey = (
+  microsoftLoginStartRequest?: MicrosoftLoginStartRequest,
+) => {
+  return [
+    "POST",
+    `/microsoft_login:start`,
+    microsoftLoginStartRequest,
+  ] as const;
+};
+
+export const getStartMicrosoftLoginQueryOptions = <
+  TData = Awaited<ReturnType<typeof startMicrosoftLogin>>,
+  TError = MicrosoftLoginError | N401Response | N403Response,
+>(
+  microsoftLoginStartRequest: MicrosoftLoginStartRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof startMicrosoftLogin>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getStartMicrosoftLoginQueryKey(microsoftLoginStartRequest);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof startMicrosoftLogin>>
+  > = ({ signal }) =>
+    startMicrosoftLogin(microsoftLoginStartRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof startMicrosoftLogin>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type StartMicrosoftLoginQueryResult = NonNullable<
+  Awaited<ReturnType<typeof startMicrosoftLogin>>
+>;
+export type StartMicrosoftLoginQueryError =
+  MicrosoftLoginError | N401Response | N403Response;
+
+export function useStartMicrosoftLogin<
+  TData = Awaited<ReturnType<typeof startMicrosoftLogin>>,
+  TError = MicrosoftLoginError | N401Response | N403Response,
+>(
+  microsoftLoginStartRequest: MicrosoftLoginStartRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof startMicrosoftLogin>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof startMicrosoftLogin>>,
+          TError,
+          Awaited<ReturnType<typeof startMicrosoftLogin>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useStartMicrosoftLogin<
+  TData = Awaited<ReturnType<typeof startMicrosoftLogin>>,
+  TError = MicrosoftLoginError | N401Response | N403Response,
+>(
+  microsoftLoginStartRequest: MicrosoftLoginStartRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof startMicrosoftLogin>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof startMicrosoftLogin>>,
+          TError,
+          Awaited<ReturnType<typeof startMicrosoftLogin>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useStartMicrosoftLogin<
+  TData = Awaited<ReturnType<typeof startMicrosoftLogin>>,
+  TError = MicrosoftLoginError | N401Response | N403Response,
+>(
+  microsoftLoginStartRequest: MicrosoftLoginStartRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof startMicrosoftLogin>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Start a Microsoft sign-in for a saved credential
+ */
+
+export function useStartMicrosoftLogin<
+  TData = Awaited<ReturnType<typeof startMicrosoftLogin>>,
+  TError = MicrosoftLoginError | N401Response | N403Response,
+>(
+  microsoftLoginStartRequest: MicrosoftLoginStartRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof startMicrosoftLogin>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getStartMicrosoftLoginQueryOptions(
+    microsoftLoginStartRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type completeMicrosoftLoginResponse200 = {
+  data: string;
+  status: 200;
+};
+
+export type completeMicrosoftLoginResponse302 = {
+  data: void;
+  status: 302;
+};
+
+export type completeMicrosoftLoginResponse400 = {
+  data: string;
+  status: 400;
+};
+
+export type completeMicrosoftLoginResponse503 = {
+  data: string;
+  status: 503;
+};
+
+export type completeMicrosoftLoginResponseSuccess =
+  completeMicrosoftLoginResponse200 & {
+    headers: Headers;
+  };
+export type completeMicrosoftLoginResponseError = (
+  | completeMicrosoftLoginResponse302
+  | completeMicrosoftLoginResponse400
+  | completeMicrosoftLoginResponse503
+) & {
+  headers: Headers;
+};
+
+export type completeMicrosoftLoginResponse =
+  completeMicrosoftLoginResponseSuccess | completeMicrosoftLoginResponseError;
+
+export const getCompleteMicrosoftLoginUrl = (
+  params: CompleteMicrosoftLoginParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/microsoft_login:callback?${stringifiedParams}`
+    : `/microsoft_login:callback`;
+};
+
+/**
+ * A BROWSER NAVIGATION, not an API call (ADR-0057 decision 6): Microsoft Entra redirects the person's browser here, and it is the only redirect URI an Entra app registers (https://host/api/v2/microsoft_login:callback), for web, desktop and mobile and for Custom and Default app. It has no session by design: on desktop and mobile it runs in the system browser, and on web in a popup that may belong to someone else. It consumes the state once, exchanges the code in Main, reads the identity and the identity probe of the credential, and parks the sealed access token as a pending handoff for 60 seconds. It attaches nothing to anyone. Only the person who started the sign-in can redeem the handoff (microsoft_login:redeem), so a victim who finishes a link an attacker started cannot link their Microsoft account to the attacker's credential.
+ *
+ * Web: an HTML page that posts {type, state, handoff or error} to the opener (targeted at the deployment origin) and on a same-origin BroadcastChannel, under a CSP that allows only its own script. Desktop: a 302 to http://127.0.0.1:{port}/oauth/microsoft?handoff=...&state=... (or ?state=...&error=...). Mobile: a 302 to {scheme}://oauth/microsoft?handoff=...&state=... (the same error form). A code, token or secret is never in a URL or a page. An unknown, expired or reused state answers a plain 400 page.
+ * @summary The one https redirect URI of a Microsoft sign-in
+ */
+export const completeMicrosoftLogin = async (
+  params: CompleteMicrosoftLoginParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<completeMicrosoftLoginResponse> => {
+  return eliteaFetch<completeMicrosoftLoginResponse>(
+    getCompleteMicrosoftLoginUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getCompleteMicrosoftLoginQueryKey = (
+  params?: CompleteMicrosoftLoginParams,
+) => {
+  return [`/microsoft_login:callback`, ...(params ? [params] : [])] as const;
+};
+
+export const getCompleteMicrosoftLoginQueryOptions = <
+  TData = Awaited<ReturnType<typeof completeMicrosoftLogin>>,
+  TError = void | string,
+>(
+  params: CompleteMicrosoftLoginParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof completeMicrosoftLogin>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getCompleteMicrosoftLoginQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof completeMicrosoftLogin>>
+  > = ({ signal }) =>
+    completeMicrosoftLogin(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof completeMicrosoftLogin>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CompleteMicrosoftLoginQueryResult = NonNullable<
+  Awaited<ReturnType<typeof completeMicrosoftLogin>>
+>;
+export type CompleteMicrosoftLoginQueryError = void | string;
+
+export function useCompleteMicrosoftLogin<
+  TData = Awaited<ReturnType<typeof completeMicrosoftLogin>>,
+  TError = void | string,
+>(
+  params: CompleteMicrosoftLoginParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof completeMicrosoftLogin>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof completeMicrosoftLogin>>,
+          TError,
+          Awaited<ReturnType<typeof completeMicrosoftLogin>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCompleteMicrosoftLogin<
+  TData = Awaited<ReturnType<typeof completeMicrosoftLogin>>,
+  TError = void | string,
+>(
+  params: CompleteMicrosoftLoginParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof completeMicrosoftLogin>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof completeMicrosoftLogin>>,
+          TError,
+          Awaited<ReturnType<typeof completeMicrosoftLogin>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCompleteMicrosoftLogin<
+  TData = Awaited<ReturnType<typeof completeMicrosoftLogin>>,
+  TError = void | string,
+>(
+  params: CompleteMicrosoftLoginParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof completeMicrosoftLogin>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary The one https redirect URI of a Microsoft sign-in
+ */
+
+export function useCompleteMicrosoftLogin<
+  TData = Awaited<ReturnType<typeof completeMicrosoftLogin>>,
+  TError = void | string,
+>(
+  params: CompleteMicrosoftLoginParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof completeMicrosoftLogin>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCompleteMicrosoftLoginQueryOptions(params, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type redeemMicrosoftLoginResponse200 = {
+  data: MicrosoftLoginRedeemed;
+  status: 200;
+};
+
+export type redeemMicrosoftLoginResponse400 = {
+  data: MicrosoftLoginError;
+  status: 400;
+};
+
+export type redeemMicrosoftLoginResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type redeemMicrosoftLoginResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type redeemMicrosoftLoginResponse503 = {
+  data: MicrosoftLoginError;
+  status: 503;
+};
+
+export type redeemMicrosoftLoginResponseSuccess =
+  redeemMicrosoftLoginResponse200 & {
+    headers: Headers;
+  };
+export type redeemMicrosoftLoginResponseError = (
+  | redeemMicrosoftLoginResponse400
+  | redeemMicrosoftLoginResponse401
+  | redeemMicrosoftLoginResponse403
+  | redeemMicrosoftLoginResponse503
+) & {
+  headers: Headers;
+};
+
+export type redeemMicrosoftLoginResponse =
+  redeemMicrosoftLoginResponseSuccess | redeemMicrosoftLoginResponseError;
+
+export const getRedeemMicrosoftLoginUrl = () => {
+  return `/microsoft_login:redeem`;
+};
+
+/**
+ * ADR-0057 decision 6. The person who started the sign-in exchanges the handoff code for the access token and its expiry. The caller must be the user who started it, in the same project, with the state of that sign-in; a desktop or mobile sign-in must also send the verifier of its client_challenge. A handoff is single use and 60 seconds: the attempt deletes it, and every refusal (unknown, expired, used, another person's, a wrong verifier) is the same 400 handoff_invalid. The answer carries an access token and its expiry only: no refresh token, no client secret. Requires the permission that updates a credential in the project.
+ * @summary Redeem a finished Microsoft sign-in
+ */
+export const redeemMicrosoftLogin = async (
+  microsoftLoginRedeemRequest: MicrosoftLoginRedeemRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<redeemMicrosoftLoginResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<redeemMicrosoftLoginResponse>(
+    getRedeemMicrosoftLoginUrl(),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(microsoftLoginRedeemRequest),
+    },
+  );
+};
+
+export const getRedeemMicrosoftLoginQueryKey = (
+  microsoftLoginRedeemRequest?: MicrosoftLoginRedeemRequest,
+) => {
+  return [
+    "POST",
+    `/microsoft_login:redeem`,
+    microsoftLoginRedeemRequest,
+  ] as const;
+};
+
+export const getRedeemMicrosoftLoginQueryOptions = <
+  TData = Awaited<ReturnType<typeof redeemMicrosoftLogin>>,
+  TError = MicrosoftLoginError | N401Response | N403Response,
+>(
+  microsoftLoginRedeemRequest: MicrosoftLoginRedeemRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof redeemMicrosoftLogin>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getRedeemMicrosoftLoginQueryKey(microsoftLoginRedeemRequest);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof redeemMicrosoftLogin>>
+  > = ({ signal }) =>
+    redeemMicrosoftLogin(microsoftLoginRedeemRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof redeemMicrosoftLogin>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RedeemMicrosoftLoginQueryResult = NonNullable<
+  Awaited<ReturnType<typeof redeemMicrosoftLogin>>
+>;
+export type RedeemMicrosoftLoginQueryError =
+  MicrosoftLoginError | N401Response | N403Response;
+
+export function useRedeemMicrosoftLogin<
+  TData = Awaited<ReturnType<typeof redeemMicrosoftLogin>>,
+  TError = MicrosoftLoginError | N401Response | N403Response,
+>(
+  microsoftLoginRedeemRequest: MicrosoftLoginRedeemRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof redeemMicrosoftLogin>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof redeemMicrosoftLogin>>,
+          TError,
+          Awaited<ReturnType<typeof redeemMicrosoftLogin>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRedeemMicrosoftLogin<
+  TData = Awaited<ReturnType<typeof redeemMicrosoftLogin>>,
+  TError = MicrosoftLoginError | N401Response | N403Response,
+>(
+  microsoftLoginRedeemRequest: MicrosoftLoginRedeemRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof redeemMicrosoftLogin>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof redeemMicrosoftLogin>>,
+          TError,
+          Awaited<ReturnType<typeof redeemMicrosoftLogin>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRedeemMicrosoftLogin<
+  TData = Awaited<ReturnType<typeof redeemMicrosoftLogin>>,
+  TError = MicrosoftLoginError | N401Response | N403Response,
+>(
+  microsoftLoginRedeemRequest: MicrosoftLoginRedeemRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof redeemMicrosoftLogin>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Redeem a finished Microsoft sign-in
+ */
+
+export function useRedeemMicrosoftLogin<
+  TData = Awaited<ReturnType<typeof redeemMicrosoftLogin>>,
+  TError = MicrosoftLoginError | N401Response | N403Response,
+>(
+  microsoftLoginRedeemRequest: MicrosoftLoginRedeemRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof redeemMicrosoftLogin>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRedeemMicrosoftLoginQueryOptions(
+    microsoftLoginRedeemRequest,
     options,
   );
 
