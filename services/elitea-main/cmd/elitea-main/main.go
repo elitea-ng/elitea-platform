@@ -957,6 +957,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// the broker reads for Jira, Confluence and Aha! oauth_delegated uses.
 	// Nil with the flag off or with no provider OAuth application.
 	vaultMasterKey := func() ([]byte, error) { return v2secrets.MasterKeyFromEnv(os.Getenv) }
+	// The Microsoft Default app registry's Helm seed (ADR-0057 decision 5):
+	// nothing with the default empty `microsoftOAuthApps` values.
+	if err := microsoftAppsAtBoot(ctx, os.LookupEnv, pool, vaultMasterKey, logger); err != nil {
+		return err
+	}
 	// Governed MCP (#1123): the inbound resource server and remote MCP
 	// OAuth, which joins provider OAuth custody below. Empty with the flag
 	// off.

@@ -142,6 +142,12 @@ import type {
   MandateListResponse,
   MandateRefusal,
   MessageResponse,
+  MicrosoftApp,
+  MicrosoftAppError,
+  MicrosoftAppList,
+  MicrosoftAppRequest,
+  MicrosoftAppSettings,
+  MicrosoftAppTestResult,
   ModeRoleAssignRequest,
   ModeRoleAssignResult,
   ModeRoleListing,
@@ -5142,6 +5148,1609 @@ export function useScanDelegationReview<
   queryKey: DataTag<QueryKey, TData, TError>;
 } {
   const queryOptions = getScanDelegationReviewQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listMicrosoftAppsResponse200 = {
+  data: MicrosoftAppList;
+  status: 200;
+};
+
+export type listMicrosoftAppsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listMicrosoftAppsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listMicrosoftAppsResponse503 = {
+  data: MicrosoftAppError;
+  status: 503;
+};
+
+export type listMicrosoftAppsResponseSuccess = listMicrosoftAppsResponse200 & {
+  headers: Headers;
+};
+export type listMicrosoftAppsResponseError = (
+  | listMicrosoftAppsResponse401
+  | listMicrosoftAppsResponse403
+  | listMicrosoftAppsResponse503
+) & {
+  headers: Headers;
+};
+
+export type listMicrosoftAppsResponse =
+  listMicrosoftAppsResponseSuccess | listMicrosoftAppsResponseError;
+
+export const getListMicrosoftAppsUrl = () => {
+  return `/admin/microsoft_oauth_apps`;
+};
+
+/**
+ * The Microsoft Default app registry (ADR-0057 decisions 5 and 11): every app, disabled ones included, with its state, scope ceiling and generated Entra checklist, the microsoft.custom_apps switch, and the deployment checklist (the redirect URI and the permissions each credential type offers). The client secret is never returned. Requires `configuration.microsoft_apps` in the administration mode.
+ * @summary List the registered Microsoft apps, the settings and the Entra checklist
+ */
+export const listMicrosoftApps = async (
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listMicrosoftAppsResponse> => {
+  return eliteaFetch<listMicrosoftAppsResponse>(getListMicrosoftAppsUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListMicrosoftAppsQueryKey = () => {
+  return [`/admin/microsoft_oauth_apps`] as const;
+};
+
+export const getListMicrosoftAppsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listMicrosoftApps>>,
+  TError = N401Response | N403Response | MicrosoftAppError,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<
+      Awaited<ReturnType<typeof listMicrosoftApps>>,
+      TError,
+      TData
+    >
+  >;
+  request?: SecondParameter<typeof eliteaFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListMicrosoftAppsQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listMicrosoftApps>>
+  > = ({ signal }) => listMicrosoftApps({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listMicrosoftApps>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListMicrosoftAppsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listMicrosoftApps>>
+>;
+export type ListMicrosoftAppsQueryError =
+  N401Response | N403Response | MicrosoftAppError;
+
+export function useListMicrosoftApps<
+  TData = Awaited<ReturnType<typeof listMicrosoftApps>>,
+  TError = N401Response | N403Response | MicrosoftAppError,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listMicrosoftApps>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listMicrosoftApps>>,
+          TError,
+          Awaited<ReturnType<typeof listMicrosoftApps>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListMicrosoftApps<
+  TData = Awaited<ReturnType<typeof listMicrosoftApps>>,
+  TError = N401Response | N403Response | MicrosoftAppError,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listMicrosoftApps>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listMicrosoftApps>>,
+          TError,
+          Awaited<ReturnType<typeof listMicrosoftApps>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListMicrosoftApps<
+  TData = Awaited<ReturnType<typeof listMicrosoftApps>>,
+  TError = N401Response | N403Response | MicrosoftAppError,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listMicrosoftApps>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the registered Microsoft apps, the settings and the Entra checklist
+ */
+
+export function useListMicrosoftApps<
+  TData = Awaited<ReturnType<typeof listMicrosoftApps>>,
+  TError = N401Response | N403Response | MicrosoftAppError,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listMicrosoftApps>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListMicrosoftAppsQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type createMicrosoftAppResponse201 = {
+  data: MicrosoftApp;
+  status: 201;
+};
+
+export type createMicrosoftAppResponse400 = {
+  data: MicrosoftAppError;
+  status: 400;
+};
+
+export type createMicrosoftAppResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type createMicrosoftAppResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type createMicrosoftAppResponse409 = {
+  data: MicrosoftAppError;
+  status: 409;
+};
+
+export type createMicrosoftAppResponse503 = {
+  data: MicrosoftAppError;
+  status: 503;
+};
+
+export type createMicrosoftAppResponseSuccess =
+  createMicrosoftAppResponse201 & {
+    headers: Headers;
+  };
+export type createMicrosoftAppResponseError = (
+  | createMicrosoftAppResponse400
+  | createMicrosoftAppResponse401
+  | createMicrosoftAppResponse403
+  | createMicrosoftAppResponse409
+  | createMicrosoftAppResponse503
+) & {
+  headers: Headers;
+};
+
+export type createMicrosoftAppResponse =
+  createMicrosoftAppResponseSuccess | createMicrosoftAppResponseError;
+
+export const getCreateMicrosoftAppUrl = () => {
+  return `/admin/microsoft_oauth_apps`;
+};
+
+/**
+ * Creates an app. With a secret it is active; without one it is a draft. The secret is sealed (AES-256-GCM) and never returned. Requires `configuration.microsoft_apps` in the administration mode.
+ * @summary Register a Microsoft app
+ */
+export const createMicrosoftApp = async (
+  microsoftAppRequest: MicrosoftAppRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<createMicrosoftAppResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<createMicrosoftAppResponse>(getCreateMicrosoftAppUrl(), {
+    ...options,
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getHeaders(options?.headers),
+    },
+    body: JSON.stringify(microsoftAppRequest),
+  });
+};
+
+export const getCreateMicrosoftAppQueryKey = (
+  microsoftAppRequest?: MicrosoftAppRequest,
+) => {
+  return ["POST", `/admin/microsoft_oauth_apps`, microsoftAppRequest] as const;
+};
+
+export const getCreateMicrosoftAppQueryOptions = <
+  TData = Awaited<ReturnType<typeof createMicrosoftApp>>,
+  TError = MicrosoftAppError | N401Response | N403Response,
+>(
+  microsoftAppRequest: MicrosoftAppRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createMicrosoftApp>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getCreateMicrosoftAppQueryKey(microsoftAppRequest);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof createMicrosoftApp>>
+  > = ({ signal }) =>
+    createMicrosoftApp(microsoftAppRequest, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof createMicrosoftApp>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CreateMicrosoftAppQueryResult = NonNullable<
+  Awaited<ReturnType<typeof createMicrosoftApp>>
+>;
+export type CreateMicrosoftAppQueryError =
+  MicrosoftAppError | N401Response | N403Response;
+
+export function useCreateMicrosoftApp<
+  TData = Awaited<ReturnType<typeof createMicrosoftApp>>,
+  TError = MicrosoftAppError | N401Response | N403Response,
+>(
+  microsoftAppRequest: MicrosoftAppRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createMicrosoftApp>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createMicrosoftApp>>,
+          TError,
+          Awaited<ReturnType<typeof createMicrosoftApp>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateMicrosoftApp<
+  TData = Awaited<ReturnType<typeof createMicrosoftApp>>,
+  TError = MicrosoftAppError | N401Response | N403Response,
+>(
+  microsoftAppRequest: MicrosoftAppRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createMicrosoftApp>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createMicrosoftApp>>,
+          TError,
+          Awaited<ReturnType<typeof createMicrosoftApp>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateMicrosoftApp<
+  TData = Awaited<ReturnType<typeof createMicrosoftApp>>,
+  TError = MicrosoftAppError | N401Response | N403Response,
+>(
+  microsoftAppRequest: MicrosoftAppRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createMicrosoftApp>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Register a Microsoft app
+ */
+
+export function useCreateMicrosoftApp<
+  TData = Awaited<ReturnType<typeof createMicrosoftApp>>,
+  TError = MicrosoftAppError | N401Response | N403Response,
+>(
+  microsoftAppRequest: MicrosoftAppRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createMicrosoftApp>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCreateMicrosoftAppQueryOptions(
+    microsoftAppRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type saveMicrosoftAppSettingsResponse200 = {
+  data: MicrosoftAppSettings;
+  status: 200;
+};
+
+export type saveMicrosoftAppSettingsResponse400 = {
+  data: MicrosoftAppError;
+  status: 400;
+};
+
+export type saveMicrosoftAppSettingsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type saveMicrosoftAppSettingsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type saveMicrosoftAppSettingsResponse503 = {
+  data: MicrosoftAppError;
+  status: 503;
+};
+
+export type saveMicrosoftAppSettingsResponseSuccess =
+  saveMicrosoftAppSettingsResponse200 & {
+    headers: Headers;
+  };
+export type saveMicrosoftAppSettingsResponseError = (
+  | saveMicrosoftAppSettingsResponse400
+  | saveMicrosoftAppSettingsResponse401
+  | saveMicrosoftAppSettingsResponse403
+  | saveMicrosoftAppSettingsResponse503
+) & {
+  headers: Headers;
+};
+
+export type saveMicrosoftAppSettingsResponse =
+  | saveMicrosoftAppSettingsResponseSuccess
+  | saveMicrosoftAppSettingsResponseError;
+
+export const getSaveMicrosoftAppSettingsUrl = () => {
+  return `/admin/microsoft_oauth_apps/settings`;
+};
+
+/**
+ * Writes the platform setting microsoft.custom_apps. Off removes Custom app from the credential forms of new credentials; existing credentials are untouched. Requires `configuration.microsoft_apps` in the administration mode.
+ * @summary Allow or refuse Custom app mode
+ */
+export const saveMicrosoftAppSettings = async (
+  microsoftAppSettings: MicrosoftAppSettings,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<saveMicrosoftAppSettingsResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<saveMicrosoftAppSettingsResponse>(
+    getSaveMicrosoftAppSettingsUrl(),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(microsoftAppSettings),
+    },
+  );
+};
+
+export const getSaveMicrosoftAppSettingsQueryKey = (
+  microsoftAppSettings?: MicrosoftAppSettings,
+) => {
+  return [
+    "PUT",
+    `/admin/microsoft_oauth_apps/settings`,
+    microsoftAppSettings,
+  ] as const;
+};
+
+export const getSaveMicrosoftAppSettingsQueryOptions = <
+  TData = Awaited<ReturnType<typeof saveMicrosoftAppSettings>>,
+  TError = MicrosoftAppError | N401Response | N403Response,
+>(
+  microsoftAppSettings: MicrosoftAppSettings,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof saveMicrosoftAppSettings>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getSaveMicrosoftAppSettingsQueryKey(microsoftAppSettings);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof saveMicrosoftAppSettings>>
+  > = ({ signal }) =>
+    saveMicrosoftAppSettings(microsoftAppSettings, {
+      signal,
+      ...requestOptions,
+    });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof saveMicrosoftAppSettings>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type SaveMicrosoftAppSettingsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof saveMicrosoftAppSettings>>
+>;
+export type SaveMicrosoftAppSettingsQueryError =
+  MicrosoftAppError | N401Response | N403Response;
+
+export function useSaveMicrosoftAppSettings<
+  TData = Awaited<ReturnType<typeof saveMicrosoftAppSettings>>,
+  TError = MicrosoftAppError | N401Response | N403Response,
+>(
+  microsoftAppSettings: MicrosoftAppSettings,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof saveMicrosoftAppSettings>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof saveMicrosoftAppSettings>>,
+          TError,
+          Awaited<ReturnType<typeof saveMicrosoftAppSettings>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSaveMicrosoftAppSettings<
+  TData = Awaited<ReturnType<typeof saveMicrosoftAppSettings>>,
+  TError = MicrosoftAppError | N401Response | N403Response,
+>(
+  microsoftAppSettings: MicrosoftAppSettings,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof saveMicrosoftAppSettings>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof saveMicrosoftAppSettings>>,
+          TError,
+          Awaited<ReturnType<typeof saveMicrosoftAppSettings>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSaveMicrosoftAppSettings<
+  TData = Awaited<ReturnType<typeof saveMicrosoftAppSettings>>,
+  TError = MicrosoftAppError | N401Response | N403Response,
+>(
+  microsoftAppSettings: MicrosoftAppSettings,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof saveMicrosoftAppSettings>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Allow or refuse Custom app mode
+ */
+
+export function useSaveMicrosoftAppSettings<
+  TData = Awaited<ReturnType<typeof saveMicrosoftAppSettings>>,
+  TError = MicrosoftAppError | N401Response | N403Response,
+>(
+  microsoftAppSettings: MicrosoftAppSettings,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof saveMicrosoftAppSettings>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getSaveMicrosoftAppSettingsQueryOptions(
+    microsoftAppSettings,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type updateMicrosoftAppResponse200 = {
+  data: MicrosoftApp;
+  status: 200;
+};
+
+export type updateMicrosoftAppResponse400 = {
+  data: MicrosoftAppError;
+  status: 400;
+};
+
+export type updateMicrosoftAppResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type updateMicrosoftAppResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type updateMicrosoftAppResponse404 = {
+  data: MicrosoftAppError;
+  status: 404;
+};
+
+export type updateMicrosoftAppResponse409 = {
+  data: MicrosoftAppError;
+  status: 409;
+};
+
+export type updateMicrosoftAppResponse503 = {
+  data: MicrosoftAppError;
+  status: 503;
+};
+
+export type updateMicrosoftAppResponseSuccess =
+  updateMicrosoftAppResponse200 & {
+    headers: Headers;
+  };
+export type updateMicrosoftAppResponseError = (
+  | updateMicrosoftAppResponse400
+  | updateMicrosoftAppResponse401
+  | updateMicrosoftAppResponse403
+  | updateMicrosoftAppResponse404
+  | updateMicrosoftAppResponse409
+  | updateMicrosoftAppResponse503
+) & {
+  headers: Headers;
+};
+
+export type updateMicrosoftAppResponse =
+  updateMicrosoftAppResponseSuccess | updateMicrosoftAppResponseError;
+
+export const getUpdateMicrosoftAppUrl = (appId: string) => {
+  return `/admin/microsoft_oauth_apps/${appId}`;
+};
+
+/**
+ * Replaces an app's definition. An absent secret keeps the sealed one. Changing the client id needs the new client's secret in the same request, because a secret belongs to its client. A disabled app stays disabled. Requires `configuration.microsoft_apps` in the administration mode.
+ * @summary Replace a Microsoft app
+ */
+export const updateMicrosoftApp = async (
+  appId: string,
+  microsoftAppRequest: MicrosoftAppRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<updateMicrosoftAppResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<updateMicrosoftAppResponse>(
+    getUpdateMicrosoftAppUrl(appId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(microsoftAppRequest),
+    },
+  );
+};
+
+export const getUpdateMicrosoftAppQueryKey = (
+  appId: string,
+  microsoftAppRequest?: MicrosoftAppRequest,
+) => {
+  return [
+    "PUT",
+    `/admin/microsoft_oauth_apps/${appId}`,
+    microsoftAppRequest,
+  ] as const;
+};
+
+export const getUpdateMicrosoftAppQueryOptions = <
+  TData = Awaited<ReturnType<typeof updateMicrosoftApp>>,
+  TError = MicrosoftAppError | N401Response | N403Response,
+>(
+  appId: string,
+  microsoftAppRequest: MicrosoftAppRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateMicrosoftApp>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getUpdateMicrosoftAppQueryKey(appId, microsoftAppRequest);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof updateMicrosoftApp>>
+  > = ({ signal }) =>
+    updateMicrosoftApp(appId, microsoftAppRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: appId !== null && appId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof updateMicrosoftApp>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type UpdateMicrosoftAppQueryResult = NonNullable<
+  Awaited<ReturnType<typeof updateMicrosoftApp>>
+>;
+export type UpdateMicrosoftAppQueryError =
+  MicrosoftAppError | N401Response | N403Response;
+
+export function useUpdateMicrosoftApp<
+  TData = Awaited<ReturnType<typeof updateMicrosoftApp>>,
+  TError = MicrosoftAppError | N401Response | N403Response,
+>(
+  appId: string,
+  microsoftAppRequest: MicrosoftAppRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateMicrosoftApp>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updateMicrosoftApp>>,
+          TError,
+          Awaited<ReturnType<typeof updateMicrosoftApp>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdateMicrosoftApp<
+  TData = Awaited<ReturnType<typeof updateMicrosoftApp>>,
+  TError = MicrosoftAppError | N401Response | N403Response,
+>(
+  appId: string,
+  microsoftAppRequest: MicrosoftAppRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateMicrosoftApp>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updateMicrosoftApp>>,
+          TError,
+          Awaited<ReturnType<typeof updateMicrosoftApp>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdateMicrosoftApp<
+  TData = Awaited<ReturnType<typeof updateMicrosoftApp>>,
+  TError = MicrosoftAppError | N401Response | N403Response,
+>(
+  appId: string,
+  microsoftAppRequest: MicrosoftAppRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateMicrosoftApp>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Replace a Microsoft app
+ */
+
+export function useUpdateMicrosoftApp<
+  TData = Awaited<ReturnType<typeof updateMicrosoftApp>>,
+  TError = MicrosoftAppError | N401Response | N403Response,
+>(
+  appId: string,
+  microsoftAppRequest: MicrosoftAppRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateMicrosoftApp>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getUpdateMicrosoftAppQueryOptions(
+    appId,
+    microsoftAppRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type disableMicrosoftAppResponse200 = {
+  data: MicrosoftApp;
+  status: 200;
+};
+
+export type disableMicrosoftAppResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type disableMicrosoftAppResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type disableMicrosoftAppResponse404 = {
+  data: MicrosoftAppError;
+  status: 404;
+};
+
+export type disableMicrosoftAppResponse503 = {
+  data: MicrosoftAppError;
+  status: 503;
+};
+
+export type disableMicrosoftAppResponseSuccess =
+  disableMicrosoftAppResponse200 & {
+    headers: Headers;
+  };
+export type disableMicrosoftAppResponseError = (
+  | disableMicrosoftAppResponse401
+  | disableMicrosoftAppResponse403
+  | disableMicrosoftAppResponse404
+  | disableMicrosoftAppResponse503
+) & {
+  headers: Headers;
+};
+
+export type disableMicrosoftAppResponse =
+  disableMicrosoftAppResponseSuccess | disableMicrosoftAppResponseError;
+
+export const getDisableMicrosoftAppUrl = (appId: string) => {
+  return `/admin/microsoft_oauth_apps/${appId}/disable`;
+};
+
+/**
+ * Switches an app off. It is no longer offered for new credentials, and a credential that names it fails with the stable error app_disabled instead of falling back to another client. Requires `configuration.microsoft_apps` in the administration mode.
+ * @summary Disable a Microsoft app
+ */
+export const disableMicrosoftApp = async (
+  appId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<disableMicrosoftAppResponse> => {
+  return eliteaFetch<disableMicrosoftAppResponse>(
+    getDisableMicrosoftAppUrl(appId),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getDisableMicrosoftAppQueryKey = (appId: string) => {
+  return ["POST", `/admin/microsoft_oauth_apps/${appId}/disable`] as const;
+};
+
+export const getDisableMicrosoftAppQueryOptions = <
+  TData = Awaited<ReturnType<typeof disableMicrosoftApp>>,
+  TError = N401Response | N403Response | MicrosoftAppError,
+>(
+  appId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof disableMicrosoftApp>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getDisableMicrosoftAppQueryKey(appId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof disableMicrosoftApp>>
+  > = ({ signal }) => disableMicrosoftApp(appId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: appId !== null && appId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof disableMicrosoftApp>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DisableMicrosoftAppQueryResult = NonNullable<
+  Awaited<ReturnType<typeof disableMicrosoftApp>>
+>;
+export type DisableMicrosoftAppQueryError =
+  N401Response | N403Response | MicrosoftAppError;
+
+export function useDisableMicrosoftApp<
+  TData = Awaited<ReturnType<typeof disableMicrosoftApp>>,
+  TError = N401Response | N403Response | MicrosoftAppError,
+>(
+  appId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof disableMicrosoftApp>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof disableMicrosoftApp>>,
+          TError,
+          Awaited<ReturnType<typeof disableMicrosoftApp>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDisableMicrosoftApp<
+  TData = Awaited<ReturnType<typeof disableMicrosoftApp>>,
+  TError = N401Response | N403Response | MicrosoftAppError,
+>(
+  appId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof disableMicrosoftApp>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof disableMicrosoftApp>>,
+          TError,
+          Awaited<ReturnType<typeof disableMicrosoftApp>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDisableMicrosoftApp<
+  TData = Awaited<ReturnType<typeof disableMicrosoftApp>>,
+  TError = N401Response | N403Response | MicrosoftAppError,
+>(
+  appId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof disableMicrosoftApp>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Disable a Microsoft app
+ */
+
+export function useDisableMicrosoftApp<
+  TData = Awaited<ReturnType<typeof disableMicrosoftApp>>,
+  TError = N401Response | N403Response | MicrosoftAppError,
+>(
+  appId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof disableMicrosoftApp>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDisableMicrosoftAppQueryOptions(appId, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type enableMicrosoftAppResponse200 = {
+  data: MicrosoftApp;
+  status: 200;
+};
+
+export type enableMicrosoftAppResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type enableMicrosoftAppResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type enableMicrosoftAppResponse404 = {
+  data: MicrosoftAppError;
+  status: 404;
+};
+
+export type enableMicrosoftAppResponse503 = {
+  data: MicrosoftAppError;
+  status: 503;
+};
+
+export type enableMicrosoftAppResponseSuccess =
+  enableMicrosoftAppResponse200 & {
+    headers: Headers;
+  };
+export type enableMicrosoftAppResponseError = (
+  | enableMicrosoftAppResponse401
+  | enableMicrosoftAppResponse403
+  | enableMicrosoftAppResponse404
+  | enableMicrosoftAppResponse503
+) & {
+  headers: Headers;
+};
+
+export type enableMicrosoftAppResponse =
+  enableMicrosoftAppResponseSuccess | enableMicrosoftAppResponseError;
+
+export const getEnableMicrosoftAppUrl = (appId: string) => {
+  return `/admin/microsoft_oauth_apps/${appId}/enable`;
+};
+
+/**
+ * Switches a disabled app back on: active when it has a secret, a draft when it has none. Requires `configuration.microsoft_apps` in the administration mode.
+ * @summary Enable a Microsoft app
+ */
+export const enableMicrosoftApp = async (
+  appId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<enableMicrosoftAppResponse> => {
+  return eliteaFetch<enableMicrosoftAppResponse>(
+    getEnableMicrosoftAppUrl(appId),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getEnableMicrosoftAppQueryKey = (appId: string) => {
+  return ["POST", `/admin/microsoft_oauth_apps/${appId}/enable`] as const;
+};
+
+export const getEnableMicrosoftAppQueryOptions = <
+  TData = Awaited<ReturnType<typeof enableMicrosoftApp>>,
+  TError = N401Response | N403Response | MicrosoftAppError,
+>(
+  appId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof enableMicrosoftApp>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getEnableMicrosoftAppQueryKey(appId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof enableMicrosoftApp>>
+  > = ({ signal }) => enableMicrosoftApp(appId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: appId !== null && appId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof enableMicrosoftApp>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type EnableMicrosoftAppQueryResult = NonNullable<
+  Awaited<ReturnType<typeof enableMicrosoftApp>>
+>;
+export type EnableMicrosoftAppQueryError =
+  N401Response | N403Response | MicrosoftAppError;
+
+export function useEnableMicrosoftApp<
+  TData = Awaited<ReturnType<typeof enableMicrosoftApp>>,
+  TError = N401Response | N403Response | MicrosoftAppError,
+>(
+  appId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof enableMicrosoftApp>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof enableMicrosoftApp>>,
+          TError,
+          Awaited<ReturnType<typeof enableMicrosoftApp>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useEnableMicrosoftApp<
+  TData = Awaited<ReturnType<typeof enableMicrosoftApp>>,
+  TError = N401Response | N403Response | MicrosoftAppError,
+>(
+  appId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof enableMicrosoftApp>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof enableMicrosoftApp>>,
+          TError,
+          Awaited<ReturnType<typeof enableMicrosoftApp>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useEnableMicrosoftApp<
+  TData = Awaited<ReturnType<typeof enableMicrosoftApp>>,
+  TError = N401Response | N403Response | MicrosoftAppError,
+>(
+  appId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof enableMicrosoftApp>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Enable a Microsoft app
+ */
+
+export function useEnableMicrosoftApp<
+  TData = Awaited<ReturnType<typeof enableMicrosoftApp>>,
+  TError = N401Response | N403Response | MicrosoftAppError,
+>(
+  appId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof enableMicrosoftApp>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getEnableMicrosoftAppQueryOptions(appId, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type testMicrosoftAppResponse200 = {
+  data: MicrosoftAppTestResult;
+  status: 200;
+};
+
+export type testMicrosoftAppResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type testMicrosoftAppResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type testMicrosoftAppResponse404 = {
+  data: MicrosoftAppError;
+  status: 404;
+};
+
+export type testMicrosoftAppResponse503 = {
+  data: MicrosoftAppError;
+  status: 503;
+};
+
+export type testMicrosoftAppResponseSuccess = testMicrosoftAppResponse200 & {
+  headers: Headers;
+};
+export type testMicrosoftAppResponseError = (
+  | testMicrosoftAppResponse401
+  | testMicrosoftAppResponse403
+  | testMicrosoftAppResponse404
+  | testMicrosoftAppResponse503
+) & {
+  headers: Headers;
+};
+
+export type testMicrosoftAppResponse =
+  testMicrosoftAppResponseSuccess | testMicrosoftAppResponseError;
+
+export const getTestMicrosoftAppUrl = (appId: string) => {
+  return `/admin/microsoft_oauth_apps/${appId}/test`;
+};
+
+/**
+ * Checks what can be checked without a person: the client id is a GUID, the authority publishes Entra metadata on login.microsoftonline.com, the redirect URI is one Entra accepts and matches the deployment host, a secret is set and not expired. It cannot prove consent; the first sign-in does that. Requires `configuration.microsoft_apps` in the administration mode.
+ * @summary Test a Microsoft app
+ */
+export const testMicrosoftApp = async (
+  appId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<testMicrosoftAppResponse> => {
+  return eliteaFetch<testMicrosoftAppResponse>(getTestMicrosoftAppUrl(appId), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getTestMicrosoftAppQueryKey = (appId: string) => {
+  return ["POST", `/admin/microsoft_oauth_apps/${appId}/test`] as const;
+};
+
+export const getTestMicrosoftAppQueryOptions = <
+  TData = Awaited<ReturnType<typeof testMicrosoftApp>>,
+  TError = N401Response | N403Response | MicrosoftAppError,
+>(
+  appId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof testMicrosoftApp>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getTestMicrosoftAppQueryKey(appId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof testMicrosoftApp>>
+  > = ({ signal }) => testMicrosoftApp(appId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: appId !== null && appId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof testMicrosoftApp>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type TestMicrosoftAppQueryResult = NonNullable<
+  Awaited<ReturnType<typeof testMicrosoftApp>>
+>;
+export type TestMicrosoftAppQueryError =
+  N401Response | N403Response | MicrosoftAppError;
+
+export function useTestMicrosoftApp<
+  TData = Awaited<ReturnType<typeof testMicrosoftApp>>,
+  TError = N401Response | N403Response | MicrosoftAppError,
+>(
+  appId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof testMicrosoftApp>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof testMicrosoftApp>>,
+          TError,
+          Awaited<ReturnType<typeof testMicrosoftApp>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useTestMicrosoftApp<
+  TData = Awaited<ReturnType<typeof testMicrosoftApp>>,
+  TError = N401Response | N403Response | MicrosoftAppError,
+>(
+  appId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof testMicrosoftApp>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof testMicrosoftApp>>,
+          TError,
+          Awaited<ReturnType<typeof testMicrosoftApp>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useTestMicrosoftApp<
+  TData = Awaited<ReturnType<typeof testMicrosoftApp>>,
+  TError = N401Response | N403Response | MicrosoftAppError,
+>(
+  appId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof testMicrosoftApp>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Test a Microsoft app
+ */
+
+export function useTestMicrosoftApp<
+  TData = Awaited<ReturnType<typeof testMicrosoftApp>>,
+  TError = N401Response | N403Response | MicrosoftAppError,
+>(
+  appId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof testMicrosoftApp>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getTestMicrosoftAppQueryOptions(appId, options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

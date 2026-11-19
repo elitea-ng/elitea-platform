@@ -4498,6 +4498,333 @@ components:
         notified:
           type: integer
 
+    MicrosoftAppPermission:
+      type: object
+      description: A delegated permission the Microsoft Entra app registration must list.
+      required: [name, admin_consent]
+      properties:
+        name:
+          type: string
+        admin_consent:
+          type: boolean
+          description: Microsoft grants the permission only after an Entra administrator consents.
+
+    MicrosoftAppResource:
+      type: object
+      description: One API an Entra app registration adds delegated permissions of.
+      required: [api, permissions]
+      properties:
+        api:
+          type: string
+          description: The name the Entra portal shows under Request API permissions, for example Microsoft Graph or Dynamics CRM.
+        permissions:
+          type: array
+          items:
+            $ref: "#/components/schemas/MicrosoftAppPermission"
+
+    MicrosoftAppChecklist:
+      type: object
+      description: >
+        The Entra setup of one app, generated for this deployment: the one Web redirect
+        URI, the delegated permissions to add, the admin consent URL and the secret
+        expiry warning.
+      required:
+        - redirect_uri
+        - account_types
+        - permissions
+        - admin_consent_url
+        - needs_admin_consent
+        - secret_expiry
+        - secret_days_left
+      properties:
+        redirect_uri:
+          type: string
+          description: The Web redirect URI to register, https://host/api/v2/microsoft_login:callback. The same for web, desktop and mobile.
+        redirect_issue:
+          type: string
+          description: https_required when the deployment origin is plain http and not localhost; Entra would refuse the URI.
+        account_types:
+          type: string
+          description: single for a tenant authority, multi for the organizations and common aliases.
+        permissions:
+          type: array
+          items:
+            $ref: "#/components/schemas/MicrosoftAppResource"
+        admin_consent_url:
+          type: string
+          description: What an Entra administrator opens to grant the permissions that need consent. A multi-tenant app carries the placeholder {tenant-id}.
+        needs_admin_consent:
+          type: boolean
+        secret_expiry:
+          type: string
+          description: none, ok, expiring (30 days or fewer) or expired.
+        secret_days_left:
+          type: integer
+
+    MicrosoftApp:
+      type: object
+      description: >
+        A registered Microsoft Entra app (Default app). The client secret is write-only:
+        a read says whether one is set and when it expires, never the value.
+      required:
+        - id
+        - name
+        - description
+        - provider
+        - client_id
+        - authority
+        - secret_set
+        - secret_expires_at
+        - credential_types
+        - scope_ceiling
+        - effective_ceiling
+        - auto_refresh_token
+        - project_scope
+        - project_ids
+        - state
+        - state_reason
+        - created_at
+        - updated_at
+        - revision
+        - checklist
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: The oauth_app_id a credential names.
+        name:
+          type: string
+        description:
+          type: string
+        provider:
+          type: string
+          description: Always entra.
+        client_id:
+          type: string
+          description: The Entra application (client) ID.
+        authority:
+          type: string
+          description: https://login.microsoftonline.com/{tenant}.
+        secret_set:
+          type: boolean
+        secret_expires_at:
+          type: string
+          nullable: true
+          description: The expiry an administrator entered, RFC 3339.
+        credential_types:
+          type: array
+          items:
+            type: string
+        scope_ceiling:
+          type: object
+          description: Per credential type, the Graph permissions an administrator saved. A type with none saved has its least-privilege default.
+          additionalProperties:
+            type: array
+            items:
+              type: string
+        effective_ceiling:
+          type: object
+          description: Per credential type, the permissions the app may ask for now (the saved ceiling or the default). Dataverse has none.
+          additionalProperties:
+            type: array
+            items:
+              type: string
+        auto_refresh_token:
+          type: boolean
+          description: Whether sign-in asks for offline_access.
+        project_scope:
+          type: string
+          description: all or selected.
+        project_ids:
+          type: array
+          items:
+            type: integer
+            format: int64
+        state:
+          type: string
+          description: draft (no secret yet), active, disabled or needs_attention.
+        state_reason:
+          type: string
+          description: A stable code for needs_attention, for example secret_unreadable.
+        managed_by:
+          type: string
+          description: helm for a row the chart seeds.
+        created_at:
+          type: string
+        updated_at:
+          type: string
+        revision:
+          type: integer
+        checklist:
+          $ref: "#/components/schemas/MicrosoftAppChecklist"
+
+    MicrosoftAppTypePermissions:
+      type: object
+      description: What one credential type offers an app, for the form.
+      required: [type, api, offered, default]
+      properties:
+        type:
+          type: string
+        api:
+          type: string
+        offered:
+          type: array
+          description: The fixed list the ceiling is picked from; empty for the free-text types.
+          items:
+            $ref: "#/components/schemas/MicrosoftAppPermission"
+        default:
+          type: array
+          items:
+            type: string
+
+    MicrosoftAppDeploymentChecklist:
+      type: object
+      description: The Entra setup that does not depend on an app yet.
+      required: [redirect_uri, types]
+      properties:
+        redirect_uri:
+          type: string
+        redirect_issue:
+          type: string
+        types:
+          type: array
+          items:
+            $ref: "#/components/schemas/MicrosoftAppTypePermissions"
+
+    MicrosoftAppSettings:
+      type: object
+      description: The platform setting microsoft.custom_apps.
+      required: [custom_apps]
+      properties:
+        custom_apps:
+          type: boolean
+          description: Whether a credential may use Custom app mode. On by default.
+
+    MicrosoftAppList:
+      type: object
+      required: [apps, total, settings, checklist]
+      properties:
+        apps:
+          type: array
+          items:
+            $ref: "#/components/schemas/MicrosoftApp"
+        total:
+          type: integer
+        settings:
+          $ref: "#/components/schemas/MicrosoftAppSettings"
+        checklist:
+          $ref: "#/components/schemas/MicrosoftAppDeploymentChecklist"
+
+    MicrosoftAppRequest:
+      type: object
+      description: >
+        Creates or replaces an app. secret is write-only and tri-state: absent keeps the
+        sealed secret, an empty string clears it (the app becomes a draft), a value seals it.
+      required: [name, client_id, authority, credential_types]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        client_id:
+          type: string
+        authority:
+          type: string
+          description: https://login.microsoftonline.com/{tenant} where tenant is a tenant ID, a verified domain, organizations or common.
+        credential_types:
+          type: array
+          items:
+            type: string
+        scope_ceiling:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+        auto_refresh_token:
+          type: boolean
+        project_scope:
+          type: string
+        project_ids:
+          type: array
+          items:
+            type: integer
+            format: int64
+        secret_expires_at:
+          type: string
+          nullable: true
+        secret:
+          type: string
+          nullable: true
+          writeOnly: true
+
+    MicrosoftAppCheck:
+      type: object
+      required: [id, ok]
+      properties:
+        id:
+          type: string
+        ok:
+          type: boolean
+        warn:
+          type: boolean
+        detail:
+          type: string
+
+    MicrosoftAppTestResult:
+      type: object
+      required: [ok, checks]
+      properties:
+        ok:
+          type: boolean
+        checks:
+          type: array
+          items:
+            $ref: "#/components/schemas/MicrosoftAppCheck"
+
+    MicrosoftAppError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+        field:
+          type: string
+
+    MicrosoftAppOffer:
+      type: object
+      description: A Default app a credential form may offer. It carries no client id, authority or secret.
+      required: [id, name, description, auto_refresh_token, scope_ceiling]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        auto_refresh_token:
+          type: boolean
+        scope_ceiling:
+          type: array
+          description: The permissions the app allows for the credential type; empty for Dataverse.
+          items:
+            type: string
+
+    MicrosoftAppOffers:
+      type: object
+      required: [credential_type, apps, custom_app_allowed]
+      properties:
+        credential_type:
+          type: string
+        apps:
+          type: array
+          items:
+            $ref: "#/components/schemas/MicrosoftAppOffer"
+        custom_app_allowed:
+          type: boolean
+          description: Whether Custom app mode may be offered next to the apps (microsoft.custom_apps).
+
     DelegationGovernedError:
       type: object
       description: >
@@ -24687,6 +25014,293 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/DelegationGovernedError' }
+
+  /admin/microsoft_oauth_apps:
+    get:
+      operationId: listMicrosoftApps
+      summary: List the registered Microsoft apps, the settings and the Entra checklist
+      description: >
+        The Microsoft Default app registry (ADR-0057 decisions 5 and 11): every app,
+        disabled ones included, with its state, scope ceiling and generated Entra
+        checklist, the microsoft.custom_apps switch, and the deployment checklist
+        (the redirect URI and the permissions each credential type offers). The client
+        secret is never returned. Requires `configuration.microsoft_apps` in the
+        administration mode.
+      tags: [admin]
+      responses:
+        '200':
+          description: The registry
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftAppList' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '503':
+          description: The registry is not available on this deployment
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftAppError' }
+    post:
+      operationId: createMicrosoftApp
+      summary: Register a Microsoft app
+      description: >
+        Creates an app. With a secret it is active; without one it is a draft. The
+        secret is sealed (AES-256-GCM) and never returned. Requires
+        `configuration.microsoft_apps` in the administration mode.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MicrosoftAppRequest' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftApp' }
+        '400':
+          description: A field is not valid; the body names it
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftAppError' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '409':
+          description: An app with this name exists
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftAppError' }
+        '503':
+          description: The registry is not available on this deployment
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftAppError' }
+
+  /admin/microsoft_oauth_apps/settings:
+    put:
+      operationId: saveMicrosoftAppSettings
+      summary: Allow or refuse Custom app mode
+      description: >
+        Writes the platform setting microsoft.custom_apps. Off removes Custom app from
+        the credential forms of new credentials; existing credentials are untouched.
+        Requires `configuration.microsoft_apps` in the administration mode.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MicrosoftAppSettings' }
+      responses:
+        '200':
+          description: Saved
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftAppSettings' }
+        '400':
+          description: custom_apps is not a boolean
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftAppError' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '503':
+          description: The setting could not be written
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftAppError' }
+
+  /admin/microsoft_oauth_apps/{app_id}:
+    parameters:
+      - name: app_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    put:
+      operationId: updateMicrosoftApp
+      summary: Replace a Microsoft app
+      description: >
+        Replaces an app's definition. An absent secret keeps the sealed one. Changing
+        the client id needs the new client's secret in the same request, because a
+        secret belongs to its client. A disabled app stays disabled. Requires
+        `configuration.microsoft_apps` in the administration mode.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MicrosoftAppRequest' }
+      responses:
+        '200':
+          description: Saved
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftApp' }
+        '400':
+          description: A field is not valid; the body names it
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftAppError' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such app
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftAppError' }
+        '409':
+          description: An app with this name exists
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftAppError' }
+        '503':
+          description: The registry is not available on this deployment
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftAppError' }
+
+  /admin/microsoft_oauth_apps/{app_id}/disable:
+    parameters:
+      - name: app_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: disableMicrosoftApp
+      summary: Disable a Microsoft app
+      description: >
+        Switches an app off. It is no longer offered for new credentials, and a
+        credential that names it fails with the stable error app_disabled instead of
+        falling back to another client. Requires `configuration.microsoft_apps` in the
+        administration mode.
+      tags: [admin]
+      responses:
+        '200':
+          description: Disabled
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftApp' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such app
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftAppError' }
+        '503':
+          description: The registry is not available on this deployment
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftAppError' }
+
+  /admin/microsoft_oauth_apps/{app_id}/enable:
+    parameters:
+      - name: app_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: enableMicrosoftApp
+      summary: Enable a Microsoft app
+      description: >
+        Switches a disabled app back on: active when it has a secret, a draft when it
+        has none. Requires `configuration.microsoft_apps` in the administration mode.
+      tags: [admin]
+      responses:
+        '200':
+          description: Enabled
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftApp' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such app
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftAppError' }
+        '503':
+          description: The registry is not available on this deployment
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftAppError' }
+
+  /admin/microsoft_oauth_apps/{app_id}/test:
+    parameters:
+      - name: app_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: testMicrosoftApp
+      summary: Test a Microsoft app
+      description: >
+        Checks what can be checked without a person: the client id is a GUID, the
+        authority publishes Entra metadata on login.microsoftonline.com, the redirect
+        URI is one Entra accepts and matches the deployment host, a secret is set and
+        not expired. It cannot prove consent; the first sign-in does that. Requires
+        `configuration.microsoft_apps` in the administration mode.
+      tags: [admin]
+      responses:
+        '200':
+          description: The checks
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftAppTestResult' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such app
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftAppError' }
+        '503':
+          description: The registry is not available on this deployment
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftAppError' }
+
+  /microsoft_oauth_apps/{project_id}:
+    parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64 }
+    get:
+      operationId: listMicrosoftAppOffers
+      summary: List the Default apps a credential form may offer
+      description: >
+        The Microsoft apps an administrator registered that are active, serve the
+        credential type and serve the project (ADR-0057 decision 5). The answer
+        carries no client id, authority or secret. An empty registry answers an empty
+        list, and the form shows only Custom app. The registry checks availability
+        again at every sign-in. Requires the permission that creates a credential in
+        the project.
+      tags: [configurations]
+      parameters:
+        - name: credential_type
+          in: query
+          required: true
+          schema: { type: string }
+          description: One of outlook, teams, ms_graph, dataverse or sharepoint.
+      responses:
+        '200':
+          description: The offers
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftAppOffers' }
+        '400':
+          description: The credential type or the project is not valid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftAppError' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '503':
+          description: The registry is not available on this deployment
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftAppError' }
 
   /admin/entitlements:
     get:

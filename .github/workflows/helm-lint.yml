@@ -300,6 +300,11 @@ jobs:
       - name: The agent assertion key Secret mounts on Main only
         run: bash deploy/helm/tests/render-agent-assertion.sh
 
+      # The Microsoft Default app seed (ADR-0057 decision 5, #2267): one JSON
+      # env var with no secret, one secretKeyRef per entry, nothing by default.
+      - name: The Microsoft Default app seed renders on Main only
+        run: bash deploy/helm/tests/render-microsoft-apps.sh
+
       # ADR-0042 (#1499): the agent runs/errors/tool calls/spend Grafana
       # dashboard is off by default and, on, one grafana_dashboard ConfigMap
       # whose panels query only metrics a service exposes; the audit export

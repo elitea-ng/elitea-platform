@@ -46,6 +46,7 @@ import (
 	v2budgets "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/budgets"
 	v2canvaspresence "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/canvaspresence"
 	v2configs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	v2microsoftapps "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/microsoftoauthapps"
 	v2connectorrequests "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/connectorrequests"
 	v2contextmgr "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/contextmgr"
 	v2contextviews "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/contextviews"
@@ -2682,6 +2683,16 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				adminOptions = append(adminOptions,
 					admin.WithPlatformRoutines(routines.NewStore(cfg.Pool)))
 			}
+			// The Microsoft Default app registry (ADR-0057 decision 5, shared
+			// migration 0255): the admin routes below and the project-facing
+			// offers route read the same store and resolver. Both are nil
+			// without a database or the vault master key; the admin routes
+			// then answer 503 and the credential form offers only Custom app.
+			microsoftStore, microsoftResolver := microsoftAppRegistry(cfg.Pool)
+			if microsoftStore != nil {
+				adminOptions = append(adminOptions,
+					admin.WithMicrosoftApps(microsoftStore, microsoftMetadataClient(cfg), cfg.PublicOrigin))
+			}
 			adminHandler := admin.NewHandler(
 				cfg.Pool,
 				append([]admin.Option{
@@ -3044,6 +3055,24 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Put("/identity_providers/administration/{key}", adminHandler.IdentityProviderSave)
 				r.With(requireRuntimePlugins).
 					Delete("/identity_providers/administration/{key}", adminHandler.IdentityProviderDelete)
+				// The Microsoft Default app registry (ADR-0057 decisions 5 and
+				// 11; epic 2254 story S1b). Its own permission, granted to
+				// super_admin and admin by shared migration 0255: an app's
+				// client secret is a credential, and registering one decides
+				// which Entra client signs users in to Microsoft for every
+				// project. `settings` is a static segment, which chi prefers
+				// over {id}. Mounted unconditionally: a Handler without the
+				// store answers 503.
+				{
+					requireMicrosoftApps := central("configuration.microsoft_apps")
+					r.With(requireMicrosoftApps).Get("/microsoft_oauth_apps", adminHandler.MicrosoftAppsList)
+					r.With(requireMicrosoftApps).Post("/microsoft_oauth_apps", adminHandler.MicrosoftAppsCreate)
+					r.With(requireMicrosoftApps).Put("/microsoft_oauth_apps/settings", adminHandler.MicrosoftAppsSettings)
+					r.With(requireMicrosoftApps).Put("/microsoft_oauth_apps/{id}", adminHandler.MicrosoftAppsUpdate)
+					r.With(requireMicrosoftApps).Post("/microsoft_oauth_apps/{id}/disable", adminHandler.MicrosoftAppsDisable)
+					r.With(requireMicrosoftApps).Post("/microsoft_oauth_apps/{id}/enable", adminHandler.MicrosoftAppsEnable)
+					r.With(requireMicrosoftApps).Post("/microsoft_oauth_apps/{id}/test", adminHandler.MicrosoftAppsTest)
+				}
 				// The TOOLKIT TYPE catalogue policy — `Admin › Toolkits`
 				// (shared migration 0114). Five routes: the listing, one
 				// decision, the two per-project exception verbs, and a bulk
@@ -3708,6 +3737,20 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			// groups below do; production leaves that field unset and both names
 			// are the same object.
 			r.Mount("/configurations", configurationsHandler.Routes())
+
+			// What a credential form offers as "Default app" (ADR-0057
+			// decision 5): the Microsoft apps an administrator registered that
+			// are active, serve the credential type and serve the project.
+			// The permission is the one the form's own create button takes
+			// (the connection check shares it); the answer carries no client
+			// id, authority or secret, and the registry applies the
+			// availability rule again at every sign-in.
+			var microsoftOffers v2microsoftapps.Source
+			if microsoftResolver != nil {
+				microsoftOffers = microsoftResolver
+			}
+			r.With(projectPermission(v2configs.CurrentConfigurationCreatePermission)).
+				Get(v2microsoftapps.Path, v2microsoftapps.New(microsoftOffers).List)
 
 			// === Secrets ===
 			// Mounted under "/secrets" — the legacy PLUGIN name — while the

@@ -88,6 +88,10 @@ import type {
   MandateAttachment,
   MandateListResponse,
   MessageResponse,
+  MicrosoftApp,
+  MicrosoftAppList,
+  MicrosoftAppSettings,
+  MicrosoftAppTestResult,
   ModeRoleAssignResult,
   ModeRoleListing,
   ModeRoleRemoveResult,
@@ -479,6 +483,429 @@ export const getScanDelegationReviewResponseMock = (
   edges: faker.number.int(),
   created: faker.number.int(),
   notified: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getListMicrosoftAppsResponseMock = (
+  overrideResponse: Partial<Extract<MicrosoftAppList, object>> = {},
+): MicrosoftAppList => ({
+  apps: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.string.uuid(),
+    name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    description: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    provider: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    client_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    authority: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    secret_set: faker.datatype.boolean(),
+    secret_expires_at: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    credential_types: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    scope_ceiling: {
+      [faker.string.alphanumeric(5)]: Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    },
+    effective_ceiling: {
+      [faker.string.alphanumeric(5)]: Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    },
+    auto_refresh_token: faker.datatype.boolean(),
+    project_scope: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    project_ids: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.number.int()),
+    state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    state_reason: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    managed_by: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    created_at: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    updated_at: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    revision: faker.number.int(),
+    checklist: {
+      redirect_uri: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      redirect_issue: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      account_types: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      permissions: Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => ({
+        api: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        permissions: Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => ({
+          name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          admin_consent: faker.datatype.boolean(),
+        })),
+      })),
+      admin_consent_url: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      needs_admin_consent: faker.datatype.boolean(),
+      secret_expiry: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      secret_days_left: faker.number.int(),
+    },
+  })),
+  total: faker.number.int(),
+  settings: { custom_apps: faker.datatype.boolean() },
+  checklist: {
+    redirect_uri: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    redirect_issue: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    types: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      api: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      offered: Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => ({
+        name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        admin_consent: faker.datatype.boolean(),
+      })),
+      default: Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    })),
+  },
+  ...overrideResponse,
+});
+
+export const getCreateMicrosoftAppResponseMock = (
+  overrideResponse: Partial<Extract<MicrosoftApp, object>> = {},
+): MicrosoftApp => ({
+  id: faker.string.uuid(),
+  name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  description: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  provider: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  client_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  authority: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  secret_set: faker.datatype.boolean(),
+  secret_expires_at: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  credential_types: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  scope_ceiling: {
+    [faker.string.alphanumeric(5)]: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  },
+  effective_ceiling: {
+    [faker.string.alphanumeric(5)]: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  },
+  auto_refresh_token: faker.datatype.boolean(),
+  project_scope: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  project_ids: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.number.int()),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  state_reason: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  managed_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  created_at: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  updated_at: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  revision: faker.number.int(),
+  checklist: {
+    redirect_uri: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    redirect_issue: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    account_types: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    permissions: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      api: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      permissions: Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => ({
+        name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        admin_consent: faker.datatype.boolean(),
+      })),
+    })),
+    admin_consent_url: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    needs_admin_consent: faker.datatype.boolean(),
+    secret_expiry: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    secret_days_left: faker.number.int(),
+  },
+  ...overrideResponse,
+});
+
+export const getSaveMicrosoftAppSettingsResponseMock = (
+  overrideResponse: Partial<Extract<MicrosoftAppSettings, object>> = {},
+): MicrosoftAppSettings => ({
+  custom_apps: faker.datatype.boolean(),
+  ...overrideResponse,
+});
+
+export const getUpdateMicrosoftAppResponseMock = (
+  overrideResponse: Partial<Extract<MicrosoftApp, object>> = {},
+): MicrosoftApp => ({
+  id: faker.string.uuid(),
+  name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  description: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  provider: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  client_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  authority: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  secret_set: faker.datatype.boolean(),
+  secret_expires_at: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  credential_types: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  scope_ceiling: {
+    [faker.string.alphanumeric(5)]: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  },
+  effective_ceiling: {
+    [faker.string.alphanumeric(5)]: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  },
+  auto_refresh_token: faker.datatype.boolean(),
+  project_scope: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  project_ids: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.number.int()),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  state_reason: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  managed_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  created_at: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  updated_at: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  revision: faker.number.int(),
+  checklist: {
+    redirect_uri: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    redirect_issue: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    account_types: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    permissions: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      api: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      permissions: Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => ({
+        name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        admin_consent: faker.datatype.boolean(),
+      })),
+    })),
+    admin_consent_url: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    needs_admin_consent: faker.datatype.boolean(),
+    secret_expiry: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    secret_days_left: faker.number.int(),
+  },
+  ...overrideResponse,
+});
+
+export const getDisableMicrosoftAppResponseMock = (
+  overrideResponse: Partial<Extract<MicrosoftApp, object>> = {},
+): MicrosoftApp => ({
+  id: faker.string.uuid(),
+  name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  description: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  provider: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  client_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  authority: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  secret_set: faker.datatype.boolean(),
+  secret_expires_at: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  credential_types: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  scope_ceiling: {
+    [faker.string.alphanumeric(5)]: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  },
+  effective_ceiling: {
+    [faker.string.alphanumeric(5)]: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  },
+  auto_refresh_token: faker.datatype.boolean(),
+  project_scope: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  project_ids: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.number.int()),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  state_reason: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  managed_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  created_at: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  updated_at: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  revision: faker.number.int(),
+  checklist: {
+    redirect_uri: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    redirect_issue: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    account_types: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    permissions: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      api: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      permissions: Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => ({
+        name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        admin_consent: faker.datatype.boolean(),
+      })),
+    })),
+    admin_consent_url: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    needs_admin_consent: faker.datatype.boolean(),
+    secret_expiry: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    secret_days_left: faker.number.int(),
+  },
+  ...overrideResponse,
+});
+
+export const getEnableMicrosoftAppResponseMock = (
+  overrideResponse: Partial<Extract<MicrosoftApp, object>> = {},
+): MicrosoftApp => ({
+  id: faker.string.uuid(),
+  name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  description: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  provider: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  client_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  authority: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  secret_set: faker.datatype.boolean(),
+  secret_expires_at: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  credential_types: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  scope_ceiling: {
+    [faker.string.alphanumeric(5)]: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  },
+  effective_ceiling: {
+    [faker.string.alphanumeric(5)]: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  },
+  auto_refresh_token: faker.datatype.boolean(),
+  project_scope: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  project_ids: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.number.int()),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  state_reason: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  managed_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  created_at: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  updated_at: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  revision: faker.number.int(),
+  checklist: {
+    redirect_uri: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    redirect_issue: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    account_types: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    permissions: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      api: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      permissions: Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => ({
+        name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        admin_consent: faker.datatype.boolean(),
+      })),
+    })),
+    admin_consent_url: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    needs_admin_consent: faker.datatype.boolean(),
+    secret_expiry: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    secret_days_left: faker.number.int(),
+  },
+  ...overrideResponse,
+});
+
+export const getTestMicrosoftAppResponseMock = (
+  overrideResponse: Partial<Extract<MicrosoftAppTestResult, object>> = {},
+): MicrosoftAppTestResult => ({
+  ok: faker.datatype.boolean(),
+  checks: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    ok: faker.datatype.boolean(),
+    warn: faker.helpers.arrayElement([faker.datatype.boolean(), undefined]),
+    detail: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+  })),
   ...overrideResponse,
 });
 
@@ -4131,6 +4558,188 @@ export const getScanDelegationReviewMockHandler = (
   );
 };
 
+export const getListMicrosoftAppsMockHandler = (
+  overrideResponse?:
+    | MicrosoftAppList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<MicrosoftAppList> | MicrosoftAppList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/microsoft_oauth_apps",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListMicrosoftAppsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getCreateMicrosoftAppMockHandler = (
+  overrideResponse?:
+    | MicrosoftApp
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<MicrosoftApp> | MicrosoftApp),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/microsoft_oauth_apps",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCreateMicrosoftAppResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
+export const getSaveMicrosoftAppSettingsMockHandler = (
+  overrideResponse?:
+    | MicrosoftAppSettings
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<MicrosoftAppSettings> | MicrosoftAppSettings),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/admin/microsoft_oauth_apps/settings",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSaveMicrosoftAppSettingsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getUpdateMicrosoftAppMockHandler = (
+  overrideResponse?:
+    | MicrosoftApp
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<MicrosoftApp> | MicrosoftApp),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/admin/microsoft_oauth_apps/:appId",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getUpdateMicrosoftAppResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getDisableMicrosoftAppMockHandler = (
+  overrideResponse?:
+    | MicrosoftApp
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<MicrosoftApp> | MicrosoftApp),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/microsoft_oauth_apps/:appId/disable",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getDisableMicrosoftAppResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getEnableMicrosoftAppMockHandler = (
+  overrideResponse?:
+    | MicrosoftApp
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<MicrosoftApp> | MicrosoftApp),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/microsoft_oauth_apps/:appId/enable",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getEnableMicrosoftAppResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getTestMicrosoftAppMockHandler = (
+  overrideResponse?:
+    | MicrosoftAppTestResult
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<MicrosoftAppTestResult> | MicrosoftAppTestResult),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/microsoft_oauth_apps/:appId/test",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getTestMicrosoftAppResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getExportEntitlementsMockHandler = (
   overrideResponse?:
     | EntitlementGrantList
@@ -6488,6 +7097,13 @@ export const getAdminMock = () => [
   getListAdminAgentRegistryMockHandler(),
   getGetDelegationReviewMockHandler(),
   getScanDelegationReviewMockHandler(),
+  getListMicrosoftAppsMockHandler(),
+  getCreateMicrosoftAppMockHandler(),
+  getSaveMicrosoftAppSettingsMockHandler(),
+  getUpdateMicrosoftAppMockHandler(),
+  getDisableMicrosoftAppMockHandler(),
+  getEnableMicrosoftAppMockHandler(),
+  getTestMicrosoftAppMockHandler(),
   getExportEntitlementsMockHandler(),
   getListCredentialInventoryMockHandler(),
   getRevokeInventoryCredentialMockHandler(),
