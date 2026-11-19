@@ -169,9 +169,12 @@ async fn call(tools: &[Arc<dyn Tool>], name: &str, arguments: Value) -> Result<V
         .iter()
         .find(|tool| tool.name() == name)
         .unwrap_or_else(|| panic!("tool {name} is not served"));
-    tool.execute(context(), arguments)
-        .await
-        .map_err(|error| error.to_string())
+    match tool.execute(context(), arguments).await {
+        // A failure is the tool's answer: `Error: <sentence>`, as in the SDK.
+        Ok(Value::String(text)) if text.starts_with("Error: ") => Err(text),
+        Ok(value) => Ok(value),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 fn ids(value: &Value) -> Vec<i64> {

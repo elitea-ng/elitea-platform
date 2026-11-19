@@ -295,11 +295,25 @@ impl Tool for DeltaLakeTool {
         Some(self.kind.schema())
     }
 
+    /// A failure is the tool's answer, as in the SDK (its action returns
+    /// `Error: ...` text): the runtime reduces a raised tool error to its
+    /// category, which would hide the sentence that says what to change (the
+    /// column that is missing, the token a query is refused at). The text is
+    /// this family's own, bounded and free of credentials.
     async fn execute(
         &self,
         _context: Arc<dyn ToolContext>,
         arguments: Value,
     ) -> adk_core::Result<Value> {
+        Ok(self
+            .run(arguments)
+            .await
+            .unwrap_or_else(|error| Value::String(format!("Error: {}", error.message))))
+    }
+}
+
+impl DeltaLakeTool {
+    async fn run(&self, arguments: Value) -> adk_core::Result<Value> {
         let arguments = arguments_object(arguments)?;
         let table = Arc::clone(&self.table);
         match self.kind {
