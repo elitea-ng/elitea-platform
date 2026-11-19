@@ -7,6 +7,7 @@
     { "family": "v0-rust-worker-rust-test", "gib": 1.3 },
     { "family": "buildkit-mounts (go, rust, light)", "gib": 1.1 },
     { "family": "buildkit-blob layers", "gib": 0.6 },
+    { "family": "rust-shared-crates (registry and git only; was 2.6 with targets)", "gib": 0.4 },
     { "family": "node-cache", "gib": 0.2 },
     { "family": "other rust-cache entries without targets (vector, doc-extractor, browser-session)", "gib": 0.5 }
   ]

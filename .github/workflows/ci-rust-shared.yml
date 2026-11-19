@@ -69,6 +69,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: rust-shared-crates
+          # Registry and git only. The nightly run saved 2.6 GiB for this one entry
+          # (2026-11-19), a quarter of the cap; LRU evicted it before any pull
+          # request restored it. The key itself matched (prefix v0-rust-rust-shared-crates-Linux-x64-<env hash>).
+          cache-targets: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
           workspaces: libs/rust
 
