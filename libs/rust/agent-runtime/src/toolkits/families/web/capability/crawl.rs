@@ -96,12 +96,13 @@ fn parse(
     max_limit: u32,
     with_bytes: bool,
 ) -> Result<Parsed, CallEnd> {
-    if let Some(key) = arguments.keys().find(|key| {
-        !matches!(
-            key.as_str(),
+    let known = |key: &str| {
+        matches!(
+            key,
             "url" | "instructions" | "max_depth" | "limit" | "provider"
-        ) && !(with_bytes && key.as_str() == "max_bytes")
-    }) {
+        ) || (with_bytes && key == "max_bytes")
+    };
+    if let Some(key) = arguments.keys().find(|key| !known(key)) {
         return Err(invalid(&format!("unknown argument `{key}`")));
     }
     let text = arguments

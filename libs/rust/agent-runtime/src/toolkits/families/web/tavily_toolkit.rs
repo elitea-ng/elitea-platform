@@ -34,7 +34,7 @@ use super::adapters::tavily::{
 use super::capability::{CallEnd, error_result, query_hash};
 use super::config::{WebConfigError, host_in_domain};
 use super::meter::{AuditTarget, Meter, MeteredOp, Units};
-use super::tavily_catalogue::tavily_type_entry;
+use super::tavily_catalogue::tool_args_schema;
 use super::transport::{HttpAnswer, ProviderError};
 use super::{TransportFactory, WebToolHost, WebToolsetError, production_transport, registry};
 use crate::toolkits::invocation::admit_materialized_toolset;
@@ -74,8 +74,8 @@ const RETRY_DELAY: Duration = if cfg!(test) {
 } else {
     Duration::from_secs(1)
 };
-const RUN_CAP_TTL: Duration = Duration::from_secs(6 * 3_600);
-const RUN_CAP_PURGE: Duration = Duration::from_secs(60);
+const RUN_CAP_TTL: Duration = Duration::from_hours(6);
+const RUN_CAP_PURGE: Duration = Duration::from_mins(1);
 const MAX_ANSWER_BYTES: usize = 5 * 1_024 * 1_024;
 const MAX_DESCRIPTION_CHARS: usize = 1_000;
 const MAX_ERROR_DETAIL_CHARS: usize = 300;
@@ -116,8 +116,8 @@ impl Kind {
     }
 
     /// The SDK's argument schema, as the catalogue entry carries it.
-    fn schema(self) -> Value {
-        tavily_type_entry()["args_schemas"][self.name()].clone()
+    fn schema(self) -> Option<Value> {
+        tool_args_schema(self.name())
     }
 }
 
@@ -1001,7 +1001,7 @@ impl Tool for TavilyTool {
     }
 
     fn parameters_schema(&self) -> Option<Value> {
-        Some(self.kind.schema())
+        self.kind.schema()
     }
 
     async fn execute(

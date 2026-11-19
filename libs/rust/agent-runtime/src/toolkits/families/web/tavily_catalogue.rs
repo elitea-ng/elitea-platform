@@ -335,6 +335,14 @@ const ENTRY: &str = r##"
 }
 "##;
 
+/// One tool's argument schema, as the SDK declares it. `None` only if the
+/// entry above were not JSON, which its own test pins.
+pub(crate) fn tool_args_schema(tool: &str) -> Option<Value> {
+    let entry: Value = serde_json::from_str(ENTRY).ok()?;
+    entry.get("args_schemas")?.get(tool).cloned()
+}
+
+#[cfg(test)]
 pub(crate) fn tavily_type_entry() -> Value {
     serde_json::from_str(ENTRY).expect("the tavily catalogue entry is valid JSON")
 }
