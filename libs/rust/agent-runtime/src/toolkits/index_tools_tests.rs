@@ -680,7 +680,7 @@ fn bitbucket_tool(indexes: Option<Value>, selected: &[&str]) -> Value {
 /// down with it. GitHub's port refuses a selection of only
 /// `generic_github_api_call` (a `PyGithub` dispatcher it does not serve) and
 /// an index tool: `search_index` is still served under the toolkit's name. A GitLab or Bitbucket selection naming
-/// a tool the port does not serve (Bitbucket has no `delete_file`; the
+/// a tool the port does not serve (a pull-request approval no Bitbucket port serves; the
 /// GitLab name is outside its port) is skipped as a family, and
 /// `search_index` beside it is still served. Without an index toolset the
 /// same toolkits are omitted, as before.
@@ -731,7 +731,10 @@ async fn a_skipped_family_half_keeps_the_toolkits_index_tools() {
             "release_repository",
         ),
         (
-            bitbucket_tool(Some(catalog_value()), &["delete_file", "search_index"]),
+            bitbucket_tool(
+                Some(catalog_value()),
+                &["approve_pull_request", "search_index"],
+            ),
             "app_repository",
         ),
     ] {
@@ -760,7 +763,7 @@ async fn a_skipped_family_half_keeps_the_toolkits_index_tools() {
     // Both are omitted entirely without an index toolset.
     for tool in [
         gitlab_tool(None, &["approve_merge_request", "search_index"]),
-        bitbucket_tool(None, &["delete_file", "search_index"]),
+        bitbucket_tool(None, &["approve_pull_request", "search_index"]),
     ] {
         let version = json!({"tools": [tool]});
         let snapshot =

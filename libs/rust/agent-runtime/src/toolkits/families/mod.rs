@@ -214,10 +214,27 @@ impl UnsupportedSetting {
 /// SDK snapshot; the test that compares this document with the file there
 /// (`ELITEA_WRITE_RUST_ONLY_TOOLS=1` rewrites it) is what keeps the two equal.
 #[cfg(all(test, feature = "toolkit-office"))]
+fn rust_only_types() -> serde_json::Value {
+    // The tools the SDK gained after the pinned snapshot (S10 #2265) sit with
+    // the `pptx` authoring tools: both are tools of an SDK type that the pinned
+    // SDK does not have.
+    let mut types: serde_json::Map<String, serde_json::Value> =
+        crate::toolkits::sdk_conformance::post_pin_tools()
+            .into_iter()
+            .map(|(sdk_type, tools)| (sdk_type, serde_json::Value::Object(tools)))
+            .collect();
+    types.insert(
+        "pptx".to_owned(),
+        serde_json::Value::Object(pptx::schema::rust_only_catalogue_tools()),
+    );
+    serde_json::Value::Object(types)
+}
+
+#[cfg(all(test, feature = "toolkit-office"))]
 pub(crate) fn rust_only_catalogue_document() -> serde_json::Value {
     serde_json::json!({
         "schema_version": "elitea.rust-only-toolkit-tools.v1",
-        "types": {"pptx": serde_json::Value::Object(pptx::schema::rust_only_catalogue_tools())},
+        "types": rust_only_types(),
         "new_types": {
             "docx": docx::schema::type_entry(),
             "xlsx": xlsx::schema::type_entry(),

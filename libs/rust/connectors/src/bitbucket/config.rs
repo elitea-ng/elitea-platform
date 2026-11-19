@@ -141,6 +141,32 @@ impl BitbucketToolkitConfig {
         })
     }
 
+    /// The same host, hosting and credential, aimed at another repository a
+    /// call names (the SDK's per-call `project` / `repository`). Its own
+    /// selection is empty and its branch is the caller's to set.
+    pub fn retargeted(
+        &self,
+        project: &str,
+        repository: &str,
+    ) -> Result<Self, BitbucketConfigError> {
+        for value in [project, repository] {
+            validate_text(value, MAX_IDENTITY_BYTES)?;
+            if value.contains('/') || matches!(value, "." | "..") {
+                return Err(invalid_configuration());
+            }
+        }
+        Ok(Self {
+            base_url: self.base_url.clone(),
+            hosting: self.hosting,
+            username: self.username.clone(),
+            password: self.password.clone(),
+            project: project.into(),
+            repository: repository.into(),
+            branch: self.branch.clone(),
+            selected_tools: Vec::new(),
+        })
+    }
+
     pub const fn base_url(&self) -> &Url {
         &self.base_url
     }

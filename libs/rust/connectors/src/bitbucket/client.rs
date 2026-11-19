@@ -273,6 +273,22 @@ impl BitbucketRest {
         &self.config
     }
 
+    /// This client aimed at another repository on the same host, over the same
+    /// transport and credential.
+    pub fn retargeted(
+        &self,
+        project: &str,
+        repository: &str,
+    ) -> Result<Self, BitbucketClientError> {
+        Ok(Self {
+            config: self
+                .config
+                .retargeted(project, repository)
+                .map_err(|_| invalid_input())?,
+            transport: Arc::clone(&self.transport),
+        })
+    }
+
     pub fn transport(&self) -> &Arc<dyn BitbucketTransport> {
         &self.transport
     }
