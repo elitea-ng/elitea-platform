@@ -58,6 +58,8 @@ import { RetryUnsent, useRestoredDraft } from './SteeringControls';
 import { SteeringQueue, type SteeringQueueBinding } from './SteeringQueue';
 import type { UnsentSteers } from './useSteering';
 import type { ComposerSkill } from './useAgentSkills';
+import { SkillPinError, skillPinExtras, useSkillPinRows, type SkillPinRows } from './skillPinRows';
+import type { SkillPinControls } from './useThreadSkillPins';
 import { threadDraftKey, useCarriedDraft } from './useCarriedDraft';
 import { useImageAttachments } from './useImageAttachments';
 import type { SentImages } from './useSendPrompt';
@@ -113,6 +115,8 @@ export interface WorkspaceComposerProps {
   onPlanModeChange: (planMode: boolean) => void;
   /** The selected agent's skills, then the project's (`project`), offered after the commands in the "/" menu. */
   skills: readonly ComposerSkill[];
+  /** Pin and unpin on a project skill's row of the "/" menu (a local thread with a saved conversation); none: no action. */
+  skillPins?: SkillPinControls | undefined;
   /** The custom commands (`commands_list`), offered after the host commands; none for a cloud thread. */
   customCommands: readonly CustomCommand[];
   /**
@@ -155,7 +159,7 @@ function placeholderFor(readOnly: boolean, steering: boolean): string {
 const steersNow = (busy: boolean, onSteer: WorkspaceComposerProps['onSteer']): boolean => busy && onSteer !== undefined;
 
 /** One "/" menu row: host commands under the menu's title, then a section per source, then the skills. */
-function slashItem(entry: SlashEntry): SuggestionItem {
+function slashItem(entry: SlashEntry, pins: SkillPinRows | undefined): SuggestionItem {
   switch (entry.kind) {
     case 'host':
       return { key: entry.command.id, label: entry.command.name, description: entry.command.description };
@@ -175,6 +179,7 @@ function slashItem(entry: SlashEntry): SuggestionItem {
         label: composer.skillToken(entry.skill),
         section: entry.skill.project === true ? t('workspace.composer.projectSkills', 'Project skills') : t('workspace.composer.skills', 'Skills'),
         ...(entry.skill.description !== undefined ? { description: entry.skill.description } : {}),
+        ...(pins === undefined ? {} : skillPinExtras(entry.skill, pins)),
       };
   }
 }
@@ -228,9 +233,10 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
     placeholderData: (previous) => previous,
   });
 
+  const { rows: pinRows, error: pinError } = useSkillPinRows(props.skillPins);
   const slash = useMemo(() => (open?.kind === 'command' ? composer.slashMenu(open.query, customCommands, skills) : []), [open, customCommands, skills]);
   const items: SuggestionItem[] = useMemo(() => {
-    if (open?.kind === 'command') return slash.map(slashItem);
+    if (open?.kind === 'command') return slash.map((entry) => slashItem(entry, pinRows));
     if (open?.kind === 'file') {
       return (files.data ?? []).map((f) => ({
         key: `${f.kind}:${f.path}`,
@@ -239,7 +245,7 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
       }));
     }
     return [];
-  }, [open, slash, files.data]);
+  }, [open, slash, files.data, pinRows]);
   const menuOpen = open !== null && items.length > 0;
   const highlighted = Math.min(activeIndex, Math.max(items.length - 1, 0));
 
@@ -364,6 +370,7 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
           onClose={() => setDismissed(open)}
         />
       )}
+      <SkillPinError message={pinError} />
       <RetryUnsent unsent={props.unsent} busy={busy} hasDraft={hasDraft} canSend={canSend} onClick={retryUnsent} />
       <SteeringQueue queue={props.queue} input={inputRef} onRestored={() => setHasDraft(true)} />
       <NewChatInput

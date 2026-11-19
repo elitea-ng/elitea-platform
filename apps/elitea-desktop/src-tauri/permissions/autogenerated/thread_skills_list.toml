@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-thread-skills-list"
+description = "Enables the thread_skills_list command without any pre-configured scope."
+commands.allow = ["thread_skills_list"]
+
+[[permission]]
+identifier = "deny-thread-skills-list"
+description = "Denies the thread_skills_list command without any pre-configured scope."
+commands.deny = ["thread_skills_list"]

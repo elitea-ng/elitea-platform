@@ -1009,6 +1009,30 @@ impl PlatformApi {
         .into_ok()
     }
 
+    /// Whether the project does not trust the text of a project skill
+    /// (`GET /api/v2/elitea_core/skill_trust/prompt_lib/{project}/{skill}`,
+    /// ADR-0051 amendment 1, A1.6): a skill written in another project
+    /// whose current text the project has not trusted. A skill of the
+    /// project's own is trusted (`not_required`). An answer that cannot be
+    /// read is untrusted: the restrictive framing wins over a guess.
+    pub async fn project_skill_untrusted(&self, project_id: i64, skill_id: i64) -> bool {
+        let status: Result<Value, ApiError> = self
+            .send(
+                Method::GET,
+                &format!("/api/v2/elitea_core/skill_trust/prompt_lib/{project_id}/{skill_id}"),
+                None,
+                &[],
+            )
+            .await
+            .and_then(Answer::into_ok);
+        !status.is_ok_and(|status| {
+            matches!(
+                status.get("state").and_then(Value::as_str),
+                Some("trusted" | "not_required")
+            )
+        })
+    }
+
     /// The signed-in user's id (`GET /api/v2/social/author`): with the
     /// origin, whose thread history is whose (`history.rs`).
     ///

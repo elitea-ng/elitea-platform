@@ -21,6 +21,7 @@ import type {
   WorkspaceFile,
   WorkspaceIpc,
 } from './workspaceIpc';
+import type { ThreadSkillPin } from './threadSkillsIpc';
 import { WorkspaceIpcError } from './workspaceIpc';
 
 type FailableCommand =
@@ -42,6 +43,7 @@ type FailableCommand =
   | 'deleteThreadHistory'
   | 'forkThreadHistory'
   | 'restorePointAfter'
+  | 'pinThreadSkill'
   | 'steerTurn'
   | 'updateSteer'
   | 'retryCommit';
@@ -60,6 +62,8 @@ export interface FakeWorkspaceIpc extends WorkspaceIpc {
     restores: { turnId: string; path?: string; confirmOlder?: boolean }[];
     fileQueries: { workspaceId: string; query: string; limit?: number }[];
     forks: ThreadForkRequest[];
+    /** `thread_skill_pin` and `thread_skill_unpin` calls, in order. */
+    pins: { workspaceId: string; conversationId: string; skillId: number; pinned: boolean }[];
     /** `attachFile` paths, and `attachBytes` calls (mime, base64 length), in order. */
     attachedFiles: { workspaceId: string; path: string }[];
     attachedBytes: { workspaceId: string; mime: string; length: number; name?: string }[];
@@ -111,8 +115,9 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
   const restorePoints = new Map<string, string | null>();
   const statuses = new Map<string, TurnStatus>();
   const history = new Map<string, StoredTurn[]>();
+  const threadPins = new Map<string, ThreadSkillPin[]>();
   const historyKey = (workspaceId: string, conversationId: string): string => `${workspaceId}\u0000${conversationId}`;
-  const calls: FakeWorkspaceIpc['calls'] = { started: [], prewarmed: [], commitRetries: [], resumed: [], cancelled: [], approvals: [], restores: [], fileQueries: [], forks: [], attachedFiles: [], attachedBytes: [], removedAttachments: [], steers: [], steerUpdates: [] };
+  const calls: FakeWorkspaceIpc['calls'] = { started: [], prewarmed: [], commitRetries: [], resumed: [], cancelled: [], approvals: [], restores: [], fileQueries: [], forks: [], pins: [], attachedFiles: [], attachedBytes: [], removedAttachments: [], steers: [], steerUpdates: [] };
   let attachments = 0;
   const attached = (name: string, mime: string): AttachedImage => {
     attachments += 1;
@@ -277,6 +282,28 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
       }));
       if (copied.length > 0) history.set(historyKey(request.workspaceId, request.targetConversationId), copied);
       return Promise.resolve(copied.length);
+    },
+    threadSkills(workspaceId, conversationId) {
+      return Promise.resolve([...(threadPins.get(historyKey(workspaceId, conversationId)) ?? [])]);
+    },
+    pinThreadSkill(workspaceId, conversationId, pin) {
+      calls.pins.push({ workspaceId, conversationId, skillId: pin.skillId, pinned: true });
+      const failed = failure('pinThreadSkill');
+      if (failed !== undefined) return failed;
+      const key = historyKey(workspaceId, conversationId);
+      const held = threadPins.get(key) ?? [];
+      if (!held.some((have) => have.skillId === pin.skillId)) threadPins.set(key, [...held, pin]);
+      return Promise.resolve();
+    },
+    unpinThreadSkill(workspaceId, conversationId, skillId) {
+      calls.pins.push({ workspaceId, conversationId, skillId, pinned: false });
+      const key = historyKey(workspaceId, conversationId);
+      const held = threadPins.get(key) ?? [];
+      threadPins.set(
+        key,
+        held.filter((have) => have.skillId !== skillId),
+      );
+      return Promise.resolve(held.some((have) => have.skillId === skillId));
     },
     restorePointAfter(turnId) {
       return failure('restorePointAfter') ?? Promise.resolve(restorePoints.get(turnId) ?? null);

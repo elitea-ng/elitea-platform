@@ -1078,6 +1078,65 @@ pub async fn thread_history_delete(
     })
 }
 
+/// One project skill pinned to a local thread.
+#[derive(Serialize)]
+pub struct ThreadSkill {
+    project_id: i64,
+    skill_id: i64,
+}
+
+/// The project skills pinned to a local thread (ADR-0050 amendment 1, A1.5;
+/// the signed-in account's only), oldest first. Each turn applies them.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn thread_skills_list(
+    state: State<'_, LocalState>,
+    workspace_id: String,
+    conversation_id: String,
+) -> Result<Vec<ThreadSkill>, IpcError> {
+    Ok(state
+        .agents
+        .thread_skills(&workspace_id, &conversation_id)
+        .await?
+        .into_iter()
+        .map(|pin| ThreadSkill {
+            project_id: pin.project_id,
+            skill_id: pin.skill_id,
+        })
+        .collect())
+}
+
+/// Pin a project skill to a local thread. Refused when the person cannot
+/// read the skill (`skill_unknown`) or the thread holds five
+/// (`thread_skills_full`). Pinning one already pinned changes nothing.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn thread_skill_pin(
+    state: State<'_, LocalState>,
+    workspace_id: String,
+    conversation_id: String,
+    project_id: i64,
+    skill_id: i64,
+) -> Result<(), IpcError> {
+    state
+        .agents
+        .pin_thread_skill(&workspace_id, &conversation_id, project_id, skill_id)
+        .await?;
+    Ok(())
+}
+
+/// Unpin a project skill from a local thread; whether it was pinned.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn thread_skill_unpin(
+    state: State<'_, LocalState>,
+    workspace_id: String,
+    conversation_id: String,
+    skill_id: i64,
+) -> Result<bool, IpcError> {
+    Ok(state
+        .agents
+        .unpin_thread_skill(&workspace_id, &conversation_id, skill_id)
+        .await?)
+}
+
 #[derive(Serialize)]
 pub struct HistoryForked {
     copied: usize,

@@ -1159,5 +1159,8 @@
   "workspace.subAgent.briefFacts": "facts {{count}}",
   "workspace.subAgent.briefMemories": "memory entries {{count}}",
   "workspace.subAgent.briefMessages": "messages {{count}}",
-  "workspace.subAgent.briefNamed": "Brief named: {{refs}}"
+  "workspace.subAgent.briefNamed": "Brief named: {{refs}}",
+  "workspace.composer.skillPin": "Pin to this thread",
+  "workspace.composer.skillPinned": "Pinned",
+  "workspace.composer.skillUnpin": "Unpin"
 }
