@@ -15,6 +15,7 @@ use crate::toolkits::invocation::{MaterializedToolsetError, admit_materialized_t
 use crate::toolkits::policy::ToolAdmissionPolicy;
 
 use super::config::{DeltaLakeConfigError, DeltaLakeConfigErrorCode, DeltaLakeToolkitConfig};
+use super::expr::Query;
 use super::filter::RowFilter;
 use super::table::{
     DeltaTable, MAX_EMBEDDING_DIMENSIONS, MAX_K, MAX_RESULT_BYTES, MAX_RESULT_ROWS, QueryRequest,
@@ -119,7 +120,7 @@ impl Kind {
     const fn action(self) -> &'static str {
         match self {
             Self::QueryTable => {
-                "Query the Delta Lake table: select columns and filter rows. filters is an object of column: condition. A condition is a value (equals), a list (in), null (is null) or an object of operators eq, ne, in, gt, gte, lt, lte, is_null that must all hold; columns are ANDed. query (a pandas expression) is not supported: use filters. At most 1000 rows are returned; a trailing _truncated entry says more matched. A read that scans too much fails: narrow it with columns and filters.\nArgs:\n    query: not supported, leave unset\n    columns: List of columns to select\n    filters: Dict of column: condition pairs\nReturns:\n    List of dicts representing rows"
+                "Query Delta Lake table. Supports pandas-like filtering, column selection, and SQL-like queries (pandas query syntax, literals only: comparisons, and/or/not, in, is null, arithmetic; no function calls). At most 1000 rows are returned; a trailing _truncated entry says more matched. A read that scans too much fails: narrow it.\nArgs:\n    query: SQL-like query string (pandas.DataFrame.query syntax)\n    columns: List of columns to select\n    filters: Dict of column: condition pairs (value, list, null, or eq/ne/in/gt/gte/lt/lte/is_null)\nReturns:\n    List of dicts representing rows"
             }
             Self::VectorSearch => {
                 "Perform a vector similarity search on the Delta Lake table.\nArgs:\n    embedding: Query embedding vector.\n    k: Number of top results to return (at most 100).\n    embedding_column: Name of the column containing embeddings.\nReturns:\n    List of dicts for top k most similar rows (cosine similarity, best first)."
@@ -137,7 +138,7 @@ impl Kind {
                     "query": {
                         "anyOf": [{"type": "string"}, {"type": "null"}],
                         "default": null,
-                        "description": "Not supported: pandas query expressions are not evaluated. Use filters.",
+                        "description": "SQL query to execute on Delta Lake table. If None, returns all data. Pandas query syntax, literals only (comparisons, and/or/not, in, is null).",
                         "title": "Query"
                     },
                     "columns": {
@@ -388,15 +389,12 @@ fn arguments_object(arguments: Value) -> adk_core::Result<Map<String, Value>> {
 }
 
 fn parse_query(arguments: &Map<String, Value>) -> adk_core::Result<QueryRequest> {
-    if let Some(Value::String(query)) = arguments.get("query") {
-        if !query.trim().is_empty() {
-            return Err(invalid(
-                "query is not supported: this toolkit does not evaluate pandas expressions. Use filters (a value, a list, or an object of eq, ne, in, gt, gte, lt, lte, is_null per column) and columns.",
-            ));
-        }
-    } else if arguments.get("query").is_some_and(|value| !value.is_null()) {
-        return Err(invalid("query must be a string"));
-    }
+    let expression = match arguments.get("query") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(query)) if query.trim().is_empty() => None,
+        Some(Value::String(query)) => Some(Query::parse(query).map_err(invalid)?),
+        Some(_) => return Err(invalid("query must be a string")),
+    };
     let columns = match arguments.get("columns") {
         None | Some(Value::Null) => None,
         Some(Value::Array(values)) => {
@@ -422,7 +420,11 @@ fn parse_query(arguments: &Map<String, Value>) -> adk_core::Result<QueryRequest>
         Some(_) => return Err(invalid("columns must be a list of column names")),
     };
     let filter = RowFilter::parse(arguments.get("filters")).map_err(invalid)?;
-    Ok(QueryRequest { columns, filter })
+    Ok(QueryRequest {
+        columns,
+        filter,
+        expression,
+    })
 }
 
 fn parse_vector(arguments: &Map<String, Value>) -> adk_core::Result<VectorRequest> {

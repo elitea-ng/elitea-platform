@@ -7,10 +7,10 @@
 //! argument schemas and reads the same table through delta-kernel-rs and
 //! Arrow, with three deliberate differences:
 //!
-//! * `query` is not evaluated. A pandas expression is an expression language
-//!   the owner declined to port; `filters` is the structured replacement
-//!   (equality as in the SDK, plus `eq`, `ne`, `in`, `gt`, `gte`, `lt`, `lte`
-//!   and `is_null` per column).
+//! * `query` (a `DataFrame.query` string) is read by a bounded hand-written
+//!   parser for its literal-only subset (`expr`), never handed to an
+//!   evaluator. `filters` also takes structured conditions beyond the SDK's
+//!   equality (`eq`, `ne`, `in`, `gt`, `gte`, `lt`, `lte`, `is_null`).
 //! * Nothing loads the whole table. A scan is bounded by rows, decoded bytes
 //!   and a deadline, and a result by rows, bytes and cell size
 //!   (`table::limits`).
@@ -20,6 +20,7 @@
 //! Compiled only with the `toolkit-delta-lake` feature.
 
 pub(in crate::toolkits) mod config;
+pub(in crate::toolkits) mod expr;
 pub(in crate::toolkits) mod filter;
 pub(in crate::toolkits) mod render;
 pub(in crate::toolkits) mod table;

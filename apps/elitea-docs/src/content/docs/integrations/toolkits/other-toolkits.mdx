@@ -37,7 +37,7 @@ The `delta_lake` toolkit reads one Delta Lake table in Amazon S3 with the AWS ke
 
 | Tool | What it does |
 |---|---|
-| `query_table` | Returns rows, optionally with `columns` (which to keep) and `filters` (which rows). |
+| `query_table` | Returns rows, optionally with `columns` (which to keep), `query` (a pandas query string) and `filters` (structured conditions). `query` and `filters` both apply. |
 | `vector_search` | Returns the `k` rows (default 5, at most 100) whose `embedding_column` (default `embedding`) is most similar to the `embedding` you give, by cosine similarity, best first. Rows with no embedding are skipped. |
 | `get_table_schema` | Returns the table's schema, one `name: type` line per column. |
 
@@ -47,9 +47,11 @@ The `delta_lake` toolkit reads one Delta Lake table in Amazon S3 with the AWS ke
 {"columns": ["id", "name"], "filters": {"score": {"gte": 20, "lt": 45}, "name": ["bob", "dave"]}}
 ```
 
-<Note>
-The SDK's `query` argument is a pandas expression (`DataFrame.query`). It is not evaluated here: a non-empty `query` is refused with a message that points at `filters`. An empty or null `query` returns every row, as in the SDK.
-</Note>
+**Query.** `query` takes the pandas `DataFrame.query` syntax, literals only: comparisons (`==`, `!=`, `<`, `<=`, `>`, `>=`, chained like `1 < id <= 3`, also between two columns), `and` / `or` / `not` (and `&`, `|`, `~`) with parentheses, `in` / `not in` against a list (`name in ['a', 'b']`), `is null` / `is not null` (`is None`), the arithmetic `+ - * / %`, and backtick-quoted column names. It is read by a bounded parser and never executed. Anything else (function or method calls such as `.str.contains()`, `@variable`, `**`, `//`, `like`, subqueries) is refused with a message naming the offending token and its position. An empty or null `query` returns every row.
+
+```json
+{"query": "score >= 20 and name in ['bob', 'dave'] and not (id == 4)"}
+```
 
 **Limits.** The SDK loads the whole table into memory. Here a read is bounded: an answer carries at most 1,000 rows and 1 MiB (a final `_truncated` entry says when more matched), a text cell is cut at 2,000 characters, and a read that would scan more than 5 million rows or 512 MiB, or take longer than a minute, fails with a message asking you to narrow it with `columns` and `filters`. The credential's path must be an `s3://` URI; the worker reads no local path.
 

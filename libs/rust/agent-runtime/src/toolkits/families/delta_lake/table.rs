@@ -26,6 +26,7 @@ use delta_kernel_default_engine::DefaultEngineBuilder;
 use serde_json::{Map, Value};
 
 use super::config::{DeltaLakeToolkitConfig, s3_endpoint};
+use super::expr::Query;
 use super::filter::RowFilter;
 use super::render::{MAX_ROW_VALUES, cell_json, schema_text};
 
@@ -82,6 +83,8 @@ pub(in crate::toolkits) struct RowSet {
 pub(in crate::toolkits) struct QueryRequest {
     pub(in crate::toolkits) columns: Option<Vec<String>>,
     pub(in crate::toolkits) filter: RowFilter,
+    /// The `query` string, parsed.
+    pub(in crate::toolkits) expression: Option<Query>,
 }
 
 /// A `vector_search` request, already parsed.
@@ -185,6 +188,7 @@ impl DeltaTable {
             .flatten()
             .map(String::as_str)
             .chain(request.filter.columns())
+            .chain(request.expression.iter().flat_map(Query::columns))
         {
             if schema.field(column).is_none() {
                 return Err(TableError::new(format!(
@@ -195,7 +199,11 @@ impl DeltaTable {
         // Read only what is needed: the requested columns and the filter's.
         let read: Option<Vec<String>> = request.columns.as_ref().map(|columns| {
             let mut read = columns.clone();
-            for column in request.filter.columns() {
+            for column in request
+                .filter
+                .columns()
+                .chain(request.expression.iter().flat_map(Query::columns))
+            {
                 if !read.iter().any(|name| name == column) {
                     read.push(column.to_owned());
                 }
@@ -214,7 +222,13 @@ impl DeltaTable {
             predicate,
             cancel,
             |batch| {
-                let mask = request.filter.matches(batch).map_err(TableError::new)?;
+                let mut mask = request.filter.matches(batch).map_err(TableError::new)?;
+                if let Some(expression) = &request.expression {
+                    let held = expression.matches(batch).map_err(TableError::new)?;
+                    for (keep, hold) in mask.iter_mut().zip(held) {
+                        *keep = *keep && hold;
+                    }
+                }
                 let names = output_names(batch, output.as_deref());
                 for (row, keep) in mask.iter().enumerate() {
                     if !*keep {

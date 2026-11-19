@@ -8,8 +8,9 @@ snapshot now lists `delta_lake`, so the type no longer answers "this deployment'
 the delta_lake toolkit".
 
 The type stays `hidden` in the **New toolkit** picker, as in the SDK. An existing toolkit, one created through the
-API, or one imported from the SDK now runs. The pandas `query` argument of `query_table` is refused (use the
-structured `filters`), and every read is bounded in rows, bytes and time.
+API, or one imported from the SDK now runs. The pandas `query` argument of `query_table` is read by a bounded parser for its literal-only subset
+(comparisons, and/or/not, in, is null, arithmetic; no function calls), and every read is bounded in rows, bytes
+and time.
 
 **Who is affected.** Operators who restrict worker egress with an allowlist, and anyone sizing the worker image.
 No database migration, no contract bump, no new configuration.

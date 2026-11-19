@@ -362,22 +362,207 @@ async fn bad_columns_and_filters_are_refused_with_a_sentence() {
 }
 
 #[tokio::test]
-async fn a_pandas_query_expression_is_refused_not_evaluated() {
+async fn query_expressions_follow_pandas_query_for_the_literal_subset() {
     let tools = fixture_tools().await;
-    for query in ["id > 2", "name == 'bob' or id == 5", "@__import__('os')"] {
-        let error = call(&tools, "query_table", json!({"query": query}))
-            .await
-            .expect_err("refused");
-        assert!(error.contains("query is not supported"), "{query}: {error}");
-        assert!(error.contains("filters"), "{error}");
-    }
+    let query = |text: &'static str| {
+        let tools = &tools;
+        async move {
+            ids(&call(tools, "query_table", json!({"query": text}))
+                .await
+                .unwrap_or_else(|error| panic!("{text}: {error}")))
+        }
+    };
+    // Parity cases in the style of pandas' own DataFrame.query examples.
+    assert_eq!(query("id > 2").await, [3, 4, 5]);
+    assert_eq!(query("id >= 2 and id < 5").await, [2, 3, 4]);
+    assert_eq!(query("id == 1 or id == 5").await, [1, 5]);
+    assert_eq!(query("(id > 1) & (id < 4)").await, [2, 3]);
+    assert_eq!(query("not id > 2").await, [1, 2]);
+    assert_eq!(query("~(id > 2)").await, [1, 2]);
+    assert_eq!(query("1 < id <= 3").await, [2, 3]);
+    assert_eq!(query("name == 'bob'").await, [2]);
+    assert_eq!(query("name == \"bob\"").await, [2]);
+    assert_eq!(query("name != 'bob' and score > 20").await, [4, 5]);
+    assert_eq!(query("name in ['alice', 'erin']").await, [1, 5]);
+    assert_eq!(query("id in (2, 3)").await, [2, 3]);
+    assert_eq!(query("id not in [2, 3]").await, [1, 4, 5]);
+    assert_eq!(query("score is null").await, [3]);
+    assert_eq!(query("score is not null").await, [1, 2, 4, 5]);
+    assert_eq!(query("score is None").await, [3]);
+    assert_eq!(query("score > 15.5").await, [2, 4, 5]);
+    assert_eq!(query("score >= 2e1").await, [2, 4, 5]);
+    assert_eq!(query("id * 2 > 7").await, [4, 5]);
+    assert_eq!(query("id % 2 == 0").await, [2, 4]);
+    assert_eq!(query("score / 10 < 2").await, [1]);
+    assert_eq!(query("-id < -3").await, [4, 5]);
+    assert_eq!(query("id > score / 10").await, Vec::<i64>::new());
+    assert_eq!(query("`id` == 4").await, [4]);
+    assert_eq!(
+        query("id == 1 and name == 'alice' and score == 10.5").await,
+        [1]
+    );
+    // A comparison with a missing value is false, `!=` is true (pandas).
+    assert_eq!(query("score != 20").await, [1, 3, 4, 5]);
+    assert_eq!(query("name > 1").await, Vec::<i64>::new());
+    // query and filters both apply, and the filter column need not be selected.
+    let rows = call(
+        &tools,
+        "query_table",
+        json!({"query": "id > 1", "filters": {"score": {"lt": 45}}, "columns": ["name"]}),
+    )
+    .await
+    .expect("rows");
+    assert_eq!(rows, json!([{"name": "bob"}, {"name": "dave"}]));
     // An empty or null query is the SDK's "return everything".
-    for query in [json!(null), json!(""), json!("  ")] {
-        let rows = call(&tools, "query_table", json!({"query": query}))
+    for empty in [json!(null), json!(""), json!("  ")] {
+        let rows = call(&tools, "query_table", json!({"query": empty}))
             .await
             .expect("rows");
         assert_eq!(ids(&rows), [1, 2, 3, 4, 5]);
     }
+}
+
+/// Everything outside the subset fails, naming the token, and never runs.
+#[tokio::test]
+async fn query_expressions_outside_the_subset_name_the_offending_token() {
+    let tools = fixture_tools().await;
+    for (query, fragment) in [
+        (
+            "name.str.contains('a')",
+            "Unsupported token '.' at position 4",
+        ),
+        ("abs(id) > 1", "Unsupported token 'abs(' at position 0"),
+        ("id > @limit", "Unsupported token '@' at position 5"),
+        ("id = 1", "Unsupported token '=' at position 3"),
+        ("id ** 2 > 1", "Unsupported token '**' at position 3"),
+        ("id // 2 > 1", "Unsupported token '//' at position 3"),
+        ("name like 'a%'", "Unsupported token 'like'"),
+        ("id between 1 and 3", "Unsupported token 'between'"),
+        ("id in (select id)", "Unsupported token 'select'"),
+        ("id in other", "'in' needs a list of literals"),
+        ("id in [a, b]", "lists hold literals only"),
+        ("id > ", "Unexpected end of query"),
+        ("(id > 1", "Unexpected end of query: expected ')'"),
+        ("id > 1)", "Unsupported token ')' at position 6"),
+        ("id > 1 2", "Unsupported token '2' at position 7"),
+        ("id +", "Unexpected end of query"),
+        ("'abc", "Unterminated string at position 0"),
+        ("`abc", "Unterminated backtick"),
+        ("id > 1 and", "Unexpected end of query"),
+        ("id is 3", "expected null or None after 'is'"),
+        ("id + 1", "query must be a condition"),
+        ("'text'", "query must be a condition"),
+        ("id > $x", "Unsupported token '$' at position 5"),
+        (
+            "id > 99999999999999999999999999999999999999999",
+            "the number is too large",
+        ),
+        ("nope > 1", "Column 'nope' not found in table."),
+        ("`no such` == 1", "Column 'no such' not found in table."),
+    ] {
+        let error = call(&tools, "query_table", json!({"query": query}))
+            .await
+            .expect_err(query);
+        assert!(error.contains(fragment), "{query}: {error}");
+    }
+    let error = call(&tools, "query_table", json!({"query": 5}))
+        .await
+        .expect_err("not a string");
+    assert!(error.contains("query must be a string"), "{error}");
+}
+
+/// Hostile input never panics and never exceeds the bounds.
+#[test]
+fn the_query_parser_is_bounded_and_never_panics() {
+    use super::families::delta_lake::expr::Query;
+
+    assert!(
+        Query::parse(&"id > 1 and ".repeat(200)).is_err(),
+        "too long"
+    );
+    assert!(Query::parse(&format!("{}id > 1{}", "(".repeat(100), ")".repeat(100))).is_err());
+    assert!(Query::parse(&format!("{}id > 1", "not ".repeat(100))).is_err());
+    let many = (0..600)
+        .map(|n| format!("id == {n}"))
+        .collect::<Vec<_>>()
+        .join(" or ");
+    assert!(Query::parse(&many).is_err(), "too many terms or characters");
+    let list = format!(
+        "id in [{}]",
+        (0..1_100)
+            .map(|n| n.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    assert!(Query::parse(&list).is_err(), "list items");
+    // Every prefix, every single-token mutation and a spread of junk parses
+    // or fails with a sentence; none panics.
+    let seed = "(id >= -2.5e3 and name in ['a', \"b\\\"c\"]) or not `my col` is not None | ~score != 1 % 2";
+    let chars: Vec<char> = seed.chars().collect();
+    for end in 0..=chars.len() {
+        let prefix: String = chars[..end].iter().collect();
+        let _ = Query::parse(&prefix);
+    }
+    for noise in [
+        "",
+        " ",
+        "\0",
+        "\u{1F600}",
+        "((((",
+        "))))",
+        "[]",
+        "()",
+        "in",
+        "is",
+        "not",
+        "and or",
+        "1 2 3",
+        "'\\",
+        "`",
+        "\"",
+        "a b c",
+        "== ==",
+        "a < < b",
+        "a in []",
+        "a in ()",
+        "a in [1,,2]",
+        "a in [1 2]",
+        "1e",
+        "1e+",
+        "1.2.3",
+        "ünï > 1",
+        "id >\n1",
+        "-",
+        "--id > 1",
+        "id > -",
+        "not",
+        "~",
+        "id not 3",
+        "id not in",
+        "is null",
+        "is not null",
+    ] {
+        let _ = Query::parse(noise);
+    }
+    // Deterministic junk from a small alphabet.
+    let alphabet: Vec<char> = "ab1 .'\"`()[],=!<>&|~+-*/%@$\\\n".chars().collect();
+    let mut state = 0x2545_F491_4F6C_DD1D_u64;
+    for _ in 0..3_000 {
+        let mut text = String::new();
+        for _ in 0..(state % 24) {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            text.push(alphabet[(state >> 33) as usize % alphabet.len()]);
+        }
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        let _ = Query::parse(&text);
+    }
+    // A value query is not a condition; a bare boolean literal is.
+    assert!(Query::parse("True").is_ok());
+    assert!(Query::parse("1").is_err());
 }
 
 #[tokio::test]
@@ -793,7 +978,7 @@ async fn a_long_path_and_name_never_cut_the_usage_text() {
         );
         let usage = match tool.name() {
             "query_table" => {
-                "filters: Dict of column: condition pairs\nReturns:\n    List of dicts representing rows"
+                "Returns:\n    List of dicts representing rows"
             }
             "vector_search" => "(cosine similarity, best first).",
             _ => "Get the schema of the Delta Lake table.",
@@ -855,6 +1040,7 @@ async fn a_cancelled_read_stops_at_the_next_batch() {
     let request = QueryRequest {
         columns: None,
         filter: super::families::delta_lake::filter::RowFilter::default(),
+        expression: None,
     };
     let result = tokio::task::spawn_blocking(move || table.query(&request, &AtomicBool::new(true)))
         .await

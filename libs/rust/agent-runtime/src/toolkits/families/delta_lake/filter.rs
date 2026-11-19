@@ -306,7 +306,7 @@ fn equals(cell: &Cell, literal: &Value) -> bool {
 
 /// One cell of a column, reduced to the four kinds a filter compares.
 #[derive(Debug)]
-enum Cell {
+pub(super) enum Cell {
     Null,
     Bool(bool),
     Int(i128),
@@ -339,13 +339,13 @@ fn compare(cell: &Cell, literal: &Value) -> Option<Ordering> {
 /// Reads one column's cells. A type with no native reading is read through
 /// Arrow's display, which is the ISO text for dates and timestamps and the
 /// exact digits for decimals.
-struct ColumnReader<'a> {
+pub(super) struct ColumnReader<'a> {
     array: &'a ArrayRef,
     display: Option<ArrayFormatter<'a>>,
 }
 
 impl<'a> ColumnReader<'a> {
-    fn new(array: &'a ArrayRef) -> Self {
+    pub(super) fn new(array: &'a ArrayRef) -> Self {
         let native = matches!(
             array.data_type(),
             DataType::Boolean
@@ -371,7 +371,7 @@ impl<'a> ColumnReader<'a> {
         Self { array, display }
     }
 
-    fn cell(&self, row: usize) -> Cell {
+    pub(super) fn cell(&self, row: usize) -> Cell {
         let array = self.array;
         if array.is_null(row) {
             return Cell::Null;
