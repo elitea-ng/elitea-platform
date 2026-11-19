@@ -111,7 +111,7 @@ export function useOfferedSubsections({ subsections, schemaProperties, data, cre
  * field both subsections hold (the scopes), and one still at the schema's own default (the refresh
  * switch). Only a section with a Default app field asks; the others infer as they always did.
  */
-export function inferenceIgnoredFields(
+function inferenceIgnoredFields(
   subsections: readonly ConfigSchemaSubsection[],
   schemaProperties: Readonly<Record<string, ConfigSchemaNode>>,
   data: Readonly<Record<string, unknown>>,
