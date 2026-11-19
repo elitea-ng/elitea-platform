@@ -84,15 +84,23 @@ func projectDelegationNotice(ctx context.Context, tx sqlExecutor, projectID int6
 	// not by the agent: the stored notice carries the saved agent's own name
 	// when its id is known, so the chat says which agent could not delegate.
 	if callerID := notice.Edge.CallerID; callerID > 0 {
-		var name string
-		switch err := tx.QueryRow(ctx, fmt.Sprintf(`SELECT name FROM %s.applications WHERE id = $1`, schema), callerID).Scan(&name); {
-		case err == nil:
-			if clipped := strings.TrimSpace(name); clipped != "" {
-				notice.Edge.CallerName = delegationnotice.ClipName(clipped)
+		// The application tables belong to the agent editor: a tenant without
+		// them keeps the worker's label rather than failing the frame.
+		var present bool
+		if err := tx.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, schema+".applications").Scan(&present); err != nil {
+			return fmt.Errorf("look for the application table: %w", err)
+		}
+		if present {
+			var name string
+			switch err := tx.QueryRow(ctx, fmt.Sprintf(`SELECT name FROM %s.applications WHERE id = $1`, schema), callerID).Scan(&name); {
+			case err == nil:
+				if clipped := strings.TrimSpace(name); clipped != "" {
+					notice.Edge.CallerName = delegationnotice.ClipName(clipped)
+				}
+			case errors.Is(err, pgx.ErrNoRows):
+			default:
+				return fmt.Errorf("read the calling agent's name: %w", err)
 			}
-		case errors.Is(err, pgx.ErrNoRows):
-		default:
-			return fmt.Errorf("read the calling agent's name: %w", err)
 		}
 	}
 	groupID, err := lockCurrentAgentMessageGroup(ctx, tx, schema, frame.Fence.ExecutionID, binding)

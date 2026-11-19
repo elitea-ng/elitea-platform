@@ -35,7 +35,9 @@ UPDATE p_1.chat_message_group SET meta = COALESCE(meta, '{}'::jsonb) || '{"groun
 		t.Fatal(err)
 	}
 	// The calling agent is a saved one: the stored notice names it, whatever label the worker sent.
-	if _, err := pool.Exec(t.Context(), `INSERT INTO p_1.applications (id, name, description, owner_id) VALUES (2, 'Real Agent2', 'fixture', 11)`); err != nil {
+	if _, err := pool.Exec(t.Context(), `CREATE TABLE IF NOT EXISTS p_1.applications (
+    id SERIAL PRIMARY KEY, name VARCHAR(128) NOT NULL, description VARCHAR(2304), owner_id INTEGER NOT NULL);
+INSERT INTO p_1.applications (id, name, description, owner_id) VALUES (2, 'Real Agent2', 'fixture', 11)`); err != nil {
 		t.Fatal(err)
 	}
 	store, err := newPostgresSharedStore(pool)
