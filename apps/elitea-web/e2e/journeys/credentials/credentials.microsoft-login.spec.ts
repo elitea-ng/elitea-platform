@@ -186,7 +186,7 @@ test('MS-2: Login saves the credential, signs in through the popup, shows the ac
   const name = `${AUTOTEST_PREFIX}cred_outlook_${RUN_ID}`;
   await page.getByRole('textbox', { name: 'Name', exact: true }).fill(name);
   // The scopes are tick boxes with the consent note, Mail.Read ticked by default.
-  await expect(page.getByRole('checkbox', { name: 'Mail.Read' })).toBeChecked();
+  await expect(page.getByRole('checkbox', { name: 'Mail.Read', exact: true })).toBeChecked();
   await expect(page.getByTestId('microsoft-scopes-note')).toContainText('every permission');
   await page.getByLabel('Client Id').fill(CLIENT_ID);
   await page.getByLabel('Client Secret').first().fill('e2e-client-secret');
