@@ -7,18 +7,29 @@ import { useCallback, useMemo } from 'react';
 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
+import { describeWorkspaceError } from '@/features/workspace';
 import type { WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 
 import type { ComposerSkill } from './useAgentSkills';
 
-/** What the "/" menu needs to pin and unpin: the pinned skills' ids (as the menu holds them) and the two actions. Rejects with the host's refusal. */
+/** What the "/" menu needs to pin and unpin. The actions reject with the host's refusal. */
 export interface SkillPinControls {
+  /** The pinned skills' ids (as the menu holds them), the unreadable ones too. */
   readonly pinned: ReadonlySet<string>;
+  /** The pinned skills the person can no longer read (deleted, or access lost): listed only to be unpinned. */
+  readonly stale: readonly string[];
+  /** Why the thread's pins could not be read, else `null`. */
+  readonly readError: string | null;
   readonly pin: (skill: ComposerSkill) => Promise<void>;
-  readonly unpin: (skill: ComposerSkill) => Promise<void>;
+  readonly unpin: (skill: Pick<ComposerSkill, 'id'>) => Promise<void>;
 }
 
-const NO_PINS: readonly string[] = [];
+interface Held {
+  readonly ids: readonly string[];
+  readonly stale: readonly string[];
+}
+
+const NONE: Held = { ids: [], stale: [] };
 
 const threadSkillsKey = (workspaceId: string, conversationId: string) => ['workspace', 'thread-skills', workspaceId, conversationId] as const;
 
@@ -32,13 +43,17 @@ export function useThreadSkillPins(ipc: WorkspaceIpc, workspaceId: string, proje
   const key = threadSkillsKey(workspaceId, conversationId);
   const read = useQuery({
     queryKey: key,
-    queryFn: async (): Promise<readonly string[]> => (await ipc.threadSkills(workspaceId, conversationId)).filter((pin) => pin.projectId === projectId).map((pin) => String(pin.skillId)),
+    queryFn: async (): Promise<Held> => {
+      const mine = (await ipc.threadSkills(workspaceId, conversationId)).filter((pin) => pin.projectId === projectId);
+      return { ids: mine.map((pin) => String(pin.skillId)), stale: mine.filter((pin) => !pin.available).map((pin) => String(pin.skillId)) };
+    },
     enabled: on,
     retry: false,
   });
   const refresh = useCallback(() => client.invalidateQueries({ queryKey: key }), [client, key]);
-  const ids = read.data ?? NO_PINS;
-  const pinned = useMemo(() => new Set(ids), [ids]);
+  const held = read.data ?? NONE;
+  const pinned = useMemo(() => new Set(held.ids), [held]);
+  const readError = read.isError ? describeWorkspaceError(read.error) : null;
   const pin = useCallback(
     async (skill: ComposerSkill): Promise<void> => {
       try {
@@ -50,7 +65,7 @@ export function useThreadSkillPins(ipc: WorkspaceIpc, workspaceId: string, proje
     [ipc, workspaceId, conversationId, projectId, refresh],
   );
   const unpin = useCallback(
-    async (skill: ComposerSkill): Promise<void> => {
+    async (skill: Pick<ComposerSkill, 'id'>): Promise<void> => {
       try {
         await ipc.unpinThreadSkill(workspaceId, conversationId, Number(skill.id));
       } finally {
@@ -59,5 +74,5 @@ export function useThreadSkillPins(ipc: WorkspaceIpc, workspaceId: string, proje
     },
     [ipc, workspaceId, conversationId, refresh],
   );
-  return useMemo(() => (on ? { pinned, pin, unpin } : undefined), [on, pinned, pin, unpin]);
+  return useMemo(() => (on ? { pinned, stale: held.stale, readError, pin, unpin } : undefined), [on, pinned, held, readError, pin, unpin]);
 }

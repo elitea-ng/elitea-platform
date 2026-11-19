@@ -1162,5 +1162,7 @@
   "workspace.subAgent.briefNamed": "Brief named: {{refs}}",
   "workspace.composer.skillPin": "Pin to this thread",
   "workspace.composer.skillPinned": "Pinned",
-  "workspace.composer.skillUnpin": "Unpin"
+  "workspace.composer.skillUnpin": "Unpin",
+  "workspace.composer.skillGone": "Skill {{id}} is not available",
+  "workspace.composer.skillsGone": "Pinned skills you can no longer use"
 }

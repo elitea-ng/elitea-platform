@@ -2609,9 +2609,9 @@ async fn a_thread_pin_is_applied_to_every_turn_without_a_pick() {
             .await
             .unwrap()
             .iter()
-            .map(|pin| pin.skill_id)
+            .map(|(pin, available)| (pin.skill_id, *available))
             .collect::<Vec<_>>(),
-        vec![12]
+        vec![(12, true)]
     );
     let req = request(&h.workspace_id);
     assert!(req.project_skills.is_empty());
@@ -2704,6 +2704,47 @@ async fn a_thread_pin_is_refused_when_unreadable_and_skipped_when_it_goes_unread
     let tail = host_context(&first);
     assert!(tail.contains("name=\"Deploy\">"), "{tail}");
     assert!(tail.contains("name=\"Hostile\">"), "{tail}");
+}
+
+#[tokio::test]
+async fn a_stale_pin_is_listed_as_unavailable_and_does_not_count_toward_the_bound() {
+    let server = serve(with_project_skills(platform(agent_details(), &[]))).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let owner = h.host.history_owner().await.unwrap();
+    let store = crate::history::HistoryStore::open(h.app.path()).unwrap();
+    // Five pins whose skills are gone (the platform answers 404 for them).
+    for id in 16..21 {
+        store
+            .thread_skill_pin(
+                &owner,
+                &h.workspace_id,
+                "42",
+                crate::history::ThreadSkillPin {
+                    project_id: 1,
+                    skill_id: id,
+                },
+                5,
+            )
+            .unwrap();
+    }
+    drop(store);
+    let listed = h.host.thread_skills(&h.workspace_id, "42").await.unwrap();
+    assert_eq!(listed.len(), 5);
+    assert!(listed.iter().all(|(_, available)| !available));
+    // The thread is "full" of them, yet a readable skill can be pinned: the
+    // stale ones are dropped first.
+    h.host
+        .pin_thread_skill(&h.workspace_id, "42", 1, 12)
+        .await
+        .unwrap();
+    let listed = h.host.thread_skills(&h.workspace_id, "42").await.unwrap();
+    assert_eq!(
+        listed
+            .iter()
+            .map(|(pin, available)| (pin.skill_id, *available))
+            .collect::<Vec<_>>(),
+        vec![(12, true)]
+    );
 }
 
 #[tokio::test]

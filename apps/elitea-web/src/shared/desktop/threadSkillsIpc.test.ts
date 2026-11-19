@@ -4,9 +4,9 @@ import { threadSkillCommands } from './threadSkillsIpc';
 
 describe('threadSkillCommands', () => {
   it('lists the pins as camelCase and sends the host its snake_case arguments', async () => {
-    const invoke = vi.fn((command: string): Promise<unknown> => (command === 'thread_skills_list' ? Promise.resolve([{ project_id: 7, skill_id: 12 }]) : command === 'thread_skill_unpin' ? Promise.resolve(true) : Promise.resolve(null)));
+    const invoke = vi.fn((command: string): Promise<unknown> => (command === 'thread_skills_list' ? Promise.resolve([{ project_id: 7, skill_id: 12, available: false }]) : command === 'thread_skill_unpin' ? Promise.resolve(true) : Promise.resolve(null)));
     const commands = threadSkillCommands(invoke as never);
-    expect(await commands.threadSkills('w1', '42')).toEqual([{ projectId: 7, skillId: 12 }]);
+    expect(await commands.threadSkills('w1', '42')).toEqual([{ projectId: 7, skillId: 12, available: false }]);
     await commands.pinThreadSkill('w1', '42', { projectId: 7, skillId: 12 });
     expect(await commands.unpinThreadSkill('w1', '42', 12)).toBe(true);
     expect(invoke.mock.calls).toEqual([

@@ -58,7 +58,7 @@ import { RetryUnsent, useRestoredDraft } from './SteeringControls';
 import { SteeringQueue, type SteeringQueueBinding } from './SteeringQueue';
 import type { UnsentSteers } from './useSteering';
 import type { ComposerSkill } from './useAgentSkills';
-import { SkillPinError, skillPinExtras, useSkillPinRows, type SkillPinRows } from './skillPinRows';
+import { SkillPinError, skillPinExtras, staleSkillItems, useSkillPinRows, type SkillPinRows } from './skillPinRows';
 import type { SkillPinControls } from './useThreadSkillPins';
 import { threadDraftKey, useCarriedDraft } from './useCarriedDraft';
 import { useImageAttachments } from './useImageAttachments';
@@ -236,7 +236,7 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
   const { rows: pinRows, error: pinError } = useSkillPinRows(props.skillPins);
   const slash = useMemo(() => (open?.kind === 'command' ? composer.slashMenu(open.query, customCommands, skills) : []), [open, customCommands, skills]);
   const items: SuggestionItem[] = useMemo(() => {
-    if (open?.kind === 'command') return slash.map((entry) => slashItem(entry, pinRows));
+    if (open?.kind === 'command') return [...slash.map((entry) => slashItem(entry, pinRows)), ...(pinRows === undefined ? [] : staleSkillItems(pinRows))];
     if (open?.kind === 'file') {
       return (files.data ?? []).map((f) => ({
         key: `${f.kind}:${f.path}`,

@@ -21,7 +21,7 @@ import type {
   WorkspaceFile,
   WorkspaceIpc,
 } from './workspaceIpc';
-import type { ThreadSkillPin } from './threadSkillsIpc';
+import type { ListedThreadSkill } from './threadSkillsIpc';
 import { WorkspaceIpcError } from './workspaceIpc';
 
 type FailableCommand =
@@ -44,6 +44,7 @@ type FailableCommand =
   | 'forkThreadHistory'
   | 'restorePointAfter'
   | 'pinThreadSkill'
+  | 'threadSkills'
   | 'steerTurn'
   | 'updateSteer'
   | 'retryCommit';
@@ -78,6 +79,8 @@ export interface FakeWorkspaceIpc extends WorkspaceIpc {
   setPreview(turnId: string, preview: RestorePreview): void;
   /** What `checkpoint_after` answers for `turnId` (default: `null`, no later turn changed the folder). */
   setRestorePoint(turnId: string, next: string | null): void;
+  /** Make a pinned skill unreadable (`thread_skills_list` then says `available: false`). */
+  setPinAvailable(workspaceId: string, conversationId: string, skillId: number, available: boolean): void;
   /** What `thread_history` answers for one thread (default: nothing recorded). */
   setHistory(workspaceId: string, conversationId: string, turns: StoredTurn[]): void;
   /** What `agent_turn_status` answers for `turnId` (default: running). */
@@ -115,7 +118,7 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
   const restorePoints = new Map<string, string | null>();
   const statuses = new Map<string, TurnStatus>();
   const history = new Map<string, StoredTurn[]>();
-  const threadPins = new Map<string, ThreadSkillPin[]>();
+  const threadPins = new Map<string, ListedThreadSkill[]>();
   const historyKey = (workspaceId: string, conversationId: string): string => `${workspaceId}\u0000${conversationId}`;
   const calls: FakeWorkspaceIpc['calls'] = { started: [], prewarmed: [], commitRetries: [], resumed: [], cancelled: [], approvals: [], restores: [], fileQueries: [], forks: [], pins: [], attachedFiles: [], attachedBytes: [], removedAttachments: [], steers: [], steerUpdates: [] };
   let attachments = 0;
@@ -284,6 +287,8 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
       return Promise.resolve(copied.length);
     },
     threadSkills(workspaceId, conversationId) {
+      const failed = failure('threadSkills');
+      if (failed !== undefined) return failed;
       return Promise.resolve([...(threadPins.get(historyKey(workspaceId, conversationId)) ?? [])]);
     },
     pinThreadSkill(workspaceId, conversationId, pin) {
@@ -292,7 +297,7 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
       if (failed !== undefined) return failed;
       const key = historyKey(workspaceId, conversationId);
       const held = threadPins.get(key) ?? [];
-      if (!held.some((have) => have.skillId === pin.skillId)) threadPins.set(key, [...held, pin]);
+      if (!held.some((have) => have.skillId === pin.skillId)) threadPins.set(key, [...held, { ...pin, available: true }]);
       return Promise.resolve();
     },
     unpinThreadSkill(workspaceId, conversationId, skillId) {
@@ -326,6 +331,13 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
     },
     setRestorePoint(turnId, next) {
       restorePoints.set(turnId, next);
+    },
+    setPinAvailable(workspaceId, conversationId, skillId, available) {
+      const key = historyKey(workspaceId, conversationId);
+      threadPins.set(
+        key,
+        (threadPins.get(key) ?? []).map((have) => (have.skillId === skillId ? { ...have, available } : have)),
+      );
     },
     setHistory(workspaceId, conversationId, turns) {
       history.set(historyKey(workspaceId, conversationId), turns);

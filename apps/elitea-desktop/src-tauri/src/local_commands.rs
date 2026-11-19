@@ -1083,6 +1083,8 @@ pub async fn thread_history_delete(
 pub struct ThreadSkill {
     project_id: i64,
     skill_id: i64,
+    /// The person can still read the skill; `false`: deleted, or access lost.
+    available: bool,
 }
 
 /// The project skills pinned to a local thread (ADR-0050 amendment 1, A1.5;
@@ -1098,9 +1100,10 @@ pub async fn thread_skills_list(
         .thread_skills(&workspace_id, &conversation_id)
         .await?
         .into_iter()
-        .map(|pin| ThreadSkill {
+        .map(|(pin, available)| ThreadSkill {
             project_id: pin.project_id,
             skill_id: pin.skill_id,
+            available,
         })
         .collect())
 }

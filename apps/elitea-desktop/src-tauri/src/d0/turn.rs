@@ -5939,8 +5939,23 @@ impl AgentHost {
             .collect())
     }
 
+    /// Whether each pinned skill can still be read by the person: `false`
+    /// only for a `403` or `404` (deleted, or access lost); a read that
+    /// failed otherwise is not read as gone.
+    async fn pins_available(&self, pins: &[ThreadSkillPin]) -> Vec<bool> {
+        futures::future::join_all(pins.iter().map(|pin| async move {
+            match self.api.project_skill(pin.project_id, pin.skill_id).await {
+                Err(error) => !matches!(error.status, Some(403 | 404)),
+                Ok(_) => true,
+            }
+        }))
+        .await
+    }
+
     /// `thread_skills_list`: the project skills pinned to a local thread of
-    /// the signed-in account, oldest first.
+    /// the signed-in account, oldest first, each with whether the person can
+    /// still read it (a stale pin is unpinnable, and never counts toward
+    /// the bound of a new pin).
     ///
     /// # Errors
     ///
@@ -5949,16 +5964,18 @@ impl AgentHost {
         &self,
         workspace_id: &str,
         conversation_id: &str,
-    ) -> Result<Vec<ThreadSkillPin>, TurnError> {
+    ) -> Result<Vec<(ThreadSkillPin, bool)>, TurnError> {
         let conversation = conversation_key(&Value::String(conversation_id.to_owned()))?;
         let Some(history) = self.deps.history.clone() else {
             return Ok(Vec::new());
         };
         let owner = self.owner(&self.api).await?;
-        history
+        let pins = history
             .read_thread_skill_pins(owner, workspace_id.to_owned(), conversation)
             .await
-            .map_err(|e| TurnError::new("storage", e.to_string()))
+            .map_err(|e| TurnError::new("storage", e.to_string()))?;
+        let available = self.pins_available(&pins).await;
+        Ok(pins.into_iter().zip(available).collect())
     }
 
     /// `thread_skill_pin`: pin a project skill to a local thread, kept by
@@ -6003,8 +6020,27 @@ impl AgentHost {
                 ),
                 _ => TurnError::from(error),
             })?;
+        // A pin whose skill is gone or unreadable does not count toward the
+        // bound: it is dropped before this one is counted.
+        let held = history
+            .read_thread_skill_pins(owner.clone(), workspace_id.to_owned(), conversation.clone())
+            .await
+            .map_err(|e| TurnError::new("storage", e.to_string()))?;
+        let held: Vec<ThreadSkillPin> = held
+            .into_iter()
+            .filter(|pin| pin.project_id == project_id)
+            .collect();
+        let gone: Vec<i64> = held
+            .iter()
+            .zip(self.pins_available(&held).await)
+            .filter(|(_, available)| !available)
+            .map(|(pin, _)| pin.skill_id)
+            .collect();
         let workspace = workspace_id.to_owned();
         let outcome = tokio::task::spawn_blocking(move || {
+            for skill_id in gone {
+                history.thread_skill_unpin(&owner, &workspace, &conversation, skill_id)?;
+            }
             history.thread_skill_pin(
                 &owner,
                 &workspace,

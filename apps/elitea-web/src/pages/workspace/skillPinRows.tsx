@@ -16,8 +16,20 @@ import type { SkillPinControls } from './useThreadSkillPins';
 
 export interface SkillPinRows {
   readonly pinned: ReadonlySet<string>;
+  /** Pinned skills the person can no longer read: rows of their own, so they can be unpinned. */
+  readonly stale: readonly string[];
   /** Pin or unpin `skill`; a refusal is shown by the caller. */
   readonly run: (act: 'pin' | 'unpin', skill: ComposerSkill) => void;
+}
+
+/** One row per stale pin, after the skills: the skill is gone, so only its id is known. */
+export function staleSkillItems(rows: SkillPinRows): SuggestionItem[] {
+  return rows.stale.map((id) => ({
+    key: `stale-pin:${id}`,
+    label: t('workspace.composer.skillGone', 'Skill {{id}} is not available', { id }),
+    section: t('workspace.composer.skillsGone', 'Pinned skills you can no longer use'),
+    action: { label: t('workspace.composer.skillUnpin', 'Unpin'), onClick: () => rows.run('unpin', { id, name: id }) },
+  }));
 }
 
 export function skillPinExtras(skill: ComposerSkill, rows: SkillPinRows): Pick<SuggestionItem, 'badges' | 'action'> {
@@ -40,6 +52,7 @@ export function useSkillPinRows(pins: SkillPinControls | undefined): { rows: Ski
         ? undefined
         : {
             pinned: pins.pinned,
+            stale: pins.stale,
             run: (act, skill) => {
               setError(null);
               void pins[act](skill).catch((failure: unknown) => setError(describeWorkspaceError(failure)));
@@ -47,7 +60,7 @@ export function useSkillPinRows(pins: SkillPinControls | undefined): { rows: Ski
           },
     [pins],
   );
-  return { rows, error };
+  return { rows, error: error ?? pins?.readError ?? null };
 }
 
 /** The refusal of a pin, above the composer. */

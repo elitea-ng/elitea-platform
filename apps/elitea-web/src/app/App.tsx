@@ -11,6 +11,7 @@ import { useSelectedProjectStore } from '@/widgets/app-shell';
 import { ThreadGrantField } from '@/features/unattended';
 import { ThreadGrantFieldContext } from '@/entities/thread-target';
 
+import './desktopLocalPin';
 import { isPublicRoutePath } from './public-routes';
 import { AppProviders, getAppBasename } from './providers';
 import { createAppRouter } from './router';

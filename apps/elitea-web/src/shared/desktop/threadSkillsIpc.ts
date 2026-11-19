@@ -10,13 +10,19 @@ export interface ThreadSkillPin {
   skillId: number;
 }
 
+/** A pin as the host lists it: `available` is false when the person can no longer read the skill (deleted, or access lost). */
+export interface ListedThreadSkill extends ThreadSkillPin {
+  available: boolean;
+}
+
 /** The thread-skill half of `WorkspaceIpc`. */
 export interface ThreadSkillCommands {
   /** `thread_skills_list`: the thread's pins, oldest first (none when it has none). */
-  threadSkills(workspaceId: string, conversationId: string): Promise<ThreadSkillPin[]>;
+  threadSkills(workspaceId: string, conversationId: string): Promise<ListedThreadSkill[]>;
   /**
    * `thread_skill_pin`: pin a project skill the person can read to the thread. Rejects `skill_unknown` (not readable)
-   * and `thread_skills_full` (a thread holds five); pinning one twice changes nothing.
+   * and `thread_skills_full` (a thread holds five readable ones: pins whose skill is gone do not count); pinning one
+   * twice changes nothing.
    */
   pinThreadSkill(workspaceId: string, conversationId: string, pin: ThreadSkillPin): Promise<void>;
   /** `thread_skill_unpin`: resolves whether the skill was pinned. */
@@ -28,6 +34,7 @@ type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>
 interface WirePin {
   project_id: number;
   skill_id: number;
+  available: boolean;
 }
 
 export function threadSkillCommands(invoke: Invoke): ThreadSkillCommands {
@@ -36,6 +43,7 @@ export function threadSkillCommands(invoke: Invoke): ThreadSkillCommands {
       (await invoke<WirePin[]>('thread_skills_list', { workspace_id: workspaceId, conversation_id: conversationId })).map((pin) => ({
         projectId: pin.project_id,
         skillId: pin.skill_id,
+        available: pin.available,
       })),
     pinThreadSkill: (workspaceId, conversationId, pin) =>
       invoke<void>('thread_skill_pin', { workspace_id: workspaceId, conversation_id: conversationId, project_id: pin.projectId, skill_id: pin.skillId }),

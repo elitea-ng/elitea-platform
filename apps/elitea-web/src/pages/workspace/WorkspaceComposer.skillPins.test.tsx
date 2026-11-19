@@ -100,4 +100,25 @@ describe('the "/" menu on a local thread', () => {
     await screen.findByRole('option', { name: '/Deploy' });
     expect(screen.queryByRole('button', { name: 'Pin to this thread' })).toBeNull();
   });
+
+  it('lists a pin whose skill is gone so it can be unpinned', async () => {
+    const ipc = createFakeWorkspaceIpc();
+    await ipc.pinThreadSkill('w1', '42', { projectId: 7, skillId: 99 });
+    ipc.setPinAvailable('w1', '42', 99, false);
+    await mount(ipc);
+    const user = userEvent.setup();
+    await user.type(screen.getByRole('textbox'), '/');
+    expect(await screen.findByText('Skill 99 is not available')).toBeInTheDocument();
+    // The one Unpin is the stale row's.
+    await user.click(await screen.findByRole('button', { name: 'Unpin' }));
+    await waitFor(() => expect(ipc.calls.pins.at(-1)).toEqual({ workspaceId: 'w1', conversationId: '42', skillId: 99, pinned: false }));
+    await waitFor(() => expect(screen.queryByText('Skill 99 is not available')).toBeNull());
+  });
+
+  it('says so when the thread\u2019s pins cannot be read', async () => {
+    const ipc = createFakeWorkspaceIpc();
+    ipc.failNext('threadSkills', 'storage', 'The thread history could not be read.');
+    await mount(ipc);
+    expect(await screen.findByTestId('skill-pin-error')).toHaveTextContent('could not be read');
+  });
 });
