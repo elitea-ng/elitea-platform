@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 )
 
 // The Helm seed (ADR-0057 decision 5): `microsoftOAuthApps` values name Default
@@ -142,15 +143,11 @@ func (s *Store) seedDigest(in Input) string {
 // revision and no audit event.
 func (s *Store) Seed(ctx context.Context, apps []SeedApp, logger *slog.Logger) (SeedReport, error) {
 	var report SeedReport
-	conn, err := s.pool.Acquire(ctx)
+	unlock, err := s.lockSeed(ctx)
 	if err != nil {
 		return report, err
 	}
-	defer conn.Release()
-	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, seedLock); err != nil {
-		return report, err
-	}
-	defer func() { _, _ = conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock($1)`, seedLock) }()
+	defer unlock()
 
 	for _, seed := range apps {
 		in, err := seed.input()
@@ -195,6 +192,39 @@ func (s *Store) Seed(ctx context.Context, apps []SeedApp, logger *slog.Logger) (
 		report.Updated++
 	}
 	return report, nil
+}
+
+// lockSeed takes the session advisory lock that serializes the seed across replicas,
+// and returns the function that releases it. The lock holder keeps ONE pooled
+// connection for the duration, and the seed needs a second one for its own work. A
+// waiter therefore must not hold a connection while it waits: with a blocking
+// pg_advisory_lock, enough replicas (or goroutines) waiting would hold every pooled
+// connection and starve the holder, which could never finish. So a waiter tries the
+// lock, gives the connection back, and tries again.
+func (s *Store) lockSeed(ctx context.Context) (func(), error) {
+	for {
+		conn, err := s.pool.Acquire(ctx)
+		if err != nil {
+			return nil, err
+		}
+		var locked bool
+		if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, seedLock).Scan(&locked); err != nil {
+			conn.Release()
+			return nil, err
+		}
+		if locked {
+			return func() {
+				_, _ = conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock($1)`, seedLock)
+				conn.Release()
+			}, nil
+		}
+		conn.Release()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
 }
 
 func seedError(key string, err error) error {

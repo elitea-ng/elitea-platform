@@ -70,6 +70,9 @@ func newDatabase(t *testing.T) *pgxpool.Pool {
 	config, err := pgxpool.ParseConfig(databaseURL)
 	require.NoError(t, err)
 	config.ConnConfig.Database = name
+	// A small pool, as on a CI runner with few CPUs: a seed that waited on the advisory
+	// lock while holding a connection would starve its holder and never finish.
+	config.MaxConns = 4
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	require.NoError(t, err)
 	t.Cleanup(func() {
