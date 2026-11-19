@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Jira analysis toolkit: bulk extraction and flow metrics
+
+There is a new **Jira analysis** toolkit. It pulls issues out of Jira in bulk with the history of every status change, writes them as CSV files in an artifact bucket, and calculates lead time, cycle time, life time, throughput, flow efficiency and flow load over those files. It uses your existing Jira credential. The files are plain CSV, so **Data Analysis** and the Code sandbox read them as they are. See [Jira analysis](/integrations/toolkits/analyse_jira_toolkit) for the tools, the dataset columns, the limits and what differs from the upstream toolkit.
+
 ## Tavily toolkit, and crawl and map in Web Search
 
 There is a new **Tavily** toolkit. It gives an agent `web_search`, `web_extract`, `web_crawl` and `web_map` with the project's own Tavily credential, and its own settings for allowed and blocked domains, page size, search and extract depth, and a cap on Tavily calls per run. The **Web Search** toolkit gains `web_crawl` (Tavily) and `web_map` (Tavily and Firecrawl) for the providers an administrator enabled. Crawls and maps are billed in the provider's units under "Web fetch" in **Settings › Usage**. Upgrade the worker before Main. Deployments that restrict worker egress already allow `api.tavily.com` for the Web Search toolkit. See [The Tavily toolkit](/integrations/toolkits/web_search_toolkit#the-tavily-toolkit).

@@ -107,6 +107,7 @@ var rustNativeToolTypes = []string{
 	"ado_repos",
 	"ado_wiki",
 	"aha",
+	"analyse_jira",
 	"artifact",
 	"azure",
 	"azure_search",

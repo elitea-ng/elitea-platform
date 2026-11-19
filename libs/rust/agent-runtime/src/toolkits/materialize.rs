@@ -34,6 +34,7 @@ use adk_core::Toolset;
 
 use super::DelegatedAuthorizationCatalog;
 use super::families::UnsupportedSetting;
+use super::families::analyse_jira;
 use super::families::artifact::ArtifactToolAuthority;
 use super::families::attachment_host::AttachmentHost;
 use super::families::bigquery;
@@ -907,6 +908,7 @@ fn family_tool_catalog(tool_type: &str) -> Option<Vec<(&'static str, bool)>> {
         "ado_repos" => ado_repos::tools::tool_catalog(),
         "ado_wiki" => ado_wiki::tools::tool_catalog(),
         "aha" => aha::tools::tool_catalog(),
+        "analyse_jira" => analyse_jira::tools::tool_catalog(),
         "artifact" => artifact::tools::tool_catalog(),
         "azure" => azure::tools::tool_catalog(),
         "azure_search" => azure_search::tools::tool_catalog(),
@@ -1326,7 +1328,15 @@ async fn materialize(
     }
     if matches!(
         reference.tool_type(),
-        "aha" | "bigquery" | "bitbucket" | "carrier" | "confluence" | "figma" | "gitlab" | "jira"
+        "aha"
+            | "analyse_jira"
+            | "bigquery"
+            | "bitbucket"
+            | "carrier"
+            | "confluence"
+            | "figma"
+            | "gitlab"
+            | "jira"
     ) {
         let toolset = materialize_ported_saas(
             reference.tool_type(),
@@ -1636,6 +1646,14 @@ fn materialize_ported_saas(
         "aha" => aha::tools::build_aha_toolset(
             name,
             aha::config::AhaToolkitConfig::parse(settings)
+                .map_err(|error| family_error(error.code()))?,
+            policy,
+            attachments.cloned(),
+        )
+        .map_err(|error| family_error(error.code()))?,
+        "analyse_jira" => analyse_jira::tools::build_analyse_jira_toolset(
+            name,
+            analyse_jira::config::AnalyseJiraConfig::parse(settings)
                 .map_err(|error| family_error(error.code()))?,
             policy,
             attachments.cloned(),
@@ -2497,6 +2515,10 @@ mod materialize_matrix_tests {
             (
                 "jira",
                 json!({"jira_configuration": {"base_url": "https://tenant.atlassian.net/", "hosting": "Auto", "username": "", "api_key": null, "token": "fixture"}, "api_version": "Auto", "verify_ssl": true}),
+            ),
+            (
+                "analyse_jira",
+                json!({"jira_configuration": {"base_url": "https://tenant.atlassian.net/", "hosting": "Auto", "username": "", "api_key": null, "token": "fixture"}, "api_version": "Auto", "verify_ssl": true, "artifact_bucket_path": "analyse-jira", "project_keys": "ALP"}),
             ),
             (
                 "confluence",

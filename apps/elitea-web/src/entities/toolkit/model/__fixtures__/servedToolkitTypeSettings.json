@@ -594,6 +594,112 @@
     "title": "aha",
     "type": "object"
   },
+  "analyse_jira": {
+    "metadata": {
+      "categories": [
+        "project management"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "analysis",
+        "jira",
+        "atlassian",
+        "flow metrics",
+        "cycle time",
+        "lead time",
+        "throughput"
+      ],
+      "has_function_validators": false,
+      "icon_url": "jira-icon.svg",
+      "label": "Jira analysis"
+    },
+    "name_required": true,
+    "properties": {
+      "api_version": {
+        "enum": [
+          "Auto",
+          "2",
+          "3"
+        ],
+        "title": "Api Version",
+        "type": "string"
+      },
+      "artifact_bucket_path": {
+        "title": "Artifact Bucket Path",
+        "type": "string"
+      },
+      "closed_status": {
+        "title": "Closed Status",
+        "type": "string"
+      },
+      "custom_fields": {
+        "title": "Custom Fields",
+        "type": "object"
+      },
+      "defects_name": {
+        "title": "Defects Name",
+        "type": "string"
+      },
+      "jira_configuration": {
+        "$ref": "#/$defs/jira",
+        "configuration_types": [
+          "jira"
+        ]
+      },
+      "max_issues": {
+        "title": "Max Issues",
+        "type": "integer"
+      },
+      "project_keys": {
+        "title": "Project Keys",
+        "type": "string"
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "calculate_jira_metrics": {
+            "type": "object"
+          },
+          "get_jira_fields_overview": {
+            "type": "object"
+          },
+          "get_jira_issues": {
+            "type": "object"
+          },
+          "get_jira_sprints": {
+            "type": "object"
+          },
+          "get_jira_statuses": {
+            "type": "object"
+          },
+          "get_number_off_all_issues": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "get_number_off_all_issues",
+            "get_jira_issues",
+            "get_jira_fields_overview",
+            "get_jira_sprints",
+            "get_jira_statuses",
+            "calculate_jira_metrics"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      },
+      "verify_ssl": {
+        "title": "Verify Ssl",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "jira_configuration"
+    ],
+    "title": "analyse_jira",
+    "type": "object"
+  },
   "application": {
     "metadata": {
       "label": "Agent"
