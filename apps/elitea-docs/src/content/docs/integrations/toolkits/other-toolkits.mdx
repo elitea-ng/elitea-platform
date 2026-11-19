@@ -41,7 +41,7 @@ The `delta_lake` toolkit reads one Delta Lake table in Amazon S3 with the AWS ke
 | `vector_search` | Returns the `k` rows (default 5, at most 100) whose `embedding_column` (default `embedding`) is most similar to the `embedding` you give, by cosine similarity, best first. Rows with no embedding are skipped. |
 | `get_table_schema` | Returns the table's schema, one `name: type` line per column. |
 
-**Filters.** `filters` is an object of `column: condition`. A condition is a value (the column equals it), a list (the column is one of them), `null` (the column is null), or an object of operators that must all hold: `eq`, `ne`, `in`, `gt`, `gte`, `lt`, `lte`, `is_null`. Columns are combined with AND. Numbers compare as numbers, text as text (dates and timestamps as their ISO text), booleans as booleans.
+**Filters.** `filters` is an object of `column: condition`. A condition is a value (the column equals it), a list (the column is one of them), `null` (the column is null), or an object of operators that must all hold: `eq`, `ne`, `in`, `gt`, `gte`, `lt`, `lte`, `is_null`. Columns are combined with AND. Numbers compare as numbers, text as text (dates and timestamps as their ISO text), booleans as booleans. `ne` also matches nulls and values of another type, as pandas `!=` does. Comparisons on integer, double and string columns (including partition columns) also let the reader skip whole files.
 
 ```json
 {"columns": ["id", "name"], "filters": {"score": {"gte": 20, "lt": 45}, "name": ["bob", "dave"]}}

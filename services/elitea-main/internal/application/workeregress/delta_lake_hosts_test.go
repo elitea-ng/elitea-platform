@@ -1,9 +1,47 @@
 package workeregress
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 )
+
+// The worker's own accept and refuse cases for a region and a table path
+// (libs/rust/agent-runtime/.../delta_lake/endpoint_cases.json, which the Rust
+// family's tests read too): the egress derivation here must give exactly the
+// host the worker will call, and none for a configuration the worker refuses.
+func TestDeltaLakeEgressHostMatchesTheWorkersEndpointCases(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", "libs", "rust", "agent-runtime", "src", "toolkits", "families", "delta_lake", "endpoint_cases.json"))
+	if err != nil {
+		t.Fatalf("read the worker's endpoint cases: %v", err)
+	}
+	var document struct {
+		Cases []struct {
+			Region string  `json:"region"`
+			Path   string  `json:"path"`
+			Host   *string `json:"host"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(raw, &document); err != nil || len(document.Cases) < 20 {
+		t.Fatalf("endpoint cases: %v (%d)", err, len(document.Cases))
+	}
+	for _, tc := range document.Cases {
+		settings, _ := json.Marshal(map[string]any{"delta_lake_configuration": map[string]any{"aws_region": tc.Region, "s3_path": tc.Path}})
+		hosts, err := HostsForToolkit("delta_lake", settings)
+		if err != nil {
+			t.Fatalf("%s %s: %v", tc.Region, tc.Path, err)
+		}
+		want := []string(nil)
+		if tc.Host != nil {
+			want = []string{*tc.Host}
+		}
+		if !slices.Equal(hosts, want) {
+			t.Errorf("region %q path %q: hosts = %v, want %v", tc.Region, tc.Path, hosts, want)
+		}
+	}
+}
 
 // A Delta Lake credential names no URL: the run's one host is the S3 endpoint
 // of its region, derived exactly as families/delta_lake/config.rs s3_endpoint

@@ -5,6 +5,7 @@
 //! its I/O on its own runtime and waits); the tools call them from
 //! `spawn_blocking`.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -14,6 +15,7 @@ use delta_kernel::arrow::datatypes::{DataType, Float64Type, Schema as ArrowSchem
 use delta_kernel::arrow::record_batch::RecordBatch;
 use delta_kernel::engine::arrow_conversion::TryFromKernel as _;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
+use delta_kernel::expressions::PredicateRef;
 use delta_kernel::object_store::ClientOptions;
 use delta_kernel::object_store::DynObjectStore;
 use delta_kernel::object_store::RetryConfig;
@@ -25,7 +27,7 @@ use serde_json::{Map, Value};
 
 use super::config::{DeltaLakeToolkitConfig, s3_endpoint};
 use super::filter::RowFilter;
-use super::render::{cell_json, schema_text};
+use super::render::{MAX_ROW_VALUES, cell_json, schema_text};
 
 /// The most rows a `query_table` or `vector_search` answers.
 pub(in crate::toolkits) const MAX_RESULT_ROWS: usize = 1_000;
@@ -170,7 +172,11 @@ impl DeltaTable {
     }
 
     /// `query_table`: the rows that satisfy the filter, in table order.
-    pub(in crate::toolkits) fn query(&self, request: &QueryRequest) -> Result<RowSet, TableError> {
+    pub(in crate::toolkits) fn query(
+        &self,
+        request: &QueryRequest,
+        cancel: &AtomicBool,
+    ) -> Result<RowSet, TableError> {
         let (engine, snapshot) = self.open()?;
         let schema = snapshot.schema();
         for column in request
@@ -200,27 +206,35 @@ impl DeltaTable {
         let mut rows: Vec<Map<String, Value>> = Vec::new();
         let mut bytes = 0usize;
         let mut truncated = false;
-        self.scan(&engine, &snapshot, read.as_deref(), |batch| {
-            let mask = request.filter.matches(batch).map_err(TableError::new)?;
-            let names = output_names(batch, output.as_deref());
-            for (row, keep) in mask.iter().enumerate() {
-                if !*keep {
-                    continue;
+        let predicate = request.filter.skipping_predicate(schema.as_ref());
+        self.scan(
+            &engine,
+            &snapshot,
+            read.as_deref(),
+            predicate,
+            cancel,
+            |batch| {
+                let mask = request.filter.matches(batch).map_err(TableError::new)?;
+                let names = output_names(batch, output.as_deref());
+                for (row, keep) in mask.iter().enumerate() {
+                    if !*keep {
+                        continue;
+                    }
+                    if rows.len() >= MAX_RESULT_ROWS {
+                        truncated = true;
+                        return Ok(false);
+                    }
+                    let object = row_object(batch, &names, row);
+                    bytes = bytes.saturating_add(serialized_len(&object));
+                    if bytes > MAX_RESULT_BYTES && !rows.is_empty() {
+                        truncated = true;
+                        return Ok(false);
+                    }
+                    rows.push(object);
                 }
-                if rows.len() >= MAX_RESULT_ROWS {
-                    truncated = true;
-                    return Ok(false);
-                }
-                let object = row_object(batch, &names, row);
-                bytes = bytes.saturating_add(serialized_len(&object));
-                if bytes > MAX_RESULT_BYTES && !rows.is_empty() {
-                    truncated = true;
-                    return Ok(false);
-                }
-                rows.push(object);
-            }
-            Ok(true)
-        })?;
+                Ok(true)
+            },
+        )?;
         Ok(RowSet { rows, truncated })
     }
 
@@ -230,6 +244,7 @@ impl DeltaTable {
     pub(in crate::toolkits) fn vector_search(
         &self,
         request: &VectorRequest,
+        cancel: &AtomicBool,
     ) -> Result<RowSet, TableError> {
         let (engine, snapshot) = self.open()?;
         let column = request.column.as_str();
@@ -244,23 +259,27 @@ impl DeltaTable {
                 "The query embedding must have at least one non-zero value.",
             ));
         }
-        let mut best: Vec<(f64, Map<String, Value>)> = Vec::with_capacity(request.k);
-        self.scan(&engine, &snapshot, None, |batch| {
+        // The best `k` so far, as (score, batch, row): a row is rendered to
+        // JSON once, at the end, never for a candidate that is later beaten.
+        let mut best: Vec<(f64, RecordBatch, usize)> = Vec::with_capacity(request.k);
+        let (mut compared, mut mismatched) = (0usize, 0usize);
+        let mut other_dimension = 0usize;
+        self.scan(&engine, &snapshot, None, None, cancel, |batch| {
             let index = batch.schema().index_of(column).map_err(|_| {
                 TableError::new(format!("Embedding column '{column}' not found in table."))
             })?;
             let embeddings = batch.column(index);
-            let names = output_names(batch, None);
             for row in 0..batch.num_rows() {
                 let Some(vector) = embedding_at(embeddings, row, column)? else {
                     continue;
                 };
+                // A row of another dimension cannot be compared: it is
+                // skipped (and counted, so a table with no comparable row at
+                // all says why).
                 if vector.len() != request.embedding.len() {
-                    return Err(TableError::new(format!(
-                        "The query embedding has {} values but the rows of '{column}' have {}.",
-                        request.embedding.len(),
-                        vector.len()
-                    )));
+                    mismatched += 1;
+                    other_dimension = vector.len();
+                    continue;
                 }
                 let row_norm = norm(&vector);
                 if row_norm == 0.0 {
@@ -275,17 +294,23 @@ impl DeltaTable {
                 if !score.is_finite() {
                     continue;
                 }
-                admit(&mut best, request.k, score, || {
-                    row_object(batch, &names, row)
-                });
+                compared += 1;
+                admit(&mut best, request.k, score, || (batch.clone(), row));
             }
             Ok(true)
         })?;
+        if compared == 0 && mismatched > 0 {
+            return Err(TableError::new(format!(
+                "The query embedding has {} values but the rows of '{column}' have {other_dimension}.",
+                request.embedding.len(),
+            )));
+        }
         best.sort_by(|left, right| right.0.total_cmp(&left.0));
         let mut rows = Vec::with_capacity(best.len());
         let mut bytes = 0usize;
         let mut truncated = false;
-        for (_, object) in best {
+        for (_, batch, row) in &best {
+            let object = row_object(batch, &output_names(batch, None), *row);
             bytes = bytes.saturating_add(serialized_len(&object));
             if bytes > MAX_RESULT_BYTES && !rows.is_empty() {
                 truncated = true;
@@ -313,7 +338,9 @@ impl DeltaTable {
     }
 
     /// Read the table in kernel batches, calling `visit` on each until it
-    /// answers `false`. `columns` restricts the read (`None` reads all). A
+    /// answers `false`. `columns` restricts the read (`None` reads all),
+    /// `predicate` lets the kernel skip files, `cancel` stops the read at the
+    /// next batch (the caller went away). A
     /// scan past its row, byte or time budget is an error, never a partial
     /// answer taken for a complete one.
     fn scan(
@@ -321,9 +348,16 @@ impl DeltaTable {
         engine: &Arc<dyn Engine>,
         snapshot: &SnapshotRef,
         columns: Option<&[String]>,
+        predicate: Option<PredicateRef>,
+        cancel: &AtomicBool,
         mut visit: impl FnMut(&RecordBatch) -> Result<bool, TableError>,
     ) -> Result<(), TableError> {
         let mut builder = Arc::clone(snapshot).scan_builder();
+        // File skipping by partition value and column statistics only; every
+        // row is still tested by the filter itself.
+        if predicate.is_some() {
+            builder = builder.with_predicate(predicate);
+        }
         if let Some(columns) = columns {
             let projected = snapshot
                 .schema()
@@ -353,6 +387,9 @@ impl DeltaTable {
                     self.max_scan_rows,
                     MAX_SCAN_BYTES / (1_024 * 1_024)
                 )));
+            }
+            if cancel.load(Ordering::Relaxed) {
+                return Err(TableError::new("The read was cancelled."));
             }
             if started.elapsed() > SCAN_DEADLINE {
                 return Err(TableError::new(format!(
@@ -393,8 +430,12 @@ fn output_names(batch: &RecordBatch, requested: Option<&[String]>) -> Vec<(Strin
 
 fn row_object(batch: &RecordBatch, names: &[(String, usize)], row: usize) -> Map<String, Value> {
     let mut object = Map::with_capacity(names.len());
+    let mut budget = MAX_ROW_VALUES;
     for (name, index) in names {
-        object.insert(name.clone(), cell_json(batch.column(*index), row));
+        object.insert(
+            name.clone(),
+            cell_json(batch.column(*index), row, &mut budget),
+        );
     }
     object
 }
@@ -407,16 +448,17 @@ fn norm(vector: &[f64]) -> f64 {
     vector.iter().map(|value| value * value).sum::<f64>().sqrt()
 }
 
-/// Keep `candidate` among the best `k` by score, rendering its row only when
-/// it is kept.
-fn admit(
-    best: &mut Vec<(f64, Map<String, Value>)>,
+/// Keep a candidate among the best `k` by score, building its payload only
+/// when it is kept.
+fn admit<T>(
+    best: &mut Vec<(f64, T, usize)>,
     k: usize,
     score: f64,
-    row: impl FnOnce() -> Map<String, Value>,
+    payload: impl FnOnce() -> (T, usize),
 ) {
     if best.len() < k {
-        best.push((score, row()));
+        let (value, row) = payload();
+        best.push((score, value, row));
         return;
     }
     let Some((worst, _)) = best
@@ -427,7 +469,8 @@ fn admit(
         return;
     };
     if score > best[worst].0 {
-        best[worst] = (score, row());
+        let (value, row) = payload();
+        best[worst] = (score, value, row);
     }
 }
 

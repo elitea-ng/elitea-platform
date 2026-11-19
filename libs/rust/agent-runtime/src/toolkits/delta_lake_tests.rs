@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 use std::io::{Read as _, Write as _};
 use std::net::TcpListener;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use adk_core::{ReadonlyContext, Tool, Toolset};
@@ -23,7 +24,7 @@ use serde_json::{Map, Value, json};
 use super::families::delta_lake::config::{
     DeltaLakeConfigErrorCode, DeltaLakeToolkitConfig, TableLocation, s3_endpoint,
 };
-use super::families::delta_lake::table::DeltaTable;
+use super::families::delta_lake::table::{DeltaTable, QueryRequest};
 use super::families::delta_lake::tools::{build_with_table, tool_catalog};
 use super::policy::ToolAdmissionPolicy;
 
@@ -711,5 +712,157 @@ async fn the_toolset_builds_from_settings_without_touching_the_network() {
         tools[0].description().starts_with(
             "S3 Path: s3://fixture-bucket/tables/events Table Path: \nToolkit: lake\n"
         )
+    );
+}
+
+/// The accept and refuse cases elitea-main's egress derivation is pinned
+/// against (`workeregress/delta_lake_hosts_test.go` reads the same file).
+#[test]
+fn the_endpoint_cases_main_derives_its_egress_host_from_hold() {
+    let document: Value =
+        serde_json::from_str(include_str!("families/delta_lake/endpoint_cases.json"))
+            .expect("endpoint cases");
+    let cases = document["cases"].as_array().expect("cases");
+    assert!(cases.len() >= 20);
+    for case in cases {
+        let (region, path) = (
+            case["region"].as_str().expect("region"),
+            case["path"].as_str().expect("path"),
+        );
+        let configuration = json!({
+            "aws_access_key_id": "AKIAFIXTURE",
+            "aws_secret_access_key": "secret-fixture-value",
+            "aws_region": region,
+            "s3_path": path
+        });
+        let parsed = DeltaLakeToolkitConfig::parse(&settings(&configuration));
+        match case["host"].as_str() {
+            Some(host) => {
+                let config = parsed.unwrap_or_else(|_| panic!("{region} {path} is refused"));
+                assert_eq!(
+                    s3_endpoint(config.region()),
+                    format!("https://{host}"),
+                    "{region} {path}"
+                );
+            }
+            None => assert!(parsed.is_err(), "{region} {path} is accepted"),
+        }
+    }
+}
+
+#[test]
+fn a_key_prefix_is_the_literal_key_the_user_wrote() {
+    for (path, url) in [
+        ("s3://bucket/my%20data/t", "s3://bucket/my%2520data/t/"),
+        ("s3://bucket/a b", ""),
+        ("s3://bucket/dir/ünï/t", "s3://bucket/dir/%C3%BCn%C3%AF/t/"),
+        ("s3://bucket/a+b/c=d", "s3://bucket/a%2Bb/c%3Dd/"),
+    ] {
+        match TableLocation::parse(path) {
+            Ok(location) => assert_eq!(location.url(), url, "{path}"),
+            Err(_) => assert!(url.is_empty(), "{path} is refused"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_long_path_and_name_never_cut_the_usage_text() {
+    let long = format!("s3://bucket/{}", "p".repeat(900));
+    let mut configuration = good_configuration();
+    configuration["s3_path"] = json!(long);
+    configuration["table_path"] = json!(long);
+    let config = DeltaLakeToolkitConfig::parse(&settings(&configuration)).expect("config");
+    let table = DeltaTable::with_store(fixture_store().await, URL.to_owned());
+    let name = "n".repeat(255);
+    let toolset = build_with_table(
+        &name,
+        &[],
+        &policy(),
+        &Arc::new(table),
+        &config.description_prefix(),
+    )
+    .expect("toolset");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    for tool in toolset.tools(readonly).await.expect("tools") {
+        let description = tool.description();
+        assert!(
+            description.len() <= 1_000,
+            "{} {}",
+            tool.name(),
+            description.len()
+        );
+        let usage = match tool.name() {
+            "query_table" => {
+                "filters: Dict of column: condition pairs\nReturns:\n    List of dicts representing rows"
+            }
+            "vector_search" => "(cosine similarity, best first).",
+            _ => "Get the schema of the Delta Lake table.",
+        };
+        assert!(
+            description.ends_with(usage),
+            "{}: {description}",
+            tool.name()
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_empty_columns_list_selects_every_column_as_in_the_sdk() {
+    let tools = fixture_tools().await;
+    let rows = call(&tools, "query_table", json!({"columns": []}))
+        .await
+        .expect("rows");
+    assert_eq!(rows[0].as_object().expect("row").len(), 4);
+}
+
+#[tokio::test]
+async fn a_row_of_another_dimension_is_skipped_unless_no_row_compares() {
+    let store: Arc<DynObjectStore> = Arc::new(InMemory::new());
+    let rows: Vec<Row> = vec![
+        (1, "a", None, Some(vec![1.0, 0.0])),
+        (2, "b", None, Some(vec![1.0, 0.0, 0.0])),
+        (3, "c", None, Some(vec![0.0, 1.0, 0.0])),
+    ];
+    write_table(&store, &[rows]).await;
+    let tools = tools_for(DeltaTable::with_store(store, URL.to_owned()), &[]).await;
+    let found = call(
+        &tools,
+        "vector_search",
+        json!({"embedding": [1.0, 0.0, 0.0]}),
+    )
+    .await
+    .expect("rows");
+    assert_eq!(ids(&found), [2, 3], "the two-value row is skipped");
+    let error = call(
+        &tools,
+        "vector_search",
+        json!({"embedding": [1.0, 0.0, 0.0, 0.0]}),
+    )
+    .await
+    .expect_err("no row compares");
+    assert!(
+        error.contains("has 4 values but the rows of 'embedding' have"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn a_cancelled_read_stops_at_the_next_batch() {
+    let table = Arc::new(DeltaTable::with_store(
+        fixture_store().await,
+        URL.to_owned(),
+    ));
+    let request = QueryRequest {
+        columns: None,
+        filter: super::families::delta_lake::filter::RowFilter::default(),
+    };
+    let result = tokio::task::spawn_blocking(move || table.query(&request, &AtomicBool::new(true)))
+        .await
+        .expect("join");
+    assert!(
+        result
+            .expect_err("cancelled")
+            .message()
+            .contains("cancelled")
     );
 }

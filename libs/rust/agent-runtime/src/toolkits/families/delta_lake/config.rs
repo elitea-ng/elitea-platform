@@ -5,12 +5,24 @@
 use std::collections::HashSet;
 use std::fmt;
 
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use serde_json::{Map, Value};
 use zeroize::Zeroizing;
 
 const MAX_SECRET_BYTES: usize = 4_096;
 const MAX_REGION_BYTES: usize = 25;
 const MAX_PATH_BYTES: usize = 1_024;
+/// A configured path is shown in a tool description cut to this many bytes, so
+/// the description never loses the usage text behind it.
+const MAX_DESCRIBED_PATH_BYTES: usize = 90;
+/// The URL path segment alphabet: everything but the unreserved characters is
+/// percent-encoded, so a prefix is the literal key the user wrote (a `%` in a
+/// key is `%25`, which the object store decodes back to `%`).
+const SEGMENT: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_')
+    .remove(b'~');
 const MAX_SELECTED_TOOLS: usize = 16;
 const MAX_TOOL_NAME_BYTES: usize = 64;
 
@@ -113,7 +125,13 @@ impl TableLocation {
         if self.prefix.is_empty() {
             format!("s3://{}/", self.bucket)
         } else {
-            format!("s3://{}/{}/", self.bucket, self.prefix)
+            let encoded = self
+                .prefix
+                .split('/')
+                .map(|segment| utf8_percent_encode(segment, SEGMENT).to_string())
+                .collect::<Vec<_>>()
+                .join("/");
+            format!("s3://{}/{encoded}/", self.bucket)
         }
     }
 }
@@ -134,18 +152,23 @@ fn valid_bucket(bucket: &str) -> bool {
         && bucket.parse::<std::net::Ipv4Addr>().is_err()
 }
 
-/// An AWS region id such as `us-east-1` or `us-gov-west-1`.
+/// An AWS region id such as `us-east-1`, `us-gov-west-1` or `ap-southeast-12`:
+/// a two-letter area, one or more lowercase words, and a one or two digit
+/// number. Mirrored by elitea-main's egress derivation, and pinned against it
+/// by `endpoint_cases.json`.
 fn valid_region(region: &str) -> bool {
-    let bytes = region.as_bytes();
-    bytes.len() <= MAX_REGION_BYTES
-        && bytes.len() >= 9
-        && bytes[..2].iter().all(u8::is_ascii_lowercase)
-        && bytes[2] == b'-'
-        && bytes
-            .iter()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
-        && bytes.last().is_some_and(u8::is_ascii_digit)
-        && !region.contains("--")
+    let parts: Vec<&str> = region.split('-').collect();
+    let lowercase =
+        |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_lowercase());
+    let Some((number, words)) = parts.split_last() else {
+        return false;
+    };
+    region.len() <= MAX_REGION_BYTES
+        && parts.len() >= 3
+        && parts[0].len() == 2
+        && words.iter().all(|word| lowercase(word))
+        && (1..=2).contains(&number.len())
+        && number.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 /// The S3 endpoint of a region, the only host the family calls. China
@@ -231,10 +254,18 @@ impl DeltaLakeToolkitConfig {
     /// `S3 Path: <s3_path> Table Path: <table_path>`, the SDK's description
     /// prefix (an unset path prints as empty).
     pub(in crate::toolkits) fn description_prefix(&self) -> String {
+        let shown = |path: &Option<Box<str>>| {
+            let path = path.as_deref().unwrap_or("");
+            let mut end = path.len().min(MAX_DESCRIBED_PATH_BYTES);
+            while !path.is_char_boundary(end) {
+                end -= 1;
+            }
+            path[..end].to_owned()
+        };
         format!(
             "S3 Path: {} Table Path: {}",
-            self.s3_path.as_deref().unwrap_or(""),
-            self.table_path.as_deref().unwrap_or("")
+            shown(&self.s3_path),
+            shown(&self.table_path)
         )
     }
 

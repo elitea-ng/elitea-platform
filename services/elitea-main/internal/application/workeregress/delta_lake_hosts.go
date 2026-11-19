@@ -3,6 +3,7 @@ package workeregress
 import (
 	"bytes"
 	"encoding/json"
+	"net"
 	"regexp"
 	"strings"
 )
@@ -12,8 +13,10 @@ import (
 const deltaLakeToolkitType = "delta_lake"
 
 // deltaLakeRegion is the AWS region id shape the worker accepts
-// (families/delta_lake/config.rs valid_region).
-var deltaLakeRegion = regexp.MustCompile(`^[a-z]{2}-[a-z0-9]+(-[a-z0-9]+)*-[0-9]$`)
+// (families/delta_lake/config.rs valid_region): a two-letter area, lowercase
+// words, a one or two digit number. Pinned against the worker by
+// endpoint_cases.json (delta_lake_hosts_test.go).
+var deltaLakeRegion = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-[0-9]{1,2}$`)
 
 // deltaLakeBucket is S3's bucket naming rule, as the worker checks it.
 var deltaLakeBucket = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
@@ -41,7 +44,7 @@ func deltaLakeHosts(content []byte) []string {
 	}
 	region, _ := configuration["aws_region"].(string)
 	region = strings.TrimSpace(region)
-	if !deltaLakeRegion.MatchString(region) || len(region) > 25 || strings.Contains(region, "--") {
+	if !deltaLakeRegion.MatchString(region) || len(region) > 25 {
 		return nil
 	}
 	path := ""
@@ -68,11 +71,16 @@ func deltaLakeHosts(content []byte) []string {
 // deltaLakeS3Path reports whether the path is an s3://, s3a:// or s3n:// URI
 // with a bucket the worker accepts.
 func deltaLakeS3Path(path string) bool {
+	for _, r := range path {
+		if r < ' ' || r == 0x7f || strings.ContainsRune("?#\\ ", r) {
+			return false
+		}
+	}
 	lower := strings.ToLower(path)
 	for _, scheme := range []string{"s3://", "s3a://", "s3n://"} {
 		if strings.HasPrefix(lower, scheme) {
 			bucket, _, _ := strings.Cut(path[len(scheme):], "/")
-			return deltaLakeBucket.MatchString(bucket) && !strings.Contains(bucket, "..")
+			return deltaLakeBucket.MatchString(bucket) && !strings.Contains(bucket, "..") && net.ParseIP(bucket) == nil
 		}
 	}
 	return false

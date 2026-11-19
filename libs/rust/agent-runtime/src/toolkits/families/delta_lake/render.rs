@@ -14,21 +14,26 @@ use serde_json::{Map, Number, Value};
 /// A text cell longer than this is cut (on a character boundary) and marked.
 pub(super) const MAX_CELL_CHARS: usize = 2_000;
 /// A list cell (an embedding) longer than this is cut.
-const MAX_LIST_ELEMENTS: usize = 16_384;
+const MAX_LIST_ELEMENTS: usize = 8_192;
+/// The JSON values (scalars, list elements, struct fields) one row may
+/// carry in all; a cell past it is cut. A row is therefore a bounded value
+/// before any byte count sees it.
+pub(super) const MAX_ROW_VALUES: usize = 32_768;
 const MAX_DEPTH: usize = 4;
 const TRUNCATED: &str = "...[truncated]";
 
 /// The JSON of one cell. Integers and floats are numbers (a non-finite float
 /// is `null`), text is text, lists and structs recurse, and everything else
 /// (dates, timestamps, decimals, binary) is Arrow's display text.
-pub(super) fn cell_json(array: &ArrayRef, row: usize) -> Value {
-    value_json(array, row, 0)
+pub(super) fn cell_json(array: &ArrayRef, row: usize, budget: &mut usize) -> Value {
+    value_json(array, row, 0, budget)
 }
 
-fn value_json(array: &ArrayRef, row: usize, depth: usize) -> Value {
-    if array.is_null(row) {
+fn value_json(array: &ArrayRef, row: usize, depth: usize, budget: &mut usize) -> Value {
+    if array.is_null(row) || *budget == 0 {
         return Value::Null;
     }
+    *budget -= 1;
     match array.data_type() {
         DataType::Boolean => Value::Bool(array.as_boolean().value(row)),
         DataType::Int8 => Value::from(array.as_primitive::<Int8Type>().value(row)),
@@ -44,14 +49,19 @@ fn value_json(array: &ArrayRef, row: usize, depth: usize) -> Value {
         DataType::Utf8 => text_json(array.as_string::<i32>().value(row)),
         DataType::LargeUtf8 => text_json(array.as_string::<i64>().value(row)),
         DataType::Utf8View => text_json(array.as_string_view().value(row)),
-        DataType::List(_) => list_json(&array.as_list::<i32>().value(row), depth),
-        DataType::LargeList(_) => list_json(&array.as_list::<i64>().value(row), depth),
-        DataType::FixedSizeList(..) => list_json(&array.as_fixed_size_list().value(row), depth),
+        DataType::List(_) => list_json(&array.as_list::<i32>().value(row), depth, budget),
+        DataType::LargeList(_) => list_json(&array.as_list::<i64>().value(row), depth, budget),
+        DataType::FixedSizeList(..) => {
+            list_json(&array.as_fixed_size_list().value(row), depth, budget)
+        }
         DataType::Struct(fields) if depth < MAX_DEPTH => {
             let columns = array.as_struct().columns();
             let mut object = Map::with_capacity(fields.len());
             for (field, column) in fields.iter().zip(columns) {
-                object.insert(field.name().clone(), value_json(column, row, depth + 1));
+                object.insert(
+                    field.name().clone(),
+                    value_json(column, row, depth + 1, budget),
+                );
             }
             Value::Object(object)
         }
@@ -75,13 +85,14 @@ fn text_json(text: &str) -> Value {
     Value::String(truncate_chars(text))
 }
 
-fn list_json(values: &ArrayRef, depth: usize) -> Value {
+fn list_json(values: &ArrayRef, depth: usize, budget: &mut usize) -> Value {
     if depth >= MAX_DEPTH {
         return Value::Null;
     }
+    let length = values.len().min(MAX_LIST_ELEMENTS).min(*budget);
     Value::Array(
-        (0..values.len().min(MAX_LIST_ELEMENTS))
-            .map(|index| value_json(values, index, depth + 1))
+        (0..length)
+            .map(|index| value_json(values, index, depth + 1, budget))
             .collect(),
     )
 }

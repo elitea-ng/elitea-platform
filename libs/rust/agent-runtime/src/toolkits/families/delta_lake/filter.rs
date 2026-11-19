@@ -17,7 +17,10 @@ use delta_kernel::arrow::datatypes::{
 };
 use delta_kernel::arrow::record_batch::RecordBatch;
 use delta_kernel::arrow::util::display::{ArrayFormatter, FormatOptions};
+use delta_kernel::expressions::{Expression, Predicate, PredicateRef, Scalar};
+use delta_kernel::schema::{DataType as KernelType, PrimitiveType, StructType};
 use serde_json::{Map, Value};
+use std::sync::Arc;
 
 pub(in crate::toolkits) const MAX_FILTER_COLUMNS: usize = 32;
 const MAX_CONDITIONS_PER_COLUMN: usize = 8;
@@ -89,6 +92,45 @@ impl RowFilter {
     /// The columns the filter reads.
     pub(in crate::toolkits) fn columns(&self) -> impl Iterator<Item = &str> {
         self.columns.iter().map(|filter| filter.column.as_str())
+    }
+
+    /// What the kernel may use to skip whole files (by partition value and
+    /// column statistics): the comparisons of this filter on a column whose
+    /// type matches the literal exactly (integers, doubles, strings). Anything
+    /// else is left to the row filter, which tests every row anyway, so a
+    /// condition left out here is never a wrong answer, only a slower read.
+    pub(in crate::toolkits) fn skipping_predicate(
+        &self,
+        schema: &StructType,
+    ) -> Option<PredicateRef> {
+        let mut predicates = Vec::new();
+        for filter in &self.columns {
+            let Some(field) = schema.field(&filter.column) else {
+                continue;
+            };
+            let KernelType::Primitive(kind) = field.data_type() else {
+                continue;
+            };
+            for condition in &filter.conditions {
+                let Operand::Scalar(literal) = &condition.operand else {
+                    continue;
+                };
+                let Some(scalar) = scalar_for(kind, literal) else {
+                    continue;
+                };
+                let column = Expression::column([filter.column.as_str()]);
+                let literal = Expression::literal(scalar);
+                predicates.push(match condition.op {
+                    Op::Eq => column.eq(literal),
+                    Op::Gt => column.gt(literal),
+                    Op::Gte => column.ge(literal),
+                    Op::Lt => column.lt(literal),
+                    Op::Lte => column.le(literal),
+                    Op::Ne | Op::In | Op::IsNull => continue,
+                });
+            }
+        }
+        (!predicates.is_empty()).then(|| Arc::new(Predicate::and_from(predicates)))
     }
 
     /// The rows of `batch` that satisfy every condition.
@@ -369,5 +411,27 @@ impl<'a> ColumnReader<'a> {
         self.display
             .as_ref()
             .map(|display| display.value(row).to_string())
+    }
+}
+
+/// The kernel scalar of a filter literal for a column of exactly this type.
+fn scalar_for(kind: &PrimitiveType, literal: &Value) -> Option<Scalar> {
+    match (kind, literal) {
+        (PrimitiveType::Long, Value::Number(number)) => number.as_i64().map(Scalar::Long),
+        (PrimitiveType::Integer, Value::Number(number)) => number
+            .as_i64()
+            .and_then(|value| i32::try_from(value).ok())
+            .map(Scalar::Integer),
+        (PrimitiveType::Short, Value::Number(number)) => number
+            .as_i64()
+            .and_then(|value| i16::try_from(value).ok())
+            .map(Scalar::Short),
+        (PrimitiveType::Byte, Value::Number(number)) => number
+            .as_i64()
+            .and_then(|value| i8::try_from(value).ok())
+            .map(Scalar::Byte),
+        (PrimitiveType::Double, Value::Number(number)) => number.as_f64().map(Scalar::Double),
+        (PrimitiveType::String, Value::String(text)) => Some(Scalar::String(text.clone())),
+        _ => None,
     }
 }

@@ -3,6 +3,7 @@
 
 use std::fmt;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use adk_core::{AdkError, ErrorCategory, ErrorComponent, Tool, ToolContext};
 use adk_tool::BasicToolset;
@@ -24,6 +25,8 @@ const QUERY_TABLE: &str = "query_table";
 const VECTOR_SEARCH: &str = "vector_search";
 const GET_TABLE_SCHEMA: &str = "get_table_schema";
 const MAX_DESCRIPTION_BYTES: usize = 1_000;
+/// The toolkit name in a description, cut so the usage text always fits.
+const MAX_DESCRIBED_NAME_BYTES: usize = 60;
 const MAX_ARGUMENT_BYTES: usize = 256 * 1_024;
 const MAX_COLUMNS: usize = 256;
 const MAX_COLUMN_NAME_BYTES: usize = 512;
@@ -116,7 +119,7 @@ impl Kind {
     const fn action(self) -> &'static str {
         match self {
             Self::QueryTable => {
-                "Query the Delta Lake table: column selection and row filtering. filters is an object of column: condition. A condition is a value (equality), a list (in), null (is null), or an object of operators: eq, ne, in, gt, gte, lt, lte, is_null (all must hold). Columns are ANDed. The pandas query expression of the SDK is not supported: use filters. At most 1000 rows (and 1 MiB) are returned; a trailing _truncated entry says when more matched. Reads that would scan too much of the table fail: narrow them with columns and filters.\nArgs:\n    query: not supported (pandas expression); leave unset\n    columns: List of columns to select\n    filters: Dict of column: condition pairs\nReturns:\n    List of dicts representing rows"
+                "Query the Delta Lake table: select columns and filter rows. filters is an object of column: condition. A condition is a value (equals), a list (in), null (is null) or an object of operators eq, ne, in, gt, gte, lt, lte, is_null that must all hold; columns are ANDed. query (a pandas expression) is not supported: use filters. At most 1000 rows are returned; a trailing _truncated entry says more matched. A read that scans too much fails: narrow it with columns and filters.\nArgs:\n    query: not supported, leave unset\n    columns: List of columns to select\n    filters: Dict of column: condition pairs\nReturns:\n    List of dicts representing rows"
             }
             Self::VectorSearch => {
                 "Perform a vector similarity search on the Delta Lake table.\nArgs:\n    embedding: Query embedding vector.\n    k: Number of top results to return (at most 100).\n    embedding_column: Name of the column containing embeddings.\nReturns:\n    List of dicts for top k most similar rows (cosine similarity, best first)."
@@ -246,7 +249,8 @@ impl DeltaLakeTool {
     fn new(kind: Kind, toolkit_name: &str, prefix: &str, table: Arc<DeltaTable>) -> Self {
         // The SDK: `S3 Path: .. Table Path: ..\nToolkit: <name>\n<doc>`, cut at
         // 1000 characters.
-        let description = format!("{prefix}\nToolkit: {toolkit_name}\n{}", kind.action());
+        let name = truncate_utf8(toolkit_name, MAX_DESCRIBED_NAME_BYTES);
+        let description = format!("{prefix}\nToolkit: {name}\n{}", kind.action());
         Self {
             kind,
             table,
@@ -300,26 +304,40 @@ impl Tool for DeltaLakeTool {
         match self.kind {
             Kind::QueryTable => {
                 let request = parse_query(&arguments)?;
-                let rows = run_blocking(move || table.query(&request)).await?;
+                let rows = run_blocking(move |cancel| table.query(&request, cancel)).await?;
                 Ok(rows_value(rows))
             }
             Kind::VectorSearch => {
                 let request = parse_vector(&arguments)?;
-                let rows = run_blocking(move || table.vector_search(&request)).await?;
+                let rows =
+                    run_blocking(move |cancel| table.vector_search(&request, cancel)).await?;
                 Ok(rows_value(rows))
             }
             Kind::GetTableSchema => {
-                let schema = run_blocking(move || table.schema_text()).await?;
+                let schema = run_blocking(move |_| table.schema_text()).await?;
                 Ok(Value::String(schema))
             }
         }
     }
 }
 
+/// Sets the flag the blocking read checks between batches when the call is
+/// dropped (the turn was cancelled or timed out), so the thread stops at the
+/// next batch instead of reading on for nobody.
+struct CancelOnDrop(Arc<AtomicBool>);
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
+
 async fn run_blocking<T: Send + 'static>(
-    work: impl FnOnce() -> Result<T, TableError> + Send + 'static,
+    work: impl FnOnce(&AtomicBool) -> Result<T, TableError> + Send + 'static,
 ) -> adk_core::Result<T> {
-    tokio::task::spawn_blocking(work)
+    let cancel = Arc::new(AtomicBool::new(false));
+    let _guard = CancelOnDrop(Arc::clone(&cancel));
+    tokio::task::spawn_blocking(move || work(&cancel))
         .await
         .map_err(|_| {
             AdkError::new(
@@ -398,8 +416,8 @@ fn parse_query(arguments: &Map<String, Value>) -> adk_core::Result<QueryRequest>
                     names.push(name.to_owned());
                 }
             }
-            // The SDK's `df[[]]` selects no columns, and so does an empty list.
-            Some(names)
+            // The SDK's `if columns:` treats an empty list as no selection.
+            (!names.is_empty()).then_some(names)
         }
         Some(_) => return Err(invalid("columns must be a list of column names")),
     };
