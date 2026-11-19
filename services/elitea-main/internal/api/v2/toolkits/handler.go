@@ -1189,6 +1189,9 @@ type InstanceListFilter struct {
 	MCP *bool
 	// Query is a case-insensitive literal substring of name or description.
 	Query string
+	// Types keeps the rows whose `type` equals one of these exactly (the
+	// repeatable `type` parameter, #2189); empty applies no type filter.
+	Types []string
 }
 
 // parseInstanceListFilter reads the optional `mcp` and `query` parameters. The
@@ -1214,7 +1217,42 @@ func parseInstanceListFilter(values url.Values) (InstanceListFilter, error) {
 		return filter, fmt.Errorf("query must be at most %d characters", maxInstanceQueryRunes)
 	}
 	filter.Query = query
+	types, err := parseInstanceTypes(values["type"])
+	if err != nil {
+		return filter, err
+	}
+	filter.Types = types
 	return filter, nil
+}
+
+const (
+	maxInstanceTypeValues = 32
+	maxInstanceTypeRunes  = 64
+)
+
+// parseInstanceTypes reads the repeatable `type` parameter: blank values are
+// skipped, duplicates dropped, and a count or a value out of bounds is a 400.
+func parseInstanceTypes(raw []string) ([]string, error) {
+	var types []string
+	seen := map[string]bool{}
+	for _, value := range raw {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		if !utf8.ValidString(value) || strings.ContainsRune(value, 0) {
+			return nil, errors.New("type is not valid text")
+		}
+		if utf8.RuneCountInString(value) > maxInstanceTypeRunes {
+			return nil, fmt.Errorf("type must be at most %d characters", maxInstanceTypeRunes)
+		}
+		seen[value] = true
+		types = append(types, value)
+	}
+	if len(types) > maxInstanceTypeValues {
+		return nil, fmt.Errorf("at most %d type values", maxInstanceTypeValues)
+	}
+	return types, nil
 }
 
 func boolPtr(v bool) *bool { return &v }
@@ -1837,6 +1875,10 @@ func instanceWhere(filter InstanceListFilter) (string, []any) {
 		args = append(args, "%"+likeLiteral.Replace(filter.Query)+"%")
 		n := strconv.Itoa(len(args))
 		conds = append(conds, `(name ILIKE $`+n+` ESCAPE '\' OR COALESCE(description, '') ILIKE $`+n+` ESCAPE '\')`)
+	}
+	if len(filter.Types) > 0 {
+		args = append(args, filter.Types)
+		conds = append(conds, `type = ANY($`+strconv.Itoa(len(args))+`::text[])`)
 	}
 	if len(conds) == 0 {
 		return "", nil

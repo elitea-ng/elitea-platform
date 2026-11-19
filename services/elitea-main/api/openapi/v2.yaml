@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.64"
+  x-elitea-client-contract: "1.65"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -49302,6 +49302,23 @@ paths:
             The server trims it; empty means no text filter. More than 128
             characters returns 400.
           schema: { type: string, maxLength: 128 }
+        - name: type
+          in: query
+          required: false
+          description: |
+            Keeps the toolkits whose `type` is one of the values (repeat the
+            parameter, `type=wiki&type=deepwiki`). Matched exactly, in the
+            stored spelling, so a caller that wants a family names every
+            spelling (the legacy `deepwiki` as well as `wiki`). `total` is the
+            filtered total, so a paged caller reaches every match. At most 32
+            values and 64 characters each, else 400. Absent means no type
+            filter. Combines with `mcp` and `query` (client contract 1.65).
+          style: form
+          explode: true
+          schema:
+            type: array
+            maxItems: 32
+            items: { type: string, maxLength: 64 }
       responses:
         '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '400': { $ref: '#/components/responses/InvalidClientVersion' }

@@ -508,6 +508,31 @@ func TestToolkitInstanceListFiltersAgainstPostgres(t *testing.T) {
 		}
 	}
 
+	t.Run("a repeated type filter keeps exactly those types and pages past the page size (#2189)", func(t *testing.T) {
+		types := []string{seeds[0].typ, "mcp"}
+		expected := map[string]bool{}
+		for id, seed := range byID {
+			if seed.typ == types[0] || seed.typ == types[1] {
+				expected[id] = true
+			}
+		}
+		if len(expected) < 2 {
+			t.Fatalf("fixture error: types %v match %d rows", types, len(expected))
+		}
+		served, total := readAll(t, InstanceListFilter{Types: types}, 3)
+		if total != len(expected) || len(served) != len(expected) {
+			t.Fatalf("total=%d served=%d, want %d", total, len(served), len(expected))
+		}
+		for _, id := range served {
+			if !expected[id] {
+				t.Errorf("row %s (type %q) is not one of %v", id, byID[id].typ, types)
+			}
+		}
+		if _, none, err := repo.ListToolkitInstances(ctx, "1", InstanceListFilter{Types: []string{"no-such-type"}}, 1, 20); err != nil || none != 0 {
+			t.Fatalf("an unknown type must match nothing: total=%d err=%v", none, err)
+		}
+	})
+
 	t.Run("the order is name then id, so duplicate names keep a stable order", func(t *testing.T) {
 		served, _ := readAll(t, InstanceListFilter{}, 5)
 		for i := 1; i < len(served); i++ {

@@ -20,12 +20,12 @@ import { BASE_URL } from '../../../playwright.config';
 export const THEME_URL = `${BASE_URL}/api/v2/social/author/theme`;
 
 export const test = base.extend({
-  page: async ({ page }, use) => {
+  page: async ({ page }, provide) => {
     const response = await page.request.put(THEME_URL, { data: { theme_mode: 'dark' } });
     if (!response.ok()) {
       // Best effort: a refused pin must not hide the shot's own verdict.
       console.warn(`visual: could not pin the stored theme to dark (HTTP ${response.status()})`);
     }
-    await use(page);
+    await provide(page);
   },
 });
