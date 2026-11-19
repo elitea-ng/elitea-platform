@@ -21,7 +21,6 @@ use crate::toolkits::families::jira::client::{
 use crate::toolkits::families::jira::config::JiraToolkitConfig;
 
 use super::config::AnalysisSettings;
-use super::extract::JiraReader;
 use super::tools::{AnalyseTool, Kind, Runner};
 
 /// Answers in order and remembers the URLs it was asked for.
@@ -137,7 +136,7 @@ async fn a_path_segment_that_could_escape_the_root_is_refused_before_any_request
             "{segment:?}"
         );
     }
-    assert!(transport.urls().is_empty());
+    assert_eq!(transport.urls().len(), 0);
 }
 
 #[tokio::test]
