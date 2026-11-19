@@ -130,4 +130,6 @@ Docs with every change: the type's page under `integrations/toolkits/`, `referen
 
 The `tavily` toolkit type (SDK `elitea_sdk/tools/tavily`, commit 0c1ce249) was added through this path in
 #2255: `families/web/tavily_catalogue.rs`, the `new_types.tavily` entry, `testdata/sdk-fixtures/tavily.json`.
-It is served hidden until #2261 builds it; the credential it references, `tavily`, already exists.
+It was served hidden until #2261 built it (`families/web/tavily_toolkit.rs`, on the `web` family's Tavily
+adapter, registered in `materialize.rs`) and added `tavily` to the worker capability snapshot and to
+`rustNativeToolTypes`. The credential it references, `tavily`, already existed.

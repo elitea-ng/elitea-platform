@@ -814,3 +814,156 @@ async fn shodan_limits_one_request_per_second_per_key() {
     }
     assert!(started.elapsed() >= Duration::from_secs(2));
 }
+
+#[tokio::test]
+async fn web_crawl_reads_a_site_through_tavily_and_frames_every_page() {
+    let meter = FakeMeter::new();
+    let transport = FixtureTransport::answering(&[fixture("tavily", "crawl_ok")]);
+    let mut settings = all_web_providers();
+    settings["fetch_allow_domains"] = json!(["docs.rs"]);
+    // Crawl and map are opt-in: a toolkit that names no tools has only
+    // search and fetch.
+    let default_names: Vec<String> = tools(&web_toolset(
+        &settings,
+        Some(&meter),
+        &transport,
+        Vec::new(),
+    ))
+    .await
+    .iter()
+    .map(|tool| tool.name().to_owned())
+    .collect();
+    assert_eq!(default_names, ["web_search", "web_fetch"]);
+    settings["selected_tools"] = json!(["web_crawl", "web_map"]);
+    let web = web_toolset(&settings, Some(&meter), &transport, Vec::new());
+    let result = call(
+        &web,
+        "web_crawl",
+        json!({"url": "https://docs.rs/tokio", "limit": 5, "instructions": "task docs"}),
+    )
+    .await;
+    assert_eq!(
+        result["provider"], "tavily",
+        "the only provider that crawls"
+    );
+    let (_, url, body) = transport.sent().pop().expect("a request");
+    assert_eq!(url, "https://api.tavily.com/crawl");
+    let body = body.expect("body");
+    assert_eq!(body["limit"], 5);
+    assert_eq!(body["max_depth"], 1);
+    assert_eq!(body["instructions"], "task docs");
+    assert_eq!(body["select_domains"], json!(["^(.+\\.)?docs\\.rs$"]));
+    let pages = result["pages"].as_array().expect("pages");
+    assert_eq!(
+        pages.len(),
+        2,
+        "the off-site page is dropped by the deployment's lists"
+    );
+    for page in pages {
+        let content = page["content"].as_str().expect("content");
+        assert!(content.starts_with("<web_content nonce=\""), "{content}");
+    }
+    assert_eq!(result["usage"]["unit"], "credit");
+    assert_eq!(result["usage"]["units"], 3);
+    let settled = meter.settled();
+    assert_eq!(settled[0].op.provider, "tavily");
+    assert_eq!(settled[0].op.operation, "web_fetch");
+    assert_eq!(settled[0].audit.tool, "web_crawl");
+    assert_eq!(settled[0].audit.target, "docs.rs");
+}
+
+#[tokio::test]
+async fn web_map_lists_urls_and_refuses_a_depth_firecrawl_cannot_follow() {
+    let meter = FakeMeter::new();
+    let transport = FixtureTransport::answering(&[fixture("firecrawl", "map_ok")]);
+    let mut settings = all_web_providers();
+    settings["selected_tools"] = json!(["web_map"]);
+    let web = web_toolset(&settings, Some(&meter), &transport, Vec::new());
+    // The first enabled provider that maps (Firecrawl sorts before Tavily).
+    let result = call(
+        &web,
+        "web_map",
+        json!({"url": "https://docs.rs/tokio", "limit": 5}),
+    )
+    .await;
+    assert_eq!(result["provider"], "firecrawl");
+    assert_eq!(
+        result["urls"],
+        json!([
+            "https://docs.rs/tokio/latest/tokio/",
+            "https://docs.rs/tokio/latest/tokio/task/"
+        ]),
+        "a non-http link is dropped"
+    );
+    let (_, url, body) = transport.sent().pop().expect("a request");
+    assert_eq!(url, "https://api.firecrawl.dev/v2/map");
+    assert_eq!(body.expect("body")["limit"], 5);
+    let settled = meter.settled();
+    assert_eq!(settled[0].op.operation, "web_fetch");
+    assert_eq!(
+        settled[0].units.pages, 1,
+        "billed as the page read its price row is per"
+    );
+    let refused = call(
+        &web,
+        "web_map",
+        json!({"url": "https://docs.rs/tokio", "max_depth": 2}),
+    )
+    .await;
+    assert_eq!(refused["error"]["code"], "unsupported_option");
+    assert_eq!(refused["error"]["option"], "max_depth");
+    assert_eq!(transport.count(), 1, "a refused option reaches no provider");
+    let named = FixtureTransport::answering(&[fixture("tavily", "map_ok")]);
+    let tavily = web_toolset(&settings, Some(&meter), &named, Vec::new());
+    let mapped = call(
+        &tavily,
+        "web_map",
+        json!({"url": "https://docs.rs/tokio", "provider": "tavily", "max_depth": 2}),
+    )
+    .await;
+    assert_eq!(mapped["provider"], "tavily");
+    assert_eq!(mapped["urls"].as_array().map(Vec::len), Some(3));
+    assert_eq!(named.sent()[0].2.as_ref().expect("body")["max_depth"], 2);
+}
+
+#[tokio::test]
+async fn web_crawl_and_map_follow_the_fetch_url_rules() {
+    let meter = FakeMeter::new();
+    let transport = FixtureTransport::answering(&[fixture("tavily", "crawl_ok")]);
+    let mut settings = all_web_providers();
+    settings["selected_tools"] = json!(["web_crawl", "web_map"]);
+    let web = web_toolset(&settings, Some(&meter), &transport, Vec::new());
+    for name in ["web_crawl", "web_map"] {
+        for url in [
+            "http://docs.rs/tokio",
+            "https://user@docs.rs/tokio",
+            "https://169.254.169.254/latest",
+            "https://localhost/",
+            "https://docs.rs:8443/",
+        ] {
+            let result = call(&web, name, json!({"url": url, "provider": "tavily"})).await;
+            assert_eq!(
+                result["error"]["code"], "url_not_allowed",
+                "{name} {url}: {result}"
+            );
+        }
+        let bad = call(&web, name, json!({"url": "https://docs.rs/", "limit": 0})).await;
+        assert_eq!(bad["error"]["code"], "invalid_arguments");
+    }
+    // A project whose only provider is Brave cannot crawl or map: the tools
+    // are not offered.
+    let search_only = web_toolset(
+        &json!({"providers": {"brave": {"api_key": "k"}}}),
+        Some(&meter),
+        &transport,
+        Vec::new(),
+    );
+    let names: Vec<String> = tools(&search_only)
+        .await
+        .iter()
+        .map(|tool| tool.name().to_owned())
+        .collect();
+    assert_eq!(names, ["web_search", "web_fetch"]);
+    assert_eq!(transport.count(), 0);
+    assert!(meter.admitted().is_empty(), "nothing was metered");
+}

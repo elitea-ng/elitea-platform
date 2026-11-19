@@ -126,7 +126,7 @@ pub(crate) fn url_violation(
     None
 }
 
-fn check_url(url: &reqwest::Url, state: &WebState) -> Result<(), CallEnd> {
+pub(crate) fn check_url(url: &reqwest::Url, state: &WebState) -> Result<(), CallEnd> {
     let violation = if url.host_str().is_none() {
         Some(ProviderError::UrlRefused)
     } else {

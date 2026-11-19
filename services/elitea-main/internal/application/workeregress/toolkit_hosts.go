@@ -36,6 +36,8 @@ import (
 //     ORIGINS of adapters/tavily.rs, firecrawl.rs, brave.rs, ddg_instant.rs);
 //     which ones a run may use is resolved at claim time, after this policy
 //   - host_intel: families/web/adapters/shodan.rs ORIGINS
+//   - tavily: families/web/adapters/tavily.rs ORIGINS (the toolkit is the web
+//     family pinned to Tavily, #2261)
 //
 // Constants that are never called (a link written into a result, such as
 // carrier's REPORT_LINK_PREFIX, or an OAuth scope) are not hosts here.
@@ -53,6 +55,7 @@ var toolkitImplicitHosts = map[string][]string{
 	"zephyr_squad":     {"prod-api.zephyr4jiracloud.com"},
 	"web":              {"api.tavily.com", "api.firecrawl.dev", "api.search.brave.com", "api.duckduckgo.com"},
 	"host_intel":       {"api.shodan.io"},
+	"tavily":           {"api.tavily.com"},
 }
 
 // ImplicitToolkitHosts answers the compiled-in hosts of a toolkit type.
