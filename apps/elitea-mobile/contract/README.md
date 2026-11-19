@@ -179,6 +179,12 @@ does not animate WebP: Android builds with `expo.webp.animated=false`, iOS anima
 video state its poster, each with the default motion. An SVG is not drawn (the still, then the old icon).
 Reduced motion shows the still only and downloads nothing else.
 
+## Client contract 1.64
+
+| Area | What |
+|---|---|
+| Publisher-trusted skills (skills epic 2169, #2184) | `trust` on a skill row and `getSkillTrust` carry `publisher_trusted` when `state` is `trusted` because an administrator trusts the publisher project (the Skill Publishing section's Trusted Skill Publishers), not because the project reviewed the text. The app needs nothing new: such a skill is `trusted`, so it carries no **Untrusted** badge. A server before 1.64 never sends it. |
+
 ## Client contract 1.63
 
 | Area | What |

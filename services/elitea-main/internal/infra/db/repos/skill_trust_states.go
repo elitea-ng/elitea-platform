@@ -9,7 +9,24 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
 	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/skilltrust"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
+
+// trustedSkillPublishers reads the projects an administrator trusts as skill
+// publishers (`skill_publishing.trusted_skill_publisher_project_ids`). An
+// unreadable setting trusts nobody: a failure must never read as trusted.
+func trustedSkillPublishers(ctx context.Context, pool *pgxpool.Pool) map[int64]struct{} {
+	values, err := platformconfig.Load(ctx, pool, platformconfig.SectionSkillPublishing)
+	if err != nil {
+		return nil
+	}
+	ids := values.Ints(platformconfig.KeyTrustedSkillPublisherProjectIDs)
+	trusted := make(map[int64]struct{}, len(ids))
+	for _, id := range ids {
+		trusted[id] = struct{}{}
+	}
+	return trusted
+}
 
 // skillTrustStates answers, in two queries for any number of skills, what the
 // project trusts of each skill's current base text (ADR-0051 amendment 1, A1.6):
@@ -30,6 +47,7 @@ FROM %s.skill_versions WHERE skill_id = ANY($1::bigint[]) AND name = 'base'`, sc
 	}
 	defer rows.Close()
 	text := make(map[int64]string, len(ids))
+	publishers := trustedSkillPublishers(ctx, pool)
 	for rows.Next() {
 		var id int64
 		var parent, instructions string
@@ -43,7 +61,12 @@ FROM %s.skill_versions WHERE skill_id = ANY($1::bigint[]) AND name = 'base'`, sc
 			if publisher > 0 {
 				state.PublisherProjectID = &publisher
 			}
-			text[id] = instructions
+			if domain.PublisherTrusted(publisher, publishers) {
+				// An administrator trusts this publisher: no per-project review is asked for.
+				state.State, state.PublisherTrusted = "trusted", true
+			} else {
+				text[id] = instructions
+			}
 		}
 		states[id] = state
 	}
