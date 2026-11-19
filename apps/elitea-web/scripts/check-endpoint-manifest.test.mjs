@@ -959,7 +959,11 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 564 -> 566 (issue 2162, delegation epic 2156 story S6): getDelegationReview and scanDelegationReview,
 // the Delegations awaiting review page. Like the other admin queues they are not in the manifest, so
 // MANIFEST_ENTRY_COUNT is unchanged.
-const GENERATED_OPERATION_COUNT = 566;
+// 566 -> 574 (issue 2267, epic 2254 story S1b): the Microsoft Default app registry. Seven admin
+// operations (list, create, update, disable, enable, test, settings) and the project-facing offers
+// read a credential form uses. Like the other admin editors they are not in the manifest, so
+// MANIFEST_ENTRY_COUNT is unchanged.
+const GENERATED_OPERATION_COUNT = 574;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

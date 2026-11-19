@@ -2256,6 +2256,69 @@ networkPolicies:
     # reaches the SPA without passing the edge's `/` redirect and MCP carve-out.
     extraIngressFrom: []
 
+# Microsoft Default apps (ADR-0057 decision 5, epic 2254 story S1b). Each entry
+# seeds one Microsoft Entra app into the admin registry at Main's start, so a
+# person picks "Default app" in an Outlook, Teams, Microsoft Graph, Dataverse or
+# SharePoint credential and never sees a client id or secret. Empty (the default)
+# seeds nothing: the credential forms offer only Custom app. The same apps can be
+# added in the admin portal (Configuration, Microsoft apps), which also prints the
+# Entra setup checklist; use this list when the deployment is managed from Git.
+#
+# Entra side, once per app (the portal shows the same checklist with this
+# deployment's values filled in):
+#   1. App registrations, New registration. Single tenant, or multi-tenant when
+#      the authority is `organizations`.
+#   2. Authentication, add a platform, Web, with the ONE redirect URI
+#      https://<deployment host>/api/v2/microsoft_login:callback (the same for
+#      web, desktop and mobile; no custom scheme or loopback URI is registered).
+#   3. API permissions, add the delegated permissions the app's scopeCeiling
+#      lists (Microsoft Graph), and Dynamics CRM user_impersonation for Dataverse.
+#   4. Grant admin consent where a permission needs it, for example
+#      ChannelMessage.Read.All.
+#   5. Certificates and secrets, new client secret, stored in the Kubernetes Secret
+#      named below.
+#
+# Each entry:
+#   key:             stable name of the row (lower-case letters, digits, dashes, up
+#                    to 40). A re-render updates the row it names.
+#   name:            shown in the credential form.
+#   description:     optional, shown under the name.
+#   clientId:        the Entra Application (client) ID.
+#   authority:       https://login.microsoftonline.com/<tenant ID | verified domain
+#                    | organizations | common>. Other hosts are refused.
+#   credentialTypes: any of outlook, teams, ms_graph, dataverse, sharepoint.
+#   scopeCeiling:    optional, per type, the Graph permissions the app may ask for,
+#                    for example {outlook: [Mail.Read, Mail.Send]}. A type with
+#                    none gets its least-privilege default (Mail.Read, the four
+#                    Teams read defaults, User.Read, Sites.Read.All). Dataverse
+#                    takes none.
+#   autoRefreshToken: optional, default true (sign-in asks for offline_access).
+#   projectScope:    all (default) or selected, with projectIds: [..].
+#   secretExpiresAt: optional date (2027-06-30); the portal warns 30 days before.
+#   secret:          {existingSecret: <Secret name>, key: <data key>} holding the
+#                    client secret. Read by Main only; it is never put in values,
+#                    a ConfigMap, a response or a log. Without it the row stays a
+#                    draft until a secret is set in the portal.
+#
+# The chart is applied when it changes: Main keeps a keyed digest of the entry it
+# last applied, so a restart with the same values writes nothing and an edit made
+# in the portal (a narrowed project list, a rotated secret) is kept until you
+# change that entry here. A row an administrator disables in the portal stays
+# disabled. Changing clientId needs the new client's secret in the same release.
+# Needs SECRETS_MASTER_KEY, like every sealed secret.
+#
+#   microsoftOAuthApps:
+#     - key: corp
+#       name: Company Microsoft
+#       clientId: 00000000-0000-0000-0000-000000000000
+#       authority: https://login.microsoftonline.com/<tenant ID>
+#       credentialTypes: [outlook, teams]
+#       scopeCeiling:
+#         outlook: [Mail.Read, Mail.Send]
+#       secretExpiresAt: 2027-06-30
+#       secret: {existingSecret: microsoft-app-corp, key: client-secret}
+microsoftOAuthApps: []
+
 main:
   # The API. Everything else is optional next to it.
   enabled: true
