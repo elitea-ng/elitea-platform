@@ -4763,7 +4763,10 @@ async fn a_second_turn_is_refused_before_it_can_wipe_a_running_seed() {
         move |req: &Req| {
             if req.path == "/llm/v1/chat/completions" && slow.load(Ordering::SeqCst) {
                 tokio::task::block_in_place(|| {
-                    for _ in 0..250 {
+                    // Released by the test (`slow` goes false) or after 30 s: a loaded CI runner
+                    // once took longer than the old 5 s between the first turn's seed and the
+                    // second start, the first turn finished, and the claim was gone.
+                    for _ in 0..1500 {
                         if !slow.load(Ordering::SeqCst) {
                             break;
                         }

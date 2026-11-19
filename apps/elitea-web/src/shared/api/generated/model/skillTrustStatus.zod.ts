@@ -61,6 +61,12 @@ export const SkillTrustStatus = zod
     state: zod
       .string()
       .describe("`not_required` (not foreign), `trusted` or `untrusted`."),
+    publisher_trusted: zod
+      .boolean()
+      .optional()
+      .describe(
+        "True when `state` is `trusted` because an administrator trusts the publisher project (client contract 1.64), not because this project reviewed the text. Absent otherwise; revoking changes nothing then.",
+      ),
     history: zod.array(SkillTrustRecord),
   })
   .describe(

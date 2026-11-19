@@ -102,7 +102,11 @@ FROM %s.skill_trust WHERE skill_id = $1 ORDER BY id`, schema), skillID)
 	}
 	if foreign {
 		status.State = "untrusted"
-		if domain.Trusted(skill.Instructions, active) {
+		// The administrator's publisher list is checked first, as the list rows do,
+		// so every reader names the same provenance for one skill.
+		if domain.PublisherTrusted(publisher, trustedSkillPublishers(ctx, r.pool)) {
+			status.State, status.PublisherTrusted = "trusted", true
+		} else if domain.Trusted(skill.Instructions, active) {
 			status.State = "trusted"
 		}
 	}
