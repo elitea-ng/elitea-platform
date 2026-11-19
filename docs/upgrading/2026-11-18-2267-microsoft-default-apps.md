@@ -29,7 +29,9 @@ names a Kubernetes Secret for its client secret (`secret: {existingSecret, key}`
 bound to the env var `ELITEA_MICROSOFT_OAUTH_APP_SECRET_<KEY>` of Main only and never appears in
 the values, a ConfigMap, a log or an API response. The rendered `ELITEA_MICROSOFT_OAUTH_APPS` JSON
 carries no secret. The default is an empty list, which seeds nothing. A malformed entry stops Main
-from starting and names the field. A row an administrator disabled stays disabled across restarts.
+from starting and names the field. The chart is applied when it changes (a keyed digest of the last
+applied entry is kept on the row), so an administrator's console edits survive a restart and are
+replaced only by a change to that entry in the chart. A row an administrator disabled stays disabled.
 
 **Rolling back.** The two tables are additive and nothing reads them yet; rolling Main back leaves
 them in place. Registered apps and their sealed secrets are kept.

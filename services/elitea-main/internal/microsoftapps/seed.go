@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"time"
 )
 
 // The Helm seed (ADR-0057 decision 5): `microsoftOAuthApps` values name Default
@@ -100,13 +99,9 @@ func (a SeedApp) input() (Input, error) {
 		ProjectScope:     ProjectScope(a.ProjectScope), ProjectIDs: a.ProjectIDs,
 	}
 	if a.SecretExpiresAt != "" {
-		expires, err := time.Parse(time.RFC3339, a.SecretExpiresAt)
+		expires, err := ParseExpiry(a.SecretExpiresAt)
 		if err != nil {
-			date, dateErr := time.Parse("2006-01-02", a.SecretExpiresAt)
-			if dateErr != nil {
-				return Input{}, invalid("secretExpiresAt", "use an RFC 3339 date, for example 2027-06-30")
-			}
-			expires = date
+			return Input{}, invalid("secretExpiresAt", "use a date such as 2027-06-30")
 		}
 		in.SecretExpiresAt = &expires
 	}
@@ -124,16 +119,45 @@ type SeedReport struct {
 
 var actorHelm = Actor{Ref: "helm-seed"}
 
-// Seed upserts the entries. A row the administrator disabled stays disabled, a
-// secret that is not supplied keeps the sealed one, and an entry that changes
-// nothing writes nothing (no revision, no audit event), so a restart is quiet.
+// seedLock serializes the seed across replicas: every Main pod runs it at start, and
+// two pods racing the check-then-create would otherwise turn a unique violation
+// into a refused boot.
+const seedLock = int64(0x0255_2267)
+
+// seedDigest is the keyed digest of what an entry asks for: its definition and its
+// secret. It is stored with the row (seed_hash), so a restart can tell "the chart
+// changed" from "an administrator edited the row in the console".
+func (s *Store) seedDigest(in Input) string {
+	canonical, _ := json.Marshal(in)
+	return s.sealer.digest(canonical)
+}
+
+// Seed applies the entries once per change of the chart. The rule that keeps the
+// console and the chart from fighting: a row is written only when what the chart
+// asks for CHANGED since the last time it was applied (its keyed digest, seed_hash,
+// differs). A restart with unchanged values writes nothing, so an administrator's
+// console edits (a narrowed project scope, a rotated secret) survive it; a changed
+// value in the chart is applied. An administrator's disable always survives, and a
+// secret the chart does not supply keeps the sealed one. A quiet restart writes no
+// revision and no audit event.
 func (s *Store) Seed(ctx context.Context, apps []SeedApp, logger *slog.Logger) (SeedReport, error) {
 	var report SeedReport
+	conn, err := s.pool.Acquire(ctx)
+	if err != nil {
+		return report, err
+	}
+	defer conn.Release()
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, seedLock); err != nil {
+		return report, err
+	}
+	defer func() { _, _ = conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock($1)`, seedLock) }()
+
 	for _, seed := range apps {
 		in, err := seed.input()
 		if err != nil {
 			return report, fmt.Errorf("microsoft oauth app %q: %w", seed.Key, err)
 		}
+		hash := s.seedDigest(in)
 		current, found, err := s.bySeedKey(ctx, seed.Key)
 		if err != nil {
 			return report, err
@@ -143,37 +167,46 @@ func (s *Store) Seed(ctx context.Context, apps []SeedApp, logger *slog.Logger) (
 				logger.Warn("microsoft oauth app seeded without a secret; it stays a draft until the Secret is bound",
 					"key", seed.Key, "variable", SeedSecretEnv(seed.Key))
 			}
-			if _, err := s.create(ctx, seed.Key, in, actorHelm); err != nil {
-				return report, fmt.Errorf("microsoft oauth app %q: %w", seed.Key, err)
+			if _, err := s.create(ctx, seed.Key, hash, in, actorHelm); err != nil {
+				return report, seedError(seed.Key, err)
 			}
 			report.Created++
 			continue
 		}
-		in.Secret = s.secretIfChanged(ctx, current, in)
-		if in.Secret == nil && len(changedFields(current, in)) == 0 {
+		if current.SeedHash == hash {
+			report.Unchanged++
+			continue
+		}
+		if len(changedFields(current, in)) == 0 && in.Secret == nil {
+			// The chart changed in a way the row already has (or only the
+			// administrator's edit differs); record that it was seen.
+			if err := s.setSeedHash(ctx, current.ID, hash); err != nil {
+				return report, err
+			}
 			report.Unchanged++
 			continue
 		}
 		if _, err := s.Update(ctx, current.ID, in, actorHelm); err != nil {
-			return report, fmt.Errorf("microsoft oauth app %q: %w", seed.Key, err)
+			return report, seedError(seed.Key, err)
+		}
+		if err := s.setSeedHash(ctx, current.ID, hash); err != nil {
+			return report, err
 		}
 		report.Updated++
 	}
 	return report, nil
 }
 
-// secretIfChanged returns the secret to write: nil when none was supplied or it
-// equals the sealed one.
-func (s *Store) secretIfChanged(ctx context.Context, current App, in Input) *string {
-	if in.Secret == nil || *in.Secret == "" {
-		return nil
+func seedError(key string, err error) error {
+	if errors.Is(err, ErrConflict) {
+		return fmt.Errorf("microsoft oauth app %q: an app with this name already exists (rename it in the console or in the values)", key)
 	}
-	if current.SecretSet && current.ClientID == in.ClientID {
-		if sealed, err := s.openSecret(ctx, current); err == nil && sealed.Reveal() == *in.Secret {
-			return nil
-		}
-	}
-	return in.Secret
+	return fmt.Errorf("microsoft oauth app %q: %w", key, err)
+}
+
+func (s *Store) setSeedHash(ctx context.Context, id, hash string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE elitea_identity.microsoft_oauth_apps SET seed_hash = $2 WHERE id = $1::uuid`, id, hash)
+	return err
 }
 
 func (s *Store) bySeedKey(ctx context.Context, key string) (App, bool, error) {

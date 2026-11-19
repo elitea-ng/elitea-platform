@@ -100,7 +100,7 @@ func NewStore(pool *pgxpool.Pool, masterKey []byte, audit Auditor) (*Store, erro
 	return &Store{pool: pool, sealer: sealer, audit: audit, now: time.Now}, nil
 }
 
-const appColumns = `id::text, coalesce(seed_key, ''), name, description, client_id, authority,
+const appColumns = `id::text, coalesce(seed_key, ''), coalesce(seed_hash, ''), name, description, client_id, authority,
        client_secret_ciphertext IS NOT NULL, secret_expires_at, credential_types, scope_ceiling,
        auto_refresh_token, project_scope, state, state_reason, created_by, updated_by,
        created_at, updated_at, revision`
@@ -114,7 +114,7 @@ func scanApp(row scanner) (App, error) {
 		scope   string
 		state   string
 	)
-	err := row.Scan(&app.ID, &app.SeedKey, &app.Name, &app.Description, &app.ClientID, &app.Authority,
+	err := row.Scan(&app.ID, &app.SeedKey, &app.SeedHash, &app.Name, &app.Description, &app.ClientID, &app.Authority,
 		&app.SecretSet, &app.SecretExpiresAt, &app.CredentialTypes, &ceiling,
 		&app.AutoRefreshToken, &scope, &state, &app.StateReason, &app.CreatedBy, &app.UpdatedBy,
 		&app.CreatedAt, &app.UpdatedAt, &app.Revision)
@@ -190,7 +190,8 @@ func (s *Store) List(ctx context.Context) ([]App, error) {
 
 // Get returns one app.
 func (s *Store) Get(ctx context.Context, id string) (App, error) {
-	if _, err := uuid.Parse(id); err != nil {
+	id, ok := NormalizeID(id)
+	if !ok {
 		return App{}, ErrNotFound
 	}
 	row := s.pool.QueryRow(ctx, `SELECT `+appColumns+` FROM elitea_identity.microsoft_oauth_apps WHERE id = $1::uuid`, id)
@@ -208,33 +209,44 @@ func (s *Store) Get(ctx context.Context, id string) (App, error) {
 	return apps[0], nil
 }
 
+// errStale means the app was edited between the read that described it and the read
+// of its secret. It is not a custody failure: the caller reads the app again.
+var errStale = errors.New("microsoftapps: the app changed while its secret was read")
+
 // openSecret opens the sealed secret of an app under its row's AAD. It is the one
-// place a registry secret is decrypted.
+// place a registry secret is decrypted. The ciphertext, its client id and its key
+// version come from ONE read, so a concurrent edit can never make a healthy secret
+// look corrupt: the AAD is built from the same row version the ciphertext came from,
+// and when that row is not the version the caller described, errStale says so.
 func (s *Store) openSecret(ctx context.Context, app App) (Secret, error) {
 	var ciphertext []byte
-	var version int
+	var clientID string
+	var version, revision int
 	err := s.pool.QueryRow(ctx, `
-SELECT client_secret_ciphertext, coalesce(key_version, 0)
-  FROM elitea_identity.microsoft_oauth_apps WHERE id = $1::uuid`, app.ID).Scan(&ciphertext, &version)
+SELECT client_secret_ciphertext, client_id, coalesce(key_version, 0), revision
+  FROM elitea_identity.microsoft_oauth_apps WHERE id = $1::uuid`, app.ID).Scan(&ciphertext, &clientID, &version, &revision)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Secret{}, ErrNotFound
 	}
 	if err != nil {
 		return Secret{}, err
 	}
+	if revision != app.Revision {
+		return Secret{}, errStale
+	}
 	if len(ciphertext) == 0 {
 		return Secret{}, ErrCustodyIntegrity
 	}
-	return s.sealer.open(ciphertext, secretAAD{AppID: app.ID, ClientID: app.ClientID, KeyVersion: version})
+	return s.sealer.open(ciphertext, secretAAD{AppID: app.ID, ClientID: clientID, KeyVersion: version})
 }
 
 // Create registers an app. A secret in the input makes it active; without one it
 // is a draft.
 func (s *Store) Create(ctx context.Context, in Input, actor Actor) (App, error) {
-	return s.create(ctx, "", in, actor)
+	return s.create(ctx, "", "", in, actor)
 }
 
-func (s *Store) create(ctx context.Context, seedKey string, in Input, actor Actor) (App, error) {
+func (s *Store) create(ctx context.Context, seedKey, seedHash string, in Input, actor Actor) (App, error) {
 	in, err := in.Normalize()
 	if err != nil {
 		return App{}, err
@@ -251,9 +263,9 @@ func (s *Store) create(ctx context.Context, seedKey string, in Input, actor Acto
 		state = StateActive
 	}
 	ceiling, _ := json.Marshal(in.ScopeCeiling)
-	var seed *string
+	var seed, hash *string
 	if seedKey != "" {
-		seed = &seedKey
+		seed, hash = &seedKey, &seedHash
 	}
 	var created App
 	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
@@ -261,12 +273,12 @@ func (s *Store) create(ctx context.Context, seedKey string, in Input, actor Acto
 INSERT INTO elitea_identity.microsoft_oauth_apps
   (id, seed_key, name, description, client_id, client_secret_ciphertext, key_label, key_version,
    secret_expires_at, authority, credential_types, scope_ceiling, auto_refresh_token, project_scope,
-   state, created_by, updated_by)
-VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15, $16, $16)
+   state, created_by, updated_by, seed_hash)
+VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15, $16, $16, $17)
 RETURNING `+appColumns,
 			id, seed, in.Name, in.Description, in.ClientID, ciphertext, keyLabel, keyVersion,
 			in.SecretExpiresAt, in.Authority, in.CredentialTypes, string(ceiling), in.AutoRefreshToken,
-			string(in.ProjectScope), string(state), actor.id())
+			string(in.ProjectScope), string(state), actor.id(), hash)
 		var err error
 		if created, err = scanApp(row); err != nil {
 			return err
@@ -308,7 +320,8 @@ func (s *Store) Update(ctx context.Context, id string, in Input, actor Actor) (A
 	if err != nil {
 		return App{}, err
 	}
-	if _, err := uuid.Parse(id); err != nil {
+	id, ok := NormalizeID(id)
+	if !ok {
 		return App{}, ErrNotFound
 	}
 	var updated App
@@ -321,6 +334,13 @@ func (s *Store) Update(ctx context.Context, id string, in Input, actor Actor) (A
 		if err != nil {
 			return err
 		}
+		// The audit event names the fields that changed, and the project set is
+		// one of them: it has to be read before it is replaced.
+		before := []App{current}
+		if err := loadProjects(ctx, tx, before); err != nil {
+			return err
+		}
+		current = before[0]
 		clientChanged := current.ClientID != in.ClientID
 		secretProvided := in.Secret != nil && *in.Secret != ""
 		secretCleared := in.Secret != nil && *in.Secret == ""
@@ -448,7 +468,8 @@ func sameTime(a, b *time.Time) bool {
 
 // SetDisabled switches an app off or back on. Enabling a draft keeps it a draft.
 func (s *Store) SetDisabled(ctx context.Context, id string, disabled bool, actor Actor) (App, error) {
-	if _, err := uuid.Parse(id); err != nil {
+	id, ok := NormalizeID(id)
+	if !ok {
 		return App{}, ErrNotFound
 	}
 	var out App

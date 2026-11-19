@@ -2300,9 +2300,12 @@ networkPolicies:
 #                    a ConfigMap, a response or a log. Without it the row stays a
 #                    draft until a secret is set in the portal.
 #
-# A row an administrator disables in the portal stays disabled across restarts. A
-# changed value updates the same row. Changing clientId needs the new client's
-# secret in the same release. Needs SECRETS_MASTER_KEY, like every sealed secret.
+# The chart is applied when it changes: Main keeps a keyed digest of the entry it
+# last applied, so a restart with the same values writes nothing and an edit made
+# in the portal (a narrowed project list, a rotated secret) is kept until you
+# change that entry here. A row an administrator disables in the portal stays
+# disabled. Changing clientId needs the new client's secret in the same release.
+# Needs SECRETS_MASTER_KEY, like every sealed secret.
 #
 #   microsoftOAuthApps:
 #     - key: corp

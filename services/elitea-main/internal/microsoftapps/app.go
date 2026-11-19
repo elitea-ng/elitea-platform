@@ -91,6 +91,8 @@ const (
 	MaxDescriptionLength = 300
 	MaxProjects          = 500
 	maxSecretLength      = 512
+	// maxTenantLength is the migration's CHECK on the authority's tenant segment.
+	maxTenantLength = 253
 )
 
 // EntraLoginHost is Entra's public login host. The registry pins it: a sovereign
@@ -100,8 +102,11 @@ const EntraLoginHost = "login.microsoftonline.com"
 
 // App is one registry row as the admin sees it. It never holds the secret.
 type App struct {
-	ID          string
-	SeedKey     string
+	ID      string
+	SeedKey string
+	// SeedHash is the keyed digest of the Helm entry last applied to the row (see
+	// Store.Seed); empty for a row the console created.
+	SeedHash    string
 	Name        string
 	Description string
 	ClientID    string
@@ -224,7 +229,7 @@ func ParseAuthority(raw string) (Authority, error) {
 		return Authority{}, invalid("authority", "the authority must name one tenant: a tenant ID, a verified domain, organizations or common")
 	}
 	tenant := strings.ToLower(segments[0])
-	if !guidPattern.MatchString(tenant) && !domainPattern.MatchString(tenant) && tenant != "organizations" && tenant != "common" {
+	if len(tenant) > maxTenantLength || (!guidPattern.MatchString(tenant) && !domainPattern.MatchString(tenant) && tenant != "organizations" && tenant != "common") {
 		return Authority{}, invalid("authority", "the tenant must be a tenant ID (GUID), a verified domain, organizations or common")
 	}
 	return Authority{URL: "https://" + EntraLoginHost + "/" + tenant, Tenant: tenant}, nil
@@ -319,9 +324,39 @@ func (in Input) Normalize() (Input, error) {
 			return Input{}, invalid("secret", "the client secret is not a valid secret value")
 		}
 		trimmed := strings.TrimSpace(*in.Secret)
+		if trimmed == "" && *in.Secret != "" {
+			// Only an explicit empty string clears a secret. A blank value is a
+			// paste mistake, and treating it as a clear would take the app out of
+			// service.
+			return Input{}, invalid("secret", "the client secret is blank; leave it out to keep the stored one")
+		}
 		out.Secret = &trimmed
 	}
 	return out, nil
+}
+
+// NormalizeID returns the lower-case canonical form of an app id, and whether id is
+// one. Only the hyphenated GUID is accepted: the database cast and a lenient parser
+// disagree about other spellings (urn:uuid:, braces), and a disagreement here would
+// answer 503 where 404 is true.
+func NormalizeID(id string) (string, bool) {
+	lower := strings.ToLower(strings.TrimSpace(id))
+	return lower, guidPattern.MatchString(lower)
+}
+
+// ParseExpiry reads an administrator-entered secret expiry: an RFC 3339 time, or a
+// date (2027-06-30), which means the END of that day in UTC. A secret that "expires
+// on 30 June" is valid on 30 June; reading the date as its midnight would call it
+// expired on its last valid day.
+func ParseExpiry(text string) (time.Time, error) {
+	if parsed, err := time.Parse(time.RFC3339, text); err == nil {
+		return parsed, nil
+	}
+	date, err := time.Parse("2006-01-02", text)
+	if err != nil {
+		return time.Time{}, invalid("secret_expires_at", "use a date such as 2027-06-30")
+	}
+	return date.Add(24*time.Hour - time.Second), nil
 }
 
 // ValidSeedKey reports whether key may name a Helm-managed row.

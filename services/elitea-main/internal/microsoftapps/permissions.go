@@ -160,10 +160,21 @@ func (a App) Ceiling(t string) []string {
 	return Defaults(t)
 }
 
-// Intersect is a credential's effective scopes under a Default app: what it
-// ticked, kept only where the ceiling allows (case-insensitive, the ceiling's
-// spelling wins), in the ceiling's order. Nothing ticked means the type's
-// defaults. removed names what the ceiling cut, so the form can show it.
+// EffectiveScopes is a credential's scopes under a Default app: what it ticked, cut
+// to the app's ceiling for the type. A credential that ticked nothing asks for the
+// type's defaults, which the ceiling then limits like any other request. removed
+// names what the ceiling cut, so the form can show it.
+func (a App) EffectiveScopes(credentialType string, requested []string) (effective, removed []string) {
+	if len(requested) == 0 {
+		requested = Defaults(credentialType)
+	}
+	return Intersect(a.Ceiling(credentialType), requested)
+}
+
+// Intersect keeps the requested names the ceiling allows (case-insensitive, the
+// ceiling's spelling wins), in the ceiling's order. An empty request yields an
+// empty answer: the defaults of a type are EffectiveScopes' business, because only
+// it knows the type. removed names what the ceiling cut.
 func Intersect(ceiling, requested []string) (effective, removed []string) {
 	allowed := map[string]string{}
 	for _, name := range ceiling {

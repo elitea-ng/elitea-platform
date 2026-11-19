@@ -89,3 +89,25 @@ func TestRequiredPermissionsFollowTheCeilingsAndTheRefreshSwitch(t *testing.T) {
 		}
 	}
 }
+
+func TestEffectiveScopesAppliesTheTypeDefaultsThenTheCeiling(t *testing.T) {
+	app := App{ScopeCeiling: map[string][]string{TypeTeams: {"Chat.Read"}}}
+	// Nothing ticked: the type's defaults, cut to the ceiling.
+	effective, removed := app.EffectiveScopes(TypeTeams, nil)
+	if !reflect.DeepEqual(effective, []string{"Chat.Read"}) || !reflect.DeepEqual(removed, []string{"User.ReadBasic.All", "Team.ReadBasic.All", "Channel.ReadBasic.All"}) {
+		t.Errorf("teams defaults = %v removed %v", effective, removed)
+	}
+	// Outlook has no saved ceiling, so its default ceiling admits its default request.
+	if effective, removed := app.EffectiveScopes(TypeOutlook, nil); !reflect.DeepEqual(effective, []string{"Mail.Read"}) || len(removed) != 0 {
+		t.Errorf("outlook defaults = %v removed %v", effective, removed)
+	}
+	// Something above the ceiling is cut and reported.
+	effective, removed = app.EffectiveScopes(TypeOutlook, []string{"Mail.Send"})
+	if len(effective) != 0 || !reflect.DeepEqual(removed, []string{"Mail.Send"}) {
+		t.Errorf("above the ceiling = %v removed %v", effective, removed)
+	}
+	// Intersect itself does not guess a default.
+	if effective, _ := Intersect([]string{"Mail.Read"}, nil); len(effective) != 0 {
+		t.Errorf("Intersect of nothing = %v", effective)
+	}
+}

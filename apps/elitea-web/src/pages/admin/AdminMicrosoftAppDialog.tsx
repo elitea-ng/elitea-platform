@@ -190,6 +190,14 @@ export function AdminMicrosoftAppDialog({
             {serverError}
           </Alert>
         )}
+        {editing?.managed_by === 'helm' ? (
+          <Alert severity="info" data-testid="microsoft-app-helm-note">
+            {t(
+              'pages.admin.microsoftApps.dialog.helmNote',
+              'This app is seeded from the Helm values. A change you save here lasts until that entry changes in the chart, which then replaces these values.',
+            )}
+          </Alert>
+        ) : null}
         <TextFields form={form} update={update} fieldError={fieldError} />
         <CredentialTypesField form={form} update={update} error={errorFor(fieldError, 'credential_types')} />
         <CeilingFields form={form} update={update} typeInfo={typeInfo} />

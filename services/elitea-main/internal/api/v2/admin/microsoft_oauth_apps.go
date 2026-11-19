@@ -224,13 +224,9 @@ func (b microsoftAppBody) input() (microsoftapps.Input, error) {
 		ProjectScope:     microsoftapps.ProjectScope(b.ProjectScope), ProjectIDs: b.ProjectIDs, Secret: b.Secret,
 	}
 	if b.SecretExpiresAt != nil && *b.SecretExpiresAt != "" {
-		expires, err := time.Parse(time.RFC3339, *b.SecretExpiresAt)
+		expires, err := microsoftapps.ParseExpiry(*b.SecretExpiresAt)
 		if err != nil {
-			date, dateErr := time.Parse("2006-01-02", *b.SecretExpiresAt)
-			if dateErr != nil {
-				return microsoftapps.Input{}, microsoftapps.ValidationError{Field: "secret_expires_at", Reason: "use a date such as 2027-06-30"}
-			}
-			expires = date
+			return microsoftapps.Input{}, err
 		}
 		in.SecretExpiresAt = &expires
 	}

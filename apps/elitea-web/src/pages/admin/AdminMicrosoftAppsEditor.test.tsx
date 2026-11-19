@@ -285,6 +285,8 @@ describe('AdminMicrosoftAppsEditor', { timeout: 20_000 }, () => {
     const secretInput = await screen.findByTestId('microsoft-app-secret');
     expect(secretInput).toHaveValue('');
     expect(screen.getByText(/cannot be shown/)).toBeVisible();
+    // A Helm-seeded app says its values come from the chart.
+    expect(screen.getByTestId('microsoft-app-helm-note')).toHaveTextContent('Helm');
     // The app's Entra checklist is part of its edit dialog.
     expect(screen.getByTestId('microsoft-app-checklist')).toBeVisible();
 

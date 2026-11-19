@@ -17,9 +17,9 @@
 -- THE SECRET IS SEALED, WRITE-ONLY. client_secret_ciphertext is AES-256-GCM
 -- under a key derived with HKDF-SHA256 from the deployment master key under the
 -- label `elitea/microsoft-oauth-apps/v1` (recorded in key_label with its
--- key_version). The AAD binds the ciphertext to the app id, client id,
--- authority and purpose, so a ciphertext copied to another row or kept after the
--- client id changes does not open. No API response, log or export carries it.
+-- key_version). The AAD binds the ciphertext to the app id, client id and key
+-- version, so a ciphertext copied to another row or kept after the client id
+-- changes does not open. No API response, log or export carries it.
 --
 -- STATES. `draft` has no secret yet, `active` is usable, `disabled` was switched
 -- off by an administrator, `needs_attention` was set by the platform (a secret
@@ -30,7 +30,9 @@
 --
 -- NOTHING SHIPS ENABLED. An empty registry means a credential form shows only
 -- Custom app. seed_key names a row that Helm (`microsoftOAuthApps`) manages, so a
--- re-run updates it instead of adding a second one.
+-- re-run updates it instead of adding a second one. seed_hash is the keyed digest
+-- of the Helm entry last applied: a restart writes the row only when the chart's
+-- values changed, so an administrator's console edits are not reverted by it.
 --
 -- The permission that guards the admin surface is granted at the end, to
 -- super_admin and admin in administration mode (the trap in 0060: a new central
@@ -43,6 +45,7 @@ CREATE TABLE IF NOT EXISTS elitea_identity.microsoft_oauth_apps (
     id                       uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
     seed_key                 text        UNIQUE
                                          CHECK (seed_key IS NULL OR seed_key ~ '^[a-z0-9][a-z0-9-]{0,39}$'),
+    seed_hash                text        CHECK (seed_hash IS NULL OR seed_hash ~ '^[0-9a-f]{64}$'),
     name                     text        NOT NULL CHECK (length(btrim(name)) BETWEEN 1 AND 80),
     description              text        NOT NULL DEFAULT '' CHECK (length(description) <= 300),
     provider                 text        NOT NULL DEFAULT 'entra' CHECK (provider = 'entra'),

@@ -5641,7 +5641,7 @@ export const getSaveMicrosoftAppSettingsUrl = () => {
 };
 
 /**
- * Writes the platform setting microsoft.custom_apps. Off removes Custom app from the credential forms of new credentials; existing credentials are untouched. Requires `configuration.microsoft_apps` in the administration mode.
+ * Writes the platform setting microsoft.custom_apps. Off removes Custom app from the credential forms of new credentials; existing credentials are untouched. The sign-in start checks it again (story S1c of epic 2254), so a credential saved around the form cannot sign in with its own client. Requires `configuration.microsoft_apps` in the administration mode.
  * @summary Allow or refuse Custom app mode
  */
 export const saveMicrosoftAppSettings = async (

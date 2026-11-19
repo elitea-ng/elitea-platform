@@ -480,6 +480,205 @@ func TestSeedIsIdempotentAndKeepsAnAdministratorsDisable(t *testing.T) {
 	require.Equal(t, "rotated-secret", secret.Reveal())
 }
 
+// What the chart did not change is not the chart's to write: an administrator who
+// narrows the projects or rotates the secret in the console keeps that across a restart.
+func TestAConsoleEditOfASeededAppSurvivesARestartUntilTheChartChanges(t *testing.T) {
+	pool := newDatabase(t)
+	store := newStore(t, pool)
+	ctx := context.Background()
+	env := map[string]string{
+		SeedConfigEnv: `[{"key":"corp","name":"Corp","clientId":"` + testClientID + `",
+			"authority":"https://login.microsoftonline.com/organizations","credentialTypes":["outlook"]}]`,
+		SeedSecretEnv("corp"): plaintextSecret,
+	}
+	seeds, err := SeedFromEnv(lookupOf(env))
+	require.NoError(t, err)
+	_, err = store.Seed(ctx, seeds, nil)
+	require.NoError(t, err)
+	apps, _ := store.List(ctx)
+
+	// The administrator narrows the app to one project and rotates the secret.
+	edit := validInput()
+	edit.Name = "Corp"
+	edit.ClientID = testClientID
+	edit.Authority = "https://login.microsoftonline.com/organizations"
+	edit.CredentialTypes = []string{TypeOutlook}
+	edit.ProjectScope, edit.ProjectIDs = ScopeSelected, []int64{5}
+	edit.Secret = secretPtr("rotated-in-the-console")
+	_, err = store.Update(ctx, apps[0].ID, edit, admin)
+	require.NoError(t, err)
+
+	// A restart with the chart unchanged writes nothing.
+	report, err := store.Seed(ctx, seeds, nil)
+	require.NoError(t, err)
+	require.Equal(t, SeedReport{Unchanged: 1}, report)
+	got, _ := store.Get(ctx, apps[0].ID)
+	require.Equal(t, ScopeSelected, got.ProjectScope, "the restart widened an administrator's narrowing")
+	secret, err := store.openSecret(ctx, got)
+	require.NoError(t, err)
+	require.Equal(t, "rotated-in-the-console", secret.Reveal(), "the restart put the Kubernetes Secret back over a rotation")
+
+	// A changed chart is applied, including the Secret it now carries.
+	env[SeedConfigEnv] = strings.Replace(env[SeedConfigEnv], `"name":"Corp"`, `"name":"Corp Prod"`, 1)
+	env[SeedSecretEnv("corp")] = "rotated-in-the-chart"
+	seeds, err = SeedFromEnv(lookupOf(env))
+	require.NoError(t, err)
+	report, err = store.Seed(ctx, seeds, nil)
+	require.NoError(t, err)
+	require.Equal(t, SeedReport{Updated: 1}, report)
+	got, _ = store.Get(ctx, apps[0].ID)
+	require.Equal(t, "Corp Prod", got.Name)
+	secret, err = store.openSecret(ctx, got)
+	require.NoError(t, err)
+	require.Equal(t, "rotated-in-the-chart", secret.Reveal())
+
+	var stored string
+	require.NoError(t, pool.QueryRow(ctx, `SELECT seed_hash FROM elitea_identity.microsoft_oauth_apps WHERE id = $1::uuid`, apps[0].ID).Scan(&stored))
+	require.Len(t, stored, 64)
+	require.NotContains(t, stored, "rotated", "the digest must not carry the secret")
+}
+
+// Every Main replica runs the seed at start. Two racing the check-then-create must
+// both finish and leave one row.
+func TestConcurrentSeedsLeaveOneRow(t *testing.T) {
+	pool := newDatabase(t)
+	ctx := context.Background()
+	env := map[string]string{
+		SeedConfigEnv: `[{"key":"corp","name":"Corp","clientId":"` + testClientID + `",
+			"authority":"https://login.microsoftonline.com/organizations","credentialTypes":["outlook"]}]`,
+		SeedSecretEnv("corp"): plaintextSecret,
+	}
+	seeds, err := SeedFromEnv(lookupOf(env))
+	require.NoError(t, err)
+
+	var wg sync.WaitGroup
+	errs := make([]error, 4)
+	for i := range errs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, errs[i] = newStore(t, pool).Seed(ctx, seeds, nil)
+		}()
+	}
+	wg.Wait()
+	for _, err := range errs {
+		require.NoError(t, err)
+	}
+	var rows int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM elitea_identity.microsoft_oauth_apps`).Scan(&rows))
+	require.Equal(t, 1, rows)
+}
+
+func TestASeedNamedLikeAConsoleAppSaysSoAndDoesNotCrash(t *testing.T) {
+	pool := newDatabase(t)
+	store := newStore(t, pool)
+	ctx := context.Background()
+	_, err := store.Create(ctx, validInput(), admin) // named "Company Microsoft"
+	require.NoError(t, err)
+	seeds, err := SeedFromEnv(lookupOf(map[string]string{SeedConfigEnv: `[{"key":"corp","name":"Company Microsoft","clientId":"` + testClientID + `",
+		"authority":"https://login.microsoftonline.com/organizations","credentialTypes":["outlook"]}]`}))
+	require.NoError(t, err)
+	_, err = store.Seed(ctx, seeds, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "already exists")
+	require.Contains(t, err.Error(), `"corp"`)
+}
+
+// A concurrent edit must not make a healthy secret look corrupt: the ciphertext and
+// the client it is bound to come from one read, and a version that moved is read
+// again instead of marking the app.
+func TestAnEditBetweenTheDescriptionAndTheSecretReadIsNotACustodyFault(t *testing.T) {
+	pool := newDatabase(t)
+	store := newStore(t, pool)
+	ctx := context.Background()
+	in := validInput()
+	in.Secret = secretPtr(plaintextSecret)
+	app, err := store.Create(ctx, in, admin)
+	require.NoError(t, err)
+
+	// The caller described revision 1 ...
+	described, err := store.Get(ctx, app.ID)
+	require.NoError(t, err)
+	// ... and an administrator moves the app to a new client and secret.
+	moved := validInput()
+	moved.ClientID = "7f8d0c1e-0000-4000-8000-000000000002"
+	moved.Secret = secretPtr("secret-of-the-new-client")
+	_, err = store.Update(ctx, app.ID, moved, admin)
+	require.NoError(t, err)
+
+	_, err = store.openSecret(ctx, described)
+	require.ErrorIs(t, err, errStale, "a moved row is stale, not corrupt")
+	still, err := store.Get(ctx, app.ID)
+	require.NoError(t, err)
+	require.Equal(t, StateActive, still.State)
+
+	// Through the resolver the answer is the new client's secret, and the app is untouched.
+	resolved, err := NewResolver(store).Resolve(ctx, Request{AppID: app.ID, CredentialType: TypeOutlook, ProjectID: 1})
+	require.NoError(t, err)
+	require.Equal(t, "secret-of-the-new-client", resolved.Secret.Reveal())
+	require.Equal(t, moved.ClientID, resolved.ClientID)
+}
+
+func TestTheAuditEventNamesTheProjectChangeAgainstTheStoredSet(t *testing.T) {
+	pool := newDatabase(t)
+	store := newStore(t, pool)
+	ctx := context.Background()
+	in := validInput()
+	in.ProjectScope, in.ProjectIDs = ScopeSelected, []int64{1, 2}
+	app, err := store.Create(ctx, in, admin)
+	require.NoError(t, err)
+
+	reasons := func() string {
+		var out string
+		require.NoError(t, pool.QueryRow(ctx, `
+SELECT event->'data'->>'reasons' FROM elitea_runtime.security_audit_outbox
+ WHERE event->'data'->>'action' = $1 ORDER BY seq DESC LIMIT 1`, ActionUpdated).Scan(&out))
+		return out
+	}
+	// Saved unchanged: the projects did not change.
+	_, err = store.Update(ctx, app.ID, in, admin)
+	require.NoError(t, err)
+	require.NotContains(t, reasons(), "field:project_ids")
+	// Narrowed to everyone: the audit says the projects changed.
+	in.ProjectScope, in.ProjectIDs = ScopeAll, nil
+	_, err = store.Update(ctx, app.ID, in, admin)
+	require.NoError(t, err)
+	require.Contains(t, reasons(), "field:project_ids")
+}
+
+func TestABlankSecretIsRefusedAndNeverClears(t *testing.T) {
+	pool := newDatabase(t)
+	store := newStore(t, pool)
+	ctx := context.Background()
+	in := validInput()
+	in.Secret = secretPtr(plaintextSecret)
+	app, err := store.Create(ctx, in, admin)
+	require.NoError(t, err)
+
+	in.Secret = secretPtr("   ")
+	_, err = store.Update(ctx, app.ID, in, admin)
+	var validation ValidationError
+	require.True(t, errors.As(err, &validation))
+	require.Equal(t, "secret", validation.Field)
+	got, _ := store.Get(ctx, app.ID)
+	require.True(t, got.SecretSet)
+	require.Equal(t, StateActive, got.State)
+}
+
+func TestAnIdThatTheDatabaseCastWouldAcceptButIsNotAGuidIsNotFound(t *testing.T) {
+	pool := newDatabase(t)
+	store := newStore(t, pool)
+	ctx := context.Background()
+	app, err := store.Create(ctx, validInput(), admin)
+	require.NoError(t, err)
+	for _, spelling := range []string{"urn:uuid:" + app.ID, "{" + app.ID + "}", strings.ReplaceAll(app.ID, "-", "")} {
+		_, err := store.Get(ctx, spelling)
+		require.ErrorIs(t, err, ErrNotFound, spelling)
+	}
+	_, err = store.Get(ctx, strings.ToUpper(app.ID))
+	require.NoError(t, err, "the canonical form in any case is the app")
+}
+
 func auditPrincipal(t *testing.T, pool *pgxpool.Pool) string {
 	t.Helper()
 	var principal string

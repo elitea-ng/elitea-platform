@@ -105,7 +105,7 @@ Every create, edit, enable, disable and secret change writes a security audit ev
 
 ## Allow Custom app
 
-The **Allow Custom app** switch is the platform setting `microsoft.custom_apps` (on by default). Turn it off when every Microsoft credential must use a vetted Default app: the credential form then offers only the registered apps. Existing Custom app credentials keep working.
+The **Allow Custom app** switch is the platform setting `microsoft.custom_apps` (on by default). Turn it off when every Microsoft credential should use a vetted Default app: the credential form then offers only the registered apps. Existing Custom app credentials keep working. The setting governs the credential form; the sign-in that follows in a later release checks it again, so a credential saved around the form cannot sign in with its own client.
 
 ## Seed apps from Helm
 
@@ -124,7 +124,7 @@ microsoftOAuthApps:
     secret: { existingSecret: microsoft-app-corp, key: client-secret }
 ```
 
-`key` names the row, so a re-render updates it instead of adding another. A change to a value updates the same row; an app an administrator disabled in the console stays disabled across restarts; a restart that changes nothing writes nothing. An entry without a `secret` stays a draft until one is set in the console. A malformed entry stops Main from starting, with the field named in its log. The default is an empty list.
+`key` names the row, so a re-render updates it instead of adding another. The chart is applied **when it changes**: Main remembers a keyed digest of the entry it last applied, and a restart with the same values writes nothing. So an edit made in the console (a narrowed project list, a rotated client secret) is kept across restarts, and is replaced only when you change that entry in the chart, secret included. An app an administrator disabled in the console stays disabled either way. An entry without a `secret` stays a draft until one is set in the console. A malformed entry, or an entry named like an app that already exists, stops Main from starting with the field or name in its log. The default is an empty list.
 
 ## What people see
 

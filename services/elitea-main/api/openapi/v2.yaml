@@ -25084,7 +25084,9 @@ paths:
       description: >
         Writes the platform setting microsoft.custom_apps. Off removes Custom app from
         the credential forms of new credentials; existing credentials are untouched.
-        Requires `configuration.microsoft_apps` in the administration mode.
+        The sign-in start checks it again (story S1c of epic 2254), so a credential
+        saved around the form cannot sign in with its own client. Requires
+        `configuration.microsoft_apps` in the administration mode.
       tags: [admin]
       requestBody:
         required: true

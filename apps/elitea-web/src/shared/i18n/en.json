@@ -7157,5 +7157,6 @@
   "pages.admin.microsoftApps.check.ok": "Passed",
   "pages.admin.microsoftApps.check.failed": "Needs attention",
   "toolkits.oauthApp.custom": "Custom app",
-  "toolkits.oauthApp.unavailable": "Default app (not available)"
+  "toolkits.oauthApp.unavailable": "Default app (not available)",
+  "pages.admin.microsoftApps.dialog.helmNote": "This app is seeded from the Helm values. A change you save here lasts until that entry changes in the chart, which then replaces these values."
 }

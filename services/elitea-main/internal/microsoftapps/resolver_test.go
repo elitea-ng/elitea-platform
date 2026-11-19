@@ -12,6 +12,9 @@ type fakeReader struct {
 	apps      map[string]App
 	secrets   map[string]Secret
 	secretErr error
+	// staleOnce makes the first secret read report the app moved.
+	staleOnce bool
+	reads     int
 	attention []string
 	custom    *bool
 }
@@ -32,6 +35,10 @@ func (f *fakeReader) List(context.Context) ([]App, error) {
 }
 
 func (f *fakeReader) openSecret(_ context.Context, app App) (Secret, error) {
+	f.reads++
+	if f.staleOnce && f.reads == 1 {
+		return Secret{}, errStale
+	}
 	if f.secretErr != nil {
 		return Secret{}, f.secretErr
 	}
@@ -224,5 +231,26 @@ func TestCustomAppsAllowedDefaultsOn(t *testing.T) {
 	fake.custom = &off
 	if resolver.CustomAppsAllowed(context.Background()) {
 		t.Error("the admin switch was ignored")
+	}
+}
+
+func TestAnAppThatMovedUnderTheSecretReadIsDescribedAgainAndNotMarked(t *testing.T) {
+	resolver, fake := resolverWith(activeApp("a1"))
+	fake.staleOnce = true
+	got, err := resolver.Resolve(context.Background(), Request{AppID: "a1", CredentialType: TypeOutlook, ProjectID: 1})
+	if err != nil || got.Secret.Reveal() != plaintextSecret || fake.reads != 2 {
+		t.Fatalf("resolved = %+v %v after %d reads", got, err, fake.reads)
+	}
+	if len(fake.attention) != 0 {
+		t.Errorf("a stale read marked the app: %v", fake.attention)
+	}
+	// An app that keeps moving is reported as stale, never as corrupt.
+	fake.secretErr = errStale
+	fake.reads = 0
+	if _, err := resolver.Resolve(context.Background(), Request{AppID: "a1", CredentialType: TypeOutlook, ProjectID: 1}); !errors.Is(err, errStale) || fake.reads != 2 {
+		t.Errorf("a loop: %v after %d reads", err, fake.reads)
+	}
+	if len(fake.attention) != 0 {
+		t.Errorf("a stale read marked the app: %v", fake.attention)
 	}
 }

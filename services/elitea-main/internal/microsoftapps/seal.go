@@ -4,7 +4,9 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hkdf"
+	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -58,26 +60,29 @@ func (Secret) MarshalText() ([]byte, error) { return []byte(redacted), nil }
 func (Secret) LogValue() slog.Value { return slog.StringValue(redacted) }
 
 // secretAAD is the additional data of a sealed client secret. It binds the
-// ciphertext to its row and meaning: copied to another app, kept after the
-// client id or authority changed, or opened as another purpose, it does not
-// open.
+// ciphertext to its row, its client and its key: copied to another app, kept after
+// the client id changed, or opened under another key version, it does not open. The
+// authority is not bound: an Entra secret belongs to the app registration, not to
+// the tenant that signs in, so moving an app between tenants keeps a valid secret.
 type secretAAD struct {
 	AppID      string
 	ClientID   string
-	Authority  string
 	KeyVersion int
 }
 
 func (a secretAAD) bytes() []byte {
 	encoded, _ := json.Marshal([]any{
-		"microsoft_oauth_app", KeyLabel, "client_secret", a.AppID, a.ClientID, a.Authority, a.KeyVersion,
+		"microsoft_oauth_app", KeyLabel, "client_secret", a.AppID, a.ClientID, a.KeyVersion,
 	})
 	return encoded
 }
 
 // sealer is the custody cipher: AES-256-GCM, random nonce, under a key derived by
 // HKDF-SHA256 from the deployment master key.
-type sealer struct{ aead cipher.AEAD }
+type sealer struct {
+	aead   cipher.AEAD
+	macKey []byte
+}
 
 func newSealer(masterKey []byte) (*sealer, error) {
 	if len(masterKey) != 32 {
@@ -96,7 +101,22 @@ func newSealer(masterKey []byte) (*sealer, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &sealer{aead: aead}, nil
+	macKey, err := hkdf.Key(sha256.New, masterKey, nil, SeedDigestLabel, 32)
+	if err != nil {
+		return nil, fmt.Errorf("microsoftapps: derive the digest key: %w", err)
+	}
+	return &sealer{aead: aead, macKey: macKey}, nil
+}
+
+// SeedDigestLabel is the HKDF label of the key that digests a Helm seed entry.
+const SeedDigestLabel = "elitea/microsoft-oauth-apps/seed-digest/v1"
+
+// digest is a keyed digest of data: the same input gives the same digest, and the
+// digest reveals nothing about a secret in it to anyone without the master key.
+func (s *sealer) digest(data []byte) string {
+	mac := hmac.New(sha256.New, s.macKey)
+	mac.Write(data)
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 func (s *sealer) seal(secret string, aad secretAAD) []byte {

@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 const testClientID = "7f8d0c1e-0000-4000-8000-000000000001"
@@ -136,5 +137,60 @@ func TestSeedKey(t *testing.T) {
 		if ValidSeedKey(key) != ok {
 			t.Errorf("ValidSeedKey(%q) = %v", key, !ok)
 		}
+	}
+}
+
+func TestAWhitespaceOnlySecretIsRefusedWhileAnExplicitEmptyOneClears(t *testing.T) {
+	blank := validInput()
+	blank.Secret = secretPtr("   \t ")
+	var validation ValidationError
+	if _, err := blank.Normalize(); !errors.As(err, &validation) || validation.Field != "secret" {
+		t.Errorf("a blank secret: %v", err)
+	}
+	clear := validInput()
+	clear.Secret = secretPtr("")
+	out, err := clear.Normalize()
+	if err != nil || out.Secret == nil || *out.Secret != "" {
+		t.Errorf("an explicit empty secret must stay a clear: %v %v", out.Secret, err)
+	}
+}
+
+func TestATenantLongerThanTheMigrationAllowsIsRefusedBeforeTheInsert(t *testing.T) {
+	long := "https://login.microsoftonline.com/" + strings.Repeat("a", 60) + "." + strings.Repeat("b", 60) + "." + strings.Repeat("c", 60) + "." + strings.Repeat("d", 60) + "." + strings.Repeat("e", 60) + ".com"
+	var validation ValidationError
+	if _, err := ParseAuthority(long); !errors.As(err, &validation) || validation.Field != "authority" {
+		t.Errorf("a 250+ character domain: %v", err)
+	}
+}
+
+func TestNormalizeIDAcceptsOnlyTheHyphenatedGuid(t *testing.T) {
+	const id = "11111111-1111-4111-8111-111111111111"
+	for _, spelling := range []string{"urn:uuid:" + id, "{" + id + "}", strings.ReplaceAll(id, "-", ""), "", "x"} {
+		if _, ok := NormalizeID(spelling); ok {
+			t.Errorf("%q was accepted", spelling)
+		}
+	}
+	if got, ok := NormalizeID(" " + strings.ToUpper(id) + " "); !ok || got != id {
+		t.Errorf("canonical form = %q %v", got, ok)
+	}
+}
+
+func TestADateOnlyExpiryIsTheEndOfThatDay(t *testing.T) {
+	got, err := ParseExpiry("2027-06-30")
+	if err != nil || got.Format("2006-01-02T15:04:05Z") != "2027-06-30T23:59:59Z" {
+		t.Fatalf("date = %v %v", got, err)
+	}
+	// The last valid day is not expired during it, and is expired the day after.
+	if state, _ := SecretExpiry(&got, time.Date(2027, 6, 30, 12, 0, 0, 0, time.UTC)); state == ExpiryExpired {
+		t.Error("a secret that expires on 30 June was expired on 30 June")
+	}
+	if state, _ := SecretExpiry(&got, time.Date(2027, 7, 1, 0, 0, 1, 0, time.UTC)); state != ExpiryExpired {
+		t.Errorf("1 July = %s", state)
+	}
+	if parsed, err := ParseExpiry("2027-06-30T10:00:00Z"); err != nil || parsed.Hour() != 10 {
+		t.Errorf("a full time is kept: %v %v", parsed, err)
+	}
+	if _, err := ParseExpiry("soon"); err == nil {
+		t.Error("garbage was accepted")
 	}
 }

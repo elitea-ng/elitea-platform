@@ -97,6 +97,21 @@ type Resolved struct {
 // Resolve checks that the app may be used for the credential and returns the
 // client. It reads the secret only after every other check passed.
 func (r *Resolver) Resolve(ctx context.Context, req Request) (Resolved, error) {
+	var lastStale error
+	// An edit between the read that described the app and the read of its secret
+	// is not a fault: describe it again. Two attempts are enough, because a third
+	// edit inside one request is not a race, it is a loop.
+	for attempt := 0; attempt < 2; attempt++ {
+		resolved, err := r.resolveOnce(ctx, req)
+		if !errors.Is(err, errStale) {
+			return resolved, err
+		}
+		lastStale = err
+	}
+	return Resolved{}, lastStale
+}
+
+func (r *Resolver) resolveOnce(ctx context.Context, req Request) (Resolved, error) {
 	app, err := r.usable(ctx, req)
 	if err != nil {
 		return Resolved{}, err
@@ -106,6 +121,9 @@ func (r *Resolver) Resolve(ctx context.Context, req Request) (Resolved, error) {
 		return Resolved{}, err
 	}
 	secret, err := r.store.openSecret(ctx, app)
+	if errors.Is(err, errStale) {
+		return Resolved{}, err
+	}
 	if err != nil {
 		if errors.Is(err, ErrCustodyIntegrity) {
 			// A secret that does not open is a platform fault the admin must
