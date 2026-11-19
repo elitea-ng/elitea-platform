@@ -37,21 +37,9 @@ on:
   # E2E stack runs elitea-main alongside elitea-web, so a backend change can
   # break a journey while touching nothing under apps/elitea-web.
   workflow_dispatch:
-  pull_request:
-    paths:
-      - "apps/elitea-web/**"
-      - "services/elitea-main/**"
-      - "deploy/**"
-      # The shared client package the app compiles from source. The client
-      # feature-parity table is NOT here: its gate runs in no-binaries.yml,
-      # so a table-only edit does not start this pipeline.
-      - "libs/ts/client-core/**"
-      # The build reads its brand (ADR-0052) from brand/<id>/ through the loader.
-      - "brand/elitea/**"
-      - "brand/sample/**"
-      - "scripts/brand/**"
-      - "scripts/ci/brand-output-scan.mjs"
-      - ".github/workflows/ci-web.yml"
+  # Called by ci.yml, which owns the PR tiers and the path filter
+  # (scripts/ci/tier-paths.json); no `pull_request` arm of its own.
+  workflow_call:
   # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
   # The nightly run on main is the one that WRITES the caches pull requests
   # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
@@ -60,7 +48,7 @@ on:
     - cron: "15 0 * * *"
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ci-web-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Minimal token scope — these jobs only read the checked-out repo.

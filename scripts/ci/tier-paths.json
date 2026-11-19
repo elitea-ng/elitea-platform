@@ -1,0 +1,515 @@
+{
+  "_comment": "The PR tiers (scripts/ci/check-tiering.mjs). Each job of .github/workflows/ci.yml that calls a workflow is listed with its tier (fast: every push; heavy: only a ready PR whose fast tier passed) and the paths that start it (null: always). Patterns are GitHub path-filter patterns (** and *, a leading ! excludes). `always` files start every job: a change to the tiering itself must exercise all of it.",
+  "always": [
+    ".github/workflows/ci.yml",
+    "scripts/ci/tier-paths.json",
+    "scripts/ci/tier-changes.mjs",
+    "scripts/ci/ci-gate.mjs"
+  ],
+  "jobs": {
+    "no-binaries": {
+      "tier": "fast",
+      "paths": null
+    },
+    "dependency-scanning": {
+      "tier": "fast",
+      "paths": null
+    },
+    "helm-lint": {
+      "tier": "fast",
+      "paths": [
+        "deploy/helm/**",
+        "deploy/argocd/**",
+        "deploy/scripts/drain-workers.sh",
+        "deploy/tests/**",
+        "scripts/ci/check-chart-deps.mjs",
+        ".github/workflows/helm-lint.yml",
+        "services/elitea-main/internal/runtimecomposition/**",
+        "deploy/docker-compose.standalone-full.yml",
+        "deploy/docker-compose.code-consumers.yml",
+        "deploy/runtime/install-material.sh",
+        "deploy/runtime/sandbox-workspace.kubernetes.example.json",
+        "deploy/runtime/worker-runtime.rust.json",
+        "deploy/runtime/worker-runtime.rust-validate.json",
+        "deploy/scripts/render-validate-worker-runtime.py",
+        "scripts/runtime/*code*",
+        "services/elitea-code-runner/Containerfile.code-platform",
+        ".github/workflows/publish.yml",
+        "libs/go/natsconn/**",
+        "services/elitea-main/cmd/elitea-main/event_stream_nats*.go",
+        "services/elitea-main/cmd/cutover-ctl/budgetcheck*.go",
+        "services/elitea-llm-gateway/internal/infra/nats/**",
+        "services/elitea-scheduler/internal/budgetwriteback/**"
+      ]
+    },
+    "ci-docs": {
+      "tier": "fast",
+      "paths": [
+        "apps/elitea-docs/**",
+        "apps/elitea-web/src/**",
+        "libs/proto/contracts/tool-categories-v1.json",
+        "libs/ts/client-core/src/brand/tokens.json",
+        "apps/elitea-web/nginx/spa.conf",
+        "apps/elitea-web/nginx/docs-security-headers.conf",
+        ".github/workflows/ci-docs.yml",
+        ".github/actions/npm-cache/**"
+      ]
+    },
+    "ci-go": {
+      "tier": "fast",
+      "paths": [
+        "services/elitea-main/**",
+        "services/elitea-scheduler/**",
+        "services/elitea-subapp-host/**",
+        "services/elitea-egress-proxy/**",
+        "libs/go/**",
+        "libs/proto/**",
+        "conformance/nativeclient/**",
+        "conformance/governed/**",
+        "deploy/governed-mocks/**",
+        "go.work",
+        "go.work.sum",
+        ".github/workflows/ci-go.yml",
+        "deploy/helm/elitea-main/**",
+        "deploy/helm/elitea/**",
+        "services/elitea-llm-gateway/scripts/env-drift-check.sh",
+        "deploy/helm/elitea/values.yaml",
+        "deploy/helm/elitea/values-nats-ha.yaml",
+        "deploy/helm/elitea/templates/nats/**",
+        "deploy/helm/elitea/Chart.lock",
+        "deploy/helm/elitea/build-deps.sh",
+        "deploy/helm/elitea/files/nats-bootstrap.sh",
+        "scripts/nats/**",
+        "docs/runtime-command-bus.md",
+        "scripts/go/**",
+        "scripts/ci/go-test-shards.mjs",
+        "scripts/ci/go-test-shards.test.mjs",
+        "scripts/contract/check_compiled_snapshots_postgres.sh",
+        "scripts/contract/generate_proto.sh",
+        "scripts/coverage/**",
+        "Taskfile.yml"
+      ]
+    },
+    "ci-web": {
+      "tier": "fast",
+      "paths": [
+        "apps/elitea-web/**",
+        "services/elitea-main/**",
+        "deploy/**",
+        "libs/ts/client-core/**",
+        "brand/elitea/**",
+        "brand/sample/**",
+        "scripts/brand/**",
+        "scripts/ci/brand-output-scan.mjs",
+        ".github/workflows/ci-web.yml"
+      ]
+    },
+    "ci-contract": {
+      "tier": "fast",
+      "paths": [
+        "services/elitea-main/tests/contract/**",
+        "services/elitea-main/api/openapi/**",
+        ".github/workflows/ci-contract.yml"
+      ]
+    },
+    "ci-gateway": {
+      "tier": "fast",
+      "paths": [
+        "services/elitea-llm-gateway/**",
+        ".github/workflows/ci-gateway.yml",
+        "scripts/ci/check-gateway-toolchain.sh",
+        "libs/go/natsconn/**",
+        "deploy/helm/elitea/values.yaml",
+        "deploy/helm/elitea/values-nats-ha.yaml",
+        "deploy/helm/elitea/templates/nats/**",
+        "deploy/helm/elitea/Chart.lock",
+        "deploy/helm/elitea/build-deps.sh",
+        "deploy/helm/elitea/files/nats-bootstrap.sh",
+        "scripts/nats/**",
+        "libs/proto/contracts/**",
+        "libs/proto/elitea/gateway/**",
+        "libs/proto/gen/go/**",
+        "services/elitea-main/migrations/shared/**",
+        "libs/rust/local-tools/src/handoff/secret_rules.json",
+        "libs/jsonschema/guardrail/**"
+      ]
+    },
+    "ci-mock-llm": {
+      "tier": "fast",
+      "paths": [
+        "deploy/mock-llm/**",
+        ".github/workflows/ci-mock-llm.yml"
+      ]
+    },
+    "ci-mobile": {
+      "tier": "fast",
+      "paths": [
+        "apps/elitea-mobile/**",
+        "services/elitea-main/api/openapi/v2.yaml",
+        "libs/ts/client-core/**",
+        "brand/elitea/**",
+        "brand/sample/**",
+        "scripts/brand/**",
+        "scripts/ci/brand-output-scan.mjs",
+        ".github/workflows/ci-mobile.yml",
+        ".github/actions/npm-cache/**"
+      ]
+    },
+    "ci-deepwiki-conformance": {
+      "tier": "fast",
+      "paths": [
+        "conformance/provider/**",
+        "libs/provider/**",
+        "scripts/provider/**",
+        "services/elitea-subapp-host/internal/apps/deepwiki/descriptor.json",
+        ".github/workflows/ci-deepwiki-conformance.yml"
+      ]
+    },
+    "image-matrix": {
+      "tier": "fast",
+      "paths": [
+        "docker-bake.hcl",
+        ".github/workflows/publish.yml",
+        ".github/workflows/nightly-image-scan.yml",
+        ".github/image-scan-exempt.txt",
+        "scripts/ci/image-matrix.sh",
+        "scripts/ci/image-scan-gate.sh",
+        "scripts/ci/image-scan-gate-test.sh",
+        "scripts/ci/image-scan-issue.mjs",
+        "scripts/ci/image-scan-issue.test.mjs",
+        "scripts/ci/py-compat.mjs",
+        "scripts/ci/testdata/trivy-*.json",
+        ".github/workflows/image-matrix.yml"
+      ]
+    },
+    "ci-rust-lint": {
+      "tier": "fast",
+      "paths": [
+        "rust-toolchain.toml",
+        "scripts/ci/assert-rust-toolchain.sh",
+        "libs/rust/**",
+        "services/elitea-worker-rust/**",
+        "services/elitea-doc-extractor/**",
+        "services/elitea-deepwiki-engine/**",
+        "services/elitea-inventory-engine/**",
+        "services/elitea-vector/**",
+        ".github/workflows/ci-rust-lint.yml"
+      ]
+    },
+    "ci-web-e2e": {
+      "tier": "heavy",
+      "paths": [
+        "apps/elitea-web/**",
+        "libs/ts/client-core/**",
+        "brand/elitea/**",
+        "brand/sample/**",
+        "scripts/brand/**",
+        "services/elitea-main/**",
+        "services/elitea-deepwiki-engine/**",
+        "libs/rust/**",
+        "services/elitea-subapp-host/**",
+        "services/elitea-worker-rust/**",
+        "services/elitea-code-runner/**",
+        "services/elitea-vector/**",
+        "services/elitea-doc-extractor/**",
+        "services/elitea-llm-gateway/**",
+        ".github/actions/**",
+        "deploy/**",
+        "docker-bake.hcl",
+        "apps/elitea-desktop/src-tauri/**",
+        "rust-toolchain.toml",
+        "scripts/ci/assert-rust-toolchain.sh",
+        "conformance/nativeclient/**",
+        "scripts/ci/e2e-lane-filter.sh",
+        "scripts/ci/e2e-lane-filter-test.sh",
+        "services/elitea-scheduler/**",
+        "services/elitea-inventory-engine/**",
+        "libs/go/**",
+        "libs/proto/**",
+        "scripts/ci/stack-images.mjs",
+        "scripts/ci/py-compat.mjs",
+        "scripts/ci/ci-compat.mjs",
+        "scripts/ci/package.json",
+        "scripts/ci/package-lock.json",
+        "scripts/ci/pull-third-party-images.sh",
+        "scripts/ci/check-ci-image-references.mjs",
+        "scripts/ci/check-workflow-cache-writes.mjs",
+        "scripts/ci/check-e2e-paths.mjs",
+        ".github/workflows/ci-web-e2e.yml"
+      ]
+    },
+    "ci-rust": {
+      "tier": "heavy",
+      "paths": [
+        "rust-toolchain.toml",
+        "scripts/ci/assert-rust-toolchain.sh",
+        "services/elitea-worker-rust/**",
+        "deploy/runtime/sandbox-workspace.kubernetes.example.json",
+        "services/elitea-code-runner/**",
+        "services/elitea-main/migrations/agentstate/**",
+        "libs/proto/**",
+        "libs/rust/**",
+        "libs/go/faults/registry/**",
+        "deploy/docker/workspace-egress.sh",
+        "services/elitea-egress-proxy/**",
+        "libs/go/egresslib/**",
+        "conformance/llm-caller/**",
+        "services/elitea-main/internal/runtimecomposition/current_toolkit_schema_snapshot.json",
+        "services/elitea-main/internal/runtimecomposition/current_rust_worker_toolkit_capability_snapshot.json",
+        "services/elitea-main/internal/rustonly/rust_only_toolkit_tools.json",
+        "deploy/helm/elitea/values.yaml",
+        "deploy/helm/elitea/values-nats-ha.yaml",
+        "deploy/helm/elitea/templates/nats/**",
+        "deploy/helm/elitea/Chart.lock",
+        "deploy/helm/elitea/build-deps.sh",
+        "deploy/helm/elitea/files/nats-bootstrap.sh",
+        "scripts/nats/**",
+        "libs/go/natsconn/**",
+        "docs/runtime-command-bus.md",
+        "services/elitea-main/cmd/elitea-migrate/**",
+        "services/elitea-main/internal/infra/db/migrate/**",
+        "scripts/runtime/test_sandbox_ledger.py",
+        "scripts/ci/check-worker-ignored-tests.mjs",
+        "scripts/ci/check-worker-ignored-tests.test.mjs",
+        "scripts/ci/ci-compat.mjs",
+        "scripts/ci/py-compat.mjs",
+        "scripts/ci/package.json",
+        "scripts/ci/package-lock.json",
+        "scripts/ci/worker-ignored-tests-allowlist.txt",
+        ".github/actions/ci-scripts-deps/**",
+        ".github/actions/npm-cache/**",
+        ".github/actions/main-write-cache/**",
+        ".github/workflows/ci-rust.yml"
+      ]
+    },
+    "ci-rust-shared": {
+      "tier": "heavy",
+      "paths": [
+        "rust-toolchain.toml",
+        "scripts/ci/assert-rust-toolchain.sh",
+        "libs/rust/**",
+        "libs/go/faults/registry/**",
+        "libs/proto/elitea/engine/**",
+        "libs/proto/elitea/llm/**",
+        "libs/proto/elitea/runtime/v1/artifact_object.proto",
+        "libs/proto/elitea/runtime/v1/internal_tool.proto",
+        "libs/proto/contracts/**",
+        "conformance/llm-caller/**",
+        "services/elitea-main/internal/runtimecomposition/current_toolkit_schema_snapshot.json",
+        "services/elitea-main/internal/runtimecomposition/current_rust_worker_toolkit_capability_snapshot.json",
+        "services/elitea-main/internal/rustonly/rust_only_toolkit_tools.json",
+        "services/elitea-main/internal/infra/extract/testdata/**",
+        ".github/workflows/ci-rust-shared.yml"
+      ]
+    },
+    "ci-deepwiki-engine": {
+      "tier": "heavy",
+      "paths": [
+        "rust-toolchain.toml",
+        "scripts/ci/assert-rust-toolchain.sh",
+        "services/elitea-deepwiki-engine/**",
+        "libs/rust/**",
+        "libs/proto/elitea/engine/**",
+        "libs/proto/elitea/llm/**",
+        "libs/proto/elitea/runtime/v1/artifact_object.proto",
+        "libs/proto/elitea/runtime/v1/internal_tool.proto",
+        "conformance/llm-caller/**",
+        "services/elitea-main/internal/runtimecomposition/current_toolkit_schema_snapshot.json",
+        "services/elitea-main/internal/runtimecomposition/current_rust_worker_toolkit_capability_snapshot.json",
+        "services/elitea-main/internal/rustonly/rust_only_toolkit_tools.json",
+        "services/elitea-subapp-host/internal/engine/**",
+        "services/elitea-subapp-host/internal/apps/deepwiki/**",
+        "conformance/provider/fixtures/deepwiki/**",
+        ".github/workflows/ci-deepwiki-engine.yml",
+        "scripts/go/declared-skips.txt"
+      ]
+    },
+    "ci-inventory-engine": {
+      "tier": "heavy",
+      "paths": [
+        "rust-toolchain.toml",
+        "scripts/ci/assert-rust-toolchain.sh",
+        "services/elitea-inventory-engine/**",
+        "libs/rust/**",
+        "libs/proto/elitea/engine/**",
+        "libs/proto/elitea/llm/**",
+        "libs/proto/elitea/runtime/v1/artifact_object.proto",
+        "libs/proto/elitea/runtime/v1/internal_tool.proto",
+        "services/elitea-subapp-host/internal/engine/**",
+        "services/elitea-subapp-host/internal/apps/inventory/**",
+        "conformance/provider/fixtures/inventory/**",
+        ".github/workflows/ci-inventory-engine.yml",
+        "scripts/go/declared-skips.txt"
+      ]
+    },
+    "ci-doc-extractor": {
+      "tier": "heavy",
+      "paths": [
+        "rust-toolchain.toml",
+        "scripts/ci/assert-rust-toolchain.sh",
+        "services/elitea-doc-extractor/**",
+        "libs/proto/elitea/extract/**",
+        "libs/rust/doc-extract/**",
+        "libs/rust/content-source/**",
+        "libs/rust/engine-sidecar/**",
+        "libs/rust/Cargo.toml",
+        "libs/rust/scripts/**",
+        "services/elitea-worker-rust/Cargo.lock",
+        ".github/workflows/ci-doc-extractor.yml"
+      ]
+    },
+    "ci-vector": {
+      "tier": "heavy",
+      "paths": [
+        "rust-toolchain.toml",
+        "scripts/ci/assert-rust-toolchain.sh",
+        "services/elitea-vector/**",
+        "libs/proto/elitea/vector/**",
+        "libs/rust/engine-sidecar/**",
+        "libs/rust/engine-core/**",
+        "libs/rust/Cargo.toml",
+        ".github/workflows/ci-vector.yml"
+      ]
+    },
+    "ci-browser-session": {
+      "tier": "heavy",
+      "paths": [
+        "rust-toolchain.toml",
+        "scripts/ci/assert-rust-toolchain.sh",
+        "libs/rust/browser-session/**",
+        "libs/rust/browser-tools/**",
+        "libs/rust/Cargo.toml",
+        "libs/rust/Cargo.lock",
+        "libs/rust/rust-toolchain.toml",
+        "libs/proto/elitea/runtime/v1/browser_session_agent_v1.md",
+        ".github/workflows/ci-browser-session.yml"
+      ]
+    },
+    "ci-desktop": {
+      "tier": "heavy",
+      "paths": [
+        "rust-toolchain.toml",
+        "scripts/ci/assert-rust-toolchain.sh",
+        "apps/elitea-desktop/**",
+        "brand/**",
+        "scripts/brand/**",
+        "scripts/ci/brand-output-scan.mjs",
+        "libs/rust/agent-runtime/**",
+        "libs/rust/local-tools/**",
+        "libs/rust/workspace-store/**",
+        "libs/rust/llm-wire/**",
+        "libs/rust/content-source/**",
+        "libs/rust/browser-tools/**",
+        "libs/rust/browser-session/**",
+        "libs/rust/desktop-control/**",
+        "libs/rust/vendor/agent-desktop/**",
+        "libs/rust/platform-rpc/**",
+        "libs/proto/elitea/runtime/v1/artifact_object.proto",
+        "libs/proto/elitea/runtime/v1/internal_tool.proto",
+        "libs/proto/contracts/**",
+        "libs/rust/connectors/**",
+        "libs/rust/doc-extract/**",
+        "libs/rust/engine-core/**",
+        "libs/rust/code-parsers/**",
+        "libs/rust/inventory-core/**",
+        "libs/rust/local-index/**",
+        "services/elitea-subapp-host/internal/apps/inventory/descriptor.json",
+        "libs/rust/vendor/adk-agent/**",
+        "libs/rust/vendor/adk-runner/**",
+        "apps/elitea-web/src/**",
+        "apps/elitea-web/vite.config.ts",
+        "apps/elitea-web/package.json",
+        "apps/elitea-web/package-lock.json",
+        "libs/ts/client-core/**",
+        ".github/workflows/ci-desktop.yml"
+      ]
+    },
+    "ci-desktop-control": {
+      "tier": "heavy",
+      "paths": [
+        "rust-toolchain.toml",
+        "scripts/ci/assert-rust-toolchain.sh",
+        "libs/rust/desktop-control/**",
+        "apps/elitea-desktop/src-tauri/**",
+        "libs/rust/local-tools/**",
+        "libs/rust/vendor/agent-desktop/**",
+        "libs/rust/Cargo.lock",
+        "libs/rust/Cargo.toml",
+        "libs/rust/rust-toolchain.toml",
+        ".github/workflows/ci-desktop-control.yml"
+      ]
+    },
+    "ci-local-tools-macos": {
+      "tier": "heavy",
+      "paths": [
+        "rust-toolchain.toml",
+        "scripts/ci/assert-rust-toolchain.sh",
+        "libs/rust/local-tools/**",
+        "libs/rust/workspace-store/**",
+        "libs/rust/agent-runtime/**",
+        "libs/rust/doc-extract/**",
+        "libs/rust/content-source/**",
+        "libs/rust/connectors/**",
+        "libs/rust/Cargo.lock",
+        "libs/rust/Cargo.toml",
+        "libs/rust/rust-toolchain.toml",
+        ".github/workflows/ci-local-tools-macos.yml"
+      ]
+    },
+    "desktop-package": {
+      "tier": "heavy",
+      "paths": [
+        ".github/workflows/desktop-package.yml",
+        "apps/elitea-desktop/scripts/desktop-package.mjs",
+        "apps/elitea-desktop/scripts/macos-pkg.sh",
+        "apps/elitea-desktop/scripts/windows-package.mjs",
+        "apps/elitea-desktop/scripts/stamp-version.mjs",
+        "apps/elitea-desktop/src-tauri/tauri.conf.json",
+        "apps/elitea-desktop/src-tauri/tauri.sidecar.conf.json",
+        ".github/actions/desktop-macos-package/**",
+        ".github/actions/desktop-windows-package/**"
+      ]
+    },
+    "helm-install-smoke": {
+      "tier": "heavy",
+      "paths": [
+        "deploy/helm/**",
+        "!deploy/helm/tests/**",
+        "!deploy/helm/**/*.md",
+        "deploy/kind/**",
+        "deploy/scripts/gen-runtime-certs.sh",
+        "services/elitea-main/internal/runtimecomposition/**",
+        "services/elitea-subapp-host/**",
+        "services/elitea-deepwiki-engine/**",
+        "services/elitea-inventory-engine/**",
+        "services/elitea-vector/**",
+        "libs/rust/**",
+        "libs/proto/**",
+        "libs/go/natsconn/**",
+        "docker-bake.hcl",
+        ".github/workflows/helm-install-smoke.yml"
+      ]
+    },
+    "ci-governed-conformance": {
+      "tier": "heavy",
+      "paths": [
+        "conformance/governed/**",
+        "deploy/docker-compose.governed.yml",
+        "deploy/governed/**",
+        "deploy/governed-mocks/**",
+        "deploy/scripts/governed-conformance.sh",
+        ".github/workflows/ci-governed-conformance.yml"
+      ]
+    },
+    "ci-handoff-loadgate": {
+      "tier": "heavy",
+      "paths": [
+        "services/elitea-main/internal/application/workspacestore/**",
+        "services/elitea-main/internal/application/workspacehandoff/**",
+        "services/elitea-main/internal/infra/db/repos/workspace_*",
+        "services/elitea-main/migrations/shared/**",
+        ".github/workflows/ci-handoff-loadgate.yml"
+      ]
+    }
+  }
+}

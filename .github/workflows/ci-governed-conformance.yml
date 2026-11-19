@@ -18,20 +18,15 @@ name: CI — Governed-profile conformance
 # change. Pull requests run it only when they touch the suite or its stack.
 
 on:
-  pull_request:
-    paths:
-      - "conformance/governed/**"
-      - "deploy/docker-compose.governed.yml"
-      - "deploy/governed/**"
-      - "deploy/governed-mocks/**"
-      - "deploy/scripts/governed-conformance.sh"
-      - ".github/workflows/ci-governed-conformance.yml"
+  # Called by ci.yml, which owns the PR tiers and the path filter
+  # (scripts/ci/tier-paths.json); no `pull_request` arm of its own.
+  workflow_call:
   schedule:
     - cron: "41 2 * * *"
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ci-governed-conformance-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:

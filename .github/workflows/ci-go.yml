@@ -1,61 +1,9 @@
 name: CI — Go
 
 on:
-  pull_request:
-    paths:
-      - "services/elitea-main/**"
-      - "services/elitea-scheduler/**"
-      - "services/elitea-subapp-host/**"
-      - "services/elitea-egress-proxy/**"
-      - "libs/go/**"
-      - "libs/proto/**"
-      # The native client conformance module (ADR-0025 WP7) is in go.work, so
-      # its helpers' unit tests, vet and lint run here; the suite itself is
-      # behind the `conformance` tag and runs in ci-web-e2e.yml.
-      - "conformance/nativeclient/**"
-      # The governed-profile conformance module and its provider doubles
-      # (ADR-0039 P6b) are in go.work too: their unit tests, vet and lint run
-      # here; the stack suite runs in ci-governed-conformance.yml.
-      - "conformance/governed/**"
-      - "deploy/governed-mocks/**"
-      - "go.work"
-      - "go.work.sum"
-      - ".github/workflows/ci-go.yml"
-      # S17: the env-drift job below checks elitea-main's Go env reads
-      # against this chart, so a chart-only change (no Go diff at all) must
-      # still trigger it — the whole point is catching drift introduced from
-      # either side.
-      - "deploy/helm/elitea-main/**"
-      - "deploy/helm/elitea/**"
-      - "services/elitea-llm-gateway/scripts/env-drift-check.sh"
-      # The secured NATS permission tests (#1076) run elitea-main's and the
-      # scheduler's real NATS paths against the nats.conf the elitea chart's
-      # bundled NATS renders, after the real bootstrap.sh. A change to the permission
-      # table, the bootstrap or the render script must run them.
-      # The bundled NATS server's permission table and the bootstrap script.
-      - "deploy/helm/elitea/values.yaml"
-      - "deploy/helm/elitea/values-nats-ha.yaml"
-      - "deploy/helm/elitea/templates/nats/**"
-      - "deploy/helm/elitea/Chart.lock"
-      - "deploy/helm/elitea/build-deps.sh"
-      - "deploy/helm/elitea/files/nats-bootstrap.sh"
-      - "scripts/nats/**"
-      # internal/transport/commandbus pins its constants to the command bus
-      # contract document.
-      - "docs/runtime-command-bus.md"
-      # The vet and test steps below run scripts/go/workspace-run.sh. A change
-      # to that script, or to the Taskfile that calls it, must run this
-      # workflow. A gate that does not trigger on the file it guards is the
-      # same false green in another costume (#409).
-      - "scripts/go/**"
-      # The Test plan job splits the Go tests into shards with this script
-      # (scripts/go/test-shards.json is under scripts/go/** above).
-      - "scripts/ci/go-test-shards.mjs"
-      - "scripts/ci/go-test-shards.test.mjs"
-      - "scripts/contract/check_compiled_snapshots_postgres.sh"
-      - "scripts/contract/generate_proto.sh"
-      - "scripts/coverage/**"
-      - "Taskfile.yml"
+  # Called by ci.yml, which owns the PR tiers and the path filter
+  # (scripts/ci/tier-paths.json); no `pull_request` arm of its own.
+  workflow_call:
   # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
   # The nightly run on main is the one that WRITES the caches pull requests
   # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
@@ -65,7 +13,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ci-go-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Minimal token scope — these jobs only read the checked-out repo.

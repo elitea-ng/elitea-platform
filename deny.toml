@@ -1,0 +1,86 @@
+# cargo-deny policy for every Rust workspace in this repository.
+#
+# One file, one policy: the workflow (dependency-scanning.yml, step "cargo-deny
+# over every Cargo.lock") runs `cargo deny --manifest-path <workspace>/Cargo.toml
+# check` for each tracked Cargo.lock, and scripts/ci/check-cargo-deny-coverage.mjs
+# fails when a lock is neither scanned nor excluded here on purpose.
+#
+# This is a code-level gate (#2246): RustSec advisories, yanked crates, a licence
+# allowlist matching what we ship, and registry sources. It needs no compile.
+#
+# Workspace crates carry no `license` field; the workflow passes `-A unlicensed`
+# so only third-party crates are held to the allowlist.
+
+[graph]
+# Resolve for the targets we ship, not every target a crate could be built for.
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+  "x86_64-pc-windows-msvc",
+  "aarch64-apple-darwin",
+  "x86_64-apple-darwin",
+]
+
+[advisories]
+version = 2
+# A yanked crate is a warning: `cargo update -p` is the fix and Dependabot proposes it.
+yanked = "warn"
+# Every ignore carries the advisory id, the reason, and an expiry: an ignore
+# that outlives its reason is a hole. scripts/ci/check-cargo-deny-coverage.mjs
+# fails once an `expires` date below has passed.
+ignore = [
+  { id = "RUSTSEC-2026-0382", reason = "rustls-webpki distrusted intermediates; first-enablement finding, tracked by #2313 (expires 2026-12-31)" },
+  { id = "RUSTSEC-2026-0381", reason = "bundled roots, distrusted emSign intermediates; first-enablement finding, tracked by #2313 (expires 2026-12-31)" },
+  { id = "RUSTSEC-2026-0385", reason = "ctutils non-constant-time comparisons; first-enablement finding, tracked by #2313 (expires 2026-12-31)" },
+  { id = "RUSTSEC-2026-0459", reason = "libsqlite3-sys bundled SQLite CVE-2026-119375; first-enablement finding, tracked by #2313 (expires 2026-12-31)" },
+  { id = "RUSTSEC-2026-0462", reason = "rmcp unbounded response buffering; first-enablement finding, tracked by #2313 (expires 2026-12-31)" },
+  { id = "RUSTSEC-2026-0414", reason = "pulldown-cmark wikilinks event growth; first-enablement finding, tracked by #2313 (expires 2026-12-31)" },
+  { id = "RUSTSEC-2026-0433", reason = "pulldown-cmark wikilinks quadratic parsing; first-enablement finding, tracked by #2313 (expires 2026-12-31)" },
+  { id = "RUSTSEC-2026-0444", reason = "astral-tl unmaintained; first-enablement finding, tracked by #2313 (expires 2026-12-31)" },
+  { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained; first-enablement finding, tracked by #2313 (expires 2026-12-31)" },
+  { id = "RUSTSEC-2024-0436", reason = "paste unmaintained; first-enablement finding, tracked by #2313 (expires 2026-12-31)" },
+  { id = "RUSTSEC-2024-0370", reason = "proc-macro-error unmaintained; first-enablement finding, tracked by #2313 (expires 2026-12-31)" },
+  { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml unmaintained; first-enablement finding, tracked by #2313 (expires 2026-12-31)" },
+  { id = "RUSTSEC-2026-0371", reason = "zbus_names unmaintained; first-enablement finding, tracked by #2313 (expires 2026-12-31)" },
+  { id = "RUSTSEC-2026-0370", reason = "zvariant unmaintained; first-enablement finding, tracked by #2313 (expires 2026-12-31)" },
+  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive unmaintained; first-enablement finding, tracked by #2313 (expires 2026-12-31)" },
+  { id = "RUSTSEC-2026-0206", reason = "rustybuzz unmaintained; first-enablement finding, tracked by #2313 (expires 2026-12-31)" },
+  { id = "RUSTSEC-2026-0192", reason = "ttf-parser unmaintained; first-enablement finding, tracked by #2313 (expires 2026-12-31)" },
+]
+
+[licenses]
+version = 2
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Unicode-DFS-2016",
+  "Zlib",
+  "MPL-2.0",
+  "CC0-1.0",
+  "0BSD",
+  "BSL-1.0",
+  "OpenSSL",
+  "CDLA-Permissive-2.0",
+  "MIT-0",
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "allow"
+wildcards = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# The two tree-sitter grammars libs/rust pins to a commit (no release carries
+# the grammar version the code parsers need).
+allow-git = [
+  "https://github.com/tree-sitter/tree-sitter-c-sharp",
+  "https://github.com/tree-sitter/tree-sitter-cpp",
+]
