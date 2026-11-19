@@ -63,6 +63,7 @@ pub(crate) struct JiraClientError {
 }
 
 impl JiraClientError {
+    #[cfg(test)]
     #[must_use]
     pub(crate) const fn code(&self) -> JiraClientErrorCode {
         self.code
