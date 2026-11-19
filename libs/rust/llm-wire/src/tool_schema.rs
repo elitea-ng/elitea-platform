@@ -197,13 +197,19 @@ pub fn normalize_tool_schema(schema: &Value, profile: SchemaProfile) -> Value {
     out
 }
 
-/// How many schemas the memo holds (tests).
+thread_local! {
+    static COMPUTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many normalisations this thread computed, as opposed to served from
+/// the memo (tests: a repeated call must not raise it).
 #[must_use]
-pub fn cached_schema_count() -> usize {
-    memo().lock().map_or(0, |guard| guard.len())
+pub fn computed_on_this_thread() -> usize {
+    COMPUTED.with(std::cell::Cell::get)
 }
 
 fn normalize_uncached(schema: &Value, profile: SchemaProfile) -> Value {
+    COMPUTED.with(|count| count.set(count.get() + 1));
     // A tool with no parameters: nothing to rewrite, nothing to note.
     if schema.as_object().is_none_or(Map::is_empty) {
         return json!({"type": "object", "properties": {}});

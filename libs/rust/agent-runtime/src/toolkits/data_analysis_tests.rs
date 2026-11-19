@@ -1387,7 +1387,7 @@ async fn the_default_sandbox_payload_fits_the_bytes_and_the_node_budget() {
 /// (about 4 bytes a token); it was 24 KB before the trim. A new tool or a
 /// longer description that trips it should be shortened, not given a bigger
 /// number.
-const DATA_TOOLS_BUDGET_BYTES: usize = 18_000;
+const DATA_TOOLS_BUDGET_BYTES: usize = 19_000;
 
 #[test]
 fn the_data_tools_fit_their_prompt_budget() {

@@ -342,7 +342,11 @@ fn filters() -> Value {
 fn filters_short() -> Value {
     json!({"type": "array", "maxItems": 50,
         "description": "Row conditions {column, operator, value}, as in filter_data.",
-        "items": {"type": "object"}})
+        "items": {"type": "object", "properties": {
+            "column": {"type": "string"},
+            "operator": {"type": "string"},
+            "value": {}},
+            "required": ["column", "operator"]}})
 }
 
 fn match_mode() -> Value {

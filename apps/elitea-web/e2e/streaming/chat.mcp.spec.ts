@@ -202,7 +202,11 @@ async function attachMcpThroughPicker(
  * Open chat with the agent whose editor is open, send `prompt`, and return the
  * conversation the Chat button created.
  */
-async function chatWithOpenAgent(page: Page, prompt: string): Promise<string> {
+async function chatWithOpenAgent(
+  page: Page,
+  prompt: string,
+  onConversation: (conversationId: string) => void,
+): Promise<string> {
   const conversationCreated = page.waitForResponse(
     (r) => CONVERSATION_CREATED_RE.test(new URL(r.url()).pathname) && r.request().method() === 'POST',
     { timeout: 30_000 },
@@ -211,6 +215,8 @@ async function chatWithOpenAgent(page: Page, prompt: string): Promise<string> {
   const conversation = (await (await conversationCreated).json()) as { id?: string | number };
   const conversationId = String(conversation.id ?? '');
   expect(conversationId, 'the Chat button must create a conversation to attach to').not.toBe('');
+  // Reported at once, so a failure after the send still lets the caller settle the turn.
+  onConversation(conversationId);
   await page.waitForURL(new RegExp(`/app/chat/${conversationId}$`), { timeout: 30_000 });
 
   // One retried unit, not fill-then-click: the pane can discard a fill after
@@ -313,7 +319,9 @@ test('an MCP connection attached through the picker is discovered, and the agent
     ).toEqual([]);
 
     // ── 4. Take a turn ────────────────────────────────────────────────────
-    conversationId = await chatWithOpenAgent(page, `autotest mcp ${suffix}`);
+    await chatWithOpenAgent(page, `autotest mcp ${suffix}`, (id) => {
+      conversationId = id;
+    });
 
     // ── 5. …and require a real answer ─────────────────────────────────────
     // This is the whole point. A stored, non-error assistant row means
@@ -365,7 +373,9 @@ test('an MCP endpoint the platform stores but the runtime will not dial refuses 
   try {
     await attachMcpThroughPicker(page, projectId, toolkitName);
 
-    conversationId = await chatWithOpenAgent(page, `autotest mcp scheme ${suffix}`);
+    await chatWithOpenAgent(page, `autotest mcp scheme ${suffix}`, (id) => {
+      conversationId = id;
+    });
 
     // Admitted, then refused — the same late shape
     // `chat.attachments.spec.ts` pins for an attached file, and for the same

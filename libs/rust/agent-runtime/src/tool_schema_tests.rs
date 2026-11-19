@@ -491,11 +491,21 @@ fn a_repeated_normalisation_is_memoised_and_identical() {
         "type": "object",
         "properties": {"unique_memo_probe_2181": {"const": "x"}},
     });
+    let start = computed_on_this_thread();
     let first = normalize_tool_schema(&raw, SchemaProfile::Gemini);
-    let after_first = cached_schema_count();
+    assert_eq!(
+        computed_on_this_thread(),
+        start + 1,
+        "the first call computes"
+    );
     let second = normalize_tool_schema(&raw, SchemaProfile::Gemini);
     assert_eq!(first, second);
-    assert!(after_first >= 1, "the first call is held");
+    assert_eq!(computed_on_this_thread(), start + 1, "the second is a hit");
     let other = normalize_tool_schema(&raw, SchemaProfile::OpenAi);
     assert_ne!(first, other, "the profile is part of the key");
+    assert_eq!(
+        computed_on_this_thread(),
+        start + 2,
+        "another profile computes"
+    );
 }

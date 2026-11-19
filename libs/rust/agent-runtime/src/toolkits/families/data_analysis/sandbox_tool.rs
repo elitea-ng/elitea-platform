@@ -52,6 +52,9 @@ pub const RUN_CODE_TOOL_NAME: &str = "run_code";
 /// admission's 64 KiB string bound, so an over-long program is a sentence the
 /// model reads, not a refused call.
 const MAX_CODE_BYTES: usize = 60_000;
+/// The most bytes the program and its input may take together on the wire (the
+/// sandbox's request limit is 1 MiB; this leaves room for the wrapper).
+const MAX_SANDBOX_REQUEST_BYTES: usize = 960 * 1024;
 /// The most bytes of `input` JSON one call carries (the admission bounds the
 /// whole call at 256 KiB and each string in it at 64 KiB).
 const MAX_INPUT_BYTES: usize = 128 * 1024;
@@ -392,6 +395,16 @@ impl RunCodeTool {
             };
             object.insert("files".to_owned(), Value::Object(staged));
             data = Value::Object(object);
+            // The files are bounded raw; escaping and base64 grow them, so the
+            // request the sandbox gets is measured here, not assumed.
+            let wire =
+                serde_json::to_string(&data).map_or(usize::MAX, |text| text.len()) + code.len() * 2;
+            if wire > MAX_SANDBOX_REQUEST_BYTES {
+                return Err(
+                    "The program and its files are over what the sandbox accepts once encoded. Pass fewer or smaller files, or read them with the data tools."
+                        .to_owned(),
+                );
+            }
         }
         let wrapped = language == AnalysisLanguage::Python;
         let request = AnalysisCodeRequest {

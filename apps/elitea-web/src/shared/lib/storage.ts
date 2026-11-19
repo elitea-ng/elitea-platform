@@ -137,11 +137,19 @@ export function onNamespaceCleared(listener: () => void): () => void {
  * sharing the origin) are untouched.
  */
 export function clearNamespace(): void {
-  for (const listener of clearListeners) listener();
   for (const area of ['local', 'session'] as const) {
     const store = areaOf(area);
     for (const key of namespacedKeys(store)) {
       store.removeItem(key);
+    }
+  }
+  // After the sweep, and each on its own: a listener that throws must neither
+  // stop the logout nor leave the others holding pre-sweep data.
+  for (const listener of clearListeners) {
+    try {
+      listener();
+    } catch {
+      // A cache that cannot drop itself is not worth failing a sign-out for.
     }
   }
 }
