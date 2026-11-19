@@ -1571,7 +1571,8 @@ where
             Ok(authority) => IndexToolSupport::Lent(authority),
             Err(reason) => IndexToolSupport::Withheld(*reason),
         };
-        let office = if is_call && matches!(request.toolkit_type(), "web" | "host_intel" | "tavily") {
+        let office = if is_call && matches!(request.toolkit_type(), "web" | "host_intel" | "tavily")
+        {
             self.web_authority(verified, authorized, lease).await?
         } else {
             self.office_authority(verified, authorized, lease, request)
