@@ -1937,7 +1937,6 @@
   "pages.toolkits.editToolkit.copyLinkCopied": "Gekopieerd!",
   "pages.toolkits.editToolkit.indexesTab": "Indexen",
   "pages.toolkits.editToolkit.save": "Opslaan",
-  "pages.toolkits.editToolkit.saveBlockedByCredential": "De geselecteerde credential heeft de verbindingscontrole niet doorstaan, dus deze toolkit kan niet worden opgeslagen.",
   "pages.toolkits.editToolkit.title": "Toolkit bewerken",
   "pages.toolkits.editToolkit.titleMcp": "MCP bewerken",
   "pages.toolkits.toolkits.emptyDescription": "Maak je eerste toolkit om te beginnen.",

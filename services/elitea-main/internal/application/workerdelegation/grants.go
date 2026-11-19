@@ -95,7 +95,8 @@ func grantMessage(grant dg.Grant) *runtimev1.WorkerDelegationGrantV1 {
 
 // withGrants adds the run's grants to policy (building the default policy when
 // the section was never saved) and returns it. It changes nothing while the
-// switch is off, the run has no saved root, or no grant is reachable.
+// switch is off or the run has no saved root. A root with no reachable grant
+// still carries its id (see below).
 func (r *Resolver) withGrants(ctx context.Context, command *runtimev1.WorkerCommandV1, input []byte, policy *runtimev1.WorkerDelegationPolicyV1) (*runtimev1.WorkerDelegationPolicyV1, error) {
 	if r.grants == nil || !r.grantsEnforced {
 		return policy, nil
@@ -109,9 +110,13 @@ func (r *Resolver) withGrants(ctx context.Context, command *runtimev1.WorkerComm
 		return policy, nil
 	}
 	grants, err := r.closureGrants(ctx, projectID, rootID)
-	if err != nil || len(grants) == 0 {
+	if err != nil {
 		return policy, err
 	}
+	// A root with no consumable grant still names itself: the worker puts the
+	// root on the edge of a refusal and its notice (`caller_id`), which is how
+	// Review delegation finds the calling agent. Sent only with the grant
+	// switch on, which is also what makes an edge without a grant refused.
 	if policy == nil {
 		policy = &runtimev1.WorkerDelegationPolicyV1{}
 	}
