@@ -230,6 +230,8 @@ var Capabilities = map[string][]Capability{
 	"projects.projects.projects.edit":  {ManageProjects},
 	"runtime.plugins":                  {AdministerPlatform},
 	"configuration.native_clients":     {AdministerPlatform},
+	// The Microsoft Default app registry (ADR-0057 decision 11).
+	"configuration.microsoft_apps": {AdministerPlatform},
 	// A schedule runs a platform routine with no user principal.
 	"configuration.scheduling.schedules.edit": {AdministerPlatform},
 

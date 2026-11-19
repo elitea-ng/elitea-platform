@@ -64,6 +64,9 @@ import type {
   ErrorResponse,
   ListConfigurationModelsParams,
   ListConfigurationsParams,
+  ListMicrosoftAppOffersParams,
+  MicrosoftAppError,
+  MicrosoftAppOffers,
   N400Response,
   N401Response,
   N403Response,
@@ -94,6 +97,254 @@ const withQueryKey = <T extends object, K>(
   }
   return result;
 };
+
+export type listMicrosoftAppOffersResponse200 = {
+  data: MicrosoftAppOffers;
+  status: 200;
+};
+
+export type listMicrosoftAppOffersResponse400 = {
+  data: MicrosoftAppError;
+  status: 400;
+};
+
+export type listMicrosoftAppOffersResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listMicrosoftAppOffersResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listMicrosoftAppOffersResponse503 = {
+  data: MicrosoftAppError;
+  status: 503;
+};
+
+export type listMicrosoftAppOffersResponseSuccess =
+  listMicrosoftAppOffersResponse200 & {
+    headers: Headers;
+  };
+export type listMicrosoftAppOffersResponseError = (
+  | listMicrosoftAppOffersResponse400
+  | listMicrosoftAppOffersResponse401
+  | listMicrosoftAppOffersResponse403
+  | listMicrosoftAppOffersResponse503
+) & {
+  headers: Headers;
+};
+
+export type listMicrosoftAppOffersResponse =
+  listMicrosoftAppOffersResponseSuccess | listMicrosoftAppOffersResponseError;
+
+export const getListMicrosoftAppOffersUrl = (
+  projectId: number,
+  params: ListMicrosoftAppOffersParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/microsoft_oauth_apps/${projectId}?${stringifiedParams}`
+    : `/microsoft_oauth_apps/${projectId}`;
+};
+
+/**
+ * The Microsoft apps an administrator registered that are active, serve the credential type and serve the project (ADR-0057 decision 5). The answer carries no client id, authority or secret. An empty registry answers an empty list, and the form shows only Custom app. The registry checks availability again at every sign-in. Requires the permission that creates a credential in the project.
+ * @summary List the Default apps a credential form may offer
+ */
+export const listMicrosoftAppOffers = async (
+  projectId: number,
+  params: ListMicrosoftAppOffersParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listMicrosoftAppOffersResponse> => {
+  return eliteaFetch<listMicrosoftAppOffersResponse>(
+    getListMicrosoftAppOffersUrl(projectId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListMicrosoftAppOffersQueryKey = (
+  projectId: number,
+  params?: ListMicrosoftAppOffersParams,
+) => {
+  return [
+    `/microsoft_oauth_apps/${projectId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListMicrosoftAppOffersQueryOptions = <
+  TData = Awaited<ReturnType<typeof listMicrosoftAppOffers>>,
+  TError = MicrosoftAppError | N401Response | N403Response,
+>(
+  projectId: number,
+  params: ListMicrosoftAppOffersParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listMicrosoftAppOffers>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListMicrosoftAppOffersQueryKey(projectId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listMicrosoftAppOffers>>
+  > = ({ signal }) =>
+    listMicrosoftAppOffers(projectId, params, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listMicrosoftAppOffers>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListMicrosoftAppOffersQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listMicrosoftAppOffers>>
+>;
+export type ListMicrosoftAppOffersQueryError =
+  MicrosoftAppError | N401Response | N403Response;
+
+export function useListMicrosoftAppOffers<
+  TData = Awaited<ReturnType<typeof listMicrosoftAppOffers>>,
+  TError = MicrosoftAppError | N401Response | N403Response,
+>(
+  projectId: number,
+  params: ListMicrosoftAppOffersParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listMicrosoftAppOffers>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listMicrosoftAppOffers>>,
+          TError,
+          Awaited<ReturnType<typeof listMicrosoftAppOffers>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListMicrosoftAppOffers<
+  TData = Awaited<ReturnType<typeof listMicrosoftAppOffers>>,
+  TError = MicrosoftAppError | N401Response | N403Response,
+>(
+  projectId: number,
+  params: ListMicrosoftAppOffersParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listMicrosoftAppOffers>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listMicrosoftAppOffers>>,
+          TError,
+          Awaited<ReturnType<typeof listMicrosoftAppOffers>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListMicrosoftAppOffers<
+  TData = Awaited<ReturnType<typeof listMicrosoftAppOffers>>,
+  TError = MicrosoftAppError | N401Response | N403Response,
+>(
+  projectId: number,
+  params: ListMicrosoftAppOffersParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listMicrosoftAppOffers>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the Default apps a credential form may offer
+ */
+
+export function useListMicrosoftAppOffers<
+  TData = Awaited<ReturnType<typeof listMicrosoftAppOffers>>,
+  TError = MicrosoftAppError | N401Response | N403Response,
+>(
+  projectId: number,
+  params: ListMicrosoftAppOffersParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listMicrosoftAppOffers>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListMicrosoftAppOffersQueryOptions(
+    projectId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
 
 export type listConfigurationsResponse200 = {
   data: ConfigurationListResponse;

@@ -32,6 +32,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/libs/go/faults"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/egress"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpoauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/microsoftapps"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/microsoftauth"
 )
 
@@ -98,17 +99,21 @@ func (h *Handler) delegatedAuthorization(w http.ResponseWriter, r *http.Request,
 	if !descriptor.IsDelegated(data) {
 		return false
 	}
+	var defaultApp *microsoftapps.Resolved
 	if appID, _ := data[microsoftauth.FieldAppID].(string); descriptor.DefaultAppSupported() && strings.TrimSpace(appID) != "" {
-		// The admin app registry (ADR-0057 decision 5) is not served yet: an
-		// app reference resolves to nothing, and falling back to another
-		// client would sign the person in as someone the credential never named.
-		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"success": false, "reason": ToolkitCheckReasonAuthFailed,
-			"message": "Default apps are not available on this deployment yet. Use a Custom app: enter its client id and secret.",
-		})
-		return true
+		// A Default app (ADR-0057 decision 5): the client comes from the admin
+		// registry, never from the credential, and an app that cannot be used is
+		// refused with its stable code instead of falling back to another client.
+		resolved, ok := h.resolveDefaultApp(w, r, projectID, configType, appID, data)
+		if !ok {
+			return true
+		}
+		defaultApp = &resolved
 	}
 	authority, err := descriptor.Authority(data)
+	if defaultApp != nil {
+		authority, err = defaultApp.Authority, nil
+	}
 	if err != nil {
 		writeDelegatedRefused(w, err.Error())
 		return true
@@ -121,6 +126,12 @@ func (h *Handler) delegatedAuthorization(w http.ResponseWriter, r *http.Request,
 		return true
 	}
 	signInScopes, dropped, err := descriptor.SignInScopes(data)
+	storedScopes := data["scopes"]
+	if defaultApp != nil {
+		var effective []string
+		signInScopes, effective, dropped, err = defaultAppScopes(descriptor, *defaultApp, configType, data)
+		storedScopes = anyStrings(effective)
+	}
 	if err != nil {
 		writeDelegatedRefused(w, "Scopes: "+err.Error()+".")
 		return true
@@ -136,8 +147,17 @@ func (h *Handler) delegatedAuthorization(w http.ResponseWriter, r *http.Request,
 	}
 	return h.answerSignInRequest(w, r, projectID, signInRequest{
 		authority: authority, descriptor: &descriptor, audience: audience, scopes: signInScopes,
-		storedScopes: data["scopes"],
+		storedScopes: storedScopes,
 	})
+}
+
+// anyStrings is a string list in the shape a stored credential value has.
+func anyStrings(values []string) []any {
+	out := make([]any, 0, len(values))
+	for _, value := range values {
+		out = append(out, value)
+	}
+	return out
 }
 
 // genericDelegatedAuthorization is the check of a credential that names an

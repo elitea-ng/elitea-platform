@@ -1165,7 +1165,13 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// amendment 1, delegation epic 2156 story S2b) with its grant column, and
 	// the one-open-request index that leaves it out. No permission: approving
 	// is the lifecycle's existing change request approval.
-	require.EqualValues(t, 254, Head(shared))
+	//
+	// 255: shared/0255_microsoft_oauth_apps.sql, the Microsoft Default app
+	// registry (elitea_identity.microsoft_oauth_apps and its project set, the
+	// client secret sealed and write-only) and the administration-mode grant
+	// `configuration.microsoft_apps` to super_admin and admin (ADR-0057
+	// decisions 4, 5 and 11, epic 2254 story S1b).
+	require.EqualValues(t, 255, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

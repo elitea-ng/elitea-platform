@@ -93,6 +93,10 @@ type Handler struct {
 	// microsoftProbe is the guarded client that reads a delegated token's
 	// identity (check_connection_oauth.go). nil refuses the read.
 	microsoftProbe func(*http.Request) (*http.Response, error)
+	// microsoftApps resolves a Default app (`oauth_app_id`) from the admin
+	// registry (microsoft_default_app.go). nil: no registry is composed, and a
+	// credential that names an app is refused.
+	microsoftApps MicrosoftAppDescriber
 	// modelProbes bounds the rate and the concurrency of the llm_model test
 	// per project and user (model_probe_limiter.go). NewHandler always
 	// supplies one.
