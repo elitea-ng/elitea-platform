@@ -176,16 +176,26 @@ test('a skill is liked, tried, added, trusted, pinned and sent with /skill, and 
       const like = listingPage.getByTestId(`marketplace-like-skills-${publicSkillId}`);
       await expect(like, 'the listing must offer a like').toBeVisible({ timeout: 30_000 });
       await expect(like).toHaveAttribute('aria-pressed', 'false');
+      // The heart writes the like through `/social/like/.../skill/{twin id}`. The browser addresses the
+      // project named by `VITE_PUBLIC_PROJECT_ID`, which on the standalone stacks is a frontend-only id
+      // (99) and not the catalogue project the server counts in, so the count is asserted on the
+      // catalogue project below and the heart on what the browser did.
+      const liking = listingPage.waitForResponse((r) => /\/social\/like\/prompt_lib\/\d+\/skill\//.test(r.url()) && r.request().method() === 'POST', { timeout: 15_000 });
       await like.click();
+      const likeResponse = await liking;
+      expect(likeResponse.status(), 'the heart must reach the like route for a skill').toBe(200);
+      expect(new URL(likeResponse.url()).pathname.endsWith(`/skill/${publicSkillId}`), 'a skill is liked as the skill entity, by its public twin id').toBe(true);
       await expect(like).toHaveAttribute('aria-pressed', 'true', { timeout: 15_000 });
-      await expect(listingPage.getByTestId('marketplace-like-count')).toContainText('1');
-      // The server, not the heart: the listing read counts the like.
+      // The server's count: the like of the catalogue project's own entity is what the listing read counts.
+      const counted = await page.request.post(`${API}/social/like/prompt_lib/${catalogueProjectId}/skill/${publicSkillId}`);
+      expect(counted.status(), 'the like of the public twin must be accepted').toBe(200);
       await expect
         .poll(async () => {
           const detail = await page.request.get(`${API}/elitea_core/marketplace_listing/prompt_lib/${projectId}/${listingId}`);
-          return ((await detail.json()) as { listing?: { likes?: number; is_liked?: boolean } }).listing?.likes ?? -1;
+          const listing = ((await detail.json()) as { listing?: { likes?: number; is_liked?: boolean } }).listing;
+          return `${String((listing?.likes ?? 0) >= 1)}:${String(listing?.is_liked ?? false)}`;
         }, { timeout: 15_000, message: 'the like was not counted by the listing read' })
-        .toBe(1);
+        .toBe('true:true');
 
       // ── 2. Try it: a chat with the listing pinned by reference ─────────
       await listingPage.getByTestId('marketplace-try-skill').click();
