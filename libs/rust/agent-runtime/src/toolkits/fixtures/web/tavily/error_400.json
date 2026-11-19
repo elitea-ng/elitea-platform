@@ -1,0 +1,9 @@
+{
+ "status": 400,
+ "content_type": "application/json",
+ "body": {
+  "detail": {
+   "error": "Invalid URL: tvly-fixture is not allowed"
+  }
+ }
+}

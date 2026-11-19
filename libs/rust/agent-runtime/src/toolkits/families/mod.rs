@@ -214,9 +214,9 @@ pub(crate) fn rust_only_catalogue_document() -> serde_json::Value {
             "web": web::catalogue::web_type_entry(),
             "host_intel": web::catalogue::host_intel_type_entry(),
             "browser": browser::catalogue::browser_type_entry(),
-            // Not served by any family yet (#2261): the catalogue entry of an
-            // SDK type newer than the pinned snapshot, the worked example of
-            // docs/contributing/adding-types.md.
+            // The catalogue entry of an SDK type newer than the pinned
+            // snapshot (the worked example of docs/contributing/adding-types.md),
+            // built by `web::tavily_toolkit` (#2261).
             "tavily": web::tavily_catalogue::tavily_type_entry(),
         },
     })

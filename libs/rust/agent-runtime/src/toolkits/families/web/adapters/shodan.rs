@@ -72,6 +72,8 @@ pub(crate) fn construct(config: &ProviderConfig, transport: Arc<dyn Transport>) 
             key,
             transport,
         })),
+        crawl: None,
+        map: None,
     }
 }
 

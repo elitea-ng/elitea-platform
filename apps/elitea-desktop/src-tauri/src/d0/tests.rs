@@ -1459,9 +1459,14 @@ fn web_tools_absent_when_policy_off() {
         ..LocalWorkPolicy::default()
     };
     assert!(!remote_tools::offered(&typed_spec("web"), &off));
+    assert!(
+        !remote_tools::offered(&typed_spec("tavily"), &off),
+        "the Tavily toolkit follows the web switch"
+    );
     assert!(remote_tools::offered(&typed_spec("jira"), &off));
     let on = LocalWorkPolicy { web: true, ..off };
     assert!(remote_tools::offered(&typed_spec("web"), &on));
+    assert!(remote_tools::offered(&typed_spec("tavily"), &on));
     assert!(!remote_tools::offered(&typed_spec("host_intel"), &on));
 }
 

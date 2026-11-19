@@ -1,0 +1,9 @@
+{
+ "status": 432,
+ "content_type": "application/json",
+ "body": {
+  "detail": {
+   "error": "This request exceeds your plan's set usage limit."
+  }
+ }
+}
