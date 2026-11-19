@@ -67,7 +67,9 @@
 //!   download is QUARANTINED (`com.apple.quarantine`, so Gatekeeper checks
 //!   it on first open, as for a Safari download) and records where it came
 //!   from (`com.apple.metadata:kMDItemWhereFroms`). A download that cannot
-//!   be quarantined is deleted and reported as failed.
+//!   be quarantined is deleted and reported as failed. On Windows it gets
+//!   the Mark of the Web (the `Zone.Identifier` stream, `ZoneId=3`, #1816);
+//!   Linux has no equivalent.
 //! - **History buttons** are native on macOS: Back, Forward and Stop call
 //!   the WKWebView's `goBack`, `goForward` and `stopLoading`
 //!   (`browser-driver-macos`, #1634), Reload `webview.reload()`, so a page
@@ -596,10 +598,53 @@ fn quarantine(path: &Path, url: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Other systems have no quarantine attribute. Windows' equivalent, the
-/// Mark of the Web, is not written yet (a follow-up, docs page
-/// `development/browser-driver-windows-linux`).
-#[cfg(not(target_os = "macos"))]
+/// The `Zone.Identifier` stream of a download: the Mark of the Web, in the
+/// format Edge and Chrome write. `ZoneId=3` is the Internet zone, which makes
+/// SmartScreen and Office's Protected View treat the file as downloaded. The
+/// origin is the download's URL with its credentials, query and fragment
+/// stripped (they can carry a token), at most 2048 characters; a URL that is
+/// not `http(s)` is left out. `HostUrl` and `ReferrerUrl` both carry it, as a
+/// download the pane started has no separate referrer.
+#[cfg_attr(
+    not(any(windows, test)),
+    expect(dead_code, reason = "Windows only")
+)]
+#[must_use]
+pub fn zone_identifier(url: &str) -> String {
+    use std::fmt::Write as _;
+    let mut text = String::from("[ZoneTransfer]\r\nZoneId=3\r\n");
+    if let Ok(mut origin) = Url::parse(url)
+        && matches!(origin.scheme(), "http" | "https")
+    {
+        let _ = origin.set_username("");
+        let _ = origin.set_password(None);
+        origin.set_query(None);
+        origin.set_fragment(None);
+        let origin: String = origin.as_str().chars().take(2048).collect();
+        let _ = write!(text, "ReferrerUrl={origin}\r\nHostUrl={origin}\r\n");
+    }
+    text
+}
+
+/// Mark a finished download with the Mark of the Web: the `Zone.Identifier`
+/// alternate data stream (`<file>:Zone.Identifier`, plain file I/O on NTFS).
+/// A file system without streams (FAT, exFAT, a network share) refuses it;
+/// that is logged and the download is kept, as Chrome and Edge do: deleting
+/// a person's download over a missing stream would lose their file for no
+/// safety the file system could give.
+#[cfg(windows)]
+fn quarantine(path: &Path, url: &str) -> std::io::Result<()> {
+    let mut stream = path.as_os_str().to_owned();
+    stream.push(":Zone.Identifier");
+    if let Err(error) = std::fs::write(PathBuf::from(stream), zone_identifier(url)) {
+        log::warn!(target: "browser", "a download got no Mark of the Web: {error}");
+    }
+    Ok(())
+}
+
+/// Linux has no quarantine attribute to write, and documents it
+/// (`development/browser-driver-windows-linux`, Limits).
+#[cfg(not(any(target_os = "macos", windows)))]
 const fn quarantine(_path: &Path, _url: &str) -> std::io::Result<()> {
     Ok(())
 }
@@ -2245,6 +2290,33 @@ mod tests {
             "another pane's download is its own"
         );
         assert!(pending.is_empty(), "a finished key is dropped");
+    }
+
+    #[test]
+    fn the_mark_of_the_web_names_the_internet_zone_and_the_bare_origin() {
+        assert_eq!(
+            zone_identifier("https://user:pw@example.com/a/report.pdf?token=s3cret#frag"),
+            "[ZoneTransfer]\r\nZoneId=3\r\nReferrerUrl=https://example.com/a/report.pdf\r\nHostUrl=https://example.com/a/report.pdf\r\n"
+        );
+        assert_eq!(
+            zone_identifier("blob:https://example.com/uuid"),
+            "[ZoneTransfer]\r\nZoneId=3\r\n",
+            "a non-http origin is left out, the zone stays"
+        );
+        assert_eq!(zone_identifier("not a url"), "[ZoneTransfer]\r\nZoneId=3\r\n");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_finished_windows_download_carries_the_zone_stream() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("report.pdf");
+        std::fs::write(&path, "%PDF").unwrap();
+        quarantine(&path, "https://example.com/report.pdf?t=1").unwrap();
+        let stream = std::fs::read_to_string(dir.path().join("report.pdf:Zone.Identifier")).unwrap();
+        assert!(stream.contains("ZoneId=3"), "{stream}");
+        assert!(stream.contains("HostUrl=https://example.com/report.pdf\r\n"), "{stream}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "%PDF", "the file itself is untouched");
     }
 
     #[test]
