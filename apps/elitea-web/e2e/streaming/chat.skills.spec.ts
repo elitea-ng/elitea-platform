@@ -230,6 +230,11 @@ test('a skill is liked, tried, added, trusted, pinned and sent with /skill, and 
     expect(copyRow?.trust, 'the list row of the copy carries its trust state, with no per-row request').toMatchObject({ foreign: true, state: 'untrusted' });
     expect(ownRow?.trust, 'a skill written here needs no trust').toMatchObject({ foreign: false, state: 'not_required' });
 
+    // The copy keeps the published skill's name, and a `~name` is resolved by name, so the original goes
+    // now: the catalogue twin and the copy do not depend on it, and one name must mean one skill below.
+    const removed = await page.request.delete(`${API}/elitea_core/skill/prompt_lib/${projectId}/${authored.id}`);
+    expect(removed.ok(), `the original skill was not removed: ${removed.status()}`).toBe(true);
+
     // The skills list says so, as a badge on the card.
     await page.goto(`${BASE_URL}/app/skills/all`);
     await expect(page.getByText(skillName).first()).toBeVisible({ timeout: 30_000 });
