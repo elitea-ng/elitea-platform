@@ -9,6 +9,7 @@ import type { OpenAPIAction } from '../ToolOpenAPI/OpenAPIActionsTable';
 import { OpenAPISchemaInput } from '../ToolOpenAPI/OpenAPISchemaInput';
 
 import { ArrayFieldInput } from './ArrayFieldInput';
+import { renderOauthAppSelect } from './OauthAppSelectField';
 import { ToolActionsSelector } from './ToolActionsSelector';
 import {
   BooleanField,
@@ -380,6 +381,7 @@ function renderDefault(ctx: FieldRenderContext): ReactNode {
 
 const RENDERERS: Readonly<Record<FieldKind, (ctx: FieldRenderContext) => ReactNode>> = {
   openapiSpec: renderOpenapiSpec,
+  oauthAppSelect: renderOauthAppSelect,
   selectedTools: renderSelectedTools,
   array: renderArray,
   secret: renderSecret,

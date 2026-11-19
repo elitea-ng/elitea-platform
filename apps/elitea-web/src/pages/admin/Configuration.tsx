@@ -140,12 +140,14 @@ import { AdminEmailEditor } from './AdminEmailEditor';
 import { AdminIdentityProvidersEditor } from './AdminIdentityProvidersEditor';
 import { AdminLlmProxyEditor } from './AdminLlmProxyEditor';
 import { AdminMcpServersEditor } from './AdminMcpServersEditor';
+import { AdminMicrosoftAppsEditor } from './AdminMicrosoftAppsEditor';
 import { AdminNativeClientsEditor } from './AdminNativeClientsEditor';
 import { BrandingSectionCard } from './BrandingSectionCard';
 import { EMAIL_MANAGED_SURFACE } from './api/adminEmailApi';
 import { IDENTITY_PROVIDERS_MANAGED_SURFACE } from './api/adminIdentityProvidersApi';
 import { LLM_PROXY_MANAGED_SURFACE } from './api/adminLlmProxyApi';
 import { MCP_SERVERS_MANAGED_SURFACE } from './api/adminMcpServersApi';
+import { MICROSOFT_APPS_MANAGED_SURFACE } from './api/adminMicrosoftAppsApi';
 import { NATIVE_CLIENTS_MANAGED_SURFACE } from './api/adminNativeClientsApi';
 import { ConfigurationSectionActions } from './ConfigurationSectionActions';
 import { ConfigurationDelegationStatus } from './ConfigurationDelegationStatus';
@@ -173,6 +175,7 @@ const MANAGED_SECTION_EDITORS: Readonly<Record<string, ComponentType>> = {
   [LLM_PROXY_MANAGED_SURFACE]: AdminLlmProxyEditor,
   [EMAIL_MANAGED_SURFACE]: AdminEmailEditor,
   [NATIVE_CLIENTS_MANAGED_SURFACE]: AdminNativeClientsEditor,
+  [MICROSOFT_APPS_MANAGED_SURFACE]: AdminMicrosoftAppsEditor,
 };
 
 /** The dedicated editor for a section, when this build has one. */

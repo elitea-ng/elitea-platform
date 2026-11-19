@@ -1,0 +1,131 @@
+---
+title: "Microsoft apps (Default app)"
+description: "Register the Microsoft Entra apps people sign in with for Outlook, Teams, Microsoft Graph, Dataverse and SharePoint credentials, from the admin console or from Helm, with the Entra setup steps, redirect URI and permissions this deployment needs."
+---
+
+A Microsoft credential (Outlook, Teams, Microsoft Graph, Dataverse, SharePoint) signs in as the person using it, through a Microsoft Entra app. There are two ways to supply that app:
+
+- **Custom app.** The credential holds its own client ID and client secret. This is how SharePoint works today, and it needs nothing from this page.
+- **Default app.** An administrator registers the Entra app once, here. A credential then names only that app. People never see the client ID or the secret, and an administrator's change (a new secret, a narrower permission list) reaches every credential without anyone editing it.
+
+**Nothing is turned on by default.** While no app is registered, a credential form offers only Custom app, and nothing on this page is a prerequisite for it. To turn Default apps on later you do the Entra side below and then register one app, with no release, migration or feature flag.
+
+<Note>
+This release ships the registry and everything an Entra administrator needs to prepare. The sign-in window for Microsoft credentials, and the credential types themselves, arrive in the following releases of the same programme; an app registered now is ready for them. Until then the credential forms offer only what they offered before.
+</Note>
+
+The section is **Configuration › Microsoft apps** in the admin console and needs the `configuration.microsoft_apps` permission, which `super_admin` and `admin` hold. The mobile app has no admin portal: manage apps in the web console, or the desktop app, which shows the same console. People sign in on web, desktop and mobile with one flow and the same redirect URI.
+
+## What Microsoft Entra needs
+
+The page prints every value below for your deployment, so an Entra administrator can copy it. Do these steps once for each app.
+
+<Steps>
+  <Step title="Register the app">
+    In the Entra admin center, **App registrations**, **New registration**. Choose **single tenant** for one organization, or **multitenant** (accounts in any organizational directory) when the authority is `organizations`.
+  </Step>
+  <Step title="Add the redirect URI">
+    **Authentication**, **Add a platform**, **Web**, and enter
+
+    ```text
+    https://<your deployment host>/api/v2/microsoft_login:callback
+    ```
+
+    This is the only redirect URI needed, for web, desktop and mobile and for both app modes. Do not register a custom scheme or a loopback address. Microsoft accepts `http` only for `localhost`, so the deployment must be reached over `https` (set `DEPLOYMENT_URL`); the page warns when it is not.
+  </Step>
+  <Step title="Add the delegated permissions">
+    **API permissions**, **Add a permission**, **Delegated permissions**. Add `openid`, `profile` and, unless token refresh is off, `offline_access`, plus the permissions of the credential types the app serves:
+
+    | Credential type | API | Permissions the credential can ask for | Default |
+    |---|---|---|---|
+    | Outlook | Microsoft Graph | `Mail.Read`, `Mail.ReadWrite`, `Mail.Send`, `Mail.Read.Shared`, `Mail.ReadWrite.Shared`, `Mail.Send.Shared` | `Mail.Read` |
+    | Teams | Microsoft Graph | `User.ReadBasic.All`, `Chat.Read`, `ChatMessage.Send`, `Chat.Create`, `Team.ReadBasic.All`, `Channel.ReadBasic.All`, `ChannelMessage.Send`, `ChannelMessage.Read.All` | `User.ReadBasic.All`, `Chat.Read`, `Team.ReadBasic.All`, `Channel.ReadBasic.All` |
+    | Microsoft Graph | Microsoft Graph | any Graph delegated permission name | `User.Read` |
+    | Dataverse | Dynamics CRM | `user_impersonation` | `user_impersonation` |
+    | SharePoint | Microsoft Graph | any Graph delegated permission name | `Sites.Read.All` |
+
+    The app's own **permission ceiling** (below) says which of these it may ask for, so add only the permissions that ceiling lists. The app's page shows the exact list.
+  </Step>
+  <Step title="Grant admin consent where needed">
+    `ChannelMessage.Read.All` needs an Entra administrator's consent. Open the **admin consent URL** printed on the app (an Entra administrator approves it once), or use **Grant admin consent** in the Entra portal. For a multitenant app the URL carries `{tenant-id}`: each organization's administrator opens it with their own tenant ID.
+  </Step>
+  <Step title="Create a client secret">
+    **Certificates and secrets**, **New client secret**. Copy the **value** (not the secret ID) and paste it into the app here. Enter its expiry date too: the page warns 30 days before it lapses and marks the app when it has.
+  </Step>
+</Steps>
+
+Consent cannot be tested without a person. **Test** checks the rest (below), and the first sign-in proves consent and shows Entra's error code if it fails.
+
+<Note>
+Sovereign clouds are not supported. The authority must be on `login.microsoftonline.com`, Dataverse hosts must end in `.dynamics.com`, and `login.microsoftonline.us`, `login.partner.microsoftonline.cn`, `.dynamics.cn` and `.microsoftdynamics.us` are refused. The client secret is only ever sent to the app's own authority.
+</Note>
+
+## Register an app
+
+Choose **Register Microsoft app**. Fields:
+
+| Field | Meaning |
+|---|---|
+| Name, description | Shown to people in the credential form. |
+| Application (client) ID | The GUID from the Entra app's Overview. |
+| Authority | `https://login.microsoftonline.com/` followed by the tenant ID, a verified domain, `organizations` or `common`. |
+| Credential types | Which of the five types the app serves. |
+| Permissions | Per type, the permissions the app may ask for (its **ceiling**). Outlook and Teams are checkbox lists; Microsoft Graph and SharePoint take Graph permission names; Dataverse has none, because its one scope is `user_impersonation` on the environment named in each credential. A type with nothing saved gets its default. |
+| Ask for `offline_access` | Whether sign-in requests a refresh token. |
+| Projects | Every project, or selected project IDs. |
+| Client secret | **Write-only.** See below. |
+| Secret expires on | Optional; drives the warning. |
+
+A credential that signs in under a Default app asks only for the permissions its ceiling allows: what the person ticked, cut to the ceiling, with what was removed shown in the form. Microsoft grants the token every permission that person already consented to for that Entra app, so unticking a box never removes a granted permission; for strict limits use a separate Entra app.
+
+### The client secret never leaves the platform
+
+The secret is sealed in the platform database (AES-256-GCM, bound to its app and client) and is **never returned**: not by the API, not in the console, not in a log, an audit event or an export. A listing says only that one is stored. The field is empty when you edit an app:
+
+- leave it empty to keep the stored secret;
+- type a value to replace it;
+- tick **Remove the stored secret** to clear it (the app becomes a draft).
+
+Changing the client ID needs the new client's secret in the same save, because a secret belongs to its client. Sign-in and token refresh run inside the platform, so the secret is never sent to the browser, the desktop app, the mobile app or a worker.
+
+### States
+
+| State | Meaning |
+|---|---|
+| Draft | No secret yet. Not offered. |
+| Active | Usable. |
+| Disabled | Switched off with the row switch. Not offered for new credentials; a credential that names it fails with `app_disabled` and is never moved to another client. Edits keep it disabled. |
+| Needs attention | The platform found the app unusable, for example a stored secret that does not open. Saving a new secret fixes it. |
+
+Every create, edit, enable, disable and secret change writes a security audit event (`config.microsoft_oauth_app.*`); the event carries the app id and the names of the fields that changed, never a value.
+
+### Test
+
+**Test** checks that the client ID is a GUID, that the authority publishes Microsoft Entra metadata on `login.microsoftonline.com`, that the redirect URI is one Entra accepts and matches this deployment's host, and that a secret is stored and not expired. It reads only public metadata.
+
+## Allow Custom app
+
+The **Allow Custom app** switch is the platform setting `microsoft.custom_apps` (on by default). Turn it off when every Microsoft credential must use a vetted Default app: the credential form then offers only the registered apps. Existing Custom app credentials keep working.
+
+## Seed apps from Helm
+
+For a deployment managed from Git, list the apps in the chart values. Main creates or updates one row per entry at start. The client secret comes from a Kubernetes Secret, never from the values.
+
+```yaml
+microsoftOAuthApps:
+  - key: corp
+    name: Company Microsoft
+    clientId: 00000000-0000-0000-0000-000000000000
+    authority: https://login.microsoftonline.com/<tenant ID>
+    credentialTypes: [outlook, teams]
+    scopeCeiling:
+      outlook: [Mail.Read, Mail.Send]
+    secretExpiresAt: 2027-06-30
+    secret: { existingSecret: microsoft-app-corp, key: client-secret }
+```
+
+`key` names the row, so a re-render updates it instead of adding another. A change to a value updates the same row; an app an administrator disabled in the console stays disabled across restarts; a restart that changes nothing writes nothing. An entry without a `secret` stays a draft until one is set in the console. A malformed entry stops Main from starting, with the field named in its log. The default is an empty list.
+
+## What people see
+
+In a credential form for a type the app serves, an **App** field offers **Custom app** and the apps that are active and available to the project. With no registered app the field does not appear.

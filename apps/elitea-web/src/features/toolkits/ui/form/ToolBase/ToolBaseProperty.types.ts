@@ -45,6 +45,8 @@ export interface ToolBasePropertyCredentialContext {
   readonly onCredentialReload?: OnCredentialReload | undefined;
   /** #902/ELITEA-0726: the selected project's scope, so a secret field's "Create new secret" entry can name it ("New Project Secret" / "New Private Secret"). `undefined` means the composition root does not know the scope — the generic label then stands, never a guess. */
   readonly isTeamProject?: boolean | undefined;
+  /** The credential type being edited, for example `outlook`. The `oauth_app_select` field needs it to list the Default apps that serve the type; without it the field renders nothing. */
+  readonly credentialType?: string | undefined;
 }
 
 export interface ToolBasePropertySlots {
