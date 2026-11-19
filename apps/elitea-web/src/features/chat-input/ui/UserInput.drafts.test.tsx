@@ -57,6 +57,28 @@ describe('composer drafts', () => {
     expect(readDraft('chat:1:a')).toBe('');
   });
 
+  it('keeps text typed before the draft key existed when the composer is rebuilt as the key resolves', async () => {
+    const user = userEvent.setup();
+    const first = renderWithTheme(<Composer draftKey={undefined} />);
+    await user.type(textarea(), 'typed while the page resolved');
+    first.unmount();
+    renderWithTheme(<Composer draftKey="chat:1:c7" />);
+    expect(textarea()).toHaveValue('typed while the page resolved');
+  });
+
+  it('does not hand unkeyed text to a composer opened long afterwards', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const first = renderWithTheme(<Composer draftKey={undefined} />);
+    await user.type(textarea(), 'left behind');
+    first.unmount();
+    act(() => {
+      vi.advanceTimersByTime(6_000);
+    });
+    renderWithTheme(<Composer draftKey="chat:1:c8" />);
+    expect(textarea()).toHaveValue('');
+  });
+
   it("carries a new chat's text to the conversation it becomes", async () => {
     const user = userEvent.setup();
     const { rerender } = renderWithTheme(<Composer draftKey="chat:1:new" />);
