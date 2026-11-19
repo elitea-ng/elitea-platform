@@ -103,6 +103,8 @@ export interface SlashSuggestionListProps {
   /** `null` both commits "the whole toolkit, no specific tool" AND (via `MentionToolList`'s own `ClickAwayListener`) signals "close without picking a tool" — same one-callback convention `shared/ui/MentionToolList`'s own doc comment documents. */
   readonly onSelectTool: (toolName: string | null) => void;
   readonly onClose: () => void;
+  /** The first `Skills` entry of the list (ADR-0050 amendment 1, A1.5): a pick inserts `/skill ` and hands over to the skill picker. Absent when the chat cannot take a skill. */
+  readonly onSelectSkills?: (() => void) | undefined;
   readonly participantToolkits: readonly SlashParticipantToolkit[];
   readonly isMcpVisible: boolean;
   readonly activeIndex: number;
@@ -193,6 +195,7 @@ function renderPhaseBody(params: {
   readonly onSelectToolkit: (toolkit: SlashParticipantToolkit) => void;
   readonly onSelectTool: (toolName: string | null) => void;
   readonly onClose: () => void;
+  readonly onSelectSkills: (() => void) | undefined;
 }): ReactNode {
   if (params.phase === 'idle') return null;
 
@@ -201,6 +204,7 @@ function renderPhaseBody(params: {
       <>
         {params.validators}
         <ToolkitMentionList
+          onSelectSkills={params.onSelectSkills}
           toolkits={params.filteredParticipants}
           onSelectToolkit={params.onSelectToolkit}
           onClose={params.onClose}
@@ -236,6 +240,12 @@ function renderPhaseBody(params: {
   );
 }
 
+/** The `Skills` row shows while what was typed after the `/` is the start of `skill` (a full `/skill` already opens the skill picker by itself). */
+function skillsEntryShown(onSelectSkills: (() => void) | undefined, toolkitQuery: string): boolean {
+  const typed = toolkitQuery.toLowerCase();
+  return onSelectSkills !== undefined && typed !== 'skill' && 'skill'.startsWith(typed);
+}
+
 export function SlashSuggestionList(props: SlashSuggestionListProps): ReactNode {
   const {
     phase,
@@ -246,6 +256,7 @@ export function SlashSuggestionList(props: SlashSuggestionListProps): ReactNode 
     onSelectToolkit,
     onSelectTool,
     onClose,
+    onSelectSkills: onSelectSkillsProp,
     participantToolkits,
     isMcpVisible,
     activeIndex,
@@ -256,6 +267,8 @@ export function SlashSuggestionList(props: SlashSuggestionListProps): ReactNode 
     useToolkitDetailsQuery,
   } = props;
 
+  const onSelectSkills = skillsEntryShown(onSelectSkillsProp, toolkitQuery) ? onSelectSkillsProp : undefined;
+  const skillsRows = onSelectSkills === undefined ? 0 : 1;
   const infoByKey = toolkitValidation.useToolkitValidationStore((state) => state.infoByKey);
 
   // Only show toolkits that are added as conversation participants (AC1)
@@ -297,7 +310,7 @@ export function SlashSuggestionList(props: SlashSuggestionListProps): ReactNode 
   }, [phase, isQueryFinal, toolkitQuery, filteredParticipants]);
 
   // Keep itemCountRef in sync and reset active index whenever the visible list changes.
-  const currentListLength = phase === 'toolkit' ? filteredParticipants.length : filteredTools.length;
+  const currentListLength = phase === 'toolkit' ? filteredParticipants.length + skillsRows : filteredTools.length;
   useEffect(() => {
     itemCountRef.current = currentListLength;
     setActiveIndex(0);
@@ -308,7 +321,11 @@ export function SlashSuggestionList(props: SlashSuggestionListProps): ReactNode 
   useEffect(() => {
     if (phase === 'toolkit') {
       onConfirmActiveRef.current = (idx) => {
-        const participant = filteredParticipants[idx];
+        if (skillsRows === 1 && idx === 0) {
+          onSelectSkills?.();
+          return;
+        }
+        const participant = filteredParticipants[idx - skillsRows];
         if (participant) onSelectToolkit(participant);
       };
     } else if (phase === 'tool') {
@@ -320,7 +337,7 @@ export function SlashSuggestionList(props: SlashSuggestionListProps): ReactNode 
       onConfirmActiveRef.current = null;
     }
     // oxlint-disable-next-line react/exhaustive-deps -- mirrors the baseline's own `[phase, filteredParticipants, filteredTools]`-only dependency list.
-  }, [phase, filteredParticipants, filteredTools]);
+  }, [phase, filteredParticipants, filteredTools, skillsRows, onSelectSkills]);
 
   // Render one validator per participant toolkit. Each mounts when the slash menu
   // opens and fires the validation API only when no data exists yet in the store.
@@ -348,5 +365,6 @@ export function SlashSuggestionList(props: SlashSuggestionListProps): ReactNode 
     onSelectToolkit,
     onSelectTool,
     onClose,
+    onSelectSkills,
   });
 }

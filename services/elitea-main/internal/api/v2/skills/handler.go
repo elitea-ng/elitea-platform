@@ -84,6 +84,17 @@ type SkillVersionAuthor struct {
 	Name  string `json:"name"`
 }
 
+// SkillTrust is what a project trusts of a skill's current base text (ADR-0051
+// amendment 1, A1.6), carried on list rows and reads so a client shows the
+// Untrusted badge without asking once per skill.
+type SkillTrust struct {
+	// Foreign is true when the skill was written in another project.
+	Foreign bool `json:"foreign"`
+	// State is `not_required` (not foreign), `trusted` or `untrusted`.
+	State              string `json:"state"`
+	PublisherProjectID *int64 `json:"publisher_project_id,omitempty"`
+}
+
 type Skill struct {
 	// AuthorID comes from the authenticated principal, never the request body.
 	AuthorID int64 `json:"-"`
@@ -109,9 +120,12 @@ type Skill struct {
 	// (repos/applications.go). It is the version a new attachment proposes;
 	// it does NOT affect which version a chat turn reads — that stays keyed
 	// off entity_skill_mapping.skill_version_id, fixed at attach time.
-	DefaultVersionID string    `json:"default_version_id,omitempty"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	DefaultVersionID string `json:"default_version_id,omitempty"`
+	// Trust is what the project trusts of the skill's base text; absent when the
+	// skill has no base version.
+	Trust     *SkillTrust `json:"trust,omitempty"`
+	CreatedAt time.Time   `json:"created_at"`
+	UpdatedAt time.Time   `json:"updated_at"`
 }
 
 // skillVersionInput lets Create accept the {versions: [{name, instructions, tags}]}
