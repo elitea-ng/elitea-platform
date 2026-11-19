@@ -458,7 +458,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
-          for suite in stack-images.test.mjs prune-ci-images.test.mjs prune-prereleases.test.mjs prune-releases.test.mjs; do
+          for suite in stack-images.test.mjs stack-image-hash.test.mjs prune-actions-caches.test.mjs prune-ci-images.test.mjs prune-prereleases.test.mjs prune-releases.test.mjs; do
             expected="$(grep -c '^test(' "scripts/ci/${suite}")"
             [ "${expected}" -ge 5 ] || { echo "::error::${suite}: found ${expected} scenario(s), expected at least 5"; exit 1; }
             # Capture the status: under `set -e` a failing command substitution
@@ -500,7 +500,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
-          node --test scripts/ci/check-tiering.test.mjs scripts/ci/ci-gate.test.mjs scripts/ci/cargo-deny.test.mjs
+          node --test scripts/ci/check-tiering.test.mjs scripts/ci/ci-gate.test.mjs scripts/ci/cargo-deny.test.mjs scripts/ci/govulncheck.test.mjs
           node scripts/ci/check-tiering.mjs
       - name: The real-model preset copy matches the pinned image
         if: ${{ !cancelled() }}

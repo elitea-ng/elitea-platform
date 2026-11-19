@@ -64,6 +64,12 @@ In CI, the `ci-go.yml` Test job runs the same script as a matrix of parallel sha
 
 For `apps/elitea-web`, run `npm run typecheck`, `npm run lint`, and `npm run test:unit` from inside the directory — see [elitea-web development](/development/frontend) for the fuller gate list.
 
+## How CI runs your pull request
+
+CI runs in two tiers. The **fast tier** runs on every push: the static gates, Go vet, lint and unit tests, web typecheck, lint and unit tests, Rust format and Clippy, and the dependency scanners. It gives its first result in about five minutes. The **heavy tier** runs only when the pull request is not a draft and the fast tier passed: the browser E2E lanes, web coverage, the Rust test chains, the desktop host, and the Helm and kind smoke test.
+
+Open your pull request as a draft with `gh pr create --draft`. Push until the fast tier is green. Then run `gh pr ready` to start the heavy tier. The `CI / ci-gate` job gives the one verdict: it fails while the pull request is a draft, and it fails when a job that must run is missing. See `docs/contributing/ci.md` in the repository for how to add a workflow to the tiers.
+
 ## Guardrails
 
 The repository's `AGENTS.md` sets the architectural rules: explicit constructor dependencies rather than service locators; a versioned contract in `libs/proto/` before any cross-language map or event name is relied on; typed API errors, with internal causes logged alongside trace and execution identifiers rather than returned across a trust boundary; authentication, project authorization and tenant context enforced before a product, admin or storage handler is mounted; gRPC over mTLS for every synchronous internal call (HTTP/JSON is for browser- and client-facing APIs only), and the NATS JetStream command bus for durable asynchronous worker commands; PostgreSQL as the source of truth for execution state, with the command bus as transport only; and no credentials, private URLs or development defaults that act as secrets. Read the full document before touching `services/elitea-main` or the runtime plane.
@@ -99,4 +105,5 @@ Continue to [Run the standalone stack](/development/standalone-stack) to bring t
 {/* source: Taskfile.yml (test/vet/lint/build tasks) */}
 {/* source: scripts/go/workspace-run.sh (referenced by AGENTS.md "Verification" section) */}
 {/* source: .github/workflows/ci-go.yml (test-plan, test-checks, test-shard, test jobs); scripts/go/test-shards.json; scripts/ci/go-test-shards.mjs */}
+{/* source: .github/workflows/ci.yml; scripts/ci/tier-paths.json; scripts/ci/ci-gate.mjs; docs/contributing/ci.md */}
 {/* source: AGENTS.md ("Architecture boundaries", "Working agreements") */}

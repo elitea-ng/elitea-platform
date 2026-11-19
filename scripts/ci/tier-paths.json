@@ -235,7 +235,19 @@
         "scripts/ci/check-ci-image-references.mjs",
         "scripts/ci/check-workflow-cache-writes.mjs",
         "scripts/ci/check-e2e-paths.mjs",
-        ".github/workflows/ci-web-e2e.yml"
+        ".github/workflows/ci-web-e2e.yml",
+        "scripts/ci/stack-image-hash.mjs"
+      ]
+    },
+    "ci-web-coverage": {
+      "tier": "heavy",
+      "paths": [
+        "apps/elitea-web/**",
+        "libs/ts/client-core/**",
+        "brand/elitea/**",
+        "brand/sample/**",
+        "scripts/brand/**",
+        ".github/workflows/ci-web-coverage.yml"
       ]
     },
     "ci-rust": {

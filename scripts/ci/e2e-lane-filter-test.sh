@@ -106,6 +106,34 @@ expect_sandbox false "a web page" "apps/elitea-web/src/pages/a.tsx"
 expect_sandbox false "docs only" "README.md"
 expect_sandbox false "the DeepWiki overlay" "deploy/docker-compose.deepwiki-native-real-engine.yml"
 
+# The webkit legs' own signal (fifth line): the web app, the harness, the
+# package set and the shared client, never the backend or the chart.
+expect_webkit() {
+  local want="$1" label="$2"; shift 2
+  local out
+  out="$(printf '%s\n' "$@" | bash "$filter" 2>/dev/null | grep '^reaches-webkit=')"
+  ran=$((ran + 1))
+  if [ "$out" != "reaches-webkit=$want" ]; then
+    echo "FAIL: $label — got: $out"
+    fails=$((fails + 1))
+  else
+    echo "ok:   $label"
+  fi
+}
+expect_webkit true "empty list"
+expect_webkit true "a web source file" "apps/elitea-web/src/pages/a.tsx"
+expect_webkit true "an e2e journey" "apps/elitea-web/e2e/chat/a.spec.ts"
+expect_webkit true "the Playwright config" "apps/elitea-web/playwright.config.ts"
+expect_webkit true "the package lock (Playwright's version)" "apps/elitea-web/package-lock.json"
+expect_webkit true "the shared client package" "libs/ts/client-core/src/index.ts"
+expect_webkit true "the workflow" ".github/workflows/ci-web-e2e.yml"
+expect_webkit false "a Go service" "services/elitea-main/cmd/x.go"
+expect_webkit false "a Rust crate" "libs/rust/agent-runtime/src/lib.rs"
+expect_webkit false "the chart" "deploy/helm/elitea/values.yaml"
+expect_webkit false "docs only" "README.md" "docs/ARCHITECTURE.md"
+expect_webkit false "the desktop host" "apps/elitea-desktop/src-tauri/src/main.rs"
+expect_webkit true "docs plus one web source file" "README.md" "apps/elitea-web/src/a.ts"
+
 # The compose-referenced helm list is READ, not written: against a fixture
 # compose dir that references a different helm file, that file reaches the
 # stack and the real one no longer does.

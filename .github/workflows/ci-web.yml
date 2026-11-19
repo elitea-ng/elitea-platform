@@ -3,7 +3,7 @@ name: CI — Web
 # apps/elitea-web's FAST quality gates (spec §7.6, unit F2). It replaced
 # ci-ui.yml, which went with the apps/elitea-ui submodule. Every job here is
 # node-only, runs in a couple of minutes, and blocks PRs: quality (typecheck +
-# lint), storybook, the sharded unit-test + coverage jobs, the gate-* family,
+# lint), storybook, the sharded unit tests, the gate-* family,
 # build. The `parity` job (uictl routes + manifest against the pinned
 # apps/elitea-ui baseline) was retired with that submodule.
 #
@@ -16,8 +16,8 @@ name: CI — Web
 # the gates. The same gates, the same commands and the same artifacts now run
 # in ~12 jobs: the single-script gates are grouped behind ONE checkout +
 # `npm ci` (`gates-static`), typecheck and lint share a job (`quality`), the
-# post-merge coverage checks are steps of `coverage-merge`, and the unit matrix
-# is 5 shards rather than 10. Each gate keeps its own step, named after the job
+# unit matrix is 5 shards rather than 10. Coverage and its thresholds moved to
+# ci-web-coverage.yml (heavy tier). Each gate keeps its own step, named after the job
 # it used to be, so the evidence stays legible in the Checks UI.
 #
 # The heavy containerised suites are NOT here (issue #157):
@@ -246,7 +246,7 @@ jobs:
           retention-days: 7
 
   unit-tests:
-    name: Unit tests (sharded + coverage)
+    name: Unit tests (sharded)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -255,9 +255,7 @@ jobs:
         # min of `npm ci` before it runs a single test, so ten shards spent
         # ~14 runner-minutes on overhead to save ~1.5 min of wall clock — and
         # on a 20-job org budget they were also what pushed every other job
-        # into the queue. The shard artifacts are consumed by pattern
-        # (`coverage-shard-*`), and merge-coverage.mjs discovers them by
-        # directory prefix, so nothing downstream knows the count.
+        # into the queue. ci-web-coverage.yml shards the same way.
         shardIndex: [1, 2, 3, 4, 5]
         shardCount: [5]
     steps:
@@ -282,22 +280,12 @@ jobs:
             echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
             sleep $((attempt * 20))
           done
-      - name: Unit tests (coverage shard)
-        env:
-          VITEST_SKIP_COVERAGE_THRESHOLDS: true
-        # Issue #421, item 4. A pipeline decided whether coverage ran at all:
-        # `find … | grep -q .`.
-        #
-        # The status of a pipeline is the status of its last element. GitHub's
-        # default shell does not set `pipefail`. So a failing `find` gave no
-        # output, `grep` reported no match, and the else arm ran the suite
-        # without --coverage. The shard then uploaded no artifact. The merge,
-        # the coverage validation and the mutator gate had nothing to read.
-        #
-        # This step captures the `find` status and tests it on its own. The
-        # else arm is gone with it. That arm was written before the first unit
-        # test landed. The tree holds 1126 unit test files today. An empty
-        # result must fail here. It must not downgrade the run silently.
+      # No coverage here: it slows every shard and its thresholds are proved by
+      # ci-web-coverage.yml in the heavy tier. This is the fast signal.
+      - name: Unit tests (shard)
+        # Issue #421, item 4: the count of test files is read on its own, so a
+        # failing `find` (no pipeline status to lose) or an empty tree fails the
+        # shard instead of running nothing.
         run: |
           if ! unit_tests=$(find src \( -name '*.test.*' -o -name '*.spec.*' \) \
                ! -path 'src/smoke/*' ! -path 'src/test/*'); then
@@ -305,110 +293,11 @@ jobs:
             exit 1
           fi
           if [ -z "$unit_tests" ]; then
-            echo "FAIL: no unit test files under src/ — the coverage shard would be vacuous"
+            echo "FAIL: no unit test files under src/ — the shard would be vacuous"
             exit 1
           fi
-          echo "$(grep -c '' <<< "$unit_tests") unit test file(s) found — §6.6 coverage thresholds armed"
-          npm run test:unit -- --run --shard=${{ matrix.shardIndex }}/${{ matrix.shardCount }} --coverage --coverage.reporter=json --coverage.reportsDirectory=coverage-shards/shard-${{ matrix.shardIndex }} --coverage.clean=false --coverage.thresholds.lines=0 --coverage.thresholds.statements=0 --coverage.thresholds.functions=0 --coverage.thresholds.branches=0 --coverage.thresholds.perFile=false
-      - name: Upload coverage shard
-        uses: actions/upload-artifact@v7
-        with:
-          name: coverage-shard-${{ matrix.shardIndex }}
-          path: apps/elitea-web/coverage-shards/shard-${{ matrix.shardIndex }}/coverage-final.json
-          if-no-files-found: error
-          retention-days: 7
-
-  coverage-merge:
-    # This job absorbed the two jobs that used to `needs: [coverage-merge]` and
-    # carry `if: always() && needs.coverage-merge.result == 'success'`:
-    # `coverage-validation` and `gate-mutator-coverage`. Both did nothing but
-    # re-download the artifact this job had just produced, on a fresh runner,
-    # after a fresh `npm ci`. As steps they read `coverage/` directly, and the
-    # "only when the merge succeeded" semantics of their `if:` are automatic:
-    # a failed merge step ends the job before they run. The artifact names are
-    # unchanged (`elitea-web-coverage`), and so are the commands.
-    name: Coverage merge + validation
-    runs-on: ubuntu-latest
-    needs:
-      - unit-tests
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "26"
-          # The npm cache is .github/actions/npm-cache below.
-          package-manager-cache: false
-      - name: Restore the npm cache (pull requests read, main writes)
-        uses: ./.github/actions/npm-cache
-        with:
-          cache-dependency-path: apps/elitea-web/package-lock.json
-      - name: Install (locked)
-        # npm's fetch retries (the npm-cache action) cover a refused request,
-        # not a registry reset mid-tarball (`read ECONNRESET`), which ends
-        # `npm ci` at once. Three bounded attempts on a clean tree.
-        run: |
-          for attempt in 1 2 3; do
-            npm ci && exit 0
-            [ "$attempt" = 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
-            echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
-            sleep $((attempt * 20))
-          done
-      - name: Download coverage shards
-        uses: actions/download-artifact@v8
-        with:
-          pattern: coverage-shard-*
-          path: apps/elitea-web/coverage-shards/
-      - name: Merge coverage (no validation — thresholds checked by the step below)
-        # Issue #421, item 3. This step ended with
-        # `echo "merged=$?" >> $GITHUB_OUTPUT`. The upload below then read
-        # `steps.merge.outputs.merged == '0'`.
-        #
-        # GitHub runs each `run:` block with `bash -e`. A non-zero `node`
-        # status ends the step before the echo. So the output could hold only
-        # `0` or nothing. The guard read as a check on the merge. It tested
-        # nothing. A failed merge ends this step, this job, and every step
-        # after it. That is the behaviour the guard described.
-        run: node scripts/merge-coverage.mjs --no-validate
-      - name: Upload merged coverage
-        # Uploaded BEFORE the two checks below, so a threshold failure still
-        # leaves the merged report attached to the run for inspection — which
-        # is what the separate-jobs layout gave.
-        uses: actions/upload-artifact@v7
-        with:
-          name: elitea-web-coverage
-          path: apps/elitea-web/coverage/
-          if-no-files-found: error
-          retention-days: 7
-      - name: Coverage validation
-        # merge-coverage.mjs enforces thresholds by default (exits non-zero on
-        # failure). It re-reads the same shard files the merge step used — the
-        # separate job downloaded the merged artifact into coverage/ and hit
-        # the script's prior-merge fallback instead; both paths measure the
-        # same numbers, and the script refuses to report success with nothing
-        # to measure either way (issue #421, item 5).
-        run: node scripts/merge-coverage.mjs
-      - name: Generated-client mutator coverage
-        # mutator.ts is hand-written, not orval output. See its own header. It
-        # is the `eliteaFetch` adapter that every generated hook calls, so it
-        # carries a real coverage floor. The numbers come from the merged
-        # coverage/ directory the merge step above wrote. This step starts no
-        # vitest run of its own.
-        #
-        # This gate held its rules as an inline `node -e` program. It carried
-        # three of issue #421's defects:
-        #   • `pct(totalStmts, totalStmts)` divided a count by itself. The
-        #     statement percentage read 100 on every run. `if (sp < 90)` was
-        #     dead code.
-        #   • `if (totalStmts === 0) … process.exit(0)` fired on every run.
-        #     vitest.config.ts excluded the whole generated directory from
-        #     coverage, so the gate never saw its target.
-        #   • A `file.includes("mutator.test.ts")` filter let the test file's
-        #     own near-100% score into the module's numbers.
-        #
-        # The rules live in scripts/lib/mutator-coverage-core.mjs now. The
-        # "Gate-script decision-logic coverage" gate holds that file at 100%.
-        # Each rule has a RED case and a GREEN case.
-        run: node scripts/check-mutator-coverage.mjs
+          echo "$(grep -c '' <<< "$unit_tests") unit test file(s) found"
+          npm run test:unit -- --run --shard=${{ matrix.shardIndex }}/${{ matrix.shardCount }} --coverage.enabled=false
 
   gates-static:
     # The eighteen single-script gates that need nothing but a checkout and

@@ -1,0 +1,123 @@
+name: CodeQL
+
+# Static analysis (SAST) of main, nightly (#2246). Not on a pull request: it is
+# minutes per language and the pull-request tiers (ci.yml) are about speed; the
+# findings reach the team as ONE issue per language (scripts/ci/codeql-issue.mjs,
+# the shape of nightly-image-scan.yml), opened or updated while there are
+# results and closed when there are none.
+#
+# `upload: never`: the SARIF is analysed here and kept out of the Security tab,
+# so the issue is the one place findings are tracked (the owner's choice). The
+# repository is public, so code scanning is available: drop `upload: never` (and
+# give the job `security-events: write`) to also publish the results there.
+#
+# Languages: Go (the services and libs), JavaScript/TypeScript (the web, desktop
+# and mobile apps and the CI scripts) and the GitHub Actions workflows.
+# CodeQL's Rust analysis is not enabled: the Rust code is covered by Clippy
+# (-D warnings, ci-rust-lint.yml), cargo-deny and the nightly image scans.
+
+on:
+  # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
+  schedule:
+    - cron: "37 3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    # A dispatch from another branch analyses that branch and files its issue;
+    # the issue is about main.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      # Opens, updates and closes the language's issue.
+      issues: write
+      # The action reads the repository's code scanning configuration.
+      security-events: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: go
+            build-mode: autobuild
+          - language: javascript-typescript
+            build-mode: none
+          - language: actions
+            build-mode: none
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        if: matrix.language == 'go'
+        with:
+          # The cache is .github/actions/go-cache below: setup-go's own saves
+          # from every ref (scripts/ci/check-workflow-cache-writes.mjs).
+          cache: false
+          go-version-file: go.work
+      - name: Restore the Go cache (pull requests read, main writes)
+        if: matrix.language == 'go'
+        uses: ./.github/actions/go-cache
+        with:
+          cache-dependency-path: services/elitea-main/go.sum
+          save: "false"
+
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      # The Go workspace builds from go.work; a plain autobuild of a repository
+      # whose modules are not at the root would find nothing. Build every module
+      # of the workspace (scripts/go/workspace-run.sh knows the list).
+      - name: Build the Go workspace
+        if: matrix.language == 'go'
+        run: |
+          set -euo pipefail
+          go list -m -f '{{.Dir}}' | while IFS= read -r dir; do
+            (cd "$dir" && go build ./...)
+          done
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:${{ matrix.language }}
+          output: sarif-results
+          upload: never
+
+      - name: Label for the issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh label create security --repo "$REPO" --color D93F0B --description "Security findings" --force
+          gh label create codeql --repo "$REPO" --color 5319E7 --description "Nightly CodeQL analysis of main" --force
+
+      # Pinned to the v9.0.0 commit, as nightly-image-scan.yml pins it: this
+      # step holds issues: write.
+      - name: Open, update or close this language's issue
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          LANGUAGE: ${{ matrix.language }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REPO: ${{ github.repository }}
+        with:
+          script: |
+            const { main } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/ci/codeql-issue.mjs`);
+            const code = await main({
+              github,
+              args: {
+                sarifDir: `${process.env.GITHUB_WORKSPACE}/sarif-results`,
+                language: process.env.LANGUAGE,
+                runUrl: process.env.RUN_URL,
+                repo: process.env.REPO,
+              },
+            });
+            if (code !== 0) core.setFailed(`scripts/ci/codeql-issue.mjs exited ${code}`);

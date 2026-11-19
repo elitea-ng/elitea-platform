@@ -155,6 +155,12 @@ jobs:
     uses: ./.github/workflows/ci-web-e2e.yml
     secrets: inherit
 
+  ci-web-coverage:
+    needs: [changes, fast-gate]
+    if: github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-web-coverage']
+    uses: ./.github/workflows/ci-web-coverage.yml
+    secrets: inherit
+
   ci-rust:
     needs: [changes, fast-gate]
     if: github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-rust']
@@ -246,7 +252,7 @@ jobs:
 
   ci-gate:
     name: ci-gate
-    needs: [changes, fast-gate, no-binaries, dependency-scanning, helm-lint, ci-docs, ci-go, ci-web, ci-contract, ci-gateway, ci-mock-llm, ci-mobile, ci-deepwiki-conformance, image-matrix, ci-rust-lint, ci-web-e2e, ci-rust, ci-rust-shared, ci-deepwiki-engine, ci-inventory-engine, ci-doc-extractor, ci-vector, ci-browser-session, ci-desktop, ci-desktop-control, ci-local-tools-macos, desktop-package, helm-install-smoke, ci-governed-conformance, ci-handoff-loadgate]
+    needs: [changes, fast-gate, no-binaries, dependency-scanning, helm-lint, ci-docs, ci-go, ci-web, ci-contract, ci-gateway, ci-mock-llm, ci-mobile, ci-deepwiki-conformance, image-matrix, ci-rust-lint, ci-web-e2e, ci-web-coverage, ci-rust, ci-rust-shared, ci-deepwiki-engine, ci-inventory-engine, ci-doc-extractor, ci-vector, ci-browser-session, ci-desktop, ci-desktop-control, ci-local-tools-macos, desktop-package, helm-install-smoke, ci-governed-conformance, ci-handoff-loadgate]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
