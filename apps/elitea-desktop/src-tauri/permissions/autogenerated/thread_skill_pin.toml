@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-thread-skill-pin"
+description = "Enables the thread_skill_pin command without any pre-configured scope."
+commands.allow = ["thread_skill_pin"]
+
+[[permission]]
+identifier = "deny-thread-skill-pin"
+description = "Denies the thread_skill_pin command without any pre-configured scope."
+commands.deny = ["thread_skill_pin"]

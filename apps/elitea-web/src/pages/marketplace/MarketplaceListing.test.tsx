@@ -10,7 +10,7 @@ import {
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type {
   MarketplaceListingDetail,
@@ -18,6 +18,8 @@ import type {
   MarketplaceVersion,
 } from '@/shared/api/generated/model';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
+import { registerLocalThreadPinFinder } from '@/shared/desktop/localThreadPin';
+import { WorkspaceIpcError } from '@/shared/desktop/workspaceIpc';
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
 import { server } from '../../test/setup';
@@ -727,6 +729,7 @@ describe('Try on a skill listing when the project has no model', () => {
 describe('Use in a chat and Add to a conversation on a skill listing (A1.4)', () => {
   afterEach(() => {
     resetGeneratedClient();
+    registerLocalThreadPinFinder(undefined);
   });
 
   function mockSkillListing(permissions: string[] = ['models.applications.fork.post']): { calls: { url: string; body: unknown }[] } {
@@ -794,6 +797,33 @@ describe('Use in a chat and Add to a conversation on a skill listing (A1.4)', ()
     await waitFor(() => expect(calls).toHaveLength(2));
     expect(calls[0]).toEqual({ url: 'attach', body: { public_skill_id: 41, public_version_id: 6, fork_only: true } });
     expect(calls[1]).toEqual({ url: 'pin:31', body: { skill_id: 904 } });
+  });
+
+  it('on a local thread, Use in a chat forks the listing into the project, then pins the copy in the desktop host (#2183)', async () => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    const { calls } = mockSkillListing();
+    const hostPin = vi.fn(() => Promise.resolve());
+    registerLocalThreadPinFinder((conversationId) => Promise.resolve(conversationId === '32' ? hostPin : null));
+    mount('/marketplace/skills/7');
+
+    await userEvent.setup().click(await screen.findByTestId('marketplace-use-skill'));
+    await pickConversation('Standup', 'Use');
+
+    await waitFor(() => expect(hostPin).toHaveBeenCalledWith(904));
+    // Forked (the fork-only Add), and the server's own pin was not written.
+    expect(calls).toEqual([{ url: 'attach', body: { public_skill_id: 41, public_version_id: 6, fork_only: true } }]);
+  });
+
+  it('on a local thread, says why the host refused the pin', async () => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    mockSkillListing();
+    registerLocalThreadPinFinder(() => Promise.resolve(() => Promise.reject(new WorkspaceIpcError('thread_skills_full', 'A thread holds at most five skills.'))));
+    mount('/marketplace/skills/7');
+
+    await userEvent.setup().click(await screen.findByTestId('marketplace-add-skill-to-chat'));
+    await pickConversation('Release chat', 'Add');
+
+    expect(await screen.findByTestId('skill-to-chat-error')).toHaveTextContent('at most five skills');
   });
 
   it('says why a pin was refused when the conversation already holds five skills', async () => {

@@ -98,7 +98,8 @@ use super::unattended::{
 };
 use crate::compaction_settings::{CompactionSettings, CompactionSettingsStore};
 use crate::history::{
-    HistoryStore, NewTurn, Owner, StoredImage, StoredTurn, ThreadCopy, ThreadCopyTarget, TurnTap,
+    HistoryStore, NewTurn, Owner, PinOutcome, StoredImage, StoredTurn, ThreadCopy,
+    ThreadCopyTarget, ThreadSkillPin, TurnTap,
 };
 use crate::index::IndexRegistry;
 use crate::keep_awake::{AwakeGuard, KeepAwake};
@@ -673,33 +674,56 @@ async fn start_turn(
         .await?)
 }
 
-/// The project skills `request` picks, read by the host (`getSkill`) and
-/// admitted, in request order (an id picked twice is read once, at its
-/// first place), all read at once. A skill the person cannot read (`403`,
-/// `404`) is `skill_unknown`.
+/// The project skills this turn applies, read by the host (`getSkill`) and
+/// admitted: the thread's pinned skills first (ADR-0050 amendment 1, A1.5;
+/// `pinned`, in the order they were pinned), then the ones `request` picks,
+/// in request order (an id met twice is read once, at its first place), all
+/// read at once. A picked skill the person cannot read (`403`, `404`) is
+/// `skill_unknown`; a pinned one is skipped, as the cloud turn skips a pin
+/// its caller cannot read. A skill written in another project whose text
+/// this project has not trusted is admitted untrusted: it reaches the model
+/// as quoted data (ADR-0051 amendment 1, A1.6).
 async fn project_skills(
     api: &PlatformApi,
     request: &TurnRequest,
+    pinned: &[i64],
 ) -> Result<Vec<InvokedSkill>, TurnError> {
-    let mut ids = skills::project_ids(&request.project_skills)?;
+    let picked = skills::project_ids(&request.project_skills)?;
+    let mut ids: Vec<(i64, bool)> = pinned
+        .iter()
+        .map(|id| (*id, !picked.contains(id)))
+        .chain(picked.iter().map(|id| (*id, false)))
+        .collect();
     let mut seen = std::collections::HashSet::new();
-    ids.retain(|id| seen.insert(*id));
-    futures::future::try_join_all(ids.into_iter().map(|id| async move {
-        let skill = api
-            .project_skill(request.project_id, id)
-            .await
-            .map_err(|error| match error.status {
-                Some(403 | 404) => TurnError::new(
-                    "skill_unknown",
-                    format!(
-                        "The project has no skill {id} you can use. Pick one from the / menu, or check the project's skills in the web app."
+    ids.retain(|(id, _)| seen.insert(*id));
+    let read = futures::future::try_join_all(ids.into_iter().map(|(id, only_pinned)| async move {
+        // The skill and its trust, read together.
+        let (skill, untrusted) = futures::future::join(
+            api.project_skill(request.project_id, id),
+            api.project_skill_untrusted(request.project_id, id),
+        )
+        .await;
+        let skill = match skill {
+            Ok(skill) => skill,
+            Err(error) if only_pinned && matches!(error.status, Some(403 | 404)) => {
+                return Ok(None);
+            }
+            Err(error) => {
+                return Err(match error.status {
+                    Some(403 | 404) => TurnError::new(
+                        "skill_unknown",
+                        format!(
+                            "The project has no skill {id} you can use. Pick one from the / menu, or check the project's skills in the web app."
+                        ),
                     ),
-                ),
-                _ => TurnError::from(error),
-            })?;
-        skills::from_project(request.project_id, id, &skill)
+                    _ => TurnError::from(error),
+                });
+            }
+        };
+        skills::from_project(request.project_id, id, &skill, untrusted).map(Some)
     }))
-    .await
+    .await?;
+    Ok(read.into_iter().flatten().collect())
 }
 
 /// The turn runs what Main started (ADR-0050 decision 7f): the participant
@@ -2838,7 +2862,8 @@ impl AgentHost {
         // Joined with the version's picks now, so a turn they do not fit is
         // refused before its start; joined again only when the revalidation
         // beside the start brings a changed version.
-        let project_skills = project_skills(&api, request).await?;
+        let pinned = self.pinned_skill_ids(request, &conversation).await?;
+        let project_skills = project_skills(&api, request, &pinned).await?;
         let invoked = skills::with_project(&invoked, &project_skills)?;
         let fresh_participant = match looked_up {
             Some(answer) => {
@@ -5892,6 +5917,178 @@ impl AgentHost {
             .map_err(|e| TurnError::new("storage", e.to_string()))
     }
 
+    /// The ids of the project skills pinned to the request's thread (the
+    /// request's project's only), oldest first; none without a history store.
+    async fn pinned_skill_ids(
+        &self,
+        request: &TurnRequest,
+        conversation: &str,
+    ) -> Result<Vec<i64>, TurnError> {
+        let Some(history) = self.deps.history.clone() else {
+            return Ok(Vec::new());
+        };
+        let owner = self.owner(&self.api).await?;
+        let pins = history
+            .read_thread_skill_pins(owner, request.workspace_id.clone(), conversation.to_owned())
+            .await
+            .map_err(|e| TurnError::new("storage", e.to_string()))?;
+        Ok(pins
+            .into_iter()
+            .filter(|pin| pin.project_id == request.project_id)
+            .map(|pin| pin.skill_id)
+            .collect())
+    }
+
+    /// Whether each pinned skill can still be read by the person: `false`
+    /// only for a `403` or `404` (deleted, or access lost); a read that
+    /// failed otherwise is not read as gone.
+    async fn pins_available(&self, pins: &[ThreadSkillPin]) -> Vec<bool> {
+        futures::future::join_all(pins.iter().map(|pin| async move {
+            match self.api.project_skill(pin.project_id, pin.skill_id).await {
+                Err(error) => !matches!(error.status, Some(403 | 404)),
+                Ok(_) => true,
+            }
+        }))
+        .await
+    }
+
+    /// `thread_skills_list`: the project skills pinned to a local thread of
+    /// the signed-in account, oldest first, each with whether the person can
+    /// still read it (a stale pin is unpinnable, and never counts toward
+    /// the bound of a new pin).
+    ///
+    /// # Errors
+    ///
+    /// `invalid_request`, `not_signed_in`, or `storage`.
+    pub async fn thread_skills(
+        &self,
+        workspace_id: &str,
+        conversation_id: &str,
+    ) -> Result<Vec<(ThreadSkillPin, bool)>, TurnError> {
+        let conversation = conversation_key(&Value::String(conversation_id.to_owned()))?;
+        let Some(history) = self.deps.history.clone() else {
+            return Ok(Vec::new());
+        };
+        let owner = self.owner(&self.api).await?;
+        let pins = history
+            .read_thread_skill_pins(owner, workspace_id.to_owned(), conversation)
+            .await
+            .map_err(|e| TurnError::new("storage", e.to_string()))?;
+        let available = self.pins_available(&pins).await;
+        Ok(pins.into_iter().zip(available).collect())
+    }
+
+    /// `thread_skill_pin`: pin a project skill to a local thread, kept by
+    /// the host (the pin is the skill's id, never its text: the text is read
+    /// at every turn under the person's own token). The skill must be one
+    /// the person can read now; a thread holds at most [`skills::MAX_SKILLS`]
+    /// (a turn applies at most that many, the message's own picks too).
+    ///
+    /// # Errors
+    ///
+    /// `invalid_request`, `skill_unknown` (not readable), `thread_skills_full`,
+    /// `not_signed_in`, or `storage`.
+    pub async fn pin_thread_skill(
+        &self,
+        workspace_id: &str,
+        conversation_id: &str,
+        project_id: i64,
+        skill_id: i64,
+    ) -> Result<PinOutcome, TurnError> {
+        let conversation = conversation_key(&Value::String(conversation_id.to_owned()))?;
+        check_project_id(project_id)?;
+        let id = skills::project_ids(&[Value::from(skill_id)])?
+            .first()
+            .copied()
+            .ok_or_else(|| {
+                TurnError::new("invalid_request", "A project skill's id is not valid.")
+            })?;
+        let history = self.deps.history.clone().ok_or_else(|| {
+            TurnError::new(
+                "storage",
+                "The thread history is not available, so a skill cannot be pinned.",
+            )
+        })?;
+        let owner = self.owner(&self.api).await?;
+        self.api
+            .project_skill(project_id, id)
+            .await
+            .map_err(|error| match error.status {
+                Some(403 | 404) => TurnError::new(
+                    "skill_unknown",
+                    format!("The project has no skill {id} you can use."),
+                ),
+                _ => TurnError::from(error),
+            })?;
+        // A pin whose skill is gone or unreadable does not count toward the
+        // bound: it is dropped before this one is counted.
+        let held = history
+            .read_thread_skill_pins(owner.clone(), workspace_id.to_owned(), conversation.clone())
+            .await
+            .map_err(|e| TurnError::new("storage", e.to_string()))?;
+        let held: Vec<ThreadSkillPin> = held
+            .into_iter()
+            .filter(|pin| pin.project_id == project_id)
+            .collect();
+        let gone: Vec<i64> = held
+            .iter()
+            .zip(self.pins_available(&held).await)
+            .filter(|(_, available)| !available)
+            .map(|(pin, _)| pin.skill_id)
+            .collect();
+        let workspace = workspace_id.to_owned();
+        let outcome = tokio::task::spawn_blocking(move || {
+            for skill_id in gone {
+                history.thread_skill_unpin(&owner, &workspace, &conversation, skill_id)?;
+            }
+            history.thread_skill_pin(
+                &owner,
+                &workspace,
+                &conversation,
+                ThreadSkillPin {
+                    project_id,
+                    skill_id: id,
+                },
+                skills::MAX_SKILLS,
+            )
+        })
+        .await
+        .map_err(|e| TurnError::new("internal", format!("the pin write stopped: {e}")))?
+        .map_err(|e| TurnError::new("storage", e.to_string()))?;
+        if outcome == PinOutcome::Full {
+            return Err(TurnError::new(
+                "thread_skills_full",
+                "A thread holds at most five skills. Remove one to add another.",
+            ));
+        }
+        Ok(outcome)
+    }
+
+    /// `thread_skill_unpin`: whether the skill was pinned.
+    ///
+    /// # Errors
+    ///
+    /// `invalid_request`, `not_signed_in`, or `storage`.
+    pub async fn unpin_thread_skill(
+        &self,
+        workspace_id: &str,
+        conversation_id: &str,
+        skill_id: i64,
+    ) -> Result<bool, TurnError> {
+        let conversation = conversation_key(&Value::String(conversation_id.to_owned()))?;
+        let Some(history) = self.deps.history.clone() else {
+            return Ok(false);
+        };
+        let owner = self.owner(&self.api).await?;
+        let workspace = workspace_id.to_owned();
+        tokio::task::spawn_blocking(move || {
+            history.thread_skill_unpin(&owner, &workspace, &conversation, skill_id)
+        })
+        .await
+        .map_err(|e| TurnError::new("internal", format!("the pin write stopped: {e}")))?
+        .map_err(|e| TurnError::new("storage", e.to_string()))
+    }
+
     /// `thread_history_fork`: copy the stored turns of one thread of the
     /// signed-in account into the new conversation a server fork made
     /// (`forkConversation`), in the same workspace: the turns up to and
@@ -7078,6 +7275,7 @@ mod tests {
         let skill = [InvokedSkill {
             name: "Style".into(),
             instructions: "Write tersely.".into(),
+            ..Default::default()
         }];
         let system =
             system_instruction("Be brief.", "## Environment\n- OS: macOS", &project, NONCE);
@@ -7199,6 +7397,7 @@ mod tests {
         let skill = [InvokedSkill {
             name: "Style".into(),
             instructions: "Write tersely.".into(),
+            ..Default::default()
         }];
         let monday = environment::Facts {
             os: "macOS 26.0 (arm64)".into(),
