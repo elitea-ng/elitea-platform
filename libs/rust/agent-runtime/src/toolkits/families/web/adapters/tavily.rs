@@ -166,6 +166,28 @@ pub(crate) fn construct(config: &ProviderConfig, transport: Arc<dyn Transport>) 
     }
 }
 
+/// The credits a crawl or a map is charged: what Tavily reports; when it
+/// reports none, or a zero for a call that cost something (it rounds per
+/// request), the estimate. Fractions are charged at their ceiling.
+pub(crate) fn charged_credits(answer: &Map<String, Value>, estimate: u64) -> u64 {
+    let reported = answer
+        .get("usage")
+        .and_then(|usage| usage.get("credits"))
+        .and_then(Value::as_f64);
+    match reported {
+        Some(credits) if credits > 0.0 || estimate == 0 => {
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "a small non-negative credit count"
+            )]
+            let whole = credits.ceil() as u64;
+            whole
+        }
+        _ => estimate,
+    }
+}
+
 /// The credits an answer reports (`usage.credits`), else `fallback`.
 fn reported_credits(answer: &Map<String, Value>, fallback: u64) -> u64 {
     answer
@@ -368,7 +390,7 @@ impl CrawlProvider for Tavily {
         let estimate = CrawlProvider::estimate(self, request).credits;
         Ok(CrawlResponse {
             pages,
-            units: Units::credits(reported_credits(&answer, estimate)),
+            units: Units::credits(charged_credits(&answer, estimate)),
         })
     }
 }
@@ -413,7 +435,35 @@ impl MapProvider for Tavily {
         let estimate = MapProvider::estimate(self, request).credits;
         Ok(MapResponse {
             urls,
-            units: Units::credits(reported_credits(&answer, estimate)),
+            units: Units::credits(charged_credits(&answer, estimate)),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn credits_are_what_tavily_reports_else_the_estimate() {
+        let usage = |credits: Value| {
+            json!({"usage": {"credits": credits}})
+                .as_object()
+                .cloned()
+                .expect("object")
+        };
+        assert_eq!(charged_credits(&usage(json!(3)), 1), 3);
+        assert_eq!(
+            charged_credits(&usage(json!(0.2)), 1),
+            1,
+            "fractions are charged whole"
+        );
+        assert_eq!(
+            charged_credits(&usage(json!(0)), 2),
+            2,
+            "a zero for a paid call is the estimate"
+        );
+        assert_eq!(charged_credits(&usage(json!(0)), 0), 0);
+        assert_eq!(charged_credits(&Map::new(), 4), 4, "no usage: the estimate");
     }
 }

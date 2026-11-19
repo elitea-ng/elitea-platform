@@ -17,6 +17,8 @@
 //! argument schemas from this entry, so the catalogue and the worker cannot
 //! disagree. `tavily` is in the worker capability snapshot, so the type is served.
 
+use std::sync::OnceLock;
+
 use serde_json::Value;
 
 /// The entry, as the SDK declares it. `properties` is the annotation the
@@ -338,8 +340,13 @@ const ENTRY: &str = r##"
 /// One tool's argument schema, as the SDK declares it. `None` only if the
 /// entry above were not JSON, which its own test pins.
 pub(crate) fn tool_args_schema(tool: &str) -> Option<Value> {
-    let entry: Value = serde_json::from_str(ENTRY).ok()?;
-    entry.get("args_schemas")?.get(tool).cloned()
+    static PARSED: OnceLock<Option<Value>> = OnceLock::new();
+    PARSED
+        .get_or_init(|| serde_json::from_str(ENTRY).ok())
+        .as_ref()?
+        .get("args_schemas")?
+        .get(tool)
+        .cloned()
 }
 
 #[cfg(test)]

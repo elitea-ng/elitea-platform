@@ -255,10 +255,15 @@ pub(crate) async fn run_crawl(
         .into_iter()
         .filter(|page| admitted(&page.url, state))
         .collect();
+    // Each page gets an equal share, at least 1000 bytes; a crawl of more pages
+    // than the budget holds returns the first ones, so the total never exceeds
+    // `max_bytes`.
     let per_page = (parsed.max_bytes / pages.len().max(1)).max(MIN_MAX_BYTES);
-    let mut truncated = false;
+    let room = (parsed.max_bytes / per_page).max(1);
+    let mut truncated = pages.len() > room;
     let pages: Vec<Value> = pages
         .iter()
+        .take(room)
         .map(|page| {
             let (content, cut_content) = cut(&page.content, per_page);
             truncated |= cut_content;

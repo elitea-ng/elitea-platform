@@ -66,7 +66,7 @@ A **Tavily** toolkit gives an agent Tavily's four tools with the project's own k
 | Blocked domains | none | Never these domains. A search result or page from one is dropped |
 | Per run call cap | 10 (1 to 100) | The most Tavily calls one run may make. The call after it answers that the limit is reached, and the model answers with what it has |
 
-Tavily's results and page text reach the model wrapped as untrusted external content. A URL longer than 2,048 characters, with credentials in it or with a backslash, is refused, because a long URL is the easiest way to carry conversation data out in a query string. Every Tavily call is admitted by the budget engine first and billed in credits as Tavily reports them. A rate limit or a server error is retried once, and each attempt is billed on its own. A crawl or a map that times out is not retried, because it has probably finished upstream, and it is billed at its upper bound.
+Tavily's results and page text reach the model wrapped as untrusted external content. A URL longer than 2,048 characters, with credentials in it or with a backslash, is refused, because a long URL is the easiest way to carry conversation data out in a query string. For the same reason `instructions` is at most 400 characters without control characters. Every Tavily call is admitted by the budget engine first and billed in credits as Tavily reports them. A rate limit or a server error is retried once, and each attempt is billed on its own. A crawl or a map that times out is not retried, because it has probably finished upstream, and it is billed at its upper bound.
 
 The toolkit runs on the cloud worker. On the desktop it follows the same switch as the Web Search toolkit (`local_work.web`), and its calls go through the cloud like those of `web`. The mobile app uses it through the cloud, like every toolkit.
 
@@ -81,7 +81,7 @@ The toolkit runs on the cloud worker. On the desktop it follows the same switch 
 | `web_crawl` | Crawls a site from a start URL and returns the pages found, as Markdown. Offered when an enabled provider crawls (Tavily) |
 | `web_map` | Lists the URLs of a site from a start URL, without page content. Offered when an enabled provider maps (Tavily, Firecrawl) |
 
-`web_crawl` and `web_map` take the start URL under the same rules as `web_fetch`, and the admin's fetch domain lists filter what a crawl finds. Firecrawl cannot follow links to a depth, so a `max_depth` sent to it is refused while **Strict options** is on.
+`web_crawl` and `web_map` cost more than a fetch, so they are opt-in: a Web Search toolkit that names no tools keeps only `web_search` and `web_fetch`, and you tick the two in the toolkit's tool list. They take the start URL under the same rules as `web_fetch`, and the admin's fetch domain lists filter what a crawl finds. A crawl never returns more than `max_bytes` of page text in all. Firecrawl cannot follow links to a depth, so a `max_depth` sent to it is refused while **Strict options** is on.
 
 </Accordion>
 

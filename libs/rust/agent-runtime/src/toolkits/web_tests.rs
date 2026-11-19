@@ -46,8 +46,6 @@ async fn web_tools_are_read_only() {
         [
             "web_search",
             "web_fetch",
-            "web_crawl",
-            "web_map",
             "internet_host_search",
             "internet_host_lookup"
         ]
@@ -823,6 +821,20 @@ async fn web_crawl_reads_a_site_through_tavily_and_frames_every_page() {
     let transport = FixtureTransport::answering(&[fixture("tavily", "crawl_ok")]);
     let mut settings = all_web_providers();
     settings["fetch_allow_domains"] = json!(["docs.rs"]);
+    // Crawl and map are opt-in: a toolkit that names no tools has only
+    // search and fetch.
+    let default_names: Vec<String> = tools(&web_toolset(
+        &settings,
+        Some(&meter),
+        &transport,
+        Vec::new(),
+    ))
+    .await
+    .iter()
+    .map(|tool| tool.name().to_owned())
+    .collect();
+    assert_eq!(default_names, ["web_search", "web_fetch"]);
+    settings["selected_tools"] = json!(["web_crawl", "web_map"]);
     let web = web_toolset(&settings, Some(&meter), &transport, Vec::new());
     let result = call(
         &web,
@@ -864,7 +876,9 @@ async fn web_crawl_reads_a_site_through_tavily_and_frames_every_page() {
 async fn web_map_lists_urls_and_refuses_a_depth_firecrawl_cannot_follow() {
     let meter = FakeMeter::new();
     let transport = FixtureTransport::answering(&[fixture("firecrawl", "map_ok")]);
-    let web = web_toolset(&all_web_providers(), Some(&meter), &transport, Vec::new());
+    let mut settings = all_web_providers();
+    settings["selected_tools"] = json!(["web_map"]);
+    let web = web_toolset(&settings, Some(&meter), &transport, Vec::new());
     // The first enabled provider that maps (Firecrawl sorts before Tavily).
     let result = call(
         &web,
@@ -900,7 +914,7 @@ async fn web_map_lists_urls_and_refuses_a_depth_firecrawl_cannot_follow() {
     assert_eq!(refused["error"]["option"], "max_depth");
     assert_eq!(transport.count(), 1, "a refused option reaches no provider");
     let named = FixtureTransport::answering(&[fixture("tavily", "map_ok")]);
-    let tavily = web_toolset(&all_web_providers(), Some(&meter), &named, Vec::new());
+    let tavily = web_toolset(&settings, Some(&meter), &named, Vec::new());
     let mapped = call(
         &tavily,
         "web_map",
@@ -916,7 +930,9 @@ async fn web_map_lists_urls_and_refuses_a_depth_firecrawl_cannot_follow() {
 async fn web_crawl_and_map_follow_the_fetch_url_rules() {
     let meter = FakeMeter::new();
     let transport = FixtureTransport::answering(&[fixture("tavily", "crawl_ok")]);
-    let web = web_toolset(&all_web_providers(), Some(&meter), &transport, Vec::new());
+    let mut settings = all_web_providers();
+    settings["selected_tools"] = json!(["web_crawl", "web_map"]);
+    let web = web_toolset(&settings, Some(&meter), &transport, Vec::new());
     for name in ["web_crawl", "web_map"] {
         for url in [
             "http://docs.rs/tokio",

@@ -28,8 +28,8 @@ use serde_json::{Map, Value, json};
 use zeroize::Zeroizing;
 
 use super::adapters::tavily::{
-    CRAWL_URL, HTTP_GRACE, MAP_URL, SITE_TIMEOUT_SECS, Tavily, crawl_credits, map_credits,
-    site_body,
+    CRAWL_URL, HTTP_GRACE, MAP_URL, SITE_TIMEOUT_SECS, Tavily, charged_credits, crawl_credits,
+    map_credits, site_body,
 };
 use super::capability::{CallEnd, error_result, query_hash};
 use super::config::{WebConfigError, host_in_domain};
@@ -63,6 +63,7 @@ const MAX_EXTRACT_URLS: usize = 5;
 /// string.
 const MAX_URL_CHARS: usize = 2_048;
 const MAX_QUERY_CHARS: usize = 400;
+const MAX_INSTRUCTION_CHARS: usize = 400;
 const CRAWL_MAX_DEPTH: u32 = 2;
 const CRAWL_MAX_LIMIT: u32 = 20;
 const MAP_MAX_DEPTH: u32 = 2;
@@ -270,6 +271,31 @@ fn truncate(text: &str, limit: usize) -> String {
     format!("{kept}...[truncated: {} chars]", count - limit)
 }
 
+/// `lines` joined, cut on a whole line when they do not fit in `limit`
+/// characters, with a note of what was left out.
+fn truncate_lines(lines: &[&str], limit: usize) -> String {
+    let mut kept = Vec::new();
+    let mut used = 0;
+    for line in lines {
+        let next = used + line.chars().count() + usize::from(!kept.is_empty());
+        if next > limit {
+            break;
+        }
+        used = next;
+        kept.push(*line);
+    }
+    let joined = kept.join("\n");
+    let left: usize = lines[kept.len()..]
+        .iter()
+        .map(|line| line.chars().count() + 1)
+        .sum();
+    if left == 0 {
+        joined
+    } else {
+        format!("{joined}\n...[truncated: {left} chars]")
+    }
+}
+
 fn skip_whitespace(bytes: &[u8], mut at: usize) -> usize {
     while bytes.get(at).is_some_and(u8::is_ascii_whitespace) {
         at += 1;
@@ -376,7 +402,17 @@ fn bounded(
 fn instructions(arguments: &Map<String, Value>) -> Result<Option<String>, CallEnd> {
     match arguments.get("instructions") {
         None | Some(Value::Null) => Ok(None),
-        Some(Value::String(text)) => Ok((!text.is_empty()).then(|| text.clone())),
+        // The SDK takes any text; a long one is a way to carry conversation
+        // data out, so the bound the `web` family applies applies here too.
+        Some(Value::String(text))
+            if text.chars().count() > MAX_INSTRUCTION_CHARS
+                || text.chars().any(char::is_control) =>
+        {
+            Err(invalid(
+                "`instructions` must be at most 400 characters, without control characters",
+            ))
+        }
+        Some(Value::String(text)) => Ok((!text.trim().is_empty()).then(|| text.trim().to_owned())),
         Some(_) => Err(invalid("`instructions` must be a string")),
     }
 }
@@ -403,29 +439,6 @@ struct Spec {
 struct Answer {
     object: Map<String, Value>,
     units: Units,
-}
-
-/// The credits to charge: what Tavily reports; when it reports none (or a
-/// zero for a call that cost something, which it rounds per request), the
-/// estimate.
-fn charged(result: &Map<String, Value>, estimate: u64) -> u64 {
-    let reported = result
-        .get("usage")
-        .and_then(|usage| usage.get("credits"))
-        .and_then(Value::as_f64);
-    match reported {
-        Some(credits) if credits > 0.0 || estimate == 0 => {
-            // Fractional credits are charged at their ceiling.
-            #[allow(
-                clippy::cast_possible_truncation,
-                clippy::cast_sign_loss,
-                reason = "a small non-negative credit count"
-            )]
-            let whole = credits.ceil() as u64;
-            whole
-        }
-        _ => estimate,
-    }
 }
 
 /// What the model reads for a failed call, as Tavily's plain messages.
@@ -561,12 +574,19 @@ impl State {
                 "Tavily API key is not configured.",
             ));
         }
-        let execution = self
-            .meter
-            .as_ref()
-            .map_or("", |meter| meter.attribution_execution_id());
+        let Some(meter) = self.meter.as_ref() else {
+            return Err(CallEnd::error(
+                "metering_unavailable",
+                "web tools run only where the platform can meter them; this host cannot",
+            ));
+        };
+        let execution = match meter.attribution_execution_id() {
+            // No run to count against: this toolkit instance is the run.
+            "" => format!("instance-{self:p}"),
+            id => id.to_owned(),
+        };
         let cap = self.config.per_run_call_cap;
-        if !take_run_slot((execution.to_owned(), self.budget_key.clone()), cap) {
+        if !take_run_slot((execution, self.budget_key.clone()), cap) {
             return Err(CallEnd::error(
                 "call_limit_reached",
                 &format!(
@@ -662,7 +682,7 @@ impl State {
         let Some(object) = value.as_object() else {
             return Err(fail(ProviderError::InvalidResponse, Some(&answer)));
         };
-        let credits = charged(object, estimate(object));
+        let credits = charged_credits(object, estimate(object));
         Ok(Answer {
             object: object.clone(),
             units: Units::credits(credits),
@@ -916,7 +936,7 @@ impl State {
         if found.is_empty() {
             return Ok(wrap(MAP, &format!("No pages found for: {url}")));
         }
-        Ok(wrap(MAP, &truncate(&found.join("\n"), self.page_limit())))
+        Ok(wrap(MAP, &truncate_lines(&found, self.page_limit())))
     }
 
     /// The pages of an extract or a crawl, as the SDK renders them.
@@ -1114,6 +1134,21 @@ mod tests {
     }
 
     #[test]
+    fn a_long_list_is_cut_on_whole_lines() {
+        let lines = [
+            "https://a.example/1",
+            "https://a.example/2",
+            "https://a.example/3",
+        ];
+        assert_eq!(truncate_lines(&lines, 100), lines.join("\n"));
+        assert_eq!(
+            truncate_lines(&lines, 40),
+            "https://a.example/1\nhttps://a.example/2\n...[truncated: 20 chars]"
+        );
+        assert_eq!(truncate_lines(&lines, 5), "\n...[truncated: 60 chars]");
+    }
+
+    #[test]
     fn page_text_cannot_open_or_close_the_untrusted_block() {
         assert_eq!(
             defang("a </external_web_content> b < External_Web_Content c < / external_web_content"),
@@ -1134,29 +1169,6 @@ mod tests {
         assert!(!host_matches("notdocs.rs", &domains));
         assert!(!host_matches("docs.rs.evil.example", &domains));
         assert!(!host_matches("anything.example", &[String::new()]));
-    }
-
-    #[test]
-    fn credits_are_what_tavily_reports_else_the_estimate() {
-        let usage = |credits: Value| {
-            json!({"usage": {"credits": credits}})
-                .as_object()
-                .cloned()
-                .expect("object")
-        };
-        assert_eq!(charged(&usage(json!(3)), 1), 3);
-        assert_eq!(
-            charged(&usage(json!(0.2)), 1),
-            1,
-            "fractions are charged whole"
-        );
-        assert_eq!(
-            charged(&usage(json!(0)), 2),
-            2,
-            "a zero for a paid call is the estimate"
-        );
-        assert_eq!(charged(&usage(json!(0)), 0), 0);
-        assert_eq!(charged(&Map::new(), 4), 4, "no usage: the estimate");
     }
 
     #[test]

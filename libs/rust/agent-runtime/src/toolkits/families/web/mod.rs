@@ -494,7 +494,15 @@ fn assemble(
     }
     let tools: Vec<Arc<dyn Tool>> = offered
         .iter()
-        .filter(|kind| selected.is_empty() || selected.iter().any(|name| name == kind.name()))
+        .filter(|kind| {
+            if selected.is_empty() {
+                // A toolkit saved before crawl and map existed keeps the two
+                // tools it was approved with: the dearer ones are opt-in.
+                !matches!(kind, WebToolKind::Crawl | WebToolKind::Map)
+            } else {
+                selected.iter().any(|name| name == kind.name())
+            }
+        })
         .map(|kind| {
             Arc::new(WebTool {
                 kind: *kind,

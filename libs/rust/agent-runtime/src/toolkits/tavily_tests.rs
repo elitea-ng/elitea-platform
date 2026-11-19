@@ -785,3 +785,43 @@ async fn a_call_without_a_key_or_a_meter_or_a_price_is_refused_before_tavily() {
     assert_eq!(result["error"]["code"], "web_provider_unpriced");
     assert_eq!(transport.count(), 0, "Tavily was not called");
 }
+
+#[tokio::test]
+async fn instructions_are_bounded_like_the_web_familys() {
+    let meter = FakeMeter::new();
+    let transport = answering(&["map_ok"]);
+    let toolset = tavily_toolset(
+        &tavily_settings("tv-instructions", &json!({})),
+        Some(&meter),
+        &transport,
+    );
+    for tool in ["web_crawl", "web_map"] {
+        for instructions in ["x".repeat(401), "line\nbreak".to_owned()] {
+            let result = call(
+                &toolset,
+                tool,
+                json!({"url": "https://docs.rs/", "instructions": instructions}),
+            )
+            .await;
+            assert_eq!(
+                result["error"]["code"], "invalid_arguments",
+                "{tool}: {result}"
+            );
+        }
+    }
+    assert_eq!(transport.count(), 0);
+}
+
+#[tokio::test]
+async fn an_unmetered_toolkit_spends_none_of_the_call_budget() {
+    let transport = answering(&["web_search_ok"]);
+    let unmetered = tavily_toolset(
+        &tavily_settings("tv-no-slot", &json!({"per_run_call_cap": 1})),
+        None,
+        &transport,
+    );
+    for _ in 0..3 {
+        let result = call(&unmetered, "web_search", json!({"query": "tokio"})).await;
+        assert_eq!(result["error"]["code"], "metering_unavailable");
+    }
+}
