@@ -104,6 +104,11 @@ impl Default for CheckpointLimits {
     }
 }
 
+/// How old a `<ref>.lock` must be before pruning treats it as left by a
+/// crashed writer and takes it over (#2087). A live git `update-ref` holds
+/// its lock for milliseconds; ten minutes is far beyond any writer.
+const STALE_LOCK_AGE: Duration = Duration::from_secs(10 * 60);
+
 /// The commit-message trailer listing the paths a git checkpoint skipped.
 const SKIPPED_TRAILER: &str = "Elitea-Skipped: ";
 
@@ -520,6 +525,19 @@ pub struct GitCheckpoints {
     limits: CheckpointLimits,
 }
 
+/// Remove the empty directories above `file`, up to but not including
+/// `stop`. A directory that is not empty (another session's refs) stays:
+/// `remove_dir` refuses it.
+fn remove_empty_parents(file: &Path, stop: &Path) {
+    let mut dir = file.parent();
+    while let Some(current) = dir {
+        if current == stop || !current.starts_with(stop) || std::fs::remove_dir(current).is_err() {
+            return;
+        }
+        dir = current.parent();
+    }
+}
+
 /// A held `<ref>.lock`, removed when dropped.
 struct RefLock(PathBuf);
 
@@ -743,20 +761,34 @@ impl GitCheckpoints {
         let mut lock_name = loose.clone().into_os_string();
         lock_name.push(".lock");
         let lock = PathBuf::from(lock_name);
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&lock)
-        {
+        let take = || {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&lock)
+        };
+        match take() {
             Ok(file) => drop(file),
             Err(error) if error.kind() == ErrorKind::AlreadyExists => {
-                tracing::warn!(lock = %lock.display(), "a checkpoint ref is locked, not pruned");
-                return Pruned::Busy;
+                // A lock a crash left behind would keep this checkpoint
+                // unpruned forever: one older than STALE_LOCK_AGE is taken
+                // over (removed, then locked afresh, so two pruners racing
+                // for it still exclude each other).
+                let stale = std::fs::metadata(&lock)
+                    .and_then(|meta| meta.modified())
+                    .ok()
+                    .and_then(|modified| modified.elapsed().ok())
+                    .is_some_and(|age| age >= STALE_LOCK_AGE);
+                if !stale || std::fs::remove_file(&lock).is_err() || take().is_err() {
+                    tracing::warn!(lock = %lock.display(), "a checkpoint ref is locked, not pruned");
+                    return Pruned::Busy;
+                }
+                tracing::warn!(lock = %lock.display(), "took over a stale checkpoint ref lock");
             }
             Err(_) => return Pruned::NotLoose,
         }
         // Released on every exit, a panic included.
-        let _release = RefLock(lock);
+        let release = RefLock(lock);
         // Under the lock: the ref still names this checkpoint, or leave it.
         if !std::fs::read_to_string(&loose).is_ok_and(|text| text.trim() == info.id) {
             return Pruned::NotLoose;
@@ -770,6 +802,14 @@ impl GitCheckpoints {
             return Pruned::Busy;
         }
         if std::fs::remove_file(&loose).is_ok() {
+            // The session's now-empty `refs/...` and `logs/...` directories
+            // go too (not the shared prefix, and never a non-empty one:
+            // `remove_dir` refuses those).
+            // The lock file sits in the same directory: release it first.
+            drop(release);
+            let prefix = Path::new(REF_PREFIX);
+            remove_empty_parents(&loose, &common.join(prefix));
+            remove_empty_parents(&common.join("logs").join(&name), &common.join("logs").join(prefix));
             Pruned::Done
         } else {
             Pruned::NotLoose
@@ -1762,6 +1802,104 @@ mod tests {
             !git_dir.join(REF_PREFIX).join("s/1.lock").exists(),
             "the lock is released"
         );
+    }
+
+    /// A session with two checkpoints under `keep: 2`: creating a third
+    /// prunes the first.
+    fn pruning_fixture() -> (tempfile::TempDir, tempfile::TempDir, Checkpoints) {
+        let dir = repo();
+        let workspace = Workspace::open(dir.path(), &[]).expect("workspace");
+        let data = tempfile::tempdir().expect("data");
+        let checkpoints = Checkpoints::open(&workspace, "s", data.path())
+            .expect("open")
+            .with_limits(CheckpointLimits {
+                keep: 2,
+                ..CheckpointLimits::default()
+            });
+        for turn in 0..2 {
+            std::fs::write(dir.path().join("f.txt"), format!("turn {turn}\n")).expect("edit");
+            checkpoints.create(&format!("turn {turn}")).expect("create");
+        }
+        (dir, data, checkpoints)
+    }
+
+    fn seqs_of(checkpoints: &Checkpoints) -> Vec<u64> {
+        checkpoints
+            .list()
+            .expect("list")
+            .iter()
+            .map(|info| info.seq)
+            .collect()
+    }
+
+    fn git_side(checkpoints: &Checkpoints) -> &GitCheckpoints {
+        match checkpoints {
+            Checkpoints::Git(side) => side,
+            Checkpoints::Copy(_) => panic!("a git work tree"),
+        }
+    }
+
+    /// A `<ref>.lock` a crash left behind (older than the stale age) is
+    /// taken over, so its checkpoint is pruned and the lock does not stay.
+    #[test]
+    fn a_stale_ref_lock_is_taken_over_by_pruning() {
+        let (dir, _data, checkpoints) = pruning_fixture();
+        let lock = dir.path().join(".git").join(REF_PREFIX).join("s/1.lock");
+        let file = std::fs::File::create(&lock).expect("lock");
+        file.set_modified(std::time::SystemTime::now() - STALE_LOCK_AGE - Duration::from_secs(60))
+            .expect("age the lock");
+        drop(file);
+
+        std::fs::write(dir.path().join("f.txt"), "turn 2\n").expect("edit");
+        checkpoints.create("turn 2").expect("create");
+        assert_eq!(seqs_of(&checkpoints), [2, 3], "the stale lock no longer pins checkpoint 1");
+        assert!(!lock.exists(), "the taken-over lock is released");
+    }
+
+    /// A session whose refs are all pruned leaves no empty directory, and
+    /// another session's directory stays.
+    #[test]
+    fn prune_loose_removes_empty_session_directories() {
+        let (dir, _data, checkpoints) = pruning_fixture();
+        let repo_dir = dir.path().join(".git");
+        let session_refs = repo_dir.join(REF_PREFIX).join("s");
+        let session_logs = repo_dir.join("logs").join(REF_PREFIX).join("s");
+        std::fs::create_dir_all(&session_logs).expect("logs");
+        let other = repo_dir.join(REF_PREFIX).join("other");
+        std::fs::create_dir_all(&other).expect("other");
+        std::fs::write(other.join("keep"), "x").expect("other ref");
+        for info in &checkpoints.list().expect("list") {
+            assert!(matches!(git_side(&checkpoints).prune_loose(info), Pruned::Done));
+        }
+        assert!(!session_refs.exists(), "the emptied session directory is removed");
+        assert!(!session_logs.exists(), "and its empty logs directory");
+        assert!(other.join("keep").exists(), "another session's directory stays");
+        assert!(repo_dir.join(REF_PREFIX).exists(), "the shared prefix stays");
+    }
+
+    /// A ref whose content is not the checkpoint's id is not removed (it
+    /// changed under us), and a packed ref (no loose file) falls through to
+    /// `update-ref`.
+    #[test]
+    fn prune_loose_leaves_a_changed_ref_and_packed_refs_fall_through() {
+        let (dir, _data, checkpoints) = pruning_fixture();
+        let repo_dir = dir.path().join(".git");
+        let all = checkpoints.list().expect("list");
+        let first = &all[0];
+        let loose = repo_dir.join(REF_PREFIX).join("s/1");
+        let original = std::fs::read_to_string(&loose).expect("ref");
+        std::fs::write(&loose, "0000000000000000000000000000000000000000\n").expect("change");
+        assert!(matches!(git_side(&checkpoints).prune_loose(first), Pruned::NotLoose));
+        assert!(loose.exists(), "a ref that changed is left alone");
+        assert!(!repo_dir.join(REF_PREFIX).join("s/1.lock").exists(), "and its lock is released");
+        std::fs::write(&loose, original).expect("restore");
+
+        git(dir.path(), &["pack-refs", "--all"]);
+        assert!(!loose.exists(), "packed");
+        assert!(matches!(git_side(&checkpoints).prune_loose(first), Pruned::NotLoose));
+        std::fs::write(dir.path().join("f.txt"), "turn 2\n").expect("edit");
+        checkpoints.create("turn 2").expect("create");
+        assert_eq!(seqs_of(&checkpoints), [2, 3], "the packed ref is pruned through update-ref");
     }
 
     /// A file ignored when the checkpoint was taken and un-ignored during
