@@ -697,7 +697,13 @@ async fn project_skills(
     let mut seen = std::collections::HashSet::new();
     ids.retain(|(id, _)| seen.insert(*id));
     let read = futures::future::try_join_all(ids.into_iter().map(|(id, only_pinned)| async move {
-        let skill = match api.project_skill(request.project_id, id).await {
+        // The skill and its trust, read together.
+        let (skill, untrusted) = futures::future::join(
+            api.project_skill(request.project_id, id),
+            api.project_skill_untrusted(request.project_id, id),
+        )
+        .await;
+        let skill = match skill {
             Ok(skill) => skill,
             Err(error) if only_pinned && matches!(error.status, Some(403 | 404)) => {
                 return Ok(None);
@@ -714,7 +720,6 @@ async fn project_skills(
                 });
             }
         };
-        let untrusted = api.project_skill_untrusted(request.project_id, id).await;
         skills::from_project(request.project_id, id, &skill, untrusted).map(Some)
     }))
     .await?;

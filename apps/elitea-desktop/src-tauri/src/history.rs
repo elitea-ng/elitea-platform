@@ -76,7 +76,7 @@
 //! thread_skill_pins (origin TEXT, user_id INTEGER, workspace_id TEXT,
 //!         conversation_id TEXT, project_id INTEGER, skill_id INTEGER,
 //!         pinned_at INTEGER /* Unix ms */,
-//!         PRIMARY KEY (origin, user_id, workspace_id, conversation_id, skill_id))
+//!         PRIMARY KEY (origin, user_id, workspace_id, conversation_id, project_id, skill_id))
 //! ```
 //!
 //! `thread_skill_pins` (schema 6, ADR-0050 amendment 1, A1.5; #2183) holds the
@@ -234,7 +234,7 @@ CREATE TABLE IF NOT EXISTS thread_skill_pins (
     project_id INTEGER NOT NULL,
     skill_id INTEGER NOT NULL,
     pinned_at INTEGER NOT NULL,
-    PRIMARY KEY (origin, user_id, workspace_id, conversation_id, skill_id)
+    PRIMARY KEY (origin, user_id, workspace_id, conversation_id, project_id, skill_id)
 );
 ";
 
@@ -1751,7 +1751,12 @@ impl HistoryStore {
         self.with("could not pin the skill", |conn| {
             let tx = conn.transaction()?;
             let spellings = spellings(&tx, owner, workspace_id, conversation)?;
-            let held = read_pins(&tx, owner, workspace_id, &spellings)?;
+            // A skill id is the project's: another project's skill of the same
+            // id is another pin, and counts for its own project's bound only.
+            let held: Vec<ThreadSkillPin> = read_pins(&tx, owner, workspace_id, &spellings)?
+                .into_iter()
+                .filter(|have| have.project_id == pin.project_id)
+                .collect();
             if held.iter().any(|have| have.skill_id == pin.skill_id) {
                 return Ok(PinOutcome::Already);
             }
@@ -2426,7 +2431,7 @@ fn read_pins(
     let mut seen = HashSet::new();
     Ok(pins
         .into_iter()
-        .filter(|pin| seen.insert(pin.skill_id))
+        .filter(|pin| seen.insert((pin.project_id, pin.skill_id)))
         .collect())
 }
 
@@ -4145,6 +4150,29 @@ mod tests {
         assert!(store.thread_skill_unpin(&me, "w1", "42", 1).unwrap());
         assert!(!store.thread_skill_unpin(&me, "w1", "42", 1).unwrap());
         assert_eq!(store.thread_skill_pins(&me, "w1", "42").unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_skill_id_is_pinned_per_project() {
+        let (_root, store) = store();
+        let me = owner(1);
+        let other = ThreadSkillPin {
+            project_id: 8,
+            skill_id: 12,
+        };
+        assert_eq!(
+            store.thread_skill_pin(&me, "w1", "42", pin(12), 5).unwrap(),
+            PinOutcome::Pinned
+        );
+        // Skill 12 of another project is another skill, and its own bound.
+        assert_eq!(
+            store.thread_skill_pin(&me, "w1", "42", other, 1).unwrap(),
+            PinOutcome::Pinned
+        );
+        assert_eq!(
+            store.thread_skill_pins(&me, "w1", "42").unwrap(),
+            vec![pin(12), other]
+        );
     }
 
     #[test]
