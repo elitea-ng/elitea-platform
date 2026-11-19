@@ -45,7 +45,7 @@ Name the toolkit and select **Create**. It's now available to attach to agents, 
 | **Project keys** | empty | The projects a call uses when it names none. |
 | **Max issues** | 5000 | The most issues one extraction reads (at most 50000). |
 
-## Available tools (6)
+## Available tools
 
 Three of the tools only read Jira and answer in the chat. The other three write a dataset to the artifact bucket, so a run needs the project's artifact store for them. Without it, only the three read tools are offered, and the run says which tools were left out.
 
@@ -67,7 +67,7 @@ The category of a tool decides when a run needs human approval to call it. See [
 | Tool | What it does |
 |---|---|
 | `get_number_off_all_issues` | Counts the issues updated on or after `after_date` in each project, all visible projects or the ones in `project_keys`. Returns `projects` and `projects_summary`. |
-| `get_jira_issues` | Extracts issues with their changelog into a work-items file and a statuses file. Arguments: `project_keys`, `closed_issues_based_on` (1 closed by status, 2 closed by resolution date), `resolved_after`, `updated_after`, `created_after`, `add_filter`. Answers `Data has been extracted successfully.` with the two file paths. |
+| `get_jira_issues` | Extracts issues with their changelog into a work-items file and a statuses file. Arguments: `project_keys`, `closed_issues_based_on` (1 closed by status, 2 closed by resolution date), `resolved_after`, `updated_after`, `created_after`, `add_filter`. Closed by resolution date (2) chooses closed issues by `resolved_after` alone; `updated_after` bounds the open ones. Answers `Data has been extracted successfully.` with the two file paths. |
 | `get_jira_fields_overview` | Shows how many issues of each project have a value in each field, for at most 2000 issues. |
 | `get_jira_sprints` | Extracts the sprints of the scrum boards of some projects. |
 | `get_jira_statuses` | Lists every status of the instance with its category. |
@@ -79,9 +79,10 @@ The category of a tool decides when a run needs human approval to call it. See [
 
 **The work-items file** has one row per issue, request type and status interval. Its columns are `issue_key`, `issue_id`, `project_name`, `project_key`, `issue_type`, `total_time_spent`, `priority`, `resolution`, `summary`, `status`, `labels`, `created_date`, `resolved_date`, `last_updated_date`, `start_date`, `components`, `subtasks`, `linked_issues`, `fix_versions`, your custom columns, then `request_type`, `status_history`, `from_date`, `to_date` and `time_in_status` (days).
 
-- `request_type` is `closed` or `open`, by the rule you chose, and `defect` again for the issues of a defect type created on or after `created_after`.
+- `request_type` is `closed` or `open`, by the rule you chose, and `defect` again for the issues of a defect type created on or after `created_after`. The defect rows are copies for your own analysis in `data_analysis`; no metric reads them.
 - An interval runs from the previous status change (the first, from the creation date) to the change that left the status. An open issue's last interval runs to the time of the extraction. A closed issue's last interval has no end, so it has no days.
-- A closed issue with a released fix version has one more row, `Waiting for release`, from its resolution to the release date.
+- A closed issue with a released fix version has one more row, `Waiting for release`, from its resolution to the latest release date, unless the release came before the resolution. Versions Jira marks unreleased are ignored.
+- The closed status is matched without regard to case, as Jira matches it.
 - Times are the wall clock of the Jira instance as it reports them, without the time zone offset.
 
 **The statuses file** maps each status to `Active` or `Waiting` and says whether it counts toward cycle time (`add_to_cycle_time`). The rows come in workflow order. Edit it before calculating if your workflow names differ from the defaults.
@@ -118,7 +119,8 @@ The agent calls `get_jira_issues` with `closed_issues_based_on` 2 and the three 
 ## Limits
 
 - One extraction reads at most **Max issues** issues. When a query would read more, it stops and writes nothing: narrow the projects, the dates or `add_filter`, or raise the setting.
-- A dataset has at most 250000 rows and 32 MiB. A run is cut off after four minutes. Nothing partial is ever written.
+- A dataset has at most 250000 rows and 32 MiB. A run is cut off after four minutes. A bound that is hit never leaves a file behind: both files of an extraction are checked before the first is stored. If storing the second file itself fails, the tool says which file was written.
+- On Jira Cloud a project's issue count pages through key-only results, up to 10000 issues; a larger count is shown as a lower bound.
 - Jira pages are requested 50 issues at a time. A rate limit or a short outage is retried up to three times.
 - A long changelog is read in full through the changelog endpoint. A Jira that does not have it (older Server versions) gives only the first page of each long changelog; the tool says how many issues are affected.
 - `add_filter` is added with `AND` inside parentheses and must not contain `ORDER BY`. Project keys are letters, digits and underscores.
@@ -140,6 +142,7 @@ The upstream SDK lists `analyse_jira` (a Jira analysis toolkit), but the code be
 - Dropping issues with no team (or any other empty group value) from a grouped metric. They are their own group here.
 - The library's second "per issue type" field statistic, which overwrote the first; the fields overview shows one statistic per project, with the percentage of that project's issues.
 - The inward label of a link on an outward link; the outward label is used.
+- A "Waiting for release" interval that would be negative, and a release Jira marks unreleased.
 - A fix version with no release date winning the "latest version" choice; the latest released version is used.
 - Reading credentials from AWS Secrets Manager or Azure Key Vault, writing to S3 or SharePoint, and the file dialogs; credentials come from the saved Jira credential and files go to the artifact bucket.
 - ADO, GitLab and GitHub analysis. They follow on the same core (#2264).

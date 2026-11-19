@@ -5,7 +5,7 @@
 //! starts with `=`, `+`, `-`, `@`, a tab or a carriage return and is not a
 //! number is written with a leading `'`, so a Jira summary such as
 //! `=HYPERLINK(...)` is data in Excel, not a formula. Numbers and dates are
-//! untouched. The reader does not undo it.
+//! untouched. The reader undoes it, so a value survives a write and a read.
 
 use super::table::Table;
 
@@ -70,6 +70,17 @@ fn starts_like_a_formula(cell: &str) -> bool {
     cell.starts_with(['=', '+', '-', '@', '\t', '\r']) && cell.trim().parse::<f64>().is_err()
 }
 
+/// Undo the writer's guard: a `'` in front of a formula-looking text is
+/// not part of the value, so a group or a status named `-Team` reads back as
+/// `-Team`.
+fn unguard(cell: &mut String) {
+    if let Some(rest) = cell.strip_prefix('\'')
+        && starts_like_a_formula(rest)
+    {
+        *cell = rest.to_owned();
+    }
+}
+
 /// Read CSV bytes into a table. A row with fewer cells than the header is
 /// padded; a longer one is cut. At most `max_rows` data rows.
 pub(crate) fn read(bytes: &[u8], max_rows: usize) -> Result<Table, CsvError> {
@@ -81,10 +92,11 @@ pub(crate) fn read(bytes: &[u8], max_rows: usize) -> Result<Table, CsvError> {
         return Err(CsvError::Malformed);
     }
     let mut table = Table::new(&header);
-    for record in records {
+    for mut record in records {
         if table.rows.len() >= max_rows {
             return Err(CsvError::TooManyRows);
         }
+        record.iter_mut().for_each(unguard);
         table.push(record);
     }
     Ok(table)
@@ -195,6 +207,16 @@ mod tests {
                 "2026-01-01 10:00:00"
             ]
         );
+    }
+
+    #[test]
+    fn a_defanged_cell_reads_back_as_the_value_it_was() {
+        let mut table = Table::new(&["team"]);
+        for cell in ["-Team", "=1+1", "@home", "plain", "-5"] {
+            table.push(row(&[cell]));
+        }
+        let bytes = write(&table, 10_000).expect("written");
+        assert_eq!(read(&bytes, 100).expect("read"), table);
     }
 
     #[test]

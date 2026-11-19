@@ -29,7 +29,7 @@ use super::config::{
     AnalyseJiraConfig, AnalyseJiraError, AnalyseJiraErrorCode, AnalysisSettings, project_keys,
 };
 use super::dataset::{ClosedBasedOn, Rules, build};
-use super::extract::{Failure, JiraReader, Outcome, Pace, Query, access, extract};
+use super::extract::{Failure, JiraReader, Outcome, Pace, Query, access, extract, filter_problem};
 use super::overview::{
     FIELDS_SAMPLE, fields_overview, projects_overview, sprints as read_sprints, statuses,
 };
@@ -196,6 +196,8 @@ pub(super) struct Runner {
     attachments: Option<AttachmentHost>,
     pub(super) page_size: usize,
     pub(super) retry_delay: Duration,
+    /// The most bytes one dataset file may have.
+    pub(super) max_bytes: usize,
 }
 
 impl Runner {
@@ -210,6 +212,7 @@ impl Runner {
             attachments,
             page_size: Pace::DEFAULT_PAGE_SIZE,
             retry_delay: Pace::DEFAULT_RETRY_DELAY,
+            max_bytes: MAX_DATASET_BYTES,
         }
     }
 
@@ -307,10 +310,8 @@ impl Runner {
         let updated_after = date(arguments, "updated_after")?;
         let created_after = date(arguments, "created_after")?;
         let filter = optional_text(arguments, "add_filter")?.unwrap_or_default();
-        if filter.to_ascii_lowercase().contains("order by") {
-            return Err(told(
-                "add_filter is a condition added with AND: remove the ORDER BY.",
-            ));
+        if let Some(problem) = filter_problem(filter) {
+            return Err(told(problem));
         }
         if based_on == ClosedBasedOn::Status && self.settings.closed_status.is_empty() {
             return Err(told(
@@ -370,24 +371,33 @@ impl Runner {
             )));
         }
         let label = file_label(&keys);
-        let items = writer::write_dataset(
+        // Both files are encoded and checked before the first is stored, so a
+        // bound that is hit never leaves one behind.
+        let items_file =
+            writer::prepare(&built.work_items, self.max_bytes).map_err(Failure::Told)?;
+        let statuses_file =
+            writer::prepare(&built.statuses, self.max_bytes).map_err(Failure::Told)?;
+        let items = writer::store(
             store,
             &self.settings.bucket,
             &format!("data_work_items_{label}"),
-            &built.work_items,
-            MAX_DATASET_BYTES,
+            items_file,
         )
         .await
         .map_err(Failure::Told)?;
-        let statuses = writer::write_dataset(
+        let statuses = writer::store(
             store,
             &self.settings.bucket,
             &format!("map_statuses_{label}"),
-            &built.statuses,
-            MAX_DATASET_BYTES,
+            statuses_file,
         )
         .await
-        .map_err(Failure::Told)?;
+        .map_err(|sentence| {
+            told(format!(
+                "{sentence} The work-items file {} was written; use it, or delete it and run again.",
+                items.path()
+            ))
+        })?;
         let mut text = format!(
             "Data has been extracted successfully.\nWork items: {} ({} rows from {} issues: {} closed, {} open, {} also as defects, {} waiting for release)\nStatuses: {} ({} statuses)",
             items.path(),
@@ -487,7 +497,7 @@ impl Runner {
             &self.settings.bucket,
             &format!("data_sprints_{}", file_label(&keys)),
             &found.table,
-            MAX_DATASET_BYTES,
+            self.max_bytes,
         )
         .await
         .map_err(Failure::Told)?;
@@ -528,7 +538,7 @@ impl Runner {
             Some(path) if !path.trim().is_empty() => Some(read_dataset(store, path.trim()).await?),
             _ => None,
         };
-        let frame = calculate_metric(metric, &items, mapping.as_ref(), &request)
+        let frame = calculate_metric(metric, items, mapping.as_ref(), &request)
             .map_err(|error| told(error.sentence()))?;
         let table = frame.to_table();
         if table.is_empty() {
@@ -542,7 +552,7 @@ impl Runner {
             &self.settings.bucket,
             &format!("jira_metrics_{}", metric.name()),
             &table,
-            MAX_DATASET_BYTES,
+            self.max_bytes,
         )
         .await
         .map_err(Failure::Told)?;

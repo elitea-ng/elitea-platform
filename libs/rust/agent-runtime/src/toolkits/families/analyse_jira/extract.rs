@@ -154,7 +154,9 @@ pub(super) async fn fetch(
             Ok(JiraRead::Refused(message)) => return Err(Failure::Refused(message)),
             Err(error) if error.retryable() && attempt < MAX_RETRIES => {
                 attempt += 1;
-                sleep(pace.retry_delay * attempt).await;
+                // Never sleep past the deadline: the next check ends the call.
+                let left = pace.deadline.saturating_duration_since(Instant::now());
+                sleep((pace.retry_delay * attempt).min(left)).await;
             }
             Err(error) => return Err(Failure::Client(error)),
         }
@@ -323,7 +325,9 @@ pub(super) async fn field_names(
 /// The histories of an issue's changelog and whether they are all of them.
 /// The search expansion returns the first page of a long changelog; the rest
 /// comes from the changelog endpoint, which older Jira Server versions lack
-/// (the changelog is then reported incomplete).
+/// (the changelog is then reported incomplete). When the expansion does not
+/// say how many histories there are, a first page that is full is read on
+/// until the endpoint says it is the last.
 async fn complete_changelog(
     client: &dyn JiraReader,
     pace: &Pace,
@@ -339,11 +343,13 @@ async fn complete_changelog(
     let total = changelog
         .and_then(|changelog| changelog.get("total"))
         .and_then(Value::as_u64)
-        .and_then(|value| usize::try_from(value).ok())
-        .unwrap_or(histories.len());
+        .and_then(|value| usize::try_from(value).ok());
+    if total.is_none() && histories.len() < CHANGELOG_PAGE {
+        return Ok((histories, true));
+    }
     let size = CHANGELOG_PAGE.to_string();
     for _ in 0..MAX_CHANGELOG_PAGES {
-        if histories.len() >= total {
+        if total.is_some_and(|total| histories.len() >= total) {
             return Ok((histories, true));
         }
         let start = histories.len().to_string();
@@ -365,15 +371,16 @@ async fn complete_changelog(
             .and_then(Value::as_array)
             .filter(|values| !values.is_empty());
         let Some(values) = values else {
-            return Ok((histories, false));
+            // Nothing more: complete when no total said there was more.
+            return Ok((histories, total.is_none()));
         };
         histories.extend(values.iter().cloned());
         if reply.get("isLast").and_then(Value::as_bool) == Some(true) {
-            let complete = histories.len() >= total;
+            let complete = total.is_none_or(|total| histories.len() >= total);
             return Ok((histories, complete));
         }
     }
-    let complete = histories.len() >= total;
+    let complete = total.is_some_and(|total| histories.len() >= total);
     Ok((histories, complete))
 }
 
@@ -385,6 +392,54 @@ pub(super) struct Query<'a> {
     pub(super) resolved_after: NaiveDate,
     pub(super) updated_after: NaiveDate,
     pub(super) add_filter: &'a str,
+}
+
+/// Why an `add_filter` cannot be added to the query, if it cannot: an
+/// `ORDER BY` (however it is spaced), a parenthesis closed that was never
+/// opened or left open, or a quote left open. Text inside quotes is not read.
+pub(super) fn filter_problem(filter: &str) -> Option<&'static str> {
+    let mut depth: i32 = 0;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    let mut outside = String::from(" ");
+    for character in filter.chars() {
+        if let Some(open) = quote {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == open {
+                quote = None;
+            }
+            continue;
+        }
+        match character {
+            '"' | '\'' => quote = Some(character),
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth < 0 {
+                    return Some("add_filter closes a parenthesis it never opened.");
+                }
+            }
+            _ => {}
+        }
+        if character.is_whitespace() {
+            if !outside.ends_with(' ') {
+                outside.push(' ');
+            }
+        } else {
+            outside.extend(character.to_lowercase());
+        }
+    }
+    outside.push(' ');
+    if quote.is_some() || depth != 0 {
+        return Some("add_filter has an unclosed parenthesis or quote.");
+    }
+    if outside.contains(" order by ") || outside.contains(")order by ") {
+        return Some("add_filter is a condition added with AND: remove the ORDER BY.");
+    }
+    None
 }
 
 /// A JQL string literal's content: backslashes and quotes escaped.
@@ -447,6 +502,9 @@ pub(super) async fn extract(
         .collect::<Vec<_>>()
         .join(",");
     let mut issues: Vec<Issue> = Vec::new();
+    // Issues read, not issues kept: one the search returned that is no issue
+    // still counts against the cap.
+    let mut read = 0_usize;
     for request in [RequestType::Closed, RequestType::Open] {
         let found = search(
             client,
@@ -454,10 +512,11 @@ pub(super) async fn extract(
             &jql(query, request),
             &fields,
             Some("changelog"),
-            max_issues.saturating_sub(issues.len()),
+            max_issues.saturating_sub(read),
             Overflow::Fail,
         )
         .await?;
+        read += found.issues.len();
         for raw in &found.issues {
             let key = raw.get("key").and_then(Value::as_str).unwrap_or_default();
             let (histories, complete) = complete_changelog(client, pace, raw, key).await?;
@@ -476,7 +535,7 @@ mod tests {
 
     use super::super::dataset::ClosedBasedOn;
     use super::super::records::RequestType;
-    use super::{Query, jql, quote};
+    use super::{Query, filter_problem, jql, quote};
 
     fn query<'a>(
         projects: &'a [String],
@@ -531,5 +590,23 @@ mod tests {
             "project IN (\"ALP\") AND status = \"Won\\\"t Do\" AND updated >= \"2026-02-03\" AND (labels = x OR labels = y)"
         );
         assert_eq!(quote("a\\b\"c"), "a\\\\b\\\"c");
+    }
+
+    #[test]
+    fn a_filter_that_would_change_the_query_is_refused() {
+        for (filter, refused) in [
+            ("labels = x", false),
+            ("labels = \"a (b\" AND status = 'x)'", false),
+            ("summary ~ \"order by\"", false),
+            ("labels = x ORDER BY created", true),
+            ("labels = x ORDER  BY created", true),
+            ("labels = x order\nby created", true),
+            ("(labels = x) order by created", true),
+            ("x) OR (project = OTHER", true),
+            ("(labels = x", true),
+            ("labels = \"x", true),
+        ] {
+            assert_eq!(filter_problem(filter).is_some(), refused, "{filter:?}");
+        }
     }
 }

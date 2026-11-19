@@ -127,6 +127,8 @@ fn fix_versions(versions: Option<&Value>) -> (String, Option<NaiveDateTime>) {
         .join(";");
     let latest = versions
         .iter()
+        // A version Jira says is not released yet has no release to wait for.
+        .filter(|version| version.get("released").and_then(Value::as_bool) != Some(false))
         .filter_map(|version| version.get("releaseDate").and_then(Value::as_str))
         .filter_map(|date| {
             NaiveDate::parse_from_str(date.get(..10).unwrap_or(date), "%Y-%m-%d").ok()
@@ -315,7 +317,8 @@ mod tests {
                 ],
                 "fixVersions": [
                     {"name": "1.0", "releaseDate": "2026-01-15"},
-                    {"name": "1.1", "releaseDate": "2026-02-15"},
+                    {"name": "1.1", "releaseDate": "2026-02-15", "released": true},
+                    {"name": "2.0", "releaseDate": "2027-03-01", "released": false},
                     {"name": "next"}
                 ],
                 "customfield_1": null,
@@ -347,7 +350,7 @@ mod tests {
         assert_eq!(record.components, "API;UI");
         assert_eq!(record.subtasks, "ALP-2");
         assert_eq!(record.linked_issues, "is blocked by ALP-3;blocks ALP-4");
-        assert_eq!(record.fix_versions, "1.0;1.1;next");
+        assert_eq!(record.fix_versions, "1.0;1.1;2.0;next");
         assert_eq!(
             record.latest_release.expect("release").to_string(),
             "2026-02-15 00:00:00"

@@ -1019,3 +1019,105 @@ fn the_catalogue_entry_lists_the_tools_the_family_serves() {
     );
     assert_eq!(entry["settings"]["required"], json!(["jira_configuration"]));
 }
+
+#[tokio::test]
+async fn a_dataset_over_the_byte_cap_writes_none_of_its_files() {
+    let platform = FakePlatform::new();
+    let mut runner = Runner::new(cloud(), settings(), Some(platform.host()));
+    runner.page_size = 2;
+    runner.max_bytes = 300;
+    let runner = Arc::new(runner);
+    let text = call_text(&runner, "get_jira_issues", issues_arguments()).await;
+    assert!(text.contains("larger than 300 bytes"), "{text}");
+    assert!(
+        platform
+            .get("analyse-jira", "data_work_items_alp.csv")
+            .is_none()
+    );
+    assert!(
+        platform
+            .get("analyse-jira", "map_statuses_alp.csv")
+            .is_none()
+    );
+}
+
+/// An issue whose changelog the search shows 100 histories of, with no total.
+fn long_history_issue() -> Value {
+    let histories: Vec<Value> = (0..100)
+        .map(|number| history(&number.to_string(), "2026-01-04T09:00:00", "To Do", "To Do"))
+        .collect();
+    let mut raw = issue(
+        "ALP-9",
+        "Done",
+        "2026-01-02T09:00:00",
+        Some("2026-01-08T09:00:00"),
+        histories,
+        100,
+    );
+    raw["changelog"]
+        .as_object_mut()
+        .expect("changelog")
+        .remove("total");
+    raw
+}
+
+#[tokio::test]
+async fn a_changelog_with_no_total_is_read_on_until_the_endpoint_says_it_is_last() {
+    let jira = FakeJira::new(JiraApiVersion::V3, |call| {
+        if call.is(&["search", "jql"]) {
+            return if call
+                .param("jql")
+                .unwrap_or_default()
+                .contains("resolved is EMPTY")
+            {
+                ok(json!({"issues": [], "isLast": true}))
+            } else {
+                ok(json!({"issues": [long_history_issue()], "isLast": true}))
+            };
+        }
+        if call.is(&["field"]) {
+            return fields_ok();
+        }
+        if call.is(&["issue", "ALP-9", "changelog"]) {
+            return ok(
+                json!({"values": [history("200", "2026-01-08T09:00:00", "To Do", "Done")], "isLast": true}),
+            );
+        }
+        refused("not found")
+    });
+    let platform = FakePlatform::new();
+    let complete = runner(Arc::clone(&jira), Some(&platform));
+    let text = call_text(&complete, "get_jira_issues", issues_arguments()).await;
+    assert!(
+        text.contains("Data has been extracted successfully."),
+        "{text}"
+    );
+    assert!(!text.contains("incomplete"), "{text}");
+    assert_eq!(jira.calls_to(&["issue", "ALP-9", "changelog"]).len(), 1);
+
+    // The same Jira without the endpoint: the history is reported incomplete.
+    let without = FakeJira::new(JiraApiVersion::V3, |call| {
+        if call.is(&["search", "jql"]) {
+            return if call
+                .param("jql")
+                .unwrap_or_default()
+                .contains("resolved is EMPTY")
+            {
+                ok(json!({"issues": [], "isLast": true}))
+            } else {
+                ok(json!({"issues": [long_history_issue()], "isLast": true}))
+            };
+        }
+        if call.is(&["field"]) {
+            return fields_ok();
+        }
+        refused("HTTP 404 Not Found")
+    });
+    let platform = FakePlatform::new();
+    let incomplete = runner(without, Some(&platform));
+    let text = call_text(&incomplete, "get_jira_issues", issues_arguments()).await;
+    assert!(
+        text.contains("1 issues have an incomplete status history"),
+        "{text}"
+    );
+}

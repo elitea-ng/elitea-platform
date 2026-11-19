@@ -156,7 +156,7 @@ pub(super) fn build(
         let mut resolved = issue.resolved;
         if rules.closed_based_on == ClosedBasedOn::Status
             && !rules.closed_status.is_empty()
-            && issue.status == rules.closed_status
+            && issue.status.to_lowercase() == rules.closed_status.to_lowercase()
         {
             resolved = history.last().and_then(|interval| interval.from);
             if resolved.is_some_and(|time| time < midnight(rules.resolved_after)) {
@@ -201,8 +201,10 @@ pub(super) fn build(
                 });
             }
         }
+        // A release before the resolution has nothing to wait for.
         if issue.request == RequestType::Closed
             && let Some(release) = issue.latest_release
+            && resolved.is_some_and(|time| time <= release)
         {
             if rows.len() >= rules.max_rows {
                 return Err(TooManyRows {
@@ -450,6 +452,31 @@ mod tests {
         assert_eq!(statuses.last(), Some(&"Waiting for release"));
         let last = built.statuses.rows.last().expect("a mapping row");
         assert_eq!(&last[4..], ["Waiting", "n"]);
+    }
+
+    #[test]
+    fn a_release_before_the_resolution_adds_no_waiting_row() {
+        let mut early = closed_issue();
+        early.latest_release = Some(at(1, 5));
+        let custom = ["team".to_owned()];
+        let built = build(&[early], &rules(&[], &custom), at(2, 1)).expect("built");
+        assert_eq!(built.released, 0);
+        assert_eq!(
+            column(&built, "status_history"),
+            ["To Do", "In Progress", "Done"]
+        );
+    }
+
+    #[test]
+    fn the_closed_status_matches_without_regard_to_case() {
+        let mut by_status = issue("ALP-5", RequestType::Closed, "Done", "Story");
+        by_status.transitions = vec![moved(1, 12, "In Progress")];
+        let custom = ["team".to_owned()];
+        let mut window = rules(&[], &custom);
+        window.closed_based_on = ClosedBasedOn::Status;
+        window.closed_status = "done";
+        let built = build(&[by_status], &window, at(2, 1)).expect("built");
+        assert_eq!(column(&built, "resolved_date")[0], "2026-01-12 00:00:00");
     }
 
     #[test]

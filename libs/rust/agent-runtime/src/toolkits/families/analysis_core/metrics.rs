@@ -327,7 +327,8 @@ pub(crate) fn parse_time(text: &str) -> Option<NaiveDateTime> {
 }
 
 impl Dataset {
-    fn from_table(table: &Table) -> Result<Self, MetricError> {
+    /// The dataset's rows are moved, not copied: a large file is held once.
+    fn from_table(table: Table) -> Result<Self, MetricError> {
         let mut index: HashMap<&str, usize> = HashMap::new();
         for name in REQUIRED_COLUMNS {
             let position = table
@@ -340,29 +341,29 @@ impl Dataset {
         let cell = |row: &[String], position: usize| row.get(position).cloned().unwrap_or_default();
         let rows = table
             .rows
-            .iter()
+            .into_iter()
             .map(|row| {
-                let resolved = parse_time(&cell(row, index["resolved_date"]));
+                let resolved = parse_time(&cell(&row, index["resolved_date"]));
                 Row {
-                    cells: row.clone(),
-                    issue_id: cell(row, index["issue_id"]),
-                    request_type: cell(row, index["request_type"]),
-                    status: cell(row, index["status_history"]),
-                    days: cell(row, index["time_in_status"])
+                    issue_id: cell(&row, index["issue_id"]),
+                    request_type: cell(&row, index["request_type"]),
+                    status: cell(&row, index["status_history"]),
+                    days: cell(&row, index["time_in_status"])
                         .trim()
                         .parse::<f64>()
                         .ok(),
                     resolved,
-                    from: from_column.and_then(|position| parse_time(&cell(row, position))),
-                    to: to_column.and_then(|position| parse_time(&cell(row, position))),
+                    from: from_column.and_then(|position| parse_time(&cell(&row, position))),
+                    to: to_column.and_then(|position| parse_time(&cell(&row, position))),
                     year_month: resolved
                         .map(|time| format!("{:04}-{:02}", time.year(), time.month()))
                         .unwrap_or_default(),
+                    cells: row,
                 }
             })
             .collect();
         Ok(Self {
-            columns: table.columns.clone(),
+            columns: table.columns,
             rows,
         })
     }
@@ -832,7 +833,7 @@ fn month_end(date: NaiveDate) -> Option<NaiveDate> {
 /// table the extraction wrote, needed by the status-based metrics.
 pub(crate) fn calculate(
     metric: Metric,
-    items: &Table,
+    items: Table,
     mapping: Option<&Table>,
     request: &Request,
 ) -> Result<Frame, MetricError> {
@@ -1101,7 +1102,7 @@ mod tests {
     }
 
     fn run(metric: Metric, request: &Request) -> Table {
-        calculate(metric, &fixture(), Some(&mapping()), request)
+        calculate(metric, fixture(), Some(&mapping()), request)
             .expect("calculated")
             .to_table()
     }
@@ -1253,7 +1254,7 @@ mod tests {
                 row[team].clear();
             }
         }
-        let frame = calculate(Metric::LeadTime, &table, None, &Request::default())
+        let frame = calculate(Metric::LeadTime, table, None, &Request::default())
             .expect("calculated")
             .to_table();
         assert_eq!(frame.rows.len(), 2);
@@ -1265,7 +1266,7 @@ mod tests {
         short.rows.retain(|row| row[0] != "In Review");
         let error = calculate(
             Metric::CycleTime,
-            &fixture(),
+            fixture(),
             Some(&short),
             &Request::default(),
         )
@@ -1277,7 +1278,7 @@ mod tests {
     #[test]
     fn a_status_metric_without_the_mapping_and_a_bad_group_column_are_refused() {
         assert_eq!(
-            calculate(Metric::CycleTime, &fixture(), None, &Request::default())
+            calculate(Metric::CycleTime, fixture(), None, &Request::default())
                 .expect_err("refused"),
             MetricError::MissingMapping
         );
@@ -1286,12 +1287,12 @@ mod tests {
             aggregate_by: Vec::new(),
         };
         assert_eq!(
-            calculate(Metric::LeadTime, &fixture(), None, &request).expect_err("refused"),
+            calculate(Metric::LeadTime, fixture(), None, &request).expect_err("refused"),
             MetricError::UnknownGroupColumn("nope".to_owned())
         );
         let bare = Table::new(&["issue_id"]);
         assert!(matches!(
-            calculate(Metric::LeadTime, &bare, None, &Request::default()),
+            calculate(Metric::LeadTime, bare, None, &Request::default()),
             Err(MetricError::MissingColumn(_))
         ));
     }
@@ -1299,7 +1300,7 @@ mod tests {
     #[test]
     fn an_empty_dataset_gives_an_empty_result() {
         let empty = items(&[]);
-        let table = calculate(Metric::LeadTime, &empty, None, &Request::default())
+        let table = calculate(Metric::LeadTime, empty, None, &Request::default())
             .expect("calculated")
             .to_table();
         assert_eq!(table.rows.len(), 0);

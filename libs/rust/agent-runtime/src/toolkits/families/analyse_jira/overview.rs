@@ -16,7 +16,9 @@ use super::records::jira_time;
 /// Projects one listing reads (50 per page).
 const MAX_PROJECT_PAGES: usize = 40;
 /// Issues one project count reads on a Jira that does not give a total.
-const COUNT_CAP: usize = 20_000;
+const COUNT_CAP: usize = 10_000;
+/// Key-only pages are cheap: a count asks for 100 at a time.
+const COUNT_PAGE_SIZE: usize = 100;
 const MAX_BOARD_PAGES: usize = 20;
 const MAX_SPRINT_PAGES: usize = 100;
 const MAX_SPRINTS: usize = 5_000;
@@ -133,9 +135,15 @@ async fn count_issues(client: &dyn JiraReader, pace: &Pace, jql: &str) -> Outcom
             return Ok((total, true));
         }
     }
+    let counting = Pace {
+        deadline: pace.deadline,
+        retry_delay: pace.retry_delay,
+        page_size: pace.page_size.max(COUNT_PAGE_SIZE),
+        max_pages: pace.max_pages,
+    };
     let found = search(
         client,
-        pace,
+        &counting,
         jql,
         "key",
         None,

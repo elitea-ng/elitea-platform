@@ -184,7 +184,7 @@ const ENTRY: &str = r##"
           "type": "string"
         },
         "updated_after": {
-          "description": "Issues updated on or after this date (YYYY-MM-DD).",
+          "description": "Open issues, and closed ones when closed_issues_based_on is 1, updated on or after this date (YYYY-MM-DD). With 2, closed issues are chosen by resolved_after.",
           "title": "Updated After",
           "type": "string"
         }
