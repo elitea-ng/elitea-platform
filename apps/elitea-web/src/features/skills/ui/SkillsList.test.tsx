@@ -33,6 +33,19 @@ function renderList(overrides: Partial<Parameters<typeof SkillsList>[0]> = {}) {
 }
 
 describe('SkillsList', () => {
+  it('badges a skill from another project that this project has not trusted, and nothing else', () => {
+    renderList({
+      items: [
+        { ...skill, id: '2', name: 'Imported', trust: { foreign: true, state: 'untrusted' } },
+        { ...skill, id: '3', name: 'Reviewed import', trust: { foreign: true, state: 'trusted' } },
+        { ...skill, id: '4', name: 'Home made', trust: { foreign: false, state: 'not_required' } },
+        { ...skill, id: '5', name: 'Older server' },
+      ],
+    });
+    expect(screen.getAllByText('Untrusted')).toHaveLength(1);
+    expect(screen.getByText('Imported')).toBeInTheDocument();
+  });
+
   it('renders loading, failure, and both empty-state variants', () => {
     const { rerender, container } = renderWithProviders(
       <SkillsList

@@ -253,6 +253,15 @@ describe('useChatSkillMention', () => {
       await expect(result.current.resolveProjectSkillIds('use ~Triage')).resolves.toEqual(['9']);
     });
 
+    it('offers the project skills in a chat with no active participant (a model chat answers it)', async () => {
+      mockProjectSkills([{ id: 9, name: 'Triage' }]);
+      const chatInput = makeRef();
+      const { result } = renderHookWithProviders(() => useChatSkillMention({ chatInput, activeParticipant: null, projectId: 'proj-1' }));
+      await waitFor(() => expect(result.current.hasMentionableSkills).toBe(true));
+      act(() => result.current.onSkillInputChange('~'));
+      await waitFor(() => expect(result.current.filteredItems.map((i) => i.name)).toEqual(['Triage']));
+    });
+
     it('offers no project skills to a participant that is not an agent', () => {
       const seen = { count: 0 };
       mockProjectSkills([{ id: 9, name: 'Triage' }], seen);

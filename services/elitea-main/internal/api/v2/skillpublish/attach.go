@@ -227,7 +227,10 @@ func (h *Handler) resolveOrForkLocalSkill(ctx context.Context, schema, publicQuo
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	projectID, _ := strconv.Atoi(strings.TrimPrefix(schema, "p_"))
+	// `schema` is the quoted identifier ("p_7"), so the quotes go before the prefix: with them
+	// left on, the owner came out as 0, which a real tenant schema refuses (skills_owner_project_fkey,
+	// tenant 0131), and Add answered 404 "not found" for a skill that was there.
+	projectID, _ := strconv.Atoi(strings.TrimPrefix(strings.Trim(schema, `"`), "p_"))
 	var forkedSkillID int
 	if err := tx.QueryRow(ctx, fmt.Sprintf(`
 		INSERT INTO %s.skills (name, description, owner_id, author_id, meta, created_at)

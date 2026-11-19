@@ -51,8 +51,12 @@ type Status struct {
 	// request must name.
 	Revision string `json:"revision"`
 	// State is `not_required` (the skill is not foreign), `trusted` or `untrusted`.
-	State   string   `json:"state"`
-	History []Record `json:"history"`
+	State string `json:"state"`
+	// PublisherTrusted is true when the state is `trusted` because an
+	// administrator trusts the publisher project (the skill-publishing
+	// section's trusted publishers), not because this project reviewed the text.
+	PublisherTrusted bool     `json:"publisher_trusted,omitempty"`
+	History          []Record `json:"history"`
 }
 
 // Repository is the storage the handler needs, for one project.
