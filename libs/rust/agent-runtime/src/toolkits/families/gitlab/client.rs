@@ -22,8 +22,7 @@ use super::config::GitLabToolkitConfig;
 use crate::toolkits::families::connector_client::IntoAdk;
 use crate::toolkits::families::gitlab_org::client::{
     GitLabOrgClientError, GitLabOrgClientErrorCode, GitLabOrgHttpResponse, GitLabOrgTransport,
-    map_http_status, python_issue_list, reqwest_transport, validate_effect_status,
-    wildcard_matches,
+    map_http_status, reqwest_transport, validate_effect_status, wildcard_matches,
 };
 use crate::toolkits::families::gitlab_org::diff::{DiffErrorCode, discussion_position};
 use crate::toolkits::families::gitlab_org::edit::{EditErrorCode, apply_update};
@@ -41,6 +40,7 @@ const MAX_BRANCH_BYTES: usize = 255;
 const MAX_IDENTIFIER_BYTES: usize = 1_024;
 const MAX_TEXT_BYTES: usize = 256 * 1_024;
 const MAX_PAGES: usize = 10;
+const MAX_FILTER_BYTES: usize = 1_024;
 const MAX_ITEMS: usize = 1_000;
 const MAX_DIFF_OUTPUT_BYTES: usize = 512 * 1_024;
 
@@ -251,7 +251,7 @@ pub(in crate::toolkits) enum GitLabOperation<'a> {
         recursive: bool,
         branch: Option<&'a str>,
     },
-    GetIssues,
+    GetIssues(ListFilter<'a>),
     GetIssue {
         issue_number: u64,
     },
@@ -324,6 +324,37 @@ pub(in crate::toolkits) enum GitLabOperation<'a> {
         until: Option<&'a str>,
         author: Option<&'a str>,
     },
+    ListMergeRequests {
+        filter: ListFilter<'a>,
+        target_branch: Option<&'a str>,
+        source_branch: Option<&'a str>,
+        include_details: bool,
+    },
+    GetMergeRequest {
+        pr_number: u64,
+        include_discussions: bool,
+        include_approvals: bool,
+        include_pipelines: bool,
+        include_commits: bool,
+    },
+}
+
+/// The filters `get_issues` and `list_merge_requests` share: python-gitlab's
+/// `list(**params)` with the SDK's defaults already applied.
+#[derive(Clone, Debug, Default)]
+pub(in crate::toolkits) struct ListFilter<'a> {
+    /// `None` when the SDK sends no `state` (blank or `all`).
+    pub(in crate::toolkits) state: Option<&'a str>,
+    pub(in crate::toolkits) page: usize,
+    pub(in crate::toolkits) per_page: usize,
+    pub(in crate::toolkits) created_after: Option<&'a str>,
+    pub(in crate::toolkits) created_before: Option<&'a str>,
+    pub(in crate::toolkits) updated_after: Option<&'a str>,
+    pub(in crate::toolkits) updated_before: Option<&'a str>,
+    pub(in crate::toolkits) author_username: Option<&'a str>,
+    pub(in crate::toolkits) labels: Option<&'a str>,
+    /// `fetch_all` (issues) or `all` (merge requests): every page.
+    pub(in crate::toolkits) all: bool,
 }
 
 #[async_trait]
@@ -546,6 +577,111 @@ impl GitLabClient {
         Ok(output)
     }
 
+    /// python-gitlab `list(**params)`: one page (`page`, `per_page`), or every
+    /// page with `all`, over the shared filters.
+    async fn list_filtered(
+        &self,
+        suffix: &[&str],
+        filter: &ListFilter<'_>,
+        extra: &[(&str, &str)],
+    ) -> Result<Vec<Value>, GitLabClientError> {
+        let mut query: Vec<(&str, String)> = Vec::new();
+        if let Some(state) = filter.state {
+            query.push(("state", state.to_owned()));
+        }
+        if let Some(value) = filter.created_after {
+            validate_text(value, MAX_FILTER_BYTES)?;
+            query.push(("created_after", value.to_owned()));
+        }
+        if let Some(value) = filter.created_before {
+            validate_text(value, MAX_FILTER_BYTES)?;
+            query.push(("created_before", expand_inclusive_upper_bound(value)));
+        }
+        if let Some(value) = filter.updated_after {
+            validate_text(value, MAX_FILTER_BYTES)?;
+            query.push(("updated_after", value.to_owned()));
+        }
+        if let Some(value) = filter.updated_before {
+            validate_text(value, MAX_FILTER_BYTES)?;
+            query.push(("updated_before", expand_inclusive_upper_bound(value)));
+        }
+        for (name, value) in extra {
+            validate_text(value, MAX_FILTER_BYTES)?;
+            query.push((*name, (*value).to_owned()));
+        }
+        if let Some(value) = filter.author_username {
+            validate_text(value, MAX_FILTER_BYTES)?;
+            query.push(("author_username", value.to_owned()));
+        }
+        if let Some(value) = filter.labels {
+            validate_text(value, MAX_FILTER_BYTES)?;
+            query.push(("labels", value.to_owned()));
+        }
+        if filter.all {
+            self.get_all(suffix, &query).await
+        } else {
+            query.push(("page", filter.page.to_string()));
+            query.push(("per_page", filter.per_page.to_string()));
+            self.get_page(suffix, &query, 100).await
+        }
+    }
+
+    /// `_normalize_mr`: the compact, stable merge request dict.
+    fn normalize_merge_request(
+        merge_request: &Value,
+        include_details: bool,
+    ) -> Result<Value, GitLabClientError> {
+        if !merge_request.is_object() {
+            return Err(invalid_response());
+        }
+        let field = |name: &str| merge_request.get(name).cloned().unwrap_or(Value::Null);
+        let users = |name: &str| -> Value {
+            Value::Array(
+                merge_request
+                    .get(name)
+                    .and_then(Value::as_array)
+                    .map(|users| users.iter().map(safe_user).collect())
+                    .unwrap_or_default(),
+            )
+        };
+        // `data.get("draft", data.get("work_in_progress"))`: a present key wins.
+        let draft = merge_request
+            .get("draft")
+            .or_else(|| merge_request.get("work_in_progress"))
+            .cloned()
+            .unwrap_or(Value::Null);
+        let merge_user = match merge_request.get("merge_user") {
+            Some(user) if is_truthy(user) => safe_user(user),
+            _ => merge_request
+                .get("merged_by")
+                .map_or(Value::Null, safe_user),
+        };
+        let mut result = json!({
+            "id": field("id"),
+            "iid": field("iid"),
+            "title": field("title"),
+            "web_url": field("web_url"),
+            "state": field("state"),
+            "draft": draft,
+            "created_at": field("created_at"),
+            "updated_at": field("updated_at"),
+            "merged_at": field("merged_at"),
+            "closed_at": field("closed_at"),
+            "source_branch": field("source_branch"),
+            "target_branch": field("target_branch"),
+            "author": merge_request.get("author").map_or(Value::Null, safe_user),
+            "merge_user": merge_user,
+            "labels": field("labels"),
+            "sha": field("sha"),
+            "merge_commit_sha": field("merge_commit_sha"),
+        });
+        if include_details {
+            result["assignees"] = users("assignees");
+            result["reviewers"] = users("reviewers");
+        }
+        Ok(result)
+    }
+
     async fn read_provider_file(
         &self,
         file_path: &str,
@@ -754,26 +890,26 @@ impl GitLabApi for GitLabClient {
                 recursive,
                 branch,
             } => self.list_tree(path, recursive, branch, "tree").await,
-            GitLabOperation::GetIssues => {
-                // python-gitlab `issues.list(state="opened")`: the first page.
-                let issues = self
-                    .get_page(&["issues"], &[("state", "opened".to_owned())], 100)
-                    .await?;
-                if issues.is_empty() {
-                    return Ok(Value::String("No open issues available".to_owned()));
-                }
+            GitLabOperation::GetIssues(filter) => {
+                let issues = self.list_filtered(&["issues"], &filter, &[]).await?;
+                // `parse_issues`: one compact dict per issue.
                 let mut projected = Vec::with_capacity(issues.len());
                 for issue in &issues {
-                    projected.push((
-                        required_string(issue, "title")?,
-                        required_u64(issue, "iid")?,
-                    ));
+                    projected.push(json!({
+                        "title": required_string(issue, "title")?,
+                        "number": required_u64(issue, "iid")?,
+                        "state": issue.get("state").cloned().unwrap_or(Value::Null),
+                        "labels": issue.get("labels").cloned().unwrap_or(Value::Null),
+                        "author": issue
+                            .get("author")
+                            .and_then(|author| author.get("username"))
+                            .cloned()
+                            .unwrap_or(Value::Null),
+                        "created_at": issue.get("created_at").cloned().unwrap_or(Value::Null),
+                        "updated_at": issue.get("updated_at").cloned().unwrap_or(Value::Null),
+                    }));
                 }
-                bounded_output(Value::String(format!(
-                    "Found {} issues:\n{}",
-                    projected.len(),
-                    python_issue_list(&projected)
-                )))
+                bounded_output(Value::Array(projected))
             }
             GitLabOperation::GetIssue { issue_number } => {
                 let issue_id = positive_id(issue_number)?;
@@ -796,7 +932,8 @@ impl GitLabApi for GitLabClient {
                         .ok_or_else(invalid_response)?;
                     comments.push(json!({
                         "body": required_string(note, "body")?,
-                        "user": author.get("username").and_then(Value::as_str).ok_or_else(invalid_response)?
+                        "user": author.get("username").and_then(Value::as_str).ok_or_else(invalid_response)?,
+                        "created_at": note.get("created_at").cloned().unwrap_or(Value::Null)
                     }));
                 }
                 bounded_output(json!({
@@ -1076,6 +1213,137 @@ impl GitLabApi for GitLabClient {
                 self.set_active(branch_name).await;
                 Ok(Value::String(format!("Active branch set to {branch_name}")))
             }
+            GitLabOperation::ListMergeRequests {
+                filter,
+                target_branch,
+                source_branch,
+                include_details,
+            } => {
+                let mut extra: Vec<(&str, &str)> = Vec::new();
+                if let Some(branch) = target_branch {
+                    extra.push(("target_branch", branch));
+                }
+                if let Some(branch) = source_branch {
+                    extra.push(("source_branch", branch));
+                }
+                let merge_requests = self
+                    .list_filtered(&["merge_requests"], &filter, &extra)
+                    .await?;
+                let mut compact = Vec::with_capacity(merge_requests.len());
+                for merge_request in &merge_requests {
+                    compact.push(Self::normalize_merge_request(
+                        merge_request,
+                        include_details,
+                    )?);
+                }
+                bounded_output(Value::Array(compact))
+            }
+            GitLabOperation::GetMergeRequest {
+                pr_number,
+                include_discussions,
+                include_approvals,
+                include_pipelines,
+                include_commits,
+            } => {
+                let id = positive_id(pr_number)?;
+                let merge_request = self.get_object(&["merge_requests", &id], &[]).await?;
+                let mut result = Self::normalize_merge_request(&merge_request, true)?;
+                result["description"] = merge_request
+                    .get("description")
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                // Each heavy field degrades to the SDK's one-line notice
+                // when its own request fails, never failing the whole call.
+                if include_discussions {
+                    result["discussions"] = match self
+                        .get_all(&["merge_requests", &id, "discussions"], &[])
+                        .await
+                    {
+                        Ok(discussions) => Value::Array(
+                            discussions
+                                .iter()
+                                .map(|discussion| {
+                                    json!({
+                                        "id": discussion.get("id").cloned().unwrap_or(Value::Null),
+                                        "notes_count": discussion
+                                            .get("notes")
+                                            .and_then(Value::as_array)
+                                            .map_or(0, Vec::len),
+                                    })
+                                })
+                                .collect(),
+                        ),
+                        Err(error) => {
+                            Value::String(format!("Unable to retrieve discussions: {error}"))
+                        }
+                    };
+                }
+                if include_approvals {
+                    result["approvals"] = match self
+                        .get_object(&["merge_requests", &id, "approvals"], &[])
+                        .await
+                    {
+                        Ok(approvals) => json!({
+                            "approved": approvals.get("approved").cloned().unwrap_or(Value::Null),
+                            "approved_by": approvals
+                                .get("approved_by")
+                                .and_then(Value::as_array)
+                                .map(|entries| {
+                                    entries
+                                        .iter()
+                                        .map(|entry| {
+                                            entry.get("user").map_or(Value::Null, safe_user)
+                                        })
+                                        .collect::<Vec<_>>()
+                                })
+                                .unwrap_or_default(),
+                        }),
+                        Err(error) => {
+                            Value::String(format!("Unable to retrieve approvals: {error}"))
+                        }
+                    };
+                }
+                if include_pipelines {
+                    result["pipeline"] = match self
+                        .get_page(&["merge_requests", &id, "pipelines"], &[], 100)
+                        .await
+                    {
+                        Ok(pipelines) => pipelines.first().map_or(Value::Null, |latest| {
+                            json!({
+                                "id": latest.get("id").cloned().unwrap_or(Value::Null),
+                                "status": latest.get("status").cloned().unwrap_or(Value::Null),
+                                "web_url": latest.get("web_url").cloned().unwrap_or(Value::Null),
+                            })
+                        }),
+                        Err(error) => {
+                            Value::String(format!("Unable to retrieve pipeline status: {error}"))
+                        }
+                    };
+                }
+                if include_commits {
+                    result["commits"] = match self
+                        .get_page(&["merge_requests", &id, "commits"], &[], 100)
+                        .await
+                    {
+                        Ok(commits) => Value::Array(
+                            commits
+                                .iter()
+                                .map(|commit| {
+                                    json!({
+                                        "sha": commit.get("id").cloned().unwrap_or(Value::Null),
+                                        "message": commit
+                                            .get("message")
+                                            .cloned()
+                                            .unwrap_or(Value::Null),
+                                    })
+                                })
+                                .collect(),
+                        ),
+                        Err(error) => Value::String(format!("Unable to retrieve commits: {error}")),
+                    };
+                }
+                bounded_output(result)
+            }
             GitLabOperation::GetPrChanges { pr_number } => {
                 let pr_id = positive_id(pr_number)?;
                 let mr = self.get_object(&["merge_requests", &pr_id], &[]).await?;
@@ -1265,6 +1533,150 @@ fn branch_already_exists(value: &Value) -> bool {
         Value::Object(values) => values.values().any(branch_already_exists),
         _ => false,
     }
+}
+
+/// `_safe_user`: a user-like dict reduced to id, username and name; null for a
+/// missing or empty one.
+fn safe_user(user: &Value) -> Value {
+    if !is_truthy(user) {
+        return Value::Null;
+    }
+    json!({
+        "id": user.get("id").cloned().unwrap_or(Value::Null),
+        "username": user.get("username").cloned().unwrap_or(Value::Null),
+        "name": user.get("name").cloned().unwrap_or(Value::Null),
+    })
+}
+
+/// Python truthiness of a JSON value (`if user:`).
+fn is_truthy(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(flag) => *flag,
+        Value::Number(number) => number.as_f64().is_some_and(|number| number != 0.0),
+        Value::String(text) => !text.is_empty(),
+        Value::Array(items) => !items.is_empty(),
+        Value::Object(fields) => !fields.is_empty(),
+    }
+}
+
+/// The SDK's `expand_inclusive_upper_bound`: widen an upper date bound to the
+/// last instant of the precision it states. GitLab renders timestamps
+/// truncated to milliseconds but filters at microsecond precision, so a bound
+/// copied out of a response sits below the record it came from, and a bare date
+/// would match nothing from that day. Lower-order fields are filled with their
+/// maximum, so this needs no date arithmetic and no time zones. A value that is
+/// not a timestamp, or that already states microseconds, is returned untouched
+/// (the deliberate escape hatch for an exact partition).
+pub(in crate::toolkits) fn expand_inclusive_upper_bound(value: &str) -> String {
+    let trimmed = value.trim();
+    let Some(parts) = parse_upper_bound(trimmed) else {
+        return value.to_owned();
+    };
+    if parts.fraction.len() >= 6 {
+        return value.to_owned();
+    }
+    format!(
+        "{}{}{}:{}:{}.{:9<6}{}",
+        parts.date,
+        parts.separator.unwrap_or("T"),
+        parts.hour.unwrap_or("23"),
+        parts.minute.unwrap_or("59"),
+        parts.second.unwrap_or("59"),
+        parts.fraction,
+        parts.offset.unwrap_or("")
+    )
+}
+
+struct UpperBound<'a> {
+    date: &'a str,
+    separator: Option<&'a str>,
+    hour: Option<&'a str>,
+    minute: Option<&'a str>,
+    second: Option<&'a str>,
+    fraction: &'a str,
+    offset: Option<&'a str>,
+}
+
+/// `^date(?:[Tt ]HH(?::MM(?::SS(?:\.frac)?)?)?(?:Z|+HH(?::?MM)?)?)?$`.
+fn parse_upper_bound(value: &str) -> Option<UpperBound<'_>> {
+    fn digits(text: &str, count: usize) -> bool {
+        text.len() == count && text.bytes().all(|byte| byte.is_ascii_digit())
+    }
+    if !value.is_ascii() || value.len() < 10 {
+        return None;
+    }
+    let (date, mut rest) = value.split_at(10);
+    let bytes = date.as_bytes();
+    if !(digits(&date[0..4], 4)
+        && bytes[4] == b'-'
+        && digits(&date[5..7], 2)
+        && bytes[7] == b'-'
+        && digits(&date[8..10], 2))
+    {
+        return None;
+    }
+    let mut parts = UpperBound {
+        date,
+        separator: None,
+        hour: None,
+        minute: None,
+        second: None,
+        fraction: "",
+        offset: None,
+    };
+    if rest.is_empty() {
+        return Some(parts);
+    }
+    let separator = &rest[..1];
+    if !matches!(separator, "T" | "t" | " ") {
+        return None;
+    }
+    parts.separator = Some(separator);
+    rest = &rest[1..];
+    if rest.len() < 2 || !digits(&rest[..2], 2) {
+        return None;
+    }
+    parts.hour = Some(&rest[..2]);
+    rest = &rest[2..];
+    if rest.len() >= 3 && rest.as_bytes()[0] == b':' && digits(&rest[1..3], 2) {
+        parts.minute = Some(&rest[1..3]);
+        rest = &rest[3..];
+        if rest.len() >= 3 && rest.as_bytes()[0] == b':' && digits(&rest[1..3], 2) {
+            parts.second = Some(&rest[1..3]);
+            rest = &rest[3..];
+            if rest.as_bytes().first() == Some(&b'.') {
+                let end = rest[1..]
+                    .bytes()
+                    .position(|byte| !byte.is_ascii_digit())
+                    .map_or(rest.len(), |at| at + 1);
+                if end > 1 {
+                    parts.fraction = &rest[1..end];
+                    rest = &rest[end..];
+                }
+            }
+        }
+    }
+    if !rest.is_empty() {
+        let offset_ok = rest == "Z"
+            || rest == "z"
+            || (matches!(rest.as_bytes()[0], b'+' | b'-')
+                && match rest.len() {
+                    3 => digits(&rest[1..], 2),
+                    5 => digits(&rest[1..], 4),
+                    6 => {
+                        rest.as_bytes()[3] == b':'
+                            && digits(&rest[1..3], 2)
+                            && digits(&rest[4..], 2)
+                    }
+                    _ => false,
+                });
+        if !offset_ok {
+            return None;
+        }
+        parts.offset = Some(rest);
+    }
+    Some(parts)
 }
 
 fn positive_id(value: u64) -> Result<String, GitLabClientError> {

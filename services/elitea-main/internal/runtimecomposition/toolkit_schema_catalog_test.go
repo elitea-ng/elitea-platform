@@ -645,3 +645,75 @@ func TestRustOnlyNewTypesAreRefusedWhenTheyShadowOrAreIncomplete(t *testing.T) {
 		t.Fatalf("a well-formed new type was refused by the catalogue: %v", err)
 	}
 }
+
+// Tools and argument schemas upstream gained after the 2026-08-07 pin (S10,
+// issue 2265) reach the toolkit editor through the rust-only document: its
+// "types" add the missing tools, its "overrides" replace a pinned schema.
+func TestPinnedSnapshotCarriesThePostPinToolsAndSchemas(t *testing.T) {
+	t.Parallel()
+
+	snapshot, err := LoadPinnedCurrentToolkitSchemaSnapshot()
+	if err != nil {
+		t.Fatalf("load pinned snapshot: %v", err)
+	}
+	plain, err := LoadCurrentToolkitSchemaSnapshot(pinnedCurrentToolkitSchemaSnapshotJSON)
+	if err != nil {
+		t.Fatalf("load plain: %v", err)
+	}
+	for toolkitType, tools := range map[string][]string{
+		"bitbucket": {"delete_file"},
+		"gitlab":    {"list_merge_requests", "get_merge_request"},
+	} {
+		merged, found, err := snapshot.ToolkitArgumentSchemas(toolkitType)
+		if err != nil || !found {
+			t.Fatalf("%s schemas: found=%v err=%v", toolkitType, found, err)
+		}
+		sdk, _, _ := plain.ToolkitArgumentSchemas(toolkitType)
+		for _, name := range tools {
+			if _, ok := merged[name]; !ok {
+				t.Errorf("%s/%s is not listed", toolkitType, name)
+			}
+			if _, ok := sdk[name]; ok {
+				t.Errorf("the pinned SDK snapshot has %s/%s: the overlay must be reconciled", toolkitType, name)
+			}
+		}
+	}
+	merged, _, _ := snapshot.ToolkitArgumentSchemas("gitlab")
+	sdk, _, _ := plain.ToolkitArgumentSchemas("gitlab")
+	properties := func(schema map[string]any) map[string]any {
+		found, _ := schema["properties"].(map[string]any)
+		return found
+	}
+	if len(properties(sdk["get_issues"])) != 0 {
+		t.Fatalf("the pinned get_issues takes arguments: the override assumption is stale")
+	}
+	for _, name := range []string{"state", "labels", "fetch_all", "created_before"} {
+		if _, ok := properties(merged["get_issues"])[name]; !ok {
+			t.Errorf("the overridden gitlab/get_issues lacks %s", name)
+		}
+	}
+}
+
+func TestRustOnlyOverridesAreRefusedWhenTheyNameNothing(t *testing.T) {
+	t.Parallel()
+
+	for name, overlay := range map[string]string{
+		"an unknown tool": `{"schema_version":"elitea.rust-only-toolkit-tools.v1","types":{},"overrides":{"gitlab":{"no_such_tool":{"type":"object"}}}}`,
+		"an unknown type": `{"schema_version":"elitea.rust-only-toolkit-tools.v1","types":{},"overrides":{"nope":{"x":{"type":"object"}}}}`,
+		"a null schema":   `{"schema_version":"elitea.rust-only-toolkit-tools.v1","types":{},"overrides":{"gitlab":{"get_issues":null}}}`,
+	} {
+		if _, err := loadCurrentToolkitSchemaSnapshot(
+			pinnedCurrentToolkitSchemaSnapshotJSON, []byte(overlay)); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+	good := `{"schema_version":"elitea.rust-only-toolkit-tools.v1","types":{},"overrides":{"gitlab":{"get_issues":{"type":"object","properties":{"x":{"type":"string"}}}}}}`
+	snapshot, err := loadCurrentToolkitSchemaSnapshot(pinnedCurrentToolkitSchemaSnapshotJSON, []byte(good))
+	if err != nil {
+		t.Fatalf("a valid override was refused: %v", err)
+	}
+	schemas, _, _ := snapshot.ToolkitArgumentSchemas("gitlab")
+	if _, ok := schemas["get_issues"]["properties"].(map[string]any)["x"]; !ok {
+		t.Errorf("the override did not replace the pinned schema: %v", schemas["get_issues"])
+	}
+}

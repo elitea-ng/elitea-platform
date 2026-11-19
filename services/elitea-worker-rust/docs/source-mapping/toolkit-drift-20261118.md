@@ -17,7 +17,7 @@ against the snapshot entry of the same type. Index tools (`index_data`, `list_in
 | Type | Tool | Status |
 |---|---|---|
 | `bitbucket` | `delete_file` | ported (S10-a) |
-| `gitlab` | `list_merge_requests`, `get_merge_request` | open (S10-b) |
+| `gitlab` | `list_merge_requests`, `get_merge_request` | ported (S10-b) |
 | `github` | `get_workflow_runs` | open (S10-c) |
 | `sharepoint` | `read_file_from_url` | open (S10-d) |
 | `ado_boards` | `search_work_items_by_text` | open (S10-e) |
@@ -32,7 +32,7 @@ No other served family (`ado_wiki`, `confluence`, `jira`, `qtest`, `testrail`, `
 |---|---|---|---|
 | `bitbucket` | every tool takes per-call `project` and `repository` (multi-repository toolkit) | all 16 + `delete_file` | ported (S10-a), config still requires a repository |
 | `github` | per-call `repo_name` on 16 tools; `get_issue.comments_offset`; `get_workflow_logs.{include_logs,include_artifacts,failed_only}`; `search_code.repo_name`; `generic_github_api_call.repo_name` | 20 tools | open (S10-c) |
-| `gitlab` | `get_issues` gained 10 filters: `state`, `labels`, `author_username`, `created_*`, `updated_*`, `page`, `per_page`, `fetch_all` | 1 tool | open (S10-b) |
+| `gitlab` | `get_issues` gained 10 filters (`state`, `labels`, `author_username`, `created_*`, `updated_*`, `page`, `per_page`, `fetch_all`), now returns a list of compact dicts, and `get_issue` comments carry `created_at` | 2 tools | ported (S10-b) |
 | `ado_boards`, `ado_repos`, `ado_wiki` | per-call `project` (and `repository_id` on repos): a toolkit with no configured project | 8 + 16 + 8 tools | open (S10-e) |
 | `confluence` | `space` on 9 tools; `get_page_attachments.max_attachments` | 10 tools | open (follow-up) |
 | `qtest` | `project_id` on 18 tools; `update_test_run_status.testcase_version_id` is now a numeric string | 19 tools | open (follow-up) |

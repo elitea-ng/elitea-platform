@@ -70,20 +70,36 @@ fn declared_tools(stored: &str) -> Option<BTreeSet<String>> {
     })
 }
 
-/// The post-pin tools by SDK type: tool name to its SDK argument schema.
-pub(crate) fn post_pin_tools() -> BTreeMap<String, Map<String, Value>> {
+/// One section of the post-pin document by SDK type: tool name to its SDK
+/// argument schema.
+fn post_pin_section(section: &str) -> BTreeMap<String, Map<String, Value>> {
     let document: Value = serde_json::from_str(POST_PIN).expect("post-pin tool schemas");
-    document["types"]
-        .as_object()
-        .expect("post-pin types")
-        .iter()
-        .map(|(sdk_type, tools)| {
-            (
-                sdk_type.clone(),
-                tools.as_object().cloned().expect("post-pin tools"),
-            )
+    document
+        .get(section)
+        .and_then(Value::as_object)
+        .map(|types| {
+            types
+                .iter()
+                .map(|(sdk_type, tools)| {
+                    (
+                        sdk_type.clone(),
+                        tools.as_object().cloned().expect("post-pin tools"),
+                    )
+                })
+                .collect()
         })
-        .collect()
+        .unwrap_or_default()
+}
+
+/// The tools the pinned snapshot lacks.
+pub(crate) fn post_pin_tools() -> BTreeMap<String, Map<String, Value>> {
+    post_pin_section("types")
+}
+
+/// The tools the pinned snapshot has with an argument schema that upstream
+/// changed since: the SDK's current schema replaces the pinned one.
+pub(crate) fn post_pin_overrides() -> BTreeMap<String, Map<String, Value>> {
+    post_pin_section("overrides")
 }
 
 fn snapshot() -> &'static BTreeMap<String, Map<String, Value>> {
@@ -110,6 +126,18 @@ fn snapshot() -> &'static BTreeMap<String, Map<String, Value>> {
                 .get_mut(&sdk_type)
                 .unwrap_or_else(|| panic!("post-pin tools name an unknown SDK type {sdk_type:?}"))
                 .extend(tools);
+        }
+        for (sdk_type, tools) in post_pin_overrides() {
+            let known = entries.get_mut(&sdk_type).unwrap_or_else(|| {
+                panic!("post-pin overrides name an unknown SDK type {sdk_type:?}")
+            });
+            for (name, schema) in tools {
+                assert!(
+                    known.contains_key(&name),
+                    "post-pin override of {sdk_type}/{name}: the pinned snapshot has no such tool"
+                );
+                known.insert(name, schema);
+            }
         }
         entries
     })
