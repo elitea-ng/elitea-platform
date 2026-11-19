@@ -19,6 +19,8 @@ interface SkillRow {
   id?: unknown;
   name?: unknown;
   description?: unknown;
+  /** `{foreign, state}` (client contract 1.63): what the project trusts of the skill's text. */
+  trust?: { state?: unknown } | null;
 }
 
 /** One project skill the menu offers. */
@@ -26,6 +28,8 @@ export interface ProjectSkillEntry {
   readonly id: string;
   readonly name: string;
   readonly description?: string | undefined;
+  /** The skill was written in another project and this one has not trusted its text (`trust.state`, client contract 1.63). */
+  readonly untrusted?: boolean;
 }
 
 /** One page of the project's skills (the server's largest). */
@@ -46,7 +50,14 @@ async function readProjectSkills(projectId: string): Promise<SkillRow[]> {
 function toEntries(rows: readonly SkillRow[]): readonly ProjectSkillEntry[] {
   return rows.flatMap((row): ProjectSkillEntry[] =>
     typeof row.name === 'string' && row.name.trim() !== '' && (typeof row.id === 'number' || typeof row.id === 'string')
-      ? [{ id: String(row.id), name: row.name, ...(typeof row.description === 'string' && row.description !== '' ? { description: row.description } : {}) }]
+      ? [
+          {
+            id: String(row.id),
+            name: row.name,
+            ...(typeof row.description === 'string' && row.description !== '' ? { description: row.description } : {}),
+            ...(row.trust?.state === 'untrusted' ? { untrusted: true } : {}),
+          },
+        ]
       : [],
   );
 }

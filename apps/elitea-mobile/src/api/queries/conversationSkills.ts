@@ -115,6 +115,8 @@ export interface ProjectSkillOption {
   id: number;
   name: string;
   description: string;
+  /** A skill written in another project that this project has not trusted (client contract 1.63; a server before it never says). */
+  untrusted: boolean;
 }
 
 /** One page of the project's skills (the server's largest), the ones a person can pin. */
@@ -133,7 +135,14 @@ export async function fetchProjectSkills(
     .flatMap((row): ProjectSkillOption[] => {
       const id = Number(row.id);
       return SkillId.safeParse(id).success && typeof row.name === 'string' && row.name.trim() !== ''
-        ? [{ id, name: row.name.trim(), description: typeof row.description === 'string' ? row.description.trim().slice(0, 200) : '' }]
+        ? [
+            {
+              id,
+              name: row.name.trim(),
+              description: typeof row.description === 'string' ? row.description.trim().slice(0, 200) : '',
+              untrusted: row.trust?.state === 'untrusted',
+            },
+          ]
         : [];
     })
     .sort((left, right) => left.name.localeCompare(right.name));

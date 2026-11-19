@@ -91,6 +91,28 @@ it('adds a project skill that is not pinned yet', async () => {
   });
 });
 
+it('marks an unpinned foreign skill Untrusted from the listing row, with no per-skill read', async () => {
+  server.on('GET', PINS, { status: 200, body: { rows: [], total: 0, max: 5 } });
+  server.on('GET', '/elitea_core/skills/prompt_lib/7', {
+    status: 200,
+    body: {
+      items: [
+        { id: '300', name: 'Imported', trust: { foreign: true, state: 'untrusted' } },
+        { id: '301', name: 'Home made', trust: { foreign: false, state: 'not_required' } },
+      ],
+      page: 1,
+      page_size: 100,
+      total: 2,
+      total_pages: 1,
+    },
+  });
+  await render(withQueries(sheet()));
+  await fireEvent.press(await screen.findByText('Add skill'));
+  expect(await screen.findByLabelText('Add Imported')).toBeTruthy();
+  expect(screen.getAllByText('Untrusted')).toHaveLength(1);
+  expect(server.requests.some((r) => r.url.pathname.includes('skill_trust'))).toBe(false);
+});
+
 it('says why a pin was refused', async () => {
   expect(skillPinErrorText(new SkillPinError('limit'))).toMatch(/at most five/);
   expect(skillPinErrorText(new SkillPinError('unavailable_skill'))).toMatch(/not available/);
