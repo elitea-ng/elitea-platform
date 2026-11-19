@@ -21,10 +21,10 @@ use elitea_engine_core::errors::{EngineError, ErrorType};
 use elitea_engine_core::stream::StopSignal;
 use elitea_llm_wire::openai::{DONE, TypeCheck, UsageProfile, parse_usage, reasoning_text};
 use elitea_llm_wire::route::CHAT_COMPLETIONS_PATH;
-use elitea_llm_wire::tool_schema::{SchemaProfile, normalize_tool_schema};
 use elitea_llm_wire::tool_calls::{
     ToolCallAssembler, ToolCallLimits, ToolCallProfile, parse_lenient_delta,
 };
+use elitea_llm_wire::tool_schema::{SchemaProfile, normalize_tool_schema};
 use serde_json::{Map, Value, json};
 use std::time::Instant;
 

@@ -761,7 +761,7 @@ mod tests {
     #[test]
     fn the_schema_passes_every_provider_profile() {
         for languages in [&ALL[..], &ALL[..1]] {
-            let raw = parameters_schema(languages);
+            let raw = parameters_schema(languages, true);
             for profile in [
                 SchemaProfile::Anthropic,
                 SchemaProfile::OpenAi,

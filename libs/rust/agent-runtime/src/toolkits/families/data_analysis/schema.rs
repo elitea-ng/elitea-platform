@@ -140,7 +140,11 @@ impl DataTool {
             Self::FilterData | Self::SortData => {
                 add(
                     "filters",
-                    if self == Self::FilterData { filters() } else { filters_short() },
+                    if self == Self::FilterData {
+                        filters()
+                    } else {
+                        filters_short()
+                    },
                 );
                 add("match", match_mode());
                 add("case_sensitive", case_sensitive());
@@ -207,10 +211,7 @@ impl DataTool {
                 add("right_filename", filename("The second table file"));
                 add("right_sheet", sheet());
                 add("right_bucket_name", bucket());
-                add(
-                    "on",
-                    columns("Key columns named the same in both files."),
-                );
+                add("on", columns("Key columns named the same in both files."));
                 add("left_on", columns("Key columns of the first file."));
                 add(
                     "right_on",
@@ -233,9 +234,7 @@ impl DataTool {
             Self::CorrelateData => {
                 add(
                     "columns",
-                    columns(
-                        "Numeric columns (default all, at most 50).",
-                    ),
+                    columns("Numeric columns (default all, at most 50)."),
                 );
                 add(
                     "method",

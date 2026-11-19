@@ -2152,7 +2152,12 @@ async fn files_over_the_limits_or_missing_are_refused_before_the_sandbox() {
 
     let missing = call(json!(["nope.csv"])).await;
     assert_eq!(missing["status"], "error", "{missing}");
-    assert!(missing["message"].as_str().unwrap().contains("no such file"));
+    assert!(
+        missing["message"]
+            .as_str()
+            .unwrap()
+            .contains("no such file")
+    );
 
     let too_big = call(json!(["big.txt"])).await;
     assert_eq!(too_big["status"], "error", "{too_big}");
