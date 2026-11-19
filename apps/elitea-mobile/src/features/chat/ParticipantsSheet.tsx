@@ -354,6 +354,7 @@ function SheetBody({
                         key={skill.id}
                         title={skill.name}
                         subtitle={skill.description || null}
+                        value={skill.untrusted ? 'Untrusted' : null}
                         trailing={<Icon name="plus" size={20} tone="accent" />}
                         accessibilityLabel={`Add ${skill.name}`}
                         disabled={busy}

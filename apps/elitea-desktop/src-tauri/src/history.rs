@@ -1462,6 +1462,28 @@ impl HistoryStore {
                 }
                 copied += 1;
             }
+            // The fork keeps applying the skills the source had pinned (same
+            // projects, same order), in the same transaction as its turns.
+            let source_spellings = spellings(&tx, owner, workspace_id, source)?;
+            for held in read_pins(&tx, owner, workspace_id, &source_spellings)? {
+                tx.execute(
+                    "INSERT INTO thread_skill_pins (origin, user_id, workspace_id, conversation_id,
+                         project_id, skill_id, pinned_at)
+                     SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7
+                     WHERE NOT EXISTS (SELECT 1 FROM thread_skill_pins
+                         WHERE origin = ?1 AND user_id = ?2 AND workspace_id = ?3
+                         AND conversation_id = ?4 AND project_id = ?5 AND skill_id = ?6)",
+                    params![
+                        owner.origin,
+                        owner.user_id,
+                        workspace_id,
+                        target_id,
+                        held.project_id,
+                        held.skill_id,
+                        now_ms()
+                    ],
+                )?;
+            }
             prune_thread(&tx, owner, workspace_id, target_id, Some(target_uuid))?;
             tx.commit()?;
             Ok(ThreadCopy::Copied(copied))
@@ -3608,6 +3630,39 @@ mod tests {
         );
         assert!(store.thread(&owner(1), "w1", "52").unwrap().is_empty());
         assert!(store.thread(&owner(3), "w1", "53").unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_fork_copies_the_source_threads_skill_pins() {
+        let (_root, store) = store();
+        let me = owner(1);
+        play(&store, new_turn(owner(1), "t1", "42"));
+        for id in [3, 1] {
+            store.thread_skill_pin(&me, "w1", "42", pin(id), 5).unwrap();
+        }
+        let none = HashSet::new();
+        let unmapped = HashMap::new();
+        let copied = store
+            .copy_thread(
+                &me,
+                "w1",
+                "uuid-42",
+                target("50", "uuid-50", &unmapped),
+                None,
+                &none,
+            )
+            .unwrap();
+        assert_eq!(copied, ThreadCopy::Copied(1));
+        let forked: Vec<i64> = store
+            .thread_skill_pins(&me, "w1", "50")
+            .unwrap()
+            .iter()
+            .map(|held| held.skill_id)
+            .collect();
+        assert_eq!(forked, vec![3, 1], "same pins, same order");
+        // The source keeps its own, and the two are independent afterwards.
+        assert!(store.thread_skill_unpin(&me, "w1", "50", 3).unwrap());
+        assert_eq!(store.thread_skill_pins(&me, "w1", "42").unwrap().len(), 2);
     }
 
     #[test]

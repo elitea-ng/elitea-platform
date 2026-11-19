@@ -44,6 +44,7 @@ import type { Theme } from '@mui/material/styles';
 import { t } from '@/shared/i18n';
 import { GradientIconWrapper } from '@/shared/ui/GradientIconWrapper';
 import { McpIcon } from '@/shared/ui/icons/mcp-icon';
+import { SkillIcon } from '@/shared/ui/icons/skill-icon';
 import { ToolIcon } from '@/shared/ui/icons/tool-icon';
 
 import type { SlashParticipantToolkit } from '../lib/hooks/useSlashMention';
@@ -122,7 +123,54 @@ function ToolkitMentionItem({ toolkit, onClick, isActive }: ToolkitMentionItemPr
   );
 }
 
+/** The list's first row, `Skills` (ADR-0050 amendment 1, A1.5): a pick hands over to the skill picker. */
+function SkillsEntry({ onClick, isActive }: { readonly onClick: () => void; readonly isActive: boolean }): ReactNode {
+  return (
+    <ButtonBase
+      onClick={onClick}
+      disableRipple
+      data-testid="slash-skills-entry"
+      data-highlighted={isActive ? 'true' : undefined}
+      sx={(theme: Theme) => ({
+        display: 'flex',
+        alignItems: 'center',
+        gap: '0.75rem',
+        width: '100%',
+        textAlign: 'left',
+        padding: '0.5rem 0.75rem',
+        borderRadius: theme.vars.shape.radiusMd,
+        cursor: 'pointer',
+        background: isActive ? theme.vars.palette.background.userInputBackgroundActive : theme.vars.palette.background.userInputBackground,
+        '&:hover': { background: theme.vars.palette.background.userInputBackgroundActive },
+      })}
+    >
+      <GradientIconWrapper size="2.25rem">
+        <Box
+          component={SkillIcon}
+          sx={iconGlyphSx}
+        />
+      </GradientIconWrapper>
+      <Box sx={{ minWidth: 0, flex: 1 }}>
+        <Typography
+          variant="headingSmall"
+          color="text.secondary"
+        >
+          {t('chatInput.toolkitMentionList.skills', 'Skills')}
+        </Typography>
+        <Typography
+          variant="bodySmall"
+          color="text.default"
+        >
+          {t('chatInput.toolkitMentionList.skillsHint', 'Add a skill to the next message')}
+        </Typography>
+      </Box>
+    </ButtonBase>
+  );
+}
+
 export interface ToolkitMentionListProps {
+  /** Shows the first `Skills` row; a pick calls it. Absent when no skill can be mentioned. */
+  readonly onSelectSkills?: (() => void) | undefined;
   readonly toolkits: readonly SlashParticipantToolkit[];
   readonly onSelectToolkit: (toolkit: SlashParticipantToolkit) => void;
   readonly onClose: () => void;
@@ -131,7 +179,7 @@ export interface ToolkitMentionListProps {
   readonly 'data-testid'?: string;
 }
 
-export function ToolkitMentionList({ toolkits, onSelectToolkit, onClose, title, activeIndex, 'data-testid': dataTestId }: ToolkitMentionListProps): ReactNode {
+export function ToolkitMentionList({ onSelectSkills, toolkits, onSelectToolkit, onClose, title, activeIndex, 'data-testid': dataTestId }: ToolkitMentionListProps): ReactNode {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -193,7 +241,13 @@ export function ToolkitMentionList({ toolkits, onSelectToolkit, onClose, title, 
           </Typography>
         </Box>
 
-        {toolkits.length === 0 ? (
+        {onSelectSkills !== undefined && (
+          <SkillsEntry
+            onClick={onSelectSkills}
+            isActive={activeIndex === 0}
+          />
+        )}
+        {toolkits.length === 0 && onSelectSkills === undefined ? (
           <Typography
             variant="bodyMedium"
             color="text.secondary"
@@ -207,7 +261,7 @@ export function ToolkitMentionList({ toolkits, onSelectToolkit, onClose, title, 
               key={`${toolkit.projectId}_${toolkit.id}`}
               toolkit={toolkit}
               onClick={() => onSelectToolkit(toolkit)}
-              isActive={index === activeIndex}
+              isActive={index + (onSelectSkills === undefined ? 0 : 1) === activeIndex}
             />
           ))
         )}

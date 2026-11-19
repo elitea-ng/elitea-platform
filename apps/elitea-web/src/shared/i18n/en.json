@@ -563,6 +563,8 @@
   "chatInput.slashSuggestionList.mentionToolkit": "Mention Toolkit",
   "chatInput.slashSuggestionList.mentionToolkitOrMcp": "Mention Toolkit or MCP",
   "chatInput.toolkitMentionList.noResults": "No matching results",
+  "chatInput.toolkitMentionList.skills": "Skills",
+  "chatInput.toolkitMentionList.skillsHint": "Add a skill to the next message",
   "chatInput.toolkitMentionList.toolkit": "Toolkit",
   "chatInput.userInput.expand": "Expand input",
   "chatInput.userInput.stopGenerating": "Stop generating",

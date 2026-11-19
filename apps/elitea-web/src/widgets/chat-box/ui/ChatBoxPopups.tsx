@@ -78,6 +78,14 @@ export interface ChatBoxPopupsProps {
   readonly userMentions: ChatBoxPopupsUserMentions;
   readonly slash: ChatBoxState['slash'];
   readonly skill: ChatBoxPopupsSkill;
+  /** The `/` list's first `Skills` entry; absent while no skill can be mentioned. */
+  readonly onSelectSkills?: (() => void) | undefined;
+}
+
+/** The `/` list's `Skills` entry: writes `/skill ` and opens the skill picker on it. */
+function selectSkillsEntry(state: ChatBoxState): void {
+  const inserted = state.slash.onSelectSkillsEntry();
+  if (inserted !== null) state.skill.onSkillInputChange(inserted.text, inserted.cursor);
 }
 
 /** The agents whose name holds the "#" query (its leading "#" dropped). */
@@ -143,6 +151,7 @@ export function buildChatBoxPopupsProps(input: {
       onClose: state.keyDown.stopProcessingAtSymbol,
     },
     slash: state.slash,
+    onSelectSkills: state.skill.hasMentionableSkills ? () => selectSkillsEntry(state) : undefined,
     skill: {
       isActive: state.isSkillPhaseActive,
       filteredItems: state.skill.filteredItems,
@@ -153,7 +162,7 @@ export function buildChatBoxPopupsProps(input: {
   };
 }
 
-export function ChatBoxPopups({ recommendations, hashPicker, agents, userMentions, slash, skill }: ChatBoxPopupsProps): ReactNode {
+export function ChatBoxPopups({ recommendations, hashPicker, agents, userMentions, slash, skill, onSelectSkills }: ChatBoxPopupsProps): ReactNode {
   return (
     <>
       {agents?.hashOpen === true && (
@@ -208,6 +217,7 @@ export function ChatBoxPopups({ recommendations, hashPicker, agents, userMention
             onSelectToolkit={slash.onSelectToolkit}
             onSelectTool={slash.onCommitMention}
             onClose={slash.resetSlash}
+            onSelectSkills={onSelectSkills}
             participantToolkits={slash.participantToolkits}
             isMcpVisible={slash.isMcpVisible}
             activeIndex={slash.activeIndex}

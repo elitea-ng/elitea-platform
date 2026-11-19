@@ -1028,6 +1028,7 @@ export * from "./skillIconDeleteRefusal.zod";
 export * from "./skillReferenceInput.zod";
 export * from "./skillSetDefaultVersionRequest.zod";
 export * from "./skillTrustRecord.zod";
+export * from "./skillTrustState.zod";
 export * from "./skillTrustStatus.zod";
 export * from "./skillValidationIssue.zod";
 export * from "./skillValidationResult.zod";

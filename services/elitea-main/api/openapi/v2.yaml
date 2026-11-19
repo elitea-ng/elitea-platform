@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.62"
+  x-elitea-client-contract: "1.63"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -4074,6 +4074,24 @@ components:
           type: integer
           format: int64
           minimum: 1
+
+    SkillTrustState:
+      type: object
+      description: >-
+        The short form of SkillTrustStatus a skill list row and a skill read
+        carry (client contract 1.63): whether the skill is foreign and what the
+        project trusts of its current base text.
+      required: [foreign, state]
+      properties:
+        foreign:
+          type: boolean
+          description: True when the skill was written in another project.
+        state:
+          type: string
+          description: "`not_required` (not foreign), `trusted` or `untrusted`."
+        publisher_project_id:
+          type: integer
+          format: int64
 
     SkillTrustRecord:
       type: object
@@ -18464,6 +18482,13 @@ components:
             attachment proposes. Does NOT change which version an EXISTING
             agent attachment resolves at chat time — that stays keyed off
             entity_skill_mapping.skill_version_id, fixed at attach time.
+        trust:
+          allOf: [{ $ref: '#/components/schemas/SkillTrustState' }]
+          description: >-
+            What this project trusts of the skill's current base text (client
+            contract 1.63, ADR-0051 amendment 1, A1.6), so a list shows the
+            Untrusted badge without one getSkillTrust call per row. Absent when
+            the skill has no base version.
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
       description: >
