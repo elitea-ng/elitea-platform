@@ -58,6 +58,9 @@ func TestEveryDeclarationNamesAKnownTool(t *testing.T) {
 	// A type only the Rust worker serves (no SDK entry) is known from the
 	// document its family generates.
 	var rustOnly struct {
+		// Tools of an SDK type that the pinned snapshot lacks (the pptx
+		// authoring tools, and the tools upstream gained after the pin).
+		Types    map[string]map[string]json.RawMessage `json:"types"`
 		NewTypes map[string]struct {
 			ArgsSchemas map[string]json.RawMessage `json:"args_schemas"`
 		} `json:"new_types"`
@@ -65,6 +68,14 @@ func TestEveryDeclarationNamesAKnownTool(t *testing.T) {
 	rawRustOnly := repoFile(t, "services", "elitea-main", "internal", "rustonly", "rust_only_toolkit_tools.json")
 	if err := json.Unmarshal(rawRustOnly, &rustOnly); err != nil {
 		t.Fatal(err)
+	}
+	for toolkitType, extra := range rustOnly.Types {
+		if known[CanonicalKey(toolkitType)] == nil {
+			known[CanonicalKey(toolkitType)] = map[string]bool{}
+		}
+		for name := range extra {
+			known[CanonicalKey(toolkitType)][CanonicalKey(name)] = true
+		}
 	}
 	for toolkitType, entry := range rustOnly.NewTypes {
 		tools := map[string]bool{}

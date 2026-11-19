@@ -34,7 +34,7 @@ Name the toolkit and select **Create**. It's now available to attach to agents, 
 
 ## Available tools
 
-<Accordion title="Available tools (22)">
+<Accordion title="Available tools (23)">
 
 The category of a tool decides when a run needs human approval to call it. See [Runtime safety](/admin/enterprise-controls/runtime-safety#tool-categories-and-approval-policy).
 
@@ -46,6 +46,7 @@ The category of a tool decides when a run needs human approval to call it. See [
 | Create file | `write` |
 | Create pull request | `write` |
 | Delete branch | `delete` |
+| Delete file | `delete` |
 | Get pull request | `read` |
 | Get pull requests changes | `read` |
 | Get pull requests commits | `read` |
@@ -64,6 +65,12 @@ The category of a tool decides when a run needs human approval to call it. See [
 | Update file | `write` |
 
 </Accordion>
+
+## Working across repositories
+
+Every Bitbucket tool takes two optional arguments, **project** (the project key on Bitbucket Server, the workspace on Bitbucket Cloud) and **repository** (the repository slug). Leave them empty to act on the toolkit's own repository. Name them to act on another repository of the same Bitbucket host with the same credential; a repository you name starts on its own default branch and remembers its own active branch for the rest of the run. Naming only one of the two takes the other from the toolkit.
+
+`Delete file` removes a file on Bitbucket Cloud in a commit of its own. Bitbucket Server has no file-deletion endpoint, so the tool returns an explanation there instead of deleting. Because it is a `delete` tool, a run can be set to ask for approval before it runs.
 
 ## Common issues
 

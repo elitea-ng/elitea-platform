@@ -12,7 +12,7 @@ use serde_json::{Map, Value, json};
 
 use super::families::bitbucket::client::{
     BitbucketApi, BitbucketClient, BitbucketClientError, BitbucketClientErrorCode,
-    BitbucketHttpResponse, BitbucketOperation, BitbucketTransport,
+    BitbucketHttpResponse, BitbucketOperation, BitbucketTarget, BitbucketTransport,
 };
 use super::families::bitbucket::config::{
     BitbucketConfigErrorCode, BitbucketHosting, BitbucketToolkitConfig,
@@ -86,6 +86,7 @@ fn catalog_follows_the_sdk_order_without_index_tools() {
             ("list_files", "read"),
             ("create_pull_request", "write"),
             ("create_file", "write"),
+            ("delete_file", "delete"),
             ("read_file", "read"),
             ("update_file", "write"),
             ("set_active_branch", "write"),
@@ -171,7 +172,7 @@ async fn tools_for(
 async fn schemas_selection_and_arguments_follow_the_sdk() {
     let api = Arc::new(FixtureApi::default());
     let tools = tools_for(&api, &[]).await.expect("complete toolset");
-    assert_eq!(tools.len(), 16);
+    assert_eq!(tools.len(), 17);
     for (tool, (name, group)) in tools.iter().zip(test_catalog()) {
         assert_eq!(tool.name(), name);
         assert_eq!(tool.is_read_only(), group == "read");
@@ -237,7 +238,7 @@ async fn schemas_selection_and_arguments_follow_the_sdk() {
     )
     .expect("policy filtered");
     let readonly: Arc<dyn ReadonlyContext> = context();
-    assert_eq!(blocked.tools(readonly).await.expect("tools").len(), 15);
+    assert_eq!(blocked.tools(readonly).await.expect("tools").len(), 16);
 }
 
 #[tokio::test]
@@ -809,5 +810,373 @@ async fn foreign_links_and_provider_failures_fail_closed() {
     assert_eq!(
         BitbucketClientError::fixture(BitbucketClientErrorCode::NotFound).to_string(),
         "the Bitbucket resource was not found"
+    );
+}
+
+// -- delete_file (upstream SDK, added after the 2026-08-07 pin; S10 #2265) ---
+
+#[tokio::test]
+async fn delete_file_is_refused_on_server_with_the_sdk_explanation_and_checks_the_file_first() {
+    let (client, transport) = client(
+        server_config(),
+        [
+            // present: the read succeeds, then the unsupported answer
+            BitbucketHttpResponse::text(StatusCode::OK, "x"),
+            // absent
+            BitbucketHttpResponse::json(StatusCode::NOT_FOUND, json!({"errors": []})),
+        ],
+    );
+    let refused = client
+        .execute(BitbucketOperation::DeleteFile {
+            file_path: "a.md",
+            branch: Some("feature"),
+            commit_message: None,
+        })
+        .await
+        .expect("explained");
+    assert!(
+        text(&refused)
+            .starts_with("Deleting a file is not supported by the Bitbucket Server REST API."),
+        "{refused}"
+    );
+    let missing = client
+        .execute(BitbucketOperation::DeleteFile {
+            file_path: "gone.md",
+            branch: Some("feature"),
+            commit_message: Some("drop"),
+        })
+        .await
+        .expect("missing");
+    assert_eq!(
+        text(&missing),
+        "File 'gone.md' not found on branch 'feature'"
+    );
+    // Nothing was written: only the two reads went out.
+    let requests = transport.requests.lock().expect("requests").clone();
+    assert_eq!(requests.len(), 2);
+    assert!(requests.iter().all(|request| request.method == Method::GET));
+    assert!(requests.iter().all(|request| !request.effect));
+}
+
+#[tokio::test]
+async fn delete_file_posts_a_files_field_to_cloud_src_with_the_default_message() {
+    let main = || ok(json!({"name": "main", "target": {"hash": "abcdef1234"}}));
+    let (client, transport) = client(
+        cloud_config(),
+        [
+            // default message: branch hash, read, delete
+            main(),
+            BitbucketHttpResponse::text(StatusCode::OK, "x"),
+            BitbucketHttpResponse::json(StatusCode::CREATED, json!({})),
+            // explicit message and branch
+            main(),
+            BitbucketHttpResponse::text(StatusCode::OK, "x"),
+            BitbucketHttpResponse::json(StatusCode::CREATED, json!({})),
+        ],
+    );
+    let deleted = client
+        .execute(BitbucketOperation::DeleteFile {
+            file_path: "docs/old.md",
+            branch: None,
+            commit_message: None,
+        })
+        .await
+        .expect("deleted");
+    assert_eq!(text(&deleted), "File has been deleted: docs/old.md.");
+    client
+        .execute(BitbucketOperation::DeleteFile {
+            file_path: "docs/old.md",
+            branch: Some("main"),
+            commit_message: Some("drop the page"),
+        })
+        .await
+        .expect("deleted with message");
+    assert_eq!(
+        routes(&transport, CLOUD_REPO),
+        [
+            "GET /refs/branches/main",
+            "GET /src/abcdef1234/docs/old.md",
+            "POST /src",
+            "GET /refs/branches/main",
+            "GET /src/abcdef1234/docs/old.md",
+            "POST /src",
+        ]
+    );
+    let requests = transport.requests.lock().expect("requests").clone();
+    assert_eq!(
+        requests[2].content_type.as_deref(),
+        Some("application/x-www-form-urlencoded")
+    );
+    assert_eq!(
+        requests[2].body,
+        "branch=main&files=docs%2Fold.md&message=Delete+docs%2Fold.md"
+    );
+    assert_eq!(
+        requests[5].body,
+        "branch=main&files=docs%2Fold.md&message=drop+the+page"
+    );
+    assert!(requests[2].effect && requests[2].authorization_sensitive);
+    assert!(!requests[1].effect);
+}
+
+#[tokio::test]
+async fn delete_file_maps_provider_failures_and_rejects_bad_arguments() {
+    for (status, code) in [
+        (
+            StatusCode::UNAUTHORIZED,
+            BitbucketClientErrorCode::Authentication,
+        ),
+        (
+            StatusCode::FORBIDDEN,
+            BitbucketClientErrorCode::Authorization,
+        ),
+        (
+            StatusCode::TOO_MANY_REQUESTS,
+            BitbucketClientErrorCode::RateLimited,
+        ),
+    ] {
+        let (client, _) = client(
+            server_config(),
+            [BitbucketHttpResponse::json(status, json!({"errors": []}))],
+        );
+        let error = client
+            .execute(BitbucketOperation::DeleteFile {
+                file_path: "a.md",
+                branch: Some("feature"),
+                commit_message: None,
+            })
+            .await
+            .expect_err("provider failure");
+        assert_eq!(error.code(), code);
+    }
+    // A failing delete request on Cloud is an error, not a success message.
+    let (client, _) = client(
+        cloud_config(),
+        [
+            ok(json!({"name": "main", "target": {"hash": "abcdef1234"}})),
+            BitbucketHttpResponse::text(StatusCode::OK, "x"),
+            BitbucketHttpResponse::json(StatusCode::FORBIDDEN, json!({})),
+        ],
+    );
+    let denied = client
+        .execute(BitbucketOperation::DeleteFile {
+            file_path: "a.md",
+            branch: None,
+            commit_message: None,
+        })
+        .await
+        .expect_err("denied");
+    assert_eq!(denied.code(), BitbucketClientErrorCode::Authorization);
+
+    let api = Arc::new(FixtureApi::default());
+    let tools = tools_for(&api, &["delete_file"]).await.expect("tool");
+    assert_eq!(tools.len(), 1);
+    assert!(!tools[0].is_read_only());
+    let schema = tools[0].parameters_schema().expect("schema");
+    assert_eq!(schema["required"], json!(["file_path", "branch"]));
+    for arguments in [
+        json!({"branch": "main"}),
+        json!({"file_path": "  ", "branch": "main"}),
+        json!({"file_path": "a.md", "branch": "main", "extra": 1}),
+        json!({"file_path": 4, "branch": "main"}),
+    ] {
+        assert!(tools[0].execute(context(), arguments).await.is_err());
+    }
+    tools[0]
+        .execute(context(), json!({"file_path": "a.md", "branch": "main"}))
+        .await
+        .expect("valid call");
+}
+
+// -- per-call repository (upstream SDK `project` / `repository`; S10 #2265) ---
+
+fn target(project: Option<&str>, repository: Option<&str>) -> BitbucketTarget {
+    BitbucketTarget {
+        project: project.map(ToOwned::to_owned),
+        repository: repository.map(ToOwned::to_owned),
+    }
+}
+
+#[tokio::test]
+async fn every_tool_takes_the_repository_it_acts_on() {
+    let api = Arc::new(FixtureApi::default());
+    let tools = tools_for(&api, &[]).await.expect("complete toolset");
+    for tool in &tools {
+        let schema = tool.parameters_schema().expect("schema");
+        for argument in ["project", "repository"] {
+            assert_eq!(
+                schema["properties"][argument]["type"],
+                json!(["string", "null"]),
+                "{} {argument}",
+                tool.name()
+            );
+            assert!(
+                !schema["required"]
+                    .as_array()
+                    .expect("required")
+                    .contains(&json!(argument))
+            );
+        }
+    }
+    // The arguments reach the call and a malformed one is refused.
+    let by_name = |name: &str| {
+        tools
+            .iter()
+            .find(|tool| tool.name() == name)
+            .cloned()
+            .expect("tool")
+    };
+    by_name("get_pull_request")
+        .execute(
+            context(),
+            json!({"pr_id": "3", "project": "OTHER", "repository": null}),
+        )
+        .await
+        .expect("targeted call");
+    for arguments in [
+        json!({"pr_id": "3", "project": 4}),
+        json!({"pr_id": "3", "repository": ["a"]}),
+    ] {
+        assert!(
+            by_name("get_pull_request")
+                .execute(context(), arguments)
+                .await
+                .is_err()
+        );
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One ledger over the foreign-client cache.
+async fn a_call_can_name_another_repository_and_it_keeps_its_own_active_branch() {
+    let (client, transport) = client(
+        server_config(),
+        [
+            // OTHER/lib: default branch, then the raw read on it
+            ok(json!({"id": "refs/heads/trunk", "displayId": "trunk"})),
+            BitbucketHttpResponse::text(StatusCode::OK, "lib text"),
+            // OTHER/lib again (cached): branch list for set_active_branch
+            ok(json!({"values": [{"displayId": "dev"}], "isLastPage": true})),
+            // OTHER/lib reads on the branch it switched to
+            BitbucketHttpResponse::text(StatusCode::OK, "dev text"),
+            // the configured repository still reads on its own `main`
+            BitbucketHttpResponse::text(StatusCode::OK, "app text"),
+            // a half-named target takes the other half from the toolkit
+            ok(json!({"id": "refs/heads/main", "displayId": "main"})),
+            BitbucketHttpResponse::text(StatusCode::OK, "half text"),
+        ],
+    );
+    let read = |path: &'static str| BitbucketOperation::ReadFile {
+        file_path: path,
+        branch: None,
+        start_line: None,
+        end_line: None,
+    };
+    let other = target(Some("OTHER"), Some("lib"));
+    let first = client
+        .execute_for(&other, read("a.md"))
+        .await
+        .expect("foreign read");
+    assert_eq!(text(&first), "lib text");
+    let switched = client
+        .execute_for(
+            &target(Some("other"), Some("LIB")),
+            BitbucketOperation::SetActiveBranch { branch_name: "dev" },
+        )
+        .await
+        .expect("switched");
+    assert_eq!(text(&switched), "Switched to branch `dev` in `OTHER/lib`");
+    let on_dev = client
+        .execute_for(&other, read("a.md"))
+        .await
+        .expect("foreign read on dev");
+    assert_eq!(text(&on_dev), "dev text");
+    // Placeholders pipelines send for "nothing" mean the toolkit's own repository.
+    let own = client
+        .execute_for(&target(Some("null"), Some(" 'None' ")), read("a.md"))
+        .await
+        .expect("own repository");
+    assert_eq!(text(&own), "app text");
+    let half = client
+        .execute_for(&target(None, Some("lib")), read("b.md"))
+        .await
+        .expect("half-named");
+    assert_eq!(text(&half), "half text");
+
+    let requests = transport.requests.lock().expect("requests").clone();
+    let urls: Vec<&str> = requests
+        .iter()
+        .map(|request| request.url.as_str())
+        .collect();
+    let base = "https://bitbucket.example.test/ctx/rest/api/1.0/projects";
+    assert_eq!(urls.len(), 7);
+    assert_eq!(urls[0], format!("{base}/OTHER/repos/lib/default-branch"));
+    assert_eq!(urls[1], format!("{base}/OTHER/repos/lib/raw/a.md?at=trunk"));
+    assert!(urls[2].starts_with(&format!("{base}/OTHER/repos/lib/branches?")));
+    assert_eq!(urls[3], format!("{base}/OTHER/repos/lib/raw/a.md?at=dev"));
+    assert_eq!(urls[4], format!("{base}/PROJ/repos/app/raw/a.md?at=main"));
+    assert_eq!(urls[5], format!("{base}/PROJ/repos/lib/default-branch"));
+    assert_eq!(urls[6], format!("{base}/PROJ/repos/lib/raw/b.md?at=main"));
+    assert!(requests.iter().all(|request| !request.effect));
+}
+
+#[tokio::test]
+async fn the_same_repository_by_another_spelling_is_the_toolkits_own_and_bad_segments_are_refused()
+{
+    let (client, transport) = client(
+        server_config(),
+        [BitbucketHttpResponse::text(StatusCode::OK, "app text")],
+    );
+    let read = BitbucketOperation::ReadFile {
+        file_path: "a.md",
+        branch: None,
+        start_line: None,
+        end_line: None,
+    };
+    let same = client
+        .execute_for(&target(Some("proj"), Some("APP")), read)
+        .await
+        .expect("same repository");
+    assert_eq!(text(&same), "app text");
+    assert_eq!(transport.requests.lock().expect("requests").len(), 1);
+    for bad in ["../x", "a/b", "{not hex}", "a b", ".hidden"] {
+        let refused = client
+            .execute_for(
+                &target(Some(bad), Some("lib")),
+                BitbucketOperation::GetPullRequest { pr_id: 1 },
+            )
+            .await
+            .expect_err("invalid segment");
+        assert_eq!(
+            refused.code(),
+            BitbucketClientErrorCode::InvalidInput,
+            "{bad}"
+        );
+    }
+    // A Cloud workspace may be its {uuid}.
+    let (cloud, transport) = client(
+        cloud_config(),
+        [
+            ok(json!({"mainbranch": {"name": "main"}})),
+            ok(json!({"id": 1})),
+        ],
+    );
+    cloud
+        .execute_for(
+            &target(Some("{4f1a-90bc}"), Some("lib")),
+            BitbucketOperation::GetPullRequest { pr_id: 1 },
+        )
+        .await
+        .expect("uuid workspace");
+    let requests = transport.requests.lock().expect("requests").clone();
+    assert!(
+        requests[0]
+            .url
+            .ends_with("/2.0/repositories/%7B4f1a-90bc%7D/lib")
+    );
+    assert!(
+        requests[1]
+            .url
+            .ends_with("/repositories/%7B4f1a-90bc%7D/lib/pullrequests/1")
     );
 }

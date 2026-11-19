@@ -132,6 +132,7 @@
     "bitbucket": {
       "add_pull_request_comment": "external_send",
       "delete_branch": "delete",
+      "delete_file": "delete",
       "get_pull_request": "read",
       "get_pull_requests_changes": "read",
       "get_pull_requests_commits": "read",

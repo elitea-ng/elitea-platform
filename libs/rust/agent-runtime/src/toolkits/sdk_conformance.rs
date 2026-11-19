@@ -33,6 +33,13 @@ const SNAPSHOT: &str = include_str!(
     "../../../../../services/elitea-main/internal/runtimecomposition/current_toolkit_schema_snapshot.json"
 );
 const EXEMPTIONS: &str = include_str!("sdk_conformance_exemptions.json");
+/// Tools the SDK declares that the pinned snapshot (revision b5113a12,
+/// 2026-08-07) lacks, as the SDK's own pydantic schemas, captured once from
+/// upstream main with their provenance (S10 #2265, epic #2254 decision D1).
+/// The snapshot below is merged with them, so a Rust tool the SDK gained after
+/// the pin is held to the same contract as every other; elitea-main's
+/// `rust_only_toolkit_tools.json` carries the same schemas to the catalogue.
+const POST_PIN: &str = include_str!("post_pin_tool_schemas.json");
 /// What elitea-main is told this worker serves: per type, and per TOOL for a
 /// family that serves fewer tools than its SDK type declares.
 const CAPABILITY: &str = include_str!(
@@ -61,11 +68,27 @@ fn declared_tools(stored: &str) -> Option<BTreeSet<String>> {
     })
 }
 
+/// The post-pin tools by SDK type: tool name to its SDK argument schema.
+pub(crate) fn post_pin_tools() -> BTreeMap<String, Map<String, Value>> {
+    let document: Value = serde_json::from_str(POST_PIN).expect("post-pin tool schemas");
+    document["types"]
+        .as_object()
+        .expect("post-pin types")
+        .iter()
+        .map(|(sdk_type, tools)| {
+            (
+                sdk_type.clone(),
+                tools.as_object().cloned().expect("post-pin tools"),
+            )
+        })
+        .collect()
+}
+
 fn snapshot() -> &'static BTreeMap<String, Map<String, Value>> {
     static ENTRIES: OnceLock<BTreeMap<String, Map<String, Value>>> = OnceLock::new();
     ENTRIES.get_or_init(|| {
         let document: Value = serde_json::from_str(SNAPSHOT).expect("SDK schema snapshot");
-        document["entries"]
+        let mut entries: BTreeMap<String, Map<String, Value>> = document["entries"]
             .as_array()
             .expect("snapshot entries")
             .iter()
@@ -79,7 +102,14 @@ fn snapshot() -> &'static BTreeMap<String, Map<String, Value>> {
                     schemas,
                 )
             })
-            .collect()
+            .collect();
+        for (sdk_type, tools) in post_pin_tools() {
+            entries
+                .get_mut(&sdk_type)
+                .unwrap_or_else(|| panic!("post-pin tools name an unknown SDK type {sdk_type:?}"))
+                .extend(tools);
+        }
+        entries
     })
 }
 
