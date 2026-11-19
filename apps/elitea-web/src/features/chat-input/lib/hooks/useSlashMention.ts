@@ -266,8 +266,12 @@ export function useSlashMention({ chatInput, participants }: UseSlashMentionPara
     const ref = chatInput.current;
     if (!ref) return null;
     const content = ref.getInputContent();
-    const anchor = mentionAnchorRef.current ?? content.length;
-    const cursorPos = ref.getCursorPosition() ?? content.length;
+    const anchor = mentionAnchorRef.current;
+    if (anchor === null) {
+      resetSlash();
+      return null;
+    }
+    const cursorPos = Math.max(anchor, ref.getCursorPosition() ?? content.length);
     const atLineStart = anchor === 0 || content[anchor - 1] === '\n';
     const replacement = atLineStart ? '/skill ' : '~';
     ref.replaceRange(anchor, cursorPos, replacement);

@@ -53,8 +53,12 @@ FROM %s.skill_versions WHERE skill_id = ANY($1::bigint[]) AND name = 'base'`, sc
 	if len(text) == 0 {
 		return states, nil
 	}
+	foreignIDs := make([]int64, 0, len(text))
+	for id := range text {
+		foreignIDs = append(foreignIDs, id)
+	}
 	trusted, err := pool.Query(ctx, fmt.Sprintf(`
-SELECT skill_id, revision FROM %s.skill_trust WHERE skill_id = ANY($1::bigint[]) AND revoked_at IS NULL`, schema), ids)
+SELECT skill_id, revision FROM %s.skill_trust WHERE skill_id = ANY($1::bigint[]) AND revoked_at IS NULL`, schema), foreignIDs)
 	if err != nil {
 		return nil, fmt.Errorf("skill trust states: read trust: %w", err)
 	}
