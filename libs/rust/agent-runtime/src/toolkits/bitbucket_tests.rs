@@ -1123,7 +1123,7 @@ async fn a_call_can_name_another_repository_and_it_keeps_its_own_active_branch()
 #[tokio::test]
 async fn the_same_repository_by_another_spelling_is_the_toolkits_own_and_bad_segments_are_refused()
 {
-    let (client, transport) = client(
+    let (server, transport) = client(
         server_config(),
         [BitbucketHttpResponse::text(StatusCode::OK, "app text")],
     );
@@ -1133,14 +1133,14 @@ async fn the_same_repository_by_another_spelling_is_the_toolkits_own_and_bad_seg
         start_line: None,
         end_line: None,
     };
-    let same = client
+    let same = server
         .execute_for(&target(Some("proj"), Some("APP")), read)
         .await
         .expect("same repository");
     assert_eq!(text(&same), "app text");
     assert_eq!(transport.requests.lock().expect("requests").len(), 1);
     for bad in ["../x", "a/b", "{not hex}", "a b", ".hidden"] {
-        let refused = client
+        let refused = server
             .execute_for(
                 &target(Some(bad), Some("lib")),
                 BitbucketOperation::GetPullRequest { pr_id: 1 },
