@@ -188,6 +188,9 @@ type Review struct {
 	CanReview bool
 	// Editors are the people to ask when the viewer may not, at most MaxEditors.
 	Editors []string
+	// CallerName is the calling agent's saved name, when the lookup knows it. A live frame carries the worker's
+	// runtime label ("elitea-agent") until the answer is stored with the agent's own name (#2276).
+	CallerName string
 }
 
 // Reviewer answers a viewer's Review of the delegations of one agent.
@@ -201,6 +204,17 @@ type Reviewer interface {
 // editors' names when the viewer may not review. A principal or depth refusal
 // is never reviewable (an editor cannot fix it), so it carries neither.
 func Stamp(notice map[string]any, review Review) {
+	if name := clip(review.CallerName); name != "" {
+		if edge, ok := notice["edge"].(map[string]any); ok {
+			// A copy: a stored notice's edge map may be shared with a cache.
+			renamed := make(map[string]any, len(edge)+1)
+			for key, value := range edge {
+				renamed[key] = value
+			}
+			renamed["caller_name"] = name
+			notice["edge"] = renamed
+		}
+	}
 	switch notice["reason"] {
 	case "principal", "depth":
 		notice["can_review"] = false

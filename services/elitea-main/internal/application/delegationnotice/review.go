@@ -27,6 +27,12 @@ type EditorLister interface {
 	EditorNames(ctx context.Context, projectID, applicationID int64, limit int) ([]string, error)
 }
 
+// NameLister is an optional side of an EditorLister: it names a saved agent, so a notice drawn live from a stream names
+// its calling agent and not the worker's runtime label. An EditorLister that does not implement it leaves the label.
+type NameLister interface {
+	AgentName(ctx context.Context, projectID, applicationID int64) (string, error)
+}
+
 // Service is the Reviewer over the project's permissions and the agent's owners.
 type Service struct {
 	permissions PermissionChecker
@@ -88,14 +94,19 @@ func (s *Service) DelegationReview(ctx context.Context, projectID, userID, calle
 	if err != nil {
 		return Review{}, err
 	}
+	callerName := ""
+	if lister, ok := s.editors.(NameLister); ok {
+		// Best effort: a failed lookup keeps the worker's label.
+		callerName, _ = lister.AgentName(ctx, projectID, callerID)
+	}
 	if allowed {
-		return Review{CanReview: true}, nil
+		return Review{CanReview: true, CallerName: callerName}, nil
 	}
 	names, err := s.editors.EditorNames(ctx, projectID, callerID, MaxEditors)
 	if err != nil {
-		return Review{}, nil
+		return Review{CallerName: callerName}, nil
 	}
-	return Review{Editors: names}, nil
+	return Review{Editors: names, CallerName: callerName}, nil
 }
 
 // cached remembers each caller's Review for reviewTTL (and a failure for
