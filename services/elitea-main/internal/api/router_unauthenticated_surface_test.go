@@ -110,6 +110,14 @@ var publicByDesign = map[string]string{
 	"/api/v2/auth/native/authorize": "the RFC 8252 authorization request; it creates only a pending record bound to the browser.",
 	"/api/v2/auth/native/token":     "the token endpoint for public clients; it authenticates the code or refresh token itself.",
 	"/api/v2/auth/native/revoke":    "RFC 7009 revocation; 200 for any token by design, revealing nothing.",
+
+	// The Microsoft sign-in callback (ADR-0057 decision 6, epic 2254 S1c). It is
+	// the one https redirect URI an Entra app registers, so a desktop or mobile
+	// system browser, which holds no session, and a web popup that may belong to a
+	// victim must both reach it. It authenticates the state itself, answers a
+	// page or a redirect that carries a one-time handoff code, and attaches
+	// nothing to anyone: only the user who started the sign-in can redeem it.
+	"/api/v2/microsoft_login:callback": "Entra's redirect back. Single-use state, no session by design; it attaches nothing, and the handoff it parks is redeemable only by the starter.",
 }
 
 // publicPrefixes covers surfaces whose whole subtree is anonymous.

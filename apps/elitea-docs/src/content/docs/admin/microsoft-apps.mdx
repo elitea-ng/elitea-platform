@@ -107,7 +107,15 @@ Every create, edit, enable, disable and secret change writes a security audit ev
 
 ## Allow Custom app
 
-The **Allow Custom app** switch is the platform setting `microsoft.custom_apps` (on by default). Turn it off when every Microsoft credential should use a vetted Default app: the credential form then offers only the registered apps. Existing Custom app credentials keep working. The setting governs the credential form; the sign-in that follows in a later release checks it again, so a credential saved around the form cannot sign in with its own client.
+The **Allow Custom app** switch is the platform setting `microsoft.custom_apps` (on by default). Turn it off when every Microsoft credential should use a vetted Default app: the credential form then offers only the registered apps. Existing Custom app credentials keep their data but cannot sign in while it is off. The setting governs the credential form and the sign-in: starting a sign-in (and finishing one that was started before you turned it off) is refused with the code `custom_apps_disabled`, so a credential saved around the form cannot sign in with its own client. Default app credentials are not affected.
+
+## How a sign-in works
+
+A person signs in to a saved Microsoft credential from the credential form. Main builds the Microsoft authorization URL (PKCE S256, and a random state tied to the person, the project, the credential, the app and the kind of client), the person signs in at Microsoft, and Microsoft sends the browser to the one redirect URI, `https://<host>/api/v2/microsoft_login:callback`. That is the only redirect URI an Entra app needs, for the web, the desktop app and the mobile app, for Custom app and Default app. Main exchanges the code itself, with the client secret, so no secret and no refresh token reaches a browser or an app.
+
+The redirect page **attaches nothing to anyone**. It parks the result for 60 seconds, and only the person who started the sign-in can collect it, with their own session (web) or with a secret the app kept (desktop and mobile). So a link an attacker started, finished by someone else, cannot link that person's Microsoft account to the attacker's credential: the sign-in expires unused.
+
+A sign-in is refused with a stable code when the Default app cannot be used (`app_disabled`, `app_draft`, `app_needs_attention`, `app_type_not_served`, `app_project_not_served`, `app_tenant_mismatch`), when Custom app is off (`custom_apps_disabled`), or when the credential's authority is not a Microsoft Entra authority (`authority_invalid`). The app is looked up again when Microsoft sends the person back, so a change you make while someone is at the Microsoft page ends their sign-in instead of finishing it with another client. If Microsoft reports the person signed in to another tenant than the one a single-tenant app belongs to, or the account lacks a permission the credential needs, the sign-in says so and stores nothing.
 
 ## Seed apps from Helm
 

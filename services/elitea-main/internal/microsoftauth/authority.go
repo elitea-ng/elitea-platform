@@ -52,6 +52,14 @@ func TokenEndpoint(authority string) string {
 	return strings.TrimSuffix(strings.TrimRight(authority, "/"), "/v2.0") + "/oauth2/v2.0/token"
 }
 
+// AuthorizeEndpoint is the authorization endpoint of an authority that passed
+// NormalizeEntraAuthority: {authority}/oauth2/v2.0/authorize. Like the token
+// endpoint it is always computed, so a discovery document a user could influence
+// can never choose where the person is sent (ADR-0057 decision 5).
+func AuthorizeEndpoint(authority string) string {
+	return strings.TrimSuffix(strings.TrimRight(authority, "/"), "/v2.0") + "/oauth2/v2.0/authorize"
+}
+
 // RequireEntraEndpoint refuses an endpoint that is not on login.microsoftonline.com
 // over https (port 443).
 func RequireEntraEndpoint(value any) error {
