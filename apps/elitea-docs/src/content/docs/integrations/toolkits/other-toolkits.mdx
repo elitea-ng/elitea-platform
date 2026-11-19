@@ -47,7 +47,7 @@ The `delta_lake` toolkit reads one Delta Lake table in Amazon S3 with the AWS ke
 {"columns": ["id", "name"], "filters": {"score": {"gte": 20, "lt": 45}, "name": ["bob", "dave"]}}
 ```
 
-**Query.** `query` takes the pandas `DataFrame.query` syntax, literals only: comparisons (`==`, `!=`, `<`, `<=`, `>`, `>=`, chained like `1 < id <= 3`, also between two columns), `and` / `or` / `not` (and `&`, `|`, `~`) with parentheses, `in` / `not in` against a list (`name in ['a', 'b']`), `is null` / `is not null` (`is None`), the arithmetic `+ - * / %`, and backtick-quoted column names. It is read by a bounded parser and never executed. Anything else (function or method calls such as `.str.contains()`, `@variable`, `**`, `//`, `like`, subqueries) is refused with a message naming the offending token and its position. An empty or null `query` returns every row.
+**Query.** `query` takes the pandas `DataFrame.query` syntax, literals only: comparisons (`==`, `!=`, `<`, `<=`, `>`, `>=`, chained like `1 < id <= 3`, also between two columns), `and` / `or` / `not` (and `&`, `|`, `~`, which rank with `and` / `or`, below the comparisons, as in pandas' default parser) with parentheses, `in` / `not in` against a list (`name in ['a', 'b']`), `is null` / `is not null` (`is None`), the arithmetic `+ - * / %`, and backtick-quoted column names. It is read by a bounded parser and never executed. Anything else (function or method calls such as `.str.contains()`, `@variable`, `**`, `//`, `like`, subqueries) is refused with a message naming the offending token and its position. An empty or null `query` returns every row.
 
 ```json
 {"query": "score >= 20 and name in ['bob', 'dave'] and not (id == 4)"}

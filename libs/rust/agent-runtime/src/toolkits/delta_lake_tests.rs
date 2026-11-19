@@ -376,6 +376,9 @@ async fn query_expressions_follow_pandas_query_for_the_literal_subset() {
     assert_eq!(query("id > 2").await, [3, 4, 5]);
     assert_eq!(query("id >= 2 and id < 5").await, [2, 3, 4]);
     assert_eq!(query("id == 1 or id == 5").await, [1, 5]);
+    // The default `parser='pandas'`: `&` and `|` rank with and/or, below comparisons.
+    assert_eq!(query("id == 1 | id == 2").await, [1, 2]);
+    assert_eq!(query("id > 3 & name != 'dave'").await, [5]);
     assert_eq!(query("(id > 1) & (id < 4)").await, [2, 3]);
     assert_eq!(query("not id > 2").await, [1, 2]);
     assert_eq!(query("~(id > 2)").await, [1, 2]);
