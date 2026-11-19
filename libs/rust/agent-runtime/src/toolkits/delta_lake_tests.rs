@@ -980,9 +980,7 @@ async fn a_long_path_and_name_never_cut_the_usage_text() {
             description.len()
         );
         let usage = match tool.name() {
-            "query_table" => {
-                "Returns:\n    List of dicts representing rows"
-            }
+            "query_table" => "Returns:\n    List of dicts representing rows",
             "vector_search" => "(cosine similarity, best first).",
             _ => "Get the schema of the Delta Lake table.",
         };
