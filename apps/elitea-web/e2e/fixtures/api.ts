@@ -8,7 +8,7 @@
  * All entities created here use the `autotest_` prefix (per qa/ convention)
  * so failed runs' leftovers are identifiable and sweepable.
  */
-import type { APIRequestContext, APIResponse, Locator, Page } from '@playwright/test';
+import type { APIRequestContext, APIResponse, Locator, Page, Request, Response } from '@playwright/test';
 import { expect, request as playwrightRequest } from '@playwright/test';
 
 import { BASE_URL, STORAGE_STATE } from '../../playwright.config';
@@ -3416,6 +3416,63 @@ export async function fillComposer(scope: Page | Locator, prompt: string) {
     await expect(sendButton).toBeEnabled({ timeout: 2_000 });
   }).toPass({ timeout: 30_000 });
   return sendButton;
+}
+
+/**
+ * Type `prompt`, click Send, and return the response to the turn's START POST.
+ *
+ * `fillComposer` is not enough on its own. Its retry loop ends when the Send
+ * control is enabled, but the chat pane of a freshly created conversation can
+ * still swap its composer after that (the plain model composer becomes the
+ * agent's once the conversation's participants resolve), and the swap drops
+ * the text a moment after the fill was confirmed. The click then lands on a
+ * control that is gone or on an empty composer, nothing is ever sent, and the
+ * spec's wait for the START POST reports 150 s of "admission" about a turn
+ * that never left the browser: nightly runs 44078130039 (all three attempts),
+ * 44297420672 and 44517103610 (first attempt) all show the empty composer and
+ * the "Hello" empty state in their failure screenshot, with no worker delivery
+ * for the turn. The earlier "the start POST queued behind a turn an earlier
+ * journey left running" reading (#2155) did not fit that: the stored turns
+ * were already settled and the retry's POST answered in 92 ms.
+ *
+ * So the send is one retried unit: fill, click, and require the START REQUEST
+ * to leave the browser within `sendTimeout`. A send that never left is
+ * repeated from the fill; once a request is out it is never repeated (a
+ * second click would be a second turn), and only then does the admission
+ * budget start: the response may legitimately take as long as the queue ahead
+ * of it, which is what `TURN_ADMISSION_TIMEOUT_MS` bounds.
+ */
+export async function sendComposerMessage(
+  page: Page,
+  prompt: string,
+  startUrl: RegExp,
+  options: { readonly sendTimeout?: number; readonly admissionTimeout?: number } = {},
+): Promise<Response> {
+  const { sendTimeout = 10_000, admissionTimeout = TURN_ADMISSION_TIMEOUT_MS } = options;
+  const isStartRequest = (request: Request): boolean => request.method() === 'POST' && startUrl.test(request.url());
+  let response: Promise<Response | null> | undefined;
+  await expect(async () => {
+    const sendButton = await fillComposer(page, prompt);
+    const sent = page.waitForRequest(isStartRequest, { timeout: sendTimeout });
+    await sendButton.click({ timeout: sendTimeout });
+    response = (await sent).response();
+  }, 'the composer must hand the message to the network (a fill the pane discards is retried)').toPass({
+    timeout: 60_000,
+    intervals: [500, 1_000],
+  });
+  let timer: NodeJS.Timeout | undefined;
+  const budget = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`the START POST left the browser but was not answered within ${admissionTimeout} ms`));
+    }, admissionTimeout);
+  });
+  try {
+    const answered = await Promise.race([response ?? Promise.resolve(null), budget]);
+    if (answered === null) throw new Error('the START POST failed before any response');
+    return answered;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**

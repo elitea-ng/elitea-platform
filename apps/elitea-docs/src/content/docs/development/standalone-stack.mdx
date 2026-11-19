@@ -104,6 +104,8 @@ COMPOSE_PROFILES=real-llm LLM_PROVIDER=vllm LLM_API_BASE=http://llm-real:8090 \
 ```
 
 Output is non-deterministic, so specs needing determinism use `llm-mock`; this profile is for specs needing real SSE streams and tool calls.
+
+The chat model runs with a 16k-token slot (`deploy/real-llm/models.ini`, mounted over the image's preset): an agent with every internal tool on sends about 11k prompt tokens of tool schemas, which the image's own 2k slot refuses.
 </Tip>
 
 ## Overlays
