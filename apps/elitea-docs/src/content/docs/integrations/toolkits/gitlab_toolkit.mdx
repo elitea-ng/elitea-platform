@@ -34,7 +34,7 @@ Name the toolkit and select **Create**. It's now available to attach to agents, 
 
 ## Available tools
 
-<Accordion title="Available tools (27)">
+<Accordion title="Available tools (29)">
 
 The category of a tool decides when a run needs human approval to call it. See [Runtime safety](/admin/enterprise-controls/runtime-safety#tool-categories-and-approval-policy).
 
@@ -52,6 +52,7 @@ The category of a tool decides when a run needs human approval to call it. See [
 | Get commits | `read` |
 | Get issue | `read` |
 | Get issues | `read` |
+| Get merge request | `read` |
 | Get pr changes | `read` |
 | Grep file | `read` |
 | Index data | `write` |
@@ -59,6 +60,7 @@ The category of a tool decides when a run needs human approval to call it. See [
 | List files | `read` |
 | List folders | `read` |
 | List indexes | `read` |
+| List merge requests | `read` |
 | Read file | `read` |
 | Read multiple files | `read` |
 | Remove index | `delete` |
@@ -69,6 +71,12 @@ The category of a tool decides when a run needs human approval to call it. See [
 | Update file | `write` |
 
 </Accordion>
+
+## Issues and merge requests
+
+**Get issues** returns a compact list (title, number, state, labels, author, created and updated time) and takes filters: **state** (`opened` by default, `closed`, `all`), **labels**, **author_username**, created and updated time windows, **page** and **per_page** (20 by default), or **fetch_all** to read every page. An upper bound given as a bare date covers the whole day.
+
+**List merge requests** and **Get merge request** give compact merge request metadata without diffs, for throughput, cycle time and aging questions. List merge requests filters by state, time window, source and target branch, author and labels, and **include_details** adds assignees and reviewers. Get merge request takes the merge request's IID and adds discussions, approvals, the latest pipeline or the commits only when you ask for them with the matching **include_** flag; one that cannot be read becomes a one-line notice instead of failing the call. For the diff itself, use **Get pr changes**.
 
 ## Common issues
 
