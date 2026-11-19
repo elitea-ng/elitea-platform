@@ -6010,17 +6010,17 @@ impl AgentHost {
             )
         })?;
         let owner = self.owner(&self.api).await?;
-        let new_skill = self
-            .api
-            .project_skill(project_id, id)
-            .await
-            .map_err(|error| match error.status {
-                Some(403 | 404) => TurnError::new(
-                    "skill_unknown",
-                    format!("The project has no skill {id} you can use."),
-                ),
-                _ => TurnError::from(error),
-            })?;
+        let new_skill =
+            self.api
+                .project_skill(project_id, id)
+                .await
+                .map_err(|error| match error.status {
+                    Some(403 | 404) => TurnError::new(
+                        "skill_unknown",
+                        format!("The project has no skill {id} you can use."),
+                    ),
+                    _ => TurnError::from(error),
+                })?;
         // A pin whose skill is gone or unreadable does not count toward the
         // bound: it is dropped before this one is counted.
         let held = history
