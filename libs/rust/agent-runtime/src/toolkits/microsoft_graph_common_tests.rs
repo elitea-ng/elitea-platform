@@ -313,8 +313,7 @@ async fn a_rejected_token_with_no_way_to_refresh_is_the_interrupt() {
     let error = client(&mock)
         .request(get("/me"))
         .await
-        .err()
-        .expect("an error");
+        .expect_err("an error");
     assert_eq!(error.kind(), GraphErrorKind::AuthorizationRequired);
     assert_eq!(mock.count(), 1);
     let rendered = format!("{error} {error:?}");
@@ -474,8 +473,7 @@ async fn a_503_without_retry_after_backs_off_one_two_four_then_gives_up() {
     let error = client(&mock)
         .request(get("/me"))
         .await
-        .err()
-        .expect("an error");
+        .expect_err("an error");
     assert_eq!(error.kind(), GraphErrorKind::Unavailable);
     assert!(error.retryable());
     assert_eq!(mock.count(), 4);
@@ -495,8 +493,7 @@ async fn four_429s_end_throttled_and_say_how_long_to_wait() {
     let error = client(&mock)
         .request(get("/me"))
         .await
-        .err()
-        .expect("an error");
+        .expect_err("an error");
     assert_eq!(error.kind(), GraphErrorKind::Throttled);
     assert_eq!(error.status(), Some(429));
     assert_eq!(error.retry_after(), Some(Duration::from_secs(2)));
@@ -555,7 +552,7 @@ async fn collect_filters_and_reports_when_it_stopped_early() {
         .collect(graph_url("/me/messages"), 10, 3, Some(&never))
         .await
         .expect("collected");
-    assert!(collected.items.is_empty());
+    assert_eq!(collected.items, Vec::<Value>::new());
     assert!(
         collected.has_more,
         "the scan cap stopped it with items unread"
@@ -656,8 +653,7 @@ async fn a_redirect_to_another_host_is_refused_and_not_followed() {
     let error = client(&mock)
         .request(get("/me/drive/root/content"))
         .await
-        .err()
-        .expect("an error");
+        .expect_err("an error");
     assert_eq!(error.kind(), GraphErrorKind::Refused);
     assert_eq!(mock.count(), 1);
     assert!(!error.to_string().contains("sharepoint"), "{error}");
@@ -827,8 +823,7 @@ async fn failure(status: u16, body: &Value) -> GraphError {
     client(&mock)
         .request(get("/me"))
         .await
-        .err()
-        .expect("an error")
+        .expect_err("an error")
 }
 
 #[tokio::test]
@@ -897,8 +892,7 @@ async fn provider_text_is_cleaned_and_bounded() {
     let error = client(&mock)
         .request(get("/me"))
         .await
-        .err()
-        .expect("an error");
+        .expect_err("an error");
     assert!(error.to_string().ends_with("no details"), "{error}");
 }
 
@@ -997,17 +991,13 @@ fn the_rules_allow_get_by_default_and_narrow_by_method_and_path() {
     default.check("", "/me").expect("an empty method is GET");
     let post = default
         .check("POST", "/me/sendMail")
-        .err()
-        .expect("POST is refused");
+        .expect_err("POST is refused");
     assert!(
         post.to_string()
             .contains("not allowed by this toolkit (allowed: GET)"),
         "{post}"
     );
-    let trace = default
-        .check("TRACE", "/me")
-        .err()
-        .expect("TRACE is refused");
+    let trace = default.check("TRACE", "/me").expect_err("TRACE is refused");
     assert!(
         trace.to_string().contains("Unsupported HTTP method TRACE"),
         "{trace}"
@@ -1043,15 +1033,14 @@ fn the_rules_allow_get_by_default_and_narrow_by_method_and_path() {
     }
     let denied = rules
         .check("POST", "/me/messages/delete")
-        .err()
-        .expect("denied");
+        .expect_err("denied");
     assert!(
         denied
             .to_string()
             .contains("denied by this toolkit (rule: /me/messages/delete)"),
         "{denied}"
     );
-    let outside = rules.check("GET", "/me/calendar").err().expect("outside");
+    let outside = rules.check("GET", "/me/calendar").expect_err("outside");
     assert!(
         outside
             .to_string()
