@@ -1,4 +1,4 @@
--- 0256_microsoft_login.sql — the server side of a Microsoft sign-in
+-- 0257_microsoft_login.sql — the server side of a Microsoft sign-in
 -- (ADR-0057 decision 6; epic 2254 story S1c, issue 2268).
 --
 -- One https callback on Main serves every client (web popup, desktop, mobile) and

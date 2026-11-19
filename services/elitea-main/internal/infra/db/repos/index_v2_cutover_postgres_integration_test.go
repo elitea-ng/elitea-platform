@@ -241,20 +241,6 @@ SET index_manual_stop_requested_at = clock_timestamp(),
 WHERE execution_id = $1`,
 			want: cutover.IndexV1PersistedState{PendingManualCleanups: 1},
 		},
-		{
-			name:       "task restamp pending",
-			settleWith: executionapp.SettlementSucceeded,
-			mutate: `
-UPDATE elitea_runtime.index_ingest_jobs
-SET index_meta_task_restamp_source_event_id = 'cutover-task-restamp',
-    index_meta_task_restamp_occurred_at = clock_timestamp(),
-    index_meta_task_restamp_created_on = 1700000000.25,
-    index_meta_task_restamp_status = 'PENDING',
-    index_meta_task_restamp_attempt_count = 0,
-    index_meta_task_restamp_next_attempt_at = clock_timestamp()
-WHERE execution_id = $1`,
-			want: cutover.IndexV1PersistedState{PendingTaskRestamps: 1},
-		},
 	} {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
@@ -287,13 +273,7 @@ UPDATE elitea_runtime.index_ingest_jobs
 SET index_manual_stop_requested_at = clock_timestamp(),
     index_manual_cleanup_status = 'APPLIED',
     index_manual_cleanup_attempt_count = 1,
-    index_manual_cleanup_resolved_at = clock_timestamp(),
-    index_meta_task_restamp_source_event_id = 'resolved-cutover-task-restamp',
-    index_meta_task_restamp_occurred_at = clock_timestamp(),
-    index_meta_task_restamp_created_on = 1700000000.25,
-    index_meta_task_restamp_status = 'APPLIED',
-    index_meta_task_restamp_attempt_count = 1,
-    index_meta_task_restamped_at = clock_timestamp()
+    index_manual_cleanup_resolved_at = clock_timestamp()
 WHERE execution_id = $1`, executionID)
 
 	assertPostgresIndexV1CutoverStateExact(t, repository, cutover.IndexV1PersistedState{})
@@ -598,4 +578,24 @@ func execPostgresCutoverFixture(
 	if _, err := pool.Exec(ctx, query, args...); err != nil {
 		t.Fatalf("mutate PostgreSQL cutover fixture: %v", err)
 	}
+}
+
+// Migration 0256 retired the v1 task-restamp intent (#1382): no column of it
+// may remain on index_ingest_jobs, and the cutover read must still work
+// without it.
+func TestPostgresIndexIngestJobsHasNoTaskRestampColumns(t *testing.T) {
+	pool, repository := newPostgresIndexV2CutoverFixture(t)
+	var remaining int
+	if err := pool.QueryRow(context.Background(), `
+SELECT count(*)
+FROM information_schema.columns
+WHERE table_schema = 'elitea_runtime'
+  AND table_name = 'index_ingest_jobs'
+  AND column_name LIKE 'index\_meta\_task\_restamp%'`).Scan(&remaining); err != nil {
+		t.Fatal(err)
+	}
+	if remaining != 0 {
+		t.Fatalf("%d task restamp columns remain on index_ingest_jobs", remaining)
+	}
+	assertPostgresIndexV1CutoverStateExact(t, repository, cutover.IndexV1PersistedState{})
 }

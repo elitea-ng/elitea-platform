@@ -1,6 +1,6 @@
 package microsoftlogin
 
-// The sign-in against a real PostgreSQL: the shipped migration corpus (shared 0256
+// The sign-in against a real PostgreSQL: the shipped migration corpus (shared 0257
 // included) applied to a template database, then Start, Callback and Redeem over the
 // real tables and an Entra fixture. CI-only: skipped without ELITEA_TEST_DATABASE_URL.
 

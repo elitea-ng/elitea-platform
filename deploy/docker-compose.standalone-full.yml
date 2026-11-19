@@ -839,6 +839,11 @@ services:
   llm-real:
     image: ghcr.io/elitea-ng/elitea-e2e-llm:v0.1.0@sha256:1b11aa30481ffee8c8e823aeae712b7926a3422f689e1c49f45f5c208329b843
     profiles: ["real-llm"]
+    volumes:
+      # The image's preset with a 16k slot instead of 2k (see the file's own
+      # header): the platform's full internal-tool surface is ~10.9k prompt
+      # tokens and a 2048-token slot refuses it with a 400 (#2155).
+      - ./real-llm/models.ini:/models/models.ini:ro
     # Not published to the host: there is no journal to read, and the gateway
     # reaches it at `llm-real:8090` on the compose network.
     healthcheck:

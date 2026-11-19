@@ -2155,7 +2155,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			v2configs.WithModelDefaults(cfg.PlatformModelDefaults),
 		}, configurationOptions...)...,
 	)
-	// The Microsoft sign-in (ADR-0057 decision 6, shared migration 0256). The
+	// The Microsoft sign-in (ADR-0057 decision 6, shared migration 0257). The
 	// callback is the one https redirect URI an Entra app registers, for web,
 	// desktop and mobile. It is PUBLIC by design: on desktop and mobile it runs
 	// in the system browser, which holds no session, and on web in a popup that

@@ -11,7 +11,7 @@ Microsoft Graph, Dataverse and delegated SharePoint credentials, for Custom app 
 - `POST /api/v2/microsoft_login:redeem` hands the access token to the person who started the
   sign-in (session on web, the verifier of the client challenge on desktop and mobile).
 
-Shared migration `0256_microsoft_login.sql` adds `elitea_identity.microsoft_login_states` and
+Shared migration `0257_microsoft_login.sql` adds `elitea_identity.microsoft_login_states` and
 `microsoft_login_handoffs`. No token or secret is stored in plaintext (AES-256-GCM under a key
 derived from the vault master key), and no refresh token is kept or returned.
 

@@ -8,7 +8,7 @@
  * All entities created here use the `autotest_` prefix (per qa/ convention)
  * so failed runs' leftovers are identifiable and sweepable.
  */
-import type { APIRequestContext, APIResponse, Locator, Page } from '@playwright/test';
+import type { APIRequestContext, APIResponse, Locator, Page, Request, Response } from '@playwright/test';
 import { expect, request as playwrightRequest } from '@playwright/test';
 
 import { BASE_URL, STORAGE_STATE } from '../../playwright.config';
@@ -3416,6 +3416,62 @@ export async function fillComposer(scope: Page | Locator, prompt: string) {
     await expect(sendButton).toBeEnabled({ timeout: 2_000 });
   }).toPass({ timeout: 30_000 });
   return sendButton;
+}
+
+/**
+ * Type `prompt`, click Send, and return the response to the turn's START POST.
+ *
+ * Two budgets, kept apart so a failure names what actually went wrong. First
+ * the START REQUEST must leave the browser (`sendTimeout`): if it does not,
+ * the composer never handed the message to the network, and the failure says
+ * so, with what the composer held. Only then does the admission budget start:
+ * the response may legitimately take as long as the queue ahead of it, which
+ * is what `TURN_ADMISSION_TIMEOUT_MS` bounds. Before, both were one 150 s
+ * `waitForResponse`, and a send that never left was reported as "admission":
+ * nightly runs 44078130039, 44297420672 and 44517103610 failed that way, with
+ * an empty composer in the failure screenshot and no worker delivery.
+ *
+ * There is deliberately NO fill/click retry here. A composer that loses typed
+ * text or swallows a click is a product bug (fixed in `useComposerDraft`), and
+ * a retry would hide a regression of it.
+ */
+export async function sendComposerMessage(
+  page: Page,
+  prompt: string,
+  startUrl: RegExp,
+  options: { readonly sendTimeout?: number; readonly admissionTimeout?: number } = {},
+): Promise<Response> {
+  const { sendTimeout = 15_000, admissionTimeout = TURN_ADMISSION_TIMEOUT_MS } = options;
+  const sendButton = await fillComposer(page, prompt);
+  const left = page.waitForRequest((request) => request.method() === 'POST' && startUrl.test(request.url()), {
+    timeout: sendTimeout,
+  });
+  await sendButton.click();
+  let request: Request;
+  try {
+    request = await left;
+  } catch (error) {
+    const held = await page.getByTestId('chat-message-input').inputValue().catch(() => '<composer gone>');
+    throw new Error(
+      `the START request never left the browser within ${sendTimeout} ms of clicking Send; ` +
+        `the composer holds ${JSON.stringify(held)} (empty means the message was swallowed, not queued): ${String(error)}`,
+    );
+  }
+  let timer: NodeJS.Timeout | undefined;
+  const budget = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`the START POST left the browser but was not answered within ${admissionTimeout} ms`));
+    }, admissionTimeout);
+  });
+  try {
+    const answered = await Promise.race([request.response(), budget]);
+    if (answered === null) {
+      throw new Error(`the START POST failed before any response: ${request.failure()?.errorText ?? 'unknown'}`);
+    }
+    return answered;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**

@@ -60,6 +60,8 @@ mod model_scope_tests;
 mod output_contract_tests;
 #[path = "pipeline_restart_pg_tests.rs"]
 pub(super) mod restart_pg_tests;
+#[path = "pipeline_root_grant_tests.rs"]
+mod root_grant_tests;
 #[path = "pipeline_scoped_pg_tests.rs"]
 mod scoped_pg_tests;
 #[path = "pipeline_scoped_tests.rs"]

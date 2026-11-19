@@ -11,7 +11,7 @@ import (
 
 func TestCurrentIndexV2CutoverRepositoryReadsExactSafeRetainedOutboxPredicate(t *testing.T) {
 	executor := &scriptedExecutor{rowResults: []scriptedRow{{values: []any{
-		int64(2), int64(3), int64(4), int64(5), int64(6), int64(7), int64(8),
+		int64(2), int64(3), int64(4), int64(5), int64(6), int64(7),
 	}}}}
 	repository, err := newCurrentIndexV2CutoverRepository(executor)
 	if err != nil {
@@ -27,8 +27,7 @@ func TestCurrentIndexV2CutoverRepositoryReadsExactSafeRetainedOutboxPredicate(t 
 		state.ActiveClaims != 4 ||
 		state.PendingInitializations != 5 ||
 		state.PendingTerminalProjections != 6 ||
-		state.PendingManualCleanups != 7 ||
-		state.PendingTaskRestamps != 8 {
+		state.PendingManualCleanups != 7 {
 		t.Fatalf("unexpected persisted state: %+v", state)
 	}
 	if len(executor.rowCalls) != 1 {
@@ -49,7 +48,6 @@ func TestCurrentIndexV2CutoverRepositoryReadsExactSafeRetainedOutboxPredicate(t 
 		"ingest.index_meta_initialization_status IN ('PENDING', 'RUNNING')",
 		"ingest.index_meta_terminal_status = 'PENDING'",
 		"ingest.index_manual_cleanup_status = 'PENDING'",
-		"ingest.index_meta_task_restamp_status = 'PENDING'",
 		"job.capability_id = ingest.capability_id",
 	} {
 		if !strings.Contains(query, required) {
