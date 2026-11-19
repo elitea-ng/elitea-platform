@@ -42,9 +42,8 @@ import {
   createAgentThroughForm,
   createAgentWithVersion,
   expectStoredAssistantAnswer,
-  fillComposer,
+  sendComposerMessage,
   settleStoredTurn,
-  TURN_ADMISSION_TIMEOUT_MS,
 } from '../fixtures/api';
 
 const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/;
@@ -77,7 +76,7 @@ const INTERNAL_TOOL_NAMES = [
 const testIdFor = (toolName: string): string => `internal-tool-${toolName}`;
 
 test('internal tools all on, agent-as-tool attached — and the agent still answers', async ({ page }) => {
-  test.setTimeout(300_000);
+  test.setTimeout(420_000);
   const name = `${AUTOTEST_PREFIX}tools-${Date.now() % 1_000_000}`;
 
   // ── 1. Author the agent through the form ────────────────────────────────
@@ -176,16 +175,9 @@ test('internal tools all on, agent-as-tool attached — and the agent still answ
   const agentParticipant = (conversationBody.participants ?? []).find((p) => p.entity_name === 'application');
   expect(String(agentParticipant?.entity_settings?.version_id ?? '')).toBe(String(versionId));
 
-  // Composer first, budget second — the same shape `chat.pipeline.spec.ts`
-  // failed on in run 33812152063. See `fillComposer`.
-  const sendButton = await fillComposer(page, `autotest tools ${Date.now()}`);
-  const started = page.waitForResponse(
-    (r) => START_RE.test(r.url()) && r.request().method() === 'POST',
-    { timeout: TURN_ADMISSION_TIMEOUT_MS },
-  );
-  await sendButton.click();
-
-  const startResponse = await started;
+  // `sendComposerMessage` fills, clicks and requires the START request to
+  // leave the browser before its admission budget starts (see its comment).
+  const startResponse = await sendComposerMessage(page, `autotest tools ${Date.now()}`, START_RE);
   expect(
     startResponse.status(),
     `the turn was refused with every internal tool on: ${(await startResponse.text()).slice(0, 300)}`,
@@ -201,7 +193,10 @@ test('internal tools all on, agent-as-tool attached — and the agent still answ
   // it until their own fixed timeouts expired.
   try {
     await expectStoredAssistantAnswer(page, projectId, conversation.id ?? '', {
-      timeout: 90_000,
+      // ~11k prompt tokens of tool schemas to prefill on a CPU runner, on top
+      // of the turn: the 16k slot (deploy/real-llm/models.ini) holds them, the
+      // old 90 s did not hold the prefill of a retry that missed the slot's cache.
+      timeout: 180_000,
       message: 'no stored answer — the runtime refused a profile the admission gates let through',
     });
   } finally {

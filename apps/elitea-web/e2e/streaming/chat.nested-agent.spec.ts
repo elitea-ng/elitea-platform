@@ -102,8 +102,7 @@ import {
   AUTOTEST_PREFIX,
   createAgentThroughForm,
   expectStoredAssistantAnswer,
-  TURN_ADMISSION_TIMEOUT_MS,
-  fillComposer,
+  sendComposerMessage,
 } from '../fixtures/api';
 
 /** Matched WITHOUT a project id: the chat persona works inside its own personal project (#290). */
@@ -230,17 +229,11 @@ test('a parent agent with a different child agent attached completes a turn', as
   // that the model took the offer — see "WHAT IS DELIBERATELY NOT ASSERTED" in
   // the header; the prompt is written this way so a manual run against a
   // tool-calling model exercises the delegation without editing the file.
-  const send = await fillComposer(page,
+  const startResponse = await sendComposerMessage(page,
     `Delegate to the saved Elitea agent named ${childName}: ask it for the single word "ready". ` +
       'You must call that agent as a tool, then report exactly what it returned.',
+    START_RE,
   );
-  const started = page.waitForResponse(
-    (r) => START_RE.test(r.url()) && r.request().method() === 'POST',
-    { timeout: TURN_ADMISSION_TIMEOUT_MS },
-  );
-  await send.click();
-
-  const startResponse = await started;
   // Spelled out because 422 `unsupported_agent_execution` is what a
   // self-reference produces here, and what a broken relation write, a bad
   // projection or a failed freeze all produce too — the body is the sentence a

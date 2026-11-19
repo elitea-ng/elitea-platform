@@ -93,10 +93,9 @@ import {
   deleteToolkit,
   expectStoredAssistantAnswer,
   expectStoredTurnRefusal,
-  fillComposer,
   readAttachedToolkits,
   readStoredTranscript,
-  TURN_ADMISSION_TIMEOUT_MS,
+  sendComposerMessage,
 } from '../fixtures/api';
 import { readsPlatformFlags } from '../fixtures/platformFlags';
 
@@ -213,20 +212,10 @@ async function chatWithOpenAgent(page: Page, prompt: string): Promise<string> {
   expect(conversationId, 'the Chat button must create a conversation to attach to').not.toBe('');
   await page.waitForURL(new RegExp(`/app/chat/${conversationId}$`), { timeout: 30_000 });
 
-  // `fillComposer` retries the fill until Send exists: a chat pane still
-  // resolving its conversation discards a fill that lands too early, and a
-  // bare fill-then-click waited its whole budget for a control that never came
-  // (run 44164037437: the click never started, so the 150 s the failure named
-  // was the START wait, not a slow admission). The wait is armed AFTER it, so
-  // its budget covers the request alone.
-  const send = await fillComposer(page, prompt);
-  const started = page.waitForResponse(
-    (r) => START_RE.test(r.url()) && r.request().method() === 'POST',
-    { timeout: TURN_ADMISSION_TIMEOUT_MS },
-  );
-  await send.click();
-
-  const startResponse = await started;
+  // One retried unit, not fill-then-click: the pane can discard a fill after
+  // Send enabled, and a click on the vanished control sends nothing (see
+  // `sendComposerMessage`).
+  const startResponse = await sendComposerMessage(page, prompt, START_RE);
   // An MCP toolkit is decided by the WORKER, never at admission: the
   // version/participant joins the admission gates run
   // (`services/elitea-main/internal/db/queries/agent_chat.sql:27-110`) serve

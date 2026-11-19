@@ -3079,6 +3079,19 @@ pub(crate) struct MaterializedApplicationTool {
 }
 
 impl MaterializedApplicationTool {
+    /// The enforced refusal this tool answers, when its delegation was
+    /// refused (FU-335): a graph node cannot answer it as a tool result.
+    pub(crate) fn enforced_refusal(&self) -> Option<RefusedDelegation> {
+        let evidence = self
+            .delegation
+            .as_ref()
+            .filter(|evidence| evidence.enforced)?;
+        Some(RefusedDelegation {
+            refusal: evidence.refusal.clone()?,
+            evidence: evidence.clone(),
+        })
+    }
+
     /// The guard catalogs the presentation catalog joins to this tool.
     fn guards(&self) -> ApplicationToolGuardCatalogs {
         ApplicationToolGuardCatalogs::new(
@@ -4044,13 +4057,15 @@ pub(in crate::agents) fn narrow_version(
         .map_err(|refused| *refused))
 }
 
-/// A refused delegation where no tool result can carry it: a pipeline node
-/// that runs a saved pipeline inside the graph. The run ends with the
-/// authorization terminal; the cause names the refusal code and the grant
-/// kind, and the log names the grant. The error also carries the person's
-/// notice (edge kind `pipeline_node`), which the lifecycle publishes before
-/// that terminal so the chat shows the delegation notice and not only the
-/// generic failure (#2218). `graph_path` is the node's place in the graph.
+/// A refused delegation where no tool result can carry it: a graph node (a
+/// pipeline node running a saved pipeline, or, FU-335, an Agent node or Map
+/// member running a saved agent). The run ends with the authorization
+/// terminal; the cause names the refusal code and the grant kind, and the log
+/// names the grant. The error also carries the person's notice (edge kind
+/// `pipeline_node`), which the lifecycle publishes before that terminal so the
+/// chat shows the delegation notice and not only the generic failure (#2218),
+/// and the refusal itself, which a saved pipeline offered as a tool answers
+/// as its result instead. `graph_path` is the node's place in the graph.
 pub(in crate::agents) fn delegation_refused_error(
     refused: &RefusedDelegation,
     graph_path: &str,
@@ -4059,7 +4074,7 @@ pub(in crate::agents) fn delegation_refused_error(
     tracing::warn!(
         event = "delegation_refused",
         refusal = %refusal.to_value(),
-        "a pipeline node delegates to a saved pipeline its caller may not run"
+        "a graph node delegates to a saved agent or pipeline its caller may not run"
     );
     let detail = match refusal {
         DelegationRefusal::GrantMissing { kind, .. }
@@ -4068,10 +4083,11 @@ pub(in crate::agents) fn delegation_refused_error(
     };
     NativeAgentAssemblyError::new(
         NativeAgentAssemblyErrorCode::AuthorizationFailed,
-        "a pipeline node delegates to a saved pipeline that needs a grant its caller does not hold, or is past the delegation depth",
+        "a graph node delegates to a saved agent or pipeline that needs a grant its caller does not hold, or is past the delegation depth",
     )
     .with_cause(refusal.code(), Some(detail))
     .with_delegation_notice(pipeline_node_notice(&refused.evidence, graph_path))
+    .with_delegation_refusal(refused.clone())
 }
 
 /// The most bytes of a graph path a notice id carries before it is hashed

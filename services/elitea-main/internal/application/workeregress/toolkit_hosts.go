@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"strings"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/microsoftauth"
 )
 
 // toolkitImplicitHosts are the hosts a toolkit type's worker client calls by
@@ -25,6 +27,13 @@ import (
 //     GOOGLE_PLACES_ORIGIN
 //   - sharepoint: families/sharepoint/client.rs GRAPH_BASE (the token is a
 //     delegated one Main redeems; the worker calls no token endpoint)
+//   - outlook, teams, ms_graph: families/microsoft_graph_common.rs
+//     GRAPH_ORIGIN (ADR-0057 decision 10; likewise a delegated token, and
+//     `login.microsoftonline.com` is a Main-only host, not a worker one)
+//   - dataverse: no compiled-in host. Its org host comes from the
+//     credential's `url` (HostsFromSettings), pinned to https://<org>.dynamics.com
+//     by microsoftauth.NormalizeDataverseURL; a sovereign cloud or any other
+//     host refuses the command (microsoftFieldHosts)
 //   - slack: families/slack/client.rs SLACK_API_ORIGIN
 //   - xray_cloud: families/xray_cloud/config.rs DEFAULT_BASE_URL (used when
 //     the settings name none)
@@ -48,6 +57,9 @@ var toolkitImplicitHosts = map[string][]string{
 	"figma":            {"api.figma.com"},
 	"google_places":    {"maps.googleapis.com", "places.googleapis.com"},
 	"sharepoint":       {"graph.microsoft.com"},
+	"outlook":          {"graph.microsoft.com"},
+	"teams":            {"graph.microsoft.com"},
+	"ms_graph":         {"graph.microsoft.com"},
 	"slack":            {"slack.com"},
 	"xray_cloud":       {"xray.cloud.getxray.app"},
 	"zephyr_essential": {"prod-api.zephyr4jiracloud.com"},
@@ -137,4 +149,34 @@ func bareLabelHost(toolkitType, key, value string) (string, bool) {
 		}
 	}
 	return hostOf(value + serviceNowInstanceDomain)
+}
+
+// microsoftFieldHosts applies ADR-0057 decision 10 to one settings field of a
+// delegated Microsoft toolkit (outlook, teams, ms_graph, dataverse). It
+// reports whether the field names no worker host, and a refusal when the
+// field is a Dataverse environment URL that is not an
+// https://<org>.<region>.dynamics.com origin (sovereign clouds included).
+//
+//   - The OAuth discovery endpoint is read by Main only (code exchange,
+//     refresh, discovery), never by the worker, so it adds no host.
+//   - A Dataverse `url` is the one host the worker calls for that type.
+//
+// SharePoint and every other type are untouched.
+func microsoftFieldHosts(toolkitType, key, value string) (skip bool, err error) {
+	descriptor, ok := microsoftauth.For(strings.TrimSpace(toolkitType))
+	if !ok || descriptor.Type() == microsoftauth.SharePoint {
+		return false, nil
+	}
+	switch strings.ToLower(key) {
+	case microsoftauth.FieldDiscoveryEndpoint:
+		return true, nil
+	case microsoftauth.FieldURL:
+		if descriptor.Type() != microsoftauth.Dataverse {
+			return false, nil
+		}
+		if _, err := microsoftauth.NormalizeDataverseURL(value); err != nil {
+			return true, refuse("the Dataverse toolkit's environment URL must look like https://<org>.crm.dynamics.com: a sovereign cloud or any other host is not supported")
+		}
+	}
+	return false, nil
 }
