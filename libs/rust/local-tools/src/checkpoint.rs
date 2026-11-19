@@ -107,7 +107,7 @@ impl Default for CheckpointLimits {
 /// How old a `<ref>.lock` must be before pruning treats it as left by a
 /// crashed writer and takes it over (#2087). A live git `update-ref` holds
 /// its lock for milliseconds; ten minutes is far beyond any writer.
-const STALE_LOCK_AGE: Duration = Duration::from_secs(10 * 60);
+const STALE_LOCK_AGE: Duration = Duration::from_mins(10);
 
 /// The commit-message trailer listing the paths a git checkpoint skipped.
 const SKIPPED_TRAILER: &str = "Elitea-Skipped: ";
