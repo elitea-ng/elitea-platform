@@ -112,12 +112,12 @@ const (
 
 // ClassifyProbe maps the HTTP status of an identity read to a ProbeResult.
 func ClassifyProbe(status int) ProbeResult {
-	switch {
-	case status == http.StatusOK:
+	switch status {
+	case http.StatusOK:
 		return ProbeOK
-	case status == http.StatusUnauthorized:
+	case http.StatusUnauthorized:
 		return ProbeUnauthorized
-	case status == http.StatusForbidden:
+	case http.StatusForbidden:
 		return ProbeForbidden
 	default:
 		return ProbeFailed
