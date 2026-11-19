@@ -77,7 +77,7 @@ fn cloud_settings() -> Map<String, Value> {
     .expect("object")
 }
 
-fn client(responses: Vec<JiraHttpResponse>) -> (JiraClient, Arc<Scripted>) {
+fn scripted(responses: Vec<JiraHttpResponse>) -> (JiraClient, Arc<Scripted>) {
     let transport = Scripted::new(responses);
     let client = JiraClient::with_transport(
         JiraToolkitConfig::parse(&cloud_settings()).expect("config"),
@@ -96,7 +96,7 @@ fn myself() -> JiraHttpResponse {
 
 #[tokio::test]
 async fn a_read_asks_for_the_rest_root_it_names_with_its_query_encoded() {
-    let (client, transport) = client(vec![ok(json!({"issues": []})), ok(json!({"values": []}))]);
+    let (client, transport) = scripted(vec![ok(json!({"issues": []})), ok(json!({"values": []}))]);
     client
         .read(
             JiraRoot::Api,
@@ -124,7 +124,7 @@ async fn a_read_asks_for_the_rest_root_it_names_with_its_query_encoded() {
 
 #[tokio::test]
 async fn a_path_segment_that_could_escape_the_root_is_refused_before_any_request() {
-    let (client, transport) = client(vec![]);
+    let (client, transport) = scripted(vec![]);
     for segment in ["..", ".", "", "a\nb"] {
         let error = client
             .read(JiraRoot::Api, &["issue", segment], &[])
@@ -142,7 +142,7 @@ async fn a_path_segment_that_could_escape_the_root_is_refused_before_any_request
 
 #[tokio::test]
 async fn a_credential_jira_refuses_is_told_in_the_sdks_words() {
-    let (client, _) = client(vec![JiraHttpResponse::fixture(
+    let (client, _) = scripted(vec![JiraHttpResponse::fixture(
         StatusCode::UNAUTHORIZED,
         None,
     )]);
@@ -150,18 +150,18 @@ async fn a_credential_jira_refuses_is_told_in_the_sdks_words() {
         client.check_access().await.expect("checked"),
         Some("Authentication failed: Invalid username or API key.".to_owned())
     );
-    let (client, _) = client(vec![JiraHttpResponse::fixture(StatusCode::FORBIDDEN, None)]);
+    let (client, _) = scripted(vec![JiraHttpResponse::fixture(StatusCode::FORBIDDEN, None)]);
     assert_eq!(
         client.check_access().await.expect("checked"),
         Some("Authentication failed: Access forbidden.".to_owned())
     );
-    let (client, _) = client(vec![myself()]);
+    let (client, _) = scripted(vec![myself()]);
     assert_eq!(client.check_access().await.expect("checked"), None);
 }
 
 #[tokio::test]
 async fn a_jira_refusal_a_rate_limit_and_a_hostile_body_read_as_themselves() {
-    let (client, _) = client(vec![JiraHttpResponse::fixture(
+    let (client, _) = scripted(vec![JiraHttpResponse::fixture(
         StatusCode::BAD_REQUEST,
         Some(json!({"errorMessages": ["The board does not support sprints"], "errors": {}})),
     )]);
@@ -179,7 +179,7 @@ async fn a_jira_refusal_a_rate_limit_and_a_hostile_body_read_as_themselves() {
         JiraRead::Accepted(_) => panic!("a 400 was accepted"),
     }
 
-    let (client, _) = client(vec![JiraHttpResponse::fixture(
+    let (client, _) = scripted(vec![JiraHttpResponse::fixture(
         StatusCode::TOO_MANY_REQUESTS,
         None,
     )]);
@@ -191,7 +191,7 @@ async fn a_jira_refusal_a_rate_limit_and_a_hostile_body_read_as_themselves() {
     assert_eq!(limited.code(), JiraClientErrorCode::RateLimited);
     assert!(limited.retryable());
 
-    let (client, _) = client(vec![JiraHttpResponse::fixture(
+    let (client, _) = scripted(vec![JiraHttpResponse::fixture(
         StatusCode::SERVICE_UNAVAILABLE,
         None,
     )]);
@@ -203,7 +203,7 @@ async fn a_jira_refusal_a_rate_limit_and_a_hostile_body_read_as_themselves() {
     assert!(down.retryable());
 
     // A 200 that is not JSON (a proxy's page) is no data, not a crash.
-    let (client, _) = client(vec![JiraHttpResponse::text_fixture(
+    let (client, _) = scripted(vec![JiraHttpResponse::text_fixture(
         StatusCode::OK,
         "<html>maintenance</html>",
     )]);
@@ -251,7 +251,7 @@ fn arguments() -> Value {
 
 #[tokio::test]
 async fn an_extraction_through_the_real_client_checks_the_credential_then_searches_twice() {
-    let (client, transport) = client(vec![
+    let (client, transport) = scripted(vec![
         myself(),
         ok(json!({"issues": [], "isLast": true})),
         ok(json!({"issues": [], "isLast": true})),
@@ -286,7 +286,7 @@ async fn an_extraction_through_the_real_client_checks_the_credential_then_search
 
 #[tokio::test]
 async fn a_rate_limit_that_does_not_lift_ends_the_tool_with_its_error() {
-    let (client, transport) = client(vec![
+    let (client, transport) = scripted(vec![
         myself(),
         JiraHttpResponse::fixture(StatusCode::TOO_MANY_REQUESTS, None),
         JiraHttpResponse::fixture(StatusCode::TOO_MANY_REQUESTS, None),
