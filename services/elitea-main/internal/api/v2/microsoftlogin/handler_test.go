@@ -54,8 +54,8 @@ func (f *fakeFlow) Redeem(_ context.Context, r microsoftlogin.RedeemRequest) (mi
 
 func serve(h *Handler, method, path, body string, signedIn bool) *httptest.ResponseRecorder {
 	r := chi.NewRouter()
-	r.With(Decode("start")).Post(StartPath, h.Start)
-	r.With(Decode("redeem")).Post(RedeemPath, h.Redeem)
+	r.With(DecodeStart).Post(StartPath, h.Start)
+	r.With(DecodeRedeem).Post(RedeemPath, h.Redeem)
 	r.Get(CallbackPath, h.Callback)
 	request := httptest.NewRequest(method, path, strings.NewReader(body))
 	if signedIn {

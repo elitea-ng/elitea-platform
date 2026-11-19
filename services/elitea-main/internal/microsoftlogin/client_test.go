@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -19,7 +20,7 @@ func unitService(t *testing.T, apps Apps) *Service {
 	t.Helper()
 	s, err := newSealer(bytes.Repeat([]byte{1}, 32))
 	require.NoError(t, err)
-	return &Service{apps: apps, sealer: s}
+	return &Service{apps: apps, sealer: s, logger: slog.New(slog.DiscardHandler)}
 }
 
 func refusalCode(t *testing.T, err error) string {
@@ -196,15 +197,15 @@ func TestLifetime(t *testing.T) {
 	require.Equal(t, time.Hour, lifetime(nil))
 	require.Equal(t, time.Hour, lifetime(float64(-5)))
 	require.Equal(t, 24*time.Hour, lifetime(float64(10_000_000)))
+	require.Equal(t, 24*time.Hour, lifetime(1e30), "beyond the Duration range is clamped, not wrapped")
+	require.Equal(t, time.Hour, lifetime("NaN"))
 }
 
-func TestChallengeMatches(t *testing.T) {
+func TestChallengeOf(t *testing.T) {
 	verifier, challenge := pkce(t)
-	require.True(t, challengeMatches(challenge, verifier))
-	require.False(t, challengeMatches(challenge, ""))
-	require.False(t, challengeMatches(challenge, verifier+"x"))
-	require.True(t, challengeMatches("", ""))
-	require.False(t, challengeMatches("", verifier))
+	require.Equal(t, challenge, challengeOf(verifier))
+	require.NotEqual(t, challenge, challengeOf(verifier+"x"))
+	require.Empty(t, challengeOf(""), "a web sign-in has no verifier and no challenge")
 }
 
 func TestOutcomeReturnURLs(t *testing.T) {

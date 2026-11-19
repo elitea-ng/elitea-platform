@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -261,11 +262,14 @@ func TestALoginCSRFEndsInAHandoffNobodyCanRedeem(t *testing.T) {
 		outcome := r.finish(res)
 		require.NotEmpty(t, outcome.Handoff)
 		require.Equal(t, 1, count(t, r.pool, "microsoft_login_handoffs"))
-		// The victim's session is another user: refused. The attempt burned the row.
+		// The victim's session is another user: refused, and the refusal deletes nothing,
+		// so a stranger cannot destroy the starter's sign-in.
 		_, err = r.redeem(outcome, otherUser, "")
 		require.ErrorIs(t, err, ErrHandoffInvalid)
-		require.Zero(t, count(t, r.pool, "microsoft_login_handoffs"))
-		// Even the starter, holding the code, now finds nothing to redeem.
+		require.Equal(t, 1, count(t, r.pool, "microsoft_login_handoffs"))
+		// Nobody redeems it as the attacker's credential owner either: the handoff parks
+		// the victim's token for the starter only, and expires unredeemed.
+		r.clock.advance(HandoffTTL + time.Second)
 		_, err = r.redeem(outcome, starter, "")
 		require.ErrorIs(t, err, ErrHandoffInvalid)
 	})
@@ -294,7 +298,15 @@ func TestALoginCSRFEndsInAHandoffNobodyCanRedeem(t *testing.T) {
 			tc.mutate(&outcome, &req)
 			_, err = r.svc.Redeem(context.Background(), req)
 			require.ErrorIs(t, err, ErrHandoffInvalid)
-			// The proof was wrong, so the handoff is gone: it cannot be guessed at.
+			// A wrong proof deletes nothing: the starter, with the right one, still gets it.
+			require.Equal(t, 1, count(t, r.pool, "microsoft_login_handoffs"))
+			good := RedeemRequest{UserID: starter, ProjectID: projectID, Handoff: outcome.Handoff, State: outcome.State}
+			if tc.kind != ClientWeb {
+				good.ClientVerifier = verifier
+			}
+			got, err := r.svc.Redeem(context.Background(), good)
+			require.NoError(t, err)
+			require.NotEmpty(t, got.AccessToken)
 			require.Zero(t, count(t, r.pool, "microsoft_login_handoffs"))
 		})
 	}
@@ -306,6 +318,11 @@ func TestALoginCSRFEndsInAHandoffNobodyCanRedeem(t *testing.T) {
 		r.clock.advance(HandoffTTL + time.Second)
 		_, err = r.redeem(outcome, starter, "")
 		require.ErrorIs(t, err, ErrHandoffInvalid)
+		// The next finished sign-in sweeps it: a sealed token is not kept past its minute.
+		again, err := r.start(ClientWeb)
+		require.NoError(t, err)
+		require.NotEmpty(t, r.finish(again).Handoff)
+		require.Equal(t, 1, count(t, r.pool, "microsoft_login_handoffs"))
 	})
 	t.Run("a handoff moved to another user's row does not open", func(t *testing.T) {
 		r := newRig(t)
@@ -593,6 +610,9 @@ func TestAStartRefusesWhatItCannotBind(t *testing.T) {
 		{"a mobile sign-in on a script scheme", func(q *StartRequest) {
 			q.ClientKind, q.ClientChallenge, q.ReturnScheme = ClientMobile, challenge, "javascript"
 		}, CodeClientReturnInvalid},
+		{"a mobile sign-in on a dialer scheme", func(q *StartRequest) {
+			q.ClientKind, q.ClientChallenge, q.ReturnScheme = ClientMobile, challenge, "tel"
+		}, CodeClientReturnInvalid},
 		{"a mobile sign-in on https", func(q *StartRequest) {
 			q.ClientKind, q.ClientChallenge, q.ReturnScheme = ClientMobile, challenge, "https"
 		}, CodeClientReturnInvalid},
@@ -653,4 +673,53 @@ INSERT INTO elitea_identity.microsoft_login_states
 VALUES (decode(repeat('ab', 32), 'hex'), 1, 1, gen_random_uuid(), 'outlook', 'custom', 'desktop',
   repeat('a', 64), 'https://x/y', 'https://login.microsoftonline.com/t', 's', '\x00', 'l', now())`)
 	require.Error(t, err)
+}
+
+func TestParallelStartsCannotExceedThePerPersonCap(t *testing.T) {
+	r := newRig(t)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	succeeded, refused := 0, 0
+	for i := 0; i < 3*MaxLiveSignIns; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := r.start(ClientWeb)
+			mu.Lock()
+			defer mu.Unlock()
+			var refusal *Refusal
+			switch {
+			case err == nil:
+				succeeded++
+			case errors.As(err, &refusal) && refusal.Code == CodeTooManySignIns:
+				refused++
+			default:
+				t.Errorf("unexpected: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	require.Equal(t, MaxLiveSignIns, succeeded)
+	require.Equal(t, 2*MaxLiveSignIns, refused)
+	require.Equal(t, MaxLiveSignIns, count(t, r.pool, "microsoft_login_states"))
+}
+
+func TestACredentialWhoseIdentityReadCannotBeBuiltIsRefusedAtTheStart(t *testing.T) {
+	r := newRig(t)
+	bad := Credential{ID: credentialID, Type: "dataverse", Data: map[string]any{
+		"client_id": fixtureClient, "client_secret": fixtureSecret, "tenant_id": fixtureTenant,
+		"url": "https://evil.example.com",
+	}}
+	r.creds.put(projectID, bad)
+	_, err := r.start(ClientWeb)
+	var refusal *Refusal
+	require.ErrorAs(t, err, &refusal)
+	require.Equal(t, CodeScopesInvalid, refusal.Code, "a Dataverse scope is derived from the org URL")
+	badMailbox := customOutlook()
+	badMailbox.Data["mailbox"] = "../../etc/passwd"
+	r.creds.put(projectID, badMailbox)
+	_, err = r.start(ClientWeb)
+	require.ErrorAs(t, err, &refusal)
+	require.Equal(t, CodeClientInvalid, refusal.Code)
+	require.Zero(t, count(t, r.pool, "microsoft_login_states"))
 }

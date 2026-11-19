@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"log/slog"
 	"regexp"
 	"strings"
 
@@ -162,6 +161,12 @@ func (s *Service) resolveClient(ctx context.Context, projectID int64, credential
 	}
 	out.authority = authority
 	out.scopes = withIdentityScopes(signIn)
+	// The identity read must be buildable (a Dataverse org URL, an Outlook mailbox): a
+	// credential that cannot be probed is refused here, not discovered at the first
+	// tool call after a sign-in that looked successful.
+	if _, err := descriptor.ProbeRequest(ctx, credential.Data, "probe"); err != nil {
+		return client{}, refuse(CodeClientInvalid, "The credential's "+descriptor.Label()+" settings are not valid: "+err.Error()+".")
+	}
 	return out, nil
 }
 
@@ -184,7 +189,7 @@ func (s *Service) resolveDefault(ctx context.Context, projectID int64, credentia
 	if errors.As(err, &refusal) {
 		return microsoftapps.Resolved{}, refuse(refusal.Code, refusal.Message)
 	}
-	slog.ErrorContext(ctx, "microsoft login: the Default app registry was not read", "type", credential.Type)
+	s.logger.ErrorContext(ctx, "microsoft login: the Default app registry was not read", "type", credential.Type, "project_id", projectID)
 	return microsoftapps.Resolved{}, err
 }
 

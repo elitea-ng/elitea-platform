@@ -32,7 +32,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -79,6 +78,11 @@ var (
 		"http": true, "https": true, "javascript": true, "data": true, "file": true, "blob": true,
 		"about": true, "ftp": true, "ws": true, "wss": true, "mailto": true, "intent": true,
 		"content": true, "vbscript": true,
+		// Schemes that dial, message or install: never a place for a handoff code.
+		"tel": true, "sms": true, "facetime": true, "facetime-audio": true, "itms-services": true,
+		"itms-apps": true, "market": true, "ssh": true, "sftp": true, "smb": true, "afp": true,
+		"vnc": true, "ldap": true, "ldaps": true, "chrome": true, "chrome-extension": true,
+		"moz-extension": true, "view-source": true, "ms-msdt": true, "search-ms": true,
 	}
 )
 
@@ -250,13 +254,6 @@ func (s *Service) Start(ctx context.Context, r StartRequest) (StartResult, error
 		return StartResult{}, err
 	}
 	now := s.now()
-	live, err := s.liveStates(ctx, r.UserID, now)
-	if err != nil {
-		return StartResult{}, err
-	}
-	if live >= MaxLiveSignIns {
-		return StartResult{}, refuse(CodeTooManySignIns, "Too many sign-ins are open. Finish or wait for them to expire, then try again.")
-	}
 	state, err := s.token(32)
 	if err != nil {
 		return StartResult{}, err
@@ -318,26 +315,23 @@ type Redeemed struct {
 	AccountName    string
 }
 
-// Redeem hands the starter the access token of a finished sign-in. The row is
-// deleted by the attempt, whatever the answer: a handoff is single use, and a wrong
-// proof burns it instead of leaving it to be guessed at.
+// Redeem hands the starter the access token of a finished sign-in. A handoff is
+// single use: the redemption deletes it. Every refusal is the same error.
 func (s *Service) Redeem(ctx context.Context, r RedeemRequest) (Redeemed, error) {
-	if r.UserID <= 0 || r.ProjectID <= 0 || r.Handoff == "" || len(r.Handoff) > 128 || r.State == "" || len(r.State) > 128 {
+	if r.UserID <= 0 || r.ProjectID <= 0 || r.Handoff == "" || len(r.Handoff) > 128 || r.State == "" || len(r.State) > 128 ||
+		len(r.ClientVerifier) > 128 {
 		return Redeemed{}, ErrHandoffInvalid
 	}
 	handoffDigest := digestOf("handoff", r.Handoff)
-	row, err := s.takeHandoff(ctx, handoffDigest)
+	stateDigest := digestOf("state", r.State)
+	// One statement checks everything and deletes the row: the person who started it,
+	// in this project, with this state and the verifier of its challenge, before it
+	// expires. A caller who is not all of those matches nothing and deletes nothing,
+	// so a stranger holding a handoff code cannot destroy the starter's sign-in; the
+	// 256-bit handoff code and verifier make guessing pointless.
+	row, err := s.takeHandoff(ctx, handoffDigest, stateDigest, r.UserID, r.ProjectID, challengeOf(r.ClientVerifier), s.now())
 	if err != nil {
 		return Redeemed{}, err
-	}
-	now := s.now()
-	stateDigest := digestOf("state", r.State)
-	switch {
-	case !now.Before(row.expiresAt),
-		row.userID != r.UserID, row.projectID != r.ProjectID,
-		subtle.ConstantTimeCompare(row.stateDigest[:], stateDigest[:]) != 1,
-		!challengeMatches(row.challenge, r.ClientVerifier):
-		return Redeemed{}, ErrHandoffInvalid
 	}
 	token, err := s.sealer.open(row.ciphertext, handoffAAD{
 		handoffDigest: handoffDigest, stateDigest: row.stateDigest, tid: row.tid, oid: row.oid,
@@ -353,18 +347,14 @@ func (s *Service) Redeem(ctx context.Context, r RedeemRequest) (Redeemed, error)
 	}, nil
 }
 
-// challengeMatches reports whether the verifier is the one the challenge was made
-// from. A web handoff has no challenge and takes no verifier.
-func challengeMatches(challenge, verifier string) bool {
-	if challenge == "" {
-		return verifier == ""
-	}
-	if verifier == "" || len(verifier) > 128 {
-		return false
+// challengeOf is the challenge a verifier answers: base64url(SHA-256(verifier)), or
+// the empty string for no verifier (a web sign-in has none).
+func challengeOf(verifier string) string {
+	if verifier == "" {
+		return ""
 	}
 	sum := sha256.Sum256([]byte(verifier))
-	want := base64.RawURLEncoding.EncodeToString(sum[:])
-	return subtle.ConstantTimeCompare([]byte(want), []byte(challenge)) == 1
+	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 // errNoRow keeps pgx out of the callers' signatures.

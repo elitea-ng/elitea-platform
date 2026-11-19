@@ -96,9 +96,14 @@ type redeemBody struct {
 
 type bodyKey struct{}
 
-// Decode reads the request body once, keeps it in the context and lets the
-// permission gate read the project from it (BodyProject).
-func Decode(kind string) func(http.Handler) http.Handler {
+// DecodeStart and DecodeRedeem read the request body once, keep it in the context and
+// let the permission gate read the project from it (BodyProject).
+var (
+	DecodeStart  = decode[startBody](func(b startBody) int64 { return b.ProjectID })
+	DecodeRedeem = decode[redeemBody](func(b redeemBody) int64 { return b.ProjectID })
+)
+
+func decode[T any](project func(T) int64) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			raw, err := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
@@ -108,18 +113,8 @@ func Decode(kind string) func(http.Handler) http.Handler {
 			}
 			decoder := json.NewDecoder(bytes.NewReader(raw))
 			decoder.DisallowUnknownFields()
-			var body any
-			var project int64
-			if kind == "start" {
-				var typed startBody
-				err = decoder.Decode(&typed)
-				body, project = typed, typed.ProjectID
-			} else {
-				var typed redeemBody
-				err = decoder.Decode(&typed)
-				body, project = typed, typed.ProjectID
-			}
-			if err != nil || project <= 0 {
+			var body T
+			if err := decoder.Decode(&body); err != nil || project(body) <= 0 {
 				writeError(w, http.StatusBadRequest, "invalid_request", "invalid request body")
 				return
 			}

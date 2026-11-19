@@ -123,11 +123,11 @@ func lifetime(value any) time.Duration {
 			seconds = parsed
 		}
 	}
-	d := time.Duration(seconds) * time.Second
-	if d <= 0 {
+	if !(seconds > 0) { // also false for NaN
 		return defaultAccessLifetime
 	}
-	return min(d, maxAccessLifetime)
+	// Clamp before converting: a float beyond the Duration range is undefined.
+	return time.Duration(min(seconds, maxAccessLifetime.Seconds())) * time.Second
 }
 
 // identity is who signed in, as Entra reported it.

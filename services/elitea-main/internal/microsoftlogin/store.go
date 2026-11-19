@@ -18,32 +18,14 @@ type stateRow struct {
 	b           binding
 }
 
-// liveStates counts the sign-ins a person has open.
-func (s *Service) liveStates(ctx context.Context, userID int64, now time.Time) (int, error) {
-	var count int
-	err := s.pool.QueryRow(ctx, `
-SELECT count(*) FROM elitea_identity.microsoft_login_states
- WHERE user_id = $1 AND consumed_at IS NULL AND expires_at > $2`, userID, now).Scan(&count)
-	if err != nil {
-		return 0, fmt.Errorf("microsoftlogin: count open sign-ins: %w", err)
-	}
-	return count, nil
-}
-
-// insertState stores a started sign-in. Dead rows are dead weight, so a start
-// removes expired states and handoffs (an hour past, so a callback that just missed
-// its window still finds its row to refuse it).
+// insertState stores a started sign-in, enforcing the per-person cap atomically: a
+// transaction takes an advisory lock keyed by the person, counts their open
+// sign-ins and inserts, so parallel starts cannot all read the same count. It also
+// removes what is dead: handoffs past their 60 seconds, and states an hour past
+// their expiry (so a callback that just missed its window still finds its row to
+// refuse it).
 func (s *Service) insertState(ctx context.Context, digest [32]byte, b binding, shape clientShape,
 	redirectURI string, sealed []byte, expires, now time.Time) error {
-	horizon := now.Add(-time.Hour)
-	if _, err := s.pool.Exec(ctx, `
-DELETE FROM elitea_identity.microsoft_login_states WHERE expires_at < $1`, horizon); err != nil {
-		return fmt.Errorf("microsoftlogin: prune sign-in states: %w", err)
-	}
-	if _, err := s.pool.Exec(ctx, `
-DELETE FROM elitea_identity.microsoft_login_handoffs WHERE expires_at < $1`, horizon); err != nil {
-		return fmt.Errorf("microsoftlogin: prune handoffs: %w", err)
-	}
 	var port *int
 	if shape.port != 0 {
 		port = &shape.port
@@ -55,7 +37,30 @@ DELETE FROM elitea_identity.microsoft_login_handoffs WHERE expires_at < $1`, hor
 	if shape.challenge != "" {
 		challenge = &shape.challenge
 	}
-	if _, err := s.pool.Exec(ctx, `
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("microsoftlogin: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('elitea/microsoft-login/user/' || ($1::bigint)::text, 0))`, b.userID); err != nil {
+		return fmt.Errorf("microsoftlogin: lock the person's sign-ins: %w", err)
+	}
+	var live int
+	if err := tx.QueryRow(ctx, `
+SELECT count(*) FROM elitea_identity.microsoft_login_states
+ WHERE user_id = $1 AND consumed_at IS NULL AND expires_at > $2`, b.userID, now).Scan(&live); err != nil {
+		return fmt.Errorf("microsoftlogin: count open sign-ins: %w", err)
+	}
+	if live >= MaxLiveSignIns {
+		return refuse(CodeTooManySignIns, "Too many sign-ins are open. Finish or wait for them to expire, then try again.")
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM elitea_identity.microsoft_login_states WHERE expires_at < $1`, now.Add(-time.Hour)); err != nil {
+		return fmt.Errorf("microsoftlogin: prune sign-in states: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM elitea_identity.microsoft_login_handoffs WHERE expires_at < $1`, now); err != nil {
+		return fmt.Errorf("microsoftlogin: prune handoffs: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
 INSERT INTO elitea_identity.microsoft_login_states
     (state_digest, user_id, tenant_project_id, credential_id, credential_type, app_ref, client_kind,
      client_challenge, return_port, return_scheme, client_id_fingerprint, redirect_uri, authority, scope,
@@ -64,6 +69,9 @@ VALUES ($1, $2, $3, $4::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 
 		digest[:], b.userID, b.projectID, b.credentialID, b.credType, b.appRef, b.clientKind,
 		challenge, port, scheme, b.fingerprint, redirectURI, b.authority, b.scope,
 		sealed, KeyLabel, expires, now); err != nil {
+		return fmt.Errorf("microsoftlogin: store the sign-in state: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("microsoftlogin: store the sign-in state: %w", err)
 	}
 	return nil
@@ -137,6 +145,11 @@ func (s *Service) insertHandoff(ctx context.Context, handoffDigest [32]byte, row
 	if row.challenge != "" {
 		challenge = &row.challenge
 	}
+	// A sealed token is useless a second after its handoff expires: a quiet deployment
+	// must not keep it until someone else starts a sign-in.
+	if _, err := s.pool.Exec(ctx, `DELETE FROM elitea_identity.microsoft_login_handoffs WHERE expires_at < $1`, now); err != nil {
+		return fmt.Errorf("microsoftlogin: prune handoffs: %w", err)
+	}
 	if _, err := s.pool.Exec(ctx, `
 INSERT INTO elitea_identity.microsoft_login_handoffs
     (handoff_digest, state_digest, user_id, tenant_project_id, credential_id, credential_type, app_ref,
@@ -151,29 +164,38 @@ VALUES ($1, $2, $3, $4, $5::uuid, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 
 	return nil
 }
 
-// takeHandoff deletes the row and returns it: the attempt itself is the single use.
-func (s *Service) takeHandoff(ctx context.Context, digest [32]byte) (handoffRow, error) {
+// takeHandoff deletes the row and returns it, only when the caller is the starter in
+// the project with the state and the verifier's challenge, and the row has not
+// expired. The attempt that matches is the single use; one that does not match
+// leaves the row alone.
+func (s *Service) takeHandoff(ctx context.Context, digest, stateDigest [32]byte, userID, projectID int64, challenge string, now time.Time) (handoffRow, error) {
 	row := handoffRow{}
 	var state []byte
-	var challenge *string
+	var rowChallenge *string
+	var want *string
+	if challenge != "" {
+		want = &challenge
+	}
 	err := s.pool.QueryRow(ctx, `
 DELETE FROM elitea_identity.microsoft_login_handoffs
- WHERE handoff_digest = $1
+ WHERE handoff_digest = $1 AND state_digest = $2 AND user_id = $3 AND tenant_project_id = $4
+   AND expires_at > $5 AND client_challenge IS NOT DISTINCT FROM $6
 RETURNING state_digest, user_id, tenant_project_id, credential_id::text, credential_type, app_ref, client_kind,
           client_challenge, client_id_fingerprint, authority, scope, entra_tid, entra_oid, account_name,
-          access_token_ciphertext, access_expires_at, expires_at`, digest[:]).Scan(
+          access_token_ciphertext, access_expires_at, expires_at`,
+		digest[:], stateDigest[:], userID, projectID, now, want).Scan(
 		&state, &row.userID, &row.projectID, &row.credentialID, &row.credType, &row.appRef, &row.clientKind,
-		&challenge, &row.fingerprint, &row.authority, &row.scope, &row.tid, &row.oid, &row.accountName,
+		&rowChallenge, &row.fingerprint, &row.authority, &row.scope, &row.tid, &row.oid, &row.accountName,
 		&row.ciphertext, &row.accessExpiresAt, &row.expiresAt)
 	if errors.Is(err, errNoRow) {
 		return handoffRow{}, ErrHandoffInvalid
 	}
 	if err != nil {
-		return handoffRow{}, fmt.Errorf("microsoftlogin: take the handoff: %w", err)
+		return handoffRow{}, fmt.Errorf("microsoft login: take the handoff: %w", err)
 	}
 	copy(row.stateDigest[:], state)
-	if challenge != nil {
-		row.challenge = *challenge
+	if rowChallenge != nil {
+		row.challenge = *rowChallenge
 	}
 	row.expiresAt, row.accessExpiresAt = row.expiresAt.UTC(), row.accessExpiresAt.UTC()
 	return row, nil

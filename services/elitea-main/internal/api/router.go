@@ -3784,9 +3784,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			microsoftLoginGate := apimw.RequireResolvedPermissionsForProject(
 				coreResolver, platformauth.PermissionModeDefault,
 				v2microsoftlogin.BodyProject, v2configs.CurrentConfigurationUpdatePermission)
-			r.With(v2microsoftlogin.Decode("start"), microsoftLoginGate).
+			r.With(v2microsoftlogin.DecodeStart, microsoftLoginGate).
 				Post(v2microsoftlogin.StartPath, microsoftLogin.Start)
-			r.With(v2microsoftlogin.Decode("redeem"), microsoftLoginGate).
+			r.With(v2microsoftlogin.DecodeRedeem, microsoftLoginGate).
 				Post(v2microsoftlogin.RedeemPath, microsoftLogin.Redeem)
 
 			// === Secrets ===

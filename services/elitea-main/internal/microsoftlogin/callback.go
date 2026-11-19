@@ -208,7 +208,10 @@ func (s *Service) probe(ctx context.Context, c client, token string) string {
 	ctx, cancel := context.WithTimeout(ctx, exchangeTimeout)
 	defer cancel()
 	request, err := c.descriptor.ProbeRequest(ctx, c.data, token)
-	if err != nil || request == nil {
+	if err != nil {
+		return ErrInternal
+	}
+	if request == nil {
 		return ""
 	}
 	response, err := s.do(request)
