@@ -774,12 +774,35 @@ impl GitCheckpoints {
                 // unpruned forever: one older than STALE_LOCK_AGE is taken
                 // over (removed, then locked afresh, so two pruners racing
                 // for it still exclude each other).
-                let stale = std::fs::metadata(&lock)
-                    .and_then(|meta| meta.modified())
-                    .ok()
-                    .and_then(|modified| modified.elapsed().ok())
-                    .is_some_and(|age| age >= STALE_LOCK_AGE);
-                if !stale || std::fs::remove_file(&lock).is_err() || take().is_err() {
+                // The takeover moves the stale lock aside under a unique name
+                // and judges THAT file, so a racing pruner that already
+                // replaced it cannot have a fresh lock deleted: a moved file
+                // that turns out fresh is put back and the ref left alone.
+                let aged = |path: &Path| {
+                    std::fs::metadata(path)
+                        .and_then(|meta| meta.modified())
+                        .ok()
+                        .and_then(|modified| modified.elapsed().ok())
+                        .is_some_and(|age| age >= STALE_LOCK_AGE)
+                };
+                let mut aside = lock.clone().into_os_string();
+                aside.push(format!(
+                    ".stale-{}-{}",
+                    std::process::id(),
+                    TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+                ));
+                let aside = PathBuf::from(aside);
+                if !aged(&lock) || std::fs::rename(&lock, &aside).is_err() {
+                    tracing::warn!(lock = %lock.display(), "a checkpoint ref is locked, not pruned");
+                    return Pruned::Busy;
+                }
+                if !aged(&aside) {
+                    let _ = std::fs::rename(&aside, &lock);
+                    tracing::warn!(lock = %lock.display(), "a checkpoint ref is locked, not pruned");
+                    return Pruned::Busy;
+                }
+                let _ = std::fs::remove_file(&aside);
+                if take().is_err() {
                     tracing::warn!(lock = %lock.display(), "a checkpoint ref is locked, not pruned");
                     return Pruned::Busy;
                 }

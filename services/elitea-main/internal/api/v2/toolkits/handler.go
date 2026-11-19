@@ -1233,6 +1233,11 @@ const (
 // parseInstanceTypes reads the repeatable `type` parameter: blank values are
 // skipped, duplicates dropped, and a count or a value out of bounds is a 400.
 func parseInstanceTypes(raw []string) ([]string, error) {
+	// Counted before blanks and duplicates are dropped, as the contract's
+	// maxItems is: a long run of repeats is refused, not absorbed.
+	if len(raw) > maxInstanceTypeValues {
+		return nil, fmt.Errorf("at most %d type values", maxInstanceTypeValues)
+	}
 	var types []string
 	seen := map[string]bool{}
 	for _, value := range raw {
@@ -1248,9 +1253,6 @@ func parseInstanceTypes(raw []string) ([]string, error) {
 		}
 		seen[value] = true
 		types = append(types, value)
-	}
-	if len(types) > maxInstanceTypeValues {
-		return nil, fmt.Errorf("at most %d type values", maxInstanceTypeValues)
 	}
 	return types, nil
 }

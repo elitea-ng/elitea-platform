@@ -223,15 +223,21 @@ func sharepointSite(data map[string]any) (site *url.URL, tenant string, ok bool)
 var entraTenantPattern = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$`)
 
 // sharepointExplicitTenant reads the tenant the credential names itself
-// (`tenant_id`, or `tenant`), which lets the check run without a site (#2251).
+// (`tenant_id`), which lets the check run without a site (#2251).
 // An empty answer means none is named; ok is false for a value that is not a
 // tenant, so a malformed one is unsupported rather than sent.
 func sharepointExplicitTenant(data map[string]any) (tenant string, named, ok bool) {
-	raw := strings.TrimSpace(firstStrVal(data, "tenant_id", "tenant"))
+	raw := strings.TrimSpace(strVal(data, "tenant_id"))
 	if raw == "" {
 		return "", false, true
 	}
 	if !entraTenantPattern.MatchString(raw) || strings.Contains(raw, "..") {
+		return "", true, false
+	}
+	// The alias tenants cannot mint an app-only token: a valid app would be
+	// reported as refused.
+	switch strings.ToLower(raw) {
+	case "common", "organizations", "consumers":
 		return "", true, false
 	}
 	return raw, true, true
@@ -333,7 +339,8 @@ func buildOpenAPIMint(data map[string]any) (mintRequest, authorizeOutcome) {
 	}
 	request := mintRequest{url: parsed.String(), contentType: "application/x-www-form-urlencoded"}
 	if strings.EqualFold(strings.TrimSpace(strVal(data, "method")), "basic") {
-		request.basicAuth, request.basicUser, request.basicPass = true, clientID, clientSecret
+		// RFC 6749 section 2.3.1: both are form-urlencoded before the header.
+		request.basicAuth, request.basicUser, request.basicPass = true, url.QueryEscape(clientID), url.QueryEscape(clientSecret)
 	} else {
 		form.Set("client_id", clientID)
 		form.Set("client_secret", clientSecret)

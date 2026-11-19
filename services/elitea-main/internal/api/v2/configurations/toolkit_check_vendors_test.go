@@ -458,7 +458,7 @@ func TestSharepointExplicitTenantWinsOverTheSiteHostAndStillRefusesABadSecret(t 
 	checker := handler.NewToolkitConnectionChecker(allowAnyHost())
 
 	outcome := checker.CheckToolkit(context.Background(), "sharepoint", map[string]any{
-		"client_id": "a", "client_secret": "b", "tenant": "fabrikam.com", "site_url": "https://contoso.sharepoint.com",
+		"client_id": "a", "client_secret": "b", "tenant_id": "fabrikam.com", "site_url": "https://contoso.sharepoint.com",
 	})
 
 	if outcome.Reason != handler.ToolkitCheckReasonAuthFailed {
@@ -470,7 +470,7 @@ func TestSharepointExplicitTenantWinsOverTheSiteHostAndStillRefusesABadSecret(t 
 }
 
 func TestSharepointRefusesATenantThatIsNotOneBeforeDialling(t *testing.T) {
-	for _, tenant := range []string{"a/b", "../x", "x..y", "https://evil.example", "a b", "-lead"} {
+	for _, tenant := range []string{"a/b", "../x", "x..y", "https://evil.example", "a b", "-lead", "common", "Organizations", "consumers"} {
 		login, graph := sharepointStubs(t, http.StatusOK, `{"access_token":"x"}`, http.StatusOK)
 		checker := handler.NewToolkitConnectionChecker(allowAnyHost())
 
@@ -529,7 +529,7 @@ func TestOpenAPIClientCredentialsMintsAndAnswersOkWithTheClientInTheBody(t *test
 		form.Get("client_secret") != "sec" || form.Get("scope") != "api://x/.default" {
 		t.Fatalf("the grant is wrong: %v %v", form, err)
 	}
-	if strings.Contains(outcome.Message, "sec") && strings.Contains(outcome.Message, "cid:") {
+	if strings.Contains(outcome.Message, "sec") || strings.Contains(outcome.Message, "cid") {
 		t.Fatalf("credential material leaked into the message: %q", outcome.Message)
 	}
 }
