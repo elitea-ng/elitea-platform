@@ -725,6 +725,8 @@ impl GitCheckpoints {
             self.refs(),
             self.repo.common_dir().join("packed-refs"),
             self.repo.common_dir().join("packed-refs.lock"),
+            // git rewrites packed-refs through a `packed-refs.new` temp file.
+            self.repo.common_dir().join("packed-refs.new"),
         ];
         for (index, info) in all.iter().enumerate() {
             let newest = index + 1 == all.len();
@@ -1374,8 +1376,11 @@ impl CopyCheckpoints {
 mod tests {
     use std::path::Path;
     use std::process::Command;
+    use std::time::Duration;
 
-    use super::{CheckpointLimits, Checkpoints, REF_PREFIX};
+    use super::{
+        CheckpointLimits, Checkpoints, GitCheckpoints, Pruned, REF_PREFIX, STALE_LOCK_AGE,
+    };
     use crate::error::ErrorCode;
     use crate::workspace::{Intent, Workspace};
 
