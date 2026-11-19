@@ -13,10 +13,10 @@ use serde_json::{Map, Value, json};
 
 use super::families::github::client::{
     GitHubApi, GitHubClient, GitHubClientError, GitHubClientErrorCode, GitHubCodeSearchQuery,
-    GitHubCommitQuery, GitHubFileScope, GitHubRequestKind, test_map_status, test_project_branches,
-    test_project_issue_detail, test_project_issue_list, test_project_issue_search,
-    test_project_text_file, test_project_tree_files, test_project_tree_sha, test_project_user,
-    test_validate_file_path,
+    GitHubCommitQuery, GitHubFileScope, GitHubRequestKind, GitHubWorkflowRunsQuery,
+    test_map_status, test_project_branches, test_project_issue_detail, test_project_issue_list,
+    test_project_issue_search, test_project_text_file, test_project_tree_files,
+    test_project_tree_sha, test_project_user, test_validate_file_path,
 };
 use super::families::github::code_search::{
     test_project_code_search, test_scope_code_search_query,
@@ -35,7 +35,9 @@ use super::families::github::pull_requests::{
 use super::families::github::tools::{
     GitHubToolsetErrorCode, build_github_toolset, test_build_with_api,
 };
-use super::families::github::workflow_runs::test_project_workflow_status;
+use super::families::github::workflow_runs::{
+    test_project_workflow_runs, test_project_workflow_status,
+};
 use super::materialize::materialize_configured_toolsets_with_tokens_and_authorization;
 use super::policy::ToolAdmissionPolicy;
 use super::snapshot::FrozenToolSnapshot;
@@ -2149,7 +2151,7 @@ async fn an_empty_selection_serves_every_ported_tool_and_a_wholly_unported_one_i
     let mut expected = super::families::github::tools::test_served_names();
     expected.sort();
     assert_eq!(names, expected);
-    assert_eq!(names.len(), 37);
+    assert_eq!(names.len(), 38);
 
     // generic_github_api_call (a PyGithub method dispatcher) and the index
     // tools are not served by this family.
@@ -2383,6 +2385,7 @@ struct FixtureGitHubApi {
     commit_calls: Mutex<Vec<String>>,
     code_search_calls: Mutex<Vec<String>>,
     workflow_status_calls: Mutex<Vec<String>>,
+    workflow_runs_calls: Mutex<Vec<String>>,
     project_calls: Mutex<Vec<String>>,
 }
 
@@ -2596,6 +2599,26 @@ impl GitHubApi for FixtureGitHubApi {
         Ok(json!({"id": run_id, "jobs": []}))
     }
 
+    async fn get_workflow_runs(
+        &self,
+        query: GitHubWorkflowRunsQuery,
+    ) -> Result<Value, GitHubClientError> {
+        let part = |value: &Option<String>| value.clone().unwrap_or_else(|| "-".to_owned());
+        self.workflow_runs_calls
+            .lock()
+            .expect("workflow-runs calls fixture lock")
+            .push(format!(
+                "{}:{}:{}:{}:{}:{}",
+                query.repository.as_deref().unwrap_or("default"),
+                part(&query.workflow_id),
+                part(&query.branch),
+                part(&query.status),
+                part(&query.event),
+                query.limit
+            ));
+        Ok(json!({"repository": "x", "count": 0, "runs": []}))
+    }
+
     async fn search_project_issues(
         &self,
         board_repository: &str,
@@ -2672,7 +2695,7 @@ async fn every_tool_keeps_the_sdk_contract() {
     .expect("native GitHub toolset");
     let readonly: Arc<dyn ReadonlyContext> = context();
     let tools = toolset.tools(readonly).await.expect("native GitHub tools");
-    assert_eq!(tools.len(), 37);
+    assert_eq!(tools.len(), 38);
     super::sdk_conformance::assert_sdk_conformance("github", &tools);
 }
 
@@ -2826,4 +2849,354 @@ fn a_blank_base_url_is_refused_by_name_not_defaulted() {
         panic!("an absent base URL was accepted");
     };
     assert_eq!(error.fault(), GitHubConfigFault::BaseUrl);
+}
+
+// -- get_workflow_runs (upstream SDK main, added after the 2026-08-07 pin;
+// S10 #2265) ---------------------------------------------------------------
+
+/// Answers the GitHub Actions routes `get_workflow_runs` walks by exact
+/// path, recording what it was asked for (path and query).
+struct RunsTransport {
+    routes: BTreeMap<String, (u16, Value)>,
+    seen: Mutex<Vec<String>>,
+}
+
+impl RunsTransport {
+    fn new(routes: &[(&str, u16, Value)]) -> Arc<Self> {
+        Arc::new(Self {
+            routes: routes
+                .iter()
+                .map(|(path, status, body)| {
+                    (
+                        format!("/api/v3/repos/EliteaAI/elitea-platform/actions/{path}"),
+                        (*status, body.clone()),
+                    )
+                })
+                .collect(),
+            seen: Mutex::new(Vec::new()),
+        })
+    }
+
+    fn seen(&self) -> Vec<String> {
+        self.seen.lock().expect("seen").clone()
+    }
+}
+
+#[async_trait]
+impl elitea_connectors::transport::Transport for RunsTransport {
+    async fn execute(
+        &self,
+        request: elitea_connectors::transport::Request,
+    ) -> Result<elitea_connectors::transport::Response, elitea_connectors::transport::TransportError>
+    {
+        let url = request.url();
+        let path = url.path().to_owned();
+        self.seen.lock().expect("seen").push(match url.query() {
+            Some(query) => format!("{}?{query}", path.rsplit("/actions/").next().unwrap_or("")),
+            None => path.rsplit("/actions/").next().unwrap_or("").to_owned(),
+        });
+        let (status, body) = self
+            .routes
+            .get(&path)
+            .unwrap_or_else(|| panic!("unexpected request {path}"));
+        Ok(elitea_connectors::transport::Response::from_bytes(
+            StatusCode::from_u16(*status).expect("status"),
+            HeaderMap::new(),
+            body.to_string().into_bytes(),
+        ))
+    }
+}
+
+fn runs_client(transport: &Arc<RunsTransport>) -> Arc<dyn GitHubApi> {
+    Arc::new(
+        GitHubClient::test_with_transport(token_config(&[]), transport.clone()).expect("client"),
+    )
+}
+
+fn runs_query(limit: usize) -> GitHubWorkflowRunsQuery {
+    GitHubWorkflowRunsQuery {
+        repository: None,
+        workflow_id: None,
+        branch: None,
+        status: None,
+        event: None,
+        limit,
+    }
+}
+
+fn run_json(id: u64, conclusion: Value) -> Value {
+    json!({
+        "id": id, "name": "CI", "workflow_id": 77, "run_number": id - 8000, "event": "push",
+        "status": "completed", "conclusion": conclusion,
+        "created_at": "2026-11-17T10:00:00Z", "updated_at": "2026-11-17T10:05:30Z",
+        "head_branch": "main", "head_sha": "a".repeat(40),
+        "html_url": format!("https://github.example.test/EliteaAI/elitea-platform/actions/runs/{id}"),
+        "actor": {"login": "must-not-project"}
+    })
+}
+
+#[tokio::test]
+async fn workflow_runs_list_the_repository_newest_first_up_to_the_limit() {
+    let transport = RunsTransport::new(&[(
+        "runs",
+        200,
+        json!({"total_count": 3, "workflow_runs": [
+            run_json(9003, json!("success")), run_json(9002, json!("failure")), run_json(9001, Value::Null)
+        ]}),
+    )]);
+    let api = runs_client(&transport);
+    let listed = api
+        .get_workflow_runs(GitHubWorkflowRunsQuery {
+            branch: Some("main".to_owned()),
+            status: Some("completed".to_owned()),
+            event: Some("push".to_owned()),
+            ..runs_query(2)
+        })
+        .await
+        .expect("runs");
+    assert_eq!(
+        listed,
+        json!({"repository": "EliteaAI/elitea-platform", "count": 2, "runs": [
+            {"id": 9003, "name": "CI", "workflow_id": 77, "run_number": 1003, "event": "push",
+             "status": "completed", "conclusion": "success",
+             "created_at": "2026-11-17T10:00:00+00:00", "updated_at": "2026-11-17T10:05:30+00:00",
+             "head_branch": "main", "head_sha": "a".repeat(40),
+             "url": "https://github.example.test/EliteaAI/elitea-platform/actions/runs/9003"},
+            {"id": 9002, "name": "CI", "workflow_id": 77, "run_number": 1002, "event": "push",
+             "status": "completed", "conclusion": "failure",
+             "created_at": "2026-11-17T10:00:00+00:00", "updated_at": "2026-11-17T10:05:30+00:00",
+             "head_branch": "main", "head_sha": "a".repeat(40),
+             "url": "https://github.example.test/EliteaAI/elitea-platform/actions/runs/9002"}
+        ]})
+    );
+    assert!(!listed.to_string().contains("must-not-project"));
+    assert_eq!(
+        transport.seen(),
+        ["runs?branch=main&status=completed&event=push&per_page=2"]
+    );
+}
+
+#[tokio::test]
+async fn workflow_runs_of_one_workflow_resolve_a_file_name_then_an_id() {
+    let transport = RunsTransport::new(&[
+        ("workflows/build.yml", 200, json!({"id": 77, "name": "CI"})),
+        (
+            "workflows/77/runs",
+            200,
+            json!({"workflow_runs": [run_json(9001, json!("success"))]}),
+        ),
+        ("workflows/1234567", 404, json!({"message": "Not Found"})),
+        (
+            "workflows",
+            200,
+            json!({"total_count": 2, "workflows": [{"id": 5}, {"id": 1_234_567}]}),
+        ),
+        ("workflows/1234567/runs", 200, json!({"workflow_runs": []})),
+        ("workflows/ghost.yml", 404, json!({"message": "Not Found"})),
+    ]);
+    let api = runs_client(&transport);
+    let by_name = api
+        .get_workflow_runs(GitHubWorkflowRunsQuery {
+            workflow_id: Some("build.yml".to_owned()),
+            ..runs_query(10)
+        })
+        .await
+        .expect("by file name");
+    assert_eq!(by_name["count"], 1);
+    // A numeric ID the direct lookup misses is found by scanning the list.
+    let by_id = api
+        .get_workflow_runs(GitHubWorkflowRunsQuery {
+            workflow_id: Some("1234567".to_owned()),
+            ..runs_query(10)
+        })
+        .await
+        .expect("by id");
+    assert_eq!(by_id["count"], 0);
+    assert_eq!(by_id["runs"], json!([]));
+    // A name nothing matches is the SDK's error object, not a failure.
+    let missing = api
+        .get_workflow_runs(GitHubWorkflowRunsQuery {
+            workflow_id: Some("ghost.yml".to_owned()),
+            ..runs_query(10)
+        })
+        .await
+        .expect("not found is an answer");
+    assert_eq!(
+        missing,
+        json!({"error": true, "message": "Workflow with ID or filename 'ghost.yml' not found in repository EliteaAI/elitea-platform"})
+    );
+    // A path-shaped name never reaches GitHub.
+    let nested = api
+        .get_workflow_runs(GitHubWorkflowRunsQuery {
+            workflow_id: Some("../../x".to_owned()),
+            ..runs_query(10)
+        })
+        .await
+        .expect("refused as not found");
+    assert_eq!(nested["error"], true);
+    assert_eq!(
+        transport.seen(),
+        [
+            "workflows/build.yml",
+            "workflows/77/runs?per_page=10",
+            "workflows/1234567",
+            "workflows?per_page=100&page=1",
+            "workflows/1234567/runs?per_page=10",
+            "workflows/ghost.yml",
+            "workflows?per_page=100&page=1",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn workflow_runs_name_another_repository_and_map_provider_failures() {
+    for (status, code) in [
+        (401, GitHubClientErrorCode::Authentication),
+        (403, GitHubClientErrorCode::Authorization),
+        (404, GitHubClientErrorCode::NotFound),
+        (429, GitHubClientErrorCode::RateLimited),
+        (500, GitHubClientErrorCode::DependencyUnavailable),
+    ] {
+        let transport = RunsTransport::new(&[("runs", status, json!({"message": "no"}))]);
+        let error = runs_client(&transport)
+            .get_workflow_runs(runs_query(10))
+            .await
+            .expect_err("provider failure");
+        assert_eq!(error.code(), code, "{status}");
+    }
+    for hostile in [
+        json!({"workflow_runs": "not a list"}),
+        json!({"total_count": 1}),
+        json!({"workflow_runs": [{"name": "no id"}]}),
+        json!({"workflow_runs": [{"id": 1, "workflow_id": 2, "run_number": 3, "created_at": "yesterday"}]}),
+    ] {
+        let transport = RunsTransport::new(&[("runs", 200, hostile.clone())]);
+        let error = runs_client(&transport)
+            .get_workflow_runs(runs_query(10))
+            .await
+            .expect_err("hostile body");
+        assert_eq!(
+            error.code(),
+            GitHubClientErrorCode::InvalidResponse,
+            "{hostile}"
+        );
+    }
+    // An empty repository answers an empty list.
+    let transport =
+        RunsTransport::new(&[("runs", 200, json!({"total_count": 0, "workflow_runs": []}))]);
+    let empty = runs_client(&transport)
+        .get_workflow_runs(runs_query(10))
+        .await
+        .expect("empty");
+    assert_eq!(
+        empty,
+        json!({"repository": "EliteaAI/elitea-platform", "count": 0, "runs": []})
+    );
+    // Another repository, named per call, and a malformed one is refused.
+    let mut routes = BTreeMap::new();
+    routes.insert(
+        "/api/v3/repos/EliteaAI/other/actions/runs".to_owned(),
+        (200, json!({"workflow_runs": []})),
+    );
+    let other = Arc::new(RunsTransport {
+        routes,
+        seen: Mutex::new(Vec::new()),
+    });
+    let api = runs_client(&other);
+    let listed = api
+        .get_workflow_runs(GitHubWorkflowRunsQuery {
+            repository: Some("EliteaAI/other".to_owned()),
+            ..runs_query(10)
+        })
+        .await
+        .expect("other repository");
+    assert_eq!(listed["repository"], "EliteaAI/other");
+    for bad in [0, 101] {
+        assert!(api.get_workflow_runs(runs_query(bad)).await.is_err());
+    }
+    assert!(
+        api.get_workflow_runs(GitHubWorkflowRunsQuery {
+            repository: Some("not a repository".to_owned()),
+            ..runs_query(10)
+        })
+        .await
+        .is_err()
+    );
+}
+
+#[test]
+fn workflow_runs_projection_fills_missing_fields_with_null() {
+    let projected = test_project_workflow_runs(
+        "EliteaAI/elitea-platform",
+        &json!({"workflow_runs": [{"id": 5, "workflow_id": 6, "run_number": 0}]}),
+        10,
+    )
+    .expect("sparse run");
+    assert_eq!(
+        projected["runs"][0],
+        json!({"id": 5, "name": null, "workflow_id": 6, "run_number": 0, "event": null,
+               "status": null, "conclusion": null, "created_at": null, "updated_at": null,
+               "head_branch": null, "head_sha": null, "url": null})
+    );
+}
+
+#[tokio::test]
+async fn the_workflow_runs_tool_takes_the_sdk_arguments_and_defaults() {
+    let client = Arc::new(FixtureGitHubApi::default());
+    let selected = vec!["get_workflow_runs".to_owned()];
+    let toolset = test_build_with_api(
+        "team-github",
+        "EliteaAI/elitea-platform",
+        &selected,
+        &policy(&[]),
+        &(client.clone() as Arc<dyn GitHubApi>),
+    )
+    .expect("workflow-runs toolset");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tools = toolset.tools(readonly).await.expect("tools");
+    let tool = tools
+        .iter()
+        .find(|tool| tool.name() == "get_workflow_runs")
+        .expect("workflow-runs tool");
+    assert!(tool.is_read_only());
+    let schema = tool.parameters_schema().expect("schema");
+    assert_eq!(schema["properties"]["limit"]["default"], 10);
+    assert_eq!(schema["properties"]["limit"]["maximum"], 100);
+    assert_eq!(schema["required"], json!([]));
+
+    tool.execute(context(), json!({})).await.expect("defaults");
+    tool.execute(
+        context(),
+        json!({"workflow_id": "build.yml", "branch": "main", "status": "failure",
+               "event": "push", "limit": 25, "repo_name": "EliteaAI/other"}),
+    )
+    .await
+    .expect("every argument");
+    tool.execute(context(), json!({"limit": null, "branch": null}))
+        .await
+        .expect("nulls are the defaults");
+    assert_eq!(
+        client
+            .workflow_runs_calls
+            .lock()
+            .expect("workflow-runs calls fixture lock")
+            .as_slice(),
+        [
+            "default:-:-:-:-:10",
+            "EliteaAI/other:build.yml:main:failure:push:25",
+            "default:-:-:-:-:10",
+        ]
+    );
+    for arguments in [
+        json!({"limit": 0}),
+        json!({"limit": 101}),
+        json!({"limit": "many"}),
+        json!({"branch": 7}),
+        json!({"run_id": "9001"}),
+    ] {
+        assert!(
+            tool.execute(context(), arguments.clone()).await.is_err(),
+            "{arguments}"
+        );
+    }
 }

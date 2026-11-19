@@ -17,7 +17,7 @@ use crate::toolkits::policy::ToolAdmissionPolicy;
 
 use super::client::{
     GitHubApi, GitHubClient, GitHubClientError, GitHubCodeSearchQuery, GitHubCommitQuery,
-    GitHubFileScope, validate_repository,
+    GitHubFileScope, GitHubWorkflowRunsQuery, validate_repository,
 };
 use super::config::{GitHubToolkitConfig, GitHubToolkitConfigError};
 use super::writes::{GitHubWriteTool, WriteKind};
@@ -44,6 +44,7 @@ const SEARCH_CODE: &str = "search_code";
 const GET_WORKFLOW_STATUS: &str = "get_workflow_status";
 const LIST_PROJECT_ISSUES: &str = "list_project_issues";
 const GET_WORKFLOW_LOGS: &str = "get_workflow_logs";
+const GET_WORKFLOW_RUNS: &str = "get_workflow_runs";
 const SEARCH_PROJECT_ISSUES: &str = "search_project_issues";
 const MAX_DESCRIPTION_BYTES: usize = 1_000;
 
@@ -194,7 +195,7 @@ fn supported_selection(selected: &[Box<str>]) -> Result<(Vec<String>, usize), Gi
     Ok((supported, omitted_count))
 }
 
-const READ_NAMES: [&str; 22] = [
+const READ_NAMES: [&str; 23] = [
     GET_ME,
     LIST_BRANCHES,
     READ_FILE,
@@ -216,6 +217,7 @@ const READ_NAMES: [&str; 22] = [
     GET_WORKFLOW_STATUS,
     LIST_PROJECT_ISSUES,
     GET_WORKFLOW_LOGS,
+    GET_WORKFLOW_RUNS,
     SEARCH_PROJECT_ISSUES,
 ];
 
@@ -270,6 +272,7 @@ fn build_with_api(
             GET_WORKFLOW_STATUS => GitHubReadToolKind::GetWorkflowStatus,
             LIST_PROJECT_ISSUES => GitHubReadToolKind::ListProjectIssues,
             GET_WORKFLOW_LOGS => GitHubReadToolKind::GetWorkflowLogs,
+            GET_WORKFLOW_RUNS => GitHubReadToolKind::GetWorkflowRuns,
             SEARCH_PROJECT_ISSUES => GitHubReadToolKind::SearchProjectIssues,
             _ => {
                 return Err(GitHubToolsetError {
@@ -310,6 +313,7 @@ enum GitHubReadToolKind {
     GetWorkflowStatus,
     ListProjectIssues,
     GetWorkflowLogs,
+    GetWorkflowRuns,
     SearchProjectIssues,
 }
 
@@ -386,6 +390,9 @@ impl GitHubReadTool {
             GitHubReadToolKind::GetWorkflowLogs => {
                 "Inspect one GitHub Actions run: its jobs and steps with status, conclusion and each job's logs_url. The log text itself is not downloaded."
             }
+            GitHubReadToolKind::GetWorkflowRuns => {
+                "List recent GitHub Actions workflow runs, newest first, optionally of one workflow (ID or file name) and filtered by branch, status or conclusion, and event. Use it to find the run_id for get_workflow_status and get_workflow_logs. limit is 1-100 (default 10)."
+            }
             GitHubReadToolKind::SearchProjectIssues => {
                 "Search one GitHub Project V2 with GitHub's item filter (for example status:Todo or label:bug) and return up to 100 matching items with fields and bodies."
             }
@@ -426,6 +433,7 @@ impl Tool for GitHubReadTool {
             GitHubReadToolKind::GetWorkflowStatus => GET_WORKFLOW_STATUS,
             GitHubReadToolKind::ListProjectIssues => LIST_PROJECT_ISSUES,
             GitHubReadToolKind::GetWorkflowLogs => GET_WORKFLOW_LOGS,
+            GitHubReadToolKind::GetWorkflowRuns => GET_WORKFLOW_RUNS,
             GitHubReadToolKind::SearchProjectIssues => SEARCH_PROJECT_ISSUES,
         }
     }
@@ -466,6 +474,7 @@ impl Tool for GitHubReadTool {
             GitHubReadToolKind::GetWorkflowStatus | GitHubReadToolKind::GetWorkflowLogs => {
                 get_workflow_status_schema()
             }
+            GitHubReadToolKind::GetWorkflowRuns => get_workflow_runs_schema(),
             GitHubReadToolKind::ListProjectIssues => list_project_issues_schema(),
             GitHubReadToolKind::SearchProjectIssues => search_project_issues_schema(),
         })
@@ -554,6 +563,7 @@ impl Tool for GitHubReadTool {
                 self.execute_list_project_issues(arguments).await
             }
             GitHubReadToolKind::GetWorkflowLogs => self.execute_get_workflow_logs(arguments).await,
+            GitHubReadToolKind::GetWorkflowRuns => self.execute_get_workflow_runs(arguments).await,
             GitHubReadToolKind::SearchProjectIssues => {
                 self.execute_search_project_issues(arguments).await
             }
@@ -916,6 +926,28 @@ fn get_workflow_status_schema() -> Value {
             "repo_name": optional_string_schema(512, "Optional repository in owner/name form.")
         },
         "required": ["run_id"],
+        "additionalProperties": false
+    })
+}
+
+fn get_workflow_runs_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "workflow_id": optional_string_schema(256, "Optional workflow ID or file name (e.g., 'build.yml', '1234567') to list runs of. If None, lists runs of all workflows in the repository."),
+            "branch": optional_string_schema(256, "Only return runs for this branch."),
+            "status": optional_string_schema(64, "Only return runs with this status or conclusion (e.g., 'queued', 'in_progress', 'completed', 'success', 'failure', 'cancelled')."),
+            "event": optional_string_schema(64, "Only return runs triggered by this event (e.g., 'push', 'pull_request', 'workflow_dispatch', 'schedule')."),
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100,
+                "default": 10,
+                "description": "Maximum number of runs to return (1-100). Most recent first."
+            },
+            "repo_name": optional_string_schema(512, "Name of the repository (e.g., 'owner/repo'). If None, uses the default repository.")
+        },
+        "required": [],
         "additionalProperties": false
     })
 }
@@ -1341,6 +1373,45 @@ impl GitHubReadTool {
         let (run_id, repository) = workflow_run_arguments(arguments)?;
         self.client
             .get_workflow_logs(run_id, repository)
+            .await
+            .map_err(GitHubClientError::into_adk)
+    }
+
+    async fn execute_get_workflow_runs(
+        &self,
+        arguments: &Map<String, Value>,
+    ) -> adk_core::Result<Value> {
+        reject_unknown_keys(
+            arguments,
+            &[
+                "workflow_id",
+                "branch",
+                "status",
+                "event",
+                "limit",
+                "repo_name",
+            ],
+        )?;
+        let text = |key: &str, max_bytes: usize| {
+            optional_text(arguments, key, max_bytes).map(|value| value.map(ToOwned::to_owned))
+        };
+        // The SDK's `limit` is `ge=1, le=100` with a default of 10.
+        let limit = match arguments.get("limit") {
+            None | Some(Value::Null) => 10,
+            Some(value) => integer_value(value)
+                .and_then(|value| usize::try_from(value).ok())
+                .filter(|value| (1..=100).contains(value))
+                .ok_or_else(invalid_arguments)?,
+        };
+        self.client
+            .get_workflow_runs(GitHubWorkflowRunsQuery {
+                repository: text("repo_name", 512)?,
+                workflow_id: text("workflow_id", 256)?,
+                branch: text("branch", 256)?,
+                status: text("status", 64)?,
+                event: text("event", 64)?,
+                limit,
+            })
             .await
             .map_err(GitHubClientError::into_adk)
     }

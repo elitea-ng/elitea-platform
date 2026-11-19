@@ -46,7 +46,7 @@ use super::pull_requests::{
 };
 use super::workflow_runs::{
     MAX_WORKFLOW_JOBS, MAX_WORKFLOW_JOBS_RESPONSE_BYTES, project_workflow_logs,
-    project_workflow_status,
+    project_workflow_runs, project_workflow_status,
 };
 use crate::toolkits::families::connector_client::{IntoAdk, transport};
 
@@ -57,6 +57,9 @@ const MAX_TREE_ENTRIES: usize = 100_000;
 const MAX_PROJECTED_FILES: usize = 10_000;
 const MAX_PROJECTED_FILE_CHARS: usize = 200_000;
 const MAX_ISSUES: usize = 100;
+const MAX_WORKFLOW_RUNS: usize = 100;
+const MAX_WORKFLOW_RUNS_RESPONSE_BYTES: usize = 4 * 1_024 * 1_024;
+const MAX_WORKFLOW_LIST_PAGES: usize = 10;
 const MAX_ISSUE_OUTPUT_CHARS: usize = 200_000;
 const MAX_ISSUE_TITLE_BYTES: usize = 16 * 1_024;
 const MAX_ISSUE_BODY_BYTES: usize = 128 * 1_024;
@@ -292,6 +295,11 @@ pub(crate) trait GitHubApi: Send + Sync {
         run_id: u64,
         repository: Option<&str>,
     ) -> Result<Value, GitHubClientError>;
+
+    async fn get_workflow_runs(
+        &self,
+        query: GitHubWorkflowRunsQuery,
+    ) -> Result<Value, GitHubClientError>;
 }
 
 /// Selects one of the two immutable branches admitted with the toolkit.
@@ -310,6 +318,17 @@ pub(in crate::toolkits) struct GitHubCommitQuery {
     pub(in crate::toolkits) until: Option<String>,
     pub(in crate::toolkits) author: Option<String>,
     pub(in crate::toolkits) max_count: usize,
+}
+
+/// Validated, bounded query for the workflow-run list tool.
+pub(in crate::toolkits) struct GitHubWorkflowRunsQuery {
+    pub(in crate::toolkits) repository: Option<String>,
+    /// A workflow ID or file name; `None` lists the runs of every workflow.
+    pub(in crate::toolkits) workflow_id: Option<String>,
+    pub(in crate::toolkits) branch: Option<String>,
+    pub(in crate::toolkits) status: Option<String>,
+    pub(in crate::toolkits) event: Option<String>,
+    pub(in crate::toolkits) limit: usize,
 }
 
 /// Validated, bounded query for one GitHub code-search provider page.
@@ -735,6 +754,74 @@ impl GitHubApi for GitHubClient {
         project_workflow_logs(&run, &jobs, run_id)
     }
 
+    async fn get_workflow_runs(
+        &self,
+        query: GitHubWorkflowRunsQuery,
+    ) -> Result<Value, GitHubClientError> {
+        if query.limit == 0 || query.limit > MAX_WORKFLOW_RUNS {
+            return Err(invalid_input());
+        }
+        let repository = query
+            .repository
+            .as_deref()
+            .unwrap_or_else(|| self.rest.config().repository());
+        let (owner, name) = validate_repository(repository)?;
+        let full_name = format!("{owner}/{name}");
+        let mut filters: Vec<(&str, String)> = Vec::new();
+        for (key, value) in [
+            ("branch", &query.branch),
+            ("status", &query.status),
+            ("event", &query.event),
+        ] {
+            if let Some(value) = value.as_deref().filter(|value| !value.is_empty()) {
+                filters.push((key, value.to_owned()));
+            }
+        }
+        filters.push(("per_page", query.limit.to_string()));
+        let runs = if let Some(workflow) = query
+            .workflow_id
+            .as_deref()
+            .filter(|workflow| !workflow.is_empty())
+        {
+            // PyGithub `get_workflow(id_or_file_name)`, then a scan of the
+            // repository's workflows by numeric ID when that lookup fails.
+            let Some(workflow_id) = self.resolve_workflow(owner, name, workflow).await? else {
+                return Ok(json!({
+                    "error": true,
+                    "message": format!(
+                        "Workflow with ID or filename '{workflow}' not found in repository {full_name}"
+                    ),
+                }));
+            };
+            self.rest
+                .get_json(
+                    GitHubRequestKind::Repository,
+                    &[
+                        "repos",
+                        owner,
+                        name,
+                        "actions",
+                        "workflows",
+                        &workflow_id,
+                        "runs",
+                    ],
+                    &filters,
+                    MAX_WORKFLOW_RUNS_RESPONSE_BYTES,
+                )
+                .await?
+        } else {
+            self.rest
+                .get_json(
+                    GitHubRequestKind::Repository,
+                    &["repos", owner, name, "actions", "runs"],
+                    &filters,
+                    MAX_WORKFLOW_RUNS_RESPONSE_BYTES,
+                )
+                .await?
+        };
+        project_workflow_runs(&full_name, &runs, query.limit)
+    }
+
     async fn list_project_issues(
         &self,
         board_repository: &str,
@@ -776,6 +863,66 @@ impl GitHubApi for GitHubClient {
 }
 
 impl GitHubClient {
+    /// The numeric ID of the workflow `workflow` names (an ID or a file
+    /// name), or `None` when the repository has no such workflow.
+    async fn resolve_workflow(
+        &self,
+        owner: &str,
+        name: &str,
+        workflow: &str,
+    ) -> Result<Option<String>, GitHubClientError> {
+        if workflow.len() > 256 || workflow.chars().any(|c| c.is_control() || c == '/') {
+            return Ok(None);
+        }
+        match self
+            .rest
+            .get_json(
+                GitHubRequestKind::Repository,
+                &["repos", owner, name, "actions", "workflows", workflow],
+                &[],
+                MAX_RESPONSE_BYTES,
+            )
+            .await
+        {
+            Ok(found) => {
+                return found
+                    .get("id")
+                    .and_then(Value::as_u64)
+                    .map(|id| Some(id.to_string()))
+                    .ok_or_else(invalid_response);
+            }
+            Err(error) if error.code() == GitHubClientErrorCode::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        for page in 1..=MAX_WORKFLOW_LIST_PAGES {
+            let listed = self
+                .rest
+                .get_json(
+                    GitHubRequestKind::Repository,
+                    &["repos", owner, name, "actions", "workflows"],
+                    &[("per_page", "100".to_owned()), ("page", page.to_string())],
+                    MAX_RESPONSE_BYTES,
+                )
+                .await?;
+            let workflows = listed
+                .get("workflows")
+                .and_then(Value::as_array)
+                .ok_or_else(invalid_response)?;
+            if let Some(id) = workflows
+                .iter()
+                .filter_map(|workflow| workflow.get("id").and_then(Value::as_u64))
+                .map(|id| id.to_string())
+                .find(|id| id == workflow)
+            {
+                return Ok(Some(id));
+            }
+            if workflows.len() < 100 {
+                break;
+            }
+        }
+        Ok(None)
+    }
+
     /// A workflow run and its first page of jobs.
     async fn workflow_run_and_jobs(
         &self,

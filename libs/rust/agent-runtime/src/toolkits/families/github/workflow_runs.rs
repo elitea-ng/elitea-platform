@@ -19,6 +19,63 @@ const MAX_METADATA_BYTES: usize = 4 * 1_024;
 const MAX_URL_BYTES: usize = 4 * 1_024;
 const MAX_STEPS: usize = 1_000;
 
+/// `get_workflow_runs`' answer: the repository, how many runs and, newest
+/// first, each run's identity, trigger, outcome, timestamps and URL.
+pub(super) fn project_workflow_runs(
+    repository: &str,
+    runs: &Value,
+    limit: usize,
+) -> Result<Value, GitHubClientError> {
+    let provider_runs = runs
+        .get("workflow_runs")
+        .and_then(Value::as_array)
+        .ok_or_else(invalid_response)?;
+    let mut projected = Vec::with_capacity(provider_runs.len().min(limit));
+    for run in provider_runs.iter().take(limit) {
+        let run = run.as_object().ok_or_else(invalid_response)?;
+        projected.push(json!({
+            "id": positive_number(run, "id")?,
+            "name": lenient_text(run, "name", MAX_NAME_BYTES)?,
+            "workflow_id": positive_number(run, "workflow_id")?,
+            "run_number": nonnegative_number(run, "run_number")?,
+            "event": lenient_text(run, "event", MAX_METADATA_BYTES)?,
+            "status": lenient_text(run, "status", MAX_METADATA_BYTES)?,
+            "conclusion": lenient_text(run, "conclusion", MAX_METADATA_BYTES)?,
+            "created_at": lenient_timestamp(run, "created_at")?,
+            "updated_at": lenient_timestamp(run, "updated_at")?,
+            "head_branch": lenient_text(run, "head_branch", MAX_METADATA_BYTES)?,
+            "head_sha": lenient_text(run, "head_sha", MAX_METADATA_BYTES)?,
+            "url": lenient_text(run, "html_url", MAX_URL_BYTES)?,
+        }));
+    }
+    bounded_output(json!({
+        "repository": repository,
+        "count": projected.len(),
+        "runs": projected,
+    }))
+}
+
+/// `optional_text`, where a missing field is as null as a null one.
+fn lenient_text(
+    object: &Map<String, Value>,
+    field: &str,
+    max_bytes: usize,
+) -> Result<Value, GitHubClientError> {
+    if object.contains_key(field) {
+        optional_text(object, field, max_bytes)
+    } else {
+        Ok(Value::Null)
+    }
+}
+
+fn lenient_timestamp(object: &Map<String, Value>, field: &str) -> Result<Value, GitHubClientError> {
+    if object.contains_key(field) {
+        optional_timestamp(object, field)
+    } else {
+        Ok(Value::Null)
+    }
+}
+
 pub(super) fn project_workflow_status(
     run: &Value,
     jobs: &Value,
@@ -249,6 +306,15 @@ pub(in crate::toolkits) fn test_project_workflow_logs(
     expected_run_id: u64,
 ) -> Result<Value, GitHubClientError> {
     project_workflow_logs(run, jobs, expected_run_id)
+}
+
+#[cfg(test)]
+pub(in crate::toolkits) fn test_project_workflow_runs(
+    repository: &str,
+    runs: &Value,
+    limit: usize,
+) -> Result<Value, GitHubClientError> {
+    project_workflow_runs(repository, runs, limit)
 }
 
 #[cfg(test)]

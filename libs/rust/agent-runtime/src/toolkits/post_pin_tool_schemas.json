@@ -68,6 +68,87 @@
     "type": "object"
    }
   },
+  "github": {
+   "get_workflow_runs": {
+    "properties": {
+     "workflow_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Optional workflow ID or file name (e.g., 'build.yml', '1234567') to list runs of. If None, lists runs of all workflows in the repository.",
+      "title": "Workflow Id"
+     },
+     "branch": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Only return runs for this branch.",
+      "title": "Branch"
+     },
+     "status": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Only return runs with this status or conclusion (e.g., 'queued', 'in_progress', 'completed', 'success', 'failure', 'cancelled').",
+      "title": "Status"
+     },
+     "event": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Only return runs triggered by this event (e.g., 'push', 'pull_request', 'workflow_dispatch', 'schedule').",
+      "title": "Event"
+     },
+     "limit": {
+      "default": 10,
+      "description": "Maximum number of runs to return (1-100). Most recent first.",
+      "maximum": 100,
+      "minimum": 1,
+      "title": "Limit",
+      "type": "integer"
+     },
+     "repo_name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Name of the repository (e.g., 'owner/repo'). If None, uses the default repository.",
+      "title": "Repo Name"
+     }
+    },
+    "title": "GetWorkflowRuns",
+    "type": "object"
+   }
+  },
   "gitlab": {
    "get_merge_request": {
     "properties": {
