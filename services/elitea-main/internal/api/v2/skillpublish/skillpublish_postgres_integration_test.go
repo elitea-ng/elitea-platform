@@ -671,6 +671,11 @@ func TestAttachForksTheSkillAndWritesTheMapping(t *testing.T) {
 		t.Errorf("entity_skill_mapping rows = %d, want 2", count)
 	}
 	// Exactly ONE local fork is created and shared by both agents.
+	// The copy is owned by the consumer PROJECT (a real tenant schema's skills_owner_project_fkey refuses
+	// anything else, and Add answered 404 when the owner came out as 0).
+	if owner := countRows(t, pool, `SELECT owner_id FROM p_3.skills LIMIT 1`); owner != 3 {
+		t.Errorf("the forked skill's owner_id = %d, want the consumer project 3", owner)
+	}
 	if count := countRows(t, pool, `SELECT COUNT(*) FROM p_3.skills`); count != 1 {
 		t.Errorf("forked local skills = %d, want 1 — the second agent must reuse the first fork", count)
 	}

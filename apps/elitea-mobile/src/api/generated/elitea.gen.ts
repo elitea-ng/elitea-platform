@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.63
+ * client contract:    1.64
  * operations sha256:  a836121d14038ae2f1db1dde8f4300b624195ee490ebe669220b1372ba3cd2fb
  */
 export interface paths {
@@ -5477,6 +5477,8 @@ export interface components {
             foreign: boolean;
             /** Format: int64 */
             publisher_project_id?: number;
+            /** @description True when `state` is `trusted` because an administrator trusts the publisher project (client contract 1.64), not because this project reviewed the text. Absent otherwise. */
+            publisher_trusted?: boolean;
             /** @description `not_required` (not foreign), `trusted` or `untrusted`. */
             state: string;
         };
