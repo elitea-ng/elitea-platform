@@ -1694,6 +1694,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          # Registry and git only: this one entry held 1.6 GiB (2026-11-19), and
+          # the cap is shared with every other Rust job (scripts/ci/cache-budget.json).
+          cache-targets: false
           workspaces: apps/elitea-desktop/src-tauri
           prefix-key: handoff-journey
       # The ELITEA build of the host (ADR-0052 decision 4): the brand overlay

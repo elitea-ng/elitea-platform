@@ -44,8 +44,8 @@ test("an entry of a tag or another branch is not a pull-request copy and stays",
 
 test("only the newest entry of a family stays, per ref", () => {
   const h = (c) => c.repeat(64);
-  const older = entry(`go-v1-L-g-${h("a")}`, 1.2, { created: 72 });
-  const newer = entry(`go-v1-L-g-${h("b")}`, 1.2, { created: 24 });
+  const older = entry(`rust-v0-g-${h("a")}`, 1.2, { created: 72 });
+  const newer = entry(`rust-v0-g-${h("b")}`, 1.2, { created: 24 });
   const other = entry(`rust-v0-L-${h("c")}`, 1, { created: 100 });
   const { doomed, kept } = decide([older, newer, other], { now: NOW });
   assert.deepEqual(doomed.map((d) => d.id), [older.id]);
@@ -83,7 +83,8 @@ test("the 2026-11-19 measurement: 11.2 GiB with three stale Go entries comes und
   const before = caches.reduce((s, c) => s + c.size_in_bytes, 0);
   assert.ok(before > CAP_BYTES);
   const { doomed, keptBytes } = decide(caches, { now: NOW });
-  assert.equal(doomed.filter((d) => d.reason.startsWith("superseded")).length, 2);
+  // Two go-v1 entries stay (two go.sum lists); the oldest of three goes.
+  assert.equal(doomed.filter((d) => d.reason.startsWith("superseded")).length, 1);
   assert.ok(keptBytes <= CAP_BYTES, `${keptBytes / GIB} GiB kept`);
 });
 

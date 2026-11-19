@@ -34,6 +34,8 @@ export const MAIN_REF = "refs/heads/main";
 export const PR_COPY_GRACE_MS = 12 * 60 * 60 * 1000;
 /** Families that hold many entries on purpose; the newest-only rule does not apply. */
 export const MANY_BY_DESIGN = [/^buildkit-blob-/, /^index-/];
+/** Families with a fixed number of live entries: the Go cache is keyed by the go.sum list, and two workflows list different files. */
+export const KEEP_NEWEST = [[/^go-v1-/, 2]];
 
 /** The key without its trailing hash segments, date, or run id and attempt. */
 export function familyOf(key) {
@@ -74,7 +76,8 @@ export function decide(caches, { now = Date.now(), capBytes = CAP_BYTES } = {}) 
   }
   for (const group of families.values()) {
     group.sort((a, b) => created(b) - created(a));
-    for (const old of group.slice(1)) doom(old, `superseded: a newer entry of the family ${familyOf(old.key)} exists`);
+    const keep = KEEP_NEWEST.find(([re]) => re.test(group[0].key))?.[1] ?? 1;
+    for (const old of group.slice(keep)) doom(old, `superseded: a newer entry of the family ${familyOf(old.key)} exists`);
   }
   let rest = caches.filter((c) => !doomed.has(c.id));
   let total = rest.reduce((s, c) => s + c.size_in_bytes, 0);

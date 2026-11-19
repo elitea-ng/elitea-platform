@@ -500,7 +500,8 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
-          node --test scripts/ci/check-tiering.test.mjs scripts/ci/ci-gate.test.mjs scripts/ci/cargo-deny.test.mjs scripts/ci/govulncheck.test.mjs
+          node --test scripts/ci/check-tiering.test.mjs scripts/ci/ci-gate.test.mjs scripts/ci/cargo-deny.test.mjs scripts/ci/govulncheck.test.mjs scripts/ci/check-cache-budget.test.mjs
+          node scripts/ci/check-cache-budget.mjs
           node scripts/ci/check-tiering.mjs
       - name: The real-model preset copy matches the pinned image
         if: ${{ !cancelled() }}

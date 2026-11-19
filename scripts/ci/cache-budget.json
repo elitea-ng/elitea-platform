@@ -1,0 +1,13 @@
+{
+  "comment": "Planned Actions cache entries, with their size in GiB as measured 2026-11-19 (windows-host without its target directory is an estimate). scripts/ci/check-cache-budget.mjs keeps the sum under 8 GiB.",
+  "entries": [
+    { "family": "go-v1 (ci-go and the gateway go.sum lists)", "gib": 2.6 },
+    { "family": "windows-host (registry and git only)", "gib": 0.5 },
+    { "family": "handoff-journey (registry and git only)", "gib": 0.4 },
+    { "family": "v0-rust-worker-rust-test", "gib": 1.3 },
+    { "family": "buildkit-mounts (go, rust, light)", "gib": 1.1 },
+    { "family": "buildkit-blob layers", "gib": 0.6 },
+    { "family": "node-cache", "gib": 0.2 },
+    { "family": "other rust-cache entries without targets (vector, doc-extractor, browser-session)", "gib": 0.5 }
+  ]
+}

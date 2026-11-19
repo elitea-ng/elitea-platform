@@ -337,6 +337,11 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          # Registry and git only. Measured 2026-11-19: this ONE entry held 2.77
+          # GiB (a quarter of the 10 GB cap), and its eviction pressure removed
+          # the entries the other Rust jobs restore. The target directory is
+          # not worth that (scripts/ci/cache-budget.json).
+          cache-targets: false
           workspaces: |
             apps/elitea-desktop/src-tauri
             libs/rust
