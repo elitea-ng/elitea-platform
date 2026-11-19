@@ -14,6 +14,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/cleanupjournal"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/buildinfo"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/microsoftapps"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
@@ -113,6 +114,13 @@ type Handler struct {
 	// (platform_routines.go). Nil unless WithPlatformRoutines is applied, and
 	// the routes answer 503 while it is.
 	platformRoutines PlatformRoutineStore
+	// The Microsoft Default app registry (microsoft_oauth_apps.go, shared
+	// migration 0255): the store, the egress-guarded client a Test reads Entra's
+	// metadata with, and the deployment's public origin. Nil store unless
+	// WithMicrosoftApps is applied, and the routes answer 503 while it is.
+	microsoftApps   MicrosoftAppStore
+	microsoftDoer   microsoftapps.HTTPDoer
+	microsoftOrigin string
 }
 
 // Option configures a Handler at construction time.

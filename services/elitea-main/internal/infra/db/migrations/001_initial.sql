@@ -1363,6 +1363,11 @@ JOIN (VALUES
     -- migrations/shared/0209_entitlement_export.sql.
     ('super_admin', 'entitlements.export'),
     ('admin', 'entitlements.export'),
+    -- Epic 2254, the Microsoft Default app registry (ADR-0057 decision 11).
+    -- Existing databases get the grant from
+    -- migrations/shared/0255_microsoft_oauth_apps.sql.
+    ('super_admin', 'configuration.microsoft_apps'),
+    ('admin', 'configuration.microsoft_apps'),
     -- Issue 1501, credential inventory and permission trimming (ADR-0044
     -- decision 5). Existing databases get the grants from
     -- migrations/shared/0208_credential_inventory.sql.
