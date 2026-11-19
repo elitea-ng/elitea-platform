@@ -15,10 +15,17 @@ describe('isMicrosoftCredentialType', () => {
 });
 
 describe('signInTokenKey', () => {
-  it('uses the credential\'s own discovery endpoint for a Custom app, as typed', () => {
+  it('uses the authority the sign-in went to for a Custom app, not the endpoint text the form held', () => {
+    // Main normalizes the stored authority (case, trailing slash, /v2.0), so the typed text can differ from what a run derives.
     expect(
-      signInTokenKey({ credentialUuid: UUID, data: { oauth_discovery_endpoint: ' https://login.microsoftonline.com/tenant-1/v2.0 ' }, authorizationUrl: URL_ }),
-    ).toBe(`${UUID}:https://login.microsoftonline.com/tenant-1/v2.0`);
+      signInTokenKey({ credentialUuid: UUID, data: { oauth_discovery_endpoint: ' https://login.microsoftonline.com/Contoso.onmicrosoft.com/v2.0/ ' }, authorizationUrl: URL_ }),
+    ).toBe(`${UUID}:https://login.microsoftonline.com/contoso.onmicrosoft.com`);
+  });
+
+  it('falls back to the endpoint the credential holds when the URL names no authority', () => {
+    expect(
+      signInTokenKey({ credentialUuid: UUID, data: { oauth_discovery_endpoint: 'https://login.microsoftonline.com/tenant-1' }, authorizationUrl: 'not a url' }),
+    ).toBe(`${UUID}:https://login.microsoftonline.com/tenant-1`);
   });
 
   it('uses the authority the sign-in went to for a Default app, which has no endpoint of its own', () => {
@@ -27,7 +34,7 @@ describe('signInTokenKey', () => {
     );
   });
 
-  it('prefers the Default app over a leftover endpoint', () => {
+  it('ignores a leftover endpoint under a Default app', () => {
     expect(
       signInTokenKey({
         credentialUuid: UUID,

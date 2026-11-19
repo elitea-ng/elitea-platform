@@ -49,7 +49,8 @@ function useMicrosoftOffers(credentialType: string | undefined, projectId: strin
   });
 }
 
-function hasValue(value: unknown): boolean {
+/** A value the person (or a stored credential) filled in. */
+export function hasValue(value: unknown): boolean {
   return value !== null && value !== undefined && value !== '';
 }
 
@@ -60,9 +61,13 @@ function appFieldOf(subsection: ConfigSchemaSubsection, schemaProperties: Readon
 
 export interface OfferedSubsections {
   readonly subsections: readonly ConfigSchemaSubsection[];
+  /** Fields whose value does not say which subsection the credential uses (see `inferenceIgnoredFields`). */
+  readonly ignored: ReadonlySet<string>;
   /** The ids of the Default apps on offer, in the registry's order. */
   readonly appIds: readonly string[];
 }
+
+const NO_FIELDS: ReadonlySet<string> = new Set();
 
 export interface OfferedSubsectionsParams {
   readonly subsections: readonly ConfigSchemaSubsection[];
@@ -86,9 +91,9 @@ export function useOfferedSubsections({ subsections, schemaProperties, data, cre
   const loading = usesApps && offers.isLoading;
 
   return useMemo(() => {
-    if (!usesApps) return { subsections, appIds };
+    if (!usesApps) return { subsections, appIds, ignored: NO_FIELDS };
     // Until the registry answers, offer nothing: showing Custom app first would flash fields a Default-app-only deployment never offers.
-    if (loading) return { subsections: [], appIds };
+    if (loading) return { subsections: [], appIds, ignored: NO_FIELDS };
     // A value both subsections hold (the scopes), or one still at its default, does not say which one the credential uses.
     const ignored = inferenceIgnoredFields(subsections, schemaProperties, data);
     const offered = subsections.filter((subsection) => {
@@ -97,7 +102,7 @@ export function useOfferedSubsections({ subsections, schemaProperties, data, cre
       if (appFieldOf(subsection, schemaProperties) !== undefined) return appIds.length > 0;
       return customAllowed || appIds.length === 0;
     });
-    return { subsections: offered, appIds };
+    return { subsections: offered, appIds, ignored };
   }, [usesApps, loading, subsections, data, appIds, customAllowed, schemaProperties]);
 }
 
@@ -111,7 +116,7 @@ export function inferenceIgnoredFields(
   schemaProperties: Readonly<Record<string, ConfigSchemaNode>>,
   data: Readonly<Record<string, unknown>>,
 ): ReadonlySet<string> {
-  if (!subsections.some((subsection) => appFieldOf(subsection, schemaProperties) !== undefined)) return new Set();
+  if (!subsections.some((subsection) => appFieldOf(subsection, schemaProperties) !== undefined)) return NO_FIELDS;
   const seen = new Set<string>();
   const ignored = new Set<string>();
   for (const field of subsections.flatMap((subsection) => subsection.fields ?? [])) {

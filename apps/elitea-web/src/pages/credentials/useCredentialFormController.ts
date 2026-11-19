@@ -217,7 +217,8 @@ export function useCredentialFormController(props: CredentialFormControllerProps
   // Collapses 4 separate `save` dependencies into 1 — keeps the `useCallback`
   // dependency array within the §3.5 budget (≤8 entries) without losing memoization correctness (this object is
   // itself re-derived only when one of the four fields actually changes).
-  const formValues = useMemo(() => ({ name, eliteaTitle, shared, data }), [name, eliteaTitle, shared, data]);
+  // A credential the sign-in created keeps the title that create wrote, whatever the name box says now.
+  const formValues = useMemo(() => ({ name, eliteaTitle: eliteaTitle ?? target.createdTitle, shared, data }), [name, eliteaTitle, target.createdTitle, shared, data]);
 
   /**
    * Reports the pick upward and nothing else — the caller owns the URL, and

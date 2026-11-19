@@ -266,10 +266,13 @@ describe('Microsoft credential form — sign-in', () => {
     const calls = mockSignInBackend(() => HttpResponse.json({ success: true }));
     const onSaved = await signIn();
     await screen.findByText('Signed in as Ada Lovelace');
+    // A rename after the sign-in changes the label, never the stable elitea_title other domains resolve the credential by.
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'renamed-outlook' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(onSaved).toHaveBeenCalledWith('11'));
     expect(calls.created).toHaveLength(1);
     expect(calls.updated).toHaveLength(1);
+    expect(calls.updated[0]).toMatchObject({ label: 'renamed-outlook', elitea_title: 'my-outlook' });
   });
 
   it('asks for a new sign-in and drops the token when the check says the credential needs one again (401)', async () => {

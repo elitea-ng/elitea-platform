@@ -8,7 +8,7 @@ import type { ConfigSchemaNode, ConfigSchemaSection, ConfigSchemaSubsection } fr
 import { RadioButtonGroup } from '@/shared/ui/RadioButtonGroup';
 
 import { CredentialSchemaField } from './CredentialFormFields';
-import { inferenceIgnoredFields, useOfferedSubsections } from './MicrosoftCredentialFields';
+import { hasValue, useOfferedSubsections } from './MicrosoftCredentialFields';
 
 const ANONYMOUS_OPTION = 'none';
 const EMPTY_SUBSECTIONS: readonly ConfigSchemaSubsection[] = [];
@@ -27,10 +27,6 @@ export interface CredentialFormSectionProps {
   /** The credential type: a Microsoft section asks the Default app registry which apps serve it. */
   readonly credentialType?: string;
   readonly onChange: (fieldKey: string, value: unknown) => void;
-}
-
-function hasValue(value: unknown): boolean {
-  return value !== null && value !== undefined && value !== '';
 }
 
 function fieldsOf(subsection: ConfigSchemaSubsection | undefined): readonly string[] {
@@ -185,14 +181,13 @@ export function CredentialFormSection({
   credentialType,
   onChange,
 }: CredentialFormSectionProps): ReactNode {
-  const { subsections, appIds } = useOfferedSubsections({
+  const { subsections, appIds, ignored } = useOfferedSubsections({
     subsections: section.subsections ?? EMPTY_SUBSECTIONS,
     schemaProperties,
     data,
     credentialType,
     projectId,
   });
-  const ignored = useMemo(() => inferenceIgnoredFields(subsections, schemaProperties, data), [subsections, schemaProperties, data]);
   const inferredOption = useMemo(() => initialOption(sectionKey, section, subsections, data, ignored), [sectionKey, section, subsections, data, ignored]);
   const [selectedOption, setSelectedOption] = useState(inferredOption);
   const didSelectOption = useRef(false);

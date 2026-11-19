@@ -15,6 +15,8 @@ import type { SaveMode, SaveOutcome } from './credentialSave';
 interface CreatedCredential {
   readonly id: string;
   readonly uuid: string;
+  /** The `elitea_title` the create wrote: the stable lookup key later saves must keep (a rename never changes it). */
+  readonly title: string;
 }
 
 interface SaveTargetMode extends SaveMode {
@@ -38,13 +40,15 @@ export interface SaveTarget {
   readonly credentialUuid: string | undefined;
   /** Whether the sign-in has already created the credential on the create screen. */
   readonly created: boolean;
+  /** The `elitea_title` that credential was created with, for the saves that follow. */
+  readonly createdTitle: string | undefined;
   readonly remember: (created: CreatedCredential) => void;
 }
 
 export function useSaveTarget(mode: SaveTargetMode, detail: DetailIdentity | undefined): SaveTarget {
   const [created, setCreated] = useState<CreatedCredential | undefined>(undefined);
   const saveMode = useMemo<SaveMode>(() => (created === undefined ? mode : { kind: 'edit', configId: created.id }), [created, mode]);
-  return { saveMode, credentialUuid: uuidOf(detail, created), created: created !== undefined, remember: setCreated };
+  return { saveMode, credentialUuid: uuidOf(detail, created), created: created !== undefined, createdTitle: created?.title, remember: setCreated };
 }
 
 /** The save the sign-in runs first: the form's own save, then the credential's uuid. A create-screen save is remembered, so the next Save updates it. */
@@ -58,7 +62,7 @@ export function useSaveForSignIn(
     const outcome = await runSave();
     if (outcome?.status !== 'ok') return undefined;
     const uuid = outcome.uuid ?? credentialUuid;
-    if (mode.kind === 'create' && !created && outcome.id !== undefined && uuid !== undefined) remember({ id: outcome.id, uuid });
+    if (mode.kind === 'create' && !created && outcome.id !== undefined && uuid !== undefined) remember({ id: outcome.id, uuid, title: outcome.title });
     return uuid;
   }, [runSave, credentialUuid, mode.kind, created, remember]);
 }

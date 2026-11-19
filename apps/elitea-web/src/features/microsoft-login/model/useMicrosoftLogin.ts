@@ -176,7 +176,8 @@ export function useMicrosoftLogin(params: UseMicrosoftLoginParams): UseMicrosoft
   );
 
   const login = useCallback(() => {
-    if (busy || projectId === undefined) return;
+    // `abortRef` is set in this very click, so a second click before the next render is refused too.
+    if (busy || abortRef.current !== null || projectId === undefined) return;
     const popup = window.open('about:blank', POPUP_NAME, POPUP_FEATURES);
     if (popup === null) {
       setFailure('popup_blocked');

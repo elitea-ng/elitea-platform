@@ -125,7 +125,7 @@ describe('useMicrosoftLogin', () => {
     const signedIn = onSignedIn.mock.calls[0]?.[0];
     expect(signedIn?.credentialUuid).toBe(UUID);
     expect(signedIn?.redeemed.access_token).toBe('access-token-1');
-    // Custom app: the credential's own discovery endpoint names the authority.
+    // The authority the sign-in went to names the token's key.
     expect(signedIn?.tokenKey).toBe(`${UUID}:https://login.microsoftonline.com/tenant-1`);
     expect(result.current.session).toMatchObject({ account: 'Ada Lovelace', tenant: 'tenant-1' });
     // Display facts only: the token is not in what is remembered.

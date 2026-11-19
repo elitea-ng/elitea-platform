@@ -77,10 +77,11 @@ export function waitForHandoff({ state, channelName, timeoutMs, popup, signal }:
       settle(event.data);
     };
     window.addEventListener('message', onMessage);
-    signal?.addEventListener('abort', () => {
+    const onAbort = (): void => {
       release();
       reject(new Error('cancelled'));
-    });
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
     if (channel !== undefined) {
       channel.onmessage = (event: MessageEvent) => {
         settle(event.data);
@@ -88,6 +89,7 @@ export function waitForHandoff({ state, channelName, timeoutMs, popup, signal }:
     }
     release = () => {
       window.clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
       window.removeEventListener('message', onMessage);
       channel?.close();
     };

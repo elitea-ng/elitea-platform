@@ -51,7 +51,7 @@ function toCredentialApiError(error: unknown): { readonly data?: { readonly mess
 }
 
 export type SaveOutcome =
-  | { readonly status: 'ok'; readonly id?: string; readonly uuid?: string }
+  | { readonly status: 'ok'; readonly id?: string; readonly uuid?: string; readonly title: string }
   | { readonly status: 'fieldErrors'; readonly errors: Readonly<Record<string, string>> }
   | { readonly status: 'genericError' };
 
@@ -94,6 +94,7 @@ export async function performSave(params: PerformSaveParams): Promise<SaveOutcom
     const uuid = saved.uuid ?? saved.uid;
     return {
       status: 'ok',
+      title: body.elitea_title,
       ...(saved.id !== undefined ? { id: String(saved.id) } : {}),
       ...(typeof uuid === 'string' && uuid !== '' ? { uuid } : {}),
     };
