@@ -13,6 +13,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/skilltrust"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
@@ -75,6 +76,18 @@ func TestATrustedPublisherMakesItsSkillsTrustedEverywhere(t *testing.T) {
 	// A lineage that names no publisher is never trusted through one.
 	if list, route, _ := state(1202); list != "untrusted" || route != "untrusted" {
 		t.Fatalf("an unknown lineage: list=%q route=%q, want untrusted", list, route)
+	}
+
+	// A skill the project also trusted by revision names the same provenance in the route and in the list.
+	if _, err := pool.Exec(context.Background(), `INSERT INTO p_1.skill_trust (skill_id, revision, publisher_project_id, trusted_by, source) VALUES (1200, $1, 2, 7, 'user')`,
+		skilltrust.Revision("Library steps")); err != nil {
+		t.Fatal(err)
+	}
+	if list, route, byPublisher := state(1200); list != "trusted" || route != "trusted" || !byPublisher {
+		t.Fatalf("trusted both ways: list=%q route=%q publisher_trusted=%v, want trusted through the publisher in both", list, route, byPublisher)
+	}
+	if _, err := pool.Exec(context.Background(), `DELETE FROM p_1.skill_trust WHERE skill_id = 1200`); err != nil {
+		t.Fatal(err)
 	}
 
 	// Removing the publisher puts the skill back to quoted data.
