@@ -71,7 +71,7 @@ type NativeAuthSubsection struct {
 // nativeConfigurationTypes is the registry. Add the next post-pin type here.
 // It is empty until the first story that needs one lands (Dataverse, Outlook,
 // Teams and Graph need the delegated sign-in foundation of #2256 first).
-var nativeConfigurationTypes = []NativeConfigurationType{}
+var nativeConfigurationTypes = microsoftNativeTypes()
 
 // NativeConfigurationTypes lists the natively defined types (a copy), for the
 // guards that check them against the other catalogues.
