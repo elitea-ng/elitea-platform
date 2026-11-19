@@ -414,8 +414,6 @@ jobs:
       # It lives here because this workflow has no path filter: a cache step can
       # be added to any workflow in any pull request.
       # ── Workflow caches are written from main only ────────────────────────────
-      - name: Install the checkers' one dependency
-        uses: ./.github/actions/ci-scripts-deps
       - name: The PyYAML-compatible YAML read the node checks share
         if: ${{ !cancelled() }}
         run: node --test scripts/ci/ci-compat.test.mjs

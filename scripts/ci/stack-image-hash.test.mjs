@@ -97,7 +97,7 @@ test("an input that no tracked file matches is 'absent' and the hash moves when 
 
 test("addHashes names the content tag, and the plan form rewrites the plan in place", () => {
   fixture((dir, rel) => {
-    const entries = [{ service: "svc", image: "img", ref: "ghcr.io/x/ci-img", tag: "t", build: { context: rel, dockerfile: "Containerfile", target: "final", args: {} } }];
+    const entries = [{ service: "svc", image: "img", ref: "registry.invalid/x/ci-img", tag: "t", build: { context: rel, dockerfile: "Containerfile", target: "final", args: {} } }];
     const [withHash] = addHashes(entries, ROOT, gitOverDisk(ROOT));
     assert.equal(withHash.cas, `cas-${withHash.hash}`);
     const plan = path.join(dir, "plan.json");
@@ -108,7 +108,7 @@ test("addHashes names the content tag, and the plan form rewrites the plan in pl
     assert.equal(main(["plan", ROOT, plan], (s) => lines.push(s), () => {}), 0);
     const written = JSON.parse(fs.readFileSync(plan, "utf8"));
     assert.match(written[0].cas, /^cas-[0-9a-f]{24}$/);
-    assert.equal(lines[0], `ghcr.io/x/ci-img:${written[0].cas}\n`);
+    assert.equal(lines[0], `registry.invalid/x/ci-img:${written[0].cas}\n`);
   });
 });
 
