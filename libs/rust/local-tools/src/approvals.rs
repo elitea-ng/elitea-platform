@@ -63,7 +63,7 @@
 //! | `search_memory` ([`ToolKind::SearchMemory`], #1233) | allowed (it only reads; kept in plan mode) |
 //! | `save_memory` ([`ToolKind::SaveMemory`]) | allowed (the transcript shows the saved text; the person deletes it in Settings → Memory); denied in plan mode |
 //! | `delete_memory` ([`ToolKind::DeleteMemory`]) | asked every time (it removes data the person may have saved on the web); never remembered; denied in plan mode |
-//! | `web_search`, `web_fetch` of a remote `web` toolkit ([`ToolKind::WebRead`], #1238) | allowed (read-only; kept in plan mode); the transcript shows the query or URL |
+//! | `web_search`, `web_fetch`, `web_crawl`, `web_map` of a remote `web` toolkit, and the four tools of a remote `tavily` toolkit ([`ToolKind::WebRead`], #1238, #2261) | allowed (read-only; kept in plan mode); the transcript shows the query or URL |
 //! | `internet_host_search`, `internet_host_lookup` of a remote `host_intel` toolkit ([`ToolKind::HostIntel`]) | asked; "approve for this session" ([`RulesEngine::remember_for_session`]) answers the rest of the app session, never a workspace rule; kept in plan mode |
 //! | one of the person's hooks running ([`crate::hooks`], #1237) | not asked (the person wrote it in host data); sandboxed as configured, capped by the policy; never run when the policy turns the shell off, or where its sandbox cannot hide what the session denies |
 //! | a repository-proposed hook (`.elitea/hooks.json`, `.claude/settings.json`) | never runs until the person trusts it (copied into host data for that file's digest); a changed file asks again |
@@ -358,7 +358,9 @@ impl ToolKind {
     #[must_use]
     pub fn web_toolkit(toolkit_type: &str) -> Option<Self> {
         match toolkit_type {
-            "web" => Some(Self::WebRead),
+            // The project-credentialed Tavily toolkit is the web family
+            // pinned to Tavily (#2261): the same policy key and the same rule.
+            "web" | "tavily" => Some(Self::WebRead),
             "host_intel" => Some(Self::HostIntel),
             _ => None,
         }
@@ -5935,6 +5937,7 @@ mod tests {
             ToolKind::web_toolkit("host_intel"),
             Some(ToolKind::HostIntel)
         );
+        assert_eq!(ToolKind::web_toolkit("tavily"), Some(ToolKind::WebRead));
         assert_eq!(ToolKind::web_toolkit("github"), None);
     }
 

@@ -3515,7 +3515,6 @@
         "crawl"
       ],
       "has_function_validators": false,
-      "hidden": true,
       "icon_url": null,
       "label": "Tavily",
       "tool_spend": {
@@ -3535,9 +3534,7 @@
           "map"
         ],
         "unit": "credit"
-      },
-      "unavailable": true,
-      "unavailable_reason": "This deployment's agent worker does not support the tavily toolkit."
+      }
     },
     "name_required": true,
     "properties": {
@@ -3889,7 +3886,13 @@
       },
       "selected_tools": {
         "args_schemas": {
+          "web_crawl": {
+            "type": "object"
+          },
           "web_fetch": {
+            "type": "object"
+          },
+          "web_map": {
             "type": "object"
           },
           "web_search": {
@@ -3898,7 +3901,9 @@
         },
         "items": {
           "enum": [
+            "web_crawl",
             "web_fetch",
+            "web_map",
             "web_search"
           ],
           "type": "string"

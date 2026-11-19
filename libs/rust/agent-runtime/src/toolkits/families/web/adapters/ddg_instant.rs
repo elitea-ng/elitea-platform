@@ -47,6 +47,8 @@ pub(crate) fn construct(_config: &ProviderConfig, transport: Arc<dyn Transport>)
         web_search: Some(Box::new(DdgInstant { transport })),
         fetch: None,
         host_intel: None,
+        crawl: None,
+        map: None,
     }
 }
 

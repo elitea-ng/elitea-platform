@@ -1,7 +1,9 @@
-//! The `web` and `host_intel` toolkit families (#1238): `web_search` and
-//! `web_fetch` through a capability-keyed provider registry (Tavily,
-//! Firecrawl, Brave, `DuckDuckGo` instant answers) plus a key-less `direct`
-//! fetch through the egress guard; `internet_host_search` and
+//! The `web` and `host_intel` toolkit families (#1238): `web_search`,
+//! `web_fetch`, `web_crawl` and `web_map` through a capability-keyed provider
+//! registry (Tavily, Firecrawl, Brave, `DuckDuckGo` instant answers) plus a
+//! key-less `direct` fetch through the egress guard (the `tavily` toolkit
+//! type, `tavily_toolkit.rs`, is the same Tavily adapter pinned and
+//! credentialed by the project); `internet_host_search` and
 //! `internet_host_lookup` over Shodan.
 //!
 //! The families run on the cloud worker only. The desktop reaches them
@@ -20,9 +22,10 @@ pub(crate) mod config;
 pub(crate) mod direct;
 pub mod meter;
 pub(crate) mod registry;
-// Only the Office catalogue test reads it (see `catalogue`).
-#[cfg(all(test, feature = "toolkit-office"))]
+// The `tavily` type's catalogue entry: the toolkit reads its tools' argument
+// schemas from it, and the Office catalogue test compares it with Main's file.
 pub(crate) mod tavily_catalogue;
+pub(crate) mod tavily_toolkit;
 pub(crate) mod transport;
 
 use std::collections::BTreeMap;
@@ -38,7 +41,7 @@ use serde_json::{Map, Value};
 use crate::toolkits::invocation::admit_materialized_toolset;
 use crate::toolkits::policy::ToolAdmissionPolicy;
 
-use capability::{CallEnd, error_result, fetch, host_intel, web_search};
+use capability::{CallEnd, crawl, error_result, fetch, host_intel, web_search};
 use config::{HostIntelConfig, WebConfig, WebConfigError};
 use direct::DirectFetcher;
 use meter::Meter;
@@ -161,18 +164,22 @@ impl WebState {
 enum WebToolKind {
     Search,
     Fetch,
+    Crawl,
+    Map,
     HostSearch,
     HostLookup,
 }
 
 impl WebToolKind {
-    const WEB: [Self; 2] = [Self::Search, Self::Fetch];
+    const WEB: [Self; 4] = [Self::Search, Self::Fetch, Self::Crawl, Self::Map];
     const HOST: [Self; 2] = [Self::HostSearch, Self::HostLookup];
 
     const fn name(self) -> &'static str {
         match self {
             Self::Search => web_search::NAME,
             Self::Fetch => fetch::NAME,
+            Self::Crawl => crawl::CRAWL,
+            Self::Map => crawl::MAP,
             Self::HostSearch => host_intel::SEARCH,
             Self::HostLookup => host_intel::LOOKUP,
         }
@@ -182,6 +189,8 @@ impl WebToolKind {
         match self {
             Self::Search => web_search::DESCRIPTION,
             Self::Fetch => fetch::DESCRIPTION,
+            Self::Crawl => crawl::CRAWL_DESCRIPTION,
+            Self::Map => crawl::MAP_DESCRIPTION,
             Self::HostSearch => host_intel::SEARCH_DESCRIPTION,
             Self::HostLookup => host_intel::LOOKUP_DESCRIPTION,
         }
@@ -191,6 +200,8 @@ impl WebToolKind {
         match self {
             Self::Search => web_search::schema(),
             Self::Fetch => fetch::schema(),
+            Self::Crawl => crawl::crawl_schema(),
+            Self::Map => crawl::map_schema(),
             Self::HostSearch => host_intel::search_schema(),
             Self::HostLookup => host_intel::lookup_schema(),
         }
@@ -243,6 +254,8 @@ impl Tool for WebTool {
         let outcome = match self.kind {
             WebToolKind::Search => web_search::run(state, &scope, arguments).await,
             WebToolKind::Fetch => fetch::run(state, &scope, arguments).await,
+            WebToolKind::Crawl => crawl::run_crawl(state, &scope, arguments).await,
+            WebToolKind::Map => crawl::run_map(state, &scope, arguments).await,
             WebToolKind::HostSearch => host_intel::run_search(state, &scope, arguments).await,
             WebToolKind::HostLookup => host_intel::run_lookup(state, &scope, arguments).await,
         };
@@ -406,6 +419,12 @@ pub(crate) fn build_web_with(
     if direct.is_some() || serves(Capability::Fetch) {
         offered.push(WebToolKind::Fetch);
     }
+    if serves(Capability::Crawl) {
+        offered.push(WebToolKind::Crawl);
+    }
+    if serves(Capability::Map) {
+        offered.push(WebToolKind::Map);
+    }
     let selected = config.selected_tools.clone();
     let state = Arc::new(WebState {
         config,
@@ -475,7 +494,15 @@ fn assemble(
     }
     let tools: Vec<Arc<dyn Tool>> = offered
         .iter()
-        .filter(|kind| selected.is_empty() || selected.iter().any(|name| name == kind.name()))
+        .filter(|kind| {
+            if selected.is_empty() {
+                // A toolkit saved before crawl and map existed keeps the two
+                // tools it was approved with: the dearer ones are opt-in.
+                !matches!(kind, WebToolKind::Crawl | WebToolKind::Map)
+            } else {
+                selected.iter().any(|name| name == kind.name())
+            }
+        })
         .map(|kind| {
             Arc::new(WebTool {
                 kind: *kind,

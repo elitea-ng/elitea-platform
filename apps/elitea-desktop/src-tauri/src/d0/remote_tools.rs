@@ -109,6 +109,14 @@ fn web_target(arguments: &Value) -> String {
     ["query", "url", "ip"]
         .iter()
         .find_map(|key| arguments.get(*key).and_then(Value::as_str))
+        // `web_extract` of the Tavily toolkit names its pages in a list.
+        .or_else(|| {
+            arguments
+                .get("urls")
+                .and_then(Value::as_array)
+                .and_then(|urls| urls.first())
+                .and_then(Value::as_str)
+        })
         .map(|text| cut(text, 512))
         .unwrap_or_default()
 }

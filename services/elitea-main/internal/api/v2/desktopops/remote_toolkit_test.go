@@ -667,6 +667,12 @@ func TestRemoteToolkitRefusesWebWhenLocalWorkWebOff(t *testing.T) {
 	assertLocalWorkPolicyRefuses(t, "web", "web_search")
 }
 
+// The project-credentialed Tavily toolkit is the web family pinned to Tavily
+// (#2261): it follows the same switch.
+func TestRemoteToolkitRefusesTavilyWhenLocalWorkWebOff(t *testing.T) {
+	assertLocalWorkPolicyRefuses(t, "tavily", "web_search")
+}
+
 func TestRemoteToolkitRefusesHostIntelWhenPolicyOff(t *testing.T) {
 	assertLocalWorkPolicyRefuses(t, "host_intel", "internet_host_lookup")
 }
@@ -676,7 +682,7 @@ func assertLocalWorkPolicyRefuses(t *testing.T, toolkitType, toolName string) {
 	runs := &fakeToolRuns{}
 	h, turns, authorizer, recorder := remoteHandler(runs, "rust")
 	// The other toolkit's switch is on; it must not open this one.
-	turns.turn.Web, turns.turn.HostIntel = toolkitType != "web", toolkitType != "host_intel"
+	turns.turn.Web, turns.turn.HostIntel = toolkitType != "web" && toolkitType != "tavily", toolkitType != "host_intel"
 	authorizer.grant.ToolkitType = toolkitType
 	response := serveWith(t, http.MethodPost, RemoteToolkitPath, remoteURL,
 		remoteBody(`"tool_name":"`+toolName+`","arguments":{}`), desktopToken(), h.serve)

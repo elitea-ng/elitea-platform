@@ -68,7 +68,7 @@ const (
 // local turn, or "" when the type is allowed.
 func localWorkRefusal(toolkitType string, turn localturn.LiveTurn) string {
 	switch {
-	case toolkitType == "web" && !turn.Web:
+	case (toolkitType == "web" || toolkitType == "tavily") && !turn.Web:
 		return "local_work.web"
 	case toolkitType == "host_intel" && !turn.HostIntel:
 		return "local_work.host_intel"
