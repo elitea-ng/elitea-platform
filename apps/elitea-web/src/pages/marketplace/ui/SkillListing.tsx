@@ -199,10 +199,8 @@ function ChatActions({
   const [action, setAction] = useState<ChatAction | undefined>();
   const pin = listingPinOf(detail, versionId);
   const off = pin === null || trySkill.start === undefined || trySkill.isStarting || listing.state === 'delisted';
-  const forkAndPin = async (): Promise<PinConversationSkillRequest> => {
-    const forked = await forkPublicSkill(projectId ?? '', Number(listing.entity_id), Number(versionId));
-    return { skill_id: forked.skillId };
-  };
+  const fork = async (): Promise<number> => (await forkPublicSkill(projectId ?? '', Number(listing.entity_id), Number(versionId))).skillId;
+  const forkAndPin = async (): Promise<PinConversationSkillRequest> => ({ skill_id: await fork() });
   return (
     <>
       <Button
@@ -244,6 +242,7 @@ function ChatActions({
         title={action === 'add' ? t('skills.addToChat.title', 'Add to a conversation') : t('skills.use.title', 'Use in a chat')}
         confirmText={action === 'add' ? t('skills.addToChat.confirm', 'Add') : t('skills.use.confirm', 'Use')}
         resolvePin={action === 'add' ? forkAndPin : () => Promise.resolve(pin ?? {})}
+        forkForLocal={fork}
         onNewChat={action === 'use' ? (picked) => trySkill.start?.({ name: listing.name, pin: picked, kind: 'use' }) : undefined}
         onClose={() => setAction(undefined)}
       />
