@@ -4841,6 +4841,123 @@ components:
           items:
             type: string
 
+    MicrosoftLoginError:
+      type: object
+      required: [error, code]
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+          description: >
+            A stable word: invalid_request, unauthenticated, not_available, internal_error, handoff_invalid,
+            credential_not_found, credential_id_invalid, client_kind_invalid, client_challenge_invalid,
+            client_return_invalid, too_many_sign_ins, not_microsoft_credential, not_delegated,
+            custom_apps_disabled, default_apps_unavailable, client_invalid, authority_invalid, scopes_invalid,
+            or a Default app refusal (app_disabled, app_draft, app_needs_attention, app_type_not_served,
+            app_project_not_served, app_tenant_mismatch, app_secret_unavailable, app_not_found, app_tenant_required).
+
+    MicrosoftLoginStartRequest:
+      type: object
+      required: [project_id, credential_id, client_kind]
+      properties:
+        project_id:
+          type: integer
+          format: int64
+        credential_id:
+          type: string
+          description: The uuid of a saved Microsoft credential in the project.
+        client_kind:
+          type: string
+          description: web (a popup that redeems with the session), desktop (the system browser and a loopback listener) or mobile (the system browser session and the app's custom scheme).
+        client_challenge:
+          type: string
+          description: Desktop and mobile only. BASE64URL(SHA256(verifier)), 43 characters; the client keeps the verifier and sends it only to redeem. A web sign-in sends none.
+        loopback_port:
+          type: integer
+          description: Desktop only. The port, 1024 to 65535, of the 127.0.0.1 listener the callback page returns to.
+        redirect_scheme:
+          type: string
+          description: Mobile only. The app's custom scheme (the scheme of the active brand manifest); empty means elitea.
+
+    MicrosoftLoginStart:
+      type: object
+      required: [authorization_url, state, expires_at, app, handoff_ttl_seconds, channel_name]
+      properties:
+        authorization_url:
+          type: string
+          description: Where to send the person. Always on login.microsoftonline.com; PKCE S256; the redirect URI is the deployment's one https callback.
+        state:
+          type: string
+          description: The state of this sign-in, echoed by the callback page so the client can match it.
+        expires_at:
+          type: string
+          format: date-time
+          description: When the sign-in can no longer finish (10 minutes).
+        app:
+          type: string
+          description: custom, or the id of the Default app that signs in.
+        handoff_ttl_seconds:
+          type: integer
+          description: How long a finished sign-in waits to be redeemed (60).
+        channel_name:
+          type: string
+          description: The BroadcastChannel the web callback page also posts on, for a popup whose opener an identity page severed.
+
+    MicrosoftLoginRedeemRequest:
+      type: object
+      required: [project_id, handoff, state]
+      properties:
+        project_id:
+          type: integer
+          format: int64
+        handoff:
+          type: string
+          description: The one-time code the callback page gave the client (postMessage, loopback query or custom-scheme URL).
+        state:
+          type: string
+          description: The state of the sign-in the handoff belongs to.
+        client_verifier:
+          type: string
+          description: Desktop and mobile only; the verifier whose challenge the start sent. A web redemption sends none.
+
+    MicrosoftLoginRedeemed:
+      type: object
+      description: >
+        The access token of a finished sign-in, for the person who started it. No refresh token and no
+        client secret is ever returned; the token is kept in memory (web) or the OS secure store
+        (desktop, mobile) and expires with the access token.
+      required: [access_token, token_type, expires_at, expires_in, scope, credential_id, credential_type, app, tenant_id, account_name]
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+          description: Bearer.
+        expires_at:
+          type: string
+          format: date-time
+        expires_in:
+          type: integer
+          description: Seconds until the token expires.
+        scope:
+          type: array
+          items:
+            type: string
+        credential_id:
+          type: string
+        credential_type:
+          type: string
+        app:
+          type: string
+          description: custom, or the Default app id that signed in.
+        tenant_id:
+          type: string
+          description: The Microsoft tenant the person signed in to.
+        account_name:
+          type: string
+          description: The signed-in account's display name, for the credential form.
+
     MicrosoftAppOffers:
       type: object
       required: [credential_type, apps, custom_app_allowed]
@@ -25340,6 +25457,148 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/MicrosoftAppError' }
+
+  /microsoft_login:start:
+    post:
+      operationId: startMicrosoftLogin
+      summary: Start a Microsoft sign-in for a saved credential
+      description: >
+        ADR-0057 decision 6. Builds the Microsoft Entra authorization URL for a saved Outlook, Teams,
+        Microsoft Graph, Dataverse or delegated SharePoint credential: PKCE S256, and a random state bound
+        server side to the caller, the project, the credential, the app (Custom app or the Default app the
+        credential names) and the client kind, valid for 10 minutes and single use. The browser talks to
+        Entra and never to a token endpoint: the code exchange runs in Main, with the client secret and
+        the PKCE verifier, at a token endpoint computed from the validated Entra authority. A Default
+        app's secret never leaves Main. Refused with a stable code when the Default app cannot be used
+        (it is resolved at every start), when the platform setting microsoft.custom_apps is off and the
+        credential uses its own client, or when the authority is not an Entra authority. Requires the
+        permission that updates a credential in the project. At most 20 sign-ins may be open per person.
+      tags: [configurations]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MicrosoftLoginStartRequest' }
+      responses:
+        '200':
+          description: The authorization URL
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftLoginStart' }
+        '400':
+          description: The body, the client kind, the challenge, the loopback port or the scheme is not valid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftLoginError' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such credential in the project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftLoginError' }
+        '409':
+          description: The sign-in is refused for a reason an administrator or the credential's author can act on (see the code)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftLoginError' }
+        '429':
+          description: Too many sign-ins are open
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftLoginError' }
+        '503':
+          description: Microsoft sign-in is not available on this deployment (no database, vault master key or https public origin)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftLoginError' }
+
+  /microsoft_login:callback:
+    get:
+      operationId: completeMicrosoftLogin
+      summary: The one https redirect URI of a Microsoft sign-in
+      description: >
+        A BROWSER NAVIGATION, not an API call (ADR-0057 decision 6): Microsoft Entra redirects the
+        person's browser here, and it is the only redirect URI an Entra app registers
+        (https://host/api/v2/microsoft_login:callback), for web, desktop and mobile and for Custom and
+        Default app. It has no session by design: on desktop and mobile it runs in the system browser, and
+        on web in a popup that may belong to someone else. It consumes the state once, exchanges the code
+        in Main, reads the identity and the identity probe of the credential, and parks the sealed access
+        token as a pending handoff for 60 seconds. It attaches nothing to anyone. Only the person who
+        started the sign-in can redeem the handoff (microsoft_login:redeem), so a victim who finishes a
+        link an attacker started cannot link their Microsoft account to the attacker's credential.
+
+
+        Web: an HTML page that posts {type, state, handoff or error} to the opener (targeted at the
+        deployment origin) and on a same-origin BroadcastChannel, under a CSP that allows only its own
+        script. Desktop: a 302 to http://127.0.0.1:{port}/oauth/microsoft?handoff=...&state=... (or
+        ?state=...&error=...). Mobile: a 302 to {scheme}://oauth/microsoft?handoff=...&state=... (the same
+        error form). A code, token or secret is never in a URL or a page. An unknown, expired or reused
+        state answers a plain 400 page.
+      tags: [configurations]
+      security: []
+      parameters:
+        - { name: state, in: query, required: true, schema: { type: string } }
+        - { name: code, in: query, required: false, schema: { type: string } }
+        - { name: error, in: query, required: false, description: Set by Microsoft when the sign-in failed or was declined., schema: { type: string } }
+      responses:
+        '200':
+          description: The web popup's page
+          content:
+            text/html:
+              schema: { type: string }
+        '302':
+          description: To the desktop's loopback listener or the mobile app's custom scheme.
+          headers:
+            Location:
+              schema: { type: string }
+        '400':
+          description: An HTML page; the state is unknown, expired or already used.
+          content:
+            text/html:
+              schema: { type: string }
+        '503':
+          description: An HTML page; Microsoft sign-in is not available on this deployment.
+          content:
+            text/html:
+              schema: { type: string }
+
+  /microsoft_login:redeem:
+    post:
+      operationId: redeemMicrosoftLogin
+      summary: Redeem a finished Microsoft sign-in
+      description: >
+        ADR-0057 decision 6. The person who started the sign-in exchanges the handoff code for the
+        access token and its expiry. The caller must be the user who started it, in the same project,
+        with the state of that sign-in; a desktop or mobile sign-in must also send the verifier of its
+        client_challenge. A handoff is single use and 60 seconds: the attempt deletes it, and every
+        refusal (unknown, expired, used, another person's, a wrong verifier) is the same 400 handoff_invalid.
+        The answer carries an access token and its expiry only: no refresh token, no client secret.
+        Requires the permission that updates a credential in the project.
+      tags: [configurations]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MicrosoftLoginRedeemRequest' }
+      responses:
+        '200':
+          description: The access token of the sign-in
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftLoginRedeemed' }
+        '400':
+          description: The body is malformed, or the handoff is not valid for this caller (code handoff_invalid)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftLoginError' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '503':
+          description: Microsoft sign-in is not available on this deployment
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MicrosoftLoginError' }
 
   /admin/entitlements:
     get:

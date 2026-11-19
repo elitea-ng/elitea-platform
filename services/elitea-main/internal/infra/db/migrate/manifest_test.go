@@ -1175,7 +1175,13 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 256: shared/0256_drop_index_task_restamp_columns.sql, which drops the
 	// ten index_meta_task_restamp columns of index_ingest_jobs that 0049 added
 	// (no writer or reader since #1378; issue 1382). No permission.
-	require.EqualValues(t, 256, Head(shared))
+	//
+	// 257: shared/0257_microsoft_login.sql, the server side of a Microsoft
+	// sign-in: elitea_identity.microsoft_login_states (a started sign-in, the
+	// sealed PKCE verifier, single use) and microsoft_login_handoffs (the
+	// finished sign-in, parked for the starter to redeem, 60 seconds) (ADR-0057
+	// decision 6, epic 2254 story S1c). No permission.
+	require.EqualValues(t, 257, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

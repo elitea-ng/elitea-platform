@@ -3,7 +3,40 @@ package microsoftapps
 import (
 	"reflect"
 	"testing"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/microsoftauth/scopes"
 )
+
+// The Outlook and Teams lists and every type's defaults have ONE source,
+// microsoftauth/scopes, which the credential save, the sign-in and the connection
+// check read. This registry reads the same lists, so an administrator's ceiling can
+// never offer a permission the credential form does not, or the reverse.
+func TestOfferedListsAndDefaultsAreTheCredentialsOwn(t *testing.T) {
+	if got, want := Offered(TypeOutlook), scopes.Outlook.Names(); !reflect.DeepEqual(got, want) {
+		t.Errorf("outlook offered = %v, want %v", got, want)
+	}
+	if got, want := Offered(TypeTeams), scopes.Teams.Names(); !reflect.DeepEqual(got, want) {
+		t.Errorf("teams offered = %v, want %v", got, want)
+	}
+	if got, want := Defaults(TypeOutlook), scopes.Outlook.Defaults(); !reflect.DeepEqual(got, want) {
+		t.Errorf("outlook defaults = %v, want %v", got, want)
+	}
+	if got, want := Defaults(TypeTeams), scopes.Teams.Defaults(); !reflect.DeepEqual(got, want) {
+		t.Errorf("teams defaults = %v, want %v", got, want)
+	}
+	if got, want := Defaults(TypeMSGraph), scopes.MSGraphDefault(); !reflect.DeepEqual(got, want) {
+		t.Errorf("ms_graph defaults = %v, want %v", got, want)
+	}
+	if len(Offered(TypeMSGraph)) != 0 {
+		t.Error("a free-text type offers no fixed list")
+	}
+	// A caller cannot change the shared list through the copy it was handed.
+	got := Offered(TypeOutlook)
+	got[0] = "Changed.Read"
+	if Offered(TypeOutlook)[0] != scopes.Outlook.Names()[0] {
+		t.Error("Offered shares its backing array")
+	}
+}
 
 func TestNormalizeCeilingPerType(t *testing.T) {
 	got, err := NormalizeCeiling(TypeTeams, []string{"channelmessage.send", "Chat.Read", "chat.read"})

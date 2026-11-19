@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/microsoftauth/scopes"
 )
 
 // The permission model of a registry app (ADR-0057 decision 3): per credential
@@ -32,21 +34,9 @@ type Resource struct {
 	Permissions []Permission `json:"permissions"`
 }
 
-var outlookPermissions = []string{
-	"Mail.Read", "Mail.ReadWrite", "Mail.Send", "Mail.Read.Shared", "Mail.ReadWrite.Shared", "Mail.Send.Shared",
-}
-
-var teamsPermissions = []string{
-	"User.ReadBasic.All", "Chat.Read", "ChatMessage.Send", "Chat.Create", "Team.ReadBasic.All",
-	"Channel.ReadBasic.All", "ChannelMessage.Send", "ChannelMessage.Read.All",
-}
-
-var (
-	outlookDefaults    = []string{"Mail.Read"}
-	teamsDefaults      = []string{"User.ReadBasic.All", "Chat.Read", "Team.ReadBasic.All", "Channel.ReadBasic.All"}
-	msGraphDefaults    = []string{"User.Read"}
-	sharePointDefaults = []string{"Sites.Read.All"}
-)
+// The Outlook and Teams lists and their defaults come from microsoftauth/scopes, the one
+// source the credential save, the sign-in and the connection check read.
+var sharePointDefaults = []string{"Sites.Read.All"}
 
 // adminConsentPermissions are the offered permissions that need Entra admin
 // consent (the SDK: ChannelMessage.Read.All, "off by default").
@@ -59,9 +49,9 @@ var permissionPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z0-9
 func offered(credentialType string) []string {
 	switch credentialType {
 	case TypeOutlook:
-		return outlookPermissions
+		return scopes.Outlook.Names()
 	case TypeTeams:
-		return teamsPermissions
+		return scopes.Teams.Names()
 	}
 	return nil
 }
@@ -76,11 +66,11 @@ func Offered(credentialType string) []string {
 func Defaults(credentialType string) []string {
 	switch credentialType {
 	case TypeOutlook:
-		return append([]string(nil), outlookDefaults...)
+		return scopes.Outlook.Defaults()
 	case TypeTeams:
-		return append([]string(nil), teamsDefaults...)
+		return scopes.Teams.Defaults()
 	case TypeMSGraph:
-		return append([]string(nil), msGraphDefaults...)
+		return scopes.MSGraphDefault()
 	case TypeSharePoint:
 		return append([]string(nil), sharePointDefaults...)
 	}

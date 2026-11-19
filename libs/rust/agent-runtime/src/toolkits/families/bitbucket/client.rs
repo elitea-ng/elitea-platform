@@ -6,7 +6,6 @@
 //! speaks the same endpoints directly over a bounded HTTPS, no-redirect,
 //! no-retry transport with a sensitive Basic credential.
 
-#[cfg(test)]
 use std::sync::Arc;
 
 use adk_core::{AdkError, ErrorCategory, ErrorComponent, RetryHint};
@@ -146,6 +145,11 @@ pub(in crate::toolkits) enum BitbucketOperation<'a> {
         contents: &'a str,
         branch: Option<&'a str>,
     },
+    DeleteFile {
+        file_path: &'a str,
+        branch: Option<&'a str>,
+        commit_message: Option<&'a str>,
+    },
     ReadFile {
         file_path: &'a str,
         branch: Option<&'a str>,
@@ -193,13 +197,67 @@ pub(in crate::toolkits) enum BitbucketOperation<'a> {
     },
 }
 
+/// The repository one call names (the SDK's per-call `project` and
+/// `repository` arguments). Empty means the toolkit's own repository.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(in crate::toolkits) struct BitbucketTarget {
+    pub(in crate::toolkits) project: Option<String>,
+    pub(in crate::toolkits) repository: Option<String>,
+}
+
 #[async_trait]
 pub(in crate::toolkits) trait BitbucketApi: Send + Sync {
     async fn execute(
         &self,
         operation: BitbucketOperation<'_>,
     ) -> Result<Value, BitbucketClientError>;
+
+    /// `execute` against the repository `target` names. A client that has
+    /// one repository only ignores it.
+    async fn execute_for(
+        &self,
+        target: &BitbucketTarget,
+        operation: BitbucketOperation<'_>,
+    ) -> Result<Value, BitbucketClientError> {
+        let _ = target;
+        self.execute(operation).await
+    }
 }
+
+/// The SDK keeps at most this many other repositories' clients.
+const FOREIGN_CLIENT_CACHE_SIZE: usize = 32;
+/// Values pipelines and LLMs send when they mean "no value".
+const EMPTY_TARGET_PLACEHOLDERS: [&str; 5] = ["null", "none", "nil", "undefined", "n/a"];
+
+/// `_normalize_target`.
+fn normalize_target(value: Option<&str>) -> Option<String> {
+    let value = value?.trim().trim_matches(|c| c == '\'' || c == '"').trim();
+    if value.is_empty()
+        || EMPTY_TARGET_PLACEHOLDERS
+            .iter()
+            .any(|placeholder| value.eq_ignore_ascii_case(placeholder))
+    {
+        return None;
+    }
+    Some(value.to_owned())
+}
+
+/// A project key, workspace or slug is one path segment; a Cloud workspace may
+/// also be a `{uuid}` (the SDK's `_TARGET_SEGMENT`).
+fn valid_target_segment(value: &str) -> bool {
+    if let Some(inner) = value
+        .strip_prefix('{')
+        .and_then(|rest| rest.strip_suffix('}'))
+    {
+        return !inner.is_empty() && inner.chars().all(|c| c.is_ascii_hexdigit() || c == '-');
+    }
+    let mut chars = value.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphanumeric() || matches!(c, '_' | '~' | '-'))
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '~' | '-'))
+}
+
+/// The clients of the other repositories a call named, oldest first.
+type ForeignClients = Vec<((String, String), Arc<BitbucketClient>)>;
 
 /// One claim-scoped Bitbucket client with the SDK's invocation-local active
 /// branch.
@@ -207,6 +265,12 @@ pub(crate) struct BitbucketClient {
     rest: BitbucketRest,
     operation_gate: Mutex<()>,
     active_branch: Mutex<Box<str>>,
+    /// Other repositories a call named, keyed by the lowercased project and
+    /// repository, oldest first. Each keeps its own active branch.
+    foreign: Mutex<ForeignClients>,
+    /// Names another repository in the messages that name one (empty for
+    /// the toolkit's own).
+    target_suffix: Box<str>,
 }
 
 impl BitbucketClient {
@@ -221,7 +285,79 @@ impl BitbucketClient {
             rest,
             operation_gate: Mutex::new(()),
             active_branch,
+            foreign: Mutex::new(Vec::new()),
+            target_suffix: Box::default(),
         }
+    }
+
+    /// The `(project, repository)` a call names when it is not the toolkit's
+    /// own (`_target_key`): a missing half comes from the configuration.
+    fn target_key(
+        &self,
+        target: &BitbucketTarget,
+    ) -> Result<Option<(String, String)>, BitbucketClientError> {
+        let project = normalize_target(target.project.as_deref());
+        let repository = normalize_target(target.repository.as_deref());
+        if project.is_none() && repository.is_none() {
+            return Ok(None);
+        }
+        for value in [&project, &repository].into_iter().flatten() {
+            if !valid_target_segment(value) {
+                return Err(invalid_input());
+            }
+        }
+        let configured = self.rest.config();
+        let project = project.unwrap_or_else(|| configured.project().to_owned());
+        let repository = repository.unwrap_or_else(|| configured.repository().to_owned());
+        if project.eq_ignore_ascii_case(configured.project())
+            && repository.eq_ignore_ascii_case(configured.repository())
+        {
+            return Ok(None);
+        }
+        Ok(Some((project, repository)))
+    }
+
+    /// The client of another repository, started on its default branch and
+    /// kept for later calls.
+    async fn foreign_client(
+        &self,
+        project: &str,
+        repository: &str,
+    ) -> Result<Arc<Self>, BitbucketClientError> {
+        let key = (
+            project.to_ascii_lowercase(),
+            repository.to_ascii_lowercase(),
+        );
+        let mut cache = self.foreign.lock().await;
+        if let Some((_, client)) = cache.iter().find(|(known, _)| *known == key) {
+            return Ok(Arc::clone(client));
+        }
+        let rest = self.rest.retargeted(project, repository)?;
+        let branch = Self::default_branch(&rest).await?;
+        let mut client = Self::with_rest(rest);
+        client.active_branch = Mutex::new(branch.into());
+        client.target_suffix = format!(" in `{project}/{repository}`").into();
+        let client = Arc::new(client);
+        if cache.len() >= FOREIGN_CLIENT_CACHE_SIZE {
+            cache.remove(0);
+        }
+        cache.push((key, Arc::clone(&client)));
+        Ok(client)
+    }
+
+    /// `default_branch()` of the SDK's client.
+    async fn default_branch(rest: &BitbucketRest) -> Result<String, BitbucketClientError> {
+        let (suffix, pointer): (Vec<&str>, &str) = if rest.cloud() {
+            (Vec::new(), "/mainbranch/name")
+        } else {
+            (vec!["default-branch"], "/displayId")
+        };
+        let body = rest.get_json(rest.repo_url(&suffix)?, &[]).await?;
+        body.pointer(pointer)
+            .and_then(Value::as_str)
+            .filter(|branch| !branch.is_empty())
+            .map(ToOwned::to_owned)
+            .ok_or_else(invalid_response)
     }
 
     #[cfg(test)]
@@ -440,6 +576,20 @@ impl BitbucketClient {
 
 #[async_trait]
 impl BitbucketApi for BitbucketClient {
+    async fn execute_for(
+        &self,
+        target: &BitbucketTarget,
+        operation: BitbucketOperation<'_>,
+    ) -> Result<Value, BitbucketClientError> {
+        match self.target_key(target)? {
+            None => self.execute(operation).await,
+            Some((project, repository)) => {
+                let client = self.foreign_client(&project, &repository).await?;
+                client.execute(operation).await
+            }
+        }
+    }
+
     #[allow(clippy::too_many_lines)] // One source-ordered provider ledger is easier to audit.
     async fn execute(
         &self,
@@ -480,7 +630,10 @@ impl BitbucketApi for BitbucketClient {
                 Ok(Value::String(if exists {
                     format!("Branch {branch_name} already exists. set it as active")
                 } else {
-                    format!("Branch {branch_name} created successfully and set as active")
+                    format!(
+                        "Branch {branch_name} created successfully{} and set as active",
+                        self.target_suffix
+                    )
                 }))
             }
             BitbucketOperation::DeleteBranch { branch_name } => {
@@ -689,6 +842,55 @@ impl BitbucketApi for BitbucketClient {
                     "File has been created: {file_path}."
                 )))
             }
+            BitbucketOperation::DeleteFile {
+                file_path,
+                branch,
+                commit_message,
+            } => {
+                let branch = self.branch_or_active(branch).await?;
+                // The SDK reads the file first and refuses a missing one.
+                match self.read_text(file_path, &branch).await {
+                    Ok(_) => {}
+                    Err(error) if error.code() == BitbucketClientErrorCode::NotFound => {
+                        return Ok(Value::String(format!(
+                            "File '{file_path}' not found on branch '{branch}'"
+                        )));
+                    }
+                    Err(error) => return Err(error),
+                }
+                if !self.rest.cloud() {
+                    // Server's browse endpoint only creates and edits files.
+                    return Ok(Value::String(
+                        "Deleting a file is not supported by the Bitbucket Server REST API. This is a platform limitation: the file-editing endpoint only supports creating or updating file content, not removing files."
+                            .to_owned(),
+                    ));
+                }
+                path_segments(file_path)?;
+                let message = match commit_message {
+                    Some(message) if !message.is_empty() => message.to_owned(),
+                    _ => format!("Delete {file_path}"),
+                };
+                validate_text(&message, MAX_TEXT_BYTES)?;
+                // Cloud's `src` endpoint reads a `files` field with no
+                // matching content field as a deletion of that path.
+                let fields = [
+                    ("branch", branch.as_str()),
+                    ("files", file_path),
+                    ("message", message.as_str()),
+                ];
+                self.rest
+                    .send(
+                        Method::POST,
+                        self.rest.repo_url(&["src"])?,
+                        &[],
+                        &Body::Form(&fields),
+                        true,
+                    )
+                    .await?;
+                Ok(Value::String(format!(
+                    "File has been deleted: {file_path}."
+                )))
+            }
             BitbucketOperation::ReadFile {
                 file_path,
                 branch,
@@ -768,7 +970,10 @@ impl BitbucketApi for BitbucketClient {
                 let branches = self.list_branches().await?;
                 if branches.iter().any(|name| name == branch_name) {
                     *self.active_branch.lock().await = branch_name.into();
-                    return Ok(Value::String(format!("Switched to branch `{branch_name}`")));
+                    return Ok(Value::String(format!(
+                        "Switched to branch `{branch_name}`{}",
+                        self.target_suffix
+                    )));
                 }
                 let listed = |names: &[String]| {
                     python_repr(&Value::Array(

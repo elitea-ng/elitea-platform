@@ -10,7 +10,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/microsoftapps"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/microsoftauth"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/microsoftauth/scopes"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/microsoftlogin"
 )
 
 // The Default app of a Microsoft credential (ADR-0057 decision 5): the credential
@@ -85,20 +85,9 @@ func (h *Handler) resolveDefaultApp(w http.ResponseWriter, r *http.Request, proj
 	return microsoftapps.Resolved{}, false
 }
 
-// defaultAppScopes is the sign-in scope list of a credential under a Default app:
-// what the credential selected, cut to the app's ceiling, and `offline_access`
-// according to the APP's refresh setting (the credential's own switch does not
-// apply). removed names what the ceiling cut.
+// defaultAppScopes is the sign-in scope list of a credential under a Default app. The
+// rule lives with the sign-in (microsoftlogin.DefaultAppSignInScopes), so the check
+// and the sign-in cannot ask for different scopes.
 func defaultAppScopes(descriptor microsoftauth.Descriptor, app microsoftapps.Resolved, configType string, data map[string]any) (signIn, effective, removed []string, err error) {
-	selected, _, err := descriptor.Scopes(data)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	effective, removed = app.EffectiveScopes(configType, selected)
-	if descriptor.ScopeModel() == microsoftauth.ScopesAsStored {
-		// SharePoint's sign-in scopes are the web client's business today.
-		return effective, effective, removed, nil
-	}
-	refresh := app.AutoRefreshToken
-	return scopes.SignIn(effective, &refresh), effective, removed, nil
+	return microsoftlogin.DefaultAppSignInScopes(descriptor, app, configType, data)
 }

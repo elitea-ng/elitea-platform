@@ -963,7 +963,10 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // operations (list, create, update, disable, enable, test, settings) and the project-facing offers
 // read a credential form uses. Like the other admin editors they are not in the manifest, so
 // MANIFEST_ENTRY_COUNT is unchanged.
-const GENERATED_OPERATION_COUNT = 574;
+// 574 -> 577 (issue 2268, epic 2254 story S1c): the Microsoft sign-in start, callback and
+// redeem. The shared web feature that calls them is story S1d, so none is in the manifest yet and
+// MANIFEST_ENTRY_COUNT is unchanged.
+const GENERATED_OPERATION_COUNT = 577;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

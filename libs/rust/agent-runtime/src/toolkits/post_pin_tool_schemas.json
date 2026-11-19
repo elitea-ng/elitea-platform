@@ -1,0 +1,72 @@
+{
+ "provenance": {
+  "source": "github.com/EliteaAI/elitea-sdk, branch main",
+  "commit": "b3f1d7413019b2ba0d59c44bbcd2b03c0d83abeb",
+  "captured": "2026-11-18",
+  "method": "args_schema.model_json_schema() of each tool the wrapper's get_available_tools declares (not commented out), imported from the commit's source tree",
+  "why": "Tools the SDK declares that the pinned snapshot (revision b5113a12, 2026-08-07) lacks. S10 #2265. Read by sdk_conformance.rs (merged into the snapshot) and by rust_only_toolkit_tools.json (types), which the Go catalogue merges into the type's argument schemas."
+ },
+ "types": {
+  "bitbucket": {
+   "delete_file": {
+    "properties": {
+     "file_path": {
+      "description": "The path of the file",
+      "title": "File Path",
+      "type": "string"
+     },
+     "branch": {
+      "description": "The branch to delete the file from",
+      "title": "Branch",
+      "type": "string"
+     },
+     "commit_message": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Commit message for deleting the file. Optional.",
+      "title": "Commit Message"
+     },
+     "project": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Project key (Bitbucket Server) or workspace (Bitbucket Cloud) of the repository to use. Leave empty to use the toolkit's project.",
+      "title": "Project"
+     },
+     "repository": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Slug of the repository to use. Leave empty to use the toolkit's repository; required only when the toolkit has no repository configured.",
+      "title": "Repository"
+     }
+    },
+    "required": [
+     "file_path",
+     "branch"
+    ],
+    "title": "DeleteFileModel",
+    "type": "object"
+   }
+  }
+ }
+}
