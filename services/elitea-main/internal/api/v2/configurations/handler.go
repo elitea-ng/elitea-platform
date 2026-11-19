@@ -90,6 +90,9 @@ type Handler struct {
 	// credential through the MCP authorization egress guard
 	// (check_connection_oauth.go). nil refuses the read.
 	oauthDiscovery *mcpoauth.Fetcher
+	// microsoftProbe is the guarded client that reads a delegated token's
+	// identity (check_connection_oauth.go). nil refuses the read.
+	microsoftProbe func(*http.Request) (*http.Response, error)
 	// modelProbes bounds the rate and the concurrency of the llm_model test
 	// per project and user (model_probe_limiter.go). NewHandler always
 	// supplies one.
