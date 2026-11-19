@@ -135,7 +135,7 @@ jobs:
         if: ${{ !cancelled() && steps.reach.outputs.go == 'true' }}
         # Pinned, as ci-go.yml pins golangci-lint: a moving scanner reddens
         # main and every open PR with no change in this repository.
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.10.0
       - name: govulncheck over every Go module that ships
         if: ${{ !cancelled() && steps.reach.outputs.go == 'true' }}
         run: node scripts/ci/govulncheck.mjs
