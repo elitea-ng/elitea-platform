@@ -15,7 +15,7 @@
 //
 // THE POLICY, applied in this order:
 //
-//   1. an entry of a ref that is not main, older than half a day, goes: a pull
+//   1. an entry of a pull-request ref, older than half a day, goes: a pull
 //      request reads main's entries and its own writes are copies nothing reads;
 //   2. of every FAMILY of keys (the key without its trailing hash, date or run
 //      id) only the newest entry stays, except the families that are many by
@@ -61,7 +61,8 @@ export function decide(caches, { now = Date.now(), capBytes = CAP_BYTES } = {}) 
   };
   const created = (c) => Date.parse(c.created_at);
   for (const c of caches) {
-    if (c.ref !== MAIN_REF && now - created(c) > PR_COPY_GRACE_MS) doom(c, "a copy written from a pull request ref: nothing reads it");
+    // Only pull-request refs: a tag or a dispatch on another branch writes entries a release run may read.
+    if (c.ref.startsWith("refs/pull/") && now - created(c) > PR_COPY_GRACE_MS) doom(c, "a copy written from a pull request ref: nothing reads it");
   }
   const families = new Map();
   for (const c of caches) {

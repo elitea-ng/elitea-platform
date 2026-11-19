@@ -48,7 +48,7 @@ jobs:
       matrix:
         include:
           - language: go
-            build-mode: autobuild
+            build-mode: manual
           - language: javascript-typescript
             build-mode: none
           - language: actions
@@ -75,16 +75,17 @@ jobs:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
 
-      # The Go workspace builds from go.work; a plain autobuild of a repository
-      # whose modules are not at the root would find nothing. Build every module
-      # of the workspace (scripts/go/workspace-run.sh knows the list).
-      - name: Build the Go workspace
+      # `manual`: the modules are not at the repository root, so autobuild would
+      # find nothing. This build is the one CodeQL traces: every module of
+      # go.work, then the gateway, which is outside go.work (GOWORK=off).
+      - name: Build the Go workspace and the gateway
         if: matrix.language == 'go'
         run: |
           set -euo pipefail
           go list -m -f '{{.Dir}}' | while IFS= read -r dir; do
             (cd "$dir" && go build ./...)
           done
+          (cd services/elitea-llm-gateway && GOWORK=off go build ./...)
 
       - uses: github/codeql-action/analyze@v4
         with:

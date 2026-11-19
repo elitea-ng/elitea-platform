@@ -659,19 +659,7 @@ jobs:
           [ "$status" -eq 0 ] || exit 1
           echo "chart lists agree: [${dirs}]"
 
-      # ── ArgoCD Applications ───────────────────────────────────────────────────
-      - name: Install kubeconform
-        if: ${{ !cancelled() }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # Through the API, not the github.com download link (504s).
-          gh release download "${KUBECONFORM_VERSION}" --repo yannh/kubeconform \
-            --pattern kubeconform-linux-amd64.tar.gz --output /tmp/kubeconform.tar.gz --clobber
-          echo "${KUBECONFORM_SHA256}  /tmp/kubeconform.tar.gz" | sha256sum -c -
-          tar -xzf /tmp/kubeconform.tar.gz -C /usr/local/bin kubeconform
-          kubeconform -v
-
+      # ── ArgoCD Applications (kubeconform is installed by the step above) ──────
       # Validated against the REAL argoproj.io Application CRD schema (from the
       # CRDs-catalog), with -strict — so a misspelled spec field fails here
       # instead of silently doing nothing in the cluster. See the note in the

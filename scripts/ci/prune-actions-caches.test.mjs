@@ -36,6 +36,12 @@ test("a pull-request ref's entry goes once it is half a day old, a fresh one sta
   assert.match(doomed[0].reason, /pull request ref/);
 });
 
+test("an entry of a tag or another branch is not a pull-request copy and stays", () => {
+  const tag = entry("tag-aaaaaaaa", 1, { ref: "refs/tags/v1.2.3", created: 40 });
+  const branch = entry("branch-bbbbbbbb", 1, { ref: "refs/heads/feature", created: 40 });
+  assert.deepEqual(decide([tag, branch], { now: NOW }).doomed, []);
+});
+
 test("only the newest entry of a family stays, per ref", () => {
   const h = (c) => c.repeat(64);
   const older = entry(`go-v1-L-g-${h("a")}`, 1.2, { created: 72 });

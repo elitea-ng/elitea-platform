@@ -108,7 +108,7 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
-          node scripts/ci/changed-paths.mjs go '**/go.mod' '**/go.sum' go.work go.work.sum \
+          node scripts/ci/changed-paths.mjs go '**/*.go' '**/go.mod' '**/go.sum' go.work go.work.sum \
             scripts/ci/govulncheck.mjs scripts/ci/govulncheck-allowlist.json .github/workflows/dependency-scanning.yml
           node scripts/ci/changed-paths.mjs rust '**/Cargo.lock' '**/Cargo.toml' deny.toml \
             scripts/ci/cargo-deny.mjs .github/workflows/dependency-scanning.yml

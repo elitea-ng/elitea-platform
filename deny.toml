@@ -2,7 +2,7 @@
 #
 # One file, one policy: the workflow (dependency-scanning.yml, step "cargo-deny
 # over every Cargo.lock") runs `cargo deny --manifest-path <workspace>/Cargo.toml
-# check` for each tracked Cargo.lock, and scripts/ci/check-cargo-deny-coverage.mjs
+# check` for each tracked Cargo.lock, and scripts/ci/cargo-deny.mjs
 # fails when a lock is neither scanned nor excluded here on purpose.
 #
 # This is a code-level gate (#2246): RustSec advisories, yanked crates, a licence
@@ -26,7 +26,7 @@ version = 2
 # A yanked crate is a warning: `cargo update -p` is the fix and Dependabot proposes it.
 yanked = "warn"
 # Every ignore carries the advisory id, the reason, and an expiry: an ignore
-# that outlives its reason is a hole. scripts/ci/check-cargo-deny-coverage.mjs
+# that outlives its reason is a hole. scripts/ci/cargo-deny.mjs
 # fails once an `expires` date below has passed.
 ignore = [
   { id = "RUSTSEC-2026-0382", reason = "rustls-webpki distrusted intermediates; first-enablement finding, tracked by #2313 (expires 2026-12-31)" },
