@@ -27,8 +27,8 @@ import "strings"
 // form renders as a masked box is a key this redaction removes.
 //
 // The SDK toolkit schema snapshot is the AUDIT ORACLE for this rule, not an
-// input to it. scripts/contract/sync_toolkit_schema_snapshot.py projects the
-// SDK's `secret` annotation into
+// input to it. The SDK's `secret` annotation is projected (by a generator deleted
+// in #1312; see docs/contributing/adding-types.md) into
 // internal/runtimecomposition/current_toolkit_schema_snapshot.json, and
 // TestPinnedToolkitSnapshotSecretFieldsAreClassifiedSecret (in that package)
 // fails when a field the SDK declares secret is not classified secret here.

@@ -20,6 +20,9 @@ pub(crate) mod config;
 pub(crate) mod direct;
 pub mod meter;
 pub(crate) mod registry;
+// Only the Office catalogue test reads it (see `catalogue`).
+#[cfg(all(test, feature = "toolkit-office"))]
+pub(crate) mod tavily_catalogue;
 pub(crate) mod transport;
 
 use std::collections::BTreeMap;
