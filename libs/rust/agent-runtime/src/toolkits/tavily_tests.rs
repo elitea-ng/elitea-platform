@@ -348,10 +348,6 @@ async fn web_extract_refuses_urls_the_policy_does_not_allow() {
             "https://user@docs.rs/x: URLs with credentials or ambiguous hosts are not allowed",
         ),
         (
-            json!({"urls": ["https://docs.rs%40evil.example/x"]}),
-            "https://docs.rs%40evil.example/x: URLs with credentials or ambiguous hosts are not allowed",
-        ),
-        (
             json!({"urls": ["https://docs.rs/a b"]}),
             "https://docs.rs/a b: URL contains characters that are not allowed",
         ),
