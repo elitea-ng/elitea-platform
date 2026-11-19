@@ -2924,7 +2924,7 @@ fn runs_query(limit: usize) -> GitHubWorkflowRunsQuery {
     }
 }
 
-fn run_json(id: u64, conclusion: Value) -> Value {
+fn run_json(id: u64, conclusion: &Value) -> Value {
     json!({
         "id": id, "name": "CI", "workflow_id": 77, "run_number": id - 8000, "event": "push",
         "status": "completed", "conclusion": conclusion,
@@ -2941,7 +2941,7 @@ async fn workflow_runs_list_the_repository_newest_first_up_to_the_limit() {
         "runs",
         200,
         json!({"total_count": 3, "workflow_runs": [
-            run_json(9003, json!("success")), run_json(9002, json!("failure")), run_json(9001, Value::Null)
+            run_json(9003, &json!("success")), run_json(9002, &json!("failure")), run_json(9001, &Value::Null)
         ]}),
     )]);
     let api = runs_client(&transport);
@@ -2983,7 +2983,7 @@ async fn workflow_runs_of_one_workflow_resolve_a_file_name_then_an_id() {
         (
             "workflows/77/runs",
             200,
-            json!({"workflow_runs": [run_json(9001, json!("success"))]}),
+            json!({"workflow_runs": [run_json(9001, &json!("success"))]}),
         ),
         ("workflows/1234567", 404, json!({"message": "Not Found"})),
         (
