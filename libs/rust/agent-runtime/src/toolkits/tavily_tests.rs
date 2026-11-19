@@ -627,7 +627,7 @@ async fn a_failed_call_says_why_in_the_sdk_words() {
         ),
         (
             "error_432",
-            "auth_failed",
+            "provider_bad_request",
             "Tavily refused the request: the key's plan or credit limit is reached.",
         ),
         (
