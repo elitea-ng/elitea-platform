@@ -514,3 +514,107 @@ func TestAPermissionRevokedDuringIntentRegistrationIsNeverSignedPostgres(t *test
 	}
 	waitNoAdvisoryLocks(t, r.w)
 }
+
+// 5b-1 PR B real-PG Main dispatch identity test:
+// settings.retry_on_fail accepts ordinal tries 1..=max_tries (+ MaxRuntimeLostRetries
+// for non-platform-client), refuses +1, refuses legacy identity on try 1, and
+// refuses forged/foreign execution claims.
+func TestOriginalCodeSettingsRetryDispatchIdentityPostgres(t *testing.T) {
+	instructions := `entry_point: run
+state:
+  input: str
+  answer: int
+nodes:
+  - id: run
+    type: code
+    language: python
+    code: '1'
+    input: [input]
+    output: [answer]
+    settings: {retry_on_fail: true, max_tries: 3, wait_between_tries_ms: 100, timeout_ms: 5000}
+    transition: END
+`
+	cfg := `{"id":"run","type":"code","language":"python","code":{"type":"fixed","value":"1"},"input":["input"],"output":["answer"],"structured_output":false,"debug":false,"transition":"END"}`
+	r := newRealPathWorldWith(t, effectsParent, effectsClaim2, 3, instructions)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+
+	policy, err := storage.OriginalSavedCodePolicy(r.instructions, r.yamlSHA, "run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	declaration, err := storage.MatchOriginalSavedCodeConfiguration(policy, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !declaration.SettingsRetryOnFail || declaration.SettingsMaxTries != 3 {
+		t.Fatalf("unexpected declaration settings: retry=%v maxTries=%d", declaration.SettingsRetryOnFail, declaration.SettingsMaxTries)
+	}
+	prepared := []byte(`{"revision":1,"language":"python","source":"1","input":{"input":"hi"},"image_digest":"sha256:` + strings.Repeat("9", 64) + `","policy_revision":"code-v1","timeout_seconds":5}`)
+	metadata, err := storage.MatchCodePrepared(declaration, []byte(cfg), prepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activation := strings.Repeat("4", 64)
+	legacyDispatch := strings.Repeat("a", 64)
+
+	registerAttempt := func(claim storage.ContentClaim, attempt uint16, dispatch string) error {
+		visitReq := code.VisitRequest{
+			Schema:                        "elitea.sandbox.original-code-visit-request.v1",
+			ActivationID:                  activation,
+			NodeID:                        "run",
+			GraphThread:                   r.root,
+			Step:                          1,
+			Attempt:                       attempt,
+			NodeDigest:                    hex.EncodeToString(declaration.ConfigurationDigest[:]),
+			OwningYAMLSHA256:              r.yamlSHA,
+			ConfigurationBase64URL:        base64.RawURLEncoding.EncodeToString([]byte(cfg)),
+			PreWorkspacePreparedBase64URL: base64.RawURLEncoding.EncodeToString(prepared),
+			SavedChildScope:               json.RawMessage("null"),
+		}
+		visit, err := r.repo.RegisterOriginalCodeVisit(ctx, claim, visitReq)
+		if err != nil {
+			return err
+		}
+		intentReq := code.IntentRequest{
+			Schema:             "elitea.sandbox.original-code-intent-request.v1",
+			OriginalVisit:      visit.OriginalVisit,
+			DispatchActivation: dispatch,
+			RequestDigest:      metadata.Fingerprint,
+			SupervisorAudience: realPathAudience,
+			PreparedBase64URL:  base64.RawURLEncoding.EncodeToString(prepared),
+		}
+		_, err = r.repo.RegisterOriginalCodeIntent(ctx, claim, intentReq)
+		return err
+	}
+
+	// Legacy non-ordinal dispatch on try 1 must be refused when settings.retry_on_fail is true.
+	if err := registerAttempt(r.claim, 1, legacyDispatch); err == nil {
+		t.Fatal("legacy non-ordinal dispatch was admitted on try 1")
+	}
+
+	// Ordinal tries 1..=max_tries + MaxRuntimeLostRetries (5) all succeed on real PG.
+	for attempt := uint16(1); attempt <= 3+MaxRuntimeLostRetries; attempt++ {
+		if err := registerAttempt(r.claim, attempt, code.DispatchActivation(activation, attempt)); err != nil {
+			t.Fatalf("ordinal attempt %d refused: %v", attempt, err)
+		}
+	}
+
+	// One past the allowance (attempt 6) must be refused closed.
+	over := uint16(3 + MaxRuntimeLostRetries + 1)
+	if err := registerAttempt(r.claim, over, code.DispatchActivation(activation, over)); err == nil {
+		t.Fatalf("attempt %d past max_tries + MaxRuntimeLostRetries was admitted", over)
+	}
+
+	// Forged / foreign execution claim must be refused closed.
+	foreignClaim := r.claim
+	foreignClaim.ExecutionID = effectsForeign
+	if err := registerAttempt(foreignClaim, 1, code.DispatchActivation(activation, 1)); err == nil {
+		t.Fatal("foreign execution claim was admitted")
+	}
+
+	if intents := r.count(t, "original_code_intents"); intents != int(3+MaxRuntimeLostRetries) {
+		t.Fatalf("intents = %d, want %d", intents, 3+MaxRuntimeLostRetries)
+	}
+	waitNoAdvisoryLocks(t, r.w)
+}
