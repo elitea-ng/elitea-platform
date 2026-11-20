@@ -2,6 +2,7 @@ package delegationnotice
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -97,7 +98,11 @@ func (s *Service) DelegationReview(ctx context.Context, projectID, userID, calle
 	callerName := ""
 	if lister, ok := s.editors.(NameLister); ok {
 		// Best effort: a failed lookup keeps the worker's label.
-		callerName, _ = lister.AgentName(ctx, projectID, callerID)
+		name, nameErr := lister.AgentName(ctx, projectID, callerID)
+		if nameErr != nil {
+			slog.WarnContext(ctx, "delegation notice: keep the worker's caller name", "application_id", callerID, "error", nameErr)
+		}
+		callerName = name
 	}
 	if allowed {
 		return Review{CanReview: true, CallerName: callerName}, nil
