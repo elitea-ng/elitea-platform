@@ -2181,9 +2181,11 @@ impl PipelineDefinition {
         let executable = CodeNode::new(bound, self.state.clone(), runtime).map_err(|_| {
             PipelineConfigurationError::Invalid("Code state declarations are invalid")
         })?;
-        let executable = executable.with_events(runtimes.events.clone());
-        let binding = self.recovery.get(node.id());
         let admitted_settings = self.settings.get(node.id());
+        let executable = executable
+            .with_events(runtimes.events.clone())
+            .with_timeout_ms(admitted_settings.and_then(|s| s.settings.timeout_ms));
+        let binding = self.recovery.get(node.id());
         let mut next = if let Some(authority) = journals {
             let policy = match (binding, admitted_settings) {
                 (Some(binding), _) => binding.policy.clone(),

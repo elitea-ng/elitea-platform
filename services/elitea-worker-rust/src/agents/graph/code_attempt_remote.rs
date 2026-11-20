@@ -1,8 +1,8 @@
 //! Classify the exact Code boundary. Do not parse display messages.
 
 use super::{
-    CodeInvocation, RemoteCodeRuntime, SandboxCallError, SandboxOutcome, observation_deadline,
-    validate_invocation,
+    CodeInvocation, RemoteCodeRuntime, SandboxCallError, SandboxOutcome, effective_timeout_seconds,
+    observation_deadline, validate_invocation,
 };
 use crate::agents::graph::code_runtime::{CodeAttemptFailure, CodeAttemptPhase};
 use crate::agents::graph::code_timing;
@@ -111,19 +111,23 @@ impl RemoteCodeRuntime {
                 classify(phase, class, invocation.activation, true)
             })?
         } else {
-            self.admit_fresh(profile, Some(declaration.node_id.as_str()))
-                .await
-                .map_err(|refusal| {
-                    // R1: a nested acquire is an internal fault, not a deadline.
-                    let class = if refusal.cause
-                        == elitea_agent_runtime::graph::fanout::admission::CodeRefusalCause::NestedSlot
-                    {
-                        NodeFailureClass::InvalidConfiguration
-                    } else {
-                        NodeFailureClass::DeadlineInsufficient
-                    };
-                    before(CodeAttemptPhase::Admission, class)
-                })?
+            self.admit_fresh(
+                profile,
+                invocation.timeout_ms,
+                Some(declaration.node_id.as_str()),
+            )
+            .await
+            .map_err(|refusal| {
+                // R1: a nested acquire is an internal fault, not a deadline.
+                let class = if refusal.cause
+                    == elitea_agent_runtime::graph::fanout::admission::CodeRefusalCause::NestedSlot
+                {
+                    NodeFailureClass::InvalidConfiguration
+                } else {
+                    NodeFailureClass::DeadlineInsufficient
+                };
+                before(CodeAttemptPhase::Admission, class)
+            })?
         };
         let declaration = crate::sandbox::code_recovery::OriginalCodeDeclarationInput {
             node_id: &declaration.node_id,
@@ -140,7 +144,9 @@ impl RemoteCodeRuntime {
         };
         // Main being briefly unavailable is never a node failure: retry the same
         // idempotent call until the attempt's own observation deadline.
-        let main_deadline = observation_deadline(profile.timeout_seconds);
+        let effective_timeout =
+            effective_timeout_seconds(profile.timeout_seconds, invocation.timeout_ms);
+        let main_deadline = observation_deadline(effective_timeout);
         let original_visit = retry_transient_main(main_deadline, || {
             content.admit_original_code_visit(
                 &self.authority,
@@ -392,7 +398,11 @@ impl RemoteCodeRuntime {
         // never refused (C2).
         if !prior_dispatch
             && self
-                .recheck_after_preparation(profile, Some(declaration.node_id))
+                .recheck_after_preparation(
+                    profile,
+                    invocation.timeout_ms,
+                    Some(declaration.node_id),
+                )
                 .is_err()
         {
             let failure = before(
@@ -410,7 +420,7 @@ impl RemoteCodeRuntime {
             trace.as_ref(),
             CodePhase::Execution,
             async {
-                let deadline = observation_deadline(profile.timeout_seconds);
+                let deadline = observation_deadline(effective_timeout);
                 // Durable before the effect: from here a submission may reach the
                 // supervisor, and a recovery must read the dispatch as possible.
                 self.journal
@@ -693,10 +703,14 @@ impl RemoteCodeRuntime {
                         // network, so only a platform-client call can have left an
                         // effect, and Main's durable platform-call journal decides,
                         // not the failure kind. A step dropped mid-flight, an
-                        // unknown call seen by this pump, or any journal answer
-                        // other than "nothing unresolved" keeps the effect possible.
+                        // unknown call seen by this pump, any timeout on a
+                        // platform-client runtime (C1: a committed platform call
+                        // may have preceded expiry), or any journal answer other
+                        // than "nothing unresolved" keeps the effect possible.
+                        let is_deadline_exceeded = code == SANDBOX_DEADLINE_EXCEEDED_CODE;
                         let effect_possible = invocation.platform_client
-                            && (platform_unknown_effect
+                            && (is_deadline_exceeded
+                                || platform_unknown_effect
                                 || step_tracker.interrupted()
                                 || match job.fingerprint() {
                                     Ok(prepared) => {
@@ -924,15 +938,22 @@ where
     )
 }
 
+const SANDBOX_DEADLINE_EXCEEDED_CODE: &str = "sandbox.deadline_exceeded";
+
 /// The class of a definite `failed` runtime phase. A runtime the supervisor
 /// proved lost (node loss, eviction, a platform kill) is re-run by the platform
 /// allowance only when it had no way to leave an effect: a runtime without the
 /// platform client has no network. A platform-client runtime is never re-run,
 /// because Main's journal answers "nothing unresolved" also for calls that
 /// already committed, and a re-run would repeat them under new identities.
+/// A sandbox execution timeout (`sandbox.deadline_exceeded`) maps to
+/// `AttemptTimeout` (C1: pure isolated Code retries/continues as `NoExternalEffect`;
+/// platform-client Code keeps `effect_possible = true` -> `Reconcile`).
 /// Everything else, including the user's own error, is never re-run.
 fn terminal_failure_class(code: &str, may_have_effects: bool) -> NodeFailureClass {
-    if code == crate::sandbox::runtime_loss::FAILURE_CODE && !may_have_effects {
+    if code == SANDBOX_DEADLINE_EXCEEDED_CODE {
+        NodeFailureClass::AttemptTimeout
+    } else if code == crate::sandbox::runtime_loss::FAILURE_CODE && !may_have_effects {
         tracing::warn!(
             event = "code_runtime_lost",
             "the sandbox runtime was lost before it reported a result"
@@ -1236,5 +1257,95 @@ mod tests {
                 class
             );
         }
+    }
+    #[test]
+    fn c1_sandbox_deadline_exceeded_is_attempt_timeout_and_platform_client_keeps_reconcile() {
+        use elitea_agent_runtime::graph::node_recovery::{
+            NodeRecoveryPolicy, RecoveryDecision, plan_after_failure,
+        };
+        use elitea_agent_runtime::graph::node_settings::NodeSettings;
+
+        // Pure isolated Code: sandbox.deadline_exceeded -> AttemptTimeout + NoExternalEffect.
+        assert_eq!(
+            terminal_failure_class(SANDBOX_DEADLINE_EXCEEDED_CODE, false),
+            NodeFailureClass::AttemptTimeout
+        );
+        let pure_timeout = classify(
+            CodeAttemptPhase::Observation,
+            terminal_failure_class(SANDBOX_DEADLINE_EXCEEDED_CODE, false),
+            [9; 32],
+            false,
+        );
+        assert_eq!(pure_timeout.failure.class, NodeFailureClass::AttemptTimeout);
+        assert_eq!(pure_timeout.failure.replay, ReplaySafety::NoExternalEffect);
+
+        let retry_policy = NodeSettings {
+            retry_on_fail: true,
+            max_tries: Some(3),
+            wait_between_tries_ms: Some(100),
+            ..NodeSettings::default()
+        }
+        .to_recovery_policy()
+        .expect("retry policy");
+        assert!(matches!(
+            plan_after_failure(
+                &retry_policy,
+                [9; 32],
+                1,
+                1_000,
+                1_000,
+                pure_timeout.failure
+            ),
+            Ok(RecoveryDecision::RetryAt { .. })
+        ));
+
+        // Platform-client Code: sandbox.deadline_exceeded -> AttemptTimeout + UnknownExternalEffect -> Reconcile (0 re-dispatches).
+        assert_eq!(
+            terminal_failure_class(SANDBOX_DEADLINE_EXCEEDED_CODE, true),
+            NodeFailureClass::AttemptTimeout
+        );
+        let platform_timeout = classify(
+            CodeAttemptPhase::Observation,
+            terminal_failure_class(SANDBOX_DEADLINE_EXCEEDED_CODE, true),
+            [9; 32],
+            true,
+        );
+        assert_eq!(
+            platform_timeout.failure.replay,
+            ReplaySafety::UnknownExternalEffect { effect_id: [9; 32] }
+        );
+        assert!(matches!(
+            plan_after_failure(
+                &retry_policy,
+                [9; 32],
+                1,
+                1_000,
+                1_000,
+                platform_timeout.failure,
+            ),
+            Ok(RecoveryDecision::Reconcile { .. })
+        ));
+        assert!(matches!(
+            plan_after_failure(
+                &NodeRecoveryPolicy::default(),
+                [9; 32],
+                1,
+                1_000,
+                1_000,
+                platform_timeout.failure,
+            ),
+            Ok(RecoveryDecision::Reconcile { .. })
+        ));
+    }
+
+    #[test]
+    fn effective_timeout_clamps_to_profile_ceiling_and_rounds_up_seconds() {
+        assert_eq!(effective_timeout_seconds(30, None), 30);
+        assert_eq!(effective_timeout_seconds(30, Some(1_000)), 1);
+        assert_eq!(effective_timeout_seconds(30, Some(1_001)), 2);
+        assert_eq!(effective_timeout_seconds(30, Some(5_000)), 5);
+        assert_eq!(effective_timeout_seconds(30, Some(30_000)), 30);
+        assert_eq!(effective_timeout_seconds(30, Some(900_000)), 30);
+        assert_eq!(effective_timeout_seconds(30, Some(0)), 1);
     }
 }

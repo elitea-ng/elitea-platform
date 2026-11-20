@@ -93,6 +93,7 @@ fn invocation(source: &str, provenance: CodeProvenance) -> CodeInvocation<'_> {
         original: None,
         debug: None,
         workspace: None,
+        timeout_ms: None,
     }
 }
 
@@ -459,4 +460,29 @@ mod signed_grants {
             assert!(fresh.scope() != original.scope());
         }
     }
+}
+
+#[tokio::test]
+async fn prepare_job_clamps_node_timeout_ms_to_profile_ceiling() {
+    let configured = profile(CodeLanguage::Python); // timeout_seconds = 30
+    let timeout_of = |inv: &CodeInvocation<'_>| -> u64 {
+        let bytes = prepare_job(inv, &configured)
+            .unwrap()
+            .to_transport()
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        value["timeout_seconds"].as_u64().unwrap()
+    };
+    let lower = CodeInvocation {
+        timeout_ms: Some(5_500),
+        ..invocation("7", CodeProvenance::SavedLiteral)
+    };
+    assert_eq!(timeout_of(&lower), 6);
+    let above_ceiling = CodeInvocation {
+        timeout_ms: Some(900_000),
+        ..invocation("7", CodeProvenance::SavedLiteral)
+    };
+    assert_eq!(timeout_of(&above_ceiling), 30);
+    let omitted = invocation("7", CodeProvenance::SavedLiteral);
+    assert_eq!(timeout_of(&omitted), 30);
 }

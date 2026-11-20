@@ -346,13 +346,15 @@ impl RemoteCodeRuntime {
     pub(super) async fn admit_fresh(
         &self,
         profile: &CodeRuntimeProfile,
+        timeout_ms: Option<u64>,
         node_id: Option<&str>,
     ) -> Result<CodeSlot, CodeDeadlineRefusal> {
+        let effective = effective_timeout_seconds(profile.timeout_seconds, timeout_ms);
         let required = required_window(
             1,
             1,
             profile.slots.capacity(),
-            Duration::from_secs(u64::from(profile.timeout_seconds)),
+            Duration::from_secs(u64::from(effective)),
         );
         let admitted = profile
             .slots
@@ -386,13 +388,15 @@ impl RemoteCodeRuntime {
     pub(super) fn recheck_after_preparation(
         &self,
         profile: &CodeRuntimeProfile,
+        timeout_ms: Option<u64>,
         node_id: Option<&str>,
     ) -> Result<(), CodeDeadlineRefusal> {
+        let effective = effective_timeout_seconds(profile.timeout_seconds, timeout_ms);
         let required = required_window(
             1,
             1,
             profile.slots.capacity(),
-            Duration::from_secs(u64::from(profile.timeout_seconds)),
+            Duration::from_secs(u64::from(effective)),
         );
         let checked = elitea_agent_runtime::graph::fanout::admission::recheck_after_preparation(
             self.execution_deadline,
@@ -564,15 +568,18 @@ impl RemoteCodeRuntime {
         // W3-1: one slot for the whole attempt, taken before its first effect
         // (preparation, journal registration, submission); refused typed
         // when the run's time left cannot hold the timeout plus the margin.
-        let _slot = self.admit_fresh(profile, None).await.map_err(|refusal| {
-            if refusal.cause == CodeRefusalCause::NestedSlot {
-                // R1: an internal fault, never a deadline the user can fix.
-                note(super::code_runtime::ToolCodeError::Refused);
-                return failed(NESTED_SLOT_MESSAGE);
-            }
-            note(super::code_runtime::ToolCodeError::DeadlineInsufficient);
-            deadline_insufficient()
-        })?;
+        let _slot = self
+            .admit_fresh(profile, invocation.timeout_ms, None)
+            .await
+            .map_err(|refusal| {
+                if refusal.cause == CodeRefusalCause::NestedSlot {
+                    // R1: an internal fault, never a deadline the user can fix.
+                    note(super::code_runtime::ToolCodeError::Refused);
+                    return failed(NESTED_SLOT_MESSAGE);
+                }
+                note(super::code_runtime::ToolCodeError::DeadlineInsufficient);
+                deadline_insufficient()
+            })?;
         let trace = invocation
             .trace
             .as_ref()
@@ -646,7 +653,10 @@ impl RemoteCodeRuntime {
         // Execution observation starts only after readiness. The recovery
         // allowance does not change the supervisor's execution deadline.
         observe(trace.as_ref(), CodePhase::Execution, async {
-        let deadline = observation_deadline(profile.timeout_seconds);
+        let deadline = observation_deadline(effective_timeout_seconds(
+            profile.timeout_seconds,
+            invocation.timeout_ms,
+        ));
         let mut busy = SupervisorBusyNotice::default();
         loop {
             let attempt = async {
@@ -836,12 +846,7 @@ impl CodeSandboxRuntime for RemoteCodeRuntime {
         if matching.next().is_some() {
             return None;
         }
-        let timeout_secs = match timeout_ms {
-            Some(ms) => profile
-                .timeout_seconds
-                .min(u32::try_from(ms.div_ceil(1_000)).unwrap_or(u32::MAX).max(1)),
-            None => profile.timeout_seconds,
-        };
+        let timeout_secs = effective_timeout_seconds(profile.timeout_seconds, timeout_ms);
         let required = required_window(
             1,
             1,
@@ -1061,6 +1066,20 @@ impl crate::sandbox::dispatch::SandboxStopDelivery for CodeRuntimeFactory {
     }
 }
 
+/// Effective Code execution timeout in seconds (5b-1 PR B):
+/// `min(profile.timeout_seconds, ceil(timeout_ms / 1000))`. Never exceeds the
+/// sandbox profile ceiling and never drops below 1 second.
+pub(super) fn effective_timeout_seconds(
+    profile_timeout_seconds: u32,
+    timeout_ms: Option<u64>,
+) -> u32 {
+    match timeout_ms {
+        Some(ms) => profile_timeout_seconds
+            .min(u32::try_from(ms.div_ceil(1_000)).unwrap_or(u32::MAX).max(1)),
+        None => profile_timeout_seconds,
+    }
+}
+
 fn prepare_job(
     invocation: &CodeInvocation<'_>,
     profile: &CodeRuntimeProfile,
@@ -1071,6 +1090,8 @@ fn prepare_job(
         CodeLanguage::TypeScript => Language::TypeScript,
         CodeLanguage::Rust => Language::Rust,
     };
+    let effective_timeout =
+        effective_timeout_seconds(profile.timeout_seconds, invocation.timeout_ms);
     PreparedJob::new(
         language,
         invocation.source.to_owned(),
@@ -1078,7 +1099,7 @@ fn prepare_job(
             .map_err(|_| failed("Code input is invalid."))?,
         profile.image_digest.clone(),
         profile.policy_revision.clone(),
-        profile.timeout_seconds,
+        effective_timeout,
     )
     .map_err(|_| {
         failed("Code input or sandbox runtime configuration exceeds its supported limits.")
@@ -1163,6 +1184,7 @@ impl CodeRuntimeFactory {
             original: None,
             debug: None,
             workspace: None,
+            timeout_ms: None,
         })?;
         let bundle = crate::sandbox::preparation::frozen_lookup_tests::fixture().1;
         runtime

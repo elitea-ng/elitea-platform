@@ -130,6 +130,7 @@ pub(in crate::agents) struct CodeInvocation<'a> {
     pub(super) original: Option<super::code_workspace::CodeOriginalDeclaration>,
     pub(super) debug: Option<super::code_debug::CodeDebugSelection>,
     pub(super) workspace: Option<super::code_workspace::CodeWorkspaceInvocation>,
+    pub(super) timeout_ms: Option<u64>,
 }
 
 /// Why a tool's sandbox run produced no receipt, as a value: what the
@@ -263,6 +264,9 @@ pub(super) struct CodeNode {
     /// W3-2 (N1): a fan-out member reads the registered code its Code node
     /// failed with, so the member failure names it.
     failure_code: Option<CodeFailureSlot>,
+    /// 5b-1 PR B: optional per-node `settings.timeout_ms` (clamped at the
+    /// sandbox profile's `timeout_seconds` ceiling).
+    timeout_ms: Option<u64>,
 }
 
 /// The registered failure code a Code node reported, for its fan-out member.
@@ -285,7 +289,13 @@ impl CodeNode {
             runtime,
             events: None,
             failure_code: None,
+            timeout_ms: None,
         })
+    }
+
+    pub(super) fn with_timeout_ms(mut self, timeout_ms: Option<u64>) -> Self {
+        self.timeout_ms = timeout_ms;
+        self
     }
 
     /// W3-2 (N1): record the registered failure code into `slot` as well.
@@ -417,6 +427,7 @@ impl CodeNode {
                     .definition
                     .workspace_selection(context)
                     .map_err(code_error)?,
+                timeout_ms: self.timeout_ms,
             })
             .await
             .map_err(|(error, code)| {
@@ -523,6 +534,7 @@ impl NodeAttemptBody for CodeNode {
                         .definition
                         .workspace_selection(context)
                         .map_err(|_| reject(NodeFailureClass::InvalidConfiguration))?,
+                    timeout_ms: self.timeout_ms,
                 },
                 authority,
             )
@@ -600,7 +612,7 @@ impl NodeAttemptBody for CodeNode {
         self.runtime.retry_deadline_budget(
             self.definition.language(),
             self.definition.platform_client(),
-            None,
+            self.timeout_ms,
         )
     }
 }
