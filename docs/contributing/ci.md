@@ -138,7 +138,7 @@ only toolchain-only jobs are routed:
 |---|---|
 | `ci.yml` | `changes`, `fast-gate`, `ci-gate` |
 | `ci-web.yml` | `quality`, `unit-tests` (every shard), `gates-static`, `build` |
-| `ci-web-coverage.yml` | `unit-tests` (every shard), `coverage-merge` |
+| `ci-web-coverage.yml` | `coverage-merge` |
 | `ci-go.yml` | `sqlc`, `lint`, `test-plan`, `test` (the aggregator) |
 | `ci-gateway.yml` | `lint` |
 | `ci-governed-conformance.yml` | `unit` |
@@ -152,7 +152,8 @@ test shards and the race build, and the Python jobs (`setup-python` cannot insta
 path without root). It also covers jobs that rely on tools the hosted image ships (gh, shellcheck, Helm, yq,
 pip), macOS, Windows, and every job outside the pull-request pipeline.
 
-The routed jobs set `GOMAXPROCS=4` and `--maxWorkers=4`. The pod's cgroup limit is 4 CPUs, but the node reports
+The coverage unit shards stay hosted: under coverage instrumentation the pod ran them 1.5 to 2 times slower,
+and the heaviest test files hit their per-test timeouts. The routed jobs set `GOMAXPROCS=4` and `--maxWorkers=4`. The pod's cgroup limit is 4 CPUs, but the node reports
 8. `scripts/ci/install-golangci-lint.sh` fetches golangci-lint with curl and jq (no gh), on both kinds of runner.
 
 Every routed job runs `./.github/actions/eng-runner-env` straight after its checkout. On a GitHub-hosted runner
