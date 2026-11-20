@@ -60,6 +60,8 @@ import (
 	"sort"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
 )
 
 const (
@@ -193,10 +195,26 @@ func (h *Handler) UserProjectPermissionsSave(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	caller, refusal := rolepolicy.ResolveCaller(r, h.resolver)
+	if refusal != nil {
+		rolepolicy.Write(w, r, refusal)
+		return
+	}
+	// `append_user_role` ASSIGNS the roles to every member of every target
+	// project. The subset rule would need the caller to hold them in projects
+	// it is not a member of, so the flag is super_admin only (issue 2488).
+	if appendUserRole && !caller.SuperAdmin {
+		rolepolicy.Write(w, r, &rolepolicy.Refusal{
+			Code: rolepolicy.CodeSuperAdminRequired,
+			Message: "only super_admin can use append_user_role, which gives the roles to every member " +
+				"of every target project",
+		})
+		return
+	}
 	result, err := h.applyRoleMap(
-		ctx, targets, roleMap, submittedRows, createMissingRoles, appendUserRole)
+		ctx, targets, roleMap, submittedRows, createMissingRoles, appendUserRole, caller)
 	if err != nil {
-		writeMatrixError(w, err)
+		writeRoleWriteError(w, r, err)
 		return
 	}
 
@@ -238,6 +256,7 @@ func (h *Handler) applyRoleMap(
 	submittedRows []string,
 	createMissingRoles bool,
 	appendUserRole bool,
+	caller rolepolicy.Caller,
 ) (roleMapResult, error) {
 	roleNames := make([]string, 0, len(roleMap))
 	for role := range roleMap {
@@ -250,6 +269,14 @@ func (h *Handler) applyRoleMap(
 		return roleMapResult{}, fmt.Errorf("begin user-project permission update: %w", err)
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
+
+	// The no-escalation rule (issue 2488). The effect guard measures the
+	// caller's own per-project sets around the whole write, so the role that
+	// `append_user_role` gives the caller is measured too.
+	guard, err := rolepolicy.BeginSelfGuard(ctx, transaction, caller)
+	if err != nil {
+		return roleMapResult{}, err
+	}
 
 	var result roleMapResult
 	if createMissingRoles {
@@ -280,6 +307,10 @@ ON CONFLICT (project_id, name) DO NOTHING`, projects, roleNames)
 					missing),
 			}
 		}
+	}
+
+	if err := refuseReservedProjectGrant(ctx, transaction, projects, roleMap); err != nil {
+		return roleMapResult{}, err
 	}
 
 	// Revoke first, then grant — the submitted set is the role's WHOLE
@@ -342,6 +373,9 @@ ON CONFLICT (project_id, user_id, role_id) DO NOTHING`, projects, roleNames)
 		result.rolesAssigned = tag.RowsAffected()
 	}
 
+	if err := guard.Check(ctx, transaction); err != nil {
+		return roleMapResult{}, err
+	}
 	if err := transaction.Commit(ctx); err != nil {
 		return roleMapResult{}, fmt.Errorf("commit user-project permission update: %w", err)
 	}
@@ -505,4 +539,43 @@ func dedupeSorted(values []string) []string {
 	}
 	sort.Strings(unique)
 	return unique
+}
+
+// refuseReservedProjectGrant applies the reserved-permission half of the
+// no-escalation rule (issue 2488): admin.auth.users.super_admin is added to no
+// project role. It grants nothing in a project, but the rule is absolute so
+// that no path can put it on a role other than the administration super_admin.
+//
+// Only a NEW grant is refused. A legacy database whose project roles already
+// carry the name can still save the matrix its own GET returned.
+func refuseReservedProjectGrant(
+	ctx context.Context, transaction pgx.Tx, projects []int, roleMap map[string][]string,
+) error {
+	for role, permissions := range roleMap {
+		cells := make([]rolepolicy.Cell, 0, 1)
+		for _, permission := range permissions {
+			if permission == rolepolicy.SuperAdminPermission {
+				cells = append(cells, rolepolicy.Cell{Role: role, Permission: permission})
+			}
+		}
+		if len(cells) == 0 {
+			continue
+		}
+		var added bool
+		if err := transaction.QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1 FROM public.auth_core__project_role role
+    WHERE role.project_id = ANY($1::int[]) AND role.name = $2
+      AND NOT EXISTS (
+        SELECT 1 FROM public.auth_core__project_role_permission held
+        WHERE held.role_id = role.id AND held.permission = $3
+      )
+)`, projects, role, rolepolicy.SuperAdminPermission).Scan(&added); err != nil {
+			return fmt.Errorf("check reserved permission for %s: %w", role, err)
+		}
+		if added {
+			return rolepolicy.CheckReserved("", cells)
+		}
+	}
+	return nil
 }

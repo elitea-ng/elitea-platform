@@ -104,7 +104,7 @@ func newBulkInviteEnvironment(t *testing.T) (*pgxpool.Pool, chi.Router, int64, i
 	// The service account. Both shapes the resolver refuses are present: the
 	// legacy name prefix AND this platform's own `@centry.user` address.
 	service := newUser("project_4@centry.user", ":system:project:4")
-	return pool, bulkInviteRouter(admin.NewHandler(pool)), first, second, service
+	return pool, bulkInviteRouter(admin.NewHandler(pool, admin.WithPermissionResolver(superAdminResolver()))), first, second, service
 }
 
 // storedRoleNames reads the membership table directly. This is the assertion a
