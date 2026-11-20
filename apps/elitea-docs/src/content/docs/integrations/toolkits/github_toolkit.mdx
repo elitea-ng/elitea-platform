@@ -92,6 +92,8 @@ The category of a tool decides when a run needs human approval to call it. See [
 
 **Get workflow runs** lists recent GitHub Actions runs, newest first (10 by default, at most 100). Give a **workflow_id** (a workflow ID or its file name such as `build.yml`) to list one workflow's runs, and filter by **branch**, **status** (`queued`, `in_progress`, `completed`, or a conclusion such as `failure`) and **event** (`push`, `pull_request`, `schedule`, ...). Name another repository with **repo_name**. Each run carries its ID, workflow, run number, event, status, conclusion, times, branch, commit and URL; pass the run ID to **Get workflow status** or **Get workflow logs**.
 
+A workflow or repository that does not exist is answered with an error message rather than an empty list. If GitHub returns a run the tool cannot read safely (for example, a branch name with a control character), that run is left out and `skipped_runs` says how many were.
+
 ## Common issues
 
 <Note>
