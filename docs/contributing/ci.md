@@ -110,6 +110,111 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
   release build and verifies it. `check-tiering.mjs` holds the path list, the dry-run inputs and
   `require_signed: true` in `publish.yml`. The app is Apple silicon only.
 
+## Runners
+
+Most jobs run on GitHub-hosted `ubuntu-latest`. The free plan caps hosted jobs at 20 at a time for the whole
+organisation, and queueing was most of a pull request's wall time. The organisation also has a self-hosted
+pool, `eng-runner`. It is an ARC runner scale set on GKE whose pods have 4 vCPU, 16 GiB and 40 GB of work
+disk.
+
+### What the pool can run
+
+A job runs directly in the plain `actions-runner` pod (Ubuntu 24.04):
+
+- **No Docker daemon.** No `container:`, no `services:`, no docker, podman, compose or kind.
+- **No root.** No sudo and no apt.
+- **No C compiler.** Rust cannot link, `go test -race` cannot build, and cgo is off.
+- **No node, Go, gh, yq or Helm.** The image has bash, git, curl, jq and python3 without pip or venv.
+  Toolchains come from `setup-*` actions or from a download into the job's own directories.
+
+So only toolchain-only jobs are routed to it:
+
+| Workflow | Jobs |
+|---|---|
+| `ci.yml` | `changes`, `fast-gate`, `ci-gate` |
+| `ci-web.yml` | `quality`, `unit-tests` (every shard), `gates-static`, `build` |
+| `ci-web-coverage.yml` | `unit-tests` (every shard), `coverage-merge` |
+| `ci-go.yml` | `sqlc`, `lint`, `test-plan`, `test` (the aggregator) |
+| `ci-gateway.yml` | `lint` |
+| `ci-governed-conformance.yml` | `unit` |
+| `ci-docs.yml`, `ci-mobile.yml` | `docs`, `check` |
+| `ci-web-e2e.yml` | `model-path-changes` |
+| `image-matrix.yml` | `gate-selftest`, `issue-script` |
+| `no-binaries.yml` | `history-gates` |
+
+Everything else stays hosted. That covers the jobs that need Docker, services or kind, every Rust job, the Go
+test shards and the race build, and the Python jobs (`setup-python` cannot install into the hosted tool cache
+path without root). It also covers jobs that rely on tools the hosted image ships (gh, shellcheck, Helm, yq,
+pip), macOS, Windows, and every job outside the pull-request pipeline.
+
+The routed jobs set `GOMAXPROCS=4` and `--maxWorkers=4`. The pod's cgroup limit is 4 CPUs, but the node reports
+8. A step a routed job runs only for node (`actions/setup-node`) has `if: runner.environment != 'github-hosted'`,
+so the hosted path is unchanged.
+
+### How a job is routed
+
+A routed job's `runs-on` is exactly `ROUTED_RUNS_ON` from `scripts/ci/check-runner-routing.mjs`. That
+expression sends the job to `eng-runner` only when **all** of these hold. Otherwise the job goes to
+`ubuntu-latest`.
+
+1. The repository variable `ENG_RUNNER` is `on`. It is unset by default.
+2. Neither `github.actor` nor `github.triggering_actor` is `dependabot[bot]`.
+3. The event is `schedule`, `workflow_dispatch` or `merge_group`, or it is a `pull_request` that meets both of
+   these:
+   - its head repository is this repository;
+   - its author is not Dependabot.
+
+It is an allowlist of events. A condition written as "anything but `pull_request`" would let
+`pull_request_target`, `workflow_run` and `issue_comment` through, and none of those may reach the pool.
+
+`scripts/ci/check-runner-routing.mjs` (run in `no-binaries.yml`) fails the pull request when:
+
+- a `runs-on` can resolve to `eng-runner` without that exact expression, whether as a literal, a list, a group,
+  a matrix value or any other expression;
+- a routed job has `container:` or `services:`;
+- a routed job has a step, or a step inside a local composite action it uses, that runs docker, podman, kind,
+  sudo, apt or systemctl, or uses a `docker/*` or kind action, unless that step's `if:` starts with
+  `runner.environment == 'github-hosted'`;
+- a routed job is in a workflow, or is called from a workflow, that can start on an event outside
+  `pull_request`, `merge_group`, `schedule` and `workflow_dispatch`.
+
+Its test evaluates the expression the way GitHub evaluates it. It covers a fork, a same-repository PR,
+Dependabot, `merge_group`, `push`, `schedule`, `workflow_dispatch`, `pull_request_target`, `workflow_run`, and
+the variable unset or off. `check-no-push-triggers.mjs` refuses `pull_request_target` in every workflow.
+
+**Turn it on or off.** Go to Settings → Secrets and variables → Actions → Variables and set `ENG_RUNNER` to `on`.
+Set it to `off`, or delete it, to send every job back to `ubuntu-latest` on its next run. Neither change needs
+a pull request.
+
+**Caches.** `actions/cache` works on the pool through the GitHub cache service. The writers are unchanged, one
+per key: the scheduled runs on main write, and pull requests only read. The image has no `zstd`, so a routed
+job may miss entries that a hosted writer saved with zstd. It then runs cold until a routed writer saves its
+own. The Go jobs build with cgo off, so the hosted Go build cache only partly applies to them.
+
+### Security model
+
+The repository is public. A fork's pull request runs the fork's copy of the workflow files, so it can write
+`runs-on: eng-runner` itself. The routing above decides where **our** jobs go and keeps fork and Dependabot
+jobs on hosted runners, but it is not a security control. The guards are:
+
+1. **The runner group gives access to selected repositories only.** Organisation settings → Actions → Runner
+   groups.
+2. **Fork pull-request runs need approval for every external contributor.**
+3. **The job-started hook (recommended; not deployed yet).** `deploy/ci-runners/job-started.sh` runs on the
+   runner before any step. It refuses every job that is not from an allowed repository, every event outside the
+   allowlist, a pull request whose head is a fork, and Dependabot. The runbook is
+   `deploy/ci-runners/README.md`.
+
+Until the hook is deployed, one risk remains: a maintainer approves a fork pull request whose own YAML targets
+`eng-runner`. **Never approve workflow runs on a fork pull request until the hook is deployed.** This includes
+the close-time run of `cancel-merged-pr-runs.yml`, which a fork's close also queues for approval. Its hourly
+sweep covers that pull request, so the run needs no approval.
+
+`cancel-merged-pr-runs.yml` uses `pull_request: [closed]` and an hourly schedule, not `pull_request_target`.
+GitHub blocks `pull_request_target` by default from 2026-12-02. A fork or Dependabot close gets a read-only
+token, so the close-time pass logs a notice and does nothing. The hourly sweep then cancels the unfinished
+runs of every pull request merged in the last 6 hours and deletes closed pull requests' caches.
+
 ## Security scanners
 
 | Scanner | Where | When |

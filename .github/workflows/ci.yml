@@ -30,7 +30,7 @@ permissions:
 jobs:
   changes:
     name: Which workflows does this change reach?
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'merge_group' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'))) && 'eng-runner' || 'ubuntu-latest' }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -44,6 +44,14 @@ jobs:
         with:
           sparse-checkout: scripts/ci
           persist-credentials: false
+      # eng-runner's image has no node (deploy/ci-runners/README.md); GitHub-hosted
+      # runners ship one, so this step runs on the self-hosted pool only.
+      - uses: actions/setup-node@v7
+        if: runner.environment != 'github-hosted'
+        with:
+          node-version: "26"
+          # Nothing to install: no automatic cache (check-workflow-cache-writes).
+          package-manager-cache: false
       - id: paths
         run: node scripts/ci/tier-changes.mjs
         env:
@@ -136,13 +144,21 @@ jobs:
     name: fast-gate
     needs: [changes, no-binaries, dependency-scanning, helm-lint, ci-docs, ci-go, ci-web, ci-contract, ci-gateway, ci-mock-llm, ci-mobile, ci-deepwiki-conformance, image-matrix, ci-rust-lint]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'merge_group' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'))) && 'eng-runner' || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
         with:
           sparse-checkout: scripts/ci
           persist-credentials: false
+      # eng-runner's image has no node (deploy/ci-runners/README.md); GitHub-hosted
+      # runners ship one, so this step runs on the self-hosted pool only.
+      - uses: actions/setup-node@v7
+        if: runner.environment != 'github-hosted'
+        with:
+          node-version: "26"
+          # Nothing to install: no automatic cache (check-workflow-cache-writes).
+          package-manager-cache: false
       - name: The fast tier passed
         run: node scripts/ci/ci-gate.mjs fast
         env:
@@ -259,13 +275,21 @@ jobs:
     name: ci-gate
     needs: [changes, fast-gate, no-binaries, dependency-scanning, helm-lint, ci-docs, ci-go, ci-web, ci-contract, ci-gateway, ci-mock-llm, ci-mobile, ci-deepwiki-conformance, image-matrix, ci-rust-lint, ci-web-e2e, ci-web-coverage, ci-rust, ci-rust-shared, ci-deepwiki-engine, ci-inventory-engine, ci-doc-extractor, ci-vector, ci-browser-session, ci-desktop, ci-desktop-control, ci-local-tools-macos, desktop-package, helm-install-smoke, ci-governed-conformance, ci-handoff-loadgate]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'merge_group' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'))) && 'eng-runner' || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
         with:
           sparse-checkout: scripts/ci
           persist-credentials: false
+      # eng-runner's image has no node (deploy/ci-runners/README.md); GitHub-hosted
+      # runners ship one, so this step runs on the self-hosted pool only.
+      - uses: actions/setup-node@v7
+        if: runner.environment != 'github-hosted'
+        with:
+          node-version: "26"
+          # Nothing to install: no automatic cache (check-workflow-cache-writes).
+          package-manager-cache: false
       - name: Every job that should have run passed (and the pull request is ready)
         run: node scripts/ci/ci-gate.mjs final
         env:

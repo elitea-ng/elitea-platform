@@ -44,7 +44,7 @@ jobs:
   # unparsable, wrong target type, exempt, stale exemption). #501's rule.
   gate-selftest:
     name: The scan gate goes red
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'merge_group' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'))) && 'eng-runner' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
       - name: Drive every arm of the gate with synthetic reports
@@ -56,9 +56,17 @@ jobs:
   # runner's node, nothing to install.
   issue-script:
     name: The nightly scan's issue script opens, updates and closes
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'merge_group' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'))) && 'eng-runner' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
+      # eng-runner's image has no node (deploy/ci-runners/README.md); GitHub-hosted
+      # runners ship one, so this step runs on the self-hosted pool only.
+      - uses: actions/setup-node@v7
+        if: runner.environment != 'github-hosted'
+        with:
+          node-version: "26"
+          # Nothing to install: no automatic cache (check-workflow-cache-writes).
+          package-manager-cache: false
       - name: Run every scenario
         run: |
           set -euo pipefail

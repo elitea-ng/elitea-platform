@@ -36,7 +36,7 @@ defaults:
 jobs:
   unit-tests:
     name: Unit tests (sharded + coverage)
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'merge_group' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'))) && 'eng-runner' || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -98,7 +98,7 @@ jobs:
             exit 1
           fi
           echo "$(grep -c '' <<< "$unit_tests") unit test file(s) found — §6.6 coverage thresholds armed"
-          npm run test:unit -- --run --shard=${{ matrix.shardIndex }}/${{ matrix.shardCount }} --coverage --coverage.reporter=json --coverage.reportsDirectory=coverage-shards/shard-${{ matrix.shardIndex }} --coverage.clean=false --coverage.thresholds.lines=0 --coverage.thresholds.statements=0 --coverage.thresholds.functions=0 --coverage.thresholds.branches=0 --coverage.thresholds.perFile=false
+          npm run test:unit -- --run --shard=${{ matrix.shardIndex }}/${{ matrix.shardCount }} --coverage --coverage.reporter=json --coverage.reportsDirectory=coverage-shards/shard-${{ matrix.shardIndex }} --coverage.clean=false --coverage.thresholds.lines=0 --coverage.thresholds.statements=0 --coverage.thresholds.functions=0 --coverage.thresholds.branches=0 --coverage.thresholds.perFile=false --maxWorkers=4
       - name: Upload coverage shard
         uses: actions/upload-artifact@v7
         with:
@@ -117,7 +117,7 @@ jobs:
     # a failed merge step ends the job before they run. The artifact names are
     # unchanged (`elitea-web-coverage`), and so are the commands.
     name: Coverage merge + validation
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'merge_group' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'))) && 'eng-runner' || 'ubuntu-latest' }}
     needs:
       - unit-tests
     steps:

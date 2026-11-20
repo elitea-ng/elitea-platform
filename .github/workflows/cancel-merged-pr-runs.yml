@@ -25,19 +25,27 @@ name: Cancel runs of a merged PR
 # A second job deletes the PR ref's Actions caches when the PR closes, merged
 # or not (see the job's comment).
 #
-# pull_request_target, not pull_request: a Dependabot or fork PR gets a
-# read-only GITHUB_TOKEN under pull_request, and cancelling needs
-# `actions: write`. This is safe here because the workflow never checks out
-# or executes anything from the PR — it only calls the Actions API with ids.
+# `pull_request: [closed]`, not `pull_request_target` (GitHub blocks that by
+# default from 2026-12-02; scripts/ci/check-no-push-triggers.mjs refuses it).
+# Under `pull_request` a fork PR, and a run Dependabot triggers, get a
+# read-only GITHUB_TOKEN whatever `permissions:` asks for, so the close-time
+# pass logs a notice and does nothing for them. The HOURLY sweep (schedule,
+# on main, with the write token) does that work instead: it cancels the
+# unfinished runs of every pull request merged in the last SWEEP_HOURS, and
+# deletes the caches of every closed pull request's ref. A fork PR's close
+# event still waits for approval like any fork run: do not approve it, the
+# sweep covers it. The workflow never checks out or executes anything from
+# the PR — it only calls the Actions API with ids.
 
 on:
-  pull_request_target:
+  pull_request:
     types:
       - closed
-  # Daily sweep for PR-ref caches written AFTER the close-time pass (a run of
+  # Hourly: the merged PRs the close-time pass could not touch (fork,
+  # Dependabot), and PR-ref caches written AFTER the close-time pass (a run of
   # a closed-unmerged PR is not cancelled and may still export when it ends).
   schedule:
-    - cron: "17 3 * * *"
+    - cron: "17 * * * *"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || 'sweep' }}
@@ -51,17 +59,19 @@ jobs:
   cancel:
     name: Cancel unfinished runs
     # A PR closed without merging keeps its runs: someone may reopen it.
-    if: github.event.pull_request.merged == true
+    if: github.event_name == 'schedule' || github.event.pull_request.merged == true
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
-      - name: Cancel, then force-cancel, this pull request's unfinished runs
-        # Pinned to the v9.0.0 commit: this job holds `actions: write` on
-        # every merged PR, fork PRs included, so a moved tag must not change
-        # the code it runs.
+      - name: Cancel, then force-cancel, merged pull requests' unfinished runs
+        # Pinned to the v9.0.0 commit: this job holds `actions: write`, so a
+        # moved tag must not change the code it runs.
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           GRACE_SECONDS: "60"
+          # Longer than the hourly cron, so a late or skipped sweep still sees
+          # every merge once.
+          SWEEP_HOURS: "6"
         with:
           # Retries 5xx and secondary rate limits. A listing that failed must
           # fail the job, never come back short and read as "nothing to
@@ -70,43 +80,67 @@ jobs:
           retry-exempt-status-codes: 400,401,403,404,409,422
           script: |
             const { owner, repo } = context.repo;
-            const pr = context.payload.pull_request;
-            // head.repo is null when the fork was deleted; the sha match
-            // alone still identifies the PR's runs.
-            const headRepo = pr.head.repo?.full_name ?? null;
             const graceMs = Number(process.env.GRACE_SECONDS) * 1000;
             const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-            // Every sha this PR ever pointed at. The endpoint caps at 250
-            // commits; a PR that size has its older runs long finished.
-            const shas = new Set(
-              (await github.paginate(github.rest.pulls.listCommits, {
-                owner, repo, pull_number: pr.number, per_page: 100,
-              })).map((c) => c.sha),
-            );
-
-            const belongsToPr = (run) =>
-              run.status !== 'completed' &&
-              shas.has(run.head_sha) &&
-              (headRepo === null || run.head_repository?.full_name === headRepo) &&
-              (run.pull_requests.length === 0 ||
-                run.pull_requests.some((p) => p.number === pr.number));
-
-            // ONE listing with no status filter, keeping everything not
-            // completed. Listing per status misses a run that moves from one
-            // status to another between the calls.
-            const listed = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
-              owner, repo, branch: pr.head.ref, event: 'pull_request', per_page: 100,
-            });
-            const runs = listed.filter(belongsToPr);
-
-            const label = `PR #${pr.number} (${headRepo ?? 'deleted fork'}:${pr.head.ref})`;
-            if (runs.length === 0) {
-              core.info(`${label}: no unfinished runs`);
-              return;
+            // Which merged pull requests this run handles.
+            let prs;
+            if (context.eventName === 'pull_request') {
+              const pr = context.payload.pull_request;
+              const fork = pr.head.repo?.full_name !== `${owner}/${repo}`;
+              if (fork || context.actor === 'dependabot[bot]') {
+                core.notice(`PR #${pr.number}: this run's token is read-only (${fork ? 'fork' : 'Dependabot'}); the hourly sweep cancels its runs`);
+                return;
+              }
+              prs = [pr];
+            } else {
+              const since = Date.now() - Number(process.env.SWEEP_HOURS) * 3600 * 1000;
+              prs = [];
+              // Most recently updated first; stop at the first page that
+              // reaches past the window.
+              for await (const { data } of github.paginate.iterator(github.rest.pulls.list, {
+                owner, repo, state: 'closed', sort: 'updated', direction: 'desc', per_page: 100,
+              })) {
+                prs.push(...data.filter((p) => p.merged_at && Date.parse(p.merged_at) >= since));
+                if (data.length === 0 || Date.parse(data[data.length - 1].updated_at) < since) break;
+              }
+              core.info(`sweep: ${prs.length} pull request(s) merged in the last ${process.env.SWEEP_HOURS} h`);
             }
-            core.info(`${label}: ${runs.length} unfinished run(s)`);
-            for (const run of runs) core.info(`  ${run.id} ${run.status} ${run.name}`);
+
+            // The unfinished runs of one pull request.
+            const runsOf = async (pr) => {
+              // head.repo is null when the fork was deleted; the sha match
+              // alone still identifies the PR's runs.
+              const headRepo = pr.head.repo?.full_name ?? null;
+              // Every sha this PR ever pointed at. The endpoint caps at 250
+              // commits; a PR that size has its older runs long finished.
+              const shas = new Set(
+                (await github.paginate(github.rest.pulls.listCommits, {
+                  owner, repo, pull_number: pr.number, per_page: 100,
+                })).map((c) => c.sha),
+              );
+              const belongsToPr = (run) =>
+                run.status !== 'completed' &&
+                shas.has(run.head_sha) &&
+                (headRepo === null || run.head_repository?.full_name === headRepo) &&
+                (run.pull_requests.length === 0 ||
+                  run.pull_requests.some((p) => p.number === pr.number));
+              // ONE listing with no status filter, keeping everything not
+              // completed. Listing per status misses a run that moves from one
+              // status to another between the calls.
+              const listed = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+                owner, repo, branch: pr.head.ref, event: 'pull_request', per_page: 100,
+              });
+              const runs = listed.filter(belongsToPr);
+              const label = `PR #${pr.number} (${headRepo ?? 'deleted fork'}:${pr.head.ref})`;
+              core.info(`${label}: ${runs.length === 0 ? 'no' : runs.length} unfinished run(s)`);
+              for (const run of runs) core.info(`  ${run.id} ${run.status} ${run.name}`);
+              return runs;
+            };
+
+            const runs = new Map();
+            for (const pr of prs) for (const run of await runsOf(pr)) runs.set(run.id, run);
+            if (runs.size === 0) return;
 
             // 409 means the run already finished, which is the outcome we
             // want. Anything else (403 missing scope, 404) is a real failure.
@@ -143,7 +177,7 @@ jobs:
             };
 
             let pending = [];
-            for (const run of runs) {
+            for (const run of runs.values()) {
               if (await post('cancel', run)) pending.push(run);
             }
 
@@ -167,7 +201,7 @@ jobs:
   delete-caches:
     name: Delete closed pull requests' Actions caches
     # On close (merged or not) for this PR, after the cancel job settled its
-    # runs; daily for every closed PR whose ref still holds entries. The
+    # runs; hourly for every closed PR whose ref still holds entries. The
     # repository cache is capped at 10 GB and evicts the least recently used
     # entries first, so PR-ref entries nothing will read again push main's
     # warm layers out and make BuildKit exports fail mid-write ("cache entry
@@ -188,7 +222,13 @@ jobs:
             const { owner, repo } = context.repo;
             let refs;
             if (context.payload.pull_request) {
-              refs = [`refs/pull/${context.payload.pull_request.number}/merge`];
+              const pr = context.payload.pull_request;
+              const fork = pr.head.repo?.full_name !== `${owner}/${repo}`;
+              if (fork || context.actor === 'dependabot[bot]') {
+                core.notice(`PR #${pr.number}: this run's token is read-only (${fork ? 'fork' : 'Dependabot'}); the hourly sweep deletes its caches`);
+                return;
+              }
+              refs = [`refs/pull/${pr.number}/merge`];
             } else {
               // Sweep: every PR ref that holds entries, kept only when its PR is closed.
               const all = await github.paginate('GET /repos/{owner}/{repo}/actions/caches', { owner, repo, per_page: 100 });

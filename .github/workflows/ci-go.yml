@@ -125,7 +125,10 @@ jobs:
 
   sqlc:
     name: Reproduce SQLC queries
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'merge_group' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'))) && 'eng-runner' || 'ubuntu-latest' }}
+    env:
+      # The pod's cgroup gives 4 CPU while the node reports 8; hosted runners have 4.
+      GOMAXPROCS: "4"
     steps:
       - uses: actions/checkout@v7
       - uses: sqlc-dev/setup-sqlc@v5
@@ -164,7 +167,10 @@ jobs:
 
   lint:
     name: Lint (workspace)
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'merge_group' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'))) && 'eng-runner' || 'ubuntu-latest' }}
+    env:
+      # The pod's cgroup gives 4 CPU while the node reports 8; hosted runners have 4.
+      GOMAXPROCS: "4"
     # Issue #427. This job used to carry a hand-written matrix of two modules,
     # `services/elitea-main` and `services/elitea-scheduler`, while go.work
     # named many more (twelve today). The libs/go modules, libs/proto/gen/go
@@ -204,7 +210,8 @@ jobs:
       # run that proves a change can never match what CI will do. Raise this
       # value deliberately, and read the release notes when you do.
       # Through the API, not the github.com release download link (504s),
-      # and checked against the release's checksums file.
+      # and checked against the release's checksums file. curl and jq, not
+      # gh: the eng-runner image has no gh.
       - name: Install golangci-lint
         env:
           GOLANGCI_LINT_VERSION: "2.9.0"
@@ -213,8 +220,11 @@ jobs:
         run: |
           set -euo pipefail
           archive="golangci-lint-${GOLANGCI_LINT_VERSION}-linux-amd64.tar.gz"
-          gh release download "v${GOLANGCI_LINT_VERSION}" --repo golangci/golangci-lint \
-            --pattern "${archive}" --output "/tmp/${archive}" --clobber
+          asset="$(curl -sSfL --retry 3 -H "Authorization: Bearer ${GH_TOKEN}" \
+            "https://api.github.com/repos/golangci/golangci-lint/releases/tags/v${GOLANGCI_LINT_VERSION}" \
+            | jq -er --arg name "${archive}" '.assets[] | select(.name == $name) | .url')"
+          curl -sSfL --retry 3 -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/octet-stream" \
+            -o "/tmp/${archive}" "${asset}"
           echo "${GOLANGCI_LINT_SHA256}  /tmp/${archive}" | sha256sum -c -
           bin="$(go env GOPATH)/bin"
           mkdir -p "$bin"
@@ -253,11 +263,22 @@ jobs:
   #                coverage profiles into the one `coverage` artifact.
   test-plan:
     name: Test plan (Go shards)
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'merge_group' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'))) && 'eng-runner' || 'ubuntu-latest' }}
+    env:
+      # The pod's cgroup gives 4 CPU while the node reports 8; hosted runners have 4.
+      GOMAXPROCS: "4"
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
     steps:
       - uses: actions/checkout@v7
+      # eng-runner's image has no node (deploy/ci-runners/README.md); GitHub-hosted
+      # runners ship one, so this step runs on the self-hosted pool only.
+      - uses: actions/setup-node@v7
+        if: runner.environment != 'github-hosted'
+        with:
+          node-version: "26"
+          # Nothing to install: no automatic cache (check-workflow-cache-writes).
+          package-manager-cache: false
       - uses: actions/setup-go@v7
         with:
           # `go list -find` reads directories only. It needs no module cache.
@@ -641,7 +662,7 @@ jobs:
     name: Test
     if: always()
     needs: [test-plan, test-checks, test-shard]
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'merge_group' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'))) && 'eng-runner' || 'ubuntu-latest' }}
     steps:
       - name: Every shard and check passed
         env:
@@ -660,6 +681,14 @@ jobs:
       - uses: actions/checkout@v7
         with:
           sparse-checkout: scripts/ci
+      # eng-runner's image has no node (deploy/ci-runners/README.md); GitHub-hosted
+      # runners ship one, so this step runs on the self-hosted pool only.
+      - uses: actions/setup-node@v7
+        if: runner.environment != 'github-hosted'
+        with:
+          node-version: "26"
+          # Nothing to install: no automatic cache (check-workflow-cache-writes).
+          package-manager-cache: false
       - name: Download shard coverage
         uses: actions/download-artifact@v8
         with:
