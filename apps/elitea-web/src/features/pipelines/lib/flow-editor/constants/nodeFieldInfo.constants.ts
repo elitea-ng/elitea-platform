@@ -221,7 +221,7 @@ export const NODE_FIELD_INFO: Readonly<Partial<Record<PipelineNodeType, Readonly
   [PipelineNodeTypes.Parallel]: {
     [K.branches]: 'Independent branch nodes executed concurrently.',
     [K.maxConcurrency]: 'Maximum number of branches allowed to run at the same time.',
-    [K.wait]: 'Whether to wait for all branches to finish or proceed after the first completes.',
+    [K.wait]: 'Waits for all declared branches to finish before continuing.',
     [K.onError]: 'How branch failures affect sibling branches and the Parallel node outcome.',
     [K.join]: 'How branch results are merged into the output state variable(s).',
     [K.output]: 'State variable(s) where merged branch results are saved.',

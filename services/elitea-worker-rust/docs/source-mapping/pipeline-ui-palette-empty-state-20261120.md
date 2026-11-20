@@ -33,7 +33,7 @@
 ## 2. Changed Source Paths
 
 - `apps/elitea-web/src/features/pipelines/lib/flow-editor/constants/nodeDocs.constants.ts` (L1-L45) — `NODE_DOCS_URLS`, `NODE_DOCS_LINK_REL`, `MIGRATION_GUIDE_TOOLTIP`, `getNodeDocsLink`
-- `apps/elitea-web/src/features/pipelines/lib/flow-editor/constants/nodeFieldInfo.constants.ts` (L1-L282) — `NODE_FIELD_KEYS`, `COMMON_NODE_FIELD_INFO`, `NODE_FIELD_INFO` (10 `EliteaUI` + 4 replatform + 7 resilience settings + deprecated types), `getNodeFieldInfo`, `getNodeFieldInfoOf`, `getInputMappingFieldInfo`, `getValueDataTypeInfo`
+- `apps/elitea-web/src/features/pipelines/lib/flow-editor/constants/nodeFieldInfo.constants.ts` (L1-L328) — `NODE_FIELD_KEYS`, `COMMON_NODE_FIELD_INFO`, `NODE_FIELD_INFO` (10 `EliteaUI` + 4 replatform + 7 resilience settings + deprecated types), `getNodeFieldInfo`, `getNodeFieldInfoOf`, `getInputMappingFieldInfo`, `getValueDataTypeInfo`
 - `apps/elitea-web/src/features/pipelines/lib/flow-editor/constants/index.ts` (L28-L47) — re-exports `NodeDocsConstants`, `NodeFieldInfoConstants`
 - `apps/elitea-web/src/features/pipelines/ui/add-node/nodeTypeDescriptions.ts` (L1-L26) — 14 admitted node descriptions
 - `apps/elitea-web/src/features/pipelines/ui/add-node/nodeTypeSelector.helpers.ts` (L1-L79) — `getNodeTypeSelectorLayout`, `getAddableNodeTypes`, `toNodeTypeTestIdSegment`

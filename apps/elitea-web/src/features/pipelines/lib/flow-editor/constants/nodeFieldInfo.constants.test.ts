@@ -61,7 +61,9 @@ describe('getNodeFieldInfo', () => {
     expect(getNodeFieldInfo(PipelineNodeTypes.Map, NODE_FIELD_KEYS.reduction)).not.toBe('');
 
     expect(getNodeFieldInfo(PipelineNodeTypes.Parallel, NODE_FIELD_KEYS.branches)).not.toBe('');
-    expect(getNodeFieldInfo(PipelineNodeTypes.Parallel, NODE_FIELD_KEYS.wait)).not.toBe('');
+    const parallelWaitInfo = getNodeFieldInfo(PipelineNodeTypes.Parallel, NODE_FIELD_KEYS.wait);
+    expect(parallelWaitInfo).toMatch(/all/i);
+    expect(parallelWaitInfo).not.toMatch(/first/i);
     expect(getNodeFieldInfo(PipelineNodeTypes.Parallel, NODE_FIELD_KEYS.join)).not.toBe('');
     expect(getNodeFieldInfo(PipelineNodeTypes.Parallel, NODE_FIELD_KEYS.maxConcurrency)).not.toBe('');
 
