@@ -227,6 +227,22 @@ and implementation changes here linked by the relevant ADR/specification. Pull
 requests must state the compatibility surface changed, security assumptions,
 failure modes exercised, and checks that were run or intentionally skipped.
 
+**Open a pull request as a draft.** CI runs in two tiers
+(`docs/contributing/ci.md`). A draft runs only the fast tier: static gates,
+vet, lint, unit tests, Rust format and Clippy. Follow these steps:
+
+1. Open the pull request with `gh pr create --draft`.
+2. Push fixes until the fast tier is green. Act on the first failed job.
+3. Mark the pull request ready with `gh pr ready`. This starts the heavy tier:
+   E2E, the Rust test chains, desktop and kind.
+4. Merge when `CI / ci-gate` is green. `ci-gate` fails on a draft and fails
+   when a job that must run is missing.
+
+Do not mark a pull request ready before the fast tier is green. Do not mark a
+pull request ready only to see the heavy tier on code that you have not tested.
+A new workflow needs a job in `ci.yml`, an entry in `scripts/ci/tier-paths.json`
+and a place in `ci-gate`. `scripts/ci/check-tiering.mjs` checks this.
+
 **Upgrade notes are one file per change.** A change that needs an operator to
 act on upgrade adds `docs/upgrading/YYYY-MM-DD-<issue>-<slug>.md`
 (`docs/upgrading/README.md`). Do not edit `docs/UPGRADING.md`: it is the closed

@@ -11,13 +11,12 @@ name: CI — Mock LLM
 # installs nothing.
 
 on:
-  pull_request:
-    paths:
-      - "deploy/mock-llm/**"
-      - ".github/workflows/ci-mock-llm.yml"
+  # Called by ci.yml, which owns the PR tiers and the path filter
+  # (scripts/ci/tier-paths.json); no `pull_request` arm of its own.
+  workflow_call:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ci-mock-llm-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:

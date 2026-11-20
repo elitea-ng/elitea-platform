@@ -65,3 +65,36 @@ jobs:
               dryRun: process.env.DRY_RUN === "true",
             });
             if (code !== 0) core.setFailed(`scripts/ci/prune-ci-images.mjs exited ${code}`);
+
+  # The repository's Actions cache (10 GB cap, LRU eviction). scripts/ci/prune-actions-caches.mjs
+  # says why and how: no pull-request copies, one entry per key family, and the
+  # least recently used entries out above 9 GiB, so what GitHub would evict
+  # blindly is chosen instead. After the nightly cache writers (00:05-01:07 UTC).
+  actions-cache:
+    name: Keep the Actions cache under its cap
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # Lists and deletes this repository's cache entries.
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: The policy still decides what it must
+        run: node --test --test-reporter=spec scripts/ci/prune-actions-caches.test.mjs
+      # Pinned to the v9.0.0 commit, as the prune above pins it: this step holds actions: write.
+      - name: Prune
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          DRY_RUN: ${{ inputs.dry_run == true }}
+        with:
+          script: |
+            const { main } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/ci/prune-actions-caches.mjs`);
+            const code = await main({
+              github,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              dryRun: process.env.DRY_RUN === "true",
+            });
+            if (code !== 0) core.setFailed(`scripts/ci/prune-actions-caches.mjs exited ${code}`);

@@ -13,13 +13,9 @@ name: CI — Handoff load gate
 # makes them t.Skip, and a skip must not read as a pass.
 
 on:
-  pull_request:
-    paths:
-      - "services/elitea-main/internal/application/workspacestore/**"
-      - "services/elitea-main/internal/application/workspacehandoff/**"
-      - "services/elitea-main/internal/infra/db/repos/workspace_*"
-      - "services/elitea-main/migrations/shared/**"
-      - ".github/workflows/ci-handoff-loadgate.yml"
+  # Called by ci.yml, which owns the PR tiers and the path filter
+  # (scripts/ci/tier-paths.json); no `pull_request` arm of its own.
+  workflow_call:
   # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
   # The nightly run on main is the one that WRITES the caches pull requests
   # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the

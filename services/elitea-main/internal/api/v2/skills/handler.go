@@ -93,6 +93,10 @@ type SkillTrust struct {
 	// State is `not_required` (not foreign), `trusted` or `untrusted`.
 	State              string `json:"state"`
 	PublisherProjectID *int64 `json:"publisher_project_id,omitempty"`
+	// PublisherTrusted is true when the state is `trusted` because an
+	// administrator trusts the publisher project, not because this project
+	// reviewed the text.
+	PublisherTrusted bool `json:"publisher_trusted,omitempty"`
 }
 
 type Skill struct {

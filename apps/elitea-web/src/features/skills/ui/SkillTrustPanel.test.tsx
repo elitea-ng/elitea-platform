@@ -22,16 +22,18 @@ interface State {
   posted: unknown[];
   revoked: number;
   postStatus: number;
+  publisherTrusted: boolean;
 }
 
 function mockTrust(initial: Partial<State> = {}): State {
-  const backend: State = { foreign: true, state: 'untrusted', posted: [], revoked: 0, postStatus: 200, ...initial };
+  const backend: State = { foreign: true, state: 'untrusted', posted: [], revoked: 0, postStatus: 200, publisherTrusted: false, ...initial };
   const status = () => ({
     skill_id: 4,
     name: 'Triage',
     foreign: backend.foreign,
     revision: REVISION,
     state: backend.foreign ? backend.state : 'not_required',
+    ...(backend.publisherTrusted ? { publisher_trusted: true } : {}),
     history: [],
   });
   server.use(
@@ -89,6 +91,15 @@ describe('SkillTrustPanel', () => {
     await userEvent.setup().click(await screen.findByTestId('skill-trust-revoke'));
     await waitFor(() => expect(backend.revoked).toBe(1));
     expect(await screen.findByTestId('skill-trust-grant')).toBeInTheDocument();
+  });
+
+  it('says an administrator trusts the publisher, and offers neither Trust nor Revoke', async () => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    mockTrust({ state: 'trusted', publisherTrusted: true });
+    mount();
+    expect(await screen.findByText(/An administrator trusts the project that wrote this skill/)).toBeInTheDocument();
+    expect(screen.queryByTestId('skill-trust-revoke')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('skill-trust-grant')).not.toBeInTheDocument();
   });
 
   it('asks the person to read the text again when it changed under them', async () => {

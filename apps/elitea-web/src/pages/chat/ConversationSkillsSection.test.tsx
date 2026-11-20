@@ -75,7 +75,7 @@ function mockBackend(initial: Pin[], overrides: Partial<Backend> = {}): Backend 
       HttpResponse.json({
         rows: [
           { id: 101, name: 'Triage' },
-          { id: 200, name: 'Release notes' },
+          { id: '200', name: 'Release notes' },
           { id: 201, name: 'Changelog' },
         ],
         total: 3,

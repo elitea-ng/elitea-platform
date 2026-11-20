@@ -17,19 +17,9 @@ name: CI — elitea-vector
 # ci-go.yml.
 
 on:
-  pull_request:
-    paths:
-      # The pin every cargo step asserts (scripts/ci/assert-rust-toolchain.sh).
-      - "rust-toolchain.toml"
-      - "scripts/ci/assert-rust-toolchain.sh"
-      - "services/elitea-vector/**"
-      - "libs/proto/elitea/vector/**"
-      # The telemetry crate elitea-vector links, and the workspace it
-      # inherits package fields and lints from.
-      - "libs/rust/engine-sidecar/**"
-      - "libs/rust/engine-core/**"
-      - "libs/rust/Cargo.toml"
-      - ".github/workflows/ci-vector.yml"
+  # Called by ci.yml, which owns the PR tiers and the path filter
+  # (scripts/ci/tier-paths.json); no `pull_request` arm of its own.
+  workflow_call:
   # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
   # The nightly run on main is the one that WRITES the caches pull requests
   # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
@@ -39,7 +29,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ci-vector-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -91,11 +81,8 @@ jobs:
           cache-targets: false
           workspaces: services/elitea-vector
 
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Run Clippy
-        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      # Formatting and Clippy for this crate run in ci-rust-lint.yml (fast
+      # tier), so they fail in minutes and before this job's build.
 
       - name: Build documentation
         env:
