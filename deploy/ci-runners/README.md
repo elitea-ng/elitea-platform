@@ -79,7 +79,25 @@ Set `ENG_RUNNER` to `off` (or delete it). Every job goes back to `ubuntu-latest`
 request is needed. To cut the pool off from the repository entirely, also untick it under the runner group's
 **Repository access**.
 
-### Changing the hook
+## Next step: a custom runner image (not implemented)
+
+Most hosted-only jobs are hosted because the plain `actions-runner` image lacks tools, not because of Docker. The
+proposal is an image at `deploy/ci-runners/Containerfile`: `FROM ghcr.io/actions/actions-runner:<pinned digest>`
+plus apt installs at build time. It would be published by a hosted workflow to ghcr and pinned by digest in the
+scale-set values.
+
+| Add | Unlocks |
+|---|---|
+| `build-essential` (gcc, make), `pkg-config`, `libssl-dev` | Rust jobs (rust-lint, rust-shared, `code-runner`, `quality`, doc-extractor, `serde-order`), and Go with cgo: `go test -race` (`test-checks`, the shards that need no services) |
+| `zstd` | The same cache version as hosted runners, so routed jobs read the zstd entries main writes, and main's writers could move too |
+| `python3-venv`, `python3-pip` | The Python jobs (ci-go `proto`, mock-llm `unit`, deepwiki-conformance `fixtures`) with a venv, or `setup-python` with `AGENT_TOOLSDIRECTORY` pre-created |
+| `shellcheck`, `gh`, `helm`, `yq`, `protoc` | no-binaries `repo-gates`, helm-lint `lint` and `template`, ci-go `env-drift`, dependency-scanning `scan` |
+
+Jobs that need Docker, `services:` or kind stay hosted until there is a daemon option (an in-cluster BuildKit or a
+separate dind scale set). Once the image lands, move each job by switching its `runs-on` to `ROUTED_RUNS_ON` and
+letting `check-runner-routing.mjs` approve it.
+
+## Changing the hook
 
 Edit `job-started.sh` here, run `node --test scripts/ci/eng-runner-hook.test.mjs`, merge, then repeat step 1.
 The cluster copy is the one that counts: the repository copy is a reference.
