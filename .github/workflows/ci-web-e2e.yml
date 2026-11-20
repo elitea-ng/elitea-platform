@@ -641,6 +641,9 @@ jobs:
         run: bash scripts/e2e-stack.sh down
       - name: Skipped (no web, harness or client change reaches WebKit)
         if: ${{ env.RUN_LEG != 'true' }}
+        # The job's default working directory (apps/elitea-web) does not exist here,
+        # because checkout was skipped; bash could not start in it.
+        working-directory: ${{ github.workspace }}
         run: echo "::notice::${{ matrix.leg }} skipped - nothing this pull request changes can reach WebKit; the nightly run on main runs it"
 
   chat-stream-rust:

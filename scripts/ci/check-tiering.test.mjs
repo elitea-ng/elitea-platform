@@ -4,11 +4,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { check, checkDesktopPackage, load, main, DESKTOP_PACKAGE_PATHS, DRAFT_CONDITION, MINIMUM_CALL_JOBS } from "./check-tiering.mjs";
+import { check, checkDesktopPackage, load, main, DESKTOP_PACKAGE_PATHS, DRAFT_CONDITION, FAST_GATE_CONDITION, MINIMUM_CALL_JOBS } from "./check-tiering.mjs";
 
 const call = (id, extra = {}) => ({ needs: ["changes"], if: `fromJSON(needs.changes.outputs.run)['${id}']`, uses: `./.github/workflows/${id}.yml`, ...extra });
 const heavyCall = (id) =>
-  call(id, { needs: ["changes", "fast-gate"], if: `${DRAFT_CONDITION} && fromJSON(needs.changes.outputs.run)['${id}']` });
+  call(id, { needs: ["changes", "fast-gate"], if: `${FAST_GATE_CONDITION} && ${DRAFT_CONDITION} && fromJSON(needs.changes.outputs.run)['${id}']` });
 
 function model() {
   const fast = Array.from({ length: MINIMUM_CALL_JOBS / 2 }, (_, i) => `fast-${i}`);
@@ -44,6 +44,14 @@ test("a heavy job without the draft condition is refused", () => {
   const m = model();
   m.ci.jobs["heavy-0"].if = "fromJSON(needs.changes.outputs.run)['heavy-0']";
   has(check(m), "heavy-0: a heavy-tier job has no");
+});
+
+test("a heavy job that leans on the implicit success() is refused", () => {
+  // #2295: a ready run reused the fast tier, so the fast jobs were skipped; through
+  // fast-gate they are ancestors, and the implicit success() skipped every heavy job.
+  const m = model();
+  m.ci.jobs["heavy-1"].if = `${DRAFT_CONDITION} && fromJSON(needs.changes.outputs.run)['heavy-1']`;
+  has(check(m), "heavy-1: a heavy-tier job's if has no");
 });
 
 test("ci-gate must list every job", () => {

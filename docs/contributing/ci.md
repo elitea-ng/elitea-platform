@@ -61,7 +61,7 @@ To add a workflow to the pull request pipeline:
 
 1. Give it a `workflow_call` trigger. Keep its `schedule` and `workflow_dispatch` triggers.
 2. Add a job to `ci.yml` named like the file, with `uses: ./.github/workflows/<name>.yml`, in the fast or the
-   heavy tier. Copy a neighbour: a heavy job needs `[changes, fast-gate]` and the draft condition.
+   heavy tier. Copy a neighbour: a heavy job needs `[changes, fast-gate]`, and its `if` starts with `!cancelled() && needs.fast-gate.result == 'success'` before the draft condition. Without that, the implicit `success()` is false whenever any fast job was skipped (by its path filter, or by a ready run that reused the fast tier), and every heavy job is skipped with it.
 3. Add the job to the `needs` of `ci-gate` (and of `fast-gate` for a fast job).
 4. Add its paths and its tier to `scripts/ci/tier-paths.json`.
 

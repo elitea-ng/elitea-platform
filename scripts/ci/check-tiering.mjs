@@ -68,6 +68,11 @@ export const DESKTOP_PACKAGE_PATHS = [
   ".github/actions/desktop-windows-package/**",
 ];
 const PR_ONLY = "${{ github.event_name == 'pull_request' }}";
+// A heavy job's own if must not lean on the implicit success(): that is false when ANY
+// ancestor was skipped, and fast-tier jobs a path filter (or a reused ready run) skipped
+// are ancestors through fast-gate, so every heavy job would be skipped. It asks for
+// fast-gate's result itself instead.
+export const FAST_GATE_CONDITION = "!cancelled() && needs.fast-gate.result == 'success'";
 
 const asList = (needs) => (needs === undefined ? [] : Array.isArray(needs) ? needs : [needs]);
 const triggers = (workflow) => {
@@ -105,6 +110,9 @@ export function check({ ci, tiers, workflows }) {
     if (isHeavy) {
       if (!String(job.if ?? "").includes(DRAFT_CONDITION)) {
         errors.push(`${id}: a heavy-tier job has no \`${DRAFT_CONDITION}\` in its if — it would run for a draft`);
+      }
+      if (!String(job.if ?? "").includes(FAST_GATE_CONDITION)) {
+        errors.push(`${id}: a heavy-tier job's if has no \`${FAST_GATE_CONDITION}\` — the implicit success() skips it whenever a fast job was skipped`);
       }
     }
     if (!needs.includes("changes")) errors.push(`${id}: needs does not include \`changes\` (its path filter)`);
