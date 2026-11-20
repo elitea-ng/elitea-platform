@@ -80,39 +80,63 @@ When the heavy-tier PR routes a helm or yq job here, either bump the workflow
 pins to the image's versions or keep the job's own install step. Until then,
 the image's copies are fallbacks.
 
-### Tool cache
+### Disk: everything on `_work` (1Gi root limit)
 
-`RUNNER_TOOL_CACHE` and `AGENT_TOOLSDIRECTORY` are both
-`/home/runner/_tool`. The directory is created in the image and owned by
-`runner`.
+On the pool, the runner container has an **`ephemeral-storage` limit of
+1Gi**. Only `/home/runner/_work` is the separate 40 GB volume. Anything a job
+writes elsewhere counts against the 1Gi: a toolchain, a module cache or a
+temp file. Going over gets the pod evicted mid-job. So the image points every
+cache and the temp dir at `_work` by default:
 
-- The runner resolves its tool directory from `RUNNER_TOOL_CACHE` first
-  (`HostContext.cs`, `WellKnownDirectory.Tools`). Without it, the runner uses
-  `_work/_tool`.
-- `setup-go`, `setup-node` and `setup-python` install into what the runner
-  reports.
-- setup-python's Ubuntu installer also reads `AGENT_TOOLSDIRECTORY` directly.
-  The Ubuntu Python builds are relocatable, so a non-default path works.
-  Only macOS needs the fixed `hostedtoolcache` path.
-- `dtolnay/rust-toolchain` uses rustup under `$HOME` (`~/.rustup`,
-  `~/.cargo`), which is writable.
+| Variable | Default | Used by |
+|---|---|---|
+| `RUNNER_TOOL_CACHE`, `AGENT_TOOLSDIRECTORY` | `/home/runner/_work/_tool` | The runner's tool directory (`HostContext.cs`, `WellKnownDirectory.Tools`), so setup-go, setup-node and setup-python. setup-python's Ubuntu installer reads `AGENT_TOOLSDIRECTORY` directly. The Ubuntu Python builds are relocatable, and only macOS needs `hostedtoolcache`. |
+| `TMPDIR` | `/home/runner/_work/_temp` | `mktemp`, compilers, pip and npm. This is the runner's own per-job temp dir (`RUNNER_TEMP`). |
+| `XDG_CACHE_HOME` | `/home/runner/_work/_cache` | Anything that follows XDG. |
+| `GOMODCACHE`, `GOCACHE` | `_work/_cache/go-mod`, `_work/_cache/go-build` | go. |
+| `CARGO_HOME`, `RUSTUP_HOME` | `_work/_cache/cargo`, `_work/_cache/rustup` | rustup and cargo. `dtolnay/rust-toolchain` puts `$CARGO_HOME/bin` on PATH. |
+| `npm_config_cache` | `_work/_cache/npm` | npm. |
+| `PIP_CACHE_DIR` | `_work/_cache/pip` | pip. |
 
-The cache starts empty in every pod, because pods are ephemeral.
+**`_work` is a mounted volume, so it is empty when the pod starts.**
+- Nothing is or can be pre-created under it in the image, because the mount
+  would hide it.
+- Each tool creates its own directory on first use. setup-go, setup-node and
+  setup-python create the tool cache. go, rustup, pip and npm create their
+  homes.
+- The runner creates and empties `_work/_temp` at job start, before the first
+  step.
+- The smoke test checks this. It mounts an empty `_work`, then every variable
+  must point under it and be creatable.
 
-**Disk budget, check before routing the Rust jobs.** `/home/runner/_tool`,
-`~/.rustup` and `~/.cargo` all sit on the container's writable layer, the
-95 GB node overlay shared by every pod on the node. They are not on the
-pod's own 40 GB `_work` volume. A Rust job adds about 1.5 GB of toolchain
-plus a cargo registry of several GB. A Go or Node toolchain adds a few
-hundred MB. If the scale set sets an `ephemeral-storage` limit on the runner
-container, it must cover that, or the pod is evicted mid-job.
+Two caveats:
 
-The recommended setting for the heavy-tier PR is to keep all of it on the
-volume. Set `RUNNER_TOOL_CACHE`, `AGENT_TOOLSDIRECTORY`, `CARGO_HOME` and
-`RUSTUP_HOME` under `/home/runner/_work/` in the runner container's `env`.
-Values set there override the image's defaults. The image default stays
-`/home/runner/_tool` because that path exists and is writable in every pod
-whatever the volume layout.
+1. **A step that sets its own value wins over these defaults.** The repo's
+   `.github/actions/go-cache` and `npm-cache` actions export
+   `GOCACHE=$HOME/.cache/go-build`, `GOMODCACHE=$HOME/go/pkg/mod` and
+   `NPM_CONFIG_CACHE=$HOME/.npm`, because `main-write-cache` saves those
+   literal paths. On this pool `$HOME` is the 1Gi root fs. The PR that routes
+   Go and Node jobs here has to make those actions pool-aware, for example by
+   using `_work` paths when `runner.environment == 'self-hosted'`, keyed apart
+   from the hosted entries. Routing them unchanged gets the pods evicted.
+2. **`$HOME` itself stays on the root fs.** git config and small dotfiles are
+   fine. Anything large is not.
+
+**Optional (values):** raise the runner container's limit to 8 to 10Gi. That
+gives headroom for whatever still writes outside `_work`, such as `$HOME`
+dotfiles and a stray `/tmp`:
+
+```yaml
+template:
+  spec:
+    containers:
+      - name: runner
+        resources:
+          limits:
+            ephemeral-storage: 10Gi
+          requests:
+            ephemeral-storage: 8Gi
+```
 
 ### Why Ubuntu
 
@@ -124,6 +148,11 @@ builds are made for the hosted Ubuntu images. No checker in `scripts/ci`
 scans this file for the OS family.
 
 ## Switching the pool to this image (owner)
+
+The scale-set values are not in this repository. They live in the owner's
+gitops (Argo CD) repository, in the `saas-eng-runner` application, and Argo
+CD applies them. The steps below edit those values. In a gitops setup,
+"apply" means committing the change there and letting Argo CD sync it.
 
 1. **Make the package readable by the cluster.** GitHub creates
    `ghcr.io/elitea-ng/eng-runner` as PRIVATE on its first push. Do one of
@@ -152,19 +181,17 @@ scans this file for the OS family.
    Keep `command` as it is in the current values. The image's entrypoint is
    unchanged from upstream.
 
-3. **Apply it:**
-
-   ```sh
-   helm upgrade <release> oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set \
-     -n saas-eng-runner --version <the installed chart version> -f <values.yaml>
-   ```
+3. **Apply it.** Commit the values change in the gitops repository and let
+   Argo CD sync `saas-eng-runner`. That is the `helm upgrade` of the
+   `gha-runner-scale-set` release. A manual `helm upgrade` would be reverted
+   by the next sync.
 
    New runner pods use the image, and running jobs finish on the old one.
 4. **Check it.** Dispatch any job on `eng-runner` that runs `cmake --version`
    and `cc --version`, or watch the next routed job.
 
 **Rollback.** Set the previous dated tag, or the stock
-`ghcr.io/actions/actions-runner:2.338.2`, and run `helm upgrade` again. Dated
+`ghcr.io/actions/actions-runner:2.338.2`, in the same values, and sync again. Dated
 tags are kept and never overwritten. A second build on the same UTC day is
 published as `<version>-<date>.<run number>`, and publish refuses a tag that
 already exists.
@@ -181,8 +208,11 @@ The pool does not follow the moving tag by itself, because the values pin a
 dated tag. Moving the pool to a new dated tag is a deliberate values change.
 
 The smoke step runs inside the built image as `runner`. It runs every tool's
-version command, creates a venv, checks that the tool cache and `$HOME` are
-writable, compiles and runs a C and a C++ file, checks the CA bundle, and
+version command. It checks that `_work` is not baked into the image. Then,
+with an empty runner-owned `_work` mounted the way the pool mounts it, it
+checks that every cache variable and `TMPDIR` point under `_work` and can be
+created there, and that `mktemp` lands there. It also creates a venv, checks
+that `$HOME` is writable, compiles and runs a C and a C++ file, checks the CA bundle, and
 asserts that no container engine and no toolchain (go, cargo, rustc, node) is
 in the image. Every package in the table above is exercised there. Change the
 two together. On every run, PRs included, the build job also saves the image

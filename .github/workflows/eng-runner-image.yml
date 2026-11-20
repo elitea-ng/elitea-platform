@@ -99,15 +99,45 @@ jobs:
           REF: ${{ env.IMAGE }}:${{ steps.meta.outputs.runner-version }}
         run: |
           set -euo pipefail
-          docker run --rm --entrypoint /bin/bash "$REF" -euo pipefail -c '
+          # Nothing may be baked under /home/runner/_work: on the pool it is a
+          # mounted volume, so anything there would be hidden by the mount.
+          docker run --rm --entrypoint /bin/bash "$REF" -c \
+            'test -z "$(ls -A /home/runner/_work 2>/dev/null)" && echo "_work is not baked into the image"'
+
+          # The rest runs with an empty, runner-owned _work mounted, the way
+          # the pool mounts its volume. The first command stands in for the
+          # runner, which creates its temp dir (TMPDIR) before the first step;
+          # every other directory must be created by the tool that uses it.
+          docker run --rm --entrypoint /bin/bash \
+            --tmpfs /home/runner/_work:rw,exec,uid=1001,gid=1001,size=2g \
+            "$REF" -euo pipefail -c '
             test "$(id -un)" = runner
+            test -z "$(ls -A /home/runner/_work)"
+            mkdir -p "$TMPDIR"
+
+            for var in RUNNER_TOOL_CACHE AGENT_TOOLSDIRECTORY TMPDIR XDG_CACHE_HOME GOMODCACHE GOCACHE CARGO_HOME RUSTUP_HOME npm_config_cache PIP_CACHE_DIR; do
+              dir="${!var}"
+              case "$dir" in
+                /home/runner/_work/*) ;;
+                *) echo "$var=$dir is outside /home/runner/_work (1Gi root fs limit on the pool)" >&2; exit 1 ;;
+              esac
+              mkdir -p "$dir" && touch "$dir/.smoke" && rm "$dir/.smoke"
+              echo "$var=$dir writable"
+            done
+            test "$RUNNER_TOOL_CACHE" = "$AGENT_TOOLSDIRECTORY"
+            mkdir -p "$RUNNER_TOOL_CACHE/smoke/1.0.0/x64"
+            touch "$RUNNER_TOOL_CACHE/smoke/1.0.0/x64.complete"
+            rm -rf "$RUNNER_TOOL_CACHE/smoke"
+            touch "$HOME/.smoke" && rm "$HOME/.smoke"
+
             cc --version
             c++ --version
             cmake --version
             pkg-config --version
             zstd --version
-            python3 -m venv /tmp/v && /tmp/v/bin/python -c "import sys; print(sys.prefix)"
-            /tmp/v/bin/pip --version
+            python3 -m venv "$TMPDIR/v" && "$TMPDIR/v/bin/python" -c "import sys; print(sys.prefix)"
+            "$TMPDIR/v/bin/pip" --version
+            test "$("$TMPDIR/v/bin/pip" cache dir)" = "$PIP_CACHE_DIR"
             pip --version
             shellcheck --version
             gh --version
@@ -118,14 +148,10 @@ jobs:
             xz --version
             test -s /etc/ssl/certs/ca-certificates.crt && echo "ca-certificates ok"
 
-            test "$RUNNER_TOOL_CACHE" = /home/runner/_tool
-            test "$AGENT_TOOLSDIRECTORY" = /home/runner/_tool
-            mkdir -p "$RUNNER_TOOL_CACHE/smoke/1.0.0/x64"
-            touch "$RUNNER_TOOL_CACHE/smoke/1.0.0/x64.complete"
-            rm -rf "$RUNNER_TOOL_CACHE/smoke"
-            touch "$HOME/.smoke" && rm "$HOME/.smoke"
-
-            cd "$(mktemp -d)"
+            # mktemp honours TMPDIR, so this also proves temp files land on _work.
+            work="$(mktemp -d)"
+            case "$work" in /home/runner/_work/*) ;; *) echo "mktemp went to $work" >&2; exit 1 ;; esac
+            cd "$work"
             printf "#include <stdio.h>\nint main(void){puts(\"cc ok\");return 0;}\n" > t.c
             cc -O2 -o t t.c && ./t
             printf "#include <iostream>\nint main(){std::cout<<\"c++ ok\"<<std::endl;}\n" > t.cpp

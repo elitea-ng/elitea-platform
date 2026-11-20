@@ -114,13 +114,31 @@ RUN set -eux; \
     \
     cd /; rm -rf "$work"
 
-# A writable tool cache owned by the runner user. The runner resolves its tool
-# directory from RUNNER_TOOL_CACHE first (then AGENT_TOOLSDIRECTORY), and the
-# setup actions install into whatever it reports; setup-python's Ubuntu
-# installer reads AGENT_TOOLSDIRECTORY directly, so both name the same place.
-# rustup (dtolnay/rust-toolchain) installs under $HOME instead, also writable.
-ENV RUNNER_TOOL_CACHE=/home/runner/_tool \
-    AGENT_TOOLSDIRECTORY=/home/runner/_tool
-RUN install -d -o runner -g runner -m 0755 /home/runner/_tool
+# Every cache and the temp dir default to the _work volume. On the pool the
+# runner container's root filesystem has an ephemeral-storage limit of 1Gi:
+# a toolchain, a module cache or a temp file written outside
+# /home/runner/_work gets the pod evicted. _work is the 40 GB volume.
+#
+# _work is MOUNTED, so it is empty when the pod starts and nothing can be
+# pre-created under it here: each tool creates its own directory on first use
+# (setup-go/-node/-python mkdir the tool cache, go and rustup their homes,
+# pip and npm their caches). TMPDIR is the runner's own per-job temp dir,
+# which the runner creates (and empties) before the first step.
+#
+# The runner resolves its tool directory from RUNNER_TOOL_CACHE first; the
+# setup actions install where it reports, and setup-python's Ubuntu installer
+# reads AGENT_TOOLSDIRECTORY directly, so both name the same place.
+# A step that exports its own value (GITHUB_ENV or `export`) still wins:
+# README, "Disk".
+ENV RUNNER_TOOL_CACHE=/home/runner/_work/_tool \
+    AGENT_TOOLSDIRECTORY=/home/runner/_work/_tool \
+    TMPDIR=/home/runner/_work/_temp \
+    XDG_CACHE_HOME=/home/runner/_work/_cache \
+    GOMODCACHE=/home/runner/_work/_cache/go-mod \
+    GOCACHE=/home/runner/_work/_cache/go-build \
+    CARGO_HOME=/home/runner/_work/_cache/cargo \
+    RUSTUP_HOME=/home/runner/_work/_cache/rustup \
+    npm_config_cache=/home/runner/_work/_cache/npm \
+    PIP_CACHE_DIR=/home/runner/_work/_cache/pip
 
 USER runner
