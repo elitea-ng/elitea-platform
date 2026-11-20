@@ -34,6 +34,7 @@ stays a workflow change and never needs an image rebuild.
 | `pkg-config` | The `pkg-config` crate is in the same graphs. Build scripts probe with it before they fall back to a vendored build. | The Rust jobs. |
 | `zstd` | Without `zstd` on PATH, `actions/cache` falls back to gzip, which is slower. It also writes under a different cache version, so a self-hosted run would never hit the entries a hosted run wrote. | Every job that restores a cache. |
 | `python3-venv`, `python3-pip` | `python3 -m venv` and `pip` against the system Python, for helper scripts. The stock image has `python3` but cannot create a venv. | `pip install` steps in `helm-lint`, `ci-go`, `no-binaries`, `ci-deepwiki-conformance` and `helm-install-smoke`. |
+| `python3-yaml` | PyYAML for the system `python3`, which refuses `pip install` (PEP 668). `scripts/nats/render-secure-conf.sh` imports it, and `ci-secure-test-env.sh` otherwise tries to pip-install it. | The secured NATS tests in the ci-go shards and ci-gateway. |
 | `shellcheck` | Shell lint. | `helm-lint`, `no-binaries`. |
 | `unzip`, `xz-utils` | Archives that setup actions and scripts unpack. `unzip` is already in the base, so listing it only states the dependency. | Browser and toolchain downloads (`ci-browser-session`, `ci-web-e2e` helpers). |
 | `skopeo` | Registry copy and inspect without a daemon. | Steps that copy or inspect images, such as `mirror-buildkit.yml`. |

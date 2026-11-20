@@ -160,6 +160,7 @@ jobs:
             "$TMPDIR/v/bin/pip" --version
             test "$("$TMPDIR/v/bin/pip" cache dir)" = "$PIP_CACHE_DIR"
             pip --version
+            python3 -c "import yaml; print(\"pyyaml\", yaml.__version__)"
             shellcheck --version
             gh --version
             helm version
