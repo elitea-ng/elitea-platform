@@ -121,3 +121,15 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
 
 An advisory that cannot be fixed now goes in `deny.toml` (`ignore`) or `scripts/ci/govulncheck-allowlist.json`
 with a reason and an expiry date. An entry with no date, or a date in the past, fails the job.
+
+## Services on the self-hosted pool
+
+The `eng-runner` image ([`deploy/ci-runners/image`](../../deploy/ci-runners/image/README.md)) carries the
+servers that jobs otherwise get from `services:` or compose. These are PostgreSQL 18, nats-server and the nats CLI,
+Qdrant, OpenBao, RustFS and `rc`, fake-gcs-server, oidc-provider-mock and nginx. It also carries the Playwright
+1.62.1 browsers with their system libraries. The pool has no container engine, so a job there runs them as
+processes, as the runner user, with their data under `_work`. Their versions are the ones the workflows and the
+compose files pin. A change to one of those pins needs the same change in the Containerfile.
+`check-playwright-image-tag.mjs` enforces this for Playwright. A native stack reaches its services by their
+compose names through the pod's per-service loopback addresses
+([name map](../../deploy/ci-runners/README.md#native-stack-name-map)).

@@ -49,6 +49,31 @@ for (const entry of readdirSync(WORKFLOW_DIR).sort()) {
   }
 }
 
+// The eng-runner image (deploy/ci-runners/image/Containerfile) bakes the
+// browsers of one Playwright release for the native E2E jobs on the
+// self-hosted pool. A library the browsers do not belong to refuses to launch
+// them, so its `ARG PLAYWRIGHT_VERSION=` is held to the same pin. It is checked
+// apart from `refs` below: the zero-references rule is about the visual suite's
+// container, which this file is not.
+const RUNNER_CONTAINERFILE = 'deploy/ci-runners/image/Containerfile';
+const runnerContainerfile = path.join(repoRoot, RUNNER_CONTAINERFILE);
+if (existsSync(runnerContainerfile)) {
+  const text = readFileSync(runnerContainerfile, 'utf8');
+  const args = [...text.matchAll(/^ARG PLAYWRIGHT_VERSION=(\S*)$/gm)].map((m) => m[1]);
+  if (args.length !== 1) {
+    console.error(`check-playwright-image-tag: FAIL — ${RUNNER_CONTAINERFILE} must declare exactly one`);
+    console.error(`  'ARG PLAYWRIGHT_VERSION=<x.y.z>' line, found ${args.length}.`);
+    process.exit(1);
+  }
+  if (args[0] !== pinned) {
+    console.error('check-playwright-image-tag: FAIL — the runner image bakes another Playwright release');
+    console.error(`  package.json @playwright/test: ${pinned}`);
+    console.error(`  ${RUNNER_CONTAINERFILE} PLAYWRIGHT_VERSION: ${args[0]}`);
+    console.error('  Bump the Containerfile ARG and PLAYWRIGHT_DIGEST with the library (its README, "Bumping").');
+    process.exit(1);
+  }
+}
+
 if (refs.length === 0) {
   // Zero references is only benign while there is no visual suite to pin. Once
   // e2e/visual exists, zero means the container reference was lost or renamed —

@@ -41,14 +41,59 @@ stays a workflow change and never needs an image rebuild.
 | `helm` v4.3.2 | Helm 4, the latest stable release. | A fallback only. Jobs that run `azure/setup-helm` get the pinned version from `check-helm-version.mjs` first on PATH. |
 | `yq` v4.54.3 | YAML edits in shell steps. | `helm-lint`'s yq step: it uses a `yq` already on PATH and otherwise needs `sudo`, which the pool lacks. Also `publish` and `nightly-image-scan`. |
 | `ca-certificates` | TLS trust for every download above. | Everything that downloads. |
+| `gnupg`, `openssl` | `gnupg` checks the PGDG key's fingerprint at build time. `openssl` is the CLI the cert scripts (`gen-*-certs.sh`) call. | The native E2E stacks' cert generation. |
 
 **Not needed, checked against every tracked `Cargo.lock`.** Nothing links
 `openssl-sys`: TLS is rustls on `ring` or `aws-lc-rs`. Nothing uses `bindgen`,
 so there is no libclang. `protoc` is vendored (`protoc-bin-vendored`).
+(`libssl-dev` arrives with the Tauri libraries below, not for these crates.)
 
-**Out of scope.** The GTK and WebKit `-sys` crates of
-`apps/elitea-desktop/src-tauri` need `libwebkit2gtk-4.1-dev` and friends. The
-desktop jobs stay on hosted runners, so those libraries are not here.
+### Service binaries and browsers
+
+The pool cannot start a container, so `services:` and compose do not work
+there. A job runs these as plain processes instead, as the runner user, with
+their data under `_work`. None of them is started, and no data directory is created,
+in the image.
+
+| What | Version, source | Replaces | Jobs it unlocks |
+|---|---|---|---|
+| PostgreSQL server and client (`postgres`, `initdb`, `pg_ctl`, `pg_isready`, `psql`, …) | 18 (latest 18.x at build), PGDG apt repo, key checked by fingerprint | the `postgres:18` service | the ci-go shards, integration, snapshots and editor lifecycle; ci-gateway; ci-contract; ci-rust's PostgreSQL test; the deepwiki and inventory engines; handoff loadgate; governed scale |
+| `pgbouncer` | PGDG | the standalone stack's pgbouncer | the standalone E2E lanes |
+| `nats-server`, `nats` | 2.12.0, natscli 0.4.0 (the nats-box 0.19.7 CLI), GitHub releases | the `nats:2.12.0` service and nats-box bootstrap | ci-go, ci-gateway (the secured NATS tests read `ELITEA_TEST_NATS_SERVER_BIN`), governed scale, the E2E stacks |
+| `qdrant` | v1.19.2, GitHub release (glibc build) | the `qdrant/qdrant:v1.19.2` service | ci-vector, the standalone lanes |
+| `bao` | OpenBao 2.4.1, GitHub release | the `openbao:2.4.1` service (`-dev`, no `IPC_LOCK` needed) | ci-go's SecretStore test, governed conformance |
+| `rustfs`, `rc` | rustfs 1.0.0 (musl build), rc v0.1.38 (`rustfs/cli`), GitHub releases | the rustfs and `rustfs/rc` containers | the db-storage shard, ci-contract, the E2E stacks |
+| `fake-gcs-server` | 1.56.1, GitHub release | the storage-test GCS emulator | the db-storage shard, ci-contract |
+| `oidc-provider-mock` | 0.4.8, PyPI, a venv in `/opt/oidc-provider-mock`, every wheel pinned by hash | the `oidc-provider-mock` container | the E2E stacks |
+| `nginx` (`nginx-light`) | Ubuntu noble; `nginx-light` is `nginx` plus the echo module there | the elitea-web container's nginx | the E2E stacks |
+| Playwright browsers in `/ms-playwright` (`PLAYWRIGHT_BROWSERS_PATH`) | 1.62.1: chromium, its headless shell, webkit and ffmpeg, copied out of `mcr.microsoft.com/playwright:v1.62.1-noble` by digest; firefox left out | the Playwright container of the E2E legs | the native E2E legs |
+| The browsers' system libraries | Playwright's own `install-deps chromium webkit`, run at build time | the same container | the same |
+| Tauri Linux build libraries (`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `libsoup-3.0-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`, `libssl-dev`, `libxdo-dev`) | Ubuntu noble | `sudo apt-get install` in the handoff journey | the handoff journey's host test |
+
+**Not here, and why.**
+- **Azurite** is a Node program, and the image ships no Node (the toolchain
+  rule above). A job that needs it runs it with the Node that `setup-node`
+  installs.
+- **llama-server and the OpenTelemetry collector** are optional in the native
+  stack. The real-model lanes move later with their own model files, and the
+  collector is dropped natively.
+- **The sandbox, gVisor, kind and egress-proof lanes** need isolation the pool
+  cannot give. They stay on hosted runners.
+
+**The browsers are read-only.** `/ms-playwright` belongs to root and nobody
+else can write it. On the pool, never run `npx playwright install` (it writes
+its link file there and fails) or `install-deps` (it needs root). The browsers
+are the ones `@playwright/test` 1.62.1 drives.
+`apps/elitea-web/scripts/check-playwright-image-tag.mjs` fails when
+`ARG PLAYWRIGHT_VERSION` and the web app's pin differ, so a library bump
+needs an image rebuild and a pin bump on the pool first.
+
+**Sizes.** The base `actions-runner` image is about 549 MB compressed. With
+the build tools, this image measured **TBD MB compressed** (TBD GB unpacked)
+on the PR that added the services. Every build prints both figures in its
+summary, and publish prints the exact sum of the pushed layers. The pool pulls
+it through an Artifact Registry remote with image streaming, so a node does
+not wait for the whole image before a pod starts.
 
 **Removed from the base.** The upstream image ships Docker's static bundle.
 The daemon side of it (`dockerd`, `containerd*`, `ctr`, `runc`, `docker-init`
@@ -63,6 +108,20 @@ reached over TCP.
   same release (`gh_<v>_checksums.txt`, `helm-<v>-linux-amd64.tar.gz.sha256sum`,
   and yq's `checksums` read through `checksums_hashes_order`). A mismatch with
   either fails the build.
+- The service binaries are pinned the same way, by version and SHA-256,
+  checked against the release's checksum file (`SHA256SUMS`,
+  `checksums-linux.txt`, `checksums.txt`, `<asset>.sha256`). Qdrant publishes
+  no checksum file, so its pin is the only check.
+- The PGDG repository is trusted through its key, with `signed-by` for that
+  repository only. The build refuses a key whose fingerprint is not
+  `B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8`. The PostgreSQL major is pinned
+  (18), and the minor follows PGDG.
+- The Playwright stage is pinned by tag and index digest. The
+  `playwright-core` tarball that runs `install-deps` is pinned by SHA-256 and
+  checked against the npm registry's published integrity.
+- `oidc-provider-mock` and its dependency closure are pinned by hash in
+  `oidc-provider-mock.requirements.txt`. pip installs them with
+  `--require-hashes --only-binary=:all:`.
 - apt packages are not version-pinned. The weekly rebuild runs `apt-get
   upgrade`, so they track Ubuntu 24.04 security updates.
 
@@ -219,6 +278,18 @@ two together. On every run, PRs included, the build job also saves the image
 and reads the archive back with skopeo. That proves the path publish depends
 on before a merge.
 
+A second smoke step covers the service binaries and the browsers, again as
+`runner` (uid 1001) with an empty `_work` and no extra capabilities, the way
+the pool runs them. Every binary prints its version. PostgreSQL gets an
+`initdb` under `_work`, starts, answers over TCP and its socket, and stops.
+nats-server (JetStream), qdrant, `bao server -dev` (without `IPC_LOCK`),
+fake-gcs-server and a non-root nginx each start, pass their health probe and
+are stopped. The Tauri libraries resolve through pkg-config. Chromium (the
+headless shell and the full browser) and WebKit launch and render a page.
+They run under the hosted runner's node and the pinned `playwright-core`,
+which are mounted outside PATH, since the image has no node. The step also
+checks that `/ms-playwright` is read-only to the runner and holds no firefox.
+
 ## Bumping
 
 **The runner.** Set `RUNNER_VERSION` and `RUNNER_DIGEST` in the Containerfile
@@ -233,3 +304,17 @@ Then open a PR. CI builds it, and the merge plus a dispatch publishes it.
 **gh, helm and yq.** Set the version and the SHA-256 of the linux amd64 asset,
 taken from the release's own checksum file. The build refuses a hash the
 release does not publish.
+
+**The service binaries** work the same way: `*_VERSION` and `*_SHA256` in the
+Containerfile. Keep them at the versions the workflows' `services:` and the
+compose files run (the comment above the ARGs lists where), so a job behaves
+the same on both pools.
+
+**Playwright** moves with `@playwright/test` in `apps/elitea-web/package.json`.
+Set `PLAYWRIGHT_VERSION`, `PLAYWRIGHT_DIGEST` (the index digest of
+`mcr.microsoft.com/playwright:v<version>-noble`, from `skopeo inspect --raw … |
+sha256sum`) and `PLAYWRIGHT_CORE_SHA256` (the SHA-256 of
+`playwright-core-<version>.tgz` from the npm registry) together.
+
+**oidc-provider-mock**: regenerate the whole
+`oidc-provider-mock.requirements.txt` with the command in its header.
