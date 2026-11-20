@@ -194,11 +194,8 @@ jobs:
           # comment inside it would become a path.
           cache-dependency-path: |
             services/elitea-main/go.sum
-            services/elitea-scheduler/go.sum
-            services/elitea-subapp-host/go.sum
             libs/go/*/go.sum
             libs/proto/gen/go/go.sum
-            conformance/nativeclient/go.sum
 
       # golangci-lint-action installs AND runs in one step, and it runs in one
       # working directory. Nine directories therefore need the binary on its
@@ -312,11 +309,8 @@ jobs:
           save: 'false'
           cache-dependency-path: |
             services/elitea-main/go.sum
-            services/elitea-scheduler/go.sum
-            services/elitea-subapp-host/go.sum
             libs/go/*/go.sum
             libs/proto/gen/go/go.sum
-            conformance/nativeclient/go.sum
 
       - name: Verify generated OpenAPI server is current
         run: |
@@ -423,11 +417,8 @@ jobs:
           save: 'false'
           cache-dependency-path: |
             services/elitea-main/go.sum
-            services/elitea-scheduler/go.sum
-            services/elitea-subapp-host/go.sum
             libs/go/*/go.sum
             libs/proto/gen/go/go.sum
-            conformance/nativeclient/go.sum
 
       # The same function as the plan job, on the same commit, so the shard
       # and the plan cannot disagree. It fails again on a bad split.
@@ -799,7 +790,10 @@ jobs:
       - name: Restore the Go cache (pull requests read, main writes)
         uses: ./.github/actions/go-cache
         with:
-          cache-dependency-path: services/elitea-main/go.sum
+          cache-dependency-path: |
+            services/elitea-main/go.sum
+            libs/go/*/go.sum
+            libs/proto/gen/go/go.sum
       - name: Run database integration tests
         env:
           INTEGRATION_DATABASE_URL: postgres://elitea:elitea@localhost:5432/elitea?sslmode=disable
@@ -850,7 +844,10 @@ jobs:
       - name: Restore the Go cache (pull requests read, main writes)
         uses: ./.github/actions/go-cache
         with:
-          cache-dependency-path: services/elitea-main/go.sum
+          cache-dependency-path: |
+            services/elitea-main/go.sum
+            libs/go/*/go.sum
+            libs/proto/gen/go/go.sum
       - name: Check compiled snapshot publication and recovery
         env:
           ELITEA_COMPILED_SNAPSHOT_PG_FIXTURE_DSN: "postgres://postgres:postgres@127.0.0.1:5432/elitea_compiled_fixture_ci?sslmode=disable"

@@ -35,6 +35,7 @@ jobs:
 
       # ── Helm Lint ─────────────────────────────────────────────────────────────
       - name: Set up Helm
+        if: ${{ !cancelled() }}
         uses: azure/setup-helm@v5
         with:
           version: v4.3.1
@@ -765,6 +766,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Set up Helm
+        if: ${{ !cancelled() }}
         uses: azure/setup-helm@v5
         with:
           version: v4.3.1
@@ -973,6 +975,7 @@ jobs:
       # latest 3.x patch (scripts/ci/check-helm-version.mjs holds both pins).
       # Last in the job: from here on `helm` is Helm 3.
       - name: Set up Helm 3 (the Argo CD renderer)
+        if: ${{ !cancelled() }}
         id: helm3
         uses: azure/setup-helm@v5
         with:

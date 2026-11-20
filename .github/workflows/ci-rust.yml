@@ -43,6 +43,7 @@ jobs:
       - name: Cache cargo registry and build artefacts
         uses: Swatinem/rust-cache@v2
         with:
+          cache-targets: false  # registry and git only: the 10 GB cap (scripts/ci/check-cache-budget.mjs)
           save-if: ${{ github.ref == 'refs/heads/main' }}
           workspaces: services/elitea-code-runner
 
@@ -110,6 +111,7 @@ jobs:
       - name: Cache cargo registry and build artefacts
         uses: Swatinem/rust-cache@v2
         with:
+          cache-targets: false  # registry and git only: the 10 GB cap (scripts/ci/check-cache-budget.mjs)
           # Read everywhere, write on main only: a pull request's target directory
           # is ~1 GB of the repository's 10 GB Actions cache, duplicated per branch.
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -228,8 +230,9 @@ jobs:
         uses: ./.github/actions/go-cache
         with:
           cache-dependency-path: |
-            go.work.sum
+            services/elitea-main/go.sum
             libs/go/*/go.sum
+            libs/proto/gen/go/go.sum
 
       - name: Provision the secured NATS permission test
         working-directory: .

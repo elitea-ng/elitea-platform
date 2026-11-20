@@ -162,10 +162,9 @@ runs:
     # Each image now has a content address (scripts/ci/stack-image-hash.mjs: a
     # hash of its build spec and every COPY source of the stages it runs) and a
     # tag for it, `<prefix><image>:cas-<hash>`. When EVERY image of this leg
-    # already has that tag, the leg builds nothing: it re-tags the existing
-    # image with this run's unique tag (a registry-side copy, which also
-    # refreshes the version's age so the 7-day prune cannot take it mid-run) and
-    # the digests are recorded as ever. Otherwise the leg builds as before and,
+    # already has that tag, the leg builds nothing: it uses the existing
+    # image under its content tag (no re-tag: it keeps its age) and the digests
+    # are recorded from that tag. Otherwise the leg builds as before and,
     # after recording the digests, tags the result with its content address for
     # the next push.
     #
@@ -207,34 +206,16 @@ runs:
         if [ "$reuse" = "true" ]; then
           echo "::notice::every image of this leg already exists for these inputs; nothing is built"
         fi
-    - name: Re-tag the reused images for this run
+    # A reused image keeps its own age: it is NOT re-tagged for this run (a
+    # re-tag would restart the 7-day prune clock of an image no push built). The
+    # digests are recorded from the content tag itself.
+    - name: Point the plan at the reused images' content tags
       if: inputs.push-prefix != '' && steps.reuse.outputs.reuse == 'true'
       shell: bash
-      env:
-        TAG: ${{ inputs.push-tag }}
       run: |
         set -euo pipefail
-        node -e 'const fs = require("fs"); for (const e of JSON.parse(fs.readFileSync(process.argv[1], "utf8"))) console.log(e.ref, e.cas)' "${RUNNER_TEMP}/stack-push-plan.json" \
-          | while read -r ref cas; do
-              docker buildx imagetools create --tag "${ref}:${TAG}" "${ref}:${cas}"
-            done
+        node -e 'const fs = require("fs"); const p = process.argv[1]; const e = JSON.parse(fs.readFileSync(p, "utf8")); for (const x of e) x.tag = x.cas; fs.writeFileSync(p, JSON.stringify(e, null, 2))' "${RUNNER_TEMP}/stack-push-plan.json"
 
-    # Third-party (non-`build:`) images the compose files reference — postgres,
-    # nats, qdrant, rustfs, the oidc-mock base, otel, etc. — pulled
-    # up front with a bounded retry, before buildx even starts.
-    #
-    # Why: three CI runs in one day died before any test ran with a Docker Hub
-    # connection reset while `compose up` pulled a base image (e.g.
-    # postgres:18) inline, on the chat-stream shards of ci-web-e2e.yml. Every
-    # caller of this action hands compose-files here in the same order and
-    # relative-to-deploy/ spelling it later hands to the stack script's `up`,
-    # so pulling from the SAME set here means a flaky pull fails loud, with
-    # retries, on a step named for it — not silently, minutes later, inside
-    # `compose up`.
-    #
-    # Deliberately excludes anything the `build:` guard below checks: pulling
-    # a build-tagged image here would paper over a #154 guard failure with a
-    # stale registry tag instead of failing loud.
     - name: Pull third-party images with retry
       # Load mode only: a push-mode build runs no stack.
       if: inputs.push-prefix == '' && steps.reuse.outputs.reuse != 'true'

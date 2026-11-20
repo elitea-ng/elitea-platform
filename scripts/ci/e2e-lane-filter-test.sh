@@ -127,6 +127,8 @@ expect_webkit true "the Playwright config" "apps/elitea-web/playwright.config.ts
 expect_webkit true "the package lock (Playwright's version)" "apps/elitea-web/package-lock.json"
 expect_webkit true "the shared client package" "libs/ts/client-core/src/index.ts"
 expect_webkit true "the workflow" ".github/workflows/ci-web-e2e.yml"
+expect_webkit true "the nginx CSP and headers" "apps/elitea-web/nginx/spa.conf"
+expect_webkit true "the web image" "apps/elitea-web/Containerfile"
 expect_webkit false "a Go service" "services/elitea-main/cmd/x.go"
 expect_webkit false "a Rust crate" "libs/rust/agent-runtime/src/lib.rs"
 expect_webkit false "the chart" "deploy/helm/elitea/values.yaml"

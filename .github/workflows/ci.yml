@@ -35,6 +35,8 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+      # Reads this workflow's earlier runs of the same head.
+      actions: read
     outputs:
       run: ${{ steps.paths.outputs.run }}
     steps:
@@ -47,6 +49,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          # ready_for_review reuses a green fast tier of the same head (tier-changes.mjs).
+          PR_ACTION: ${{ github.event.action }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
 
   # ── Fast tier ───────────────────────────────────────────────────────────────
   no-binaries:

@@ -109,3 +109,9 @@ test("main deletes what is decided, tolerates a 404, and a dry run deletes nothi
   assert.equal(await main({ github, owner: "o", repo: "r", now: NOW, log: quiet }), 0);
   assert.deepEqual(deleted.sort(), [caches[0].id, caches[1].id].sort());
 });
+
+test("npm caches of different lockfiles all survive: the hash in the key is the lockfile, not a version", () => {
+  const h = (c) => c.repeat(64);
+  const npm = ["web", "docs", "mobile", "desktop", "ci"].map((n, i) => entry(`node-cache-Linux-x64-npm-${h("abcde"[i])}`, 0.2, { created: 30 + i }));
+  assert.equal(decide(npm, { now: NOW }).doomed.length, 0);
+});

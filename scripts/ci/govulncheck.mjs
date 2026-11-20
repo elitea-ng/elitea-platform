@@ -80,7 +80,7 @@ export function allowlistProblems(entries, today = new Date()) {
   return problems;
 }
 
-export function main({ root = ROOT, run = spawnSync, out = console.log, err = console.error, today = new Date() } = {}) {
+export function main({ root = ROOT, run = spawnSync, out = console.log, err = console.error, today = new Date(), env = process.env } = {}) {
   const listing = run("git", ["ls-files"], { cwd: root, encoding: "utf8", maxBuffer: 1 << 26 });
   const { modules, problems } = coverage(String(listing.stdout).split("\n").filter(Boolean), fs.readFileSync(path.join(root, "go.work"), "utf8"));
   const allowFile = path.join(root, "scripts", "ci", "govulncheck-allowlist.json");
@@ -90,7 +90,11 @@ export function main({ root = ROOT, run = spawnSync, out = console.log, err = co
   if (problems.length) return 1;
   const allowed = new Set(allow.map((e) => e.id));
   let failed = 0;
-  for (const { dir, workOff } of modules) {
+  // GOVULN_SCOPE: `workspace` (go.work's modules, on go.work's toolchain, so the
+  // Go cache ci-go.yml writes is hit) or `gateway` (the 1.27 module), else both.
+  const scope = env.GOVULN_SCOPE || "all";
+  const selected = modules.filter((m) => scope === "all" || (scope === "gateway") === m.workOff);
+  for (const { dir, workOff } of selected) {
     out(`::group::govulncheck ${dir}${workOff ? " (GOWORK=off)" : ""}`);
     const result = run("govulncheck", ["./..."], {
       cwd: path.join(root, dir),
@@ -112,7 +116,7 @@ export function main({ root = ROOT, run = spawnSync, out = console.log, err = co
     }
   }
   if (failed) return 1;
-  out(`govulncheck: ${modules.length} module(s) clean`);
+  out(`govulncheck: ${selected.length} module(s) clean (${scope})`);
   return 0;
 }
 

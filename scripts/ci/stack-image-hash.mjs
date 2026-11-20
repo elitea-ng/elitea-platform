@@ -13,11 +13,10 @@
 // cache keys on, read the way scripts/ci/check-e2e-paths.mjs reads it for the
 // path filter. Two commits with the same hash build the same image.
 //
-// WHAT IT DOES NOT COVER, and why that is acceptable. A floating base-image tag
-// (`FROM debian:13`) can move between two builds; ci-* images live seven days
-// (ci-image-cleanup.yml) and a reused image is re-tagged for the run, so a
-// moved base is at most a week stale in a CI image that ships nothing. Every
-// Containerfile in the stack pins its Rust and Go bases by digest. A COPY
+// BASE IMAGES. The digest each FROM ref resolves to today is part of the hash
+// (a floating tag that moved is a new address; a digest-pinned ref is its own
+// digest; a ref that cannot be resolved gets an address nothing else has, so
+// the image is built). A COPY
 // source that is generated (untracked) is not hashed; none of the build-once
 // jobs generates one before the build.
 //
@@ -41,8 +40,32 @@ import path from "node:path";
 import { containerfileInputs } from "./check-e2e-paths.mjs";
 import { isEntrypoint } from "./py-compat.mjs";
 
-export const HASH_VERSION = "cas-v1";
+export const HASH_VERSION = "cas-v2";
 export const HASH_LENGTH = 24;
+
+/** The image refs a Containerfile's FROM lines name (stage names and `scratch` are not images). */
+export function baseImages(text) {
+  const stages = new Set();
+  const refs = new Set();
+  for (const line of text.replace(/\\\n/g, " ").split("\n")) {
+    const words = line.trim().split(/\s+/).filter((w) => w && !w.startsWith("--"));
+    if (!words.length || words[0].toUpperCase() !== "FROM") continue;
+    const ref = words[1];
+    if (!stages.has(ref) && ref.toLowerCase() !== "scratch") refs.add(ref);
+    const as = words.findIndex((w) => w.toUpperCase() === "AS");
+    if (as > 0) stages.add(words[as + 1]);
+  }
+  return [...refs].sort();
+}
+
+/** The digest a base image ref resolves to now; a digest-pinned ref is its own. A failure is `unresolved:<time>`, which never matches a stored address. */
+export function resolveBase(ref, run = spawnSync) {
+  if (ref.includes("@sha256:")) return ref;
+  if (ref.includes("$")) return `unresolved:${ref}`;
+  const r = run("docker", ["buildx", "imagetools", "inspect", ref, "--format", "{{json .Manifest.Digest}}"], { encoding: "utf8" });
+  const digest = String(r.stdout ?? "").trim().replace(/"/g, "");
+  return r.status === 0 && digest.startsWith("sha256:") ? `${ref}@${digest}` : `unresolved:${ref}:${Date.now()}`;
+}
 
 const sha256 = (text) => crypto.createHash("sha256").update(text).digest("hex");
 
@@ -56,7 +79,7 @@ function trackedBlobs(workspace, repoPath, run) {
 /**
  * @param {{workspace: string, context: string, dockerfile?: string, target?: string, args?: Record<string,string>, run?: Function}} spec
  */
-export function contentHash({ workspace, context, dockerfile = "Dockerfile", target = "", args = {}, run = spawnSync }) {
+export function contentHash({ workspace, context, dockerfile = "Dockerfile", target = "", args = {}, run = spawnSync, resolve = (ref) => resolveBase(ref) }) {
   const absContext = path.resolve(workspace, context);
   const absDockerfile = path.resolve(absContext, dockerfile);
   const inputs = new Set(containerfileInputs(absContext, absDockerfile, target || undefined));
@@ -70,12 +93,13 @@ export function contentHash({ workspace, context, dockerfile = "Dockerfile", tar
     // so adding the file later changes it.
     lines.push(`${input}: ${blobs.length ? sha256(blobs.sort().join("\n")) : "absent"}`);
   }
-  const spec = { v: HASH_VERSION, context: path.relative(workspace, absContext) || ".", dockerfile, target, args: Object.fromEntries(Object.entries(args).sort()), inputs: lines };
+  const bases = baseImages(fs.readFileSync(absDockerfile, "utf8")).map((ref) => resolve(ref));
+  const spec = { v: HASH_VERSION, bases, context: path.relative(workspace, absContext) || ".", dockerfile, target, args: Object.fromEntries(Object.entries(args).sort()), inputs: lines };
   return sha256(JSON.stringify(spec)).slice(0, HASH_LENGTH);
 }
 
 /** Adds `hash` and `cas` to every entry of a stack-images plan. */
-export function addHashes(entries, workspace, run = spawnSync) {
+export function addHashes(entries, workspace, run = spawnSync, resolve = (ref) => resolveBase(ref)) {
   return entries.map((entry) => {
     const hash = contentHash({
       workspace,
@@ -84,6 +108,7 @@ export function addHashes(entries, workspace, run = spawnSync) {
       target: entry.build.target,
       args: entry.build.args,
       run,
+      resolve,
     });
     return { ...entry, hash, cas: `cas-${hash}` };
   });

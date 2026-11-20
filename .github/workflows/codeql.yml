@@ -31,7 +31,7 @@ permissions:
 
 jobs:
   analyze:
-    name: Analyze (${{ matrix.language }})
+    name: Analyze (${{ matrix.label || matrix.language }})
     # A dispatch from another branch analyses that branch and files its issue;
     # the issue is about main.
     if: github.ref == 'refs/heads/main'
@@ -47,7 +47,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Two Go legs: go.work's modules on go.work's toolchain, and the gateway
+          # (outside go.work, GOWORK=off) on Go 1.27, its floor. One leg with one
+          # toolchain would extract only part of the code.
           - language: go
+            label: go
+            build-mode: manual
+          - language: go
+            label: go-gateway
             build-mode: manual
           - language: javascript-typescript
             build-mode: none
@@ -57,17 +64,23 @@ jobs:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v7
-        if: matrix.language == 'go'
+        if: matrix.label == 'go'
         with:
           # The cache is .github/actions/go-cache below: setup-go's own saves
           # from every ref (scripts/ci/check-workflow-cache-writes.mjs).
           cache: false
           go-version-file: go.work
+      - uses: actions/setup-go@v7
+        if: matrix.label == 'go-gateway'
+        with:
+          cache: false
+          go-version: "1.27"
+          check-latest: true
       - name: Restore the Go cache (pull requests read, main writes)
         if: matrix.language == 'go'
         uses: ./.github/actions/go-cache
         with:
-          cache-dependency-path: services/elitea-main/go.sum
+          cache-dependency-path: ${{ matrix.label == 'go' && 'services/elitea-main/go.sum' || 'services/elitea-llm-gateway/go.sum' }}
           save: "false"
 
       - uses: github/codeql-action/init@v4
@@ -76,20 +89,24 @@ jobs:
           build-mode: ${{ matrix.build-mode }}
 
       # `manual`: the modules are not at the repository root, so autobuild would
-      # find nothing. This build is the one CodeQL traces: every module of
-      # go.work, then the gateway, which is outside go.work (GOWORK=off).
-      - name: Build the Go workspace and the gateway
-        if: matrix.language == 'go'
+      # find nothing. This build is the one CodeQL traces. A build that fails
+      # fails the leg: a partial extraction must never read as "no findings".
+      - name: Build the Go workspace
+        if: matrix.label == 'go'
         run: |
           set -euo pipefail
           go list -m -f '{{.Dir}}' | while IFS= read -r dir; do
             (cd "$dir" && go build ./...)
           done
-          (cd services/elitea-llm-gateway && GOWORK=off go build ./...)
+      - name: Build the gateway (outside go.work)
+        if: matrix.label == 'go-gateway'
+        run: |
+          set -euo pipefail
+          cd services/elitea-llm-gateway && GOWORK=off go build ./...
 
       - uses: github/codeql-action/analyze@v4
         with:
-          category: /language:${{ matrix.language }}
+          category: /language:${{ matrix.label || matrix.language }}
           output: sarif-results
           upload: never
 
@@ -106,7 +123,7 @@ jobs:
       - name: Open, update or close this language's issue
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
-          LANGUAGE: ${{ matrix.language }}
+          LANGUAGE: ${{ matrix.label || matrix.language }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           REPO: ${{ github.repository }}
         with:

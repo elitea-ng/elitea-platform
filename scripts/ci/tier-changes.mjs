@@ -104,7 +104,37 @@ async function changedFiles(token, repo, number, fetchImpl = fetch) {
   return { files, truncated: true };
 }
 
-export async function main(env = process.env, log = console.log) {
+/**
+ * Did the fast tier already pass for this head? `ready_for_review` starts CI
+ * again for the SAME commit; when an earlier run of this workflow on that head
+ * ended with `fast-gate` green, the fast jobs are not run twice: the ready run
+ * goes straight to the heavy tier, and `ci-gate` treats the fast jobs as
+ * satisfied (their run flag is false, so a skip is correct). A head that never
+ * had a green fast tier runs it.
+ */
+export async function fastTierAlreadyPassed({ token, repo, headSha, runId }, fetchImpl = fetch) {
+  const get = async (url) => {
+    const response = await fetchImpl(`https://api.github.com/repos/${repo}/${url}`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" },
+    });
+    if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
+    return response.json();
+  };
+  const runs = (await get(`actions/workflows/ci.yml/runs?head_sha=${headSha}&event=pull_request&per_page=30`)).workflow_runs ?? [];
+  for (const run of runs) {
+    if (String(run.id) === String(runId) || run.status !== "completed") continue;
+    const jobs = (await get(`actions/runs/${run.id}/jobs?per_page=100`)).jobs ?? [];
+    if (jobs.some((j) => j.name === "fast-gate" && j.conclusion === "success")) return run.id;
+  }
+  return null;
+}
+
+/** The run flags with the fast jobs satisfied by an earlier green run. */
+export function withFastReused(run, tiers) {
+  return Object.fromEntries(Object.entries(run).map(([id, on]) => [id, tiers.jobs[id].tier === "fast" ? false : on]));
+}
+
+export async function main(env = process.env, log = console.log, fetchImpl = fetch) {
   const tiers = JSON.parse(fs.readFileSync(TIERS_FILE, "utf8"));
   let run;
   if (!env.PR_NUMBER) {
@@ -114,6 +144,16 @@ export async function main(env = process.env, log = console.log) {
     const { files, truncated } = await changedFiles(env.GITHUB_TOKEN, env.GITHUB_REPOSITORY, env.PR_NUMBER);
     run = computeRun(tiers, files, { everything: truncated });
     log(`${files.length} changed file(s)${truncated ? " (the API list is truncated: running everything)" : ""}`);
+    if (env.PR_ACTION === "ready_for_review" && env.HEAD_SHA) {
+      const earlier = await fastTierAlreadyPassed({ token: env.GITHUB_TOKEN, repo: env.GITHUB_REPOSITORY, headSha: env.HEAD_SHA, runId: env.GITHUB_RUN_ID }, fetchImpl).catch((error) => {
+        log(`::warning::could not look for an earlier fast tier (${error.message}); running it`);
+        return null;
+      });
+      if (earlier) {
+        log(`the fast tier already passed for ${env.HEAD_SHA} in run ${earlier}: not run again`);
+        run = withFastReused(run, tiers);
+      }
+    }
   }
   for (const [id, on] of Object.entries(run)) log(`${on ? "run " : "skip"}  ${tiers.jobs[id].tier.padEnd(5)} ${id}`);
   const line = `run=${JSON.stringify(run)}\n`;

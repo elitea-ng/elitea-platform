@@ -55,7 +55,10 @@ jobs:
       - name: Restore the Go cache (pull requests read, main writes)
         uses: ./.github/actions/go-cache
         with:
-          cache-dependency-path: services/elitea-main/go.sum
+          cache-dependency-path: |
+            services/elitea-main/go.sum
+            libs/go/*/go.sum
+            libs/proto/gen/go/go.sum
 
       - name: Vet contract tests
         run: |

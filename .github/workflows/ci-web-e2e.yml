@@ -849,9 +849,8 @@ jobs:
           REF: ${{ steps.addr.outputs.ref }}
         run: |
           set -euo pipefail
-          # Re-tagging by this run's tag refreshes the version's age, so the
-          # 7-day prune cannot take it before the lane has loaded it.
-          docker buildx imagetools create --tag "${SUPERVISOR_REPO}:${GITHUB_SHA}-${GITHUB_RUN_ID}" "$REF"
+          # Pulled here, in this job: the lane gets the image as an artifact, so
+          # a prune after this step cannot take it.
           docker pull "$REF"
           docker tag "$REF" elitea-sandbox-supervisor:ci
       - uses: docker/setup-buildx-action@v4
@@ -1583,7 +1582,10 @@ jobs:
       - name: Restore the Go cache (pull requests read, main writes)
         uses: ./.github/actions/go-cache
         with:
-          cache-dependency-path: conformance/nativeclient/go.sum
+          cache-dependency-path: |
+            services/elitea-main/go.sum
+            libs/go/*/go.sum
+            libs/proto/gen/go/go.sum
       - name: Stack images for this lane (pulled by digest; built here on a fork)
         # Built ONCE per commit by the build-once jobs and pulled by digest
         # (.github/actions/stack-images, which also answers issue #154).
@@ -1647,7 +1649,10 @@ jobs:
       - name: Restore the Go cache (pull requests read, main writes)
         uses: ./.github/actions/go-cache
         with:
-          cache-dependency-path: services/elitea-main/go.sum
+          cache-dependency-path: |
+            services/elitea-main/go.sum
+            libs/go/*/go.sum
+            libs/proto/gen/go/go.sum
       - name: Stack images for this lane (pulled by digest; built here on a fork)
         uses: ./.github/actions/stack-images
         with:

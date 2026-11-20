@@ -59,6 +59,7 @@ jobs:
       # command proves the gate red, once per assertion, on a broken copy.
       # check-rust-toolchain.mjs reads the YAML files with the `yaml` package.
       - name: Install the toolchain check's one dependency
+        if: ${{ !cancelled() }}
         uses: ./.github/actions/ci-scripts-deps
       - name: One Rust toolchain across cargo, CI and images
         if: ${{ !cancelled() }}
@@ -161,15 +162,20 @@ jobs:
       # and reads the Gateway API HTTPRoute and the chart strip list (#338,
       # #568, #1359).
       - uses: actions/setup-go@v7
+        if: ${{ !cancelled() }}
         with:
           # The cache is .github/actions/go-cache below: setup-go's own
           # saves from every ref, and pull-request copies evicted main's.
           cache: false
           go-version-file: go.work
       - name: Restore the Go cache (pull requests read, main writes)
+        if: ${{ !cancelled() }}
         uses: ./.github/actions/go-cache
         with:
-          cache-dependency-path: services/elitea-main/go.sum
+          cache-dependency-path: |
+            services/elitea-main/go.sum
+            libs/go/*/go.sum
+            libs/proto/gen/go/go.sum
       # -count=1 is required, not tidiness. The gate reads YAML from deploy/,
       # which is outside this module, so the Go test cache does not notice an
       # edit to those files and can serve a stale pass.
@@ -220,6 +226,7 @@ jobs:
       # failing evidence check does not hide the binary scan and the reverse.
       # ── Checked-in evidence baselines ─────────────────────────────────────────
       - uses: actions/setup-python@v7
+        if: ${{ !cancelled() }}
         with:
           python-version: "3.12"
       # Every check reads only the standard library and the committed JSON, so

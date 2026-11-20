@@ -112,6 +112,7 @@ jobs:
       - name: Cache cargo registry and build artefacts
         uses: Swatinem/rust-cache@v2
         with:
+          cache-targets: false  # registry and git only: the 10 GB cap (scripts/ci/check-cache-budget.mjs)
           shared-key: deepwiki-engine
           save-if: ${{ github.ref == 'refs/heads/main' }}
           workspaces: services/elitea-deepwiki-engine
@@ -142,7 +143,10 @@ jobs:
       - name: Restore the Go cache (pull requests read, main writes)
         uses: ./.github/actions/go-cache
         with:
-          cache-dependency-path: services/elitea-subapp-host/go.sum
+          cache-dependency-path: |
+            services/elitea-main/go.sum
+            libs/go/*/go.sum
+            libs/proto/gen/go/go.sum
 
       # The module download on its own step, with a bounded retry: on run
       # 39461870673 proxy.golang.org reset one stream ("stream error ...
@@ -185,6 +189,7 @@ jobs:
       - name: Cache cargo registry and build artefacts
         uses: Swatinem/rust-cache@v2
         with:
+          cache-targets: false  # registry and git only: the 10 GB cap (scripts/ci/check-cache-budget.mjs)
           save-if: ${{ github.ref == 'refs/heads/main' }}
           workspaces: libs/rust
 

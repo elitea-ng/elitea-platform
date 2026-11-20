@@ -33,7 +33,8 @@ export const CAP_BYTES = 9 * 1024 ** 3;
 export const MAIN_REF = "refs/heads/main";
 export const PR_COPY_GRACE_MS = 12 * 60 * 60 * 1000;
 /** Families that hold many entries on purpose; the newest-only rule does not apply. */
-export const MANY_BY_DESIGN = [/^buildkit-blob-/, /^index-/];
+// node-cache-: the key ends in the LOCKFILE hash, so web, docs, mobile, desktop and scripts/ci are five entries by design.
+export const MANY_BY_DESIGN = [/^buildkit-blob-/, /^index-/, /^node-cache-/];
 /** Families with a fixed number of live entries: the Go cache is keyed by the go.sum list, and two workflows list different files. */
 export const KEEP_NEWEST = [[/^go-v1-/, 2]];
 

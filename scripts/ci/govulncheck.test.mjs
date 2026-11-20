@@ -69,3 +69,15 @@ test("the repository's own go.mod files are all covered", () => {
   const tracked = String(spawnSync("git", ["ls-files"], { cwd: root, encoding: "utf8", maxBuffer: 1 << 26 }).stdout).split("\n").filter(Boolean);
   assert.deepEqual(coverage(tracked, fs.readFileSync(path.join(root, "go.work"), "utf8")).problems, []);
 });
+
+test("GOVULN_SCOPE picks the workspace modules or the gateway", () => {
+  const mods = workModules(fs.readFileSync(path.join(root, "go.work"), "utf8"));
+  const git = { stdout: [...mods.map((d) => `${d}/go.mod`), `${GATEWAY}/go.mod`, "libs/rust/local-tools/tests/fixtures/projects/go/go.mod", "scripts/eval/a/go.mod"].join("\n") };
+  const quiet = () => {};
+  for (const [scope, want] of [["workspace", mods.length], ["gateway", 1], ["all", mods.length + 1]]) {
+    let n = 0;
+    const run = (cmd) => (cmd === "git" ? git : (n += 1, { status: 0, stdout: "" }));
+    assert.equal(main({ root, run, out: quiet, err: quiet, env: { GOVULN_SCOPE: scope } }), 0);
+    assert.equal(n, want, scope);
+  }
+});

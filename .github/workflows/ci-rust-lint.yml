@@ -97,6 +97,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: ${{ matrix.key }}
+          # Registry and git only: seven legs with targets would be 9 GiB of the
+          # 10 GB cap (scripts/ci/check-cache-budget.mjs).
+          cache-targets: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
           workspaces: ${{ matrix.dir }}
 

@@ -101,6 +101,7 @@ jobs:
       - name: Cache cargo registry and build artefacts
         uses: Swatinem/rust-cache@v2
         with:
+          cache-targets: false  # registry and git only: the 10 GB cap (scripts/ci/check-cache-budget.mjs)
           save-if: ${{ github.ref == 'refs/heads/main' }}
           workspaces: |
             apps/elitea-desktop/src-tauri
@@ -268,6 +269,7 @@ jobs:
       - name: Cache cargo registry and build artefacts
         uses: Swatinem/rust-cache@v2
         with:
+          cache-targets: false  # registry and git only: the 10 GB cap (scripts/ci/check-cache-budget.mjs)
           save-if: ${{ github.ref == 'refs/heads/main' }}
           workspaces: apps/elitea-desktop/src-tauri
           prefix-key: pane-drivers

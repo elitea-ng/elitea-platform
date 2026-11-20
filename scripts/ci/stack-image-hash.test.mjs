@@ -8,7 +8,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { HASH_LENGTH, addHashes, contentHash, main } from "./stack-image-hash.mjs";
+import { HASH_LENGTH, addHashes, baseImages, contentHash, main, resolveBase } from "./stack-image-hash.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -45,7 +45,7 @@ function fixture(callback) {
   }
 }
 
-const hashOf = (rel, over = {}) => contentHash({ workspace: ROOT, context: rel, dockerfile: "Containerfile", target: "final", run: gitOverDisk(ROOT), ...over });
+const hashOf = (rel, over = {}) => contentHash({ resolve: (r) => `${r}@sha256:fixed`, workspace: ROOT, context: rel, dockerfile: "Containerfile", target: "final", run: gitOverDisk(ROOT), ...over });
 
 test("the hash is stable, and a change to a COPY source or the Containerfile moves it", () => {
   fixture((dir, rel) => {
@@ -117,4 +117,22 @@ test("a real build of the repository hashes, and is not the same address for two
   const mainImage = contentHash({ workspace: ROOT, context: ".", dockerfile: "services/elitea-main/Containerfile", target: "e2e" });
   assert.match(worker, /^[0-9a-f]{24}$/);
   assert.notEqual(worker, mainImage);
+});
+
+test("a moved base image changes the address, and so does an unresolvable one", () => {
+  fixture((dir, rel) => {
+    const a = hashOf(rel, { resolve: (r) => `${r}@sha256:aaa` });
+    const b = hashOf(rel, { resolve: (r) => `${r}@sha256:bbb` });
+    assert.notEqual(a, b);
+    assert.equal(hashOf(rel, { resolve: (r) => `${r}@sha256:aaa` }), a);
+  });
+});
+
+test("baseImages reads FROM refs, not stage names or scratch; resolveBase keeps pinned refs and refuses to guess", () => {
+  const text = "FROM rust:1 AS build\nFROM --platform=x debian:13@sha256:abc AS rt\nFROM build AS other\nFROM scratch\nFROM $BASE\n";
+  assert.deepEqual(baseImages(text), ["$BASE", "debian:13@sha256:abc", "rust:1"]);
+  assert.equal(resolveBase("debian:13@sha256:abc"), "debian:13@sha256:abc");
+  assert.match(resolveBase("$BASE"), /^unresolved:/);
+  assert.equal(resolveBase("x:1", () => ({ status: 0, stdout: '"sha256:dd"\n' })), "x:1@sha256:dd");
+  assert.match(resolveBase("x:1", () => ({ status: 1, stdout: "" })), /^unresolved:x:1:\d+$/);
 });

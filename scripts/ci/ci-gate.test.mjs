@@ -8,7 +8,7 @@ import path from "node:path";
 import { test } from "node:test";
 
 import { evaluate, TIERS_FILE } from "./ci-gate.mjs";
-import { computeRun, patternToRegExp, reaches } from "./tier-changes.mjs";
+import { computeRun, fastTierAlreadyPassed, patternToRegExp, reaches, withFastReused } from "./tier-changes.mjs";
 
 const tiers = {
   jobs: {
@@ -120,4 +120,19 @@ test("changed-paths: a pull request is diffed against its base, any other event 
   assert.equal(main(["all", "x"], { GITHUB_EVENT_NAME: "schedule", GITHUB_OUTPUT: outFile }, run, quiet, quiet), 0);
   assert.equal(fs.readFileSync(outFile, "utf8"), "go=true\nrust=false\nall=true\n");
   assert.equal(main([], env, run, quiet, quiet), 2);
+});
+
+test("ready_for_review reuses a green fast tier of the same head, and ci-gate accepts the skipped fast jobs", async () => {
+  const jobsOf = { 1: [{ name: "fast-gate", conclusion: "failure" }], 2: [{ name: "fast-gate", conclusion: "success" }] };
+  const fetchImpl = async (url) => ({
+    ok: true,
+    json: async () => (url.includes("/workflows/ci.yml/runs") ? { workflow_runs: [{ id: 9, status: "completed" }, { id: 1, status: "completed" }, { id: 3, status: "in_progress" }, { id: 2, status: "completed" }] } : { jobs: jobsOf[Number(url.match(/runs\/(\d+)\/jobs/)[1])] ?? [] }),
+  });
+  assert.equal(await fastTierAlreadyPassed({ token: "t", repo: "o/r", headSha: "abc", runId: 9 }, fetchImpl), 2);
+  const none = async (url) => ({ ok: true, json: async () => (url.includes("/workflows/") ? { workflow_runs: [{ id: 1, status: "completed" }] } : { jobs: jobsOf[1] }) });
+  assert.equal(await fastTierAlreadyPassed({ token: "t", repo: "o/r", headSha: "abc", runId: 9 }, none), null);
+  const reused = withFastReused({ a: true, b: true, h: true, g: false }, tiers);
+  assert.deepEqual(reused, { a: false, b: false, h: true, g: false });
+  const n = needs({ a: { result: "skipped" }, b: { result: "skipped" } });
+  assert.deepEqual(evaluate({ stage: "final", needs: n, run: reused, draft: false, tiers }), { ok: true, problems: [] });
 });

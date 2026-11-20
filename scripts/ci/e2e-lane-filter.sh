@@ -110,7 +110,7 @@ SANDBOX='^('\
 
 # What the webkit legs observe. Only ever too wide, never too narrow.
 WEBKIT='^('\
-'apps/elitea-web/(src/|e2e/|public/|index\.html$|playwright[^/]*\.ts$|package(-lock)?\.json$|vite\.config\.ts$|tsconfig[^/]*\.json$|scripts/lib/|scripts/[^/]*e2e[^/]*)|'\
+'apps/elitea-web/(src/|e2e/|public/|nginx/|Containerfile$|docker-entrypoint\.sh$|index\.html$|playwright[^/]*\.ts$|package(-lock)?\.json$|vite\.config\.ts$|tsconfig[^/]*\.json$|scripts/lib/|scripts/[^/]*e2e[^/]*)|'\
 'libs/ts/client-core/|brand/|'\
 '\.github/(actions/(npm-cache|stack-images|build-stack-images|pull-stack-images)/|workflows/ci-web-e2e\.yml)|'\
 'scripts/ci/(e2e-lane-filter|stack-image)'\
