@@ -51,6 +51,7 @@ import { AdminScimClientsEditor } from "./AdminScimClientsEditor";
 import { AdminScimGroupBindingsEditor } from "./AdminScimGroupBindingsEditor";
 import { ProviderTable } from "./AdminIdentityProviderTable";
 import { configFailureReason } from "./api/adminConfigurationApi";
+import { identityTrustFailureReason } from "./api/identityTrustRefusal";
 import {
   useAdminIdentityProviders,
   useDeleteAdminIdentityProvider,
@@ -170,7 +171,7 @@ export function AdminIdentityProvidersEditor() {
       // refused — and on this screen that input includes a secret they would
       // have to find again.
       onError: (error: unknown) => {
-        setSaveError(configFailureReason(error) ?? "save");
+        setSaveError(identityTrustFailureReason(error) ?? "save");
       },
     });
   };

@@ -141,6 +141,12 @@ type identityProviderView struct {
 
 	OIDC *identityproviders.OIDCDocument `json:"oidc,omitempty"`
 	SAML *identityproviders.SAMLDocument `json:"saml,omitempty"`
+
+	// PreviousIssuer is set only on the answer to a save that changed the
+	// provider's issuer (OIDC) or IdP entity id (SAML). The accounts linked
+	// under it stay bound to it until a super_admin re-binds them
+	// (IdentityProviderRebind), so the caller learns what to re-bind from.
+	PreviousIssuer string `json:"previous_issuer,omitempty"`
 }
 
 func identityProviderToView(provider identityproviders.Provider) identityProviderView {
@@ -265,6 +271,24 @@ func (h *Handler) IdentityProviderSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A NEW provider, or a change to a TRUST field (the issuer, the metadata,
+	// the signing certificates, the identity attributes), decides who an
+	// assertion says a person is. Whoever can make one can sign in as any
+	// account, so it is a super_admin decision (identity_trust.go, issue
+	// 2558). Checked before anything is sealed or written.
+	trustFields := identityproviders.TrustChanges(existing, validated)
+	if len(trustFields) > 0 && !h.requireSuperAdmin(w, r, trustGate{
+		code: CodeIdentityTrustSuperAdminRequired,
+		message: "only a super admin can create an identity provider or change its issuer, " +
+			"metadata, signing certificates or identity attributes",
+		refusedAction: AuditIdentityTrustRefused,
+		entityType:    "identity_provider",
+		entityName:    key,
+		fields:        trustFields,
+	}) {
+		return
+	}
+
 	// Enabled is INHERITED when the body does not state it. A form that omits
 	// the field must not silently retire a live provider.
 	validated.Enabled = existing.Enabled
@@ -319,13 +343,20 @@ func (h *Handler) IdentityProviderSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	view := identityProviderToView(stored)
+	if len(trustFields) > 0 {
+		annotateTrustChange(r, AuditIdentityTrustChanged, "identity_provider", key, nil, trustFields)
+		if previous := existing.TrustIssuer(); existing.Key != "" && previous != stored.TrustIssuer() {
+			view.PreviousIssuer = previous
+		}
+	}
+
 	// The row no longer names the secret, so removing it is now safe. A failure
 	// here leaves an entry nothing reads, which is inert — so it is reported in
 	// the response rather than turned into an error that would invite a retry
 	// of a save that already succeeded.
 	if clearing && existing.SecretRef != "" {
 		if err := h.identityProviderVault.DeleteAdminHiddenSecret(r.Context(), existing.SecretRef); err != nil {
-			view := identityProviderToView(stored)
 			writeJSON(w, http.StatusOK, map[string]any{
 				"provider": view,
 				"warning": "the provider was saved without a secret; the previously stored value could " +
@@ -334,7 +365,7 @@ func (h *Handler) IdentityProviderSave(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	writeJSON(w, http.StatusOK, identityProviderToView(stored))
+	writeJSON(w, http.StatusOK, view)
 }
 
 // identityProviderWillHoldSecret reports whether the definition still has a

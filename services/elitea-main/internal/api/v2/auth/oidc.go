@@ -506,7 +506,7 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID, err := h.provisionUser(ctx, claims.Sub, claims.Email, claims.Name,
+	userID, err := h.provisionUser(ctx, runtime.binding, claims.Sub, claims.Email, claims.Name,
 		claims.EmailVerified, runtime.requireEmailVerified, runtime.adoptSCIMUsers)
 	if err != nil {
 		if errors.Is(err, errUserSuspended) {
@@ -600,6 +600,11 @@ const (
 	// login ran (a concurrent delete, or a concurrent first login of the
 	// same subject). A retry decides it.
 	conflictConcurrentChange
+	// conflictProviderNotBound: the subject is linked, but not to this
+	// provider and issuer (issue 2558). The usual cause is an edit of the
+	// provider's issuer or entity id. A super_admin re-binds the links
+	// (POST /api/v2/admin/identity_providers/administration/{key}/rebind).
+	conflictProviderNotBound
 )
 
 func (c identityConflictCause) String() string {
@@ -614,6 +619,8 @@ func (c identityConflictCause) String() string {
 		return "email_held_by_another_account"
 	case conflictConcurrentChange:
 		return "concurrent_change"
+	case conflictProviderNotBound:
+		return "provider_not_bound"
 	default:
 		return "unknown"
 	}
@@ -668,10 +675,18 @@ func oidcIdentityConflictMessage(cause identityConflictCause) string {
 			"Ask an administrator to resolve the conflict."
 	case conflictConcurrentChange:
 		return "your account changed while you signed in. Sign in again."
+	case conflictProviderNotBound:
+		return providerNotBoundMessage
 	default:
 		return identityConflictLinkedMessage + ". Ask an administrator to resolve the conflict."
 	}
 }
+
+// providerNotBoundMessage is the 409 body for conflictProviderNotBound, in
+// both protocols. It names no account and no issuer.
+const providerNotBoundMessage = "your account is linked to a different identity provider or issuer than " +
+	"the one you signed in with. If the identity provider was changed on purpose, ask a super admin " +
+	"to re-bind the existing accounts to it."
 
 // errEmailNotVerified means a subject with no link asked to join an account by
 // email alone. The identity provider did not state that the address is verified.
@@ -755,6 +770,7 @@ func verifiedEmailClaim(email string, emailVerified *bool) string {
 // an email match alone is exactly failure 1.
 func (h *OIDCHandler) provisionUser(
 	ctx context.Context,
+	binding identityrepo.ProviderBinding,
 	sub, email, name string,
 	emailVerified *bool,
 	requireVerifiedEmail bool,
@@ -769,7 +785,7 @@ func (h *OIDCHandler) provisionUser(
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	userID, err := resolveProvisionedUserFor(
-		ctx, tx, providerRef, email, name, emailVerified, requireVerifiedEmail, adoptSCIMUsers)
+		ctx, tx, binding, providerRef, email, name, emailVerified, requireVerifiedEmail, adoptSCIMUsers)
 	if err != nil {
 		return "", err
 	}
@@ -806,23 +822,32 @@ func (h *OIDCHandler) WithFirstLoginPolicy(policy FirstLoginPolicy) *OIDCHandler
 func resolveProvisionedUser(
 	ctx context.Context,
 	tx pgx.Tx,
+	binding identityrepo.ProviderBinding,
 	providerRef, email, name string,
 	emailVerified *bool,
 	requireVerifiedEmail bool,
 ) (int, error) {
-	return resolveProvisionedUserFor(ctx, tx, providerRef, email, name, emailVerified, requireVerifiedEmail, false)
+	return resolveProvisionedUserFor(ctx, tx, binding, providerRef, email, name, emailVerified, requireVerifiedEmail, false)
 }
 
 // resolveProvisionedUserFor is resolveProvisionedUser for a provider whose
 // `adopt_scim_users` setting is known. See joinAccountByEmail.
+//
+// binding is the provider asserting the subject: its key and its configured
+// issuer (identityrepo.ProviderBinding). A linked subject resolves only when
+// its link is bound to this provider and issuer; see reuseLinkedAccount.
 func resolveProvisionedUserFor(
 	ctx context.Context,
 	tx pgx.Tx,
+	binding identityrepo.ProviderBinding,
 	providerRef, email, name string,
 	emailVerified *bool,
 	requireVerifiedEmail bool,
 	adoptSCIMUsers bool,
 ) (int, error) {
+	if !binding.Valid() {
+		return 0, identityrepo.ErrInvalidBinding
+	}
 	// Applied here as well as at each handler, so no caller of the resolution
 	// can compare an address in a spelling the directory does not store.
 	email = normalizeAssertedEmail(email)
@@ -835,17 +860,33 @@ func resolveProvisionedUserFor(
 		return 0, fmt.Errorf("lock provider identity: %w", err)
 	}
 
-	userID, linked, err := reuseLinkedAccount(ctx, tx, providerRef, email, name)
+	userID, linked, err := reuseLinkedAccount(ctx, tx, binding, providerRef, email, name)
 	if err != nil {
 		return 0, err
 	}
 	if linked {
 		return userID, nil
 	}
-	return joinAccountByEmail(ctx, tx, providerRef, email, name, emailVerified, requireVerifiedEmail, adoptSCIMUsers)
+	return joinAccountByEmail(ctx, tx, binding, providerRef, email, name, emailVerified, requireVerifiedEmail, adoptSCIMUsers)
 }
 
 // reuseLinkedAccount returns the account this provider subject already owns.
+//
+// THE LINK MUST BE BOUND TO THIS PROVIDER AND ISSUER (issue 2558). A link is
+// `oidc:<sub>` or `saml:<NameID>` and names no provider, so matching on it
+// alone handed any account to whoever repointed the enabled provider at an
+// identity provider they control. The match is (provider key, issuer,
+// subject):
+//
+//   - bound to this provider and issuer: the account is resolved;
+//   - bound elsewhere only, for example under the issuer this provider had
+//     before an edit: refused with conflictProviderNotBound. A super_admin
+//     re-binds the links on purpose (identityrepo.RebindLinks);
+//   - bound nowhere: a link made before shared migration 0258 whose protocol
+//     had no enabled stored provider at the upgrade. The environment provider
+//     (OIDC_ISSUER_URL), which only an operator can configure, binds it here.
+//     Any other provider is refused, and a super_admin binds the links with
+//     the rebind route's `from_unbound`.
 //
 // It also REPAIRS the address on that account. This keeps an email change at
 // the identity provider from orphaning the account. The subject still names the
@@ -853,22 +894,39 @@ func resolveProvisionedUserFor(
 func reuseLinkedAccount(
 	ctx context.Context,
 	tx pgx.Tx,
+	binding identityrepo.ProviderBinding,
 	providerRef, email, name string,
 ) (userID int, linked bool, err error) {
-	var suspended bool
+	var suspended, bound, boundAnywhere bool
 	err = tx.QueryRow(ctx,
-		`SELECT owner.id, owner.suspended
+		`SELECT owner.id, owner.suspended,
+		        EXISTS (SELECT 1 FROM elitea_auth.identity_bindings AS binding
+		                WHERE binding.provider_ref = provider.provider_ref
+		                  AND binding.user_id = provider.user_id
+		                  AND binding.provider_key = $2 AND binding.issuer = $3),
+		        EXISTS (SELECT 1 FROM elitea_auth.identity_bindings AS binding
+		                WHERE binding.provider_ref = provider.provider_ref
+		                  AND binding.user_id = provider.user_id)
 		 FROM auth_core__user_provider AS provider
 		 JOIN auth_core__user AS owner ON owner.id = provider.user_id
 		 WHERE provider.provider_ref = $1
 		 FOR UPDATE OF provider, owner`,
-		providerRef,
-	).Scan(&userID, &suspended)
+		providerRef, binding.Key, binding.Issuer,
+	).Scan(&userID, &suspended, &bound, &boundAnywhere)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, false, nil
 	}
 	if err != nil {
 		return 0, false, fmt.Errorf("read provider identity: %w", err)
+	}
+	switch {
+	case bound:
+	case !boundAnywhere && binding.Environment():
+		if err := identityrepo.BindLink(ctx, tx, binding, userID, providerRef); err != nil {
+			return 0, false, err
+		}
+	default:
+		return 0, false, newIdentityConflict(conflictProviderNotBound)
 	}
 	if suspended {
 		return 0, false, errUserSuspended
@@ -955,6 +1013,7 @@ func federatedRefPatterns() []string {
 func joinAccountByEmail(
 	ctx context.Context,
 	tx pgx.Tx,
+	binding identityrepo.ProviderBinding,
 	providerRef, email, name string,
 	emailVerified *bool,
 	requireVerifiedEmail bool,
@@ -1019,6 +1078,11 @@ func joinAccountByEmail(
 	}
 	if ownerID != userID {
 		return 0, newIdentityConflict(conflictConcurrentChange)
+	}
+	// The new link is bound to the provider that asserted it, so only that
+	// provider, under this issuer, resolves it again (reuseLinkedAccount).
+	if err := identityrepo.BindLink(ctx, tx, binding, userID, providerRef); err != nil {
+		return 0, err
 	}
 	return userID, nil
 }

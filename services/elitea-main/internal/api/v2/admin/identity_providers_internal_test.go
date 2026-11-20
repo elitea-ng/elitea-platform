@@ -32,6 +32,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/identityproviders"
 )
 
@@ -40,7 +41,8 @@ func providerRequest(method, key, body string) *http.Request {
 	req := httptest.NewRequest(method, "/identity_providers/administration/"+key, strings.NewReader(body))
 	routeContext := chi.NewRouteContext()
 	routeContext.URLParams.Add("key", key)
-	return req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, routeContext))
+	ctx := auth.ContextWithUser(req.Context(), auth.User{ID: "5", UserID: "5"})
+	return req.WithContext(context.WithValue(ctx, chi.RouteCtxKey, routeContext))
 }
 
 // recordingProviderStore answers from `rows` and remembers every write, so a
@@ -105,11 +107,11 @@ func (s *recordingProviderStore) Delete(_ context.Context, key string) (string, 
 }
 
 func wiredProviderHandler(vault *recordingVault) *Handler {
-	return NewHandler(nil, WithIdentityProviders(newRecordingProviderStore(), vault))
+	return NewHandler(nil, WithIdentityProviders(newRecordingProviderStore(), vault), superAdmin)
 }
 
 func handlerWithStore(store *recordingProviderStore, vault *recordingVault) *Handler {
-	return NewHandler(nil, WithIdentityProviders(store, vault))
+	return NewHandler(nil, WithIdentityProviders(store, vault), superAdmin)
 }
 
 const validOIDCBody = `{

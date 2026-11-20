@@ -26,8 +26,8 @@ package repos
 // It also refuses to LINK a new subject to a SCIM-provisioned account
 // (ErrRelinkSCIMAccount). The login path adopts such an account only for a
 // provider with `adopt_scim_users` (identityrepo.AdoptionGuard). This command
-// cannot apply that rule: an `oidc:<sub>` link names no issuer, so it does
-// not know which provider the new subject comes from. Linking anyway would
+// cannot apply that rule: it is not told which provider the new subject
+// comes from. Linking anyway would
 // let an operator command bypass the gate, so it refuses, and --clear is the
 // remedy: the user's next login then reaches the gate itself, with the
 // provider's real setting.
@@ -143,6 +143,31 @@ func validOIDCSubject(subject string) bool {
 	return true
 }
 
+// relinkBindNewSubject binds the new link to a provider (issue 2558): a sign-in
+// matches (provider key, issuer, subject), so a link with no binding signs in
+// only through the environment provider. A replaced subject keeps the bindings
+// of the subject it replaces, because the same provider re-created the user.
+// A subject with nothing to copy is bound to the enabled stored OIDC provider,
+// the one the user signs in through; with none, it stays unbound for the
+// environment provider to bind.
+func relinkBindNewSubject(ctx context.Context, tx pgx.Tx, plan OIDCRelinkPlan) error {
+	newRef := identityrepo.OIDCProviderRefPrefix + plan.Add
+	if plan.Remove != "" {
+		copied, err := identityrepo.CopyLinkBindings(ctx, tx, plan.UserID,
+			identityrepo.OIDCProviderRefPrefix+plan.Remove, newRef)
+		if err != nil {
+			return fmt.Errorf("oidc relink: %w", err)
+		}
+		if copied > 0 {
+			return nil
+		}
+	}
+	if _, err := identityrepo.BindLinkToEnabledProvider(ctx, tx, plan.UserID, newRef); err != nil {
+		return fmt.Errorf("oidc relink: %w", err)
+	}
+	return nil
+}
+
 // RelinkOIDCIdentityTx plans, and with Apply writes, one relink in tx.
 func RelinkOIDCIdentityTx(ctx context.Context, tx pgx.Tx, req OIDCRelinkRequest) (OIDCRelinkPlan, error) {
 	req.User = strings.TrimSpace(req.User)
@@ -241,13 +266,6 @@ SELECT EXISTS (SELECT 1 FROM elitea_auth.scim_users WHERE user_id = $1)`, plan.U
 		return plan, errors.New("oidc relink: the operator must be a numeric auth_core user id")
 	}
 
-	if plan.Remove != "" {
-		if _, err := tx.Exec(ctx, `
-DELETE FROM public.auth_core__user_provider WHERE user_id = $1 AND provider_ref = $2`,
-			plan.UserID, identityrepo.OIDCProviderRefPrefix+plan.Remove); err != nil {
-			return plan, fmt.Errorf("oidc relink: remove the old link: %w", err)
-		}
-	}
 	if plan.Add != "" {
 		if _, err := tx.Exec(ctx, `
 INSERT INTO public.auth_core__user_provider (user_id, provider_ref) VALUES ($1, $2)`,
@@ -259,6 +277,26 @@ INSERT INTO public.auth_core__user_provider (user_id, provider_ref) VALUES ($1, 
 				return plan, ErrRelinkSubjectTaken
 			}
 			return plan, fmt.Errorf("oidc relink: add the new link: %w", err)
+		}
+		if err := relinkBindNewSubject(ctx, tx, plan); err != nil {
+			return plan, err
+		}
+	}
+	// Removed AFTER the new link is bound, because relinkBindNewSubject copies
+	// the old link's bindings (shared migration 0258). They are deleted here
+	// explicitly as well: the foreign key that cascades them exists only where
+	// auth_core__user_provider existed when 0258 ran.
+	if plan.Remove != "" {
+		oldRef := identityrepo.OIDCProviderRefPrefix + plan.Remove
+		if _, err := tx.Exec(ctx, `
+DELETE FROM elitea_auth.identity_bindings WHERE user_id = $1 AND provider_ref = $2`,
+			plan.UserID, oldRef); err != nil {
+			return plan, fmt.Errorf("oidc relink: remove the old bindings: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+DELETE FROM public.auth_core__user_provider WHERE user_id = $1 AND provider_ref = $2`,
+			plan.UserID, oldRef); err != nil {
+			return plan, fmt.Errorf("oidc relink: remove the old link: %w", err)
 		}
 	}
 
@@ -272,8 +310,9 @@ INSERT INTO public.auth_core__user_provider (user_id, provider_ref) VALUES ($1, 
 	// No subject, and no digest of one, goes into the event. A subject is
 	// often guessable (a numeric GitHub id, an email address), so an unsalted
 	// digest of it is the subject in all but name. The event records the
-	// action, the account, the operator and the provider namespace; an
-	// `oidc:<sub>` link names no issuer, so there is no provider to record.
+	// action, the account, the operator and the provider namespace. The
+	// provider binding of the new link is copied from the old one, or is the
+	// enabled provider (relinkBindNewSubject); the command names neither.
 	reasons := []string{"provider_namespace:oidc", "via:oidc-relink"}
 	appender, err := securityaudit.NewPostgresAppender("elitea-main/oidc-relink")
 	if err != nil {

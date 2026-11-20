@@ -45,6 +45,45 @@ A stored secret is never shown in the clear — the field renders a mask, and th
 Deleting a provider also deletes its stored secret, which cannot be recovered. To stop using a provider for new logins without losing its configuration, turn off "use this provider for logins" instead of deleting it.
 </Warning>
 
+## Each account is bound to its identity provider
+
+An account that signs in through OIDC or SAML is bound to three values: the provider key, the issuer the provider trusts, and the subject (the OIDC `sub` or the SAML NameID). The issuer is the OIDC **Issuer URL** or the SAML **Identity-provider entity ID**. A provider configured through environment variables has the key `@environment` and the issuer `OIDC_ISSUER_URL`. A sign-in uses an account only when all three values match. If the same subject comes from two providers, each provider has its own binding.
+
+So a provider whose issuer changed cannot sign in to an account that was linked under the old issuer. The sign-in gets `409` with the cause `provider_not_bound`, and no session is made. This applies to the web, the desktop app and the mobile app. The desktop and mobile apps sign in through the same OIDC and SAML callbacks in the system browser.
+
+### Who may change trust
+
+Only a super admin may make these changes. Another administrator gets `403` with a stable `code`, the screen says why, and the Audit Trail records the refusal:
+
+| Change | `code` | Audit Trail action |
+| --- | --- | --- |
+| Create an identity provider. Change its issuer, client ID or Entra tenants (OIDC), its entity ID, SSO URL, certificates or e-mail attribute (SAML). Turn on **Users provisioned by SCIM may sign in through this provider**, or turn off e-mail verification. | `identity_provider_trust_super_admin_required` | `identity_provider.trust_change_refused` |
+| Re-bind accounts to a provider | `identity_binding_super_admin_required` | `identity_binding.rebind_refused` |
+| Create, rotate or delete a SCIM client | `scim_client_super_admin_required` | `scim_client.change_refused` |
+
+A provider refusal also lists the changed trust fields in `fields`. Other edits (the display name, the redirect URI, the scopes, the login domains, turning a provider on or off) stay open to any administrator with the Authentication permission. A change that a super admin makes is recorded as `identity_provider.trust_changed`, `scim_client.created`, `scim_client.rotated` or `scim_client.deleted`.
+
+### Rotate an issuer: re-bind the accounts
+
+When your identity provider really moved to a new issuer (a new tenant, a new Keycloak realm, a new ADFS entity ID), a super admin first saves the provider with the new issuer. The save answers with `previous_issuer`. Then the super admin re-binds the accounts of the old issuer to the new one:
+
+```bash
+curl -X POST "https://<host>/api/v2/admin/identity_providers/administration/corporate/rebind" \
+  -H "Authorization: Bearer $SUPER_ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"from_issuer": "https://old-idp.example.com/realms/corp"}'
+```
+
+The answer is `{"provider_key": "corporate", "issuer": "<new issuer>", "rebound": <count>}`. The old binding is removed, so the old issuer stops working. A repeated request moves nothing.
+
+- To move the accounts of another provider, add `"from_provider_key": "<key>"`. Use `"from_provider_key": "@environment"` for the accounts of a provider that was configured through environment variables, when you replace it with a provider on this screen.
+- To bind accounts that have no binding, send `{"from_unbound": true}` alone. After the upgrade, these are the accounts of a protocol that had no enabled stored provider.
+
+Each re-bind writes the security audit event `ai.elitea.security.v1.identity.link.changed` with the action `identity.binding.rebound`, and the Audit Trail records `identity_binding.rebound`.
+
+<Warning>
+Re-bind only when you are sure that the new issuer is the same directory as the old one. A re-bind lets the new issuer sign in to every account it moves. The platform does not re-link accounts by e-mail address, because the address is a claim of the new identity provider.
+</Warning>
+
 ## OIDC sign-in rules
 
 The platform links an account to the OIDC subject (the id_token `sub` claim), stored as `oidc:<sub>`. The email claim only selects the account on the first login of a subject. These rules apply to every OIDC sign-in:
@@ -73,6 +112,7 @@ A 409 means that the login cannot use the account that the email claim names. On
 | `this identity is already linked to another account. If your identity provider re-created your user` | `oidc_subject_holds_account` | Another OIDC subject holds the account. Usually the identity provider re-created the user. [Relink the account](#relink-an-account-after-the-identity-provider-re-created-a-user). |
 | `this identity is already linked to another account: the account with this email address signs in through SAML` | `saml_subject_holds_account` | A SAML identity holds the account. An OIDC login never takes over an account of the other protocol. The user signs in through SAML. `oidc-relink` does not apply. |
 | `the account with this email address is provisioned by the directory (SCIM)` | `scim_adoption_refused` | The account was created by SCIM, and this provider may not sign in SCIM-provisioned users. If this provider is the one paired with your SCIM client, turn on **Users provisioned by SCIM may sign in through this provider** (`OIDC_ADOPT_SCIM_USERS=true` for a provider configured through environment variables). `oidc-relink` does not apply. |
+| `your account is linked to a different identity provider or issuer than the one you signed in with` | `provider_not_bound` | The account is bound to another provider or issuer, usually because the issuer of the provider changed. A SAML sign-in gets the same 409. If the change was on purpose, a super admin [re-binds the accounts](#rotate-an-issuer-re-bind-the-accounts). `oidc-relink` does not apply. |
 | `the email address your identity provider now sends belongs to another account` | `email_held_by_another_account` | The subject is linked, and its new address is the address of a different account. Change the address of one of the two accounts. |
 | `your account changed while you signed in` | `concurrent_change` | The account or the link changed during the login, for example a concurrent delete. Sign in again. |
 
@@ -189,7 +229,7 @@ An identity provider authenticates to SCIM with a **SCIM client**. A SCIM client
 
 <Steps>
   <Step title="Open Configuration › Authentication › SCIM provisioning">
-    The panel shows the **Tenant URL** and the **Token endpoint** of this deployment, each with a copy button. You need the `admin.auth.users` permission to manage SCIM clients.
+    The panel shows the **Tenant URL** and the **Token endpoint** of this deployment, each with a copy button. You need the `admin.auth.users` permission to manage SCIM clients. Only a super admin can create, rotate or delete a SCIM client, because a SCIM client can create and change accounts.
   </Step>
   <Step title="Create a SCIM client">
     Select **New SCIM client**. Type a name for the identity provider, and select a method:
