@@ -251,7 +251,7 @@ pub use families::data_analysis::sandbox_tool::{
 #[cfg(feature = "toolkit-data-analysis")]
 pub use families::data_analysis::tools::{
     AnalysisGate, AttachmentBucketError, AttachmentBucketResolver, DataAnalysisAuthority,
-    DataAnalysisToolsetError, build_data_analysis_toolset, close_analysis_gate,
+    DataAnalysisToolsetError, FileStager, build_data_analysis_toolset, close_analysis_gate,
 };
 pub use families::imagegen::{
     IMAGE_GENERATION_TOOL, ImageArtifactBucket, ImageBucketError, ImageFamily,

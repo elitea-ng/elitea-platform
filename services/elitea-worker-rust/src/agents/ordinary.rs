@@ -846,8 +846,17 @@ impl OrdinaryNativeAgentAssembler {
         }
         // The Code sandbox toggle (`pyodide`) needs only the platform's code
         // sandbox, the one `run_analysis_code` and the Code node run on.
+        // With the data tools' file staging, when the run has one, so the
+        // program can be handed conversation attachments and artifact files
+        // (#2205).
         let code_authority = code.clone().map(|runtime| {
-            CodeSandboxAuthority::new(Arc::new(super::graph::SandboxAnalysisRunner::new(runtime)))
+            let authority = CodeSandboxAuthority::new(Arc::new(
+                super::graph::SandboxAnalysisRunner::new(runtime),
+            ));
+            match data_analysis_authority.as_ref() {
+                Some(data) => authority.with_files(data.file_stager()),
+                None => authority,
+            }
         });
         let code_toolset =
             internal_tools.code_sandbox_toolset(code_authority.as_ref(), tool_policy);

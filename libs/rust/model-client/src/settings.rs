@@ -34,6 +34,7 @@
 use elitea_engine_core::errors::{EngineError, ErrorType};
 use elitea_engine_core::pyvalue::py_truthy;
 use elitea_engine_core::secret::Secret;
+use elitea_llm_wire::tool_schema::SchemaProfile;
 use serde_json::Value;
 use std::fmt;
 
@@ -100,6 +101,15 @@ pub struct ModelSettings {
     /// does not think on a request that carries tools. Read only with a
     /// declared `reasoning_control`. Default false.
     pub reasoning_off_with_tools: bool,
+    /// `llm_settings.tool_schema_profile`, from the catalogue: the provider
+    /// family the model's tool schemas are written for (`openai`,
+    /// `anthropic`, `bedrock`, `gemini`, `llama_cpp`). Unset, the family is
+    /// read from the model name, and a name nothing recognises gets the
+    /// strictest form (`llama_cpp`): it is accepted everywhere, while a
+    /// lighter one is refused by the providers that need the strict one, and
+    /// a refusal fails the whole call. A hosted model behind an unrecognised
+    /// name (a gateway alias) sets this to keep its full constraints.
+    pub tool_schema_profile: Option<SchemaProfile>,
     pub model_name: String,
     pub max_retries: u32,
     pub max_tokens: u32,
@@ -120,6 +130,7 @@ impl fmt::Debug for ModelSettings {
             .field("reasoning_control", &self.reasoning_control)
             .field("reasoning_tool_steps", &self.reasoning_tool_steps)
             .field("reasoning_off_with_tools", &self.reasoning_off_with_tools)
+            .field("tool_schema_profile", &self.tool_schema_profile)
             .field("model_name", &self.model_name)
             .field("max_retries", &self.max_retries)
             .field("max_tokens", &self.max_tokens)
@@ -334,6 +345,15 @@ impl ModelSettings {
             reasoning_control: reasoning.control,
             reasoning_tool_steps: reasoning.tool_steps,
             reasoning_off_with_tools: reasoning.off_with_tools,
+            tool_schema_profile: match settings.get("tool_schema_profile") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(name)) => Some(SchemaProfile::from_name(name).ok_or_else(|| {
+                    invalid(
+                        "llm_settings.tool_schema_profile must be one of openai, anthropic, bedrock, gemini, llama_cpp",
+                    )
+                })?),
+                Some(_) => return Err(invalid("llm_settings.tool_schema_profile must be text")),
+            },
             model_name,
             max_retries,
             max_tokens,

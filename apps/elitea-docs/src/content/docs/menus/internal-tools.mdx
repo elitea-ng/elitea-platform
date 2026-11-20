@@ -63,6 +63,8 @@ Lets the agent write a short program and run it in the platform's isolated code 
 
 This is the same sandbox that runs a pipeline **Code** node and the code of Data analysis, with the same limits on time, memory and output, the same lack of network and files, and the same package preparation. It is not a second sandbox.
 
+**Files for the program.** When the agent also has the **Data analysis** module (the one that reads files), `run_code` takes a `files` argument: up to 5 conversation attachments or artifact files, named as the attachment message shows them (`<conversation>/data.csv`, or `/<bucket>/<name>`). The program receives each one in its input, as `data['files'][name]` with `size` and either `text` (a UTF-8 file) or `base64` (any other file). Each file is at most 256 KiB and all of them together 512 KiB; a file over a limit, a missing file or a name that is not allowed is refused with a sentence before the sandbox is called. For larger tables use the data tools, which read the file themselves. The sandbox still has no files of its own and no network.
+
 - **Python** returns what the program printed (`stdout`), what it wrote to `stderr`, the value of its last expression (`result`) and the traceback if it raised. Standard-library modules and the packages the sandbox provides can be imported.
 - **JavaScript and TypeScript** are a module whose default export (or the result of a default-exported function of the state) is the result. What the program prints with `console.log` comes back as `output`.
 - **Rust** defines `pub fn run(state: serde_json::Value) -> Result<serde_json::Value, Box<dyn std::error::Error>>`, and its value is the result. What it prints comes back as `output`.
@@ -100,6 +102,10 @@ Reduces token usage when an agent has many toolkits configured by binding only t
 <Note>
 A tool that needs your confirmation (a sensitive action) or a sign-in to the service stays directly available to the agent instead of going through `invoke_tool`, so approvals keep working exactly as without the module. The Planner, Attachments and this module apply to the agent you chat with; agents it calls as tools, and pipeline steps, do not get them.
 </Note>
+
+## What the modules cost the model
+
+Every module that binds tools adds their descriptions and argument schemas to each request, before your text is read. With every module on, that was about 10,900 tokens, which is more than a small local model's whole context (a 2,048 or 8,192-token window) and a visible delay before the first word on a slow model. The wording of the Data analysis tools and of the sub-agent tools is now shorter (the Data analysis tools went from about 6,000 to about 4,400 tokens, and no tool or argument was removed), and the platform keeps a budget: the ten Data analysis tools fit about 4,500 tokens together, and the other modules about 4,000. A test fails when a change makes them heavier. If you run a small model, turn on only the modules the agent needs, and use [Smart tools selection](#smart-tools-selection) for many toolkits.
 
 ## Troubleshooting
 
