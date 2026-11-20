@@ -156,13 +156,24 @@ jobs:
           command -v skopeo >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q skopeo; }
           archive="${RUNNER_TEMP}/eng-runner.tar"
           docker save "$REF" -o "$archive"
+          # The tested image is identified by its CONFIG digest, which survives
+          # every copy. With the classic image store `.Id` is that digest; with
+          # the containerd image store (hosted runners, measured on this PR)
+          # `.Id` is the manifest digest, and the manifest is a blob in the
+          # saved archive, so the config digest is read from it.
           id="$(docker image inspect --format '{{.Id}}' "$REF")"
-          config="$(skopeo inspect --raw "docker-archive:${archive}" | jq -r .config.digest)"
-          if [ "$config" != "$id" ]; then
-            echo "::error::the saved archive's config ${config} is not the smoke-tested image ${id}"
+          archived="$(skopeo inspect --raw "docker-archive:${archive}" | jq -r .config.digest)"
+          if [ "$archived" = "$id" ]; then
+            config="$id"
+          else
+            config="$(tar -xOf "$archive" "blobs/sha256/${id#sha256:}" | jq -r .config.digest)"
+          fi
+          if [ "$config" != "$archived" ]; then
+            echo "::error::the saved archive's config ${archived} is not the smoke-tested image's ${config} (image ${id})"
             exit 1
           fi
-          echo "image-id=${id}" >> "$GITHUB_OUTPUT"
+          echo "image-id=${config}" >> "$GITHUB_OUTPUT"
+          echo "smoke-tested image config ${config}" | tee -a "$GITHUB_STEP_SUMMARY"
           ls -l "$archive"
 
       - name: Upload the tested image
