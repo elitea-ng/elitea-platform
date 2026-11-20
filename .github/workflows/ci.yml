@@ -153,7 +153,7 @@ jobs:
   # ── Heavy tier: not a draft, and the fast tier passed ───────────────────────
   ci-web-e2e:
     needs: [changes, fast-gate]
-    if: github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-web-e2e']
+    if: ${{ !cancelled() && needs.fast-gate.result == 'success' && github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-web-e2e'] }}
     permissions:
       contents: read
       packages: write
@@ -162,73 +162,73 @@ jobs:
 
   ci-web-coverage:
     needs: [changes, fast-gate]
-    if: github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-web-coverage']
+    if: ${{ !cancelled() && needs.fast-gate.result == 'success' && github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-web-coverage'] }}
     uses: ./.github/workflows/ci-web-coverage.yml
     secrets: inherit
 
   ci-rust:
     needs: [changes, fast-gate]
-    if: github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-rust']
+    if: ${{ !cancelled() && needs.fast-gate.result == 'success' && github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-rust'] }}
     uses: ./.github/workflows/ci-rust.yml
     secrets: inherit
 
   ci-rust-shared:
     needs: [changes, fast-gate]
-    if: github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-rust-shared']
+    if: ${{ !cancelled() && needs.fast-gate.result == 'success' && github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-rust-shared'] }}
     uses: ./.github/workflows/ci-rust-shared.yml
     secrets: inherit
 
   ci-deepwiki-engine:
     needs: [changes, fast-gate]
-    if: github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-deepwiki-engine']
+    if: ${{ !cancelled() && needs.fast-gate.result == 'success' && github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-deepwiki-engine'] }}
     uses: ./.github/workflows/ci-deepwiki-engine.yml
     secrets: inherit
 
   ci-inventory-engine:
     needs: [changes, fast-gate]
-    if: github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-inventory-engine']
+    if: ${{ !cancelled() && needs.fast-gate.result == 'success' && github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-inventory-engine'] }}
     uses: ./.github/workflows/ci-inventory-engine.yml
     secrets: inherit
 
   ci-doc-extractor:
     needs: [changes, fast-gate]
-    if: github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-doc-extractor']
+    if: ${{ !cancelled() && needs.fast-gate.result == 'success' && github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-doc-extractor'] }}
     uses: ./.github/workflows/ci-doc-extractor.yml
     secrets: inherit
 
   ci-vector:
     needs: [changes, fast-gate]
-    if: github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-vector']
+    if: ${{ !cancelled() && needs.fast-gate.result == 'success' && github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-vector'] }}
     uses: ./.github/workflows/ci-vector.yml
     secrets: inherit
 
   ci-browser-session:
     needs: [changes, fast-gate]
-    if: github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-browser-session']
+    if: ${{ !cancelled() && needs.fast-gate.result == 'success' && github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-browser-session'] }}
     uses: ./.github/workflows/ci-browser-session.yml
     secrets: inherit
 
   ci-desktop:
     needs: [changes, fast-gate]
-    if: github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-desktop']
+    if: ${{ !cancelled() && needs.fast-gate.result == 'success' && github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-desktop'] }}
     uses: ./.github/workflows/ci-desktop.yml
     secrets: inherit
 
   ci-desktop-control:
     needs: [changes, fast-gate]
-    if: github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-desktop-control']
+    if: ${{ !cancelled() && needs.fast-gate.result == 'success' && github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-desktop-control'] }}
     uses: ./.github/workflows/ci-desktop-control.yml
     secrets: inherit
 
   ci-local-tools-macos:
     needs: [changes, fast-gate]
-    if: github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-local-tools-macos']
+    if: ${{ !cancelled() && needs.fast-gate.result == 'success' && github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-local-tools-macos'] }}
     uses: ./.github/workflows/ci-local-tools-macos.yml
     secrets: inherit
 
   desktop-package:
     needs: [changes, fast-gate]
-    if: github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['desktop-package']
+    if: ${{ !cancelled() && needs.fast-gate.result == 'success' && github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['desktop-package'] }}
     uses: ./.github/workflows/desktop-package.yml
     with:
       require_signed: false
@@ -236,13 +236,13 @@ jobs:
 
   helm-install-smoke:
     needs: [changes, fast-gate]
-    if: github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['helm-install-smoke']
+    if: ${{ !cancelled() && needs.fast-gate.result == 'success' && github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['helm-install-smoke'] }}
     uses: ./.github/workflows/helm-install-smoke.yml
     secrets: inherit
 
   ci-governed-conformance:
     needs: [changes, fast-gate]
-    if: github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-governed-conformance']
+    if: ${{ !cancelled() && needs.fast-gate.result == 'success' && github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-governed-conformance'] }}
     permissions:
       contents: read
       packages: read
@@ -251,7 +251,7 @@ jobs:
 
   ci-handoff-loadgate:
     needs: [changes, fast-gate]
-    if: github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-handoff-loadgate']
+    if: ${{ !cancelled() && needs.fast-gate.result == 'success' && github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-handoff-loadgate'] }}
     uses: ./.github/workflows/ci-handoff-loadgate.yml
     secrets: inherit
 
