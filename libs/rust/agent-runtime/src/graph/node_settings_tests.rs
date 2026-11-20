@@ -455,3 +455,155 @@ fn an_invalid_id_is_named_a_pipeline_node() {
         format!("A pipeline node: {}", NodeSettingsRefusal::Malformed.text())
     );
 }
+
+#[test]
+fn settings_compile_to_recovery_policy_without_widening_or_changing_policy_bytes() {
+    use super::super::node_recovery::{
+        MAX_ELAPSED_MS, NodeBackoff, NodeFailure, NodeFailureClass, NodeRecoveryPolicy,
+        RecoveryDecision, ReplaySafety, RetryCondition, StopReason, plan_after_failure,
+    };
+
+    // Without retry_on_fail, policy is identical to NodeRecoveryPolicy::default()
+    // even when on_error, always_output_data, execute_once and timeout_ms are set.
+    let non_retry = parse(
+        "{on_error: continue, always_output_data: true, execute_once: true, timeout_ms: 5000}",
+    )
+    .unwrap();
+    assert_eq!(non_retry.effective_max_tries(), 1);
+    assert_eq!(non_retry.effective_wait_ms(), None);
+    assert_eq!(
+        non_retry.to_recovery_policy().unwrap(),
+        NodeRecoveryPolicy::default()
+    );
+    assert_eq!(
+        serde_json::to_vec(&non_retry.to_recovery_policy().unwrap()).unwrap(),
+        serde_json::to_vec(&NodeRecoveryPolicy::default()).unwrap()
+    );
+
+    // With retry_on_fail, policy matches explicit NodeRecoveryPolicy::admit byte-for-byte
+    // and keeps on_error / always_output_data / execute_once out of policy serde bytes.
+    let retry_plain = parse("{retry_on_fail: true}").unwrap();
+    assert_eq!(retry_plain.effective_max_tries(), DEFAULT_NODE_TRIES);
+    assert_eq!(
+        retry_plain.effective_wait_ms(),
+        Some(DEFAULT_WAIT_BETWEEN_TRIES_MS)
+    );
+    let retry_with_extras = parse(
+        "{retry_on_fail: true, max_tries: 3, wait_between_tries_ms: 1000, on_error: error_output, error_transition: handler, always_output_data: true, execute_once: true, timeout_ms: 5000}",
+    )
+    .unwrap();
+    let expected = NodeRecoveryPolicy::admit(
+        3,
+        BTreeSet::from([
+            RetryCondition::DependencyUnavailable,
+            RetryCondition::RateLimited,
+            RetryCondition::AttemptTimeout,
+            RetryCondition::WorkerInterrupted,
+        ]),
+        Some(NodeBackoff {
+            initial_ms: DEFAULT_WAIT_BETWEEN_TRIES_MS,
+            maximum_ms: DEFAULT_WAIT_BETWEEN_TRIES_MS,
+            multiplier: 1,
+        }),
+        Some(MAX_ELAPSED_MS),
+        None,
+    )
+    .unwrap();
+    assert_eq!(retry_plain.to_recovery_policy().unwrap(), expected);
+    assert_eq!(retry_with_extras.to_recovery_policy().unwrap(), expected);
+    assert_eq!(
+        serde_json::to_vec(&retry_with_extras.to_recovery_policy().unwrap()).unwrap(),
+        serde_json::to_vec(&expected).unwrap()
+    );
+
+    // C2: every non-retryable, denial, control, and deadline class stays non-retryable;
+    // unknown external effects still go to Reconcile, never RetryAt.
+    let policy = retry_plain.to_recovery_policy().unwrap();
+    for class in [
+        NodeFailureClass::DependencyUnavailable,
+        NodeFailureClass::RateLimited,
+        NodeFailureClass::AttemptTimeout,
+        NodeFailureClass::WorkerInterrupted,
+    ] {
+        let decision = plan_after_failure(
+            &policy,
+            [1; 32],
+            1,
+            1_000,
+            1_100,
+            NodeFailure::new(class, ReplaySafety::NoExternalEffect),
+        )
+        .unwrap();
+        assert_eq!(
+            decision,
+            RecoveryDecision::RetryAt {
+                not_before_ms: 2_100,
+                next_attempt: 2,
+                effect_id: None,
+            },
+            "{class:?} with NoExternalEffect retries with fixed wait"
+        );
+        let unknown = plan_after_failure(
+            &policy,
+            [1; 32],
+            1,
+            1_000,
+            1_100,
+            NodeFailure::new(
+                class,
+                ReplaySafety::UnknownExternalEffect { effect_id: [2; 32] },
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            unknown,
+            RecoveryDecision::Reconcile {
+                effect_id: Some([2; 32]),
+                completed_receipt: None,
+            },
+            "{class:?} with UnknownExternalEffect reconciles, never retries"
+        );
+    }
+    for class in [
+        NodeFailureClass::InvalidConfiguration,
+        NodeFailureClass::InvalidInput,
+        NodeFailureClass::InvalidResult,
+        NodeFailureClass::ModelOutputIncomplete,
+        NodeFailureClass::AuthenticationDenied,
+        NodeFailureClass::AuthorizationDenied,
+        NodeFailureClass::SensitiveRejected,
+        NodeFailureClass::Unknown,
+        NodeFailureClass::DeadlineInsufficient,
+    ] {
+        let decision = plan_after_failure(
+            &policy,
+            [1; 32],
+            1,
+            1_000,
+            1_100,
+            NodeFailure::new(class, ReplaySafety::NoExternalEffect),
+        )
+        .unwrap();
+        assert_eq!(
+            decision,
+            RecoveryDecision::Stop(StopReason::NotRetryable),
+            "{class:?} must never retry"
+        );
+    }
+    for class in [NodeFailureClass::Cancelled, NodeFailureClass::LeaseLost] {
+        let decision = plan_after_failure(
+            &policy,
+            [1; 32],
+            1,
+            1_000,
+            1_100,
+            NodeFailure::new(class, ReplaySafety::NoExternalEffect),
+        )
+        .unwrap();
+        assert_eq!(
+            decision,
+            RecoveryDecision::Stop(StopReason::ControlDecision),
+            "{class:?} must be ControlDecision"
+        );
+    }
+}

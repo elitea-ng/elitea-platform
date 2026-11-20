@@ -25,13 +25,14 @@ fn schema_for(ledger: &NodeAttemptLedger) -> &'static str {
     if ledger.events.iter().any(|event| {
         matches!(
             event,
-            NodeRecoveryEvent::Failure {
-                failure: NodeFailure {
-                    class: NodeFailureClass::DeadlineInsufficient,
+            NodeRecoveryEvent::FailureWithin { .. }
+                | NodeRecoveryEvent::Failure {
+                    failure: NodeFailure {
+                        class: NodeFailureClass::DeadlineInsufficient,
+                        ..
+                    },
                     ..
-                },
-                ..
-            }
+                }
         )
     }) {
         SCHEMA_V4
@@ -68,6 +69,12 @@ pub enum NodeRecoveryEvent {
     Failure {
         failure: NodeFailure,
         now_ms: u64,
+    },
+    FailureWithin {
+        failure: NodeFailure,
+        now_ms: u64,
+        run_deadline_ms: u64,
+        required_ms: u64,
     },
     Success {
         receipt_id: [u8; 32],
@@ -177,6 +184,12 @@ fn apply_event(
     match *event {
         NodeRecoveryEvent::Start { now_ms } => ledger.start_attempt(now_ms),
         NodeRecoveryEvent::Failure { failure, now_ms } => ledger.record_failure(failure, now_ms),
+        NodeRecoveryEvent::FailureWithin {
+            failure,
+            now_ms,
+            run_deadline_ms,
+            required_ms,
+        } => ledger.record_failure_within(failure, now_ms, run_deadline_ms, required_ms),
         NodeRecoveryEvent::Success { receipt_id, now_ms } => {
             ledger.record_success(receipt_id, now_ms)
         }
