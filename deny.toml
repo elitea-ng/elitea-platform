@@ -38,6 +38,8 @@ ignore = [
   { id = "RUSTSEC-2026-0433", reason = "pulldown-cmark wikilinks quadratic parsing; first-enablement finding, tracked by #2313 (expires 2026-12-31)" },
   { id = "RUSTSEC-2026-0444", reason = "astral-tl unmaintained; first-enablement finding, tracked by #2313 (expires 2026-12-31)" },
   { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained; first-enablement finding, tracked by #2313 (expires 2026-12-31)" },
+  { id = "RUSTSEC-2026-0555", reason = "chrono-tz unmaintained (the chrono announcement behind RUSTSEC-2026-0543); arrow-array and delta_kernel of the delta_lake family (#2262), no maintained replacement; tracked by #2313 (expires 2026-12-31)" },
+  { id = "RUSTSEC-2026-0542", reason = "humantime unmaintained (wraps chrono, RUSTSEC-2026-0543); object_store of the delta_lake family (#2262), no maintained replacement; tracked by #2313 (expires 2026-12-31)" },
   { id = "RUSTSEC-2024-0436", reason = "paste unmaintained; first-enablement finding, tracked by #2313 (expires 2026-12-31)" },
   { id = "RUSTSEC-2024-0370", reason = "proc-macro-error unmaintained; first-enablement finding, tracked by #2313 (expires 2026-12-31)" },
   { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml unmaintained; first-enablement finding, tracked by #2313 (expires 2026-12-31)" },
