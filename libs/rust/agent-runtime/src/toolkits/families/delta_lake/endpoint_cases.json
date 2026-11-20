@@ -1,0 +1,29 @@
+{
+  "description": "The one host a delta_lake toolkit calls, per credential region and table path. The Rust family (config.rs valid_region, valid_bucket, s3_endpoint) and elitea-main's run egress derivation (workeregress/delta_lake_hosts.go) both read this file, so the two cannot drift: a null host means the worker refuses the configuration and Main adds no host.",
+  "cases": [
+    {"region": "us-east-1", "path": "s3://acme-data/tables/events", "host": "s3.us-east-1.amazonaws.com"},
+    {"region": "eu-west-2", "path": "s3a://acme-data/t", "host": "s3.eu-west-2.amazonaws.com"},
+    {"region": "us-gov-west-1", "path": "s3://gov-bucket/t", "host": "s3.us-gov-west-1.amazonaws.com"},
+    {"region": "us-iso-east-1", "path": "s3://iso-bucket/t", "host": "s3.us-iso-east-1.amazonaws.com"},
+    {"region": "ap-southeast-12", "path": "s3n://acme-data/t", "host": "s3.ap-southeast-12.amazonaws.com"},
+    {"region": "cn-north-1", "path": "s3://cn-bucket/t", "host": "s3.cn-north-1.amazonaws.com.cn"},
+    {"region": "us-east-1", "path": "S3://my.bucket-1", "host": "s3.us-east-1.amazonaws.com"},
+    {"region": "us-east-1.evil.test", "path": "s3://acme-data/t", "host": null},
+    {"region": "localhost", "path": "s3://acme-data/t", "host": null},
+    {"region": "us-east-123", "path": "s3://acme-data/t", "host": null},
+    {"region": "us-1-1", "path": "s3://acme-data/t", "host": null},
+    {"region": "US-EAST-1", "path": "s3://acme-data/t", "host": null},
+    {"region": "us-east", "path": "s3://acme-data/t", "host": null},
+    {"region": "u-east-1", "path": "s3://acme-data/t", "host": null},
+    {"region": "us--east-1", "path": "s3://acme-data/t", "host": null},
+    {"region": "us-east-1", "path": "/var/data/t", "host": null},
+    {"region": "us-east-1", "path": "file:///etc", "host": null},
+    {"region": "us-east-1", "path": "https://evil.test/t", "host": null},
+    {"region": "us-east-1", "path": "s3://AB/t", "host": null},
+    {"region": "us-east-1", "path": "s3://ab/t", "host": null},
+    {"region": "us-east-1", "path": "s3://192.168.0.1/t", "host": null},
+    {"region": "us-east-1", "path": "s3://a..b/t", "host": null},
+    {"region": "us-east-1", "path": "s3://-abc/t", "host": null},
+    {"region": "us-east-1", "path": "s3://acme-data/t?x=1", "host": null}
+  ]
+}

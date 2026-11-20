@@ -117,6 +117,20 @@ export function createStorage(area: StorageAreaName): NamespacedStorage {
   };
 }
 
+const clearListeners = new Set<() => void>();
+
+/**
+ * Runs `listener` whenever {@link clearNamespace} is about to sweep: a module
+ * that keeps a parsed copy of a stored value drops it here, so the sweep is
+ * not answered from memory afterwards. Returns the unsubscribe.
+ */
+export function onNamespaceCleared(listener: () => void): () => void {
+  clearListeners.add(listener);
+  return () => {
+    clearListeners.delete(listener);
+  };
+}
+
 /**
  * §5.4 complete logout: removes EVERY key under the `el.` namespace from BOTH
  * `localStorage` and `sessionStorage`. Keys outside the namespace (other apps
@@ -127,6 +141,15 @@ export function clearNamespace(): void {
     const store = areaOf(area);
     for (const key of namespacedKeys(store)) {
       store.removeItem(key);
+    }
+  }
+  // After the sweep, and each on its own: a listener that throws must neither
+  // stop the logout nor leave the others holding pre-sweep data.
+  for (const listener of clearListeners) {
+    try {
+      listener();
+    } catch {
+      // A cache that cannot drop itself is not worth failing a sign-out for.
     }
   }
 }

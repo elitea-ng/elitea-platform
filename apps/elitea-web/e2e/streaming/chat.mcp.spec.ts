@@ -96,6 +96,7 @@ import {
   readAttachedToolkits,
   readStoredTranscript,
   sendComposerMessage,
+  settleStoredTurn,
 } from '../fixtures/api';
 import { readsPlatformFlags } from '../fixtures/platformFlags';
 
@@ -201,7 +202,11 @@ async function attachMcpThroughPicker(
  * Open chat with the agent whose editor is open, send `prompt`, and return the
  * conversation the Chat button created.
  */
-async function chatWithOpenAgent(page: Page, prompt: string): Promise<string> {
+async function chatWithOpenAgent(
+  page: Page,
+  prompt: string,
+  onConversation: (conversationId: string) => void,
+): Promise<string> {
   const conversationCreated = page.waitForResponse(
     (r) => CONVERSATION_CREATED_RE.test(new URL(r.url()).pathname) && r.request().method() === 'POST',
     { timeout: 30_000 },
@@ -210,6 +215,8 @@ async function chatWithOpenAgent(page: Page, prompt: string): Promise<string> {
   const conversation = (await (await conversationCreated).json()) as { id?: string | number };
   const conversationId = String(conversation.id ?? '');
   expect(conversationId, 'the Chat button must create a conversation to attach to').not.toBe('');
+  // Reported at once, so a failure after the send still lets the caller settle the turn.
+  onConversation(conversationId);
   await page.waitForURL(new RegExp(`/app/chat/${conversationId}$`), { timeout: 30_000 });
 
   // One retried unit, not fill-then-click: the pane can discard a fill after
@@ -230,13 +237,19 @@ async function chatWithOpenAgent(page: Page, prompt: string): Promise<string> {
   return conversationId;
 }
 
-/** Remove the agent and the connection whatever the assertions did. */
+/**
+ * Settle the turn (#2181: an assertion that failed mid-turn used to leave it
+ * running, and the next journey's start POST queued behind it), then remove
+ * the agent and the connection whatever the assertions did.
+ */
 async function cleanUp(
   page: Page,
   projectId: string,
   agentId: string,
   toolkitId: string,
+  conversationId = '',
 ): Promise<void> {
+  if (conversationId !== '') await settleStoredTurn(page, projectId, conversationId);
   await page.request.delete(
     `${BASE_URL}/api/v2/elitea_core/application/prompt_lib/${projectId}/${agentId}`,
   );
@@ -268,6 +281,7 @@ test('an MCP connection attached through the picker is discovered, and the agent
     'the endpoint must round-trip through the write — the runtime reads the STORED settings, not the request',
   ).toBe(MOCK_MCP_URL);
 
+  let conversationId = '';
   try {
     // ── 3. Attach it through the editor's own "+ MCP" picker ──────────────
     await attachMcpThroughPicker(page, projectId, toolkitName);
@@ -305,7 +319,9 @@ test('an MCP connection attached through the picker is discovered, and the agent
     ).toEqual([]);
 
     // ── 4. Take a turn ────────────────────────────────────────────────────
-    const conversationId = await chatWithOpenAgent(page, `autotest mcp ${suffix}`);
+    await chatWithOpenAgent(page, `autotest mcp ${suffix}`, (id) => {
+      conversationId = id;
+    });
 
     // ── 5. …and require a real answer ─────────────────────────────────────
     // This is the whole point. A stored, non-error assistant row means
@@ -326,7 +342,7 @@ test('an MCP connection attached through the picker is discovered, and the agent
         'certificate',
     });
   } finally {
-    await cleanUp(page, projectId, agentId, connection.id);
+    await cleanUp(page, projectId, agentId, connection.id, conversationId);
   }
 });
 
@@ -353,10 +369,13 @@ test('an MCP endpoint the platform stores but the runtime will not dial refuses 
     'it, the disagreement below is gone and this spec should be retired rather than repaired',
   ).toBe(UNSUPPORTED_SCHEME_URL);
 
+  let conversationId = '';
   try {
     await attachMcpThroughPicker(page, projectId, toolkitName);
 
-    const conversationId = await chatWithOpenAgent(page, `autotest mcp scheme ${suffix}`);
+    await chatWithOpenAgent(page, `autotest mcp scheme ${suffix}`, (id) => {
+      conversationId = id;
+    });
 
     // Admitted, then refused — the same late shape
     // `chat.attachments.spec.ts` pins for an attached file, and for the same
@@ -389,6 +408,6 @@ test('an MCP endpoint the platform stores but the runtime will not dial refuses 
       'was dialled, which is the rule this test says is applied before any dialling happens',
     ).toBe(UNSUPPORTED_CAPABILITY_MESSAGE);
   } finally {
-    await cleanUp(page, projectId, agentId, connection.id);
+    await cleanUp(page, projectId, agentId, connection.id, conversationId);
   }
 });

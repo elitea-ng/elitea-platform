@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Python sandbox takes files, the internal tools are lighter, and tool schemas are fitted to the model's provider everywhere
+
+The Python sandbox (`run_code`) now accepts a `files` argument when the agent also has Data analysis: up to 5 conversation attachments or artifact files (256 KiB each, 512 KiB together) arrive in the program's input as text or base64. The Data analysis and sub-agent tools use shorter descriptions, so an agent with every module on sends about 1,600 tokens less per turn, with the same tools and arguments; a test now holds each set to a stated budget. The tool-schema fitting that keeps a provider from refusing a tool (added for Gemini, llama.cpp, Anthropic, OpenAI and Bedrock) now also applies to the engines that call models directly (DeepWiki, Inventory) and is computed once per schema instead of on every model call. See [Python sandbox](/menus/internal-tools#python-sandbox-code-execution) and [What the modules cost the model](/menus/internal-tools#what-the-modules-cost-the-model).
+
 ## Jira analysis toolkit: bulk extraction and flow metrics
 
 There is a new **Jira analysis** toolkit. It pulls issues out of Jira in bulk with the history of every status change, writes them as CSV files in an artifact bucket, and calculates lead time, cycle time, life time, throughput, flow efficiency and flow load over those files. It uses your existing Jira credential. The files are plain CSV, so **Data Analysis** and the Code sandbox read them as they are. See [Jira analysis](/integrations/toolkits/analyse_jira_toolkit) for the tools, the dataset columns, the limits and what differs from the upstream toolkit.
@@ -12,6 +16,10 @@ There is a new **Jira analysis** toolkit. It pulls issues out of Jira in bulk wi
 ## Trusted skill publishers, and an Untrusted badge in the skills list
 
 An administrator can name projects whose skills every project trusts: **Features › Skill Publishing › Trusted Skill Publishers**. A skill added from one of them is applied as an instruction with no per-project review, and its editor says so. Skills from any other project stay quoted data until your project trusts that exact version. The Skills list now marks a skill from another project that your project has not trusted with an **Untrusted** badge. A message sent again after a pin was removed in between is refused, as a pick of that skill is. Client contract 1.64. See [Use a skill in chat](/menus/skills#use-a-skill-in-chat).
+
+## AWS Delta Lake toolkit runs on the agent worker
+
+The **AWS Delta Lake** toolkit now works: an agent can read a Delta Lake table in S3 with `query_table`, `vector_search` and `get_table_schema`. `query_table` keeps the SDK's `query` argument (pandas query syntax, literals only, read by a bounded parser) and adds structured `filters`, and every read is bounded in rows, bytes and time so a large table cannot exhaust the worker. The type stays out of the **New toolkit** picker, as in the SDK. Operators who restrict worker egress need do nothing: a run that uses the toolkit opens only the S3 endpoint of the credential's region. See [AWS Delta Lake](/integrations/toolkits/other-toolkits#aws-delta-lake).
 
 ## Microsoft sign-in: one redirect URI for the web, desktop and mobile apps
 

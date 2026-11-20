@@ -500,14 +500,14 @@ func TestToolkitTypeBulkCanRevert(t *testing.T) {
 // the routes gated on a string migration 0114 does not grant — which on a clean
 // database is 403 for every caller, and reads as a broken page.
 // A type that is catalogued but whose family has not landed (a type served
-// hidden, such as delta_lake, which the Rust worker cannot build) stays in the
+// hidden, such as localgit, which the Rust worker cannot build) stays in the
 // admin list, so an operator can set policy ahead of it, and carries the worker
 // verdict that says it is not verified. It is not dropped and not shown as
 // supported.
 func TestAdminListKeepsAHiddenNativeTypeWithItsUnverifiedVerdict(t *testing.T) {
-	views := buildToolkitTypeViews([]string{"delta_lake"}, true, nil, nil)
+	views := buildToolkitTypeViews([]string{"localgit"}, true, nil, nil)
 	require.Len(t, views, 1)
-	require.Equal(t, "delta_lake", views[0].Type)
+	require.Equal(t, "localgit", views[0].Type)
 	require.True(t, views[0].Registered)
 	require.False(t, views[0].Capability.Rust)
 	require.Equal(t, string(toolkitcatalogue.VerdictUnverified), views[0].Capability.Verdict)

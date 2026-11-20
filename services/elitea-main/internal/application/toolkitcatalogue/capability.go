@@ -116,6 +116,7 @@ var rustNativeToolTypes = []string{
 	"browser",
 	"carrier",
 	"confluence",
+	"delta_lake",
 	"docx",
 	"elastic",
 	"figma",

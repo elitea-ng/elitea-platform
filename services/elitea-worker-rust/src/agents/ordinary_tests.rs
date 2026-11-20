@@ -5348,6 +5348,65 @@ mod internal_tools_graph {
         (assembler, captured)
     }
 
+    /// #2300: the internal tools an agent binds cost the model prompt tokens
+    /// on every turn, before the user's text. This is the stated budget for
+    /// the set this harness can bind (the builders, the planner, attachments,
+    /// the sub-agent tools and `ask_user`; the data tools and `run_code` need
+    /// a sandbox and a bucket, and have their own budget beside their schema in
+    /// `agent-runtime`). A JSON declaration costs about 4 bytes a token. When a
+    /// new tool or a longer description trips this, shorten the wording or bind
+    /// the tool lazily; raising the number is the last resort and needs the
+    /// measurement in the PR.
+    const INTERNAL_TOOL_BUDGET_BYTES: usize = 16_000;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_default_internal_tool_surface_fits_its_token_budget() {
+        let (runtime_context, _) = runtime_context_client();
+        let (assembler, captured) = assembler_with(
+            vec![TestModelGatewayOutcome::Response(text_response("ok"))],
+            runtime_context,
+            Arc::new(InMemorySessionService::new()),
+        );
+        run(
+            &assembler,
+            &with_toggles(
+                AgentExecutionKind::Adhoc,
+                &[
+                    "ask_user",
+                    "skills_builder",
+                    "project_context_builder",
+                    "planner",
+                    "attachments",
+                    "subagents",
+                    "lazy_tools_mode",
+                    "internal_mcp",
+                    "swarm",
+                ],
+            ),
+        )
+        .await;
+        let seen = requests(&captured);
+        let tools = seen[0]["tools"].as_array().expect("tools");
+        let mut sizes: Vec<(usize, String)> = tools
+            .iter()
+            .map(|tool| {
+                (
+                    tool.to_string().len(),
+                    tool["function"]["name"].as_str().unwrap_or("?").to_owned(),
+                )
+            })
+            .collect();
+        sizes.sort_by(|a, b| b.cmp(a));
+        let total: usize = sizes.iter().map(|(size, _)| size).sum();
+        assert!(!sizes.is_empty(), "the toggles bound no tool");
+        assert!(
+            total <= INTERNAL_TOOL_BUDGET_BYTES,
+            "{} internal tools cost {total} bytes (~{} tokens) per turn, over the {INTERNAL_TOOL_BUDGET_BYTES} byte budget; heaviest first: {sizes:?}",
+            sizes.len(),
+            total / 4,
+        );
+    }
+
     const PLAN_TOOLS: [&str; 5] = [
         "update_plan",
         "start_step",
