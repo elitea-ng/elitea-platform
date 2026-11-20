@@ -130,6 +130,7 @@ impl fmt::Debug for ModelSettings {
             .field("reasoning_control", &self.reasoning_control)
             .field("reasoning_tool_steps", &self.reasoning_tool_steps)
             .field("reasoning_off_with_tools", &self.reasoning_off_with_tools)
+            .field("tool_schema_profile", &self.tool_schema_profile)
             .field("model_name", &self.model_name)
             .field("max_retries", &self.max_retries)
             .field("max_tokens", &self.max_tokens)
