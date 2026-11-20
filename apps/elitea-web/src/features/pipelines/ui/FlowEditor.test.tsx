@@ -243,6 +243,40 @@ describe('FlowEditor', () => {
     expect(screen.getByRole('button', { name: 'State' })).toBeInTheDocument();
   });
 
+  it('renders FlowEmptyState and hides the End node while the pipeline has no user nodes', () => {
+    const endNode = { id: 'END', type: 'END', position: { x: 0, y: 0 }, data: { label: 'End' } };
+    const { container } = renderFlowEditor(baseProps({ yamlJsonObject: { nodes: [] }, initialNodes: [endNode] }));
+
+    expect(screen.getByTestId('pipeline-empty-state')).toBeInTheDocument();
+    expect(screen.getByTestId('pipeline-empty-state-add-node-button')).toBeInTheDocument();
+    expect(container.querySelector('[data-id="END"]')).toBeNull();
+  });
+
+  it('hides FlowEmptyState and renders the End node once a user node exists', () => {
+    const userNode = { id: 'LLM_1', type: 'ghost', position: { x: 0, y: 0 }, data: {} };
+    const endNode = { id: 'END', type: 'END', position: { x: 0, y: 120 }, data: { label: 'End' } };
+    const { container } = renderFlowEditor(
+      baseProps({
+        yamlJsonObject: { nodes: [{ id: 'LLM_1', type: 'llm' }] },
+        initialNodes: [userNode, endNode],
+      }),
+    );
+
+    expect(screen.queryByTestId('pipeline-empty-state')).toBeNull();
+    expect(container.querySelector('[data-id="END"]')).not.toBeNull();
+  });
+
+  it('adds a node from FlowEmptyState when the user clicks Add Node and picks a type', async () => {
+    const user = userEvent.setup();
+    const setYamlJsonObject = vi.fn();
+    renderFlowEditor(baseProps({ setYamlJsonObject }));
+
+    await user.click(screen.getByTestId('pipeline-empty-state-add-node-button'));
+    await user.click(screen.getByTestId('pipeline-add-node-menu-item-printer'));
+
+    expect(setYamlJsonObject).toHaveBeenCalled();
+  });
+
   // NOT COVERABLE HERE: `useFlowEditorLayoutVersionSync`'s `onReLayout` callback (the
   // `layoutVersion` mismatch -> re-layout path) only fires once xyflow's own
   // `useNodesInitialized()` reports every node measured. jsdom has no real layout engine

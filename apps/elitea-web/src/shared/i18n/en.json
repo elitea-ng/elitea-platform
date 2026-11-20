@@ -7175,5 +7175,9 @@
   "pages.admin.microsoftApps.check.failed": "Needs attention",
   "toolkits.oauthApp.custom": "Custom app",
   "toolkits.oauthApp.unavailable": "Default app (not available)",
-  "pages.admin.microsoftApps.dialog.helmNote": "This app is seeded from the Helm values. A change you save here lasts until that entry changes in the chart, which then replaces these values."
+  "pages.admin.microsoftApps.dialog.helmNote": "This app is seeded from the Helm values. A change you save here lasts until that entry changes in the chart, which then replaces these values.",
+  "features.pipelines.addNode.buttonLabel": "Node",
+  "features.pipelines.addNode.selectNodeType": "Select node type",
+  "features.pipelines.emptyState.addNode": "Add Node",
+  "features.pipelines.emptyState.message": "Start by adding your first node to the canvas!"
 }
