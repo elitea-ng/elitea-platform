@@ -46244,7 +46244,18 @@ paths:
       operationId: createPersonalToken
       summary: Mint a personal access token
       description: |
-        NOTE(W2): internal/api/v2/auth/tokens.go:430 (TokenCreate).
+        NOTE(W2): internal/api/v2/auth/tokens.go:441 (TokenCreate).
+
+        WHO MAY MINT (issue 2559, internal/api/v2/auth/token_mint_policy.go):
+        a browser session (the `elitea_session` cookie, the Form session
+        cookie or the legacy signed cookie) always may. A native device
+        session (the desktop and mobile apps) may only for an owner who holds
+        no administration permission. A personal access token, a run token
+        and every other bearer or API-key credential may not. A caller whose
+        own credential is bound to a project mints only a token bound to that
+        same project. When the permission store does not answer for a native
+        caller, the route answers 500 with `code`
+        `token_mint_permissions_unavailable` and mints nothing.
 
         THE ONLY RESPONSE THAT CARRIES THE SECRET. `token` here is the full
         signed value; every later read masks it. The response also sets
@@ -46289,6 +46300,18 @@ paths:
             `project_forbidden`. The message names only the project the caller
             supplied, and is the same whether that project exists, is
             suspended, or was never created.
+            The calling credential may not mint this token: `code` is
+            `token_mint_browser_session_required` (a token, not a browser or
+            native session, is calling), `token_mint_native_admin` (a native
+            session of an owner with administration permissions),
+            `token_mint_wider_than_caller` (the token would not be bound to the
+            project the calling credential is bound to; `error.project_id`
+            names that project) or `token_mint_caller_unresolved` (the server
+            could not establish the calling credential, or could not read a
+            native caller's administration permissions). These refusals run
+            before the body is read, except the binding one, which runs before
+            the other fields are validated. Each refusal writes an audit row
+            with action `token.mint_refused` and the code as its entity name.
           content:
             application/json:
               schema:

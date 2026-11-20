@@ -6,6 +6,7 @@ import {
   sortTokensByName,
   tokenExpiryInDays,
   tokenExpiryStatus,
+  tokenMintRefusal,
   tokenProjectErrorCode,
   tokenProjectKey,
 } from './selectors';
@@ -158,5 +159,40 @@ describe('tokenProjectErrorCode', () => {
     expect(tokenProjectErrorCode(undefined)).toBeNull();
     expect(tokenProjectErrorCode(null)).toBeNull();
     expect(tokenProjectErrorCode('nope')).toBeNull();
+  });
+});
+
+describe('tokenMintRefusal', () => {
+  const nested = (code: string, extra: Record<string, unknown> = {}): unknown => ({
+    failure: {
+      kind: 'http',
+      status: 403,
+      url: '/api/v2/auth/token/',
+      body: { error: { message: 'no', type: 'permission_error', code, ...extra } },
+    },
+  });
+
+  it.each([
+    'token_mint_browser_session_required',
+    'token_mint_native_admin',
+    'token_mint_wider_than_caller',
+    'token_mint_caller_unresolved',
+  ])('reads %s out of the nested error envelope', (code) => {
+    expect(tokenMintRefusal(nested(code))).toEqual({ code, projectId: null });
+  });
+
+  it('reads the caller binding a wider-than-caller refusal carries', () => {
+    expect(tokenMintRefusal(nested('token_mint_wider_than_caller', { project_id: 5 }))).toEqual({
+      code: 'token_mint_wider_than_caller',
+      projectId: 5,
+    });
+    expect(tokenMintRefusal(nested('token_mint_wider_than_caller', { project_id: '5' }))?.projectId).toBeNull();
+  });
+
+  it('ignores the project codes, unknown codes and the flat envelope', () => {
+    expect(tokenMintRefusal(nested('project_forbidden'))).toBeNull();
+    expect(tokenMintRefusal(nested('some_other_code'))).toBeNull();
+    expect(tokenMintRefusal({ failure: { kind: 'http', status: 403, url: '/x', body: { error: 'boom' } } })).toBeNull();
+    expect(tokenMintRefusal(undefined)).toBeNull();
   });
 });
