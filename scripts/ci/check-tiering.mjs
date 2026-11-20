@@ -47,6 +47,7 @@ export const OWN_PR_TRIGGER = new Map([
   ["ci.yml", "the orchestrator itself"],
   ["mirror-buildkit.yml", "starts only when its own file changes; its `packages: write` is not a gate"],
   ["cancel-merged-pr-runs.yml", "housekeeping on close, not a check"],
+  ["eng-runner-image.yml", "starts only when the eng-runner image or its own file changes; it builds a CI runner image, not product code"],
 ]);
 export const DRAFT_CONDITION = "github.event.pull_request.draft == false";
 /**
