@@ -38,7 +38,7 @@ func TestUsersListsOnlyTheAdministrationModeSuperAdmin(t *testing.T) {
 	pool := newUsersWritePostgresPool(t)
 	prepareUsersWriteFixture(t, pool)
 	seedSuperAdminsInEveryMode(t, pool)
-	router := usersWriteRouter(eliteacore.NewHandler(pool))
+	router := usersWriteRouter(eliteacore.NewHandler(pool, eliteacore.WithPermissionResolver(superAdminCaller{})))
 
 	listing := readMembers(t, router)
 

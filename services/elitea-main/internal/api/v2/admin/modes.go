@@ -47,6 +47,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
 )
 
 // modeAssignment is one row of the listing.
@@ -190,6 +191,8 @@ func (h *Handler) ModesAssign(w http.ResponseWriter, r *http.Request) {
 	// The DEMOTION arm stays scoped to `administration`. currentAdminRole
 	// (users.go) reads the administration-mode role only, and the DELETE below
 	// removes assignments in the requested mode only.
+	var caller rolepolicy.Caller
+	var ok bool
 	{
 		current, err := h.currentAdminRole(ctx, userID)
 		if err != nil {
@@ -203,14 +206,9 @@ func (h *Handler) ModesAssign(w http.ResponseWriter, r *http.Request) {
 		}
 		demotesAdministrationSuperAdmin := mode == auth.PermissionModeAdministration &&
 			current == "super_admin" && role != "super_admin"
-		if role == "super_admin" || demotesAdministrationSuperAdmin {
-			allowed, err := h.callerHasPermission(ctx, r, permissionSuperAdmin)
-			if err != nil || !allowed {
-				writeJSON(w, http.StatusForbidden, map[string]any{
-					"error": "only super_admin can assign or revoke the super_admin role",
-				})
-				return
-			}
+		caller, ok = h.resolveAssigningCaller(w, r, role == "super_admin" || demotesAdministrationSuperAdmin)
+		if !ok {
+			return
 		}
 	}
 
@@ -220,6 +218,20 @@ func (h *Handler) ModesAssign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
+
+	// The subset rule (issue 2488), the same one the admin Users surface
+	// applies: the caller holds every permission of the role given and of
+	// every role in this mode that the DELETE below takes away. Before it,
+	// `modes.users` assigned ANY role of the mode — a custom role holding
+	// everything included. It runs under the role-writes lock, in this
+	// transaction.
+	if refusal, err := h.checkCentralAssignment(ctx, transaction, caller, mode, role, userID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to read current role"})
+		return
+	} else if refusal != nil {
+		rolepolicy.Write(w, r, refusal)
+		return
+	}
 
 	if _, err := transaction.Exec(ctx, `
 DELETE FROM public.auth_core__user_role assignment
@@ -307,17 +319,30 @@ func (h *Handler) ModesRemove(w http.ResponseWriter, r *http.Request) {
 	// The guard covers every accepted mode. A legacy database carries a
 	// `super_admin` role in the `developer` mode too, because auth_core__role
 	// is UNIQUE (name, mode).
-	if role == "super_admin" {
-		allowed, err := h.callerHasPermission(ctx, r, permissionSuperAdmin)
-		if err != nil || !allowed {
-			writeJSON(w, http.StatusForbidden, map[string]any{
-				"error": "only super_admin can assign or revoke the super_admin role",
-			})
-			return
-		}
+	caller, ok := h.resolveAssigningCaller(w, r, role == "super_admin")
+	if !ok {
+		return
 	}
 
-	tag, err := h.pool.Exec(ctx, `
+	transaction, err := h.pool.Begin(ctx)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove role"})
+		return
+	}
+	defer func() { _ = transaction.Rollback(ctx) }()
+	// The subset rule (issue 2488): removing an administration role needs every
+	// permission of that role too. A developer-mode row needs only the
+	// super_admin guard; see checkCentralRoles.
+	if err := rolepolicy.LockRoleWrites(ctx, transaction); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove role"})
+		return
+	}
+	if refusal := h.checkCentralRoles(ctx, transaction, caller, mode, "", []string{role}); refusal != nil {
+		rolepolicy.Write(w, r, refusal)
+		return
+	}
+
+	tag, err := transaction.Exec(ctx, `
 DELETE FROM public.auth_core__user_role assignment
 USING public.auth_core__role role
 WHERE role.id = assignment.role_id
@@ -330,6 +355,10 @@ WHERE role.id = assignment.role_id
 	}
 	if tag.RowsAffected() == 0 {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "assignment not found"})
+		return
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove role"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "removed": tag.RowsAffected()})
