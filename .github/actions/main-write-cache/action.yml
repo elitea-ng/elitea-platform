@@ -23,7 +23,8 @@ description: >-
 # A composite action cannot declare a post step of its own, but the actions it
 # uses keep theirs. The writer therefore uses the full `actions/cache@v6`,
 # whose save runs as a post step after the job's own steps; the reader uses
-# `actions/cache/restore@v6`, which never saves. Exactly one of the two runs.
+# `actions/cache/restore@v6`, which never saves. One of the two runs (neither
+# on a self-hosted runner; see below).
 #
 # The write condition is spelled literally on the writer step, not passed in:
 # an input would let a caller turn writing on from a pull request, and
@@ -55,10 +56,40 @@ description: >-
 #   go    ~/.cache/go-build, ~/go/pkg/mod   go-cache sets GOCACHE, GOMODCACHE
 #   npm   ~/.npm                            npm-cache sets NPM_CONFIG_CACHE
 #
-# The caller still passes `path` for the restore. The claim step below FAILS
-# when that path is not the literal path of the slot, so the directory that
-# is saved is always the directory that is restored. A new slot needs a new
-# writer step and a new line in the claim step.
+# The caller still passes `path`, the directories its tool really uses. The
+# claim step below FAILS when that path is not the literal path of the slot,
+# so the directory that is saved is always the directory that is restored. A
+# new slot needs a new writer step, a new reader step with the same literal
+# path, and a new line in the claim step.
+#
+# ── Why the reader PATH is the writer's, character for character ──────────
+#
+# Measured 2026-11-20: main held node-cache-Linux-x64-npm-955ed20c… and a
+# pull request restoring that exact key reported a MISS. An entry's VERSION
+# is sha256 of the `path:` lines AS WRITTEN, joined with `|`, plus the
+# compression method and "1.0" (@actions/cache getCacheVersion), and a
+# restore matches only when key AND version match. The writer saved `~/.npm`
+# (version c242501c…); the reader passed `${{ inputs.path }}`, which the
+# caller had resolved to `/home/runner/.npm` (version 04d00cc6…). So no pull
+# request ever restored a Go or npm cache main wrote.
+#
+# So the readers spell the writers' literal `~/...` paths too. The tilde
+# form also gives the same version on Linux and macOS (`/home/runner` vs
+# `/Users/runner`), and @actions/cache expands it at run time.
+# check-cache-path-parity.mjs (No Binaries) fails when any restore of a key
+# family spells its paths differently from its writer.
+#
+# ── GitHub-hosted runners only ──────────────────────────────────────────────
+#
+# The tar inside an entry holds paths RELATIVE TO GITHUB_WORKSPACE: on a
+# hosted runner `~/.npm` is saved as `../../../.npm` (workspace
+# /home/runner/work/<repo>/<repo>, HOME /home/runner). A self-hosted runner
+# with another layout extracts that to wherever `../../..` of ITS workspace
+# is, not to its $HOME, so the tool runs cold while the restore fills a
+# directory nothing reads; and a self-hosted writer would save its own layout
+# under the shared key. Both slots therefore restore and save on
+# GitHub-hosted runners only; elsewhere the steps are skipped (a cold run, the
+# same result the absolute reader path gave there).
 #
 # One slot can be used ONE time in a job. Two uses would register two saves of
 # the same directory under two keys. The claim step records each slot in
@@ -73,8 +104,10 @@ inputs:
     required: true
   path:
     description: >-
-      Newline-separated paths to cache (as actions/cache `path`). They must be
-      the paths of the slot, with `~` written as the home directory or as `~`.
+      Newline-separated directories the tool of the job uses (`go env GOCACHE`,
+      `npm config get cache`). The claim step checks they are the slot's
+      paths, with `~` written as the home directory or as `~`. The restore and
+      the save use the slot's LITERAL paths, never this input.
     required: true
   key:
     description: The exact key.
@@ -93,10 +126,10 @@ inputs:
 outputs:
   cache-hit:
     description: "'true' on an exact-key hit."
-    value: ${{ steps.writer-go.outputs.cache-hit || steps.writer-npm.outputs.cache-hit || steps.reader.outputs.cache-hit }}
+    value: ${{ steps.writer-go.outputs.cache-hit || steps.writer-npm.outputs.cache-hit || steps.reader-go.outputs.cache-hit || steps.reader-npm.outputs.cache-hit }}
   cache-matched-key:
     description: The key that was restored, empty on a miss.
-    value: ${{ steps.writer-go.outputs.cache-matched-key || steps.writer-npm.outputs.cache-matched-key || steps.reader.outputs.cache-matched-key }}
+    value: ${{ steps.writer-go.outputs.cache-matched-key || steps.writer-npm.outputs.cache-matched-key || steps.reader-go.outputs.cache-matched-key || steps.reader-npm.outputs.cache-matched-key }}
 runs:
   using: composite
   steps:
@@ -134,7 +167,7 @@ runs:
         echo "${marker}=${KEY}" >> "$GITHUB_ENV"
     - name: Restore, and save at job end (run on main) — go slot
       id: writer-go
-      if: inputs.slot == 'go' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && inputs.save != 'false'
+      if: inputs.slot == 'go' && runner.environment == 'github-hosted' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && inputs.save != 'false'
       uses: actions/cache@v6
       with:
         # LITERAL: the post step evaluates this again without `inputs`.
@@ -145,30 +178,45 @@ runs:
         restore-keys: ${{ inputs.restore-keys }}
     - name: Restore, and save at job end (run on main) — npm slot
       id: writer-npm
-      if: inputs.slot == 'npm' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && inputs.save != 'false'
+      if: inputs.slot == 'npm' && runner.environment == 'github-hosted' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && inputs.save != 'false'
       uses: actions/cache@v6
       with:
         # LITERAL: the post step evaluates this again without `inputs`.
         path: ~/.npm
         key: ${{ inputs.key }}
         restore-keys: ${{ inputs.restore-keys }}
-    - name: Restore only (pull requests and every other run)
-      id: reader
-      if: ${{ !(github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && inputs.save != 'false') }}
+    # The readers spell the SAME literal paths as the writers above, character
+    # for character. See "Why the reader PATH is the writer's" in the header.
+    - name: Restore only (pull requests and every other run) — go slot
+      id: reader-go
+      if: ${{ inputs.slot == 'go' && runner.environment == 'github-hosted' && !(github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && inputs.save != 'false') }}
       uses: actions/cache/restore@v6
       with:
-        path: ${{ inputs.path }}
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ inputs.key }}
+        restore-keys: ${{ inputs.restore-keys }}
+    - name: Restore only (pull requests and every other run) — npm slot
+      id: reader-npm
+      if: ${{ inputs.slot == 'npm' && runner.environment == 'github-hosted' && !(github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && inputs.save != 'false') }}
+      uses: actions/cache/restore@v6
+      with:
+        path: ~/.npm
         key: ${{ inputs.key }}
         restore-keys: ${{ inputs.restore-keys }}
     - name: Report the cache result
       shell: bash
       env:
-        HIT: ${{ steps.writer-go.outputs.cache-hit || steps.writer-npm.outputs.cache-hit || steps.reader.outputs.cache-hit }}
-        MATCHED: ${{ steps.writer-go.outputs.cache-matched-key || steps.writer-npm.outputs.cache-matched-key || steps.reader.outputs.cache-matched-key }}
+        HIT: ${{ steps.writer-go.outputs.cache-hit || steps.writer-npm.outputs.cache-hit || steps.reader-go.outputs.cache-hit || steps.reader-npm.outputs.cache-hit }}
+        MATCHED: ${{ steps.writer-go.outputs.cache-matched-key || steps.writer-npm.outputs.cache-matched-key || steps.reader-go.outputs.cache-matched-key || steps.reader-npm.outputs.cache-matched-key }}
         KEY: ${{ inputs.key }}
-        WRITES: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && inputs.save != 'false' }}
+        WRITES: ${{ runner.environment == 'github-hosted' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && inputs.save != 'false' }}
+        HOSTED: ${{ runner.environment == 'github-hosted' }}
       run: |
-        if [ -n "$MATCHED" ]; then
+        if [ "$HOSTED" != "true" ]; then
+          echo "cache: SKIPPED for key '$KEY' on a self-hosted runner (the entries are GitHub-hosted ones; see main-write-cache)"
+        elif [ -n "$MATCHED" ]; then
           echo "cache: restored '$MATCHED' (exact hit: ${HIT:-false}) for key '$KEY'; this run writes: $WRITES"
         else
           echo "cache: MISS for key '$KEY'; this run writes: $WRITES"

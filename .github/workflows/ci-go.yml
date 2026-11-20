@@ -359,8 +359,12 @@ jobs:
       # one red gate above left main without a Go cache until the next green
       # night. The build cache a failed gate warmed is as good as any other.
       # A pull request never saves, and an exact hit has nothing to add.
+      # The path is the go slot's of .github/actions/main-write-cache, as
+      # written there (the entry's version is a hash of these exact lines;
+      # scripts/ci/check-cache-path-parity.mjs), and the save is GitHub-hosted
+      # only, like that action's (the tar holds workspace-relative paths).
       - name: Save the Go cache (main, even after a red gate)
-        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.gocache.outputs.cache-hit != 'true' }}
+        if: ${{ !cancelled() && runner.environment == 'github-hosted' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.gocache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v6
         with:
           path: |

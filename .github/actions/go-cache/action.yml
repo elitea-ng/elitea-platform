@@ -75,8 +75,9 @@ runs:
         fi
         if command -v sha256sum >/dev/null; then sha() { sha256sum "$@"; }; else sha() { shasum -a 256 "$@"; }; fi
         hash="$(printf '%s\n' "${files[@]}" | LC_ALL=C sort -u | while IFS= read -r f; do sha "$f"; done | sha | cut -c1-64)"
-        # The writer in main-write-cache saves LITERAL paths (the post step
-        # loses the composite's contexts; see its header). So the go tool
+        # main-write-cache saves AND restores LITERAL `~/` paths (the post
+        # step loses the composite's contexts, and a restore matches only the
+        # path strings its entry was saved with; see its header). So the go tool
         # must use exactly those paths, on every OS: on Linux they are the
         # defaults, on macOS GOCACHE moves from ~/Library/Caches/go-build.
         # Every later step of the job inherits them through GITHUB_ENV.

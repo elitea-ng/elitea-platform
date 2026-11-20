@@ -104,6 +104,14 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
 
   The workspace Go key has one writer, `ci-go.yml` `test-checks`. Its nightly run compiles every `go.work`
   module with `go test -race -run '^$' -exec true`.
+- **Path parity.** A cache entry has a key and a version, and a restore matches only when both match. The
+  version is a hash of the `path:` lines exactly as written. So `~/.npm` and `/home/runner/.npm` are two
+  versions, and a reader with one never restores what a writer with the other saved. Until 2026-11-20 no pull
+  request restored main's Go or npm cache for this reason. Every save and restore of one key uses the same
+  literal `~/...` lines, in the same order. An expression path is not allowed.
+  `scripts/ci/check-cache-path-parity.mjs` (in `No Binaries`) fails when a restore differs from its writer.
+  The Go and npm caches restore and save on GitHub-hosted runners only. The tar holds paths relative to
+  the workspace, so a runner with another home layout extracts them to the wrong directory.
 - **macOS package.** `desktop-package` (heavy tier) runs on a pull request only when `apps/elitea-desktop/**`,
   `libs/rust/vendor/agent-desktop/**`, the Rust toolchain pin, `desktop-package.yml` or the two packaging actions change. The run is an
   unsigned debug dry run. `publish.yml` (the nightly pre-release on main, and every release) runs the signed

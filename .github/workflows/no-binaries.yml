@@ -462,6 +462,31 @@ jobs:
       - name: No workflow cache step writes from a pull request
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-workflow-cache-writes.mjs
+      # A restore matches an entry only when its `path:` strings are the ones
+      # the entry was saved with (the version is their hash). Until 2026-11-20
+      # every pull-request restore of main's Go and npm caches missed, because
+      # the readers spelled `/home/runner/...` and the writers `~/...`.
+      # Counted like the suite above: a suite that collects nothing exits 0.
+      - name: Every cache restore spells its writer's paths
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          suite=scripts/ci/check-cache-path-parity.test.mjs
+          expected="$(grep -c '^test(' "${suite}")"
+          [ "${expected}" -ge 10 ] || { echo "::error::${suite}: found ${expected} scenario(s), expected at least 10"; exit 1; }
+          status=0
+          output="$(node --test --test-reporter=tap "${suite}" 2>&1)" || status=$?
+          printf '%s\n' "${output}"
+          ran="$(printf '%s\n' "${output}" | sed -n 's/^# pass \([0-9][0-9]*\)$/\1/p')"
+          if [ -z "${ran}" ] || [ "${ran}" -ne "${expected}" ]; then
+            echo "::error::${suite} holds ${expected} scenario(s) and node --test passed ${ran:-none}"
+            exit 1
+          fi
+          if [ "${status}" -ne 0 ]; then
+            echo "::error::node --test ${suite} exited ${status}"
+            exit "${status}"
+          fi
+          node scripts/ci/check-cache-path-parity.mjs
       # ci-web-e2e.yml builds each stack image once and the lanes pull it by
       # digest: scripts/ci/stack-images.mjs is the contract between the two
       # halves (it refuses an image nobody built, or one built from another
