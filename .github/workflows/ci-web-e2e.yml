@@ -1582,7 +1582,7 @@ jobs:
       - name: Restore the Go cache (read only, one writer per key)
         uses: ./.github/actions/go-cache
         with:
-          # Restores only: one writer per key (scripts/ci/check-cache-budget.mjs).
+          # Restores only: one writer per key (the cache plan, docs/contributing/ci.md).
           save: "false"
           cache-dependency-path: |
             services/elitea-main/go.sum
@@ -1651,7 +1651,7 @@ jobs:
       - name: Restore the Go cache (read only, one writer per key)
         uses: ./.github/actions/go-cache
         with:
-          # Restores only: one writer per key (scripts/ci/check-cache-budget.mjs).
+          # Restores only: one writer per key (the cache plan, docs/contributing/ci.md).
           save: "false"
           cache-dependency-path: |
             services/elitea-main/go.sum
@@ -1698,7 +1698,7 @@ jobs:
       - name: Assert the pinned toolchain
         working-directory: apps/elitea-desktop/src-tauri
         run: bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
-      # No cargo cache here (scripts/ci/cache-budget.json, measured 2026-11-20): a
+      # No cargo cache here (the cache plan, docs/contributing/ci.md; measured 2026-11-20): a
       # registry-only entry is 0.3-0.6 GiB of the 10 GB cap and saves about the
       # time cargo takes to fetch the crates. The budget goes to target caches.
       # The ELITEA build of the host (ADR-0052 decision 4): the brand overlay

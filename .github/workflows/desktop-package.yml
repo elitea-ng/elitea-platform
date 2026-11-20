@@ -92,7 +92,7 @@ jobs:
     # The same value as ci-desktop.yml's macOS host job: it is part of the
     # rust-cache key, so the pull-request dry run restores that job's entry.
     env:
-      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_DEV_DEBUG: "0"
     defaults:
       run:
         shell: bash

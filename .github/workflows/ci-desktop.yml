@@ -47,12 +47,14 @@ jobs:
     # minute cap cancelled a green run mid-compile (PR #1545). The cap costs
     # nothing on a fast run.
     timeout-minutes: 60
-    # Line tables only (file and line in a backtrace, no type information): the
-    # dev-profile target is what the cache below keeps, and full debug info is
-    # most of its size. desktop-package.yml's pull-request dry run sets the same
+    # No debug info in the dev profile: the dev-profile target is what the
+    # cache below keeps, and debug info is most of its size (measured
+    # 2026-11-20 with line tables: 2.3 GiB compressed for the two targets). A
+    # failed assertion still names its file and line (that is the panic's
+    # location, not debug info); only a backtrace loses its line numbers. desktop-package.yml's pull-request dry run sets the same
     # value, because the CARGO_* environment is part of the rust-cache key.
     env:
-      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
       - uses: actions/checkout@v7
 
@@ -210,8 +212,15 @@ jobs:
           for d in apps/elitea-desktop/src-tauri/target apps/elitea-desktop/doc-extract-sidecar/target; do
             [ -d "$d" ] && du -sh "$d" || true
           done
+          # rust-cache drops the workspace members' own artefacts (elitea-*) and
+          # keeps the dependencies.
           find apps/elitea-desktop/src-tauri/target/debug apps/elitea-desktop/doc-extract-sidecar/target/debug -maxdepth 2 \( -path '*/deps/*' -o -path '*/build/*' -o -path '*/.fingerprint/*' \) -prune -print 2>/dev/null \
-            | while IFS= read -r f; do if [ -f "$f" ] && [ -x "$f" ] && [[ "$(basename "$f")" != *.* ]]; then :; else printf '%s\n' "$f"; fi; done > "$RUNNER_TEMP/keep.txt"
+            | while IFS= read -r f; do
+                b="$(basename "$f")"
+                case "$b" in elitea_*|libelitea_*|elitea-*) continue ;; esac
+                if [ -f "$f" ] && [ -x "$f" ] && [[ "$b" != *.* ]]; then continue; fi
+                printf '%s\n' "$f"
+              done > "$RUNNER_TEMP/keep.txt"
           wc -l < "$RUNNER_TEMP/keep.txt"
           comp=(zstd -T0 -3 -q); command -v zstd >/dev/null || comp=(gzip -6)
           tar -cf - -T "$RUNNER_TEMP/keep.txt" 2>/dev/null | "${comp[@]}" | wc -c | awk '{printf "would-be target entry: %.2f GiB compressed\n", $1/1073741824}'
