@@ -47,6 +47,10 @@ import (
 //   - host_intel: families/web/adapters/shodan.rs ORIGINS
 //   - tavily: families/web/adapters/tavily.rs ORIGINS (the toolkit is the web
 //     family pinned to Tavily, #2261)
+//   - delta_lake: no compiled-in host. The one host is the S3 endpoint of the
+//     credential's region (families/delta_lake/config.rs s3_endpoint), derived
+//     by deltaLakeHosts when the credential names a valid region and an
+//     s3:// table path (#2262)
 //
 // Constants that are never called (a link written into a result, such as
 // carrier's REPORT_LINK_PREFIX, or an OAuth scope) are not hosts here.
@@ -85,6 +89,9 @@ func HostsForToolkit(toolkitType string, content []byte) ([]string, error) {
 	}
 	if strings.TrimSpace(toolkitType) == openAPIToolkitType {
 		hosts = append(hosts, openAPIHosts(content)...)
+	}
+	if strings.TrimSpace(toolkitType) == deltaLakeToolkitType {
+		hosts = append(hosts, deltaLakeHosts(content)...)
 	}
 	return append(hosts, ImplicitToolkitHosts(toolkitType)...), nil
 }

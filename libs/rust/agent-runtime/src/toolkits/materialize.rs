@@ -38,6 +38,8 @@ use super::families::artifact::ArtifactToolAuthority;
 use super::families::attachment_host::AttachmentHost;
 use super::families::bigquery;
 use super::families::confluence;
+#[cfg(feature = "toolkit-delta-lake")]
+use super::families::delta_lake;
 use super::families::index_tools::{
     CompositeToolset, IndexCatalog, IndexToolSupport, IndexToolsWithheld, IndexToolsetErrorCode,
     build_index_toolset, is_index_family, selection_is_index_only,
@@ -914,6 +916,8 @@ fn family_tool_catalog(tool_type: &str) -> Option<Vec<(&'static str, bool)>> {
         "bitbucket" => bitbucket::tools::tool_catalog(),
         "carrier" => carrier::tools::tool_catalog(),
         "confluence" => confluence::tools::tool_catalog(),
+        #[cfg(feature = "toolkit-delta-lake")]
+        "delta_lake" => delta_lake::tools::tool_catalog(),
         #[cfg(feature = "toolkit-office")]
         "docx" => docx::schema::tool_catalog(),
         "elastic" => elastic::tools::tool_catalog(),
@@ -1341,6 +1345,7 @@ async fn materialize(
         reference.tool_type(),
         "azure"
             | "azure_search"
+            | "delta_lake"
             | "elastic"
             | "gcp"
             | "gitlab_org"
@@ -1569,6 +1574,16 @@ fn materialize_a_to_k(
         "azure_search" => azure_search::tools::build_azure_search_read_only_toolset(
             name,
             azure_search::config::AzureSearchToolkitConfig::parse(settings)
+                .map_err(|_| invalid_configuration())?,
+            policy,
+        )
+        .map_err(|_| invalid_configuration())?,
+        // Without `toolkit-delta-lake` a `delta_lake` toolkit falls through to
+        // unsupported and is skipped like any family this runtime cannot serve.
+        #[cfg(feature = "toolkit-delta-lake")]
+        "delta_lake" => delta_lake::tools::build_delta_lake_toolset(
+            name,
+            &delta_lake::config::DeltaLakeToolkitConfig::parse(settings)
                 .map_err(|_| invalid_configuration())?,
             policy,
         )
@@ -2240,6 +2255,7 @@ mod materialize_tests {
                 (cfg!(feature = "toolkit-office")
                     || !matches!(name.as_str(), "pptx" | "docx" | "xlsx"))
                     && (cfg!(feature = "toolkit-sql") || name != "sql")
+                    && (cfg!(feature = "toolkit-delta-lake") || name != "delta_lake")
             })
             .collect()
     }
@@ -2525,6 +2541,12 @@ mod materialize_matrix_tests {
                 json!({"sharepoint_configuration": {"client_id": "client-id", "client_secret": "secret", "site_url": "https://tenant.sharepoint.com/sites/default", "oauth_discovery_endpoint": "https://login.example.test/.well-known/openid-configuration", "configuration_uuid": "00000000-0000-4000-8000-000000000123", "scopes": ["Sites.Read.All"]}, "site_path": "teams/project"}),
             ),
         ];
+        if cfg!(feature = "toolkit-delta-lake") {
+            table.push((
+                "delta_lake",
+                json!({"delta_lake_configuration": {"aws_access_key_id": "AKIAFIXTURE", "aws_secret_access_key": "secret", "aws_region": "us-east-1", "s3_path": "s3://fixture-bucket/tables/events"}}),
+            ));
+        }
         if cfg!(feature = "toolkit-sql") {
             table.push(("sql", json!({"dialect": "postgres", "database_name": "db", "sql_configuration": {"host": "database.example.test", "port": null, "username": "u", "password": "p"}})));
         }
