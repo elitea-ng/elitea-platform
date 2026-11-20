@@ -57,7 +57,14 @@ for (const entry of readdirSync(WORKFLOW_DIR).sort()) {
 // container, which this file is not.
 const RUNNER_CONTAINERFILE = 'deploy/ci-runners/image/Containerfile';
 const runnerContainerfile = path.join(repoRoot, RUNNER_CONTAINERFILE);
-if (existsSync(runnerContainerfile)) {
+// A moved or renamed Containerfile must fail here, not skip: "found nothing,
+// therefore OK" is how this gate stopped gating once already (#157, below).
+if (!existsSync(runnerContainerfile)) {
+  console.error(`check-playwright-image-tag: FAIL — ${RUNNER_CONTAINERFILE} is missing.`);
+  console.error('  The runner image bakes the Playwright browsers; point this check at its new path.');
+  process.exit(1);
+}
+{
   const text = readFileSync(runnerContainerfile, 'utf8');
   const args = [...text.matchAll(/^ARG PLAYWRIGHT_VERSION=(\S*)$/gm)].map((m) => m[1]);
   if (args.length !== 1) {
@@ -69,7 +76,10 @@ if (existsSync(runnerContainerfile)) {
     console.error('check-playwright-image-tag: FAIL — the runner image bakes another Playwright release');
     console.error(`  package.json @playwright/test: ${pinned}`);
     console.error(`  ${RUNNER_CONTAINERFILE} PLAYWRIGHT_VERSION: ${args[0]}`);
-    console.error('  Bump the Containerfile ARG and PLAYWRIGHT_DIGEST with the library (its README, "Bumping").');
+    console.error('  Bump PLAYWRIGHT_VERSION, PLAYWRIGHT_DIGEST and PLAYWRIGHT_CORE_SHA256 in the same PR');
+    console.error('  (deploy/ci-runners/image/README.md, "Bumping"). The build refuses a digest whose');
+    console.error('  browsers are not that release\'s. After the merge, dispatch eng-runner-image.yml and');
+    console.error('  have the owner move the pool to the new dated tag before a native E2E leg runs it.');
     process.exit(1);
   }
 }

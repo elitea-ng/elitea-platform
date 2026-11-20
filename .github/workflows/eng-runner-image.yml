@@ -290,7 +290,11 @@ jobs:
             gcs_pid=$!
             wait_for curl -fsS http://127.0.0.1:54443/storage/v1/b
             kill "$gcs_pid"; wait "$gcs_pid" || true
-            oidc-provider-mock --help >/dev/null && echo "oidc-provider-mock ok"
+            oidc-provider-mock --help >/dev/null
+            oidc-provider-mock --host 127.0.0.1 --port 59400 > "$TMPDIR/oidc.log" 2>&1 &
+            oidc_pid=$!
+            wait_for curl -fsS http://127.0.0.1:59400/.well-known/openid-configuration
+            kill "$oidc_pid"; wait "$oidc_pid" || true
 
             # nginx as non-root, with every path in a prefix of its own.
             nginx -v
@@ -304,7 +308,8 @@ jobs:
 
             # The Tauri host-test build libraries.
             pkg-config --modversion webkit2gtk-4.1 gtk+-3.0 libsoup-3.0 ayatana-appindicator3-0.1 librsvg-2.0 openssl
-            test -e /usr/include/xdo.h && echo "libxdo ok"
+            test -e /usr/include/xdo.h
+            echo "libxdo ok"
 
             # The baked browsers: read-only to the runner, and they launch.
             test "$PLAYWRIGHT_BROWSERS_PATH" = /ms-playwright
@@ -348,7 +353,10 @@ jobs:
           # What the pool pulls is the gzip-compressed layers. The archive
           # gzipped whole is within a few percent of their sum, so a PR states
           # the size it would publish (publish prints the exact figure).
-          gz="$(gzip -c "$archive" | wc -c)"
+          # pigz at its default level 6 is gzip's default, as the push uses.
+          # pigz: gzip on every core, so the estimate costs about a minute.
+          command -v pigz >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q pigz; }
+          gz="$(pigz -c "$archive" | wc -c)"
           echo "compressed size (gzip of the saved archive): $((gz / 1024 / 1024)) MiB" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the tested image

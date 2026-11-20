@@ -228,8 +228,14 @@ RUN set -eux; \
 # release). That CLI needs node, which the image must not ship (toolchains come
 # from the setup actions): the Playwright stage's node binary is bind-mounted
 # for this one step and is not part of any layer.
+#
+# The same step proves the Playwright stage holds THIS release's browsers:
+# every browser revision playwright-core's browsers.json names must be a
+# directory there. A digest left behind by a version bump pulls the old image
+# (the digest wins over the tag) and fails here, not at the first launch.
 # hadolint ignore=DL3008
 RUN --mount=type=bind,from=playwright,source=/usr/bin/node,target=/opt/build-node/node \
+    --mount=type=bind,from=playwright,source=/ms-playwright,target=/opt/build-browsers \
     set -eux; \
     work="$(mktemp -d)"; cd "$work"; \
     tgz="playwright-core-${PLAYWRIGHT_VERSION}.tgz"; \
@@ -241,6 +247,14 @@ RUN --mount=type=bind,from=playwright,source=/usr/bin/node,target=/opt/build-nod
       echo "npm publishes ${published} for ${tgz}, the download is ${actual}" >&2; exit 1; \
     fi; \
     tar -xzf "$tgz"; \
+    for name in chromium chromium-headless-shell webkit ffmpeg; do \
+      rev="$(jq -r --arg n "$name" '.browsers[] | select(.name == $n) | .revision' package/browsers.json)"; \
+      dir="${name//-/_}-${rev}"; \
+      if [ -z "$rev" ] || [ ! -d "/opt/build-browsers/${dir}" ]; then \
+        echo "the Playwright stage has no ${dir} for playwright-core ${PLAYWRIGHT_VERSION}: PLAYWRIGHT_DIGEST is another release's" >&2; \
+        ls /opt/build-browsers >&2; exit 1; \
+      fi; \
+    done; \
     DEBIAN_FRONTEND=noninteractive /opt/build-node/node package/cli.js install-deps chromium webkit; \
     cd /; rm -rf "$work" /var/lib/apt/lists/*
 

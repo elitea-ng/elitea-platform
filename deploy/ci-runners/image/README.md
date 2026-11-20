@@ -83,14 +83,17 @@ in the image.
 **The browsers are read-only.** `/ms-playwright` belongs to root and nobody
 else can write it. On the pool, never run `npx playwright install` (it writes
 its link file there and fails) or `install-deps` (it needs root). The browsers
-are the ones `@playwright/test` 1.62.1 drives.
+are the ones `@playwright/test` 1.62.1 drives. `PLAYWRIGHT_BROWSERS_PATH` is
+set for every job on the pool. A routed job that needs another Playwright
+release must stay hosted. The build refuses a Playwright stage whose browser
+revisions are not the ones that release's `browsers.json` names.
 `apps/elitea-web/scripts/check-playwright-image-tag.mjs` fails when
 `ARG PLAYWRIGHT_VERSION` and the web app's pin differ, so a library bump
 needs an image rebuild and a pin bump on the pool first.
 
 **Sizes.** The base `actions-runner` image is about 549 MB compressed. With
-the build tools, this image measured **TBD MB compressed** (TBD GB unpacked)
-on the PR that added the services. Every build prints both figures in its
+the build tools, and the services and browsers added, it is estimated at
+about 1.3 to 1.6 GB compressed. Every build prints both figures in its
 summary, and publish prints the exact sum of the pushed layers. The pool pulls
 it through an Artifact Registry remote with image streaming, so a node does
 not wait for the whole image before a pod starts.
