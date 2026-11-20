@@ -1,11 +1,11 @@
 import type { ReactNode } from 'react';
 import { useContext } from 'react';
-import Button from '@mui/material/Button';
-import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import { t } from '@/shared/i18n';
+import { BaseBtn } from '@/shared/ui/BaseBtn';
+import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import { FlowEditorContext } from '../../../lib/flow-editor/flowEditorContext';
 import { mapOwnedWorkerChannels } from '../../../lib/graphMapAdmission.helpers';
 import { extensionRecord, extensionStrings, extensionText, extensionValues, patchGraphExtensionNode } from '../../../lib/graphExtensions.helpers';
@@ -60,13 +60,13 @@ export function MapWorkerInputs({ owner, disabled }: MapWorkerInputsProps): Reac
   return <Stack spacing={1}>
     <Typography variant="bodySmall">{t('pipelines.graphExtensions.ownedInputScope', 'Worker inputs belong only to {{worker}}. Parent State remains unchanged.', { worker: workerId })}</Typography>
     {worker.type === 'state_modifier' && approved.map((key) => <FormControlLabel key={key} label={key}
-      control={<BaseCheckbox className="nodrag nopan" disabled={disabled} checked={selected.includes(key)}
+      control={<BaseCheckbox className="nodrag nopan nowheel" disabled={disabled} checked={selected.includes(key)}
         onChange={(_, checked) => changeInput(key, checked)} />} />)}
     {(worker.type === 'agent' || worker.type === 'llm') && <AgentTask worker={worker} channels={approved} disabled={disabled}
       change={(mapping) => context.setYamlJsonObject(patchGraphExtensionNode(context.yamlJsonObject, workerId,
         'input_mapping', { ...worker.input_mapping, task: mapping }))} />}
-    {hasTransition && <Button disabled={disabled} onClick={removeTransition}>
+    {hasTransition && <BaseBtn variant="text" size="small" className="nodrag nopan nowheel" disabled={disabled} onClick={removeTransition}>
       {t('pipelines.graphExtensions.removeWorkerTransition', 'Remove owned worker transition')}
-    </Button>}
+    </BaseBtn>}
   </Stack>;
 }
