@@ -27,6 +27,17 @@ step, and refuses every job that is not ours.
 | `job-started.sh` | The hook. It allows only the listed repositories (built in: `elitea-platform`, `elitea-docs`, `elitea-brand-template`; an `allowed-repos` key in the same ConfigMap, read from `/etc/eng-runner/allowed-repos`, replaces the list, and no environment variable can; the log names the list it used) and the events `pull_request`, `workflow_dispatch`, `schedule` and `push` (not `merge_group`: its payload does not say who wrote the queued change). It refuses a pull request whose head is another repository (a fork, or a deleted one) and any Dependabot job. Any other case fails closed. Tests: `scripts/ci/eng-runner-hook.test.mjs`. |
 | `values-eng-runner.yaml` | The part of the scale-set values that mounts the hook and sets `ACTIONS_RUNNER_HOOK_JOB_STARTED`. |
 
+## Where the hook is deployed
+
+The owner's GitOps chart for the runner scale set is the deployment that counts. It holds the ConfigMap
+`eng-runner-hooks`, with the keys `job-started.sh` and `allowed-repos`, mounts it at `/etc/eng-runner`, and sets
+`ACTIONS_RUNNER_HOOK_JOB_STARTED`. Its `allowed-repos` list includes `elitea-ng/elitea-e2e-llm`.
+
+The files here are the reference copy, with tests. Keep the two in sync: change `job-started.sh` here, with
+its tests, then copy it unchanged into the chart.
+
+The manual steps below do the same thing by hand.
+
 ## Runbook (repository owner)
 
 ### 1. Deploy the hook
