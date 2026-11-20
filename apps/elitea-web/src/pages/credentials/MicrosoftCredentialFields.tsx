@@ -137,7 +137,7 @@ export interface MicrosoftAppFieldProps {
   readonly projectId: string;
   /** The credential's `oauth_app_id`. */
   readonly value: unknown;
-  readonly onChange: (appId: string | null) => void;
+  readonly onChange: (appId: string) => void;
 }
 
 /** The Default app picker: one option per registered app that serves this type and project. */
@@ -159,7 +159,8 @@ export function MicrosoftAppField({ label, required, credentialType, projectId, 
       value={current}
       options={options}
       onChange={(next) => {
-        onChange(next === '' ? null : next);
+        // A Default app is always one of the apps on offer: an empty pick is never written back as "nothing chosen".
+        if (next !== '') onChange(next);
       }}
     />
   );
