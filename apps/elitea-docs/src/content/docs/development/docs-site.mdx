@@ -33,6 +33,22 @@ Link with root-relative paths such as `/development/frontend`. The build adds th
 </Step>
 </Steps>
 
+## Add a What's new entry
+
+A change that users see gets a [What's new](/what-is-new) entry. Each entry is its own file, so open pull requests never conflict over the page: add `src/content/whats-new/<YYYY-MM-DD>-<slug>.md` and never edit `what-is-new.mdx`, which renders the folder newest first.
+
+```md
+---
+date: 2026-11-20
+---
+
+## Run reports show the model's cost
+
+What changed, for whom, and a link such as [Usage](/menus/settings/analytics-and-usage).
+```
+
+`date` is the file name's date. Entries of one date show in file-name order unless you give them an `order` (an integer, higher first, default 0). The body is one `## ` heading, which becomes the page anchor and the table-of-contents entry, followed by plain Markdown: `### ` subsections and links work, components such as `Note` do not. `scripts/ci/check-whats-new.mjs` fails a section added to `what-is-new.mdx`, a badly named entry, a date that differs from the name, an unknown front matter key and a heading another entry already uses.
+
 ## Components
 
 Every `.mdx` page can use these components without importing them: `Note`, `Tip`, `Info`, `Warning`, `Check`, `Steps`/`Step`, `Tabs`/`Tab`, `Accordion`/`AccordionGroup`, `Card`/`CardGroup`, `Badge`, `Frame`, `Icon` and `Screenshot`. The list lives in `src/plugins/remark-docs-components.ts`, and the content check fails a page that uses anything else. `Icon` and `Card` take [Lucide](https://lucide.dev) icon names.
@@ -57,3 +73,4 @@ The docs CSP is `apps/elitea-web/nginx/docs-security-headers.conf`, which the we
 {/* source: apps/elitea-docs/astro.config.ts (base, Pagefind, plugins) */}
 {/* source: apps/elitea-docs/scripts/content.test.mjs, apps/elitea-docs/scripts/check-dist.mjs */}
 {/* source: .github/workflows/ci-docs.yml */}
+{/* source: apps/elitea-docs/src/whats-new.ts, scripts/ci/check-whats-new.mjs */}
