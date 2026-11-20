@@ -2182,6 +2182,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"POST /api/v2/admin/gateway/providers/{configID}/check",
 		"POST /api/v2/admin/gateway/providers/{configID}/models",
 		"POST /api/v2/admin/gateway/providers/{configID}/revalidate",
+		"POST /api/v2/admin/identity_providers/administration/{key}/rebind",
 		// The cross-project bulk membership invite (issue 247). It replaces
 		// the legacy invites_bulkusers and invites_bulkprojects console pages,
 		// which are the same cross product with one side pinned.

@@ -131,6 +131,7 @@ func (h *OIDCHandler) buildEntraRuntime(
 		requireEmailVerified: document.RequireEmailVerified,
 		adoptSCIMUsers:       document.AdoptSCIMUsers,
 		origin:               fmt.Sprintf("provider %s revision %d (entra)", provider.Key, provider.Revision),
+		binding:              provider.Binding(),
 		entra:                &entraRuntime{policy: policy, assertions: assertions},
 	}, nil
 }
