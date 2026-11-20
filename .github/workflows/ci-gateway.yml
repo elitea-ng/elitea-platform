@@ -55,6 +55,8 @@ jobs:
         working-directory: services/elitea-llm-gateway
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume (does nothing on hosted).
+      - uses: ./.github/actions/eng-runner-env
 
       # The gateway must be TESTED on the toolchain it SHIPS (#506). The pin
       # below and services/elitea-llm-gateway/Containerfile are two files that

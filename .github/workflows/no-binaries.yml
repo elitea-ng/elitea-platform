@@ -594,8 +594,11 @@ jobs:
           # The landed-line walk needs the trunk, and the checker REFUSES a
           # shallow clone rather than reporting a short walk as a pass.
           fetch-depth: 0
-      # node on eng-runner only; hosted runners ship one.
-      - uses: ./.github/actions/setup-node-pool
+      # eng-runner: caches and TMPDIR on the work volume, and node (none in its
+      # image). Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          node: "true"
 
       # Issue #520. A migration states its version number when an author writes it.
       # The number is only true when the pull request MERGES. Pull requests #369 and

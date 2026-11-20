@@ -93,6 +93,11 @@ scale-set values.
 | `python3-venv`, `python3-pip` | The Python jobs (ci-go `proto`, mock-llm `unit`, deepwiki-conformance `fixtures`) with a venv, or `setup-python` with `AGENT_TOOLSDIRECTORY` pre-created |
 | `shellcheck`, `gh`, `helm`, `yq`, `protoc` | no-binaries `repo-gates`, helm-lint `lint` and `template`, ci-go `env-drift`, dependency-scanning `scan` |
 
+Also mount the 40 GB work volume at `/home/runner`, not only at `/home/runner/_work`. The container's
+ephemeral-storage limit is 1 GiB, so today `.github/actions/eng-runner-env` moves `HOME` and every cache under
+`_work` to keep a job from being evicted. With the volume at `/home/runner`, `HOME` stays where it is, and the
+cache paths match the hosted ones.
+
 Jobs that need Docker, `services:` or kind stay hosted until there is a daemon option (an in-cluster BuildKit or a
 separate dind scale set). Once the image lands, move each job by switching its `runs-on` to `ROUTED_RUNS_ON` and
 letting `check-runner-routing.mjs` approve it.

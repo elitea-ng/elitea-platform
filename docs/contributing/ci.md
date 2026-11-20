@@ -126,6 +126,9 @@ A job runs directly in the plain `actions-runner` pod (Ubuntu 24.04):
 - **No C compiler.** Rust cannot link, `go test -race` cannot build, and cgo is off.
 - **No node, Go, gh, yq or Helm.** The image has bash, git, curl, jq and python3 without pip or venv.
   Toolchains come from `setup-*` actions or from a download into the job's own directories.
+- **1 GiB of disk outside `/home/runner/_work`.** That is the container's ephemeral-storage limit. Only
+  `_work` is the separate 40 GB volume, and a pod that writes past the limit is evicted. The default places
+  for `~/go/pkg/mod`, `~/.cache/go-build`, `~/.npm`, `~/.cache` and `/tmp` all count against it.
 
 So only toolchain-only jobs are routed to it:
 
@@ -148,9 +151,16 @@ path without root). It also covers jobs that rely on tools the hosted image ship
 pip), macOS, Windows, and every job outside the pull-request pipeline.
 
 The routed jobs set `GOMAXPROCS=4` and `--maxWorkers=4`. The pod's cgroup limit is 4 CPUs, but the node reports
-8. `./.github/actions/setup-node-pool` installs node only when `runner.environment != 'github-hosted'`, so the
-hosted path is unchanged. `scripts/ci/install-golangci-lint.sh` fetches golangci-lint with curl and jq (no gh),
-on both kinds of runner.
+8. `scripts/ci/install-golangci-lint.sh` fetches golangci-lint with curl and jq (no gh), on both kinds of runner.
+
+Every routed job runs `./.github/actions/eng-runner-env` straight after its checkout. On a GitHub-hosted runner
+it does nothing, so the hosted path is unchanged. On the pool it does two things:
+
+- It moves `HOME` to `/home/runner/_work/_home`, and sets `XDG_CACHE_HOME`, `GOPATH`, `GOMODCACHE`,
+  `GOCACHE`, `GOLANGCI_LINT_CACHE` and `npm_config_cache` under it. It also sets `TMPDIR` to `RUNNER_TEMP`, which
+  covers jest's cache in `os.tmpdir()`; vitest caches in `node_modules`. Because `HOME` itself moves, the
+  `go-cache`, `npm-cache` and `main-write-cache` actions follow it: they resolve their paths from `$HOME`.
+- With `node: "true"`, it installs node, for jobs that run node scripts without a `setup-node` step of their own.
 
 ### How a job is routed
 
@@ -184,9 +194,10 @@ These events stay hosted:
   `runner.environment == 'github-hosted'`;
 - a routed job is in a workflow, or is called from a workflow, that can start on an event outside
   `pull_request`, `schedule` and `workflow_dispatch`;
-- a routed job runs `node`, `npm`, `npx` or `go` but has no step that installs it. Jobs that call node scripts
-  without a setup step of their own use `./.github/actions/setup-node-pool`, which installs node on the pool
-  only. A sparse checkout must include that action's directory.
+- a routed job runs `node`, `npm`, `npx` or `go` but has no step that installs it (`actions/setup-node`,
+  `actions/setup-go`, or `eng-runner-env` with `node: "true"`);
+- a routed job does not run `./.github/actions/eng-runner-env` unconditionally, before every action other than
+  the checkout. A sparse checkout must include that action's directory.
 
 Its test evaluates the expression the way GitHub evaluates it. It covers a fork, a same-repository PR,
 Dependabot, `merge_group`, `push`, `schedule`, `workflow_dispatch`, `pull_request_target`, `workflow_run`, and
@@ -200,9 +211,15 @@ a pull request.
 then re-run the failed or cancelled jobs (or push again).
 
 **Caches.** `actions/cache` works on the pool through the GitHub cache service. The writers are unchanged, one
-per key: the scheduled runs on main write, and they stay hosted. Pull requests only read. The image has no
-`zstd`, so a routed job may miss entries that a hosted writer saved with zstd, and then run cold. The Go jobs
-build with cgo off, so the hosted Go build cache only partly applies to them.
+per key: the scheduled runs on main write, and they stay hosted. Pull requests only read. Expect a routed job
+to miss the hosted entries and run cold, for two reasons:
+
+- The image has no `zstd`, so the pool's cache client uses a different cache version from the hosted writers.
+- The restore paths sit under the moved `HOME`, and the version hashes the path strings.
+
+The Go jobs also build with cgo off, so the hosted Go build cache would only partly apply to them anyway. Mounting
+the work volume at `/home/runner` in the scale set would keep `HOME` unmoved; with `zstd` in a custom image, the
+cache versions would then match (`deploy/ci-runners/README.md`, "Next step").
 
 ### Security model
 

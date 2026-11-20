@@ -107,7 +107,7 @@ updates:
       - /.github/actions/main-write-cache
       - /.github/actions/npm-cache
       - /.github/actions/pull-stack-images
-      - /.github/actions/setup-node-pool
+      - /.github/actions/eng-runner-env
       - /.github/actions/stack-images
     multi-ecosystem-group: nightly
     patterns: ["*"]

@@ -1097,6 +1097,8 @@ jobs:
         if: github.event_name == 'pull_request'
         with:
           fetch-depth: 2
+      # eng-runner: caches and TMPDIR on the work volume (does nothing on hosted).
+      - uses: ./.github/actions/eng-runner-env
       - name: The lane filter decides every case it is tested on
         if: github.event_name == 'pull_request'
         working-directory: ${{ github.workspace }}

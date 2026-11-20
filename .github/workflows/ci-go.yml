@@ -131,6 +131,8 @@ jobs:
       GOMAXPROCS: "4"
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume (does nothing on hosted).
+      - uses: ./.github/actions/eng-runner-env
       - uses: sqlc-dev/setup-sqlc@v5
         with:
           sqlc-version: "1.31.1"
@@ -184,6 +186,8 @@ jobs:
     # lints on its own Go release).
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume (does nothing on hosted).
+      - uses: ./.github/actions/eng-runner-env
       - uses: actions/setup-go@v7
         with:
           # The cache is .github/actions/go-cache below: setup-go's own
@@ -258,8 +262,11 @@ jobs:
       matrix: ${{ steps.plan.outputs.matrix }}
     steps:
       - uses: actions/checkout@v7
-      # node on eng-runner only; hosted runners ship one.
-      - uses: ./.github/actions/setup-node-pool
+      # eng-runner: caches and TMPDIR on the work volume, and node (none in its
+      # image). Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          node: "true"
       - uses: actions/setup-go@v7
         with:
           # `go list -find` reads directories only. It needs no module cache.
@@ -664,9 +671,12 @@ jobs:
           # The local action below must be in the checkout too.
           sparse-checkout: |
             scripts/ci
-            .github/actions/setup-node-pool
-      # node on eng-runner only; hosted runners ship one.
-      - uses: ./.github/actions/setup-node-pool
+            .github/actions/eng-runner-env
+      # eng-runner: caches and TMPDIR on the work volume, and node (none in its
+      # image). Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          node: "true"
       - name: Download shard coverage
         uses: actions/download-artifact@v8
         with:

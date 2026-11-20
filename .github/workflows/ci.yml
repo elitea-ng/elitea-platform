@@ -45,10 +45,13 @@ jobs:
           # The local action below must be in the checkout too.
           sparse-checkout: |
             scripts/ci
-            .github/actions/setup-node-pool
+            .github/actions/eng-runner-env
           persist-credentials: false
-      # node on eng-runner only; hosted runners ship one.
-      - uses: ./.github/actions/setup-node-pool
+      # eng-runner: caches and TMPDIR on the work volume, and node (none in its
+      # image). Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          node: "true"
       - id: paths
         run: node scripts/ci/tier-changes.mjs
         env:
@@ -149,10 +152,13 @@ jobs:
           # The local action below must be in the checkout too.
           sparse-checkout: |
             scripts/ci
-            .github/actions/setup-node-pool
+            .github/actions/eng-runner-env
           persist-credentials: false
-      # node on eng-runner only; hosted runners ship one.
-      - uses: ./.github/actions/setup-node-pool
+      # eng-runner: caches and TMPDIR on the work volume, and node (none in its
+      # image). Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          node: "true"
       - name: The fast tier passed
         run: node scripts/ci/ci-gate.mjs fast
         env:
@@ -277,10 +283,13 @@ jobs:
           # The local action below must be in the checkout too.
           sparse-checkout: |
             scripts/ci
-            .github/actions/setup-node-pool
+            .github/actions/eng-runner-env
           persist-credentials: false
-      # node on eng-runner only; hosted runners ship one.
-      - uses: ./.github/actions/setup-node-pool
+      # eng-runner: caches and TMPDIR on the work volume, and node (none in its
+      # image). Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          node: "true"
       - name: Every job that should have run passed (and the pull request is ready)
         run: node scripts/ci/ci-gate.mjs final
         env:

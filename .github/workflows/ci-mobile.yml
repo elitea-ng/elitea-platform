@@ -44,6 +44,8 @@ jobs:
         working-directory: apps/elitea-mobile
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume (does nothing on hosted).
+      - uses: ./.github/actions/eng-runner-env
 
       - uses: actions/setup-node@v7
         with:

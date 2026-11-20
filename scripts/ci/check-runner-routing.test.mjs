@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { check, classifyRunsOn, main, ROUTED_RUNS_ON, ROUTING_CONDITION, HOSTED_ONLY } from "./check-runner-routing.mjs";
+import { check, classifyRunsOn, main, ROUTED_RUNS_ON, ROUTING_CONDITION, HOSTED_ONLY, ENV_ACTION } from "./check-runner-routing.mjs";
 
 // ── A GitHub Actions expression evaluator, for the subset the condition uses ──
 // Literals ('str', null, true, false, numbers), property paths, == != ! && || and parentheses. Semantics
@@ -124,13 +124,12 @@ test("the condition is an allowlist of events, never a negation of pull_request"
 });
 
 test("a routed job that runs node or go must install it", () => {
-  const noNode = routedJob({ steps: [{ uses: "actions/checkout@v7" }, { run: "node scripts/ci/x.mjs" }] });
+  const noNode = routedJob({ steps: [{ run: "node scripts/ci/x.mjs" }] });
   assert.match(check(model({ schedule: [] }, noNode)).errors.join(), /runs node, but no step installs it/);
-  const actions = { ".github/actions/setup-node-pool": { runs: { using: "composite", steps: [{ uses: "actions/setup-node@v7" }] } } };
-  for (const uses of ["actions/setup-node@v7", "./.github/actions/setup-node-pool"]) {
-    const ok = routedJob({ steps: [{ uses }, { run: "node scripts/ci/x.mjs" }] });
-    assert.deepEqual(check(model({ schedule: [] }, ok, actions)).errors, [], uses);
-  }
+  const ok = routedJob({ steps: [{ uses: "actions/setup-node@v7" }, { run: "node scripts/ci/x.mjs" }] });
+  assert.deepEqual(check(model({ schedule: [] }, ok)).errors, []);
+  const viaEnv = routedJob({ raw: [{ uses: "actions/checkout@v7" }, { uses: ENV_ACTION, with: { node: "true" } }, { run: "node scripts/ci/x.mjs" }] });
+  assert.deepEqual(check(model({ schedule: [] }, viaEnv)).errors, [], "the env action with node: true installs it");
   const noGo = routedJob({ steps: [{ run: "go vet ./..." }] });
   assert.match(check(model({ schedule: [] }, noGo)).errors.join(), /runs go, but no step installs it/);
   assert.deepEqual(check(model({ schedule: [] }, routedJob({ steps: [{ uses: "actions/setup-go@v7" }, { run: "go vet ./..." }] }))).errors, []);
@@ -168,8 +167,34 @@ test("runs-on: a matrix value is read through", () => {
 });
 
 // ── check() over synthetic workflows ──
-const routedJob = (extra = {}) => ({ "runs-on": ROUTED_RUNS_ON, steps: [{ uses: "actions/checkout@v7" }, { uses: "actions/setup-node@v7" }, { run: "npm test" }], ...extra });
-const model = (on, job, actions = {}, more = {}) => ({ workflows: { "w.yml": { parsed: { on, jobs: { j: job } } }, ...more }, actions });
+// A routed job: the checkout and the cache-dir action first, then its own steps.
+const routedJob = ({ steps, raw, ...extra } = {}) => ({
+  "runs-on": ROUTED_RUNS_ON,
+  steps: raw ?? [{ uses: "actions/checkout@v7" }, { uses: ENV_ACTION }, ...(steps ?? [{ uses: "actions/setup-node@v7" }, { run: "npm test" }])],
+  ...extra,
+});
+const ENV_ACTIONS = { [ENV_ACTION.replace(/^\.\//, "")]: { runs: { using: "composite", steps: [{ run: 'echo "HOME=x" >> "$GITHUB_ENV"' }, { uses: "actions/setup-node@v7" }] } } };
+const model = (on, job, actions = {}, more = {}) => ({ workflows: { "w.yml": { parsed: { on, jobs: { j: job } } }, ...more }, actions: { ...ENV_ACTIONS, ...actions } });
+
+test("a routed job must move its caches onto the work volume first", () => {
+  const without = routedJob({ raw: [{ uses: "actions/checkout@v7" }, { uses: "actions/setup-node@v7" }, { run: "npm test" }] });
+  assert.match(check(model({ schedule: [] }, without)).errors.join(), /without \.\/\.github\/actions\/eng-runner-env: .*1 GiB/);
+  const late = routedJob({ raw: [{ uses: "actions/checkout@v7" }, { uses: "actions/setup-node@v7" }, { uses: ENV_ACTION }, { run: "npm test" }] });
+  assert.match(check(model({ schedule: [] }, late)).errors.join(), /runs before \.\/\.github\/actions\/eng-runner-env/);
+  const gated = routedJob({ raw: [{ uses: "actions/checkout@v7" }, { uses: ENV_ACTION, if: "always()" }, { uses: "actions/setup-node@v7" }, { run: "npm test" }] });
+  assert.match(check(model({ schedule: [] }, gated)).errors.join(), /must run unconditionally/);
+  // A plain run step before it (an aggregator's result check) is fine.
+  const runFirst = routedJob({ raw: [{ run: "test success = success" }, { uses: "actions/checkout@v7" }, { uses: ENV_ACTION }] });
+  assert.deepEqual(check(model({ schedule: [] }, runFirst)).errors, []);
+});
+
+test("this repository's env action moves HOME, the caches and TMPDIR", () => {
+  const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..", "..");
+  const text = fs.readFileSync(path.join(root, ENV_ACTION, "action.yml"), "utf8");
+  for (const name of ["HOME", "XDG_CACHE_HOME", "GOPATH", "GOMODCACHE", "GOCACHE", "GOLANGCI_LINT_CACHE", "npm_config_cache", "TMPDIR"]) {
+    assert.match(text, new RegExp(`echo "${name}=`), name);
+  }
+});
 
 test("a clean routed job passes and is counted", () => {
   const { errors, routed } = check(model({ workflow_call: null, schedule: [] }, routedJob()));
@@ -255,8 +280,11 @@ function tree(workflowCount, job) {
   const wf = path.join(root, ".github", "workflows");
   fs.mkdirSync(wf, { recursive: true });
   for (let i = 0; i < workflowCount; i += 1) {
-    fs.writeFileSync(path.join(wf, `w${i}.yml`), `on:\n  schedule:\n    - cron: '1 1 * * *'\njobs:\n  j:\n    runs-on: ${JSON.stringify(job)}\n    steps:\n      - run: echo\n`);
+    fs.writeFileSync(path.join(wf, `w${i}.yml`), `on:\n  schedule:\n    - cron: '1 1 * * *'\njobs:\n  j:\n    runs-on: ${JSON.stringify(job)}\n    steps:\n      - uses: actions/checkout@v7\n      - uses: ${ENV_ACTION}\n      - run: echo\n`);
   }
+  const action = path.join(root, ENV_ACTION);
+  fs.mkdirSync(action, { recursive: true });
+  fs.writeFileSync(path.join(action, "action.yml"), "runs:\n  using: composite\n  steps:\n    - run: echo\n      shell: bash\n");
   return root;
 }
 const run = (root, opts = {}) => {
