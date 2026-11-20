@@ -87,5 +87,5 @@ jobs:
       - name: Agent runtime — digests with and without preserve_order
         working-directory: libs/rust
         run: |
-          cargo test --locked -p elitea-agent-runtime --all-targets --features toolkit-sql,toolkit-office
-          cargo test --locked -p elitea-agent-runtime --all-targets --features test-preserve-order,toolkit-sql,toolkit-office
+          cargo test --locked -p elitea-agent-runtime --all-targets --features toolkit-sql,toolkit-office,toolkit-delta-lake
+          cargo test --locked -p elitea-agent-runtime --all-targets --features test-preserve-order,toolkit-sql,toolkit-office,toolkit-delta-lake

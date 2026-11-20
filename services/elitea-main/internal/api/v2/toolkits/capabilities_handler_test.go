@@ -208,9 +208,11 @@ func TestRuntimeCapabilitiesHiddenToolkitTypesOnRust(t *testing.T) {
 	// A family leaves this list when the Rust worker starts materializing
 	// it (even partially); the served check below then covers it. Of #865's
 	// named types none is left: pptx, the last, joined with ADR-0032 P3 (the
-	// host lends it a model). These two have no native family.
+	// host lends it a model). localgit has no native family. delta_lake left
+	// the list with #2262: the worker serves it (it stays hidden from the
+	// create pickers by its own catalogue metadata, as upstream hides it).
 	want := []string{
-		"localgit", "delta_lake",
+		"localgit",
 	}
 	sort.Strings(want)
 	got := append([]string(nil), body.HiddenToolkitTypes...)
@@ -231,7 +233,7 @@ func TestRuntimeCapabilitiesHiddenToolkitTypesOnRust(t *testing.T) {
 		"sql", "aha", "ado_boards", "ado_plans", "ado_repos", "ado_wiki",
 		"bigquery", "bitbucket", "carrier", "confluence", "figma", "gitlab",
 		"jira", "qtest", "testio", "testrail", "xray_cloud",
-		"zephyr_enterprise", "zephyr_essential", "zephyr_scale",
+		"zephyr_enterprise", "zephyr_essential", "zephyr_scale", "delta_lake",
 	} {
 		if gotSet[served] {
 			t.Errorf("hidden_toolkit_types contains %q, which materialize.rs supports", served)

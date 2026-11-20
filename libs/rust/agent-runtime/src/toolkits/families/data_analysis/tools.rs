@@ -194,6 +194,106 @@ impl DataAnalysisAuthority {
     }
 }
 
+impl DataAnalysisAuthority {
+    /// The file staging this authority's data tools read through, for
+    /// `run_code` (#2205): the same object store, the same conversation
+    /// attachment bucket, the same name rules.
+    #[must_use]
+    pub fn file_stager(&self) -> FileStager {
+        FileStager {
+            host: Arc::clone(&self.host),
+            buckets: self.buckets.clone(),
+            resolved: Arc::clone(&self.resolved),
+        }
+    }
+}
+
+/// The most files one `run_code` call stages.
+pub const MAX_STAGED_FILES: usize = 5;
+/// The most bytes of one staged file.
+pub const MAX_STAGED_FILE_BYTES: u64 = 256 * 1024;
+/// The most bytes of all the files of one call. With base64 and the program,
+/// below the sandbox's request limit (`Limits::max_sandbox_bytes`).
+pub const MAX_STAGED_TOTAL_BYTES: usize = 512 * 1024;
+
+/// Reads the files a `run_code` call names (conversation attachments or
+/// artifact files) so the program receives them in its input. It is the
+/// data tools' file staging, not a second one: the same host reads, the same
+/// default bucket resolves, `/<bucket>/<name>` and plain names work alike.
+#[derive(Clone)]
+pub struct FileStager {
+    host: SharedOfficeToolHost,
+    buckets: Option<Arc<dyn AttachmentBucketResolver>>,
+    resolved: Arc<tokio::sync::OnceCell<String>>,
+}
+
+impl FileStager {
+    async fn default_bucket(&self) -> Result<String, Sentence> {
+        let Some(resolver) = &self.buckets else {
+            return Err(NO_ATTACHMENTS.to_owned());
+        };
+        self.resolved
+            .get_or_try_init(|| async {
+                let bucket = resolver.attachment_bucket().await?;
+                if valid_bucket_name(&bucket) {
+                    Ok(bucket)
+                } else {
+                    Err(AttachmentBucketError::Unavailable)
+                }
+            })
+            .await
+            .cloned()
+            .map_err(|error| match error {
+                AttachmentBucketError::NotAvailable => NO_ATTACHMENTS.to_owned(),
+                AttachmentBucketError::Unavailable => ATTACHMENTS_UNAVAILABLE.to_owned(),
+            })
+    }
+
+    /// Each named file as `{size, text}` (valid UTF-8) or `{size, base64}`,
+    /// keyed by the name the model gave. A sentence for the model when a name
+    /// is bad, a file is missing or too large, or the total is over the limit.
+    pub(crate) async fn stage(&self, names: &[String]) -> Result<Map<String, Value>, Sentence> {
+        use base64::Engine as _;
+
+        if names.len() > MAX_STAGED_FILES {
+            return Err(format!(
+                "`files` names {} files; at most {MAX_STAGED_FILES} can be passed to one program.",
+                names.len()
+            ));
+        }
+        let mut staged = Map::new();
+        let mut total = 0usize;
+        for name in names {
+            let (bucket, key) = match rooted(name) {
+                Some((bucket, key)) => (valid_bucket(bucket.to_owned())?, plain_key(key)?),
+                None => (self.default_bucket().await?, plain_key(name)?),
+            };
+            let bytes = self
+                .host
+                .read_object(&bucket, &key, MAX_STAGED_FILE_BYTES)
+                .await
+                .map_err(|error| host_sentence(&format!("read `{key}`"), &error))?;
+            total += bytes.len();
+            if total > MAX_STAGED_TOTAL_BYTES {
+                return Err(format!(
+                    "The files are over {} KiB in all; pass fewer or smaller ones, or read them with the data tools.",
+                    MAX_STAGED_TOTAL_BYTES / 1024
+                ));
+            }
+            let size = bytes.len();
+            let entry = match String::from_utf8(bytes) {
+                Ok(text) => json!({"size": size, "text": text}),
+                Err(error) => json!({
+                    "size": size,
+                    "base64": base64::engine::general_purpose::STANDARD.encode(error.into_bytes()),
+                }),
+            };
+            staged.insert(name.trim().to_owned(), entry);
+        }
+        Ok(staged)
+    }
+}
+
 /// Stable construction failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DataAnalysisToolsetError;

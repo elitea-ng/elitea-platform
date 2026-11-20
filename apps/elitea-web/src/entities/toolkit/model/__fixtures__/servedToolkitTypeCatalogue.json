@@ -235,9 +235,7 @@
     "metadata": {
       "hidden": true,
       "icon_url": "delta-lake.svg",
-      "label": "AWS Delta Lake",
-      "unavailable": true,
-      "unavailable_reason": "This deployment's agent worker does not support the delta_lake toolkit."
+      "label": "AWS Delta Lake"
     }
   },
   "docx": {

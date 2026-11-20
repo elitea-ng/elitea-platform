@@ -99,5 +99,5 @@ jobs:
       - name: Agent runtime — production feature sets (panic guard on)
         if: matrix.dir == 'libs/rust'
         run: |
-          cargo clippy --locked -p elitea-agent-runtime --all-targets --features toolkit-sql,toolkit-office -- -D warnings
+          cargo clippy --locked -p elitea-agent-runtime --all-targets --features toolkit-sql,toolkit-office,toolkit-delta-lake -- -D warnings
           cargo clippy --locked -p elitea-agent-runtime --all-targets -- -D warnings

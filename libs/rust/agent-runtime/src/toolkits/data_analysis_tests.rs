@@ -1381,6 +1381,35 @@ async fn the_default_sandbox_payload_fits_the_bytes_and_the_node_budget() {
     assert!(m.contains("Not even one row fits"), "{m}");
 }
 
+/// #2300: the ten data tools are bound together whenever the `data_analysis`
+/// toggle is on, so their declarations (name, description, argument schema)
+/// cost the model prompt tokens on every turn. This is their stated budget
+/// (about 4 bytes a token); it was 24 KB before the trim. A new tool or a
+/// longer description that trips it should be shortened, not given a bigger
+/// number.
+const DATA_TOOLS_BUDGET_BYTES: usize = 19_000;
+
+#[test]
+fn the_data_tools_fit_their_prompt_budget() {
+    let sizes: Vec<(usize, &str)> = ALL_TOOLS
+        .iter()
+        .map(|tool| {
+            let declaration = json!({"type": "function", "function": {
+                "name": tool.name(),
+                "description": tool.description(),
+                "parameters": tool.parameters_schema(),
+            }});
+            (declaration.to_string().len(), tool.name())
+        })
+        .collect();
+    let total: usize = sizes.iter().map(|(size, _)| size).sum();
+    assert!(
+        total <= DATA_TOOLS_BUDGET_BYTES,
+        "the data tools cost {total} bytes (~{} tokens) per turn, over the {DATA_TOOLS_BUDGET_BYTES} byte budget: {sizes:?}",
+        total / 4,
+    );
+}
+
 #[tokio::test]
 async fn one_result_limit_is_stated_everywhere() {
     for tool in ALL_TOOLS {
@@ -2028,4 +2057,132 @@ async fn the_tool_policy_applies() {
         .expect("tools");
     assert!(tools.iter().all(|t| t.name() != "chart_data"));
     assert_eq!(tools.len(), 8);
+}
+
+// ---------------------------------------------------------------------------
+// run_code takes files (#2205)
+// ---------------------------------------------------------------------------
+
+/// A `run_code` tool whose file staging is the data tools' own: the host and
+/// the conversation's default bucket.
+async fn run_code_with_files(host: Arc<FakeHost>, runner: Arc<FakeRunner>) -> Arc<dyn Tool> {
+    use super::families::data_analysis::sandbox_tool::{
+        CodeSandboxAuthority, build_code_sandbox_toolset,
+    };
+    let shared: SharedOfficeToolHost = host as SharedOfficeToolHost;
+    let data = DataAnalysisAuthority::new(shared)
+        .with_bucket_resolver(Arc::new(FixedBucket::new(Ok(BUCKET))));
+    let authority = CodeSandboxAuthority::new(runner).with_files(data.file_stager());
+    let toolset = build_code_sandbox_toolset(&authority, &policy())
+        .expect("builds")
+        .expect("allowed");
+    toolset
+        .tools(context() as Arc<dyn ReadonlyContext>)
+        .await
+        .expect("tools")
+        .remove(0)
+}
+
+async fn run_code(tool: &Arc<dyn Tool>, args: Value) -> Value {
+    tool.execute(context() as Arc<dyn ToolContext>, args)
+        .await
+        .expect("tool result")
+}
+
+#[tokio::test]
+async fn run_code_offers_files_only_when_a_file_store_is_lent() {
+    use super::families::data_analysis::sandbox_tool::{
+        CodeSandboxAuthority, build_code_sandbox_toolset,
+    };
+    let tool = run_code_with_files(Arc::new(FakeHost::default()), Arc::default()).await;
+    assert!(tool.parameters_schema().expect("schema")["properties"]["files"].is_object());
+    assert!(tool.description().contains("`files`"));
+
+    let plain = CodeSandboxAuthority::new(Arc::new(FakeRunner::default()));
+    let tools = build_code_sandbox_toolset(&plain, &policy())
+        .expect("builds")
+        .expect("allowed")
+        .tools(context() as Arc<dyn ReadonlyContext>)
+        .await
+        .expect("tools");
+    assert!(tools[0].parameters_schema().expect("schema")["properties"]["files"].is_null());
+    assert!(!tools[0].description().contains("`files`"));
+    let refused = run_code(&tools[0], json!({"code": "1", "files": ["a.csv"]})).await;
+    assert_eq!(refused["status"], "error", "{refused}");
+}
+
+#[tokio::test]
+async fn named_files_reach_the_program_as_text_or_base64() {
+    let host = Arc::new(FakeHost::default());
+    host.put("c1/a.csv", "id,x\n1,a\n");
+    host.put_in("team-files", "pics/b.bin", vec![0xff, 0xfe, 0x00]);
+    let runner = Arc::new(FakeRunner::default());
+    let tool = run_code_with_files(Arc::clone(&host), Arc::clone(&runner)).await;
+    let out = run_code(
+        &tool,
+        json!({
+            "code": "1",
+            "language": "javascript",
+            "input": {"k": 1},
+            "files": ["c1/a.csv", "/team-files/pics/b.bin"],
+        }),
+    )
+    .await;
+    assert_eq!(out["status"], "success", "{out}");
+    let seen = runner.seen.lock().expect("seen");
+    let data = &seen[0].input["data"];
+    assert_eq!(data["k"], 1, "the model's own input is kept");
+    assert_eq!(data["files"]["c1/a.csv"]["text"], "id,x\n1,a\n");
+    assert_eq!(data["files"]["c1/a.csv"]["size"], 9);
+    assert_eq!(data["files"]["/team-files/pics/b.bin"]["base64"], "//4A");
+    assert_eq!(data["files"]["/team-files/pics/b.bin"]["size"], 3);
+}
+
+#[tokio::test]
+async fn files_over_the_limits_or_missing_are_refused_before_the_sandbox() {
+    use super::families::data_analysis::tools::{MAX_STAGED_FILE_BYTES, MAX_STAGED_FILES};
+    let host = Arc::new(FakeHost::default());
+    host.put("big.txt", vec![b'a'; MAX_STAGED_FILE_BYTES as usize + 1]);
+    for index in 0..3 {
+        host.put(&format!("f{index}.txt"), vec![b'a'; 200 * 1024]);
+    }
+    let runner = Arc::new(FakeRunner::default());
+    let tool = run_code_with_files(Arc::clone(&host), Arc::clone(&runner)).await;
+    let call = |files: Value| run_code(&tool, json!({"code": "1", "files": files}));
+
+    let missing = call(json!(["nope.csv"])).await;
+    assert_eq!(missing["status"], "error", "{missing}");
+    assert!(
+        missing["message"]
+            .as_str()
+            .unwrap()
+            .contains("no such file")
+    );
+
+    let too_big = call(json!(["big.txt"])).await;
+    assert_eq!(too_big["status"], "error", "{too_big}");
+
+    let in_all = call(json!(["f0.txt", "f1.txt", "f2.txt"])).await;
+    assert_eq!(in_all["status"], "error", "{in_all}");
+    assert!(in_all["message"].as_str().unwrap().contains("in all"));
+
+    let many: Vec<String> = (0..=MAX_STAGED_FILES)
+        .map(|n| format!("f{n}.txt"))
+        .collect();
+    let too_many = call(json!(many)).await;
+    assert_eq!(too_many["status"], "error", "{too_many}");
+
+    let traversal = call(json!(["../secret"])).await;
+    assert_eq!(traversal["status"], "error", "{traversal}");
+
+    let clash = run_code(
+        &tool,
+        json!({"code": "1", "input": {"files": 1}, "files": ["f0.txt"]}),
+    )
+    .await;
+    assert_eq!(clash["status"], "error", "{clash}");
+    assert!(
+        runner.seen.lock().unwrap().is_empty(),
+        "nothing reached the sandbox"
+    );
 }

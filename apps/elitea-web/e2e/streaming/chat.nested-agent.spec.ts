@@ -103,6 +103,7 @@ import {
   createAgentThroughForm,
   expectStoredAssistantAnswer,
   sendComposerMessage,
+  settleStoredTurn,
 } from '../fixtures/api';
 
 /** Matched WITHOUT a project id: the chat persona works inside its own personal project (#290). */
@@ -248,10 +249,18 @@ test('a parent agent with a different child agent attached completes a turn', as
   // and why nothing on screen can stand in for it are in
   // `expectStoredAssistantAnswer`. A nested child that fails mid-turn lands
   // here as an `is_error` row, which is exactly what this rules out.
-  await expectStoredAssistantAnswer(page, projectId, conversationId, {
-    timeout: 120_000,
-    message: 'the nested turn stored no answer — the parent was admitted and then failed while delegating',
-  });
+  //
+  // The turn is settled whatever the assertion decides (#2181): a failure here
+  // used to leave it running, and the next journey's start POST queued behind
+  // it until its own admission bound expired.
+  try {
+    await expectStoredAssistantAnswer(page, projectId, conversationId, {
+      timeout: 120_000,
+      message: 'the nested turn stored no answer — the parent was admitted and then failed while delegating',
+    });
+  } finally {
+    await settleStoredTurn(page, projectId, conversationId);
+  }
 
   // Cleanup is best-effort and deliberately last: a failure above should leave
   // both agents, and the relation between them, in place for inspection. The
