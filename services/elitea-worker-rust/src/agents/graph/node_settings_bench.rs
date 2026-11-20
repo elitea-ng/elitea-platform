@@ -2,7 +2,7 @@
 //! - 128-node no-settings pipeline compile guard
 //! - Settings wrapper overhead (p99 <= 50 us) on no-settings and deterministic paths.
 
-use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use adk_rust::graph::{ExecutionConfig, MemoryCheckpointer, Node, NodeContext, State};
@@ -27,9 +27,10 @@ pub fn build_128_node_no_settings_yaml() -> String {
         } else {
             format!("n{}", i + 1)
         };
-        yaml.push_str(&format!(
-            "  - id: n{i}\n    type: state_modifier\n    template: '{{{{ value }}}}'\n    input: [value]\n    output: [out]\n    transition: {next}\n"
-        ));
+        let _ = writeln!(
+            yaml,
+            "  - id: n{i}\n    type: state_modifier\n    template: '{{{{ value }}}}'\n    input: [value]\n    output: [out]\n    transition: {next}"
+        );
     }
     yaml
 }
@@ -174,9 +175,4 @@ impl DeterministicSettingsBench {
             .map(|out| out.updates.len())
             .map_err(|e| e.to_string())
     }
-}
-
-/// Keeps `HashMap` import used across feature combinations.
-pub fn _bench_state_size(state: &HashMap<String, serde_json::Value>) -> usize {
-    state.len()
 }

@@ -464,10 +464,9 @@ fn an_invalid_id_is_named_a_pipeline_node() {
 }
 
 #[test]
-fn settings_compile_to_recovery_policy_without_widening_or_changing_policy_bytes() {
+fn settings_compile_to_recovery_policy_without_changing_policy_bytes() {
     use super::super::node_recovery::{
-        MAX_ELAPSED_MS, NodeBackoff, NodeFailure, NodeFailureClass, NodeRecoveryPolicy,
-        RecoveryDecision, ReplaySafety, RetryCondition, StopReason, plan_after_failure,
+        MAX_ELAPSED_MS, NodeBackoff, NodeRecoveryPolicy, RetryCondition,
     };
 
     // Without retry_on_fail, policy is identical to NodeRecoveryPolicy::default()
@@ -522,10 +521,21 @@ fn settings_compile_to_recovery_policy_without_widening_or_changing_policy_bytes
         serde_json::to_vec(&retry_with_extras.to_recovery_policy().unwrap()).unwrap(),
         serde_json::to_vec(&expected).unwrap()
     );
+}
+
+#[test]
+fn settings_recovery_policy_never_widens_retry_conditions() {
+    use super::super::node_recovery::{
+        NodeFailure, NodeFailureClass, RecoveryDecision, ReplaySafety, StopReason,
+        plan_after_failure,
+    };
 
     // C2: every non-retryable, denial, control, and deadline class stays non-retryable;
     // unknown external effects still go to Reconcile, never RetryAt.
-    let policy = retry_plain.to_recovery_policy().unwrap();
+    let policy = parse("{retry_on_fail: true}")
+        .unwrap()
+        .to_recovery_policy()
+        .unwrap();
     for class in [
         NodeFailureClass::DependencyUnavailable,
         NodeFailureClass::RateLimited,

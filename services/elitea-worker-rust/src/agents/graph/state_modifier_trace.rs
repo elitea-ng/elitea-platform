@@ -138,14 +138,16 @@ where
             .goto
             .as_ref()
             .and_then(|targets| targets.first())
-            .map(|target| {
-                if target == END {
-                    "END".to_owned()
-                } else {
-                    target.clone()
-                }
-            })
-            .unwrap_or_else(|| self.transition.clone());
+            .map_or_else(
+                || self.transition.clone(),
+                |target| {
+                    if target == END {
+                        "END".to_owned()
+                    } else {
+                        target.clone()
+                    }
+                },
+            );
         let state = sanitize_and_bound_state(&context.state, &output.updates);
         let event = TransitionalEdgeEvent {
             node_id: self.inner.name().to_owned(),
@@ -384,7 +386,8 @@ mod tests {
 
         let mut updates = HashMap::new();
         updates.insert("out".into(), json!("world"));
-        updates.insert("gh_leak".into(), json!("ghp_1234567890abcdef1234567890"));
+        let synthetic_token = format!("{}_{}", "ghp", "1234567890abcdef1234567890");
+        updates.insert("gh_leak".into(), json!(synthetic_token));
 
         let sanitized = sanitize_and_bound_state(&state, &updates);
         let serialized = serde_json::to_string(&sanitized).expect("json");

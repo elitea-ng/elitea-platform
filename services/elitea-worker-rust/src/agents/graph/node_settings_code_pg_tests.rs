@@ -184,12 +184,65 @@ async fn compile_with_saved_child(
         .unwrap()
 }
 
+struct FailOnSettledStepSave {
+    inner: Arc<dyn Checkpointer>,
+}
+
+#[async_trait::async_trait]
+impl Checkpointer for FailOnSettledStepSave {
+    async fn save(
+        &self,
+        cp: &adk_rust::graph::Checkpoint,
+    ) -> Result<String, adk_rust::graph::GraphError> {
+        if cp
+            .state
+            .get("node_errors")
+            .and_then(|v| v.as_array())
+            .is_some_and(|entries| !entries.is_empty())
+        {
+            Err(adk_rust::graph::GraphError::CheckpointError(
+                "simulated crash before step checkpoint".into(),
+            ))
+        } else {
+            self.inner.save(cp).await
+        }
+    }
+    async fn load(
+        &self,
+        thread: &str,
+    ) -> Result<Option<adk_rust::graph::Checkpoint>, adk_rust::graph::GraphError> {
+        self.inner.load(thread).await
+    }
+    async fn load_by_id(
+        &self,
+        id: &str,
+    ) -> Result<Option<adk_rust::graph::Checkpoint>, adk_rust::graph::GraphError> {
+        self.inner.load_by_id(id).await
+    }
+    async fn list(
+        &self,
+        thread: &str,
+    ) -> Result<Vec<adk_rust::graph::Checkpoint>, adk_rust::graph::GraphError> {
+        self.inner.list(thread).await
+    }
+    async fn delete(&self, thread: &str) -> Result<(), adk_rust::graph::GraphError> {
+        self.inner.delete(thread).await
+    }
+    async fn prune(
+        &self,
+        thread: &str,
+        policy: &adk_rust::graph::checkpoint::RetentionPolicy,
+    ) -> Result<usize, adk_rust::graph::GraphError> {
+        self.inner.prune(thread, policy).await
+    }
+}
+
 /// 1. Kill after `Started` before receipt -> replacement re-attaches to try 1,
 /// 0 extra tries.
 #[tokio::test]
 #[ignore = "requires disposable PostgreSQL"]
 async fn real_pg_code_kill_after_started_before_receipt_zero_extra_tries() {
-    let yaml = r#"
+    let yaml = r"
 entry_point: run
 state:
   count: {type: int, value: 0}
@@ -201,7 +254,7 @@ nodes:
     output: [count]
     settings: {retry_on_fail: true, max_tries: 3, wait_between_tries_ms: 100}
     transition: END
-"#;
+";
     let h = harness_with(
         QUIET,
         Duration::from_millis(500),
@@ -241,7 +294,7 @@ nodes:
 #[tokio::test]
 #[ignore = "requires disposable PostgreSQL"]
 async fn real_pg_code_kill_mid_wait_resumes_same_try_fences_zombie_and_races_cleanly() {
-    let yaml = r#"
+    let yaml = r"
 entry_point: run
 state:
   count: {type: int, value: 0}
@@ -253,7 +306,7 @@ nodes:
     output: [count]
     settings: {retry_on_fail: true, max_tries: 3, wait_between_tries_ms: 1500}
     transition: END
-"#;
+";
     let h = harness_with(
         QUIET,
         Duration::from_millis(20),
@@ -312,10 +365,14 @@ nodes:
 }
 
 /// 3. Kill between failure append and graph checkpoint -> live & restore
-/// produce byte-identical `node_errors` entry and code (plus DeadlineInsufficient
+/// produce byte-identical `node_errors` entry and code (plus `DeadlineInsufficient`
 /// never continued).
 #[tokio::test]
 #[ignore = "requires disposable PostgreSQL"]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Live, crash-restore, and tight-deadline proofs share one fixture."
+)]
 async fn real_pg_code_kill_between_failure_append_and_checkpoint_live_restore_byte_identical() {
     let yaml = r#"
 entry_point: run
@@ -389,64 +446,6 @@ nodes:
     // so the journal has the committed failure while the graph thread has 0
     // checkpoints, then run claim 2's real compiled graph!
     let (cp1, rt1) = claim(&h_crash, 1, "code-live-restore", &def).await;
-    let _ = cp1;
-    // Open the exact journal for node "run" at step 0 on thread "code-live-restore"
-    // by running the compiled graph with a checkpointer that persists the journal
-    // (through PostgresCheckpointer) while failing the graph's own step save!
-    struct FailOnSettledStepSave {
-        inner: Arc<dyn Checkpointer>,
-    }
-    #[async_trait::async_trait]
-    impl Checkpointer for FailOnSettledStepSave {
-        async fn save(
-            &self,
-            cp: &adk_rust::graph::Checkpoint,
-        ) -> Result<String, adk_rust::graph::GraphError> {
-            // Allow every pre-node checkpoint to commit, then simulate a crash
-            // right after `run` appends its failure to the PG journal and before
-            // the graph step checkpoint carrying `node_errors` commits.
-            if cp
-                .state
-                .get("node_errors")
-                .and_then(|v| v.as_array())
-                .is_some_and(|entries| !entries.is_empty())
-            {
-                Err(adk_rust::graph::GraphError::CheckpointError(
-                    "simulated crash before step checkpoint".into(),
-                ))
-            } else {
-                self.inner.save(cp).await
-            }
-        }
-        async fn load(
-            &self,
-            thread: &str,
-        ) -> Result<Option<adk_rust::graph::Checkpoint>, adk_rust::graph::GraphError> {
-            self.inner.load(thread).await
-        }
-        async fn load_by_id(
-            &self,
-            id: &str,
-        ) -> Result<Option<adk_rust::graph::Checkpoint>, adk_rust::graph::GraphError> {
-            self.inner.load_by_id(id).await
-        }
-        async fn list(
-            &self,
-            thread: &str,
-        ) -> Result<Vec<adk_rust::graph::Checkpoint>, adk_rust::graph::GraphError> {
-            self.inner.list(thread).await
-        }
-        async fn delete(&self, thread: &str) -> Result<(), adk_rust::graph::GraphError> {
-            self.inner.delete(thread).await
-        }
-        async fn prune(
-            &self,
-            thread: &str,
-            policy: &adk_rust::graph::checkpoint::RetentionPolicy,
-        ) -> Result<usize, adk_rust::graph::GraphError> {
-            self.inner.prune(thread, policy).await
-        }
-    }
     let crash_graph = def
         .compile_subgraph_with_runtime(
             Arc::new(FailOnSettledStepSave { inner: cp1 }),
@@ -519,7 +518,7 @@ nodes:
 #[tokio::test]
 #[ignore = "requires disposable PostgreSQL"]
 async fn real_pg_c1_platform_client_timeout_with_retry_on_fail_reconciles_zero_redispatch() {
-    let yaml = r#"
+    let yaml = r"
 entry_point: run
 state:
   count: {type: int, value: 0}
@@ -532,7 +531,7 @@ nodes:
     output: [count]
     settings: {retry_on_fail: true, max_tries: 3, wait_between_tries_ms: 100, on_error: continue}
     transition: END
-"#;
+";
     let h = harness_with(
         MainScript {
             effects: Effects::None,
@@ -640,7 +639,7 @@ nodes:
                 final_state = Some(state);
                 break;
             }
-            Err(adk_rust::graph::GraphError::Interrupted(_)) => continue,
+            Err(adk_rust::graph::GraphError::Interrupted(_)) => {}
             Err(other) => panic!("unexpected error on resume: {other}"),
         }
     }
@@ -658,9 +657,13 @@ nodes:
 /// (B) Code retry inside a saved child resumes at `claim+1` after mid-wait kill.
 #[tokio::test]
 #[ignore = "requires disposable PostgreSQL"]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Exercises both FU-348 saved-child shapes sequentially on real PostgreSQL."
+)]
 async fn real_pg_fu348_saved_child_deterministic_settled_failure_and_code_retry_resuming_at_claim_plus_1()
  {
-    let root_yaml = r#"
+    let root_yaml = r"
 entry_point: run_saved
 state:
   input: {type: str, value: 'go'}
@@ -673,7 +676,7 @@ nodes:
     input_mapping: {task: {type: fixed, value: work}}
     output: [count]
     transition: END
-"#;
+";
     let root = PipelineDefinition::from_yaml(root_yaml).unwrap();
 
     // (A) Deterministic settled failure inside saved child.
@@ -721,7 +724,7 @@ nodes:
     );
 
     // (B) Code retry inside a saved child killed mid-wait and resumed at claim+1 (claim 2).
-    let code_child_yaml = r#"
+    let code_child_yaml = r"
 entry_point: work
 state:
   input: {type: str, value: ''}
@@ -736,7 +739,7 @@ nodes:
     output: [count]
     settings: {retry_on_fail: true, max_tries: 3, wait_between_tries_ms: 1500}
     transition: END
-"#;
+";
     let code_child = PipelineDefinition::from_yaml(code_child_yaml).unwrap();
     let h_code = harness_with(
         QUIET,

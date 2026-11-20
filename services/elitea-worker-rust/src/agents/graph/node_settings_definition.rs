@@ -164,6 +164,10 @@ impl RawSettingsCatalog {
         Ok((state, defaults, declaration_order, reducers))
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Keep ordered per-node settings admission checks in one pass."
+    )]
     pub(super) fn admit(
         self,
         nodes: &[PipelineNodeDefinition],
