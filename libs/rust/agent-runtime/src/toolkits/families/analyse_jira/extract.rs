@@ -55,10 +55,21 @@ pub(super) trait JiraReader: Send + Sync {
         segments: &[&str],
         query: &[(&str, &str)],
     ) -> Result<JiraRead, JiraClientError>;
+
+    /// Jira Cloud's approximate count of a JQL query; `None` when there is
+    /// no such endpoint (the default).
+    async fn approximate_count(&self, jql: &str) -> Result<Option<u64>, JiraClientError> {
+        let _ = jql;
+        Ok(None)
+    }
 }
 
 #[async_trait]
 impl JiraReader for JiraClient {
+    async fn approximate_count(&self, jql: &str) -> Result<Option<u64>, JiraClientError> {
+        JiraClient::approximate_count(self, jql).await
+    }
+
     fn rest_version(&self) -> JiraApiVersion {
         JiraClient::rest_version(self)
     }

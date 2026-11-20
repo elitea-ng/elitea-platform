@@ -135,6 +135,12 @@ async fn count_issues(client: &dyn JiraReader, pace: &Pace, jql: &str) -> Outcom
             return Ok((total, true));
         }
     }
+    if client.rest_version() == JiraApiVersion::V3
+        && let Some(count) = client.approximate_count(jql).await?
+    {
+        // Jira Cloud's own count: one request instead of paging the issues.
+        return Ok((usize::try_from(count).unwrap_or(usize::MAX), true));
+    }
     let counting = Pace {
         deadline: pace.deadline,
         retry_delay: pace.retry_delay,

@@ -1121,3 +1121,52 @@ async fn a_changelog_with_no_total_is_read_on_until_the_endpoint_says_it_is_last
         "{text}"
     );
 }
+
+#[tokio::test]
+async fn a_cloud_count_uses_the_approximate_count_when_jira_has_it() {
+    struct Counting(Arc<FakeJira>);
+
+    #[async_trait]
+    impl JiraReader for Counting {
+        fn rest_version(&self) -> JiraApiVersion {
+            self.0.rest_version()
+        }
+
+        async fn check_access(&self) -> Result<Option<String>, JiraClientError> {
+            self.0.check_access().await
+        }
+
+        async fn read(
+            &self,
+            root: JiraRoot,
+            segments: &[&str],
+            query: &[(&str, &str)],
+        ) -> Result<JiraRead, JiraClientError> {
+            self.0.read(root, segments, query).await
+        }
+
+        async fn approximate_count(&self, _jql: &str) -> Result<Option<u64>, JiraClientError> {
+            Ok(Some(12_345))
+        }
+    }
+
+    let jira = FakeJira::new(JiraApiVersion::V3, |call| {
+        if call.is(&["project", "search"]) {
+            return ok(json!({"values": [{"key": "ALP", "name": "Alpha"}], "isLast": true}));
+        }
+        refused("the issues must not be paged")
+    });
+    let runner = Arc::new(Runner::new(
+        Arc::new(Counting(Arc::clone(&jira))),
+        settings(),
+        None,
+    ));
+    let counted = call(
+        &runner,
+        "get_number_off_all_issues",
+        json!({"after_date": "2025-01-01"}),
+    )
+    .await;
+    assert_eq!(counted["projects_summary"]["issues_count"], 12_345);
+    assert!(jira.calls_to(&["search", "jql"]).is_empty());
+}

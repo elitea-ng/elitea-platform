@@ -1466,6 +1466,23 @@ impl JiraClient {
         })
     }
 
+    /// Jira Cloud's approximate issue count of a JQL query (`POST
+    /// search/approximate-count`, a read), or `None` when this Jira has no
+    /// such endpoint or refused the query.
+    pub(in crate::toolkits) async fn approximate_count(
+        &self,
+        jql: &str,
+    ) -> Result<Option<u64>, JiraClientError> {
+        let url = self.api_url(self.version(), &["search", "approximate-count"])?;
+        let body = json!({ "jql": jql });
+        Ok(
+            match self.send(Method::POST, url, Some(&body), false).await? {
+                Reply::Accepted(value) => value.get("count").and_then(Value::as_u64),
+                Reply::Refused(_) => None,
+            },
+        )
+    }
+
     /// A model-supplied path joined onto this toolkit's base (the SDK's
     /// `url_joiner`), refused unless it stays a plain path on that origin.
     fn relative_url(&self, relative_url: &str) -> Option<Url> {

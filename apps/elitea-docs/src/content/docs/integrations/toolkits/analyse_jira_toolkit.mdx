@@ -120,7 +120,8 @@ The agent calls `get_jira_issues` with `closed_issues_based_on` 2 and the three 
 
 - One extraction reads at most **Max issues** issues. When a query would read more, it stops and writes nothing: narrow the projects, the dates or `add_filter`, or raise the setting.
 - A dataset has at most 250000 rows and 32 MiB. A run is cut off after four minutes. A bound that is hit never leaves a file behind: both files of an extraction are checked before the first is stored. If storing the second file itself fails, the tool says which file was written.
-- On Jira Cloud a project's issue count pages through key-only results, up to 10000 issues; a larger count is shown as a lower bound.
+- On Jira Cloud a project's issue count is Jira's own approximate count (one request). If this Jira does not have it, the count pages through key-only results, up to 10000 issues, and a larger count is shown as a lower bound.
+- A long changelog is read one issue at a time. That is bounded by the four minute limit: an extraction that cannot finish stops and writes nothing, so narrow it.
 - Jira pages are requested 50 issues at a time. A rate limit or a short outage is retried up to three times.
 - A long changelog is read in full through the changelog endpoint. A Jira that does not have it (older Server versions) gives only the first page of each long changelog; the tool says how many issues are affected.
 - `add_filter` is added with `AND` inside parentheses and must not contain `ORDER BY`. Project keys are letters, digits and underscores.
