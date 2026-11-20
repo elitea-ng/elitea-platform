@@ -67,6 +67,24 @@ test("a push trigger fails, and names the workflow", () => {
   assert.match(text, /::error::subject\.yml starts on a push/);
 });
 
+test("a pull_request_target trigger fails in every spelling, and names the workflow", () => {
+  for (const subject of [
+    "on:\n  pull_request_target:\n    types: [closed]\n\njobs: {}\n",
+    "on: pull_request_target\njobs: {}\n",
+    "on: [schedule, pull_request_target]\njobs: {}\n",
+    "'on':\n  schedule:\n    - cron: '1 * * * *'\n  \"pull_request_target\":\n\njobs: {}\n",
+  ]) {
+    const [code, text] = run(tree(subject));
+    assert.equal(code, 1, subject);
+    assert.match(text, /::error::subject\.yml starts on pull_request_target/);
+  }
+});
+
+test("pull_request with types: [closed] passes", () => {
+  const [code, text] = run(tree("on:\n  pull_request:\n    types: [closed]\n  schedule:\n    - cron: '17 * * * *'\n\njobs: {}\n"));
+  assert.equal(code, 0, text);
+});
+
 test("an unreadable on: fails rather than passes", () => {
   const [code, text] = run(tree("name: x\njobs: {}\n"));
   assert.equal(code, 1);

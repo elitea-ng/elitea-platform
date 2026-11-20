@@ -1082,7 +1082,7 @@ jobs:
     # unexpanded name (e.g. `E2E (${{ matrix.leg }})`), not one per leg. No
     # status check is required on main today; anyone making these lanes
     # required must require that skipped name too, or gate inside the steps.
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
     timeout-minutes: 5
     outputs:
       reaches-model: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reaches-model }}
@@ -1097,6 +1097,8 @@ jobs:
         if: github.event_name == 'pull_request'
         with:
           fetch-depth: 2
+      # eng-runner: caches and TMPDIR on the work volume (does nothing on hosted).
+      - uses: ./.github/actions/eng-runner-env
       - name: The lane filter decides every case it is tested on
         if: github.event_name == 'pull_request'
         working-directory: ${{ github.workspace }}
