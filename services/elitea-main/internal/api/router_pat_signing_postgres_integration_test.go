@@ -53,7 +53,7 @@ func TestRouterSignsPersonalAccessTokensWithTheConfiguredKey(t *testing.T) {
 			PATSigner:          signer,
 		})
 
-		token := createPATThroughRouter(t, router, "router-signer-token")
+		token := createPATThroughRouter(t, router, sessionSecret, "router-signer-token")
 
 		if signer.calls != 1 {
 			t.Fatalf("deployment signer calls = %d, want 1: NewRouter did not pass "+
@@ -68,6 +68,32 @@ func TestRouterSignsPersonalAccessTokensWithTheConfiguredKey(t *testing.T) {
 		}
 	})
 
+	// Issue 2559 through the real Auth middleware: the provenance the handler
+	// reads is the one serveAuthenticated records, not a test context.
+	t.Run("a bearer token cannot mint a token", func(t *testing.T) {
+		router := NewRouter(RouterConfig{
+			Pool:               pool,
+			AuthValidator:      apimw.TokenValidator(testTokenValidator{user: authenticatedTestUser()}),
+			PrincipalValidator: testPrincipalValidator{},
+			SessionSecret:      sessionSecret,
+		})
+		request := httptest.NewRequest(http.MethodPost, "/api/v2/auth/token/",
+			bytes.NewReader([]byte(`{"name":"minted-by-a-token"}`)))
+		request.Header.Set("Content-Type", "application/json")
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, testAuthHeader(request))
+		var refusal struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		_ = json.Unmarshal(recorder.Body.Bytes(), &refusal)
+		if recorder.Code != http.StatusForbidden || refusal.Error.Code != "token_mint_browser_session_required" {
+			t.Fatalf("POST /api/v2/auth/token/ with a bearer = %d %s, want 403 token_mint_browser_session_required",
+				recorder.Code, recorder.Body.String())
+		}
+	})
+
 	t.Run("no signer falls back to the session secret", func(t *testing.T) {
 		router := NewRouter(RouterConfig{
 			Pool:               pool,
@@ -76,7 +102,7 @@ func TestRouterSignsPersonalAccessTokensWithTheConfiguredKey(t *testing.T) {
 			SessionSecret:      sessionSecret,
 		})
 
-		token := createPATThroughRouter(t, router, "router-fallback-token")
+		token := createPATThroughRouter(t, router, sessionSecret, "router-fallback-token")
 
 		// The OIDC-only shape. APPLICATION_SECRET_KEY both signs the token and
 		// reads it back, so the fallback must stay.
@@ -110,7 +136,10 @@ func (s *routerPATSignerStub) SignPAT(tokenUUID *string, expiresAt *time.Time) (
 	}).SignedString(s.key)
 }
 
-func createPATThroughRouter(t *testing.T, router http.Handler, name string) string {
+// createPATThroughRouter mints through a BROWSER session (a signed
+// `elitea_session` cookie for user 1): a bearer token may not mint a personal
+// access token (issue 2559, v2/auth/token_mint_policy.go).
+func createPATThroughRouter(t *testing.T, router http.Handler, sessionSecret, name string) string {
 	t.Helper()
 	body, err := json.Marshal(map[string]any{"name": name})
 	if err != nil {
@@ -118,8 +147,9 @@ func createPATThroughRouter(t *testing.T, router http.Handler, name string) stri
 	}
 	request := httptest.NewRequest(http.MethodPost, "/api/v2/auth/token/", bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
+	request.AddCookie(&http.Cookie{Name: "elitea_session", Value: sessionToken(sessionSecret, "1")})
 	recorder := httptest.NewRecorder()
-	router.ServeHTTP(recorder, testAuthHeader(request))
+	router.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("POST /api/v2/auth/token/ = %d, body %s", recorder.Code, recorder.Body.String())
 	}

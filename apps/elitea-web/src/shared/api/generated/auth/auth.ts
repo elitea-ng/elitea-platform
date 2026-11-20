@@ -1985,7 +1985,18 @@ export const getCreatePersonalTokenUrl = () => {
 };
 
 /**
- * NOTE(W2): internal/api/v2/auth/tokens.go:430 (TokenCreate).
+ * NOTE(W2): internal/api/v2/auth/tokens.go:441 (TokenCreate).
+ *
+ * WHO MAY MINT (issue 2559, internal/api/v2/auth/token_mint_policy.go):
+ * a browser session (the `elitea_session` cookie, the Form session
+ * cookie or the legacy signed cookie) always may. A native device
+ * session (the desktop and mobile apps) may only for an owner who holds
+ * no administration permission. A personal access token, a run token
+ * and every other bearer or API-key credential may not. A caller whose
+ * own credential is bound to a project mints only a token bound to that
+ * same project. When the permission store does not answer for a native
+ * caller, the route answers 500 with `code`
+ * `token_mint_permissions_unavailable` and mints nothing.
  *
  * THE ONLY RESPONSE THAT CARRIES THE SECRET. `token` here is the full
  * signed value; every later read masks it. The response also sets
