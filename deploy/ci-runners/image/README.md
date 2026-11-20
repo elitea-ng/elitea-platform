@@ -42,6 +42,7 @@ stays a workflow change and never needs an image rebuild.
 | `helm` v4.3.2 | Helm 4, the latest stable release. | A fallback only. Jobs that run `azure/setup-helm` get the pinned version from `check-helm-version.mjs` first on PATH. |
 | `yq` v4.54.3 | YAML edits in shell steps. | `helm-lint`'s yq step: it uses a `yq` already on PATH and otherwise needs `sudo`, which the pool lacks. Also `publish` and `nightly-image-scan`. |
 | `ca-certificates` | TLS trust for every download above. | Everything that downloads. |
+| `locales` (`en_US.UTF-8` generated) | The locale the `postgres:18` service image initialises its cluster with (`LANG=en_US.utf8`). A job that runs its PostgreSQL as a process on the pool must pass `initdb --locale=en_US.UTF-8` to sort and compare text as on a hosted runner: `LANG` itself is not set (so other jobs see no change), and a plain `initdb` gets the C locale. The smoke test initialises its cluster that way and checks the collation. | Every job whose `services:` run as processes on the pool. |
 | `gnupg`, `openssl` | `gnupg` checks the PGDG key's fingerprint at build time. `openssl` is the CLI the cert scripts (`gen-*-certs.sh`) call. | The native E2E stacks' cert generation. |
 
 **Not needed, checked against every tracked `Cargo.lock`.** Nothing links
@@ -94,9 +95,10 @@ needs an image rebuild and a pin bump on the pool first.
 
 **Sizes.** The base `actions-runner` image is about 549 MB compressed. With
 the build tools, the services and the browsers, this image measured
-**about 1.7 GB compressed** (1,786,194,432 bytes of layers) on the PR that
-added the services. Every build prints the layer sum of its saved archive
-in its summary, and publish prints the exact sum of the pushed layers. The pool pulls
+**about 1.7 GB compressed** (its saved archive was 1,786,194,432 bytes) and
+**about 4.9 GB unpacked** (4,648 MiB of uncompressed layers) on the PR that
+added the services (#2722). Every build prints both in its summary, and publish prints the exact sum of the pushed
+layers. The pool pulls
 it through an Artifact Registry remote with image streaming, so a node does
 not wait for the whole image before a pod starts.
 

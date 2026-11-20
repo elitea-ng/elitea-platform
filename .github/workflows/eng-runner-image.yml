@@ -248,12 +248,20 @@ jobs:
             postgres --version | grep -q "(PostgreSQL) 18\."
             pg="$TMPDIR/pg"; mkdir -p "$pg"
             echo smoke > "$TMPDIR/pgpw"
-            initdb -D "$pg/data" -U elitea --pwfile="$TMPDIR/pgpw" -A scram-sha-256 >/dev/null
+            # The locale of the postgres image. LANG is unset, so a cluster
+            # gets it only when initdb names it, as here.
+            initdb -D "$pg/data" -U elitea --pwfile="$TMPDIR/pgpw" -A scram-sha-256 \
+              --encoding=UTF8 --locale=en_US.UTF-8 >/dev/null
             pg_ctl -D "$pg/data" -l "$pg/log" -w \
               -o "-c listen_addresses=127.0.0.1 -c port=55432 -c unix_socket_directories=$pg -c fsync=off" start
             pg_isready -h 127.0.0.1 -p 55432
             PGPASSWORD=smoke psql -h 127.0.0.1 -p 55432 -U elitea -d postgres -tAc "select version()"
             PGPASSWORD=smoke psql -h "$pg" -p 55432 -U elitea -d postgres -tAc "select 1" | grep -qx 1
+            # glibc en_US sorts a before B; C sorts by byte, B (66) before a (97).
+            collation="$(PGPASSWORD=smoke psql -h 127.0.0.1 -p 55432 -U elitea -d postgres -tAc \
+              "select datcollate, chr(97) < chr(66) from pg_database where datname = current_database()")"
+            test "$collation" = "en_US.UTF-8|t"
+            echo "collation ${collation} ok"
             pg_ctl -D "$pg/data" -m fast -w stop
 
             # NATS with JetStream, and the CLI against it.
@@ -349,13 +357,25 @@ jobs:
           fi
           echo "image-id=${config}" >> "$GITHUB_OUTPUT"
           echo "smoke-tested image config ${config}" | tee -a "$GITHUB_STEP_SUMMARY"
-          ls -l "$archive"
-          # What the pool pulls is the gzip-compressed layers. The hosted
-          # runners' containerd image store keeps the layers compressed, and
-          # `docker save` writes them as stored, so their sum in the archive is
-          # the size publish pushes (publish prints the exact figure).
-          layers="$(skopeo inspect --raw "docker-archive:${archive}" | jq '[.layers[].size] | add')"
-          echo "layers in the saved archive: $((layers / 1024 / 1024)) MiB" | tee -a "$GITHUB_STEP_SUMMARY"
+          # Two sizes. Compressed, what the pool pulls: the hosted runners'
+          # containerd store keeps the layers gzipped and `docker save` writes
+          # them as stored, so the archive itself is within a few MiB of the
+          # pushed layers (publish prints their exact sum; gzip shrank the
+          # archive by 5% on #2722, so its layers are already compressed).
+          # Unpacked, what a node's disk holds: skopeo reports the layers'
+          # uncompressed sizes for a docker-archive (4648 MiB on #2722, against
+          # a 1703 MiB archive, so it cannot be the stored size).
+          compressed="$(wc -c < "$archive")"
+          unpacked="$(skopeo inspect --raw "docker-archive:${archive}" | jq '[.layers[].size] | add')"
+          {
+            echo "compressed size (the saved archive): $((compressed / 1024 / 1024)) MiB"
+            echo "unpacked size (sum of the uncompressed layers): $((unpacked / 1024 / 1024)) MiB"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          # The labels hold only while unpacked > compressed; if a runner
+          # image change makes skopeo report stored sizes, say so.
+          if [ "$unpacked" -le "$compressed" ]; then
+            echo "::warning::the layer sum (${unpacked}) is not above the archive size (${compressed}): it is not the unpacked size here; fix the labels"
+          fi
 
       - name: Upload the tested image
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'

@@ -119,6 +119,10 @@ RUN apt-get update \
       ca-certificates \
       gnupg \
       openssl \
+      locales \
+ && locale-gen en_US.UTF-8 \
+ && locales="$(locale -a)" \
+ && { grep -qx 'en_US\.utf8' <<<"$locales" || { echo "locale-gen produced no en_US.utf8: ${locales}" >&2; exit 1; }; } \
  && rm -rf /var/lib/apt/lists/*
 
 # The base installs Docker's static bundle into /usr/bin: the CLI and buildx
