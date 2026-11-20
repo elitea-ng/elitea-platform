@@ -239,3 +239,136 @@ func TestSavedCodeMatchingJSONCannotInventUnknownTypedFieldsOrExpandSourceBounds
 		t.Fatal("alias-compatible policy expanded existing source bounds")
 	}
 }
+
+func TestSavedCodeSettingsAdmittedStrippedAndValidatedStrictly(t *testing.T) {
+	config := `{"id":"run","type":"code","language":"python","code":{"type":"fixed","value":"7"},"input":[],"output":["answer"],"structured_output":false,"debug":false,"transition":"END"}`
+	// 1. Default max_tries = 3 when retry_on_fail: true without max_tries.
+	instructions := `entry_point: run
+state: {answer: int}
+nodes:
+ - id: run
+   type: code
+   language: python
+   code: '7'
+   output: [answer]
+   settings:
+     retry_on_fail: true
+     on_error: continue
+     always_output_data: true
+     execute_once: true
+     timeout_ms: 5000
+   transition: END
+`
+	policies, err := SavedCodePolicies(instructions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decl, err := MatchOriginalSavedCodeConfiguration(policies["run"], config)
+	if err != nil {
+		t.Fatalf("admitted settings refused: %v", err)
+	}
+	if !decl.SettingsRetryOnFail || decl.SettingsMaxTries != 3 || len(decl.Settings) == 0 {
+		t.Fatalf("unexpected parsed settings: retry=%v maxTries=%d raw=%s", decl.SettingsRetryOnFail, decl.SettingsMaxTries, decl.Settings)
+	}
+	reconstructed, err := ReadSavedCodeDeclaration(policies["run"], decl.ConfigurationDigest)
+	if err != nil || !reflect.DeepEqual(decl, reconstructed) {
+		t.Fatalf("reconstruction mismatch: %v", err)
+	}
+
+	// 2. Explicit max_tries = 5 + wait_between_tries_ms + error_output.
+	explicit := `entry_point: run
+state: {answer: int}
+nodes:
+ - id: run
+   type: code
+   language: python
+   code: '7'
+   output: [answer]
+   settings: {retry_on_fail: true, max_tries: 5, wait_between_tries_ms: 250, on_error: error_output, error_transition: END}
+   transition: END
+`
+	explicitPolicies, err := SavedCodePolicies(explicit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	explicitDecl, err := MatchOriginalSavedCodeConfiguration(explicitPolicies["run"], config)
+	if err != nil || !explicitDecl.SettingsRetryOnFail || explicitDecl.SettingsMaxTries != 5 {
+		t.Fatalf("explicit max_tries failed: err=%v retry=%v maxTries=%d", err, explicitDecl.SettingsRetryOnFail, explicitDecl.SettingsMaxTries)
+	}
+
+	// 3. Empty settings block `{}` is a no-op.
+	emptyBlock := `entry_point: run
+state: {answer: int}
+nodes:
+ - id: run
+   type: code
+   language: python
+   code: '7'
+   output: [answer]
+   settings: {}
+   transition: END
+`
+	emptyPolicies, err := SavedCodePolicies(emptyBlock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	emptyDecl, err := MatchOriginalSavedCodeConfiguration(emptyPolicies["run"], config)
+	if err != nil || emptyDecl.SettingsRetryOnFail || emptyDecl.SettingsMaxTries != 0 || len(emptyDecl.Settings) != 0 {
+		t.Fatalf("empty settings block not treated as no-op: err=%v decl=%+v", err, emptyDecl)
+	}
+
+	// 4. Settings without retry_on_fail leaves SettingsRetryOnFail=false, SettingsMaxTries=0.
+	continueOnly := `entry_point: run
+state: {answer: int}
+nodes:
+ - id: run
+   type: code
+   language: python
+   code: '7'
+   output: [answer]
+   settings: {on_error: continue}
+   transition: END
+`
+	contPolicies, err := SavedCodePolicies(continueOnly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contDecl, err := MatchOriginalSavedCodeConfiguration(contPolicies["run"], config)
+	if err != nil || contDecl.SettingsRetryOnFail || contDecl.SettingsMaxTries != 0 || len(contDecl.Settings) == 0 {
+		t.Fatalf("continue-only settings mismatch: err=%v decl=%+v", err, contDecl)
+	}
+
+	// 5. Strict fail-closed rejections: combining with recovery/failure_handler, unknown keys,
+	// bad types, floats, out-of-range bounds, broken couplings, and null settings.
+	base := `{"id":"run","type":"code","language":"python","code":{"type":"fixed","value":"7"},"input":[],"output":["answer"],"structured_output":false,"debug":false,"transition":"END"`
+	rejected := map[string]string{
+		"with_recovery":          base + `,"recovery":{"max_attempts":2},"settings":{"on_error":"continue"}}`,
+		"with_failure_handler":   base + `,"failure_handler":null,"settings":{"on_error":"continue"}}`,
+		"null_settings":          base + `,"settings":null}`,
+		"array_settings":         base + `,"settings":[]}`,
+		"unknown_key":            base + `,"settings":{"bogus":true}}`,
+		"max_tries_below_min":    base + `,"settings":{"retry_on_fail":true,"max_tries":1}}`,
+		"max_tries_above_max":    base + `,"settings":{"retry_on_fail":true,"max_tries":6}}`,
+		"max_tries_float":        base + `,"settings":{"retry_on_fail":true,"max_tries":3.5}}`,
+		"max_tries_without_flag": base + `,"settings":{"max_tries":3}}`,
+		"wait_without_flag":      base + `,"settings":{"wait_between_tries_ms":1000}}`,
+		"wait_below_min":         base + `,"settings":{"retry_on_fail":true,"wait_between_tries_ms":99}}`,
+		"wait_above_max":         base + `,"settings":{"retry_on_fail":true,"wait_between_tries_ms":300001}}`,
+		"timeout_below_min":      base + `,"settings":{"timeout_ms":999}}`,
+		"timeout_above_max":      base + `,"settings":{"timeout_ms":900001}}`,
+		"bad_on_error":           base + `,"settings":{"on_error":"ignore"}}`,
+		"missing_error_route":    base + `,"settings":{"on_error":"error_output"}}`,
+		"unexpected_error_route": base + `,"settings":{"on_error":"continue","error_transition":"END"}}`,
+		"bad_error_route_id":     base + `,"settings":{"on_error":"error_output","error_transition":"../escape"}}`,
+	}
+	for name, rawPolicy := range rejected {
+		t.Run(name, func(t *testing.T) {
+			if _, err := MatchOriginalSavedCodeConfiguration([]byte(rawPolicy), config); err == nil {
+				t.Fatalf("invalid saved settings %s was admitted", name)
+			}
+			if _, err := ReadSavedCodeDeclaration([]byte(rawPolicy), [32]byte{1}); err == nil {
+				t.Fatalf("invalid saved settings %s passed ReadSavedCodeDeclaration", name)
+			}
+		})
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"reflect"
+	"strconv"
 	"sync/atomic"
 
 	"gopkg.in/yaml.v3"
@@ -317,6 +318,9 @@ type SavedCodeDeclaration struct {
 	Workspace           json.RawMessage
 	Recovery            json.RawMessage
 	FailureHandler      json.RawMessage
+	Settings            json.RawMessage
+	SettingsRetryOnFail bool
+	SettingsMaxTries    uint16
 }
 
 // Compare semantic saved fields before hashing the exact Rust serde configuration bytes.
@@ -330,9 +334,11 @@ func MatchOriginalSavedCodeConfiguration(policy []byte, configurationJSON string
 	if err != nil {
 		return empty, err
 	}
-	// Worker46 excludes these catalog-owned fields from the Code configuration.
+	// Worker strips catalog-owned recovery, failure_handler, and settings blocks
+	// before hashing the Code node configuration.
 	delete(original, "recovery")
 	delete(original, "failure_handler")
+	delete(original, "settings")
 	// Producer skip_false preserves legacy Code JSON; remove only exact authored false.
 	if original["platform_client"] == false {
 		delete(original, "platform_client")
@@ -363,7 +369,7 @@ func ReadSavedCodeDeclaration(policy []byte, validatedConfigurationDigest [32]by
 	}
 	for key := range original {
 		switch key {
-		case "id", "type", "language", "dependencies", "code", "input", "output", "structured_output", "debug", "transition", "workspace", "platform_client", "recovery", "failure_handler":
+		case "id", "type", "language", "dependencies", "code", "input", "output", "structured_output", "debug", "transition", "workspace", "platform_client", "recovery", "failure_handler", "settings":
 		default:
 			// Preserve unknown saved bytes in inspection; never infer an admitted
 			// typed Code declaration from a matching arbitrary JSON object.
@@ -376,11 +382,34 @@ func ReadSavedCodeDeclaration(policy []byte, validatedConfigurationDigest [32]by
 	}
 	recovery, _ := json.Marshal(original["recovery"])
 	handler, _ := json.Marshal(original["failure_handler"])
-	if _, present := original["recovery"]; !present {
+	_, hasRecovery := original["recovery"]
+	_, hasHandler := original["failure_handler"]
+	if !hasRecovery {
 		recovery = nil
 	}
-	if _, present := original["failure_handler"]; !present {
+	if !hasHandler {
 		handler = nil
+	}
+	var settingsJSON json.RawMessage
+	var settingsRetryOnFail bool
+	var settingsMaxTries uint16
+	if rawSettings, hasSettings := original["settings"]; hasSettings {
+		encoded, err := json.Marshal(rawSettings)
+		if err != nil {
+			return empty, ErrContentRejected
+		}
+		nonEmpty, retryOnFail, maxTries, err := parseSavedCodeSettings(encoded)
+		if err != nil {
+			return empty, ErrContentRejected
+		}
+		if nonEmpty && (hasRecovery || hasHandler) {
+			return empty, ErrContentRejected
+		}
+		if nonEmpty {
+			settingsJSON = encoded
+			settingsRetryOnFail = retryOnFail
+			settingsMaxTries = maxTries
+		}
 	}
 	for _, key := range []string{"debug", "structured_output"} {
 		if _, ok := original[key].(bool); !ok {
@@ -435,7 +464,143 @@ func ReadSavedCodeDeclaration(policy []byte, validatedConfigurationDigest [32]by
 	if len(source.Value) > 256*1024 {
 		return empty, ErrContentRejected
 	}
-	return SavedCodeDeclaration{ConfigurationDigest: validatedConfigurationDigest, Language: saved.Language, Source: saved.Source, Input: saved.Input, Output: saved.Output, StructuredOutput: saved.StructuredOutput, Debug: saved.Debug, PlatformClient: platformClient, Workspace: saved.Workspace, Recovery: recovery, FailureHandler: handler}, nil
+	return SavedCodeDeclaration{ConfigurationDigest: validatedConfigurationDigest, Language: saved.Language, Source: saved.Source, Input: saved.Input, Output: saved.Output, StructuredOutput: saved.StructuredOutput, Debug: saved.Debug, PlatformClient: platformClient, Workspace: saved.Workspace, Recovery: recovery, FailureHandler: handler, Settings: settingsJSON, SettingsRetryOnFail: settingsRetryOnFail, SettingsMaxTries: settingsMaxTries}, nil
+}
+
+const (
+	savedCodeSettingsDefaultTries = 3
+	savedCodeSettingsMinTries     = 2
+	savedCodeSettingsMaxTries     = 5
+	savedCodeSettingsMinWaitMs    = 100
+	savedCodeSettingsMaxWaitMs    = 300_000
+	savedCodeSettingsMinTimeoutMs = 1_000
+	savedCodeSettingsMaxTimeoutMs = 900_000
+)
+
+// parseSavedCodeSettings strictly validates a Code node's saved `settings:` JSON
+// block against the pipeline-node-settings-v1 contract. Fails closed on unknown
+// keys, non-integer numbers, out-of-range values, or invalid field couplings.
+func parseSavedCodeSettings(encoded []byte) (nonEmpty bool, retryOnFail bool, maxTries uint16, err error) {
+	if len(encoded) == 0 || len(encoded) > 16*1024 {
+		return false, false, 0, ErrContentRejected
+	}
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.UseNumber()
+	var raw any
+	if decoder.Decode(&raw) != nil || decoder.More() {
+		return false, false, 0, ErrContentRejected
+	}
+	var trailing any
+	if decoder.Decode(&trailing) != io.EOF {
+		return false, false, 0, ErrContentRejected
+	}
+	fields, ok := raw.(map[string]any)
+	if !ok {
+		return false, false, 0, ErrContentRejected
+	}
+	if len(fields) == 0 {
+		return false, false, 0, nil
+	}
+	onError := "stop"
+	hasMaxTries := false
+	var parsedMaxTries int64
+	hasWait := false
+	hasErrorTransition := false
+	for key, value := range fields {
+		switch key {
+		case "retry_on_fail":
+			v, ok := value.(bool)
+			if !ok {
+				return false, false, 0, ErrContentRejected
+			}
+			retryOnFail = v
+		case "always_output_data", "execute_once":
+			if _, ok := value.(bool); !ok {
+				return false, false, 0, ErrContentRejected
+			}
+		case "max_tries":
+			if value != nil {
+				v, ok := savedCodeExactInt64(value)
+				if !ok || v < savedCodeSettingsMinTries || v > savedCodeSettingsMaxTries {
+					return false, false, 0, ErrContentRejected
+				}
+				hasMaxTries = true
+				parsedMaxTries = v
+			}
+		case "wait_between_tries_ms":
+			if value != nil {
+				v, ok := savedCodeExactInt64(value)
+				if !ok || v < savedCodeSettingsMinWaitMs || v > savedCodeSettingsMaxWaitMs {
+					return false, false, 0, ErrContentRejected
+				}
+				hasWait = true
+			}
+		case "timeout_ms":
+			if value != nil {
+				v, ok := savedCodeExactInt64(value)
+				if !ok || v < savedCodeSettingsMinTimeoutMs || v > savedCodeSettingsMaxTimeoutMs {
+					return false, false, 0, ErrContentRejected
+				}
+			}
+		case "on_error":
+			v, ok := value.(string)
+			if !ok || (v != "stop" && v != "continue" && v != "error_output") {
+				return false, false, 0, ErrContentRejected
+			}
+			onError = v
+		case "error_transition":
+			if value != nil {
+				target, ok := value.(string)
+				if !ok || !codeDebugNodeID(target) {
+					return false, false, 0, ErrContentRejected
+				}
+				hasErrorTransition = true
+			}
+		default:
+			return false, false, 0, ErrContentRejected
+		}
+	}
+	if !retryOnFail && (hasMaxTries || hasWait) {
+		return false, false, 0, ErrContentRejected
+	}
+	if onError == "error_output" && !hasErrorTransition {
+		return false, false, 0, ErrContentRejected
+	}
+	if onError != "error_output" && hasErrorTransition {
+		return false, false, 0, ErrContentRejected
+	}
+	if retryOnFail {
+		if hasMaxTries {
+			maxTries = uint16(parsedMaxTries)
+		} else {
+			maxTries = savedCodeSettingsDefaultTries
+		}
+	}
+	return true, retryOnFail, maxTries, nil
+}
+
+func savedCodeExactInt64(value any) (int64, bool) {
+	num, ok := value.(json.Number)
+	if !ok {
+		return 0, false
+	}
+	text := num.String()
+	if text == "" {
+		return 0, false
+	}
+	for i := 0; i < len(text); i++ {
+		if i == 0 && text[i] == '-' {
+			continue
+		}
+		if text[i] < '0' || text[i] > '9' {
+			return 0, false
+		}
+	}
+	parsed, err := strconv.ParseInt(text, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
 }
 
 // Use only instructions returned by immutable root input or registered saved-child lookup.
