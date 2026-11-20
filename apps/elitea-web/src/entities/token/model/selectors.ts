@@ -106,8 +106,52 @@ function readObject(value: unknown, key: string): unknown {
  * defeated by a second copy of the error class in the module graph.
  */
 export function tokenProjectErrorCode(error: unknown): TokenProjectErrorCode | null {
-  const body = readObject(readObject(error, 'failure'), 'body');
-  const code = readObject(readObject(body, 'error'), 'code');
+  const code = readObject(nestedTokenError(error), 'code');
   if (code === 'project_forbidden' || code === 'invalid_project_id') return code;
   return null;
+}
+
+/** The `error` object of the nested envelope, or undefined for any other shape. */
+function nestedTokenError(error: unknown): unknown {
+  return readObject(readObject(readObject(error, 'failure'), 'body'), 'error');
+}
+
+/**
+ * The four refusals `POST /api/v2/auth/token/` answers when the CALLING
+ * credential may not mint the token (issue 2559, server
+ * `internal/api/v2/auth/token_mint_policy.go`). They use the same nested
+ * envelope as the project failures.
+ *
+ * - `token_mint_browser_session_required`: a token, not a sign-in, is calling.
+ * - `token_mint_native_admin`: the desktop or mobile app, for an owner who
+ *   holds administration permissions. Such an owner creates tokens in a
+ *   browser.
+ * - `token_mint_wider_than_caller`: the caller is limited to one project and
+ *   the token would not be bound to it. The body carries that project as
+ *   `error.project_id`.
+ * - `token_mint_caller_unresolved`: the server could not check the calling
+ *   sign-in or the owner's permissions.
+ */
+const TOKEN_MINT_REFUSAL_CODES = [
+  'token_mint_browser_session_required',
+  'token_mint_native_admin',
+  'token_mint_wider_than_caller',
+  'token_mint_caller_unresolved',
+] as const;
+
+export type TokenMintRefusalCode = (typeof TOKEN_MINT_REFUSAL_CODES)[number];
+
+export interface TokenMintRefusal {
+  readonly code: TokenMintRefusalCode;
+  /** The caller's own project binding, on `token_mint_wider_than_caller` only. */
+  readonly projectId: number | null;
+}
+
+/** Pull a credential-kind refusal out of a rejected create-token call. */
+export function tokenMintRefusal(error: unknown): TokenMintRefusal | null {
+  const nested = nestedTokenError(error);
+  const code = TOKEN_MINT_REFUSAL_CODES.find((known) => known === readObject(nested, 'code'));
+  if (code === undefined) return null;
+  const projectId = readObject(nested, 'project_id');
+  return { code, projectId: typeof projectId === 'number' ? projectId : null };
 }
