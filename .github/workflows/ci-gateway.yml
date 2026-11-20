@@ -4,7 +4,7 @@ name: CI — Gateway
 # root go.work. It therefore needs its own CI job, built with GOWORK=off so the
 # workspace is never consulted. Since 2026-10 it is also on a DIFFERENT Go series
 # from the workspace: github.com/maximhq/bifrost/core 1.13 requires go 1.27.3,
-# while go.work and every other module stay on 1.26 (floor 1.26.9).
+# while go.work and every other module stay on 1.26 (floor 1.26.11).
 #
 # THE PIN BELOW IS THE SERIES `1.27`, NOT A PATCH SUCH AS `1.27.3` (#506).
 #

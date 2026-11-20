@@ -120,13 +120,9 @@ jobs:
           # The cache is .github/actions/go-cache below: setup-go's own saves
           # from every ref (scripts/ci/check-workflow-cache-writes.mjs).
           cache: false
-          # The newest 1.26 patch: go.work pins 1.26.9, whose net/http and
-          # crypto/x509 have reachable fixed vulnerabilities (GO-2026-6859,
-          # GO-2026-6809, fixed in 1.26.11); the toolchain bump is #2318. The Go
-          # cache key includes the Go version, so this leg restores read-only
-          # and falls back to a cold module download.
-          go-version: "1.26"
-          check-latest: true
+          # go.work's own toolchain (1.26.11): the Go cache key includes the Go
+          # version, so this leg hits the entry ci-go.yml saves.
+          go-version-file: go.work
       - name: Restore the Go cache (pull requests read, main writes)
         if: ${{ !cancelled() && steps.reach.outputs.go == 'true' }}
         uses: ./.github/actions/go-cache
