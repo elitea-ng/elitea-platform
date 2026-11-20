@@ -1,69 +1,15 @@
 /**
- * Ported from `apps/elitea-ui/src/[fsd]/features/pipelines/flow-editor/ui/
- * FlowEditor.jsx` (722 lines) — unit A2k, the flow-editor's canvas
- * composition root: instantiates `<ReactFlow>`, wires the `nodeTypes`/
- * `edgeTypes` maps to every node component across A2e/A2f/A2g (see
- * `./useFlowEditorNodeTypes.tsx`), and composes A2c's parse/layout helpers
- * with A2d's canvas-interaction hooks. The highest-fan-in file in the
- * `pipelines` domain — built LAST, after every node/hook/helper sub-unit.
+ * Ported from `EliteaUI` `flow-editor/ui/FlowEditor.jsx` — canvas composition root.
+ * Split across `./FlowEditor.styles.ts`, `./useFlowEditorLifecycle.ts`,
+ * `./useFlowEditorNodeOperations.ts`, `./useFlowEditorNodeTypes.tsx`,
+ * `./FlowEditorProvider.tsx`, `./FlowEditorCanvasControls.tsx`, and
+ * `./FlowEditorStateToggle.tsx` to stay within §3.5 budgets.
  *
- * SPLIT ACROSS FILES purely to fit §3.5's 400-line/3-effects-per-component
- * budgets (baseline: 7 top-level `useEffect`s alone): `./FlowEditor.
- * styles.ts`, `./useFlowEditorLifecycle.ts` (the 7 effects, regrouped),
- * `./useFlowEditorNodeOperations.ts` (node-creation/layout callbacks),
- * `./useFlowEditorNodeTypes.tsx` (`nodeTypes`/`edgeTypes`), `./
- * FlowEditorProvider.tsx` (`<FlowEditorContext.Provider>`), `./
- * FlowEditorCanvasControls.tsx` / `./FlowEditorStateToggle.tsx` (self-
- * contained JSX chunks).
- *
- * DISCLOSED REDESIGN — no Redux (baseline: `useSelector(state =>
- * state.pipeline)`/`useSelector(state => state.pipelineEditor)`/
- * `dispatch(actions...)`, `FlowEditor.jsx:3,40,94-114,128-129,178-197,
- * 475-481`): this app has zustand only. `state.pipelineEditor`'s `{nodes,
- * edges}` CACHE already lives in `../model/pipelineEditorStore.ts` (A2d),
- * read unchanged below. Everything else `slices/pipeline.js` owned —
- * `yamlJsonObject`/`nodes`/`edges`/`layout_version`/`resetFlag` plus the
- * `clearResetFlag`/`setLayoutVersion` actions — has no store yet
- * (`pipelineEditorStore.ts`'s own doc comment defers it to "whichever
- * sub-unit owns the pipeline-editor PAGE/composition root" — this
- * component). Each becomes an explicit prop or callback prop, the same
- * "ambient Redux -> explicit prop" swap `useSaveNodeAndEdges.ts`/
- * `useStateValidation.ts` already established; the not-yet-built
- * pipeline-editor page is the natural next owner.
- *
- * DISCLOSED REDESIGN — GA event tracking dropped (baseline: `trackEvent
- * (GA_EVENT_NAMES.PIPELINE_NODE_CREATED, ...)` via `useTrackEvent` from
- * `@/GA`, `FlowEditor.jsx:9,89,254-256`): no such hook/module exists
- * anywhere in this app (grepped the full tree) — same documented gap
- * `useAgentCreation.ts`'s doc comment already established.
- *
- * DROPPED — `data-tour={PIPELINE_TOUR_TARGET_IDS.*}` (baseline:
- * `features/interactive-tours`): out of this Wave-2 batch's scope
- * entirely — same treatment `ApplicationTools.tsx` already established
- * (`no-sideways-features`, no carve-out).
- *
- * DISCLOSED REDESIGN RISK — `./useFlowEditorNodeOperations.ts`'s `onNodeCreateAtPosition` reads a
- * `setYamlJsonObject` ref snapshot instead of the baseline's atomic functional updater (`FlowEditor.
- * jsx:214-220`); `SetYamlJsonObject` still lacks a functional-updater overload (sibling-owned) — real lost-update risk, see that call site's comment.
- *
- * REAL PLUMBING GAP CLOSED HERE: `versionTools`/`llmSettings` — see
- * `./useFlowEditorNodeTypes.tsx`'s doc comment for the full "ambient
- * Formik -> explicit prop, no channel through `nodeTypes` itself" story.
- *
- * `FlowEditorState.StateDrawer` (unit A2j) is imported from `./state/
- * StateDrawer`, re-verified against its real, current `StateDrawerProps`
- * (`isOpen`/`onClose`/`setYamlJsonObject`/`yamlJsonObject`/`disabled`)
- * immediately before writing this version, not assumed from the baseline.
- *
- * `useReactFlow().fitView` is `() => Promise<boolean>` in `@xyflow/react`
- * 12 (the baseline's plain-JS `fitView()` never had to care). Every call
- * site that only wants "fire and forget" goes through `fitViewVoid` — one
- * `void fitView()` wrapper — so `() => void`-typed params (`useFlowEditorReset`/
- * `useFlowEditorInitialFitView`/the imperative handle's `fitView`) never
- * trip `no-misused-promises`.
+ * Uses zustand (`pipelineEditorStore`) + explicit props instead of Redux;
+ * GA tracking and interactive-tour `data-tour` attributes are omitted.
  */
 import type { ReactNode } from 'react';
-import { forwardRef, memo, useCallback, useImperativeHandle, useState } from 'react';
+import { forwardRef, memo, useCallback, useImperativeHandle, useMemo, useState } from 'react';
 
 import Box from '@mui/material/Box';
 import { useColorScheme, type SxProps, type Theme } from '@mui/material/styles';
@@ -104,6 +50,7 @@ import { FlowEditorBackground, FlowEditorCanvasControls } from './FlowEditorCanv
 import { FlowEditorProvider } from './FlowEditorProvider';
 import { flowEditorFitViewOptions } from './flowEditorFitView';
 import { FlowEditorStateToggle } from './FlowEditorStateToggle';
+import { FlowEmptyState } from './empty-state';
 import { RunStateNodeGroup } from './nodes/RunStateNodeGroup';
 import type { PipelineToolEntry } from './select/pipelineToolEntry.types';
 import { ConnectionDropdown } from './settings/ConnectionDropdown';
@@ -156,6 +103,15 @@ export interface FlowEditorHandle {
   readonly calculateLayoutNodes: (parsedYamlJson: YamlPipelineDocument, shouldDoLayout: boolean, layoutAll: boolean, explicitExpandState?: boolean) => void;
   readonly stopCurrentRun: () => void;
   readonly hasRunsInProgress: () => boolean;
+}
+
+function isEmptyPipelineDocument(yamlJsonObject: YamlPipelineDocument): boolean {
+  const nodes = (yamlJsonObject as { readonly nodes?: readonly unknown[] }).nodes;
+  return !nodes?.filter(Boolean).length;
+}
+
+function getVisibleFlowNodes(flowNodes: FlowNode[], isEmpty: boolean): FlowNode[] {
+  return isEmpty ? flowNodes.filter(node => node.type !== FlowEditorConstants.PipelineNodeTypes.End) : flowNodes;
 }
 
 const FlowEditorImpl = forwardRef<FlowEditorHandle, FlowEditorProps>(function FlowEditor(props, ref): ReactNode {
@@ -292,6 +248,12 @@ const FlowEditorImpl = forwardRef<FlowEditorHandle, FlowEditorProps>(function Fl
 
   const onToggleStateDrawer = useCallback(() => setIsStateDrawerOpen(prev => !prev), []);
 
+  const isEmptyPipeline = isEmptyPipelineDocument(yamlJsonObject);
+  const visibleFlowNodes = useMemo(
+    () => getVisibleFlowNodes(flowNodes, isEmptyPipeline),
+    [flowNodes, isEmptyPipeline],
+  );
+
   const { nodeTypes, edgeTypes } = useFlowEditorNodeTypes({ versionTools, llmSettings });
 
   // `RunStateNodeGroup`'s `RunStateGraphNode` (A2f) kept the baseline's own
@@ -337,7 +299,7 @@ const FlowEditorImpl = forwardRef<FlowEditorHandle, FlowEditorProps>(function Fl
           panOnDrag
           panOnScroll
           selectionOnDrag
-          nodes={flowNodes}
+          nodes={visibleFlowNodes}
           onNodesChange={onNodesChange}
           edges={flowEdges}
           onEdgesChange={onEdgesChange}
@@ -366,6 +328,12 @@ const FlowEditorImpl = forwardRef<FlowEditorHandle, FlowEditorProps>(function Fl
           />
         </ReactFlow>
       </FlowEditorProvider>
+      {isEmptyPipeline && (
+        <FlowEmptyState
+          onAddNode={onAddNode}
+          disabled={safeDisabled}
+        />
+      )}
       <StateDrawer
         isOpen={isStateDrawerOpen}
         onClose={onToggleStateDrawer}
