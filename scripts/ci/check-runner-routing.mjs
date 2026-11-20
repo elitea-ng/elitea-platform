@@ -12,9 +12,9 @@
 //   * the pull request's head repository IS this repository (not a fork), and its author is not Dependabot;
 //   * the actor, and the actor of a re-run, is not Dependabot.
 //
-// schedule and workflow_dispatch stay hosted on purpose: they are the runs on main that WRITE the caches. The
-// pool's image has no zstd, so an entry it saved would carry the gzip cache version, which every hosted reader
-// (fork and Dependabot pull requests, the jobs that stay hosted) misses. merge_group stays hosted too: its
+// schedule and workflow_dispatch stay hosted on purpose: they are the runs on main that WRITE the caches. On the
+// pool HOME moves under _work, and the cache version hashes the path strings, so an entry it saved would be one
+// every hosted reader (fork and Dependabot pull requests, the jobs that stay hosted) misses. merge_group stays hosted too: its
 // payload does not say who wrote the queued change, so a Dependabot bump could reach the pool through it.
 //
 // Everything else runs on ubuntu-latest. This is routing, not security: a fork's pull request runs the fork's
@@ -32,7 +32,7 @@
 //     refused outright;
 //   * a routed job runs node/npm/npx or go without a step that installs it (the image has neither);
 //   * a routed job does not run ENV_ACTION unconditionally, straight after its checkout and before any other
-//     action: outside /home/runner/_work the pod has a 1 GiB ephemeral-storage limit, and a job that writes
+//     action: outside /home/runner/_work the pod has a 10 GiB ephemeral-storage limit, and a job that writes
 //     its Go, npm or XDG caches or /tmp there past it is evicted;
 //   * it finds fewer workflows or routed jobs than its floors: "found nothing, therefore clean" is how a
 //     guard stops guarding.
@@ -62,7 +62,7 @@ export const HOSTED_ONLY = "runner.environment == 'github-hosted'";
 export const ALLOWED_EVENTS = new Set(["pull_request", "schedule", "workflow_dispatch", "workflow_call"]);
 /**
  * The action every routed job runs straight after its checkout: it moves HOME, the Go, npm and XDG caches
- * and TMPDIR onto the work volume. The pod's ephemeral-storage limit is 1 GiB outside /home/runner/_work,
+ * and TMPDIR onto the work volume. The pod's ephemeral-storage limit is 10 GiB outside /home/runner/_work,
  * and a job over it is evicted.
  */
 export const ENV_ACTION = "./.github/actions/eng-runner-env";
@@ -217,7 +217,7 @@ export function check({ workflows, actions }) {
       const envAt = steps.findIndex(isEnvStep);
       const firstAction = steps.findIndex((s) => s.uses !== undefined && !/^actions\/checkout@/.test(String(s.uses)) && !isEnvStep(s));
       if (envAt < 0) {
-        errors.push(`${where}: routed to ${RUNNER} without ${ENV_ACTION}: outside /home/runner/_work the pod has 1 GiB of ephemeral storage, and the Go, npm and XDG caches would get it evicted. Add it straight after the checkout`);
+        errors.push(`${where}: routed to ${RUNNER} without ${ENV_ACTION}: outside /home/runner/_work the pod has 10 GiB of ephemeral storage, and the Go, npm and XDG caches would get it evicted. Add it straight after the checkout`);
       } else {
         if (steps[envAt].if !== undefined) errors.push(`${where}: ${ENV_ACTION} must run unconditionally (it is a no-op on hosted runners)`);
         if (firstAction >= 0 && firstAction < envAt) errors.push(`${where}: step ${firstAction + 1} (${steps[firstAction].uses}) runs before ${ENV_ACTION}, so it writes under the old HOME; move ${ENV_ACTION} up, straight after the checkout`);

@@ -102,7 +102,7 @@ const TABLE = [
   ["a Dependabot pull request", { event: "pull_request", author: "dependabot[bot]", actor: "dependabot[bot]" }, "ubuntu-latest"],
   ["a human push on top of a Dependabot pull request", { event: "pull_request", author: "dependabot[bot]" }, "ubuntu-latest"],
   ["a Dependabot re-run of a human pull request", { event: "pull_request", triggering: "dependabot[bot]" }, "ubuntu-latest"],
-  // The runs on main write the caches; they stay hosted (zstd cache version). merge_group cannot tell who
+  // The runs on main write the caches; they stay hosted (moved-HOME cache paths). merge_group cannot tell who
   // wrote the queued change.
   ["merge_group", { event: "merge_group" }, "ubuntu-latest"],
   ["schedule", { event: "schedule" }, "ubuntu-latest"],
@@ -178,7 +178,7 @@ const model = (on, job, actions = {}, more = {}) => ({ workflows: { "w.yml": { p
 
 test("a routed job must move its caches onto the work volume first", () => {
   const without = routedJob({ raw: [{ uses: "actions/checkout@v7" }, { uses: "actions/setup-node@v7" }, { run: "npm test" }] });
-  assert.match(check(model({ schedule: [] }, without)).errors.join(), /without \.\/\.github\/actions\/eng-runner-env: .*1 GiB/);
+  assert.match(check(model({ schedule: [] }, without)).errors.join(), /without \.\/\.github\/actions\/eng-runner-env: .*10 GiB/);
   const late = routedJob({ raw: [{ uses: "actions/checkout@v7" }, { uses: "actions/setup-node@v7" }, { uses: ENV_ACTION }, { run: "npm test" }] });
   assert.match(check(model({ schedule: [] }, late)).errors.join(), /runs before \.\/\.github\/actions\/eng-runner-env/);
   const gated = routedJob({ raw: [{ uses: "actions/checkout@v7" }, { uses: ENV_ACTION, if: "always()" }, { uses: "actions/setup-node@v7" }, { run: "npm test" }] });

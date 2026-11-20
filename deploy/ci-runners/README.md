@@ -1,26 +1,29 @@
 # eng-runner: the self-hosted CI runner pool
 
-`eng-runner` is the org's ARC runner scale set on GKE (namespace `saas-eng-runner`). Each pod has 4 vCPU,
-16 GiB and a 40 GB `_work` volume, and runs the plain `actions-runner` image (Ubuntu 24.04). Jobs run directly
-in the pod: there is no Docker daemon, no `container:` or `services:`, no sudo, no apt and no C compiler. How CI routes jobs
-to it is in [`docs/contributing/ci.md`](../../docs/contributing/ci.md#runners).
+`eng-runner` is the org's ARC runner scale set on GKE (namespace `saas-eng-runner`).
+
+- **Pod size:** 4 vCPU, 16 GiB of memory, an 80 GiB `_work` volume and 10 GiB of ephemeral storage outside it.
+  `minRunners` is 0.
+- **Image:** the owner's custom image `ghcr.io/elitea-ng/eng-runner:2.338.2-20261120`. It is the
+  `actions-runner` image (Ubuntu 24.04, runner 2.338.2) plus build tools: cc, zstd and others.
+- **Limits:** jobs run directly in the pod. There is no Docker daemon, so no `container:` or `services:`, and
+  no root, so no sudo or apt.
+
+How CI routes jobs to it is in [`docs/contributing/ci.md`](../../docs/contributing/ci.md#runners).
 
 The repository is public, so a fork pull request can write `runs-on: eng-runner` into its own copy of a
 workflow. YAML cannot stop that. The job-started hook in this directory can: it runs on the runner, before any
 step, and refuses every job that is not ours.
 
-> **Status: the hook is NOT deployed yet.** It is the recommended hardening. Until it is deployed, these are the
-> guards:
+> **Status: the hook is DEPLOYED** (2026-11-20, through the owner's GitOps chart; see below). A probe job
+> passed: the hook accepted it, and its caches landed under `_work`. It works together with:
 >
-> - The runner group gives access to selected repositories only.
-> - A fork pull request's workflow runs wait for approval for every external contributor.
-> - The YAML routing (`docs/contributing/ci.md`) keeps fork and Dependabot jobs on GitHub-hosted runners.
+> - the runner group, which gives access to selected repositories only;
+> - approval of fork workflow runs for every external contributor;
+> - the YAML routing (`docs/contributing/ci.md`), which keeps fork and Dependabot jobs on GitHub-hosted runners.
 >
-> **The remaining risk:** a maintainer approves a fork pull request whose own workflow YAML targets
-> `eng-runner`. That job would run in the cluster.
->
-> **The rule: never approve workflow runs on a fork pull request until the hook is deployed.** Review the
-> fork's code in the diff instead, or push its commits to a branch of this repository yourself.
+> Keep approving fork runs with care. The hook refuses a fork job that targets `eng-runner`, but it is the
+> only layer that does.
 
 | File | What it is |
 |---|---|
@@ -77,11 +80,11 @@ If the job runs `echo hi`, the hook is not active: stop here and check the pod's
 Settings → Secrets and variables → Actions → **Variables** → New repository variable:
 `ENG_RUNNER` = `on`.
 
-This step does not depend on steps 1 and 2. The owner decided on 2026-11-20 to turn routing on before the hook
-is deployed. In that case the rule in the status box above applies.
+This step does not depend on steps 1 and 2, but turn routing on only with the hook deployed (it is, as of
+2026-11-20).
 
 The next run of a same-repo pull request sends the toolchain-only jobs to `eng-runner`. Their "Set up job" log
-shows `Runner name: eng-runner-…`. With the hook deployed, "Set up runner" also shows
+shows `Runner name: eng-runner-…`, and "Set up runner" shows
 `eng-runner: accepted pull_request job of …`.
 
 ### 4. Roll back
@@ -90,30 +93,37 @@ Set `ENG_RUNNER` to `off` (or delete it). Every job goes back to `ubuntu-latest`
 request is needed. To cut the pool off from the repository entirely, also untick it under the runner group's
 **Repository access**.
 
-## Next step: a custom runner image (not implemented)
+## Next step: move the jobs the custom image unlocks
 
-Most hosted-only jobs are hosted because the plain `actions-runner` image lacks tools, not because of Docker. The
-proposal is an image at `deploy/ci-runners/Containerfile`: `FROM ghcr.io/actions/actions-runner:<pinned digest>`
-plus apt installs at build time. It would be published by a hosted workflow to ghcr and pinned by digest in the
-scale-set values.
+The routed set in `docs/contributing/ci.md` was chosen for the plain `actions-runner` image. The custom image
+adds tools that let more jobs move. Each tool is listed with what it unlocks; check that it is in the image
+before moving a job:
 
-| Add | Unlocks |
+| Tool | Unlocks |
 |---|---|
-| `build-essential` (gcc, make), `pkg-config`, `libssl-dev` | Rust jobs (rust-lint, rust-shared, `code-runner`, `quality`, doc-extractor, `serde-order`), and Go with cgo: `go test -race` (`test-checks`, the shards that need no services) |
-| `zstd` | The same cache version as hosted runners, so routed jobs read the zstd entries main writes, and main's writers could move too |
-| `python3-venv`, `python3-pip` | The Python jobs (ci-go `proto`, mock-llm `unit`, deepwiki-conformance `fixtures`) with a venv, or `setup-python` with `AGENT_TOOLSDIRECTORY` pre-created |
+| A C toolchain (cc, make), `pkg-config`, `libssl-dev` | The Rust jobs (rust-lint, rust-shared, `code-runner`, `quality`, doc-extractor, `serde-order`), and Go with cgo: `go test -race` (`test-checks`, the shards that need no services) |
+| `zstd` | The cache client's zstd version. Hosted entries become readable once the cache paths match too (see below) |
+| `python3-venv`, `python3-pip` | The Python jobs (ci-go `proto`, mock-llm `unit`, deepwiki-conformance `fixtures`) |
 | `shellcheck`, `gh`, `helm`, `yq`, `protoc` | no-binaries `repo-gates`, helm-lint `lint` and `template`, ci-go `env-drift`, dependency-scanning `scan` |
 
-Also mount the 40 GB work volume at `/home/runner`, not only at `/home/runner/_work`. The container's
-ephemeral-storage limit is 1 GiB, so today `.github/actions/eng-runner-env` moves `HOME` and every cache under
-`_work` to keep a job from being evicted. With the volume at `/home/runner`, `HOME` stays where it is, and the
-cache paths match the hosted ones.
+To move a job, switch its `runs-on` to `ROUTED_RUNS_ON`, add `./.github/actions/eng-runner-env` after its
+checkout, and let `check-runner-routing.mjs` approve it. The guard's "runs go or node without installing it"
+rule and its docker and sudo rules still apply.
 
-Jobs that need Docker, `services:` or kind stay hosted until there is a daemon option (an in-cluster BuildKit or a
-separate dind scale set). Once the image lands, move each job by switching its `runs-on` to `ROUTED_RUNS_ON` and
-letting `check-runner-routing.mjs` approve it.
+**Cache paths.** `.github/actions/eng-runner-env` moves `HOME` and every cache under `_work`. Outside `_work`
+the pod has only 10 GiB of ephemeral storage, and a pod that writes past it is evicted. A side effect is that
+the cache paths differ from the hosted ones, so hosted entries stay unreadable. Mounting the work volume at
+`/home/runner` would let `HOME` stay where it is. The cache paths would then match, and main's cache writers
+could move too.
+
+Jobs that need Docker, `services:` or kind stay hosted until there is a daemon option, such as an in-cluster
+BuildKit or a separate dind scale set.
 
 ## Changing the hook
 
-Edit `job-started.sh` here, run `node --test scripts/ci/eng-runner-hook.test.mjs`, merge, then repeat step 1.
-The cluster copy is the one that counts: the repository copy is a reference.
+1. Edit `job-started.sh` here.
+2. Run `node --test scripts/ci/eng-runner-hook.test.mjs`.
+3. Merge.
+4. Copy the file unchanged into the owner's GitOps chart.
+
+The chart's copy is the one that counts; the repository copy is the tested reference.

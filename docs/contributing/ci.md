@@ -114,23 +114,25 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
 
 Most jobs run on GitHub-hosted `ubuntu-latest`. The free plan caps hosted jobs at 20 at a time for the whole
 organisation, and queueing was most of a pull request's wall time. The organisation also has a self-hosted
-pool, `eng-runner`. It is an ARC runner scale set on GKE whose pods have 4 vCPU, 16 GiB and 40 GB of work
-disk.
+pool, `eng-runner`. It is an ARC runner scale set on GKE whose pods have 4 vCPU, 16 GiB, an 80 GiB work
+volume and 10 GiB of ephemeral storage. It runs the custom image `ghcr.io/elitea-ng/eng-runner:2.338.2-20261120`:
+the `actions-runner` image plus build tools such as cc and zstd.
 
 ### What the pool can run
 
-A job runs directly in the plain `actions-runner` pod (Ubuntu 24.04):
+A job runs directly in the pod (Ubuntu 24.04):
 
 - **No Docker daemon.** No `container:`, no `services:`, no docker, podman, compose or kind.
 - **No root.** No sudo and no apt.
-- **No C compiler.** Rust cannot link, `go test -race` cannot build, and cgo is off.
-- **No node, Go, gh, yq or Helm.** The image has bash, git, curl, jq and python3 without pip or venv.
-  Toolchains come from `setup-*` actions or from a download into the job's own directories.
-- **1 GiB of disk outside `/home/runner/_work`.** That is the container's ephemeral-storage limit. Only
-  `_work` is the separate 40 GB volume, and a pod that writes past the limit is evicted. The default places
+- **Toolchains come from the job.** node and Go come from `setup-*` actions or from a download into the job's
+  own directories.
+- **10 GiB of disk outside `/home/runner/_work`.** That is the container's ephemeral-storage limit. Only
+  `_work` is the separate 80 GiB volume, and a pod that writes past the limit is evicted. The default places
   for `~/go/pkg/mod`, `~/.cache/go-build`, `~/.npm`, `~/.cache` and `/tmp` all count against it.
 
-So only toolchain-only jobs are routed to it:
+The routed set below was chosen for the plain `actions-runner` image, which had no C compiler, zstd, gh, yq,
+Helm or pip. The custom image unlocks more jobs; `deploy/ci-runners/README.md` ("Next step") lists them. Today
+only toolchain-only jobs are routed:
 
 | Workflow | Jobs |
 |---|---|
@@ -180,7 +182,8 @@ It is an allowlist of one event. A condition written as "anything but `pull_requ
 These events stay hosted:
 
 - **`schedule` and `workflow_dispatch`** (the runs on main). They write the caches. An entry saved on the pool
-  would carry the gzip cache version, because the image has no `zstd`, and every hosted reader would miss it.
+  would be saved under the moved `HOME` paths, and the cache version hashes the path strings, so every hosted
+  reader would miss it.
 - **`merge_group`.** Its payload does not say who wrote the queued change, so a Dependabot bump could reach the
   pool through it.
 
@@ -212,14 +215,12 @@ then re-run the failed or cancelled jobs (or push again).
 
 **Caches.** `actions/cache` works on the pool through the GitHub cache service. The writers are unchanged, one
 per key: the scheduled runs on main write, and they stay hosted. Pull requests only read. Expect a routed job
-to miss the hosted entries and run cold, for two reasons:
-
-- The image has no `zstd`, so the pool's cache client uses a different cache version from the hosted writers.
-- The restore paths sit under the moved `HOME`, and the version hashes the path strings.
+to miss the hosted entries and run cold: the restore paths sit under the moved `HOME`, and the cache version
+hashes the path strings. The custom image has `zstd`, so the compression part of the version already matches.
 
 The Go jobs also build with cgo off, so the hosted Go build cache would only partly apply to them anyway. Mounting
-the work volume at `/home/runner` in the scale set would keep `HOME` unmoved; with `zstd` in a custom image, the
-cache versions would then match (`deploy/ci-runners/README.md`, "Next step").
+the work volume at `/home/runner` in the scale set would keep `HOME` unmoved, and the cache versions would then
+match (`deploy/ci-runners/README.md`, "Next step").
 
 ### Security model
 
@@ -230,16 +231,15 @@ jobs on hosted runners, but it is not a security control. The guards are:
 1. **The runner group gives access to selected repositories only.** Organisation settings → Actions → Runner
    groups.
 2. **Fork pull-request runs need approval for every external contributor.**
-3. **The job-started hook (recommended; not deployed yet).** `deploy/ci-runners/job-started.sh` runs on the
+3. **The job-started hook (deployed 2026-11-20).** `deploy/ci-runners/job-started.sh` runs on the
    runner before any step. It refuses every job that is not from an allowed repository, and every event outside
    `pull_request`, `schedule`, `workflow_dispatch` and `push`. It also refuses a pull request whose head is a
-   fork, and Dependabot. The runbook is
-   `deploy/ci-runners/README.md`.
+   fork, and Dependabot. The owner's GitOps chart deploys it; the repository copy is the tested reference.
+   The runbook is `deploy/ci-runners/README.md`.
 
-Until the hook is deployed, one risk remains: a maintainer approves a fork pull request whose own YAML targets
-`eng-runner`. **Never approve workflow runs on a fork pull request until the hook is deployed.** This includes
-the close-time run of `cancel-merged-pr-runs.yml`, which a fork's close also queues for approval. Its hourly
-sweep covers that pull request, so the run needs no approval.
+The hook is the only layer that refuses a fork job whose own YAML targets `eng-runner`, so keep approving fork
+runs with care. The close-time run of `cancel-merged-pr-runs.yml`, which a fork's close also queues for
+approval, needs no approval: its hourly sweep covers that pull request.
 
 `cancel-merged-pr-runs.yml` uses `pull_request: [closed]` and an hourly schedule, not `pull_request_target`.
 GitHub blocks `pull_request_target` by default from 2026-12-02. A fork or Dependabot close gets a read-only
