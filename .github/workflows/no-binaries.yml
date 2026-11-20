@@ -7,7 +7,9 @@ name: No Binaries
 # change so a binary added anywhere is caught.
 
 on:
-  pull_request:
+  # Called by ci.yml, which owns the PR tiers and the path filter
+  # (scripts/ci/tier-paths.json); no `pull_request` arm of its own.
+  workflow_call:
   # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
   # The nightly run on main is the one that WRITES the caches pull requests
   # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
@@ -24,26 +26,31 @@ on:
 # jobs, so a queued run that can never report on current code is a slot another
 # gate needs.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: no-binaries-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
-  no-binaries:
-    name: No committed binaries
+  repo-gates:
+    name: Repository gates
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
         with:
           # Need the working tree + HEAD to scan; no full history required.
           fetch-depth: 1
+
+      # ── No committed binaries ─────────────────────────────────────────────────
       - name: Scan for binary / oversize tracked files
+        if: ${{ !cancelled() }}
         run: bash scripts/no-binaries-check.sh
       # Upgrade notes are one file per change, so open pull requests never
       # conflict over a shared list (docs/upgrading/README.md).
       - name: Upgrade notes are one file per change
+        if: ${{ !cancelled() }}
         run: node scripts/ci/check-upgrading-notes.mjs
       # One Rust version everywhere (PR #1297): every rust-toolchain.toml, every
       # `FROM rust:` image (same digest in every stage) and every crate's
@@ -52,8 +59,10 @@ jobs:
       # command proves the gate red, once per assertion, on a broken copy.
       # check-rust-toolchain.mjs reads the YAML files with the `yaml` package.
       - name: Install the toolchain check's one dependency
+        if: ${{ !cancelled() }}
         uses: ./.github/actions/ci-scripts-deps
       - name: One Rust toolchain across cargo, CI and images
+        if: ${{ !cancelled() }}
         run: |
           bash scripts/ci/check-rust-toolchain.sh
           bash scripts/ci/check-rust-toolchain-test.sh
@@ -64,6 +73,7 @@ jobs:
       # this workflow has no path filter. It breaks one input per case and
       # requires the gate to name it.
       - name: The zip pin gate is proved red
+        if: ${{ !cancelled() }}
         run: bash scripts/ci/check-zip-pin-test.sh
       # One Helm in CI (v4, every azure/setup-helm step) plus the one Helm 3
       # render Argo CD needs (helm-lint.yml, id helm3). Dependabot bumps the
@@ -72,6 +82,7 @@ jobs:
       # The test step counts its scenarios: a suite that collects nothing
       # exits 0.
       - name: One Helm version across CI, and the Helm 3 render
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           node scripts/ci/check-helm-version.mjs
@@ -107,6 +118,7 @@ jobs:
       # This step measures syntax, not behaviour. It is not a substitute for a
       # caller. The floor turns a glob that stopped matching into a red job.
       - name: Every tracked shell file parses
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           scripts_found=0
@@ -141,6 +153,7 @@ jobs:
       # second. It lives here because this workflow has no path filter, and
       # the guards it reads sit in three different trees.
       - name: The derived assertion floors move with their assertions
+        if: ${{ !cancelled() }}
         run: bash scripts/lib/assertion-floor-test.sh
       # This gate lives here, and not only in ci-go.yml, because ci-go.yml is
       # path-filtered and does not select deploy/gateway-api/**, the compose
@@ -149,19 +162,25 @@ jobs:
       # and reads the Gateway API HTTPRoute and the chart strip list (#338,
       # #568, #1359).
       - uses: actions/setup-go@v7
+        if: ${{ !cancelled() }}
         with:
           # The cache is .github/actions/go-cache below: setup-go's own
           # saves from every ref, and pull-request copies evicted main's.
           cache: false
           go-version-file: go.work
       - name: Restore the Go cache (pull requests read, main writes)
+        if: ${{ !cancelled() }}
         uses: ./.github/actions/go-cache
         with:
-          cache-dependency-path: services/elitea-main/go.sum
+          cache-dependency-path: |
+            services/elitea-main/go.sum
+            libs/go/*/go.sum
+            libs/proto/gen/go/go.sum
       # -count=1 is required, not tidiness. The gate reads YAML from deploy/,
       # which is outside this module, so the Go test cache does not notice an
       # edit to those files and can serve a stale pass.
       - name: Validate the browser edges
+        if: ${{ !cancelled() }}
         working-directory: services/elitea-main
         run: go test -count=1 ./tests/deployedge/...
       # The permission-grant gate lives here for the same reason as the step
@@ -186,35 +205,34 @@ jobs:
       # files, and a stale pass here hides the exact defect the gate exists for.
       # The run takes about ten seconds, so the insurance is nearly free.
       - name: Validate that every gated permission has a grant
+        if: ${{ !cancelled() }}
         working-directory: services/elitea-main
         run: go test -count=1 ./internal/api/
 
-  # Issue #424. Gate scripts that validated checked-in evidence were called by
-  # no workflow, Taskfile task or other script. A gate that nothing calls
-  # cannot fail, and its presence in the tree reads as coverage.
-  #
-  # The remaining checks are the database catalog contract
-  # (scripts/database/check_legacy_catalog_contract.py, over testdata/postgres)
-  # and the ETL fixture isolation guard (scripts/security/, over deploy/ and
-  # scripts/acceptance/etl). They live here, and not in a path-filtered
-  # workflow, for the reason the header of this file gives: their subjects
-  # are spread over several trees, and this repository has twice shipped a
-  # gate that stopped running because a filter or a path stopped matching
-  # (#157, #426). This workflow has no path filter at all.
-  #
-  # The scripts are a separate job, not more steps in the job above, so a
-  # failing evidence check does not hide the binary scan and the reverse.
-  evidence-baselines:
-    name: Checked-in evidence baselines
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
+      # Issue #424. Gate scripts that validated checked-in evidence were called by
+      # no workflow, Taskfile task or other script. A gate that nothing calls
+      # cannot fail, and its presence in the tree reads as coverage.
+      #
+      # The remaining checks are the database catalog contract
+      # (scripts/database/check_legacy_catalog_contract.py, over testdata/postgres)
+      # and the ETL fixture isolation guard (scripts/security/, over deploy/ and
+      # scripts/acceptance/etl). They live here, and not in a path-filtered
+      # workflow, for the reason the header of this file gives: their subjects
+      # are spread over several trees, and this repository has twice shipped a
+      # gate that stopped running because a filter or a path stopped matching
+      # (#157, #426). This workflow has no path filter at all.
+      #
+      # The scripts are a separate job, not more steps in the job above, so a
+      # failing evidence check does not hide the binary scan and the reverse.
+      # ── Checked-in evidence baselines ─────────────────────────────────────────
       - uses: actions/setup-python@v7
+        if: ${{ !cancelled() }}
         with:
           python-version: "3.12"
       # Every check reads only the standard library and the committed JSON, so
       # there is nothing to install.
       - name: Validate the checked-in security and database evidence
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -232,6 +250,7 @@ jobs:
             python "${check}"
           done
       - name: Install the test runner
+        if: ${{ !cancelled() }}
         run: python -m pip install --disable-pip-version-check pytest==8.4.2
       # pytest exits 5 when it collects nothing, so an empty run is red rather
       # than green. The glob floor covers the narrower case where one file of
@@ -239,6 +258,7 @@ jobs:
       # are deliberately not here: they test one-off migration procedures
       # pinned to the manifest through 0123 and fail on any later tree.
       - name: Run the evidence checker unit tests
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -252,63 +272,51 @@ jobs:
       # cache must touch its sources first, or a stale binary ships under a
       # fresh tag. It reads only the committed Containerfiles.
       - name: Rust image builds compile the checked-out source
+        if: ${{ !cancelled() }}
         run: python -m pytest -q scripts/contract/test_cargo_target_cache_freshness.py
 
-  # No workflow starts on a push (owner decision, 2026-10-22): a merge to main
-  # starts no pipeline. Pull requests run their gates; main runs on a schedule
-  # (the nightly cache writers, publish.yml's nightly pre-release) and by
-  # dispatch (a release, a dev pre-release). This job holds that rule for every
-  # workflow, in each spelling `on:` takes.
-  #
-  # It lives here, and not in a path-filtered workflow, for the reason the
-  # header of this file gives: a path filter is a second thing to keep correct,
-  # and a gate about triggers must not itself depend on one.
-  workflow-triggers:
-    name: No workflow starts on a push
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      # It reads only node's standard library (the runner's node); there is
-      # nothing to install.
+      # No workflow starts on a push (owner decision, 2026-10-22): a merge to main
+      # starts no pipeline. Pull requests run their gates; main runs on a schedule
+      # (the nightly cache writers, publish.yml's nightly pre-release) and by
+      # dispatch (a release, a dev pre-release). This job holds that rule for every
+      # workflow, in each spelling `on:` takes.
+      #
+      # It lives here, and not in a path-filtered workflow, for the reason the
+      # header of this file gives: a path filter is a second thing to keep correct,
+      # and a gate about triggers must not itself depend on one.
+      # ── No workflow starts on a push ──────────────────────────────────────────
       - name: No workflow names the push event
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           node --test scripts/ci/check-no-push-triggers.test.mjs
           node scripts/ci/check-no-push-triggers.mjs
 
-  # docs/client-feature-parity.md is how new client work lands on web, desktop
-  # and mobile together; the checker holds the table's shape (every row has a
-  # status for each client in one of the three forms). Here rather than in
-  # ci-web.yml: a table-only edit is a documentation change, and the web
-  # pipeline it used to start is the most expensive one in the repository.
-  # This workflow has no path filter, so the table is checked on every change.
-  # It reads only node's standard library (the runner's node).
-  client-feature-parity:
-    name: Client feature-parity table is well formed
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
+      # docs/client-feature-parity.md is how new client work lands on web, desktop
+      # and mobile together; the checker holds the table's shape (every row has a
+      # status for each client in one of the three forms). Here rather than in
+      # ci-web.yml: a table-only edit is a documentation change, and the web
+      # pipeline it used to start is the most expensive one in the repository.
+      # This workflow has no path filter, so the table is checked on every change.
+      # It reads only node's standard library (the runner's node).
+      # ── Client feature-parity table is well formed ────────────────────────────
       - name: Every feature has a status for web, desktop and mobile
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           node --test scripts/ci/check-client-feature-parity.test.mjs
           node scripts/ci/check-client-feature-parity.mjs
 
-  # The brand guide (brand/, published to GitHub Pages at /brand/ by
-  # docs-pages.yml). Its build reads client-core's tokens.json, the logo SVGs
-  # and the web app's vendored fonts, so a change to any of them can break
-  # it: here, where there is no path filter, rather than behind ci-web's.
-  # The build recomputes every contrast pair and fails below its minimum.
-  # Node's standard library only. The test count is asserted because a
-  # suite that collects nothing exits 0.
-  brand-guide:
-    name: Brand guide builds, its links resolve, brand manifests pass
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
+      # The brand guide (brand/, published to GitHub Pages at /brand/ by
+      # docs-pages.yml). Its build reads client-core's tokens.json, the logo SVGs
+      # and the web app's vendored fonts, so a change to any of them can break
+      # it: here, where there is no path filter, rather than behind ci-web's.
+      # The build recomputes every contrast pair and fails below its minimum.
+      # Node's standard library only. The test count is asserted because a
+      # suite that collects nothing exits 0.
+      # ── Brand guide builds, its links resolve, brand manifests pass ───────────
       - name: Build the brand guide and test it
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           expected="$(grep -c '^test(' brand/test/build.test.mjs)"
@@ -331,6 +339,7 @@ jobs:
       # per row of elitea-sync's COPIES table, which builds its tests in a
       # loop), because a suite that collects nothing exits 0.
       - name: Brand manifests pass brand-check and their tests
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           node scripts/brand-check.mjs brand/elitea brand/sample
@@ -347,65 +356,23 @@ jobs:
             exit 1
           fi
 
-  # Issue #520. A migration states its version number when an author writes it.
-  # The number is only true when the pull request MERGES. Pull requests #369 and
-  # #388 both claimed 0072; #495 and #516 both claimed 0084. In each case both
-  # authors read the branch head, both found the number free, and neither made
-  # an error. A repeated version makes LoadManifest fail and a deployment stops.
-  #
-  # The check reads the BASE BRANCH as origin holds it at the time it runs, not
-  # the pull request's own tree. A check that reads its own tree cannot see the
-  # collision.
-  #
-  # It runs here rather than in ci-go.yml because this workflow has no path
-  # filter. ci-go.yml selects `services/elitea-main/**` and would cover the
-  # migration directory today, but a filter is a second thing to keep correct.
-  migration-version:
-    name: Migration version is free on the base branch
-    # Only a pull request has a base branch. A push has already merged, and the
-    # duplicate version is then a LoadManifest failure that ci-go.yml reports.
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          # The check runs `git ls-tree` against the base branch, so it needs a
-          # repository with a remote it can fetch that ref from. The script
-          # fetches the single ref it needs at depth 1.
-          fetch-depth: 1
-      - name: The added migration numbers are above the base head
-        env:
-          MIGRATION_BASE_REF: ${{ github.base_ref }}
-        run: bash scripts/database/check-migration-version.sh
-
-  # Issue #485. `docker/model-cache-init/test_entrypoint.sh` holds the
-  # assertions on the model-cache entrypoint, and no workflow, Taskfile task or
-  # script called it. The image cannot run it either, because
-  # `docker/model-cache-init/.dockerignore` excludes it from the build context.
-  # Running it here needs no image at all: the suite states that it runs without
-  # Docker, against a temporary directory.
-  #
-  # It runs in this workflow because no other workflow selects
-  # `docker/model-cache-init/**`, and this one has no path filter. About 15
-  # seconds.
-  #
-  # Issue #529 adds the second half of that directory. `validate-manifest.sh`
-  # had no caller either, and `manifest-schema.json` had no reader at all. The
-  # validator reads the schema now, so the step below measures both files.
-  model-cache-init:
-    name: Model cache entrypoint suite and manifest
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      # Read the COUNT, not the exit status (#529). The suite already exits
-      # non-zero on a shortfall, and a job that reads the status alone believes
-      # whatever the suite reports about itself. This step reads the result
-      # line, so a suite that stops printing one is red here as well.
+      # Issue #485. `docker/model-cache-init/test_entrypoint.sh` holds the
+      # assertions on the model-cache entrypoint, and no workflow, Taskfile task or
+      # script called it. The image cannot run it either, because
+      # `docker/model-cache-init/.dockerignore` excludes it from the build context.
+      # Running it here needs no image at all: the suite states that it runs without
+      # Docker, against a temporary directory.
       #
-      # It states NO number of its own. The floor is derived inside the suite
-      # (#534), and a number restated here would put the same stale count in a
-      # second place.
+      # It runs in this workflow because no other workflow selects
+      # `docker/model-cache-init/**`, and this one has no path filter. About 15
+      # seconds.
+      #
+      # Issue #529 adds the second half of that directory. `validate-manifest.sh`
+      # had no caller either, and `manifest-schema.json` had no reader at all. The
+      # validator reads the schema now, so the step below measures both files.
+      # ── Model cache entrypoint suite and manifest ─────────────────────────────
       - name: Run the entrypoint assertions
+        if: ${{ !cancelled() }}
         run: |
           set +e
           set -uo pipefail
@@ -435,142 +402,32 @@ jobs:
       # The bucket is private, so the answer itself is a counted warning and not
       # an error, and the step does not depend on a credential.
       - name: Validate the model cache manifest against its schema
+        if: ${{ !cancelled() }}
         run: bash docker/model-cache-init/validate-manifest.sh docker/model-cache-init/manifest.json
 
-  # Issue #541. A squash merge writes whole files. A squash from a branch that
-  # was cut before an earlier pull request landed therefore DELETES that pull
-  # request's work, and it leaves the deleted pull request in the history.
-  # Pull request #502 corrected the logout flight and its journey. Pull request
-  # #516 merged four hours later and wrote the five files back to their
-  # pre-#502 copies, byte for byte. This repository still holds both blobs, and
-  # they show it: logout.ts is object da9ba899 before #502, c2f5564a after it,
-  # and da9ba899 again at #516.
-  #
-  # The check that cleared it was `git merge-base --is-ancestor`, and it
-  # answered "true". That answer is correct and it is not evidence. Ancestry
-  # reports the commit. It says nothing about the content. Three agents then
-  # cleared a red journey by calling it "pre-existing on staging". Each was
-  # right, and the reason it was pre-existing was this deletion, so the
-  # reasoning closed on itself.
-  #
-  # This job reads content. It walks the trunk, takes the diff of each merged
-  # pull request against its own base, and looks for the lines that pull
-  # request added. It names BOTH pull requests, and the one that deleted the
-  # work is the one to fix.
-  #
-  # It reads the BASE branch head on a pull request, never the proposed tree. A
-  # pull request may rewrite lines an earlier pull request added, and that is
-  # ordinary work, so a gate that read its own tree would be red on most of
-  # them. The measurement is about what ALREADY merged. On a push it reads the
-  # new trunk head, so a bad merge turns red within minutes of landing.
-  #
-  # It lives here, and not in a path-filtered workflow, for the reason the
-  # header of this file gives. A deletion of this kind can land in any tree.
-  landed-line-survival:
-    name: A merged pull request's work is still in the tree
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          # The walk needs the trunk. The checker REFUSES a shallow clone
-          # rather than reporting a short walk as a pass.
-          fetch-depth: 0
-      # The suite builds throwaway bare repositories with git plumbing. It
-      # reads only node's standard library (the runner's node), so there is
-      # nothing to install.
+      # The 10 GB Actions cache. Measured 2026-10-16 it held 10.7 GB in 809
+      # entries, GitHub evicted entries within minutes, and the largest writers
+      # were PULL REQUESTS: setup-go caches of 0.3-1.2 GB per pull request and
+      # ~2.9 GB of pull-request BuildKit blobs, every one of them evicting the
+      # main-branch entry each pull request should have been reading. The rule
+      # since then is "pull requests read, a run on main writes"; this job holds
+      # it, for every workflow and composite action, with the negative cases in
+      # scripts/ci/check-workflow-cache-writes.test.mjs.
       #
-      # Read the COUNT of scenarios, not the exit status alone. A test runner
-      # exits 0 when it collects nothing, so a renamed file or a renamed method
-      # would turn this step into a silent no-op (#534). The number comes from
-      # the suite file itself, so adding a scenario raises it.
-      - name: The checker still sees the deletion it exists for
-        run: |
-          set -euo pipefail
-          expected="$(grep -c '^test(' scripts/ci/check-landed-line-survival.test.mjs)"
-          if [ "${expected}" -lt 8 ]; then
-            echo "::error::found ${expected} scenario(s) in the suite, expected at least 8 — the pattern stopped matching, so this step checked nothing"
-            exit 1
-          fi
-          # Capture the status: under `set -e` a failing command substitution
-          # exits at the assignment and the output is never printed.
-          status=0
-          output="$(node --test --test-reporter=tap scripts/ci/check-landed-line-survival.test.mjs 2>&1)" || status=$?
-          printf '%s\n' "${output}"
-          ran="$(printf '%s\n' "${output}" | sed -n 's/^# pass \([0-9][0-9]*\)$/\1/p')"
-          if [ -z "${ran}" ]; then
-            echo "::error::node --test printed no pass line, so the number of scenarios it ran was never reported"
-            exit 1
-          fi
-          if [ "${ran}" -ne "${expected}" ]; then
-            echo "::error::the suite file holds ${expected} scenario(s) and node --test passed ${ran}; a scenario that does not run is not a passed scenario"
-            exit 1
-          fi
-          if [ "${status}" -ne 0 ]; then
-            echo "::error::node --test check-landed-line-survival.test.mjs exited ${status}"
-            exit "${status}"
-          fi
-          echo "line-survival checker: ${ran} of ${expected} scenarios ran"
-      - name: The lines the last merged pull requests added are still on the trunk
-        env:
-          # A pull request measures its BASE. A push measures the new head.
-          SURVIVAL_TIP: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: |
-          set -euo pipefail
-          tip="${SURVIVAL_TIP}"
-          if ! git rev-parse -q --verify "${tip}^{commit}" >/dev/null 2>&1; then
-            # A force-push to the base branch can retire the recorded sha. On a
-            # pull request the checkout is the merge commit, so its first
-            # parent IS the base.
-            echo "::notice::${tip} is not in this clone; reading the first parent of HEAD instead"
-            tip="$(git rev-parse HEAD^1 2>/dev/null || git rev-parse HEAD)"
-          fi
-          # A pull request can target a FEATURE branch (a stacked PR). Its base
-          # head then sits on unmerged feature commits, none of which name a
-          # pull request, and the walk refuses with "measured nothing" - a
-          # false alarm about the subject format. The trunk this check audits
-          # is the default branch, so fold the tip down to the last trunk
-          # commit underneath it. On a pull request into the default branch the
-          # base head already sits on the trunk and the fold is the identity.
-          trunk="origin/${DEFAULT_BRANCH}"
-          if git rev-parse -q --verify "${trunk}^{commit}" >/dev/null 2>&1; then
-            folded="$(git merge-base "${tip}" "${trunk}")" || folded="${tip}"
-            if [ "${folded}" != "${tip}" ]; then
-              echo "::notice::${tip} is not on ${trunk}; auditing the trunk beneath it at ${folded}"
-              tip="${folded}"
-            fi
-          fi
-          node scripts/ci/check-landed-line-survival.mjs --tip "${tip}"
-
-  # The 10 GB Actions cache. Measured 2026-10-16 it held 10.7 GB in 809
-  # entries, GitHub evicted entries within minutes, and the largest writers
-  # were PULL REQUESTS: setup-go caches of 0.3-1.2 GB per pull request and
-  # ~2.9 GB of pull-request BuildKit blobs, every one of them evicting the
-  # main-branch entry each pull request should have been reading. The rule
-  # since then is "pull requests read, a run on main writes"; this job holds
-  # it, for every workflow and composite action, with the negative cases in
-  # scripts/ci/check-workflow-cache-writes.test.mjs.
-  #
-  # actionlint over EVERY workflow runs here too: no other job lints the
-  # whole directory, and a cache condition that does not parse is a cache
-  # condition that never gates. The binary is pinned by version and checksum.
-  #
-  # It lives here because this workflow has no path filter: a cache step can
-  # be added to any workflow in any pull request.
-  workflow-cache-writes:
-    name: Workflow caches are written from main only
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      # The checks read YAML with the `yaml` package (scripts/ci/package-lock.json);
-      # the runner's node runs them.
-      - name: Install the checkers' one dependency
-        uses: ./.github/actions/ci-scripts-deps
+      # actionlint over EVERY workflow runs here too: no other job lints the
+      # whole directory, and a cache condition that does not parse is a cache
+      # condition that never gates. The binary is pinned by version and checksum.
+      #
+      # It lives here because this workflow has no path filter: a cache step can
+      # be added to any workflow in any pull request.
+      # ── Workflow caches are written from main only ────────────────────────────
       - name: The PyYAML-compatible YAML read the node checks share
+        if: ${{ !cancelled() }}
         run: node --test scripts/ci/ci-compat.test.mjs
       # Read the COUNT of scenarios, not the exit status alone: a suite that
       # collects nothing exits 0 (#534).
       - name: The checker still refuses every pull-request writer it exists for
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           expected="$(grep -c '^test(' scripts/ci/check-workflow-cache-writes.test.mjs)"
@@ -594,6 +451,7 @@ jobs:
           fi
           echo "cache-write checker: ${ran} of ${expected} scenarios passed"
       - name: No workflow cache step writes from a pull request
+        if: ${{ !cancelled() }}
         run: node scripts/ci/check-workflow-cache-writes.mjs
       # ci-web-e2e.yml builds each stack image once and the lanes pull it by
       # digest: scripts/ci/stack-images.mjs is the contract between the two
@@ -602,9 +460,10 @@ jobs:
       # that ships. Counted like the suite above: a suite that collects
       # nothing exits 0.
       - name: The build-once contract and the CI-image prune policy hold
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
-          for suite in stack-images.test.mjs prune-ci-images.test.mjs prune-prereleases.test.mjs prune-releases.test.mjs; do
+          for suite in stack-images.test.mjs stack-image-hash.test.mjs prune-actions-caches.test.mjs prune-ci-images.test.mjs prune-prereleases.test.mjs prune-releases.test.mjs; do
             expected="$(grep -c '^test(' "scripts/ci/${suite}")"
             [ "${expected}" -ge 5 ] || { echo "::error::${suite}: found ${expected} scenario(s), expected at least 5"; exit 1; }
             # Capture the status: under `set -e` a failing command substitution
@@ -623,26 +482,40 @@ jobs:
             fi
           done
       - name: CI-only images are referenced only by CI
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           node --test scripts/ci/check-ci-image-references.test.mjs
           node scripts/ci/check-ci-image-references.mjs
       - name: The legacy runtime is named nowhere
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           node --test scripts/ci/check-legacy-runtime-name.test.mjs
           node scripts/ci/check-legacy-runtime-name.mjs
       - name: The E2E workflow starts on every input of its stack
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           node --test scripts/ci/check-e2e-paths.test.mjs
           node scripts/ci/check-e2e-paths.mjs
+      # ci.yml's two tiers: every heavy job is gated on a ready PR and the
+      # fast tier, ci-gate lists every job, and no workflow runs untiered.
+      - name: The CI tiers are complete and ci-gate lists every job
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          node --test scripts/ci/check-tiering.test.mjs scripts/ci/ci-gate.test.mjs scripts/ci/cargo-deny.test.mjs scripts/ci/govulncheck.test.mjs scripts/ci/check-cache-budget.test.mjs
+          node scripts/ci/check-cache-budget.mjs
+          node scripts/ci/check-tiering.mjs
       - name: The real-model preset copy matches the pinned image
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           node --test scripts/ci/check-real-llm-preset.test.mjs
           node scripts/ci/check-real-llm-preset.mjs
       - name: actionlint over every workflow
+        if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ github.token }}
           ACTIONLINT_VERSION: 1.7.12
@@ -688,3 +561,127 @@ jobs:
           git -C "${template}" init -q
           (cd "${template}" && "${RUNNER_TEMP}/actionlint" -color -shellcheck "${shellcheck}")
           echo "actionlint: the brand template's workflows are clean"
+
+  history-gates:
+    name: History gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The landed-line walk needs the trunk, and the checker REFUSES a
+          # shallow clone rather than reporting a short walk as a pass.
+          fetch-depth: 0
+
+      # Issue #520. A migration states its version number when an author writes it.
+      # The number is only true when the pull request MERGES. Pull requests #369 and
+      # #388 both claimed 0072; #495 and #516 both claimed 0084. In each case both
+      # authors read the branch head, both found the number free, and neither made
+      # an error. A repeated version makes LoadManifest fail and a deployment stops.
+      #
+      # The check reads the BASE BRANCH as origin holds it at the time it runs, not
+      # the pull request's own tree. A check that reads its own tree cannot see the
+      # collision.
+      #
+      # It runs here rather than in ci-go.yml because this workflow has no path
+      # filter. ci-go.yml selects `services/elitea-main/**` and would cover the
+      # migration directory today, but a filter is a second thing to keep correct.
+      # ── Migration version is free on the base branch ──────────────────────────
+      # Only a pull request has a base branch. A push has already merged, and the
+      # duplicate version is then a LoadManifest failure that ci-go.yml reports.
+      - name: The added migration numbers are above the base head
+        if: ${{ !cancelled() && (github.event_name == 'pull_request') }}
+        env:
+          MIGRATION_BASE_REF: ${{ github.base_ref }}
+        run: bash scripts/database/check-migration-version.sh
+
+      # Issue #541. A squash merge writes whole files. A squash from a branch that
+      # was cut before an earlier pull request landed therefore DELETES that pull
+      # request's work, and it leaves the deleted pull request in the history.
+      # Pull request #502 corrected the logout flight and its journey. Pull request
+      # #516 merged four hours later and wrote the five files back to their
+      # pre-#502 copies, byte for byte. This repository still holds both blobs, and
+      # they show it: logout.ts is object da9ba899 before #502, c2f5564a after it,
+      # and da9ba899 again at #516.
+      #
+      # The check that cleared it was `git merge-base --is-ancestor`, and it
+      # answered "true". That answer is correct and it is not evidence. Ancestry
+      # reports the commit. It says nothing about the content. Three agents then
+      # cleared a red journey by calling it "pre-existing on staging". Each was
+      # right, and the reason it was pre-existing was this deletion, so the
+      # reasoning closed on itself.
+      #
+      # This job reads content. It walks the trunk, takes the diff of each merged
+      # pull request against its own base, and looks for the lines that pull
+      # request added. It names BOTH pull requests, and the one that deleted the
+      # work is the one to fix.
+      #
+      # It reads the BASE branch head on a pull request, never the proposed tree. A
+      # pull request may rewrite lines an earlier pull request added, and that is
+      # ordinary work, so a gate that read its own tree would be red on most of
+      # them. The measurement is about what ALREADY merged. On a push it reads the
+      # new trunk head, so a bad merge turns red within minutes of landing.
+      #
+      # It lives here, and not in a path-filtered workflow, for the reason the
+      # header of this file gives. A deletion of this kind can land in any tree.
+      # ── A merged pull request's work is still in the tree ─────────────────────
+      - name: The checker still sees the deletion it exists for
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          expected="$(grep -c '^test(' scripts/ci/check-landed-line-survival.test.mjs)"
+          if [ "${expected}" -lt 8 ]; then
+            echo "::error::found ${expected} scenario(s) in the suite, expected at least 8 — the pattern stopped matching, so this step checked nothing"
+            exit 1
+          fi
+          # Capture the status: under `set -e` a failing command substitution
+          # exits at the assignment and the output is never printed.
+          status=0
+          output="$(node --test --test-reporter=tap scripts/ci/check-landed-line-survival.test.mjs 2>&1)" || status=$?
+          printf '%s\n' "${output}"
+          ran="$(printf '%s\n' "${output}" | sed -n 's/^# pass \([0-9][0-9]*\)$/\1/p')"
+          if [ -z "${ran}" ]; then
+            echo "::error::node --test printed no pass line, so the number of scenarios it ran was never reported"
+            exit 1
+          fi
+          if [ "${ran}" -ne "${expected}" ]; then
+            echo "::error::the suite file holds ${expected} scenario(s) and node --test passed ${ran}; a scenario that does not run is not a passed scenario"
+            exit 1
+          fi
+          if [ "${status}" -ne 0 ]; then
+            echo "::error::node --test check-landed-line-survival.test.mjs exited ${status}"
+            exit "${status}"
+          fi
+          echo "line-survival checker: ${ran} of ${expected} scenarios ran"
+      - name: The lines the last merged pull requests added are still on the trunk
+        if: ${{ !cancelled() }}
+        env:
+          # A pull request measures its BASE. A push measures the new head.
+          SURVIVAL_TIP: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          tip="${SURVIVAL_TIP}"
+          if ! git rev-parse -q --verify "${tip}^{commit}" >/dev/null 2>&1; then
+            # A force-push to the base branch can retire the recorded sha. On a
+            # pull request the checkout is the merge commit, so its first
+            # parent IS the base.
+            echo "::notice::${tip} is not in this clone; reading the first parent of HEAD instead"
+            tip="$(git rev-parse HEAD^1 2>/dev/null || git rev-parse HEAD)"
+          fi
+          # A pull request can target a FEATURE branch (a stacked PR). Its base
+          # head then sits on unmerged feature commits, none of which name a
+          # pull request, and the walk refuses with "measured nothing" - a
+          # false alarm about the subject format. The trunk this check audits
+          # is the default branch, so fold the tip down to the last trunk
+          # commit underneath it. On a pull request into the default branch the
+          # base head already sits on the trunk and the fold is the identity.
+          trunk="origin/${DEFAULT_BRANCH}"
+          if git rev-parse -q --verify "${trunk}^{commit}" >/dev/null 2>&1; then
+            folded="$(git merge-base "${tip}" "${trunk}")" || folded="${tip}"
+            if [ "${folded}" != "${tip}" ]; then
+              echo "::notice::${tip} is not on ${trunk}; auditing the trunk beneath it at ${folded}"
+              tip="${folded}"
+            fi
+          fi
+          node scripts/ci/check-landed-line-survival.mjs --tip "${tip}"

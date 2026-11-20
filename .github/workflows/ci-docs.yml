@@ -7,20 +7,9 @@ name: CI — Docs
 # (DOCS_BASE=/docs/), so a docs change that would break the image build or
 # the served CSP fails here first.
 on:
-  pull_request:
-    paths:
-      - "apps/elitea-docs/**"
-      # check:dist also resolves the web app's hard-coded links into the docs.
-      - "apps/elitea-web/src/**"
-      # The tool categories the toolkit reference pages are generated from.
-      - "libs/proto/contracts/tool-categories-v1.json"
-      # The palette the diagrams are drawn in.
-      - "libs/ts/client-core/src/brand/tokens.json"
-      # The nginx locations that serve the built site, and its CSP.
-      - "apps/elitea-web/nginx/spa.conf"
-      - "apps/elitea-web/nginx/docs-security-headers.conf"
-      - ".github/workflows/ci-docs.yml"
-      - ".github/actions/npm-cache/**"
+  # Called by ci.yml, which owns the PR tiers and the path filter
+  # (scripts/ci/tier-paths.json); no `pull_request` arm of its own.
+  workflow_call:
   # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
   # The nightly run on main is the one that WRITES the npm cache pull
   # requests read (scripts/ci/check-workflow-cache-writes.mjs).
@@ -29,7 +18,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ci-docs-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:

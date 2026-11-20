@@ -1,0 +1,121 @@
+name: CI — Rust lint
+
+# Formatting and Clippy for every Rust workspace, in the FAST tier of ci.yml.
+#
+# They used to be steps of the 20-35 minute test jobs, so a lint error reached
+# a pull request after the build had spent its runner, and the same Clippy of
+# libs/rust ran again in each workflow that links it. Now one leg per Cargo
+# workspace fails in minutes, and the test chains (heavy tier) start only when
+# this has passed. The legs lint exactly what the test jobs linted before
+# (`--locked --all-targets --all-features -D warnings`); the desktop and the
+# platform-specific crates keep their own Clippy (windows, macOS) in
+# ci-desktop.yml, ci-desktop-control.yml and ci-browser-session.yml, and the
+# shared-crate `-p` runs whose point is feature unification stay in
+# ci-deepwiki-engine.yml.
+on:
+  # Called by ci.yml, which owns the PR tiers and the path filter
+  # (scripts/ci/tier-paths.json); no `pull_request` arm of its own.
+  workflow_call:
+  # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
+  # The nightly run on main is the one that WRITES the caches pull requests
+  # read (scripts/ci/check-workflow-cache-writes.mjs).
+  schedule:
+    - cron: "5 0 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-rust-lint-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: lint (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: shared crates
+            dir: libs/rust
+            key: rust-lint-shared
+          - name: worker
+            dir: services/elitea-worker-rust
+            key: rust-lint-worker
+          - name: code runner
+            dir: services/elitea-code-runner
+            key: rust-lint-code-runner
+            jobs: "1"
+          - name: deepwiki engine
+            dir: services/elitea-deepwiki-engine
+            key: rust-lint-deepwiki
+          - name: inventory engine
+            dir: services/elitea-inventory-engine
+            key: rust-lint-inventory
+          - name: vector
+            dir: services/elitea-vector
+            key: rust-lint-vector
+          - name: doc extractor
+            dir: services/elitea-doc-extractor
+            key: rust-lint-doc-extractor
+    defaults:
+      run:
+        working-directory: ${{ matrix.dir }}
+    env:
+      CARGO_BUILD_JOBS: ${{ matrix.jobs || '4' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Assert the pinned toolchain
+        run: |
+          bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
+
+      - name: Free runner disk for the build
+        # The jobs this replaces freed this space before a build on top of a
+        # restored target/ (ENOSPC, PR #1547). Bounded and NON-FATAL: a refused
+        # rm only warns, and the build then fails honestly on ENOSPC.
+        working-directory: .
+        run: |
+          df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/share/boost /opt/hostedtoolcache/CodeQL \
+            || echo "::warning::could not remove every preinstalled toolchain; continuing"
+          df -h / | tail -1
+
+      # Read everywhere, write on main only (the nightly run above): its own
+      # `shared-key` per workspace, one writer per entry. `cache-targets: false`
+      # is not set: a Clippy check build is small, and it is the build this
+      # job repeats on every push.
+      - name: Cache cargo registry and build artefacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ matrix.key }}
+          # Registry and git only: seven legs with targets would be 9 GiB of the
+          # 10 GB cap (scripts/ci/check-cache-budget.mjs).
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          workspaces: ${{ matrix.dir }}
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      # The workspace run above uses --all-features, which turns on
+      # `test-support`, and that switches off the agent runtime's
+      # deny(clippy::expect_used, panic, unwrap_used, ...) guard. Lint the two
+      # production feature sets with the guard on: the worker's
+      # (`toolkit-sql`, `toolkit-office`) and the desktop host's (no features).
+      - name: Agent runtime — production feature sets (panic guard on)
+        if: matrix.dir == 'libs/rust'
+        run: |
+          cargo clippy --locked -p elitea-agent-runtime --all-targets --features toolkit-sql,toolkit-office,toolkit-delta-lake -- -D warnings
+          cargo clippy --locked -p elitea-agent-runtime --all-targets -- -D warnings

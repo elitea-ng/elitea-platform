@@ -91,78 +91,9 @@ on:
           unfiltered run for that reason). Ignored by every other job.
         type: string
         default: ""
-  pull_request:
-    paths:
-      - "apps/elitea-web/**"
-      # The shared client package the web image compiles from source.
-      - "libs/ts/client-core/**"
-      # The brand the web and admin bundles are built for (ADR-0052).
-      - "brand/elitea/**"
-      - "brand/sample/**"
-      - "scripts/brand/**"
-      - "services/elitea-main/**"
-      # The DeepWiki engine sidecar the `deepwiki-stack` job runs (native,
-      # its fixture runner).
-      - "services/elitea-deepwiki-engine/**"
-      - "libs/rust/**"
-      - "services/elitea-subapp-host/**"
-      # The `chat-stream-rust` job runs the journeys against the native Rust
-      # runtime, so a change to it can break a browser journey while touching
-      # nothing under apps/elitea-web. Without this path the job that exists to
-      # catch that drift would not start on the change that caused it.
-      - "services/elitea-worker-rust/**"
-      # The `code-sandbox` job (#2206, #2208) runs the agent `run_code` tool
-      # on the real Docker code sandbox: the runner images are its subject too.
-      - "services/elitea-code-runner/**"
-      # The `index-stream-rust` job (ADR-0030 Verification 3) runs the index
-      # journey on the Rust-only path: vectors in Qdrant behind elitea-vector,
-      # documents read by the extractor sidecar. Same reasoning as above.
-      - "services/elitea-vector/**"
-      - "services/elitea-doc-extractor/**"
-      # The real-model lane's own subjects: the gateway's SSE relay, the
-      # Rust worker's model path, and the shared build action every stack
-      # job here uses. The `model-path-changes` job names these; a prefix it
-      # names must also START this workflow, or the lane silently never runs
-      # for the change it exists to catch.
-      - "services/elitea-llm-gateway/**"
-      - ".github/actions/**"
-      - "deploy/**"
-      - "docker-bake.hcl"
-      # The `handoff-journey` job's own subjects (ADR-0034): the desktop host's
-      # handoff code and the live tests it runs, the crates the host links for
-      # it (libs/rust/** above), and the simulator that plays the cloud
-      # executor (services/** is already named). The desktop
-      # paths are outside the stack lanes (e2e-lane-filter.sh), so only that
-      # job runs on a change that touches nothing else.
-      - "apps/elitea-desktop/src-tauri/**"
-      - "rust-toolchain.toml"
-      - "scripts/ci/assert-rust-toolchain.sh"
-      # The `native-client-conformance` job's own subject: the black-box
-      # ADR-0025 suite it runs against the stack.
-      - "conformance/nativeclient/**"
-      # The lane filter the `model-path-changes` job runs, and its test.
-      - "scripts/ci/e2e-lane-filter.sh"
-      - "scripts/ci/e2e-lane-filter-test.sh"
-      # The rest of what the stack images COPY and what this workflow runs:
-      # scripts/ci/check-e2e-paths.mjs derives that set from the compose
-      # files' Containerfiles and this workflow's `scripts/` calls (with what
-      # each .mjs one imports), and fails
-      # when this list stops covering it (the scheduler, the inventory engine,
-      # the shared Go libraries and the protos were missing until it ran).
-      - "services/elitea-scheduler/**"
-      - "services/elitea-inventory-engine/**"
-      - "libs/go/**"
-      - "libs/proto/**"
-      - "scripts/ci/stack-images.mjs"
-      - "scripts/ci/py-compat.mjs"
-      - "scripts/ci/ci-compat.mjs"
-      - "scripts/ci/package.json"
-      - "scripts/ci/package-lock.json"
-      - "scripts/ci/pull-third-party-images.sh"
-      - "scripts/ci/check-ci-image-references.mjs"
-      - "scripts/ci/check-workflow-cache-writes.mjs"
-      - "scripts/ci/check-e2e-paths.mjs"
-      - ".github/workflows/ci-web-e2e.yml"
+  # Called by ci.yml, which owns the PR tiers and the path filter
+  # (scripts/ci/tier-paths.json); no `pull_request` arm of its own.
+  workflow_call:
   # No push arm: a merge starts no run (no-binaries.yml's workflow-triggers).
   # The nightly run on main is the one that WRITES the caches pull requests
   # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
@@ -175,7 +106,7 @@ on:
 # cancelled writer saves nothing). GitHub still holds at most one pending run
 # per group, so main cannot pile up a backlog.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ci-web-e2e-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Minimal token scope — these jobs only read the checked-out repo.
@@ -369,6 +300,13 @@ jobs:
     # below so chromium and webkit are each still validated (§6.6/§7.6).
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    env:
+      # The webkit legs run when the web app, the harness or the shared client
+      # changed, and on every run that is not a pull request (the nightly run on
+      # main). A job-level `if` cannot read the matrix, so a skipped leg is a leg
+      # whose every step is skipped; it reports success having run nothing, and
+      # says so in its "Skipped" step.
+      RUN_LEG: ${{ (matrix.engine != 'webkit' && matrix.engine != 'platform-flags-webkit') || needs.model-path-changes.outputs.reaches-webkit == 'true' }}
     strategy:
       # Both engines are validated independently. Issue #60 requires chromium AND
       # webkit; the job used to run whatever `npm run e2e` defaulted to, so half
@@ -468,16 +406,20 @@ jobs:
     # GitHub-hosted ubuntu-latest has Docker and docker compose (v2 plugin) pre-installed.
     steps:
       - uses: actions/checkout@v7
+        if: ${{ env.RUN_LEG == 'true' }}
       - uses: actions/setup-node@v7
+        if: ${{ env.RUN_LEG == 'true' }}
         with:
           node-version: "26"
           # The npm cache is .github/actions/npm-cache below.
           package-manager-cache: false
       - name: Restore the npm cache (pull requests read, main writes)
+        if: ${{ env.RUN_LEG == 'true' }}
         uses: ./.github/actions/npm-cache
         with:
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
+        if: ${{ env.RUN_LEG == 'true' }}
         # npm's fetch retries (the npm-cache action) cover a refused request,
         # not a registry reset mid-tarball (`read ECONNRESET`), which ends
         # `npm ci` at once. Three bounded attempts on a clean tree.
@@ -489,6 +431,7 @@ jobs:
             sleep $((attempt * 20))
           done
       - name: The suite's shape still matches this workflow
+        if: ${{ env.RUN_LEG == 'true' }}
         # Three seconds, on every leg, and it is here rather than only in
         # ci-web.yml because of what ci-web.yml does NOT fire on: its `paths`
         # list names `.github/workflows/ci-web.yml` and not this file, so a
@@ -503,6 +446,7 @@ jobs:
         # anything, and the remaining ones can.
         run: npx vitest run --config vitest.config.ts --project scripts scripts/e2e-journey-shape.test.mjs
       - name: Pre-pull the pinned Playwright container (background)
+        if: ${{ env.RUN_LEG == 'true' }}
         # Network-bound, so it overlaps the CPU-bound bake below. Started with
         # nohup and left running: the runner does not reap a step's background
         # processes. Fire-and-forget on purpose — nothing here waits on it or
@@ -514,6 +458,7 @@ jobs:
         run: |
           nohup timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.62.1-noble >/tmp/playwright-pull.log 2>&1 &
       - name: Stack images for this lane (pulled by digest; built here on a fork)
+        if: ${{ env.RUN_LEG == 'true' }}
         # Built ONCE per commit by the build-once jobs and pulled by digest
         # (.github/actions/stack-images, which also answers issue #154).
         uses: ./.github/actions/stack-images
@@ -527,6 +472,7 @@ jobs:
           targets: e2e
           mount-cache-suffix: go
       - name: Bring up E2E stack
+        if: ${{ env.RUN_LEG == 'true' }}
         # e2e-stack.sh uses deploy/docker-compose.e2e-standalone.yml which references
         # elitea-main:e2e and elitea-web:e2e (both built and asserted above).
         # The script auto-detects `docker compose` (CI) vs `podman compose` (local).
@@ -538,11 +484,13 @@ jobs:
           test -d e2e || { echo "release tag without an e2e suite (unit V1) — refusing"; exit 1; }
           bash scripts/e2e-stack.sh up
       - name: Seed E2E users
+        if: ${{ env.RUN_LEG == 'true' }}
         env:
           COMPOSE_BIN: docker compose
           E2E_PORT: "8080"
         run: bash scripts/e2e-stack.sh seed
       - name: Playwright against the real stack (pinned container, host network)
+        if: ${{ env.RUN_LEG == 'true' }}
         # No `npx playwright install --with-deps` step. That step cost 57s on the
         # chromium leg and 82s on the webkit leg, and the browser downloads were
         # only ~14s of it — the other ~67s was apt fetching 114 MB of system
@@ -625,7 +573,7 @@ jobs:
         # logs". That step writes playwright-results/stack-logs.txt as the
         # runner user, and with the chown after it the write failed on every
         # run, `|| true` hid it, and "0 line(s) collected" was green (#859).
-        if: always()
+        if: ${{ always() && env.RUN_LEG == 'true' }}
         run: sudo chown -R "$(id -u):$(id -g)" playwright-results playwright-report 2>/dev/null || true
       - name: Collect the stack's own logs
         # ONLY ON FAILURE, AFTER the chown above, and BEFORE the teardown below
@@ -645,14 +593,14 @@ jobs:
         # nothing (unwritable file, zero log lines), and a step that is visibly
         # failed in the run view is how that gets noticed instead of hidden
         # behind a green tick (#859).
-        if: failure()
+        if: ${{ failure() && env.RUN_LEG == 'true' }}
         continue-on-error: true
         working-directory: apps/elitea-web
         env:
           COMPOSE_BIN: docker compose
         run: bash scripts/e2e-stack.sh logs
       - name: Upload Playwright report
-        if: always()
+        if: ${{ always() && env.RUN_LEG == 'true' }}
         uses: actions/upload-artifact@v7
         with:
           # Per-engine name: upload-artifact v7 rejects a duplicate name, so a
@@ -679,7 +627,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Upload failed test video recordings
-        if: failure()
+        if: ${{ failure() && env.RUN_LEG == 'true' }}
         uses: actions/upload-artifact@v7
         with:
           name: playwright-failed-videos-${{ matrix.leg }}
@@ -687,10 +635,13 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
       - name: Tear down E2E stack
-        if: always()
+        if: ${{ always() && env.RUN_LEG == 'true' }}
         env:
           COMPOSE_BIN: docker compose
         run: bash scripts/e2e-stack.sh down
+      - name: Skipped (no web, harness or client change reaches WebKit)
+        if: ${{ env.RUN_LEG != 'true' }}
+        run: echo "::notice::${{ matrix.leg }} skipped - nothing this pull request changes can reach WebKit; the nightly run on main runs it"
 
   chat-stream-rust:
     name: Chat journey on the native Rust runtime (${{ matrix.leg }})
@@ -839,6 +790,14 @@ jobs:
   # handed to the `code-sandbox` lane as an artifact (the image is a distroless
   # binary, tens of MB). The runner images are NOT built here: they are large,
   # and the lane builds them from the Actions cache ci-rust.yml writes.
+  #
+  # PRE-PUBLISHED by content address. Measured 2026-11-19 the build took a
+  # median 17.8 minutes on every pull request that reached the sandbox, though
+  # most of those pushes did not touch the worker. The image is now pushed to
+  # `ghcr.io/elitea-ng/ci-elitea-sandbox-supervisor:cas-<hash>` (the hash of its
+  # build inputs: scripts/ci/stack-image-hash.mjs), and a push whose inputs
+  # already have that tag pulls it instead of building. A fork's pull request
+  # (a read-only token) builds as before and publishes nothing.
   sandbox-supervisor-image:
     name: Build the code sandbox supervisor image
     needs: [model-path-changes]
@@ -847,16 +806,61 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
+      # Pushes the CI-only ci-elitea-sandbox-supervisor (pruned with the other
+      # ci-* images by ci-image-cleanup.yml).
+      packages: write
+    env:
+      SUPERVISOR_REPO: ghcr.io/elitea-ng/ci-elitea-sandbox-supervisor
+      # A fork's token, and Dependabot's, cannot push packages.
+      CAN_PUSH: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]') }}
     steps:
       - uses: actions/checkout@v7
+      - name: Install the content-address script's one dependency
+        if: ${{ env.CAN_PUSH == 'true' }}
+        uses: ./.github/actions/ci-scripts-deps
+      - uses: docker/login-action@v4
+        if: ${{ env.CAN_PUSH == 'true' }}
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # The `supervisor` stage of the worker Containerfile: the same binary the
+      # chart pins by digest (publish.yml), cargo-auditable, distroless.
+      - name: Is this image already published for these inputs?
+        id: addr
+        if: ${{ env.CAN_PUSH == 'true' }}
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          hash="$(node scripts/ci/stack-image-hash.mjs "$GITHUB_WORKSPACE" . services/elitea-worker-rust/Containerfile supervisor)"
+          ref="${SUPERVISOR_REPO}:cas-${hash}"
+          echo "ref=${ref}" >> "$GITHUB_OUTPUT"
+          # A run on main always builds: it is the writer of the layer cache.
+          if [ "${GITHUB_REF}" != "refs/heads/main" ] && docker buildx imagetools inspect "$ref" > /dev/null 2>&1; then
+            echo "have=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::${ref} exists; nothing is built"
+          else
+            echo "have=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Pull the published image
+        if: ${{ steps.addr.outputs.have == 'true' }}
+        working-directory: ${{ github.workspace }}
+        env:
+          REF: ${{ steps.addr.outputs.ref }}
+        run: |
+          set -euo pipefail
+          # Pulled here, in this job: the lane gets the image as an artifact, so
+          # a prune after this step cannot take it.
+          docker pull "$REF"
+          docker tag "$REF" elitea-sandbox-supervisor:ci
       - uses: docker/setup-buildx-action@v4
+        if: ${{ steps.addr.outputs.have != 'true' }}
         with:
           # The builder image from the org's own mirror (mirror-buildkit.yml), by
           # digest: no anonymous Docker Hub pull per job.
           driver-opts: image=ghcr.io/elitea-ng/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
-      # The `supervisor` stage of the worker Containerfile: the same binary the
-      # chart pins by digest (publish.yml), cargo-auditable, distroless.
       - name: Build the supervisor image
+        if: ${{ steps.addr.outputs.have != 'true' }}
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -868,6 +872,15 @@ jobs:
           platforms: linux/amd64
           cache-from: type=gha,scope=elitea-sandbox-supervisor-linux-amd64
           cache-to: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=elitea-sandbox-supervisor-linux-amd64,ignore-error=true' || '' }}
+      - name: Publish the image under its content address
+        if: ${{ steps.addr.outputs.have == 'false' }}
+        working-directory: ${{ github.workspace }}
+        env:
+          REF: ${{ steps.addr.outputs.ref }}
+        run: |
+          set -uo pipefail
+          docker tag elitea-sandbox-supervisor:ci "$REF"
+          docker push "$REF" || echo "::warning::could not publish ${REF}; the next push builds it again"
       - name: Save the image for the lane
         working-directory: ${{ github.workspace }}
         run: docker save elitea-sandbox-supervisor:ci | gzip -1 > "${RUNNER_TEMP}/elitea-sandbox-supervisor.tar.gz"
@@ -1073,6 +1086,9 @@ jobs:
       reaches-stack: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reaches-stack }}
       reaches-handoff: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reaches-handoff }}
       reaches-sandbox: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reaches-sandbox }}
+      # The webkit legs: a web, harness or client change on a pull request, and
+      # every non-pull-request run (the nightly one) unconditionally.
+      reaches-webkit: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reaches-webkit }}
     steps:
       - uses: actions/checkout@v7
         if: github.event_name == 'pull_request'
@@ -1566,7 +1582,10 @@ jobs:
       - name: Restore the Go cache (pull requests read, main writes)
         uses: ./.github/actions/go-cache
         with:
-          cache-dependency-path: conformance/nativeclient/go.sum
+          cache-dependency-path: |
+            services/elitea-main/go.sum
+            libs/go/*/go.sum
+            libs/proto/gen/go/go.sum
       - name: Stack images for this lane (pulled by digest; built here on a fork)
         # Built ONCE per commit by the build-once jobs and pulled by digest
         # (.github/actions/stack-images, which also answers issue #154).
@@ -1630,7 +1649,10 @@ jobs:
       - name: Restore the Go cache (pull requests read, main writes)
         uses: ./.github/actions/go-cache
         with:
-          cache-dependency-path: services/elitea-main/go.sum
+          cache-dependency-path: |
+            services/elitea-main/go.sum
+            libs/go/*/go.sum
+            libs/proto/gen/go/go.sum
       - name: Stack images for this lane (pulled by digest; built here on a fork)
         uses: ./.github/actions/stack-images
         with:
@@ -1677,6 +1699,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          # Registry and git only: this one entry held 1.6 GiB (2026-11-19), and
+          # the cap is shared with every other Rust job (scripts/ci/cache-budget.json).
+          cache-targets: false
           workspaces: apps/elitea-desktop/src-tauri
           prefix-key: handoff-journey
       # The ELITEA build of the host (ADR-0052 decision 4): the brand overlay

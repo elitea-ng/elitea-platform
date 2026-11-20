@@ -13,33 +13,9 @@ name: CI — Rust shared crates
 # and in parallel with the engine jobs when both are touched.
 
 on:
-  pull_request:
-    paths:
-      # The pin every cargo step asserts (scripts/ci/assert-rust-toolchain.sh).
-      - "rust-toolchain.toml"
-      - "scripts/ci/assert-rust-toolchain.sh"
-      - "libs/rust/**"
-      # The error registry elitea-faults' build.rs reads (FU-299).
-      - "libs/go/faults/registry/**"
-      # The build.rs of the gRPC crates compile these contracts (#1359):
-      # engine-sidecar elitea.engine.v1, model-rpc elitea.llm.v1, platform-rpc
-      # the artifact and internal-tool services of elitea.runtime.v1.
-      - "libs/proto/elitea/engine/**"
-      - "libs/proto/elitea/llm/**"
-      - "libs/proto/elitea/runtime/v1/artifact_object.proto"
-      - "libs/proto/elitea/runtime/v1/internal_tool.proto"
-      # The agent runtime compiles in the tool category contract (ADR-0041
-      # decision 5).
-      - "libs/proto/contracts/**"
-      # What the workspace's tests read from outside it: the /llm caller
-      # contract, the agent runtime's SDK schema gate, and the office
-      # extraction fixtures.
-      - "conformance/llm-caller/**"
-      - "services/elitea-main/internal/runtimecomposition/current_toolkit_schema_snapshot.json"
-      - "services/elitea-main/internal/runtimecomposition/current_rust_worker_toolkit_capability_snapshot.json"
-      - "services/elitea-main/internal/rustonly/rust_only_toolkit_tools.json"
-      - "services/elitea-main/internal/infra/extract/testdata/**"
-      - ".github/workflows/ci-rust-shared.yml"
+  # Called by ci.yml, which owns the PR tiers and the path filter
+  # (scripts/ci/tier-paths.json); no `pull_request` arm of its own.
+  workflow_call:
   # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
   # The nightly run on main is the one that WRITES the caches pull requests
   # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
@@ -49,7 +25,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ci-rust-shared-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -61,7 +37,7 @@ env:
 
 jobs:
   shared-crates:
-    name: Shared crates — formatting, Clippy, rustdoc, tests
+    name: Shared crates — rustdoc and tests
     runs-on: ubuntu-latest
     # 22 min measured cold for the first step alone (no cache under this
     # key yet); the agent-runtime steps reuse its build.
@@ -93,16 +69,20 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: rust-shared-crates
+          # Registry and git only. The nightly run saved 2.6 GiB for this one entry
+          # (2026-11-19), a quarter of the cap; LRU evicted it before any pull
+          # request restored it. The key itself matched (prefix v0-rust-rust-shared-crates-Linux-x64-<env hash>).
+          cache-targets: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
           workspaces: libs/rust
 
-      - name: Shared crates — formatting, Clippy, rustdoc, tests
+      # Formatting and Clippy (the workspace, and the two production feature
+      # sets of the agent runtime) run in ci-rust-lint.yml, in the fast tier.
+      - name: Shared crates — rustdoc, tests
         working-directory: libs/rust
         env:
           RUSTDOCFLAGS: "-D warnings"
         run: |
-          cargo fmt --all -- --check
-          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
           cargo doc --locked --workspace --no-deps --all-features
           cargo test --locked --workspace --all-targets --all-features
 
@@ -119,14 +99,3 @@ jobs:
         run: |
           cargo test --locked -p elitea-agent-runtime --all-targets --features toolkit-sql,toolkit-office,toolkit-delta-lake
           cargo test --locked -p elitea-agent-runtime --all-targets --features test-preserve-order,toolkit-sql,toolkit-office,toolkit-delta-lake
-
-      # The workspace Clippy run above uses --all-features, which turns on
-      # `test-support`, and that switches off the crate's
-      # deny(clippy::expect_used, panic, unwrap_used, ...) guard. Lint the
-      # two production feature sets with the guard on: the worker's
-      # (`toolkit-sql`, `toolkit-office`) and the desktop host's (no features).
-      - name: Agent runtime — production feature sets (panic guard on)
-        working-directory: libs/rust
-        run: |
-          cargo clippy --locked -p elitea-agent-runtime --all-targets --features toolkit-sql,toolkit-office,toolkit-delta-lake -- -D warnings
-          cargo clippy --locked -p elitea-agent-runtime --all-targets -- -D warnings
