@@ -168,55 +168,55 @@ fn spawn_schema() -> Value {
             "task": {
                 "type": "string",
                 "maxLength": MAX_TASK_CHARS,
-                "description": "Self-contained instructions; the child sees nothing else from this conversation."
+                "description": "Self-contained instructions; the child sees nothing else."
             },
             "label": {
                 "type": "string",
                 "maxLength": MAX_LABEL_CHARS,
-                "description": "A short name shown for the sub-agent"
+                "description": "Short name shown for it"
             },
             "max_steps": {
                 "type": "integer",
                 "minimum": 1,
                 "maximum": MAX_CHILD_STEPS,
-                "description": "The most model steps it may take"
+                "description": "Most model steps it may take"
             },
             "profile": {
                 "type": "object",
-                "description": "Who the sub-agent is",
+                "description": "Who it is",
                 "properties": {
                     "display_name": {
                         "type": "string",
                         "maxLength": MAX_DISPLAY_NAME_CHARS,
-                        "description": "The name shown for it"
+                        "description": "Name shown for it"
                     },
                     "soul": {
                         "type": "string",
                         "maxLength": MAX_SOUL_BYTES,
-                        "description": "A short role and style (at most 2048 bytes of UTF-8), in place of the default role text; it never widens what the sub-agent may do"
+                        "description": "Short role and style (at most 2048 bytes), replacing the default role text; never widens what it may do"
                     },
                     "tools": {
                         "type": "array",
                         "maxItems": MAX_PROFILE_TOOLS,
                         "items": {"type": "string"},
-                        "description": "Only these of your tools, as \"toolkit/tool\" or \"toolkit/*\"; each must be one a sub-agent may get"
+                        "description": "Only these of your tools, \"toolkit/tool\" or \"toolkit/*\"; each must be one a sub-agent may get"
                     },
                     "model": {
                         "type": "string",
                         "maxLength": profile::MAX_MODEL_NAME_BYTES,
-                        "description": "\"inherit\" (the default): it uses your model. Or the name of another model of this project that you may use; any other is refused"
+                        "description": "\"inherit\" (default) uses your model; or another model of this project you may use"
                     },
                     "avatar": {
                         "type": "string",
                         "enum": profile::DEFAULT_AVATAR_KEYS,
-                        "description": "One of the default avatar keys, such as \"default:owl\"; any other key is ignored and the sub-agent has no avatar"
+                        "description": "A default avatar key such as \"default:owl\"; others are ignored"
                     }
                 },
                 "additionalProperties": false
             },
             "context": {
                 "type": "object",
-                "description": "A brief passed before the task: only what you yourself can see",
+                "description": "A brief passed before the task: only what you can see",
                 "properties": {
                     "excerpts": {
                         "type": "array",
@@ -224,31 +224,31 @@ fn spawn_schema() -> Value {
                         "items": {
                             "type": "object",
                             "properties": {
-                                "message_id": {"type": "string", "description": "The id on the message's `[message m-...]` line, such as \"m-0123456789\""},
+                                "message_id": {"type": "string", "description": "The id on the message's `[message m-...]` line"},
                                 "quote": {"type": "string", "maxLength": MAX_BRIEF_TEXT_CHARS}
                             },
                             "required": ["message_id", "quote"],
                             "additionalProperties": false
                         },
-                        "description": "Exact quotes of messages in this conversation that carry a `[message m-...]` line"
+                        "description": "Exact quotes of messages that carry a `[message m-...]` line"
                     },
                     "attachments": {
                         "type": "array",
                         "maxItems": MAX_BRIEF_ITEMS,
                         "items": {"type": "string"},
-                        "description": "Ids of this turn's attachments (\"att-...\")"
+                        "description": "This turn's attachment ids (\"att-...\")"
                     },
                     "facts": {
                         "type": "array",
                         "maxItems": MAX_BRIEF_ITEMS,
                         "items": {"type": "string", "maxLength": MAX_BRIEF_TEXT_CHARS},
-                        "description": "Short facts in your own words"
+                        "description": "Short facts, in your words"
                     },
                     "memory_entries": {
                         "type": "array",
                         "maxItems": MAX_BRIEF_ITEMS,
                         "items": {"type": "string"},
-                        "description": "Memory entries you were given in this turn, each as N·TAG exactly as its [memory N·TAG, ...] line of your notes shows it, or a memory_ref from recall"
+                        "description": "Memory entries given this turn, as N·TAG exactly as its [memory N·TAG, ...] line shows, or a memory_ref from recall"
                     }
                 },
                 "additionalProperties": false
@@ -686,9 +686,9 @@ impl Tool for SubAgentTool {
         match self.action {
             Action::Spawn => {
                 if self.registry.isolation_allowed() {
-                    "Start a sub-agent on a self-contained task and return at once with its agent_id. It has its own fresh context (it sees nothing of this conversation but the task) and runs alongside other sub-agents. By default it can read and search but never change anything: use it for independent investigations that would fill your context. With isolation \"worktree\" it works in a git checkout of its own and may change files there, never yours. A `profile` names it and gives it a role; a `context` brief passes it quotes, attachments, facts and memory entries that you can see. Then wait_agent for the results."
+                    "Start a sub-agent on a self-contained task and return at once with its agent_id. It has a fresh context (only the task) and runs alongside others. By default it can read and search but never change anything: use it for independent investigations that would fill your context. With isolation \"worktree\" it may change files in a git checkout of its own, never yours. `profile` names it and gives it a role; `context` passes it quotes, attachments, facts and memory entries you can see. Then wait_agent."
                 } else {
-                    "Start a read-only sub-agent on a self-contained task and return at once with its agent_id. It has its own fresh context (it sees nothing of this conversation but the task), can read and search but never change anything, and runs alongside other sub-agents. Use it for independent investigations that would fill your context. A `profile` names it and gives it a role; a `context` brief passes it quotes, attachments, facts and memory entries that you can see. Then wait_agent for the results."
+                    "Start a read-only sub-agent on a self-contained task and return at once with its agent_id. It has a fresh context (only the task), can read and search but never change anything, and runs alongside others. Use it for independent investigations that would fill your context. `profile` names it and gives it a role; `context` passes it quotes, attachments, facts and memory entries you can see. Then wait_agent."
                 }
             }
             Action::Send => {
@@ -708,7 +708,7 @@ impl Tool for SubAgentTool {
                 schema["properties"]["isolation"] = json!({
                     "type": "string",
                     "enum": ["none", "worktree"],
-                    "description": "\"worktree\": the sub-agent works in a git checkout of its own and may change files there (the person reviews and merges them); \"none\" (the default): it only reads"
+                    "description": "\"worktree\": a git checkout of its own where it may change files (the person reviews and merges); \"none\" (default): read-only"
                 });
                 schema
             }

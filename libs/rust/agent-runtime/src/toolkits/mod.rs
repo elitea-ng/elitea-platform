@@ -13,7 +13,9 @@
 //!
 //! The `sql` family needs `sqlx` with its `postgres` and `mysql` drivers and is
 //! compiled only with the `toolkit-sql` feature; without it a `sql` toolkit
-//! is skipped as unsupported, like any family a runtime cannot serve.
+//! is skipped as unsupported, like any family a runtime cannot serve. The
+//! `delta_lake` family (delta-kernel-rs and Arrow over S3) is likewise behind
+//! `toolkit-delta-lake`, which only the cloud worker enables.
 //!
 //! The per-family behaviour suites and the SDK conformance gate
 //! (`sdk_conformance`, test-only, which reads elitea-main's toolkit schema snapshots)
@@ -94,6 +96,8 @@ mod confluence_attachment_tests;
 mod confluence_tests;
 #[cfg(all(test, feature = "toolkit-data-analysis"))]
 mod data_analysis_tests;
+#[cfg(all(test, feature = "toolkit-delta-lake"))]
+mod delta_lake_tests;
 #[cfg(test)]
 mod direct_execution_tests;
 #[cfg(all(test, feature = "toolkit-office"))]
@@ -251,7 +255,7 @@ pub use families::data_analysis::sandbox_tool::{
 #[cfg(feature = "toolkit-data-analysis")]
 pub use families::data_analysis::tools::{
     AnalysisGate, AttachmentBucketError, AttachmentBucketResolver, DataAnalysisAuthority,
-    DataAnalysisToolsetError, build_data_analysis_toolset, close_analysis_gate,
+    DataAnalysisToolsetError, FileStager, build_data_analysis_toolset, close_analysis_gate,
 };
 pub use families::imagegen::{
     IMAGE_GENERATION_TOOL, ImageArtifactBucket, ImageBucketError, ImageFamily,

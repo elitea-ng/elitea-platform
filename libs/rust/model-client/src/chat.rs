@@ -24,6 +24,7 @@ use elitea_llm_wire::route::CHAT_COMPLETIONS_PATH;
 use elitea_llm_wire::tool_calls::{
     ToolCallAssembler, ToolCallLimits, ToolCallProfile, parse_lenient_delta,
 };
+use elitea_llm_wire::tool_schema::{SchemaProfile, normalize_tool_schema};
 use serde_json::{Map, Value, json};
 use std::time::Instant;
 
@@ -448,7 +449,14 @@ impl ChatClient {
                     "function": {
                         "name": tool.name,
                         "description": tool.description,
-                        "parameters": tool.parameters,
+                        // The wire form the model's provider family accepts
+                        // (#2181); the tool validates against its own schema.
+                        "parameters": normalize_tool_schema(
+                            &tool.parameters,
+                            self.settings
+                                .tool_schema_profile
+                                .unwrap_or_else(|| SchemaProfile::for_model(model)),
+                        ),
                     },
                 }));
             }
@@ -1063,6 +1071,60 @@ mod tests {
         assert!(
             client_with_settings(&json!({"reasoning_off_with_tools": 1})).is_err(),
             "reasoning_off_with_tools is a boolean"
+        );
+    }
+
+    /// #2181: a tool carrying a `$ref` and a root `anyOf` reaches the
+    /// provider in the wire form its family accepts, not raw.
+    #[test]
+    fn tool_parameters_are_normalised_for_the_models_provider() {
+        let client = client_with(json!({}));
+        let mut request = ChatRequest::new(vec![ChatMessage::User("q".to_owned())]);
+        request.tools.push(ToolDefinition {
+            name: "lookup".to_owned(),
+            description: "Looks up.".to_owned(),
+            parameters: json!({
+                "type": "object",
+                "properties": {"node": {"$ref": "#/$defs/node"}},
+                "$defs": {"node": {"type": "string", "const": "a"}},
+            }),
+        });
+        let body = client.body(&request, false).unwrap_or_default();
+        let parameters = &body["tools"][0]["function"]["parameters"];
+        assert_eq!(parameters["type"], "object");
+        assert!(parameters.get("$defs").is_none(), "{parameters}");
+        assert!(parameters["properties"]["node"].get("$ref").is_none());
+        assert!(parameters["properties"]["node"].get("const").is_none());
+    }
+
+    /// The catalogue can name the provider family of a model whose name
+    /// nothing recognises; the schema then keeps what that family accepts.
+    #[test]
+    fn a_catalogue_profile_overrides_the_name_heuristic() {
+        let schema = json!({"type": "object", "properties": {
+            "mode": {"const": "a"}, "name": {"type": "string", "maxLength": 5000}}});
+        let body_for = |extra: Value| {
+            let client = client_with(extra);
+            let mut request = ChatRequest::new(vec![ChatMessage::User("q".to_owned())]);
+            request.tools.push(ToolDefinition {
+                name: "lookup".to_owned(),
+                description: "Looks up.".to_owned(),
+                parameters: schema.clone(),
+            });
+            client.body(&request, false).unwrap_or_default()["tools"][0]["function"]["parameters"]
+                .clone()
+        };
+        // `qwen3` reads as llama.cpp: the long bound is folded away.
+        assert!(
+            body_for(json!({}))["properties"]["name"]
+                .get("maxLength")
+                .is_none()
+        );
+        let hosted = body_for(json!({"tool_schema_profile": "openai"}));
+        assert_eq!(hosted["properties"]["name"]["maxLength"], 5000);
+        assert!(
+            client_with_settings(&json!({"tool_schema_profile": "nope"})).is_err(),
+            "an unknown profile name is refused"
         );
     }
 

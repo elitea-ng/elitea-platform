@@ -20,6 +20,8 @@
 //!   reader;
 //! * [`tool_calls`] — streamed tool-call delta assembly with count, name,
 //!   id and argument limits;
+//! * [`tool_schema`] — provider-aware tool parameter schemas (#2145, #2181),
+//!   the one rewrite every model call path applies before a request is sent;
 //! * [`reasoning`] — the worker's rule for reasoning a model wrote into an
 //!   answer's text (`<think>` blocks, Qwen's bare `</think>`); the model
 //!   client and the proposal chunker keep their own rules, for the reasons
@@ -69,3 +71,4 @@ pub mod route;
 pub mod sse;
 pub mod thinking;
 pub mod tool_calls;
+pub mod tool_schema;
