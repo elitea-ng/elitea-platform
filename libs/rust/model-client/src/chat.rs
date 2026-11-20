@@ -453,7 +453,9 @@ impl ChatClient {
                         // (#2181); the tool validates against its own schema.
                         "parameters": normalize_tool_schema(
                             &tool.parameters,
-                            SchemaProfile::for_model(model),
+                            self.settings
+                                .tool_schema_profile
+                                .unwrap_or_else(|| SchemaProfile::for_model(model)),
                         ),
                     },
                 }));
@@ -1093,6 +1095,37 @@ mod tests {
         assert!(parameters.get("$defs").is_none(), "{parameters}");
         assert!(parameters["properties"]["node"].get("$ref").is_none());
         assert!(parameters["properties"]["node"].get("const").is_none());
+    }
+
+    /// The catalogue can name the provider family of a model whose name
+    /// nothing recognises; the schema then keeps what that family accepts.
+    #[test]
+    fn a_catalogue_profile_overrides_the_name_heuristic() {
+        let schema = json!({"type": "object", "properties": {
+            "mode": {"const": "a"}, "name": {"type": "string", "maxLength": 5000}}});
+        let body_for = |extra: Value| {
+            let client = client_with(extra);
+            let mut request = ChatRequest::new(vec![ChatMessage::User("q".to_owned())]);
+            request.tools.push(ToolDefinition {
+                name: "lookup".to_owned(),
+                description: "Looks up.".to_owned(),
+                parameters: schema.clone(),
+            });
+            client.body(&request, false).unwrap_or_default()["tools"][0]["function"]["parameters"]
+                .clone()
+        };
+        // `qwen3` reads as llama.cpp: the long bound is folded away.
+        assert!(
+            body_for(json!({}))["properties"]["name"]
+                .get("maxLength")
+                .is_none()
+        );
+        let hosted = body_for(json!({"tool_schema_profile": "openai"}));
+        assert_eq!(hosted["properties"]["name"]["maxLength"], 5000);
+        assert!(
+            client_with_settings(&json!({"tool_schema_profile": "nope"})).is_err(),
+            "an unknown profile name is refused"
+        );
     }
 
     #[test]

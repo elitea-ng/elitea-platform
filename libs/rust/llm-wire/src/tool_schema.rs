@@ -142,6 +142,21 @@ impl SchemaProfile {
         }
     }
 
+    /// The profile a catalogue entry names (`llm_settings.tool_schema_profile`):
+    /// `anthropic`, `openai`, `bedrock`, `gemini` or `llama_cpp`. `None` for
+    /// any other text.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "anthropic" => Some(Self::Anthropic),
+            "openai" => Some(Self::OpenAi),
+            "bedrock" => Some(Self::Bedrock),
+            "gemini" => Some(Self::Gemini),
+            "llama_cpp" | "llamacpp" => Some(Self::LlamaCpp),
+            _ => None,
+        }
+    }
+
     const fn gemini(self) -> bool {
         matches!(self, Self::Gemini)
     }

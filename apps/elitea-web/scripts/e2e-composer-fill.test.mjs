@@ -67,12 +67,17 @@ function specsUnder(dir, base = dir) {
 }
 
 /** Characters after which a `/` starts a regular expression, not a division. */
-const REGEX_PRECEDERS = new Set('(,=:[!&|?{};+-*%<>~^'.split(''));
+const REGEX_PRECEDERS = new Set('(,=:[!&|?{};+-*%<>~^}'.split(''));
+/** Words after which a `/` starts a regular expression (`return /x/.test(y)`). */
+const REGEX_KEYWORDS = new Set(['return', 'typeof', 'case', 'in', 'of', 'delete', 'void', 'throw', 'new', 'else', 'do', 'yield', 'await', 'instanceof']);
 
 /**
  * `source` with the inside of every comment, string, template literal and
  * regular expression literal blanked to spaces (same length, newlines kept),
- * so a brace inside one is not counted as a block boundary (#2250).
+ * so a brace inside one is not counted as a block boundary (#2250). A `/`
+ * is a regular expression after an operator, `}` or a keyword such as
+ * `return`, and a division after a name, a number or `)`; a template's `${}`
+ * holds code of its own, with its own strings and templates.
  */
 export function maskLiterals(source) {
   if (lastMasked?.source === source) return lastMasked.masked;
@@ -88,45 +93,88 @@ function maskUncached(source) {
   const blank = (from, to) => {
     for (let k = from; k < to; k += 1) if (out[k] !== '\n') out[k] = ' ';
   };
-  let lastCode = '';
-  let i = 0;
-  while (i < source.length) {
-    const ch = source[i];
-    const next = source[i + 1];
-    if (ch === '/' && next === '/') {
-      const end = source.indexOf('\n', i);
-      const stop = end === -1 ? source.length : end;
-      blank(i, stop);
-      i = stop;
-    } else if (ch === '/' && next === '*') {
-      const end = source.indexOf('*/', i + 2);
-      const stop = end === -1 ? source.length : end + 2;
-      blank(i, stop);
-      i = stop;
-    } else if (ch === '"' || ch === "'" || ch === '`') {
-      let j = i + 1;
-      while (j < source.length && source[j] !== ch) j += source[j] === '\\' ? 2 : 1;
-      blank(i + 1, j);
-      i = j + 1;
-      lastCode = ch;
-    } else if (ch === '/' && (lastCode === '' || REGEX_PRECEDERS.has(lastCode))) {
-      let j = i + 1;
-      let inClass = false;
-      while (j < source.length && source[j] !== '\n') {
-        if (source[j] === '\\') j += 1;
-        else if (source[j] === '[') inClass = true;
-        else if (source[j] === ']') inClass = false;
-        else if (source[j] === '/' && !inClass) break;
+  /** The index after the template literal opening at `open`. */
+  function template(open) {
+    let j = open + 1;
+    while (j < source.length && source[j] !== '`') {
+      if (source[j] === '\\') {
+        blank(j, j + 2);
+        j += 2;
+      } else if (source[j] === '$' && source[j + 1] === '{') {
+        j = scan(j + 2, true) + 1;
+      } else {
+        blank(j, j + 1);
         j += 1;
       }
-      blank(i + 1, j);
-      i = j + 1;
-      lastCode = '/';
-    } else {
-      if (!/\s/.test(ch)) lastCode = ch;
-      i += 1;
     }
+    return j + 1;
   }
+  /** Scans code from `start`; inside a `${}` it stops at the `}` that closes it and returns that index. */
+  function scan(start, inTemplate) {
+    let lastCode = '';
+    let lastWord = '';
+    let depth = 0;
+    let i = start;
+    while (i < source.length) {
+      const ch = source[i];
+      const next = source[i + 1];
+      if (ch === '/' && next === '/') {
+        const end = source.indexOf('\n', i);
+        const stop = end === -1 ? source.length : end;
+        blank(i, stop);
+        i = stop;
+      } else if (ch === '/' && next === '*') {
+        const end = source.indexOf('*/', i + 2);
+        const stop = end === -1 ? source.length : end + 2;
+        blank(i, stop);
+        i = stop;
+      } else if (ch === '"' || ch === "'") {
+        let j = i + 1;
+        while (j < source.length && source[j] !== ch && source[j] !== '\n') j += source[j] === '\\' ? 2 : 1;
+        blank(i + 1, j);
+        i = j + 1;
+        lastCode = ch;
+        lastWord = '';
+      } else if (ch === '`') {
+        i = template(i);
+        lastCode = ch;
+        lastWord = '';
+      } else if (ch === '/' && (lastCode === '' || REGEX_PRECEDERS.has(lastCode) || (lastCode === 'a' && REGEX_KEYWORDS.has(lastWord)))) {
+        let j = i + 1;
+        let inClass = false;
+        while (j < source.length && source[j] !== '\n') {
+          if (source[j] === '\\') j += 1;
+          else if (source[j] === '[') inClass = true;
+          else if (source[j] === ']') inClass = false;
+          else if (source[j] === '/' && !inClass) break;
+          j += 1;
+        }
+        blank(i + 1, j);
+        i = j + 1;
+        lastCode = '/';
+        lastWord = '';
+      } else if (/[A-Za-z_$]/.test(ch)) {
+        let j = i + 1;
+        while (j < source.length && /[\w$]/.test(source[j])) j += 1;
+        lastWord = source.slice(i, j);
+        lastCode = 'a';
+        i = j;
+      } else {
+        if (inTemplate && ch === '{') depth += 1;
+        else if (inTemplate && ch === '}') {
+          if (depth === 0) return i;
+          depth -= 1;
+        }
+        if (!/\s/.test(ch)) {
+          lastCode = ch;
+          lastWord = '';
+        }
+        i += 1;
+      }
+    }
+    return i;
+  }
+  scan(0, false);
   return out.join('');
 }
 
@@ -265,6 +313,16 @@ describe('e2e specs send through fillComposer (#2221, #2229)', () => {
     const masked = maskLiterals(source);
     expect(masked).toHaveLength(source.length);
     expect(masked.split('}').length - 1).toBe(1);
+  });
+
+  it('reads a regex after return, and a template that nests a template, as literals (#2250)', () => {
+    const regex = 'function a() {\n  return /[}]/.test(x);\n}';
+    expect(maskLiterals(regex).split('}').length - 1).toBe(1);
+    const nested = 'function a() {\n  const t = `a ${ `b }` + "}" } c }`;\n}';
+    expect(maskLiterals(nested)).toHaveLength(nested.length);
+    expect(maskLiterals(nested).split('}').length - 1).toBe(2);
+    // A division is not a regex: the `}` after it still counts.
+    expect(maskLiterals('function a() {\n  const r = x / 2; /* } */ \n}').split('}').length - 1).toBe(1);
   });
 
   it('accepts the helper, and a fill that is never followed by a send', () => {
