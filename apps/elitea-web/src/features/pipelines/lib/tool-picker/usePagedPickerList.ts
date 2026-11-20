@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { useSelectedProjectId } from '../flow-editor/hooks/useSelectedProjectId';
 import type { PickerListState } from './toolPicker.types';
@@ -82,18 +82,26 @@ export function usePagedPickerAccumulator<TRow>({
   refetch,
   setPage,
 }: UsePagedPickerAccumulatorParams<TRow>): PickerListState<TRow> {
-  const [accumulated, setAccumulated] = useState<readonly TRow[]>([]);
+  const [pagesByNumber, setPagesByNumber] = useState<Readonly<Record<number, readonly TRow[]>>>({});
   const [prevKey, setPrevKey] = useState(queryKey);
 
   if (queryKey !== prevKey) {
     setPrevKey(queryKey);
-    setAccumulated([]);
+    setPagesByNumber({});
   }
 
   useEffect(() => {
     if (!enabled || isFetching || isError) return;
-    setAccumulated((prev) => (page === 0 ? pageRows : [...prev, ...pageRows]));
+    setPagesByNumber((prev) => ({ ...prev, [page]: pageRows }));
   }, [enabled, isError, isFetching, page, pageRows]);
+
+  const rows = useMemo(() => {
+    const keys = Object.keys(pagesByNumber)
+      .map(Number)
+      .sort((a, b) => a - b);
+    if (keys.length === 0) return page === 0 ? pageRows : [];
+    return keys.flatMap((pageNum) => pagesByNumber[pageNum] ?? []);
+  }, [page, pageRows, pagesByNumber]);
 
   const numericTotal = Number(total) || 0;
   const hasMore = (page + 1) * pageSize < numericTotal;
@@ -113,7 +121,7 @@ export function usePagedPickerAccumulator<TRow>({
   }, [page, refetch, setPage]);
 
   return {
-    rows: page === 0 && accumulated.length === 0 ? pageRows : accumulated,
+    rows,
     total: numericTotal,
     isLoading,
     isFetching,

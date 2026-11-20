@@ -10,6 +10,7 @@ import type { PickerToolEntry } from './toolPicker.types';
 import { useApplyPipelineAttachments } from './useApplyPipelineAttachments';
 import { useCreateInNewTab } from './useCreateInNewTab';
 import { isVersionLocked, useIsVersionLocked } from './useIsVersionLocked';
+import { usePagedPickerAccumulator } from './usePagedPickerList';
 import { usePickerMenu } from './usePickerMenu';
 import { usePipelineToolAttachments } from './usePipelineToolAttachments';
 import { useReconcilePipelineAttachments } from './useReconcilePipelineAttachments';
@@ -76,6 +77,7 @@ describe('tool-picker hooks', () => {
       result.current('https://evil.example/phish');
       result.current('//evil.example/phish');
       result.current('/toolkits/../admin');
+      result.current('/toolkits\\admin');
       result.current('/toolkits/%2fadmin');
       result.current('/toolkits/create\r\nX-Header: 1');
     });
@@ -228,5 +230,91 @@ describe('tool-picker hooks', () => {
     );
 
     await waitFor(() => expect(onToolsChange).toHaveBeenCalledWith([]));
+  });
+
+  it('useApplyPipelineAttachments rejects traversal/missing IDs before issuing HTTP requests (S1)', async () => {
+    const httpCalls: string[] = [];
+    server.use(
+      http.patch(`${BASE}/*`, ({ request }) => {
+        httpCalls.push(request.url);
+        return HttpResponse.json({ ok: true });
+      }),
+    );
+
+    const onError = vi.fn();
+    const badProjectProbe = mountHookWithRouter(() =>
+      useApplyPipelineAttachments({ projectId: '../etc', onError }),
+    );
+    await waitFor(() => expect(badProjectProbe.current()).toBeDefined());
+
+    const badProjectOutcome = await act(async () =>
+      badProjectProbe.current().applyAttachments({
+        applicationId: 100,
+        versionId: 1,
+        initialTools: [],
+        tools: [{ id: 10, type: 'github', toolkit_name: 'gh' }],
+      }),
+    );
+    expect(badProjectOutcome).toBe(false);
+
+    const goodProjectProbe = mountHookWithRouter(() =>
+      useApplyPipelineAttachments({ projectId: PROJECT_ID, onError }),
+    );
+    await waitFor(() => expect(goodProjectProbe.current()).toBeDefined());
+
+    const missingToolkitIdOutcome = await act(async () =>
+      goodProjectProbe.current().applyAttachments({
+        applicationId: 100,
+        versionId: 1,
+        initialTools: [],
+        tools: [{ type: 'github', toolkit_name: 'gh' }],
+      }),
+    );
+    expect(missingToolkitIdOutcome).toBe(false);
+
+    const invalidAppIdOutcome = await act(async () =>
+      goodProjectProbe.current().applyAttachments({
+        applicationId: 100,
+        versionId: 1,
+        initialTools: [],
+        tools: [{ type: 'application', name: 'BadApp', settings: { application_id: 0, application_version_id: 1 } }],
+      }),
+    );
+    expect(invalidAppIdOutcome).toBe(false);
+    expect(httpCalls).toEqual([]);
+    expect(onError).toHaveBeenCalledTimes(3);
+  });
+
+  it('usePagedPickerAccumulator replaces refetched pages idempotently without duplicating rows (F3)', () => {
+    const setPage = vi.fn();
+    const refetch = vi.fn();
+    const { result, rerender } = renderHookWithProviders(
+      (props: { page: number; pageRows: readonly string[]; isFetching: boolean }) =>
+        usePagedPickerAccumulator<string>({
+          page: props.page,
+          pageSize: 2,
+          queryKey: 'proj-1:',
+          enabled: true,
+          pageRows: props.pageRows,
+          total: 4,
+          isLoading: false,
+          isFetching: props.isFetching,
+          isError: false,
+          refetch,
+          setPage,
+        }),
+      undefined,
+      { initialProps: { page: 0, pageRows: ['a', 'b'], isFetching: false } },
+    );
+    expect(result.current.rows).toEqual(['a', 'b']);
+
+    // Advance to page 1
+    rerender({ page: 1, pageRows: ['c', 'd'], isFetching: false });
+    expect(result.current.rows).toEqual(['a', 'b', 'c', 'd']);
+
+    // Simulate background refetch of page 1 settling with updated/same rows — must NOT duplicate
+    rerender({ page: 1, pageRows: ['c', 'd'], isFetching: true });
+    rerender({ page: 1, pageRows: ['c', 'd-updated'], isFetching: false });
+    expect(result.current.rows).toEqual(['a', 'b', 'c', 'd-updated']);
   });
 });

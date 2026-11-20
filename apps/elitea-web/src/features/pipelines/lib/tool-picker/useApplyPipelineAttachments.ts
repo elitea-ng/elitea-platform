@@ -7,6 +7,7 @@ import { buildErrorMessage } from '@/shared/lib/http-error';
 
 import { useSelectedProjectId } from '../flow-editor/hooks/useSelectedProjectId';
 import { diffAttachments, getAttachmentKey } from './attachmentDiff.helpers';
+import { encodeSafePathSegment } from './attachmentTool.helpers';
 import { isApplicationTool } from './pipelineToolUsage.helpers';
 import { IDEMPOTENT_RELATION_ERRORS } from './toolPicker.constants';
 import type { PickerToolEntry } from './toolPicker.types';
@@ -68,6 +69,10 @@ function formatRelationError(tool: PickerToolEntry, error: unknown, action: 'add
   return `Failed to ${verb} toolkit "${tool.toolkit_name || tool.name || ''}": ${detail}`;
 }
 
+function isPositiveInt(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0;
+}
+
 async function patchToolkitRelation(params: {
   readonly projectId: string;
   readonly applicationId: number;
@@ -75,22 +80,23 @@ async function patchToolkitRelation(params: {
   readonly tool: PickerToolEntry;
   readonly hasRelation: boolean;
 }): Promise<void> {
-  const toolkitId = params.tool.tool_id ?? params.tool.id;
+  const safeProject = encodeSafePathSegment(params.projectId);
+  const safeToolkit = encodeSafePathSegment(params.tool.tool_id ?? params.tool.id);
+  if (!safeProject || !safeToolkit) {
+    throw new Error('Invalid project or toolkit identifier for toolkit relation');
+  }
   const selectedTools = params.hasRelation ? getSelectedTools(params.tool) : undefined;
-  await eliteaFetch(
-    `/elitea_core/tool/prompt_lib/${encodeURIComponent(params.projectId)}/${encodeURIComponent(String(toolkitId ?? ''))}`,
-    {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        entity_version_id: params.versionId,
-        entity_id: params.applicationId,
-        entity_type: 'agent',
-        has_relation: params.hasRelation,
-        ...(selectedTools === undefined ? {} : { selected_tools: selectedTools }),
-      }),
-    },
-  );
+  await eliteaFetch(`/elitea_core/tool/prompt_lib/${safeProject}/${safeToolkit}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      entity_version_id: params.versionId,
+      entity_id: params.applicationId,
+      entity_type: 'agent',
+      has_relation: params.hasRelation,
+      ...(selectedTools === undefined ? {} : { selected_tools: selectedTools }),
+    }),
+  });
 }
 
 async function patchApplicationRelation(params: {
@@ -100,16 +106,17 @@ async function patchApplicationRelation(params: {
   readonly tool: PickerToolEntry;
   readonly hasRelation: boolean;
 }): Promise<{ readonly tool_id?: number | undefined } | null> {
-  const response = await updateApplicationRelation(
-    params.projectId,
-    Number(params.tool.settings?.application_id ?? 0),
-    Number(params.tool.settings?.application_version_id ?? 0),
-    {
-      application_id: params.applicationId,
-      version_id: params.versionId,
-      has_relation: params.hasRelation,
-    },
-  );
+  const safeProject = encodeSafePathSegment(params.projectId);
+  const childAppId = params.tool.settings?.application_id;
+  const childVersionId = params.tool.settings?.application_version_id;
+  if (!safeProject || !isPositiveInt(childAppId) || !isPositiveInt(childVersionId)) {
+    throw new Error('Invalid project, application, or version identifier for application relation');
+  }
+  const response = await updateApplicationRelation(safeProject, childAppId, childVersionId, {
+    application_id: params.applicationId,
+    version_id: params.versionId,
+    has_relation: params.hasRelation,
+  });
   const body = unwrapBody(response);
   if (!body || typeof body !== 'object') return null;
   const toolId = (body as Record<string, unknown>)['tool_id'];

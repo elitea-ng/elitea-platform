@@ -73,7 +73,7 @@
 
 ## 3. Tests & Static Gates
 
-- **Targeted `vitest` (`lib/tool-picker` + `ui/tool-picker`, 10 files):** **40 passed / 0 failed / 0 skipped** (all MSW-backed, zero `vi.mock`).
+- **Targeted `vitest` (`lib/tool-picker` + `ui/tool-picker`, 10 files):** **42 passed / 0 failed / 0 skipped** (all MSW-backed, zero `vi.mock`, zero nested-`<button>` or MUI out-of-range warnings).
 - **`npm run typecheck`:** PASS (0 errors).
 - **`npm run lint -- --deny-warnings`:** PASS (0 warnings, 0 errors across 6,539 files).
 - **`npm run theme-gate`:** PASS (all 9 checks + 5/5 brand-pack contract tests).

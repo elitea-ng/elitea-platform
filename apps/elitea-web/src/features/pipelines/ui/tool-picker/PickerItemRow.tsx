@@ -93,7 +93,7 @@ function PickerItemRowInner<TItem extends PickerItem = PickerItem>({
 
   const row = (
     <ListItemButton
-      aria-selected={selected}
+      component="div"
       selected={selected}
       disabled={isDisabled}
       onClick={handleClick}

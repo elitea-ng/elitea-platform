@@ -12,6 +12,7 @@ export { reconcileAttachments, type ReconcileAttachmentsParams } from './attachm
 export {
   buildApplicationAttachment,
   buildToolkitAttachment,
+  encodeSafePathSegment,
   getAttachmentPagePath,
   getToolkitAvailableTools,
   withApplicationVersion,

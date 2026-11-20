@@ -1,4 +1,5 @@
 import type { ReactElement } from 'react';
+import Box from '@mui/material/Box';
 import { ThemeProvider } from '@mui/material/styles';
 import { render } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -74,25 +75,25 @@ describe('Tool picker UI primitives', () => {
     const onLoginClick = vi.fn();
 
     const { queryByTestId, rerender, getByTestId } = renderWithTheme(
-      <button type="button" onClick={onParentClick}>
+      <Box role="presentation" onClick={onParentClick} onKeyDown={onParentClick}>
         <PickerMcpStatus
           mcp={{ id: 1, type: 'mcp', name: 'DocsMCP', online: true }}
           onLoginClick={onLoginClick}
           data-testid="mcp-status"
         />
-      </button>,
+      </Box>,
     );
     expect(queryByTestId('mcp-status')).not.toBeInTheDocument();
 
     rerender(
       <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
-        <button type="button" onClick={onParentClick}>
+        <Box role="presentation" onClick={onParentClick} onKeyDown={onParentClick}>
           <PickerMcpStatus
             mcp={{ id: 1, type: 'mcp', name: 'DocsMCP', online: false }}
             onLoginClick={onLoginClick}
             data-testid="mcp-status"
           />
-        </button>
+        </Box>
       </ThemeProvider>,
     );
     expect(getByTestId('mcp-status')).toBeInTheDocument();

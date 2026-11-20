@@ -153,13 +153,14 @@ export const AgentVersionSelect = memo(function AgentVersionSelect({
 
   const versionLabel = t('pipelines.toolPicker.versionLabel', 'Version');
   const selectDisabled = disabled || isVersionLocked || !applicationId || query.isFetching;
+  const selectValue = options.some((opt) => opt.value === stringVersionId) ? stringVersionId : '';
   const optionalSelectProps = resolveOptionalSelectProps(tooltip, versionLabel, missingVersionError);
 
   return (
     <Box sx={rootSx} className="nopan nodrag nowheel" data-testid={testId}>
       {tooltip ? <InfoLabelWithTooltip label={versionLabel} tooltip={tooltip} /> : null}
       <SingleSelect
-        value={stringVersionId}
+        value={selectValue}
         options={options}
         onChange={handleChange}
         disabled={selectDisabled}

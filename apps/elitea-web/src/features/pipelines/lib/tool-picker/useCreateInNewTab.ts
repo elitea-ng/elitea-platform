@@ -23,7 +23,12 @@ export function useCreateInNewTab(onReturn?: () => void): (route: string) => voi
   }, []);
 
   return useCallback((route: string) => {
-    if (!SAFE_INTERNAL_ROUTE_RE.test(route) || route.includes('..') || route.toLowerCase().includes('%2f')) {
+    if (
+      !SAFE_INTERNAL_ROUTE_RE.test(route) ||
+      route.includes('..') ||
+      route.includes('\\') ||
+      route.toLowerCase().includes('%2f')
+    ) {
       return;
     }
     isCreatingRef.current = true;

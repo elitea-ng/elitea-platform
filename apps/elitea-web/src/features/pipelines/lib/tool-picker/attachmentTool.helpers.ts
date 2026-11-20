@@ -3,7 +3,7 @@ import type { ApplicationListRow, PickerToolEntry, ToolkitListRow } from './tool
 
 const SAFE_SEGMENT_RE = /^[A-Za-z0-9_-]+$/;
 
-function encodeSafePathSegment(raw: number | string | undefined): string | null {
+export function encodeSafePathSegment(raw: number | string | undefined): string | null {
   if (raw === undefined || raw === null) return null;
   const text = String(raw);
   if (!text || !SAFE_SEGMENT_RE.test(text)) return null;
