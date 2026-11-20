@@ -28,8 +28,34 @@ Each of these wraps a single provider API in one or two generic call tools; none
 |---|---|---|---|---|
 | `azure_search` | Azure Search | Queries and fetches documents from an Azure AI Search index. | saved credential: `azure_search` | Yes |
 | `bigquery` | Cloud GCP (BigQuery) | Runs BigQuery queries and vector similarity search over BigQuery-backed embeddings. | saved credential: `bigquery`; inline: `api_key` | Yes |
-| `delta_lake` | AWS Delta Lake | Reads a Delta Lake table's schema and rows, including vector search. | saved credential: `delta_lake`; inline: AWS access key/secret/session token/region | No |
+| `delta_lake` | AWS Delta Lake | Reads a Delta Lake table's schema and rows, including vector search. See [AWS Delta Lake](#aws-delta-lake). | saved credential: `delta_lake`; inline: AWS access key/secret/session token/region | Yes |
 | `elastic` | Elasticsearch | Runs a search query against an Elasticsearch index. | none | Yes |
+
+## AWS Delta Lake
+
+The `delta_lake` toolkit reads one Delta Lake table in Amazon S3 with the AWS key pair, region and `s3_path` (or `table_path`) of a `delta_lake` credential. Its tiles stay out of the **New toolkit** picker (the type is hidden, as in the SDK it comes from); a toolkit created through the API or imported from the SDK runs on the agent worker. It has three read-only tools, with the SDK's names and arguments:
+
+| Tool | What it does |
+|---|---|
+| `query_table` | Returns rows, optionally with `columns` (which to keep), `query` (a pandas query string) and `filters` (structured conditions). `query` and `filters` both apply. |
+| `vector_search` | Returns the `k` rows (default 5, at most 100) whose `embedding_column` (default `embedding`) is most similar to the `embedding` you give, by cosine similarity, best first. Rows with no embedding are skipped. |
+| `get_table_schema` | Returns the table's schema, one `name: type` line per column. |
+
+**Filters.** `filters` is an object of `column: condition`. A condition is a value (the column equals it), a list (the column is one of them), `null` (the column is null), or an object of operators that must all hold: `eq`, `ne`, `in`, `gt`, `gte`, `lt`, `lte`, `is_null`. Columns are combined with AND. Numbers compare as numbers, text as text (dates and timestamps as their ISO text), booleans as booleans. `ne` also matches nulls and values of another type, as pandas `!=` does. Comparisons on integer, double and string columns (including partition columns) also let the reader skip whole files.
+
+```json
+{"columns": ["id", "name"], "filters": {"score": {"gte": 20, "lt": 45}, "name": ["bob", "dave"]}}
+```
+
+**Query.** `query` takes the pandas `DataFrame.query` syntax, literals only: comparisons (`==`, `!=`, `<`, `<=`, `>`, `>=`, chained like `1 < id <= 3`, also between two columns), `and` / `or` / `not` (and `&`, `|`, `~`, which rank with `and` / `or`, below the comparisons, as in pandas' default parser) with parentheses, `in` / `not in` against a list (`name in ['a', 'b']`), `is null` / `is not null` (`is None`), the arithmetic `+ - * / %`, and backtick-quoted column names. It is read by a bounded parser and never executed. Anything else (function or method calls such as `.str.contains()`, `@variable`, `**`, `//`, `like`, subqueries) is refused with a message naming the offending token and its position. An empty or null `query` returns every row.
+
+```json
+{"query": "score >= 20 and name in ['bob', 'dave'] and not (id == 4)"}
+```
+
+**Limits.** The SDK loads the whole table into memory. Here a read is bounded: an answer carries at most 1,000 rows and 1 MiB (a final `_truncated` entry says when more matched), a text cell is cut at 2,000 characters, and a read that would scan more than 5 million rows or 512 MiB, or take longer than a minute, fails with a message asking you to narrow it with `columns` and `filters`. The credential's path must be an `s3://` URI; the worker reads no local path.
+
+The worker calls only `s3.<region>.amazonaws.com` (`.com.cn` for a `cn-` region). Deployments that restrict worker egress allow it automatically for a run that uses the toolkit. Test Connection is not available for this credential type.
 
 ## Communication and testing
 

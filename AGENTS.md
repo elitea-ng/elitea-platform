@@ -249,3 +249,11 @@ act on upgrade adds `docs/upgrading/YYYY-MM-DD-<issue>-<slug>.md`
 history up to 2026-11-09, and `scripts/ci/check-upgrading-notes.mjs` fails a pull
 request that adds an entry to it. A shared list made every two open pull
 requests conflict.
+
+**What's new entries are one file per change.** A change that users see adds
+`apps/elitea-docs/src/content/whats-new/YYYY-MM-DD-<slug>.md`: front matter
+`date: YYYY-MM-DD` (the file name's date) and an optional integer `order`
+(higher first among entries of one date), then one `## ` heading and plain
+Markdown paragraphs. Never edit `apps/elitea-docs/src/content/docs/what-is-new.mdx`:
+it renders that folder newest first, and `scripts/ci/check-whats-new.mjs` fails
+a pull request that adds a section to it or an entry that breaks these rules.

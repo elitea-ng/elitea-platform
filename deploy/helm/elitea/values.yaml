@@ -7027,7 +7027,7 @@ worker:
   # committed `current_rust_worker_toolkit_capability_snapshot.json`), and each
   # reply that was configured with a toolkit, tool or built-in capability the
   # worker cannot run carries a compact notice listing what was left out and
-  # why. Not served, as of this release: localgit, aws, delta_lake, kubernetes
+  # why. Not served, as of this release: localgit, aws, kubernetes
   # (owner decisions, see the worker's SOURCE_PARITY.md); the internal tools
   # image_generation, internal_mcp and swarm; and the per-tool gaps the
   # capability snapshot's `supported_tools` lists (shown greyed with a reason).
