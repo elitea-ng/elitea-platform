@@ -166,7 +166,7 @@ func TestEveryRegisteredCodeIsUsed(t *testing.T) {
 		}
 		goName := ConstName(entry.Code)
 		rustName := strings.ToUpper(strings.NewReplacer(".", "_").Replace(entry.Code))
-		if !strings.Contains(text, "faults."+goName) && !regexp.MustCompile(`\b`+goName+`\b`).MatchString(text) && !strings.Contains(text, "codes::"+rustName) {
+		if !strings.Contains(text, "faults."+goName) && !containsWord(text, goName) && !strings.Contains(text, "codes::"+rustName) {
 			t.Errorf("%s (%s) is registered but nothing raises it; remove it or use it", entry.Code, entry.File)
 		}
 	}
@@ -307,6 +307,28 @@ func writeBaseline(t *testing.T, found map[string]string) {
 	}
 }
 
+// containsWord reports whether word occurs in text with no identifier character
+// on either side: the meaning of regexp `\bword\b` for an identifier. It
+// replaces a regexp compiled per registered code and matched against the whole
+// Go and Rust corpus, which took 21 minutes of the CI Go job (measured
+// 2026-11-19, the one package that made its shard 35 minutes long).
+func containsWord(text, word string) bool {
+	isWord := func(b byte) bool {
+		return b == '_' || b >= '0' && b <= '9' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z'
+	}
+	for from := 0; ; {
+		i := strings.Index(text[from:], word)
+		if i < 0 {
+			return false
+		}
+		start, end := from+i, from+i+len(word)
+		if (start == 0 || !isWord(text[start-1])) && (end == len(text) || !isWord(text[end])) {
+			return true
+		}
+		from = start + 1
+	}
+}
+
 func repositoryRoot(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()
@@ -348,4 +370,27 @@ func sourceFiles(t *testing.T, root, ext string) []string {
 		t.Fatal(err)
 	}
 	return files
+}
+
+func TestContainsWordMatchesRegexpWordBoundaries(t *testing.T) {
+	for _, c := range []struct {
+		text, word string
+		want       bool
+	}{
+		{"ErrFoo", "ErrFoo", true},
+		{"x ErrFoo y", "ErrFoo", true},
+		{"ErrFooBar", "ErrFoo", false},
+		{"MyErrFoo", "ErrFoo", false},
+		{"ErrFoo_x", "ErrFoo", false},
+		{"ErrFooBar ErrFoo.", "ErrFoo", true},
+		{"faults.ErrFoo(", "ErrFoo", true},
+		{"", "ErrFoo", false},
+	} {
+		if got := containsWord(c.text, c.word); got != c.want {
+			t.Errorf("containsWord(%q, %q) = %v, want %v", c.text, c.word, got, c.want)
+		}
+		if got := regexp.MustCompile(`\b` + c.word + `\b`).MatchString(c.text); got != c.want {
+			t.Errorf("regexp disagrees on (%q, %q): %v", c.text, c.word, got)
+		}
+	}
 }

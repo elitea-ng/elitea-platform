@@ -1,66 +1,9 @@
 name: CI — Rust worker
 
 on:
-  pull_request:
-    paths:
-      # The pin every cargo step asserts (scripts/ci/assert-rust-toolchain.sh).
-      - "rust-toolchain.toml"
-      - "scripts/ci/assert-rust-toolchain.sh"
-      - "services/elitea-worker-rust/**"
-      # The chart-rendered workspace profile the supervisor test parses.
-      - "deploy/runtime/sandbox-workspace.kubernetes.example.json"
-      - "services/elitea-code-runner/**"
-      - "services/elitea-main/migrations/agentstate/**"
-      - "libs/proto/**"
-      # elitea-llm-wire (the /llm caller contract) and elitea-agent-runtime
-      # (the runtime shared with the desktop host, ADR-0029), path dependencies,
-      # and the patched adk crates in libs/rust/vendor; they inherit package
-      # fields and lints from the libs/rust workspace.
-      - "libs/rust/**"
-      # The error registry elitea-faults' build.rs reads (FU-299).
-      - "libs/go/faults/registry/**"
-      # The workspace-run Docker proofs create the egress network with it.
-      - "deploy/docker/workspace-egress.sh"
-      # ...and run the real egress proxy for the proxy-mode proof.
-      - "services/elitea-egress-proxy/**"
-      - "libs/go/egresslib/**"
-      # The /llm caller contract both Rust callers assert (worker, engine model client).
-      - "conformance/llm-caller/**"
-      # The SDK schema gate reads both (libs/rust/agent-runtime/src/toolkits/sdk_conformance.rs;
-      # the worker's artifact suite asserts it through `test-support`).
-      - "services/elitea-main/internal/runtimecomposition/current_toolkit_schema_snapshot.json"
-      - "services/elitea-main/internal/runtimecomposition/current_rust_worker_toolkit_capability_snapshot.json"
-      - "services/elitea-main/internal/rustonly/rust_only_toolkit_tools.json"
-      # The live command-bus test runs the worker against the NATS chart's
-      # own permission table and the real bootstrap (docs/runtime-command-bus.md).
-      # The bundled NATS server's permission table and the bootstrap script.
-      - "deploy/helm/elitea/values.yaml"
-      - "deploy/helm/elitea/values-nats-ha.yaml"
-      - "deploy/helm/elitea/templates/nats/**"
-      - "deploy/helm/elitea/Chart.lock"
-      - "deploy/helm/elitea/build-deps.sh"
-      - "deploy/helm/elitea/files/nats-bootstrap.sh"
-      - "scripts/nats/**"
-      - "libs/go/natsconn/**"
-      - "docs/runtime-command-bus.md"
-      # The owner-schema fixture is migrated by the real command, and the
-      # Docker supervisor tests run through the ledger helper; the ignored-test
-      # guard reads its own script and allowlist.
-      - "services/elitea-main/cmd/elitea-migrate/**"
-      - "services/elitea-main/internal/infra/db/migrate/**"
-      - "scripts/runtime/test_sandbox_ledger.py"
-      - "scripts/ci/check-worker-ignored-tests.mjs"
-      - "scripts/ci/check-worker-ignored-tests.test.mjs"
-      - "scripts/ci/ci-compat.mjs"
-      - "scripts/ci/py-compat.mjs"
-      - "scripts/ci/package.json"
-      - "scripts/ci/package-lock.json"
-      - "scripts/ci/worker-ignored-tests-allowlist.txt"
-      # The guard's install: ci-scripts-deps and the npm cache actions it uses.
-      - ".github/actions/ci-scripts-deps/**"
-      - ".github/actions/npm-cache/**"
-      - ".github/actions/main-write-cache/**"
-      - ".github/workflows/ci-rust.yml"
+  # Called by ci.yml, which owns the PR tiers and the path filter
+  # (scripts/ci/tier-paths.json); no `pull_request` arm of its own.
+  workflow_call:
   # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
   # The nightly run on main is the one that WRITES the caches pull requests
   # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
@@ -70,7 +13,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ci-rust-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -82,7 +25,7 @@ env:
 
 jobs:
   code-runner:
-    name: Code runner format, lint, and tests
+    name: Code runner tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -100,14 +43,12 @@ jobs:
       - name: Cache cargo registry and build artefacts
         uses: Swatinem/rust-cache@v2
         with:
+          cache-targets: false  # registry and git only: the 10 GB cap (scripts/ci/check-cache-budget.mjs)
           save-if: ${{ github.ref == 'refs/heads/main' }}
           workspaces: services/elitea-code-runner
 
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Run Clippy
-        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      # Formatting and Clippy for this crate run in ci-rust-lint.yml (fast
+      # tier), so they fail in minutes and before this job's build.
 
       - name: Run all targets and features
         run: cargo test --locked --all-targets --all-features
@@ -121,7 +62,7 @@ jobs:
           "${RUNNER_TEMP}/code-runner-build-rs-tests"
 
   quality:
-    name: Format, Clippy, docs, and release
+    name: Docs and release build
     runs-on: ubuntu-latest
     timeout-minutes: 45
     defaults:
@@ -170,16 +111,14 @@ jobs:
       - name: Cache cargo registry and build artefacts
         uses: Swatinem/rust-cache@v2
         with:
+          cache-targets: false  # registry and git only: the 10 GB cap (scripts/ci/check-cache-budget.mjs)
           # Read everywhere, write on main only: a pull request's target directory
           # is ~1 GB of the repository's 10 GB Actions cache, duplicated per branch.
           save-if: ${{ github.ref == 'refs/heads/main' }}
           workspaces: services/elitea-worker-rust
 
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Run Clippy
-        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      # Formatting and Clippy for this crate run in ci-rust-lint.yml (fast
+      # tier), so they fail in minutes and before this job's build.
 
       - name: Build documentation
         env:
@@ -291,8 +230,9 @@ jobs:
         uses: ./.github/actions/go-cache
         with:
           cache-dependency-path: |
-            go.work.sum
+            services/elitea-main/go.sum
             libs/go/*/go.sum
+            libs/proto/gen/go/go.sum
 
       - name: Provision the secured NATS permission test
         working-directory: .

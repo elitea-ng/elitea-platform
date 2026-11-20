@@ -112,25 +112,113 @@ inputs:
 runs:
   using: composite
   steps:
-    # Third-party (non-`build:`) images the compose files reference — postgres,
-    # nats, qdrant, rustfs, the oidc-mock base, otel, etc. — pulled
-    # up front with a bounded retry, before buildx even starts.
+    # Push mode: one tag per requested target, named after the compose
+    # service's image (`ghcr.io/elitea-ng/elitea-main:standalone` →
+    # `<prefix>elitea-main:<tag>`), plus each target's build spec for the
+    # digest map.
+    - name: Name the images this run pushes
+      if: inputs.push-prefix != ''
+      id: push
+      shell: bash
+      working-directory: ${{ github.workspace }}/deploy
+      env:
+        COMPOSE_FILES: ${{ inputs.compose-files }}
+        TARGETS: ${{ inputs.targets }}
+        PREFIX: ${{ inputs.push-prefix }}
+        TAG: ${{ inputs.push-tag }}
+        DIGESTS_FILE: ${{ inputs.digests-file }}
+        SOURCE: ${{ github.server_url }}/${{ github.repository }}
+        REVISION: ${{ github.sha }}
+      run: |
+        set -euo pipefail
+        [ -n "$TAG" ] || { echo "::error::push mode needs push-tag"; exit 1; }
+        [ -n "$DIGESTS_FILE" ] || { echo "::error::push mode needs digests-file"; exit 1; }
+        args=()
+        while IFS= read -r f; do
+          [ -n "$f" ] && args+=(-f "$f")
+        done <<< "$COMPOSE_FILES"
+        docker compose "${args[@]}" config --format json > "${RUNNER_TEMP}/stack-config.json"
+        # Targets are compose SERVICE names, comma- or space-separated.
+        read -r -a targets <<< "${TARGETS//,/ }"
+        [ "${#targets[@]}" -gt 0 ] || { echo "::error::push mode needs explicit targets"; exit 1; }
+        node "${GITHUB_WORKSPACE}/scripts/ci/stack-images.mjs" plan \
+          "${RUNNER_TEMP}/stack-config.json" "$GITHUB_WORKSPACE" "$PREFIX" "$TAG" \
+          "${RUNNER_TEMP}/stack-push-plan.json" "${targets[@]}" > "${RUNNER_TEMP}/stack-push-set.txt"
+        {
+          echo "set<<__SET__"
+          cat "${RUNNER_TEMP}/stack-push-set.txt"
+          for t in "${targets[@]}"; do
+            echo "${t}.labels.org.opencontainers.image.source=${SOURCE}"
+            echo "${t}.labels.org.opencontainers.image.revision=${REVISION}"
+          done
+          echo "__SET__"
+        } >> "$GITHUB_OUTPUT"
+        cat "${RUNNER_TEMP}/stack-push-set.txt"
+
+    # ── Content-addressed reuse (push mode) ─────────────────────────────────
     #
-    # Why: three CI runs in one day died before any test ran with a Docker Hub
-    # connection reset while `compose up` pulled a base image (e.g.
-    # postgres:18) inline, on the chat-stream shards of ci-web-e2e.yml. Every
-    # caller of this action hands compose-files here in the same order and
-    # relative-to-deploy/ spelling it later hands to the stack script's `up`,
-    # so pulling from the SAME set here means a flaky pull fails loud, with
-    # retries, on a step named for it — not silently, minutes later, inside
-    # `compose up`.
+    # Measured 2026-11-19: the build-once jobs were 43 runner-minutes of every
+    # pull-request head, rebuilt in full on a push that changed one service.
+    # Each image now has a content address (scripts/ci/stack-image-hash.mjs: a
+    # hash of its build spec and every COPY source of the stages it runs) and a
+    # tag for it, `<prefix><image>:cas-<hash>`. When EVERY image of this leg
+    # already has that tag, the leg builds nothing: it uses the existing
+    # image under its content tag (no re-tag: it keeps its age) and the digests
+    # are recorded from that tag. Otherwise the leg builds as before and,
+    # after recording the digests, tags the result with its content address for
+    # the next push.
     #
-    # Deliberately excludes anything the `build:` guard below checks: pulling
-    # a build-tagged image here would paper over a #154 guard failure with a
-    # stale registry tag instead of failing loud.
+    # A run that may WRITE caches (the nightly run on main) never reuses: its
+    # whole purpose is to build, export the layer cache and save the mounts. A
+    # fork's pull request never reaches this action (its build-once jobs are
+    # skipped and its lanes build in-job: .github/actions/stack-images), so the
+    # fork fallback is the build it always had.
+    - name: Install the content-address script's one dependency
+      if: inputs.push-prefix != ''
+      uses: ./.github/actions/ci-scripts-deps
+    - name: Look for images already built from these inputs
+      if: inputs.push-prefix != ''
+      id: reuse
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        WRITE: ${{ inputs.cache-write }}
+      run: |
+        set -euo pipefail
+        plan="${RUNNER_TEMP}/stack-push-plan.json"
+        node scripts/ci/stack-image-hash.mjs plan "$GITHUB_WORKSPACE" "$plan" > "${RUNNER_TEMP}/stack-cas-refs.txt"
+        cat "${RUNNER_TEMP}/stack-cas-refs.txt"
+        reuse=true
+        if [ "$WRITE" = "true" ]; then
+          echo "this run writes caches: it builds"
+          reuse=false
+        else
+          while IFS= read -r ref; do
+            if docker buildx imagetools inspect "$ref" > /dev/null 2>&1; then
+              echo "  have  $ref"
+            else
+              echo "  build $ref"
+              reuse=false
+            fi
+          done < "${RUNNER_TEMP}/stack-cas-refs.txt"
+        fi
+        echo "reuse=$reuse" >> "$GITHUB_OUTPUT"
+        if [ "$reuse" = "true" ]; then
+          echo "::notice::every image of this leg already exists for these inputs; nothing is built"
+        fi
+    # A reused image keeps its own age: it is NOT re-tagged for this run (a
+    # re-tag would restart the 7-day prune clock of an image no push built). The
+    # digests are recorded from the content tag itself.
+    - name: Point the plan at the reused images' content tags
+      if: inputs.push-prefix != '' && steps.reuse.outputs.reuse == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        node -e 'const fs = require("fs"); const p = process.argv[1]; const e = JSON.parse(fs.readFileSync(p, "utf8")); for (const x of e) x.tag = x.cas; fs.writeFileSync(p, JSON.stringify(e, null, 2))' "${RUNNER_TEMP}/stack-push-plan.json"
+
     - name: Pull third-party images with retry
       # Load mode only: a push-mode build runs no stack.
-      if: inputs.push-prefix == ''
+      if: inputs.push-prefix == '' && steps.reuse.outputs.reuse != 'true'
       shell: bash
       working-directory: ${{ github.workspace }}/deploy
       env:
@@ -144,6 +232,7 @@ runs:
         bash "${GITHUB_WORKSPACE}/scripts/ci/pull-third-party-images.sh" "${args[@]}"
 
     - uses: docker/setup-buildx-action@v4
+      if: steps.reuse.outputs.reuse != 'true'
       id: buildx
       with:
         # v0.37.1: v0.37.0 derives the docker-container driver's readiness
@@ -170,6 +259,7 @@ runs:
     # step starts, with a bounded retry, so a slow-to-settle container never
     # reaches the dance at all instead of failing partway through it.
     - name: Wait for the builder to be ready
+      if: steps.reuse.outputs.reuse != 'true'
       shell: bash
       env:
         BUILDER: ${{ steps.buildx.outputs.name }}
@@ -212,6 +302,7 @@ runs:
     # pull request reads. So a pull request rebuilds what it changed on each
     # push, and main pays a cold build once.
     - name: Decide what this run may write
+      if: steps.reuse.outputs.reuse != 'true'
       id: policy
       shell: bash
       env:
@@ -305,7 +396,7 @@ runs:
       # The ref/event half restates the cache-write default literally, so a
       # caller that passed `cache-write: true` from a pull request still
       # cannot save (scripts/ci/check-workflow-cache-writes.mjs reads it).
-      if: steps.policy.outputs.write-mounts == 'true' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+      if: steps.policy.outputs.write-mounts == 'true' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.reuse.outputs.reuse != 'true'
       id: mounts-rw
       uses: actions/cache@v6
       with:
@@ -325,7 +416,7 @@ runs:
           ${{ steps.policy.outputs.mount-base }}-
           ${{ steps.policy.outputs.mount-prefix }}
     - name: Restore BuildKit cache mounts (readers)
-      if: steps.policy.outputs.write-mounts != 'true'
+      if: steps.policy.outputs.write-mounts != 'true' && steps.reuse.outputs.reuse != 'true'
       id: mounts-ro
       uses: actions/cache/restore@v6
       with:
@@ -349,7 +440,7 @@ runs:
     # restore-time cap (the first version of this) left the saved entry
     # uncapped and made the trimmed image cold on every main run.
     - name: Cap the saved cache mounts (writers, post step)
-      if: steps.policy.outputs.write-mounts == 'true'
+      if: steps.policy.outputs.write-mounts == 'true' && steps.reuse.outputs.reuse != 'true'
       uses: ./.github/actions/build-stack-images/cap-saved-mounts
       with:
         path: .buildkit-mounts
@@ -362,6 +453,7 @@ runs:
     # builder first, with a bounded retry, and pin it by digest below, so the
     # dance resolves it from the builder's own store instead of the registry.
     - name: Warm the cache-dance utility image in the builder
+      if: steps.reuse.outputs.reuse != 'true'
       shell: bash
       env:
         BUILDER: ${{ steps.buildx.outputs.name }}
@@ -390,6 +482,7 @@ runs:
     # five stack images build their dependencies in a LAYER (the registry
     # layer cache), so they have no target mount to map.
     - name: Inject cache mounts into the builder
+      if: steps.reuse.outputs.reuse != 'true'
       uses: reproducible-containers/buildkit-cache-dance@v3
       with:
         builder: ${{ steps.buildx.outputs.name }}
@@ -418,6 +511,7 @@ runs:
     # neither the compose files nor the cache HCL declare a cache-to of their
     # own (bake-cache.hcl's header says so).
     - name: Derive the cache-to overlay for this run
+      if: steps.reuse.outputs.reuse != 'true'
       id: overlay
       shell: bash
       working-directory: ${{ github.workspace }}/deploy
@@ -468,49 +562,6 @@ runs:
         echo "layer cache: mode=$MODE, $n_to scope(s)"
         echo "file=$out" >> "$GITHUB_OUTPUT"
 
-    # Push mode: one tag per requested target, named after the compose
-    # service's image (`ghcr.io/elitea-ng/elitea-main:standalone` →
-    # `<prefix>elitea-main:<tag>`), plus each target's build spec for the
-    # digest map.
-    - name: Name the images this run pushes
-      if: inputs.push-prefix != ''
-      id: push
-      shell: bash
-      working-directory: ${{ github.workspace }}/deploy
-      env:
-        COMPOSE_FILES: ${{ inputs.compose-files }}
-        TARGETS: ${{ inputs.targets }}
-        PREFIX: ${{ inputs.push-prefix }}
-        TAG: ${{ inputs.push-tag }}
-        DIGESTS_FILE: ${{ inputs.digests-file }}
-        SOURCE: ${{ github.server_url }}/${{ github.repository }}
-        REVISION: ${{ github.sha }}
-      run: |
-        set -euo pipefail
-        [ -n "$TAG" ] || { echo "::error::push mode needs push-tag"; exit 1; }
-        [ -n "$DIGESTS_FILE" ] || { echo "::error::push mode needs digests-file"; exit 1; }
-        args=()
-        while IFS= read -r f; do
-          [ -n "$f" ] && args+=(-f "$f")
-        done <<< "$COMPOSE_FILES"
-        docker compose "${args[@]}" config --format json > "${RUNNER_TEMP}/stack-config.json"
-        # Targets are compose SERVICE names, comma- or space-separated.
-        read -r -a targets <<< "${TARGETS//,/ }"
-        [ "${#targets[@]}" -gt 0 ] || { echo "::error::push mode needs explicit targets"; exit 1; }
-        node "${GITHUB_WORKSPACE}/scripts/ci/stack-images.mjs" plan \
-          "${RUNNER_TEMP}/stack-config.json" "$GITHUB_WORKSPACE" "$PREFIX" "$TAG" \
-          "${RUNNER_TEMP}/stack-push-plan.json" "${targets[@]}" > "${RUNNER_TEMP}/stack-push-set.txt"
-        {
-          echo "set<<__SET__"
-          cat "${RUNNER_TEMP}/stack-push-set.txt"
-          for t in "${targets[@]}"; do
-            echo "${t}.labels.org.opencontainers.image.source=${SOURCE}"
-            echo "${t}.labels.org.opencontainers.image.revision=${REVISION}"
-          done
-          echo "__SET__"
-        } >> "$GITHUB_OUTPUT"
-        cat "${RUNNER_TEMP}/stack-push-set.txt"
-
     # bake reads the compose files as its definition, merges the HCL's
     # per-target cache scopes onto the same-named services, and `load: true`
     # writes every result into the runner's image store (the #154 guard).
@@ -525,7 +576,7 @@ runs:
     # packages:read token instead of costing a cold build. Allowed to fail:
     # a token without that scope must not stop a build that can go cold.
     - name: Log in to the registry to read the layer cache
-      if: inputs.push-prefix == ''
+      if: inputs.push-prefix == '' && steps.reuse.outputs.reuse != 'true'
       continue-on-error: true
       shell: bash
       env:
@@ -534,6 +585,7 @@ runs:
       run: printf '%s' "$TOKEN" | docker login ghcr.io --username "$ACTOR" --password-stdin
 
     - name: Bake the stack images
+      if: steps.reuse.outputs.reuse != 'true'
       uses: docker/bake-action@v7
       with:
         source: ./deploy
@@ -594,13 +646,28 @@ runs:
         node "${GITHUB_WORKSPACE}/scripts/ci/stack-images.mjs" record "$plan" "$meta" > "$DIGESTS_FILE"
         cat "$DIGESTS_FILE"
 
+    # The content address of what this leg just built, for the next push to
+    # find. A registry-side copy of the tag just pushed. Not on a reuse (the
+    # address exists already). A failure costs the next push a build, nothing
+    # more, so it only warns.
+    - name: Tag the built images with their content address
+      if: inputs.push-prefix != '' && steps.reuse.outputs.reuse != 'true'
+      shell: bash
+      run: |
+        set -uo pipefail
+        node -e 'const fs = require("fs"); for (const e of JSON.parse(fs.readFileSync(process.argv[1], "utf8"))) console.log(e.ref, e.tag, e.cas)' "${RUNNER_TEMP}/stack-push-plan.json" \
+          | while read -r ref tag cas; do
+              docker buildx imagetools create --tag "${ref}:${cas}" "${ref}:${tag}" \
+                || echo "::warning::could not tag ${ref}:${cas}; the next push builds it again"
+            done
+
     # The layer-cache refs THIS leg's targets read (and, on main, write: the
     # overlay's cache-to is derived ref-for-ref from the same cache-from
     # lines). `bake --print` resolves the targets the way the bake did. Runs
     # on every push-mode leg, pull requests included, so CI exercises it even
     # though only main uses the result below.
     - name: Resolve the layer-cache refs of this leg's targets
-      if: inputs.push-prefix != ''
+      if: inputs.push-prefix != '' && steps.reuse.outputs.reuse != 'true'
       id: legrefs
       shell: bash
       working-directory: ${{ github.workspace }}/deploy
@@ -632,7 +699,7 @@ runs:
     # on every run that wrote, instead of assuming it. Anonymous token + tag
     # list is exactly what an unauthenticated BuildKit does.
     - name: The layer cache this run wrote is publicly readable
-      if: inputs.push-prefix != '' && steps.policy.outputs.layer-mode != 'none'
+      if: inputs.push-prefix != '' && steps.policy.outputs.layer-mode != 'none' && steps.reuse.outputs.reuse != 'true'
       shell: bash
       working-directory: ${{ github.workspace }}/deploy
       env:

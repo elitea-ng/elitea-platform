@@ -54,7 +54,8 @@
 //                           counts as one writer of that leg's suffix.
 //   deploy/ci/*.hcl         declares no cache-to (it is merged into every bake)
 //
-// A workflow with no pull_request, pull_request_target, push or merge_group
+// A workflow with no pull_request, pull_request_target, push, merge_group or
+// workflow_call (ci.yml calls the pull-request workflows)
 // trigger (publish.yml, the nightlies) is exempt from the cache-to,
 // actions/cache and trivy rules: it cannot run for a pull request. Every other
 // rule still applies to it.
@@ -82,7 +83,9 @@ export const MINIMUM_CACHE_STEPS = 20;
 const MAIN_REF = "github.ref == 'refs/heads/main'";
 const WRITER_EVENT = "github.event_name != 'pull_request'";
 // The triggers that can run a workflow for a pull request, or for a branch push.
-const PR_TRIGGERS = ["pull_request", "pull_request_target", "push", "merge_group"];
+// `workflow_call`: ci.yml runs most workflows as called workflows, so a
+// workflow with only that arm (and a schedule) still runs for a pull request.
+const PR_TRIGGERS = ["pull_request", "pull_request_target", "push", "merge_group", "workflow_call"];
 
 const isDict = (v) => v !== null && typeof v === "object" && !Array.isArray(v) && !(v instanceof Date);
 // dict.get(key, default)

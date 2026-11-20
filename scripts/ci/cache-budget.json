@@ -1,0 +1,24 @@
+{
+  "comment": "Size estimates (GiB) for the cache steps scripts/ci/check-cache-budget.mjs derives from the workflows, measured 2026-11-19; `measured` overrides by workflow:job; `fixed` are entries no step of these kinds writes.",
+  "estimates": {
+    "rustWithTargets": 1.3,
+    "rustRegistryOnly": 0.1,
+    "go": 1.2,
+    "npm": 0.2
+  },
+  "measured": {},
+  "fixed": [
+    {
+      "family": "buildkit-mounts (go, rust, light)",
+      "gib": 1.1
+    },
+    {
+      "family": "buildkit-blob layers",
+      "gib": 0.6
+    },
+    {
+      "family": "trivy db and binaries",
+      "gib": 0.15
+    }
+  ]
+}

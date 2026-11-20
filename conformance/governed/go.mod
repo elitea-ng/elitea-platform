@@ -1,3 +1,3 @@
 module github.com/elitea-ng/elitea-platform/conformance/governed
 
-go 1.26.9
+go 1.26.11
