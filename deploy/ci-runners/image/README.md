@@ -36,10 +36,10 @@ stays a workflow change and never needs an image rebuild.
 | `python3-venv`, `python3-pip` | `python3 -m venv` and `pip` against the system Python, for helper scripts. The stock image has `python3` but cannot create a venv. | `pip install` steps in `helm-lint`, `ci-go`, `no-binaries`, `ci-deepwiki-conformance` and `helm-install-smoke`. |
 | `shellcheck` | Shell lint. | `helm-lint`, `no-binaries`. |
 | `unzip`, `xz-utils` | Archives that setup actions and scripts unpack. `unzip` is already in the base, so listing it only states the dependency. | Browser and toolchain downloads (`ci-browser-session`, `ci-web-e2e` helpers). |
-| `skopeo` | Registry copies and inspects without a daemon. | `mirror-buildkit`-style jobs, image digest checks. |
-| `gh` 2.105.0 | Scripts that call the GitHub API. | PR and release housekeeping scripts. |
-| `helm` v4.3.2 | Helm 4, the latest stable release. | Chart render and lint jobs that do not run `azure/setup-helm`. |
-| `yq` v4.54.3 | YAML edits in shell steps. | `helm-lint`, `publish`, `nightly-image-scan`. |
+| `skopeo` | Registry copy and inspect without a daemon. | Steps that copy or inspect images, such as `mirror-buildkit.yml`. |
+| `gh` 2.105.0 | The GitHub CLI. It is preinstalled on hosted runners, so steps call it without installing it. | Any `run:` step that calls `gh`. |
+| `helm` v4.3.2 | Helm 4, the latest stable release. | A fallback only. Jobs that run `azure/setup-helm` get the pinned version from `check-helm-version.mjs` first on PATH. |
+| `yq` v4.54.3 | YAML edits in shell steps. | `helm-lint`'s yq step: it uses a `yq` already on PATH and otherwise needs `sudo`, which the pool lacks. Also `publish` and `nightly-image-scan`. |
 | `ca-certificates` | TLS trust for every download above. | Everything that downloads. |
 
 **Not needed, checked against every tracked `Cargo.lock`.** Nothing links
@@ -66,6 +66,20 @@ reached over TCP.
 - apt packages are not version-pinned. The weekly rebuild runs `apt-get
   upgrade`, so they track Ubuntu 24.04 security updates.
 
+**Version skew with the workflows.** The image takes the latest stable `helm`
+and `yq`. The workflows pin their own: `HELM_VERSION` in
+`scripts/ci/check-helm-version.mjs` (v4.3.1 on 2026-11-20), and `YQ_VERSION`
+in `helm-lint.yml`. That checker reads workflows only, not this file.
+
+- A job that installs its own version keeps it, because `setup-helm` puts the
+  pinned helm first on PATH.
+- A job that falls back to the image's binary runs the image's version, so a
+  render can differ between the pools.
+
+When the heavy-tier PR routes a helm or yq job here, either bump the workflow
+pins to the image's versions or keep the job's own install step. Until then,
+the image's copies are fallbacks.
+
 ### Tool cache
 
 `RUNNER_TOOL_CACHE` and `AGENT_TOOLSDIRECTORY` are both
@@ -83,10 +97,22 @@ reached over TCP.
 - `dtolnay/rust-toolchain` uses rustup under `$HOME` (`~/.rustup`,
   `~/.cargo`), which is writable.
 
-The cache starts empty in every pod, because pods are ephemeral. It sits on
-the pod's root overlay, not on the 40 GB `_work` volume. To put it on the
-volume instead, unset both variables in the scale-set values, and the runner
-falls back to `_work/_tool`.
+The cache starts empty in every pod, because pods are ephemeral.
+
+**Disk budget, check before routing the Rust jobs.** `/home/runner/_tool`,
+`~/.rustup` and `~/.cargo` all sit on the container's writable layer, the
+95 GB node overlay shared by every pod on the node. They are not on the
+pod's own 40 GB `_work` volume. A Rust job adds about 1.5 GB of toolchain
+plus a cargo registry of several GB. A Go or Node toolchain adds a few
+hundred MB. If the scale set sets an `ephemeral-storage` limit on the runner
+container, it must cover that, or the pod is evicted mid-job.
+
+The recommended setting for the heavy-tier PR is to keep all of it on the
+volume. Set `RUNNER_TOOL_CACHE`, `AGENT_TOOLSDIRECTORY`, `CARGO_HOME` and
+`RUSTUP_HOME` under `/home/runner/_work/` in the runner container's `env`.
+Values set there override the image's defaults. The image default stays
+`/home/runner/_tool` because that path exists and is writable in every pod
+whatever the volume layout.
 
 ### Why Ubuntu
 
@@ -139,15 +165,16 @@ scans this file for the OS family.
 
 **Rollback.** Set the previous dated tag, or the stock
 `ghcr.io/actions/actions-runner:2.338.2`, and run `helm upgrade` again. Dated
-tags are kept. A bad rebuild never replaces an existing dated tag, except
-another build on the same UTC day.
+tags are kept and never overwritten. A second build on the same UTC day is
+published as `<version>-<date>.<run number>`, and publish refuses a tag that
+already exists.
 
 ## Rebuild cadence
 
 | Trigger | What it does |
 |---|---|
 | Pull request touching `deploy/ci-runners/image/**` or the workflow | Builds and smoke-tests. Nothing is pushed. |
-| Weekly, Mondays 05:17 UTC (`schedule`, main) | Builds fresh with no layer cache, so `apt-get upgrade` picks up security updates. Smoke-tests, then pushes `2.338.2-<date>` and `2.338.2`. It then fails if `actions/runner` has a newer release than the pin, so the bump is not missed. GitHub stops accepting old runner versions some weeks after a release. |
+| Weekly, Mondays 05:17 UTC (`schedule`, main) | Builds fresh with no layer cache, so `apt-get upgrade` picks up security updates. Smoke-tests, then pushes `2.338.2-<date>`, checks that the pushed config digest is the smoke-tested image ID, and moves `2.338.2` to it. A separate `runner-pin` job fails if `actions/runner` has a newer release than the pin. So a red `publish` means the image did not ship, and a red `runner-pin` means only that the bump is due. GitHub stops accepting old runner versions some weeks after a release. |
 | `workflow_dispatch` from main | The same as the weekly run, on demand. Use it for the first publish. |
 
 The pool does not follow the moving tag by itself, because the values pin a
@@ -155,8 +182,12 @@ dated tag. Moving the pool to a new dated tag is a deliberate values change.
 
 The smoke step runs inside the built image as `runner`. It runs every tool's
 version command, creates a venv, checks that the tool cache and `$HOME` are
-writable, compiles and runs a C and a C++ file, and asserts that no container
-engine and no toolchain (go, cargo, rustc, node) is in the image.
+writable, compiles and runs a C and a C++ file, checks the CA bundle, and
+asserts that no container engine and no toolchain (go, cargo, rustc, node) is
+in the image. Every package in the table above is exercised there. Change the
+two together. On every run, PRs included, the build job also saves the image
+and reads the archive back with skopeo. That proves the path publish depends
+on before a merge.
 
 ## Bumping
 

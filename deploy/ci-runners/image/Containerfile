@@ -67,9 +67,15 @@ RUN apt-get update \
 # the daemon side, which goes. The pool has no privileges to run a daemon, so
 # those binaries are only attack surface (removing them in a layer does not
 # shrink the base layer; that is not the point).
-RUN rm -f /usr/bin/dockerd /usr/bin/docker-init /usr/bin/docker-proxy \
-          /usr/bin/containerd /usr/bin/containerd-shim-runc-v2 /usr/bin/ctr \
-          /usr/bin/runc
+# No -f: if the base moves the bundle, this layer fails instead of silently
+# removing nothing, and the PATH check catches a copy anywhere else.
+RUN rm /usr/bin/dockerd /usr/bin/docker-init /usr/bin/docker-proxy \
+       /usr/bin/containerd /usr/bin/containerd-shim-runc-v2 /usr/bin/ctr \
+       /usr/bin/runc \
+ && for b in dockerd containerd containerd-shim-runc-v2 ctr docker-proxy; do \
+      if command -v "$b"; then echo "container engine still present: $b" >&2; exit 1; fi; \
+    done \
+ && docker --version
 
 # gh, helm and yq from their official releases, each verified twice: against
 # the pinned hash above, and against the checksum file the release publishes.

@@ -13,7 +13,7 @@ name: eng-runner image
 #   schedule       weekly. The base is pinned by digest, so this is how Ubuntu
 #                  security updates (`apt-get upgrade` in the Containerfile)
 #                  reach the pool, and how a new runner release is noticed
-#                  (the last step fails when the pin is behind).
+#                  (the `runner-pin` job fails when the pin is behind).
 #   workflow_dispatch  from main: the first publish, or a rebuild on demand.
 # No `push:` trigger (scripts/ci/check-no-push-triggers.mjs). It keeps its own
 # pull_request trigger, outside ci.yml's tiers, the way mirror-buildkit.yml
@@ -21,9 +21,11 @@ name: eng-runner image
 # (scripts/ci/check-tiering.mjs OWN_PR_TRIGGER).
 #
 # WHAT IS PUBLISHED is the image the smoke step ran, not a rebuild: `build`
-# saves it as an artifact and `publish` copies that archive to the registry.
-# Tags: `<runner-version>-<UTC date>` (immutable in practice; the owner pins
-# this one in the scale-set values) and `<runner-version>` (moves weekly).
+# saves it as an artifact and `publish` copies that archive to the registry,
+# then checks the pushed config digest is the smoke-tested image ID.
+# Tags: `<runner-version>-<UTC date>` (never overwritten: a second build the
+# same day gets `.<run number>`; the owner pins a dated tag in the scale-set
+# values) and `<runner-version>` (moves weekly, only after the dated push).
 # No layer cache is read or written: every build is fresh, so the weekly
 # rebuild really does pick up new packages.
 
@@ -55,7 +57,7 @@ jobs:
     timeout-minutes: 30
     outputs:
       runner-version: ${{ steps.meta.outputs.runner-version }}
-      date-tag: ${{ steps.meta.outputs.date-tag }}
+      image-id: ${{ steps.save.outputs.image-id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -71,7 +73,6 @@ jobs:
             exit 1
           fi
           echo "runner-version=${version}" >> "$GITHUB_OUTPUT"
-          echo "date-tag=${version}-$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -91,13 +92,11 @@ jobs:
           load: true
           push: false
           provenance: false
-          tags: |
-            ${{ env.IMAGE }}:${{ steps.meta.outputs.date-tag }}
-            ${{ env.IMAGE }}:${{ steps.meta.outputs.runner-version }}
+          tags: ${{ env.IMAGE }}:${{ steps.meta.outputs.runner-version }}
 
       - name: Smoke-test inside the image, as the runner user
         env:
-          REF: ${{ env.IMAGE }}:${{ steps.meta.outputs.date-tag }}
+          REF: ${{ env.IMAGE }}:${{ steps.meta.outputs.runner-version }}
         run: |
           set -euo pipefail
           docker run --rm --entrypoint /bin/bash "$REF" -euo pipefail -c '
@@ -108,6 +107,7 @@ jobs:
             pkg-config --version
             zstd --version
             python3 -m venv /tmp/v && /tmp/v/bin/python -c "import sys; print(sys.prefix)"
+            /tmp/v/bin/pip --version
             pip --version
             shellcheck --version
             gh --version
@@ -116,6 +116,7 @@ jobs:
             skopeo --version
             unzip -v >/dev/null && echo "unzip ok"
             xz --version
+            test -s /etc/ssl/certs/ca-certificates.crt && echo "ca-certificates ok"
 
             test "$RUNNER_TOOL_CACHE" = /home/runner/_tool
             test "$AGENT_TOOLSDIRECTORY" = /home/runner/_tool
@@ -133,7 +134,7 @@ jobs:
             # Not in the image: a container engine (the pool cannot run one)
             # or a toolchain (the setup actions bring those). `!` would not
             # trip errexit, hence the explicit loop.
-            for absent in dockerd containerd runc podman go cargo rustc node; do
+            for absent in dockerd containerd podman go cargo rustc node; do
               if command -v "$absent" >/dev/null; then
                 echo "unexpected in the image: $absent at $(command -v "$absent")" >&2
                 exit 1
@@ -144,14 +145,25 @@ jobs:
           '
           docker image inspect "$REF" --format 'size: {{.Size}} bytes, user: {{.Config.User}}' | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - name: Save the tested image for publish
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+      # On every run, pull requests included, so the save -> skopeo path the
+      # publish job depends on is proven before a merge, not first on main.
+      - name: Save the tested image and check the archive
+        id: save
         env:
-          DATE_TAG: ${{ steps.meta.outputs.date-tag }}
+          REF: ${{ env.IMAGE }}:${{ steps.meta.outputs.runner-version }}
         run: |
           set -euo pipefail
-          docker save "${IMAGE}:${DATE_TAG}" -o "${RUNNER_TEMP}/eng-runner.tar"
-          ls -l "${RUNNER_TEMP}/eng-runner.tar"
+          command -v skopeo >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q skopeo; }
+          archive="${RUNNER_TEMP}/eng-runner.tar"
+          docker save "$REF" -o "$archive"
+          id="$(docker image inspect --format '{{.Id}}' "$REF")"
+          config="$(skopeo inspect --raw "docker-archive:${archive}" | jq -r .config.digest)"
+          if [ "$config" != "$id" ]; then
+            echo "::error::the saved archive's config ${config} is not the smoke-tested image ${id}"
+            exit 1
+          fi
+          echo "image-id=${id}" >> "$GITHUB_OUTPUT"
+          ls -l "$archive"
 
       - name: Upload the tested image
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
@@ -178,31 +190,63 @@ jobs:
           name: eng-runner-image
           path: ${{ runner.temp }}/image
 
-      - name: Push both tags
+      - name: Push the dated tag, then the moving tag
         env:
           REGISTRY_AUTH_FILE: ${{ runner.temp }}/skopeo-auth.json
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ACTOR: ${{ github.actor }}
-          DATE_TAG: ${{ needs.build.outputs.date-tag }}
-          VERSION_TAG: ${{ needs.build.outputs.runner-version }}
+          VERSION: ${{ needs.build.outputs.runner-version }}
+          IMAGE_ID: ${{ needs.build.outputs.image-id }}
         run: |
           set -euo pipefail
           command -v skopeo >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q skopeo; }
           skopeo login ghcr.io --username "$ACTOR" --password-stdin <<< "$TOKEN"
           archive="${RUNNER_TEMP}/image/eng-runner.tar"
-          skopeo copy "docker-archive:${archive}" "docker://${IMAGE}:${DATE_TAG}"
-          skopeo copy "docker://${IMAGE}:${DATE_TAG}" "docker://${IMAGE}:${VERSION_TAG}"
-          digest="$(skopeo inspect --format '{{.Digest}}' "docker://${IMAGE}:${DATE_TAG}")"
+
+          # A dated tag is never overwritten: the pool pins one. A second build
+          # on the same UTC day gets `.<run number>` instead.
+          tag="${VERSION}-$(date -u +%Y%m%d)"
+          if skopeo inspect --raw "docker://${IMAGE}:${tag}" >/dev/null 2>&1; then
+            tag="${tag}.${GITHUB_RUN_NUMBER}"
+          fi
+          if skopeo inspect --raw "docker://${IMAGE}:${tag}" >/dev/null 2>&1; then
+            echo "::error::${IMAGE}:${tag} already exists; refusing to overwrite a dated tag"
+            exit 1
+          fi
+
+          skopeo copy "docker-archive:${archive}" "docker://${IMAGE}:${tag}"
+          config="$(skopeo inspect --raw "docker://${IMAGE}:${tag}" | jq -r .config.digest)"
+          if [ "$config" != "$IMAGE_ID" ]; then
+            echo "::error::pushed ${IMAGE}:${tag} has config ${config}; the smoke-tested image is ${IMAGE_ID}"
+            exit 1
+          fi
+          # The moving tag follows only a dated tag verified above.
+          skopeo copy "docker://${IMAGE}:${tag}" "docker://${IMAGE}:${VERSION}"
+          digest="$(skopeo inspect --format '{{.Digest}}' "docker://${IMAGE}:${tag}")"
+          moved="$(skopeo inspect --format '{{.Digest}}' "docker://${IMAGE}:${VERSION}")"
+          if [ "$moved" != "$digest" ]; then
+            echo "::error::${IMAGE}:${VERSION} is ${moved}, not the dated tag's ${digest}"
+            exit 1
+          fi
           {
-            echo "Published \`${IMAGE}:${DATE_TAG}\` and \`${IMAGE}:${VERSION_TAG}\`"
+            echo "Published \`${IMAGE}:${tag}\` (pin this one) and \`${IMAGE}:${VERSION}\`"
             echo
             echo "digest \`${digest}\`"
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - name: The runner pin is the latest runner release
-        # After the push, so a new runner release never blocks the weekly
-        # security rebuild; it fails the run so the bump is not left in silence.
-        # GitHub stops accepting a runner some weeks after its successor ships.
+  runner-pin:
+    # Its own job, so a red run says which thing is wrong: `publish` red means
+    # the image did not ship; this red means it shipped (or would have) and
+    # the runner pin is behind. GitHub stops accepting a runner some weeks
+    # after its successor ships, so a stale pin must not pass in silence. Not
+    # on pull requests: a runner release would turn an unrelated image PR red.
+    name: The runner pin is the latest actions/runner release
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Compare the pin with the latest release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PINNED: ${{ needs.build.outputs.runner-version }}
