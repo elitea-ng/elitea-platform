@@ -93,9 +93,10 @@ revisions are not the ones that release's `browsers.json` names.
 needs an image rebuild and a pin bump on the pool first.
 
 **Sizes.** The base `actions-runner` image is about 549 MB compressed. With
-the build tools, and the services and browsers added, it is estimated at
-about 1.3 to 1.6 GB compressed. Every build prints both figures in its
-summary, and publish prints the exact sum of the pushed layers. The pool pulls
+the build tools, the services and the browsers, this image measured
+**about 1.7 GB compressed** (1,786,194,432 bytes of layers) on the PR that
+added the services. Every build prints the layer sum of its saved archive
+in its summary, and publish prints the exact sum of the pushed layers. The pool pulls
 it through an Artifact Registry remote with image streaming, so a node does
 not wait for the whole image before a pod starts.
 

@@ -54,10 +54,9 @@ jobs:
   build:
     name: Build and smoke-test
     runs-on: ubuntu-latest
-    # The image is ~4 GB unpacked since the service binaries and the browsers
-    # moved in; the fresh build (no cache), the load and the save take most of
-    # this.
-    timeout-minutes: 45
+    # About 6 minutes with the service binaries and the browsers (measured on
+    # the PR that added them; the image is ~1.7 GB compressed).
+    timeout-minutes: 30
     outputs:
       runner-version: ${{ steps.meta.outputs.runner-version }}
       image-id: ${{ steps.save.outputs.image-id }}
@@ -85,7 +84,7 @@ jobs:
 
       - name: Free runner disk for the image
         # The image is built in the BuildKit container, loaded into the
-        # daemon and saved to a tarball: three copies of ~4 GB. Bounded and
+        # daemon and saved to a tarball: three copies of a multi-GB image. Bounded and
         # NON-FATAL, as in ci-rust.yml: a refused rm only warns, and the
         # build then fails honestly on ENOSPC.
         run: |
@@ -351,14 +350,12 @@ jobs:
           echo "image-id=${config}" >> "$GITHUB_OUTPUT"
           echo "smoke-tested image config ${config}" | tee -a "$GITHUB_STEP_SUMMARY"
           ls -l "$archive"
-          # What the pool pulls is the gzip-compressed layers. The archive
-          # gzipped whole is within a few percent of their sum, so a PR states
-          # the size it would publish (publish prints the exact figure).
-          # pigz at its default level 6 is gzip's default, as the push uses.
-          # pigz: gzip on every core, so the estimate costs about a minute.
-          command -v pigz >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q pigz; }
-          gz="$(pigz -c "$archive" | wc -c)"
-          echo "compressed size (gzip of the saved archive): $((gz / 1024 / 1024)) MiB" | tee -a "$GITHUB_STEP_SUMMARY"
+          # What the pool pulls is the gzip-compressed layers. The hosted
+          # runners' containerd image store keeps the layers compressed, and
+          # `docker save` writes them as stored, so their sum in the archive is
+          # the size publish pushes (publish prints the exact figure).
+          layers="$(skopeo inspect --raw "docker-archive:${archive}" | jq '[.layers[].size] | add')"
+          echo "layers in the saved archive: $((layers / 1024 / 1024)) MiB" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the tested image
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
@@ -374,7 +371,7 @@ jobs:
     needs: build
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    # Downloading the ~4 GB archive and compressing its layers on the push.
+    # Downloading the ~1.7 GB archive and pushing it.
     timeout-minutes: 40
     permissions:
       contents: read
