@@ -28,7 +28,7 @@ func TestCodeFailureRouteMatchesDedicatedTypedHandlerAndWorkerTuple(t *testing.T
 }
 func TestCodeFailureRouteRejectsSuccessPathsOwnedNodesAndDenial(t *testing.T) {
 	original, route := codeFailureRouteFixture()
-	for _, name := range []string{"stale source", "forged route hash", "handler is entry", "wrong state type", "handler source dynamic", "handler writes error", "producer reads error", "handler has normal predecessor", "router default predecessor", "decision predecessor", "HITL predecessor", "Map owns handler", "Parallel owns handler", "denial class", "multi document"} {
+	for _, name := range []string{"stale source", "forged route hash", "handler is entry", "wrong state type", "handler source dynamic", "handler writes error", "producer reads error", "handler has normal predecessor", "router default predecessor", "decision predecessor", "HITL predecessor", "Map owns handler", "Parallel owns handler", "denial class", "runtime lost class", "deadline insufficient class", "multi document"} {
 		t.Run(name, func(t *testing.T) {
 			instructions := original
 			f := *route
@@ -64,6 +64,12 @@ func TestCodeFailureRouteRejectsSuccessPathsOwnedNodesAndDenial(t *testing.T) {
 				instructions += "  - id: fan\n    type: parallel\n    branches: [{id: one, node: handler}, {id: two, node: run}]\n    transition: END\n"
 			case "denial class":
 				f.Failed.FailureClass = "authorization_denied"
+			case "runtime lost class":
+				instructions = strings.Replace(instructions, "classes: [attempt_timeout, dependency_unavailable]", "classes: [runtime_lost]", 1)
+				f.Failed.FailureClass = "runtime_lost"
+			case "deadline insufficient class":
+				instructions = strings.Replace(instructions, "classes: [attempt_timeout, dependency_unavailable]", "classes: [deadline_insufficient]", 1)
+				f.Failed.FailureClass = "deadline_insufficient"
 			case "multi document":
 				instructions += "---\nnodes: []\n"
 			}
@@ -74,6 +80,14 @@ func TestCodeFailureRouteRejectsSuccessPathsOwnedNodesAndDenial(t *testing.T) {
 				t.Fatal("invalid handler path admitted", handler, err)
 			}
 		})
+	}
+}
+func TestCodeFailureClassIndexMatchesRustEnumOrder(t *testing.T) {
+	if got := codeFailureClassIndex("runtime_lost"); got != 14 {
+		t.Fatalf("runtime_lost index = %d, want 14", got)
+	}
+	if got := codeFailureClassIndex("deadline_insufficient"); got != 15 {
+		t.Fatalf("deadline_insufficient index = %d, want 15", got)
 	}
 }
 func TestCodeFailureRouteDoesNotTreatStableParallelBranchLabelAsSuccessRoute(t *testing.T) {

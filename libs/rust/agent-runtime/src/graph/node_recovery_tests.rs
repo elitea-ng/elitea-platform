@@ -858,3 +858,81 @@ fn operator_cannot_override_denial_cancel_lease_or_unknown_effects() {
         Err(NodeRecoveryError::InvalidTransition)
     );
 }
+
+#[test]
+fn deadline_insufficient_is_never_retried_routed_or_operator_retried_and_uses_v4() {
+    let all_conditions = BTreeSet::from([
+        RetryCondition::DependencyUnavailable,
+        RetryCondition::RateLimited,
+        RetryCondition::AttemptTimeout,
+        RetryCondition::WorkerInterrupted,
+    ]);
+    let policy = NodeRecoveryPolicy::admit(
+        3,
+        all_conditions,
+        Some(NodeBackoff {
+            initial_ms: 100,
+            maximum_ms: 1_000,
+            multiplier: 2,
+        }),
+        Some(10_000),
+        None,
+    )
+    .unwrap();
+    let failure = NodeFailure::new(
+        NodeFailureClass::DeadlineInsufficient,
+        ReplaySafety::NoExternalEffect,
+    );
+    assert!(failure.class.deadline());
+    assert_eq!(failure.class.retry_condition(), None);
+    assert_eq!(
+        NodeErrorRoute::admit(
+            ROUTE,
+            BTreeSet::from([NodeFailureClass::DeadlineInsufficient]),
+            ErrorRouteContract {
+                dedicated_typed_error_input: true,
+                requires_success_output: false,
+                reexecutes_failed_operation: false,
+                explicitly_handles_denial: true,
+            },
+        ),
+        Err(NodeRecoveryError::InvalidErrorRoute)
+    );
+    let ledger = NodeAttemptLedger::new(ACTIVATION, policy.clone())
+        .unwrap()
+        .start_attempt(1_000)
+        .unwrap()
+        .record_failure(failure, 1_010)
+        .unwrap();
+    assert_eq!(
+        ledger.phase(),
+        NodeAttemptPhase::Failed(RecoveryDecision::Stop(StopReason::NotRetryable))
+    );
+    assert_eq!(
+        ledger.operator_retry(
+            OperatorRetryRequest {
+                request_id: [5; 32],
+                activation_id: ACTIVATION,
+                expected_revision: ledger.revision(),
+            },
+            1_020,
+        ),
+        Err(NodeRecoveryError::OperatorRetryDenied)
+    );
+    let wire = codec::encode(&ledger).unwrap();
+    assert_eq!(wire["schema"], "elitea.pipeline.node-recovery.v4");
+    assert_eq!(codec::decode(&wire, ACTIVATION, &policy).unwrap(), ledger);
+    for stale in [
+        "elitea.pipeline.node-recovery.v1",
+        "elitea.pipeline.node-recovery.v2",
+        "elitea.pipeline.node-recovery.v3",
+    ] {
+        let mut forged = wire.clone();
+        forged["schema"] = serde_json::json!(stale);
+        assert_eq!(
+            codec::decode(&forged, ACTIVATION, &policy),
+            Err(NodeRecoveryError::InvalidHistory),
+            "forged schema {stale} must be refused"
+        );
+    }
+}

@@ -1407,6 +1407,10 @@ async fn code_typed_fresh_and_historical_failures_keep_category_without_reexecut
             "pipeline.code_authorization_failed",
         ),
         (NodeFailureClass::Cancelled, "pipeline.code_cancelled"),
+        (
+            NodeFailureClass::DeadlineInsufficient,
+            crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE,
+        ),
     ] {
         let factory = factory();
         let runtime = typed_code_failure(factory.clone(), class);

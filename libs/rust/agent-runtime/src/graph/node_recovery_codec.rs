@@ -15,10 +15,27 @@ const SCHEMA_V2: &str = "elitea.pipeline.node-recovery.v2";
 /// A ledger that recorded a lost sandbox runtime. Earlier Workers do not know
 /// the class, so they refuse the record by its schema instead of guessing.
 const SCHEMA_V3: &str = "elitea.pipeline.node-recovery.v3";
+/// A ledger that recorded `NodeFailureClass::DeadlineInsufficient` (FU-309) or
+/// a run-deadline-clamped failure decision. Earlier Workers refuse it by schema
+/// instead of misclassifying or replaying a retry past the run deadline.
+const SCHEMA_V4: &str = "elitea.pipeline.node-recovery.v4";
 
 /// The oldest schema that can express every event in `ledger`.
 fn schema_for(ledger: &NodeAttemptLedger) -> &'static str {
     if ledger.events.iter().any(|event| {
+        matches!(
+            event,
+            NodeRecoveryEvent::Failure {
+                failure: NodeFailure {
+                    class: NodeFailureClass::DeadlineInsufficient,
+                    ..
+                },
+                ..
+            }
+        )
+    }) {
+        SCHEMA_V4
+    } else if ledger.events.iter().any(|event| {
         matches!(
             event,
             NodeRecoveryEvent::Failure {

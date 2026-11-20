@@ -60,6 +60,9 @@ fn terminal_failure_code(
         | NodeFailureClass::AuthorizationDenied
         | NodeFailureClass::SensitiveRejected => Some("pipeline.code_authorization_failed"),
         NodeFailureClass::Cancelled if preparation.is_none() => Some("pipeline.code_cancelled"),
+        NodeFailureClass::DeadlineInsufficient => {
+            Some(crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE)
+        }
         NodeFailureClass::DependencyUnavailable
         | NodeFailureClass::RateLimited
         | NodeFailureClass::AttemptTimeout
@@ -85,9 +88,6 @@ pub(crate) struct CodeAttemptFailure {
     // Owning call detail; generic graph recovery still uses the whole dispatch.
     pub(crate) platform_call_effect: Option<[u8; 32]>,
     pub(crate) preparation: Option<CodePreparationFailure>,
-    /// W3-1: refused before dispatch by deadline admission. The class stays
-    /// a persisted, non-retryable one; this selects the registered terminal.
-    pub(crate) deadline_insufficient: bool,
 }
 
 impl CodeAttemptFailure {
@@ -101,20 +101,11 @@ impl CodeAttemptFailure {
             failure: NodeFailure { class, replay },
             platform_call_effect: None,
             preparation: None,
-            deadline_insufficient: false,
         }
-    }
-    pub(crate) const fn with_deadline_insufficient(mut self) -> Self {
-        self.deadline_insufficient = true;
-        self
     }
     /// The registered upstream code the node reports for this failure.
     fn terminal_code(self) -> Option<&'static str> {
-        if self.deadline_insufficient {
-            Some(crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE)
-        } else {
-            terminal_failure_code(self.failure.class, self.preparation)
-        }
+        terminal_failure_code(self.failure.class, self.preparation)
     }
     pub(crate) fn with_preparation_failure(mut self, failure: CodePreparationFailure) -> Self {
         self.preparation = Some(failure);
@@ -719,6 +710,10 @@ mod tests {
                 Some(CodePreparationFailure::Failed)
             ),
             None
+        );
+        assert_eq!(
+            terminal_failure_code(NodeFailureClass::DeadlineInsufficient, None),
+            Some(crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE)
         );
         for class in [
             NodeFailureClass::AttemptTimeout,

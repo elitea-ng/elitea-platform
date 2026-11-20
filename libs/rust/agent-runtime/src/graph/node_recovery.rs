@@ -48,10 +48,15 @@ pub enum NodeFailureClass {
     /// eviction, a platform kill), proven by the supervisor and not by user
     /// code. Only the platform retry allowance re-runs it; YAML cannot name it.
     RuntimeLost,
+    /// Refused before dispatch because the run's remaining time is shorter
+    /// than the attempt's required window (W3-1 / FU-309). Never retried,
+    /// never routed, and never continued by node settings (C1 / D6 / D7).
+    DeadlineInsufficient,
 }
 
 impl NodeFailureClass {
-    const fn retry_condition(self) -> Option<RetryCondition> {
+    #[must_use]
+    pub const fn retry_condition(self) -> Option<RetryCondition> {
         match self {
             Self::DependencyUnavailable => Some(RetryCondition::DependencyUnavailable),
             Self::RateLimited => Some(RetryCondition::RateLimited),
@@ -67,19 +72,27 @@ impl NodeFailureClass {
             | Self::Cancelled
             | Self::LeaseLost
             | Self::Unknown
-            | Self::RuntimeLost => None,
+            | Self::RuntimeLost
+            | Self::DeadlineInsufficient => None,
         }
     }
 
-    const fn denial(self) -> bool {
+    #[must_use]
+    pub const fn denial(self) -> bool {
         matches!(
             self,
             Self::AuthenticationDenied | Self::AuthorizationDenied | Self::SensitiveRejected
         )
     }
 
-    const fn control_stop(self) -> bool {
+    #[must_use]
+    pub const fn control_stop(self) -> bool {
         matches!(self, Self::Cancelled | Self::LeaseLost)
+    }
+
+    #[must_use]
+    pub const fn deadline(self) -> bool {
+        matches!(self, Self::DeadlineInsufficient)
     }
 }
 
@@ -177,6 +190,7 @@ impl NodeErrorRoute {
             || contract.reexecutes_failed_operation
             || classes.iter().any(|class| class.control_stop())
             || classes.contains(&NodeFailureClass::RuntimeLost)
+            || classes.contains(&NodeFailureClass::DeadlineInsufficient)
             || (classes.iter().any(|class| class.denial()) && !contract.explicitly_handles_denial)
         {
             return Err(NodeRecoveryError::InvalidErrorRoute);

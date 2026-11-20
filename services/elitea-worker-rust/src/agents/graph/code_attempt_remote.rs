@@ -114,16 +114,15 @@ impl RemoteCodeRuntime {
             self.admit_fresh(profile, Some(declaration.node_id.as_str()))
                 .await
                 .map_err(|refusal| {
-                    let failure = before(
-                        CodeAttemptPhase::Admission,
-                        NodeFailureClass::InvalidConfiguration,
-                    );
                     // R1: a nested acquire is an internal fault, not a deadline.
-                    if refusal.cause == elitea_agent_runtime::graph::fanout::admission::CodeRefusalCause::NestedSlot {
-                        failure
+                    let class = if refusal.cause
+                        == elitea_agent_runtime::graph::fanout::admission::CodeRefusalCause::NestedSlot
+                    {
+                        NodeFailureClass::InvalidConfiguration
                     } else {
-                        failure.with_deadline_insufficient()
-                    }
+                        NodeFailureClass::DeadlineInsufficient
+                    };
+                    before(CodeAttemptPhase::Admission, class)
                 })?
         };
         let declaration = crate::sandbox::code_recovery::OriginalCodeDeclarationInput {
@@ -398,9 +397,8 @@ impl RemoteCodeRuntime {
         {
             let failure = before(
                 CodeAttemptPhase::Admission,
-                NodeFailureClass::InvalidConfiguration,
-            )
-            .with_deadline_insufficient();
+                NodeFailureClass::DeadlineInsufficient,
+            );
             self.release_undispatched(profile, &invocation.activation, &request_digest, &failure)
                 .await;
             return Err(failure);
