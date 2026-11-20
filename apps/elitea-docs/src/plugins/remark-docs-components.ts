@@ -28,6 +28,7 @@ const IMPORTS: Record<string, string> = {
   Tabs: 'Tabs.astro',
   Tip: 'callouts/Tip.astro',
   Warning: 'callouts/Warning.astro',
+  WhatsNew: 'WhatsNew.astro',
 };
 
 export const DOCS_COMPONENTS = Object.keys(IMPORTS);
