@@ -191,6 +191,17 @@ pub(in crate::agents) trait CodeSandboxRuntime: Send + Sync {
         Ok(())
     }
 
+    /// Remaining run-deadline budget and required attempt window (in ms) for
+    /// retry clamping (`record_failure_within`, PLAN §3.3).
+    fn retry_deadline_budget(
+        &self,
+        _language: CodeLanguage,
+        _platform_client: bool,
+        _timeout_ms: Option<u64>,
+    ) -> Option<(u64, u64)> {
+        None
+    }
+
     /// Bind only the actual Main registered saved family at the compiler seam.
     /// Default runtimes cannot acquire scoped authority from a child definition.
     fn bind_saved_child_scope(
@@ -583,6 +594,14 @@ impl NodeAttemptBody for CodeNode {
             }
         }
         Ok(())
+    }
+
+    fn retry_deadline_budget(&self) -> Option<(u64, u64)> {
+        self.runtime.retry_deadline_budget(
+            self.definition.language(),
+            self.definition.platform_client(),
+            None,
+        )
     }
 }
 

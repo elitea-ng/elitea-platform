@@ -32,11 +32,29 @@ pub(super) struct RawSettingsCatalog {
     nodes: BTreeMap<String, RawNodeSettings>,
 }
 
+/// The admitted node family of a `settings:` block (`NotYet` and `Pause` are
+/// refused during admission and never reach runtime).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AdmittedNodeFamily {
+    Deterministic(DeterministicFamily),
+    Code,
+}
+
+impl AdmittedNodeFamily {
+    #[must_use]
+    pub(crate) const fn node_type(self) -> &'static str {
+        match self {
+            Self::Deterministic(family) => family.node_type(),
+            Self::Code => "code",
+        }
+    }
+}
+
 /// One admitted node's settings and what its wrapper needs at run time.
 #[derive(Clone, Debug)]
 pub(crate) struct AdmittedNodeSettings {
     pub(crate) settings: NodeSettings,
-    pub(crate) family: DeterministicFamily,
+    pub(crate) family: AdmittedNodeFamily,
     /// `(key, declared state type)` of every declared output, for
     /// `always_output_data`.
     pub(crate) outputs: Vec<(String, String)>,
@@ -178,8 +196,15 @@ impl RawSettingsCatalog {
             raw.settings
                 .check_family(family)
                 .map_err(|why| refusal(&id, why))?;
-            let SettingsFamily::Deterministic(family) = family else {
-                return Err(refusal(&id, NodeSettingsRefusal::FamilyNotYet));
+            let admitted_family = match family {
+                SettingsFamily::Deterministic(family) => AdmittedNodeFamily::Deterministic(family),
+                SettingsFamily::Code => AdmittedNodeFamily::Code,
+                SettingsFamily::NotYet => {
+                    return Err(refusal(&id, NodeSettingsRefusal::FamilyNotYet));
+                }
+                SettingsFamily::Pause => {
+                    return Err(refusal(&id, NodeSettingsRefusal::FamilyPause));
+                }
             };
             if owned.contains(&id) {
                 return Err(refusal(&id, NodeSettingsRefusal::FanoutOwned));
@@ -240,7 +265,7 @@ impl RawSettingsCatalog {
                 id,
                 AdmittedNodeSettings {
                     settings: raw.settings,
-                    family,
+                    family: admitted_family,
                     outputs,
                     router_default,
                 },

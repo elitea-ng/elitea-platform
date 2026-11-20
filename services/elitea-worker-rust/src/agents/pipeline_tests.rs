@@ -4327,6 +4327,16 @@ async fn pipeline_new_turn_executes_nodes_instead_of_reusing_completed_output() 
             .await
             .expect("turn assembly");
         let (mut run, _, _) = invocation.start().expect("turn start");
+        let edge = run
+            .next_event()
+            .await
+            .expect("transitional edge event")
+            .expect("edge");
+        assert!(
+            edge.provider_metadata
+                .contains_key(super::graph::state_modifier_trace::TRANSITIONAL_EDGE_METADATA_KEY),
+            "expected state modifier transitional edge before result"
+        );
         let event = run.next_event().await.expect("turn event").expect("result");
         assert_eq!(
             event.content().expect("content").parts,
@@ -4632,6 +4642,19 @@ async fn printer_uses_the_common_runner_as_a_nonterminal_result_then_resumes_fro
         .project_start(timestamp(2))
         .expect("Printer resume browser start");
     let (mut run, mut projector, completion) = invocation.start().expect("Printer resume start");
+    let edge = run
+        .next_event()
+        .await
+        .expect("Printer transitional edge")
+        .expect("edge");
+    let edge_frames = projector
+        .project(&edge)
+        .expect("Printer edge projection")
+        .into_iter()
+        .map(|event| current(&event))
+        .collect::<Vec<_>>();
+    assert_eq!(edge_frames.len(), 1);
+    assert_eq!(edge_frames[0]["type"], "agent_on_transitional_edge");
     let completed = run
         .next_event()
         .await
@@ -4709,6 +4732,19 @@ async fn ordinary_message_after_a_printer_pause_resumes_the_paused_run() {
         .project_start(timestamp(2))
         .expect("resume browser start");
     let (mut run, mut projector, completion) = invocation.start().expect("resume start");
+    let edge = run
+        .next_event()
+        .await
+        .expect("transitional edge")
+        .expect("edge");
+    let edge_frames = projector
+        .project(&edge)
+        .expect("edge projection")
+        .into_iter()
+        .map(|event| current(&event))
+        .collect::<Vec<_>>();
+    assert_eq!(edge_frames.len(), 1);
+    assert_eq!(edge_frames[0]["type"], "agent_on_transitional_edge");
     let completed = run
         .next_event()
         .await
@@ -4792,6 +4828,29 @@ async fn state_modifier_result_survives_common_runner_projection_and_eos_complet
         .project_start(timestamp(0))
         .expect("browser start");
     let (mut run, mut projector, completion) = invocation.start().expect("pipeline start");
+    let edge = run
+        .next_event()
+        .await
+        .expect("transitional edge read")
+        .expect("transitional edge event");
+    let edge_projected = projector
+        .project(&edge)
+        .expect("transitional edge projection")
+        .into_iter()
+        .map(|event| current(&event))
+        .collect::<Vec<_>>();
+    assert_eq!(edge_projected.len(), 1);
+    assert_eq!(edge_projected[0]["type"], "agent_on_transitional_edge");
+    assert_eq!(
+        edge_projected[0]["response_metadata"]["metadata"]["langgraph_node"],
+        "transform"
+    );
+    assert_eq!(edge_projected[0]["response_metadata"]["next_step"], "END");
+    assert_eq!(
+        edge_projected[0]["response_metadata"]["state"]["final_text"],
+        "Hello, current"
+    );
+
     let result = run
         .next_event()
         .await
@@ -4820,6 +4879,97 @@ async fn state_modifier_result_survives_common_runner_projection_and_eos_complet
             .iter()
             .all(|event| event["content"] == "Hello, current")
     );
+}
+
+#[tokio::test]
+async fn state_modifier_transitional_edge_carries_node_errors_redacts_secrets_and_stays_state_modifier_only()
+ {
+    let yaml = r#"
+state:
+  input: str
+  api_token:
+    type: str
+    value: "SUPER-SECRET-TOKEN"
+  out: str
+  final_text: str
+entry_point: route
+nodes:
+  - id: route
+    type: router
+    condition: "'shape'"
+    routes: [shape]
+    default_output: shape
+  - id: shape
+    type: state_modifier
+    template: "{{ input | nosuchfilter }}"
+    input: [input]
+    output: [out]
+    settings: {on_error: continue, always_output_data: true}
+    transition: finish
+  - id: finish
+    type: state_modifier
+    template: "errors={{ node_errors | length }}"
+    input: [node_errors]
+    output: [final_text]
+    transition: END
+"#;
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let pipeline_assembler = PipelineNativeAgentAssembler::with_state(
+        Arc::clone(&sessions),
+        Arc::new(MemoryCheckpointer::new()),
+    );
+    let mut request = pipeline_request();
+    request
+        .payload
+        .application
+        .get_mut("version_details")
+        .and_then(Value::as_object_mut)
+        .expect("pipeline version")
+        .insert("instructions".to_owned(), json!(yaml));
+
+    let mut invocation = pipeline_assembler
+        .assemble(authorized(&request))
+        .await
+        .expect("assemble");
+    invocation.project_start(timestamp(0)).expect("start");
+    let (mut run, mut projector, _completion) = invocation.start().expect("run");
+
+    let mut projected = Vec::new();
+    while let Some(event) = run.next_event().await.expect("event") {
+        for frame in projector.project(&event).expect("project") {
+            projected.push(current(&frame));
+        }
+    }
+    let edges: Vec<_> = projected
+        .iter()
+        .filter(|e| e["type"] == "agent_on_transitional_edge")
+        .collect();
+    // Only the two State Modifier nodes emit; Router does NOT (FU-351 State Modifier-only).
+    assert_eq!(edges.len(), 2, "{edges:?}");
+    assert_eq!(
+        edges[0]["response_metadata"]["metadata"]["langgraph_node"],
+        "shape"
+    );
+    assert_eq!(edges[0]["response_metadata"]["next_step"], "finish");
+    assert_eq!(
+        edges[0]["response_metadata"]["state"]["node_errors"][0]["node"],
+        "shape"
+    );
+    assert_eq!(
+        edges[0]["response_metadata"]["state"]["api_token"],
+        "[REDACTED]"
+    );
+    assert_eq!(
+        edges[1]["response_metadata"]["metadata"]["langgraph_node"],
+        "finish"
+    );
+    assert_eq!(edges[1]["response_metadata"]["next_step"], "END");
+    assert_eq!(
+        edges[1]["response_metadata"]["state"]["final_text"],
+        "errors=1"
+    );
+    let all_json = serde_json::to_string(&edges).expect("json");
+    assert!(!all_json.contains("SUPER-SECRET-TOKEN"));
 }
 
 /// #990 review 3 — WHICH pause kinds a nested pipeline can raise.

@@ -10,7 +10,7 @@
 mod recovery_definition;
 #[path = "node_settings_definition.rs"]
 mod settings_definition;
-pub(crate) use settings_definition::AdmittedNodeSettings;
+pub(crate) use settings_definition::{AdmittedNodeFamily, AdmittedNodeSettings};
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
@@ -1353,6 +1353,11 @@ impl PipelineDefinition {
                 self.recovery
                     .get(id)
                     .map(|binding| binding.policy.clone())
+                    .or_else(|| {
+                        self.settings
+                            .get(id)
+                            .and_then(|admitted| admitted.settings.to_recovery_policy().ok())
+                    })
                     .unwrap_or_default(),
             )),
             _ => None,
@@ -1374,12 +1379,17 @@ impl PipelineDefinition {
         if let Some(PipelineNodeDefinition::Code(node)) =
             self.nodes.iter().find(|node| node.id() == id)
         {
+            let legacy_first_attempt = self.recovery.get(id).is_none()
+                && !self
+                    .settings
+                    .get(id)
+                    .is_some_and(|admitted| admitted.settings.retry_on_fail);
             let projector = super::code_runtime::CodeCommittedProjector::new(
                 node.clone(),
                 self.declared_variable_types(),
                 execution_id.to_owned(),
                 generation,
-                self.recovery.get(id).is_none(),
+                legacy_first_attempt,
             )
             .map_err(|_| {
                 PipelineConfigurationError::Invalid("The original Code result contract is invalid.")
@@ -2051,8 +2061,7 @@ impl PipelineDefinition {
                 self.bind_settled(builder, RouterNode::new(node.clone()), runtimes)
             }
             PipelineNodeDefinition::StateModifier(node) => {
-                let next =
-                    self.bind_settled(builder, StateModifierNode::new(node.clone()), runtimes);
+                let next = self.bind_state_modifier(builder, node, runtimes);
                 bind_transition(next, node.id(), node.transition())
             }
             PipelineNodeDefinition::SplitOut(node) => {
@@ -2064,6 +2073,50 @@ impl PipelineDefinition {
                 bind_transition(next, node.id(), node.transition())
             }
         })
+    }
+
+    /// Bind a State Modifier with optional settings and FU-351 transitional
+    /// edge trace (State Modifier-only, emitted only when a `transition` is
+    /// declared and an invocation event sink is attached).
+    fn bind_state_modifier(
+        &self,
+        builder: PipelineGraphBuilder,
+        node: &StateModifierNodeDefinition,
+        runtimes: &PipelineNodeRuntimes,
+    ) -> PipelineGraphBuilder {
+        let inner = StateModifierNode::new(node.clone());
+        match (
+            self.settings.get(node.id()),
+            node.transition(),
+            runtimes.events.as_ref(),
+        ) {
+            (Some(admitted), Some(transition), Some(sender)) => {
+                builder.node(super::state_modifier_trace::StateModifierTraceNode::new(
+                    super::node_settings_runtime::SettingsNode::new(
+                        inner,
+                        admitted.clone(),
+                        runtimes.execution_id.clone(),
+                    ),
+                    transition.to_owned(),
+                    sender.clone(),
+                ))
+            }
+            (None, Some(transition), Some(sender)) => {
+                builder.node(super::state_modifier_trace::StateModifierTraceNode::new(
+                    inner,
+                    transition.to_owned(),
+                    sender.clone(),
+                ))
+            }
+            (Some(admitted), _, _) => {
+                builder.node(super::node_settings_runtime::SettingsNode::new(
+                    inner,
+                    admitted.clone(),
+                    runtimes.execution_id.clone(),
+                ))
+            }
+            (None, _, _) => builder.node(inner),
+        }
     }
 
     /// Bind a deterministic node, wrapped in its settings layer when it has
@@ -2130,11 +2183,19 @@ impl PipelineDefinition {
         })?;
         let executable = executable.with_events(runtimes.events.clone());
         let binding = self.recovery.get(node.id());
+        let admitted_settings = self.settings.get(node.id());
         let mut next = if let Some(authority) = journals {
-            let policy = binding
-                .map(|binding| binding.policy.clone())
-                .unwrap_or_default();
-            let wrapper = super::node_recovery_runtime::RecoverableNode::new(
+            let policy = match (binding, admitted_settings) {
+                (Some(binding), _) => binding.policy.clone(),
+                (None, Some(admitted)) => admitted.settings.to_recovery_policy().map_err(|_| {
+                    PipelineConfigurationError::Invalid(
+                        "Code node settings could not compile to a recovery policy",
+                    )
+                })?,
+                (None, None) => super::node_recovery::NodeRecoveryPolicy::default(),
+            };
+            let settings_retry = admitted_settings.is_some_and(|s| s.settings.retry_on_fail);
+            let mut wrapper = super::node_recovery_runtime::RecoverableNode::new(
                 Arc::new(executable),
                 node.validated_digest(),
                 policy,
@@ -2142,13 +2203,16 @@ impl PipelineDefinition {
                 binding.and_then(|binding| binding.error_route.clone()),
             );
             // A default-policy visit preserves the pre-existing effect identity.
-            // Opting into bounded retries creates ordinal identities explicitly.
-            builder.node(if binding.is_none() {
-                wrapper.with_legacy_first_attempt()
-            } else {
-                wrapper
-            })
-        } else if binding.is_some() {
+            // Opting into bounded retries (`recovery:` or `settings.retry_on_fail`)
+            // creates ordinal identities explicitly from try 1.
+            if binding.is_none() && !settings_retry {
+                wrapper = wrapper.with_legacy_first_attempt();
+            }
+            if let Some(admitted) = admitted_settings {
+                wrapper = wrapper.with_settings(admitted.clone(), runtimes.execution_id.clone());
+            }
+            builder.node(wrapper)
+        } else if binding.is_some() || admitted_settings.is_some() {
             return Err(PipelineConfigurationError::Unsupported(
                 "node recovery requires a current fenced durable writer",
             ));

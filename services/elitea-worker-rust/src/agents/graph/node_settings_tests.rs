@@ -426,10 +426,16 @@ fn every_admission_refusal_is_typed_and_names_the_node() {
         ("a".to_owned(), NodeSettingsRefusal::AlwaysOutputReducer)
     );
     // Families not wired yet and pauses refuse the whole block.
-    let code = "state:\n  answer: int\nentry_point: run\nnodes:\n  - id: run\n    type: code\n    code: '7'\n    output: [answer]\n    settings: {on_error: continue}\n    transition: END\n";
+    let agent = format!(
+        "state:\n  answer: str\nentry_point: delegate\nnodes:\n{}",
+        AGENT.replace(
+            "    transition: END\n",
+            "    settings: {on_error: continue}\n    transition: END\n",
+        )
+    );
     assert_eq!(
-        refused(code),
-        ("run".to_owned(), NodeSettingsRefusal::FamilyNotYet)
+        refused(&agent),
+        ("delegate".to_owned(), NodeSettingsRefusal::FamilyNotYet)
     );
     let hitl = "state:\n  summary: {type: dict, value: {}}\nentry_point: review\nnodes:\n  - id: review\n    type: hitl\n    input: [summary]\n    user_message: {type: fixed, value: Review.}\n    routes: {approve: END, reject: END, edit: END}\n    edit_state_key: summary\n    settings: {execute_once: true}\n";
     assert_eq!(
@@ -636,7 +642,10 @@ fn the_admitted_families_are_the_contracts() {
         let family = SettingsFamily::of(node_type);
         if families.contains(node_type) {
             assert!(
-                matches!(family, SettingsFamily::Deterministic(_)),
+                matches!(
+                    family,
+                    SettingsFamily::Deterministic(_) | SettingsFamily::Code
+                ),
                 "{node_type}"
             );
         } else if pauses.contains(node_type) {
@@ -752,8 +761,8 @@ fn the_shared_admission_vectors_hold_in_the_worker() {
 /// family that has no settings yet is refused, even at its default value.
 #[test]
 fn an_empty_block_is_a_no_op_on_every_family() {
-    let code = "state:\n  answer: int\nentry_point: run\nnodes:\n  - id: run\n    type: code\n    code: '7'\n    output: [answer]\n    transition: END\n";
-    let with_empty = code.replace(
+    let agent = format!("state:\n  answer: str\nentry_point: delegate\nnodes:\n{AGENT}");
+    let with_empty = agent.replace(
         "    transition: END\n",
         "    settings: {}\n    transition: END\n",
     );
@@ -761,17 +770,30 @@ fn an_empty_block_is_a_no_op_on_every_family() {
         PipelineDefinition::from_yaml(&with_empty)
             .expect("an empty block is a no-op")
             .definition_digest(),
-        PipelineDefinition::from_yaml(code)
+        PipelineDefinition::from_yaml(&agent)
             .expect("plain")
             .definition_digest()
     );
-    let defaulted = code.replace(
+    let defaulted = agent.replace(
         "    transition: END\n",
         "    settings: {on_error: stop}\n    transition: END\n",
     );
     assert_eq!(
         refused(&defaulted),
-        ("run".to_owned(), NodeSettingsRefusal::FamilyNotYet)
+        ("delegate".to_owned(), NodeSettingsRefusal::FamilyNotYet)
+    );
+    let code = "state:\n  answer: int\nentry_point: run\nnodes:\n  - id: run\n    type: code\n    code: '7'\n    output: [answer]\n    transition: END\n";
+    let code_default = code.replace(
+        "    transition: END\n",
+        "    settings: {on_error: stop}\n    transition: END\n",
+    );
+    assert_eq!(
+        PipelineDefinition::from_yaml(&code_default)
+            .expect("default settings on Code is a no-op")
+            .definition_digest(),
+        PipelineDefinition::from_yaml(code)
+            .expect("plain code")
+            .definition_digest()
     );
 }
 

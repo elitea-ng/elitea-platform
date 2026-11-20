@@ -327,8 +327,11 @@ impl DeterministicFamily {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SettingsFamily {
     Deterministic(DeterministicFamily),
-    /// A node type whose slice has not wired settings yet (5b-1 PR B and
-    /// 5b-2..5b-5): the whole block is refused.
+    /// Code sandbox node (5b-1 PR B): journaled retries, on-error,
+    /// always-output, run-once and per-node timeout.
+    Code,
+    /// A node type whose slice has not wired settings yet (5b-2..5b-5):
+    /// the whole block is refused.
     NotYet,
     /// HITL and Printer pause the run: no settings, ever.
     Pause,
@@ -342,6 +345,7 @@ impl SettingsFamily {
             "router" => Self::Deterministic(DeterministicFamily::Router),
             "split_out" => Self::Deterministic(DeterministicFamily::SplitOut),
             "aggregate" => Self::Deterministic(DeterministicFamily::Aggregate),
+            "code" => Self::Code,
             "hitl" | "printer" => Self::Pause,
             _ => Self::NotYet,
         }
@@ -356,6 +360,16 @@ impl SettingsFamily {
                 "error_transition",
                 "always_output_data",
                 "execute_once",
+            ],
+            Self::Code => &[
+                "retry_on_fail",
+                "max_tries",
+                "wait_between_tries_ms",
+                "on_error",
+                "error_transition",
+                "always_output_data",
+                "execute_once",
+                "timeout_ms",
             ],
             Self::NotYet | Self::Pause => &[],
         }
@@ -497,7 +511,7 @@ impl NodeSettings {
         match family {
             SettingsFamily::NotYet => return Err(NodeSettingsRefusal::FamilyNotYet),
             SettingsFamily::Pause => return Err(NodeSettingsRefusal::FamilyPause),
-            SettingsFamily::Deterministic(_) => {}
+            SettingsFamily::Deterministic(_) | SettingsFamily::Code => {}
         }
         let admitted = family.admitted_keys();
         if self.retry_on_fail && !admitted.contains(&"retry_on_fail") {

@@ -823,6 +823,38 @@ impl CodeSandboxRuntime for RemoteCodeRuntime {
         admitted
     }
 
+    fn retry_deadline_budget(
+        &self,
+        language: CodeLanguage,
+        platform_client: bool,
+        timeout_ms: Option<u64>,
+    ) -> Option<(u64, u64)> {
+        let mut matching = self.profiles.iter().filter(|profile| {
+            profile.language == language && profile.platform_client.is_some() == platform_client
+        });
+        let profile = matching.next()?;
+        if matching.next().is_some() {
+            return None;
+        }
+        let timeout_secs = match timeout_ms {
+            Some(ms) => profile
+                .timeout_seconds
+                .min(u32::try_from(ms.div_ceil(1_000)).unwrap_or(u32::MAX).max(1)),
+            None => profile.timeout_seconds,
+        };
+        let required = required_window(
+            1,
+            1,
+            profile.slots.capacity(),
+            Duration::from_secs(u64::from(timeout_secs)),
+        );
+        let remaining = self
+            .execution_deadline
+            .saturating_duration_since(tokio::time::Instant::now());
+        let millis = |d: Duration| u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
+        Some((millis(remaining), millis(required)))
+    }
+
     fn bind_saved_child_scope(
         &self,
         provider: Arc<

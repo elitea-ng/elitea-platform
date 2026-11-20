@@ -139,7 +139,7 @@ fn deterministic_families_refuse_retry_and_timeout() {
         );
     }
     for node_type in [
-        "code", "llm", "decision", "toolkit", "mcp", "agent", "parallel", "map",
+        "llm", "decision", "toolkit", "mcp", "agent", "parallel", "map",
     ] {
         assert_eq!(
             admitted.check_family(SettingsFamily::of(node_type)),
@@ -147,6 +147,12 @@ fn deterministic_families_refuse_retry_and_timeout() {
             "{node_type}"
         );
     }
+    assert_eq!(
+        parse("{retry_on_fail: true, max_tries: 3, wait_between_tries_ms: 1000, on_error: continue, always_output_data: true, execute_once: true, timeout_ms: 5000}")
+            .unwrap()
+            .check_family(SettingsFamily::of("code")),
+        Ok(())
+    );
     for node_type in ["hitl", "printer"] {
         assert_eq!(
             admitted.check_family(SettingsFamily::of(node_type)),
@@ -202,26 +208,27 @@ fn the_constants_tables_and_texts_are_the_contracts() {
         );
     }
     let families = contract["families"].as_object().expect("families");
+    let mut expected_families: BTreeSet<&str> = DeterministicFamily::ALL
+        .iter()
+        .map(|family| family.node_type())
+        .collect();
+    expected_families.insert("code");
     assert_eq!(
         families.keys().map(String::as_str).collect::<BTreeSet<_>>(),
-        DeterministicFamily::ALL
-            .iter()
-            .map(|family| family.node_type())
-            .collect::<BTreeSet<_>>()
+        expected_families
     );
-    for family in DeterministicFamily::ALL {
-        let listed: Vec<&str> = families[family.node_type()]
+    for (node_type, family) in DeterministicFamily::ALL
+        .iter()
+        .map(|family| (family.node_type(), SettingsFamily::Deterministic(*family)))
+        .chain(std::iter::once(("code", SettingsFamily::Code)))
+    {
+        let listed: Vec<&str> = families[node_type]
             .as_array()
             .expect("family keys")
             .iter()
             .filter_map(Value::as_str)
             .collect();
-        assert_eq!(
-            listed,
-            SettingsFamily::Deterministic(family).admitted_keys(),
-            "{}",
-            family.node_type()
-        );
+        assert_eq!(listed, family.admitted_keys(), "{node_type}");
     }
     for pause in contract["pause_families"].as_array().expect("pauses") {
         assert_eq!(
