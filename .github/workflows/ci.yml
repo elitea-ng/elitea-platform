@@ -1,0 +1,274 @@
+name: CI
+
+# The pull-request pipeline, in two tiers (docs/contributing/ci.md).
+#
+#   fast   every push: static gates, vet and lint, Go and web unit tests, Rust fmt
+#          and clippy, the small contract suites.
+#   heavy  the E2E lanes, the Rust test chains, desktop, kind. Only when the fast
+#          tier passed AND the pull request is not a draft; marking a draft ready
+#          for review starts this workflow again (`ready_for_review`).
+#
+# `ci-gate` is the one verdict: it fails while the pull request is a draft and
+# when a heavy job that should have run is missing. A required status check can
+# point at `CI / ci-gate` alone. Each job below calls a workflow that keeps its
+# own schedule and workflow_dispatch arms; what starts it on a pull request is
+# scripts/ci/tier-paths.json. scripts/ci/check-tiering.mjs keeps this file, that
+# file and the called workflows in step.
+
+on:
+  # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Which workflows does this change reach?
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      # Reads this workflow's earlier runs of the same head.
+      actions: read
+    outputs:
+      run: ${{ steps.paths.outputs.run }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts/ci
+          persist-credentials: false
+      - id: paths
+        run: node scripts/ci/tier-changes.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          # ready_for_review reuses a green fast tier of the same head (tier-changes.mjs).
+          PR_ACTION: ${{ github.event.action }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+
+  # ── Fast tier ───────────────────────────────────────────────────────────────
+  no-binaries:
+    needs: [changes]
+    if: fromJSON(needs.changes.outputs.run)['no-binaries']
+    uses: ./.github/workflows/no-binaries.yml
+    secrets: inherit
+
+  dependency-scanning:
+    needs: [changes]
+    if: fromJSON(needs.changes.outputs.run)['dependency-scanning']
+    uses: ./.github/workflows/dependency-scanning.yml
+    secrets: inherit
+
+  helm-lint:
+    needs: [changes]
+    if: fromJSON(needs.changes.outputs.run)['helm-lint']
+    uses: ./.github/workflows/helm-lint.yml
+    secrets: inherit
+
+  ci-docs:
+    needs: [changes]
+    if: fromJSON(needs.changes.outputs.run)['ci-docs']
+    uses: ./.github/workflows/ci-docs.yml
+    secrets: inherit
+
+  ci-go:
+    needs: [changes]
+    if: fromJSON(needs.changes.outputs.run)['ci-go']
+    uses: ./.github/workflows/ci-go.yml
+    secrets: inherit
+
+  ci-web:
+    needs: [changes]
+    if: fromJSON(needs.changes.outputs.run)['ci-web']
+    uses: ./.github/workflows/ci-web.yml
+    secrets: inherit
+
+  ci-contract:
+    needs: [changes]
+    if: fromJSON(needs.changes.outputs.run)['ci-contract']
+    uses: ./.github/workflows/ci-contract.yml
+    secrets: inherit
+
+  ci-gateway:
+    needs: [changes]
+    if: fromJSON(needs.changes.outputs.run)['ci-gateway']
+    uses: ./.github/workflows/ci-gateway.yml
+    secrets: inherit
+
+  ci-mock-llm:
+    needs: [changes]
+    if: fromJSON(needs.changes.outputs.run)['ci-mock-llm']
+    uses: ./.github/workflows/ci-mock-llm.yml
+    secrets: inherit
+
+  ci-mobile:
+    needs: [changes]
+    if: fromJSON(needs.changes.outputs.run)['ci-mobile']
+    uses: ./.github/workflows/ci-mobile.yml
+    secrets: inherit
+
+  ci-deepwiki-conformance:
+    needs: [changes]
+    if: fromJSON(needs.changes.outputs.run)['ci-deepwiki-conformance']
+    uses: ./.github/workflows/ci-deepwiki-conformance.yml
+    secrets: inherit
+
+  image-matrix:
+    needs: [changes]
+    if: fromJSON(needs.changes.outputs.run)['image-matrix']
+    uses: ./.github/workflows/image-matrix.yml
+    secrets: inherit
+
+  ci-rust-lint:
+    needs: [changes]
+    if: fromJSON(needs.changes.outputs.run)['ci-rust-lint']
+    uses: ./.github/workflows/ci-rust-lint.yml
+    secrets: inherit
+
+  fast-gate:
+    name: fast-gate
+    needs: [changes, no-binaries, dependency-scanning, helm-lint, ci-docs, ci-go, ci-web, ci-contract, ci-gateway, ci-mock-llm, ci-mobile, ci-deepwiki-conformance, image-matrix, ci-rust-lint]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts/ci
+          persist-credentials: false
+      - name: The fast tier passed
+        run: node scripts/ci/ci-gate.mjs fast
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          RUN: ${{ needs.changes.outputs.run }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+
+  # ── Heavy tier: not a draft, and the fast tier passed ───────────────────────
+  ci-web-e2e:
+    needs: [changes, fast-gate]
+    if: github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-web-e2e']
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/ci-web-e2e.yml
+    secrets: inherit
+
+  ci-web-coverage:
+    needs: [changes, fast-gate]
+    if: github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-web-coverage']
+    uses: ./.github/workflows/ci-web-coverage.yml
+    secrets: inherit
+
+  ci-rust:
+    needs: [changes, fast-gate]
+    if: github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-rust']
+    uses: ./.github/workflows/ci-rust.yml
+    secrets: inherit
+
+  ci-rust-shared:
+    needs: [changes, fast-gate]
+    if: github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-rust-shared']
+    uses: ./.github/workflows/ci-rust-shared.yml
+    secrets: inherit
+
+  ci-deepwiki-engine:
+    needs: [changes, fast-gate]
+    if: github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-deepwiki-engine']
+    uses: ./.github/workflows/ci-deepwiki-engine.yml
+    secrets: inherit
+
+  ci-inventory-engine:
+    needs: [changes, fast-gate]
+    if: github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-inventory-engine']
+    uses: ./.github/workflows/ci-inventory-engine.yml
+    secrets: inherit
+
+  ci-doc-extractor:
+    needs: [changes, fast-gate]
+    if: github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-doc-extractor']
+    uses: ./.github/workflows/ci-doc-extractor.yml
+    secrets: inherit
+
+  ci-vector:
+    needs: [changes, fast-gate]
+    if: github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-vector']
+    uses: ./.github/workflows/ci-vector.yml
+    secrets: inherit
+
+  ci-browser-session:
+    needs: [changes, fast-gate]
+    if: github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-browser-session']
+    uses: ./.github/workflows/ci-browser-session.yml
+    secrets: inherit
+
+  ci-desktop:
+    needs: [changes, fast-gate]
+    if: github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-desktop']
+    uses: ./.github/workflows/ci-desktop.yml
+    secrets: inherit
+
+  ci-desktop-control:
+    needs: [changes, fast-gate]
+    if: github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-desktop-control']
+    uses: ./.github/workflows/ci-desktop-control.yml
+    secrets: inherit
+
+  ci-local-tools-macos:
+    needs: [changes, fast-gate]
+    if: github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-local-tools-macos']
+    uses: ./.github/workflows/ci-local-tools-macos.yml
+    secrets: inherit
+
+  desktop-package:
+    needs: [changes, fast-gate]
+    if: github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['desktop-package']
+    uses: ./.github/workflows/desktop-package.yml
+    with:
+      require_signed: false
+    secrets: inherit
+
+  helm-install-smoke:
+    needs: [changes, fast-gate]
+    if: github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['helm-install-smoke']
+    uses: ./.github/workflows/helm-install-smoke.yml
+    secrets: inherit
+
+  ci-governed-conformance:
+    needs: [changes, fast-gate]
+    if: github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-governed-conformance']
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/ci-governed-conformance.yml
+    secrets: inherit
+
+  ci-handoff-loadgate:
+    needs: [changes, fast-gate]
+    if: github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-handoff-loadgate']
+    uses: ./.github/workflows/ci-handoff-loadgate.yml
+    secrets: inherit
+
+  ci-gate:
+    name: ci-gate
+    needs: [changes, fast-gate, no-binaries, dependency-scanning, helm-lint, ci-docs, ci-go, ci-web, ci-contract, ci-gateway, ci-mock-llm, ci-mobile, ci-deepwiki-conformance, image-matrix, ci-rust-lint, ci-web-e2e, ci-web-coverage, ci-rust, ci-rust-shared, ci-deepwiki-engine, ci-inventory-engine, ci-doc-extractor, ci-vector, ci-browser-session, ci-desktop, ci-desktop-control, ci-local-tools-macos, desktop-package, helm-install-smoke, ci-governed-conformance, ci-handoff-loadgate]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts/ci
+          persist-credentials: false
+      - name: Every job that should have run passed (and the pull request is ready)
+        run: node scripts/ci/ci-gate.mjs final
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          RUN: ${{ needs.changes.outputs.run }}
+          DRAFT: ${{ github.event.pull_request.draft }}

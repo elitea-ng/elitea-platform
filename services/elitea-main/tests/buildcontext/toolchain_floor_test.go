@@ -33,7 +33,7 @@ import (
 // The `go` directive is what turns the floor into a guarantee. With the
 // golang image's GOTOOLCHAIN=local, an older toolchain refuses the module
 //
-//	go: go.mod requires go >= 1.26.9 (running go 1.26.8; GOTOOLCHAIN=local)
+//	go: go.mod requires go >= 1.26.11 (running go 1.26.10; GOTOOLCHAIN=local)
 //
 // and with GOTOOLCHAIN=auto it fetches the floor toolchain instead. Either way
 // no binary is built on a standard library below the floor.
@@ -50,7 +50,7 @@ import (
 // indented `stdlibFloorGo1NN = "…"` line, choosing the one named for the series
 // of the gateway's `go` directive, so they stay inside a const block.
 const (
-	stdlibFloorGo126 = "1.26.9"
+	stdlibFloorGo126 = "1.26.11"
 	stdlibFloorGo127 = "1.27.2"
 )
 

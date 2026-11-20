@@ -21,27 +21,18 @@ name: Desktop — package for device management
 #   workflow_call       publish.yml's release check, signed (`require_signed`).
 #   workflow_dispatch   by hand: a signed package to hand to device management.
 on:
-  pull_request:
-    paths:
-      - ".github/workflows/desktop-package.yml"
-      - "apps/elitea-desktop/scripts/desktop-package.mjs"
-      - "apps/elitea-desktop/scripts/macos-pkg.sh"
-      - "apps/elitea-desktop/scripts/windows-package.mjs"
-      - "apps/elitea-desktop/scripts/stamp-version.mjs"
-      - "apps/elitea-desktop/src-tauri/tauri.conf.json"
-      - "apps/elitea-desktop/src-tauri/tauri.sidecar.conf.json"
-      - ".github/actions/desktop-macos-package/**"
-      - ".github/actions/desktop-windows-package/**"
   workflow_call:
     inputs:
       ref:
-        description: The git ref to build (the release tag).
+        description: The git ref to build (the release tag); empty builds the caller's own ref (ci.yml).
         type: string
-        required: true
+        required: false
+        default: ""
       version:
-        description: The full release version to stamp (X.Y.Z or X.Y.Z-pre).
+        description: The full release version to stamp (X.Y.Z or X.Y.Z-pre); empty on a pull request (a dry run).
         type: string
-        required: true
+        required: false
+        default: ""
       require_signed:
         description: Fail unless every package is signed (the release check).
         type: boolean
@@ -71,7 +62,7 @@ on:
         default: false
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ inputs.ref || github.ref }}
+  group: desktop-package-${{ github.event_name }}-${{ inputs.ref || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
