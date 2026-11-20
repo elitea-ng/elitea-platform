@@ -48,8 +48,9 @@ jobs:
     # nothing on a fast run.
     timeout-minutes: 60
     # No debug info in the dev profile: the dev-profile target is what the
-    # cache below keeps, and debug info is most of its size (measured
-    # 2026-11-20 with line tables: 2.3 GiB compressed for the two targets). A
+    # cache below keeps, and debug info is most of its size. Measured
+    # 2026-11-20, the two targets' dependencies compressed: 2.29 GiB with line
+    # tables, 1.17 GiB without (11.8 to 7.0 GiB on disk). A
     # failed assertion still names its file and line (that is the panic's
     # location, not debug info); only a backtrace loses its line numbers. desktop-package.yml's pull-request dry run sets the same
     # value, because the CARGO_* environment is part of the rust-cache key.
@@ -201,30 +202,6 @@ jobs:
           cd apps/elitea-desktop/src-tauri
           TAURI_CONFIG="$(cat tauri.brand.json)" cargo build --locked -p elitea-desktop --bin elitea-desktop
           node "${GITHUB_WORKSPACE}/scripts/ci/brand-output-scan.mjs" --lane desktop target/debug/elitea-desktop tauri.brand.json
-
-      # TEMPORARY (removed before review): the compressed size the cache entry
-      # would have, for scripts/ci/cache-budget.json. Dependencies only, as
-      # rust-cache keeps them (no test or bin executables, no incremental).
-      - name: Measure the would-be cache entry (temporary)
-        if: always()
-        run: |
-          set -euo pipefail
-          for d in apps/elitea-desktop/src-tauri/target apps/elitea-desktop/doc-extract-sidecar/target; do
-            [ -d "$d" ] && du -sh "$d" || true
-          done
-          # rust-cache drops the workspace members' own artefacts (elitea-*) and
-          # keeps the dependencies.
-          find apps/elitea-desktop/src-tauri/target/debug apps/elitea-desktop/doc-extract-sidecar/target/debug -maxdepth 2 \( -path '*/deps/*' -o -path '*/build/*' -o -path '*/.fingerprint/*' \) -prune -print 2>/dev/null \
-            | while IFS= read -r f; do
-                b="$(basename "$f")"
-                case "$b" in elitea_*|libelitea_*|elitea-*) continue ;; esac
-                if [ -f "$f" ] && [ -x "$f" ] && [[ "$b" != *.* ]]; then continue; fi
-                printf '%s\n' "$f"
-              done > "$RUNNER_TEMP/keep.txt"
-          wc -l < "$RUNNER_TEMP/keep.txt"
-          comp=(zstd -T0 -3 -q); command -v zstd >/dev/null || comp=(gzip -6)
-          tar -cf - -T "$RUNNER_TEMP/keep.txt" 2>/dev/null | "${comp[@]}" | wc -c | awk '{printf "would-be target entry: %.2f GiB compressed\n", $1/1073741824}'
-          du -sh ~/.cargo/registry ~/.cargo/git 2>/dev/null || true
 
   # The browser pane's Windows and Linux drivers (ADR-0048 decision 6,
   # #1593). The macOS job above is the one that builds and tests the whole
