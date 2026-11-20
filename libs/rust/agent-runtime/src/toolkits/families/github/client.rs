@@ -57,7 +57,9 @@ const MAX_TREE_ENTRIES: usize = 100_000;
 const MAX_PROJECTED_FILES: usize = 10_000;
 const MAX_PROJECTED_FILE_CHARS: usize = 200_000;
 const MAX_ISSUES: usize = 100;
-const MAX_WORKFLOW_RUNS: usize = 100;
+/// `get_workflow_runs`' `limit`: the SDK's `ge=1, le=100`, default 10.
+pub(in crate::toolkits) const MAX_WORKFLOW_RUNS: usize = 100;
+pub(in crate::toolkits) const DEFAULT_WORKFLOW_RUNS: usize = 10;
 const MAX_WORKFLOW_RUNS_RESPONSE_BYTES: usize = 4 * 1_024 * 1_024;
 const MAX_WORKFLOW_LIST_PAGES: usize = 10;
 const MAX_ISSUE_OUTPUT_CHARS: usize = 200_000;
@@ -773,19 +775,36 @@ impl GitHubApi for GitHubClient {
             ("status", &query.status),
             ("event", &query.event),
         ] {
-            if let Some(value) = value.as_deref().filter(|value| !value.is_empty()) {
+            if let Some(value) = value.as_deref().filter(|value| !value.trim().is_empty()) {
                 filters.push((key, value.to_owned()));
             }
         }
         filters.push(("per_page", query.limit.to_string()));
+        // The SDK answers every failure as `{error: true, message}`; a
+        // repository (or its Actions) that is not there answers in the same
+        // shape as a workflow that is not there.
+        let repository_missing = || {
+            json!({
+                "error": true,
+                "message": format!(
+                    "An error occurred while getting workflow runs: repository {full_name} or its Actions runs not found"
+                ),
+            })
+        };
         let runs = if let Some(workflow) = query
             .workflow_id
             .as_deref()
-            .filter(|workflow| !workflow.is_empty())
+            .filter(|workflow| !workflow.trim().is_empty())
         {
             // PyGithub `get_workflow(id_or_file_name)`, then a scan of the
             // repository's workflows by numeric ID when that lookup fails.
-            let Some(workflow_id) = self.resolve_workflow(owner, name, workflow).await? else {
+            let resolved = match self.resolve_workflow(owner, name, workflow).await {
+                Err(error) if error.code() == GitHubClientErrorCode::NotFound => {
+                    return Ok(repository_missing());
+                }
+                resolved => resolved?,
+            };
+            let Some(workflow_id) = resolved else {
                 return Ok(json!({
                     "error": true,
                     "message": format!(
@@ -808,7 +827,7 @@ impl GitHubApi for GitHubClient {
                     &filters,
                     MAX_WORKFLOW_RUNS_RESPONSE_BYTES,
                 )
-                .await?
+                .await
         } else {
             self.rest
                 .get_json(
@@ -817,9 +836,15 @@ impl GitHubApi for GitHubClient {
                     &filters,
                     MAX_WORKFLOW_RUNS_RESPONSE_BYTES,
                 )
-                .await?
+                .await
         };
-        project_workflow_runs(&full_name, &runs, query.limit)
+        match runs {
+            Ok(runs) => project_workflow_runs(&full_name, &runs, query.limit),
+            Err(error) if error.code() == GitHubClientErrorCode::NotFound => {
+                Ok(repository_missing())
+            }
+            Err(error) => Err(error),
+        }
     }
 
     async fn list_project_issues(
@@ -871,7 +896,13 @@ impl GitHubClient {
         name: &str,
         workflow: &str,
     ) -> Result<Option<String>, GitHubClientError> {
-        if workflow.len() > 256 || workflow.chars().any(|c| c.is_control() || c == '/') {
+        // A path segment of its own: `.` and `..` would be dropped from the
+        // URL (and list the workflows instead), so they name no workflow.
+        if workflow.len() > 256
+            || workflow == "."
+            || workflow == ".."
+            || workflow.chars().any(|c| c.is_control() || c == '/')
+        {
             return Ok(None);
         }
         match self
@@ -893,6 +924,11 @@ impl GitHubClient {
             }
             Err(error) if error.code() == GitHubClientErrorCode::NotFound => {}
             Err(error) => return Err(error),
+        }
+        // The SDK's fallback matches `str(workflow.id)`: only a numeric ID
+        // can match, so a file name that was not found is not found.
+        if !workflow.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Ok(None);
         }
         for page in 1..=MAX_WORKFLOW_LIST_PAGES {
             let listed = self

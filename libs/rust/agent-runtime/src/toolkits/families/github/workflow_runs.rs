@@ -31,27 +31,43 @@ pub(super) fn project_workflow_runs(
         .and_then(Value::as_array)
         .ok_or_else(invalid_response)?;
     let mut projected = Vec::with_capacity(provider_runs.len().min(limit));
+    let mut skipped = 0_usize;
     for run in provider_runs.iter().take(limit) {
-        let run = run.as_object().ok_or_else(invalid_response)?;
-        projected.push(json!({
-            "id": positive_number(run, "id")?,
-            "name": lenient_text(run, "name", MAX_NAME_BYTES)?,
-            "workflow_id": positive_number(run, "workflow_id")?,
-            "run_number": nonnegative_number(run, "run_number")?,
-            "event": lenient_text(run, "event", MAX_METADATA_BYTES)?,
-            "status": lenient_text(run, "status", MAX_METADATA_BYTES)?,
-            "conclusion": lenient_text(run, "conclusion", MAX_METADATA_BYTES)?,
-            "created_at": lenient_timestamp(run, "created_at")?,
-            "updated_at": lenient_timestamp(run, "updated_at")?,
-            "head_branch": lenient_text(run, "head_branch", MAX_METADATA_BYTES)?,
-            "head_sha": lenient_text(run, "head_sha", MAX_METADATA_BYTES)?,
-            "url": lenient_text(run, "html_url", MAX_URL_BYTES)?,
-        }));
+        // One run with a hostile value (a control character in a run name or
+        // branch, an oversize field) is left out and counted, not allowed to
+        // hide every other run.
+        match project_workflow_run(run) {
+            Ok(run) => projected.push(run),
+            Err(_) => skipped += 1,
+        }
     }
-    bounded_output(json!({
+    let mut answer = json!({
         "repository": repository,
         "count": projected.len(),
         "runs": projected,
+    });
+    if skipped > 0 {
+        answer["skipped_runs"] = json!(skipped);
+    }
+    bounded_output(answer)
+}
+
+/// One run of `get_workflow_runs`' answer.
+fn project_workflow_run(run: &Value) -> Result<Value, GitHubClientError> {
+    let run = run.as_object().ok_or_else(invalid_response)?;
+    Ok(json!({
+        "id": positive_number(run, "id")?,
+        "name": lenient_text(run, "name", MAX_NAME_BYTES)?,
+        "workflow_id": positive_number(run, "workflow_id")?,
+        "run_number": nonnegative_number(run, "run_number")?,
+        "event": lenient_text(run, "event", MAX_METADATA_BYTES)?,
+        "status": lenient_text(run, "status", MAX_METADATA_BYTES)?,
+        "conclusion": lenient_text(run, "conclusion", MAX_METADATA_BYTES)?,
+        "created_at": lenient_timestamp(run, "created_at")?,
+        "updated_at": lenient_timestamp(run, "updated_at")?,
+        "head_branch": lenient_text(run, "head_branch", MAX_METADATA_BYTES)?,
+        "head_sha": lenient_text(run, "head_sha", MAX_METADATA_BYTES)?,
+        "url": lenient_text(run, "html_url", MAX_URL_BYTES)?,
     }))
 }
 

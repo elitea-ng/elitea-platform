@@ -3034,6 +3034,17 @@ async fn workflow_runs_of_one_workflow_resolve_a_file_name_then_an_id() {
         .await
         .expect("refused as not found");
     assert_eq!(nested["error"], true);
+    // `.` and `..` would be dropped from the URL: they name no workflow.
+    for dots in [".", ".."] {
+        let dotted = api
+            .get_workflow_runs(GitHubWorkflowRunsQuery {
+                workflow_id: Some(dots.to_owned()),
+                ..runs_query(10)
+            })
+            .await
+            .expect("refused as not found");
+        assert_eq!(dotted["error"], true, "{dots}");
+    }
     assert_eq!(
         transport.seen(),
         [
@@ -3042,10 +3053,49 @@ async fn workflow_runs_of_one_workflow_resolve_a_file_name_then_an_id() {
             "workflows/1234567",
             "workflows?per_page=100&page=1",
             "workflows/1234567/runs?per_page=10",
+            // A file name the lookup misses is not scanned for: only a
+            // numeric ID can match the SDK's fallback.
             "workflows/ghost.yml",
-            "workflows?per_page=100&page=1",
         ]
     );
+}
+
+#[tokio::test]
+async fn workflow_runs_skip_a_bad_run_and_drop_blank_filters() {
+    // One run GitHub answers badly is left out and counted; the others stay.
+    let mut control = run_json(9002, &json!("failure"));
+    control["head_branch"] = json!("main\u{0007}");
+    let transport = RunsTransport::new(&[(
+        "runs",
+        200,
+        json!({"workflow_runs": [
+            run_json(9003, &json!("success")),
+            control,
+            {"name": "no id"},
+            {"id": 1, "workflow_id": 2, "run_number": 3, "created_at": "yesterday"}
+        ]}),
+    )]);
+    let partial = runs_client(&transport)
+        .get_workflow_runs(runs_query(10))
+        .await
+        .expect("the good run");
+    assert_eq!(partial["count"], 1);
+    assert_eq!(partial["runs"][0]["id"], 9003);
+    assert_eq!(partial["skipped_runs"], 3);
+    // Whitespace-only filters are not sent.
+    let transport =
+        RunsTransport::new(&[("runs", 200, json!({"total_count": 0, "workflow_runs": []}))]);
+    runs_client(&transport)
+        .get_workflow_runs(GitHubWorkflowRunsQuery {
+            branch: Some(" ".to_owned()),
+            status: Some("\t".to_owned()),
+            event: Some("  ".to_owned()),
+            workflow_id: Some(" ".to_owned()),
+            ..runs_query(10)
+        })
+        .await
+        .expect("no filters");
+    assert_eq!(transport.seen(), ["runs?per_page=10"]);
 }
 
 #[tokio::test]
@@ -3053,7 +3103,6 @@ async fn workflow_runs_name_another_repository_and_map_provider_failures() {
     for (status, code) in [
         (401, GitHubClientErrorCode::Authentication),
         (403, GitHubClientErrorCode::Authorization),
-        (404, GitHubClientErrorCode::NotFound),
         (429, GitHubClientErrorCode::RateLimited),
         (500, GitHubClientErrorCode::DependencyUnavailable),
     ] {
@@ -3064,11 +3113,20 @@ async fn workflow_runs_name_another_repository_and_map_provider_failures() {
             .expect_err("provider failure");
         assert_eq!(error.code(), code, "{status}");
     }
+    // A repository (or its Actions) that is not there is the SDK's error
+    // object, like a workflow that is not there.
+    let transport = RunsTransport::new(&[("runs", 404, json!({"message": "Not Found"}))]);
+    let missing = runs_client(&transport)
+        .get_workflow_runs(runs_query(10))
+        .await
+        .expect("a missing repository is an answer");
+    assert_eq!(
+        missing,
+        json!({"error": true, "message": "An error occurred while getting workflow runs: repository EliteaAI/elitea-platform or its Actions runs not found"})
+    );
     for hostile in [
         json!({"workflow_runs": "not a list"}),
         json!({"total_count": 1}),
-        json!({"workflow_runs": [{"name": "no id"}]}),
-        json!({"workflow_runs": [{"id": 1, "workflow_id": 2, "run_number": 3, "created_at": "yesterday"}]}),
     ] {
         let transport = RunsTransport::new(&[("runs", 200, hostile.clone())]);
         let error = runs_client(&transport)

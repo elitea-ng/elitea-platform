@@ -16,8 +16,9 @@ use crate::toolkits::invocation::{MaterializedToolsetError, admit_materialized_t
 use crate::toolkits::policy::ToolAdmissionPolicy;
 
 use super::client::{
-    GitHubApi, GitHubClient, GitHubClientError, GitHubCodeSearchQuery, GitHubCommitQuery,
-    GitHubFileScope, GitHubWorkflowRunsQuery, validate_repository,
+    DEFAULT_WORKFLOW_RUNS, GitHubApi, GitHubClient, GitHubClientError, GitHubCodeSearchQuery,
+    GitHubCommitQuery, GitHubFileScope, GitHubWorkflowRunsQuery, MAX_WORKFLOW_RUNS,
+    validate_repository,
 };
 use super::config::{GitHubToolkitConfig, GitHubToolkitConfigError};
 use super::writes::{GitHubWriteTool, WriteKind};
@@ -941,8 +942,8 @@ fn get_workflow_runs_schema() -> Value {
             "limit": {
                 "type": "integer",
                 "minimum": 1,
-                "maximum": 100,
-                "default": 10,
+                "maximum": MAX_WORKFLOW_RUNS,
+                "default": DEFAULT_WORKFLOW_RUNS,
                 "description": "Maximum number of runs to return (1-100). Most recent first."
             },
             "repo_name": optional_string_schema(512, "Name of the repository (e.g., 'owner/repo'). If None, uses the default repository.")
@@ -1397,10 +1398,10 @@ impl GitHubReadTool {
         };
         // The SDK's `limit` is `ge=1, le=100` with a default of 10.
         let limit = match arguments.get("limit") {
-            None | Some(Value::Null) => 10,
+            None | Some(Value::Null) => DEFAULT_WORKFLOW_RUNS,
             Some(value) => integer_value(value)
                 .and_then(|value| usize::try_from(value).ok())
-                .filter(|value| (1..=100).contains(value))
+                .filter(|value| (1..=MAX_WORKFLOW_RUNS).contains(value))
                 .ok_or_else(invalid_arguments)?,
         };
         self.client
