@@ -1,0 +1,120 @@
+# The runner image of the org self-hosted pool `eng-runner`.
+#
+# The stock ghcr.io/actions/actions-runner image plus the native build tools
+# our jobs need and cannot install themselves: the runner pods have no root
+# (NoNewPrivs, CapEff=0), so `sudo apt-get install` in a job fails. Toolchains
+# are NOT here: Go, Node, Python and Rust versions come from the setup actions
+# into the tool cache below, exactly as on GitHub-hosted runners. No container
+# engine either: the pool has no daemon and no privileges to run one.
+#
+# What each package is for, and how the owner rolls the image out:
+# deploy/ci-runners/image/README.md. Built, smoke-tested and published by
+# .github/workflows/eng-runner-image.yml (hosted runners).
+#
+# The base is Ubuntu 24.04 because the upstream runner image is; it is not a
+# shipped image, so the Debian 13 single-OS-family rule for product images
+# does not apply (README, "Why Ubuntu").
+
+# Runner 2.338.2 (2026-10-26), the manifest-list digest resolved 2026-11-20 with
+#   skopeo inspect --raw docker://ghcr.io/actions/actions-runner:2.338.2 | sha256sum
+# To raise it: change RUNNER_VERSION and the digest together (README, "Bumping").
+ARG RUNNER_VERSION=2.338.2
+ARG RUNNER_DIGEST=sha256:6d0b2d80d80f143f77dcb676e50920100bbb547e39e883454d57f45ab8c31300
+
+FROM ghcr.io/actions/actions-runner:${RUNNER_VERSION}@${RUNNER_DIGEST}
+
+ARG RUNNER_VERSION
+
+# Pinned CLI releases. Each SHA-256 is the one the project publishes for the
+# linux amd64 asset; the build checks the download against BOTH this pin and
+# the project's checksum file of the same release, so a changed upstream file
+# or a mistyped pin fails the build.
+ARG GH_VERSION=2.105.0
+ARG GH_SHA256=79e7ab5db738c48777b696e374f8b428f0647debfb424f44d2f426370407fe2f
+ARG HELM_VERSION=v4.3.2
+ARG HELM_SHA256=d1c0278d46beab79582d7e50f5b3dc206944ba8e577cde618513fd07daa53983
+ARG YQ_VERSION=v4.54.3
+ARG YQ_SHA256=129534601871538efe0ba4c5e62a34fb1d5f469bcb975c4fddeb467d82974973
+
+LABEL org.opencontainers.image.source="https://github.com/elitea-ng/elitea-platform" \
+      org.opencontainers.image.description="eng-runner: actions-runner ${RUNNER_VERSION} with native build tools" \
+      org.opencontainers.image.version="${RUNNER_VERSION}"
+
+USER root
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# `upgrade` is deliberate: the base is pinned by digest, so the weekly rebuild
+# is how Ubuntu security updates reach the pool.
+# hadolint ignore=DL3008
+RUN apt-get update \
+ && apt-get upgrade -y --no-install-recommends \
+ && apt-get install -y --no-install-recommends \
+      build-essential \
+      cmake \
+      pkg-config \
+      zstd \
+      python3-venv \
+      python3-pip \
+      shellcheck \
+      unzip \
+      xz-utils \
+      skopeo \
+      ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+# The base installs Docker's static bundle into /usr/bin: the CLI and buildx
+# plugin, which stay (a later in-cluster BuildKit is reached through them), and
+# the daemon side, which goes. The pool has no privileges to run a daemon, so
+# those binaries are only attack surface (removing them in a layer does not
+# shrink the base layer; that is not the point).
+RUN rm -f /usr/bin/dockerd /usr/bin/docker-init /usr/bin/docker-proxy \
+          /usr/bin/containerd /usr/bin/containerd-shim-runc-v2 /usr/bin/ctr \
+          /usr/bin/runc
+
+# gh, helm and yq from their official releases, each verified twice: against
+# the pinned hash above, and against the checksum file the release publishes.
+RUN set -eux; \
+    work="$(mktemp -d)"; cd "$work"; \
+    verify() { \
+      local file="$1" pinned="$2" published="$3"; \
+      echo "${pinned}  ${file}" | sha256sum -c -; \
+      if [ "$published" != "$pinned" ]; then \
+        echo "published checksum of ${file} is '${published}', pinned is '${pinned}'" >&2; exit 1; \
+      fi; \
+    }; \
+    \
+    gh="gh_${GH_VERSION}_linux_amd64.tar.gz"; \
+    curl -fsSLO "https://github.com/cli/cli/releases/download/v${GH_VERSION}/${gh}"; \
+    curl -fsSLO "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_checksums.txt"; \
+    verify "$gh" "$GH_SHA256" "$(awk -v f="$gh" '$2 == f { print $1 }' "gh_${GH_VERSION}_checksums.txt")"; \
+    tar -xzf "$gh"; \
+    install -m 0755 "gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh; \
+    \
+    helm="helm-${HELM_VERSION}-linux-amd64.tar.gz"; \
+    curl -fsSLO "https://get.helm.sh/${helm}"; \
+    curl -fsSLO "https://get.helm.sh/${helm}.sha256sum"; \
+    verify "$helm" "$HELM_SHA256" "$(awk -v f="$helm" '$2 == f { print $1 }' "${helm}.sha256sum")"; \
+    tar -xzf "$helm"; \
+    install -m 0755 linux-amd64/helm /usr/local/bin/helm; \
+    \
+    yq=yq_linux_amd64; \
+    curl -fsSLO "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/${yq}"; \
+    curl -fsSLO "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/checksums"; \
+    curl -fsSLO "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/checksums_hashes_order"; \
+    col="$(grep -nx 'SHA-256' checksums_hashes_order | cut -d: -f1)"; \
+    test -n "$col"; \
+    verify "$yq" "$YQ_SHA256" "$(awk -v f="$yq" -v c="$((col + 1))" '$1 == f { print $c }' checksums)"; \
+    install -m 0755 "$yq" /usr/local/bin/yq; \
+    \
+    cd /; rm -rf "$work"
+
+# A writable tool cache owned by the runner user. The runner resolves its tool
+# directory from RUNNER_TOOL_CACHE first (then AGENT_TOOLSDIRECTORY), and the
+# setup actions install into whatever it reports; setup-python's Ubuntu
+# installer reads AGENT_TOOLSDIRECTORY directly, so both name the same place.
+# rustup (dtolnay/rust-toolchain) installs under $HOME instead, also writable.
+ENV RUNNER_TOOL_CACHE=/home/runner/_tool \
+    AGENT_TOOLSDIRECTORY=/home/runner/_tool
+RUN install -d -o runner -g runner -m 0755 /home/runner/_tool
+
+USER runner

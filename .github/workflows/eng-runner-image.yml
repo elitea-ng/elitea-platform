@@ -1,0 +1,217 @@
+name: eng-runner image
+
+# Builds the runner image of the org self-hosted pool `eng-runner`
+# (deploy/ci-runners/image/Containerfile), smoke-tests it as the runner user,
+# and publishes it to ghcr.io/elitea-ng/eng-runner.
+#
+# HOSTED ONLY. Every job here is on ubuntu-latest: the pool cannot build images
+# (no daemon, no root, no in-cluster BuildKit), and the image it would build is
+# the image it runs on.
+#
+# WHEN.
+#   pull_request   a change to the image or this file: build and smoke, no push.
+#   schedule       weekly. The base is pinned by digest, so this is how Ubuntu
+#                  security updates (`apt-get upgrade` in the Containerfile)
+#                  reach the pool, and how a new runner release is noticed
+#                  (the last step fails when the pin is behind).
+#   workflow_dispatch  from main: the first publish, or a rebuild on demand.
+# No `push:` trigger (scripts/ci/check-no-push-triggers.mjs). It keeps its own
+# pull_request trigger, outside ci.yml's tiers, the way mirror-buildkit.yml
+# does: it starts only on its own paths and gates nothing
+# (scripts/ci/check-tiering.mjs OWN_PR_TRIGGER).
+#
+# WHAT IS PUBLISHED is the image the smoke step ran, not a rebuild: `build`
+# saves it as an artifact and `publish` copies that archive to the registry.
+# Tags: `<runner-version>-<UTC date>` (immutable in practice; the owner pins
+# this one in the scale-set values) and `<runner-version>` (moves weekly).
+# No layer cache is read or written: every build is fresh, so the weekly
+# rebuild really does pick up new packages.
+
+on:
+  pull_request:
+    paths:
+      - "deploy/ci-runners/image/**"
+      - ".github/workflows/eng-runner-image.yml"
+  schedule:
+    # Mondays 05:17 UTC.
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: eng-runner-image-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/elitea-ng/eng-runner
+  CONTAINERFILE: deploy/ci-runners/image/Containerfile
+
+jobs:
+  build:
+    name: Build and smoke-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      runner-version: ${{ steps.meta.outputs.runner-version }}
+      date-tag: ${{ steps.meta.outputs.date-tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read the runner version from the Containerfile
+        id: meta
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^ARG RUNNER_VERSION=\([0-9][0-9.]*\)$/\1/p' "$CONTAINERFILE")"
+          if [ -z "$version" ]; then
+            echo "::error file=${CONTAINERFILE}::no 'ARG RUNNER_VERSION=<x.y.z>' line"
+            exit 1
+          fi
+          echo "runner-version=${version}" >> "$GITHUB_OUTPUT"
+          echo "date-tag=${version}-$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          # The builder image from the org's own mirror (mirror-buildkit.yml), by
+          # digest: no anonymous Docker Hub pull.
+          driver-opts: image=ghcr.io/elitea-ng/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+
+      - name: Build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: deploy/ci-runners/image
+          file: ${{ env.CONTAINERFILE }}
+          platforms: linux/amd64
+          pull: true
+          no-cache: true
+          load: true
+          push: false
+          provenance: false
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.meta.outputs.date-tag }}
+            ${{ env.IMAGE }}:${{ steps.meta.outputs.runner-version }}
+
+      - name: Smoke-test inside the image, as the runner user
+        env:
+          REF: ${{ env.IMAGE }}:${{ steps.meta.outputs.date-tag }}
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint /bin/bash "$REF" -euo pipefail -c '
+            test "$(id -un)" = runner
+            cc --version
+            c++ --version
+            cmake --version
+            pkg-config --version
+            zstd --version
+            python3 -m venv /tmp/v && /tmp/v/bin/python -c "import sys; print(sys.prefix)"
+            pip --version
+            shellcheck --version
+            gh --version
+            helm version
+            yq --version
+            skopeo --version
+            unzip -v >/dev/null && echo "unzip ok"
+            xz --version
+
+            test "$RUNNER_TOOL_CACHE" = /home/runner/_tool
+            test "$AGENT_TOOLSDIRECTORY" = /home/runner/_tool
+            mkdir -p "$RUNNER_TOOL_CACHE/smoke/1.0.0/x64"
+            touch "$RUNNER_TOOL_CACHE/smoke/1.0.0/x64.complete"
+            rm -rf "$RUNNER_TOOL_CACHE/smoke"
+            touch "$HOME/.smoke" && rm "$HOME/.smoke"
+
+            cd "$(mktemp -d)"
+            printf "#include <stdio.h>\nint main(void){puts(\"cc ok\");return 0;}\n" > t.c
+            cc -O2 -o t t.c && ./t
+            printf "#include <iostream>\nint main(){std::cout<<\"c++ ok\"<<std::endl;}\n" > t.cpp
+            c++ -o tpp t.cpp && ./tpp
+
+            # Not in the image: a container engine (the pool cannot run one)
+            # or a toolchain (the setup actions bring those). `!` would not
+            # trip errexit, hence the explicit loop.
+            for absent in dockerd containerd runc podman go cargo rustc node; do
+              if command -v "$absent" >/dev/null; then
+                echo "unexpected in the image: $absent at $(command -v "$absent")" >&2
+                exit 1
+              fi
+            done
+            docker --version
+            echo "smoke ok"
+          '
+          docker image inspect "$REF" --format 'size: {{.Size}} bytes, user: {{.Config.User}}' | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Save the tested image for publish
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          DATE_TAG: ${{ steps.meta.outputs.date-tag }}
+        run: |
+          set -euo pipefail
+          docker save "${IMAGE}:${DATE_TAG}" -o "${RUNNER_TEMP}/eng-runner.tar"
+          ls -l "${RUNNER_TEMP}/eng-runner.tar"
+
+      - name: Upload the tested image
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: eng-runner-image
+          path: ${{ runner.temp }}/eng-runner.tar
+          retention-days: 1
+          if-no-files-found: error
+
+  publish:
+    name: Publish to ghcr.io/elitea-ng/eng-runner
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Download the tested image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: eng-runner-image
+          path: ${{ runner.temp }}/image
+
+      - name: Push both tags
+        env:
+          REGISTRY_AUTH_FILE: ${{ runner.temp }}/skopeo-auth.json
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          DATE_TAG: ${{ needs.build.outputs.date-tag }}
+          VERSION_TAG: ${{ needs.build.outputs.runner-version }}
+        run: |
+          set -euo pipefail
+          command -v skopeo >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q skopeo; }
+          skopeo login ghcr.io --username "$ACTOR" --password-stdin <<< "$TOKEN"
+          archive="${RUNNER_TEMP}/image/eng-runner.tar"
+          skopeo copy "docker-archive:${archive}" "docker://${IMAGE}:${DATE_TAG}"
+          skopeo copy "docker://${IMAGE}:${DATE_TAG}" "docker://${IMAGE}:${VERSION_TAG}"
+          digest="$(skopeo inspect --format '{{.Digest}}' "docker://${IMAGE}:${DATE_TAG}")"
+          {
+            echo "Published \`${IMAGE}:${DATE_TAG}\` and \`${IMAGE}:${VERSION_TAG}\`"
+            echo
+            echo "digest \`${digest}\`"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: The runner pin is the latest runner release
+        # After the push, so a new runner release never blocks the weekly
+        # security rebuild; it fails the run so the bump is not left in silence.
+        # GitHub stops accepting a runner some weeks after its successor ships.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PINNED: ${{ needs.build.outputs.runner-version }}
+        run: |
+          set -euo pipefail
+          latest="$(gh api repos/actions/runner/releases/latest --jq .tag_name)"
+          latest="${latest#v}"
+          if [ "$latest" != "$PINNED" ]; then
+            echo "::error::eng-runner pins actions-runner ${PINNED}, the latest release is ${latest}; bump RUNNER_VERSION and RUNNER_DIGEST (deploy/ci-runners/image/README.md, Bumping)"
+            exit 1
+          fi
+          echo "actions-runner ${PINNED} is the latest release"
