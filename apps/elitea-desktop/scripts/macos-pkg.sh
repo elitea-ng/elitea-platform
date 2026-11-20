@@ -59,10 +59,11 @@ pkgbuild \
 # silicon: `productbuild --synthesize` writes one `<options …/>` element, the
 # architecture goes on it (replacing any it carries), and the edit is checked.
 productbuild --synthesize --package "$work/component.pkg" "$work/distribution.xml" >/dev/null
-sed -E -i '' \
+sed -E \
   -e 's/ hostArchitectures="[^"]*"//' \
   -e 's/<options /<options hostArchitectures="arm64" /' \
-  "$work/distribution.xml"
+  "$work/distribution.xml" > "$work/distribution.arm64.xml"
+mv "$work/distribution.arm64.xml" "$work/distribution.xml"
 if [ "$(grep -c 'hostArchitectures="arm64"' "$work/distribution.xml")" != 1 ]; then
   echo "::error::the synthesized distribution has no single <options> element to pin to arm64" >&2
   cat "$work/distribution.xml" >&2

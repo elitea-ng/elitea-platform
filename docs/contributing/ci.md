@@ -105,7 +105,7 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
   The workspace Go key has one writer, `ci-go.yml` `test-checks`. Its nightly run compiles every `go.work`
   module with `go test -race -run '^$' -exec true`.
 - **macOS package.** `desktop-package` (heavy tier) runs on a pull request only when `apps/elitea-desktop/**`,
-  `libs/rust/vendor/agent-desktop/**`, `desktop-package.yml` or the two packaging actions change. The run is an
+  `libs/rust/vendor/agent-desktop/**`, the Rust toolchain pin, `desktop-package.yml` or the two packaging actions change. The run is an
   unsigned debug dry run. `publish.yml` (the nightly pre-release on main, and every release) runs the signed
   release build and verifies it. `check-tiering.mjs` holds the path list, the dry-run inputs and
   `require_signed: true` in `publish.yml`. The app is Apple silicon only.

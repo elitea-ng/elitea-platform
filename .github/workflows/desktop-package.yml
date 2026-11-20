@@ -85,9 +85,10 @@ jobs:
     name: macOS Apple Silicon (.app, .pkg)
     # Apple silicon: the package is built for the runner's own architecture.
     runs-on: macos-latest
-    # One architecture now; the release build (fat LTO, one codegen unit) is the
-    # long part.
-    timeout-minutes: 60
+    # A pull request's debug dry run restores the host's cached target; the
+    # signed release build (fat LTO, one codegen unit) starts cold and then
+    # waits for notarisation (up to 30 minutes per notarytool submit).
+    timeout-minutes: ${{ github.event_name == 'pull_request' && 45 || 90 }}
     # The same value as ci-desktop.yml's macOS host job: it is part of the
     # rust-cache key, so the pull-request dry run restores that job's entry.
     env:

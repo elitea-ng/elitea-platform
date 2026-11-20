@@ -52,12 +52,17 @@ export const DRAFT_CONDITION = "github.event.pull_request.draft == false";
 /**
  * The pull-request gate of the macOS package job (owner decision 2026-11-20): the
  * desktop app (its Tauri config and packaging scripts are under it), the vendored
- * agent-desktop it links, and the packaging workflow and actions. Exact: a path
+ * agent-desktop it links, the toolchain pin the packaging action asserts, and the
+ * packaging workflow and actions. Not the other libs/rust crates the host links:
+ * the dry run is a debug build, and ci-desktop.yml's macOS host job already
+ * builds and tests that same debug graph for them. Exact: a path
  * added here runs a 20-minute macOS job on every pull request that touches it.
  */
 export const DESKTOP_PACKAGE_PATHS = [
   "apps/elitea-desktop/**",
   "libs/rust/vendor/agent-desktop/**",
+  "rust-toolchain.toml",
+  "scripts/ci/assert-rust-toolchain.sh",
   ".github/workflows/desktop-package.yml",
   ".github/actions/desktop-macos-package/**",
   ".github/actions/desktop-windows-package/**",

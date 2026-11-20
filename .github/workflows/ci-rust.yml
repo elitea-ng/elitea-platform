@@ -147,10 +147,12 @@ jobs:
             || echo "::warning::could not remove every preinstalled toolchain; continuing"
           df -h / | tail -1
 
-      # This job's entry keeps the dependency artefacts in target/ (the
-      # 418-crate graph), the one Rust target cache besides the macOS desktop
-      # host's. `quality` has no cache: a registry-only entry is 0.3-0.6 GiB of
-      # the cap for seconds of download (scripts/ci/cache-budget.json).
+      # The worker's target cache: the 418-crate dependency graph in target/,
+      # one of the three Rust target caches (with the macOS desktop host and
+      # the package dry run that reads it; scripts/ci/check-cache-budget.mjs).
+      # This job is its one writer. `quality` and the other Rust jobs have no
+      # cargo cache: a registry-only entry is 0.3-0.6 GiB of the cap for the
+      # seconds cargo takes to fetch the crates.
       #
       # `workspaces` is repo-relative (the `defaults.run.working-directory`
       # above applies to `run:` steps, not to `uses:`), and points at the

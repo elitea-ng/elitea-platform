@@ -531,6 +531,8 @@
       "paths": [
         "apps/elitea-desktop/**",
         "libs/rust/vendor/agent-desktop/**",
+        "rust-toolchain.toml",
+        "scripts/ci/assert-rust-toolchain.sh",
         ".github/workflows/desktop-package.yml",
         ".github/actions/desktop-macos-package/**",
         ".github/actions/desktop-windows-package/**"

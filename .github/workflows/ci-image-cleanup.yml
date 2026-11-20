@@ -103,19 +103,26 @@ jobs:
       # a failure: it says when the measured sizes need updating (2026-11-20 the
       # plan said 0.1 GiB per registry-only Rust entry and they held 0.4).
       - name: Install scripts/ci dependencies (the YAML reader)
+        id: deps
         if: ${{ !cancelled() }}
+        continue-on-error: true
         uses: ./.github/actions/ci-scripts-deps
       - name: The cache plan matches the cache
         if: ${{ !cancelled() }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
-            const { reportDrift } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/ci/check-cache-budget.mjs`);
-            await reportDrift({
-              github,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              root: process.env.GITHUB_WORKSPACE,
-              log: (line) => core.info(line),
-              warn: (line) => core.warning(line),
-            });
+            // Reporting only: whatever goes wrong here is a warning, the prune above is the job.
+            try {
+              const { reportDrift } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/ci/check-cache-budget.mjs`);
+              await reportDrift({
+                github,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                root: process.env.GITHUB_WORKSPACE,
+                log: (line) => core.info(line),
+                warn: (line) => core.warning(line),
+              });
+            } catch (error) {
+              core.warning(`the cache drift report could not run: ${error.message}`);
+            }
