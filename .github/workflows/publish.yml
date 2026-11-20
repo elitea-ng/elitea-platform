@@ -1286,7 +1286,7 @@ jobs:
   # app is not attached to the GitHub release and no workflow artifact is kept:
   # ELITEA's desktop builds reach clients through their device management,
   # signed by the brand owner (ADR-0052 decision 8). desktop-package.yml builds
-  # the universal macOS app and its silent `.pkg`, signs, notarises, staples and
+  # the Apple silicon macOS app and its silent `.pkg`, signs, notarises, staples and
   # verifies them (`spctl -a -vv`, `stapler validate`), then discards them. The
   # brand owner runs that workflow by hand to keep a package for MDM.
   #

@@ -35,9 +35,9 @@ on:
   # (scripts/ci/tier-paths.json); no `pull_request` arm of its own.
   workflow_call:
   # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
-  # The nightly run on main is the one that WRITES the caches pull requests
-  # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
-  # other cache writers, ahead of publish.yml's 02:07 nightly pre-release.
+  # The nightly run on main tests main. The caches it may write follow
+  # scripts/ci/check-cache-budget.mjs (one writer per key); staggered ahead
+  # of publish.yml's 02:07 nightly pre-release.
   schedule:
     - cron: "27 0 * * *"
   workflow_dispatch:
@@ -101,21 +101,9 @@ jobs:
             || echo "::warning::could not remove every preinstalled toolchain; continuing"
           df -h / | tail -1
 
-      # Read everywhere, write on main only: a pull request's target
-      # directory duplicated per branch would crowd the 10 GB Actions cache.
-      #
-      # `shared-key` because rust-cache otherwise keys on the JOB ID, and
-      # ci-inventory-engine.yml's job is also called `engine`: the two shared
-      # the restore prefix `v0-rust-engine-Linux-x64-<env>-`, so each restored
-      # the other's 2-3 GB target on a miss and re-saved it inflated (the
-      # entry measured 3.15 GB on 2026-10-20).
-      - name: Cache cargo registry and build artefacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          cache-targets: false  # registry and git only: the 10 GB cap (scripts/ci/check-cache-budget.mjs)
-          shared-key: deepwiki-engine
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          workspaces: services/elitea-deepwiki-engine
+      # No cargo cache here (scripts/ci/cache-budget.json, measured 2026-11-20): a
+      # registry-only entry is 0.3-0.6 GiB of the 10 GB cap and saves about the
+      # time cargo takes to fetch the crates. The budget goes to target caches.
 
       # Formatting and Clippy for this crate run in ci-rust-lint.yml (fast
       # tier), so they fail in minutes and before this job's build.
@@ -140,9 +128,11 @@ jobs:
           # saves from every ref, and pull-request copies evicted main's.
           cache: false
           go-version-file: go.work
-      - name: Restore the Go cache (pull requests read, main writes)
+      - name: Restore the Go cache (read only, one writer per key)
         uses: ./.github/actions/go-cache
         with:
+          # Restores only: one writer per key (scripts/ci/check-cache-budget.mjs).
+          save: "false"
           cache-dependency-path: |
             services/elitea-main/go.sum
             libs/go/*/go.sum
@@ -185,13 +175,9 @@ jobs:
         working-directory: libs/rust
         run: bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
 
-      # Read everywhere, write on main only (as in the engine job).
-      - name: Cache cargo registry and build artefacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          cache-targets: false  # registry and git only: the 10 GB cap (scripts/ci/check-cache-budget.mjs)
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          workspaces: libs/rust
+      # No cargo cache here (scripts/ci/cache-budget.json, measured 2026-11-20): a
+      # registry-only entry is 0.3-0.6 GiB of the 10 GB cap and saves about the
+      # time cargo takes to fetch the crates. The budget goes to target caches.
 
       # engine-core and code-parsers keep `preserve_order` and
       # `float_roundtrip` in their dev-dependencies only, so the desktop host

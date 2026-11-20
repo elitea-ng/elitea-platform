@@ -123,7 +123,7 @@ jobs:
           # go.work's own toolchain (1.26.11): the Go cache key includes the Go
           # version, so this leg hits the entry ci-go.yml saves.
           go-version-file: go.work
-      - name: Restore the Go cache (pull requests read, main writes)
+      - name: Restore the Go cache (read only, one writer per key)
         if: ${{ !cancelled() && steps.reach.outputs.go == 'true' }}
         uses: ./.github/actions/go-cache
         with:

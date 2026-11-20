@@ -5,9 +5,9 @@ on:
   # (scripts/ci/tier-paths.json); no `pull_request` arm of its own.
   workflow_call:
   # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
-  # The nightly run on main is the one that WRITES the caches pull requests
-  # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
-  # other cache writers, ahead of publish.yml's 02:07 nightly pre-release.
+  # The nightly run on main tests main. The caches it may write follow
+  # scripts/ci/check-cache-budget.mjs (one writer per key); staggered ahead
+  # of publish.yml's 02:07 nightly pre-release.
   schedule:
     - cron: "55 0 * * *"
   workflow_dispatch:
@@ -52,9 +52,11 @@ jobs:
           # saves from every ref, and pull-request copies evicted main's.
           cache: false
           go-version-file: go.work
-      - name: Restore the Go cache (pull requests read, main writes)
+      - name: Restore the Go cache (read only, one writer per key)
         uses: ./.github/actions/go-cache
         with:
+          # Restores only: one writer per key (scripts/ci/check-cache-budget.mjs).
+          save: "false"
           cache-dependency-path: |
             services/elitea-main/go.sum
             libs/go/*/go.sum

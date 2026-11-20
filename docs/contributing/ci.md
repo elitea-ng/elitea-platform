@@ -85,7 +85,30 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
   published the same way as `ci-elitea-sandbox-supervisor`.
 - **Actions cache.** The cache has a 10 GB cap. `ci-image-cleanup.yml` runs
   `scripts/ci/prune-actions-caches.mjs` every night: it keeps one entry per key family, removes pull-request
-  copies, and removes the least recently used entries above 9 GiB.
+  copies, and removes the least recently used entries above 9 GiB. It then compares what main's entries hold
+  with the plan and warns when they differ by more than 1 GiB.
+- **The cache plan.** `scripts/ci/check-cache-budget.mjs` derives every cache entry from the workflows, sizes it
+  from `scripts/ci/cache-budget.json` (measured with `gh api repos/{owner}/{repo}/actions/caches`), and fails
+  when:
+  - the plan is over 8 GiB;
+  - a cache key has more than one writer (rust-cache and go-cache; every other job restores with
+    `save: "false"` or `save-if: false`);
+  - a reader's key has no writer on a schedule;
+  - a Rust cache is registry only. A registry-only entry measured 0.3 to 0.6 GiB and saves only the seconds
+    cargo takes to fetch the crates.
+
+  Three Rust jobs keep a target cache:
+  - the worker tests (`ci-rust.yml` `test`);
+  - the macOS desktop host (`ci-desktop.yml` `desktop`, shared key `desktop-host`);
+  - the macOS package dry run on a pull request, which restores the host's entry.
+
+  The workspace Go key has one writer, `ci-go.yml` `test-checks`. Its nightly run compiles every `go.work`
+  module with `go test -race -run '^$' -exec true`.
+- **macOS package.** `desktop-package` (heavy tier) runs on a pull request only when `apps/elitea-desktop/**`,
+  `libs/rust/vendor/agent-desktop/**`, the Rust toolchain pin, `desktop-package.yml` or the two packaging actions change. The run is an
+  unsigned debug dry run. `publish.yml` (the nightly pre-release on main, and every release) runs the signed
+  release build and verifies it. `check-tiering.mjs` holds the path list, the dry-run inputs and
+  `require_signed: true` in `publish.yml`. The app is Apple silicon only.
 
 ## Security scanners
 

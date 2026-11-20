@@ -21,9 +21,9 @@ on:
   # (scripts/ci/tier-paths.json); no `pull_request` arm of its own.
   workflow_call:
   # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
-  # The nightly run on main is the one that WRITES the caches pull requests
-  # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
-  # other cache writers, ahead of publish.yml's 02:07 nightly pre-release.
+  # The nightly run on main tests main. The caches it may write follow
+  # scripts/ci/check-cache-budget.mjs (one writer per key); staggered ahead
+  # of publish.yml's 02:07 nightly pre-release.
   schedule:
     - cron: "35 0 * * *"
   workflow_dispatch:
@@ -68,18 +68,9 @@ jobs:
         run: |
           bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
 
-      # Read everywhere, write on main only: a pull request's target
-      # directory duplicated per branch would crowd the 10 GB Actions cache.
-      - name: Cache cargo registry and build artefacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          # Registry and git only. Measured 2026-10-20: the target directory
-          # made this entry 0.75 GB and saved ~2 minutes on a cached run
-          # (~6 -> ~4 min), the worst minutes-per-GB of any Rust job;
-          # in a 10 GB cache it evicted entries worth far more.
-          cache-targets: false
-          workspaces: services/elitea-vector
+      # No cargo cache here (scripts/ci/cache-budget.json, measured 2026-11-20): a
+      # registry-only entry is 0.3-0.6 GiB of the 10 GB cap and saves about the
+      # time cargo takes to fetch the crates. The budget goes to target caches.
 
       # Formatting and Clippy for this crate run in ci-rust-lint.yml (fast
       # tier), so they fail in minutes and before this job's build.

@@ -184,7 +184,7 @@ jobs:
           # saves from every ref, and pull-request copies evicted main's.
           cache: false
           go-version-file: go.work
-      - name: Restore the Go cache (pull requests read, main writes)
+      - name: Restore the Go cache (read only, one writer per key)
         uses: ./.github/actions/go-cache
         with:
           # Only test-checks (go vet over every module) writes this key.
@@ -299,7 +299,7 @@ jobs:
           # saves from every ref, and pull-request copies evicted main's.
           cache: false
           go-version-file: go.work
-      - name: Restore the Go cache (pull requests read, main writes)
+      - name: Restore the Go cache (this job is the key's one writer, on main)
         id: gocache
         uses: ./.github/actions/go-cache
         with:
@@ -335,6 +335,24 @@ jobs:
       # in series before the tests (3.5 minutes); here it runs beside them.
       - name: Go vet (workspace)
         run: bash scripts/go/workspace-run.sh vet
+
+      # THE ONE WRITER of the workspace Go key (scripts/ci/check-cache-budget.mjs,
+      # "one writer per cache key"): every other job that restores it is read
+      # only. 2026-11-20: thirteen jobs saved this key, the first small one to
+      # finish won with 0.39 GiB, and an exact hit never re-saves, so the full
+      # build cache (1.34 GiB the day before) was gone. This compiles every
+      # package and its tests the way the test shards do (`-race`) in every
+      # go.work module, and links nothing it runs: `-exec true` (the test
+      # binaries never start, so no TestMain needs a database). On main only.
+      - name: Warm the build cache for every go.work module (main only)
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.gocache.outputs.cache-hit != 'true' }}
+        run: |
+          set -euo pipefail
+          for dir in $(go work edit -json | jq -r '.Use[].DiskPath'); do
+            echo "::group::$dir"
+            (cd "$dir" && go test -race -count=1 -run '^$' -exec true ./... > /dev/null)
+            echo "::endgroup::"
+          done
 
       # The nightly run on main saves the Go cache here, not in the cache
       # action's post step: that step runs only when every step succeeded, so
@@ -410,7 +428,7 @@ jobs:
           # saves from every ref, and pull-request copies evicted main's.
           cache: false
           go-version-file: go.work
-      - name: Restore the Go cache (pull requests read, main writes)
+      - name: Restore the Go cache (read only, one writer per key)
         uses: ./.github/actions/go-cache
         with:
           # Only test-checks (go vet over every module) writes this key.
@@ -686,9 +704,11 @@ jobs:
           # saves from every ref, and pull-request copies evicted main's.
           cache: false
           go-version-file: go.work
-      - name: Restore the Go cache (pull requests read, main writes)
+      - name: Restore the Go cache (read only, one writer per key)
         uses: ./.github/actions/go-cache
         with:
+          # Restores only: one writer per key (scripts/ci/check-cache-budget.mjs).
+          save: "false"
           cache-dependency-path: |
             services/elitea-main/go.sum
             libs/go/*/go.sum
@@ -746,9 +766,11 @@ jobs:
         with:
           cache: false
           go-version-file: go.work
-      - name: Restore the Go cache (pull requests read, main writes)
+      - name: Restore the Go cache (read only, one writer per key)
         uses: ./.github/actions/go-cache
         with:
+          # Restores only: one writer per key (scripts/ci/check-cache-budget.mjs).
+          save: "false"
           cache-dependency-path: |
             services/elitea-main/go.sum
             libs/go/*/go.sum
@@ -787,9 +809,11 @@ jobs:
           # saves from every ref, and pull-request copies evicted main's.
           cache: false
           go-version-file: go.work
-      - name: Restore the Go cache (pull requests read, main writes)
+      - name: Restore the Go cache (read only, one writer per key)
         uses: ./.github/actions/go-cache
         with:
+          # Restores only: one writer per key (scripts/ci/check-cache-budget.mjs).
+          save: "false"
           cache-dependency-path: |
             services/elitea-main/go.sum
             libs/go/*/go.sum
@@ -840,10 +864,14 @@ jobs:
           # The cache is .github/actions/go-cache below: setup-go's own
           # saves from every ref, and pull-request copies evicted main's.
           cache: false
-          go-version-file: services/elitea-main/go.mod
-      - name: Restore the Go cache (pull requests read, main writes)
+          # go.work, as the key's one writer (test-checks) reads it: the same
+          # Go, spelled the same way (scripts/ci/check-cache-budget.mjs).
+          go-version-file: go.work
+      - name: Restore the Go cache (read only, one writer per key)
         uses: ./.github/actions/go-cache
         with:
+          # Restores only: one writer per key (scripts/ci/check-cache-budget.mjs).
+          save: "false"
           cache-dependency-path: |
             services/elitea-main/go.sum
             libs/go/*/go.sum
