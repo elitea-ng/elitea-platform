@@ -40,7 +40,7 @@ var nativeToolkitTypes = []string{"application", "custom", "database", "datasour
 // publishes it as `kubernetes`, and the Rust match arm is the string "k8s",
 // which no platform type equals.
 var sdkTypesWithoutRustFamily = []string{
-	"aws", "delta_lake", "kubernetes", "localgit",
+	"aws", "kubernetes", "localgit",
 }
 
 // rustOnlyTypes are the types the SDK does not have and only the Rust worker
@@ -269,14 +269,14 @@ func TestRustWorkerCapabilityWithholdsTheFamiliesItCannotMaterialize(t *testing.
 	// creatable under the rust worker instead of withheld.
 	for _, toolkitType := range []string{
 		"github", "openapi", "sharepoint", "sql", "artifact", "bitbucket", "testrail", "qtest", "pptx",
-		"docx", "xlsx",
+		"docx", "xlsx", "delta_lake",
 	} {
 		metadata := metadataOf(t, body, toolkitType)
 		if unavailable, _ := metadata["unavailable"].(bool); unavailable {
 			t.Errorf("%s is a native family and is withheld", toolkitType)
 		}
 	}
-	for _, toolkitType := range []string{"localgit", "delta_lake"} {
+	for _, toolkitType := range []string{"localgit"} {
 		metadata := metadataOf(t, body, toolkitType)
 		if unavailable, _ := metadata["unavailable"].(bool); !unavailable {
 			t.Errorf("%s has no native family and is offered as creatable", toolkitType)

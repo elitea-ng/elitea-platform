@@ -215,6 +215,31 @@ describe('composer drafts', () => {
     expect(readDraft('chat:1:u-abc')).toBe('');
   });
 
+  it('reads the alias map from storage once, not on every slot lookup (#2250)', () => {
+    rememberDraftAlias('chat:1:u-abc', 'chat:1:12');
+    expect(readDraft('chat:1:u-abc')).toBe('');
+    const reads = vi.spyOn(Storage.prototype, 'getItem');
+    try {
+      for (let index = 0; index < 20; index += 1) readDraft('chat:1:u-abc');
+      const aliasReads = reads.mock.calls.filter(([key]) => key === 'el.composer.draftAliases');
+      expect(aliasReads).toHaveLength(0);
+    } finally {
+      reads.mockRestore();
+    }
+  });
+
+  it('drops the cached alias map when it is registered again or swept (#2250)', () => {
+    rememberDraftAlias('chat:1:u-abc', 'chat:1:12');
+    writeDraft('chat:1:12', 'there');
+    expect(readDraft('chat:1:u-abc')).toBe('there');
+    rememberDraftAlias('chat:1:u-abc', 'chat:1:99');
+    expect(readDraft('chat:1:u-abc')).toBe('');
+    clearNamespace();
+    writeDraft('chat:1:u-abc', 'own slot again');
+    expect(readDraft('chat:1:12')).toBe('');
+    expect(readDraft('chat:1:u-abc')).toBe('own slot again');
+  });
+
   it('keeps only the newest drafts', () => {
     for (let index = 0; index <= MAX_DRAFTS; index += 1) {
       vi.setSystemTime(1_000 + index);

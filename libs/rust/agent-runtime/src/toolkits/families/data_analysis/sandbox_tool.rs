@@ -39,6 +39,7 @@ use super::code::{
     AnalysisCodeError, AnalysisCodeFailure, AnalysisCodeRequest, AnalysisCodeRunner,
     AnalysisLanguage,
 };
+use super::tools::{FileStager, MAX_STAGED_FILES};
 
 /// The internal tool name and the toolkit type the admission policy names this
 /// tool set by. It is the agent form's own toggle name, kept so stored agents
@@ -51,6 +52,9 @@ pub const RUN_CODE_TOOL_NAME: &str = "run_code";
 /// admission's 64 KiB string bound, so an over-long program is a sentence the
 /// model reads, not a refused call.
 const MAX_CODE_BYTES: usize = 60_000;
+/// The most bytes the program and its input may take together on the wire (the
+/// sandbox's request limit is 1 MiB; this leaves room for the wrapper).
+const MAX_SANDBOX_REQUEST_BYTES: usize = 960 * 1024;
 /// The most bytes of `input` JSON one call carries (the admission bounds the
 /// whole call at 256 KiB and each string in it at 64 KiB).
 const MAX_INPUT_BYTES: usize = 128 * 1024;
@@ -103,12 +107,26 @@ def _clip(_text):
 #[derive(Clone)]
 pub struct CodeSandboxAuthority {
     runner: Arc<dyn AnalysisCodeRunner>,
+    files: Option<FileStager>,
 }
 
 impl CodeSandboxAuthority {
     #[must_use]
     pub fn new(runner: Arc<dyn AnalysisCodeRunner>) -> Self {
-        Self { runner }
+        Self {
+            runner,
+            files: None,
+        }
+    }
+
+    /// Lend the file staging the data tools read through (#2205): `run_code`
+    /// then takes a `files` argument naming conversation attachments or
+    /// artifact files, and the program receives their content in its input.
+    /// Without it the tool takes no files, as before.
+    #[must_use]
+    pub fn with_files(mut self, files: FileStager) -> Self {
+        self.files = Some(files);
+        self
     }
 
     /// The languages the sandbox serves, in a stable order. Empty: the tool is
@@ -162,11 +180,13 @@ pub fn build_code_sandbox_toolset(
     {
         return Ok(None);
     }
+    let with_files = authority.files.is_some();
     let tool: Arc<dyn Tool> = Arc::new(RunCodeTool {
         runner: Arc::clone(&authority.runner),
-        description: description_for(&languages),
-        schema: parameters_schema(&languages),
+        description: description_for(&languages, with_files),
+        schema: parameters_schema(&languages, with_files),
         languages,
+        files: authority.files.clone(),
     });
     admit_materialized_toolset(CODE_SANDBOX_TOOL, CODE_SANDBOX_TOOL, policy, vec![tool])
         .map(Some)
@@ -174,10 +194,13 @@ pub fn build_code_sandbox_toolset(
 }
 
 /// The tool description: what it does, then one line per served language.
-fn description_for(languages: &[AnalysisLanguage]) -> String {
+fn description_for(languages: &[AnalysisLanguage], with_files: bool) -> String {
     let mut text = String::from(
-        "Run a short program in an isolated sandbox and get its output. Use it for calculations, parsing and data wrangling you can express in code. The sandbox has no network and no files. Pass data in `input` (a JSON object); the program reads it as elitea_state['data'] (elitea_state.data in JavaScript and TypeScript, state[\"data\"] in Rust). The result must be JSON. Output is cut at 20,000 characters per stream.",
+        "Run a short program in an isolated sandbox and get its output. Use it for calculations, parsing and data wrangling you can express in code. The sandbox has no network and no files of its own. Pass data in `input` (a JSON object); the program reads it as elitea_state['data'] (elitea_state.data in JavaScript and TypeScript, state[\"data\"] in Rust). The result must be JSON. Output is cut at 20,000 characters per stream.",
     );
+    if with_files {
+        text.push_str(" Name attachments or artifact files in `files`: the program gets data['files'][name] = {size, text|base64}.");
+    }
     for language in languages {
         text.push_str(match language {
             AnalysisLanguage::Python => {
@@ -198,9 +221,9 @@ fn description_for(languages: &[AnalysisLanguage]) -> String {
 /// The tool's argument schema: a closed object, plain types, no combinators,
 /// so every provider's schema dialect takes it as it is. `language` is an enum
 /// of the languages this deployment serves.
-fn parameters_schema(languages: &[AnalysisLanguage]) -> Value {
+fn parameters_schema(languages: &[AnalysisLanguage], with_files: bool) -> Value {
     let names: Vec<&str> = languages.iter().map(|language| language.name()).collect();
-    json!({
+    let mut schema = json!({
         "type": "object",
         "properties": {
             "language": {
@@ -221,7 +244,16 @@ fn parameters_schema(languages: &[AnalysisLanguage]) -> Value {
         },
         "required": ["code"],
         "additionalProperties": false
-    })
+    });
+    if with_files {
+        schema["properties"]["files"] = json!({
+            "type": "array",
+            "maxItems": MAX_STAGED_FILES,
+            "items": {"type": "string", "minLength": 1, "maxLength": 1024},
+            "description": "Attachments or artifact files, named as in the attachment message (`<conversation>/data.csv` or `/<bucket>/<name>`). At most 5; 256 KiB each, 512 KiB in all."
+        });
+    }
+    schema
 }
 
 struct RunCodeTool {
@@ -229,6 +261,7 @@ struct RunCodeTool {
     languages: Vec<AnalysisLanguage>,
     description: String,
     schema: Value,
+    files: Option<FileStager>,
 }
 
 #[async_trait]
@@ -296,6 +329,39 @@ impl RunCodeTool {
             })
     }
 
+    /// The files the call names, read through the data tools' staging (#2205).
+    /// `None` when it names none.
+    async fn stage_files(
+        &self,
+        arguments: &Value,
+        data: &Value,
+    ) -> Result<Option<Map<String, Value>>, String> {
+        let Some(requested) = arguments.get("files").filter(|value| !value.is_null()) else {
+            return Ok(None);
+        };
+        let names: Vec<String> = requested
+            .as_array()
+            .and_then(|items| {
+                items
+                    .iter()
+                    .map(|item| item.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .ok_or_else(|| "`files` must be a list of file names.".to_owned())?;
+        if names.is_empty() {
+            return Ok(None);
+        }
+        let Some(stager) = &self.files else {
+            return Err(
+                "This run cannot pass files to the program: it has no file store.".to_owned(),
+            );
+        };
+        if data.get("files").is_some() {
+            return Err("`input.files` is where the named files go; rename that key.".to_owned());
+        }
+        stager.stage(&names).await.map(Some)
+    }
+
     async fn run(&self, arguments: &Value, call_id: String) -> Result<Value, String> {
         let language = self.language_of(arguments)?;
         let code = arguments
@@ -312,7 +378,7 @@ impl RunCodeTool {
         if code.contains('\0') {
             return Err("`code` must not contain NUL characters.".to_owned());
         }
-        let data = match arguments.get("input") {
+        let mut data = match arguments.get("input") {
             None | Some(Value::Null) => Value::Null,
             Some(value @ Value::Object(_)) => value.clone(),
             Some(_) => return Err("`input` must be a JSON object.".to_owned()),
@@ -321,6 +387,24 @@ impl RunCodeTool {
             return Err(format!(
                 "`input` is over the {MAX_INPUT_BYTES} byte limit. Send less data."
             ));
+        }
+        if let Some(staged) = self.stage_files(arguments, &data).await? {
+            let mut object = match data {
+                Value::Object(object) => object,
+                _ => Map::new(),
+            };
+            object.insert("files".to_owned(), Value::Object(staged));
+            data = Value::Object(object);
+            // The files are bounded raw; escaping and base64 grow them, so the
+            // request the sandbox gets is measured here, not assumed.
+            let wire =
+                serde_json::to_string(&data).map_or(usize::MAX, |text| text.len()) + code.len() * 2;
+            if wire > MAX_SANDBOX_REQUEST_BYTES {
+                return Err(
+                    "The program and its files are over what the sandbox accepts once encoded. Pass fewer or smaller files, or read them with the data tools."
+                        .to_owned(),
+                );
+            }
         }
         let wrapped = language == AnalysisLanguage::Python;
         let request = AnalysisCodeRequest {
@@ -690,7 +774,7 @@ mod tests {
     #[test]
     fn the_schema_passes_every_provider_profile() {
         for languages in [&ALL[..], &ALL[..1]] {
-            let raw = parameters_schema(languages);
+            let raw = parameters_schema(languages, true);
             for profile in [
                 SchemaProfile::Anthropic,
                 SchemaProfile::OpenAi,
@@ -707,7 +791,9 @@ mod tests {
 
     #[test]
     fn the_description_stays_under_the_sdk_cap_with_every_language() {
-        assert!(description_for(&ALL).len() <= 1_000);
+        assert!(description_for(&ALL, false).len() <= 1_000);
+        // The `files` sentence is offered only where a file store is lent.
+        assert!(description_for(&ALL, true).len() <= 1_100);
     }
 
     #[tokio::test]
