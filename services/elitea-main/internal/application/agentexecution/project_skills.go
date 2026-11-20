@@ -138,6 +138,13 @@ func (service *CurrentApplicationStartService) resolveProjectSkills(
 // not applied for them. A pinned LISTING version that was yanked, withdrawn or
 // delisted does refuse (the resolver's answer), because the conversation was
 // pinned to text that is no longer offered.
+//
+// Idempotent retry (skills epic 2169, #2184): the pins and the picks are read
+// here, BEFORE the start's idempotency replay answers a retried request. So a
+// start that is sent again after a pin was removed in between, or after the
+// caller lost the right to read a picked skill, is refused like a pick of that
+// skill is, instead of replaying the first answer. The client sends the message
+// again with the pin in place, or without it. Documented in menus/skills.
 func (service *CurrentApplicationStartService) resolveTurnSkills(
 	ctx context.Context,
 	projectID int64,

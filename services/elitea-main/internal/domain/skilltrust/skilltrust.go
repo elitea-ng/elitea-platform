@@ -65,3 +65,14 @@ func Trusted(instructions string, activeRevisions []string) bool {
 	}
 	return false
 }
+
+// PublisherTrusted reports whether publisherProjectID is one of the projects an
+// administrator trusts as a publisher of skill text. An unknown publisher (zero,
+// a malformed lineage) is never trusted.
+func PublisherTrusted(publisherProjectID int64, trustedPublishers map[int64]struct{}) bool {
+	if publisherProjectID <= 0 {
+		return false
+	}
+	_, ok := trustedPublishers[publisherProjectID]
+	return ok
+}

@@ -5,7 +5,8 @@
  * it as quoted untrusted data until THIS project trusts the exact version of the text
  * shown here. The person reads it in the editor, then chooses **Trust this version for
  * this project**; any later change to the text is a new version and is untrusted
- * again. **Revoke trust** undoes it. A skill written in this project shows nothing.
+ * again. **Revoke trust** undoes it. A skill written in this project shows nothing. A skill whose publisher
+ * an administrator trusts is trusted with no review, and says so (there is nothing to trust or revoke here).
  */
 import type { ReactNode } from 'react';
 
@@ -51,6 +52,20 @@ function TrustedAlert({ canEdit, busy, onRevoke }: { readonly canEdit: boolean; 
       }
     >
       {t('skills.trust.trusted', 'This project trusts this version of the text, written in another project. Chats give it to the model as an instruction.')}
+    </Alert>
+  );
+}
+
+function PublisherTrustedAlert(): ReactNode {
+  return (
+    <Alert
+      severity="success"
+      data-testid="skill-trust-panel"
+    >
+      {t(
+        'skills.trust.publisherTrusted',
+        'An administrator trusts the project that wrote this skill, so chats give its text to the model as an instruction. Nothing to review here.',
+      )}
     </Alert>
   );
 }
@@ -106,9 +121,31 @@ export function SkillTrustPanel({ projectId, skillId, canEdit, revisionHint }: S
   });
   const revoke = useMutation({ mutationFn: () => revokeSkillTrust(projectId ?? '', id), onSuccess: refresh });
 
-  const data = status.data;
-  if (!enabled || data === undefined || !data.foreign) return null;
-  const busy = trust.isPending || revoke.isPending;
-  if (data.state === 'trusted') return <TrustedAlert canEdit={canEdit} busy={busy} onRevoke={() => revoke.mutate()} />;
-  return <UntrustedAlert canEdit={canEdit} busy={busy} failed={trust.error ?? revoke.error} onTrust={() => trust.mutate(data.revision)} />;
+  const data = enabled ? status.data : undefined;
+  if (data?.foreign !== true) return null;
+  return (
+    <TrustAlert
+      data={data}
+      canEdit={canEdit}
+      busy={trust.isPending || revoke.isPending}
+      failed={trust.error ?? revoke.error}
+      onTrust={() => trust.mutate(data.revision)}
+      onRevoke={() => revoke.mutate()}
+    />
+  );
+}
+
+/** The alert for what the project trusts of a foreign skill: reviewed, trusted through its publisher, or not yet. */
+function TrustAlert(props: {
+  readonly data: SkillTrustStatus;
+  readonly canEdit: boolean;
+  readonly busy: boolean;
+  readonly failed: unknown;
+  readonly onTrust: () => void;
+  readonly onRevoke: () => void;
+}): ReactNode {
+  const { data, canEdit, busy, failed, onTrust, onRevoke } = props;
+  if (data.state === 'trusted' && data.publisher_trusted === true) return <PublisherTrustedAlert />;
+  if (data.state === 'trusted') return <TrustedAlert canEdit={canEdit} busy={busy} onRevoke={onRevoke} />;
+  return <UntrustedAlert canEdit={canEdit} busy={busy} failed={failed} onTrust={onTrust} />;
 }

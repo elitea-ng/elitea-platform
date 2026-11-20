@@ -113,6 +113,13 @@ export function ciPackages(hclTexts) {
   return [...sorted.map((i) => PREFIX + i), ...sorted.map((i) => CACHE_PREFIX + i)].sort();
 }
 
+/**
+ * CI-only packages no cache ref in the HCL names: pushed by a workflow step
+ * directly. ci-web-e2e.yml's `sandbox-supervisor-image` publishes the code
+ * sandbox's supervisor under its content address, `ci-elitea-sandbox-supervisor`.
+ */
+export const EXTRA_CI_PACKAGES = ["ci-elitea-sandbox-supervisor"];
+
 export function hclSources(root = ROOT) {
   const dir = path.join(root, "deploy", "ci");
   const hcl = fs.readdirSync(dir).filter((n) => n.endsWith(".hcl")).sort().map((n) => path.join(dir, n));
@@ -183,7 +190,7 @@ export async function main({ github, org, days = 7, dryRun = false, now = new Da
     return 2;
   }
 
-  const ci = ciPackages(hclSources(root).map((p) => fs.readFileSync(p, "utf8")));
+  const ci = [...new Set([...ciPackages(hclSources(root).map((p) => fs.readFileSync(p, "utf8"))), ...EXTRA_CI_PACKAGES])].sort();
   if (ci.length < 20) {
     log(`::error::derived ${ci.length} CI package name(s) from deploy/ci/*.hcl and docker-bake.hcl, expected at least 20 — the ref pattern stopped matching`);
     return 1;

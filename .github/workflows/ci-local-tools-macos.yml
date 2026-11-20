@@ -16,22 +16,9 @@ name: CI — local tools on macOS (Seatbelt)
 # to zero tests would otherwise pass.
 
 on:
-  pull_request:
-    paths:
-      # The pin every cargo step asserts (scripts/ci/assert-rust-toolchain.sh).
-      - "rust-toolchain.toml"
-      - "scripts/ci/assert-rust-toolchain.sh"
-      - "libs/rust/local-tools/**"
-      - "libs/rust/workspace-store/**"
-      - "libs/rust/agent-runtime/**"
-      - "libs/rust/doc-extract/**"
-      - "libs/rust/content-source/**"
-      # The provider clients the toolkit families share (ADR-0030 decision 3).
-      - "libs/rust/connectors/**"
-      - "libs/rust/Cargo.lock"
-      - "libs/rust/Cargo.toml"
-      - "libs/rust/rust-toolchain.toml"
-      - ".github/workflows/ci-local-tools-macos.yml"
+  # Called by ci.yml, which owns the PR tiers and the path filter
+  # (scripts/ci/tier-paths.json); no `pull_request` arm of its own.
+  workflow_call:
   # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
   # The nightly run on main is the one that WRITES the caches pull requests
   # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
@@ -41,7 +28,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ci-local-tools-macos-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -73,6 +60,7 @@ jobs:
       - name: Cache cargo registry and build artefacts
         uses: Swatinem/rust-cache@v2
         with:
+          cache-targets: false  # registry and git only: the 10 GB cap (scripts/ci/check-cache-budget.mjs)
           save-if: ${{ github.ref == 'refs/heads/main' }}
           workspaces: libs/rust
 

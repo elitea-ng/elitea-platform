@@ -81,6 +81,10 @@ export const getGetSkillTrustResponseMock = (
   ]),
   revision: faker.string.alpha({ length: { min: 10, max: 20 } }),
   state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  publisher_trusted: faker.helpers.arrayElement([
+    faker.datatype.boolean(),
+    undefined,
+  ]),
   history: Array.from(
     { length: faker.number.int({ min: 1, max: 10 }) },
     (_, i) => i + 1,
@@ -114,6 +118,10 @@ export const getTrustSkillRevisionResponseMock = (
   ]),
   revision: faker.string.alpha({ length: { min: 10, max: 20 } }),
   state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  publisher_trusted: faker.helpers.arrayElement([
+    faker.datatype.boolean(),
+    undefined,
+  ]),
   history: Array.from(
     { length: faker.number.int({ min: 1, max: 10 }) },
     (_, i) => i + 1,
@@ -147,6 +155,10 @@ export const getRevokeSkillTrustResponseMock = (
   ]),
   revision: faker.string.alpha({ length: { min: 10, max: 20 } }),
   state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  publisher_trusted: faker.helpers.arrayElement([
+    faker.datatype.boolean(),
+    undefined,
+  ]),
   history: Array.from(
     { length: faker.number.int({ min: 1, max: 10 }) },
     (_, i) => i + 1,
@@ -289,6 +301,10 @@ export const getListApplicationSkillsResponseMock =
               state: faker.string.alpha({ length: { min: 10, max: 20 } }),
               publisher_project_id: faker.helpers.arrayElement([
                 faker.number.int(),
+                undefined,
+              ]),
+              publisher_trusted: faker.helpers.arrayElement([
+                faker.datatype.boolean(),
                 undefined,
               ]),
             },
@@ -455,6 +471,10 @@ export const getListSkillsResponseMock = (
             faker.number.int(),
             undefined,
           ]),
+          publisher_trusted: faker.helpers.arrayElement([
+            faker.datatype.boolean(),
+            undefined,
+          ]),
         },
       },
       undefined,
@@ -571,6 +591,10 @@ export const getCreateSkillResponseMock = (
         state: faker.string.alpha({ length: { min: 10, max: 20 } }),
         publisher_project_id: faker.helpers.arrayElement([
           faker.number.int(),
+          undefined,
+        ]),
+        publisher_trusted: faker.helpers.arrayElement([
+          faker.datatype.boolean(),
           undefined,
         ]),
       },
@@ -1270,6 +1294,10 @@ export const getGetSkillResponseMock = (
           faker.number.int(),
           undefined,
         ]),
+        publisher_trusted: faker.helpers.arrayElement([
+          faker.datatype.boolean(),
+          undefined,
+        ]),
       },
     },
     undefined,
@@ -1383,6 +1411,10 @@ export const getUpdateSkillResponseMock = (
           faker.number.int(),
           undefined,
         ]),
+        publisher_trusted: faker.helpers.arrayElement([
+          faker.datatype.boolean(),
+          undefined,
+        ]),
       },
     },
     undefined,
@@ -1494,6 +1526,10 @@ export const getCreateSkillVersionResponseMock = (
         state: faker.string.alpha({ length: { min: 10, max: 20 } }),
         publisher_project_id: faker.helpers.arrayElement([
           faker.number.int(),
+          undefined,
+        ]),
+        publisher_trusted: faker.helpers.arrayElement([
+          faker.datatype.boolean(),
           undefined,
         ]),
       },
@@ -1622,6 +1658,10 @@ export const getGetSkillVersionResponseMock = (
           faker.number.int(),
           undefined,
         ]),
+        publisher_trusted: faker.helpers.arrayElement([
+          faker.datatype.boolean(),
+          undefined,
+        ]),
       },
     },
     undefined,
@@ -1733,6 +1773,10 @@ export const getUpdateSkillVersionResponseMock = (
         state: faker.string.alpha({ length: { min: 10, max: 20 } }),
         publisher_project_id: faker.helpers.arrayElement([
           faker.number.int(),
+          undefined,
+        ]),
+        publisher_trusted: faker.helpers.arrayElement([
+          faker.datatype.boolean(),
           undefined,
         ]),
       },
@@ -1848,6 +1892,10 @@ export const getRestoreSkillVersionResponseMock = (
           faker.number.int(),
           undefined,
         ]),
+        publisher_trusted: faker.helpers.arrayElement([
+          faker.datatype.boolean(),
+          undefined,
+        ]),
       },
     },
     undefined,
@@ -1959,6 +2007,10 @@ export const getSetDefaultVersionResponseMock = (
         state: faker.string.alpha({ length: { min: 10, max: 20 } }),
         publisher_project_id: faker.helpers.arrayElement([
           faker.number.int(),
+          undefined,
+        ]),
+        publisher_trusted: faker.helpers.arrayElement([
+          faker.datatype.boolean(),
           undefined,
         ]),
       },
@@ -2079,6 +2131,10 @@ export const getImportSkillResponseMock = (
                 faker.number.int(),
                 undefined,
               ]),
+              publisher_trusted: faker.helpers.arrayElement([
+                faker.datatype.boolean(),
+                undefined,
+              ]),
             },
           },
           undefined,
@@ -2193,6 +2249,10 @@ export const getImportSkillResponseMock = (
             state: faker.string.alpha({ length: { min: 10, max: 20 } }),
             publisher_project_id: faker.helpers.arrayElement([
               faker.number.int(),
+              undefined,
+            ]),
+            publisher_trusted: faker.helpers.arrayElement([
+              faker.datatype.boolean(),
               undefined,
             ]),
           },

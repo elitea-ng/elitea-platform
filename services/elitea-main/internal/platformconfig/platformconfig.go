@@ -72,6 +72,13 @@ const (
 	KeySkillPublishWhitelistProjectIDs = "skill_publish_whitelist_project_ids"
 	KeySkillCategories                 = "skill_categories"
 
+	// KeyTrustedSkillPublisherProjectIDs lists the projects whose skills every
+	// project treats as trusted text (ADR-0051 amendment 1, A1.6; skills epic
+	// 2169 follow-up 2184). It lives in the skill-publishing section because
+	// it answers the same question from the other side: who may put skill text
+	// in front of a model.
+	KeyTrustedSkillPublisherProjectIDs = "trusted_skill_publisher_project_ids"
+
 	KeyVoiceEnabled             = "vite_voice_features_enabled"
 	KeyVoiceTemporarilyDisabled = "vite_voice_features_temporarily_disabled"
 

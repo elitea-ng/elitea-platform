@@ -15,18 +15,12 @@ name: CI — Provider conformance fixtures
 # they are maintained.
 
 on:
-  pull_request:
-    paths:
-      - "conformance/provider/**"
-      - "libs/provider/**"
-      - "scripts/provider/**"
-      # The descriptor guard compares the fixture with the copy the Go host
-      # serves.
-      - "services/elitea-subapp-host/internal/apps/deepwiki/descriptor.json"
-      - ".github/workflows/ci-deepwiki-conformance.yml"
+  # Called by ci.yml, which owns the PR tiers and the path filter
+  # (scripts/ci/tier-paths.json); no `pull_request` arm of its own.
+  workflow_call:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ci-deepwiki-conformance-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:

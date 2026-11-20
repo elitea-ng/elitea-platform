@@ -32,9 +32,21 @@
       ]
     },
     {
+      "name": "infra-suites",
+      "storage": false,
+      "description": "The packages that measured 2-5 minutes each beside the rest on 2026-11-19 (the shard that held them took 35 minutes): the testpg harness, the migration corpus, the system and workspace tests, the NATS test server and the fault registry.",
+      "packages": [
+        "services/elitea-main/internal/testpg",
+        "services/elitea-main/migrations/...",
+        "services/elitea-main/tests/...",
+        "libs/go/natsconn/...",
+        "libs/go/faults/..."
+      ]
+    },
+    {
       "name": "rest",
       "storage": false,
-      "description": "Every package that no other shard names: the migration corpus, testpg, tests/system, the rest of elitea-main and every other workspace module.",
+      "description": "Every package that no other shard names: the rest of elitea-main and every other workspace module.",
       "packages": [
         "..."
       ]

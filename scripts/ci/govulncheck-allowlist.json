@@ -1,0 +1,3 @@
+[
+  { "id": "GO-2026-6911", "reason": "github.com/mark3labs/mcp-go (llm-gateway, via Bifrost core): the vulnerability database marks EVERY version affected (introduced 0, no fix; v1.6.0 is the newest tag), so no upgrade exists. Not reachable in our configuration: server.go calls bifrost.Init with no MCPConfig, so Bifrost never opens a streamable HTTP MCP connection; the call-graph path through llmproxy/ports.go ResponsesRequest is static. Tracked by #2319", "expires": "2026-12-19" }
+]
