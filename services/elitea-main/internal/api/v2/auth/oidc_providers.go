@@ -244,7 +244,7 @@ func (h *OIDCHandler) buildRuntime(
 		requireEmailVerified: document.RequireEmailVerified,
 		adoptSCIMUsers:       document.AdoptSCIMUsers,
 		origin:               fmt.Sprintf("provider %s revision %d", provider.Key, provider.Revision),
-		binding:              identityrepo.ProviderBinding{Key: provider.Key, Issuer: document.Issuer},
+		binding:              provider.Binding(),
 	}, nil
 }
 

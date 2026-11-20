@@ -38,7 +38,6 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/identityproviders"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identity/entra/delegationstore"
 	identityoidc "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identity/oidc"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identityrepo"
 )
 
 // EntraCustody is the governed custody the OIDC plane writes to.
@@ -132,7 +131,7 @@ func (h *OIDCHandler) buildEntraRuntime(
 		requireEmailVerified: document.RequireEmailVerified,
 		adoptSCIMUsers:       document.AdoptSCIMUsers,
 		origin:               fmt.Sprintf("provider %s revision %d (entra)", provider.Key, provider.Revision),
-		binding:              identityrepo.ProviderBinding{Key: provider.Key, Issuer: document.Issuer},
+		binding:              provider.Binding(),
 		entra:                &entraRuntime{policy: policy, assertions: assertions},
 	}, nil
 }

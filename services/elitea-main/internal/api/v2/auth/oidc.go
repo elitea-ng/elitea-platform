@@ -925,6 +925,17 @@ func reuseLinkedAccount(
 		if err := identityrepo.BindLink(ctx, tx, binding, userID, providerRef); err != nil {
 			return 0, false, err
 		}
+	case !boundAnywhere:
+		// A link written by a replica of the previous release during the
+		// rolling upgrade. Bound only to a provider that has not been saved
+		// since 0258, so never to one repointed after it.
+		adopted, err := identityrepo.BindUnboundLinkToUnchangedProvider(ctx, tx, binding, userID, providerRef)
+		if err != nil {
+			return 0, false, err
+		}
+		if !adopted {
+			return 0, false, newIdentityConflict(conflictProviderNotBound)
+		}
 	default:
 		return 0, false, newIdentityConflict(conflictProviderNotBound)
 	}

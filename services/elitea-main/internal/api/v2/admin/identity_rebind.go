@@ -94,7 +94,7 @@ func (h *Handler) IdentityProviderRebind(w http.ResponseWriter, r *http.Request)
 			map[string]any{"error": "the identity provider definitions could not be read"})
 		return
 	}
-	request.Target = identityrepo.ProviderBinding{Key: provider.Key, Issuer: provider.TrustIssuer()}
+	request.Target = provider.Binding()
 	request.Prefix = identityrepo.OIDCProviderRefPrefix
 	if provider.Kind == identityproviders.KindSAML {
 		request.Prefix = identityrepo.SAMLProviderRefPrefix
@@ -111,6 +111,13 @@ func (h *Handler) IdentityProviderRebind(w http.ResponseWriter, r *http.Request)
 		"rebound":      rebound,
 	})
 }
+
+// The bounds of a re-bind source. A provider key fits the audit reason code
+// `from_provider:<key>` (128 characters in all); an issuer is a URL or a URN.
+const (
+	maxRebindProviderKeyLength = 64
+	maxRebindIssuerLength      = 2048
+)
 
 // decodeIdentityRebind reads the body into a request with its source set.
 func decodeIdentityRebind(w http.ResponseWriter, r *http.Request, key string) (identityrepo.RebindRequest, bool) {
@@ -139,12 +146,29 @@ func decodeIdentityRebind(w http.ResponseWriter, r *http.Request, key string) (i
 		})
 		return identityrepo.RebindRequest{}, false
 	}
+	if len(issuer) > maxRebindIssuerLength {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": "from_issuer is too long", "field": "from_issuer",
+		})
+		return identityrepo.RebindRequest{}, false
+	}
 	switch fromKey {
 	case "":
 		fromKey = key
 	case identityrepo.EnvironmentProviderKey:
 	default:
-		fromKey = identityproviders.NormalizeKey(fromKey)
+		// Checked HERE, not left to the audit reason code: that check runs
+		// after the links have moved, so a bad key would surface as a 503 and a
+		// rolled-back re-bind instead of a 400 that names the field.
+		normalized := identityproviders.NormalizeKey(fromKey)
+		if normalized == "" || len(normalized) > maxRebindProviderKeyLength {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error": "from_provider_key must be a provider key or @environment",
+				"field": "from_provider_key",
+			})
+			return identityrepo.RebindRequest{}, false
+		}
+		fromKey = normalized
 	}
 	return identityrepo.RebindRequest{From: &identityrepo.ProviderBinding{Key: fromKey, Issuer: issuer}}, true
 }

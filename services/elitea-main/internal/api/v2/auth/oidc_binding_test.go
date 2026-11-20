@@ -40,8 +40,11 @@ func TestALinkBoundUnderAnotherIssuerIsRefused(t *testing.T) {
 }
 
 // A link with no binding at all predates shared migration 0258 on a protocol
-// that had no enabled stored provider. A STORED provider may not claim it: it
-// is refused until a super_admin re-binds the links.
+// that had no enabled stored provider, or was written by a replica of the
+// previous release during the upgrade. A STORED provider claims it only
+// through the guarded upgrade-window statement (which binds nothing here: the
+// scripted statement affects no row, as for a provider saved since 0258), and
+// it is otherwise refused until a super_admin re-binds the links.
 func TestAnUnboundLinkIsRefusedToAStoredProvider(t *testing.T) {
 	tx := &scriptedTx{rows: []scriptedRow{{values: []any{7, false, false, false}}}}
 
@@ -50,8 +53,11 @@ func TestAnUnboundLinkIsRefusedToAStoredProvider(t *testing.T) {
 	if identityConflictCauseOf(err) != conflictProviderNotBound {
 		t.Fatalf("err = %v, want the provider_not_bound conflict", err)
 	}
-	if statementIndex(t, tx, "identity_bindings (provider_ref") >= 0 {
-		t.Fatalf("a stored provider bound an unbound link: %v", tx.statements)
+	if statementIndex(t, tx, "VALUES ($1, $2, $3, $4)") >= 0 {
+		t.Fatalf("a stored provider bound an unbound link unconditionally: %v", tx.statements)
+	}
+	if statementIndex(t, tx, "provider.updated_at <= ledger.applied_at") < 0 {
+		t.Fatalf("the upgrade-window guard did not run: %v", tx.statements)
 	}
 }
 

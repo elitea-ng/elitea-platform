@@ -36,10 +36,17 @@
 --   * an OIDC link on a deployment configured by OIDC_ISSUER_URL is bound by
 --     its next sign-in through that environment provider, which only an
 --     operator with workload access can configure;
+--   * a link that a replica of the previous release writes while the upgrade
+--     rolls out is bound at its next sign-in, but only to a stored provider
+--     that has not been saved since this migration was applied
+--     (identityrepo.BindUnboundLinkToUnchangedProvider), so never to one
+--     repointed after the upgrade;
 --   * any other unbound link is refused until a super_admin binds it with the
 --     rebind route's `from_unbound`.
--- Bare legacy refs and invite receipts carry no protocol prefix. No federated
--- sign-in path reads them, and they are not bound.
+-- Bare refs (the operator-configured Form logins) and invite receipts carry no
+-- protocol prefix and are not bound. The Form plane (identityrepo Provision)
+-- resolves only those; it refuses an `oidc:` or `saml:` reference outright, so
+-- the bound resolution in api/v2/auth is the only way to a federated link.
 --
 -- NO UNCONDITIONAL FOREIGN KEY, for the reason 0096 states: the shared corpus
 -- must apply to a database that holds nothing else. The key to the link (ON

@@ -8,6 +8,7 @@ package admin
 // the request's audit row.
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -189,11 +190,95 @@ func TestTrustChangesNamesOnlyTheWideningDirection(t *testing.T) {
 		"verify relaxed":   {next(func(d *identityproviders.OIDCDocument) { d.RequireEmailVerified = false }), []string{"require_email_verified"}},
 		"adoption enabled": {next(func(d *identityproviders.OIDCDocument) { d.AdoptSCIMUsers = true }), []string{"adopt_scim_users"}},
 		"login domains":    {next(func(d *identityproviders.OIDCDocument) { d.LoginDomains = []string{"corp.example"} }), nil},
+		"redirect":         {next(func(d *identityproviders.OIDCDocument) { d.RedirectURI = "https://evil/cb" }), []string{"redirect_uri"}},
+		"token file":       {next(func(d *identityproviders.OIDCDocument) { d.EntraFederatedTokenFile = "/x" }), []string{"entra_federated_token_file"}},
+		"api scope":        {next(func(d *identityproviders.OIDCDocument) { d.EntraAPIScope = "api://x/.default" }), []string{"entra_api_scope"}},
 	}
 	for name, testCase := range cases {
 		require.Equal(t, testCase.want, identityproviders.TrustChanges(base, testCase.after), name)
 	}
 	require.Equal(t, []string{"created"}, identityproviders.TrustChanges(identityproviders.Provider{}, base))
+
+	// Turning a provider on retires the live one of its kind; turning it off
+	// stops sign-in. Either way it decides which identity provider is believed.
+	enabled := base
+	enabled.Enabled = true
+	require.Equal(t, []string{"enabled"}, identityproviders.TrustChanges(base, enabled))
+	require.Equal(t, []string{"enabled"}, identityproviders.TrustChanges(enabled, base))
+}
+
+func TestSAMLTrustChangesCoverTheServiceProviderSide(t *testing.T) {
+	base := identityproviders.Provider{Key: "k", Kind: identityproviders.KindSAML, SAML: &identityproviders.SAMLDocument{
+		IDPEntityID: "urn:idp", SPEntityID: "urn:sp", ACSURL: "https://e/acs", ClockSkewSeconds: 60,
+	}}
+	next := func(edit func(*identityproviders.SAMLDocument)) identityproviders.Provider {
+		document := *base.SAML
+		edit(&document)
+		return identityproviders.Provider{Key: "k", Kind: identityproviders.KindSAML, SAML: &document}
+	}
+	for name, testCase := range map[string]struct {
+		after identityproviders.Provider
+		want  []string
+	}{
+		"audience":     {next(func(d *identityproviders.SAMLDocument) { d.SPEntityID = "urn:other" }), []string{"sp_entity_id"}},
+		"acs":          {next(func(d *identityproviders.SAMLDocument) { d.ACSURL = "https://evil/acs" }), []string{"acs_url"}},
+		"nameid":       {next(func(d *identityproviders.SAMLDocument) { d.NameIDFormat = "email" }), []string{"name_id_format"}},
+		"signing":      {next(func(d *identityproviders.SAMLDocument) { d.SignAuthnRequests = true }), []string{"sign_authn_requests"}},
+		"skew raised":  {next(func(d *identityproviders.SAMLDocument) { d.ClockSkewSeconds = 86400 }), []string{"clock_skew_seconds"}},
+		"skew lowered": {next(func(d *identityproviders.SAMLDocument) { d.ClockSkewSeconds = 30 }), nil},
+		"name attr":    {next(func(d *identityproviders.SAMLDocument) { d.NameAttribute = "cn" }), nil},
+	} {
+		require.Equal(t, testCase.want, identityproviders.TrustChanges(base, testCase.after), name)
+	}
+}
+
+// An `admin` cannot switch which provider is live, nor replace its secret:
+// enabling retires the live provider of the kind, and the secret is a
+// credential of the trust relationship.
+func TestAnAdminCannotEnableAProviderOrReplaceItsSecret(t *testing.T) {
+	for name, body := range map[string]string{
+		"disable": strings.Replace(validOIDCBody, `"kind": "oidc",`, `"kind": "oidc", "enabled": false,`, 1),
+		"secret":  strings.Replace(validOIDCBody, `"kind": "oidc",`, `"kind": "oidc", "secret": "replaced",`, 1),
+	} {
+		store := storeWithCorporate()
+		vault := newRecordingVault()
+		handler := NewHandler(nil, WithIdentityProviders(store, vault), plainAdmin)
+		recorder, annotation := audited(providerRequest(http.MethodPut, "corporate", body), handler.IdentityProviderSave)
+		require.Equal(t, http.StatusForbidden, recorder.Code, name+": "+recorder.Body.String())
+		require.Equal(t, AuditIdentityTrustRefused, annotation.Action, name)
+		require.Empty(t, store.upserted, name)
+		require.True(t, store.rows["corporate"].Enabled, name)
+	}
+}
+
+// A save decided against a row that changed in between is refused, so it
+// cannot silently revert a super_admin's trust change.
+func TestASaveOverANewerRevisionIsRefused(t *testing.T) {
+	store := storeWithCorporate()
+	stale := &staleLookupStore{recordingProviderStore: store, revision: store.rows["corporate"].Revision}
+	current := store.rows["corporate"]
+	current.Revision++
+	store.rows["corporate"] = current
+	handler := NewHandler(nil, WithIdentityProviders(stale, newRecordingVault()), plainAdmin)
+	body := strings.Replace(validOIDCBody, `"Corporate SSO"`, `"Sign in with Corp"`, 1)
+
+	recorder, _ := audited(providerRequest(http.MethodPut, "corporate", body), handler.IdentityProviderSave)
+
+	require.Equal(t, http.StatusConflict, recorder.Code, recorder.Body.String())
+	require.Empty(t, store.upserted)
+}
+
+// staleLookupStore answers Lookup with the revision the caller read before a
+// concurrent save moved the row on.
+type staleLookupStore struct {
+	*recordingProviderStore
+	revision int
+}
+
+func (s *staleLookupStore) Lookup(ctx context.Context, key string) (identityproviders.Provider, error) {
+	provider, err := s.recordingProviderStore.Lookup(ctx, key)
+	provider.Revision = s.revision
+	return provider, err
 }
 
 /* ── SCIM clients ──────────────────────────────────────────────────────── */
@@ -263,6 +348,9 @@ func TestTheRebindBodyNamesExactlyOneSource(t *testing.T) {
 		"unknown field":   {`{"to_issuer":"https://x"}`, false},
 		"malformed":       {`{`, false},
 		"key without iss": {`{"from_provider_key":"other"}`, false},
+		"punctuation key": {`{"from_provider_key":"!!!","from_issuer":"https://old.example"}`, false},
+		"long key":        {`{"from_provider_key":"` + strings.Repeat("k", 65) + `","from_issuer":"https://old.example"}`, false},
+		"long issuer":     {`{"from_issuer":"https://` + strings.Repeat("i", 2048) + `"}`, false},
 	} {
 		recorder := httptest.NewRecorder()
 		request, ok := decodeIdentityRebind(recorder, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(testCase.body)), "corporate")

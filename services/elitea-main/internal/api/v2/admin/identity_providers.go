@@ -82,7 +82,9 @@ type IdentityProviderSecretStore interface {
 type IdentityProviderStore interface {
 	List(ctx context.Context) ([]identityproviders.Provider, error)
 	Lookup(ctx context.Context, key string) (identityproviders.Provider, error)
-	Upsert(ctx context.Context, provider identityproviders.Provider) (identityproviders.Provider, error)
+	// UpsertAtRevision writes only while the row is at the revision the
+	// handler read (0: none), or returns identityproviders.ErrRevisionConflict.
+	UpsertAtRevision(ctx context.Context, provider identityproviders.Provider, expected int) (identityproviders.Provider, error)
 	Delete(ctx context.Context, key string) (string, error)
 }
 
@@ -276,24 +278,29 @@ func (h *Handler) IdentityProviderSave(w http.ResponseWriter, r *http.Request) {
 	// assertion says a person is. Whoever can make one can sign in as any
 	// account, so it is a super_admin decision (identity_trust.go, issue
 	// 2558). Checked before anything is sealed or written.
+	//
+	// Enabled is INHERITED when the body does not state it. A form that omits
+	// the field must not silently retire a live provider. It is resolved
+	// before the gate because turning a provider on retires the live provider
+	// of its kind: that decides which identity provider is believed.
+	validated.Enabled = existing.Enabled
+	if body.Enabled != nil {
+		validated.Enabled = *body.Enabled
+	}
 	trustFields := identityproviders.TrustChanges(existing, validated)
+	if body.Secret != nil && existing.Key != "" {
+		trustFields = append(trustFields, "secret")
+	}
 	if len(trustFields) > 0 && !h.requireSuperAdmin(w, r, trustGate{
 		code: CodeIdentityTrustSuperAdminRequired,
-		message: "only a super admin can create an identity provider or change its issuer, " +
-			"metadata, signing certificates or identity attributes",
+		message: "only a super admin can create an identity provider, turn it on or off, replace " +
+			"its secret, or change its issuer, metadata, certificates or identity attributes",
 		refusedAction: AuditIdentityTrustRefused,
 		entityType:    "identity_provider",
 		entityName:    key,
 		fields:        trustFields,
 	}) {
 		return
-	}
-
-	// Enabled is INHERITED when the body does not state it. A form that omits
-	// the field must not silently retire a live provider.
-	validated.Enabled = existing.Enabled
-	if body.Enabled != nil {
-		validated.Enabled = *body.Enabled
 	}
 
 	// Signing an outbound SAML request needs the private key that matches the
@@ -331,7 +338,13 @@ func (h *Handler) IdentityProviderSave(w http.ResponseWriter, r *http.Request) {
 		validated.SecretRef = secretRef
 	}
 
-	stored, err := h.identityProviders.Upsert(r.Context(), validated)
+	stored, err := h.identityProviders.UpsertAtRevision(r.Context(), validated, existing.Revision)
+	if errors.Is(err, identityproviders.ErrRevisionConflict) {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error": "the identity provider changed since it was read: reload it and save again",
+		})
+		return
+	}
 	if err != nil {
 		var validation identityproviders.ValidationError
 		if errors.As(err, &validation) {

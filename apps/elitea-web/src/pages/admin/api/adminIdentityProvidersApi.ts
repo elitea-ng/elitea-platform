@@ -153,9 +153,27 @@ export interface AdminIdentityProviderDraft {
   readonly saml?: AdminSamlDocument;
 }
 
+/**
+ * What a save reports back. `previousIssuer` is set when a super admin changed
+ * the issuer (OIDC) or entity ID (SAML): the existing accounts are still bound
+ * to it (issue 2558) and sign in again only after a re-bind.
+ */
+export interface AdminIdentityProviderSaveResult {
+  readonly previousIssuer: string | undefined;
+}
+
+type SavedProviderBody =
+  | { previous_issuer?: unknown; provider?: { previous_issuer?: unknown } }
+  | undefined;
+
+function previousIssuerOf(body: SavedProviderBody): string | undefined {
+  const value = body?.previous_issuer ?? body?.provider?.previous_issuer;
+  return typeof value === 'string' && value !== '' ? value : undefined;
+}
+
 /** `PUT /admin/identity_providers/administration/{key}`. */
 export function useSaveAdminIdentityProvider(): UseMutationResult<
-  void,
+  AdminIdentityProviderSaveResult,
   Error,
   AdminIdentityProviderDraft
 > {
@@ -180,11 +198,14 @@ export function useSaveAdminIdentityProvider(): UseMutationResult<
       if (draft.secret !== undefined) {
         body['secret'] = draft.secret;
       }
-      await eliteaFetch<unknown>(providerUrl(draft.key), {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
+      const saved = unwrapBody(
+        await eliteaFetch<unknown>(providerUrl(draft.key), {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        }),
+      ) as SavedProviderBody;
+      return { previousIssuer: previousIssuerOf(saved) };
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: adminIdentityProviderKeys.all }),
   });

@@ -165,7 +165,7 @@ func (h *SAMLHandler) buildRuntime(
 		document:         *document,
 		clockSkewSeconds: document.ClockSkewSeconds,
 		origin:           fmt.Sprintf("provider %s revision %d", provider.Key, provider.Revision),
-		binding:          identityrepo.ProviderBinding{Key: provider.Key, Issuer: document.IDPEntityID},
+		binding:          provider.Binding(),
 	}, nil
 }
 

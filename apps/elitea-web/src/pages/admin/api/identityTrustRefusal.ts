@@ -19,7 +19,7 @@ const TRUST_REFUSAL_MESSAGES: Readonly<Record<string, () => string>> = {
   identity_provider_trust_super_admin_required: () =>
     t(
       'pages.admin.identityTrust.refusal.provider',
-      'Only a super admin can create an identity provider or change its issuer, metadata, signing certificates or identity attributes.',
+      'Only a super admin can create an identity provider, turn it on or off, replace its secret, or change its issuer, metadata, certificates or identity attributes.',
     ),
   identity_binding_super_admin_required: () =>
     t(

@@ -231,10 +231,33 @@ describe('Admin › Authentication › identity providers', () => {
 
     expect(
       await screen.findByText(
-        'Only a super admin can create an identity provider or change its issuer, metadata, signing certificates or identity attributes. Changed: issuer.',
+        'Only a super admin can create an identity provider, turn it on or off, replace its secret, or change its issuer, metadata, certificates or identity attributes. Changed: issuer.',
       ),
     ).toBeInTheDocument();
     expect(screen.getByTestId('identity-provider-save')).toBeInTheDocument();
+  });
+
+  it('says the accounts are still bound to the previous issuer after an issuer change (#2558)', async () => {
+    server.use(
+      http.put('*/admin/identity_providers/administration/*', async ({ request }) => {
+        recorded.push({ method: 'PUT', url: request.url, body: await request.json() });
+        return HttpResponse.json({
+          key: 'corporate',
+          kind: 'oidc',
+          display_name: 'Corporate SSO',
+          previous_issuer: 'https://old-idp.example.com',
+        });
+      }),
+    );
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminIdentityProvidersEditor />);
+    await openEditFor('Corporate SSO');
+
+    await user.click(screen.getByTestId('identity-provider-save'));
+
+    expect(await screen.findByTestId('admin-identity-providers-rebind-note')).toHaveTextContent(
+      'https://old-idp.example.com',
+    );
   });
 
   it('sends the login domains inside the document its kind names', async () => {

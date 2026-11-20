@@ -95,31 +95,72 @@ func CopyLinkBindings(ctx context.Context, tx pgx.Tx, userID int, fromRef, toRef
 	return tag.RowsAffected(), nil
 }
 
+// providerIssuerSQL is a stored provider's trust issuer in SQL: the OIDC
+// issuer or the SAML IdP entity id, trimmed. It is
+// identityproviders.Provider.TrustIssuer, and shared migration 0258 spells
+// the same expression; identity_binding tests hold the three to one answer.
+const providerIssuerSQL = `btrim(CASE provider.kind
+                  WHEN 'oidc' THEN provider.config ->> 'issuer'
+                  WHEN 'saml' THEN provider.config ->> 'idp_entity_id'
+              END)`
+
 // BindLinkToEnabledProvider binds the link (userID, providerRef) to the
 // enabled stored provider of its protocol, and reports whether one existed.
-// oidc-relink uses it for a subject with no binding to copy. With no enabled
-// stored provider the link stays unbound, which the environment provider binds
-// on the next sign-in.
+// oidc-relink uses it for a subject ADDED to an account with no OIDC link.
+// With no enabled stored provider the link stays unbound, which the
+// environment provider binds on the next sign-in.
 func BindLinkToEnabledProvider(ctx context.Context, tx pgx.Tx, userID int, providerRef string) (bool, error) {
 	tag, err := tx.Exec(ctx,
 		`INSERT INTO elitea_auth.identity_bindings (provider_ref, provider_key, issuer, user_id)
-		 SELECT $2, provider.provider_key,
-		        btrim(CASE provider.kind
-		                  WHEN 'oidc' THEN provider.config ->> 'issuer'
-		                  WHEN 'saml' THEN provider.config ->> 'idp_entity_id'
-		              END),
-		        $1
+		 SELECT $2, provider.provider_key, `+providerIssuerSQL+`, $1
 		 FROM elitea_auth.identity_providers AS provider
 		 WHERE provider.enabled
 		   AND left($2::text, length(provider.kind) + 1) = provider.kind || ':'
-		   AND coalesce(btrim(CASE provider.kind
-		                          WHEN 'oidc' THEN provider.config ->> 'issuer'
-		                          WHEN 'saml' THEN provider.config ->> 'idp_entity_id'
-		                      END), '') <> ''
+		   AND coalesce(`+providerIssuerSQL+`, '') <> ''
 		 ON CONFLICT (provider_ref, provider_key, issuer) DO NOTHING`,
 		userID, providerRef)
 	if err != nil {
 		return false, fmt.Errorf("identityrepo: bind to the enabled provider: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// BindUnboundLinkToUnchangedProvider binds a link that has NO binding to the
+// stored provider signing in, and reports whether it did, only while that
+// provider is enabled, still has binding's issuer, and has not been saved
+// since shared migration 0258 was applied.
+//
+// It closes the rolling-upgrade window. The backfill binds the links that
+// exist when 0258 runs, but replicas of the previous release keep serving
+// until they roll over, and a first sign-in there writes a link with no
+// binding. Such a link belongs to the provider that was live through the
+// upgrade, which is what "not saved since 0258" proves: every save, a trust
+// change included, bumps updated_at, and a trust change is a super_admin's.
+// So a provider repointed after the upgrade never takes an unbound link; a
+// super_admin re-binds those with the rebind route's from_unbound.
+func BindUnboundLinkToUnchangedProvider(
+	ctx context.Context, tx pgx.Tx, binding ProviderBinding, userID int, providerRef string,
+) (bool, error) {
+	if !binding.Valid() || binding.Environment() {
+		return false, nil
+	}
+	tag, err := tx.Exec(ctx,
+		`INSERT INTO elitea_auth.identity_bindings (provider_ref, provider_key, issuer, user_id)
+		 SELECT $1, provider.provider_key, $3, $4
+		 FROM elitea_auth.identity_providers AS provider
+		 JOIN elitea_runtime.schema_migrations AS ledger
+		   ON ledger.target_kind = 'shared' AND ledger.version = 258
+		 WHERE provider.provider_key = $2
+		   AND provider.enabled
+		   AND `+providerIssuerSQL+` = $3
+		   AND left($1::text, length(provider.kind) + 1) = provider.kind || ':'
+		   AND provider.updated_at <= ledger.applied_at
+		   AND NOT EXISTS (SELECT 1 FROM elitea_auth.identity_bindings AS existing
+		                   WHERE existing.provider_ref = $1)
+		 ON CONFLICT (provider_ref, provider_key, issuer) DO NOTHING`,
+		providerRef, binding.Key, binding.Issuer, userID)
+	if err != nil {
+		return false, fmt.Errorf("identityrepo: bind an upgrade-window link: %w", err)
 	}
 	return tag.RowsAffected() > 0, nil
 }

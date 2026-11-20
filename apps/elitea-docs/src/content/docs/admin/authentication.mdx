@@ -57,15 +57,15 @@ Only a super admin may make these changes. Another administrator gets `403` with
 
 | Change | `code` | Audit Trail action |
 | --- | --- | --- |
-| Create an identity provider. Change its issuer, client ID or Entra tenants (OIDC), its entity ID, SSO URL, certificates or e-mail attribute (SAML). Turn on **Users provisioned by SCIM may sign in through this provider**, or turn off e-mail verification. | `identity_provider_trust_super_admin_required` | `identity_provider.trust_change_refused` |
+| Create an identity provider. Turn it on or off. Replace or clear its secret. Change its issuer, client ID, redirect URI or Entra settings (OIDC), or its entity ID, SSO URL, NameID format, e-mail attribute, service provider entity ID, ACS URL, request signing or service provider certificate (SAML). Add a certificate or an Entra tenant, raise the clock-skew tolerance, turn on **Users provisioned by SCIM may sign in through this provider**, or turn off e-mail verification. | `identity_provider_trust_super_admin_required` | `identity_provider.trust_change_refused` |
 | Re-bind accounts to a provider | `identity_binding_super_admin_required` | `identity_binding.rebind_refused` |
 | Create, rotate or delete a SCIM client | `scim_client_super_admin_required` | `scim_client.change_refused` |
 
-A provider refusal also lists the changed trust fields in `fields`. Other edits (the display name, the redirect URI, the scopes, the login domains, turning a provider on or off) stay open to any administrator with the Authentication permission. A change that a super admin makes is recorded as `identity_provider.trust_changed`, `scim_client.created`, `scim_client.rotated` or `scim_client.deleted`.
+A provider refusal also lists the changed trust fields in `fields`. Other edits stay open to any administrator with the Authentication permission: the display name, the scopes, the login domains, the name attribute, and changes that only narrow trust (removing a certificate or a tenant, lowering the clock skew, turning on e-mail verification). A save made against a provider that changed after the form was opened gets `409`; reload the provider and save again. A change that a super admin makes is recorded as `identity_provider.trust_changed`, `scim_client.created`, `scim_client.rotated` or `scim_client.deleted`.
 
 ### Rotate an issuer: re-bind the accounts
 
-When your identity provider really moved to a new issuer (a new tenant, a new Keycloak realm, a new ADFS entity ID), a super admin first saves the provider with the new issuer. The save answers with `previous_issuer`. Then the super admin re-binds the accounts of the old issuer to the new one:
+When your identity provider really moved to a new issuer (a new tenant, a new Keycloak realm, a new ADFS entity ID), a super admin first saves the provider with the new issuer. The save answers with `previous_issuer`, and the Authentication screen shows a warning that the existing accounts are still bound to it. Then the super admin re-binds the accounts of the old issuer to the new one:
 
 ```bash
 curl -X POST "https://<host>/api/v2/admin/identity_providers/administration/corporate/rebind" \
@@ -76,7 +76,7 @@ curl -X POST "https://<host>/api/v2/admin/identity_providers/administration/corp
 The answer is `{"provider_key": "corporate", "issuer": "<new issuer>", "rebound": <count>}`. The old binding is removed, so the old issuer stops working. A repeated request moves nothing.
 
 - To move the accounts of another provider, add `"from_provider_key": "<key>"`. Use `"from_provider_key": "@environment"` for the accounts of a provider that was configured through environment variables, when you replace it with a provider on this screen.
-- To bind accounts that have no binding, send `{"from_unbound": true}` alone. After the upgrade, these are the accounts of a protocol that had no enabled stored provider.
+- To bind accounts that have no binding, send `{"from_unbound": true}` alone. After the upgrade, these are the accounts of a protocol that had no enabled stored provider. An account linked by a replica of the previous release while the upgrade rolled out is bound at its next sign-in, as long as the provider has not been saved since the upgrade.
 
 Each re-bind writes the security audit event `ai.elitea.security.v1.identity.link.changed` with the action `identity.binding.rebound`, and the Audit Trail records `identity_binding.rebound`.
 

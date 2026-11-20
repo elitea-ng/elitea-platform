@@ -206,3 +206,55 @@ func TestAnUnboundLinkSignsInOnlyThroughTheEnvironmentProvider(t *testing.T) {
 	require.Equal(t, identityrepo.EnvironmentProviderKey, key)
 	require.Equal(t, environment.server.URL, issuer)
 }
+
+// A link written by a replica of the previous release while the upgrade rolls
+// out has no binding. It is bound at its next sign-in through the stored
+// provider that was live through the upgrade (not saved since 0258 was
+// applied), and refused once that provider has been saved since: a provider
+// repointed after the upgrade never takes an unbound link.
+func TestAnUpgradeWindowLinkBindsOnlyToAProviderUnchangedSinceTheUpgrade(t *testing.T) {
+	pool := newSignInProvisioningPool(t)
+	ctx := context.Background()
+	stored := newFakeIdentityProvider(t)
+	tag, err := pool.Exec(ctx, `
+INSERT INTO elitea_auth.identity_providers (provider_key, kind, display_name, enabled, config, updated_at)
+SELECT 'corporate', 'oidc', 'Corporate', true,
+       jsonb_build_object('issuer', $1::text, 'client_id', 'elitea', 'redirect_uri', 'https://e/cb'),
+       ledger.applied_at - interval '1 minute'
+FROM elitea_runtime.schema_migrations AS ledger WHERE ledger.target_kind = 'shared' AND ledger.version = 258`,
+		stored.server.URL)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, tag.RowsAffected(), "the corpus must ledger 0258")
+	unboundLink := func(subject string) {
+		t.Helper()
+		var userID int
+		require.NoError(t, pool.QueryRow(ctx,
+			`INSERT INTO public.auth_core__user (email, name) VALUES ($1, 'Window') RETURNING id`,
+			subject+"@corp.example").Scan(&userID))
+		_, err := pool.Exec(ctx,
+			`INSERT INTO public.auth_core__user_provider (user_id, provider_ref) VALUES ($1, $2)`, userID, "oidc:"+subject)
+		require.NoError(t, err)
+	}
+	source := &switchableProviderSource{}
+	source.point(stored)
+	handler := storedProviderHandler(t, pool, source)
+
+	unboundLink("window")
+	code, _, issued := stored.signInWithTarget(handler, "window", "window@corp.example", "/")
+	require.Equal(t, http.StatusFound, code)
+	require.True(t, issued)
+	var key, issuer string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT provider_key, issuer FROM elitea_auth.identity_bindings WHERE provider_ref = 'oidc:window'`,
+	).Scan(&key, &issuer))
+	require.Equal(t, "corporate", key)
+	require.Equal(t, stored.server.URL, issuer)
+
+	// Any save after the upgrade (here, a touch) ends the window.
+	_, err = pool.Exec(ctx, `UPDATE elitea_auth.identity_providers SET updated_at = now() WHERE provider_key = 'corporate'`)
+	require.NoError(t, err)
+	unboundLink("late")
+	code, _, issued = stored.signInWithTarget(handler, "late", "late@corp.example", "/")
+	require.Equal(t, http.StatusConflict, code)
+	require.False(t, issued)
+}

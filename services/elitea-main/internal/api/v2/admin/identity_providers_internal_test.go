@@ -78,12 +78,16 @@ func (s *recordingProviderStore) Lookup(_ context.Context, key string) (identity
 	return provider, nil
 }
 
-func (s *recordingProviderStore) Upsert(
+func (s *recordingProviderStore) UpsertAtRevision(
 	_ context.Context,
 	provider identityproviders.Provider,
+	expected int,
 ) (identityproviders.Provider, error) {
 	if s.upsertErr != nil {
 		return identityproviders.Provider{}, s.upsertErr
+	}
+	if s.rows[provider.Key].Revision != expected {
+		return identityproviders.Provider{}, identityproviders.ErrRevisionConflict
 	}
 	stored, err := identityproviders.Validate(provider)
 	if err != nil {

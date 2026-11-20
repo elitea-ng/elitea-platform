@@ -146,21 +146,20 @@ func validOIDCSubject(subject string) bool {
 // relinkBindNewSubject binds the new link to a provider (issue 2558): a sign-in
 // matches (provider key, issuer, subject), so a link with no binding signs in
 // only through the environment provider. A replaced subject keeps the bindings
-// of the subject it replaces, because the same provider re-created the user.
-// A subject with nothing to copy is bound to the enabled stored OIDC provider,
-// the one the user signs in through; with none, it stays unbound for the
-// environment provider to bind.
+// of the subject it replaces, and ONLY those: the same provider re-created the
+// user, so a replaced subject that was unbound stays unbound, and gains no
+// binding its predecessor did not have. A subject ADDED to an account with no
+// OIDC link is bound to the enabled stored OIDC provider, the one the user
+// signs in through; with none, it stays unbound for the environment provider
+// to bind.
 func relinkBindNewSubject(ctx context.Context, tx pgx.Tx, plan OIDCRelinkPlan) error {
 	newRef := identityrepo.OIDCProviderRefPrefix + plan.Add
 	if plan.Remove != "" {
-		copied, err := identityrepo.CopyLinkBindings(ctx, tx, plan.UserID,
-			identityrepo.OIDCProviderRefPrefix+plan.Remove, newRef)
-		if err != nil {
+		if _, err := identityrepo.CopyLinkBindings(ctx, tx, plan.UserID,
+			identityrepo.OIDCProviderRefPrefix+plan.Remove, newRef); err != nil {
 			return fmt.Errorf("oidc relink: %w", err)
 		}
-		if copied > 0 {
-			return nil
-		}
+		return nil
 	}
 	if _, err := identityrepo.BindLinkToEnabledProvider(ctx, tx, plan.UserID, newRef); err != nil {
 		return fmt.Errorf("oidc relink: %w", err)
