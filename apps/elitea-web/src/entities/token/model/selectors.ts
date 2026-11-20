@@ -139,7 +139,7 @@ const TOKEN_MINT_REFUSAL_CODES = [
   'token_mint_caller_unresolved',
 ] as const;
 
-export type TokenMintRefusalCode = (typeof TOKEN_MINT_REFUSAL_CODES)[number];
+type TokenMintRefusalCode = (typeof TOKEN_MINT_REFUSAL_CODES)[number];
 
 export interface TokenMintRefusal {
   readonly code: TokenMintRefusalCode;
