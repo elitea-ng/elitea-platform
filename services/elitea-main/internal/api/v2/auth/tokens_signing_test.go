@@ -66,7 +66,7 @@ func verifies(t *testing.T, token string, key []byte) bool {
 
 func createdTokenFrom(t *testing.T, handler *Handler) string {
 	t.Helper()
-	req := authenticatedTokenRequest(http.MethodPost, "/token/", `{"name":"ci-token"}`)
+	req := browserSessionTokenRequest("/token/", `{"name":"ci-token"}`)
 	rec := httptest.NewRecorder()
 	handler.Routes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -149,7 +149,7 @@ func TestTokenRoutesAreAvailableWithASignerAndNoRawKey(t *testing.T) {
 // an unsigned or empty bearer.
 func TestTokenRoutesReportNotConfiguredWithNoSignerAndNoKey(t *testing.T) {
 	handler := signingTestHandler(nil, nil)
-	req := authenticatedTokenRequest(http.MethodPost, "/token/", `{"name":"ci-token"}`)
+	req := browserSessionTokenRequest("/token/", `{"name":"ci-token"}`)
 	rec := httptest.NewRecorder()
 	handler.Routes().ServeHTTP(rec, req)
 

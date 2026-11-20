@@ -18,7 +18,7 @@ import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
-import { tokenProjectErrorCode } from '@/entities/token/model/selectors';
+import { tokenMintRefusal, tokenProjectErrorCode, type TokenMintRefusal } from '@/entities/token/model/selectors';
 import { EliteaApiError } from '@/shared/api/generated/mutator';
 import { t } from '@/shared/i18n';
 
@@ -53,6 +53,8 @@ export function createTokenFailureMessage(error: unknown): string {
       );
     }
   }
+  const refusal = tokenMintRefusal(error);
+  if (refusal !== null) return mintRefusalMessage(refusal);
   const code = tokenProjectErrorCode(error);
   if (code === 'project_forbidden') {
     return t(
@@ -67,6 +69,47 @@ export function createTokenFailureMessage(error: unknown): string {
     );
   }
   return t('entities.token.form.createFailed', 'The system did not create the token. Try again.');
+}
+
+/*
+ * Issue 2559: the server refuses a mint by the CALLING credential. The
+ * desktop app signs in with a native device session, so an administrator
+ * meets `token_mint_native_admin` there; "try again" would be wrong advice,
+ * the browser is the way.
+ */
+function mintRefusalMessage({ code, projectId }: TokenMintRefusal): string {
+  switch (code) {
+    case 'token_mint_native_admin':
+      return t(
+        'entities.token.form.mintNativeAdmin',
+        'Your account has administrator permissions, so this app cannot create a personal token for it. Create it in the web app in a browser.',
+      );
+    case 'token_mint_wider_than_caller':
+      /*
+       * Name the project: "select that project" with no name gives the user
+       * nothing to select. The browser is the exit if it is not selectable.
+       */
+      return projectId === null
+        ? t(
+            'entities.token.form.mintWiderThanCaller',
+            'Your sign-in is limited to one project, so the token must be bound to it. Create the token in the web app in a browser.',
+          )
+        : t(
+            'entities.token.form.mintWiderThanCallerProject',
+            'Your sign-in is limited to the project with ID {{project}}. Select that project in the sidebar and create the token again, or create it in the web app in a browser.',
+            { project: projectId },
+          );
+    case 'token_mint_caller_unresolved':
+      return t(
+        'entities.token.form.mintCallerUnresolved',
+        'The system could not check your sign-in, so it did not create the token. Create it in the web app in a browser.',
+      );
+    case 'token_mint_browser_session_required':
+      return t(
+        'entities.token.form.mintBrowserRequired',
+        'A personal token can be created only after you sign in with a browser, not with another token.',
+      );
+  }
 }
 
 /* ── the binding disclosure ────────────────────────────────────────────── */
