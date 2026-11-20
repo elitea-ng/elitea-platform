@@ -84,6 +84,11 @@ export default defineConfig({
       lastUpdated: false,
       pagination: true,
       tableOfContents: { minHeadingLevel: 2, maxHeadingLevel: 3 },
+      // Adds the What's new entries' headings to that page's table of contents.
+      routeMiddleware: './src/route-data.ts',
+      // The What's new entries get Starlight's heading anchor links and asides
+      // too, as if they were written on the page.
+      markdown: { processedDirs: ['./src/content/whats-new/'] },
       components: {
         MarkdownContent: './src/components/overrides/MarkdownContent.astro',
       },
