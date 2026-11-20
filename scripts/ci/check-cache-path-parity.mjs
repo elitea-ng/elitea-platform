@@ -32,7 +32,14 @@
 //          step `<id>` runs (go-cache's `key`).
 //      A key that resolves to no literal is grouped with the steps of the same
 //      file that read the same context (`steps.policy`), the closest thing to
-//      "the same key" a static read can name.
+//      "the same key" a static read can name. A key built from a composite's
+//      input or a local action's output that cannot be followed is refused:
+//      a guessed family would compare it with nothing. Each step is compared
+//      with its family's first SAVING step, so one wrong reader is one error.
+//   3. One directory has one spelling across ALL steps, whatever their keys:
+//      `~/x`, `$HOME/x`, `/home/runner/x` and `/Users/runner/x` name one
+//      directory and give four versions. This catches a step whose key no rule
+//      above resolves (a matrix or env key) caching main's Go or npm directory.
 //
 // It fails, rather than passes, when it finds fewer cache steps than its floor,
 // or when a required family (go-v1-, node-cache-) has no writer and no reader:
@@ -133,10 +140,11 @@ function resolveKey(docs, file, steps, key, conds, depth = 0) {
   return null;
 }
 
-/** Every cache step: {where, file, family[], saves, restores, paths, crossOs, expressionPath}. */
+/** Every cache step: {where, file, families[], unfollowed, saves, restores, paths, crossOs, expressionPath}. */
 export function collect(docs) {
   const out = [];
   for (const [file, doc] of docs) {
+    const isAction = isDict(get(doc, "runs"));
     for (const [job, steps] of stepLists(doc)) {
       for (const step of steps) {
         if (!isDict(step)) continue;
@@ -144,14 +152,19 @@ export function collect(docs) {
         if (!kind) continue;
         const with_ = get(step, "with") ?? {};
         const conds = [...str(get(step, "if")).matchAll(INPUT_EQUALS)].map((m) => [m[1], m[2]]);
-        const key = get(with_, "key");
+        const key = str(get(with_, "key"));
         const resolved = resolveKey(docs, file, steps, key, conds);
-        const context = CONTEXT_REF.exec(str(key))?.[1] ?? str(key).trim();
+        const context = CONTEXT_REF.exec(key)?.[1] ?? key.trim();
         const label = str(get(step, "name")) || str(get(step, "id")) || actionOf(step);
         out.push({
           where: `${file} [${job}] '${label}'`,
           file,
+          key,
           families: resolved ? [...resolved].sort() : [`${file}#${context}`],
+          // A key built from what the CALLER passes, or from a local action's
+          // output, that could not be followed: its family is unknown, and a
+          // guess would compare it with nothing.
+          unfollowed: resolved === null && ((isAction && /\binputs\./.test(key)) || readsLocalActionOutput(docs, steps, key)),
           ...kind,
           paths: pathLines(get(with_, "path")),
           crossOs: str(get(with_, "enableCrossOsArchive")).trim().toLowerCase() === "true",
@@ -163,9 +176,47 @@ export function collect(docs) {
   return out;
 }
 
+/** True when the key reads an output of a step that runs a local action. */
+function readsLocalActionOutput(docs, steps, key) {
+  for (const m of key.matchAll(/steps\.([A-Za-z0-9_-]+)\.outputs\./g)) {
+    const source = steps.find((s) => isDict(s) && str(get(s, "id")) === m[1]);
+    if (source && localAction(docs, actionOf(source))) return true;
+  }
+  return false;
+}
+
 const overlaps = (a, b) => a.startsWith(b) || b.startsWith(a);
-const shareFamily = (x, y) => x.families.some((a) => y.families.some((b) => overlaps(a, b)));
 const spelled = (s) => `${s.paths.map((p) => JSON.stringify(p)).join(" | ") || "(none)"}${s.crossOs ? " enableCrossOsArchive" : ""}`;
+
+/**
+ * One directory, whatever home spelling names it: `~/x`, `$HOME/x`,
+ * `/home/runner/x`, `/Users/runner/x` and `C:\Users\runneradmin\x` are the
+ * same place on the runner that spells it, and different version strings.
+ */
+export function directoryOf(line) {
+  return line
+    .replace(/\\/g, "/")
+    .replace(/^(?:~|\$HOME|\$\{HOME\}|\/home\/[^/]+|\/Users\/[^/]+|[A-Za-z]:\/Users\/[^/]+)(?=\/|$)/, "~")
+    .replace(/\/+$/, "");
+}
+
+/** Clusters of steps whose families overlap (restore-keys match by prefix), transitively. */
+function clusters(steps) {
+  const parent = steps.map((_, i) => i);
+  const find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  for (let i = 0; i < steps.length; i += 1) {
+    for (let j = i + 1; j < steps.length; j += 1) {
+      if (steps[i].families.some((a) => steps[j].families.some((b) => overlaps(a, b)))) parent[find(i)] = find(j);
+    }
+  }
+  const groups = new Map();
+  steps.forEach((s, i) => {
+    const root = find(i);
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root).push(s);
+  });
+  return [...groups.values()];
+}
 
 /** {errors[], steps} for a map of repository-relative file name → parsed document. */
 export function check(docs, { requiredFamilies = REQUIRED_FAMILIES } = {}) {
@@ -175,17 +226,37 @@ export function check(docs, { requiredFamilies = REQUIRED_FAMILIES } = {}) {
     if (s.expressionPath) {
       errors.push(`${s.where}: \`path:\` is an expression. The entry's version is a hash of the path STRINGS as written, and an expression resolves to an absolute path that no \`~/\` writer (and no other OS) spells the same way, so the restore misses. Write the writer's literal paths.`);
     }
-  }
-  const reported = new Set();
-  for (let i = 0; i < steps.length; i += 1) {
-    for (let j = i + 1; j < steps.length; j += 1) {
-      const [a, b] = [steps[i], steps[j]];
-      if (a.expressionPath || b.expressionPath || !shareFamily(a, b) || spelled(a) === spelled(b)) continue;
-      const pair = [a.where, b.where].sort().join("\n");
-      if (reported.has(pair)) continue;
-      reported.add(pair);
-      errors.push(`key family ${a.families.join(", ")}: ${a.where} spells ${spelled(a)} but ${b.where} spells ${spelled(b)}. The cache version is a hash of these exact strings, so one never restores what the other saved; spell them identically (the literal \`~/...\` form).`);
+    if (s.unfollowed) {
+      errors.push(`${s.where}: the key ${JSON.stringify(s.key.trim())} is built from a caller's input or a local action's output that this check cannot follow to a literal start, so it cannot name the writer to compare the path with. Start the key with its literal family (\`go-v1-...\`), or pass the whole key through one \`\${{ inputs.<x> }}\`.`);
     }
+  }
+  const compared = steps.filter((s) => !s.expressionPath);
+  // 1. One family, one spelling. Each step is compared with the family's
+  //    first SAVING step (the entry's version is the writer's), so one wrong
+  //    reader is one error line, not one per other member.
+  for (const group of clusters(compared)) {
+    const reference = group.find((s) => s.saves) ?? group[0];
+    for (const s of group) {
+      if (s === reference || spelled(s) === spelled(reference)) continue;
+      errors.push(`key family ${reference.families.join(", ")}: ${s.where} spells ${spelled(s)} but its writer ${reference.where} spells ${spelled(reference)}. The cache version is a hash of these exact strings, so the restore never matches the entry; spell them identically (the literal \`~/...\` form).`);
+    }
+  }
+  // 2. One directory, one spelling, whatever the key. This catches a step whose
+  //    key this check could not resolve (a matrix or env key) caching main's Go
+  //    or npm directory under another spelling: its family never meets theirs,
+  //    and its restore would still miss.
+  const spellings = new Map();
+  for (const s of compared) {
+    for (const line of s.paths) {
+      const dir = directoryOf(line);
+      if (!spellings.has(dir)) spellings.set(dir, new Map());
+      if (!spellings.get(dir).has(line)) spellings.get(dir).set(line, s.where);
+    }
+  }
+  for (const [dir, lines] of spellings) {
+    if (lines.size < 2) continue;
+    const listed = [...lines].map(([line, where]) => `${JSON.stringify(line)} (${where})`).join(", ");
+    errors.push(`the directory ${dir} is spelled ${lines.size} ways: ${listed}. Each spelling is another cache version; write it as ${JSON.stringify(dir)} everywhere.`);
   }
   for (const family of requiredFamilies) {
     const members = steps.filter((s) => s.families.some((f) => overlaps(f, family)));

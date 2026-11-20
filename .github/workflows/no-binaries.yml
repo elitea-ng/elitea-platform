@@ -462,42 +462,21 @@ jobs:
       - name: No workflow cache step writes from a pull request
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-workflow-cache-writes.mjs
-      # A restore matches an entry only when its `path:` strings are the ones
-      # the entry was saved with (the version is their hash). Until 2026-11-20
-      # every pull-request restore of main's Go and npm caches missed, because
-      # the readers spelled `/home/runner/...` and the writers `~/...`.
-      # Counted like the suite above: a suite that collects nothing exits 0.
-      - name: Every cache restore spells its writer's paths
-        if: ${{ !cancelled() }}
-        run: |
-          set -euo pipefail
-          suite=scripts/ci/check-cache-path-parity.test.mjs
-          expected="$(grep -c '^test(' "${suite}")"
-          [ "${expected}" -ge 10 ] || { echo "::error::${suite}: found ${expected} scenario(s), expected at least 10"; exit 1; }
-          status=0
-          output="$(node --test --test-reporter=tap "${suite}" 2>&1)" || status=$?
-          printf '%s\n' "${output}"
-          ran="$(printf '%s\n' "${output}" | sed -n 's/^# pass \([0-9][0-9]*\)$/\1/p')"
-          if [ -z "${ran}" ] || [ "${ran}" -ne "${expected}" ]; then
-            echo "::error::${suite} holds ${expected} scenario(s) and node --test passed ${ran:-none}"
-            exit 1
-          fi
-          if [ "${status}" -ne 0 ]; then
-            echo "::error::node --test ${suite} exited ${status}"
-            exit "${status}"
-          fi
-          node scripts/ci/check-cache-path-parity.mjs
       # ci-web-e2e.yml builds each stack image once and the lanes pull it by
       # digest: scripts/ci/stack-images.mjs is the contract between the two
       # halves (it refuses an image nobody built, or one built from another
       # variant), and the CI-only `ci-*` images must stay out of everything
-      # that ships. Counted like the suite above: a suite that collects
-      # nothing exits 0.
-      - name: The build-once contract and the CI-image prune policy hold
+      # that ships. And a cache restore matches an entry only when its `path:`
+      # strings are the ones the entry was saved with (the version is their
+      # hash): until 2026-11-20 every pull-request restore of main's Go and npm
+      # caches missed, the readers spelling `/home/runner/...` and the writers
+      # `~/...` (scripts/ci/check-cache-path-parity.mjs, run in the next step).
+      # Counted like the suite above: a suite that collects nothing exits 0.
+      - name: The build-once contract, the CI-image prune policy and cache path parity hold
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
-          for suite in stack-images.test.mjs stack-image-hash.test.mjs prune-actions-caches.test.mjs prune-ci-images.test.mjs prune-prereleases.test.mjs prune-releases.test.mjs; do
+          for suite in stack-images.test.mjs stack-image-hash.test.mjs prune-actions-caches.test.mjs prune-ci-images.test.mjs prune-prereleases.test.mjs prune-releases.test.mjs check-cache-path-parity.test.mjs; do
             expected="$(grep -c '^test(' "scripts/ci/${suite}")"
             [ "${expected}" -ge 5 ] || { echo "::error::${suite}: found ${expected} scenario(s), expected at least 5"; exit 1; }
             # Capture the status: under `set -e` a failing command substitution
@@ -515,6 +494,9 @@ jobs:
               exit "${status}"
             fi
           done
+      - name: Every cache restore spells its writer's paths
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-cache-path-parity.mjs
       - name: CI-only images are referenced only by CI
         if: ${{ !cancelled() }}
         run: |

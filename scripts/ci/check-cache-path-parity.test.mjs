@@ -59,8 +59,10 @@ test("an absolute reader path against a ~/ writer of the same key is refused", (
   const errors = errorsOf({
     ".github/workflows/w.yml": workflow(save("node-cache-${{ runner.os }}-a", "~/.npm") + restore("node-cache-${{ runner.os }}-a", "/home/runner/.npm")),
   });
-  assert.equal(errors.length, 1);
-  assert.match(errors[0], /node-cache-.*"~\/\.npm".*"\/home\/runner\/\.npm"/);
+  // Once as a family whose reader is not its writer, once as one directory spelled two ways.
+  assert.equal(errors.length, 2);
+  assert.match(errors[0], /^key family node-cache-: .*"\/home\/runner\/\.npm".*its writer.*"~\/\.npm"/);
+  assert.match(errors[1], /^the directory ~\/\.npm is spelled 2 ways/);
 });
 
 test("the same paths in another order are refused (the version hash is order-sensitive)", () => {
@@ -71,7 +73,9 @@ test("the same paths in another order are refused (the version hash is order-sen
 });
 
 test("a trailing slash is a different string and is refused", () => {
-  assert.equal(errorsOf({ ".github/workflows/w.yml": workflow(save("go-v1-a", "~/.npm") + restore("go-v1-a", "~/.npm/")) }).length, 1);
+  const errors = errorsOf({ ".github/workflows/w.yml": workflow(save("go-v1-a", "~/.npm") + restore("go-v1-a", "~/.npm/")) });
+  assert.equal(errors.length, 2);
+  assert.match(errors[1], /^the directory ~\/\.npm is spelled 2 ways/);
 });
 
 test("indentation and blank lines do not count (actions/cache trims and drops them)", () => {
@@ -82,13 +86,13 @@ test("indentation and blank lines do not count (actions/cache trims and drops th
 });
 
 test("a composite's inputs.key is followed to each caller's key, kept to the step's slot condition", () => {
-  // The go reader is wrong; the npm steps are right and must not be compared with go's.
+  // The go reader drops a line; the npm steps are right and must not be compared with go's.
   const errors = errorsOf({
-    ".github/actions/slots/action.yml": slotAction({ goReader: ["/home/runner/.cache/go-build", "/home/runner/go/pkg/mod"] }),
+    ".github/actions/slots/action.yml": slotAction({ goReader: ["~/.cache/go-build"] }),
     ".github/workflows/c.yml": callers,
   });
   assert.equal(errors.length, 1);
-  assert.match(errors[0], /^key family go-v1-: .*writer-go.*reader-go|^key family go-v1-: .*reader-go.*writer-go/);
+  assert.match(errors[0], /^key family go-v1-: .*reader-go.*its writer.*writer-go/);
 });
 
 test("the repository's slot shape with matching paths passes, and resolves both required families", () => {
@@ -104,7 +108,7 @@ test("a steps.<id>.outputs.key is followed into the local action's output", () =
   const files = {
     ".github/actions/gokey/action.yml": keyAction,
     ".github/workflows/w.yml": workflow(
-      "- id: gocache\n  uses: ./.github/actions/gokey\n" + save("${{ steps.gocache.outputs.key }}", "~/.cache/go-build") + restore("go-v1-${{ runner.os }}-z", "/home/runner/.cache/go-build"),
+      "- id: gocache\n  uses: ./.github/actions/gokey\n" + save("${{ steps.gocache.outputs.key }}", "~/.cache/go-build") + restore("go-v1-${{ runner.os }}-z", "~/.cache/go-build-other"),
     ),
   };
   const errors = errorsOf(files);
@@ -155,4 +159,40 @@ test("fewer cache steps than the floor fails instead of passing", () => {
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("one wrong reader is one error, against the family's writer, however many steps share the family", () => {
+  const k = "go-v1-${{ runner.os }}";
+  const steps = save(k, "~/go") + restore(k, "~/go") + restore(k, "~/go") + restore(k, "~/other");
+  const errors = errorsOf({ ".github/workflows/w.yml": workflow(steps) });
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /"~\/other" but its writer .*actions\/cache\/save/);
+});
+
+test("a directory spelled two ways is refused even when the keys never resolve to one family", () => {
+  // A matrix key resolves to no literal, so the family rule never meets go-v1-; the directory rule does.
+  const files = {
+    ".github/workflows/a.yml": workflow(save("go-v1-a", "~/go/pkg/mod")),
+    ".github/workflows/b.yml": workflow(restore("${{ matrix.key }}", "/home/runner/go/pkg/mod")),
+  };
+  const errors = errorsOf(files);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /^the directory ~\/go\/pkg\/mod is spelled 2 ways: "~\/go\/pkg\/mod" .*"\/home\/runner\/go\/pkg\/mod"/);
+});
+
+test("a composite key built from an input it cannot follow is refused, not guessed", () => {
+  const action = "inputs:\n  key: {required: true}\nruns:\n  using: composite\n  steps:\n  - uses: actions/cache/restore@v6\n    with:\n      path: ~/.npm\n      key: ${{ runner.os }}-${{ inputs.key }}\n";
+  const errors = errorsOf({
+    ".github/actions/k/action.yml": action,
+    ".github/workflows/c.yml": workflow("- uses: ./.github/actions/k\n  with: {key: 'node-cache-x'}\n"),
+  });
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /cannot follow to a literal start/);
+});
+
+test("directoryOf reads every home spelling as one directory", () => {
+  for (const line of ["~/.npm", "$HOME/.npm", "${HOME}/.npm", "/home/runner/.npm", "/Users/runner/.npm", "C:\\Users\\runneradmin\\.npm", "~/.npm/"]) {
+    assert.equal(checker.directoryOf(line), "~/.npm", line);
+  }
+  assert.equal(checker.directoryOf(".buildkit-mounts"), ".buildkit-mounts");
 });
