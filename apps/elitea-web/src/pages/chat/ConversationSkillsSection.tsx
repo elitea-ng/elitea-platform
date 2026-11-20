@@ -56,6 +56,12 @@ interface SkillRow {
   readonly name?: unknown;
 }
 
+/** A skill row's id as a positive integer, whether the wire sent a number or a numeric string. */
+function skillRowId(raw: unknown): number | undefined {
+  const id = typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : raw;
+  return typeof id === 'number' && Number.isInteger(id) && id > 0 ? id : undefined;
+}
+
 /** The project's skills the add menu offers: one page of the project's own list, by name. */
 function useProjectSkillOptions(projectId: string | undefined, enabled: boolean) {
   return useQuery({
@@ -63,8 +69,9 @@ function useProjectSkillOptions(projectId: string | undefined, enabled: boolean)
     queryFn: async (): Promise<readonly { readonly id: number; readonly name: string }[]> =>
       unwrapListPage<SkillRow>(await listSkills(projectId ?? '', { page: 1, page_size: 100 }), 'conversationSkillOptions')
         .rows.flatMap((row) =>
-          typeof row.id === 'number' && typeof row.name === 'string' && row.name.trim() !== ''
-            ? [{ id: row.id, name: row.name }]
+          // `listSkills` answers the id as a string ("12"); a number is accepted too.
+          skillRowId(row.id) !== undefined && typeof row.name === 'string' && row.name.trim() !== ''
+            ? [{ id: skillRowId(row.id) as number, name: row.name }]
             : [],
         )
         .sort((left, right) => left.name.localeCompare(right.name)),

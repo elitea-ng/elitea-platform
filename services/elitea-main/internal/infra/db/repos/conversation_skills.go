@@ -59,6 +59,7 @@ LEFT JOIN %[1]s.skill_versions sv ON sv.skill_id = sk.id AND sv.name = 'base'`, 
 func (r *ConversationSkillsRepo) scanPins(ctx context.Context, projectID int64, rows pgx.Rows) ([]conversationskills.Pin, error) {
 	defer rows.Close()
 	var pins []conversationskills.Pin
+	publishers := trustedSkillPublishers(ctx, r.pool)
 	for rows.Next() {
 		var (
 			pin                   conversationskills.Pin
@@ -84,7 +85,7 @@ func (r *ConversationSkillsRepo) scanPins(ctx context.Context, projectID int64, 
 				if publisher > 0 {
 					pin.Trust.PublisherProjectID = &publisher
 				}
-				if !skilltrust.Trusted(instructions, trusted) {
+				if !skilltrust.Trusted(instructions, trusted) && !skilltrust.PublisherTrusted(publisher, publishers) {
 					pin.Trust.State = "untrusted"
 				}
 			}

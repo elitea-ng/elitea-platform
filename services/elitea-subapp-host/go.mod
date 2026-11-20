@@ -1,6 +1,6 @@
 module github.com/elitea-ng/elitea-platform/services/elitea-subapp-host
 
-go 1.26.9
+go 1.26.11
 
 replace github.com/elitea-ng/elitea-platform/libs/proto/gen/go => ../../libs/proto/gen/go
 

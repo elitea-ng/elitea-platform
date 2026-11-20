@@ -75,6 +75,7 @@ WHERE sk.id = ANY($1::int[])%[2]s`, schema, predicate), args...)
 	}
 	defer rows.Close()
 	found := make(map[int64]agentexecutionapp.CurrentProjectSkill, len(skillIDs))
+	publishers := trustedSkillPublishers(ctx, r.pool)
 	for rows.Next() {
 		var skill agentexecutionapp.CurrentProjectSkill
 		var skillID, versionID int32
@@ -91,7 +92,7 @@ WHERE sk.id = ANY($1::int[])%[2]s`, schema, predicate), args...)
 		// revision of it (ADR-0051 amendment 1, A1.6).
 		if publisher, foreign := skilltrust.Foreign(parentProject, projectID); foreign {
 			skill.PublisherProjectID = publisher
-			skill.Untrusted = !skilltrust.Trusted(skill.Instructions, trusted)
+			skill.Untrusted = !skilltrust.Trusted(skill.Instructions, trusted) && !skilltrust.PublisherTrusted(publisher, publishers)
 		}
 		found[skill.SkillID] = skill
 	}

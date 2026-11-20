@@ -14,7 +14,7 @@
 //     imports: its relative imports, transitively, and for a bare package
 //     import the package.json and package-lock.json `npm ci` installs from,
 //
-// and fails, naming the path, when the `pull_request` filter covers none of
+// and fails, naming the path, when the `ci-web-e2e` filter of tier-paths.json covers none of
 // them. (There is no `push` filter to keep equal to it: no workflow starts on
 // a push, scripts/ci/check-no-push-triggers.mjs.) It
 // also runs scripts/ci/e2e-lane-filter.sh (the `model-path-changes` job's
@@ -223,10 +223,9 @@ const sorted = (items) => [...items].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)
 
 export function main(log = console.log) {
   const workflowText = fs.readFileSync(WORKFLOW, "utf8");
-  const workflow = loadYaml(workflowText);
-  // PyYAML reads the unquoted `on:` key as True ("true" here).
-  const on = Object.hasOwn(workflow, "true") ? workflow.true : workflow.on;
-  const pr = [...on.pull_request.paths];
+  // The filter is scripts/ci/tier-paths.json (ci.yml runs this workflow as a job).
+  const tiers = JSON.parse(fs.readFileSync(path.join(ROOT, "scripts", "ci", "tier-paths.json"), "utf8"));
+  const pr = [...(tiers.jobs["ci-web-e2e"]?.paths ?? [])];
   const errors = [];
   if (pr.some((p) => p.startsWith("!"))) {
     errors.push("negated path patterns are not modelled by this check");

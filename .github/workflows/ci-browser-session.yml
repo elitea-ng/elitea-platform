@@ -20,21 +20,9 @@ name: CI — elitea-browser-session
 # where ELITEA_REQUIRE_BROWSER_CONFORMANCE turns a skip into a failure.
 
 on:
-  pull_request:
-    paths:
-      # The pin every cargo step asserts (scripts/ci/assert-rust-toolchain.sh).
-      - "rust-toolchain.toml"
-      - "scripts/ci/assert-rust-toolchain.sh"
-      - "libs/rust/browser-session/**"
-      # The contract and conformance kit the driver implements, and the
-      # workspace both inherit package fields, lints and the lock from.
-      - "libs/rust/browser-tools/**"
-      - "libs/rust/Cargo.toml"
-      - "libs/rust/Cargo.lock"
-      - "libs/rust/rust-toolchain.toml"
-      # The protocol the agent speaks to the sandbox supervisor.
-      - "libs/proto/elitea/runtime/v1/browser_session_agent_v1.md"
-      - ".github/workflows/ci-browser-session.yml"
+  # Called by ci.yml, which owns the PR tiers and the path filter
+  # (scripts/ci/tier-paths.json); no `pull_request` arm of its own.
+  workflow_call:
   # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
   # The nightly run on main is the one that WRITES the caches pull requests
   # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
@@ -44,7 +32,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ci-browser-session-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
