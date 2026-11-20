@@ -98,3 +98,24 @@ jobs:
               dryRun: process.env.DRY_RUN === "true",
             });
             if (code !== 0) core.setFailed(`scripts/ci/prune-actions-caches.mjs exited ${code}`);
+      # The plan (scripts/ci/cache-budget.json, derived by check-cache-budget.mjs)
+      # against what main's entries actually hold after the prune. A warning, not
+      # a failure: it says when the measured sizes need updating (2026-11-20 the
+      # plan said 0.1 GiB per registry-only Rust entry and they held 0.4).
+      - name: Install scripts/ci dependencies (the YAML reader)
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/ci-scripts-deps
+      - name: The cache plan matches the cache
+        if: ${{ !cancelled() }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const { reportDrift } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/ci/check-cache-budget.mjs`);
+            await reportDrift({
+              github,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              root: process.env.GITHUB_WORKSPACE,
+              log: (line) => core.info(line),
+              warn: (line) => core.warning(line),
+            });

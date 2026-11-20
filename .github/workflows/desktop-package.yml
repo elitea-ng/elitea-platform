@@ -1,9 +1,10 @@
 name: Desktop — package for device management
 
-# The desktop app's MDM packages (ADR-0052 decisions 4, 6 and 8; W2b): a universal
-# (Apple silicon + Intel) macOS app signed with the brand owner's Developer ID,
-# notarised and stapled, in a signed `.pkg` that installs silently; and (once the
-# host builds on Windows, #1828) an MSI for Intune and an MSIX for the Store.
+# The desktop app's MDM packages (ADR-0052 decisions 4, 6 and 8; W2b): an Apple
+# silicon (arm64) macOS app signed with the brand owner's Developer ID, notarised and
+# stapled, in a signed `.pkg` that installs silently and refuses an Intel Mac (Intel
+# is not supported, owner decision 2026-11-20); and (once the host builds on
+# Windows, #1828) an MSI for Intune and an MSIX for the Store.
 #
 # NOTHING IS ATTACHED TO A RELEASE (owner decision 10). ELITEA's desktop app reaches
 # clients only through their device management. The packages stay WORKFLOW
@@ -17,8 +18,15 @@ name: Desktop — package for device management
 # pull request is ALWAYS a dry run: its code must not run with the certificates.
 #
 # WHEN.
-#   pull_request        the packaging files changed: the unsigned dry run.
-#   workflow_call       publish.yml's release check, signed (`require_signed`).
+#   pull_request        through ci.yml (heavy tier), only when the desktop app, its
+#                       Tauri config, the packaging scripts and actions or the
+#                       vendored agent-desktop change (scripts/ci/tier-paths.json,
+#                       held exact by scripts/ci/check-tiering.mjs): an unsigned
+#                       DEBUG dry run that restores ci-desktop.yml's cached debug
+#                       target (key `desktop-host`, written by its nightly on main).
+#   workflow_call       publish.yml, on main: the nightly pre-release (its schedule)
+#                       and every release. The full release build, signed and
+#                       verified (`require_signed`).
 #   workflow_dispatch   by hand: a signed package to hand to device management.
 on:
   workflow_call:
@@ -74,10 +82,16 @@ env:
 
 jobs:
   macos:
-    name: macOS universal (.app, .pkg)
+    name: macOS Apple Silicon (.app, .pkg)
+    # Apple silicon: the package is built for the runner's own architecture.
     runs-on: macos-latest
-    # A universal build compiles the host twice (arm64 and x86_64).
-    timeout-minutes: 90
+    # One architecture now; the release build (fat LTO, one codegen unit) is the
+    # long part.
+    timeout-minutes: 60
+    # The same value as ci-desktop.yml's macOS host job: it is part of the
+    # rust-cache key, so the pull-request dry run restores that job's entry.
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     defaults:
       run:
         shell: bash
@@ -98,6 +112,28 @@ jobs:
         with:
           cache-dependency-path: apps/elitea-web/package-lock.json
 
+      # A pull request's dry run is a debug build, so it reuses the macOS host
+      # job's target: the same shared-key, workspaces, cache-targets and CARGO_*
+      # environment as ci-desktop.yml `desktop`, the one writer (its nightly on
+      # main). scripts/ci/check-cache-budget.mjs fails a restore-only step whose
+      # key no scheduled writer saves. A release build cannot use a debug target,
+      # so the signed runs skip the restore.
+      # rust-cache keys on `rustc -vV`: the pinned toolchain is installed first, as
+      # in the writer.
+      - name: Assert the pinned toolchain
+        if: github.event_name == 'pull_request'
+        working-directory: apps/elitea-desktop/src-tauri
+        run: bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
+      - name: Restore the macOS host's cargo cache (pull requests)
+        if: github.event_name == 'pull_request'
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: desktop-host
+          save-if: false
+          workspaces: |
+            apps/elitea-desktop/src-tauri
+            apps/elitea-desktop/doc-extract-sidecar
+
       # The build itself is .github/actions/desktop-macos-package, which brand
       # repositories run from a release tag (ADR-0052 W5, docs/brand-template/).
       - name: Build, sign and verify (or dry run)
@@ -107,6 +143,7 @@ jobs:
           version: ${{ inputs.version }}
           build-number: ${{ github.run_number }}
           dry-run: ${{ github.event_name == 'pull_request' }}
+          debug: ${{ github.event_name == 'pull_request' }}
           # A kept package goes to device management: it must be signed.
           require-signed: ${{ inputs.require_signed == true || inputs.keep_artifacts == true }}
           apple-certificate: ${{ secrets.APPLE_CERTIFICATE }}

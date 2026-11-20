@@ -72,9 +72,11 @@ jobs:
           # The series, at its latest patch: go.mod sets the floor (1.27.3,
           # bifrost/core's minimum), and the runner cache can lag behind it.
           check-latest: true
-      - name: Restore the Go cache (pull requests read, main writes)
+      - name: Restore the Go cache (read only, one writer per key)
         uses: ./.github/actions/go-cache
         with:
+          # Restores only: one writer per key (scripts/ci/check-cache-budget.mjs).
+          save: "false"
           cache-dependency-path: services/elitea-llm-gateway/go.sum
       # PINNED, as ci-go.yml pins it: `version: latest` made this gate a moving
       # target, and a new release redded main and every open gateway PR on

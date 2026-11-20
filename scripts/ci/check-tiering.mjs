@@ -23,6 +23,11 @@
 //     called workflow that is the CALLER's name, so every called workflow shares
 //     one group and they cancel each other).
 //
+// And the macOS package job (`desktop-package`, checkDesktopPackage) keeps its gate:
+// on a pull request it runs only for DESKTOP_PACKAGE_PATHS (exactly those), as an
+// unsigned debug dry run; publish.yml (the nightly on main and every release) runs
+// it in full, signed and verified (`require_signed: true`).
+//
 // Reads YAML with the `yaml` package (./ci-compat.mjs; `npm ci --prefix scripts/ci`)
 // and runs with the runner's node. It fails when it finds fewer jobs than its
 // floor: "found nothing, therefore clean" is how a guard stops guarding.
@@ -44,6 +49,20 @@ export const OWN_PR_TRIGGER = new Map([
   ["cancel-merged-pr-runs.yml", "housekeeping on close, not a check"],
 ]);
 export const DRAFT_CONDITION = "github.event.pull_request.draft == false";
+/**
+ * The pull-request gate of the macOS package job (owner decision 2026-11-20): the
+ * desktop app (its Tauri config and packaging scripts are under it), the vendored
+ * agent-desktop it links, and the packaging workflow and actions. Exact: a path
+ * added here runs a 20-minute macOS job on every pull request that touches it.
+ */
+export const DESKTOP_PACKAGE_PATHS = [
+  "apps/elitea-desktop/**",
+  "libs/rust/vendor/agent-desktop/**",
+  ".github/workflows/desktop-package.yml",
+  ".github/actions/desktop-macos-package/**",
+  ".github/actions/desktop-windows-package/**",
+];
+const PR_ONLY = "${{ github.event_name == 'pull_request' }}";
 
 const asList = (needs) => (needs === undefined ? [] : Array.isArray(needs) ? needs : [needs]);
 const triggers = (workflow) => {
@@ -136,6 +155,38 @@ export function check({ ci, tiers, workflows }) {
   return errors;
 }
 
+/**
+ * The macOS package job keeps its gate: exact pull-request paths, a dry run (and a
+ * debug build) on a pull request only, and the full signed run from publish.yml.
+ * @param {{ci: any, tiers: any, workflows: Record<string, {parsed: any, text: string}>}} model
+ * @returns {string[]}
+ */
+export function checkDesktopPackage({ ci, tiers, workflows }) {
+  const errors = [];
+  const job = ci.jobs?.["desktop-package"];
+  if (!job) return ["ci.yml has no `desktop-package` job (the macOS package dry run)"];
+  const paths = tiers.jobs?.["desktop-package"]?.paths;
+  const want = [...DESKTOP_PACKAGE_PATHS].sort();
+  const got = Array.isArray(paths) ? [...paths].sort() : paths;
+  if (JSON.stringify(got) !== JSON.stringify(want)) {
+    errors.push(`desktop-package: tier-paths.json paths are ${JSON.stringify(paths)}, not exactly ${JSON.stringify(DESKTOP_PACKAGE_PATHS)} (check-tiering.mjs DESKTOP_PACKAGE_PATHS)`);
+  }
+  if (job.with?.require_signed !== false) errors.push("desktop-package: ci.yml must pass `require_signed: false` (a pull request is a dry run)");
+  const steps = workflows["desktop-package.yml"]?.parsed?.jobs?.macos?.steps ?? [];
+  const pkg = steps.find((s) => String(s.uses ?? "") === "./.github/actions/desktop-macos-package");
+  if (!pkg) {
+    errors.push("desktop-package.yml: the `macos` job does not use ./.github/actions/desktop-macos-package");
+  } else {
+    for (const input of ["dry-run", "debug"]) {
+      if (String(pkg.with?.[input] ?? "") !== PR_ONLY) errors.push(`desktop-package.yml: the package step's \`${input}\` must be \`${PR_ONLY}\` (pull requests only; main and releases build in full)`);
+    }
+  }
+  const publish = Object.values(workflows["publish.yml"]?.parsed?.jobs ?? {}).filter((j) => j.uses === "./.github/workflows/desktop-package.yml");
+  if (publish.length !== 1) errors.push(`publish.yml: ${publish.length} job(s) call desktop-package.yml, expected 1 (the nightly and release package check)`);
+  for (const j of publish) if (j.with?.require_signed !== true) errors.push("publish.yml: the desktop-package call must pass `require_signed: true` (signed and verified)");
+  return errors;
+}
+
 export function load(root = ROOT) {
   const directory = path.join(root, ".github", "workflows");
   const workflows = {};
@@ -157,7 +208,7 @@ export function main({ root = ROOT, out = console.log, err = console.error } = {
     err(`::error::${error.message}`);
     return 1;
   }
-  const errors = check(model);
+  const errors = [...check(model), ...checkDesktopPackage(model)];
   if (errors.length) {
     for (const e of errors) err(`::error::${e}`);
     return 1;

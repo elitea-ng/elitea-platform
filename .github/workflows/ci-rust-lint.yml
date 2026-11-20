@@ -17,8 +17,7 @@ on:
   # (scripts/ci/tier-paths.json); no `pull_request` arm of its own.
   workflow_call:
   # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
-  # The nightly run on main is the one that WRITES the caches pull requests
-  # read (scripts/ci/check-workflow-cache-writes.mjs).
+  # The nightly run lints main; it writes no cache (this workflow has none).
   schedule:
     - cron: "5 0 * * *"
   workflow_dispatch:
@@ -45,26 +44,19 @@ jobs:
         include:
           - name: shared crates
             dir: libs/rust
-            key: rust-lint-shared
           - name: worker
             dir: services/elitea-worker-rust
-            key: rust-lint-worker
           - name: code runner
             dir: services/elitea-code-runner
-            key: rust-lint-code-runner
             jobs: "1"
           - name: deepwiki engine
             dir: services/elitea-deepwiki-engine
-            key: rust-lint-deepwiki
           - name: inventory engine
             dir: services/elitea-inventory-engine
-            key: rust-lint-inventory
           - name: vector
             dir: services/elitea-vector
-            key: rust-lint-vector
           - name: doc extractor
             dir: services/elitea-doc-extractor
-            key: rust-lint-doc-extractor
     defaults:
       run:
         working-directory: ${{ matrix.dir }}
@@ -89,19 +81,9 @@ jobs:
             || echo "::warning::could not remove every preinstalled toolchain; continuing"
           df -h / | tail -1
 
-      # Read everywhere, write on main only (the nightly run above): its own
-      # `shared-key` per workspace, one writer per entry. `cache-targets: false`
-      # is not set: a Clippy check build is small, and it is the build this
-      # job repeats on every push.
-      - name: Cache cargo registry and build artefacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: ${{ matrix.key }}
-          # Registry and git only: seven legs with targets would be 9 GiB of the
-          # 10 GB cap (scripts/ci/check-cache-budget.mjs).
-          cache-targets: false
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          workspaces: ${{ matrix.dir }}
+      # No cargo cache here (scripts/ci/cache-budget.json, measured 2026-11-20): a
+      # registry-only entry is 0.3-0.6 GiB of the 10 GB cap and saves about the
+      # time cargo takes to fetch the crates. The budget goes to target caches.
 
       - name: Check formatting
         run: cargo fmt --all -- --check

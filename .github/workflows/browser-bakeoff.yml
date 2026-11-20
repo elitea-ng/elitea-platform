@@ -78,14 +78,9 @@ jobs:
             || { echo "::error::only must be task ids, comma-separated"; exit 1; }
           case ",${ENGINES}," in *,full,*) ;; *) echo "::error::the rule compares lite with full: include full"; exit 1 ;; esac
 
-      # Read only: the bake-off is not a cache writer.
-      - name: Cache cargo registry
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: browser-session
-          save-if: false
-          cache-targets: false
-          workspaces: libs/rust
+      # No cargo cache here (scripts/ci/cache-budget.json, measured 2026-11-20): a
+      # registry-only entry is 0.3-0.6 GiB of the 10 GB cap and saves about the
+      # time cargo takes to fetch the crates. The budget goes to target caches.
 
       - name: Install gVisor (runsc)
         run: |

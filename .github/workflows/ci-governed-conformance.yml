@@ -46,9 +46,11 @@ jobs:
         with:
           cache: false
           go-version-file: go.work
-      - name: Restore the Go cache (pull requests read, main writes)
+      - name: Restore the Go cache (read only, one writer per key)
         uses: ./.github/actions/go-cache
         with:
+          # Restores only: one writer per key (scripts/ci/check-cache-budget.mjs).
+          save: "false"
           cache-dependency-path: |
             services/elitea-main/go.sum
             libs/go/*/go.sum
@@ -83,9 +85,11 @@ jobs:
         with:
           cache: false
           go-version-file: go.work
-      - name: Restore the Go cache (pull requests read, main writes)
+      - name: Restore the Go cache (read only, one writer per key)
         uses: ./.github/actions/go-cache
         with:
+          # Restores only: one writer per key (scripts/ci/check-cache-budget.mjs).
+          save: "false"
           cache-dependency-path: |
             services/elitea-main/go.sum
             libs/go/*/go.sum

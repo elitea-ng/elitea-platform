@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { check, load, main, DRAFT_CONDITION, MINIMUM_CALL_JOBS } from "./check-tiering.mjs";
+import { check, checkDesktopPackage, load, main, DESKTOP_PACKAGE_PATHS, DRAFT_CONDITION, MINIMUM_CALL_JOBS } from "./check-tiering.mjs";
 
 const call = (id, extra = {}) => ({ needs: ["changes"], if: `fromJSON(needs.changes.outputs.run)['${id}']`, uses: `./.github/workflows/${id}.yml`, ...extra });
 const heavyCall = (id) =>
@@ -113,8 +113,52 @@ test("a parser that finds nothing fails", () => {
   has(check(m), "expected at least");
 });
 
+function packageModel() {
+  const pr = "${{ github.event_name == 'pull_request' }}";
+  return {
+    ci: { jobs: { "desktop-package": { needs: ["changes", "fast-gate"], uses: "./.github/workflows/desktop-package.yml", with: { require_signed: false } } } },
+    tiers: { jobs: { "desktop-package": { tier: "heavy", paths: [...DESKTOP_PACKAGE_PATHS].reverse() } } },
+    workflows: {
+      "desktop-package.yml": { parsed: { jobs: { macos: { steps: [{ uses: "./.github/actions/desktop-macos-package", with: { "dry-run": pr, debug: pr } }] } } }, text: "" },
+      "publish.yml": { parsed: { jobs: { desktop: { uses: "./.github/workflows/desktop-package.yml", with: { require_signed: true } } } }, text: "" },
+    },
+  };
+}
+
+test("the macOS package gate: a sound model passes, in any path order", () => {
+  assert.deepEqual(checkDesktopPackage(packageModel()), []);
+});
+
+test("the macOS package gate: a path added to or dropped from the PR filter is refused", () => {
+  const added = packageModel();
+  added.tiers.jobs["desktop-package"].paths.push("apps/elitea-web/**");
+  has(checkDesktopPackage(added), "desktop-package: tier-paths.json paths are");
+  const dropped = packageModel();
+  dropped.tiers.jobs["desktop-package"].paths = DESKTOP_PACKAGE_PATHS.filter((p) => !p.includes("agent-desktop"));
+  has(checkDesktopPackage(dropped), "not exactly");
+  const always = packageModel();
+  always.tiers.jobs["desktop-package"].paths = null;
+  has(checkDesktopPackage(always), "not exactly");
+});
+
+test("the macOS package gate: a pull request stays a dry run, publish.yml stays signed", () => {
+  const m = packageModel();
+  m.ci.jobs["desktop-package"].with.require_signed = true;
+  m.workflows["desktop-package.yml"].parsed.jobs.macos.steps[0].with.debug = "false";
+  m.workflows["desktop-package.yml"].parsed.jobs.macos.steps[0].with["dry-run"] = "true";
+  m.workflows["publish.yml"].parsed.jobs.desktop.with.require_signed = false;
+  const errors = checkDesktopPackage(m);
+  has(errors, "ci.yml must pass `require_signed: false`");
+  has(errors, "the package step's `debug` must be");
+  has(errors, "the package step's `dry-run` must be");
+  has(errors, "publish.yml: the desktop-package call must pass `require_signed: true`");
+  delete m.ci.jobs["desktop-package"];
+  has(checkDesktopPackage(m), "ci.yml has no `desktop-package` job");
+});
+
 test("the repository passes", () => {
-  const errors = check(load());
+  const model = load();
+  const errors = [...check(model), ...checkDesktopPackage(model)];
   assert.deepEqual(errors, []);
   assert.equal(main({ out: () => {}, err: () => {} }), 0);
 });

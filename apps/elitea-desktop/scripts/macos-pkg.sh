@@ -2,6 +2,9 @@
 # macos-pkg.sh — the desktop app as a macOS installer package for device management
 # (ADR-0052 decision 8, W2b.1). It installs into /Applications with no UI, so Jamf,
 # Intune for macOS, Kandji or `sudo installer -pkg <file> -target /` deploy it silently.
+# Apple silicon only (owner decision, 2026-11-20): the app is arm64, and the package's
+# distribution says `hostArchitectures="arm64"`, so the installer refuses an Intel Mac
+# instead of installing an app that cannot start there.
 #
 #   macos-pkg.sh <path/to/App.app> <identifier> <version> <out-dir>
 #
@@ -52,9 +55,26 @@ pkgbuild \
   --install-location / \
   "$work/component.pkg"
 
-pkg="$out/${name}-${version}-universal.pkg"
+# The product's distribution, synthesized from the component and pinned to Apple
+# silicon: `productbuild --synthesize` writes one `<options …/>` element, the
+# architecture goes on it (replacing any it carries), and the edit is checked.
+productbuild --synthesize --package "$work/component.pkg" "$work/distribution.xml" >/dev/null
+sed -E -i '' \
+  -e 's/ hostArchitectures="[^"]*"//' \
+  -e 's/<options /<options hostArchitectures="arm64" /' \
+  "$work/distribution.xml"
+if [ "$(grep -c 'hostArchitectures="arm64"' "$work/distribution.xml")" != 1 ]; then
+  echo "::error::the synthesized distribution has no single <options> element to pin to arm64" >&2
+  cat "$work/distribution.xml" >&2
+  exit 1
+fi
+build_product() {
+  productbuild --distribution "$work/distribution.xml" --package-path "$work" "$@" "$pkg"
+}
+
+pkg="$out/${name}-${version}-arm64.pkg"
 if [ -z "${INSTALLER_IDENTITY:-}" ]; then
-  productbuild --package "$work/component.pkg" "$pkg"
+  build_product
   echo "unsigned package: $pkg"
   exit 0
 fi
@@ -84,7 +104,7 @@ if ! security find-identity -v "$keychain" | grep -qF "$INSTALLER_IDENTITY"; the
   exit 1
 fi
 
-productbuild --package "$work/component.pkg" --sign "$INSTALLER_IDENTITY" --keychain "$keychain" "$pkg"
+build_product --sign "$INSTALLER_IDENTITY" --keychain "$keychain"
 
 : "${APPLE_API_KEY:?APPLE_API_KEY}" "${APPLE_API_ISSUER:?APPLE_API_ISSUER}" "${APPLE_API_KEY_PATH:?APPLE_API_KEY_PATH}"
 xcrun notarytool submit "$pkg" --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" --wait --timeout 30m
