@@ -11,6 +11,8 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const CONTENT = join(ROOT, 'src/content/docs');
+// The What's new entries: Markdown rendered into what-is-new.mdx (src/whats-new.ts).
+const WHATS_NEW = join(ROOT, 'src/content/whats-new');
 const SCREENSHOTS = join(ROOT, 'src/screenshots');
 const MAX_SCREENSHOT_BYTES = 250 * 1024;
 
@@ -19,21 +21,21 @@ const COMPONENTS = new Set(
   [...readFileSync(join(ROOT, 'src/plugins/remark-docs-components.ts'), 'utf8').matchAll(/^  (\w+): '/gm)].map((m) => m[1]),
 );
 
-function walk(dir) {
+function walk(dir, ext = '.mdx') {
   return readdirSync(dir).flatMap((entry) => {
     const full = join(dir, entry);
-    return statSync(full).isDirectory() ? walk(full) : entry.endsWith('.mdx') ? [full] : [];
+    return statSync(full).isDirectory() ? walk(full, ext) : entry.endsWith(ext) ? [full] : [];
   });
 }
 
-const pages = walk(CONTENT).map((file) => {
+function parse(file) {
   const source = readFileSync(file, 'utf8');
   const match = /^---\n([\s\S]*?)\n---\n?/.exec(source);
   const front = match?.[1] ?? '';
   const body = source.slice(match?.[0].length ?? 0);
   const prose = body.replace(/```[\s\S]*?```/g, '');
   const field = (name) => new RegExp(`^${name}:\\s*(.+)$`, 'm').exec(front)?.[1]?.trim();
-  const slug = relative(CONTENT, file).replace(/\\/g, '/').replace(/\.mdx$/, '');
+  const slug = relative(CONTENT, file).replace(/\\/g, '/').replace(/\.mdx?$/, '');
   return {
     slug: slug === 'index' ? '' : slug,
     title: field('title'),
@@ -43,7 +45,10 @@ const pages = walk(CONTENT).map((file) => {
     mermaid: [...body.matchAll(/^```mermaid\n([\s\S]*?)^```/gm)].map((m) => m[1]),
     components: new Set([...prose.replace(/`[^`\n]*`/g, '').matchAll(/<\/?([A-Z][A-Za-z0-9]*)\b/g)].map((m) => m[1])),
   };
-});
+}
+
+const pages = walk(CONTENT).map(parse);
+const entries = walk(WHATS_NEW, '.md').map(parse);
 
 const navSlugs = readdirSync(join(ROOT, 'src/nav')).flatMap((file) =>
   [...readFileSync(join(ROOT, 'src/nav', file), 'utf8').matchAll(/slug: '([^']*)'/g)].map((m) => m[1]),
@@ -85,10 +90,21 @@ describe('docs content', () => {
     const { default: purify } = await import('dompurify');
     Object.assign(purify, { addHook() {}, removeHook() {}, removeHooks() {}, sanitize: (text) => String(text) });
     const { default: mermaid } = await import('mermaid');
-    const diagrams = pages.flatMap((page) => page.mermaid.map((source) => ({ slug: page.slug, source })));
+    const diagrams = [...pages, ...entries].flatMap((page) => page.mermaid.map((source) => ({ slug: page.slug, source })));
     assert.ok(diagrams.length > 0, 'no mermaid diagrams found: the fence pattern no longer matches');
     for (const { slug, source } of diagrams) {
       await assert.doesNotReject(mermaid.parse(source), `${slug}: a mermaid diagram does not parse`);
+    }
+  });
+
+  // The entries' names, front matter and one-`## `-heading rule are
+  // scripts/ci/check-whats-new.mjs's; this holds them to the page rules the
+  // build relies on, in the docs job too.
+  it("What's new entries: present, no H1, no components (plain Markdown)", () => {
+    assert.ok(entries.length > 100, `only ${entries.length} What's new entries found`);
+    for (const entry of entries) {
+      assert.deepEqual(entry.h1, [], `${entry.slug}: an entry has no H1; its heading is "## "`);
+      assert.deepEqual([...entry.components], [], `${entry.slug}: components do not render in a .md entry`);
     }
   });
 

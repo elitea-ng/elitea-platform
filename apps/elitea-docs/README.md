@@ -13,3 +13,6 @@ npm run build && npm run check:dist   # links, anchors, CSP hashes
 How to add a page, the components a page can use, screenshots and the CSP
 rewrite are covered on the site itself:
 [`src/content/docs/development/docs-site.mdx`](src/content/docs/development/docs-site.mdx).
+
+A What's new entry is a new file in `src/content/whats-new/`, never an edit to
+`what-is-new.mdx`; the same page covers it.
