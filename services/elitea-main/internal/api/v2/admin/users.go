@@ -40,6 +40,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/nativeauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -376,9 +377,23 @@ func (h *Handler) setAdminRole(w http.ResponseWriter, r *http.Request, body auth
 	if roleName == "super_admin" || (currentRole == "super_admin" && roleName != "super_admin") {
 		allowed, err := h.callerHasPermission(ctx, r, permissionSuperAdmin)
 		if err != nil || !allowed {
-			apierr.WriteStatus(w, http.StatusForbidden, "only super_admin can assign or revoke the super_admin role")
+			rolepolicy.Write(w, r, rolepolicy.SuperAdminRequired())
 			return
 		}
+	}
+
+	// The subset rule (issue 2488): the caller holds every permission of the
+	// role given AND of every administration role taken away. The DELETE
+	// below drops all of the target's administration roles, custom ones
+	// included, so all of them count.
+	removed, err := rolepolicy.UserCentralRoles(ctx, h.pool, targetID, auth.PermissionModeAdministration)
+	if err != nil {
+		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to read current role")
+		return
+	}
+	if refusal := h.checkCentralAssignment(r, auth.PermissionModeAdministration, roleName, removed); refusal != nil {
+		rolepolicy.Write(w, r, refusal)
+		return
 	}
 
 	transaction, err := h.pool.Begin(ctx)
@@ -554,6 +569,40 @@ WHERE u.id = $1`, userID, adminRolePriority).Scan(&role)
 		return "", nil
 	}
 	return *role, nil
+}
+
+// checkCentralAssignment applies the subset rule of issue 2488 to an
+// administration-plane assignment: the caller holds every permission of the
+// role given (`assigned`, "" for none) and of every role taken away. A holder
+// of admin.auth.users.super_admin is exempt. It fails closed.
+func (h *Handler) checkCentralAssignment(
+	r *http.Request, mode, assigned string, removed []string,
+) *rolepolicy.Refusal {
+	caller, refusal := rolepolicy.ResolveCaller(r, h.resolver)
+	if refusal != nil {
+		return refusal
+	}
+	if caller.SuperAdmin {
+		return nil
+	}
+	roles := append([]string{}, removed...)
+	if assigned != "" {
+		roles = append(roles, assigned)
+	}
+	ctx := r.Context()
+	required, err := rolepolicy.CentralRolePermissions(ctx, h.pool, mode, roles)
+	if err != nil {
+		return rolepolicy.Unresolved("the permissions of the role could not be read, so the role change was refused")
+	}
+	held, err := caller.CentralSet(ctx, mode)
+	if err != nil {
+		return rolepolicy.Unresolved("your own permissions could not be read, so the role change was refused")
+	}
+	role := assigned
+	if role == "" && len(removed) > 0 {
+		role = removed[0]
+	}
+	return rolepolicy.CheckAssignment(held, false, role, required)
 }
 
 // callerHasPermission re-resolves the CALLER's administration permissions from

@@ -51,6 +51,20 @@ Open **Roles**. It shows a permission matrix across three scopes, each a tab:
 
 <Screenshot id="admin-roles-matrix" alt="Roles permission matrix with scope tabs" />
 
-<Warning>
-The `super_admin` column is disabled for anyone who is not a super admin, in the console only — this is a display convenience, not an enforced rule. The server does not treat `super_admin` specially beyond the permission checks that apply to any other role.
-</Warning>
+## No escalation
+
+The server makes sure that no administrator can give themselves, or anybody else, more than they hold. It applies these rules to the Roles matrix, to role definitions, to the Users page, to the role assignments under `/admin/modes`, to project members, to bulk invites, to the personal and team project matrix and to SCIM group bindings:
+
+- **Grant only what you hold.** You can add a permission to a role only if you hold that permission yourself.
+- **Assign only what you hold.** You can assign or remove a role only if you hold every permission of that role. Removing a role counts, so an administrator with fewer permissions cannot demote one with more.
+- **Your own role is locked.** You cannot change the permissions of a central role that you hold. You cannot move a SCIM group binding that you are a member of.
+- **The super admin permission stays on the super admin role.** `admin.auth.users.super_admin` can be granted only to the administration `super_admin` role. This rule applies to super admins too.
+- **No self-escalation in projects.** A change to a project role, to the Standard Roles template or to **Apply to Projects** cannot give you a permission in a project that you did not already hold there.
+
+A super admin (a holder of `admin.auth.users.super_admin`) is exempt from all rules except the fourth. A new role always starts with no permissions.
+
+The server refuses a change that breaks a rule with `403` and a `code`: `role_permission_not_held`, `role_own_set_locked`, `role_permission_reserved`, `role_super_admin_required`, `role_self_escalation` or `role_caller_unresolved`. The body also names the `role` and the `permissions`. The Roles page shows that reason in place of a generic error. Each refusal is in the Audit Trail with the action `role.escalation_refused`.
+
+<Note>
+An account that holds only the `admin` role cannot change the permissions of the `admin` role. A super admin can. The accounts in `identity.initial_global_admins` (`ELITEA_INITIAL_GLOBAL_ADMINS`) get `super_admin` on their first sign-in.
+</Note>

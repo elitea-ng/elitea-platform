@@ -47,6 +47,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
 )
 
 // modeAssignment is one row of the listing.
@@ -206,12 +207,25 @@ func (h *Handler) ModesAssign(w http.ResponseWriter, r *http.Request) {
 		if role == "super_admin" || demotesAdministrationSuperAdmin {
 			allowed, err := h.callerHasPermission(ctx, r, permissionSuperAdmin)
 			if err != nil || !allowed {
-				writeJSON(w, http.StatusForbidden, map[string]any{
-					"error": "only super_admin can assign or revoke the super_admin role",
-				})
+				rolepolicy.Write(w, r, rolepolicy.SuperAdminRequired())
 				return
 			}
 		}
+	}
+
+	// The subset rule (issue 2488), the same one the admin Users surface
+	// applies: the caller holds every permission of the role given and of
+	// every role in this mode that the DELETE below takes away. Before it,
+	// `modes.users` assigned ANY role of the mode — a custom role holding
+	// everything included.
+	removed, err := rolepolicy.UserCentralRoles(ctx, h.pool, userID, mode)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to read current role"})
+		return
+	}
+	if refusal := h.checkCentralAssignment(r, mode, role, removed); refusal != nil {
+		rolepolicy.Write(w, r, refusal)
+		return
 	}
 
 	transaction, err := h.pool.Begin(ctx)
@@ -310,11 +324,15 @@ func (h *Handler) ModesRemove(w http.ResponseWriter, r *http.Request) {
 	if role == "super_admin" {
 		allowed, err := h.callerHasPermission(ctx, r, permissionSuperAdmin)
 		if err != nil || !allowed {
-			writeJSON(w, http.StatusForbidden, map[string]any{
-				"error": "only super_admin can assign or revoke the super_admin role",
-			})
+			rolepolicy.Write(w, r, rolepolicy.SuperAdminRequired())
 			return
 		}
+	}
+	// The subset rule (issue 2488): removing a role needs every permission of
+	// that role too.
+	if refusal := h.checkCentralAssignment(r, mode, "", []string{role}); refusal != nil {
+		rolepolicy.Write(w, r, refusal)
+		return
 	}
 
 	tag, err := h.pool.Exec(ctx, `

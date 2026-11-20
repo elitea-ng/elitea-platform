@@ -50,8 +50,44 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/scimdirectory"
 )
+
+// checkOwnBinding applies the own-role lock of the no-escalation rule (issue
+// 2488) to a binding edit. Moving a binding re-grants its members under the
+// new (project, role) pair, so editing a binding the caller is a member of is
+// editing the caller's own access. It is refused unless the caller holds
+// admin.auth.users.super_admin. A binding grants project roles only
+// (scimdirectory.verifyProjectRole), so it cannot reach the administration
+// plane at all; creating one grants nobody anything until the directory
+// pushes members.
+func (h *Handler) checkOwnBinding(r *http.Request, bindingID int64) *rolepolicy.Refusal {
+	caller, refusal := rolepolicy.ResolveCaller(r, h.resolver)
+	if refusal != nil {
+		return refusal
+	}
+	if caller.SuperAdmin {
+		return nil
+	}
+	if h.pool == nil {
+		return rolepolicy.Unresolved("the binding members could not be read, so the change was refused")
+	}
+	var member bool
+	if err := h.pool.QueryRow(r.Context(), `
+SELECT EXISTS (
+    SELECT 1 FROM elitea_auth.scim_group_members WHERE binding_id = $1 AND user_id = $2
+)`, bindingID, caller.UserID).Scan(&member); err != nil {
+		return rolepolicy.Unresolved("the binding members could not be read, so the change was refused")
+	}
+	if member {
+		return &rolepolicy.Refusal{
+			Code:    rolepolicy.CodeOwnRoleLocked,
+			Message: "you are a member of this group binding, so you cannot change the access it grants",
+		}
+	}
+	return nil
+}
 
 // SCIMGroupBindingStore is the store seam.
 //
@@ -282,6 +318,10 @@ func (h *Handler) SCIMGroupBindingSave(w http.ResponseWriter, r *http.Request) {
 	}
 	body, ok := decodeSCIMGroupBinding(w, r)
 	if !ok {
+		return
+	}
+	if refusal := h.checkOwnBinding(r, id); refusal != nil {
+		rolepolicy.Write(w, r, refusal)
 		return
 	}
 	group, err := h.scimGroupBindings.UpdateBinding(

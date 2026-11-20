@@ -71,8 +71,8 @@ func newRoleWriteEnvironment(t *testing.T) (*pgxpool.Pool, chi.Router, chi.Route
 	t.Setenv("AI_PROJECT_ID", fmt.Sprint(publicProjectID))
 	principal := &auth.User{ID: "1", UserID: "1"}
 	return pool,
-		roleWriteRouter(admin.NewHandler(pool), nil, principal),
-		rolesRouter(admin.NewHandler(pool), nil, principal)
+		roleWriteRouter(admin.NewHandler(pool, admin.WithPermissionResolver(superAdminResolver())), nil, principal),
+		rolesRouter(admin.NewHandler(pool, admin.WithPermissionResolver(superAdminResolver())), nil, principal)
 }
 
 func rolesURL(scope, mode string) string { return "/admin/roles/" + scope + "/" + mode }
@@ -617,7 +617,7 @@ func TestRoleWritesAreGatedPerPermissionAndNothingMoves(t *testing.T) {
 	gateFor := func(permission string) func(http.Handler) http.Handler {
 		return apimw.RequireCentralPermissions(holder, auth.PermissionModeAdministration, permission)
 	}
-	handler := admin.NewHandler(pool)
+	handler := admin.NewHandler(pool, admin.WithPermissionResolver(superAdminResolver()))
 
 	create := roleWriteRouter(handler, gateFor(admin.RolesCreatePermission), principal)
 	if recorder := adminDo(t, create, http.MethodPost, rolesURL("administration", "default"),

@@ -49,6 +49,7 @@ import (
 	"fmt"
 	appmailer "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/mailer"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
 	"log/slog"
 	"net/http"
 	"net/mail"
@@ -228,7 +229,7 @@ func validEmail(address string) bool {
 // GetAuthUserByEmailForProvisioning → LinkAuthProviderIfMissing). Writing a
 // provider_ref here would guess at an identity the IdP has not asserted yet.
 func (h *Handler) UsersCreate(w http.ResponseWriter, r *http.Request) {
-	h.usersCreate(w, r, requestWriteMode(r))
+	h.usersCreate(w, r, requestWriteMode(r), true)
 }
 
 // AdministrationUsersCreate implements
@@ -236,10 +237,12 @@ func (h *Handler) UsersCreate(w http.ResponseWriter, r *http.Request) {
 // page's "Manage project member" dialog. It states its mode because the route
 // carries `administration` as a static segment; see requestWriteMode.
 func (h *Handler) AdministrationUsersCreate(w http.ResponseWriter, r *http.Request) {
-	h.usersCreate(w, r, userWriteModeAdministration)
+	h.usersCreate(w, r, userWriteModeAdministration, false)
 }
 
-func (h *Handler) usersCreate(w http.ResponseWriter, r *http.Request, mode string) {
+// asMember is true on the `{mode}` route, whose gate resolves the caller in
+// the project; see users_write_policy.go.
+func (h *Handler) usersCreate(w http.ResponseWriter, r *http.Request, mode string, asMember bool) {
 	projectID, ok := h.userWriteContext(w, r, mode)
 	if !ok {
 		return
@@ -271,6 +274,17 @@ func (h *Handler) usersCreate(w http.ResponseWriter, r *http.Request, mode strin
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"error": fmt.Sprintf("unknown role(s) for this project: %s", strings.Join(unknown, ", ")),
 		})
+		return
+	}
+	targets, err := h.userIDsByEmail(r, body.Emails)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to read project roles"})
+		return
+	}
+	if refusal := h.checkMembershipChange(r, membershipChange{
+		projectID: projectID, asMember: asMember, assigned: roleIDs, targets: targets,
+	}); refusal != nil {
+		rolepolicy.Write(w, r, refusal)
 		return
 	}
 
@@ -470,17 +484,18 @@ func (req usersUpdateRequest) userIDs() ([]int, error) {
 // it is the only place that revokes. TestUsersUpdateRoleChangeKeepsTokenProjectBindings
 // pins this.
 func (h *Handler) UsersUpdate(w http.ResponseWriter, r *http.Request) {
-	h.usersUpdate(w, r, requestWriteMode(r))
+	h.usersUpdate(w, r, requestWriteMode(r), true)
 }
 
 // AdministrationUsersUpdate implements
 // PUT /api/v2/admin/users/administration/{projectID} — the role change the
 // same member dialog submits. It states its mode; see requestWriteMode.
 func (h *Handler) AdministrationUsersUpdate(w http.ResponseWriter, r *http.Request) {
-	h.usersUpdate(w, r, userWriteModeAdministration)
+	h.usersUpdate(w, r, userWriteModeAdministration, false)
 }
 
-func (h *Handler) usersUpdate(w http.ResponseWriter, r *http.Request, mode string) {
+// asMember: see usersCreate.
+func (h *Handler) usersUpdate(w http.ResponseWriter, r *http.Request, mode string, asMember bool) {
 	projectID, ok := h.userWriteContext(w, r, mode)
 	if !ok {
 		return
@@ -519,6 +534,12 @@ func (h *Handler) usersUpdate(w http.ResponseWriter, r *http.Request, mode strin
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"error": fmt.Sprintf("unknown role(s) for this project: %s", strings.Join(unknown, ", ")),
 		})
+		return
+	}
+	if refusal := h.checkMembershipChange(r, membershipChange{
+		projectID: projectID, asMember: asMember, assigned: roleIDs, targets: userIDs, takesCurrent: true,
+	}); refusal != nil {
+		rolepolicy.Write(w, r, refusal)
 		return
 	}
 
@@ -645,6 +666,13 @@ func (h *Handler) UsersDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(userIDs) == 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "id[] is required"})
+		return
+	}
+	// The `{mode}` route is the only DELETE, and its gate is the member's.
+	if refusal := h.checkMembershipChange(r, membershipChange{
+		projectID: projectID, asMember: true, targets: userIDs, takesCurrent: true,
+	}); refusal != nil {
+		rolepolicy.Write(w, r, refusal)
 		return
 	}
 

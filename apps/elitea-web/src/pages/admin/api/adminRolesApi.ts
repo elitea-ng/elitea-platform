@@ -30,6 +30,7 @@ import {
 } from '@tanstack/react-query';
 
 import { EliteaApiError, eliteaFetch } from '@/shared/api/generated/mutator';
+import { t } from '@/shared/i18n';
 import { unwrapListPage } from '@/shared/api/unwrap';
 
 /** Which matrix is being read or written. See this module's header. */
@@ -62,8 +63,7 @@ export interface PermissionMatrixTarget {
  */
 const adminRolesKeys = {
   all: ['admin', 'roles'] as const,
-  matrix: (target: PermissionMatrixTarget) =>
-    ['admin', 'roles', 'matrix', target.scope, target.targetMode] as const,
+  matrix: (target: PermissionMatrixTarget) => ['admin', 'roles', 'matrix', target.scope, target.targetMode] as const,
 };
 
 function matrixUrl(target: PermissionMatrixTarget): string {
@@ -87,8 +87,63 @@ export function permissionMatrixFailureReason(error: unknown): string | undefine
   if (failure.kind !== 'http') return undefined;
   const body = failure.body;
   if (typeof body !== 'object' || body === null) return undefined;
+  const refusal = roleRefusalReason(body);
+  if (refusal !== undefined) return refusal;
   const reason = (body as { error?: unknown }).error;
   return typeof reason === 'string' && reason !== '' ? reason : undefined;
+}
+
+/** The 403 body of a refusal by the server's no-escalation rule (issue 2488). */
+interface RoleRefusalBody {
+  readonly code?: unknown;
+  readonly role?: unknown;
+  readonly permissions?: unknown;
+}
+
+/**
+ * The no-escalation refusals, keyed on the server's stable `code`
+ * (internal/rolepolicy). The server's `error` sentence is the fallback for a
+ * code this client does not know yet.
+ */
+const ROLE_REFUSAL_MESSAGES: Readonly<Record<string, () => string>> = {
+  role_permission_not_held: () =>
+    t('pages.admin.roles.refusal.notHeld', 'You can grant, assign or remove only permissions that you hold yourself.'),
+  role_own_set_locked: () =>
+    t(
+      'pages.admin.roles.refusal.ownRole',
+      'You hold this role, so you cannot change its permissions. Ask a super admin.',
+    ),
+  role_permission_reserved: () =>
+    t('pages.admin.roles.refusal.reserved', 'The super admin permission can be granted only to the super admin role.'),
+  role_super_admin_required: () =>
+    t('pages.admin.roles.refusal.superAdmin', 'Only a super admin can assign or remove the super admin role.'),
+  role_self_escalation: () =>
+    t('pages.admin.roles.refusal.selfEscalation', 'This change would give you permissions that you do not hold.'),
+  role_caller_unresolved: () =>
+    t(
+      'pages.admin.roles.refusal.unresolved',
+      'Your own permissions could not be checked, so the change was not saved. Try again.',
+    ),
+};
+
+function roleRefusalReason(body: RoleRefusalBody): string | undefined {
+  if (typeof body.code !== 'string') return undefined;
+  const message = ROLE_REFUSAL_MESSAGES[body.code];
+  if (message === undefined) return undefined;
+  const permissions = Array.isArray(body.permissions)
+    ? body.permissions.filter((name): name is string => typeof name === 'string')
+    : [];
+  const role = typeof body.role === 'string' ? body.role : '';
+  const details: string[] = [];
+  if (role !== '') details.push(t('pages.admin.roles.refusal.role', 'Role: {{role}}.', { role }));
+  if (permissions.length > 0) {
+    details.push(
+      t('pages.admin.roles.refusal.permissions', 'Permissions: {{permissions}}.', {
+        permissions: permissions.join(', '),
+      }),
+    );
+  }
+  return [message(), ...details].join(' ');
 }
 
 /** `GET /admin/permissions/{scope}/{targetMode}` — the whole matrix, unpaginated. */
@@ -100,10 +155,7 @@ export function usePermissionMatrix(
     queryKey: adminRolesKeys.matrix(target),
     enabled: options.enabled ?? true,
     queryFn: async (): Promise<PermissionMatrixRow[]> =>
-      unwrapListPage<PermissionMatrixRow>(
-        await eliteaFetch<unknown>(matrixUrl(target)),
-        'adminPermissionMatrix',
-      ).rows,
+      unwrapListPage<PermissionMatrixRow>(await eliteaFetch<unknown>(matrixUrl(target)), 'adminPermissionMatrix').rows,
   });
 }
 
@@ -116,11 +168,7 @@ interface PermissionMatrixSaveVariables {
  * `PUT /admin/permissions/{scope}/{targetMode}` — the matrix as the page shows
  * it. The server diffs it against the stored one and applies the difference.
  */
-export function useSavePermissionMatrix(): UseMutationResult<
-  void,
-  Error,
-  PermissionMatrixSaveVariables
-> {
+export function useSavePermissionMatrix(): UseMutationResult<void, Error, PermissionMatrixSaveVariables> {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ target, rows }: PermissionMatrixSaveVariables) => {
@@ -236,14 +284,11 @@ export function useDeleteRole(): UseMutationResult<void, Error, RoleDeleteVariab
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ target, name }: RoleDeleteVariables) => {
-      await eliteaFetch<unknown>(
-        `${roleDefinitionUrl(target)}?name=${encodeURIComponent(name)}`,
-        {
-          method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name }),
-        },
-      );
+      await eliteaFetch<unknown>(`${roleDefinitionUrl(target)}?name=${encodeURIComponent(name)}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: adminRolesKeys.all }),
   });

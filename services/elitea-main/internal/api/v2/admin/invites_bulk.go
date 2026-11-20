@@ -73,6 +73,8 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
 )
 
 // The permissions the legacy runtime declares on the two forms this route
@@ -201,6 +203,11 @@ func (h *Handler) BulkInviteMembers(w http.ResponseWriter, r *http.Request) {
 	resolvedProjects, err := h.resolveBulkInviteProjects(ctx, projects, role)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to read the projects"})
+		return
+	}
+
+	if refusal := h.checkBulkInviteSelf(r, users, resolvedProjects); refusal != nil {
+		rolepolicy.Write(w, r, refusal)
 		return
 	}
 
@@ -426,4 +433,56 @@ func dedupeIDs(ids []int64) []int64 {
 	}
 	sort.Slice(unique, func(i, j int) bool { return unique[i] < unique[j] })
 	return unique
+}
+
+// checkBulkInviteSelf applies the no-escalation rule (issue 2488) to the one
+// account this route can widen for the caller: the caller's own. The gate is
+// central, so the caller is an operator of every project and holds no project
+// permission by role. Inviting the caller's own account into a project is
+// refused when the role carries a permission that the caller does not already
+// hold there. Nothing is written for any pair. A super_admin holder is exempt.
+func (h *Handler) checkBulkInviteSelf(
+	r *http.Request, users []int64, projects map[int64]*projectTarget,
+) *rolepolicy.Refusal {
+	caller, refusal := rolepolicy.ResolveCaller(r, h.resolver)
+	if refusal != nil {
+		return refusal
+	}
+	if caller.SuperAdmin {
+		return nil
+	}
+	self := false
+	for _, id := range users {
+		if id == caller.UserID {
+			self = true
+			break
+		}
+	}
+	if !self {
+		return nil
+	}
+	ids := make([]int64, 0, len(projects))
+	for id := range projects {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(a, b int) bool { return ids[a] < ids[b] })
+	ctx := r.Context()
+	for _, id := range ids {
+		project := projects[id]
+		if project == nil || project.roleID == nil || project.isPersonal {
+			continue
+		}
+		required, err := rolepolicy.ProjectRolesPermissions(ctx, h.pool, int(id), []int{*project.roleID})
+		if err != nil {
+			return rolepolicy.Unresolved("the project roles could not be read, so the role change was refused")
+		}
+		held, err := caller.ProjectSet(ctx, int(id))
+		if err != nil {
+			return rolepolicy.Unresolved("your own permissions could not be read, so the role change was refused")
+		}
+		if missing := rolepolicy.Missing(held, required); len(missing) > 0 {
+			return rolepolicy.SelfEscalation(rolepolicy.ProjectGain{ProjectID: id, Permissions: missing})
+		}
+	}
+	return nil
 }

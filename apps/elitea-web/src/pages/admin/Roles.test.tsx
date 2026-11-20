@@ -123,10 +123,7 @@ beforeEach(() => {
   adminReads = 0;
   adminRowsAfterFirstRead = ADMIN_ROWS;
   configureGeneratedClient({ baseUrl: '/api/v2' });
-  grantAdminUiPermissions([
-    'configuration.roles.permissions.view',
-    'configuration.roles.permissions.edit',
-  ]);
+  grantAdminUiPermissions(['configuration.roles.permissions.view', 'configuration.roles.permissions.edit']);
   useRolesHandlers();
 });
 
@@ -206,6 +203,65 @@ describe('Admin › Roles', () => {
     expect(await screen.findByText('Permissions saved.')).toBeInTheDocument();
   });
 
+  it('explains a refusal by the no-escalation rule, with the role and the permissions', async () => {
+    // Issue 2488: the server refuses a grant the caller does not hold with a
+    // 403 and a stable code. The page shows what was refused and why, not
+    // "Failed to save permissions.", and keeps the edit for the operator.
+    server.use(
+      http.put('*/admin/permissions/:scope/:mode', () =>
+        HttpResponse.json(
+          {
+            error: 'you can grant only permissions that you hold',
+            code: 'role_permission_not_held',
+            role: 'editor',
+            permissions: ['models.alpha.edit'],
+          },
+          { status: 403 },
+        ),
+      ),
+    );
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminRoles />);
+
+    await expandGroup(user, 'models.alpha');
+    await user.click(screen.getByRole('checkbox', { name: 'editor: models.alpha.edit' }));
+    await user.click(await screen.findByRole('button', { name: 'Save' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(
+      'You can grant, assign or remove only permissions that you hold yourself. Role: editor. Permissions: models.alpha.edit.',
+    );
+    expect(screen.queryByText('Failed to save permissions.')).not.toBeInTheDocument();
+    expect(screen.queryByText('Permissions saved.')).not.toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'editor: models.alpha.edit' })).toBeChecked();
+  });
+
+  it('shows the reserved super admin permission refusal in its own words', async () => {
+    server.use(
+      http.put('*/admin/permissions/:scope/:mode', () =>
+        HttpResponse.json(
+          {
+            error: 'admin.auth.users.super_admin can be granted only to the administration super_admin role',
+            code: 'role_permission_reserved',
+            role: 'admin',
+            permissions: ['admin.auth.users.super_admin'],
+          },
+          { status: 403 },
+        ),
+      ),
+    );
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminRoles />);
+
+    await expandGroup(user, 'models.alpha');
+    await user.click(screen.getByRole('checkbox', { name: 'editor: models.alpha.edit' }));
+    await user.click(await screen.findByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'The super admin permission can be granted only to the super admin role.',
+    );
+  });
+
   it('toggles a whole group from its group checkbox', async () => {
     const user = userEvent.setup();
     renderAdminRoute(<AdminRoles />);
@@ -230,9 +286,7 @@ describe('Admin › Roles', () => {
     await user.click(screen.getByRole('checkbox', { name: 'viewer: models.alpha.edit' }));
     await user.click(await screen.findByRole('button', { name: 'Discard' }));
 
-    await waitFor(() =>
-      expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument());
     expect(screen.getByRole('checkbox', { name: 'viewer: models.alpha.edit' })).not.toBeChecked();
     expect(recorded.some((entry) => entry.method === 'PUT')).toBe(false);
   });
@@ -327,9 +381,7 @@ describe('Admin › Roles', () => {
     // It is defined for administration/default alone, so it must not follow the
     // operator to a project tab.
     await user.click(screen.getByRole('tab', { name: 'Public Project' }));
-    await waitFor(() =>
-      expect(screen.queryByRole('button', { name: 'Apply to Projects' })).not.toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Apply to Projects' })).not.toBeInTheDocument());
   });
 
   it('states why the support tab is unavailable instead of calling it a failure', async () => {

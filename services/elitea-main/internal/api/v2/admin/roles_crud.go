@@ -79,6 +79,7 @@ import (
 	"regexp"
 	"strconv"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -304,6 +305,12 @@ func refuseBuiltIn(name, what string) error {
 // A new role starts with NO permissions. That is deliberate and is the legacy
 // behaviour too: the operator grants them on the matrix this page already
 // shows, where every grant is one auditable change.
+//
+// It is also what makes creation safe under the no-escalation rule (issue
+// 2488): the new role's set is empty, which every caller holds, and every
+// permission it gets later passes the matrix save's subset rule. The body has
+// no permission field. A `permissions` key that a client sends is ignored,
+// and TestRoleCreateIgnoresAPermissionListInTheBody pins that.
 func (h *Handler) AdminRoleCreate(w http.ResponseWriter, r *http.Request) {
 	target, body, ok := h.beginRoleWrite(w, r, roleModeWrite)
 	if !ok {
@@ -403,22 +410,43 @@ func (h *Handler) AdminRoleRename(w http.ResponseWriter, r *http.Request) {
 	// project cascade finds nothing, because every candidate row already holds
 	// the new name and its own NOT EXISTS guard excludes it.
 
-	renamed, err := h.renameRole(r.Context(), target, body.Name, body.NewName)
+	// A project-plane rename can change what members resolve: a project role
+	// with no grants of its own falls back to the central `default` role OF THE
+	// SAME NAME. So the rename runs the effect guard of the no-escalation rule
+	// (issue 2488). An administration-plane rename cannot: grants and
+	// assignments follow the role id.
+	var caller *rolepolicy.Caller
+	if !target.central() || !rolepolicy.AdministrationPlane(target.mode) {
+		resolved, refusal := rolepolicy.ResolveCaller(r, h.resolver)
+		if refusal != nil {
+			rolepolicy.Write(w, r, refusal)
+			return
+		}
+		caller = &resolved
+	}
+	renamed, err := h.renameRole(r.Context(), target, body.Name, body.NewName, caller)
 	if err != nil {
-		writeMatrixError(w, err)
+		writeRoleWriteError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "projects_renamed": renamed})
 }
 
 func (h *Handler) renameRole(
-	ctx context.Context, target roleTarget, name, newName string,
+	ctx context.Context, target roleTarget, name, newName string, caller *rolepolicy.Caller,
 ) (projectsRenamed int64, err error) {
 	transaction, err := h.pool.Begin(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("begin role rename: %w", err)
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
+
+	var guard *rolepolicy.SelfGuard
+	if caller != nil {
+		if guard, err = rolepolicy.BeginSelfGuard(ctx, transaction, *caller); err != nil {
+			return 0, err
+		}
+	}
 
 	var tag pgconn.CommandTag
 	if target.central() {
@@ -462,6 +490,9 @@ WHERE stale.name = $1
 		projectsRenamed = projectTag.RowsAffected()
 	}
 
+	if err := guard.Check(ctx, transaction); err != nil {
+		return 0, err
+	}
 	if err := transaction.Commit(ctx); err != nil {
 		return 0, fmt.Errorf("commit role rename: %w", err)
 	}
