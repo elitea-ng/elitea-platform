@@ -71,6 +71,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 
@@ -437,10 +438,12 @@ func dedupeIDs(ids []int64) []int64 {
 
 // checkBulkInviteSelf applies the no-escalation rule (issue 2488) to the one
 // account this route can widen for the caller: the caller's own. The gate is
-// central, so the caller is an operator of every project and holds no project
-// permission by role. Inviting the caller's own account into a project is
-// refused when the role carries a permission that the caller does not already
-// hold there. Nothing is written for any pair. A super_admin holder is exempt.
+// central, and placing people into any project is the authority it grants
+// (ADR-0059 keeps it a central-operator power), so an invite of OTHER accounts
+// is not measured against the operator's own project sets, which are usually
+// empty. Inviting the caller's own account into a project is refused when the
+// role carries a permission that the caller does not already hold there.
+// Nothing is written for any pair. A super_admin holder is exempt.
 func (h *Handler) checkBulkInviteSelf(
 	r *http.Request, users []int64, projects map[int64]*projectTarget,
 ) *rolepolicy.Refusal {
@@ -448,17 +451,7 @@ func (h *Handler) checkBulkInviteSelf(
 	if refusal != nil {
 		return refusal
 	}
-	if caller.SuperAdmin {
-		return nil
-	}
-	self := false
-	for _, id := range users {
-		if id == caller.UserID {
-			self = true
-			break
-		}
-	}
-	if !self {
+	if caller.SuperAdmin || !slices.Contains(users, caller.UserID) {
 		return nil
 	}
 	ids := make([]int64, 0, len(projects))

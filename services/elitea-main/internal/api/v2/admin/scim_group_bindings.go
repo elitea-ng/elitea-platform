@@ -49,20 +49,32 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/scimdirectory"
 )
 
-// checkOwnBinding applies the own-role lock of the no-escalation rule (issue
-// 2488) to a binding edit. Moving a binding re-grants its members under the
-// new (project, role) pair, so editing a binding the caller is a member of is
-// editing the caller's own access. It is refused unless the caller holds
-// admin.auth.users.super_admin. A binding grants project roles only
-// (scimdirectory.verifyProjectRole), so it cannot reach the administration
-// plane at all; creating one grants nobody anything until the directory
-// pushes members.
-func (h *Handler) checkOwnBinding(r *http.Request, bindingID int64) *rolepolicy.Refusal {
+// bindingPair is the (project, role) a binding gives its members.
+type bindingPair struct {
+	projectID int
+	roleName  string
+}
+
+// checkBindingAssignment applies the subset rule of the no-escalation rule
+// (issue 2488) to a binding write. A binding ASSIGNS its role in its project to
+// every member the directory pushes, so writing one is assigning that role, and
+// moving or deleting one is removing the old role. The caller must hold every
+// permission of each pair it gives or takes, in that pair's project. Checking
+// only the bindings the caller is a member of would not do: the caller can
+// author a binding for a group it is in before the directory pushes it.
+// A binding grants project roles only (scimdirectory.verifyProjectRole), so it
+// cannot reach the administration plane. A super_admin holder is exempt.
+//
+// `bindingID` is the binding being moved or deleted, or 0 for a create.
+func (h *Handler) checkBindingAssignment(
+	r *http.Request, bindingID int64, next *bindingPair,
+) *rolepolicy.Refusal {
 	caller, refusal := rolepolicy.ResolveCaller(r, h.resolver)
 	if refusal != nil {
 		return refusal
@@ -70,20 +82,57 @@ func (h *Handler) checkOwnBinding(r *http.Request, bindingID int64) *rolepolicy.
 	if caller.SuperAdmin {
 		return nil
 	}
+	unreadable := rolepolicy.Unresolved("the binding could not be read, so the change was refused")
 	if h.pool == nil {
-		return rolepolicy.Unresolved("the binding members could not be read, so the change was refused")
+		return unreadable
 	}
-	var member bool
-	if err := h.pool.QueryRow(r.Context(), `
-SELECT EXISTS (
-    SELECT 1 FROM elitea_auth.scim_group_members WHERE binding_id = $1 AND user_id = $2
-)`, bindingID, caller.UserID).Scan(&member); err != nil {
-		return rolepolicy.Unresolved("the binding members could not be read, so the change was refused")
+	ctx := r.Context()
+	pairs := []bindingPair{}
+	if next != nil {
+		pairs = append(pairs, *next)
 	}
-	if member {
-		return &rolepolicy.Refusal{
-			Code:    rolepolicy.CodeOwnRoleLocked,
-			Message: "you are a member of this group binding, so you cannot change the access it grants",
+	if bindingID != 0 {
+		var current bindingPair
+		err := h.pool.QueryRow(ctx,
+			`SELECT project_id, role_name FROM elitea_auth.scim_group_bindings WHERE id = $1`, bindingID,
+		).Scan(&current.projectID, &current.roleName)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			// The store answers a missing binding with its own 404.
+		case err != nil:
+			return unreadable
+		default:
+			pairs = append(pairs, current)
+		}
+	}
+	for _, pair := range pairs {
+		var roleIDs []int
+		var roleID int
+		err := h.pool.QueryRow(ctx,
+			`SELECT id FROM public.auth_core__project_role WHERE project_id = $1 AND name = $2`,
+			pair.projectID, pair.roleName).Scan(&roleID)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			// The store refuses a role the project does not have, by name.
+			continue
+		case err != nil:
+			return unreadable
+		}
+		roleIDs = append(roleIDs, roleID)
+		required, err := rolepolicy.ProjectRolesPermissions(ctx, h.pool, pair.projectID, roleIDs)
+		if err != nil {
+			return unreadable
+		}
+		held, err := caller.ProjectSet(ctx, pair.projectID)
+		if err != nil {
+			return rolepolicy.Unresolved("your own permissions could not be read, so the change was refused")
+		}
+		if missing := rolepolicy.Missing(held, required); len(missing) > 0 {
+			refusal := rolepolicy.NotHeld(
+				"a group binding assigns its role, so you can bind, move or remove only a role whose "+
+					"permissions you all hold in its project", pair.roleName, missing)
+			refusal.ProjectID = int64(pair.projectID)
+			return refusal
 		}
 	}
 	return nil
@@ -293,6 +342,11 @@ func (h *Handler) SCIMGroupBindingCreate(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
+	if refusal := h.checkBindingAssignment(r, 0,
+		&bindingPair{projectID: body.ProjectID, roleName: body.RoleName}); refusal != nil {
+		rolepolicy.Write(w, r, refusal)
+		return
+	}
 	group, err := h.scimGroupBindings.CreateBinding(
 		r.Context(), body.DisplayName, body.ProjectID, body.RoleName)
 	if err != nil {
@@ -320,7 +374,8 @@ func (h *Handler) SCIMGroupBindingSave(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if refusal := h.checkOwnBinding(r, id); refusal != nil {
+	if refusal := h.checkBindingAssignment(r, id,
+		&bindingPair{projectID: body.ProjectID, roleName: body.RoleName}); refusal != nil {
 		rolepolicy.Write(w, r, refusal)
 		return
 	}
@@ -344,6 +399,10 @@ func (h *Handler) SCIMGroupBindingDelete(w http.ResponseWriter, r *http.Request)
 	}
 	id, ok := scimGroupBindingID(w, r)
 	if !ok {
+		return
+	}
+	if refusal := h.checkBindingAssignment(r, id, nil); refusal != nil {
+		rolepolicy.Write(w, r, refusal)
 		return
 	}
 	if err := h.scimGroupBindings.DeleteGroup(r.Context(), id); err != nil {

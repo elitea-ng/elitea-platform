@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -24,6 +25,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/scimdirectory"
 )
 
 // The callers. Each holds exactly one administration role.
@@ -177,6 +179,16 @@ func TestAnAdminCannotMakeTheAdminRoleASuperAdmin(t *testing.T) {
 	}
 }
 
+func TestAnAdminCannotStripTheSuperAdminPermissionFromSuperAdmin(t *testing.T) {
+	env := newEscalationEnvironment(t)
+	// Revoking it would leave nobody able to grant it back, short of SQL.
+	expectRefusal(t, saveCell(t, env.as(escalationAdmin), centralMatrix, rolepolicy.SuperAdminPermission, "super_admin", false),
+		rolepolicy.CodePermissionNotHeld)
+	if !contains(grantsSQL(t, env.pool, "administration", "super_admin"), rolepolicy.SuperAdminPermission) {
+		t.Fatal("the refused revoke was written")
+	}
+}
+
 func TestASuperAdminCannotPutTheSuperAdminPermissionOnAnotherRole(t *testing.T) {
 	env := newEscalationEnvironment(t)
 	expectRefusal(t, saveCell(t, env.as(escalationSuper), centralMatrix, rolepolicy.SuperAdminPermission, "admin", true),
@@ -288,6 +300,22 @@ func TestTheModesRouteAppliesTheSubsetRule(t *testing.T) {
 	// A role within its own set is assignable.
 	expectStatus(t, adminDo(t, router, http.MethodPost, "/o/admin/modes/administration",
 		map[string]any{"user_id": plain, "mode": "administration", "role": "empty_role"}), http.StatusOK)
+
+	// A developer-mode row the legacy runtime left behind grants nothing a
+	// route reads, so clearing it needs no subset.
+	for _, statement := range []string{
+		`INSERT INTO public.auth_core__role (name, mode) VALUES ('legacy_dev', 'developer')`,
+		`INSERT INTO public.auth_core__role_permission (role_id, permission)
+			SELECT id, 'admin.auth.users' FROM public.auth_core__role WHERE name = 'legacy_dev' AND mode = 'developer'`,
+		fmt.Sprintf(`INSERT INTO public.auth_core__user_role (user_id, role_id)
+			SELECT %d, id FROM public.auth_core__role WHERE name = 'legacy_dev' AND mode = 'developer'`, plain),
+	} {
+		if _, err := env.pool.Exec(context.Background(), statement); err != nil {
+			t.Fatalf("seed %q: %v", statement, err)
+		}
+	}
+	expectStatus(t, adminDo(t, router, http.MethodDelete,
+		fmt.Sprintf("/o/admin/modes/administration?id=%d:developer:legacy_dev", plain), nil), http.StatusOK)
 }
 
 /* ── assignment: the Users page ───────────────────────────────────────── */
@@ -341,6 +369,10 @@ SELECT 3, $1, id FROM public.auth_core__project_role WHERE project_id = 3 AND na
 		map[string]any{"editor": []string{rolepolicy.SuperAdminPermission}}), rolepolicy.CodeReservedPermission)
 	expectStatus(t, adminDo(t, router, http.MethodPut, path,
 		map[string]any{"editor": []string{"models.beta.edit"}}), http.StatusOK)
+	// `append_user_role` gives the roles to every member of every personal
+	// project, which no subset of the caller's own set can cover.
+	expectRefusal(t, adminDo(t, router, http.MethodPut, path+"?append_user_role",
+		map[string]any{"editor": []string{"models.beta.edit"}}), rolepolicy.CodeSuperAdminRequired)
 }
 
 func TestABulkInviteCannotGiveTheCallerAProjectRole(t *testing.T) {
@@ -348,6 +380,8 @@ func TestABulkInviteCannotGiveTheCallerAProjectRole(t *testing.T) {
 	router := env.as(escalationAdmin)
 	const path = "/b/admin/invites_bulk/administration"
 
+	// The admin holds nothing in project 2, so its own account in the batch
+	// refuses the whole batch.
 	expectRefusal(t, adminDo(t, router, http.MethodPost, path, map[string]any{
 		"users": []int{env.ids[escalationAdmin], env.ids[escalationPlainTarget]}, "projects": []int{2}, "role": "admin",
 	}), rolepolicy.CodeSelfEscalation)
@@ -359,6 +393,7 @@ func TestABulkInviteCannotGiveTheCallerAProjectRole(t *testing.T) {
 	if members != 0 {
 		t.Fatalf("a refused batch wrote %d memberships, want none", members)
 	}
+	// Placing other accounts is the operator authority the central gate grants.
 	expectStatus(t, adminDo(t, router, http.MethodPost, path, map[string]any{
 		"users": []int{env.ids[escalationPlainTarget]}, "projects": []int{2}, "role": "admin",
 	}), http.StatusOK)
@@ -392,6 +427,71 @@ func TestARenameCannotWidenTheCallerThroughTheTemplateFallback(t *testing.T) {
 	if roles := projectRoleNamesSQL(t, env.pool, 1); !contains(roles, "helper") || contains(roles, "power") {
 		t.Fatalf("project roles after the refused rename = %v", roles)
 	}
+}
+
+/* ── SCIM group bindings ──────────────────────────────────────────────── */
+
+func TestAGroupBindingAssignsOnlyARoleTheCallerHolds(t *testing.T) {
+	env := newEscalationEnvironment(t)
+	ctx := context.Background()
+	for _, file := range []string{
+		"../../../../migrations/shared/0096_scim_provisioning.sql",
+		"../../../../migrations/shared/0098_scim_group_bindings.sql",
+	} {
+		migration, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := env.pool.Exec(ctx, string(migration)); err != nil {
+			t.Fatalf("apply %s: %v", file, err)
+		}
+	}
+	bindingsAs := func(email string) chi.Router {
+		id := fmt.Sprint(env.ids[email])
+		handler := admin.NewHandler(env.pool,
+			admin.WithPermissionResolver(legacyrbac.NewPostgresResolver(env.pool)),
+			admin.WithSCIMGroupBindings(scimdirectory.NewStore(env.pool)))
+		router := chi.NewRouter()
+		router.Use(func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				next.ServeHTTP(w, r.WithContext(auth.ContextWithUser(r.Context(), auth.User{ID: id, UserID: id})))
+			})
+		})
+		router.Post("/bindings", handler.SCIMGroupBindingCreate)
+		router.Put("/bindings/{id}", handler.SCIMGroupBindingSave)
+		router.Delete("/bindings/{id}", handler.SCIMGroupBindingDelete)
+		return router
+	}
+	// The admin is a `viewer` of the public project (project 1).
+	router := bindingsAs(escalationAdmin)
+	bind := func(role string) map[string]any {
+		return map[string]any{"display_name": "Team " + role, "project_id": publicProjectID, "role_name": role}
+	}
+
+	// A group the caller is in, or a second account of its own, would carry
+	// the role: binding `admin` is assigning it.
+	expectRefusal(t, adminDo(t, router, http.MethodPost, "/bindings", bind("admin")), rolepolicy.CodePermissionNotHeld)
+	// `viewer` is the caller's own role there.
+	created := adminDo(t, router, http.MethodPost, "/bindings", bind("viewer"))
+	expectStatus(t, created, http.StatusCreated)
+	var body struct {
+		Binding struct {
+			ID string `json:"id"`
+		} `json:"binding"`
+	}
+	if err := json.Unmarshal(created.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	path := "/bindings/" + body.Binding.ID
+	// Moving it to `admin` is assigning `admin`.
+	expectRefusal(t, adminDo(t, router, http.MethodPut, path, bind("admin")), rolepolicy.CodePermissionNotHeld)
+
+	// A super admin moves it to `admin`. The admin can then neither move nor
+	// delete it, because both take `admin` away from its members.
+	expectStatus(t, adminDo(t, bindingsAs(escalationSuper), http.MethodPut, path, bind("admin")), http.StatusOK)
+	expectRefusal(t, adminDo(t, router, http.MethodPut, path, bind("viewer")), rolepolicy.CodePermissionNotHeld)
+	expectRefusal(t, adminDo(t, router, http.MethodDelete, path, nil), rolepolicy.CodePermissionNotHeld)
+	expectStatus(t, adminDo(t, bindingsAs(escalationSuper), http.MethodDelete, path, nil), http.StatusNoContent)
 }
 
 func projectRoleNamesSQL(t *testing.T, pool *pgxpool.Pool, projectID int) []string {

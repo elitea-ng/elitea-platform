@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -57,10 +58,6 @@ var validAdminRoles = map[string]struct{}{
 	"editor":      {},
 	"viewer":      {},
 }
-
-// permissionSuperAdmin is the permission that gates GRANTING or REVOKING
-// `super_admin`, exactly as auth_users.py gates it.
-const permissionSuperAdmin = "admin.auth.users.super_admin"
 
 // systemUserPredicate classifies "system" users. Copied verbatim from
 // `list_users_paginated`'s `is_system`, underscores included: SQLAlchemy's
@@ -374,25 +371,8 @@ func (h *Handler) setAdminRole(w http.ResponseWriter, r *http.Request, body auth
 	// `admin.auth.users.super_admin` in administration mode. Enforced against
 	// the DATABASE, never against anything the client sent — the admin UI's
 	// `window.admin_ui_config.permissions` is presentation state only.
-	if roleName == "super_admin" || (currentRole == "super_admin" && roleName != "super_admin") {
-		allowed, err := h.callerHasPermission(ctx, r, permissionSuperAdmin)
-		if err != nil || !allowed {
-			rolepolicy.Write(w, r, rolepolicy.SuperAdminRequired())
-			return
-		}
-	}
-
-	// The subset rule (issue 2488): the caller holds every permission of the
-	// role given AND of every administration role taken away. The DELETE
-	// below drops all of the target's administration roles, custom ones
-	// included, so all of them count.
-	removed, err := rolepolicy.UserCentralRoles(ctx, h.pool, targetID, auth.PermissionModeAdministration)
-	if err != nil {
-		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to read current role")
-		return
-	}
-	if refusal := h.checkCentralAssignment(r, auth.PermissionModeAdministration, roleName, removed); refusal != nil {
-		rolepolicy.Write(w, r, refusal)
+	caller, ok := h.resolveAssigningCaller(w, r, roleName == "super_admin" || currentRole == "super_admin")
+	if !ok {
 		return
 	}
 
@@ -402,6 +382,21 @@ func (h *Handler) setAdminRole(w http.ResponseWriter, r *http.Request, body auth
 		return
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
+
+	// The subset rule (issue 2488): the caller holds every permission of the
+	// role given AND of every administration role taken away. The DELETE
+	// below drops all of the target's administration roles, custom ones
+	// included, so all of them count. It is checked under the role-writes
+	// lock, inside this transaction, so no concurrent write outdates it.
+	if refusal, err := h.checkCentralAssignment(
+		ctx, transaction, caller, auth.PermissionModeAdministration, roleName, targetID,
+	); err != nil {
+		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to read current role")
+		return
+	} else if refusal != nil {
+		rolepolicy.Write(w, r, refusal)
+		return
+	}
 
 	// Single-role-per-mode, exactly as `assign_user_to_role` enforces it: drop
 	// every administration-mode assignment first, then add the new one (if any).
@@ -576,54 +571,74 @@ WHERE u.id = $1`, userID, adminRolePriority).Scan(&role)
 // role given (`assigned`, "" for none) and of every role taken away. A holder
 // of admin.auth.users.super_admin is exempt. It fails closed.
 func (h *Handler) checkCentralAssignment(
-	r *http.Request, mode, assigned string, removed []string,
-) *rolepolicy.Refusal {
-	caller, refusal := rolepolicy.ResolveCaller(r, h.resolver)
-	if refusal != nil {
-		return refusal
+	ctx context.Context, q rolepolicy.Querier, caller rolepolicy.Caller, mode, assigned string, targetID int,
+) (*rolepolicy.Refusal, error) {
+	if err := rolepolicy.LockRoleWrites(ctx, q); err != nil {
+		return nil, err
 	}
-	if caller.SuperAdmin {
-		return nil
+	removed, err := rolepolicy.UserCentralRoles(ctx, q, targetID, mode)
+	if err != nil {
+		return nil, err
+	}
+	return h.checkCentralRoles(ctx, q, caller, mode, assigned, removed), nil
+}
+
+// checkCentralRoles is the rule for one central assignment: `assigned` is the
+// role given ("" for none), `removed` the roles taken away. The caller must
+// hold rolepolicy.LockRoleWrites in the transaction `q` belongs to, and is
+// read again here, so the check and the write see the same state.
+//
+//   - super_admin, given or taken, needs admin.auth.users.super_admin, in
+//     every mode.
+//   - In the administration mode, the caller holds every permission of every
+//     role given or taken. The retired developer mode grants nothing that a
+//     route reads, so clearing a developer-mode row that the legacy runtime
+//     left behind needs no subset.
+func (h *Handler) checkCentralRoles(
+	ctx context.Context, q rolepolicy.Querier, caller rolepolicy.Caller, mode, assigned string, removed []string,
+) *rolepolicy.Refusal {
+	caller, err := caller.Reload(ctx)
+	if err != nil {
+		return rolepolicy.Unresolved("your own permissions could not be read, so the role change was refused")
 	}
 	roles := append([]string{}, removed...)
 	if assigned != "" {
 		roles = append(roles, assigned)
 	}
-	ctx := r.Context()
-	required, err := rolepolicy.CentralRolePermissions(ctx, h.pool, mode, roles)
+	if !caller.SuperAdmin && slices.Contains(roles, rolepolicy.SuperAdminRole) {
+		return rolepolicy.SuperAdminRequired()
+	}
+	if caller.SuperAdmin || mode != rolepolicy.ModeAdministration {
+		return nil
+	}
+	required, err := rolepolicy.CentralRolePermissions(ctx, q, mode, roles)
 	if err != nil {
 		return rolepolicy.Unresolved("the permissions of the role could not be read, so the role change was refused")
-	}
-	held, err := caller.CentralSet(ctx, mode)
-	if err != nil {
-		return rolepolicy.Unresolved("your own permissions could not be read, so the role change was refused")
 	}
 	role := assigned
 	if role == "" && len(removed) > 0 {
 		role = removed[0]
 	}
-	return rolepolicy.CheckAssignment(held, false, role, required)
+	return rolepolicy.CheckAssignment(caller.Administration, false, role, required)
 }
 
-// callerHasPermission re-resolves the CALLER's administration permissions from
-// the database. Fails closed when no resolver is configured or no principal is
-// on the context.
-func (h *Handler) callerHasPermission(ctx context.Context, r *http.Request, permission string) (bool, error) {
-	if h.resolver == nil {
-		return false, nil
+// resolveAssigningCaller reads the caller of an assignment once, before its
+// transaction. `touchesSuperAdmin` is true when the write gives or takes the
+// super_admin role as far as the request can tell before the lock; such a
+// write is refused early, with the super_admin code, when the caller cannot be
+// read or does not hold admin.auth.users.super_admin. checkCentralRoles checks
+// it again under the lock.
+func (h *Handler) resolveAssigningCaller(
+	w http.ResponseWriter, r *http.Request, touchesSuperAdmin bool,
+) (rolepolicy.Caller, bool) {
+	caller, refusal := rolepolicy.ResolveCaller(r, h.resolver)
+	if touchesSuperAdmin && (refusal != nil || !caller.SuperAdmin) {
+		rolepolicy.Write(w, r, rolepolicy.SuperAdminRequired())
+		return rolepolicy.Caller{}, false
 	}
-	principal, ok := auth.UserFromContext(r.Context())
-	if !ok {
-		return false, nil
+	if refusal != nil {
+		rolepolicy.Write(w, r, refusal)
+		return rolepolicy.Caller{}, false
 	}
-	resolution, err := h.resolver.ResolvePermissions(ctx, principal, auth.PermissionModeAdministration, "")
-	if err != nil {
-		return false, err
-	}
-	for _, granted := range resolution.Permissions {
-		if granted == permission {
-			return true, nil
-		}
-	}
-	return false, nil
+	return caller, true
 }

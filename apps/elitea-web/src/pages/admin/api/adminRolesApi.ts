@@ -63,7 +63,8 @@ export interface PermissionMatrixTarget {
  */
 const adminRolesKeys = {
   all: ['admin', 'roles'] as const,
-  matrix: (target: PermissionMatrixTarget) => ['admin', 'roles', 'matrix', target.scope, target.targetMode] as const,
+  matrix: (target: PermissionMatrixTarget) =>
+    ['admin', 'roles', 'matrix', target.scope, target.targetMode] as const,
 };
 
 function matrixUrl(target: PermissionMatrixTarget): string {
@@ -109,10 +110,7 @@ const ROLE_REFUSAL_MESSAGES: Readonly<Record<string, () => string>> = {
   role_permission_not_held: () =>
     t('pages.admin.roles.refusal.notHeld', 'You can grant, assign or remove only permissions that you hold yourself.'),
   role_own_set_locked: () =>
-    t(
-      'pages.admin.roles.refusal.ownRole',
-      'You hold this role, so you cannot change its permissions. Ask a super admin.',
-    ),
+    t('pages.admin.roles.refusal.ownRole', 'You hold this role, so you cannot change its permissions. Ask a super admin.'),
   role_permission_reserved: () =>
     t('pages.admin.roles.refusal.reserved', 'The super admin permission can be granted only to the super admin role.'),
   role_super_admin_required: () =>
@@ -126,6 +124,11 @@ const ROLE_REFUSAL_MESSAGES: Readonly<Record<string, () => string>> = {
     ),
 };
 
+/**
+ * The reason, then what it is about. Each part is a whole sentence with its
+ * own key, so a translation never has to agree with a fragment of another
+ * key, and the details read the same in any order.
+ */
 function roleRefusalReason(body: RoleRefusalBody): string | undefined {
   if (typeof body.code !== 'string') return undefined;
   const message = ROLE_REFUSAL_MESSAGES[body.code];
@@ -134,16 +137,16 @@ function roleRefusalReason(body: RoleRefusalBody): string | undefined {
     ? body.permissions.filter((name): name is string => typeof name === 'string')
     : [];
   const role = typeof body.role === 'string' ? body.role : '';
-  const details: string[] = [];
-  if (role !== '') details.push(t('pages.admin.roles.refusal.role', 'Role: {{role}}.', { role }));
+  const sentences = [message()];
+  if (role !== '') sentences.push(t('pages.admin.roles.refusal.role', 'Role: {{role}}.', { role }));
   if (permissions.length > 0) {
-    details.push(
+    sentences.push(
       t('pages.admin.roles.refusal.permissions', 'Permissions: {{permissions}}.', {
         permissions: permissions.join(', '),
       }),
     );
   }
-  return [message(), ...details].join(' ');
+  return sentences.join(' ');
 }
 
 /** `GET /admin/permissions/{scope}/{targetMode}` — the whole matrix, unpaginated. */
@@ -155,7 +158,10 @@ export function usePermissionMatrix(
     queryKey: adminRolesKeys.matrix(target),
     enabled: options.enabled ?? true,
     queryFn: async (): Promise<PermissionMatrixRow[]> =>
-      unwrapListPage<PermissionMatrixRow>(await eliteaFetch<unknown>(matrixUrl(target)), 'adminPermissionMatrix').rows,
+      unwrapListPage<PermissionMatrixRow>(
+        await eliteaFetch<unknown>(matrixUrl(target)),
+        'adminPermissionMatrix',
+      ).rows,
   });
 }
 
@@ -168,7 +174,11 @@ interface PermissionMatrixSaveVariables {
  * `PUT /admin/permissions/{scope}/{targetMode}` — the matrix as the page shows
  * it. The server diffs it against the stored one and applies the difference.
  */
-export function useSavePermissionMatrix(): UseMutationResult<void, Error, PermissionMatrixSaveVariables> {
+export function useSavePermissionMatrix(): UseMutationResult<
+  void,
+  Error,
+  PermissionMatrixSaveVariables
+> {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ target, rows }: PermissionMatrixSaveVariables) => {
@@ -284,11 +294,14 @@ export function useDeleteRole(): UseMutationResult<void, Error, RoleDeleteVariab
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ target, name }: RoleDeleteVariables) => {
-      await eliteaFetch<unknown>(`${roleDefinitionUrl(target)}?name=${encodeURIComponent(name)}`, {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
-      });
+      await eliteaFetch<unknown>(
+        `${roleDefinitionUrl(target)}?name=${encodeURIComponent(name)}`,
+        {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name }),
+        },
+      );
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: adminRolesKeys.all }),
   });

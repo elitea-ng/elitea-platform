@@ -59,6 +59,45 @@ func ResolveCaller(r *http.Request, resolver auth.PermissionResolver) (Caller, *
 	}, nil
 }
 
+// Reload reads the caller again. A write calls it after LockRoleWrites, so
+// that the set it checks against is the one no concurrent role write can
+// change before the commit.
+func (c Caller) Reload(ctx context.Context) (Caller, error) {
+	if c.resolver == nil {
+		return Caller{}, errors.New("rolepolicy: the caller has no resolver")
+	}
+	resolution, err := c.resolver.ResolvePermissions(ctx, c.principal, ModeAdministration, "")
+	if err != nil {
+		return Caller{}, err
+	}
+	if resolution.UserID != c.UserID {
+		return Caller{}, errors.New("rolepolicy: the caller resolved to another user")
+	}
+	administration := SetOf(resolution.Permissions...)
+	c.Administration = administration
+	c.SuperAdmin = administration[SuperAdminPermission]
+	return c, nil
+}
+
+// roleWritesLock is the key of the transaction-scoped advisory lock that every
+// write of role contents or role assignments takes (LockRoleWrites). It is an
+// arbitrary constant; "2488" ends it, for the issue.
+const roleWritesLock int64 = 0x726f6c6532488
+
+// LockRoleWrites serialises the writes that change role contents or role
+// assignments, until the transaction ends. A check that runs after it, inside
+// the same transaction, cannot be outdated by a concurrent role write before
+// the commit: a matrix save that widens a role cannot slip between the
+// assignment's check and its INSERT. Role writes are rare, so one lock is
+// cheaper than reasoning about row locks across four tables.
+func LockRoleWrites(ctx context.Context, q Querier) error {
+	var locked bool
+	if err := q.QueryRow(ctx, `SELECT true FROM pg_advisory_xact_lock($1)`, roleWritesLock).Scan(&locked); err != nil {
+		return fmt.Errorf("lock role writes: %w", err)
+	}
+	return nil
+}
+
 // CentralSet is the caller's set in a central mode.
 func (c Caller) CentralSet(ctx context.Context, mode string) (Set, error) {
 	if mode == ModeAdministration {
@@ -129,11 +168,16 @@ ORDER BY 1`, mode, roles)
 
 // UserCentralRoles are the roles of one central mode that a user holds.
 func UserCentralRoles(ctx context.Context, q Querier, userID int, mode string) ([]string, error) {
-	held, err := HeldCentralRoles(ctx, q, int64(userID), mode)
+	rows, err := q.Query(ctx, `
+SELECT DISTINCT role.name
+FROM public.auth_core__user_role assignment
+JOIN public.auth_core__role role ON role.id = assignment.role_id
+WHERE assignment.user_id = $1 AND role.mode = $2
+ORDER BY 1`, userID, mode)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read held roles: %w", err)
 	}
-	return SetOf(keys(held)...).Names(), nil
+	return scanStrings(rows)
 }
 
 // ProjectRolesPermissions is what a member who holds exactly these project
@@ -263,7 +307,13 @@ type SelfGuard struct {
 
 // BeginSelfGuard snapshots the caller's per-project sets. A super_admin caller
 // is exempt, and gets a guard that never refuses.
+//
+// It takes LockRoleWrites first, so the before-and-after compare cannot be
+// skewed by a concurrent role write.
 func BeginSelfGuard(ctx context.Context, q Querier, caller Caller) (*SelfGuard, error) {
+	if err := LockRoleWrites(ctx, q); err != nil {
+		return nil, err
+	}
 	guard := &SelfGuard{caller: caller}
 	if caller.SuperAdmin {
 		return guard, nil
@@ -303,12 +353,4 @@ func scanStrings(rows pgx.Rows) ([]string, error) {
 		values = append(values, value)
 	}
 	return values, rows.Err()
-}
-
-func keys(set map[string]bool) []string {
-	names := make([]string, 0, len(set))
-	for name := range set {
-		names = append(names, name)
-	}
-	return names
 }

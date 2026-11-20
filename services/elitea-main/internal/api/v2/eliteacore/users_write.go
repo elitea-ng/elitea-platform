@@ -229,7 +229,7 @@ func validEmail(address string) bool {
 // GetAuthUserByEmailForProvisioning → LinkAuthProviderIfMissing). Writing a
 // provider_ref here would guess at an identity the IdP has not asserted yet.
 func (h *Handler) UsersCreate(w http.ResponseWriter, r *http.Request) {
-	h.usersCreate(w, r, requestWriteMode(r), true)
+	h.usersCreate(w, r, requestWriteMode(r))
 }
 
 // AdministrationUsersCreate implements
@@ -237,12 +237,11 @@ func (h *Handler) UsersCreate(w http.ResponseWriter, r *http.Request) {
 // page's "Manage project member" dialog. It states its mode because the route
 // carries `administration` as a static segment; see requestWriteMode.
 func (h *Handler) AdministrationUsersCreate(w http.ResponseWriter, r *http.Request) {
-	h.usersCreate(w, r, userWriteModeAdministration, false)
+	h.usersCreate(w, r, userWriteModeAdministration)
 }
 
-// asMember is true on the `{mode}` route, whose gate resolves the caller in
-// the project; see users_write_policy.go.
-func (h *Handler) usersCreate(w http.ResponseWriter, r *http.Request, mode string, asMember bool) {
+// The no-escalation rule is in users_write_policy.go.
+func (h *Handler) usersCreate(w http.ResponseWriter, r *http.Request, mode string) {
 	projectID, ok := h.userWriteContext(w, r, mode)
 	if !ok {
 		return
@@ -276,13 +275,11 @@ func (h *Handler) usersCreate(w http.ResponseWriter, r *http.Request, mode strin
 		})
 		return
 	}
-	targets, err := h.userIDsByEmail(r, body.Emails)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to read project roles"})
-		return
-	}
+	// One refusal for the whole batch: every address gets the same roles, so
+	// a role the caller may not give is refused for all of them alike.
 	if refusal := h.checkMembershipChange(r, membershipChange{
-		projectID: projectID, asMember: asMember, assigned: roleIDs, targets: targets,
+		projectID: projectID, asMember: mode != userWriteModeAdministration, assigned: roleIDs,
+		invited: body.Emails,
 	}); refusal != nil {
 		rolepolicy.Write(w, r, refusal)
 		return
@@ -484,18 +481,17 @@ func (req usersUpdateRequest) userIDs() ([]int, error) {
 // it is the only place that revokes. TestUsersUpdateRoleChangeKeepsTokenProjectBindings
 // pins this.
 func (h *Handler) UsersUpdate(w http.ResponseWriter, r *http.Request) {
-	h.usersUpdate(w, r, requestWriteMode(r), true)
+	h.usersUpdate(w, r, requestWriteMode(r))
 }
 
 // AdministrationUsersUpdate implements
 // PUT /api/v2/admin/users/administration/{projectID} — the role change the
 // same member dialog submits. It states its mode; see requestWriteMode.
 func (h *Handler) AdministrationUsersUpdate(w http.ResponseWriter, r *http.Request) {
-	h.usersUpdate(w, r, userWriteModeAdministration, false)
+	h.usersUpdate(w, r, userWriteModeAdministration)
 }
 
-// asMember: see usersCreate.
-func (h *Handler) usersUpdate(w http.ResponseWriter, r *http.Request, mode string, asMember bool) {
+func (h *Handler) usersUpdate(w http.ResponseWriter, r *http.Request, mode string) {
 	projectID, ok := h.userWriteContext(w, r, mode)
 	if !ok {
 		return
@@ -537,7 +533,7 @@ func (h *Handler) usersUpdate(w http.ResponseWriter, r *http.Request, mode strin
 		return
 	}
 	if refusal := h.checkMembershipChange(r, membershipChange{
-		projectID: projectID, asMember: asMember, assigned: roleIDs, targets: userIDs, takesCurrent: true,
+		projectID: projectID, asMember: mode != userWriteModeAdministration, assigned: roleIDs, targets: userIDs,
 	}); refusal != nil {
 		rolepolicy.Write(w, r, refusal)
 		return
@@ -670,7 +666,7 @@ func (h *Handler) UsersDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	// The `{mode}` route is the only DELETE, and its gate is the member's.
 	if refusal := h.checkMembershipChange(r, membershipChange{
-		projectID: projectID, asMember: true, targets: userIDs, takesCurrent: true,
+		projectID: projectID, asMember: true, targets: userIDs,
 	}); refusal != nil {
 		rolepolicy.Write(w, r, refusal)
 		return

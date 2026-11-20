@@ -123,7 +123,10 @@ beforeEach(() => {
   adminReads = 0;
   adminRowsAfterFirstRead = ADMIN_ROWS;
   configureGeneratedClient({ baseUrl: '/api/v2' });
-  grantAdminUiPermissions(['configuration.roles.permissions.view', 'configuration.roles.permissions.edit']);
+  grantAdminUiPermissions([
+    'configuration.roles.permissions.view',
+    'configuration.roles.permissions.edit',
+  ]);
   useRolesHandlers();
 });
 
@@ -211,7 +214,7 @@ describe('Admin › Roles', () => {
       http.put('*/admin/permissions/:scope/:mode', () =>
         HttpResponse.json(
           {
-            error: 'you can grant only permissions that you hold',
+            error: 'you can grant or revoke only permissions that you hold',
             code: 'role_permission_not_held',
             role: 'editor',
             permissions: ['models.alpha.edit'],
@@ -286,7 +289,9 @@ describe('Admin › Roles', () => {
     await user.click(screen.getByRole('checkbox', { name: 'viewer: models.alpha.edit' }));
     await user.click(await screen.findByRole('button', { name: 'Discard' }));
 
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument(),
+    );
     expect(screen.getByRole('checkbox', { name: 'viewer: models.alpha.edit' })).not.toBeChecked();
     expect(recorded.some((entry) => entry.method === 'PUT')).toBe(false);
   });
@@ -381,7 +386,9 @@ describe('Admin › Roles', () => {
     // It is defined for administration/default alone, so it must not follow the
     // operator to a project tab.
     await user.click(screen.getByRole('tab', { name: 'Public Project' }));
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'Apply to Projects' })).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Apply to Projects' })).not.toBeInTheDocument(),
+    );
   });
 
   it('states why the support tab is unavailable instead of calling it a failure', async () => {

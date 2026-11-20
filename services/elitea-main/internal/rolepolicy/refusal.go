@@ -58,7 +58,10 @@ func Write(w http.ResponseWriter, r *http.Request, refusal *Refusal) {
 		"code", refusal.Code, "role", refusal.Role, "permissions", refusal.Permissions,
 		"project_id", refusal.ProjectID, "method", r.Method, "path", r.URL.Path)
 
+	// The headers apierr.WriteStatus sets. Its body carries only `error`, so the
+	// refusal keeps its own encoder for `code`, `role` and `permissions`.
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusForbidden)
 	_ = json.NewEncoder(w).Encode(refusal.Body())
 }

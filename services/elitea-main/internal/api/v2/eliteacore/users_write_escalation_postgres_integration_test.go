@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -155,17 +156,32 @@ func TestAnOperatorCannotGiveItsOwnAccountAProjectRole(t *testing.T) {
 	// The member reaches the ADMINISTRATION route: its gate is central, and
 	// the caller is an operator acting on a project.
 	router, memberID := escalationRouter(t, pool, "e2e-member@autotest.local")
-
-	recorder := usersWriteDo(t, router, http.MethodPut,
-		fmt.Sprintf("/admin/users/administration/%d", usersWriteProjectID),
-		map[string]any{"userId": fmt.Sprint(memberID), "roles": []string{"admin"}})
-	if recorder.Code != http.StatusForbidden || refusalCode(t, recorder.Body.Bytes()) != rolepolicy.CodeSelfEscalation {
-		t.Fatalf("status = %d body %s, want 403 %s", recorder.Code, recorder.Body.String(), rolepolicy.CodeSelfEscalation)
+	path := fmt.Sprintf("/admin/users/administration/%d", usersWriteProjectID)
+	var email string
+	if err := pool.QueryRow(context.Background(),
+		`SELECT email FROM public.auth_core__user WHERE id = $1`, memberID).Scan(&email); err != nil {
+		t.Fatal(err)
 	}
 
-	// Another account is the operator's to place.
-	recorder = usersWriteDo(t, router, http.MethodPost,
-		fmt.Sprintf("/admin/users/administration/%d", usersWriteProjectID),
+	for _, attempt := range []struct {
+		name, method string
+		body         map[string]any
+	}{
+		{"by id", http.MethodPut, map[string]any{"userId": fmt.Sprint(memberID), "roles": []string{"admin"}}},
+		// An invite of its own address, in another case, is the same account.
+		{"by address", http.MethodPost,
+			map[string]any{"emails": []string{" " + strings.ToUpper(email)}, "roles": []string{"admin"}}},
+	} {
+		recorder := usersWriteDo(t, router, attempt.method, path, attempt.body)
+		if recorder.Code != http.StatusForbidden ||
+			refusalCode(t, recorder.Body.Bytes()) != rolepolicy.CodeSelfEscalation {
+			t.Fatalf("%s: status = %d body %s, want 403 %s", attempt.name, recorder.Code,
+				recorder.Body.String(), rolepolicy.CodeSelfEscalation)
+		}
+	}
+
+	// Placing another account is the operator authority the central gate grants.
+	recorder := usersWriteDo(t, router, http.MethodPost, path,
 		map[string]any{"emails": []string{"e2e-newcomer@autotest.local"}, "roles": []string{"admin"}})
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("inviting another account: status = %d body %s, want 200", recorder.Code, recorder.Body.String())

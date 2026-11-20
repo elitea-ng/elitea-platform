@@ -67,6 +67,21 @@ func TestACallerCannotGrantAPermissionTheCallerDoesNotHold(t *testing.T) {
 	}
 }
 
+// A revoke is bound by the subset rule too: a caller who could strip the
+// reserved permission from super_admin would leave nobody able to grant it back.
+func TestACallerCannotRevokeAPermissionTheCallerDoesNotHold(t *testing.T) {
+	refusal := CheckCentralEdit(CentralEdit{
+		Caller: adminSet, Mode: ModeAdministration, HeldRoles: map[string]bool{"admin": true},
+		Revoked: []Cell{{Role: SuperAdminRole, Permission: SuperAdminPermission}},
+	})
+	if refusal == nil || refusal.Code != CodePermissionNotHeld || refusal.Role != SuperAdminRole {
+		t.Fatalf("refusal = %+v, want %s on %s", refusal, CodePermissionNotHeld, SuperAdminRole)
+	}
+	if !reflect.DeepEqual(refusal.Permissions, []string{SuperAdminPermission}) {
+		t.Fatalf("refusal names %v, want [%s]", refusal.Permissions, SuperAdminPermission)
+	}
+}
+
 func TestACallerCannotEditARoleTheCallerHolds(t *testing.T) {
 	for name, edit := range map[string]CentralEdit{
 		"grant a held permission": {Granted: []Cell{{Role: "admin", Permission: "runtime.plugins"}}},
@@ -138,6 +153,13 @@ func TestWriteAnswers403WithTheCodeAndAnnotatesTheAuditRow(t *testing.T) {
 
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", recorder.Code)
+	}
+	// The headers apierr.WriteStatus sets on every other JSON error.
+	if got := recorder.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Content-Type = %q", got)
+	}
+	if got := recorder.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("X-Content-Type-Options = %q, want nosniff", got)
 	}
 	var body map[string]any
 	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {

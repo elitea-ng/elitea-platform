@@ -18,24 +18,40 @@
 // `developer` mode. legacyrbac resolves administration permissions ONLY from
 // these roles (auth_core__user_role joined to auth_core__role by mode). Here:
 //
-//   - a caller adds a permission to a role only if the caller holds it in that
-//     mode (CodePermissionNotHeld);
+//   - a caller adds a permission to a role, or removes one from it, only if
+//     the caller holds it in that mode (CodePermissionNotHeld). A removal
+//     counts: a caller who could strip a permission it does not hold could
+//     empty a role above it, super_admin included, beyond repair;
 //   - a caller does not edit the set of a role the caller holds in that mode
 //     (CodeOwnRoleLocked);
-//   - a caller assigns or removes a role only if the caller holds every
-//     permission of that role (CodePermissionNotHeld).
+//   - a caller assigns or removes an administration role only if the caller
+//     holds every permission of that role (CodePermissionNotHeld). The retired
+//     developer mode grants nothing a route reads, so clearing one of its rows
+//     needs only the super_admin guard.
 //
 // The PROJECT plane: a central `default`-mode role (the template every project
 // inherits by role name) and an auth_core__project_role. These never resolve in
 // the administration plane, so no project write can make anyone a global
 // administrator. Inside a project:
 //
-//   - a project member who assigns or removes project roles holds every
-//     permission of those roles in that project (CodePermissionNotHeld);
-//   - a central operator, who holds no project permission by role, may not use
-//     a project-plane write to widen the caller's OWN set in any project
-//     (CodeSelfEscalation). The write is measured by its effect: the caller's
-//     per-project set before and after, inside the same transaction.
+//   - a project MEMBER who gives or takes project roles holds every permission
+//     of those roles in that project (CodePermissionNotHeld);
+//   - a SCIM group binding gives its role to members the directory pushes
+//     later, the caller possibly among them, so its effect cannot be measured
+//     when it is written. Creating, moving or deleting one needs every
+//     permission of the role in its project (CodePermissionNotHeld);
+//   - a central OPERATOR manages the members and roles of every project: that
+//     is the authority its central gate grants, and ADR-0059 keeps it (R0.9
+//     splits it out with its own roles). An operator usually holds no role in
+//     the project, so the rule there is the effect on the caller: a membership
+//     write, a bulk invite or a write of role CONTENTS (the template, Apply to
+//     Projects, a project matrix, a rename) may not widen the caller's OWN set
+//     in any project (CodeSelfEscalation). The contents writes are measured by
+//     their effect, the caller's per-project set before and after, inside the
+//     same transaction.
+//
+// The checks that a concurrent role write could outdate run under
+// LockRoleWrites, inside the write's own transaction.
 //
 // In BOTH planes:
 //
@@ -76,7 +92,7 @@ const (
 	// that the caller does not hold.
 	CodePermissionNotHeld = "role_permission_not_held"
 	// CodeOwnRoleLocked: the write changes the set of a role that the caller
-	// holds, or moves a SCIM group binding that the caller is a member of.
+	// holds.
 	CodeOwnRoleLocked = "role_own_set_locked"
 	// CodeReservedPermission: the write adds SuperAdminPermission to a role
 	// other than the administration super_admin role.
@@ -203,19 +219,22 @@ func CheckCentralEdit(edit CentralEdit) *Refusal {
 			}
 		}
 	}
-	required := make([]string, 0, len(edit.Granted))
-	for _, cell := range edit.Granted {
+	// Revokes count too: a caller who could strip a permission it does not
+	// hold could empty a role above it (super_admin included) beyond repair.
+	cells := append(append([]Cell{}, edit.Granted...), edit.Revoked...)
+	required := make([]string, 0, len(cells))
+	for _, cell := range cells {
 		required = append(required, cell.Permission)
 	}
 	if missing := Missing(edit.Caller, required); len(missing) > 0 {
 		role := ""
-		for _, cell := range edit.Granted {
+		for _, cell := range cells {
 			if !edit.Caller[cell.Permission] {
 				role = cell.Role
 				break
 			}
 		}
-		return NotHeld("you can grant only permissions that you hold", role, missing)
+		return NotHeld("you can grant or revoke only permissions that you hold", role, missing)
 	}
 	return nil
 }

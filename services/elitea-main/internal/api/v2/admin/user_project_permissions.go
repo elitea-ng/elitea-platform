@@ -200,6 +200,17 @@ func (h *Handler) UserProjectPermissionsSave(w http.ResponseWriter, r *http.Requ
 		rolepolicy.Write(w, r, refusal)
 		return
 	}
+	// `append_user_role` ASSIGNS the roles to every member of every target
+	// project. The subset rule would need the caller to hold them in projects
+	// it is not a member of, so the flag is super_admin only (issue 2488).
+	if appendUserRole && !caller.SuperAdmin {
+		rolepolicy.Write(w, r, &rolepolicy.Refusal{
+			Code: rolepolicy.CodeSuperAdminRequired,
+			Message: "only super_admin can use append_user_role, which gives the roles to every member " +
+				"of every target project",
+		})
+		return
+	}
 	result, err := h.applyRoleMap(
 		ctx, targets, roleMap, submittedRows, createMissingRoles, appendUserRole, caller)
 	if err != nil {

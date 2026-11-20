@@ -1,7 +1,8 @@
 package admin
 
-// The own-binding lock of the no-escalation rule (issue 2488) on
-// PUT /admin/scim_group_bindings/administration/{id}.
+// The no-escalation rule (issue 2488) on the SCIM group binding writes: the
+// order of the refusals and the fail-closed answer. The rule itself, against a
+// database, is in role_escalation_postgres_integration_test.go.
 
 import (
 	"context"
@@ -57,6 +58,30 @@ func TestABindingEditFailsClosedWhenTheCallerCannotBeRead(t *testing.T) {
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
 	require.Equal(t, rolepolicy.CodeCallerUnresolved, body["code"])
+}
+
+func TestEveryBindingWriteFailsClosedForACallerWhoIsNotASuperAdmin(t *testing.T) {
+	handler := NewHandler(nil, WithSCIMGroupBindings(&stubBindingStore{}),
+		WithPermissionResolver(fixedResolver{"configuration.roles.user_project_permissions.edit"}))
+	router := chi.NewRouter()
+	router.Post("/bindings", handler.SCIMGroupBindingCreate)
+	router.Put("/bindings/{id}", handler.SCIMGroupBindingSave)
+	router.Delete("/bindings/{id}", handler.SCIMGroupBindingDelete)
+	const body = `{"display_name":"Team","project_id":1,"role_name":"admin"}`
+	for _, call := range []struct{ method, target, body string }{
+		{http.MethodPost, "/bindings", body},
+		{http.MethodPut, "/bindings/7", body},
+		{http.MethodDelete, "/bindings/7", ""},
+	} {
+		request := httptest.NewRequest(call.method, call.target, strings.NewReader(call.body))
+		request = request.WithContext(auth.ContextWithUser(request.Context(), auth.User{ID: "5", UserID: "5"}))
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, request)
+		require.Equal(t, http.StatusForbidden, recorder.Code, "%s %s: %s", call.method, call.target, recorder.Body.String())
+		var decoded map[string]any
+		require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &decoded))
+		require.Equal(t, rolepolicy.CodeCallerUnresolved, decoded["code"])
+	}
 }
 
 func TestASuperAdminEditsABindingAsBefore(t *testing.T) {

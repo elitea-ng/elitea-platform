@@ -12,16 +12,20 @@ package eliteacore
 //     measured in this project. A member with `configuration.users.users.edit`
 //     cannot make anybody, the caller included, a project admin unless the
 //     caller holds all of the admin role.
-//   - Through the static `administration` routes, the gate is central and the
-//     caller is an operator of every project, who holds no project permission
-//     by role. There the rule is the effect on the caller: an operator cannot
-//     give the caller's own account a role whose permissions the caller does
-//     not already hold in the project.
+//   - Through the static `administration` routes (the admin Projects page), the
+//     gate is central. Managing the members of every project is the authority
+//     that central gate grants, and ADR-0059 keeps it a central-operator power
+//     (R0.9 splits it out with its own roles later). An operator usually holds
+//     no role in the project at all, so a subset rule there would refuse every
+//     member write it is entitled to. The rule there is the effect on the
+//     caller: an operator cannot give its OWN account a role whose permissions
+//     it does not already hold in the project.
 //
 // A holder of admin.auth.users.super_admin is exempt from both.
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
@@ -34,14 +38,16 @@ type membershipChange struct {
 	asMember bool
 	// assigned are the project role ids the write gives.
 	assigned []int
-	// targets are the users the write changes.
+	// targets are the users whose current roles the write removes (update and
+	// delete).
 	targets []int
-	// takesCurrent is true when the write removes the targets' current roles
-	// in the project (update and delete).
-	takesCurrent bool
+	// invited are the addresses a create adds. Only the operator path reads
+	// them, to find the caller's own account among them.
+	invited []string
 }
 
-// checkMembershipChange returns the refusal of a change, or nil.
+// checkMembershipChange returns the refusal of a change, or nil. A super_admin
+// caller is answered before any query.
 func (h *Handler) checkMembershipChange(r *http.Request, change membershipChange) *rolepolicy.Refusal {
 	caller, refusal := rolepolicy.ResolveCaller(r, h.permissionResolver)
 	if refusal != nil {
@@ -54,24 +60,22 @@ func (h *Handler) checkMembershipChange(r *http.Request, change membershipChange
 	unreadable := rolepolicy.Unresolved("the project roles could not be read, so the role change was refused")
 
 	roleIDs := append([]int{}, change.assigned...)
-	if !change.asMember {
-		// The operator path checks the effect on the caller only.
-		self := false
-		for _, target := range change.targets {
-			if int64(target) == caller.UserID {
-				self = true
-				break
+	if change.asMember {
+		if len(change.targets) > 0 {
+			current, err := rolepolicy.MembersProjectRoleIDs(ctx, h.pool, change.projectID, change.targets)
+			if err != nil {
+				return unreadable
 			}
+			roleIDs = append(roleIDs, current...)
+		}
+	} else {
+		self, err := h.callerIsAmong(r, caller.UserID, change)
+		if err != nil {
+			return unreadable
 		}
 		if !self {
 			return nil
 		}
-	} else if change.takesCurrent {
-		current, err := rolepolicy.MembersProjectRoleIDs(ctx, h.pool, change.projectID, change.targets)
-		if err != nil {
-			return unreadable
-		}
-		roleIDs = append(roleIDs, current...)
 	}
 
 	required, err := rolepolicy.ProjectRolesPermissions(ctx, h.pool, change.projectID, roleIDs)
@@ -97,26 +101,23 @@ func (h *Handler) checkMembershipChange(r *http.Request, change membershipChange
 	return refusal
 }
 
-// userIDsByEmail resolves the invited addresses that already have an account.
-// An address with no account cannot be the caller.
-func (h *Handler) userIDsByEmail(r *http.Request, emails []string) ([]int, error) {
-	normalized := make([]string, 0, len(emails))
-	for _, email := range emails {
+// callerIsAmong is true when the change reaches the caller's own account: as
+// a target, or as one of the invited addresses. The address lookup runs only
+// when there are addresses.
+func (h *Handler) callerIsAmong(r *http.Request, callerID int64, change membershipChange) (bool, error) {
+	if slices.Contains(change.targets, int(callerID)) {
+		return true, nil
+	}
+	if len(change.invited) == 0 {
+		return false, nil
+	}
+	normalized := make([]string, 0, len(change.invited))
+	for _, email := range change.invited {
 		normalized = append(normalized, strings.ToLower(strings.TrimSpace(email)))
 	}
-	rows, err := h.pool.Query(r.Context(),
-		`SELECT id FROM auth_core__user WHERE lower(email) = ANY($1::text[])`, normalized)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	ids := []int{}
-	for rows.Next() {
-		var id int
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
+	var self bool
+	err := h.pool.QueryRow(r.Context(),
+		`SELECT EXISTS (SELECT 1 FROM auth_core__user WHERE id = $1 AND lower(email) = ANY($2::text[]))`,
+		callerID, normalized).Scan(&self)
+	return self, err
 }

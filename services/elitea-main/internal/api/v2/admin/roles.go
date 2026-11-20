@@ -630,10 +630,10 @@ func (h *Handler) saveGrants(
 		return 0, 0, refusal
 	}
 	centralPlane := scope == scopeAdministration && rolepolicy.AdministrationPlane(mode)
-	if err := h.checkMatrixEdit(ctx, caller, centralPlane, mode, current, toGrant, toRevoke); err != nil {
-		return 0, 0, err
+	check := func(ctx context.Context, q rolepolicy.Querier) error {
+		return h.checkMatrixEdit(ctx, q, caller, centralPlane, mode, current, toGrant, toRevoke)
 	}
-	if err := h.applyGrantChanges(ctx, scope, mode, toGrant, toRevoke, caller, !centralPlane); err != nil {
+	if err := h.applyGrantChanges(ctx, scope, mode, toGrant, toRevoke, caller, !centralPlane, check); err != nil {
 		return 0, 0, err
 	}
 	return len(toGrant), len(toRevoke), nil
@@ -653,8 +653,11 @@ func (h *Handler) saveGrants(
 // project already HAD through the central fallback, so they are not checked
 // as new grants of the reserved permission. The effect guard still measures
 // them.
+//
+// It runs inside the write transaction, after rolepolicy.LockRoleWrites, and
+// reads the caller again there.
 func (h *Handler) checkMatrixEdit(
-	ctx context.Context, caller rolepolicy.Caller, centralPlane bool, mode string,
+	ctx context.Context, q rolepolicy.Querier, caller rolepolicy.Caller, centralPlane bool, mode string,
 	current permissionMatrix, toGrant, toRevoke []grant,
 ) error {
 	if !centralPlane {
@@ -672,11 +675,15 @@ func (h *Handler) checkMatrixEdit(
 		}
 		return nil
 	}
+	caller, err := caller.Reload(ctx)
+	if err != nil {
+		return rolepolicy.Unresolved("your own permissions could not be read, so the role change was refused")
+	}
 	callerSet, err := caller.CentralSet(ctx, mode)
 	if err != nil {
 		return fmt.Errorf("read the caller's %s permissions: %w", mode, err)
 	}
-	held, err := rolepolicy.HeldCentralRoles(ctx, h.pool, caller.UserID, mode)
+	held, err := rolepolicy.HeldCentralRoles(ctx, q, caller.UserID, mode)
 	if err != nil {
 		return err
 	}
@@ -761,9 +768,13 @@ func sortGrants(cells []grant) {
 // no-escalation rule on the same transaction: the caller's own per-project
 // sets are read before the first statement and again before the commit, and a
 // gain rolls the whole write back.
+//
+// `check` is the no-escalation check of the edit. It runs after
+// rolepolicy.LockRoleWrites and before the first statement, so no concurrent
+// role write can outdate it before the commit.
 func (h *Handler) applyGrantChanges(
 	ctx context.Context, scope, mode string, granted, revoked []grant,
-	caller rolepolicy.Caller, guardSelf bool,
+	caller rolepolicy.Caller, guardSelf bool, check func(context.Context, rolepolicy.Querier) error,
 ) error {
 	insertSQL, deleteSQL, scopeArg, err := h.grantStatements(ctx, scope, mode)
 	if err != nil {
@@ -776,6 +787,14 @@ func (h *Handler) applyGrantChanges(
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
 
+	if err := rolepolicy.LockRoleWrites(ctx, transaction); err != nil {
+		return err
+	}
+	if check != nil {
+		if err := check(ctx, transaction); err != nil {
+			return err
+		}
+	}
 	var guard *rolepolicy.SelfGuard
 	if guardSelf {
 		if guard, err = rolepolicy.BeginSelfGuard(ctx, transaction, caller); err != nil {
