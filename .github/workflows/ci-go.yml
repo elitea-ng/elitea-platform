@@ -24,9 +24,6 @@ jobs:
   proto:
     name: Protobuf contracts (lint, breaking, generated drift)
     runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
-    env:
-      # The pod's cgroup gives 4 CPU while the node reports more; hosted runners have 4.
-      GOMAXPROCS: "4"
     # #1359 D3: libs/proto is the one protobuf tree (the legacy proto/ +
     # gen/ were deleted), and every internal hop is gRPC, so a contract edit
     # is a wire change. Three gates, run only when the contracts, their
@@ -310,9 +307,6 @@ jobs:
   test-checks:
     name: Test checks (vet, generated code)
     runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
-    env:
-      # The pod's cgroup gives 4 CPU while the node reports more; hosted runners have 4.
-      GOMAXPROCS: "4"
     steps:
       - uses: actions/checkout@v7
       # eng-runner: caches and TMPDIR on the work volume (does nothing on hosted).

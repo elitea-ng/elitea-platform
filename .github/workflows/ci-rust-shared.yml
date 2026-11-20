@@ -39,10 +39,6 @@ jobs:
   shared-crates:
     name: Shared crates — rustdoc and tests
     runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
-    env:
-      # 4 CPU on the pool (nproc reports more) and on hosted runners.
-      CARGO_BUILD_JOBS: "4"
-      RUST_TEST_THREADS: "4"
     # 22 min measured cold for the first step alone (no cache under this
     # key yet); the agent-runtime steps reuse its build.
     timeout-minutes: 45

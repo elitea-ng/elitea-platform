@@ -43,10 +43,6 @@ jobs:
   extractor:
     name: elitea-doc-extractor — lint, test, the smallvec floor
     runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
-    env:
-      # 4 CPU on the pool (nproc reports more) and on hosted runners.
-      CARGO_BUILD_JOBS: "4"
-      RUST_TEST_THREADS: "4"
     timeout-minutes: 30
     defaults:
       run:

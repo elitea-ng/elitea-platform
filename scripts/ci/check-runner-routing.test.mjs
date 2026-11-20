@@ -151,6 +151,13 @@ test("a routed job that runs cargo, rustc, rustup or the toolchain assert must i
   assert.deepEqual(check(model({ schedule: [] }, routedJob({ steps: [{ run: "python3 scripts/contract/test_cargo_target_cache_freshness.py" }] }))).errors, []);
 });
 
+test("a toolchain installed after its first use is refused", () => {
+  const late = routedJob({ steps: [{ run: "python -m pytest" }, { uses: "actions/setup-python@v7" }] });
+  assert.match(check(model({ schedule: [] }, late)).errors.join(), /step 3 runs python before step 4 installs it/);
+  const goLate = routedJob({ steps: [{ run: "go vet ./..." }, { uses: "actions/setup-go@v7" }] });
+  assert.match(check(model({ schedule: [] }, goLate)).errors.join(), /runs go before/);
+});
+
 test("a routed job that runs python or pip must set up python; the image's python3 runs, but cannot pip install", () => {
   for (const run of ["python -m pytest -q", "pip install pytest", "python3 -m pip install --quiet pyyaml", "python3 -c 'import yaml' || python3 -m pip install pyyaml"]) {
     assert.match(check(model({ schedule: [] }, routedJob({ steps: [{ run }] }))).errors.join(), /runs python, but no step installs it.*setup-python/, run);
@@ -218,6 +225,8 @@ test("this repository's env action moves HOME, the caches and TMPDIR", () => {
   for (const name of ["HOME", "XDG_CACHE_HOME", "GOPATH", "GOMODCACHE", "GOCACHE", "GOLANGCI_LINT_CACHE", "npm_config_cache", "CARGO_HOME", "RUSTUP_HOME", "TMPDIR"]) {
     assert.match(text, new RegExp(`echo "${name}=`), name);
   }
+  // Parallelism is pinned to the pod's 4 CPUs for every routed job, here, on the pool only.
+  for (const name of ["GOMAXPROCS", "CARGO_BUILD_JOBS", "RUST_TEST_THREADS"]) assert.match(text, new RegExp(`echo "${name}=4"`), name);
   // rustup is pinned and checked, never piped from sh.rustup.rs.
   assert.match(text, /RUSTUP_VERSION: "\d+\.\d+\.\d+"/);
   assert.match(text, /RUSTUP_INIT_SHA256: [0-9a-f]{64}\n/);

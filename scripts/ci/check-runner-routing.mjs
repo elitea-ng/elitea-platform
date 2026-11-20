@@ -80,7 +80,9 @@ const TOOLCHAINS = [
   [/(?:^|[\s;&|(`$])(?:python|pip3?)\s|(?:^|[\s;&|(`$])python3\s+-m\s+pip\s+install\b/, (s) => /^actions\/setup-python@/.test(String(s.uses ?? "")), "python", "actions/setup-python"],
 ];
 export const MINIMUM_WORKFLOWS = 40;
-export const MINIMUM_ROUTED_JOBS = 35;
+// Below the 35 routed today with slack, so un-routing a job or two is not a guard change; far above the 21
+// before the heavy jobs moved, so losing the condition's recognition still fails.
+export const MINIMUM_ROUTED_JOBS = 30;
 
 // What cannot run in the pod. Read per line of a step's `run:`, comments dropped.
 const FORBIDDEN_RUN = [
@@ -215,9 +217,12 @@ export function check({ workflows, actions }) {
       });
       const steps = job.steps ?? [];
       for (const [runs, installs, tool, fix] of TOOLCHAINS) {
-        const uses = steps.some((s) => !strip(s.if).startsWith(HOSTED_ONLY) && String(s.run ?? "").split("\n").some((l) => runs.test(l.replace(/(^|\s)#.*$/, ""))));
-        if (uses && !steps.some(installs)) {
+        const firstUse = steps.findIndex((s) => !strip(s.if).startsWith(HOSTED_ONLY) && String(s.run ?? "").split("\n").some((l) => runs.test(l.replace(/(^|\s)#.*$/, ""))));
+        const firstInstall = steps.findIndex(installs);
+        if (firstUse >= 0 && firstInstall < 0) {
           errors.push(`${where}: routed to ${RUNNER} and runs ${tool}, but no step installs it (the pool's image has no ${tool}); add ${fix}`);
+        } else if (firstUse >= 0 && firstInstall > firstUse) {
+          errors.push(`${where}: step ${firstUse + 1} runs ${tool} before step ${firstInstall + 1} installs it; on ${RUNNER} that is "command not found". Move ${fix} up`);
         }
       }
       // The cache-dir step: present, unconditional, and before every action but the checkout.

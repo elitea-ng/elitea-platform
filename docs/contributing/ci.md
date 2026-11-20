@@ -128,7 +128,9 @@ A job runs directly in the pod (Ubuntu 24.04):
   the `cc` crate), cmake, pkg-config, zstd, shellcheck, gh, helm, yq and skopeo. node, Go, Python and rustup come
   from the job: `setup-*` actions, or `eng-runner-env` with `node: "true"` or `rust: "true"`. Its `python3` is
   Ubuntu's, whose pip refuses to install (PEP 668), so a job that runs `python`, `pip` or `python3 -m pip
-  install` sets up Python.
+  install` sets up Python. `setup-python` needs no root here: the image points `RUNNER_TOOL_CACHE` and
+  `AGENT_TOOLSDIRECTORY` at `/home/runner/_work/_tool`, and the Python installer only copies into that
+  directory. The aws CLI is not in the image; `repo-gates` installs it with pip on the pool.
 - **10 GiB of disk outside `/home/runner/_work`.** That is the container's ephemeral-storage limit. Only
   `_work` is the separate 80 GiB volume, and a pod that writes past the limit is evicted. The default places
   for `~/go/pkg/mod`, `~/.cache/go-build`, `~/.npm`, `~/.cargo`, `~/.cache` and `/tmp` all count against it.
@@ -172,16 +174,20 @@ Everything else stays hosted:
 - **macOS and Windows**, including `ci-desktop-control.yml`, whose matrix has a Windows leg.
 - **Every event but `pull_request`**, so the scheduled runs on main, which write the caches, stay hosted.
 
-The routed jobs pin their parallelism to the pod's 4 CPUs, because the node reports 8: `GOMAXPROCS=4`,
-`--maxWorkers=4`, `CARGO_BUILD_JOBS=4` (`1` in `code-runner`, as before) and `RUST_TEST_THREADS=4`. A step that
+The routed jobs pin their parallelism to the pod's 4 CPUs, because the node reports 8. `eng-runner-env` sets
+`GOMAXPROCS=4`, `CARGO_BUILD_JOBS=4` and `RUST_TEST_THREADS=4` on the pool only, and a job's own `env:` still wins
+(`CARGO_BUILD_JOBS=1` in `code-runner`); the web jobs pass `--maxWorkers=4`. A step that
 frees hosted-runner disk with `sudo rm` runs on hosted runners only (`if: runner.environment ==
 'github-hosted'`): the pool builds on its 80 GiB work volume. Binaries a job downloads (kubeconform,
 cargo-deny) go into a directory under `RUNNER_TEMP` on `PATH`, not `/usr/local/bin`.
 `scripts/ci/install-golangci-lint.sh` fetches golangci-lint with curl and jq (no gh), on both kinds of runner.
 
 Every routed job runs `./.github/actions/eng-runner-env` straight after its checkout. On a GitHub-hosted runner
-it does nothing, so the hosted path is unchanged. On the pool it does three things:
+it does nothing, so the hosted path is unchanged. On the pool it does these things:
 
+- It fails at once, naming the tool, when the pod's image lacks one the routed jobs take from it (cc, c++,
+  make, cmake, pkg-config, zstd, git, jq, curl, unzip, gh, helm, yq, shellcheck).
+- It pins the parallelism (above).
 - It moves `HOME` to `/home/runner/_work/_home`, and sets `XDG_CACHE_HOME`, `GOPATH`, `GOMODCACHE`,
   `GOCACHE`, `GOLANGCI_LINT_CACHE`, `npm_config_cache`, `CARGO_HOME` and `RUSTUP_HOME` under it. It also sets
   `TMPDIR` to `RUNNER_TEMP`, which covers jest's cache in `os.tmpdir()`; vitest caches in `node_modules`. Because

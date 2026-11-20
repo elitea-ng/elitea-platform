@@ -38,10 +38,6 @@ jobs:
   scan:
     name: Dependency scanning
     runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
-    env:
-      # The pod's cgroup gives 4 CPU while the node reports more; hosted runners have 4.
-      GOMAXPROCS: "4"
-      CARGO_BUILD_JOBS: "4"
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7

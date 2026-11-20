@@ -38,6 +38,17 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        # The tools the routed jobs take from the image
+        # (deploy/ci-runners/image/Containerfile). A pod on an image without
+        # one fails here, by name, not halfway through a build.
+        missing=""
+        for tool in cc c++ make cmake pkg-config zstd git jq curl unzip gh helm yq shellcheck; do
+          command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
+        done
+        if [ -n "$missing" ]; then
+          echo "::error::eng-runner-env: this pod's image lacks:$missing. The routed jobs need the eng-runner image (deploy/ci-runners/image/); set ENG_RUNNER to off until the pool runs it."
+          exit 1
+        fi
         work="$(dirname -- "$RUNNER_TEMP")"   # /home/runner/_work, the 80 GiB volume
         home="$work/_home"
         mkdir -p "$home/.cache" "$RUNNER_TEMP"
@@ -57,6 +68,12 @@ runs:
           echo "CARGO_HOME=$home/.cargo"
           echo "RUSTUP_HOME=$home/.rustup"
           echo "TMPDIR=$RUNNER_TEMP"
+          # The pod's cgroup gives 4 CPU while nproc reports the node's 8.
+          # Every routed job gets the pin here, on the pool only; a job's own
+          # `env:` (CARGO_BUILD_JOBS "1" in code-runner) still wins.
+          echo "GOMAXPROCS=4"
+          echo "CARGO_BUILD_JOBS=4"
+          echo "RUST_TEST_THREADS=4"
         } >> "$GITHUB_ENV"
         echo "eng-runner: HOME, caches and TMPDIR under $work"
     - uses: actions/setup-node@v7
