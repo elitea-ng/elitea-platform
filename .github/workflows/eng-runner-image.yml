@@ -54,6 +54,8 @@ jobs:
   build:
     name: Build and smoke-test
     runs-on: ubuntu-latest
+    # About 6 minutes with the service binaries and the browsers (measured on
+    # the PR that added them; the image is ~1.7 GB compressed).
     timeout-minutes: 30
     outputs:
       runner-version: ${{ steps.meta.outputs.runner-version }}
@@ -73,6 +75,24 @@ jobs:
             exit 1
           fi
           echo "runner-version=${version}" >> "$GITHUB_OUTPUT"
+
+      # Before the long build: the baked browsers must be the release
+      # apps/elitea-web's @playwright/test drives (ci-web runs the same check
+      # when the library moves).
+      - name: The baked Playwright is the web app's
+        run: node apps/elitea-web/scripts/check-playwright-image-tag.mjs
+
+      - name: Free runner disk for the image
+        # The image is built in the BuildKit container, loaded into the
+        # daemon and saved to a tarball: three copies of a multi-GB image. Bounded and
+        # NON-FATAL, as in ci-rust.yml: a refused rm only warns, and the
+        # build then fails honestly on ENOSPC.
+        run: |
+          df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/share/boost /opt/hostedtoolcache/CodeQL \
+            || echo "::warning::could not remove every preinstalled toolchain; continuing"
+          df -h / | tail -1
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -139,6 +159,7 @@ jobs:
             "$TMPDIR/v/bin/pip" --version
             test "$("$TMPDIR/v/bin/pip" cache dir)" = "$PIP_CACHE_DIR"
             pip --version
+            python3 -c "import yaml; print(\"pyyaml\", yaml.__version__)"
             shellcheck --version
             gh --version
             helm version
@@ -171,6 +192,134 @@ jobs:
           '
           docker image inspect "$REF" --format 'size: {{.Size}} bytes, user: {{.Config.User}}' | tee -a "$GITHUB_STEP_SUMMARY"
 
+      # The service binaries and the browsers, as the runner user (uid 1001)
+      # from an empty _work, the way a job on the pool runs them: no root, no
+      # IPC_LOCK, data and sockets under _work. Every binary prints its
+      # version; the servers a services job starts are also started, probed
+      # for health and stopped. The browsers are launched for real with the
+      # host's node and the pinned playwright-core mounted OUTSIDE PATH (the
+      # image ships no node).
+      - name: Smoke-test the service binaries and browsers, as the runner user
+        env:
+          REF: ${{ env.IMAGE }}:${{ steps.meta.outputs.runner-version }}
+        run: |
+          set -euo pipefail
+          smoke="${RUNNER_TEMP}/smoke"
+          mkdir -p "$smoke"
+          version="$(sed -n 's/^ARG PLAYWRIGHT_VERSION=\([0-9][0-9.]*\)$/\1/p' "$CONTAINERFILE")"
+          test -n "$version"
+          # npm checks the tarball against the registry's integrity.
+          (cd "$smoke" && npm pack --silent "playwright-core@${version}" >/dev/null && tar -xzf "playwright-core-${version}.tgz")
+          cp "$(readlink -f "$(command -v node)")" "$smoke/node"
+          cat > "$smoke/browsers.cjs" <<'JS'
+          const pw = require('/opt/smoke/package');
+          (async () => {
+            for (const [name, opts] of [['chromium', {}], ['chromium', { channel: 'chromium' }], ['webkit', {}]]) {
+              const browser = await pw[name].launch(opts);
+              const page = await browser.newPage();
+              await page.setContent('<p>ok</p>');
+              const text = await page.textContent('p');
+              if (text !== 'ok') throw new Error(`${name} rendered ${text}`);
+              console.log(`${name}${opts.channel ? ' (' + opts.channel + ')' : ''} ${browser.version()} ok`);
+              await browser.close();
+            }
+          })().catch((err) => { console.error(err); process.exit(1); });
+          JS
+
+          docker run --rm --entrypoint /bin/bash \
+            --tmpfs /home/runner/_work:rw,exec,uid=1001,gid=1001,size=2g \
+            --shm-size=2g \
+            -v "$smoke:/opt/smoke:ro" \
+            "$REF" -euo pipefail -c '
+            test "$(id -u)" = 1001
+            mkdir -p "$TMPDIR"
+            wait_for() {
+              for _ in $(seq 1 150); do
+                if "$@" >/dev/null 2>&1; then return 0; fi
+                sleep 0.2
+              done
+              echo "never ready: $*" >&2
+              return 1
+            }
+
+            # PostgreSQL 18: a cluster of our own under _work, over TCP and the
+            # socket, then stopped.
+            for b in postgres initdb pg_ctl pg_isready psql pgbouncer; do "$b" --version; done
+            postgres --version | grep -q "(PostgreSQL) 18\."
+            pg="$TMPDIR/pg"; mkdir -p "$pg"
+            echo smoke > "$TMPDIR/pgpw"
+            initdb -D "$pg/data" -U elitea --pwfile="$TMPDIR/pgpw" -A scram-sha-256 >/dev/null
+            pg_ctl -D "$pg/data" -l "$pg/log" -w \
+              -o "-c listen_addresses=127.0.0.1 -c port=55432 -c unix_socket_directories=$pg -c fsync=off" start
+            pg_isready -h 127.0.0.1 -p 55432
+            PGPASSWORD=smoke psql -h 127.0.0.1 -p 55432 -U elitea -d postgres -tAc "select version()"
+            PGPASSWORD=smoke psql -h "$pg" -p 55432 -U elitea -d postgres -tAc "select 1" | grep -qx 1
+            pg_ctl -D "$pg/data" -m fast -w stop
+
+            # NATS with JetStream, and the CLI against it.
+            nats-server --version
+            nats --version
+            nats-server -js -sd "$TMPDIR/nats" -a 127.0.0.1 -p 54222 -m 58222 > "$TMPDIR/nats.log" 2>&1 &
+            nats_pid=$!
+            wait_for curl -fsS "http://127.0.0.1:58222/healthz?js-enabled-only=true"
+            nats --server nats://127.0.0.1:54222 account info >/dev/null
+            kill "$nats_pid"; wait "$nats_pid" || true
+
+            # Qdrant, storage under _work.
+            qdrant --version
+            mkdir -p "$TMPDIR/qdrant"
+            (cd "$TMPDIR/qdrant" && \
+              QDRANT__SERVICE__HOST=127.0.0.1 QDRANT__SERVICE__HTTP_PORT=56333 QDRANT__SERVICE__GRPC_PORT=56334 \
+              QDRANT__STORAGE__STORAGE_PATH="$TMPDIR/qdrant/storage" QDRANT__STORAGE__SNAPSHOTS_PATH="$TMPDIR/qdrant/snapshots" \
+              QDRANT__TELEMETRY_DISABLED=true exec qdrant > "$TMPDIR/qdrant.log" 2>&1) &
+            qdrant_pid=$!
+            wait_for curl -fsS http://127.0.0.1:56333/readyz
+            kill "$qdrant_pid"; wait "$qdrant_pid" || true
+
+            # OpenBao dev server without IPC_LOCK (the pool has no capabilities).
+            bao version
+            bao server -dev -dev-listen-address=127.0.0.1:58200 -dev-root-token-id=smoke > "$TMPDIR/bao.log" 2>&1 &
+            bao_pid=$!
+            BAO_ADDR=http://127.0.0.1:58200 wait_for bao status
+            kill "$bao_pid"; wait "$bao_pid" || true
+
+            # The storage emulators and the OIDC mock.
+            rustfs --version
+            rc --version
+            fake-gcs-server -scheme http -host 127.0.0.1 -port 54443 -backend memory > "$TMPDIR/gcs.log" 2>&1 &
+            gcs_pid=$!
+            wait_for curl -fsS http://127.0.0.1:54443/storage/v1/b
+            kill "$gcs_pid"; wait "$gcs_pid" || true
+            oidc-provider-mock --help >/dev/null
+            oidc-provider-mock --host 127.0.0.1 --port 59400 > "$TMPDIR/oidc.log" 2>&1 &
+            oidc_pid=$!
+            wait_for curl -fsS http://127.0.0.1:59400/.well-known/openid-configuration
+            kill "$oidc_pid"; wait "$oidc_pid" || true
+
+            # nginx as non-root, with every path in a prefix of its own.
+            nginx -v
+            ng="$TMPDIR/nginx"; mkdir -p "$ng"
+            printf "pid %s/nginx.pid;\nerror_log %s/error.log;\nevents {}\nhttp { access_log off; client_body_temp_path %s; proxy_temp_path %s; fastcgi_temp_path %s; uwsgi_temp_path %s; scgi_temp_path %s; server { listen 127.0.0.1:58080; location / { return 200 ok; } } }\n" \
+              "$ng" "$ng" "$ng" "$ng" "$ng" "$ng" "$ng" > "$ng/nginx.conf"
+            nginx -p "$ng" -e "$ng/error.log" -c "$ng/nginx.conf" -t
+            nginx -p "$ng" -e "$ng/error.log" -c "$ng/nginx.conf"
+            wait_for curl -fsS http://127.0.0.1:58080/
+            nginx -p "$ng" -e "$ng/error.log" -c "$ng/nginx.conf" -s stop
+
+            # The Tauri host-test build libraries.
+            pkg-config --modversion webkit2gtk-4.1 gtk+-3.0 libsoup-3.0 ayatana-appindicator3-0.1 librsvg-2.0 openssl
+            test -e /usr/include/xdo.h
+            echo "libxdo ok"
+
+            # The baked browsers: read-only to the runner, and they launch.
+            test "$PLAYWRIGHT_BROWSERS_PATH" = /ms-playwright
+            if touch /ms-playwright/.smoke 2>/dev/null; then echo "/ms-playwright is writable by the runner" >&2; exit 1; fi
+            if ls -d /ms-playwright/firefox-* 2>/dev/null; then echo "firefox is baked in" >&2; exit 1; fi
+            /opt/smoke/node /opt/smoke/browsers.cjs
+            if command -v node >/dev/null; then echo "node is on PATH" >&2; exit 1; fi
+            echo "services smoke ok"
+          '
+
       # On every run, pull requests included, so the save -> skopeo path the
       # publish job depends on is proven before a merge, not first on main.
       - name: Save the tested image and check the archive
@@ -201,6 +350,12 @@ jobs:
           echo "image-id=${config}" >> "$GITHUB_OUTPUT"
           echo "smoke-tested image config ${config}" | tee -a "$GITHUB_STEP_SUMMARY"
           ls -l "$archive"
+          # What the pool pulls is the gzip-compressed layers. The hosted
+          # runners' containerd image store keeps the layers compressed, and
+          # `docker save` writes them as stored, so their sum in the archive is
+          # the size publish pushes (publish prints the exact figure).
+          layers="$(skopeo inspect --raw "docker-archive:${archive}" | jq '[.layers[].size] | add')"
+          echo "layers in the saved archive: $((layers / 1024 / 1024)) MiB" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the tested image
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
@@ -216,7 +371,8 @@ jobs:
     needs: build
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Downloading the ~1.7 GB archive and pushing it.
+    timeout-minutes: 40
     permissions:
       contents: read
       packages: write
@@ -269,6 +425,8 @@ jobs:
             echo "Published \`${IMAGE}:${tag}\` (pin this one) and \`${IMAGE}:${VERSION}\`"
             echo
             echo "digest \`${digest}\`"
+            echo
+            echo "compressed size $(skopeo inspect --raw "docker://${IMAGE}:${tag}" | jq '[.layers[].size] | add / 1048576 | floor') MiB (sum of the pushed layers)"
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
   runner-pin:
