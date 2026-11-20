@@ -201,3 +201,8 @@ test("a run with an unreadable updated_at fails before deleting from that packag
   await assert.rejects(run(github), /ci-cache-elitea-main: version 2 has an unreadable updated_at 'not a date'/);
   assert.deepEqual(github.deleted, []);
 });
+
+test("the packages a workflow step pushes directly are pruned too, and are ci-* packages", () => {
+  assert.ok(p.EXTRA_CI_PACKAGES.length > 0);
+  for (const name of p.EXTRA_CI_PACKAGES) assert.ok(p.isCiPackage(name), `${name} must be a ci-* package or the prune refuses it`);
+});

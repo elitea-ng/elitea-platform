@@ -1,0 +1,82 @@
+#!/usr/bin/env node
+// The verdicts of ci.yml: `fast-gate` (stage `fast`) and `ci-gate` (`final`).
+//
+// Both run with `if: always()` and read what their `needs` did, so a job that
+// the path filter skipped counts as a success and a job that FAILED or was
+// CANCELLED never does. What a skip means depends on why it happened, which is
+// why the gate also reads the `changes` output:
+//
+//   run[job] false      the change does not reach the job: skipped is correct.
+//   run[job] true       the job must have succeeded. A fast job that was skipped
+//                       anyway, or a heavy job skipped because the fast tier
+//                       failed or the pull request is a draft, is MISSING: the
+//                       gate names it and fails, so a check list that went green
+//                       by absence cannot reach a required check.
+//
+// `final` also fails while the pull request is a draft: the heavy tier has not
+// run, so the pull request has no verdict yet. That is the message an agent
+// reads before it marks a draft ready (AGENTS.md).
+
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { isEntrypoint } from "./py-compat.mjs";
+
+const SELF = fileURLToPath(import.meta.url);
+export const TIERS_FILE = path.join(path.dirname(SELF), "tier-paths.json");
+
+/**
+ * @param {{stage: "fast"|"final", needs: Record<string,{result:string}>, run: Record<string,boolean>, draft: boolean, tiers: {jobs: Record<string,{tier:string}>}}} input
+ * @returns {{ok: boolean, problems: string[]}}
+ */
+export function evaluate({ stage, needs, run, draft, tiers }) {
+  const problems = [];
+  const changes = needs.changes?.result;
+  if (changes !== "success") {
+    problems.push(`changes: ${changes ?? "missing"} — the path filter did not produce a verdict`);
+    return { ok: false, problems };
+  }
+  for (const [id, job] of Object.entries(tiers.jobs)) {
+    if (stage === "fast" && job.tier !== "fast") continue;
+    const result = needs[id]?.result;
+    if (result === undefined) {
+      problems.push(`${id}: not in the gate's needs`);
+    } else if (result === "failure" || result === "cancelled") {
+      problems.push(`${id}: ${result}`);
+    } else if (run[id] === true && result !== "success") {
+      // A draft never runs the heavy tier: the one `draft` problem below says so.
+      if (draft && job.tier === "heavy") continue;
+      const why = job.tier === "heavy" ? "the fast tier did not pass" : "it did not run";
+      problems.push(`${id}: missing (${result}; ${why})`);
+    }
+  }
+  if (stage === "fast") {
+    return { ok: problems.length === 0, problems };
+  }
+  if (needs["fast-gate"]?.result !== "success") problems.push(`fast-gate: ${needs["fast-gate"]?.result ?? "missing"}`);
+  if (draft) problems.unshift("draft: the pull request is a draft, so the heavy tier has not run — mark it ready for review (gh pr ready) once the fast tier is green");
+  return { ok: problems.length === 0, problems };
+}
+
+export function main(env = process.env, log = console.log, err = console.error) {
+  const stage = process.argv[2] === "fast" ? "fast" : "final";
+  const tiers = JSON.parse(fs.readFileSync(TIERS_FILE, "utf8"));
+  const needs = JSON.parse(env.NEEDS || "{}");
+  let run = {};
+  try {
+    run = JSON.parse(env.RUN || "{}");
+  } catch {
+    run = {};
+  }
+  const { ok, problems } = evaluate({ stage, needs, run, draft: env.DRAFT === "true", tiers });
+  for (const [id, n] of Object.entries(needs)) log(`${String(n.result).padEnd(10)} ${id}`);
+  if (!ok) {
+    for (const p of problems) err(`::error::${stage === "fast" ? "fast tier" : "ci-gate"}: ${p}`);
+    return 1;
+  }
+  log(stage === "fast" ? "the fast tier passed" : "every job that should have run passed");
+  return 0;
+}
+
+if (isEntrypoint(import.meta.url)) process.exit(main());

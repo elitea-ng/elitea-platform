@@ -15,18 +15,9 @@ name: CI — Mobile app
 # this job too; the package's own tests run in ci-web.yml's static gates.
 
 on:
-  pull_request:
-    paths:
-      - "apps/elitea-mobile/**"
-      - "services/elitea-main/api/openapi/v2.yaml"
-      - "libs/ts/client-core/**"
-      # app.config.ts builds the identity from the brand manifest (ADR-0052).
-      - "brand/elitea/**"
-      - "brand/sample/**"
-      - "scripts/brand/**"
-      - "scripts/ci/brand-output-scan.mjs"
-      - ".github/workflows/ci-mobile.yml"
-      - ".github/actions/npm-cache/**"
+  # Called by ci.yml, which owns the PR tiers and the path filter
+  # (scripts/ci/tier-paths.json); no `pull_request` arm of its own.
+  workflow_call:
   # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
   # The nightly run on main is the one that WRITES the caches pull requests
   # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
@@ -36,7 +27,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ci-mobile-${{ github.ref }}
   # Main runs are not cancelled: they write the npm cache (pull requests read, main writes).
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
