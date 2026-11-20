@@ -19,6 +19,14 @@ describe('node settings helpers', () => {
     expect(writeNodeSettings({ execute_once: true }, { execute_once: false })).toBeUndefined();
     expect(writeNodeSettings({ on_error: 'error_output', error_transition: 'b' }, { on_error: 'continue' })).toEqual({ on_error: 'continue' });
     expect(writeNodeSettings(undefined, { always_output_data: true })).toEqual({ always_output_data: true });
+    // Turning off retry_on_fail drops coupled max_tries and wait_between_tries_ms cleanly.
+    expect(
+      writeNodeSettings({ retry_on_fail: true, max_tries: 4, wait_between_tries_ms: 500 }, { retry_on_fail: false }),
+    ).toBeUndefined();
+    expect(
+      writeNodeSettings({ retry_on_fail: true, max_tries: 4, timeout_ms: 5000 }, { retry_on_fail: false }),
+    ).toEqual({ timeout_ms: 5000 });
+    expect(writeNodeSettings({ timeout_ms: 5000 }, { timeout_ms: undefined })).toBeUndefined();
   });
 
   it('reads defaults for an absent or invalid block', () => {

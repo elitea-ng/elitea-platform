@@ -336,6 +336,10 @@ export function readNodeSettings(node: YamlPipelineNode | undefined): NodeSettin
 export function writeNodeSettings(current: Readonly<Record<string, unknown>> | undefined, change: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> | undefined {
   const next: Record<string, unknown> = { ...(isRecord(current) ? current : {}), ...change };
   if (next['on_error'] !== 'error_output') delete next['error_transition'];
+  if (next['retry_on_fail'] !== true) {
+    delete next['max_tries'];
+    delete next['wait_between_tries_ms'];
+  }
   for (const [key, value] of Object.entries(next)) {
     if (value === undefined || value === false || (key === 'on_error' && value === 'stop')) delete next[key];
   }

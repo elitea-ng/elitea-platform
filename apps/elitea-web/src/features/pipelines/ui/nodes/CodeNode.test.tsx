@@ -294,4 +294,43 @@ describe('CodeNode', () => {
     expect(toggle).toBeChecked(); expect(toggle).toBeDisabled();
     fireEvent.click(toggle); expect(setYamlJsonObject).not.toHaveBeenCalled();
   });
+
+  it('edits Code settings (Retry on fail and Timeout) and survives YAML round-trip', async () => {
+    const user = userEvent.setup();
+    const node = { id: 'Node1', type: 'code', code: { type: 'fixed', value: 'result = 1' }, output: ['answer'], transition: 'END' };
+    let saved: YamlPipelineDocument = { entry_point: 'Node1', nodes: [node] };
+    const setYamlJsonObject = vi.fn((document: YamlPipelineDocument) => { saved = document; });
+    const ui = renderCodeNodeBare({ expandAll: true, yamlJsonObject: saved, setYamlJsonObject });
+
+    await user.click(await ui.findByRole('button', { name: 'Settings' }));
+    await user.click(ui.getByRole('switch', { name: 'Retry on fail' }));
+    expect(saved.nodes?.[0]?.['settings']).toEqual({ retry_on_fail: true });
+    ui.unmount();
+
+    // Reopen from dumped/loaded YAML and verify retry controls & timeout survive round-trip.
+    const withTimeout: YamlPipelineDocument = {
+      ...saved,
+      nodes: [{ ...saved.nodes![0]!, settings: { retry_on_fail: true, max_tries: 4, wait_between_tries_ms: 250, timeout_ms: 5000 } }],
+    };
+    const reopened = renderCodeNodeBare({
+      expandAll: true,
+      yamlJsonObject: load(dump(withTimeout)) as YamlPipelineDocument,
+    });
+    await user.click(await reopened.findByRole('button', { name: 'Settings' }));
+    expect(reopened.getByRole('switch', { name: 'Retry on fail' })).toBeChecked();
+    expect(reopened.getByLabelText('Max tries')).toHaveValue(4);
+    expect(reopened.getByLabelText('Wait between tries (ms)')).toHaveValue(250);
+    expect(reopened.getByLabelText('Timeout (ms)')).toHaveValue(5000);
+  });
+
+  it('renders the Error output handle on Code when on_error is error_output', async () => {
+    const { findByText, container } = renderCodeNode({
+      yamlJsonObject: {
+        entry_point: 'Node1',
+        nodes: [{ id: 'Node1', type: 'code', settings: { on_error: 'error_output', error_transition: 'END' } }],
+      },
+    });
+    await findByText('Node1');
+    expect(container.querySelectorAll('.react-flow__handle')).toHaveLength(3);
+  });
 });
