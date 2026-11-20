@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -492,6 +493,41 @@ func TestAGroupBindingAssignsOnlyARoleTheCallerHolds(t *testing.T) {
 	expectRefusal(t, adminDo(t, router, http.MethodPut, path, bind("viewer")), rolepolicy.CodePermissionNotHeld)
 	expectRefusal(t, adminDo(t, router, http.MethodDelete, path, nil), rolepolicy.CodePermissionNotHeld)
 	expectStatus(t, adminDo(t, bindingsAs(escalationSuper), http.MethodDelete, path, nil), http.StatusNoContent)
+}
+
+/* ── the role-writes lock ─────────────────────────────────────────────── */
+
+// A check made under a hold cannot be outdated before the hold ends: a second
+// role write waits for the lock until the hold is released.
+func TestARoleWriteWaitsForTheHoldOfAnother(t *testing.T) {
+	env := newEscalationEnvironment(t)
+	ctx := context.Background()
+	_, release, err := rolepolicy.HoldRoleWrites(ctx, env.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := env.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = second.Rollback(ctx) }()
+	waiting, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	defer cancel()
+	if err := rolepolicy.LockRoleWrites(waiting, second); err == nil {
+		t.Fatal("a second role write took the lock while another write held it")
+	}
+	_ = second.Rollback(ctx)
+
+	release()
+	third, err := env.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = third.Rollback(ctx) }()
+	if err := rolepolicy.LockRoleWrites(ctx, third); err != nil {
+		t.Fatalf("the lock is still held after release: %v", err)
+	}
 }
 
 func projectRoleNamesSQL(t *testing.T, pool *pgxpool.Pool, projectID int) []string {

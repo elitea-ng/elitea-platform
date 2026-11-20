@@ -25,9 +25,9 @@ changes role contents or role assignments:
 - `append_user_role` on `/admin/user_project_permissions` is super admin only.
 
 A super admin (holder of `admin.auth.users.super_admin`) is exempt from all rules except the
-reserved permission rule. The checks of the matrix save and of the central assignments run inside
-the write transaction, under one advisory lock that the role writes share, so a concurrent role
-write cannot outdate them. A refusal is `403` with a `code` (`role_permission_not_held`,
+reserved permission rule. Every check runs under one transaction-scoped advisory lock that all
+role writes share, from the check until the last commit of the write, so a concurrent role write
+cannot outdate it. A refusal is `403` with a `code` (`role_permission_not_held`,
 `role_own_set_locked`, `role_permission_reserved`, `role_super_admin_required`,
 `role_self_escalation`, `role_caller_unresolved`) and an audit row with the action
 `role.escalation_refused`. A caller whose own permissions cannot be read is refused

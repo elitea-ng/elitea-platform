@@ -275,9 +275,17 @@ func (h *Handler) usersCreate(w http.ResponseWriter, r *http.Request, mode strin
 		})
 		return
 	}
+	// Each address commits in its own transaction (inviteOne), so the check
+	// and the loop run under a hold of the role-writes lock that spans them.
+	hold, release, err := rolepolicy.HoldRoleWrites(r.Context(), h.pool)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to read project roles"})
+		return
+	}
+	defer release()
 	// One refusal for the whole batch: every address gets the same roles, so
 	// a role the caller may not give is refused for all of them alike.
-	if refusal := h.checkMembershipChange(r, membershipChange{
+	if refusal := h.checkMembershipChange(r, hold, membershipChange{
 		projectID: projectID, asMember: mode != userWriteModeAdministration, assigned: roleIDs,
 		invited: body.Emails,
 	}); refusal != nil {
@@ -532,13 +540,6 @@ func (h *Handler) usersUpdate(w http.ResponseWriter, r *http.Request, mode strin
 		})
 		return
 	}
-	if refusal := h.checkMembershipChange(r, membershipChange{
-		projectID: projectID, asMember: mode != userWriteModeAdministration, assigned: roleIDs, targets: userIDs,
-	}); refusal != nil {
-		rolepolicy.Write(w, r, refusal)
-		return
-	}
-
 	ctx := r.Context()
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
@@ -546,6 +547,19 @@ func (h *Handler) usersUpdate(w http.ResponseWriter, r *http.Request, mode strin
 		return
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	// The no-escalation check runs under the role-writes lock, in this
+	// transaction, before its first write.
+	if err := rolepolicy.LockRoleWrites(ctx, tx); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to update user roles"})
+		return
+	}
+	if refusal := h.checkMembershipChange(r, tx, membershipChange{
+		projectID: projectID, asMember: mode != userWriteModeAdministration, assigned: roleIDs, targets: userIDs,
+	}); refusal != nil {
+		rolepolicy.Write(w, r, refusal)
+		return
+	}
 
 	for _, userID := range userIDs {
 		if _, err := tx.Exec(ctx,
@@ -664,14 +678,6 @@ func (h *Handler) UsersDelete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "id[] is required"})
 		return
 	}
-	// The `{mode}` route is the only DELETE, and its gate is the member's.
-	if refusal := h.checkMembershipChange(r, membershipChange{
-		projectID: projectID, asMember: true, targets: userIDs,
-	}); refusal != nil {
-		rolepolicy.Write(w, r, refusal)
-		return
-	}
-
 	ctx := r.Context()
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
@@ -679,6 +685,20 @@ func (h *Handler) UsersDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	// The no-escalation check runs under the role-writes lock, in this
+	// transaction, before its first write. The `{mode}` route is the only
+	// DELETE, and its gate is the member's.
+	if err := rolepolicy.LockRoleWrites(ctx, tx); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove users"})
+		return
+	}
+	if refusal := h.checkMembershipChange(r, tx, membershipChange{
+		projectID: projectID, asMember: true, targets: userIDs,
+	}); refusal != nil {
+		rolepolicy.Write(w, r, refusal)
+		return
+	}
 
 	if _, err := tx.Exec(ctx, revokeTokenProjectBindingsSQL, projectID, userIDs); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove users"})

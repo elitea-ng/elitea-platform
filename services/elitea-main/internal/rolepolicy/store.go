@@ -85,7 +85,8 @@ func (c Caller) Reload(ctx context.Context) (Caller, error) {
 const roleWritesLock int64 = 0x726f6c6532488
 
 // LockRoleWrites serialises the writes that change role contents or role
-// assignments, until the transaction ends. A check that runs after it, inside
+// assignments, until the transaction ends. Take it as the FIRST statement of
+// the transaction (see HoldRoleWrites for why). A check that runs after it, inside
 // the same transaction, cannot be outdated by a concurrent role write before
 // the commit: a matrix save that widens a role cannot slip between the
 // assignment's check and its INSERT. Role writes are rare, so one lock is
@@ -96,6 +97,33 @@ func LockRoleWrites(ctx context.Context, q Querier) error {
 		return fmt.Errorf("lock role writes: %w", err)
 	}
 	return nil
+}
+
+// Beginner begins a transaction; *pgxpool.Pool is one.
+type Beginner interface {
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
+
+// HoldRoleWrites begins a transaction that holds LockRoleWrites and writes
+// nothing. It is for a write that commits in transactions of its own (one per
+// invited address, one per bulk-invite pair, the SCIM store's): the caller
+// runs its check on the returned transaction, then its writes, then release.
+// No other role write can start between the check and the last commit.
+//
+// It cannot deadlock against another role write because every transaction
+// that takes the lock takes it as its FIRST statement: a waiter holds no row,
+// so the writes that run while the lock is held never wait on one.
+func HoldRoleWrites(ctx context.Context, b Beginner) (pgx.Tx, func(), error) {
+	tx, err := b.Begin(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("begin role-writes hold: %w", err)
+	}
+	release := func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }
+	if err := LockRoleWrites(ctx, tx); err != nil {
+		release()
+		return nil, nil, err
+	}
+	return tx, release, nil
 }
 
 // CentralSet is the caller's set in a central mode.

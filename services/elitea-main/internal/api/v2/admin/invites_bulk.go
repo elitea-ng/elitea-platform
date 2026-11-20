@@ -207,7 +207,15 @@ func (h *Handler) BulkInviteMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if refusal := h.checkBulkInviteSelf(r, users, resolvedProjects); refusal != nil {
+	// Each pair commits in its own transaction (addProjectMembership), so the
+	// check and the loop run under a hold of the role-writes lock that spans them.
+	hold, release, err := rolepolicy.HoldRoleWrites(ctx, h.pool)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to read the projects"})
+		return
+	}
+	defer release()
+	if refusal := h.checkBulkInviteSelf(r, hold, users, resolvedProjects); refusal != nil {
 		rolepolicy.Write(w, r, refusal)
 		return
 	}
@@ -445,7 +453,7 @@ func dedupeIDs(ids []int64) []int64 {
 // role carries a permission that the caller does not already hold there.
 // Nothing is written for any pair. A super_admin holder is exempt.
 func (h *Handler) checkBulkInviteSelf(
-	r *http.Request, users []int64, projects map[int64]*projectTarget,
+	r *http.Request, q rolepolicy.Querier, users []int64, projects map[int64]*projectTarget,
 ) *rolepolicy.Refusal {
 	caller, refusal := rolepolicy.ResolveCaller(r, h.resolver)
 	if refusal != nil {
@@ -465,7 +473,7 @@ func (h *Handler) checkBulkInviteSelf(
 		if project == nil || project.roleID == nil || project.isPersonal {
 			continue
 		}
-		required, err := rolepolicy.ProjectRolesPermissions(ctx, h.pool, int(id), []int{*project.roleID})
+		required, err := rolepolicy.ProjectRolesPermissions(ctx, q, int(id), []int{*project.roleID})
 		if err != nil {
 			return rolepolicy.Unresolved("the project roles could not be read, so the role change was refused")
 		}

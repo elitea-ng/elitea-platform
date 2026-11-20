@@ -48,7 +48,14 @@ type membershipChange struct {
 
 // checkMembershipChange returns the refusal of a change, or nil. A super_admin
 // caller is answered before any query.
-func (h *Handler) checkMembershipChange(r *http.Request, change membershipChange) *rolepolicy.Refusal {
+//
+// `q` is a transaction that holds rolepolicy.LockRoleWrites: the write's own
+// transaction (update, delete) or a rolepolicy.HoldRoleWrites hold that spans
+// the per-address transactions (create). The caller is resolved here, after
+// the lock, so the check and the write see the same state.
+func (h *Handler) checkMembershipChange(
+	r *http.Request, q rolepolicy.Querier, change membershipChange,
+) *rolepolicy.Refusal {
 	caller, refusal := rolepolicy.ResolveCaller(r, h.permissionResolver)
 	if refusal != nil {
 		return refusal
@@ -62,14 +69,14 @@ func (h *Handler) checkMembershipChange(r *http.Request, change membershipChange
 	roleIDs := append([]int{}, change.assigned...)
 	if change.asMember {
 		if len(change.targets) > 0 {
-			current, err := rolepolicy.MembersProjectRoleIDs(ctx, h.pool, change.projectID, change.targets)
+			current, err := rolepolicy.MembersProjectRoleIDs(ctx, q, change.projectID, change.targets)
 			if err != nil {
 				return unreadable
 			}
 			roleIDs = append(roleIDs, current...)
 		}
 	} else {
-		self, err := h.callerIsAmong(r, caller.UserID, change)
+		self, err := callerIsAmong(r, q, caller.UserID, change)
 		if err != nil {
 			return unreadable
 		}
@@ -78,7 +85,7 @@ func (h *Handler) checkMembershipChange(r *http.Request, change membershipChange
 		}
 	}
 
-	required, err := rolepolicy.ProjectRolesPermissions(ctx, h.pool, change.projectID, roleIDs)
+	required, err := rolepolicy.ProjectRolesPermissions(ctx, q, change.projectID, roleIDs)
 	if err != nil {
 		return unreadable
 	}
@@ -104,7 +111,7 @@ func (h *Handler) checkMembershipChange(r *http.Request, change membershipChange
 // callerIsAmong is true when the change reaches the caller's own account: as
 // a target, or as one of the invited addresses. The address lookup runs only
 // when there are addresses.
-func (h *Handler) callerIsAmong(r *http.Request, callerID int64, change membershipChange) (bool, error) {
+func callerIsAmong(r *http.Request, q rolepolicy.Querier, callerID int64, change membershipChange) (bool, error) {
 	if slices.Contains(change.targets, int(callerID)) {
 		return true, nil
 	}
@@ -116,7 +123,7 @@ func (h *Handler) callerIsAmong(r *http.Request, callerID int64, change membersh
 		normalized = append(normalized, strings.ToLower(strings.TrimSpace(email)))
 	}
 	var self bool
-	err := h.pool.QueryRow(r.Context(),
+	err := q.QueryRow(r.Context(),
 		`SELECT EXISTS (SELECT 1 FROM auth_core__user WHERE id = $1 AND lower(email) = ANY($2::text[]))`,
 		callerID, normalized).Scan(&self)
 	return self, err
