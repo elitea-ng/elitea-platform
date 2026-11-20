@@ -1,6 +1,6 @@
 module github.com/elitea-ng/elitea-platform/services/elitea-egress-proxy
 
-go 1.26.9
+go 1.26.11
 
 require (
 	github.com/elitea-ng/elitea-platform/libs/go/egresslib v0.0.0-00010101000000-000000000000

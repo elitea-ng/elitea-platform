@@ -13,21 +13,9 @@ name: Image Matrix
 # is checked here in seconds, with no image built.
 
 on:
-  pull_request:
-    paths:
-      - "docker-bake.hcl"
-      - ".github/workflows/publish.yml"
-      - ".github/workflows/nightly-image-scan.yml"
-      - ".github/image-scan-exempt.txt"
-      - "scripts/ci/image-matrix.sh"
-      # The scan gate both scans run, the nightly issue script, and their tests.
-      - "scripts/ci/image-scan-gate.sh"
-      - "scripts/ci/image-scan-gate-test.sh"
-      - "scripts/ci/image-scan-issue.mjs"
-      - "scripts/ci/image-scan-issue.test.mjs"
-      - "scripts/ci/py-compat.mjs"
-      - "scripts/ci/testdata/trivy-*.json"
-      - ".github/workflows/image-matrix.yml"
+  # Called by ci.yml, which owns the PR tiers and the path filter
+  # (scripts/ci/tier-paths.json); no `pull_request` arm of its own.
+  workflow_call:
 
 permissions:
   contents: read
