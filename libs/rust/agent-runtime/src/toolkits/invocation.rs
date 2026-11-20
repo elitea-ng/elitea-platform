@@ -416,6 +416,21 @@ fn sanitize_tool_error(error: &AdkError) -> AdkError {
             max_attempts: Some(1),
         });
     }
+    // A native family's own bounded, redacted sentence (`family_visible_error`):
+    // still an error, with its message kept.
+    if super::mcp_error::is_family_visible_error(error) {
+        return AdkError::new(
+            ErrorComponent::Tool,
+            error.category,
+            super::mcp_error::FAMILY_TOOL_ERROR_CODE,
+            error.message.clone(),
+        )
+        .with_retry(RetryHint {
+            should_retry: false,
+            retry_after_ms: None,
+            max_attempts: Some(1),
+        });
+    }
     let (code, message) = match error.category {
         ErrorCategory::InvalidInput => (
             "tool.execution.invalid_input",

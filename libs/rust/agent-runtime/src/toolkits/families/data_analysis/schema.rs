@@ -67,34 +67,34 @@ impl DataTool {
     pub(crate) const fn description(self) -> &'static str {
         match self {
             Self::DescribeData => {
-                "Profile a table file: its columns with types, row count, missing values, distinct counts, numeric summaries (mean, std, min, quartiles, max), top text values, date ranges, and the first rows. Always start here for a file you have not seen. Works on CSV, TSV, JSON and Excel (.xlsx; pass `sheet`, or see `sheets` in the answer). The file is in the conversation attachments bucket unless `bucket_name` says otherwise."
+                "Profile a table file: columns and types, row count, missing and distinct counts, numeric summaries, top text values, date ranges, first rows. Start here for a file you have not seen. CSV, TSV, JSON and Excel (.xlsx: pass `sheet`, or see `sheets` in the answer). The file is in the conversation attachments bucket unless `bucket_name` says otherwise."
             }
             Self::FilterData => {
-                "Keep the rows of a table file that match conditions, optionally pick columns, sort, and limit. Conditions are {column, operator, value}; operators: eq, ne, gt, ge, lt, le, contains, not_contains, starts_with, ends_with, in, not_in, is_null, not_null, matches (regex). Missing cells match only is_null. The answer shows the first rows and the total; pass `output_file` to save every matching row as .csv, .tsv, .json or .xlsx next to the source."
+                "Keep the rows of a table file that match conditions {column, operator, value} (`matches` is a regex; `match` is all or any). Missing cells match only is_null. Optionally pick columns, sort, limit. Shows the first rows and the total; `output_file` saves every matching row. Other tools take the same `filters`."
             }
             Self::SortData => {
-                "Sort a table file by one or more columns (missing values last) and show the first rows. Optional `filters` narrow the rows first. Pass `output_file` to save the whole sorted table next to the source."
+                "Sort a table file by one or more columns (missing values last) and show the first rows. Optional `filters` narrow first; `output_file` saves the whole sorted table."
             }
             Self::AggregateData => {
-                "Group rows and summarise them: group_by columns (omit to summarise the whole table) and aggregations {column, function, name}. Functions: count, sum, mean, median, min, max, std, var, nunique, first, last. Use column `*` with count to count rows. Groups come out sorted by key; rows with a missing key are left out. Optional `filters` narrow the rows first; `sort_by` and `limit` shape the result; `output_file` saves it."
+                "Group rows and summarise them: `group_by` columns (omit for the whole table) and `aggregations` {column, function, name}; column `*` with count counts rows. Groups come out sorted by key; rows with a missing key are left out. Optional `filters`, `sort_by`, `limit`; `output_file` saves the result."
             }
             Self::PivotData => {
-                "Pivot a table: one row per `index` combination, one column per distinct value of `columns`, each cell the `function` (default sum) of `values`. Cells with no rows are empty, or `fill_value`. Optional `filters` first. A pivot with more than 500 distinct column values is refused; filter or aggregate instead. `output_file` saves the result."
+                "Pivot a table: one row per `index` combination, one column per distinct value of `columns`, each cell the `function` (default sum) of `values`; empty cells are blank or `fill_value`. More than 500 distinct column values is refused: filter or aggregate first. `output_file` saves the result."
             }
             Self::JoinData => {
-                "Join two table files on key columns: `on` (same column names in both) or `left_on` and `right_on`. `how` is inner (default), left, right or outer. Rows whose key is missing never match. Same-named non-key columns get the suffixes `_x` and `_y`. A join that would produce more than 1,000,000 rows is refused. `output_file` saves the joined table next to the first file."
+                "Join two table files on `on` (same key names in both) or `left_on` and `right_on`; `how` is inner (default), left, right or outer. Missing keys never match; same-named other columns get `_x` and `_y`. A join over 1,000,000 rows is refused. `output_file` saves the result next to the first file."
             }
             Self::CorrelateData => {
-                "Correlation matrix between the numeric columns (Pearson, or Spearman rank correlation) using the rows where both values exist. Pass `columns` to choose; at most 50. Optional `filters` first."
+                "Correlation matrix of the numeric columns (Pearson or Spearman) over the rows where both values exist. `columns` chooses (at most 50); optional `filters`."
             }
             Self::ChartData => {
-                "Draw a chart from a table file and save it as a PNG artifact. chart_type: bar, line, scatter, pie or histogram. For bar, line and pie give `x` (categories) and `y` (one or more numeric columns); repeated x values are combined with `aggregation` (default sum). For scatter give numeric `x` and `y`. For histogram give `y` (one numeric column) and `bins`. Optional `filters`, `sort_by`, `top_n` (keep the largest categories). The answer includes a Markdown image to embed. Pass `output_file` to name the PNG."
+                "Draw a chart from a table file and save it as a PNG artifact. bar, line, pie: `x` (categories) and `y` (numeric columns), repeated x combined with `aggregation` (default sum). scatter: numeric `x` and `y`. histogram: `y` and `bins`. Optional `filters`, `sort_by`, `top_n` (largest categories). The answer has a Markdown image to embed; `output_file` names the PNG."
             }
             Self::SaveDataframe => {
-                "Convert a table file to another format, saved in the same bucket. The target's extension picks the format: .csv, .tsv, .json (a list of records) or .xlsx. Fails if the target exists unless `overwrite` is true."
+                "Convert a table file to .csv, .tsv, .json (a list of records) or .xlsx (the target's extension picks it), saved in the same bucket. Fails if the target exists unless `overwrite` is true."
             }
             Self::RunCode => {
-                "Run your own short Python or JavaScript on rows from a table file, for analysis the other tools cannot express. The code runs in an isolated sandbox with no network and no files. Python reads `elitea_state['data']`; JavaScript is a module whose default export (or the result of a default-exported function of the state) is the answer, and reads `elitea_state.data`. `data` is an object {columns, types, rows, total_rows, truncated} where rows is a list of lists. The final Python expression is the answer. The answer must be JSON, at most 100 KiB; a larger answer is refused, so summarise inside the program. At most 50,000 cells are sent: choose `columns`, `filters` and `max_rows` so the rows you need fit; the answer says if rows were cut. The sandbox has no pandas."
+                "Run your own short Python or JavaScript on rows of a table file, for analysis the other tools cannot express. Isolated sandbox: no network, no files, no pandas. Python reads `elitea_state['data']`, and its final expression is the answer; JavaScript reads `elitea_state.data` and default-exports the answer (or a function of the state). `data` is {columns, types, rows, total_rows, truncated}, rows a list of lists. The answer must be JSON, at most 100 KiB, so summarise inside the program. At most 50,000 cells are sent: use `columns`, `filters`, `max_rows`; the answer says if rows were cut."
             }
         }
     }
@@ -110,12 +110,12 @@ impl DataTool {
                 add(
                     "source_df",
                     json!({"type": "string", "minLength": 1, "maxLength": 1024,
-                        "description": "The source file name, as shown in the attachment message (for example `<conversation>/sales.csv`)."}),
+                        "description": "The source file, as in the attachment message (`<conversation>/sales.csv`)."}),
                 );
                 add(
                     "target_file",
                     json!({"type": "string", "minLength": 1, "maxLength": 1024,
-                        "description": "The file to create; its extension picks the format. A bare name is placed next to the source."}),
+                        "description": "The file to create; a bare name goes next to the source."}),
                 );
                 required.extend(["source_df", "target_file"]);
                 add("sheet", sheet());
@@ -131,17 +131,24 @@ impl DataTool {
         }
         match self {
             Self::DescribeData => {
-                add("columns", columns("Only profile these columns."));
+                add("columns", columns("Only these columns."));
                 add(
                     "head_rows",
                     json!({"type": "integer", "minimum": 0, "maximum": 50, "default": 5, "description": "How many leading rows to show."}),
                 );
             }
             Self::FilterData | Self::SortData => {
-                add("filters", filters());
+                add(
+                    "filters",
+                    if self == Self::FilterData {
+                        filters()
+                    } else {
+                        filters_short()
+                    },
+                );
                 add("match", match_mode());
                 add("case_sensitive", case_sensitive());
-                add("columns", columns("The columns to keep, in this order."));
+                add("columns", columns("Columns to keep, in order."));
                 add("sort_by", sort_by());
                 add("limit", limit());
                 add("output_file", output_file());
@@ -153,20 +160,20 @@ impl DataTool {
             Self::AggregateData => {
                 add(
                     "group_by",
-                    columns("Columns to group by. Omit to summarise the whole table."),
+                    columns("Group-by columns; omit for the whole table."),
                 );
                 add(
                     "aggregations",
                     json!({"type": "array", "minItems": 1, "maxItems": 100,
                     "description": "What to compute.",
                     "items": {"type": "object", "properties": {
-                        "column": {"type": "string", "description": "Column name, or `*` with count to count rows."},
+                        "column": {"type": "string", "description": "Column, or `*` with count."},
                         "function": {"type": "string", "enum": Func::NAMES},
-                        "name": {"type": "string", "description": "Name of the result column (default `<column>_<function>`)."}},
+                        "name": {"type": "string", "description": "Result column name."}},
                         "required": ["column", "function"]}}),
                 );
                 required.push("aggregations");
-                add("filters", filters());
+                add("filters", filters_short());
                 add("match", match_mode());
                 add("case_sensitive", case_sensitive());
                 add("sort_by", sort_by());
@@ -178,7 +185,7 @@ impl DataTool {
                 add("index", columns("Columns that become the row labels."));
                 add(
                     "columns",
-                    json!({"type": "string", "description": "The column whose distinct values become columns."}),
+                    json!({"type": "string", "description": "Column whose distinct values become columns."}),
                 );
                 add(
                     "values",
@@ -190,10 +197,10 @@ impl DataTool {
                 );
                 add(
                     "fill_value",
-                    json!({"type": "number", "description": "What to put in cells with no rows (default empty)."}),
+                    json!({"type": "number", "description": "Value for empty cells."}),
                 );
                 required.extend(["index", "columns", "values"]);
-                add("filters", filters());
+                add("filters", filters_short());
                 add("match", match_mode());
                 add("case_sensitive", case_sensitive());
                 add("limit", limit());
@@ -204,10 +211,7 @@ impl DataTool {
                 add("right_filename", filename("The second table file"));
                 add("right_sheet", sheet());
                 add("right_bucket_name", bucket());
-                add(
-                    "on",
-                    columns("Key columns present, by the same name, in both files."),
-                );
+                add("on", columns("Key columns named the same in both files."));
                 add("left_on", columns("Key columns of the first file."));
                 add(
                     "right_on",
@@ -230,15 +234,13 @@ impl DataTool {
             Self::CorrelateData => {
                 add(
                     "columns",
-                    columns(
-                        "Numeric columns to correlate (default: all numeric columns, at most 50).",
-                    ),
+                    columns("Numeric columns (default all, at most 50)."),
                 );
                 add(
                     "method",
                     json!({"type": "string", "enum": ["pearson", "spearman"], "default": "pearson"}),
                 );
-                add("filters", filters());
+                add("filters", filters_short());
                 add("match", match_mode());
                 add("case_sensitive", case_sensitive());
             }
@@ -249,15 +251,15 @@ impl DataTool {
                 );
                 add(
                     "x",
-                    json!({"type": "string", "description": "Category or x column (not used by histogram)."}),
+                    json!({"type": "string", "description": "Category or x column."}),
                 );
                 add(
                     "y",
-                    columns("Value column(s). Scatter and histogram take one."),
+                    columns("Value column(s); scatter and histogram take one."),
                 );
                 add(
                     "aggregation",
-                    json!({"type": "string", "enum": Func::NAMES, "default": "sum", "description": "How repeated x values are combined."}),
+                    json!({"type": "string", "enum": Func::NAMES, "default": "sum", "description": "How repeated x values combine."}),
                 );
                 add(
                     "bins",
@@ -265,18 +267,18 @@ impl DataTool {
                 );
                 add(
                     "top_n",
-                    json!({"type": "integer", "minimum": 1, "maximum": 100, "description": "Keep the n categories with the largest total."}),
+                    json!({"type": "integer", "minimum": 1, "maximum": 100, "description": "Keep the n largest categories."}),
                 );
                 add("title", json!({"type": "string", "maxLength": 200}));
                 add("x_label", json!({"type": "string", "maxLength": 100}));
                 add("y_label", json!({"type": "string", "maxLength": 100}));
-                add("filters", filters());
+                add("filters", filters_short());
                 add("match", match_mode());
                 add("case_sensitive", case_sensitive());
                 add("sort_by", sort_by());
                 add(
                     "output_file",
-                    json!({"type": "string", "maxLength": 1024, "description": "Name of the PNG (default chart_<id>.png, next to the source)."}),
+                    json!({"type": "string", "maxLength": 1024, "description": "PNG name (default chart_<id>.png)."}),
                 );
                 add("overwrite", overwrite());
                 required.push("chart_type");
@@ -291,12 +293,12 @@ impl DataTool {
                     json!({"type": "string", "minLength": 1, "maxLength": 100_000, "description": "The program."}),
                 );
                 add("columns", columns("Send only these columns."));
-                add("filters", filters());
+                add("filters", filters_short());
                 add("match", match_mode());
                 add("case_sensitive", case_sensitive());
                 add(
                     "max_rows",
-                    json!({"type": "integer", "minimum": 1, "maximum": 50_000, "description": "Send at most this many rows (the first ones)."}),
+                    json!({"type": "integer", "minimum": 1, "maximum": 50_000, "description": "Send at most this many leading rows."}),
                 );
                 required.push("code");
             }
@@ -309,15 +311,15 @@ impl DataTool {
 
 fn filename(what: &str) -> Value {
     json!({"type": "string", "minLength": 1, "maxLength": 1024,
-        "description": format!("{what}: its name in the bucket, as shown in the attachment message (for example `<conversation>/sales.csv`). CSV, TSV, TXT, JSON, JSONL and .xlsx are read.")})
+        "description": format!("{what}, as in the attachment message (`<conversation>/sales.csv`).")})
 }
 
 fn sheet() -> Value {
-    json!({"type": "string", "description": "Sheet name, for an .xlsx file (default: the first sheet)."})
+    json!({"type": "string", "description": "Sheet of an .xlsx (default the first)."})
 }
 
 fn bucket() -> Value {
-    json!({"type": "string", "description": "The bucket the file is in (default: the bucket the platform names for this conversation's attachments)."})
+    json!({"type": "string", "description": "Bucket (default: this conversation's attachments)."})
 }
 
 fn columns(description: &str) -> Value {
@@ -326,7 +328,7 @@ fn columns(description: &str) -> Value {
 
 fn filters() -> Value {
     json!({"type": "array", "maxItems": 50,
-        "description": "Conditions on the rows. Dates are ISO text such as 2024-01-31.",
+        "description": "Row conditions. Dates are ISO text (2024-01-31).",
         "items": {"type": "object", "properties": {
             "column": {"type": "string"},
             "operator": {"type": "string", "enum": Op::NAMES},
@@ -334,17 +336,29 @@ fn filters() -> Value {
             "required": ["column", "operator"]}})
 }
 
+/// The `filters` argument of every tool but `filter_data`: the same
+/// conditions, without repeating the operator list in each schema (#2300);
+/// `filter_data`'s description and schema carry it.
+fn filters_short() -> Value {
+    json!({"type": "array", "maxItems": 50,
+        "description": "Row conditions {column, operator, value}, as in filter_data.",
+        "items": {"type": "object", "properties": {
+            "column": {"type": "string"},
+            "operator": {"type": "string"},
+            "value": {}},
+            "required": ["column", "operator"]}})
+}
+
 fn match_mode() -> Value {
-    json!({"type": "string", "enum": ["all", "any"], "default": "all",
-        "description": "Whether a row must meet all of the filters or any one."})
+    json!({"type": "string", "enum": ["all", "any"], "default": "all"})
 }
 
 fn case_sensitive() -> Value {
-    json!({"type": "boolean", "default": true, "description": "Whether text comparisons respect case."})
+    json!({"type": "boolean", "default": true})
 }
 
 fn sort_by() -> Value {
-    json!({"type": "array", "maxItems": 20, "description": "Columns to sort by, first is the main key.",
+    json!({"type": "array", "maxItems": 20, "description": "Sort keys, main first.",
         "items": {"oneOf": [{"type": "string"}, {"type": "object", "properties": {
             "column": {"type": "string"}, "descending": {"type": "boolean", "default": false}},
             "required": ["column"]}]}})
@@ -352,14 +366,14 @@ fn sort_by() -> Value {
 
 fn limit() -> Value {
     json!({"type": "integer", "minimum": 1, "maximum": 500, "default": 20,
-        "description": "How many result rows to show in the answer. The saved file always has all of them."})
+        "description": "Result rows shown; a saved file has all."})
 }
 
 fn output_file() -> Value {
     json!({"type": "string", "maxLength": 1024,
-        "description": "Save the whole result under this name (.csv, .tsv, .json or .xlsx). A bare name is placed next to the source file. Not saved when omitted."})
+        "description": "Save the whole result here (.csv, .tsv, .json, .xlsx); a bare name goes next to the source."})
 }
 
 fn overwrite() -> Value {
-    json!({"type": "boolean", "default": false, "description": "Replace the output file if it exists (default: refuse)."})
+    json!({"type": "boolean", "default": false, "description": "Replace an existing output file."})
 }

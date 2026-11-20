@@ -24,13 +24,20 @@
 
 use std::sync::LazyLock;
 
-use adk_core::{AdkError, ErrorComponent, RetryHint};
+use adk_core::{AdkError, ErrorCategory, ErrorComponent, RetryHint};
 use regex::Regex;
 use zeroize::Zeroizing;
 
 /// The code of an MCP failure whose message is safe for the model.
 /// `invocation::sanitize_tool_error` keeps the message of this code only.
 pub(crate) const MCP_TOOL_ERROR_RESULT_CODE: &str = "mcp.tool.error_result";
+
+/// The code of a native family's failure whose message is safe for the model
+/// (a missing column, a refused query token, a bounded table error). Like the
+/// MCP code it stays an error (the turn trace, the tool breaker and the error
+/// accounting see a failure), and `invocation::sanitize_tool_error` keeps the
+/// message of this code only.
+pub(crate) const FAMILY_TOOL_ERROR_CODE: &str = "family.tool.error";
 
 /// The most characters of server text that reach the model.
 const MAX_DETAIL_CHARS: usize = 1_000;
@@ -182,6 +189,42 @@ pub(crate) fn model_visible_mcp_error(
         retry_after_ms: None,
         max_attempts: Some(1),
     })
+}
+
+/// The error a native family raises when its own sentence should reach the
+/// model: `message` is cut to the same bound as MCP text and has the toolkit's
+/// credential values and the usual secret patterns replaced, so a credential
+/// is never echoed even if a vendor error carried one.
+#[cfg_attr(
+    not(feature = "toolkit-delta-lake"),
+    allow(
+        dead_code,
+        reason = "the first family to use it is behind toolkit-delta-lake"
+    )
+)]
+pub(crate) fn family_visible_error(
+    category: ErrorCategory,
+    message: &str,
+    redaction: &McpErrorRedaction,
+) -> AdkError {
+    let message = bounded_detail(message, redaction)
+        .unwrap_or_else(|| "the tool failed without a description".to_owned());
+    AdkError::new(
+        ErrorComponent::Tool,
+        category,
+        FAMILY_TOOL_ERROR_CODE,
+        message,
+    )
+    .with_retry(RetryHint {
+        should_retry: false,
+        retry_after_ms: None,
+        max_attempts: Some(1),
+    })
+}
+
+/// True when `error` was built by [`family_visible_error`].
+pub(crate) fn is_family_visible_error(error: &AdkError) -> bool {
+    error.component == ErrorComponent::Tool && error.code == FAMILY_TOOL_ERROR_CODE
 }
 
 /// The model-visible text of a failed MCP task (`TaskError` display). Only a
