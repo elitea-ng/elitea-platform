@@ -36,6 +36,11 @@ name: Cancel runs of a merged PR
 # event still waits for approval like any fork run: do not approve it, the
 # sweep covers it. The workflow never checks out or executes anything from
 # the PR — it only calls the Actions API with ids.
+#
+# Under `pull_request` the close-time run uses the PR's OWN copy of this file
+# (pull_request_target used main's). That gives nothing new to anyone: only a
+# same-repository PR gets a write token, and its author can already declare
+# `actions: write` in any workflow on their branch.
 
 on:
   pull_request:
@@ -69,9 +74,9 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           GRACE_SECONDS: "60"
-          # Longer than the hourly cron, so a late or skipped sweep still sees
-          # every merge once.
-          SWEEP_HOURS: "6"
+          # Just over two cron intervals: a late or skipped sweep still sees
+          # every merge, and each merge is listed at most twice.
+          SWEEP_HOURS: "2"
         with:
           # Retries 5xx and secondary rate limits. A listing that failed must
           # fail the job, never come back short and read as "nothing to

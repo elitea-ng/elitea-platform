@@ -24,7 +24,7 @@ step, and refuses every job that is not ours.
 
 | File | What it is |
 |---|---|
-| `job-started.sh` | The hook. It allows only the listed repositories (built in: `elitea-platform`, `elitea-docs`, `elitea-brand-template`; an `allowed-repos` key in the same ConfigMap replaces the list, and no environment variable can) and the events `pull_request`, `merge_group`, `workflow_dispatch`, `schedule` and `push`. It refuses a pull request whose head is another repository (a fork, or a deleted one) and any Dependabot job. Any other case fails closed. Tests: `scripts/ci/eng-runner-hook.test.mjs`. |
+| `job-started.sh` | The hook. It allows only the listed repositories (built in: `elitea-platform`, `elitea-docs`, `elitea-brand-template`; an `allowed-repos` key in the same ConfigMap, read from `/etc/eng-runner/allowed-repos`, replaces the list, and no environment variable can; the log names the list it used) and the events `pull_request`, `workflow_dispatch`, `schedule` and `push` (not `merge_group`: its payload does not say who wrote the queued change). It refuses a pull request whose head is another repository (a fork, or a deleted one) and any Dependabot job. Any other case fails closed. Tests: `scripts/ci/eng-runner-hook.test.mjs`. |
 | `values-eng-runner.yaml` | The part of the scale-set values that mounts the hook and sets `ACTIONS_RUNNER_HOOK_JOB_STARTED`. |
 
 ## Runbook (repository owner)

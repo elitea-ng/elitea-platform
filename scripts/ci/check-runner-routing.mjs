@@ -7,11 +7,15 @@
 // through ROUTED_RUNS_ON below, which sends it there only when ALL of these hold:
 //
 //   * the repository variable ENG_RUNNER is `on` (unset by default: the kill switch);
-//   * the actor, and the actor of a re-run, is not Dependabot;
-//   * the event is schedule, workflow_dispatch or merge_group (only writers start them, and their head is in
-//     this repository), or a pull_request whose head repository IS this repository and whose author is not
-//     Dependabot. Never an "everything but pull_request" condition: pull_request_target, workflow_run and
-//     issue_comment would pass it.
+//   * the event is pull_request — an allowlist of one, never an "everything but pull_request" condition, which
+//     pull_request_target, workflow_run and issue_comment would pass;
+//   * the pull request's head repository IS this repository (not a fork), and its author is not Dependabot;
+//   * the actor, and the actor of a re-run, is not Dependabot.
+//
+// schedule and workflow_dispatch stay hosted on purpose: they are the runs on main that WRITE the caches. The
+// pool's image has no zstd, so an entry it saved would carry the gzip cache version, which every hosted reader
+// (fork and Dependabot pull requests, the jobs that stay hosted) misses. merge_group stays hosted too: its
+// payload does not say who wrote the queued change, so a Dependabot bump could reach the pool through it.
 //
 // Everything else runs on ubuntu-latest. This is routing, not security: a fork's pull request runs the fork's
 // own YAML. The guards for that are the runner group's repository list, fork-run approval, and the job-started
@@ -23,9 +27,10 @@
 //   * a routed job has `container:` or `services:`, or a step (its own, or one inside a local composite
 //     action it uses) runs docker, podman, buildah, kind, sudo, apt or systemctl, or uses a docker/* or kind
 //     action or a Docker container action — unless the step's `if:` starts with HOSTED_ONLY;
-//   * a routed job is in a workflow that can start on any event other than pull_request, merge_group,
-//     schedule, workflow_dispatch (and workflow_call from such a caller): pull_request_target and
-//     workflow_run are refused outright;
+//   * a routed job is in a workflow that can start on any event other than pull_request, schedule,
+//     workflow_dispatch (and workflow_call from such a caller): pull_request_target and workflow_run are
+//     refused outright;
+//   * a routed job runs node/npm/npx or go without a step that installs it (the image has neither);
 //   * it finds fewer workflows or routed jobs than its floors: "found nothing, therefore clean" is how a
 //     guard stops guarding.
 
@@ -42,16 +47,21 @@ export const RUNNER = "eng-runner";
 /** The ONE routing condition, as a bare expression (without `${{ }}`). */
 export const ROUTING_CONDITION =
   "vars.ENG_RUNNER == 'on'" +
-  " && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]'" +
-  " && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'merge_group'" +
-  " || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository" +
-  " && github.event.pull_request.user.login != 'dependabot[bot]'))";
+  " && github.event_name == 'pull_request'" +
+  " && github.event.pull_request.head.repo.full_name == github.repository" +
+  " && github.event.pull_request.user.login != 'dependabot[bot]'" +
+  " && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]'";
 /** The only runs-on a job may use to reach the pool. */
 export const ROUTED_RUNS_ON = `\${{ (${ROUTING_CONDITION}) && 'eng-runner' || 'ubuntu-latest' }}`;
 /** A step whose `if:` starts with this runs on GitHub-hosted runners only. */
 export const HOSTED_ONLY = "runner.environment == 'github-hosted'";
 /** Events a workflow with a routed job may start on. */
-export const ALLOWED_EVENTS = new Set(["pull_request", "merge_group", "schedule", "workflow_dispatch", "workflow_call"]);
+export const ALLOWED_EVENTS = new Set(["pull_request", "schedule", "workflow_dispatch", "workflow_call"]);
+/** A routed job whose steps run one of these must install it: the pool's image has neither. */
+const TOOLCHAINS = [
+  [/(?:^|[\s;&|(`$])(?:node|npm|npx)\s/, /^actions\/setup-node@|^\.\/\.github\/actions\/setup-node-pool\/?$/, "node", "./.github/actions/setup-node-pool"],
+  [/(?:^|[\s;&|(`$])go\s+(?:build|env|generate|install|list|mod|run|test|tool|vet|work)\b/, /^actions\/setup-go@/, "go", "actions/setup-go"],
+];
 export const MINIMUM_WORKFLOWS = 40;
 export const MINIMUM_ROUTED_JOBS = 20;
 
@@ -186,6 +196,13 @@ export function check({ workflows, actions }) {
           errors.push(`${where}: step ${i + 1} (${step.name ?? step.uses ?? "unnamed"}) ${p}; the pool has no Docker daemon and no root. Keep the job hosted, or give the step \`if: ${HOSTED_ONLY}\``);
         }
       });
+      const steps = job.steps ?? [];
+      for (const [runs, installs, tool, fix] of TOOLCHAINS) {
+        const uses = steps.some((s) => !strip(s.if).startsWith(HOSTED_ONLY) && String(s.run ?? "").split("\n").some((l) => runs.test(l.replace(/(^|\s)#.*$/, ""))));
+        if (uses && !steps.some((s) => installs.test(String(s.uses ?? "")))) {
+          errors.push(`${where}: routed to ${RUNNER} and runs ${tool}, but no step installs it (the pool's image has no ${tool}); add ${fix}`);
+        }
+      }
     }
   }
   return { errors, routed };

@@ -65,7 +65,7 @@ jobs:
     # same installed tree, and each spent more time on runner setup + `npm ci`
     # than on its own work. They are steps here; a failure still names the step.
     name: Quality (typecheck + lint)
-    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'merge_group' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'))) && 'eng-runner' || 'ubuntu-latest' }}
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -247,7 +247,7 @@ jobs:
 
   unit-tests:
     name: Unit tests (sharded)
-    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'merge_group' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'))) && 'eng-runner' || 'ubuntu-latest' }}
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -315,7 +315,7 @@ jobs:
     # skip `npm ci` for that reason; they now ride the shared install, which
     # costs the job nothing extra because the other thirteen need it.
     name: Static gates (node scripts)
-    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'merge_group' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'))) && 'eng-runner' || 'ubuntu-latest' }}
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -669,7 +669,7 @@ jobs:
     # `build` and the old `gate-bundle-secret` job both ran `npm run build` on
     # their own runner and then read `dist/`. One build now feeds both checks.
     name: Build (four entries + bundle budget + bundle secrets)
-    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'merge_group' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'))) && 'eng-runner' || 'ubuntu-latest' }}
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7

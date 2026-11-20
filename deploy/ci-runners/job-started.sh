@@ -20,17 +20,22 @@
 # tests: scripts/ci/eng-runner-hook.test.mjs. Runbook: deploy/ci-runners/README.md.
 set -euo pipefail
 
-# Repositories allowed on the pool. The override is a file next to this script
-# (`allowed-repos` in the same read-only ConfigMap: one owner/name per line,
-# `#` comments), never an environment variable: depending on the runner
-# version a workflow's job-level `env:`, which a fork controls, may reach this
-# process. $0 is the path the pod spec gave the runner.
+# Repositories allowed on the pool. The override is a file, `allowed-repos` in
+# the same read-only ConfigMap (one owner/name per line, `#` comments), never
+# an environment variable: depending on the runner version a workflow's
+# job-level `env:`, which a fork controls, may reach this process. It is read
+# from /etc/eng-runner/allowed-repos (the mount in values-eng-runner.yaml),
+# else from next to this script; the first one that exists wins, and the log
+# says which list was used.
 allowed_repos="elitea-ng/elitea-platform elitea-ng/elitea-docs elitea-ng/elitea-brand-template"
-override="$(dirname -- "$0")/allowed-repos"
-if [ -e "$override" ]; then
+allowlist_source="built-in list"
+for override in /etc/eng-runner/allowed-repos "$(dirname -- "$0")/allowed-repos"; do
+  [ -e "$override" ] || continue
   [ -r "$override" ] || { echo "::error::eng-runner refuses this job: $override is not readable"; exit 1; }
   allowed_repos="$(sed -e 's/#.*//' -- "$override" | tr -s ' \t\r\n' ' ')"
-fi
+  allowlist_source="$override"
+  break
+done
 
 deny() {
   echo "::error title=eng-runner refused this job::eng-runner refuses this job: $1. It is for jobs of our own repositories only; see deploy/ci-runners/README.md in elitea-ng/elitea-platform."
@@ -48,15 +53,17 @@ triggering_actor="${GITHUB_TRIGGERING_ACTOR:-}"
 
 case " $allowed_repos " in
   *" $repo "*) ;;
-  *) deny "repository $repo is not on the allowlist" ;;
+  *) deny "repository $repo is not on the allowlist ($allowlist_source)" ;;
 esac
 
 # An allowlist of events, never a denylist: pull_request_target, workflow_run,
 # issue_comment, pull_request_review* and anything GitHub adds later run with
 # a write token or secrets on behalf of someone who may not have write access.
 # In a called (reusable) workflow GITHUB_EVENT_NAME is the caller's event.
+# Not merge_group: its payload does not say who wrote the queued change, so a
+# Dependabot bump could reach the pool through the queue.
 case "$event" in
-  pull_request | merge_group | workflow_dispatch | schedule | push) ;;
+  pull_request | workflow_dispatch | schedule | push) ;;
   *) deny "event $event is not allowed" ;;
 esac
 
@@ -92,4 +99,4 @@ PY
   [ "$author" != "dependabot[bot]" ] || deny "Dependabot pull request (routed to GitHub-hosted)"
 fi
 
-echo "eng-runner: accepted $event job of $repo"
+echo "eng-runner: accepted $event job of $repo (allowlist: $allowlist_source)"

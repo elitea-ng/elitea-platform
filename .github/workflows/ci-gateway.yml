@@ -46,7 +46,7 @@ env:
 jobs:
   lint:
     name: Lint
-    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'merge_group' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'))) && 'eng-runner' || 'ubuntu-latest' }}
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
     env:
       # The pod's cgroup gives 4 CPU while the node reports 8; hosted runners have 4.
       GOMAXPROCS: "4"
@@ -94,26 +94,15 @@ jobs:
       # stays on 1.26, so ci-go.yml keeps v2.9.0 until it is raised on its own.
       # Installed here through the API, not by the action from the github.com
       # release download link (504s); the action then runs the binary on PATH.
-      # curl and jq, not gh: the eng-runner image has no gh.
+      # scripts/ci/install-golangci-lint.sh, shared with ci-go.yml (curl and jq,
+      # so it also runs on eng-runner, whose image has no gh).
       - name: Install golangci-lint
         working-directory: .
         env:
           GOLANGCI_LINT_VERSION: "2.15.0"
           GOLANGCI_LINT_SHA256: 9b7fe6a6bf6334b98decf8d86b11415ea7889afdabdd1959fdce23af2a9ebcea
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          archive="golangci-lint-${GOLANGCI_LINT_VERSION}-linux-amd64.tar.gz"
-          asset="$(curl -sSfL --retry 3 -H "Authorization: Bearer ${GH_TOKEN}" \
-            "https://api.github.com/repos/golangci/golangci-lint/releases/tags/v${GOLANGCI_LINT_VERSION}" \
-            | jq -er --arg name "${archive}" '.assets[] | select(.name == $name) | .url')"
-          curl -sSfL --retry 3 -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/octet-stream" \
-            -o "/tmp/${archive}" "${asset}"
-          echo "${GOLANGCI_LINT_SHA256}  /tmp/${archive}" | sha256sum -c -
-          bin="${RUNNER_TEMP}/golangci-lint-bin"
-          mkdir -p "$bin"
-          tar -xzf "/tmp/${archive}" -C "$bin" --strip-components=1 "golangci-lint-${GOLANGCI_LINT_VERSION}-linux-amd64/golangci-lint"
-          echo "$bin" >> "$GITHUB_PATH"
+        run: bash scripts/ci/install-golangci-lint.sh "${GOLANGCI_LINT_VERSION}" "${GOLANGCI_LINT_SHA256}" "${RUNNER_TEMP}/golangci-lint-bin"
       - uses: golangci/golangci-lint-action@v9
         with:
           install-mode: none

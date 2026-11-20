@@ -102,17 +102,18 @@ const TABLE = [
   ["a Dependabot pull request", { event: "pull_request", author: "dependabot[bot]", actor: "dependabot[bot]" }, "ubuntu-latest"],
   ["a human push on top of a Dependabot pull request", { event: "pull_request", author: "dependabot[bot]" }, "ubuntu-latest"],
   ["a Dependabot re-run of a human pull request", { event: "pull_request", triggering: "dependabot[bot]" }, "ubuntu-latest"],
-  ["merge_group", { event: "merge_group" }, "eng-runner"],
-  ["schedule", { event: "schedule" }, "eng-runner"],
-  ["workflow_dispatch", { event: "workflow_dispatch" }, "eng-runner"],
-  ["a Dependabot schedule actor", { event: "schedule", actor: "dependabot[bot]" }, "ubuntu-latest"],
+  // The runs on main write the caches; they stay hosted (zstd cache version). merge_group cannot tell who
+  // wrote the queued change.
+  ["merge_group", { event: "merge_group" }, "ubuntu-latest"],
+  ["schedule", { event: "schedule" }, "ubuntu-latest"],
+  ["workflow_dispatch", { event: "workflow_dispatch" }, "ubuntu-latest"],
   ["push", { event: "push" }, "ubuntu-latest"],
   ["pull_request_target, even from this repository", { event: "pull_request_target" }, "ubuntu-latest"],
   ["workflow_run", { event: "workflow_run" }, "ubuntu-latest"],
   ["issue_comment", { event: "issue_comment" }, "ubuntu-latest"],
   ["the variable unset", { event: "pull_request", vars: {} }, "ubuntu-latest"],
-  ["the variable off", { event: "schedule", vars: { ENG_RUNNER: "off" } }, "ubuntu-latest"],
-  ["the variable 'true' (only 'on' turns it on)", { event: "schedule", vars: { ENG_RUNNER: "true" } }, "ubuntu-latest"],
+  ["the variable off", { event: "pull_request", vars: { ENG_RUNNER: "off" } }, "ubuntu-latest"],
+  ["the variable 'true' (only 'on' turns it on)", { event: "pull_request", vars: { ENG_RUNNER: "true" } }, "ubuntu-latest"],
 ];
 for (const [what, ctx, want] of TABLE) {
   test(`routing: ${what} → ${want}`, () => assert.equal(runsOn(ctx), want));
@@ -120,6 +121,21 @@ for (const [what, ctx, want] of TABLE) {
 
 test("the condition is an allowlist of events, never a negation of pull_request", () => {
   assert.doesNotMatch(ROUTING_CONDITION, /event_name\s*!=/);
+});
+
+test("a routed job that runs node or go must install it", () => {
+  const noNode = routedJob({ steps: [{ uses: "actions/checkout@v7" }, { run: "node scripts/ci/x.mjs" }] });
+  assert.match(check(model({ schedule: [] }, noNode)).errors.join(), /runs node, but no step installs it/);
+  const actions = { ".github/actions/setup-node-pool": { runs: { using: "composite", steps: [{ uses: "actions/setup-node@v7" }] } } };
+  for (const uses of ["actions/setup-node@v7", "./.github/actions/setup-node-pool"]) {
+    const ok = routedJob({ steps: [{ uses }, { run: "node scripts/ci/x.mjs" }] });
+    assert.deepEqual(check(model({ schedule: [] }, ok, actions)).errors, [], uses);
+  }
+  const noGo = routedJob({ steps: [{ run: "go vet ./..." }] });
+  assert.match(check(model({ schedule: [] }, noGo)).errors.join(), /runs go, but no step installs it/);
+  assert.deepEqual(check(model({ schedule: [] }, routedJob({ steps: [{ uses: "actions/setup-go@v7" }, { run: "go vet ./..." }] }))).errors, []);
+  // Prose and paths are not invocations.
+  assert.deepEqual(check(model({ schedule: [] }, routedJob({ steps: [{ run: "echo go to node_modules; cat package.json" }] }))).errors, []);
 });
 
 // ── classifyRunsOn ──
@@ -152,7 +168,7 @@ test("runs-on: a matrix value is read through", () => {
 });
 
 // ── check() over synthetic workflows ──
-const routedJob = (extra = {}) => ({ "runs-on": ROUTED_RUNS_ON, steps: [{ uses: "actions/checkout@v7" }, { run: "npm test" }], ...extra });
+const routedJob = (extra = {}) => ({ "runs-on": ROUTED_RUNS_ON, steps: [{ uses: "actions/checkout@v7" }, { uses: "actions/setup-node@v7" }, { run: "npm test" }], ...extra });
 const model = (on, job, actions = {}, more = {}) => ({ workflows: { "w.yml": { parsed: { on, jobs: { j: job } } }, ...more }, actions });
 
 test("a clean routed job passes and is counted", () => {

@@ -148,8 +148,9 @@ path without root). It also covers jobs that rely on tools the hosted image ship
 pip), macOS, Windows, and every job outside the pull-request pipeline.
 
 The routed jobs set `GOMAXPROCS=4` and `--maxWorkers=4`. The pod's cgroup limit is 4 CPUs, but the node reports
-8. A step a routed job runs only for node (`actions/setup-node`) has `if: runner.environment != 'github-hosted'`,
-so the hosted path is unchanged.
+8. `./.github/actions/setup-node-pool` installs node only when `runner.environment != 'github-hosted'`, so the
+hosted path is unchanged. `scripts/ci/install-golangci-lint.sh` fetches golangci-lint with curl and jq (no gh),
+on both kinds of runner.
 
 ### How a job is routed
 
@@ -158,14 +159,20 @@ expression sends the job to `eng-runner` only when **all** of these hold. Otherw
 `ubuntu-latest`.
 
 1. The repository variable `ENG_RUNNER` is `on`. It is unset by default.
-2. Neither `github.actor` nor `github.triggering_actor` is `dependabot[bot]`.
-3. The event is `schedule`, `workflow_dispatch` or `merge_group`, or it is a `pull_request` that meets both of
-   these:
-   - its head repository is this repository;
-   - its author is not Dependabot.
+2. The event is `pull_request`.
+3. The pull request's head repository is this repository, so it is not a fork.
+4. Its author is not Dependabot.
+5. Neither `github.actor` nor `github.triggering_actor` is `dependabot[bot]`.
 
-It is an allowlist of events. A condition written as "anything but `pull_request`" would let
+It is an allowlist of one event. A condition written as "anything but `pull_request`" would let
 `pull_request_target`, `workflow_run` and `issue_comment` through, and none of those may reach the pool.
+
+These events stay hosted:
+
+- **`schedule` and `workflow_dispatch`** (the runs on main). They write the caches. An entry saved on the pool
+  would carry the gzip cache version, because the image has no `zstd`, and every hosted reader would miss it.
+- **`merge_group`.** Its payload does not say who wrote the queued change, so a Dependabot bump could reach the
+  pool through it.
 
 `scripts/ci/check-runner-routing.mjs` (run in `no-binaries.yml`) fails the pull request when:
 
@@ -176,7 +183,10 @@ It is an allowlist of events. A condition written as "anything but `pull_request
   sudo, apt or systemctl, or uses a `docker/*` or kind action, unless that step's `if:` starts with
   `runner.environment == 'github-hosted'`;
 - a routed job is in a workflow, or is called from a workflow, that can start on an event outside
-  `pull_request`, `merge_group`, `schedule` and `workflow_dispatch`.
+  `pull_request`, `schedule` and `workflow_dispatch`;
+- a routed job runs `node`, `npm`, `npx` or `go` but has no step that installs it. Jobs that call node scripts
+  without a setup step of their own use `./.github/actions/setup-node-pool`, which installs node on the pool
+  only. A sparse checkout must include that action's directory.
 
 Its test evaluates the expression the way GitHub evaluates it. It covers a fork, a same-repository PR,
 Dependabot, `merge_group`, `push`, `schedule`, `workflow_dispatch`, `pull_request_target`, `workflow_run`, and
@@ -186,10 +196,13 @@ the variable unset or off. `check-no-push-triggers.mjs` refuses `pull_request_ta
 Set it to `off`, or delete it, to send every job back to `ubuntu-latest` on its next run. Neither change needs
 a pull request.
 
+**When the pool is down.** Routed jobs stay queued, and `ci-gate` waits for them. Set `ENG_RUNNER` to `off`,
+then re-run the failed or cancelled jobs (or push again).
+
 **Caches.** `actions/cache` works on the pool through the GitHub cache service. The writers are unchanged, one
-per key: the scheduled runs on main write, and pull requests only read. The image has no `zstd`, so a routed
-job may miss entries that a hosted writer saved with zstd. It then runs cold until a routed writer saves its
-own. The Go jobs build with cgo off, so the hosted Go build cache only partly applies to them.
+per key: the scheduled runs on main write, and they stay hosted. Pull requests only read. The image has no
+`zstd`, so a routed job may miss entries that a hosted writer saved with zstd, and then run cold. The Go jobs
+build with cgo off, so the hosted Go build cache only partly applies to them.
 
 ### Security model
 
@@ -201,8 +214,9 @@ jobs on hosted runners, but it is not a security control. The guards are:
    groups.
 2. **Fork pull-request runs need approval for every external contributor.**
 3. **The job-started hook (recommended; not deployed yet).** `deploy/ci-runners/job-started.sh` runs on the
-   runner before any step. It refuses every job that is not from an allowed repository, every event outside the
-   allowlist, a pull request whose head is a fork, and Dependabot. The runbook is
+   runner before any step. It refuses every job that is not from an allowed repository, and every event outside
+   `pull_request`, `schedule`, `workflow_dispatch` and `push`. It also refuses a pull request whose head is a
+   fork, and Dependabot. The runbook is
    `deploy/ci-runners/README.md`.
 
 Until the hook is deployed, one risk remains: a maintainer approves a fork pull request whose own YAML targets
@@ -213,7 +227,7 @@ sweep covers that pull request, so the run needs no approval.
 `cancel-merged-pr-runs.yml` uses `pull_request: [closed]` and an hourly schedule, not `pull_request_target`.
 GitHub blocks `pull_request_target` by default from 2026-12-02. A fork or Dependabot close gets a read-only
 token, so the close-time pass logs a notice and does nothing. The hourly sweep then cancels the unfinished
-runs of every pull request merged in the last 6 hours and deletes closed pull requests' caches.
+runs of every pull request merged in the last 2 hours and deletes closed pull requests' caches.
 
 ## Security scanners
 

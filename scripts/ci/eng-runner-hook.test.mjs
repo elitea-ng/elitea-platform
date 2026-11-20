@@ -69,13 +69,15 @@ test("Dependabot pull request is refused by author, actor and re-run actor", () 
   assert.equal(run({ event: "push", actor: "dependabot[bot]" }).code, 1);
 });
 
-for (const event of ["merge_group", "workflow_dispatch", "schedule", "push"]) {
+for (const event of ["workflow_dispatch", "schedule", "push"]) {
   test(`${event} of an allowed repository is accepted`, () => {
-    assert.equal(run({ event }).code, 0);
+    const r = run({ event });
+    assert.equal(r.code, 0);
+    assert.match(r.out, /allowlist: built-in list/);
   });
 }
 
-for (const event of ["pull_request_target", "workflow_run", "issue_comment", "pull_request_review", "pull_request_review_comment", "release", "repository_dispatch"]) {
+for (const event of ["merge_group", "pull_request_target", "workflow_run", "issue_comment", "pull_request_review", "pull_request_review_comment", "release", "repository_dispatch"]) {
   test(`${event} is refused`, () => {
     const r = run({ event, payload: pr(REPO) });
     assert.equal(r.code, 1, r.out);
@@ -97,8 +99,11 @@ test("a repository whose name is a prefix or suffix of an allowed one is refused
 test("allowed-repos next to the hook replaces the allowlist", () => {
   const file = "# owner/name per line\nelitea-ng/other  # a comment\n\nelitea-ng/third\n";
   assert.equal(run({ event: "schedule", allowedRepos: file }).code, 1, "a built-in entry is no longer allowed");
-  assert.equal(run({ repo: "elitea-ng/other", event: "schedule", allowedRepos: file }).code, 0);
+  const accepted = run({ repo: "elitea-ng/other", event: "schedule", allowedRepos: file });
+  assert.equal(accepted.code, 0);
+  assert.match(accepted.out, /allowlist: .*\/allowed-repos\)/, "the log names the file it read");
   assert.equal(run({ repo: "elitea-ng/third", event: "schedule", allowedRepos: file }).code, 0);
+  assert.match(run({ event: "schedule", allowedRepos: file }).out, /not on the allowlist \(.*allowed-repos\)/);
 });
 
 test("an empty allowed-repos file refuses everything", () => {
