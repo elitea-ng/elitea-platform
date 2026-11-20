@@ -1,0 +1,12 @@
+---
+/**
+ * Renders every What's new entry, newest first (src/whats-new.ts). Used only
+ * by what-is-new.mdx; src/route-data.ts adds the entries' headings to that
+ * page's table of contents.
+ */
+import { renderedEntries } from '../whats-new';
+
+const entries = await renderedEntries();
+---
+
+{entries.map(({ Content }) => <Content />)}
