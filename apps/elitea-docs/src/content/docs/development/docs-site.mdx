@@ -47,7 +47,7 @@ date: 2026-11-20
 What changed, for whom, and a link such as [Usage](/menus/settings/analytics-and-usage).
 ```
 
-`date` is the file name's date. Entries of one date show in file-name order unless you give them an `order` (an integer, higher first, default 0). The body is one `## ` heading, which becomes the page anchor and the table-of-contents entry, followed by plain Markdown: `### ` subsections and links work, components such as `Note` do not. `scripts/ci/check-whats-new.mjs` fails a section added to `what-is-new.mdx`, a badly named entry, a date that differs from the name, an unknown front matter key and a heading another entry already uses.
+`date` is the file name's date. Entries of one date show by `order` (an integer in the entry's own front matter, higher first, default 0), then by file name, not by merge order: to put yours above an entry of the same date, give your own file a higher `order`. That edits only your file, so it conflicts with nothing. The body is one `## ` heading, which becomes the page anchor and the table-of-contents entry, followed by plain Markdown: `### ` subsections and links work, components such as `Note` do not. `scripts/ci/check-whats-new.mjs` fails a section added to `what-is-new.mdx`, a badly named entry, a date that differs from the name, an unknown front matter key and a heading whose anchor another entry already has.
 
 ## Components
 

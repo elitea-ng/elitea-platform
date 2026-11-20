@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
-import { check, checkEntry, checkPage, ENTRIES, PAGE } from './check-whats-new.mjs';
+import { check, checkEntry, checkPage, ENTRIES, PAGE, slugOf } from './check-whats-new.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const PAGE_OK = '---\ntitle: "What\'s new"\ndescription: "d"\n---\n\nIntro.\n\n<WhatsNew />\n\n<Info title="x">\ny\n</Info>\n';
@@ -45,7 +45,7 @@ test('front matter: date required, matching the name; order an integer; nothing 
 test('the body is one "## " section of plain Markdown', () => {
   assert.match(checkEntry('2026-11-20-x.md', entry('date: 2026-11-20', 'Text first.\n\n## A change\n')).join(), /must start with/);
   assert.match(checkEntry('2026-11-20-x.md', entry('date: 2026-11-20', '## One\n\n## Two\n')).join(), /one "## " heading/);
-  assert.match(checkEntry('2026-11-20-x.md', entry('date: 2026-11-20', '## One\n\n<Note>x</Note>\n')).join(), /MDX components/);
+  assert.match(checkEntry('2026-11-20-x.md', entry('date: 2026-11-20', '## One\n\n<Note>x</Note>\n')).join(), /MDX component does not render/);
   assert.deepEqual(checkEntry('2026-11-20-x.md', entry('date: 2026-11-20', '## One\n\nAn `<untrusted>` envelope and `<Note>` in code.\n')), []);
   assert.match(checkEntry('2026-11-20-x.md', entry('date: 2026-11-20', '## One\n<<<<<<< HEAD\na\n||||||| base\n=======\nb\n>>>>>>> x\n')).join(), /conflict marker/);
 });
@@ -62,9 +62,23 @@ test('check() reads the tree: an empty folder, a stray file and a repeated headi
   const stray = check(tree(PAGE_OK, { '2026-11-20-x.md': entry('date: 2026-11-20'), 'notes.txt': 'x' }));
   assert.match(stray.problems.join(), /only \.md entries/);
   const twice = check(tree(PAGE_OK, { '2026-11-20-x.md': entry('date: 2026-11-20'), '2026-11-19-y.md': entry('date: 2026-11-19') }));
-  assert.match(twice.problems.join(), /same heading/);
+  assert.match(twice.problems.join(), /anchor #a-change/);
+  // Different text, one anchor: the gate compares slugs, not strings.
+  const slugTwice = check(tree(PAGE_OK, { '2026-11-20-x.md': entry('date: 2026-11-20', '## Try: skills\n'), '2026-11-19-y.md': entry('date: 2026-11-19', '## Try Skills\n') }));
+  assert.match(slugTwice.problems.join(), /anchor #try-skills/);
   const ok = check(tree(PAGE_OK, { '2026-11-20-x.md': entry('date: 2026-11-20'), '2026-11-19-y.md': entry('date: 2026-11-19', '## Another\n') }));
   assert.deepEqual(ok, { problems: [], entries: 2 });
+});
+
+test('slugs, CRLF, setext underlines and nested fences read as the Markdown pipeline reads them', () => {
+  assert.equal(slugOf('`run_code` shows the model why a program failed'), 'run_code-shows-the-model-why-a-program-failed');
+  assert.equal(slugOf('"HR agent" is now "Workforce manager"'), 'hr-agent-is-now-workforce-manager');
+  assert.deepEqual(checkEntry('2026-11-20-x.md', entry('date: 2026-11-20').replace(/\n/g, '\r\n')), []);
+  assert.deepEqual(checkEntry('2026-11-20-x.md', entry('date: 2026-11-20', '## One\n\nSub\n=======\n')), []);
+  assert.deepEqual(checkEntry('2026-11-20-x.md', entry('date: 2026-11-20', '## One\n\n~~~md\n```\n## sample\n```\n~~~\n')), []);
+  assert.match(checkEntry('2026-11-20-x.md', entry('date: 2026-11-20', '## One\n\n~~~\nx\n~~~\n\n## Two\n')).join(), /one "## " heading/);
+  assert.match(checkEntry('2026-11-20-x.md', entry('date: 2026-11-20', '## One\n\nPass a Vec<String> to it.\n')).join(), /wrap it in backticks/);
+  assert.deepEqual(checkPage(PAGE_OK.replace(/\n/g, '\r\n')), []);
 });
 
 test('this repository passes', () => {

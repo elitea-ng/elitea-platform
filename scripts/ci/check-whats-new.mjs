@@ -18,7 +18,8 @@
 //
 //   Markdown paragraphs (`### ` subsections allowed, no MDX components).
 //
-// The page sorts by date, then order, then file name (src/whats-new.ts). It
+// The page sorts by date, then order, then file name (src/whats-new.ts), not
+// by merge order; `order` lives in the entry's own file, so it shares nothing. It
 // fails, rather than passes, when the folder holds no entry: "nothing found,
 // therefore correct" is how a gate stops gating in silence.
 //
@@ -32,20 +33,45 @@ import { fileURLToPath } from 'node:url';
 export const PAGE = 'apps/elitea-docs/src/content/docs/what-is-new.mdx';
 export const ENTRIES = 'apps/elitea-docs/src/content/whats-new';
 export const ENTRY_NAME = /^(\d{4})-(\d{2})-(\d{2})-[a-z0-9]+(?:-[a-z0-9]+)*\.md$/;
-const CONFLICT = /^(<{7}|\|{7}|={7}|>{7})( |$)/m;
-const FRONT = /^---\n([\s\S]*?)\n---\n/;
+// No `=======` alternative: a setext heading underline is that line too, and
+// a real conflict always carries the `<<<<<<<` and `>>>>>>>` lines.
+const CONFLICT = /^(<{7}|\|{7}|>{7})( |$)/m;
+const FRONT = /^---\n([\s\S]*?)\n---(?:\n|$)/;
 const KEYS = new Set(['date', 'order']);
 
-/** Lines outside ``` fences, so a code sample's `## ` is not a heading. */
+/** CRLF and LF read alike, as the Astro loader reads them. */
+const lf = (text) => text.replace(/\r\n?/g, '\n');
+
+/**
+ * Lines outside code fences, so a code sample's `## ` is not a heading. A
+ * fence closes only on its own character, at least as long (CommonMark), so
+ * a ``` line inside a ~~~ block stays code.
+ */
 function proseLines(text) {
-  let fenced = false;
+  let fence;
   return text.split('\n').filter((line) => {
-    if (/^\s*(```|~~~)/.test(line)) {
-      fenced = !fenced;
+    const m = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (m && !fence) {
+      fence = m[1];
       return false;
     }
-    return !fenced;
+    if (m && fence && m[1][0] === fence[0] && m[1].length >= fence.length && line.trim() === m[1]) {
+      fence = undefined;
+      return false;
+    }
+    return !fence;
   });
+}
+
+/**
+ * The anchor id a heading gets: github-slugger's rule, which the Markdown
+ * pipeline uses (lower case, drop everything but letters, marks, numbers,
+ * connector punctuation, spaces and hyphens, spaces to hyphens). Each entry
+ * renders on its own, so no slugger de-duplicates across entries: two equal
+ * slugs would be one anchor twice.
+ */
+export function slugOf(heading) {
+  return heading.toLowerCase().replace(/[^\p{L}\p{M}\p{N}\p{Pc} -]/gu, '').replace(/ /g, '-');
 }
 
 function validDate(y, m, d) {
@@ -54,7 +80,8 @@ function validDate(y, m, d) {
 }
 
 /** The problems in one entry file (`name`, its `text`); [] when it is fine. */
-export function checkEntry(name, text) {
+export function checkEntry(name, raw) {
+  const text = lf(raw);
   const problems = [];
   const where = `${ENTRIES}/${name}`;
   const m = ENTRY_NAME.exec(name);
@@ -95,18 +122,21 @@ export function checkEntry(name, text) {
     problems.push(`${where}: one "## " heading per entry (use "### " inside it, or add a second entry file)`);
   }
   const prose = lines.join('\n').replace(/`[^`\n]*`/g, '');
-  if (/<\/?[A-Z][A-Za-z0-9]*[\s/>]/.test(prose)) problems.push(`${where}: an entry is plain Markdown; MDX components do not render in it`);
+  if (/<\/?[A-Z][A-Za-z0-9]*[\s/>]/.test(prose)) {
+    problems.push(`${where}: a <Tag> outside backticks: an entry is plain Markdown, so an MDX component does not render and a type such as Vec<String> vanishes as HTML; wrap it in backticks`);
+  }
   return problems;
 }
 
 /** The heading of an entry, for the duplicate-anchor check. */
 export function headingOf(text) {
-  const body = text.replace(FRONT, '');
+  const body = lf(text).replace(FRONT, '');
   return proseLines(body).find((line) => line.startsWith('## '))?.slice(3).trim();
 }
 
 /** The problems in what-is-new.mdx's text; [] when it holds no section. */
-export function checkPage(text) {
+export function checkPage(raw) {
+  const text = lf(raw);
   const problems = [];
   const sections = proseLines(text.replace(FRONT, '')).filter((line) => /^#{1,2} /.test(line));
   for (const line of sections) {
@@ -120,7 +150,7 @@ export function checkPage(text) {
 export function check(root) {
   const problems = checkPage(fs.readFileSync(path.join(root, PAGE), 'utf8'));
   const dir = path.join(root, ENTRIES);
-  const names = fs.readdirSync(dir);
+  const names = fs.readdirSync(dir).sort();
   const entries = names.filter((n) => n.endsWith('.md'));
   if (entries.length === 0) problems.push(`${ENTRIES}/ holds no entry: the gate found nothing to check`);
   for (const name of names) {
@@ -130,10 +160,11 @@ export function check(root) {
   for (const name of entries) {
     const text = fs.readFileSync(path.join(dir, name), 'utf8');
     problems.push(...checkEntry(name, text));
-    const heading = headingOf(text)?.toLowerCase();
+    const heading = headingOf(text);
     if (heading === undefined) continue;
-    if (headings.has(heading)) problems.push(`${ENTRIES}/${name}: same heading as ${headings.get(heading)}, so both would share one anchor`);
-    else headings.set(heading, name);
+    const slug = slugOf(heading);
+    if (headings.has(slug)) problems.push(`${ENTRIES}/${name}: its heading's anchor #${slug} is ${headings.get(slug)}'s too; reword one heading`);
+    else headings.set(slug, name);
   }
   return { problems, entries: entries.length };
 }
