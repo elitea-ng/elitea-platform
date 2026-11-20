@@ -38,18 +38,29 @@ env:
 jobs:
   shared-crates:
     name: Shared crates — rustdoc and tests
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
+    env:
+      # 4 CPU on the pool (nproc reports more) and on hosted runners.
+      CARGO_BUILD_JOBS: "4"
+      RUST_TEST_THREADS: "4"
     # 22 min measured cold for the first step alone (no cache under this
     # key yet); the agent-runtime steps reuse its build.
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume, and rustup (none in
+      # its image). Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          rust: "true"
 
       - name: Assert the pinned toolchain
         working-directory: libs/rust
         run: bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
 
       - name: Free runner disk for the all-features build
+        # Hosted only: the pool builds on its 80 GiB work volume, and has no sudo.
+        if: runner.environment == 'github-hosted'
         # The all-features build of the workspace on top of main's restored
         # target/ ran the runner out of disk (ENOSPC in xberg-native-pdf,
         # PR #1561: a dependency refresh rebuilds most of the graph beside

@@ -741,7 +741,7 @@ jobs:
 
   template:
     name: Helm Template (${{ matrix.chart }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -764,6 +764,11 @@ jobs:
           # new chart cannot quietly join neither.
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume, and node (none in
+      # its image). Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          node: "true"
 
       - name: Set up Helm
         if: ${{ !cancelled() }}
@@ -791,10 +796,22 @@ jobs:
         run: |
           # Through the API, not the github.com download link (504s).
           gh release download "${KUBECONFORM_VERSION}" --repo yannh/kubeconform \
-            --pattern kubeconform-linux-amd64.tar.gz --output /tmp/kubeconform.tar.gz --clobber
-          echo "${KUBECONFORM_SHA256}  /tmp/kubeconform.tar.gz" | sha256sum -c -
-          tar -xzf /tmp/kubeconform.tar.gz -C /usr/local/bin kubeconform
-          kubeconform -v
+            --pattern kubeconform-linux-amd64.tar.gz --output "${RUNNER_TEMP}/kubeconform.tar.gz" --clobber
+          echo "${KUBECONFORM_SHA256}  ${RUNNER_TEMP}/kubeconform.tar.gz" | sha256sum -c -
+          # The job's own directory, not /usr/local/bin: the self-hosted pool
+          # runs without root.
+          bin="${RUNNER_TEMP}/kubeconform-bin"
+          mkdir -p "${bin}"
+          tar -xzf "${RUNNER_TEMP}/kubeconform.tar.gz" -C "${bin}" kubeconform
+          echo "${bin}" >> "$GITHUB_PATH"
+          "${bin}/kubeconform" -v
+
+      # PyYAML for the Helm 3 parity step at the end. The eng-runner image's
+      # python3 is Ubuntu's, whose pip refuses to install (PEP 668); a
+      # setup-python interpreter installs on either kind of runner.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
 
       # Every dependency resolved as Chart.lock pins it: every row's STATUS
       # must be `ok`, and an unknown status fails too

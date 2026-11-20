@@ -35,13 +35,21 @@ permissions:
 jobs:
   repo-gates:
     name: Repository gates
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
+    env:
+      # The pod's cgroup gives 4 CPU while the node reports more; hosted runners have 4.
+      GOMAXPROCS: "4"
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
         with:
           # Need the working tree + HEAD to scan; no full history required.
           fetch-depth: 1
+      # eng-runner: caches and TMPDIR on the work volume, and node (none in
+      # its image). Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          node: "true"
 
       # ── No committed binaries ─────────────────────────────────────────────────
       - name: Scan for binary / oversize tracked files

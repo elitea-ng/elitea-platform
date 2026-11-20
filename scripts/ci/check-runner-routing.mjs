@@ -2,8 +2,9 @@
 // Only our own jobs can be routed to the self-hosted pool, and only jobs that can run there.
 //
 // `eng-runner` is the org's ARC runner scale set (deploy/ci-runners/README.md). It runs the job directly in
-// the plain `actions-runner` pod: no Docker daemon (so no `container:`, no `services:`, no docker, podman or
-// kind), no root (no sudo, no apt), and no C toolchain. The repository is public. A job may reach the pool only
+// the runner pod (image: deploy/ci-runners/image/, which adds build-essential, cmake, zstd, gh, helm, yq and
+// shellcheck, and no toolchains): no Docker daemon (so no `container:`, no `services:`, no docker, podman or
+// kind), and no root (no sudo, no apt). The repository is public. A job may reach the pool only
 // through ROUTED_RUNS_ON below, which sends it there only when ALL of these hold:
 //
 //   * the repository variable ENG_RUNNER is `on` (unset by default: the kill switch);
@@ -30,7 +31,8 @@
 //   * a routed job is in a workflow that can start on any event other than pull_request, schedule,
 //     workflow_dispatch (and workflow_call from such a caller): pull_request_target and workflow_run are
 //     refused outright;
-//   * a routed job runs node/npm/npx or go without a step that installs it (the image has neither);
+//   * a routed job runs node/npm/npx, go, cargo/rustc/rustup, or python/pip without a step that installs it
+//     (the image has none of them; its python3 is Ubuntu's, whose pip refuses to install: PEP 668);
 //   * a routed job does not run ENV_ACTION unconditionally, straight after its checkout and before any other
 //     action: outside /home/runner/_work the pod has a 10 GiB ephemeral-storage limit, and a job that writes
 //     its Go, npm or XDG caches or /tmp there past it is evicted;
@@ -67,13 +69,18 @@ export const ALLOWED_EVENTS = new Set(["pull_request", "schedule", "workflow_dis
  */
 export const ENV_ACTION = "./.github/actions/eng-runner-env";
 const isEnvStep = (s) => String(s.uses ?? "").replace(/\/$/, "") === ENV_ACTION;
-/** A routed job whose steps run one of these must install it: the pool's image has neither. */
+/** A routed job whose steps run one of these must install it: the pool's image has none of them. */
 const TOOLCHAINS = [
   [/(?:^|[\s;&|(`$])(?:node|npm|npx)\s/, (s) => /^actions\/setup-node@/.test(String(s.uses ?? "")) || (isEnvStep(s) && String(s.with?.node) === "true"), "node", `${ENV_ACTION} with \`node: "true"\``],
   [/(?:^|[\s;&|(`$])go\s+(?:build|env|generate|install|list|mod|run|test|tool|vet|work)\b/, (s) => /^actions\/setup-go@/.test(String(s.uses ?? "")), "go", "actions/setup-go"],
+  // Hosted runners ship rustup; the image does not. assert-rust-toolchain.sh installs the pinned toolchain
+  // through rustup, so it counts as a use.
+  [/(?:^|[\s;&|(`$])(?:cargo|rustc|rustup)\s|assert-rust-toolchain\.sh/, (s) => isEnvStep(s) && String(s.with?.rust) === "true", "rust", `${ENV_ACTION} with \`rust: "true"\``],
+  // A bare `python` or `pip` exists on hosted runners only, and the image's python3 refuses `pip install`.
+  [/(?:^|[\s;&|(`$])(?:python|pip3?)\s|(?:^|[\s;&|(`$])python3\s+-m\s+pip\s+install\b/, (s) => /^actions\/setup-python@/.test(String(s.uses ?? "")), "python", "actions/setup-python"],
 ];
 export const MINIMUM_WORKFLOWS = 40;
-export const MINIMUM_ROUTED_JOBS = 20;
+export const MINIMUM_ROUTED_JOBS = 35;
 
 // What cannot run in the pod. Read per line of a step's `run:`, comments dropped.
 const FORBIDDEN_RUN = [

@@ -1,16 +1,16 @@
 name: Job environment on the self-hosted pool
 description: >-
   On eng-runner (deploy/ci-runners/README.md) moves every per-user cache and
-  temporary directory onto the 80 GiB work volume, and optionally installs node.
-  On a GitHub-hosted runner it does nothing. Every job routed to eng-runner
-  uses it straight after its checkout (check-runner-routing.mjs refuses one
-  that does not).
+  temporary directory onto the 80 GiB work volume, and optionally installs node
+  or rustup. On a GitHub-hosted runner it does nothing. Every job routed to
+  eng-runner uses it straight after its checkout (check-runner-routing.mjs
+  refuses one that does not).
   Why: the runner container has an ephemeral-storage limit of 10 GiB, and only
   /home/runner/_work is a separate volume. Anything written elsewhere
-  (~/go/pkg/mod, ~/.cache/go-build, ~/.npm, ~/.cache, /tmp) counts against
-  that limit, and a job that exceeds it gets its pod EVICTED. HOME itself
-  moves, so every `~` path follows: the go-cache and npm-cache actions set
-  GOCACHE, GOMODCACHE and NPM_CONFIG_CACHE from $HOME, and main-write-cache
+  (~/go/pkg/mod, ~/.cache/go-build, ~/.npm, ~/.cargo, ~/.cache, /tmp) counts
+  against that limit, and a job that exceeds it gets its pod EVICTED. HOME
+  itself moves, so every `~` path follows: the go-cache and npm-cache actions
+  set GOCACHE, GOMODCACHE and NPM_CONFIG_CACHE from $HOME, and main-write-cache
   checks its slot paths against $HOME.
 
 inputs:
@@ -18,6 +18,15 @@ inputs:
     description: >-
       "true" installs node on the pool, for a job that runs node scripts
       without a setup-node step of its own (the pool's image has no node).
+    required: false
+    default: "false"
+  rust:
+    description: >-
+      "true" installs rustup on the pool (the image has none; hosted runners
+      ship it), with no toolchain. The job's assert-rust-toolchain.sh step
+      then installs the toolchain rust-toolchain.toml pins, as on a hosted
+      runner. check-runner-routing.mjs requires it on a routed job that runs
+      cargo, rustc or rustup.
     required: false
     default: "false"
 
@@ -42,6 +51,11 @@ runs:
           echo "GOCACHE=$home/.cache/go-build"
           echo "GOLANGCI_LINT_CACHE=$home/.cache/golangci-lint"
           echo "npm_config_cache=$home/.npm"
+          # The image sets both under _work already. Moved with HOME here so
+          # that a pod on an older image cannot fall back to ~/.cargo on the
+          # ephemeral disk; a toolchain and a registry are gigabytes.
+          echo "CARGO_HOME=$home/.cargo"
+          echo "RUSTUP_HOME=$home/.rustup"
           echo "TMPDIR=$RUNNER_TEMP"
         } >> "$GITHUB_ENV"
         echo "eng-runner: HOME, caches and TMPDIR under $work"
@@ -51,3 +65,26 @@ runs:
         node-version: "26"
         # Nothing to install: no automatic cache (check-workflow-cache-writes).
         package-manager-cache: false
+    # The rustup-init release binary, not the sh.rustup.rs script: a pinned
+    # version, checked against the SHA-256 the release publishes beside it
+    # (rustup-init.sha256). No default toolchain: rust-toolchain.toml picks it.
+    # Bump: read the version from static.rust-lang.org/rustup/release-stable.toml
+    # and the hash from .../archive/<version>/x86_64-unknown-linux-gnu/rustup-init.sha256.
+    - name: rustup on the work volume
+      if: runner.environment != 'github-hosted' && inputs.rust == 'true'
+      shell: bash
+      env:
+        RUSTUP_VERSION: "1.29.3"
+        RUSTUP_INIT_SHA256: b1c8cb14e30889e7e2999e6b69e62d9e9b9ffc0f4df8180564d306d9680e6c55
+      run: |
+        set -euo pipefail
+        [ "$(uname -m)" = x86_64 ] || { echo "::error::eng-runner-env: the rustup pin is x86_64, this pod is $(uname -m)"; exit 1; }
+        init="$RUNNER_TEMP/rustup-init"
+        curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-all-errors -o "$init" \
+          "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/x86_64-unknown-linux-gnu/rustup-init"
+        echo "${RUSTUP_INIT_SHA256}  $init" | sha256sum -c -
+        chmod +x "$init"
+        "$init" -y --no-modify-path --profile minimal --default-toolchain none
+        rm -f -- "$init"
+        echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+        "$CARGO_HOME/bin/rustup" --version

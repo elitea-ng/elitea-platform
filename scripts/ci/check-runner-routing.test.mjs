@@ -137,6 +137,30 @@ test("a routed job that runs node or go must install it", () => {
   assert.deepEqual(check(model({ schedule: [] }, routedJob({ steps: [{ run: "echo go to node_modules; cat package.json" }] }))).errors, []);
 });
 
+test("a routed job that runs cargo, rustc, rustup or the toolchain assert must install rustup", () => {
+  const withRust = (steps) => routedJob({ raw: [{ uses: "actions/checkout@v7" }, { uses: ENV_ACTION, with: { rust: "true" } }, ...steps] });
+  for (const run of ["cargo test --locked", "cargo clippy -- -D warnings", "rustc --version", "rustup toolchain install", 'bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"', "x=$(cargo tree -i smallvec)"]) {
+    assert.match(check(model({ schedule: [] }, routedJob({ steps: [{ run }] }))).errors.join(), /runs rust, but no step installs it.*rust: "true"/, run);
+    assert.deepEqual(check(model({ schedule: [] }, withRust([{ run }]))).errors, [], `${run} with rust: "true"`);
+  }
+  // node: "true" is not rust: "true".
+  const wrong = routedJob({ raw: [{ uses: "actions/checkout@v7" }, { uses: ENV_ACTION, with: { node: "true" } }, { run: "cargo build" }] });
+  assert.match(check(model({ schedule: [] }, wrong)).errors.join(), /runs rust/);
+  // A hosted-only step, and words that only contain the names, are not uses.
+  assert.deepEqual(check(model({ schedule: [] }, routedJob({ steps: [{ if: HOSTED_ONLY, run: "cargo build" }] }))).errors, []);
+  assert.deepEqual(check(model({ schedule: [] }, routedJob({ steps: [{ run: "python3 scripts/contract/test_cargo_target_cache_freshness.py" }] }))).errors, []);
+});
+
+test("a routed job that runs python or pip must set up python; the image's python3 runs, but cannot pip install", () => {
+  for (const run of ["python -m pytest -q", "pip install pytest", "python3 -m pip install --quiet pyyaml", "python3 -c 'import yaml' || python3 -m pip install pyyaml"]) {
+    assert.match(check(model({ schedule: [] }, routedJob({ steps: [{ run }] }))).errors.join(), /runs python, but no step installs it.*setup-python/, run);
+    assert.deepEqual(check(model({ schedule: [] }, routedJob({ steps: [{ uses: "actions/setup-python@v7" }, { run }] }))).errors, [], run);
+  }
+  for (const run of ["python3 scripts/check.py", "python3 -m unittest discover", "bash scripts/python_lint.sh"]) {
+    assert.deepEqual(check(model({ schedule: [] }, routedJob({ steps: [{ run }] }))).errors, [], run);
+  }
+});
+
 // ── classifyRunsOn ──
 test("runs-on: plain labels are hosted; the routed expression is routed", () => {
   assert.equal(classifyRunsOn({ "runs-on": "ubuntu-latest" }).kind, "hosted");
@@ -191,9 +215,14 @@ test("a routed job must move its caches onto the work volume first", () => {
 test("this repository's env action moves HOME, the caches and TMPDIR", () => {
   const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..", "..");
   const text = fs.readFileSync(path.join(root, ENV_ACTION, "action.yml"), "utf8");
-  for (const name of ["HOME", "XDG_CACHE_HOME", "GOPATH", "GOMODCACHE", "GOCACHE", "GOLANGCI_LINT_CACHE", "npm_config_cache", "TMPDIR"]) {
+  for (const name of ["HOME", "XDG_CACHE_HOME", "GOPATH", "GOMODCACHE", "GOCACHE", "GOLANGCI_LINT_CACHE", "npm_config_cache", "CARGO_HOME", "RUSTUP_HOME", "TMPDIR"]) {
     assert.match(text, new RegExp(`echo "${name}=`), name);
   }
+  // rustup is pinned and checked, never piped from sh.rustup.rs.
+  assert.match(text, /RUSTUP_VERSION: "\d+\.\d+\.\d+"/);
+  assert.match(text, /RUSTUP_INIT_SHA256: [0-9a-f]{64}\n/);
+  assert.match(text, /sha256sum -c -/);
+  assert.doesNotMatch(text, /\|\s*(?:ba)?sh\b/, "nothing is piped into a shell");
 });
 
 test("a clean routed job passes and is counted", () => {
