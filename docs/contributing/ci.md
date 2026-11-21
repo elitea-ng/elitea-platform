@@ -298,6 +298,65 @@ with `ENG_RUNNER` off and the nightly run keep the full compose matrix on hosted
 runs under exactly one name. `visual` and `docs-shots` stay compose on hosted runners, because their pixels
 come from the pinned Playwright container.
 
+### The standalone lanes on the pool
+
+The same workflow runs five standalone-stack lanes natively as `E2E native (<lane>)`: chat-stream-rust (three
+shards, the compose lane's weights `61:16:33`), deepwiki-stack, index-stream-rust, native-client-conformance
+and handoff-journey. They run `deploy/scripts/standalone-stack.sh` with `E2E_STACK=native` over
+`deploy/native/standalone-full.mjs`, the standalone-full compose file plus the Rust agent overlay as a native
+table. That table also carries the deltas of the conformance and handoff overlays. The lanes need both build
+jobs. `native-build` builds the Go binaries and web bundles, now including `elitea-scheduler`,
+`elitea-grpc-health` and `grpcurl`. `native-build-rust` (`scripts/e2e/build-native-rust.sh`) builds the five
+Rust services (worker, vector, doc-extractor, the DeepWiki and Inventory engines) and the LLM gateway. The
+gateway is Go outside `go.work`, so it builds with `GOWORK=off` on its own `go.mod`'s Go. They are built on the
+pool and never lifted from an image, because the images link a different glibc from the pool's. That job has
+no Rust cache: the cache budget has no room for a release target directory, and the one Rust entry caches the
+test profile. It builds cold, with the five workspaces sharing one target directory. Neither build job
+depends on `ci-build-once`.
+
+What the native table does differently from compose, and why:
+
+- The runtime PKI is minted on the host (`standalone-stack.sh certs`), which needs Python's `cryptography`,
+  so each lane installs a pinned copy with `actions/setup-python`. The handoff lane adds a pinned `awscli`.
+- Host names in `worker-runtime.rust.json` resolve through the pod's `127.0.0.x` name map. The gateway's
+  egress allowlist gains `127.0.0.0/8`. The worker's allowlist matches host names, not addresses, so it
+  needs no change.
+- doc-extractor's `network_mode: none` becomes `PEER_UIDS` set to the runner's uid. It only listens on its
+  Unix socket. Its read-only root, dropped capabilities and memory and pid limits have no native equivalent.
+- The Python and Go mocks run from source. The migrate and init jobs are one-shots. The OpenTelemetry
+  collector is a sink that accepts OTLP/HTTP and discards it.
+- No Redis and no new internal HTTP: the services talk gRPC over mTLS or NATS, exactly as in compose.
+
+Pinned parallelism per lane:
+
+| Lane | Runner | Parallelism |
+|------|--------|-------------|
+| chat-stream-rust ×3, deepwiki-stack | Playwright | 1 worker (`chat-stream-e2e.sh --workers=1`) |
+| index-stream-rust | Playwright | 1 worker (`index-stream-e2e.sh --workers 1`) |
+| native-client-conformance | `go test` | one run against the one stack |
+| handoff-journey | `cargo test` | `--test-threads=1` (`handoff-live.sh`) |
+
+Where these lanes run, `ci-web-e2e.yml`'s compose versions stand down on a pull request. They come back as the
+image smoke when `reaches-images` says the change touches what only images prove. That now includes the
+compose half of the standalone stack scripts. Only leg 1of3 of chat-stream-rust runs as the smoke (`RUN_LEG`).
+Pushes, the nightly run, forks, Dependabot and runs with `ENG_RUNNER` off keep the full compose versions.
+
+What stays compose or hosted, and why:
+
+- **chat-stream-real and `nightly-real-llm.yml`** stay compose. The model server (`llm-real`) is an image
+  holding llama.cpp and two GGUF models, and the pool has neither. The table lists the service as
+  `NATIVE_ABSENT` and refuses the `real-llm` profile. Taking them native needs a pinned llama.cpp release
+  binary and the models, with their sha256s, in the pool image.
+- **`deepwiki-real-engine.yml`** stays compose. Its `engine_image` input is an image by design, its overlay
+  replaces llm-mock with an image-only stub, its script builds the images, and it runs weekly, so there is no
+  queue to win back.
+- **code-sandbox** stays compose: its supervisor runs containers, which the pool cannot.
+- **`visual` and `docs-shots`** stay compose, for the rasteriser reason above.
+- **`ci-governed-conformance.yml`** stays on hosted runners. Its clients call `graph.microsoft.com` and
+  `login.microsoftonline.com`, which the governed mocks answer. Those names are deliberately absent from the
+  pod's hostAliases, so a pool job cannot resolve them to the mocks. Also, governed-mocks binds port 443,
+  which a non-root process cannot.
+
 ### How a job is routed
 
 A routed job's `runs-on` is exactly `ROUTED_RUNS_ON` from `scripts/ci/check-runner-routing.mjs`. That
