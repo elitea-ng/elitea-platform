@@ -335,8 +335,8 @@ non-loopback peer, as through compose's port forward, and still refuses it `/rea
 
 **Test timeout.** The native E2E legs set `E2E_TIMEOUT_SCALE=1.5` (`playwright.config.ts`, 1 to 3, default 1),
 which scales the per-test timeout and nothing else. The pod is a 4-CPU CFS quota on a shared 8-thread node, and a
-burst from the browser's threads throttles the whole cgroup, stack included; the WebKit pipeline-canvas journeys
-ran past their budgets there. The Playwright step prints the cgroup's throttled periods for the run, so the
+burst from the browser's threads throttles the whole cgroup, stack included: at 4 workers, 91-96% of periods
+were throttled (run 44917909298). The Playwright step prints the cgroup's throttled periods for the run, so the
 reason stays measured. Retries are the compose legs', unchanged.
 
 These jobs run only where the routing condition sends them to the pool. Where they run, `ci-web-e2e.yml`'s
