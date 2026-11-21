@@ -7,10 +7,12 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	indexingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
+	"github.com/jackc/pgx/v5"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -558,4 +560,121 @@ WHERE execution_id = $1
   AND index_meta_terminal_claim_token = 'claim-second'`,
 		second.ExecutionID,
 	)
+}
+
+func TestCurrentIndexMetaTerminalSafeErrorKeepsLongMultilineWorkerMessages(t *testing.T) {
+	// Worker failure messages run past the 256-byte admission limit and carry
+	// line breaks; the projection stores them, so the terminal path must too.
+	message := strings.Repeat("connector refused the page\r\n", 12) // 336 bytes
+	payload, err := proto.Marshal(&runtimev1.IndexIngestResultV1{
+		ResultSummary: &runtimev1.IndexIngestSummaryV1{
+			Status:  runtimev1.IndexIngestStatusV1_INDEX_INGEST_STATUS_V1_ERROR,
+			Message: message,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := terminalSafeError(payloadTypeIndexIngestResult, payload, ""); got != message {
+		t.Fatalf("message was altered: %q", got)
+	}
+
+	long := strings.Repeat("é", indexingapp.MaxCurrentIndexMetaSafeErrorBytes) // 2 bytes a rune
+	got := terminalSafeError("", []byte(long+"\x00"), "DEADLINE_EXCEEDED")
+	if len(got) > indexingapp.MaxCurrentIndexMetaSafeErrorBytes ||
+		!strings.HasSuffix(got, " [truncated]") || !utf8.ValidString(got) ||
+		strings.ContainsRune(got, '\x00') {
+		t.Fatalf("bounded message: %d bytes, suffix ok %v, utf8 %v",
+			len(got), strings.HasSuffix(got, " [truncated]"), utf8.ValidString(got))
+	}
+	claim := indexingapp.CurrentIndexMetaTerminalClaim{
+		CurrentIndexMetaTerminalRequest: indexingapp.CurrentIndexMetaTerminalRequest{
+			ExecutionID: "execution-1", Generation: 1,
+			State:      indexingapp.CurrentIndexMetaFailed,
+			OccurredAt: time.Date(2026, time.November, 16, 9, 16, 31, 0, time.UTC),
+			SafeError:  got,
+		},
+		ClaimToken: "claim-1",
+	}
+	if err := claim.Validate(); err != nil {
+		t.Fatalf("bounded message is refused: %v", err)
+	}
+	if got := terminalSafeError("", []byte("\x00"), "DEADLINE_EXCEEDED"); got == "" {
+		t.Fatal("an all-NUL refusal message left a failed terminal without a message")
+	}
+}
+
+func TestCurrentIndexMetaTerminalClaimRejectsOnlyTheInvalidRow(t *testing.T) {
+	at := time.Date(2026, time.November, 16, 9, 16, 31, 0, time.UTC)
+	store := &scriptedExecutor{
+		rowsResult: &scriptedRows{rows: []scriptedRow{
+			{values: []any{"no-source", int64(1), "failed", at}},
+			{values: []any{"unknown-state", int64(2), "exploded", at}},
+			{values: []any{"healthy", int64(1), "cancelled", at}},
+		}},
+		rowResults: []scriptedRow{{err: pgx.ErrNoRows}},
+	}
+	repository, err := newCurrentIndexMetaTerminalBindingsRepository(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims, err := repository.ClaimPendingTerminalEffects(context.Background(), "claim-1", 8, time.Minute)
+	var rejected indexingapp.CurrentIndexMetaTerminalRejections
+	if !errors.As(err, &rejected) {
+		t.Fatalf("err=%v, want rejections", err)
+	}
+	if len(claims) != 1 || claims[0].ExecutionID != "healthy" {
+		t.Fatalf("claims=%+v", claims)
+	}
+	if len(rejected) != 2 ||
+		rejected[0].ExecutionID != "no-source" || rejected[0].Generation != 1 ||
+		rejected[0].ClaimToken != "claim-1" ||
+		rejected[1].ExecutionID != "unknown-state" || rejected[1].Generation != 2 {
+		t.Fatalf("rejected=%+v", rejected)
+	}
+	if !errors.Is(err, indexingapp.ErrCurrentIndexMetaInitializationInvalid) ||
+		!strings.Contains(err.Error(), "no failure record matches the terminal time") ||
+		!strings.Contains(err.Error(), `terminal state "exploded" is unknown`) ||
+		!strings.Contains(err.Error(), `"unknown-state" generation 2`) {
+		t.Fatalf("rejection does not name the row and the check: %v", err)
+	}
+}
+
+func TestCurrentIndexMetaTerminalRejectionBacksOffThenQuarantines(t *testing.T) {
+	store := &scriptedExecutor{rowResults: []scriptedRow{
+		{values: []any{"PENDING"}},
+		{values: []any{"QUARANTINED"}},
+	}}
+	repository, err := newCurrentIndexMetaTerminalBindingsRepository(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := indexingapp.CurrentIndexMetaTerminalClaimRef{ExecutionID: "bad", Generation: 2, ClaimToken: "claim-1"}
+	for _, want := range []bool{false, true} {
+		quarantined, err := repository.RejectTerminalEffect(context.Background(), ref, "INVALID_TERMINAL_EFFECT", 5)
+		if err != nil || quarantined != want {
+			t.Fatalf("quarantined=%v err=%v, want %v", quarantined, err, want)
+		}
+	}
+	call := store.rowCalls[0]
+	for _, predicate := range []string{
+		"WHEN index_meta_terminal_attempt_count >= $5 THEN 'QUARANTINED'",
+		"index_meta_terminal_claim_token = NULL",
+		"index_meta_terminal_last_error_code = $4",
+		"AND index_meta_terminal_status = 'PENDING'",
+		"AND index_meta_terminal_claim_token = $3",
+	} {
+		if !strings.Contains(call.sql, predicate) {
+			t.Fatalf("rejection SQL is missing %q", predicate)
+		}
+	}
+	if len(call.args) != 5 || call.args[0] != "bad" || call.args[1] != int64(2) ||
+		call.args[3] != "INVALID_TERMINAL_EFFECT" || call.args[4] != int32(5) {
+		t.Fatalf("args=%#v", call.args)
+	}
+	lost := &scriptedExecutor{rowResults: []scriptedRow{{err: pgx.ErrNoRows}}}
+	repository, _ = newCurrentIndexMetaTerminalBindingsRepository(lost)
+	if _, err := repository.RejectTerminalEffect(context.Background(), ref, "INVALID_TERMINAL_EFFECT", 5); !errors.Is(err, indexingapp.ErrCurrentIndexMetaConflict) {
+		t.Fatalf("lost claim err=%v", err)
+	}
 }

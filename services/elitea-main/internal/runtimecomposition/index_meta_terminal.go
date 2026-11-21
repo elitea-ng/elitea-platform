@@ -47,7 +47,18 @@ type currentIndexMetaTerminalEffectStore interface {
 		indexingapp.CurrentIndexMetaTerminalClaim,
 		string,
 	) error
+	RejectTerminalEffect(
+		context.Context,
+		indexingapp.CurrentIndexMetaTerminalClaimRef,
+		string,
+		int,
+	) (bool, error)
 }
+
+// invalidTerminalEffectErrorCode is recorded on a terminal effect that failed
+// validation; after MaxCurrentIndexMetaTerminalInvalidAttempts it is
+// QUARANTINED with this code.
+const invalidTerminalEffectErrorCode = "INVALID_TERMINAL_EFFECT"
 
 func currentIndexMetaTerminalConcurrency(maxConnections int32) (int, error) {
 	if maxConnections <= 0 {
@@ -75,11 +86,15 @@ func (e *currentIndexMetaTerminalProcessor) ReconcilePendingIndexMetaTerminals(
 		claimLimit,
 		e.claimLease,
 	)
-	if err != nil {
+	var rejected indexingapp.CurrentIndexMetaTerminalRejections
+	if err != nil && !errors.As(err, &rejected) {
 		return 0, err
 	}
+	// A rejected row is recorded and skipped; it never costs the valid claims
+	// of the same batch their pass.
+	rejectErrors := e.rejectClaims(ctx, rejected)
 	if len(claims) == 0 {
-		return 0, nil
+		return len(rejected), errors.Join(rejectErrors...)
 	}
 
 	workerCount := min(e.concurrency, len(claims))
@@ -116,7 +131,8 @@ send:
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	itemErrors := make([]error, 0, len(results))
+	itemErrors := make([]error, 0, len(results)+len(rejectErrors))
+	itemErrors = append(itemErrors, rejectErrors...)
 	for index, result := range results {
 		if result.err == nil {
 			continue
@@ -138,7 +154,37 @@ send:
 			))
 		}
 	}
-	return len(claims), errors.Join(itemErrors...)
+	return len(claims) + len(rejected), errors.Join(itemErrors...)
+}
+
+// rejectClaims backs off or quarantines each claimed effect that failed
+// validation and reports it with its execution and the failed check. It
+// returns only the failures to record a rejection, which fail the pass.
+func (e *currentIndexMetaTerminalProcessor) rejectClaims(
+	ctx context.Context,
+	rejected indexingapp.CurrentIndexMetaTerminalRejections,
+) []error {
+	var failures []error
+	for _, rejection := range rejected {
+		quarantined, err := e.store.RejectTerminalEffect(
+			ctx,
+			rejection.CurrentIndexMetaTerminalClaimRef,
+			invalidTerminalEffectErrorCode,
+			indexingapp.MaxCurrentIndexMetaTerminalInvalidAttempts,
+		)
+		if err != nil {
+			failures = append(failures, fmt.Errorf(
+				"record rejection of %w: %w", rejection, err,
+			))
+			continue
+		}
+		outcome := "backed off"
+		if quarantined {
+			outcome = "quarantined"
+		}
+		e.reportItemFailure(fmt.Errorf("%w (%s as %s)", rejection, outcome, invalidTerminalEffectErrorCode))
+	}
+	return failures
 }
 
 func (e *currentIndexMetaTerminalProcessor) applyClaim(
@@ -163,6 +209,27 @@ func (e *currentIndexMetaTerminalProcessor) applyClaim(
 				claim,
 				indexingapp.CurrentIndexMetaTerminalSuperseded,
 			)
+		}
+		if ctx.Err() == nil && errors.Is(err, indexingapp.ErrCurrentIndexMetaInitializationInvalid) {
+			// Invalid evidence does not heal on retry: record it, back off,
+			// and quarantine at the attempt limit, as a claim-time rejection.
+			quarantined, rejectErr := e.store.RejectTerminalEffect(
+				ctx,
+				indexingapp.CurrentIndexMetaTerminalClaimRef{
+					ExecutionID: claim.ExecutionID,
+					Generation:  claim.Generation,
+					ClaimToken:  claim.ClaimToken,
+				},
+				invalidTerminalEffectErrorCode,
+				indexingapp.MaxCurrentIndexMetaTerminalInvalidAttempts,
+			)
+			if rejectErr != nil {
+				return false, errors.Join(err, rejectErr)
+			}
+			if quarantined {
+				return true, fmt.Errorf("%w (quarantined as %s)", err, invalidTerminalEffectErrorCode)
+			}
+			return true, fmt.Errorf("%w (backed off as %s)", err, invalidTerminalEffectErrorCode)
 		}
 		releaseErr := e.store.ReleaseTerminalEffect(ctx, claim, terminalEffectErrorCode(err))
 		if releaseErr != nil {
