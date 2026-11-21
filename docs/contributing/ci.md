@@ -141,7 +141,7 @@ These jobs are routed (when `ENG_RUNNER` is on, on our own pull requests):
 |---|---|
 | `ci.yml` | `changes`, `fast-gate`, `ci-gate` |
 | `ci-web.yml` | `quality`, `unit-tests` (every shard), `gates-static`, `build` |
-| `ci-web-coverage.yml` | `coverage-merge` |
+| `ci-web-coverage.yml` | `unit-tests` (every shard), `coverage-merge` |
 | `ci-go.yml` | `proto`, `sqlc`, `env-drift`, `lint`, `test-plan`, `test-checks`, `test` (the aggregator) |
 | `ci-gateway.yml` | `lint` |
 | `ci-governed-conformance.yml` | `unit` |
@@ -161,8 +161,6 @@ These jobs are routed (when `ENG_RUNNER` is on, on our own pull requests):
 
 Everything else stays hosted:
 
-- **The coverage unit shards** (`ci-web-coverage.yml` `unit-tests`): under coverage instrumentation the pod
-  ran them 1.5 to 2 times slower, and the heaviest test files hit their per-test timeouts.
 - **`services:` or `container:`.** The Go test shards, `integration`, `editor-lifecycle`,
   `compiled-snapshots-postgres` and `secretstore-openbao` in `ci-go.yml`; the gateway's `test`; the engine jobs
   of `ci-deepwiki-engine.yml` and `ci-inventory-engine.yml` (Postgres, so their "Go host against the binary"
