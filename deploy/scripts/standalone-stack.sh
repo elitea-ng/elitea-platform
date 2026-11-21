@@ -538,8 +538,18 @@ db_exception() {
       exit 1
       ;;
   esac
-  stack_service_psql \
-    -v elitea_sql_exception="${exception_name}" -U elitea -d elitea "$@"
+  # The psql command itself, inline per backend, NOT through stack_service_psql:
+  # a function call is traced twice and its body's psql line carries no
+  # elitea_sql_exception=, so the assertion below would count a surplus and
+  # read the shim's line as an offender. Each branch is one traced command
+  # holding both psql and the marker, as the assertion expects.
+  if [ "$E2E_STACK" = native ]; then
+    PGPASSWORD="${E2E_NATIVE_PGPASSWORD:-elitea}" psql -h postgres -p 5432 \
+      -v elitea_sql_exception="${exception_name}" -U elitea -d elitea "$@"
+  else
+    $COMPOSE_BIN $COMPOSE_F exec -T postgres psql \
+      -v elitea_sql_exception="${exception_name}" -U elitea -d elitea "$@"
+  fi
 }
 
 # assert_seed_llm_sql_exceptions reads a command trace and refuses any database
