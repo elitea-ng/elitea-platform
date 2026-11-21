@@ -271,7 +271,9 @@ version is the SHA-256 of the `path:` strings exactly as written, plus the compr
   (`/home/runner/_work/_home/...`), so its version differs and the entry is never found. `Swatinem/rust-cache`
   builds its paths that way; none of the jobs routed here uses it.
 - A `~/...` path string is the same on both, but the archive holds paths relative to `GITHUB_WORKSPACE`, so on
-  the pool it would unpack under `/home/runner` (the 10 GiB ephemeral disk), not under the moved `HOME`.
+  the pool it would unpack under `/home/runner` (the 10 GiB ephemeral disk), not under the moved `HOME`. So
+  `.github/actions/main-write-cache` (the Go and npm caches) skips its restore and save on a self-hosted runner,
+  and logs `cache: SKIPPED`.
 
 Mounting the work volume at `/home/runner` in the scale set would keep `HOME` unmoved, and then a `~/...`
 string would match and unpack in the right place (`deploy/ci-runners/README.md`).
