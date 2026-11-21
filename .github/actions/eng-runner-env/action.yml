@@ -84,7 +84,12 @@ runs:
         package-manager-cache: false
     # The rustup-init release binary, not the sh.rustup.rs script: a pinned
     # version, checked against the SHA-256 the release publishes beside it
-    # (rustup-init.sha256). No default toolchain: rust-toolchain.toml picks it.
+    # (rustup-init.sha256). The DEFAULT toolchain is the repository pin: a
+    # hosted runner has a default (stable), and cargo run from a directory with
+    # no rust-toolchain.toml uses it. With none, such a cargo exits at once
+    # ("no default toolchain"): local-tools' run_tests fixture runs `cargo test`
+    # in a temporary directory and read 0 tests (#2721). Inside the repository
+    # rust-toolchain.toml still picks, so nothing else changes.
     # Bump: read the version from static.rust-lang.org/rustup/release-stable.toml
     # and the hash from .../archive/<version>/x86_64-unknown-linux-gnu/rustup-init.sha256.
     - name: rustup on the work volume
@@ -105,3 +110,10 @@ runs:
         rm -f -- "$init"
         echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
         "$CARGO_HOME/bin/rustup" --version
+        pin="$(sed -nE 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"([0-9]+\.[0-9]+\.[0-9]+)"[[:space:]]*$/\1/p' "$GITHUB_WORKSPACE/rust-toolchain.toml")"
+        [ -n "$pin" ] || { echo "::error::eng-runner-env: read no 'channel = \"X.Y.Z\"' from rust-toolchain.toml; run this after the checkout"; exit 1; }
+        for attempt in 1 2 3; do
+          if "$CARGO_HOME/bin/rustup" default "$pin"; then break; fi
+          [ "$attempt" -lt 3 ] || { echo "::error::eng-runner-env: rustup default $pin failed three times"; exit 1; }
+          sleep $((attempt * 10))
+        done
