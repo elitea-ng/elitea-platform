@@ -575,6 +575,17 @@ jobs:
           set -euo pipefail
           node --test scripts/ci/check-e2e-paths.test.mjs
           node scripts/ci/check-e2e-paths.mjs
+      # The pool runs the E2E stack as processes from a hand-kept table
+      # (deploy/native/). Every compose environment key, depends_on edge,
+      # healthcheck and one-shot must have its counterpart there, and every
+      # address must be the pod's name map (deploy/ci-runners/README.md), or a
+      # variable added to the compose file would be silently missing natively.
+      - name: The native E2E stack runs what its compose file runs
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          node --test scripts/ci/check-native-stack-parity.test.mjs
+          node scripts/ci/check-native-stack-parity.mjs
       # ci.yml's two tiers: every heavy job is gated on a ready PR and the
       # fast tier, ci-gate lists every job, and no workflow runs untiered.
       - name: The CI tiers are complete and ci-gate lists every job
