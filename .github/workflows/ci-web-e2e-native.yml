@@ -307,13 +307,39 @@ jobs:
         # on the host: the pool's image bakes the pinned Playwright's browsers
         # and their libraries at PLAYWRIGHT_BROWSERS_PATH (read-only; no
         # `playwright install`). E2E_REUSE_STACK=1: the stack is up already.
+        #
+        # E2E_TIMEOUT_SCALE 1.5 (playwright.config.ts): the pod is a 4-CPU
+        # CFS quota on a shared 8-thread node, and WebKit and Node size their
+        # thread pools from the 8 CPUs they see, so a burst exhausts the quota
+        # and the whole cgroup (stack included) waits out the period. A hosted
+        # runner's 4 vCPU are not quota'd. Measured on webkit-2of3: every
+        # pipeline-canvas action 4-5 s, and J16's twelve-node journey ran past
+        # its 90 s at the eleventh node. The step prints the cgroup's throttling for the
+        # run, so the reason stays measured. No retries are added: the
+        # config's CI retries are the compose leg's, unchanged.
         env:
           CI: "true"
           E2E_REUSE_STACK: "1"
+          E2E_TIMEOUT_SCALE: "1.5"
           PLAYWRIGHT_BASE_URL: http://localhost:8080
           E2E_TZ: UTC
           PWTEST_SHARD_WEIGHTS: ${{ matrix.weights }}
-        run: npx playwright test --project=${{ matrix.engine }} ${{ matrix.shard && format('--shard={0}', matrix.shard) || '' }}
+        run: |
+          cpu_stat() { cat /sys/fs/cgroup/cpu.stat 2>/dev/null || true; }
+          before="$(cpu_stat)"
+          status=0
+          npx playwright test --project=${{ matrix.engine }} ${{ matrix.shard && format('--shard={0}', matrix.shard) || '' }} || status=$?
+          after="$(cpu_stat)"
+          # nr_periods / nr_throttled / throttled_usec over the run.
+          node -e '
+            const parse = (t) => Object.fromEntries(t.split("\n").filter(Boolean).map((l) => l.split(" ")).map(([k, v]) => [k, Number(v)]));
+            const [a, b] = [parse(process.argv[1]), parse(process.argv[2])];
+            const d = (k) => (b[k] ?? 0) - (a[k] ?? 0);
+            if (!("nr_periods" in b)) { console.log("cgroup cpu.stat: not readable"); process.exit(0); }
+            const pct = d("nr_periods") ? (100 * d("nr_throttled") / d("nr_periods")).toFixed(1) : "0";
+            console.log(`cgroup CPU over the run: ${d("nr_throttled")} of ${d("nr_periods")} periods throttled (${pct}%), ${(d("throttled_usec") / 1e6).toFixed(1)} s throttled, cpu.max ${require("node:fs").readFileSync("/sys/fs/cgroup/cpu.max", "utf8").trim()}`);
+          ' "$before" "$after" | tee -a "$GITHUB_STEP_SUMMARY" || true
+          exit "$status"
       - name: Collect the stack's own logs
         # As the compose leg: only on failure, before the teardown.
         if: ${{ failure() && env.RUN_LEG == 'true' }}
