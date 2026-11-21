@@ -311,7 +311,10 @@ Rust services (worker, vector, doc-extractor, the DeepWiki and Inventory engines
 gateway is Go outside `go.work`, so it builds with `GOWORK=off` on its own `go.mod`'s Go. They are built on the
 pool and never lifted from an image, because the images link a different glibc from the pool's. That job has
 no Rust cache: the cache budget has no room for a release target directory, and the one Rust entry caches the
-test profile. It builds cold, with the five workspaces sharing one target directory. Neither build job
+test profile. It builds cold, with the five workspaces sharing one target directory. It keeps the release
+semantics (no debug assertions, `panic = "abort"` where set) but drops the whole-program optimisation (thin
+LTO, one codegen unit, opt-level 3) through `CARGO_PROFILE_RELEASE_*`. The compose image smoke runs the
+shipped profile; `NATIVE_RUST_FULL_RELEASE=1` builds it natively. Neither build job
 depends on `ci-build-once`.
 
 What the native table does differently from compose, and why:

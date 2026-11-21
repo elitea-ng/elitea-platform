@@ -364,8 +364,10 @@ jobs:
     # one Rust entry there is (ci-rust.yml's worker-rust-test) caches the
     # `--all-features` test profile, whose artefacts a release build never
     # reuses. One shared CARGO_TARGET_DIR compiles a dependency the five share
-    # once (scripts/e2e/build-native-rust.sh).
-    timeout-minutes: 90
+    # once (scripts/e2e/build-native-rust.sh), and the script drops the
+    # profile's LTO, codegen-units 1 and opt-level 3 (release semantics kept;
+    # the compose image smoke runs the shipped profile).
+    timeout-minutes: 60
     outputs:
       sha256: ${{ steps.pack.outputs.sha256 }}
     steps:

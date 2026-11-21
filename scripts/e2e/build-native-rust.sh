@@ -33,6 +33,16 @@ mkdir -p "$out"
 out="$(cd "$out" && pwd)"
 export CARGO_TARGET_DIR="${NATIVE_RUST_TARGET_DIR:-$(dirname "$out")/native-rust-target}"
 export CARGO_NET_RETRY=10 CARGO_NET_GIT_FETCH_WITH_CLI=true
+# The release profile minus what makes it slow to build. Each workspace ships
+# opt-level 3 + thin LTO (+ codegen-units 1 in four of them); a cold build of
+# five on 4 CPUs is most of an hour. A test stack keeps release semantics (no
+# debug assertions or overflow checks, panic = abort where set) and drops the
+# whole-program optimisation; the shipped profile is what the compose image
+# smoke runs. NATIVE_RUST_FULL_RELEASE=1 builds the profile as written.
+if [ "${NATIVE_RUST_FULL_RELEASE:-0}" != 1 ]; then
+  export CARGO_PROFILE_RELEASE_OPT_LEVEL=1 CARGO_PROFILE_RELEASE_LTO=false \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 CARGO_PROFILE_RELEASE_DEBUG=false
+fi
 
 CRATES=(elitea-worker-rust elitea-vector elitea-doc-extractor elitea-deepwiki-engine elitea-inventory-engine)
 for crate in "${CRATES[@]}"; do
