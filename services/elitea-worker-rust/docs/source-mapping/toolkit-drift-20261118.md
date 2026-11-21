@@ -18,13 +18,18 @@ against the snapshot entry of the same type. Index tools (`index_data`, `list_in
 |---|---|---|
 | `bitbucket` | `delete_file` | ported (S10-a) |
 | `gitlab` | `list_merge_requests`, `get_merge_request` | ported (S10-b) |
-| `github` | `get_workflow_runs` | open (S10-c) |
+| `github` | `get_workflow_runs` | ported (S10-c) |
 | `sharepoint` | `read_file_from_url` | open (S10-d) |
 | `ado_boards` | `search_work_items_by_text` | open (S10-e) |
 | `ado_repos` | `list_repositories`, `search_code` | open (S10-e) |
 
 No other served family (`ado_wiki`, `confluence`, `jira`, `qtest`, `testrail`, `xray_cloud`, `figma`,
 `postman`) declares a tool the Rust family lacks. `ado_plans` has no upstream wrapper on `main` any more.
+
+`github` also declares `generic_github_api_call` (a PyGithub method dispatcher that runs arbitrary Python
+method names on the client). It was never ported and stays out by design: it is a Python-library
+reflection surface, which the platform rules exclude (no plugin loading, no dynamic Python). The Rust
+family serves the same capabilities as named tools.
 
 ## Argument drift on tools already served
 

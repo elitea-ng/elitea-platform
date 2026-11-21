@@ -22,7 +22,9 @@
  * `settle()`, and the shared volatile masks (the chat list and the version
  * line among them).
  */
-import { test, expect, type Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
+
+import { test } from './lib/test';
 
 import { BASE_URL, STORAGE_STATE } from '../../playwright.config';
 import { SNAPSHOT_TOLERANCE, chatLandmark, selectProject, settle, shellSettled, volatileRegions } from './lib/settle';

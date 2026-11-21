@@ -34,6 +34,7 @@ Code: `libs/rust/agent-runtime/src/toolkits/families/github/{writes,project_writ
 | `create_issue_on_project` / `update_issue_on_project` | effect | the SDK's texts | See "Project boards". |
 | `get_workflow_logs` | read | the SDK's job-details object | Run, jobs, steps and each job's `logs_url`. The log archive is never downloaded (GitHub answers with a redirect to a storage host the egress guard does not admit); the `note` says so. |
 | `search_project_issues` | read | the project snapshot of `list_project_issues` plus item bodies | The pinned SDK declares no `search_query` variable in its query, so it returns the first items unfiltered. This applies GitHub's native `items(query:)` filter. |
+| `get_workflow_runs` | read | the SDK's object (`repository`, `count`, `runs`: id, name, workflow_id, run_number, event, status, conclusion, created_at, updated_at, head_branch, head_sha, url) | Post-pin (S10 #2265, not in `b5113a1`), Rust only. `workflow_id` is resolved like the SDK: the direct lookup by id or file name, then, for a numeric id only, a scan of up to 10 pages of the workflow list; a workflow or repository that is not there is the SDK's `{error: true, message}` object. `limit` 1-100 (default 10) is one provider page; empty and whitespace-only filters are not sent; a run GitHub answers with a control character or an oversize field is left out and counted in `skipped_runs` (absent when none). `total_count` is not passed through. |
 
 Not ported: `generic_github_api_call`. It calls any method of a `PyGithub` object by name and
 returns `raw_data`; the contract is the Python library's surface, so a port would be a different
@@ -168,3 +169,8 @@ real client and request builder; a request the script does not expect fails the 
 schema gate over all 37 tools), `families/github/patch.rs` and `project_writes.rs` unit tests, and
 the worker's `transport/office_host_tests.rs` (bucket creation, its causes, an invalid name never
 sent) and `toolkits/artifact_tests.rs`.
+
+
+## Since this note
+
+S10 (#2265) added `get_workflow_runs` (post-pin, row above): the family now serves 38 of 45 GitHub tools and `supported_tools.github` has 38 names.

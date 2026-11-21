@@ -1,3 +1,4 @@
+import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { waitFor } from '@testing-library/react';
 
@@ -45,6 +46,27 @@ describe('useApplicationToolkits', () => {
 
     await waitFor(() => expect(result.current.applications).toHaveLength(2));
     expect(result.current.applications.map((row) => row.id)).toEqual(['2', '3']);
+  });
+
+  it('asks the server for the application types, each spelling as its own type value (#2189)', async () => {
+    let requested: URL | undefined;
+    server.use(
+      http.get('*/elitea_core/tools/prompt_lib/:projectId', ({ request }) => {
+        requested = new URL(request.url);
+        return HttpResponse.json(toolkitList(toolkit('2', 'wikis_Wikis')));
+      }),
+    );
+    const { result } = renderHookWithRouter(() => useApplicationToolkits(), { projectId: 'proj-1' });
+
+    await waitFor(() => expect(result.current.applications).toHaveLength(1));
+    expect(requested?.searchParams.getAll('type')).toEqual([
+      'wikis_Wikis',
+      'inventory',
+      'deepwiki_Deepwiki',
+      'wikis',
+      'deepwiki',
+    ]);
+    expect(requested?.searchParams.get('mcp')).toBe('false');
   });
 
   it('reports a failed list', async () => {
