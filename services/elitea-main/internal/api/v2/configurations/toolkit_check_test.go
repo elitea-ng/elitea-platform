@@ -130,12 +130,12 @@ func TestToolkitCheckReportsUnreachableWhenNothingAnswers(t *testing.T) {
 func TestToolkitCheckReportsUnsupportedTypeForAFamilyWithNoProbe(t *testing.T) {
 	checker := handler.NewToolkitConnectionChecker(allowAnyHost())
 
-	outcome := checker.CheckToolkit(context.Background(), "openapi", map[string]any{"base_url": "https://example.invalid"})
+	outcome := checker.CheckToolkit(context.Background(), "postman", map[string]any{"base_url": "https://example.invalid"})
 
 	if outcome.Reason != handler.ToolkitCheckReasonUnsupportedType {
 		t.Fatalf("a type with no probe must be unsupported_type, got %+v", outcome)
 	}
-	if handler.IsToolkitCheckableType("openapi") {
+	if handler.IsToolkitCheckableType("postman") {
 		t.Fatal("IsToolkitCheckableType must agree with the probe table")
 	}
 }
@@ -646,9 +646,9 @@ func TestCheckConnectionRouteReportsAuthFailedForAToolkitCredentialTheProviderRe
 func TestCheckConnectionRouteStillRefusesAToolkitTypeWithNoProbe(t *testing.T) {
 	router := setupConfigRouterWithToolkitChecker(handler.NewToolkitConnectionChecker(allowAnyHost()))
 
-	// `openapi` is a real catalogue type with no probe: it must keep the
+	// `postman` is a real catalogue type with no probe: it must keep the
 	// honest "not supported yet" answer rather than becoming an error.
-	status, body := postCheckConnection(t, router, "openapi", `{"base_url":"https://example.invalid"}`)
+	status, body := postCheckConnection(t, router, "postman", `{"base_url":"https://example.invalid"}`)
 
 	if status != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d: %v", status, body)

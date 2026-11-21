@@ -7,3 +7,11 @@ func SetSharepointEndpointsForTest(login, graph string) func() {
 	entraLoginBase, graphBase = login, graph
 	return func() { entraLoginBase, graphBase = previousLogin, previousGraph }
 }
+
+// SetOpenAPITokenSchemeForTest lets the OpenAPI client-credentials probe reach
+// an httptest token endpoint and returns the function that restores the rule.
+func SetOpenAPITokenSchemeForTest(scheme string) func() {
+	previous := openAPITokenScheme
+	openAPITokenScheme = scheme
+	return func() { openAPITokenScheme = previous }
+}

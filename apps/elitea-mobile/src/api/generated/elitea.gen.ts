@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.64
+ * client contract:    1.65
  * operations sha256:  a836121d14038ae2f1db1dde8f4300b624195ee490ebe669220b1372ba3cd2fb
  */
 export interface paths {
@@ -10014,6 +10014,16 @@ export interface operations {
                  *     characters returns 400.
                  */
                 query?: string;
+                /**
+                 * @description Keeps the toolkits whose `type` is one of the values (repeat the
+                 *     parameter, `type=wiki&type=deepwiki`). Matched exactly, in the
+                 *     stored spelling, so a caller that wants a family names every
+                 *     spelling (the legacy `deepwiki` as well as `wiki`). `total` is the
+                 *     filtered total, so a paged caller reaches every match. At most 32
+                 *     values and 64 characters each, else 400. Absent means no type
+                 *     filter. Combines with `mcp` and `query` (client contract 1.65).
+                 */
+                type?: string[];
             };
             header?: {
                 /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */

@@ -39,7 +39,9 @@
  * from `routes.visual.spec.ts`, because importing a `*.spec.ts` re-registers
  * its tests.
  */
-import { test, expect, type Page, type Route } from '@playwright/test';
+import { expect, type Page, type Route } from '@playwright/test';
+
+import { test } from './lib/test';
 
 import { BASE_URL } from '../../playwright.config';
 import { SNAPSHOT_TOLERANCE, chatLandmark, selectProject, settle, shellSettled, volatileRegions } from './lib/settle';
