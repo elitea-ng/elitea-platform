@@ -10,7 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
 
-import { groupAlive, groupMembers, main, shortRoot, topoSort, validate } from "./native-stack.mjs";
+import { exposedListeners, groupAlive, groupMembers, loopbackHex, main, shortRoot, topoSort, validate } from "./native-stack.mjs";
 
 const NODE = process.execPath;
 const roots = [];
@@ -269,4 +269,35 @@ test("a zombie leader's group is found from /proc, without pgrep", () => {
   fs.mkdirSync(path.join(proc, "self"));
   assert.deepEqual(groupMembers(100, proc).sort(), [101]);
   assert.deepEqual(groupMembers(300, proc), []);
+});
+
+test("loopback addresses as /proc/net/tcp prints them", () => {
+  assert.ok(loopbackHex("0100007F")); // 127.0.0.1
+  assert.ok(loopbackHex("0400007F")); // 127.0.0.4
+  assert.ok(!loopbackHex("00000000")); // 0.0.0.0
+  assert.ok(!loopbackHex("0A01A8C0")); // 192.168.1.10
+  assert.ok(loopbackHex("00000000000000000000000001000000")); // ::1
+  assert.ok(loopbackHex("0000000000000000FFFF00000100007F")); // ::ffff:127.0.0.1
+  assert.ok(!loopbackHex("00000000000000000000000000000000")); // ::
+});
+
+test("a stack socket listening on a wildcard or pod address is found; loopback and other processes' are not", () => {
+  const proc = fs.mkdtempSync(path.join(os.tmpdir(), "nsnet-"));
+  roots.push(proc);
+  fs.mkdirSync(path.join(proc, "net"));
+  const hdr = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n";
+  const row = (local, st, inode) => `   0: ${local} 00000000:0000 ${st} 00000000:00000000 00:00000000 00000000  1000        0 ${inode} 1 0000000000000000 100 0 0 10 0\n`;
+  fs.writeFileSync(path.join(proc, "net", "tcp"), hdr + row("00000000:1F9A", "0A", "111") + row("0400007F:2328", "0A", "222") + row("00000000:0050", "0A", "333") + row("00000000:1F9B", "01", "444"));
+  fs.writeFileSync(path.join(proc, "net", "tcp6"), hdr + row("00000000000000000000000000000000:1F40", "0A", "555"));
+  const pid = (n, pgrp, inodes) => {
+    fs.mkdirSync(path.join(proc, String(n), "fd"), { recursive: true });
+    fs.writeFileSync(path.join(proc, String(n), "stat"), `${n} (x) S 1 ${pgrp} ${pgrp} 0 -1\n`);
+    inodes.forEach((i, k) => fs.symlinkSync(`socket:[${i}]`, path.join(proc, String(n), "fd", String(k + 3))));
+  };
+  pid(10, 10, ["111", "222"]); // mock: wildcard 8090 and loopback 9000
+  pid(11, 10, ["555"]); // its child: :: 8000
+  pid(20, 20, ["333"]); // not the stack's: someone else's :80
+  const found = exposedListeners([{ service: "llm-mock", pgid: 10 }], proc).sort((a, b) => a.port - b.port);
+  assert.deepEqual(found.map((f) => [f.service, f.pid, f.port]), [["llm-mock", 11, 8000], ["llm-mock", 10, 8090]]);
+  assert.deepEqual(exposedListeners([{ service: "other", pgid: 30 }], proc), []);
 });

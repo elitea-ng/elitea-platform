@@ -141,6 +141,12 @@ runner pod `hostAliases`, and each compose service name gets its own
 
 Linux answers the whole of `127.0.0.0/8` on `lo`, so no privilege is needed.
 
+Every native service binds loopback only, never a wildcard: the pool is a shared cluster, and a CI service with
+dev credentials must not listen on the pod's network address (`check-native-stack-parity.mjs` and the
+supervisor's socket check enforce it). One exception to the map: rustfs refuses a bind host that is not an
+interface address, so natively it binds `127.0.0.1:9000` and its clients use that endpoint; `rustfs` stays in
+the map for the names compose-shaped configs carry.
+
 | Address | Names |
 |---|---|
 | 127.0.0.1 | `elitea-main`, `oidc-mock`, `oidc.localhost` |

@@ -45,7 +45,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { renderSpaConf, WEB_PORT } from "./e2e-standalone.mjs";
+import { renderSpaConf, RUSTFS_BIND, RUSTFS_ENDPOINT, WEB_PORT } from "./e2e-standalone.mjs";
 
 export const COMPOSE_FILE = "deploy/docker-compose.standalone-full.yml";
 /** Applied on top of COMPOSE_FILE every time (standalone-stack.sh's STANDALONE_WORKER=rust). */
@@ -95,7 +95,7 @@ export const OVERLAYS = {
     "elitea-main": { DEPLOYMENT_URL: `http://localhost:${MAIN_PORT}` },
   }),
   "deploy/docker-compose.handoff-live.yml": () => ({
-    // The 127.0.0.1:19000 publish is not needed: handoff-live.sh reaches S3 at http://rustfs:9000 natively.
+    // The 127.0.0.1:19000 publish is not needed: handoff-live.sh reaches S3 at RUSTFS_ENDPOINT natively.
     rustfs: { RUSTFS_SSE_S3_MASTER_KEY: "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=" },
     "elitea-main": { S3_PRESIGN: "false", AWS_REQUEST_CHECKSUM_CALCULATION: "when_required" },
   }),
@@ -107,7 +107,7 @@ export const NATIVE_ONLY_ENV = {
     PG_SOCKET_DIR: "the Unix socket directory: compose's container has its own /var/run/postgresql",
   },
   rustfs: {
-    RUSTFS_ADDRESS: "the bind, spelled out: :9000, the image's default (rustfs refuses a loopback alias as its host)",
+    RUSTFS_ADDRESS: "the bind: the image listens on :9000; natively 127.0.0.1:9000 (RUSTFS_BIND), loopback only",
     RUSTFS_VOLUMES: "the data directory the image keeps at /data",
     RUSTFS_CONSOLE_ENABLE: "the image's console is never published; natively it would bind another port",
     RUSTFS_OBS_LOG_DIRECTORY: "the image writes its logs under /logs; natively under the data dir",
@@ -118,6 +118,9 @@ export const NATIVE_ONLY_ENV = {
     QDRANT__STORAGE__SNAPSHOTS_PATH: "the image's ./snapshots, natively the data dir",
     QDRANT_API_KEY_FILE: "the file compose mounts at /run/qdrant/api-key, read by the same sh -c wrapper",
   },
+  "llm-mock": { MOCK_LLM_HOST: "the bind: the image listens on 0.0.0.0; natively its own loopback address" },
+  "qtest-mock": { QTEST_MOCK_HOST: "the bind: the image listens on 0.0.0.0; natively its own loopback address" },
+  "ado-mock": { ADO_MOCK_HOST: "the bind: the image listens on 0.0.0.0; natively its own loopback address" },
   "mcp-mock": {
     MOCK_MCP_HOST: "the bind: mcp-mock's own address, because the gateway holds 8443 on 127.0.0.10",
     MOCK_MCP_CERT: "the image's /opt/mock-mcp/tls/server-chain.crt, minted natively by setup as its Containerfile's tls stage does",
@@ -371,24 +374,22 @@ export default function table(ctx) {
       },
       {
         name: "rustfs",
-        ip: ip("rustfs"),
-        hostnames: ["rustfs"],
+        // No hostname: the name map's rustfs (127.0.0.4) is refused as a bind, so every client of
+        // this table is pointed at RUSTFS_ENDPOINT instead.
+        ip: RUSTFS_BIND,
         cmd: "rustfs",
         env: {
           RUSTFS_ACCESS_KEY: "elitea",
           RUSTFS_SECRET_KEY: "elitea-dev-secret",
-          // rustfs refuses a bind host that is not one of the machine's own addresses
-          // ("host in server address should be this server"), and 127.0.0.4 is not one: lo
-          // carries 127.0.0.1/8. So it listens on every address at :9000 (no other service of
-          // the stack uses 9000) and is reached as rustfs, 127.0.0.4, like the rest.
-          RUSTFS_ADDRESS: ":9000",
+          // RUSTFS_BIND (above): 127.0.0.1, never a wildcard.
+          RUSTFS_ADDRESS: `${RUSTFS_BIND}:9000`,
           RUSTFS_VOLUMES: path.join(data("rustfs"), "data"),
           RUSTFS_CONSOLE_ENABLE: "false",
           RUSTFS_OBS_LOG_DIRECTORY: path.join(data("rustfs"), "logs"),
           ...delta("rustfs"),
         },
         setup: 'mkdir -p "$RUSTFS_VOLUMES" "$RUSTFS_OBS_LOG_DIRECTORY"',
-        health: { kind: "http", url: `http://${ip("rustfs")}:9000/minio/health/cluster`, interval: 2, timeout: 3, retries: 15 },
+        health: { kind: "http", url: `${RUSTFS_ENDPOINT}/minio/health/cluster`, interval: 2, timeout: 3, retries: 15 },
       },
       {
         name: "rustfs-bucket-init",
@@ -398,7 +399,7 @@ export default function table(ctx) {
           "-c",
           [
             "i=0",
-            "until rc alias set rustfs http://rustfs:9000 elitea elitea-dev-secret; do",
+            `until rc alias set rustfs ${RUSTFS_ENDPOINT} elitea elitea-dev-secret; do`,
             "  i=$((i + 1))",
             '  if [ "$i" -ge 30 ]; then',
             '    echo "rustfs alias set still failing after 30 attempts (60s) — giving up" >&2',
@@ -457,6 +458,7 @@ export default function table(ctx) {
         cmd: "python3",
         args: [path.join(repo, "deploy", "mock-llm", "server.py")],
         env: {
+          MOCK_LLM_HOST: ip("llm-mock"),
           MOCK_LLM_PORT: "8090",
           MOCK_LLM_MODEL: "E2E-MOCK-MODEL",
           MOCK_LLM_TOOL_BASE_URL: "https://llm-mock:8090/tool",
@@ -470,7 +472,7 @@ export default function table(ctx) {
         hostnames: ["qtest-mock"],
         cmd: "python3",
         args: [path.join(repo, "deploy", "qtest-mock", "server.py")],
-        env: { QTEST_MOCK_PORT: "8096", QTEST_MOCK_TOKEN: d("STANDALONE_QTEST_TOKEN", "e2e-qtest-token") },
+        env: { QTEST_MOCK_HOST: ip("qtest-mock"), QTEST_MOCK_PORT: "8096", QTEST_MOCK_TOKEN: d("STANDALONE_QTEST_TOKEN", "e2e-qtest-token") },
         health: pyHealth(`http://${ip("qtest-mock")}:8096/healthz`),
       },
       {
@@ -480,6 +482,7 @@ export default function table(ctx) {
         cmd: "python3",
         args: [path.join(repo, "deploy", "ado-mock", "server.py")],
         env: {
+          ADO_MOCK_HOST: ip("ado-mock"),
           ADO_MOCK_PORT: "8097",
           ADO_MOCK_PAT: d("STANDALONE_ADO_PAT", "e2e-ado-pat"),
           ADO_MOCK_PUBLIC_URL: "http://ado-mock:8097",
@@ -541,7 +544,7 @@ export default function table(ctx) {
           ELITEA_INITIAL_GLOBAL_ADMINS: dd("ELITEA_INITIAL_GLOBAL_ADMINS", ""),
           STORAGE_BACKEND: "s3",
           STORAGE_CONTAINER: "elitea-artifacts",
-          S3_ENDPOINT_URL: "http://rustfs:9000",
+          S3_ENDPOINT_URL: RUSTFS_ENDPOINT,
           S3_ACCESS_KEY: "elitea",
           S3_SECRET_KEY: "elitea-dev-secret",
           S3_REGION: "us-east-1",

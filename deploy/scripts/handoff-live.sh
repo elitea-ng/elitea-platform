@@ -42,7 +42,8 @@ if [ "${E2E_STACK:-compose}" = native ]; then
   # (the pod's name map), not at compose's published host ports.
   export STANDALONE_PORT="${STANDALONE_PORT:-8080}"
   MAIN_DATABASE_URL="postgres://elitea:elitea@postgres:5432/elitea?sslmode=disable"
-  MAIN_S3_ENDPOINT="http://rustfs:9000"
+  # rustfs binds 127.0.0.1 only natively (RUSTFS_BIND in deploy/native/e2e-standalone.mjs).
+  MAIN_S3_ENDPOINT="http://127.0.0.1:9000"
 else
   export STANDALONE_PORT="${STANDALONE_PORT:-8089}"
   MAIN_DATABASE_URL="postgres://elitea:elitea@127.0.0.1:${STANDALONE_PG_PORT}/elitea?sslmode=disable"

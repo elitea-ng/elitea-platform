@@ -4,7 +4,7 @@ import { test } from "node:test";
 
 import standaloneFull, { overlaysOf, rewrite } from "../../deploy/native/standalone-full.mjs";
 import { validate } from "../e2e/native-stack.mjs";
-import { check, composeDeps, envKeys, main, mergeCompose, nameMap, sameValue } from "./check-native-stack-parity.mjs";
+import { check, composeDeps, envKeys, main, mergeCompose, nameMap, sameValue, wildcardBinds } from "./check-native-stack-parity.mjs";
 
 const compose = () => ({
   services: {
@@ -177,4 +177,42 @@ test("the mechanical rewrites need no entry, and nothing wider passes", () => {
   assert.ok(!sameValue(":9443", "127.0.0.5:9444"));
   assert.ok(!sameValue(":9443", "10.0.0.5:9443"));
   assert.ok(!sameValue("a,b", "a,b,c"));
+});
+
+test("every native bind is loopback: a wildcard or bare :port fails, wherever the table spells it", () => {
+  const bad = [
+    [{ env: { RUSTFS_ADDRESS: ":9000" } }, "env RUSTFS_ADDRESS=:9000"],
+    [{ env: { GATEWAY_HTTP_ADDR: "0.0.0.0:8083" } }, "env GATEWAY_HTTP_ADDR=0.0.0.0:8083"],
+    [{ env: { MOCK_LLM_HOST: "0.0.0.0" } }, "env MOCK_LLM_HOST=0.0.0.0"],
+    [{ env: { WHATEVER: "[::]:80" } }, "env WHATEVER=[::]:80"],
+    [{ ip: "0.0.0.0" }, "ip 0.0.0.0"],
+    [{ args: ["-a", "0.0.0.0", "-p", "4222"] }, "arg -a 0.0.0.0"],
+    [{ args: ["--host=::"] }, "arg --host=::"],
+    [{ args: ["-c", "HTTPServer(('0.0.0.0', 4318), H)"] }, "arg HTTPServer(('0.0.0.0'"],
+    [{ files: [{ path: "/d/default.conf", content: () => "server {\n  listen 80;\n}" }] }, "file default.conf: listen 80;"],
+    [{ files: [{ path: "/d/nats.conf", content: "http: 8222\n" }] }, "file nats.conf: http: 8222"],
+    [{ files: [{ path: "/d/pgbouncer.ini", content: "listen_addr = 0.0.0.0\n" }] }, "file pgbouncer.ini: listen_addr = 0.0.0.0"],
+  ];
+  for (const [entry, want] of bad) assert.ok(wildcardBinds(entry).some((w) => w.startsWith(want)), `${JSON.stringify(entry.env ?? entry.args ?? entry.ip ?? want)} -> ${wildcardBinds(entry)}`);
+  const good = {
+    ip: "127.0.0.4",
+    env: { RUSTFS_ADDRESS: "127.0.0.1:9000", QDRANT__SERVICE__HOST: "127.0.0.9", SMTP_HOST: "", S3_ENDPOINT_URL: "http://127.0.0.1:9000", MOCK_MCP_PORT: "8443" },
+    args: ["-a", "127.0.0.3", "--host", "127.0.0.1", "-c", "HTTPServer(('127.0.0.23', 4318), H)"],
+    files: [{ path: "/d/default.conf", content: "listen 127.0.0.7:8080;\nhttp: 127.0.0.3:8222\nlisten_addr = 127.0.0.8\n" }],
+  };
+  assert.deepEqual(wildcardBinds(good), []);
+  // check() reports it by service.
+  const t = table();
+  t.services[2].env.APP_ADDR = ":8080";
+  const c = compose();
+  c.services.app.environment.push("APP_ADDR=:8080");
+  assert.deepEqual(check({ compose: c, table: t, names }).errors, [
+    "app: listens on a non-loopback address (env APP_ADDR=:8080); bind its own 127.0.0.x: the pool is a shared cluster",
+  ]);
+});
+
+test("the rustfs endpoint rewrite is mechanical, and only that one", () => {
+  assert.ok(sameValue("http://rustfs:9000", "http://127.0.0.1:9000"));
+  assert.ok(!sameValue("http://rustfs:9000", "http://127.0.0.2:9000"));
+  assert.ok(!sameValue("http://qdrant:6333", "http://127.0.0.1:6333"));
 });

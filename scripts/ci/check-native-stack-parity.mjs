@@ -7,6 +7,11 @@
 // would say so. This fails, naming the service and the key, when:
 //
 //   * a compose service has no table entry, or the table has a service compose does not;
+//   * a native service would listen on a non-loopback address: its address, a bind-shaped env value
+//     (`*_ADDR`, `*_ADDRESS`, `*_HOST`, `*_LISTEN`, `*_BIND`), an argument or a config file it is given names
+//     0.0.0.0, ::, * or a bare :port. The pool is a shared cluster: a CI service with dev credentials must
+//     never listen on the pod's network address (wildcardBinds below; native-stack.mjs checks the sockets
+//     themselves after `up`, for binds a program hard-codes);
 //   * a key both set carries a different VALUE natively, unless the difference is one of the mechanical
 //     rewrites (sameValue below: compose interpolation resolved to its default, a container path moved to a
 //     host path with the same file name, a `:port` or `0.0.0.0:port` listen address bound to a loopback address on that port)
@@ -65,6 +70,18 @@ export function composeDeps(dependsOn) {
   return pairs.map(([n, c]) => `${n}:${c}`).sort();
 }
 
+/**
+ * Endpoints a native client reaches somewhere other than the service's name-map address, with the reason;
+ * sameValue treats the rewrite as mechanical.
+ */
+export const ENDPOINT_REWRITES = [
+  {
+    from: "//rustfs:9000",
+    to: "//127.0.0.1:9000",
+    why: "rustfs binds 127.0.0.1 only; its server-address check rejects 127.0.0.x aliases (RUSTFS_BIND in deploy/native/e2e-standalone.mjs)",
+  },
+];
+
 /** compose `${VAR:-default}` / `${VAR-default}` / `${VAR}` with an empty environment, as compose reads it. */
 export function interpolate(value) {
   return String(value ?? "").replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)(?::?-([^}]*))?\}/g, (_, _name, def) => def ?? "");
@@ -76,13 +93,49 @@ export function interpolate(value) {
  * `:port` listen address bound to a loopback address on the same port.
  */
 export function sameValue(composeValue, nativeValue) {
-  const c = interpolate(composeValue);
+  let c = interpolate(composeValue);
   const n = String(nativeValue ?? "");
+  if (c === n) return true;
+  for (const r of ENDPOINT_REWRITES) c = c.split(r.from).join(r.to);
   if (c === n) return true;
   if (/^\/[^\s,;]*$/.test(c) && /^\/[^\s,;]*$/.test(n) && path.posix.basename(c) === path.posix.basename(n)) return true;
   const port = /^(?::|0\.0\.0\.0:)(\d+)$/.exec(c);
   if (port && new RegExp(`^127\\.\\d+\\.\\d+\\.\\d+:${port[1]}$`).test(n)) return true;
   return false;
+}
+
+const WILDCARD = /^(?:0\.0\.0\.0|::|\[::\]|\*)?(?::\d+)?$/;
+const BIND_KEY = /(?:^|_)(?:ADDR|ADDRESS|HOST|LISTEN|BIND)$/;
+
+/** Where a native service entry would listen on a non-loopback address: a list of "where: what" strings. */
+export function wildcardBinds(entry) {
+  const found = [];
+  if (entry.ip !== undefined && !/^127\.\d+\.\d+\.\d+$/.test(String(entry.ip))) found.push(`ip ${entry.ip}`);
+  for (const [k, v] of Object.entries(entry.env ?? {})) {
+    const value = String(v ?? "");
+    if (value === "") continue;
+    if ((BIND_KEY.test(k) && WILDCARD.test(value)) || /^(?:0\.0\.0\.0|\[::\])(?::\d+)?$/.test(value)) found.push(`env ${k}=${value}`);
+  }
+  const args = (entry.args ?? []).map(String);
+  args.forEach((a, i) => {
+    const flag = /^-{1,2}(?:a|addr|address|host|bind|listen)(?:=(.*))?$/.exec(a);
+    const value = flag ? (flag[1] ?? args[i + 1] ?? "") : a;
+    if ((flag && WILDCARD.test(value) && value !== "") || /(?:^|[^\d.])0\.0\.0\.0(?![\d.])|\[::\]/.test(a)) found.push(`arg ${a}${flag && flag[1] === undefined ? ` ${value}` : ""}`);
+  });
+  for (const f of entry.files ?? []) {
+    let text = "";
+    try {
+      text = typeof f.content === "function" ? String(f.content()) : String(f.content ?? "");
+    } catch {
+      continue;
+    }
+    for (const line of text.split("\n")) {
+      const l = line.trim();
+      if (/^listen\s+(?:\d+|\*:\d+|\[::\]:\d+|0\.0\.0\.0:\d+)(?:[;\s]|$)/.test(l) || /(?:^|[^\d.])0\.0\.0\.0(?![\d.])/.test(l) || /^(?:listen|http|listen_addr)\s*[:=]\s*(?:\*|::)?(?::?\d+)?\s*$/.test(l))
+        found.push(`file ${path.basename(f.path ?? "?")}: ${l}`);
+    }
+  }
+  return found;
 }
 
 const asMap = (environment) =>
@@ -193,6 +246,8 @@ export function check({ compose, table, nativeOnly = {}, exempt = {}, names = {}
 
     const oneShot = String(svc.restart ?? "") === "no";
     if (oneShot !== !!entry.init) errors.push(`${name}: ${oneShot ? 'a one-shot in compose (restart: "no"), not init: true natively' : "init: true natively, but compose restarts it"}`);
+
+    for (const w of wildcardBinds(entry)) errors.push(`${name}: listens on a non-loopback address (${w}); bind its own 127.0.0.x: the pool is a shared cluster`);
 
     for (const host of entry.hostnames ?? []) {
       if (!(host in names)) errors.push(`${name}: hostname ${host} is not in the pod's name map (${README})`);

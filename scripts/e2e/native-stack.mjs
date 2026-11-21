@@ -199,6 +199,71 @@ export function groupMembers(pgid, proc = "/proc") {
   return out;
 }
 
+/** Whether a /proc/net/tcp{,6} local address (hex, as the kernel prints it) is a loopback address. */
+export function loopbackHex(hex) {
+  if (hex.length === 8) return hex.slice(6, 8).toUpperCase() === "7F"; // little-endian: the first octet last
+  if (hex.length === 32) {
+    const h = hex.toUpperCase();
+    if (h === "00000000000000000000000001000000") return true; // ::1
+    return h.startsWith("0000000000000000FFFF0000") && h.slice(30, 32) === "7F"; // ::ffff:127.x.y.z
+  }
+  return false;
+}
+
+/** The LISTEN sockets of /proc/net/tcp and tcp6: { addr (hex), port, inode }. */
+export function listeners(proc = "/proc") {
+  const out = [];
+  for (const f of ["tcp", "tcp6"]) {
+    let text = "";
+    try {
+      text = fs.readFileSync(path.join(proc, "net", f), "utf8");
+    } catch {
+      continue;
+    }
+    for (const line of text.split("\n").slice(1)) {
+      const cols = line.trim().split(/\s+/);
+      if (cols.length < 10 || cols[3] !== "0A") continue;
+      const [addr, port] = cols[1].split(":");
+      out.push({ addr, port: parseInt(port, 16), inode: cols[9] });
+    }
+  }
+  return out;
+}
+
+/**
+ * The stack's sockets that listen on a non-loopback address: [{ service, pid, port, addr }]. The pool is a
+ * shared cluster; a CI service (dev credentials, mocks) must never listen on the pod's network address, and a
+ * table can only declare the binds it can see, not one a program hard-codes. Read from /proc after `up`.
+ */
+export function exposedListeners(groups, proc = "/proc") {
+  const open = listeners(proc).filter((l) => !loopbackHex(l.addr));
+  if (!open.length) return [];
+  const byInode = new Map(open.map((l) => [l.inode, l]));
+  const found = [];
+  for (const { service, pgid } of groups) {
+    for (const pid of groupMembers(pgid, proc)) {
+      let fds = [];
+      try {
+        fds = fs.readdirSync(path.join(proc, String(pid), "fd"));
+      } catch {
+        continue;
+      }
+      for (const fd of fds) {
+        let link = "";
+        try {
+          link = fs.readlinkSync(path.join(proc, String(pid), "fd", fd));
+        } catch {
+          continue;
+        }
+        const m = /^socket:\[(\d+)\]$/.exec(link);
+        const l = m && byInode.get(m[1]);
+        if (l) found.push({ service, pid, port: l.port, addr: l.addr });
+      }
+    }
+  }
+  return found;
+}
+
 export function groupAlive(pgid) {
   if (!pgid) return false;
   try {
@@ -504,6 +569,15 @@ export async function up(table, { wait = false, env = process.env, out = console
     }
     for (const r of results) if (r.status === "rejected" && ![...failures.keys()].some((n) => r.reason.message.startsWith(`${n}:`))) err(r.reason.message);
     return 1;
+  }
+  if (wait && fs.existsSync("/proc/net/tcp")) {
+    const groups = order.map((svc) => ({ service: svc.name, pgid: serviceState(st, svc.name).pid })).filter((g) => g.pgid);
+    const exposed = exposedListeners(groups);
+    if (exposed.length) {
+      err("✗ Native services listen on a non-loopback address. The pool is a shared cluster: bind each to its own 127.0.0.x.");
+      for (const e of exposed) err(`  ${e.service} (pid ${e.pid}): port ${e.port} on ${e.addr} (hex, /proc/net/tcp)`);
+      return 1;
+    }
   }
   out(`native-stack: ${order.length} service(s) up${wait ? " and healthy" : ""}`);
   return 0;

@@ -42,6 +42,17 @@ export const ADDRESSES = {
   "elitea-inventory": "127.0.0.6",
   "elitea-web": "127.0.0.7",
 };
+/**
+ * Where rustfs listens, and how this table's clients reach it. rustfs refuses a bind host that is not one of
+ * the machine's own interface addresses ("host in server address should be this server"), and its name-map
+ * address 127.0.0.4 is not one (lo carries 127.0.0.1/8). A wildcard bind is never an option: the pool is a
+ * shared cluster, and a CI service with dev credentials must not listen on the pod's network address. So it
+ * binds 127.0.0.1:9000 (no other service of either stack uses 9000) and its clients, here and in
+ * standalone-full.mjs, the e2e-stack.sh probes and handoff-live.sh, use http://127.0.0.1:9000, not
+ * http://rustfs:9000. scripts/ci/check-native-stack-parity.mjs knows that endpoint rewrite.
+ */
+export const RUSTFS_BIND = "127.0.0.1";
+export const RUSTFS_ENDPOINT = `http://${RUSTFS_BIND}:9000`;
 /** The non-root nginx port (compose's container listens on 80). ELITEA_WEB_UPSTREAM names it. */
 export const WEB_PORT = 8080;
 
@@ -52,7 +63,7 @@ export const NATIVE_ONLY_ENV = {
     PG_SOCKET_DIR: "the Unix socket directory: compose's container has its own /var/run/postgresql",
   },
   rustfs: {
-    RUSTFS_ADDRESS: "the bind, spelled out: :9000, the image's default (rustfs refuses a loopback alias as its host)",
+    RUSTFS_ADDRESS: "the bind: the image listens on :9000; natively 127.0.0.1:9000 (RUSTFS_BIND), loopback only",
     RUSTFS_VOLUMES: "the data directory the image keeps at /data",
     RUSTFS_CONSOLE_ENABLE: "the image's console is never published; natively it would bind another port",
     RUSTFS_OBS_LOG_DIRECTORY: "the image writes its logs under /logs; natively under the data dir",
@@ -159,9 +170,22 @@ export default function table(ctx) {
         name: "nats",
         ip: ip("nats"),
         hostnames: ["nats"],
-        // compose: ["-js", "-sd", "/data", "-m", "8222"], on the container's address.
+        // compose: ["-js", "-sd", "/data", "-m", "8222"], on the container's address. A config file, not
+        // flags: -a binds only the client port, and the monitor's host must be named too (loopback only).
         cmd: "nats-server",
-        args: ["-js", "-sd", data("nats"), "-m", "8222", "-a", ip("nats"), "-p", "4222"],
+        args: ["-c", path.join(data("nats"), "nats.conf")],
+        files: [
+          {
+            path: path.join(data("nats"), "nats.conf"),
+            content: () =>
+              [
+                `listen: ${ip("nats")}:4222`,
+                `http: ${ip("nats")}:8222`,
+                `jetstream { store_dir: ${JSON.stringify(data("nats"))} }`,
+                "",
+              ].join("\n"),
+          },
+        ],
       },
       {
         // An idle process whose check reads the server's /healthz from outside, as the compose sidecar does:
@@ -182,24 +206,22 @@ export default function table(ctx) {
       },
       {
         name: "rustfs",
-        ip: ip("rustfs"),
-        hostnames: ["rustfs"],
+        // No hostname: the name map's rustfs (127.0.0.4) is refused as a bind, so every client of
+        // this table is pointed at RUSTFS_ENDPOINT instead.
+        ip: RUSTFS_BIND,
         cmd: "rustfs",
         env: {
           RUSTFS_ACCESS_KEY: "elitea",
           RUSTFS_SECRET_KEY: "elitea-dev-secret",
-          // rustfs refuses a bind host that is not one of the machine's own addresses
-          // ("host in server address should be this server"), and 127.0.0.4 is not one: lo
-          // carries 127.0.0.1/8. So it listens on every address at :9000 (no other service of
-          // the stack uses 9000) and is reached as rustfs, 127.0.0.4, like the rest.
-          RUSTFS_ADDRESS: ":9000",
+          // RUSTFS_BIND (above): 127.0.0.1, never a wildcard.
+          RUSTFS_ADDRESS: `${RUSTFS_BIND}:9000`,
           RUSTFS_VOLUMES: path.join(data("rustfs"), "data"),
           RUSTFS_CONSOLE_ENABLE: "false",
           RUSTFS_OBS_LOG_DIRECTORY: path.join(data("rustfs"), "logs"),
         },
         setup: 'mkdir -p "$RUSTFS_VOLUMES" "$RUSTFS_OBS_LOG_DIRECTORY"',
         // /minio/health/cluster stays 503 until quorum (the compose file's comment).
-        health: { kind: "http", url: `http://${ip("rustfs")}:9000/minio/health/cluster`, interval: 2, timeout: 3, retries: 15 },
+        health: { kind: "http", url: `${RUSTFS_ENDPOINT}/minio/health/cluster`, interval: 2, timeout: 3, retries: 15 },
       },
       {
         name: "rustfs-bucket-init",
@@ -209,7 +231,7 @@ export default function table(ctx) {
           "-c",
           [
             "i=0",
-            "until rc alias set rustfs http://rustfs:9000 elitea elitea-dev-secret; do",
+            `until rc alias set rustfs ${RUSTFS_ENDPOINT} elitea elitea-dev-secret; do`,
             "  i=$((i + 1))",
             '  if [ "$i" -ge 30 ]; then',
             '    echo "rustfs alias set still failing after 30 attempts (60s) — giving up" >&2',
@@ -271,7 +293,7 @@ export default function table(ctx) {
           ELITEA_INITIAL_GLOBAL_ADMINS: env.ELITEA_INITIAL_GLOBAL_ADMINS ?? "",
           STORAGE_BACKEND: "s3",
           STORAGE_CONTAINER: "elitea-artifacts",
-          S3_ENDPOINT_URL: "http://rustfs:9000",
+          S3_ENDPOINT_URL: RUSTFS_ENDPOINT,
           S3_ACCESS_KEY: "elitea",
           S3_SECRET_KEY: "elitea-dev-secret",
           S3_REGION: "us-east-1",

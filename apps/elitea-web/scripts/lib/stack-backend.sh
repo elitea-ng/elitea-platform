@@ -23,6 +23,15 @@
 
 E2E_STACK="${E2E_STACK:-compose}"
 NATIVE_STACK="${REPO_ROOT}/scripts/e2e/native-stack.mjs"
+# The object store as a probe reaches it: rustfs on the compose network, and
+# 127.0.0.1:9000 natively, where rustfs binds loopback only (it refuses its
+# name-map alias as a bind host; RUSTFS_BIND in deploy/native/e2e-standalone.mjs).
+if [ "$E2E_STACK" = native ]; then
+  STACK_S3_ENDPOINT="http://127.0.0.1:9000"
+else
+  STACK_S3_ENDPOINT="http://rustfs:9000"
+fi
+export STACK_S3_ENDPOINT
 
 # stack_init: pick the backend. Compose mode needs a compose binary; native
 # mode needs node (the supervisor) and must not look for docker or podman.

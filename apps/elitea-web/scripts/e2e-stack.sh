@@ -2355,7 +2355,7 @@ WIKI_PAGE
     # stack_probe mounts WIKI_TMP at $PROBE_SRC (compose), or runs rc on the
     # host with PROBE_SRC=WIKI_TMP (native).
     stack_probe rustfs/rc:latest "${WIKI_TMP}" "
-        rc alias set rustfs http://rustfs:9000 elitea elitea-dev-secret >/dev/null &&
+        rc alias set rustfs ${STACK_S3_ENDPOINT} elitea elitea-dev-secret >/dev/null &&
         rc cp --recursive \"\$PROBE_SRC/${WIKI_ID}\" rustfs/elitea-artifacts/p/90200/b/wiki-artifacts/o/${WIKI_ID}/ >/dev/null
       " || {
         echo "ERROR: could not write the seeded wiki objects into rustfs." >&2
@@ -2372,7 +2372,7 @@ WIKI_PAGE
     # leaves the browser empty. This lists the exact prefix elitea-main derives
     # for (project 1, bucket wiki-artifacts) and requires the manifest in it.
     WIKI_OBJECTS=$(stack_probe rustfs/rc:latest "" "
-        rc alias set rustfs http://rustfs:9000 elitea elitea-dev-secret >/dev/null &&
+        rc alias set rustfs ${STACK_S3_ENDPOINT} elitea elitea-dev-secret >/dev/null &&
         rc ls --recursive rustfs/elitea-artifacts/p/90200/b/wiki-artifacts/o/ 2>/dev/null
       " || true)
     case "$WIKI_OBJECTS" in

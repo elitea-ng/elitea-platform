@@ -124,6 +124,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import NamedTuple
 
 PORT = int(os.environ.get("MOCK_LLM_PORT", "8090"))
+# The bind host: every address in its container (compose); the native CI stack sets its own
+# loopback address, because a process there must never listen on the pod's network address.
+HOST = os.environ.get("MOCK_LLM_HOST", "0.0.0.0")
 MODEL = os.environ.get("MOCK_LLM_MODEL", "E2E-MOCK-MODEL")
 EMBEDDING_MODEL = os.environ.get("MOCK_LLM_EMBEDDING_MODEL", "E2E-MOCK-EMBEDDING")
 # 1536 because that is the width every embedding artefact in this workspace is
@@ -1806,7 +1809,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+    server = ThreadingHTTPServer((HOST, PORT), Handler)
     print(f"elitea mock LLM listening on :{PORT} (model={MODEL})", flush=True)
     server.serve_forever()
 

@@ -294,6 +294,14 @@ compose file: an environment key, a value (beyond the mechanical rewrites: inter
 moved to host paths, listen addresses bound to loopback; anything else is listed in the table's `REWRITTEN_ENV`
 with its reason), a `depends_on` edge, a healthcheck or a one-shot.
 
+**Loopback only.** The pool is a shared cluster, so no native service may listen on the pod's network
+address. The parity check fails a table whose address, bind-shaped env value (`*_ADDR`, `*_ADDRESS`, `*_HOST`,
+`*_LISTEN`, `*_BIND`), argument or config file names `0.0.0.0`, `::`, `*` or a bare `:port`. After `up --wait`,
+`native-stack.mjs` also reads `/proc/net/tcp{,6}` and fails the stack when any socket its processes hold listens
+on a non-loopback address, which catches a bind a program hard-codes. Each service binds its own `127.0.0.x`
+from the name map, except rustfs: it refuses a bind host that is not an interface address, so it binds
+`127.0.0.1:9000` and its native clients use `http://127.0.0.1:9000` (`RUSTFS_ENDPOINT`).
+
 These jobs run only where the routing condition sends them to the pool. Where they run, `ci-web-e2e.yml`'s
 compose legs stand down on a pull request to one smoke leg, chromium 1/2. That leg runs only when the change
 reaches what only images prove: a Containerfile, a compose file, the web image's nginx or entrypoint, or the
