@@ -155,7 +155,7 @@ These jobs are routed (when `ENG_RUNNER` is on, on our own pull requests):
 |---|---|
 | `ci.yml` | `changes`, `fast-gate`, `ci-gate` |
 | `ci-web.yml` | `quality`, `unit-tests` (every shard), `gates-static`, `build` |
-| `ci-web-coverage.yml` | `unit-tests` (every shard), `coverage-merge` |
+| `ci-web-coverage.yml` | `coverage-merge` |
 | `ci-go.yml` | `proto`, `sqlc`, `env-drift`, `lint`, `test-plan`, `test-checks`, `test` (the aggregator) |
 | `ci-gateway.yml` | `lint` |
 | `ci-governed-conformance.yml` | `unit` |
@@ -184,6 +184,9 @@ Everything else stays hosted:
   check), `helm-install-smoke`, the E2E suites, `ci-browser-session.yml`. helm-lint's `lint` job too: a step it runs calls `docker compose config`.
 - **System packages through apt**: the Tauri host on Linux (`ci-desktop.yml` `pane-drivers`, webkit2gtk).
 - **macOS and Windows**, including `ci-desktop-control.yml`, whose matrix has a Windows leg.
+- **The coverage unit shards** (`ci-web-coverage.yml` `unit-tests`). Under coverage instrumentation the pod
+  runs them 1.5 to 2 times slower, and the heaviest files hit their 15 s per-test timeouts: on T2D nodes too,
+  `CreateApplication.test.tsx` timed out twice in shard 4 of 5 (#2721).
 - **Every event but `pull_request`**, so the scheduled runs on main, which write the caches, stay hosted.
 
 The routed jobs pin their parallelism to the pod's 4 CPUs, because the node reports 8. `eng-runner-env` sets
