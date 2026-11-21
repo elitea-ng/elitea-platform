@@ -65,16 +65,9 @@ jobs:
     name: Cancel unfinished runs
     # A PR closed without merging keeps its runs: someone may reopen it.
     if: github.event_name == 'schedule' || github.event.pull_request.merged == true
-    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      # The local env action below needs the tree; this job reads nothing else.
-      - uses: actions/checkout@v7
-        with:
-          sparse-checkout: .github/actions
-          persist-credentials: false
-      # eng-runner: caches and TMPDIR on the work volume (does nothing on hosted).
-      - uses: ./.github/actions/eng-runner-env
       - name: Cancel, then force-cancel, merged pull requests' unfinished runs
         # Pinned to the v9.0.0 commit: this job holds `actions: write`, so a
         # moved tag must not change the code it runs.
@@ -220,16 +213,9 @@ jobs:
     # no longer exists").
     needs: cancel
     if: always()
-    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      # The local env action below needs the tree; this job reads nothing else.
-      - uses: actions/checkout@v7
-        with:
-          sparse-checkout: .github/actions
-          persist-credentials: false
-      # eng-runner: caches and TMPDIR on the work volume (does nothing on hosted).
-      - uses: ./.github/actions/eng-runner-env
       - name: Delete every cache entry scoped to a closed PR's refs/pull/<n>/merge
         # Same pin and the same reason as above.
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0

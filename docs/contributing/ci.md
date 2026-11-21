@@ -203,10 +203,10 @@ These jobs are routed (when `ENG_RUNNER` is on, on our own pull requests):
 | `ci-governed-scale.yml` | `scale` (PostgreSQL and NATS as processes) |
 | `ci-web-mutation.yml`, `codeql.yml`, `docs-pages.yml` | `mutation-spotcheck`, `analyze`, `build-and-deploy` |
 | `publish.yml`, `release-retention.yml`, `ci-image-cleanup.yml` | `release`, `prune`; `admin`, `prune`; `prune`, `actions-cache` |
-| `cancel-merged-pr-runs.yml`, `eng-runner-image.yml` | `cancel`, `delete-caches`; `runner-pin` |
+| `eng-runner-image.yml` | `runner-pin` |
 | `mobile-eas-build.yml`, `mobile-eas-submit.yml` | `build`, `submit` (EAS builds in Expo's cloud) |
 
-Everything else stays hosted, because it needs what the pool does not have (audited 2026-11-21: 43 hosted
+Everything else stays hosted, because it needs what the pool does not have (audited 2026-11-21: 45 hosted
 job definitions, down from 59; every other job is routed):
 
 - **Docker next to the services.** `ci-rust.yml`'s "Test with PostgreSQL 18" also builds the sandbox images
@@ -220,6 +220,8 @@ job definitions, down from 59; every other job is routed):
   `nightly-real-llm.yml`), `ci-governed-conformance.yml` `stack`, `helm-install-smoke`, `ci-browser-session.yml`
   and `browser-bakeoff.yml` (gVisor). helm-lint's `lint` job too: a step it runs calls `docker compose config`.
 - **System packages through apt**: the Tauri host on Linux (`ci-desktop.yml` `pane-drivers`, webkit2gtk).
+- **The pool's own janitor**: `cancel-merged-pr-runs.yml` (`cancel`, `delete-caches`) cancels the runs of
+  merged pull requests to free the pool. Queued on the pool, it would wait behind the very runs it cancels.
 - **macOS and Windows**: `ci-desktop.yml` `desktop` and `windows-host`, `ci-local-tools-macos.yml`,
   `desktop-package.yml`, and `ci-desktop-control.yml`, whose matrix has a Windows leg.
 
