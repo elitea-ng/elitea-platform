@@ -26,6 +26,9 @@ function run({ event = "pull_request", repo = REPO, actor = "alice", triggeringA
       encoding: "utf8",
       env: {
         PATH: process.env.PATH,
+        // A setup-python interpreter outside /opt/hostedtoolcache (eng-runner's _work/_tool) loads libpython
+        // only through the LD_LIBRARY_PATH setup-python exports; without it the hook's python3 cannot start.
+        ...(process.env.LD_LIBRARY_PATH ? { LD_LIBRARY_PATH: process.env.LD_LIBRARY_PATH } : {}),
         GITHUB_REPOSITORY: repo,
         GITHUB_EVENT_NAME: event,
         GITHUB_EVENT_PATH: path,

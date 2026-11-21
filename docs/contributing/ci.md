@@ -133,6 +133,10 @@ A job runs directly in the pod (Ubuntu 24.04):
   install` sets up Python. `setup-python` needs no root here: the image points `RUNNER_TOOL_CACHE` and
   `AGENT_TOOLSDIRECTORY` at `/home/runner/_work/_tool`, and the Python installer only copies into that
   directory. The aws CLI is not in the image; `repo-gates` installs it with pip on the pool.
+  **Keep `LD_LIBRARY_PATH` in child environments.** Outside `/opt/hostedtoolcache` the setup-python
+  interpreter finds `libpython3.12.so.1.0` only through the `LD_LIBRARY_PATH` setup-python exports, so a script
+  or test that starts `python3` with a scrubbed env (`{PATH, GITHUB_*}`) must pass it through, as
+  `eng-runner-hook.test.mjs` does. This libpython rpath issue is also why the Python jobs first stayed hosted.
 - **10 GiB of disk outside `/home/runner/_work`.** That is the container's ephemeral-storage limit. Only
   `_work` is the separate 80 GiB volume, and a pod that writes past the limit is evicted. The default places
   for `~/go/pkg/mod`, `~/.cache/go-build`, `~/.npm`, `~/.cargo`, `~/.cache` and `/tmp` all count against it.
