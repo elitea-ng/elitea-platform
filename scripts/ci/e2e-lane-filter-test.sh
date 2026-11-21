@@ -66,6 +66,10 @@ expect_handoff true "the cloud-turn simulator" "services/elitea-main/cmd/handoff
 expect_handoff true "the store service" "services/elitea-main/internal/application/workspacestore/service.go"
 expect_handoff true "the shared workspace store crate" "libs/rust/workspace-store/src/sync.rs"
 expect_handoff true "the lane's script" "deploy/scripts/handoff-live.sh"
+expect_handoff true "the native table (its handoff overlay delta)" "deploy/native/standalone-full.mjs"
+expect_handoff true "the native supervisor" "scripts/e2e/native-stack.mjs"
+expect_handoff true "the backend shim" "apps/elitea-web/scripts/lib/stack-backend.sh"
+expect_handoff true "the native workflow" ".github/workflows/ci-web-e2e-native.yml"
 expect_handoff true "empty list" 
 expect_handoff false "a web page" "apps/elitea-web/src/pages/a.tsx"
 expect_handoff true "any desktop host source (the lane builds the whole crate)" "apps/elitea-desktop/src-tauri/src/tray.rs"
@@ -96,6 +100,7 @@ expect_sandbox() {
 }
 expect_sandbox true "empty list"
 expect_sandbox true "the run_code tool" "libs/rust/agent-runtime/src/toolkits/families/data_analysis/sandbox_tool.rs"
+expect_sandbox true "the backend shim the compose lane runs through" "apps/elitea-web/scripts/lib/stack-backend.sh"
 expect_sandbox true "the worker's code tool" "services/elitea-worker-rust/src/agents/graph/code_tool.rs"
 expect_sandbox true "the runner image" "services/elitea-code-runner/Containerfile"
 expect_sandbox true "the sandbox overlay" "deploy/docker-compose.sandbox.yml"
@@ -124,6 +129,8 @@ expect_webkit() {
   fi
 }
 expect_webkit true "empty list"
+expect_webkit true "the native e2e table" "deploy/native/e2e-standalone.mjs"
+expect_webkit true "the native workflow" ".github/workflows/ci-web-e2e-native.yml"
 expect_webkit true "a web source file" "apps/elitea-web/src/pages/a.tsx"
 expect_webkit true "an e2e journey" "apps/elitea-web/e2e/chat/a.spec.ts"
 expect_webkit true "the Playwright config" "apps/elitea-web/playwright.config.ts"

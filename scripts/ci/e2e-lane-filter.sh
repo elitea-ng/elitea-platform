@@ -87,9 +87,10 @@ COMPOSE_DIR="${COMPOSE_DIR:-deploy}"
 HANDOFF='^('\
 'apps/elitea-desktop/src-tauri/|'\
 'libs/(rust|proto)/|rust-toolchain\.toml$|scripts/ci/assert-rust-toolchain\.sh$|'\
-'apps/elitea-web/scripts/lib/compose-detect\.sh$|'\
+'apps/elitea-web/scripts/lib/(compose-detect|stack-backend)\.sh$|'\
+'deploy/native/|scripts/e2e/|'\
 'deploy/(scripts/(standalone-stack|handoff-live)\.sh|scripts/lib/|docker-compose\.(standalone-full|standalone-rust-agent|handoff-live)\.yml)|'\
-'\.github/(actions/(stack-images|build-stack-images|pull-stack-images)/|workflows/ci-(web-e2e|build-once)\.yml)|'\
+'\.github/(actions/(stack-images|build-stack-images|pull-stack-images)/|workflows/ci-(web-e2e|web-e2e-native|build-once)\.yml)|'\
 'scripts/ci/(e2e-lane-filter|stack-image)|'\
 'services/elitea-main/(cmd/handoff-live-cloudturn/|migrations/|'\
 'internal/(application/(workspacehandoff|workspacestore|workspacechanges|workspaceruntime|workspaceexecutor|nativeauth)/|'\
@@ -103,8 +104,8 @@ SANDBOX='^('\
 'libs/(rust|proto)/|rust-toolchain\.toml$|'\
 'services/elitea-main/(internal/(runtimecomposition|domain/codesandbox|api/v2/toolkits)/|cmd/elitea-main/)|ci/|\\.github/actions/(npm-cache|go-cache)/|'\
 'deploy/(docker-compose\.(standalone-full|standalone-rust-agent|sandbox|sandbox-postgres-tls|sandbox-code-owner)\.yml|runtime/(worker-runtime\.rust\.json|postgres-tls-entrypoint\.sh|install-material\.sh)|scripts/(standalone-stack|sandbox-compose-material|gen-sandbox-certs|gen-runtime-certs)\.sh|scripts/lib/|mock-llm/)|'\
-'apps/elitea-web/(scripts/(chat-stream-e2e|code-sandbox-e2e)\.sh|scripts/lib/compose-detect\.sh|playwright\.config\.ts|e2e/(fixtures/|streaming/code-sandbox\.))|'\
-'\.github/(actions/(stack-images|build-stack-images|pull-stack-images)/|workflows/ci-(web-e2e|build-once)\.yml)|'\
+'apps/elitea-web/(scripts/(chat-stream-e2e|code-sandbox-e2e)\.sh|scripts/lib/(compose-detect|stack-backend)\.sh|playwright\.config\.ts|e2e/(fixtures/|streaming/code-sandbox\.))|'\
+'\.github/(actions/(stack-images|build-stack-images|pull-stack-images)/|workflows/ci-(web-e2e|web-e2e-native|build-once)\.yml)|'\
 'scripts/ci/(e2e-lane-filter|stack-image)'\
 ')'
 
@@ -126,8 +127,8 @@ IMAGES='(^|/)(Containerfile|Dockerfile)(\.[^/]+)?$|(^|/)\.dockerignore$|'\
 # What the webkit legs observe. Only ever too wide, never too narrow.
 WEBKIT='^('\
 'apps/elitea-web/(src/|e2e/|public/|nginx/|Containerfile$|docker-entrypoint\.sh$|index\.html$|playwright[^/]*\.ts$|package(-lock)?\.json$|vite\.config\.ts$|tsconfig[^/]*\.json$|scripts/lib/|scripts/[^/]*e2e[^/]*)|'\
-'libs/ts/client-core/|brand/|'\
-'\.github/(actions/(npm-cache|stack-images|build-stack-images|pull-stack-images)/|workflows/ci-(web-e2e|build-once)\.yml)|'\
+'libs/ts/client-core/|brand/|deploy/native/|scripts/e2e/|'\
+'\.github/(actions/(npm-cache|stack-images|build-stack-images|pull-stack-images)/|workflows/ci-(web-e2e|web-e2e-native|build-once)\.yml)|'\
 'scripts/ci/(e2e-lane-filter|stack-image)'\
 ')'
 
@@ -148,7 +149,7 @@ used_by_compose() {
   done
   return 1
 }
-MODEL='^(services/elitea-llm-gateway/|services/elitea-worker-rust/|libs/rust/llm-wire/|libs/rust/agent-runtime/|libs/rust/connectors/|services/elitea-main/internal/api/v2/executions/|services/elitea-main/internal/llmproxy/|services/elitea-main/internal/runtimecomposition/|apps/elitea-web/src/features/chat-|apps/elitea-web/e2e/|apps/elitea-web/scripts/chat-stream-e2e\.sh|apps/elitea-web/playwright\.config\.ts|deploy/docker-compose\.standalone-(full|rust-agent)\.yml|deploy/scripts/|deploy/ci/|\.github/actions/|\.github/workflows/ci-(web-e2e|build-once)\.yml)'
+MODEL='^(services/elitea-llm-gateway/|services/elitea-worker-rust/|libs/rust/llm-wire/|libs/rust/agent-runtime/|libs/rust/connectors/|services/elitea-main/internal/api/v2/executions/|services/elitea-main/internal/llmproxy/|services/elitea-main/internal/runtimecomposition/|apps/elitea-web/src/features/chat-|apps/elitea-web/e2e/|apps/elitea-web/scripts/chat-stream-e2e\.sh|apps/elitea-web/playwright\.config\.ts|deploy/docker-compose\.standalone-(full|rust-agent)\.yml|deploy/scripts/|deploy/ci/|\.github/actions/|\.github/workflows/ci-(web-e2e|web-e2e-native|build-once)\.yml)'
 
 total=0
 reaching=()
