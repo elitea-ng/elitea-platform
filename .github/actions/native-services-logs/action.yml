@@ -1,0 +1,29 @@
+name: Native services logs
+description: >-
+  The companion of ./.github/actions/native-services: run it as a job's last
+  step with `if: failure()`. Inside that action `failure()` sees only its own
+  steps, so a server that dies DURING the tests (an OOM, a crash) would take
+  its log down with the pod. This uploads the logs of every service the job
+  started as a process, whether the start or a later step failed. On a
+  GitHub-hosted runner it does nothing: there the services are containers.
+  check-runner-routing.mjs requires it next to native-services.
+
+runs:
+  using: composite
+  steps:
+    # A name unique per job and matrix leg (an artifact name may not repeat
+    # within a run).
+    - name: Name the artifact
+      id: name
+      if: runner.environment != 'github-hosted'
+      shell: bash
+      run: echo "id=$(date +%s)-$$-${RANDOM}" >> "$GITHUB_OUTPUT"
+
+    - name: Upload the service logs
+      if: runner.environment != 'github-hosted'
+      uses: actions/upload-artifact@v7
+      with:
+        name: native-services-${{ github.job }}-${{ steps.name.outputs.id }}
+        path: ${{ runner.temp }}/native-services/logs
+        if-no-files-found: warn
+        retention-days: 7

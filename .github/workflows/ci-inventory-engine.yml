@@ -50,15 +50,19 @@ env:
 jobs:
   engine:
     name: Engine — lint, test, and the Go host against the binary
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
     timeout-minutes: 30
     defaults:
       run:
         working-directory: services/elitea-inventory-engine
+    # eng-runner has no container engine. There every image below is empty, so
+    # GitHub creates no service, and .github/actions/native-services runs the
+    # same servers as processes at the same ports and credentials
+    # (scripts/ci/check-runner-routing.mjs poolEmptyImage; it checks the two agree).
     services:
       postgres:
         # Plain PostgreSQL 18 (Debian 13), as every deployment runs.
-        image: postgres:18
+        image: ${{ !(vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'postgres:18' || '' }}
         env:
           POSTGRES_USER: inventory
           POSTGRES_PASSWORD: inventory
@@ -72,12 +76,28 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume, and rustup (none in
+      # its image). Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          rust: "true"
+      # eng-runner: the services block's PostgreSQL as a process.
+      # Does nothing on a hosted runner, where the services block runs them.
+      - name: Start the services as processes (eng-runner)
+        uses: ./.github/actions/native-services
+        with:
+          postgres: "true"
+          postgres-user: inventory
+          postgres-password: inventory
+          postgres-db: inventory
 
       - name: Assert the pinned toolchain
         run: |
           bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
 
       - name: Free runner disk for the engine build
+        # Hosted only: the pool builds on its 80 GiB work volume, and has no sudo.
+        if: runner.environment == 'github-hosted'
         # The engine build on top of the restored target/ ran the runner out
         # of disk (PR #1574: a shared-crate change rebuilds most of the graph
         # beside the cached copy). Copied from ci-rust.yml: bounded and
@@ -149,3 +169,9 @@ jobs:
           ELITEA_INVENTORY_NATIVE_ENGINE_BIN: ${{ github.workspace }}/services/elitea-inventory-engine/target/release/elitea-inventory-engine
           ELITEA_REQUIRE_NATIVE_ENGINE: "1"
         run: go test -race -count=1 -run 'NativeEngine' -v ./internal/apps/inventory/run
+
+      # eng-runner: the logs of the services native-services started, when
+      # anything in the job failed. Does nothing on a hosted runner.
+      - name: Upload the service logs (eng-runner)
+        if: failure()
+        uses: ./.github/actions/native-services-logs

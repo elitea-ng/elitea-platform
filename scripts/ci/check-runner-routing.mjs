@@ -2,8 +2,8 @@
 // Only our own jobs can be routed to the self-hosted pool, and only jobs that can run there.
 //
 // `eng-runner` is the org's ARC runner scale set (deploy/ci-runners/README.md). It runs the job directly in
-// the runner pod (image: deploy/ci-runners/image/, which adds build-essential, cmake, zstd, gh, helm, yq and
-// shellcheck, and no toolchains): no Docker daemon (so no `container:`, no `services:`, no docker, podman or
+// the runner pod (image: deploy/ci-runners/image/, which adds build-essential, cmake, zstd, gh, helm, yq,
+// shellcheck and the service binaries, and no toolchains): no Docker daemon (so no `container:`, no docker, podman or
 // kind), and no root (no sudo, no apt). The repository is public. A job may reach the pool only
 // through ROUTED_RUNS_ON below, which sends it there only when ALL of these hold:
 //
@@ -25,9 +25,14 @@
 // This check fails when:
 //   * a job's runs-on can resolve to eng-runner (a literal, a matrix value, an expression naming ENG_RUNNER)
 //     and is not exactly ROUTED_RUNS_ON, or runs-on is an expression this check cannot see through;
-//   * a routed job has `container:` or `services:`, or a step (its own, or one inside a local composite
-//     action it uses) runs docker, podman, buildah, kind, sudo, apt or systemctl, or uses a docker/* or kind
-//     action or a Docker container action — unless the step's `if:` starts with HOSTED_ONLY;
+//   * a routed job has `container:`, or a step (its own, or one inside a local composite action it uses)
+//     runs docker, podman, buildah, kind, sudo, apt, systemctl or `playwright install`, or uses a docker/* or
+//     kind action or a Docker container action — unless the step's `if:` starts with HOSTED_ONLY;
+//   * a routed job has `services:` where an image is not poolEmptyImage(<image>) (empty on the pool, so
+//     GitHub creates no container there), or does not run NATIVE_SERVICES_ACTION once, unconditionally,
+//     after ENV_ACTION, with inputs that match the block (the same servers, versions, ports, credentials
+//     and settings, as processes), `storage` set exactly when the hosted storage-test compose step runs,
+//     and NATIVE_SERVICES_LOGS_ACTION on `failure()` after it;
 //   * a routed job is in a workflow that can start on any event other than pull_request, schedule,
 //     workflow_dispatch (and workflow_call from such a caller): pull_request_target and workflow_run are
 //     refused outright;
@@ -80,9 +85,9 @@ const TOOLCHAINS = [
   [/(?:^|[\s;&|(`$])(?:python|pip3?)\s|(?:^|[\s;&|(`$])python3\s+-m\s+pip\s+install\b/, (s) => /^actions\/setup-python@/.test(String(s.uses ?? "")), "python", "actions/setup-python"],
 ];
 export const MINIMUM_WORKFLOWS = 40;
-// Below the 35 routed today with slack, so un-routing a job or two is not a guard change; far above the 21
-// before the heavy jobs moved, so losing the condition's recognition still fails.
-export const MINIMUM_ROUTED_JOBS = 30;
+// Below the 46 routed today with slack, so un-routing a job or two is not a guard change; far above the 35
+// before the services jobs moved, so losing the condition's recognition still fails.
+export const MINIMUM_ROUTED_JOBS = 40;
 
 // What cannot run in the pod. Read per line of a step's `run:`, comments dropped.
 const FORBIDDEN_RUN = [
@@ -95,12 +100,170 @@ const FORBIDDEN_RUN = [
   [/\bdpkg\s+-i\b/, "dpkg (no root)"],
   [/\bsystemctl\b/, "systemctl"],
   [/\brunsc\b/, "gVisor"],
+  // The image bakes the browsers read-only at PLAYWRIGHT_BROWSERS_PATH, with their system libraries.
+  [/\bplaywright\s+install\b/, "playwright install (the image bakes the browsers, read-only)"],
 ];
 const FORBIDDEN_USES = [
   [/^docker\//, "a docker/* action (no daemon)"],
   [/^docker:\/\//, "a container action (no daemon)"],
   [/^helm\/kind-action\b/, "kind"],
 ];
+
+/** The composite action that runs a routed job's services as processes on the pool. */
+export const NATIVE_SERVICES_ACTION = "./.github/actions/native-services";
+/** Its companion: the job's last step, `if: failure()`, uploads the services' logs. */
+export const NATIVE_SERVICES_LOGS_ACTION = "./.github/actions/native-services-logs";
+const isNativeStep = (s) => String(s.uses ?? "").replace(/\/$/, "") === NATIVE_SERVICES_ACTION;
+/**
+ * The only image a routed job's service may name: empty on the pool (GitHub does not create a service whose
+ * image is empty), the image everywhere else. The condition is ROUTING_CONDITION, textually, so the two
+ * cannot disagree about where the job runs.
+ */
+export const poolEmptyImage = (image) => `\${{ !(${ROUTING_CONDITION}) && '${image}' || '' }}`;
+const POOL_EMPTY = new RegExp(`^${poolEmptyImage("\u0000").replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace("\u0000", "([^']+)")}$`);
+
+/** host:container (or ip:host:container) → { host, container }. */
+const portMap = (ports) =>
+  (ports ?? []).map((p) => {
+    const parts = String(p).split(":");
+    return { container: parts.at(-1).replace(/\/(tcp|udp)$/, ""), host: parts.length > 1 ? parts.at(-2) : parts.at(-1) };
+  });
+
+// Per kind of service: how to recognise its image, and what the action's inputs must say about it.
+const SERVICE_KINDS = [
+  {
+    kind: "postgres",
+    image: /^postgres:(\d+)/,
+    expect(svc, version) {
+      const out = [["postgres-version", version]];
+      const p = portMap(svc.ports).find((m) => m.container === "5432");
+      out.push(["postgres-port", p?.host ?? "5432"]);
+      out.push(["postgres-user", svc.env?.POSTGRES_USER ?? "postgres"]);
+      out.push(["postgres-password", svc.env?.POSTGRES_PASSWORD ?? "postgres"]);
+      out.push(["postgres-db", svc.env?.POSTGRES_DB ?? svc.env?.POSTGRES_USER ?? "postgres"]);
+      return out;
+    },
+    // Every server setting the container gets, the process must get too.
+    // Every server setting the container gets, the process must get too, the same: as whole `-c name=value`
+    // words, so `=512` and `=5120` differ.
+    extra(svc, input) {
+      const settings = (text) => [...String(text).matchAll(/(?:^|\s)-c\s+(\S+)/g)].map((m) => m[1]);
+      const args = new Set(settings(input("postgres-args")));
+      return settings(svc.command ?? "").filter((s) => !args.has(s)).map((s) => `the services block passes \`-c ${s}\`, postgres-args does not`);
+    },
+  },
+  {
+    kind: "nats",
+    image: /^nats:(\d+\.\d+\.\d+)/,
+    expect(svc, version) {
+      const ports = portMap(svc.ports);
+      return [
+        ["nats-version", version],
+        ["nats-port", ports.find((m) => m.container === "4222")?.host ?? "4222"],
+        ["nats-monitor-port", ports.find((m) => m.container === "8222")?.host ?? "8222"],
+      ];
+    },
+    extra(svc, input) {
+      const js = /(?:^|\s)(?:-js|--jetstream)\b/;
+      return js.test(String(svc.command ?? "")) === js.test(input("nats-args")) ? [] : ["JetStream (-js) is on in one of the services block and nats-args only"];
+    },
+  },
+  {
+    kind: "qdrant",
+    image: /^qdrant\/qdrant:(v[\d.]+)/,
+    expect(svc, version) {
+      const ports = portMap(svc.ports);
+      return [
+        ["qdrant-version", version],
+        ["qdrant-http-port", ports.find((m) => m.container === "6333")?.host ?? "6333"],
+        ["qdrant-grpc-port", ports.find((m) => m.container === "6334")?.host ?? "6334"],
+      ];
+    },
+  },
+  {
+    kind: "openbao",
+    image: /^(?:[\w.-]+\/)?openbao\/openbao:([\d.]+)/,
+    expect(svc, version) {
+      const token = /-dev-root-token-id=(\S+)/.exec(String(svc.command ?? ""))?.[1];
+      const tls = (svc.volumes ?? []).map(String).find((v) => /:\/tls$/.test(v));
+      const out = [
+        ["openbao-version", version],
+        ["openbao-port", portMap(svc.ports).find((m) => m.container === "8200")?.host ?? "8200"],
+      ];
+      if (token) out.push(["openbao-root-token", token]);
+      if (tls) out.push(["openbao-tls-cert-dir", tls.replace(/:\/tls$/, "")]);
+      return out;
+    },
+  },
+];
+
+/** The problems with a routed job's `services:`: each must be pool-empty and run by the action instead. */
+function servicesProblems(job, steps, envAt, actions) {
+  if (job.services === undefined) {
+    return steps.some(isNativeStep) ? [`runs ${NATIVE_SERVICES_ACTION} but has no \`services:\` block (the hosted run would have none)`] : [];
+  }
+  const problems = [];
+  const natives = steps.map((s, i) => [s, i]).filter(([s]) => isNativeStep(s));
+  if (natives.length !== 1) {
+    problems.push(`has \`services:\`, so it must run ${NATIVE_SERVICES_ACTION} exactly once (found ${natives.length}): the pool has no Docker daemon`);
+    return problems;
+  }
+  const [native, at] = natives[0];
+  if (native.if !== undefined) problems.push(`${NATIVE_SERVICES_ACTION} must run unconditionally (it is a no-op on hosted runners)`);
+  if (envAt >= 0 && at < envAt) problems.push(`${NATIVE_SERVICES_ACTION} runs before ${ENV_ACTION}; move it after`);
+  // Inside the action failure() sees only its own steps: a server that dies during the tests needs the job's
+  // own failure() step to keep its log.
+  const logsAt = steps.findIndex((s) => String(s.uses ?? "").replace(/\/$/, "") === NATIVE_SERVICES_LOGS_ACTION);
+  if (logsAt < 0 || logsAt < at || !/\bfailure\(\)/.test(String(steps[logsAt].if ?? ""))) {
+    problems.push(`runs ${NATIVE_SERVICES_ACTION}, so its last step must be ${NATIVE_SERVICES_LOGS_ACTION} with \`if: failure()\` (a service that dies mid-job would take its log with the pod)`);
+  }
+  const defaults = Object.fromEntries(Object.entries(actions[NATIVE_SERVICES_ACTION.replace(/^\.\//, "")]?.inputs ?? {}).map(([k, v]) => [k, v?.default]));
+  const input = (name) => String(native.with?.[name] ?? defaults[name] ?? "");
+  const started = new Set();
+  for (const [id, svc] of Object.entries(job.services ?? {})) {
+    const m = POOL_EMPTY.exec(String(svc?.image ?? ""));
+    if (!m) {
+      problems.push(`service ${id}: its image must be scripts/ci/check-runner-routing.mjs poolEmptyImage(<image>) — \`\${{ !(<ROUTING_CONDITION>) && '<image>' || '' }}\` — so GitHub creates no container on the pool; got ${JSON.stringify(svc?.image)}`);
+      continue;
+    }
+    const image = m[1];
+    const kind = SERVICE_KINDS.find((k) => k.image.test(image));
+    if (!kind) {
+      problems.push(`service ${id}: ${image} has no counterpart in ${NATIVE_SERVICES_ACTION} (postgres, nats, qdrant, openbao)`);
+      continue;
+    }
+    if (started.has(kind.kind)) problems.push(`service ${id}: a second ${kind.kind}; ${NATIVE_SERVICES_ACTION} starts one`);
+    started.add(kind.kind);
+    if (input(kind.kind) !== "true") problems.push(`service ${id} (${image}): ${NATIVE_SERVICES_ACTION} needs \`${kind.kind}: "true"\``);
+    const version = kind.image.exec(image)[1];
+    for (const [name, want] of kind.expect(svc, version)) {
+      if (input(name) !== String(want)) problems.push(`service ${id} (${image}): ${NATIVE_SERVICES_ACTION} ${name} is ${JSON.stringify(input(name))}, the services block's is ${JSON.stringify(String(want))}`);
+    }
+    for (const p of kind.extra?.(svc, input) ?? []) problems.push(`service ${id} (${image}): ${p}`);
+  }
+  for (const k of SERVICE_KINDS) {
+    if (input(k.kind) === "true" && !started.has(k.kind)) problems.push(`${NATIVE_SERVICES_ACTION} starts ${k.kind}, which the services block does not run`);
+  }
+  problems.push(...storageProblems(steps, input));
+  return problems;
+}
+
+/**
+ * The storage emulators are not a `services:` entry but a hosted-only compose step: `storage` must start them
+ * exactly when that step does. The step's `if:` after HOSTED_ONLY (`&& matrix.storage`, or nothing) must be
+ * the condition `storage` carries: "true" for none, `${{ <cond> && 'true' || 'false' }}` for one.
+ */
+function storageProblems(steps, input) {
+  const up = steps.filter((s) => /docker(?:-|\s+)compose\s+-f\s+\S*docker-compose\.storage-test\.yml\s+up\b/.test(String(s.run ?? "")));
+  const storage = input("storage").trim();
+  if (!up.length) return storage === "false" || storage === "" ? [] : [`${NATIVE_SERVICES_ACTION} storage is ${JSON.stringify(storage)}, but no step starts deploy/docker-compose.storage-test.yml on the hosted leg`];
+  if (up.length > 1) return ["starts deploy/docker-compose.storage-test.yml in more than one step"];
+  const cond = strip(up[0].if);
+  if (!cond.startsWith(HOSTED_ONLY)) return [`the step that starts deploy/docker-compose.storage-test.yml must be \`if: ${HOSTED_ONLY}\` (…), since ${NATIVE_SERVICES_ACTION} storage starts them on the pool`];
+  const rest = cond.slice(HOSTED_ONLY.length).trim().replace(/^&&\s*/, "");
+  const want = rest === "" ? "true" : `\${{ ${rest} && 'true' || 'false' }}`;
+  return storage === want ? [] : [`${NATIVE_SERVICES_ACTION} storage is ${JSON.stringify(storage)}; the compose step runs when \`${rest || "always"}\`, so it must be ${JSON.stringify(want)}`];
+}
 
 const strip = (expression) => String(expression ?? "").trim().replace(/^\$\{\{\s*([\s\S]*?)\s*\}\}$/, "$1").trim();
 const triggers = (workflow) => {
@@ -207,7 +370,6 @@ export function check({ workflows, actions }) {
       if (runsOn.kind !== "routed") continue;
       routed.push(where);
       if (job.container !== undefined) errors.push(`${where}: routed to ${RUNNER} but has \`container:\` (the pool has no Docker daemon)`);
-      if (job.services !== undefined) errors.push(`${where}: routed to ${RUNNER} but has \`services:\` (the pool has no Docker daemon)`);
       const bad = [...events[file]].filter((e) => !ALLOWED_EVENTS.has(e));
       if (bad.length) errors.push(`${where}: routed to ${RUNNER} in a workflow that can start on ${bad.join(", ")}; only ${[...ALLOWED_EVENTS].join(", ")} may reach the pool`);
       (job.steps ?? []).forEach((step, i) => {
@@ -234,6 +396,7 @@ export function check({ workflows, actions }) {
         if (steps[envAt].if !== undefined) errors.push(`${where}: ${ENV_ACTION} must run unconditionally (it is a no-op on hosted runners)`);
         if (firstAction >= 0 && firstAction < envAt) errors.push(`${where}: step ${firstAction + 1} (${steps[firstAction].uses}) runs before ${ENV_ACTION}, so it writes under the old HOME; move ${ENV_ACTION} up, straight after the checkout`);
       }
+      for (const p of servicesProblems(job, steps, envAt, actions)) errors.push(`${where}: routed to ${RUNNER}: ${p}`);
     }
   }
   return { errors, routed };

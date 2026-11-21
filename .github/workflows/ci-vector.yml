@@ -42,16 +42,20 @@ env:
 jobs:
   vector:
     name: elitea-vector — lint, test, and the isolation suite on Qdrant
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
     timeout-minutes: 30
     defaults:
       run:
         working-directory: services/elitea-vector
+    # eng-runner has no container engine. There every image below is empty, so
+    # GitHub creates no service, and .github/actions/native-services runs the
+    # same servers as processes at the same ports and credentials
+    # (scripts/ci/check-runner-routing.mjs poolEmptyImage; it checks the two agree).
     services:
       qdrant:
         # Keep in step with deploy/docker-compose.standalone-full.yml and
         # the chart's vector.qdrant.internal.image.
-        image: qdrant/qdrant:v1.19.2
+        image: ${{ !(vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'qdrant/qdrant:v1.19.2' || '' }}
         ports:
           - 6334:6334
         # The image has no curl; bash's /dev/tcp checks that the HTTP port
@@ -63,6 +67,17 @@ jobs:
           --health-retries 12
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume, and rustup (none in
+      # its image). Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          rust: "true"
+      # eng-runner: the services block's Qdrant as a process.
+      # Does nothing on a hosted runner, where the services block runs them.
+      - name: Start the services as processes (eng-runner)
+        uses: ./.github/actions/native-services
+        with:
+          qdrant: "true"
 
       - name: Assert the pinned toolchain
         run: |
@@ -88,3 +103,9 @@ jobs:
 
       - name: Build the release binary
         run: cargo build --locked --release
+
+      # eng-runner: the logs of the services native-services started, when
+      # anything in the job failed. Does nothing on a hosted runner.
+      - name: Upload the service logs (eng-runner)
+        if: failure()
+        uses: ./.github/actions/native-services-logs

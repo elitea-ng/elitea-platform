@@ -34,13 +34,17 @@ concurrency:
 jobs:
   loadgate:
     name: Handoff publish load gate
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
     timeout-minutes: 20
+    # eng-runner has no container engine. There every image below is empty, so
+    # GitHub creates no service, and .github/actions/native-services runs the
+    # same servers as processes at the same ports and credentials
+    # (scripts/ci/check-runner-routing.mjs poolEmptyImage; it checks the two agree).
     services:
       postgres:
         # Plain PostgreSQL 18 (Debian 13), the server every deployment runs:
         # the repos package's migrated template needs no extension.
-        image: postgres:18
+        image: ${{ !(vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'postgres:18' || '' }}
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -54,6 +58,14 @@ jobs:
           --health-retries=5
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume. Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+      # eng-runner: the services block's PostgreSQL as a process.
+      # Does nothing on a hosted runner, where the services block runs them.
+      - name: Start the services as processes (eng-runner)
+        uses: ./.github/actions/native-services
+        with:
+          postgres: "true"
       - uses: actions/setup-go@v7
         with:
           # The cache is .github/actions/go-cache below: setup-go's own
@@ -123,3 +135,9 @@ jobs:
             echo "::error::a load gate case was skipped"
             exit 1
           fi
+
+      # eng-runner: the logs of the services native-services started, when
+      # anything in the job failed. Does nothing on a hosted runner.
+      - name: Upload the service logs (eng-runner)
+        if: failure()
+        uses: ./.github/actions/native-services-logs

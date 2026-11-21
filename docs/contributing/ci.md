@@ -132,7 +132,8 @@ the `actions-runner` image plus build tools such as cc and zstd.
 
 A job runs directly in the pod (Ubuntu 24.04):
 
-- **No Docker daemon.** No `container:`, no `services:`, no docker, podman, compose or kind.
+- **No Docker daemon.** No `container:`, no docker, podman, compose or kind. A job's `services:` run as
+  processes instead (below).
 - **No root.** No sudo and no apt.
 - **Build tools, no toolchains.** The image (`deploy/ci-runners/image/`) has build-essential (cc for cgo and
   the `cc` crate), cmake, pkg-config, zstd, shellcheck, gh, helm, yq and skopeo. node, Go, Python and rustup come
@@ -156,8 +157,12 @@ These jobs are routed (when `ENG_RUNNER` is on, on our own pull requests):
 | `ci.yml` | `changes`, `fast-gate`, `ci-gate` |
 | `ci-web.yml` | `quality`, `unit-tests` (every shard), `gates-static`, `build` |
 | `ci-web-coverage.yml` | `coverage-merge` |
-| `ci-go.yml` | `proto`, `sqlc`, `env-drift`, `lint`, `test-plan`, `test-checks`, `test` (the aggregator) |
-| `ci-gateway.yml` | `lint` |
+| `ci-go.yml` | `proto`, `sqlc`, `env-drift`, `lint`, `test-plan`, `test-checks`, `test` (the aggregator), `test-shard` (every shard, storage included), `integration`, `editor-lifecycle`, `compiled-snapshots-postgres`, `secretstore-openbao` |
+| `ci-gateway.yml` | `lint`, `test` |
+| `ci-contract.yml` | `compile` |
+| `ci-vector.yml` | `vector` |
+| `ci-inventory-engine.yml` | `engine` (with the Go host against the binary) |
+| `ci-handoff-loadgate.yml` | `loadgate` |
 | `ci-governed-conformance.yml` | `unit` |
 | `ci-docs.yml`, `ci-mobile.yml` | `docs`, `check` |
 | `ci-web-e2e.yml` | `model-path-changes` |
@@ -169,17 +174,16 @@ These jobs are routed (when `ENG_RUNNER` is on, on our own pull requests):
 | `ci-rust-shared.yml` | `shared-crates` (rustdoc and tests) |
 | `ci-rust.yml` | `code-runner`, `quality` (docs and release build) |
 | `ci-doc-extractor.yml` | `extractor` |
-| `ci-deepwiki-engine.yml` | `serde-order` |
+| `ci-deepwiki-engine.yml` | `serde-order`, `engine` (with the Go host against the binary) |
 | `ci-mock-llm.yml` | `unit` |
 | `ci-deepwiki-conformance.yml` | `fixtures` |
 
 Everything else stays hosted:
 
-- **`services:` or `container:`.** The Go test shards, `integration`, `editor-lifecycle`,
-  `compiled-snapshots-postgres` and `secretstore-openbao` in `ci-go.yml`; the gateway's `test`; the engine jobs
-  of `ci-deepwiki-engine.yml` and `ci-inventory-engine.yml` (Postgres, so their "Go host against the binary"
-  steps stay with them); `ci-vector.yml`; `ci-contract.yml`; and `ci-rust.yml`'s "Test with PostgreSQL 18" and
-  "Workspace runs on Docker".
+- **Docker next to the services.** `ci-rust.yml`'s "Test with PostgreSQL 18" also builds the sandbox images
+  with buildx, and `check-worker-ignored-tests.mjs` credits only unconditional steps, so it cannot gate those
+  steps to hosted runners; "Workspace runs on Docker" needs a registry container.
+- **Nightly only.** `ci-governed-scale.yml` runs on `schedule` and `workflow_dispatch`, which stay hosted.
 - **Docker, compose, kind or gVisor**: image builds and `docker buildx bake --print` (`image-matrix.yml`'s list
   check), `helm-install-smoke`, the E2E suites, `ci-browser-session.yml`. helm-lint's `lint` job too: a step it runs calls `docker compose config`.
 - **System packages through apt**: the Tauri host on Linux (`ci-desktop.yml` `pane-drivers`, webkit2gtk).
@@ -213,6 +217,32 @@ it does nothing, so the hosted path is unchanged. On the pool it does these thin
   no toolchain. The job's `assert-rust-toolchain.sh` step then installs the toolchain `rust-toolchain.toml`
   pins, as it does on a hosted runner, where rustup is preinstalled.
 
+### Services as processes
+
+A routed job keeps its `services:` block for hosted runners, and names every image through
+`poolEmptyImage(<image>)` from `scripts/ci/check-runner-routing.mjs`:
+
+```yaml
+image: ${{ !(<the routing condition>) && 'postgres:18' || '' }}
+```
+
+The condition is the routing condition, word for word, so the image is empty exactly where the job runs on
+the pool, and GitHub does not start a service whose image is empty. (The inverted form,
+`<condition> && '' || 'postgres:18'`, is always the image: `''` is falsy.) The job then runs
+`./.github/actions/native-services` after `eng-runner-env`. On the pool that action starts the same servers
+from the image's binaries (PostgreSQL 18, nats-server, Qdrant, OpenBao, and with `storage: "true"` RustFS,
+Azurite and fake-gcs-server in place of `deploy/docker-compose.storage-test.yml`). They run as the runner user
+under `RUNNER_TEMP`, on 127.0.0.1, at the ports and with the credentials the block maps (the storage ports and
+keys are read from the compose file). The binary must be the release the block names, and PostgreSQL is
+initialised with the image's locale (`en_US.UTF-8`), so text sorts the same on both legs. The action waits until
+each server is healthy and fails with the log's tail when one is not. PostgreSQL runs with `fsync`,
+`synchronous_commit` and `full_page_writes` off: it is a throwaway CI database. The job's last step,
+`./.github/actions/native-services-logs` with `if: failure()`, uploads the servers' logs whichever step failed. On
+a hosted runner both actions do nothing. The few steps that call docker directly (the storage compose file,
+copying `nats-server` out of its container) run on hosted runners only; `scripts/nats/ci-secure-test-env.sh` takes
+the image's `nats-server` on the pool and checks it is the chart's pin. `index_v2_preflight`'s system test creates
+its database on the job's server (`ELITEA_TEST_DATABASE_URL`) instead of starting a container, on both legs.
+
 ### How a job is routed
 
 A routed job's `runs-on` is exactly `ROUTED_RUNS_ON` from `scripts/ci/check-runner-routing.mjs`. That
@@ -240,9 +270,16 @@ These events stay hosted:
 
 - a `runs-on` can resolve to `eng-runner` without that exact expression, whether as a literal, a list, a group,
   a matrix value or any other expression;
-- a routed job has `container:` or `services:`;
+- a routed job has `container:`;
+- a routed job has `services:` and an image is not `poolEmptyImage(<image>)`, or it does not run
+  `native-services` exactly once, unconditionally, after `eng-runner-env`, with inputs that match the block:
+  the same kind of server, version, ports, user, password, database, `postgres -c` settings and NATS
+  JetStream; with `storage` set exactly when the hosted compose step runs; and with
+  `native-services-logs` on `failure()` after it. A service the action cannot run (a registry, say) keeps the
+  job hosted;
 - a routed job has a step, or a step inside a local composite action it uses, that runs docker, podman, kind,
-  sudo, apt or systemctl, or uses a `docker/*` or kind action, unless that step's `if:` starts with
+  sudo, apt, systemctl or `playwright install` (the image bakes the browsers, read-only), or uses a
+  `docker/*` or kind action, unless that step's `if:` starts with
   `runner.environment == 'github-hosted'`;
 - a routed job is in a workflow, or is called from a workflow, that can start on an event outside
   `pull_request`, `schedule` and `workflow_dispatch`;

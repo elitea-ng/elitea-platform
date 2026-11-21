@@ -56,16 +56,20 @@ env:
 jobs:
   engine:
     name: Engine — lint, test, and the Go host against the binary
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
     # About 23 minutes with a warm cache; a change to a shared crate or a
     # lockfile invalidates the cache and the cold build needs more than 30.
     timeout-minutes: 45
     # The index storage tests' database (ADR-0026 decision 5). Plain
     # PostgreSQL, the major and Debian 13 base every deployment runs: a fresh
     # install needs no extension (#1359).
+    # eng-runner has no container engine. There every image below is empty, so
+    # GitHub creates no service, and .github/actions/native-services runs the
+    # same servers as processes at the same ports and credentials
+    # (scripts/ci/check-runner-routing.mjs poolEmptyImage; it checks the two agree).
     services:
       postgres:
-        image: postgres:18
+        image: ${{ !(vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'postgres:18' || '' }}
         env:
           POSTGRES_USER: deepwiki
           POSTGRES_PASSWORD: deepwiki
@@ -82,12 +86,28 @@ jobs:
         working-directory: services/elitea-deepwiki-engine
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume, and rustup (none in
+      # its image). Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          rust: "true"
+      # eng-runner: the services block's PostgreSQL as a process.
+      # Does nothing on a hosted runner, where the services block runs them.
+      - name: Start the services as processes (eng-runner)
+        uses: ./.github/actions/native-services
+        with:
+          postgres: "true"
+          postgres-user: deepwiki
+          postgres-password: deepwiki
+          postgres-db: deepwiki
 
       - name: Assert the pinned toolchain
         run: |
           bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
 
       - name: Free runner disk for the engine build
+        # Hosted only: the pool builds on its 80 GiB work volume, and has no sudo.
+        if: runner.environment == 'github-hosted'
         # The engine build on top of the restored target/ ran the runner out
         # of disk (PR #1574: a shared-crate change rebuilds most of the graph
         # beside the cached copy). Copied from ci-rust.yml: bounded and
@@ -164,6 +184,13 @@ jobs:
   # (ADR-0029 decisions 2 and 7), in a job of their own: in the engine job
   # they pushed it past its 30-minute limit, and they need neither Postgres
   # nor the engine binary.
+
+      # eng-runner: the logs of the services native-services started, when
+      # anything in the job failed. Does nothing on a hosted runner.
+      - name: Upload the service logs (eng-runner)
+        if: failure()
+        uses: ./.github/actions/native-services-logs
+
   serde-order:
     name: Shared crates — serde_json order split (desktop links)
     runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}

@@ -393,7 +393,7 @@ jobs:
   test-shard:
     name: Test (${{ matrix.name }})
     needs: test-plan
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
     strategy:
       # Each shard reports. One red shard does not cancel the others, so a
       # run names every failure, as workspace-run.sh does for modules.
@@ -406,9 +406,13 @@ jobs:
     # that entire class of test provided zero actual coverage. Each test
     # provisions its own isolated CREATE DATABASE against this one shared
     # server instance, so a single service container is enough.
+    # eng-runner has no container engine. There every image below is empty, so
+    # GitHub creates no service, and .github/actions/native-services runs the
+    # same servers as processes at the same ports and credentials
+    # (scripts/ci/check-runner-routing.mjs poolEmptyImage; it checks the two agree).
     services:
       postgres:
-        image: postgres:18
+        image: ${{ !(vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'postgres:18' || '' }}
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -432,7 +436,7 @@ jobs:
       # flag arguments to nats-server. The undeclared-skip gate fails the run
       # if those tests skip, so losing this container cannot read as green.
       nats:
-        image: nats:2.12.0-alpine
+        image: ${{ !(vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'nats:2.12.0-alpine' || '' }}
         command: -js -m 8222
         ports:
           - 4222:4222
@@ -444,6 +448,24 @@ jobs:
           --health-retries=30
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume, and node for the shard
+      # scripts and Azurite. Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          node: "true"
+      # eng-runner: the services block's PostgreSQL and NATS as processes, and on
+      # the storage shard the storage-test emulators (in place of the compose
+      # step below).
+      # Does nothing on a hosted runner, where the services block runs them.
+      - name: Start the services as processes (eng-runner)
+        id: native
+        uses: ./.github/actions/native-services
+        with:
+          postgres: "true"
+          postgres-args: -c max_locks_per_transaction=512
+          nats: "true"
+          nats-args: -js
+          storage: ${{ matrix.storage && 'true' || 'false' }}
       - uses: actions/setup-go@v7
         with:
           # The cache is .github/actions/go-cache below: setup-go's own
@@ -505,7 +527,7 @@ jobs:
       # every service's healthcheck passes (see the compose file for why each
       # healthcheck is more involved than a bare wget).
       - name: Start storage emulators
-        if: matrix.storage
+        if: runner.environment == 'github-hosted' && matrix.storage
         run: docker compose -f deploy/docker-compose.storage-test.yml up -d --wait
 
       # The secured NATS permission tests (#1076): libs/go/natsconn/natstest
@@ -527,11 +549,23 @@ jobs:
       # server's process) and natstest run the same build as the service, on
       # one pin. Set explicitly on both consumers below.
       - name: Copy nats-server out of the nats service container
+        if: runner.environment == 'github-hosted'
         env:
           NATS_CONTAINER: ${{ job.services.nats.id }}
         run: |
           set -euo pipefail
           docker cp "${NATS_CONTAINER}:/usr/local/bin/nats-server" "${RUNNER_TEMP}/nats-server"
+          "${RUNNER_TEMP}/nats-server" --version
+
+      # On eng-runner the same pin comes from the image (native-services
+      # checked its version against the services block).
+      - name: Use the image's nats-server (eng-runner)
+        if: runner.environment != 'github-hosted'
+        env:
+          NATS_SERVER_BIN: ${{ steps.native.outputs.nats-server-bin }}
+        run: |
+          set -euo pipefail
+          install -m 0755 "$NATS_SERVER_BIN" "${RUNNER_TEMP}/nats-server"
           "${RUNNER_TEMP}/nats-server" --version
 
       - name: Provision the secured NATS permission tests
@@ -630,7 +664,7 @@ jobs:
         run: bash scripts/go/workspace-run.sh coverage --race
 
       - name: Stop storage emulators
-        if: always() && matrix.storage
+        if: runner.environment == 'github-hosted' && always() && matrix.storage
         run: docker compose -f deploy/docker-compose.storage-test.yml down -v
 
       # The profiles are written INSIDE each module directory. The collect
@@ -659,6 +693,13 @@ jobs:
   # ruleset requires no status check), but people and tools read this name.
   # `if: always()` makes this job run when a shard fails, so it can report
   # the failure. A skipped or cancelled job is a failure here too.
+
+      # eng-runner: the logs of the services native-services started, when
+      # anything in the job failed. Does nothing on a hosted runner.
+      - name: Upload the service logs (eng-runner)
+        if: failure()
+        uses: ./.github/actions/native-services-logs
+
   test:
     name: Test
     if: always()
@@ -708,13 +749,17 @@ jobs:
 
   editor-lifecycle:
     name: Editor Test lifecycle (PostgreSQL 18)
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
     timeout-minutes: 10
     # The editor guard rejects the broad Test job's PG16 listener and DSN.
     # Run this fixture in its own process and database. Do not use product settings.
+    # eng-runner has no container engine. There every image below is empty, so
+    # GitHub creates no service, and .github/actions/native-services runs the
+    # same servers as processes at the same ports and credentials
+    # (scripts/ci/check-runner-routing.mjs poolEmptyImage; it checks the two agree).
     services:
       editor-postgres:
-        image: postgres:18
+        image: ${{ !(vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'postgres:18' || '' }}
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: editor_fixture
@@ -728,6 +773,17 @@ jobs:
           --health-retries=10
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume. Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+      # eng-runner: the services block's PostgreSQL as a process.
+      # Does nothing on a hosted runner, where the services block runs them.
+      - name: Start the services as processes (eng-runner)
+        uses: ./.github/actions/native-services
+        with:
+          postgres: "true"
+          postgres-port: "15444"
+          postgres-password: editor_fixture
+          postgres-db: elitea_it_editor_lifecycle_20261002
       - uses: actions/setup-go@v7
         with:
           # The cache is .github/actions/go-cache below: setup-go's own
@@ -759,9 +815,15 @@ jobs:
           path: ${{ runner.temp }}/editor-lifecycle
           if-no-files-found: error
 
+      # eng-runner: the logs of the services native-services started, when
+      # anything in the job failed. Does nothing on a hosted runner.
+      - name: Upload the service logs (eng-runner)
+        if: failure()
+        uses: ./.github/actions/native-services-logs
+
   secretstore-openbao:
     name: SecretStore KV v2 against OpenBao (#1113)
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
     timeout-minutes: 10
     # The Vault/OpenBao adapter's integration tests need a real KV v2 server.
     # OpenBao dev mode with TLS, the same fixture (entrypoint, command, user)
@@ -773,9 +835,13 @@ jobs:
     # out mode 0444, so the test reads it from the host. A service definition
     # cannot read the runner context, so the directory is per run under /tmp
     # instead of $RUNNER_TEMP.
+    # eng-runner has no container engine. There every image below is empty, so
+    # GitHub creates no service, and .github/actions/native-services runs the
+    # same servers as processes at the same ports and credentials
+    # (scripts/ci/check-runner-routing.mjs poolEmptyImage; it checks the two agree).
     services:
       openbao:
-        image: quay.io/openbao/openbao:2.4.1
+        image: ${{ !(vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'quay.io/openbao/openbao:2.4.1' || '' }}
         entrypoint: bao
         command: >-
           server -dev -dev-tls -dev-tls-cert-dir=/tls
@@ -792,6 +858,18 @@ jobs:
           --health-retries=30
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume. Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+      # eng-runner: the services block's OpenBao dev server (TLS) as a process; it
+      # writes vault-ca.pem where the test reads it.
+      # Does nothing on a hosted runner, where the services block runs them.
+      - name: Start the services as processes (eng-runner)
+        uses: ./.github/actions/native-services
+        with:
+          openbao: "true"
+          openbao-port: "8210"
+          openbao-root-token: elitea-secretstore-it-root
+          openbao-tls-cert-dir: /tmp/openbao-tls-${{ github.run_id }}-${{ github.run_attempt }}
       - uses: actions/setup-go@v7
         with:
           cache: false
@@ -814,12 +892,22 @@ jobs:
           ELITEA_REQUIRE_OPENBAO_TEST: "true"
         run: go test -race -count=1 -run 'TestOpenBao' ./internal/secretstore/vault/
 
+      # eng-runner: the logs of the services native-services started, when
+      # anything in the job failed. Does nothing on a hosted runner.
+      - name: Upload the service logs (eng-runner)
+        if: failure()
+        uses: ./.github/actions/native-services-logs
+
   integration:
     name: Integration (Postgres)
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
+    # eng-runner has no container engine. There every image below is empty, so
+    # GitHub creates no service, and .github/actions/native-services runs the
+    # same servers as processes at the same ports and credentials
+    # (scripts/ci/check-runner-routing.mjs poolEmptyImage; it checks the two agree).
     services:
       postgres:
-        image: postgres:18
+        image: ${{ !(vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'postgres:18' || '' }}
         env:
           POSTGRES_USER: elitea
           POSTGRES_PASSWORD: elitea
@@ -833,6 +921,17 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume. Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+      # eng-runner: the services block's PostgreSQL as a process.
+      # Does nothing on a hosted runner, where the services block runs them.
+      - name: Start the services as processes (eng-runner)
+        uses: ./.github/actions/native-services
+        with:
+          postgres: "true"
+          postgres-user: elitea
+          postgres-password: elitea
+          postgres-db: elitea
       - uses: actions/setup-go@v7
         with:
           # The cache is .github/actions/go-cache below: setup-go's own
@@ -867,15 +966,25 @@ jobs:
   # triggers would run the Postgres service, the storage emulators and the whole
   # Go test suite on every front-end change.
 
+      # eng-runner: the logs of the services native-services started, when
+      # anything in the job failed. Does nothing on a hosted runner.
+      - name: Upload the service logs (eng-runner)
+        if: failure()
+        uses: ./.github/actions/native-services-logs
+
   compiled-snapshots-postgres:
     name: Compiled snapshots (required isolated PostgreSQL)
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
     timeout-minutes: 10
+    # eng-runner has no container engine. There every image below is empty, so
+    # GitHub creates no service, and .github/actions/native-services runs the
+    # same servers as processes at the same ports and credentials
+    # (scripts/ci/check-runner-routing.mjs poolEmptyImage; it checks the two agree).
     services:
       postgres:
         # Plain PostgreSQL 18 (Debian 13): the compiled-snapshot tests need no
         # extension.
-        image: postgres:18
+        image: ${{ !(vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'postgres:18' || '' }}
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -889,6 +998,15 @@ jobs:
           --health-retries=10
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume. Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+      # eng-runner: the services block's PostgreSQL as a process.
+      # Does nothing on a hosted runner, where the services block runs them.
+      - name: Start the services as processes (eng-runner)
+        uses: ./.github/actions/native-services
+        with:
+          postgres: "true"
+          postgres-db: elitea_compiled_fixture_ci
       - uses: actions/setup-go@v7
         with:
           # The cache is .github/actions/go-cache below: setup-go's own
@@ -911,3 +1029,9 @@ jobs:
           ELITEA_COMPILED_SNAPSHOT_PG_FIXTURE_DSN: "postgres://postgres:postgres@127.0.0.1:5432/elitea_compiled_fixture_ci?sslmode=disable"
           ELITEA_COMPILED_SNAPSHOT_PG_DISPOSABLE_ACK: "isolated_fixture_only"
         run: bash scripts/contract/check_compiled_snapshots_postgres.sh
+
+      # eng-runner: the logs of the services native-services started, when
+      # anything in the job failed. Does nothing on a hosted runner.
+      - name: Upload the service logs (eng-runner)
+        if: failure()
+        uses: ./.github/actions/native-services-logs

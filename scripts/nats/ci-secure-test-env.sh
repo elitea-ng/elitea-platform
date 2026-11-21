@@ -11,7 +11,9 @@
 #    SHA-256), because the tests create the JetStream assets with the real
 #    bootstrap.sh exactly as the hook Job does.
 # 3. Copies nats-server out of the chart's pinned NATS image when ELITEA_TEST_NATS_SERVER_BIN
-#    is not already set (ci-go.yml copies it out of its nats service container).
+#    is not already set (ci-go.yml copies it out of its nats service container);
+#    on eng-runner, which has no docker, takes the image's own. Either way it
+#    checks the version is the chart's pin.
 # 4. Sets ELITEA_REQUIRE_NATS_SECURE_TEST=1, so a missing piece FAILS the
 #    tests instead of skipping them: a permission test that skipped would
 #    read exactly like one that passed.
@@ -21,6 +23,8 @@ set -euo pipefail
 : "${GITHUB_ENV:?GITHUB_ENV is not set; this script is for GitHub Actions}"
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 
+# The chart's NATS release (deploy/helm/elitea values: nats image tag).
+NATS_SERVER_VERSION="2.12.0"
 NATSCLI_VERSION="0.4.0"
 NATSCLI_SHA256="8dbd437c826b953dbd7432cf890ef22ba3c33dccc3dce5e71b3e8d055427849c"
 
@@ -45,18 +49,29 @@ chmod +x "$cli"
 "$cli" --version
 
 server="${ELITEA_TEST_NATS_SERVER_BIN:-}"
-if [ -z "$server" ]; then
+if [ -z "$server" ] && [ "${RUNNER_ENVIRONMENT:-}" = self-hosted ]; then
+  # eng-runner has no container engine; its image ships the same pin
+  # (deploy/ci-runners/image), checked below.
+  server="$(command -v nats-server)" || { echo "this runner has no nats-server and no docker" >&2; exit 1; }
+elif [ -z "$server" ]; then
   # The scratch image has no shell, so read the binary's path from the
   # image's entrypoint instead of asking a shell inside the container.
-  ctr="$(docker create nats:2.12.0)"
-  path_in_image="$(docker inspect --format '{{index .Config.Entrypoint 0}}' nats:2.12.0)"
+  ctr="$(docker create "nats:${NATS_SERVER_VERSION}")"
+  path_in_image="$(docker inspect --format '{{index .Config.Entrypoint 0}}' "nats:${NATS_SERVER_VERSION}")"
   [ -n "$path_in_image" ]
   server="${RUNNER_TEMP}/nats-server"
   docker cp "${ctr}:${path_in_image}" "$server"
   docker rm "$ctr" >/dev/null
   chmod +x "$server"
 fi
-"$server" --version
+# Whichever way it came, it is the chart's pin: a permission test against
+# another release would not test what ships.
+got="$("$server" --version)"
+echo "$got"
+case "$got" in
+  *"v${NATS_SERVER_VERSION}"*) ;;
+  *) echo "nats-server is '${got}', the chart pins ${NATS_SERVER_VERSION}" >&2; exit 1 ;;
+esac
 
 {
   echo "ELITEA_TEST_NATS_SECURE_CONF=${conf}"
