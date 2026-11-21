@@ -132,8 +132,12 @@ outputs:
     description: "'true' on an exact-key hit."
     value: ${{ steps.writer-go.outputs.cache-hit || steps.writer-npm.outputs.cache-hit || steps.reader-go.outputs.cache-hit || steps.reader-npm.outputs.cache-hit }}
   cache-matched-key:
-    description: The key that was restored, empty on a miss.
-    value: ${{ steps.writer-go.outputs.cache-matched-key || steps.writer-npm.outputs.cache-matched-key || steps.reader-go.outputs.cache-matched-key || steps.reader-npm.outputs.cache-matched-key }}
+    description: >-
+      The key that was restored, empty on a miss. Readers only: the full
+      actions/cache a writer uses keeps the matched key in its post-step state
+      and declares no such output, so on a writer run this is always empty
+      (use cache-hit there; see the report step).
+    value: ${{ steps.reader-go.outputs.cache-matched-key || steps.reader-npm.outputs.cache-matched-key }}
 runs:
   using: composite
   steps:
@@ -222,17 +226,32 @@ runs:
         restore-keys: ${{ inputs.restore-keys }}
     - name: Report the cache result
       shell: bash
+      # The two actions report a restore differently (actions/cache@v6
+      # src/restoreImpl.ts, src/stateProvider.ts):
+      #   reader (actions/cache/restore) sets cache-matched-key, and cache-hit
+      #     only when something was restored;
+      #   writer (actions/cache) declares ONLY cache-hit: it keeps the matched
+      #     key as post-step state, not as an output. cache-hit is 'true' on an
+      #     exact hit, 'false' on a restore-keys hit, and UNSET on a miss.
+      # So the report branches on cache-hit, and names the matched key only
+      # when a reader exposed it. Reading MATCHED alone printed "MISS" on every
+      # writer run that had just restored (seen 2026-11-21, release run
+      # 44930746423).
       env:
         HIT: ${{ steps.writer-go.outputs.cache-hit || steps.writer-npm.outputs.cache-hit || steps.reader-go.outputs.cache-hit || steps.reader-npm.outputs.cache-hit }}
-        MATCHED: ${{ steps.writer-go.outputs.cache-matched-key || steps.writer-npm.outputs.cache-matched-key || steps.reader-go.outputs.cache-matched-key || steps.reader-npm.outputs.cache-matched-key }}
+        MATCHED: ${{ steps.reader-go.outputs.cache-matched-key || steps.reader-npm.outputs.cache-matched-key }}
         KEY: ${{ inputs.key }}
         WRITES: ${{ (runner.environment == 'github-hosted' || steps.layout.outputs.ok == 'true') && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && inputs.save != 'false' }}
         LAYOUT: ${{ runner.environment == 'github-hosted' || steps.layout.outputs.ok == 'true' }}
       run: |
         if [ "$LAYOUT" != "true" ]; then
           echo "cache: SKIPPED for key '$KEY': an entry's ~/ paths would not extract into this runner's HOME (see main-write-cache)"
+        elif [ "$HIT" = "true" ]; then
+          echo "cache: exact hit for key '$KEY'; this run writes: $WRITES (a no-op save: the key exists)"
         elif [ -n "$MATCHED" ]; then
-          echo "cache: restored '$MATCHED' (exact hit: ${HIT:-false}) for key '$KEY'; this run writes: $WRITES"
+          echo "cache: restored '$MATCHED' from a restore-keys prefix for key '$KEY'; this run writes: $WRITES"
+        elif [ "$HIT" = "false" ]; then
+          echo "cache: restored from a restore-keys prefix for key '$KEY' (the writer does not expose which; see its log line 'Cache restored from key'); this run writes: $WRITES"
         else
           echo "cache: MISS for key '$KEY'; this run writes: $WRITES"
         fi
