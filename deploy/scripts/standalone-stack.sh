@@ -893,22 +893,48 @@ EOF
   fi
 }
 
+# rewrite_mount <string> <mount, e.g. /m> <host dir>: sets REPLY to <string>
+# with every path that STARTS with <mount>/ moved to <host dir>/. A path starts
+# at the beginning of the string or after whitespace, a quote, `=` or `(`, so
+# a URL or JSON body that merely contains /m/ (/api/v2/m/...) is left alone,
+# as compose leaves it. Pure bash: the host dir never passes through sed.
+rewrite_mount() {
+  local rest="$1" mount="$2/" dir="$3/" out="" pre last
+  local boundary='[[:space:]"'"'"'=(]'
+  while [[ "$rest" == *"$mount"* ]]; do
+    pre="${rest%%"$mount"*}"
+    rest="${rest#*"$mount"}"
+    last="${pre: -1}"
+    if [ -z "$pre" ] || [[ "$last" =~ $boundary ]]; then
+      out+="${pre}${dir}"
+    else
+      out+="${pre}${mount}"
+    fi
+  done
+  REPLY="${out}${rest}"
+}
 # native_probe <cert dir> <sh script>: the `postgres:18` probe container the
 # compose check runs on the stack's network with <cert dir> at /m, as a host
 # shell (the pool's openssl; the hostnames resolve through the name map).
 native_probe() {
-  sh -c "${2//\/m\//$1/}" 2>&1 || true
+  rewrite_mount "$2" /m "$1"
+  sh -c "$REPLY" 2>&1 || true
 }
 # native_run <cert dir for /m> <cert dir for /c, or -> <cmd> ARGS…: a probe
-# image's command run on the host, with the mounts it had spelled out: /m/ and
-# /c/ in any argument, and an argument that is exactly /proto (libs/proto).
+# image's command run on the host, with the mounts it had spelled out: a path
+# under /m/ or /c/ in any argument (rewrite_mount), and an argument that is
+# exactly /proto (libs/proto).
 native_run() {
   local m="$1" c="$2" a
   shift 2
   local argv=()
   for a in "$@"; do
-    a="${a//\/m\//$m/}"
-    [ "$c" = - ] || a="${a//\/c\//$c/}"
+    rewrite_mount "$a" /m "$m"
+    a="$REPLY"
+    if [ "$c" != - ]; then
+      rewrite_mount "$a" /c "$c"
+      a="$REPLY"
+    fi
     [ "$a" = /proto ] && a="${REPO_ROOT}/libs/proto"
     argv+=("$a")
   done
