@@ -10,6 +10,12 @@ import { emittedCssVars } from './reference-scan';
 
 const theme = buildEliteaTheme(DEFAULT_BRAND_PACK);
 
+describe('motion', () => {
+  it('follows the system reduced-motion setting for MUI transitions', () => {
+    expect(theme.motion.reducedMotion).toBe('system');
+  });
+});
+
 describe('CSS-variable wiring', () => {
   it('uses the el prefix and the data-attribute scheme selector', () => {
     expect(theme.cssVarPrefix).toBe(CSS_VAR_PREFIX);

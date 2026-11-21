@@ -424,6 +424,18 @@ const CHROMIUM_LAUNCH_OPTIONS = {
   args: ['--disable-web-security', '--allow-insecure-localhost', '--no-sandbox'],
 };
 
+/**
+ * The journey projects (chromium, webkit and their platform-flags siblings) run with the
+ * browser's reduced-motion preference on, which the app's theme honours for every MUI
+ * transition (`motion: { reducedMotion: 'system' }` in shared/brand/buildTheme.ts): a menu,
+ * popover or dialog is at its final place from its first paint. Without it a click could land
+ * mid-transition on the CPU-quota'd pool: Playwright's stable check passed before a menu's
+ * grow-in started, the item moved between mousedown and mouseup, and no click fired (native run
+ * 44917909298, J16: "Decision" focused, no node added). The journeys test behaviour, not motion.
+ * The visual project keeps the default preference, so its baselines are unchanged.
+ */
+const JOURNEY_MOTION = { reducedMotion: 'reduce' } as const;
+
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: true,
@@ -554,6 +566,7 @@ export default defineConfig({
       ],
       use: {
         ...devices['Desktop Chrome'],
+        ...JOURNEY_MOTION,
         storageState: STORAGE_STATE.member,
         launchOptions: CHROMIUM_LAUNCH_OPTIONS,
       },
@@ -575,6 +588,7 @@ export default defineConfig({
       ],
       use: {
         ...devices['Desktop Safari'],
+        ...JOURNEY_MOTION,
         storageState: STORAGE_STATE.member,
       },
       dependencies: ['setup', 'toolkits-empty'],
@@ -614,6 +628,7 @@ export default defineConfig({
       name: 'platform-flags',
       use: {
         ...devices['Desktop Chrome'],
+        ...JOURNEY_MOTION,
         storageState: STORAGE_STATE.member,
         launchOptions: CHROMIUM_LAUNCH_OPTIONS,
       },
@@ -627,6 +642,7 @@ export default defineConfig({
       name: 'platform-flags-webkit',
       use: {
         ...devices['Desktop Safari'],
+        ...JOURNEY_MOTION,
         storageState: STORAGE_STATE.member,
       },
       dependencies: ['setup', 'toolkits-empty'],

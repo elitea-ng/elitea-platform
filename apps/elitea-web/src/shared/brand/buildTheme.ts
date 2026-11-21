@@ -119,6 +119,11 @@ export function buildEliteaTheme(pack: BrandPack, scope?: ThemeScope, direction:
     // Density is a token, not a fork: 6 vs 8 covers the whole compact mode.
     spacing: pack.shape.density === 'compact' ? 6 : 8,
     breakpoints: { values: { ...BREAKPOINT_VALUES } },
+    // A person who asked their system for less motion gets MUI's transitions
+    // (menus growing in, dialogs fading, drawers sliding, ripples) with zero
+    // duration, the way the brand's own animations already stop under
+    // prefers-reduced-motion. MUI's default is 'never'.
+    motion: { reducedMotion: 'system' },
     components: muiOverrides(), // static; reads theme.vars only
   });
 }
