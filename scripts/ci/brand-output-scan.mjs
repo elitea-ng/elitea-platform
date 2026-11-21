@@ -149,6 +149,22 @@ export function insideContentHash(text, index, length) {
   return false;
 }
 
+/**
+ * Whether the match lies inside a CSP source hash, `'sha256-<base64>'` (sha384, sha512 too). Tauri writes the
+ * hash of every inline script and style into the host binary's CSP; it is base64 of a digest, so a four-letter
+ * term turns up in one now and then (`…QTObaePAmaA=`), and it changes with every web build. Only the base64
+ * body of a complete, quoted source expression counts.
+ */
+export function insideCspHash(text, index, length) {
+  const from = Math.max(0, index - 100);
+  const window = text.slice(from, index + length + 100);
+  for (const m of window.matchAll(/'sha(?:256|384|512)-([A-Za-z0-9+/]{20,}={0,2})'/g)) {
+    const start = from + m.index + m[0].indexOf('-') + 1;
+    if (index >= start && index + length <= start + m[1].length) return true;
+  }
+  return false;
+}
+
 const printableByte = (b) => (b >= 0x20 && b < 0x7f) || b === 0x09;
 
 /**
@@ -207,7 +223,7 @@ export function scanText(text, { file, lane, identifiers, allowed = ALLOWED, com
   const findings = [];
   for (const { kind, re } of compiled) {
     for (const m of text.matchAll(re)) {
-      if (kind === 'epam' && insideContentHash(text, m.index, m[0].length)) continue;
+      if (kind === 'epam' && (insideContentHash(text, m.index, m[0].length) || insideCspHash(text, m.index, m[0].length))) continue;
       const context = text.slice(Math.max(0, m.index - 30), m.index + m[0].length + 30).replace(/\s+/g, ' ');
       const allow = allowed.find((a) => (a.lane === '*' || a.lane === lane) && (a.re ? a.re.test(context) : context.includes(a.text)));
       if (!allow) findings.push({ file, kind, match: m[0], context });
