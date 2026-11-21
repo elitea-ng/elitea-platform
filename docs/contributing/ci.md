@@ -302,6 +302,18 @@ on a non-loopback address, which catches a bind a program hard-codes. Each servi
 from the name map, except rustfs: it refuses a bind host that is not an interface address, so it binds
 `127.0.0.1:9000` and its native clients use `http://127.0.0.1:9000` (`RUSTFS_ENDPOINT`).
 
+Nothing is published on the host's localhost either, so the host-side readers name a service by its compose
+name (the pod's hostAliases): the specs read the mock journals from `STANDALONE_MOCK_ORIGIN`,
+`STANDALONE_QTEST_ORIGIN` and `STANDALONE_ADO_ORIGIN`. The browser-origin probes in `standalone-stack.sh`
+bind the host's own non-loopback address as their source (`stack_browser_source`), so elitea-main sees a
+non-loopback peer, as through compose's port forward, and still refuses it `/readyz`.
+
+**Test timeout.** The native E2E legs set `E2E_TIMEOUT_SCALE=1.5` (`playwright.config.ts`, 1 to 3, default 1),
+which scales the per-test timeout and nothing else. The pod is a 4-CPU CFS quota on a shared 8-thread node, and a
+burst from the browser's threads throttles the whole cgroup, stack included; the WebKit pipeline-canvas journeys
+ran past their budgets there. The Playwright step prints the cgroup's throttled periods for the run, so the
+reason stays measured. Retries are the compose legs', unchanged.
+
 These jobs run only where the routing condition sends them to the pool. Where they run, `ci-web-e2e.yml`'s
 compose legs stand down on a pull request to one smoke leg, chromium 1/2. That leg runs only when the change
 reaches what only images prove: a Containerfile, a compose file, the web image's nginx or entrypoint, or the
