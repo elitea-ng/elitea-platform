@@ -155,7 +155,22 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
   request restored main's Go or npm cache for this reason. Every save and restore of one key uses the same
   literal `~/...` lines, in the same order. An expression path is not allowed.
   `scripts/ci/check-cache-path-parity.mjs` (in `No Binaries`) fails when a restore differs from its writer.
-  The Go and npm caches save on GitHub-hosted runners only, and restore wherever `../../..` of the workspace
+- **Compression parity.** The version also hashes the compression: zstd when the `zstd` binary is on `PATH`,
+  gzip otherwise. On 2026-11-21 main held the web npm key twice: a zstd entry from the hosted writers, and a
+  gzip entry saved by the Storybook job inside the Playwright image, which has no zstd. So a job that runs in
+  a job-level `container:` never saves a cache. It restores only, with `save: "false"` or
+  `actions/cache/restore`, or it runs on the host. The eng-runner image ships zstd, and `eng-runner-env`
+  checks for it. The same parity check fails when a containerised job reaches a save, directly or through
+  local actions.
+- **One npm slot per job.** `main-write-cache` lets a job use each slot once. A nested action that installs
+  `scripts/ci` dependencies, such as `code-runner-images`, calls `ci-scripts-deps` with `npm-cache: "false"`,
+  so it never claims the slot its caller has already used.
+- **Reading the cache report.** `main-write-cache` ends with one `cache:` line: exact hit, restored from a
+  prefix, or MISS. On a writer run, the full `actions/cache` reports only `cache-hit`, which is `true` on an
+  exact hit, `false` on a prefix hit and unset on a miss. It never exposes the matched key, so the report
+  says "restored from a restore-keys prefix" without naming the key. Its `Cache restored from key` log line
+  names it.
+- **Home layout.** The Go and npm caches save on a run on main (hosted or eng-runner), and save and restore only wherever `../../..` of the workspace
   is `HOME` (hosted runners and eng-runner): the tar holds paths relative to the workspace, so a runner with
   another home layout would extract them to the wrong directory.
 - **macOS package.** `desktop-package` (heavy tier) runs on a pull request only when `apps/elitea-desktop/**`,

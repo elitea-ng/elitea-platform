@@ -196,3 +196,50 @@ test("directoryOf reads every home spelling as one directory", () => {
   }
   assert.equal(checker.directoryOf(".buildkit-mounts"), ".buildkit-mounts");
 });
+
+/** A workflow whose one job runs in a container with these steps. */
+const containerWorkflow = (steps) => `on: schedule\njobs:\n  sb:\n    runs-on: ubuntu-latest\n    container:\n      image: mcr.microsoft.com/playwright:v1.62.1-noble\n    steps:\n${steps.replace(/^(?=.*\S)/gm, "      ")}`;
+
+/** A main-write-cache-shaped composite with a `save` input (its writer's gate is left out: the rule reads the declared input, not the `if:`). */
+const gatedAction = `inputs:\n  key: {required: true}\n  save: {required: false, default: "true"}\nruns:\n  using: composite\n  steps:\n  - id: writer\n    uses: actions/cache@v6\n    with:\n      path: ~/.npm\n      key: \${{ inputs.key }}\n  - id: reader\n    uses: actions/cache/restore@v6\n    with:\n      path: ~/.npm\n      key: \${{ inputs.key }}\n`;
+/** npm-cache-shaped: a wrapper with no `save` input around the gated action. */
+const wrapper = `inputs:\n  lock: {required: true}\nruns:\n  using: composite\n  steps:\n  - uses: ./.github/actions/gated\n    with:\n      key: node-cache-x\n`;
+
+test("a containerised job that saves through local actions is refused (the gzip Storybook writer of 2026-11-21)", () => {
+  const errors = errorsOf({
+    ".github/actions/gated/action.yml": gatedAction,
+    ".github/actions/npm/action.yml": wrapper,
+    ".github/workflows/web.yml": containerWorkflow("- uses: ./.github/actions/npm\n  with: {lock: package-lock.json}\n"),
+  });
+  assert.equal(errors.length, 1, errors.join("\n"));
+  assert.match(errors[0], /web\.yml \[sb\]: runs in a job `container:` and saves a cache \(\.github\/actions\/npm\/action\.yml → \.github\/actions\/gated\/action\.yml → 'writer'\)/);
+});
+
+test("a containerised job with a direct actions/cache save is refused", () => {
+  const errors = errorsOf({ ".github/workflows/web.yml": containerWorkflow(save("node-cache-a", "~/.npm")) });
+  assert.equal(errors.length, 1, errors.join("\n"));
+  assert.match(errors[0], /container/);
+});
+
+test("a containerised job that restores only, or passes save: \"false\" to an action that declares it, passes", () => {
+  assert.deepEqual(
+    errorsOf({
+      ".github/actions/gated/action.yml": gatedAction,
+      ".github/workflows/web.yml": containerWorkflow(`- uses: ./.github/actions/gated\n  with: {key: node-cache-x, save: "false"}\n${restore("node-cache-x", "~/.npm")}`),
+    }),
+    [],
+  );
+});
+
+test("save: \"false\" to an action that declares no save input is not trusted", () => {
+  const errors = errorsOf({
+    ".github/actions/gated/action.yml": gatedAction,
+    ".github/actions/npm/action.yml": wrapper,
+    ".github/workflows/web.yml": containerWorkflow(`- uses: ./.github/actions/npm\n  with: {lock: package-lock.json, save: "false"}\n`),
+  });
+  assert.equal(errors.length, 1, errors.join("\n"));
+});
+
+test("the same saving job on the host passes", () => {
+  assert.deepEqual(errorsOf({ ".github/workflows/web.yml": workflow(save("node-cache-a", "~/.npm")) }), []);
+});

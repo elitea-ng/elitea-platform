@@ -9,6 +9,16 @@ description: >-
 # Why the runner's node and no setup-node (owner decision 2026-10-20): the CI
 # scripts are native to GitHub Actions. They are written for Node 20 and need
 # nothing newer.
+inputs:
+  npm-cache:
+    description: >-
+      'false' installs without the shared npm cache. For a caller that cannot
+      know whether its job has already used main-write-cache's npm slot, which
+      allows one use per job (a second use fails the job): a nested action
+      such as .github/actions/code-runner-images. The dependency is one small
+      package, so the cold fetch costs seconds.
+    required: false
+    default: "true"
 runs:
   using: composite
   steps:
@@ -16,10 +26,17 @@ runs:
       shell: bash
       run: echo "node $(node --version), npm $(npm --version)"
     - name: Restore the npm cache (save on a run on main)
+      if: inputs.npm-cache != 'false'
       uses: ./.github/actions/npm-cache
       with:
         cache-dependency-path: scripts/ci/package-lock.json
         prefix-fallback: "false"
     - name: Install scripts/ci dependencies
       shell: bash
+      env:
+        # npm-cache sets these through GITHUB_ENV; without it, the same
+        # retries keep one registry reset from failing the install.
+        NPM_CONFIG_FETCH_RETRIES: ${{ env.NPM_CONFIG_FETCH_RETRIES || '6' }}
+        NPM_CONFIG_FETCH_RETRY_MINTIMEOUT: ${{ env.NPM_CONFIG_FETCH_RETRY_MINTIMEOUT || '20000' }}
+        NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: ${{ env.NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT || '120000' }}
       run: npm ci --prefix "${GITHUB_WORKSPACE}/scripts/ci" --no-audit --no-fund --ignore-scripts

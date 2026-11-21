@@ -82,6 +82,10 @@ runs:
     - name: Install the content-address script's one dependency
       if: inputs.registry == 'true'
       uses: ./.github/actions/ci-scripts-deps
+      with:
+        # The caller's job may already use the npm cache slot (code-sandbox
+        # restores the web app's), and a second use fails the job.
+        npm-cache: "false"
     - uses: docker/login-action@v4
       if: inputs.registry == 'true'
       with:
