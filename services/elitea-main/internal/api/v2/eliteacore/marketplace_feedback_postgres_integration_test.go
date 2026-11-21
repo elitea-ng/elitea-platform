@@ -734,3 +734,38 @@ UPDATE elitea_marketplace.installs SET created_at = clock_timestamp() - interval
 		t.Errorf("%d signal rows older than the retention remain", n)
 	}
 }
+
+// TestReconcileDismissesHiresWhoseEntityIsGone (#2089): a skill delete, the
+// workforce ladder, a catalogue-twin delete, the undo of an automatic hire and
+// a project delete do not call MarkDismissed, so the daily pass dismisses every
+// hire whose agent or skill no longer exists in its project, and leaves a live
+// one and a fresh one alone.
+func TestReconcileDismissesHiresWhoseEntityIsGone(t *testing.T) {
+	f := newFeedbackFixture(t)
+	ctx := context.Background()
+	live := f.workforceManager(3, "Still Hired", false)
+	f.hire(3, live, f.v1)  // the agent exists
+	f.hire(4, 9001, f.v1)  // the agent was removed by a path that does not record it
+	f.hire(5, 9002, f.v1)  // removed, but hired a minute ago: left for the next pass
+	f.hire(99, 9003, f.v1) // the project and its schema are gone
+	if _, err := f.pool.Exec(ctx, `
+UPDATE elitea_marketplace.installs SET created_at = clock_timestamp() - interval '2 days' WHERE entity_id IN ($1, 9001, 9003)`, live); err != nil {
+		t.Fatal(err)
+	}
+	dismissed := func(entity int64) bool {
+		return f.countRows(`SELECT count(*) FROM elitea_marketplace.installs WHERE entity_id = $1 AND dismissed_at IS NOT NULL`, entity) == 1
+	}
+	if n, err := marketplace.ReconcileDismissals(ctx, f.pool); err != nil || n != 2 {
+		t.Fatalf("reconcile = %d (%v), want 2 (the removed agent and the deleted project)", n, err)
+	}
+	if dismissed(live) || !dismissed(9001) || !dismissed(9003) || dismissed(9002) {
+		t.Fatalf("dismissed: live %v, removed %v, project gone %v, fresh %v", dismissed(live), dismissed(9001), dismissed(9003), dismissed(9002))
+	}
+	// A second pass changes nothing.
+	if n, err := marketplace.ReconcileDismissals(ctx, f.pool); err != nil || n != 0 {
+		t.Fatalf("second reconcile = %d (%v), want 0", n, err)
+	}
+	if n := f.countRows(`SELECT count(*) FROM elitea_marketplace.installs WHERE entity_id = 9001 AND dismissed_by IS NULL`); n != 1 {
+		t.Errorf("a reconciled hire records no actor, got %d rows", n)
+	}
+}

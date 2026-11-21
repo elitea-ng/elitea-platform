@@ -745,6 +745,7 @@ describe('Use in a chat and Add to a conversation on a skill listing (A1.4)', ()
       http.get('/api/v2/elitea_core/conversations/prompt_lib/:projectId', () =>
         HttpResponse.json({ rows: [{ id: 31, name: 'Release chat' }, { id: 32, name: 'Standup' }], total: 2 }),
       ),
+      http.get('/api/v2/elitea_core/conversation_skills/prompt_lib/:projectId/:conversationId', () => HttpResponse.json({ rows: [], total: 0 })),
       http.post('/api/v2/elitea_core/conversation_skills/prompt_lib/:projectId/:conversationId', async ({ request, params }) => {
         calls.push({ url: `pin:${String(params['conversationId'])}`, body: await request.json() });
         return HttpResponse.json({}, { status: 201 });
@@ -840,6 +841,22 @@ describe('Use in a chat and Add to a conversation on a skill listing (A1.4)', ()
     await pickConversation('Standup', 'Use');
 
     expect(await screen.findByTestId('skill-to-chat-error')).toHaveTextContent('at most five skills');
+  });
+
+  it('checks the conversation before forking, so a full one leaves no copy behind (#2294)', async () => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    const { calls } = mockSkillListing();
+    const pins = [1, 2, 3, 4, 5].map((id) => ({ id, skill_id: id }));
+    server.use(
+      http.get('/api/v2/elitea_core/conversation_skills/prompt_lib/:projectId/:conversationId', () => HttpResponse.json({ rows: pins, total: 5 })),
+    );
+    mount('/marketplace/skills/7');
+
+    await userEvent.setup().click(await screen.findByTestId('marketplace-add-skill-to-chat'));
+    await pickConversation('Release chat', 'Add');
+
+    expect(await screen.findByTestId('skill-to-chat-error')).toHaveTextContent('at most five skills');
+    expect(calls).toEqual([]);
   });
 
   it('keeps Add to a conversation off without the fork permission, and Use in a chat on', async () => {

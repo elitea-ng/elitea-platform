@@ -158,12 +158,18 @@ export async function settleDelegation({ projectId, applicationId, calleeId, ite
   }
 }
 
-/** The grants of the agent's edges, for the row status. Only read while the agent holds an agent or pipeline tool. */
-export function useAgentDelegationGrants(projectId: string | undefined, applicationId: number | undefined, enabled: boolean): readonly DelegationGrant[] {
-  const query = useListDelegationGrants(projectId ?? '', applicationId ?? 0, undefined, {
-    query: { enabled: enabled && projectId !== undefined && applicationId !== undefined, retry: false },
-  });
-  return (query.data as { data?: { grants?: readonly DelegationGrant[] } } | undefined)?.data?.grants ?? [];
+/** The grants of the agent's edges, for the row status, and whether the read has settled (an answer or a refusal). Only read while the agent holds an agent or pipeline tool. */
+export function useAgentDelegationGrants(
+  projectId: string | undefined,
+  applicationId: number | undefined,
+  enabled: boolean,
+): { readonly grants: readonly DelegationGrant[]; readonly settled: boolean } {
+  const reading = enabled && projectId !== undefined && applicationId !== undefined;
+  const query = useListDelegationGrants(projectId ?? '', applicationId ?? 0, undefined, { query: { enabled: reading, retry: false } });
+  const grants = (query.data as { data?: { grants?: readonly DelegationGrant[] } } | undefined)?.data?.grants ?? [];
+  // Settled once the grants were read; with nothing to read (no agent or pipeline tool) once the project is known.
+  const known = projectId !== undefined && applicationId !== undefined;
+  return { grants, settled: known && (!enabled || query.isSuccess) };
 }
 
 export function invalidateDelegationGrants(queryClient: QueryClient, projectId: string, applicationId: number): Promise<void> {

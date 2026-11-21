@@ -101,8 +101,8 @@ func (fakeChanges) DelegationChangeForGrant(context.Context, int64, int64) (agen
 
 type fakeAccess struct{ toolkits, credentials bool }
 
-func (a fakeAccess) HoldsToolkit(string) bool    { return a.toolkits }
-func (a fakeAccess) HoldsCredential(string) bool { return a.credentials }
+func (a fakeAccess) HoldsToolkit(string) bool            { return a.toolkits }
+func (a fakeAccess) HoldsCredential(string, string) bool { return a.credentials }
 
 type fakeResolver struct{ access dg.Access }
 
