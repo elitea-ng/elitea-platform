@@ -33,7 +33,7 @@ func TestTokenCreateNameLimit(t *testing.T) {
 				},
 			}
 			payload, _ := json.Marshal(map[string]any{"name": tc.value})
-			req := authenticatedTokenRequest(http.MethodPost, "/token/", string(payload))
+			req := browserSessionTokenRequest("/token/", string(payload))
 			rec := httptest.NewRecorder()
 			handler.Routes().ServeHTTP(rec, req)
 			if tc.want == http.StatusBadRequest {

@@ -399,8 +399,12 @@ executable; a build without it reads text files only.
 `.github/workflows/desktop-package.yml` (ADR-0052 W2b) builds the app for device
 management:
 
-- **macOS:** a **universal** (Apple silicon + Intel) app, signed with the
+- **macOS:** an **Apple silicon** (arm64) app, signed with the
   brand owner's Developer ID and the hardened runtime, notarised and stapled.
+  Intel Macs are not supported: the package's distribution names `arm64` as its
+  only host architecture, so the installer refuses an Intel Mac. A pull request
+  that changes the app runs an unsigned debug dry run of the package; the
+  nightly pre-release and every release run the signed release build.
   It ships in a `.pkg` (`scripts/macos-pkg.sh`) that installs into
   `/Applications` with no UI, signed with the Developer ID Installer identity,
   notarised and stapled. The workflow verifies both with `codesign`,

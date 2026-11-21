@@ -42,6 +42,16 @@ func (r *PostgresRepository) Provision(
 	if r == nil || r.pool == nil {
 		return identity.ProvisionResult{}, errors.New("identityrepo: PostgreSQL pool is unavailable")
 	}
+	// This plane matches a link by its reference ALONE. That is sound only
+	// for the references it owns: the bare login of a Form user, configured by
+	// an operator. A federated link (`oidc:`, `saml:`) is bound to a provider
+	// and issuer (issue 2558, shared migration 0258) and resolves only through
+	// resolveProvisionedUserFor in api/v2/auth, which checks that binding. So
+	// this plane refuses to read or write one, and can never become a second,
+	// unbound way to sign in to a federated account.
+	if IsFederatedProviderRef(command.ProviderReference) {
+		return identity.ProvisionResult{}, identity.ErrIdentityConflict
+	}
 
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {

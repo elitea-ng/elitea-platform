@@ -40,12 +40,9 @@ jobs:
         run: |
           bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
 
-      - name: Cache cargo registry and build artefacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          cache-targets: false  # registry and git only: the 10 GB cap (scripts/ci/check-cache-budget.mjs)
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          workspaces: services/elitea-code-runner
+      # No cargo cache here (scripts/ci/cache-budget.json, measured 2026-11-20): a
+      # registry-only entry is 0.3-0.6 GiB of the 10 GB cap and saves about the
+      # time cargo takes to fetch the crates. The budget goes to target caches.
 
       # Formatting and Clippy for this crate run in ci-rust-lint.yml (fast
       # tier), so they fail in minutes and before this job's build.
@@ -89,33 +86,9 @@ jobs:
             || echo "::warning::could not remove every preinstalled toolchain; continuing"
           df -h / | tail -1
 
-      # Both jobs below used to do a COLD build of the whole 418-crate
-      # dependency graph on every Rust PR — twice per PR, once here and once in
-      # the other job, with nothing carried between runs. Nothing in this
-      # workflow cached ~/.cargo or target/.
-      #
-      # `workspaces` is repo-relative (the `defaults.run.working-directory`
-      # above applies to `run:` steps, not to `uses:`), and points at the
-      # Cargo.toml this workflow builds.
-      #
-      # CARGO_INCREMENTAL=0 above stays. rust-cache is designed for CI with
-      # incremental off — it caches the registry, the git checkouts and the
-      # dependency artefacts in target/, none of which are incremental state —
-      # and it deliberately does not cache the workspace crates themselves.
-      #
-      # `quality` keeps its own entry (rust-cache keys on the job id when no
-      # shared-key is set): it builds --release and docs, `test` builds test
-      # targets, and one shared entry would thrash between them. `test`
-      # shares its entry with `workspace-run-docker` (shared-key
-      # worker-rust-test), which builds the same test profile.
-      - name: Cache cargo registry and build artefacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          cache-targets: false  # registry and git only: the 10 GB cap (scripts/ci/check-cache-budget.mjs)
-          # Read everywhere, write on main only: a pull request's target directory
-          # is ~1 GB of the repository's 10 GB Actions cache, duplicated per branch.
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          workspaces: services/elitea-worker-rust
+      # No cargo cache here (scripts/ci/cache-budget.json, measured 2026-11-20): a
+      # registry-only entry is 0.3-0.6 GiB of the 10 GB cap and saves about the
+      # time cargo takes to fetch the crates. The budget goes to target caches.
 
       # Formatting and Clippy for this crate run in ci-rust-lint.yml (fast
       # tier), so they fail in minutes and before this job's build.
@@ -174,10 +147,12 @@ jobs:
             || echo "::warning::could not remove every preinstalled toolchain; continuing"
           df -h / | tail -1
 
-      # Both jobs below used to do a COLD build of the whole 418-crate
-      # dependency graph on every Rust PR — twice per PR, once here and once in
-      # the other job, with nothing carried between runs. Nothing in this
-      # workflow cached ~/.cargo or target/.
+      # The worker's target cache: the 418-crate dependency graph in target/,
+      # one of the three Rust target caches (with the macOS desktop host and
+      # the package dry run that reads it; scripts/ci/check-cache-budget.mjs).
+      # This job is its one writer. `quality` and the other Rust jobs have no
+      # cargo cache: a registry-only entry is 0.3-0.6 GiB of the cap for the
+      # seconds cargo takes to fetch the crates.
       #
       # `workspaces` is repo-relative (the `defaults.run.working-directory`
       # above applies to `run:` steps, not to `uses:`), and points at the
@@ -187,12 +162,6 @@ jobs:
       # incremental off — it caches the registry, the git checkouts and the
       # dependency artefacts in target/, none of which are incremental state —
       # and it deliberately does not cache the workspace crates themselves.
-      #
-      # `quality` keeps its own entry (rust-cache keys on the job id when no
-      # shared-key is set): it builds --release and docs, `test` builds test
-      # targets, and one shared entry would thrash between them. `test`
-      # shares its entry with `workspace-run-docker` (shared-key
-      # worker-rust-test), which builds the same test profile.
       #
       # `test` and `workspace-run-docker` build the same `--all-features` test
       # profile: measured 2026-10-20 each saved an entry of exactly
@@ -226,9 +195,11 @@ jobs:
           # saves from every ref, and pull-request copies evicted main's.
           cache: false
           go-version-file: go.work
-      - name: Restore the Go cache (pull requests read, main writes)
+      - name: Restore the Go cache (read only, one writer per key)
         uses: ./.github/actions/go-cache
         with:
+          # Restores only: one writer per key (scripts/ci/check-cache-budget.mjs).
+          save: "false"
           cache-dependency-path: |
             services/elitea-main/go.sum
             libs/go/*/go.sum

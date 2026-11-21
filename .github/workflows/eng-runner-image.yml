@@ -1,0 +1,476 @@
+name: eng-runner image
+
+# Builds the runner image of the org self-hosted pool `eng-runner`
+# (deploy/ci-runners/image/Containerfile), smoke-tests it as the runner user,
+# and publishes it to ghcr.io/elitea-ng/eng-runner.
+#
+# HOSTED ONLY. Every job here is on ubuntu-latest: the pool cannot build images
+# (no daemon, no root, no in-cluster BuildKit), and the image it would build is
+# the image it runs on.
+#
+# WHEN.
+#   pull_request   a change to the image or this file: build and smoke, no push.
+#   schedule       weekly. The base is pinned by digest, so this is how Ubuntu
+#                  security updates (`apt-get upgrade` in the Containerfile)
+#                  reach the pool, and how a new runner release is noticed
+#                  (the `runner-pin` job fails when the pin is behind).
+#   workflow_dispatch  from main: the first publish, or a rebuild on demand.
+# No `push:` trigger (scripts/ci/check-no-push-triggers.mjs). It keeps its own
+# pull_request trigger, outside ci.yml's tiers, the way mirror-buildkit.yml
+# does: it starts only on its own paths and gates nothing
+# (scripts/ci/check-tiering.mjs OWN_PR_TRIGGER).
+#
+# WHAT IS PUBLISHED is the image the smoke step ran, not a rebuild: `build`
+# saves it as an artifact and `publish` copies that archive to the registry,
+# then checks the pushed config digest is the smoke-tested image ID.
+# Tags: `<runner-version>-<UTC date>` (never overwritten: a second build the
+# same day gets `.<run number>`; the owner pins a dated tag in the scale-set
+# values) and `<runner-version>` (moves weekly, only after the dated push).
+# No layer cache is read or written: every build is fresh, so the weekly
+# rebuild really does pick up new packages.
+
+on:
+  pull_request:
+    paths:
+      - "deploy/ci-runners/image/**"
+      - ".github/workflows/eng-runner-image.yml"
+  schedule:
+    # Mondays 05:17 UTC.
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: eng-runner-image-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/elitea-ng/eng-runner
+  CONTAINERFILE: deploy/ci-runners/image/Containerfile
+
+jobs:
+  build:
+    name: Build and smoke-test
+    runs-on: ubuntu-latest
+    # About 6 minutes with the service binaries and the browsers (measured on
+    # the PR that added them; the image is ~1.7 GB compressed).
+    timeout-minutes: 30
+    outputs:
+      runner-version: ${{ steps.meta.outputs.runner-version }}
+      image-id: ${{ steps.save.outputs.image-id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read the runner version from the Containerfile
+        id: meta
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^ARG RUNNER_VERSION=\([0-9][0-9.]*\)$/\1/p' "$CONTAINERFILE")"
+          if [ -z "$version" ]; then
+            echo "::error file=${CONTAINERFILE}::no 'ARG RUNNER_VERSION=<x.y.z>' line"
+            exit 1
+          fi
+          echo "runner-version=${version}" >> "$GITHUB_OUTPUT"
+
+      # Before the long build: the baked browsers must be the release
+      # apps/elitea-web's @playwright/test drives (ci-web runs the same check
+      # when the library moves).
+      - name: The baked Playwright is the web app's
+        run: node apps/elitea-web/scripts/check-playwright-image-tag.mjs
+
+      - name: Free runner disk for the image
+        # The image is built in the BuildKit container, loaded into the
+        # daemon and saved to a tarball: three copies of a multi-GB image. Bounded and
+        # NON-FATAL, as in ci-rust.yml: a refused rm only warns, and the
+        # build then fails honestly on ENOSPC.
+        run: |
+          df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/share/boost /opt/hostedtoolcache/CodeQL \
+            || echo "::warning::could not remove every preinstalled toolchain; continuing"
+          df -h / | tail -1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          # The builder image from the org's own mirror (mirror-buildkit.yml), by
+          # digest: no anonymous Docker Hub pull.
+          driver-opts: image=ghcr.io/elitea-ng/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+
+      - name: Build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: deploy/ci-runners/image
+          file: ${{ env.CONTAINERFILE }}
+          platforms: linux/amd64
+          pull: true
+          no-cache: true
+          load: true
+          push: false
+          provenance: false
+          tags: ${{ env.IMAGE }}:${{ steps.meta.outputs.runner-version }}
+
+      - name: Smoke-test inside the image, as the runner user
+        env:
+          REF: ${{ env.IMAGE }}:${{ steps.meta.outputs.runner-version }}
+        run: |
+          set -euo pipefail
+          # Nothing may be baked under /home/runner/_work: on the pool it is a
+          # mounted volume, so anything there would be hidden by the mount.
+          docker run --rm --entrypoint /bin/bash "$REF" -c \
+            'test -z "$(ls -A /home/runner/_work 2>/dev/null)" && echo "_work is not baked into the image"'
+
+          # The rest runs with an empty, runner-owned _work mounted, the way
+          # the pool mounts its volume. The first command stands in for the
+          # runner, which creates its temp dir (TMPDIR) before the first step;
+          # every other directory must be created by the tool that uses it.
+          docker run --rm --entrypoint /bin/bash \
+            --tmpfs /home/runner/_work:rw,exec,uid=1001,gid=1001,size=2g \
+            "$REF" -euo pipefail -c '
+            test "$(id -un)" = runner
+            test -z "$(ls -A /home/runner/_work)"
+            mkdir -p "$TMPDIR"
+
+            for var in RUNNER_TOOL_CACHE AGENT_TOOLSDIRECTORY TMPDIR XDG_CACHE_HOME GOMODCACHE GOCACHE CARGO_HOME RUSTUP_HOME npm_config_cache PIP_CACHE_DIR; do
+              dir="${!var}"
+              case "$dir" in
+                /home/runner/_work/*) ;;
+                *) echo "$var=$dir is outside /home/runner/_work (1Gi root fs limit on the pool)" >&2; exit 1 ;;
+              esac
+              mkdir -p "$dir" && touch "$dir/.smoke" && rm "$dir/.smoke"
+              echo "$var=$dir writable"
+            done
+            test "$RUNNER_TOOL_CACHE" = "$AGENT_TOOLSDIRECTORY"
+            mkdir -p "$RUNNER_TOOL_CACHE/smoke/1.0.0/x64"
+            touch "$RUNNER_TOOL_CACHE/smoke/1.0.0/x64.complete"
+            rm -rf "$RUNNER_TOOL_CACHE/smoke"
+            touch "$HOME/.smoke" && rm "$HOME/.smoke"
+
+            cc --version
+            c++ --version
+            cmake --version
+            pkg-config --version
+            zstd --version
+            python3 -m venv "$TMPDIR/v" && "$TMPDIR/v/bin/python" -c "import sys; print(sys.prefix)"
+            "$TMPDIR/v/bin/pip" --version
+            test "$("$TMPDIR/v/bin/pip" cache dir)" = "$PIP_CACHE_DIR"
+            pip --version
+            python3 -c "import yaml; print(\"pyyaml\", yaml.__version__)"
+            shellcheck --version
+            gh --version
+            helm version
+            yq --version
+            skopeo --version
+            unzip -v >/dev/null && echo "unzip ok"
+            xz --version
+            test -s /etc/ssl/certs/ca-certificates.crt && echo "ca-certificates ok"
+
+            # mktemp honours TMPDIR, so this also proves temp files land on _work.
+            work="$(mktemp -d)"
+            case "$work" in /home/runner/_work/*) ;; *) echo "mktemp went to $work" >&2; exit 1 ;; esac
+            cd "$work"
+            printf "#include <stdio.h>\nint main(void){puts(\"cc ok\");return 0;}\n" > t.c
+            cc -O2 -o t t.c && ./t
+            printf "#include <iostream>\nint main(){std::cout<<\"c++ ok\"<<std::endl;}\n" > t.cpp
+            c++ -o tpp t.cpp && ./tpp
+
+            # Not in the image: a container engine (the pool cannot run one)
+            # or a toolchain (the setup actions bring those). `!` would not
+            # trip errexit, hence the explicit loop.
+            for absent in dockerd containerd podman go cargo rustc node; do
+              if command -v "$absent" >/dev/null; then
+                echo "unexpected in the image: $absent at $(command -v "$absent")" >&2
+                exit 1
+              fi
+            done
+            docker --version
+            echo "smoke ok"
+          '
+          docker image inspect "$REF" --format 'size: {{.Size}} bytes, user: {{.Config.User}}' | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # The service binaries and the browsers, as the runner user (uid 1001)
+      # from an empty _work, the way a job on the pool runs them: no root, no
+      # IPC_LOCK, data and sockets under _work. Every binary prints its
+      # version; the servers a services job starts are also started, probed
+      # for health and stopped. The browsers are launched for real with the
+      # host's node and the pinned playwright-core mounted OUTSIDE PATH (the
+      # image ships no node).
+      - name: Smoke-test the service binaries and browsers, as the runner user
+        env:
+          REF: ${{ env.IMAGE }}:${{ steps.meta.outputs.runner-version }}
+        run: |
+          set -euo pipefail
+          smoke="${RUNNER_TEMP}/smoke"
+          mkdir -p "$smoke"
+          version="$(sed -n 's/^ARG PLAYWRIGHT_VERSION=\([0-9][0-9.]*\)$/\1/p' "$CONTAINERFILE")"
+          test -n "$version"
+          # npm checks the tarball against the registry's integrity.
+          (cd "$smoke" && npm pack --silent "playwright-core@${version}" >/dev/null && tar -xzf "playwright-core-${version}.tgz")
+          cp "$(readlink -f "$(command -v node)")" "$smoke/node"
+          cat > "$smoke/browsers.cjs" <<'JS'
+          const pw = require('/opt/smoke/package');
+          (async () => {
+            for (const [name, opts] of [['chromium', {}], ['chromium', { channel: 'chromium' }], ['webkit', {}]]) {
+              const browser = await pw[name].launch(opts);
+              const page = await browser.newPage();
+              await page.setContent('<p>ok</p>');
+              const text = await page.textContent('p');
+              if (text !== 'ok') throw new Error(`${name} rendered ${text}`);
+              console.log(`${name}${opts.channel ? ' (' + opts.channel + ')' : ''} ${browser.version()} ok`);
+              await browser.close();
+            }
+          })().catch((err) => { console.error(err); process.exit(1); });
+          JS
+
+          docker run --rm --entrypoint /bin/bash \
+            --tmpfs /home/runner/_work:rw,exec,uid=1001,gid=1001,size=2g \
+            --shm-size=2g \
+            -v "$smoke:/opt/smoke:ro" \
+            "$REF" -euo pipefail -c '
+            test "$(id -u)" = 1001
+            mkdir -p "$TMPDIR"
+            wait_for() {
+              for _ in $(seq 1 150); do
+                if "$@" >/dev/null 2>&1; then return 0; fi
+                sleep 0.2
+              done
+              echo "never ready: $*" >&2
+              return 1
+            }
+
+            # PostgreSQL 18: a cluster of our own under _work, over TCP and the
+            # socket, then stopped.
+            for b in postgres initdb pg_ctl pg_isready psql pgbouncer; do "$b" --version; done
+            postgres --version | grep -q "(PostgreSQL) 18\."
+            pg="$TMPDIR/pg"; mkdir -p "$pg"
+            echo smoke > "$TMPDIR/pgpw"
+            # The locale of the postgres image. LANG is unset, so a cluster
+            # gets it only when initdb names it, as here.
+            initdb -D "$pg/data" -U elitea --pwfile="$TMPDIR/pgpw" -A scram-sha-256 \
+              --encoding=UTF8 --locale=en_US.UTF-8 >/dev/null
+            pg_ctl -D "$pg/data" -l "$pg/log" -w \
+              -o "-c listen_addresses=127.0.0.1 -c port=55432 -c unix_socket_directories=$pg -c fsync=off" start
+            pg_isready -h 127.0.0.1 -p 55432
+            PGPASSWORD=smoke psql -h 127.0.0.1 -p 55432 -U elitea -d postgres -tAc "select version()"
+            PGPASSWORD=smoke psql -h "$pg" -p 55432 -U elitea -d postgres -tAc "select 1" | grep -qx 1
+            # glibc en_US sorts a before B; C sorts by byte, B (66) before a (97).
+            collation="$(PGPASSWORD=smoke psql -h 127.0.0.1 -p 55432 -U elitea -d postgres -tAc \
+              "select datcollate, chr(97) < chr(66) from pg_database where datname = current_database()")"
+            test "$collation" = "en_US.UTF-8|t"
+            echo "collation ${collation} ok"
+            pg_ctl -D "$pg/data" -m fast -w stop
+
+            # NATS with JetStream, and the CLI against it.
+            nats-server --version
+            nats --version
+            nats-server -js -sd "$TMPDIR/nats" -a 127.0.0.1 -p 54222 -m 58222 > "$TMPDIR/nats.log" 2>&1 &
+            nats_pid=$!
+            wait_for curl -fsS "http://127.0.0.1:58222/healthz?js-enabled-only=true"
+            nats --server nats://127.0.0.1:54222 account info >/dev/null
+            kill "$nats_pid"; wait "$nats_pid" || true
+
+            # Qdrant, storage under _work.
+            qdrant --version
+            mkdir -p "$TMPDIR/qdrant"
+            (cd "$TMPDIR/qdrant" && \
+              QDRANT__SERVICE__HOST=127.0.0.1 QDRANT__SERVICE__HTTP_PORT=56333 QDRANT__SERVICE__GRPC_PORT=56334 \
+              QDRANT__STORAGE__STORAGE_PATH="$TMPDIR/qdrant/storage" QDRANT__STORAGE__SNAPSHOTS_PATH="$TMPDIR/qdrant/snapshots" \
+              QDRANT__TELEMETRY_DISABLED=true exec qdrant > "$TMPDIR/qdrant.log" 2>&1) &
+            qdrant_pid=$!
+            wait_for curl -fsS http://127.0.0.1:56333/readyz
+            kill "$qdrant_pid"; wait "$qdrant_pid" || true
+
+            # OpenBao dev server without IPC_LOCK (the pool has no capabilities).
+            bao version
+            bao server -dev -dev-listen-address=127.0.0.1:58200 -dev-root-token-id=smoke > "$TMPDIR/bao.log" 2>&1 &
+            bao_pid=$!
+            BAO_ADDR=http://127.0.0.1:58200 wait_for bao status
+            kill "$bao_pid"; wait "$bao_pid" || true
+
+            # The storage emulators and the OIDC mock.
+            rustfs --version
+            rc --version
+            fake-gcs-server -scheme http -host 127.0.0.1 -port 54443 -backend memory > "$TMPDIR/gcs.log" 2>&1 &
+            gcs_pid=$!
+            wait_for curl -fsS http://127.0.0.1:54443/storage/v1/b
+            kill "$gcs_pid"; wait "$gcs_pid" || true
+            oidc-provider-mock --help >/dev/null
+            oidc-provider-mock --host 127.0.0.1 --port 59400 > "$TMPDIR/oidc.log" 2>&1 &
+            oidc_pid=$!
+            wait_for curl -fsS http://127.0.0.1:59400/.well-known/openid-configuration
+            kill "$oidc_pid"; wait "$oidc_pid" || true
+
+            # nginx as non-root, with every path in a prefix of its own.
+            nginx -v
+            ng="$TMPDIR/nginx"; mkdir -p "$ng"
+            printf "pid %s/nginx.pid;\nerror_log %s/error.log;\nevents {}\nhttp { access_log off; client_body_temp_path %s; proxy_temp_path %s; fastcgi_temp_path %s; uwsgi_temp_path %s; scgi_temp_path %s; server { listen 127.0.0.1:58080; location / { return 200 ok; } } }\n" \
+              "$ng" "$ng" "$ng" "$ng" "$ng" "$ng" "$ng" > "$ng/nginx.conf"
+            nginx -p "$ng" -e "$ng/error.log" -c "$ng/nginx.conf" -t
+            nginx -p "$ng" -e "$ng/error.log" -c "$ng/nginx.conf"
+            wait_for curl -fsS http://127.0.0.1:58080/
+            nginx -p "$ng" -e "$ng/error.log" -c "$ng/nginx.conf" -s stop
+
+            # The Tauri host-test build libraries.
+            pkg-config --modversion webkit2gtk-4.1 gtk+-3.0 libsoup-3.0 ayatana-appindicator3-0.1 librsvg-2.0 openssl
+            test -e /usr/include/xdo.h
+            echo "libxdo ok"
+
+            # The baked browsers: read-only to the runner, and they launch.
+            test "$PLAYWRIGHT_BROWSERS_PATH" = /ms-playwright
+            if touch /ms-playwright/.smoke 2>/dev/null; then echo "/ms-playwright is writable by the runner" >&2; exit 1; fi
+            if ls -d /ms-playwright/firefox-* 2>/dev/null; then echo "firefox is baked in" >&2; exit 1; fi
+            /opt/smoke/node /opt/smoke/browsers.cjs
+            if command -v node >/dev/null; then echo "node is on PATH" >&2; exit 1; fi
+            echo "services smoke ok"
+          '
+
+      # On every run, pull requests included, so the save -> skopeo path the
+      # publish job depends on is proven before a merge, not first on main.
+      - name: Save the tested image and check the archive
+        id: save
+        env:
+          REF: ${{ env.IMAGE }}:${{ steps.meta.outputs.runner-version }}
+        run: |
+          set -euo pipefail
+          command -v skopeo >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q skopeo; }
+          archive="${RUNNER_TEMP}/eng-runner.tar"
+          docker save "$REF" -o "$archive"
+          # The tested image is identified by its CONFIG digest, which survives
+          # every copy. With the classic image store `.Id` is that digest; with
+          # the containerd image store (hosted runners, measured on this PR)
+          # `.Id` is the manifest digest, and the manifest is a blob in the
+          # saved archive, so the config digest is read from it.
+          id="$(docker image inspect --format '{{.Id}}' "$REF")"
+          archived="$(skopeo inspect --raw "docker-archive:${archive}" | jq -r .config.digest)"
+          if [ "$archived" = "$id" ]; then
+            config="$id"
+          else
+            config="$(tar -xOf "$archive" "blobs/sha256/${id#sha256:}" | jq -r .config.digest)"
+          fi
+          if [ "$config" != "$archived" ]; then
+            echo "::error::the saved archive's config ${archived} is not the smoke-tested image's ${config} (image ${id})"
+            exit 1
+          fi
+          echo "image-id=${config}" >> "$GITHUB_OUTPUT"
+          echo "smoke-tested image config ${config}" | tee -a "$GITHUB_STEP_SUMMARY"
+          # Two sizes. Compressed, what the pool pulls: the hosted runners'
+          # containerd store keeps the layers gzipped and `docker save` writes
+          # them as stored, so the archive itself is within a few MiB of the
+          # pushed layers (publish prints their exact sum; gzip shrank the
+          # archive by 5% on #2722, so its layers are already compressed).
+          # Unpacked, what a node's disk holds: skopeo reports the layers'
+          # uncompressed sizes for a docker-archive (4648 MiB on #2722, against
+          # a 1703 MiB archive, so it cannot be the stored size).
+          compressed="$(wc -c < "$archive")"
+          unpacked="$(skopeo inspect --raw "docker-archive:${archive}" | jq '[.layers[].size] | add')"
+          {
+            echo "compressed size (the saved archive): $((compressed / 1024 / 1024)) MiB"
+            echo "unpacked size (sum of the uncompressed layers): $((unpacked / 1024 / 1024)) MiB"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          # The labels hold only while unpacked > compressed; if a runner
+          # image change makes skopeo report stored sizes, say so.
+          if [ "$unpacked" -le "$compressed" ]; then
+            echo "::warning::the layer sum (${unpacked}) is not above the archive size (${compressed}): it is not the unpacked size here; fix the labels"
+          fi
+
+      - name: Upload the tested image
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: eng-runner-image
+          path: ${{ runner.temp }}/eng-runner.tar
+          retention-days: 1
+          if-no-files-found: error
+
+  publish:
+    name: Publish to ghcr.io/elitea-ng/eng-runner
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Downloading the ~1.7 GB archive and pushing it.
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Download the tested image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: eng-runner-image
+          path: ${{ runner.temp }}/image
+
+      - name: Push the dated tag, then the moving tag
+        env:
+          REGISTRY_AUTH_FILE: ${{ runner.temp }}/skopeo-auth.json
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          VERSION: ${{ needs.build.outputs.runner-version }}
+          IMAGE_ID: ${{ needs.build.outputs.image-id }}
+        run: |
+          set -euo pipefail
+          command -v skopeo >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q skopeo; }
+          skopeo login ghcr.io --username "$ACTOR" --password-stdin <<< "$TOKEN"
+          archive="${RUNNER_TEMP}/image/eng-runner.tar"
+
+          # A dated tag is never overwritten: the pool pins one. A second build
+          # on the same UTC day gets `.<run number>` instead.
+          tag="${VERSION}-$(date -u +%Y%m%d)"
+          if skopeo inspect --raw "docker://${IMAGE}:${tag}" >/dev/null 2>&1; then
+            tag="${tag}.${GITHUB_RUN_NUMBER}"
+          fi
+          if skopeo inspect --raw "docker://${IMAGE}:${tag}" >/dev/null 2>&1; then
+            echo "::error::${IMAGE}:${tag} already exists; refusing to overwrite a dated tag"
+            exit 1
+          fi
+
+          skopeo copy "docker-archive:${archive}" "docker://${IMAGE}:${tag}"
+          config="$(skopeo inspect --raw "docker://${IMAGE}:${tag}" | jq -r .config.digest)"
+          if [ "$config" != "$IMAGE_ID" ]; then
+            echo "::error::pushed ${IMAGE}:${tag} has config ${config}; the smoke-tested image is ${IMAGE_ID}"
+            exit 1
+          fi
+          # The moving tag follows only a dated tag verified above.
+          skopeo copy "docker://${IMAGE}:${tag}" "docker://${IMAGE}:${VERSION}"
+          digest="$(skopeo inspect --format '{{.Digest}}' "docker://${IMAGE}:${tag}")"
+          moved="$(skopeo inspect --format '{{.Digest}}' "docker://${IMAGE}:${VERSION}")"
+          if [ "$moved" != "$digest" ]; then
+            echo "::error::${IMAGE}:${VERSION} is ${moved}, not the dated tag's ${digest}"
+            exit 1
+          fi
+          {
+            echo "Published \`${IMAGE}:${tag}\` (pin this one) and \`${IMAGE}:${VERSION}\`"
+            echo
+            echo "digest \`${digest}\`"
+            echo
+            echo "compressed size $(skopeo inspect --raw "docker://${IMAGE}:${tag}" | jq '[.layers[].size] | add / 1048576 | floor') MiB (sum of the pushed layers)"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+  runner-pin:
+    # Its own job, so a red run says which thing is wrong: `publish` red means
+    # the image did not ship; this red means it shipped (or would have) and
+    # the runner pin is behind. GitHub stops accepting a runner some weeks
+    # after its successor ships, so a stale pin must not pass in silence. Not
+    # on pull requests: a runner release would turn an unrelated image PR red.
+    name: The runner pin is the latest actions/runner release
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Compare the pin with the latest release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PINNED: ${{ needs.build.outputs.runner-version }}
+        run: |
+          set -euo pipefail
+          latest="$(gh api repos/actions/runner/releases/latest --jq .tag_name)"
+          latest="${latest#v}"
+          if [ "$latest" != "$PINNED" ]; then
+            echo "::error::eng-runner pins actions-runner ${PINNED}, the latest release is ${latest}; bump RUNNER_VERSION and RUNNER_DIGEST (deploy/ci-runners/image/README.md, Bumping)"
+            exit 1
+          fi
+          echo "actions-runner ${PINNED} is the latest release"

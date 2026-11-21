@@ -64,7 +64,7 @@ func memoryProbeFixture(t *testing.T, journal probeJournal) (*pgxpool.Pool, *eli
 	if _, err := pool.Exec(ctx, `CREATE TABLE memory_cleanup_probe (project_id bigint, user_id bigint)`); err != nil {
 		t.Fatal(err)
 	}
-	return pool, eliteacore.NewHandler(pool, eliteacore.WithMemoryUserJournal(journal))
+	return pool, eliteacore.NewHandler(pool, eliteacore.WithMemoryUserJournal(journal), eliteacore.WithPermissionResolver(superAdminCaller{}))
 }
 
 func TestRemovingAUserFromAProjectJournalsTheirMemoryCleanupInTheSameTransaction(t *testing.T) {

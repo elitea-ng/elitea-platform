@@ -1082,7 +1082,7 @@ jobs:
     # unexpanded name (e.g. `E2E (${{ matrix.leg }})`), not one per leg. No
     # status check is required on main today; anyone making these lanes
     # required must require that skipped name too, or gate inside the steps.
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
     timeout-minutes: 5
     outputs:
       reaches-model: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reaches-model }}
@@ -1097,6 +1097,8 @@ jobs:
         if: github.event_name == 'pull_request'
         with:
           fetch-depth: 2
+      # eng-runner: caches and TMPDIR on the work volume (does nothing on hosted).
+      - uses: ./.github/actions/eng-runner-env
       - name: The lane filter decides every case it is tested on
         if: github.event_name == 'pull_request'
         working-directory: ${{ github.workspace }}
@@ -1582,9 +1584,11 @@ jobs:
           # saves from every ref, and pull-request copies evicted main's.
           cache: false
           go-version-file: go.work
-      - name: Restore the Go cache (pull requests read, main writes)
+      - name: Restore the Go cache (read only, one writer per key)
         uses: ./.github/actions/go-cache
         with:
+          # Restores only: one writer per key (the cache plan, docs/contributing/ci.md).
+          save: "false"
           cache-dependency-path: |
             services/elitea-main/go.sum
             libs/go/*/go.sum
@@ -1649,9 +1653,11 @@ jobs:
           # saves from every ref, and pull-request copies evicted main's.
           cache: false
           go-version-file: go.work
-      - name: Restore the Go cache (pull requests read, main writes)
+      - name: Restore the Go cache (read only, one writer per key)
         uses: ./.github/actions/go-cache
         with:
+          # Restores only: one writer per key (the cache plan, docs/contributing/ci.md).
+          save: "false"
           cache-dependency-path: |
             services/elitea-main/go.sum
             libs/go/*/go.sum
@@ -1697,16 +1703,9 @@ jobs:
       - name: Assert the pinned toolchain
         working-directory: apps/elitea-desktop/src-tauri
         run: bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
-      # Read everywhere, write on main only (the policy of ci-desktop.yml).
-      - name: Cache cargo registry and build artefacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          # Registry and git only: this one entry held 1.6 GiB (2026-11-19), and
-          # the cap is shared with every other Rust job (scripts/ci/cache-budget.json).
-          cache-targets: false
-          workspaces: apps/elitea-desktop/src-tauri
-          prefix-key: handoff-journey
+      # No cargo cache here (the cache plan, docs/contributing/ci.md; measured 2026-11-20): a
+      # registry-only entry is 0.3-0.6 GiB of the 10 GB cap and saves about the
+      # time cargo takes to fetch the crates. The budget goes to target caches.
       # The ELITEA build of the host (ADR-0052 decision 4): the brand overlay
       # as TAURI_CONFIG for the cargo build the journey runs.
       - name: Brand overlay (brand/elitea)
