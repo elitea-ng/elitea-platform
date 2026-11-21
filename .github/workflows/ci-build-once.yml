@@ -50,6 +50,12 @@ on:
       reaches-images:
         description: The lane filter for ci-web-e2e.yml's compose smoke leg (what only the container stack proves).
         value: ${{ jobs.model-path-changes.outputs.reaches-images }}
+      e2e-legs:
+        description: ci-web-e2e.yml's `e2e` matrix include list, as JSON (scripts/ci/e2e-legs.mjs).
+        value: ${{ jobs.model-path-changes.outputs.e2e-legs }}
+      chat-stream-rust-legs:
+        description: ci-web-e2e.yml's `chat-stream-rust` matrix include list, as JSON (scripts/ci/e2e-legs.mjs).
+        value: ${{ jobs.model-path-changes.outputs.chat-stream-rust-legs }}
       web-images:
         description: >-
           The result of the `web-images` job (success, skipped, failure,
@@ -117,13 +123,22 @@ jobs:
       # The compose smoke leg, on a pull request whose E2E legs the pool runs
       # natively: a Containerfile, a compose file or the web image changed.
       reaches-images: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reaches-images }}
+      # The compose legs this run needs (scripts/ci/e2e-legs.mjs): ci-web-e2e.yml's
+      # e2e and chat-stream-rust matrices are `fromJSON` of these, so a leg the
+      # run does not need starts no runner.
+      e2e-legs: ${{ steps.legs.outputs.e2e-legs }}
+      chat-stream-rust-legs: ${{ steps.legs.outputs.chat-stream-rust-legs }}
     steps:
+      # Every run checks out: the legs step reads scripts/ci. Depth 2 is for
+      # the pull request diff below.
       - uses: actions/checkout@v7
-        if: github.event_name == 'pull_request'
         with:
           fetch-depth: 2
-      # eng-runner: caches and TMPDIR on the work volume (does nothing on hosted).
+      # eng-runner: caches and TMPDIR on the work volume (does nothing on
+      # hosted); node for the legs step, which the pool's image lacks.
       - uses: ./.github/actions/eng-runner-env
+        with:
+          node: "true"
       - name: The lane filter decides every case it is tested on
         if: github.event_name == 'pull_request'
         working-directory: ${{ github.workspace }}
@@ -144,6 +159,15 @@ jobs:
           # A failed diff fails this job (pipefail), never an empty list.
           git diff --name-only HEAD^1 HEAD > "$RUNNER_TEMP/changed.txt"
           bash scripts/ci/e2e-lane-filter.sh < "$RUNNER_TEMP/changed.txt" >> "$GITHUB_OUTPUT"
+      - id: legs
+        working-directory: ${{ github.workspace }}
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          # check-runner-routing.mjs's ROUTING_CONDITION, textually: the pool
+          # runs every leg natively where this is true, so only the smoke legs stay.
+          POOLED: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'true' || 'false' }}
+          REACHES_WEBKIT: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reaches-webkit }}
+        run: node scripts/ci/e2e-legs.mjs >> "$GITHUB_OUTPUT"
 
   # ── BUILD ONCE PER COMMIT, FAN OUT ──────────────────────────────────────────
   #

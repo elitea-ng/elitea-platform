@@ -217,6 +217,8 @@ jobs:
       reaches-sandbox: ${{ needs.ci-build-once.outputs.reaches-sandbox }}
       reaches-webkit: ${{ needs.ci-build-once.outputs.reaches-webkit }}
       reaches-images: ${{ needs.ci-build-once.outputs.reaches-images }}
+      e2e-legs: ${{ needs.ci-build-once.outputs.e2e-legs }}
+      chat-stream-rust-legs: ${{ needs.ci-build-once.outputs.chat-stream-rust-legs }}
     secrets: inherit
 
   # The E2E legs on the self-hosted pool, as processes (no image, so no

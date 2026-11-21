@@ -49,6 +49,8 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
+import { LEGS } from '../../../scripts/ci/e2e-legs.mjs';
+
 const APP = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const read = (relative) => readFileSync(join(APP, relative), 'utf8');
@@ -946,6 +948,28 @@ describe("the seeded project's X-SECRET value is a property of the stack", () =>
 const E2E_WORKFLOW = '../../.github/workflows/ci-web-e2e.yml';
 const PLATFORM_FLAG_PROJECTS = ['platform-flags', 'platform-flags-webkit'];
 
+/**
+ * A legs list in the matrix-text shape the readers in this file take. The
+ * compose legs are scripts/ci/e2e-legs.mjs's LEGS, not text in
+ * ci-web-e2e.yml: its e2e and chat-stream-rust matrices are `fromJSON` of
+ * the list a run needs, so a leg the run does not need starts no runner.
+ */
+export function legsAsMatrix(job, legs) {
+  const quoted = new Set(['shard', 'weights']);
+  return [
+    `  ${job}:`,
+    '    strategy:',
+    '      matrix:',
+    '        include:',
+    ...legs.flatMap((leg) =>
+      Object.entries(leg).map(([key, value], i) => `          ${i === 0 ? '- ' : '  '}${key}: ${quoted.has(key) ? `"${value}"` : value}`),
+    ),
+  ].join('\n');
+}
+
+/** The compose legs, every lane, as matrix text. */
+const COMPOSE_LEGS = [legsAsMatrix('e2e', LEGS.e2e), legsAsMatrix('chat-stream-rust', LEGS['chat-stream-rust'])].join('\n');
+
 /** Every journey spec whose CODE takes the writer half of the lock. */
 export function platformFlagWriters(specs) {
   return specs
@@ -1048,8 +1072,19 @@ describe('#957 — a flag-writing journey must not queue behind three others', (
     expect(flagProjectsAreSerial(read('playwright.config.ts'))).toBe(true);
   });
 
-  it('ci-web-e2e.yml runs both flag projects as their own legs', () => {
-    expect(flagProjectsWiredIntoCI(read(E2E_WORKFLOW))).toEqual(PLATFORM_FLAG_PROJECTS);
+  it('the compose legs run both flag projects as their own legs', () => {
+    expect(flagProjectsWiredIntoCI(COMPOSE_LEGS)).toEqual(PLATFORM_FLAG_PROJECTS);
+  });
+
+  it('ci-web-e2e.yml takes both legged matrices from the computed lists, not literal text', () => {
+    const workflow = read(E2E_WORKFLOW);
+    expect(workflow).toContain('include: ${{ fromJSON(inputs.e2e-legs || needs.build-once.outputs.e2e-legs) }}');
+    expect(workflow).toContain(
+      'include: ${{ fromJSON(inputs.chat-stream-rust-legs || needs.build-once.outputs.chat-stream-rust-legs) }}',
+    );
+    // No literal leg left behind for the computed list to disagree with.
+    expect(shardLegsWithWeights(workflow)).toEqual([]);
+    expect(workflow).not.toMatch(/^\s*- engine:/m);
   });
 
   it('rejects a new flag-writing journey left in the sharded projects', () => {
@@ -1246,8 +1281,8 @@ export function shardWeightMismatches(workflowSource) {
 }
 
 describe('a sharded lane must carry one weight per shard', () => {
-  it('every sharded leg in ci-web-e2e.yml agrees with its own denominator', () => {
-    const workflow = read(E2E_WORKFLOW);
+  it('every sharded compose leg (scripts/ci/e2e-legs.mjs) agrees with its own denominator', () => {
+    const workflow = COMPOSE_LEGS;
     // A rule whose input can be empty passes by finding nothing: the sharded
     // legs exist, and this is what says so.
     expect(shardLegsWithWeights(workflow).length).toBeGreaterThan(0);
@@ -1346,7 +1381,7 @@ describe('the native legs run exactly what the compose legs run', () => {
   // the two would be a slice of the suite that runs on one kind of runner and
   // silently not on the other.
   it('the two e2e matrices are the same legs, shards and weights', () => {
-    const compose = e2eMatrix(read(E2E_WORKFLOW));
+    const compose = e2eMatrix(COMPOSE_LEGS);
     expect(compose.length).toBe(7);
     expect(e2eMatrix(read(NATIVE_WORKFLOW))).toEqual(compose);
   });

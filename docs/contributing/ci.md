@@ -319,7 +319,10 @@ compose legs stand down on a pull request to one smoke leg, chromium 1/2. That l
 reaches what only images prove: a Containerfile, a compose file, the web image's nginx or entrypoint, or the
 bake and image actions (`e2e-lane-filter.sh` `reaches-images`). A fork's or Dependabot's pull request, a run
 with `ENG_RUNNER` off and the nightly run keep the full compose matrix on hosted runners. Each leg therefore
-runs under exactly one name. `visual` and `docs-shots` stay compose on hosted runners, because their pixels
+runs under exactly one name. The compose legs are `scripts/ci/e2e-legs.mjs` (`LEGS`), and the matrices of
+`e2e` and `chat-stream-rust` are `fromJSON` of the list the run needs, which ci-build-once.yml's lane filter
+job computes (`e2e-legs`, `chat-stream-rust-legs`). A stood-down leg is not in the list, so it starts no runner;
+it used to start a hosted runner that skipped every step. `visual` and `docs-shots` stay compose on hosted runners, because their pixels
 come from the pinned Playwright container.
 
 ### The standalone lanes on the pool
@@ -365,7 +368,7 @@ Pinned parallelism per lane:
 
 Where these lanes run, `ci-web-e2e.yml`'s compose versions stand down on a pull request. They come back as the
 image smoke when `reaches-images` says the change touches what only images prove. That now includes the
-compose half of the standalone stack scripts. Only leg 1of3 of chat-stream-rust runs as the smoke (`RUN_LEG`).
+compose half of the standalone stack scripts. Only leg 1of3 of chat-stream-rust runs as the smoke (its computed matrix list).
 Pushes, the nightly run, forks, Dependabot and runs with `ENG_RUNNER` off keep the full compose versions.
 
 What stays compose or hosted, and why:
