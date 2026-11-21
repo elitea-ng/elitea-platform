@@ -987,7 +987,8 @@ export default function table(ctx) {
             "http {",
             "  include /etc/nginx/mime.types;",
             "  default_type application/octet-stream;",
-            "  access_log /dev/stdout;",
+            // Not /dev/stdout: the supervisor's stdout is a socket, which open() refuses (ENXIO).
+            `  access_log ${web}/access.log;`,
             "  sendfile on;",
             "  keepalive_timeout 65;",
             ...["client_body", "proxy", "fastcgi", "uwsgi", "scgi"].map((t) => `  ${t}_temp_path ${web}/tmp/${t === "client_body" ? "body" : t};`),

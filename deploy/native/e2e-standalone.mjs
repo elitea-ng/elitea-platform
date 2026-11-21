@@ -374,7 +374,7 @@ export default function table(ctx) {
           {
             path: path.join(web, "nginx.conf"),
             // The nginx image's main config, minus `user` (a non-root master cannot switch) and with every
-            // path in the prefix. Its access log goes to stdout, as the image's symlink sends it.
+            // path in the prefix. Its access log goes to a file in the data dir (the image symlinks it to stdout).
             content: () =>
               [
                 `pid ${web}/nginx.pid;`,
@@ -383,7 +383,8 @@ export default function table(ctx) {
                 "http {",
                 "  include /etc/nginx/mime.types;",
                 "  default_type application/octet-stream;",
-                "  access_log /dev/stdout;",
+                // Not /dev/stdout: the supervisor's stdout is a socket, which open() refuses (ENXIO).
+            `  access_log ${web}/access.log;`,
                 "  sendfile on;",
                 "  keepalive_timeout 65;",
                 ...["client_body", "proxy", "fastcgi", "uwsgi", "scgi"].map((t) => `  ${t}_temp_path ${web}/tmp/${t === "client_body" ? "body" : t};`),
