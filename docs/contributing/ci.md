@@ -74,7 +74,10 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
 - **Folded jobs.** `No Binaries` (9 jobs), `Dependency Scanning` (4) and `Helm lint` (4) are 2, 1 and 3 jobs of
   named steps. Every gate step runs even when an earlier one failed, so one run shows every red gate.
 - **Rust.** `ci-rust-lint.yml` runs `cargo fmt` and one `cargo clippy` per Cargo workspace in the fast tier. The
-  test jobs no longer run them.
+  test jobs no longer run them. Those runs use `--all-features`, which turns on the agent runtime's
+  `test-support` and with it switches off its panic guard, so the `libs/rust` leg also lints the agent runtime
+  with the worker's exact feature list (`toolkit-sql`, `toolkit-office`, `toolkit-data-analysis`,
+  `toolkit-delta-lake`) and with none (the desktop host).
 - **Go vet once.** `ci-go.yml` runs no standalone `go vet`: the `lint` job's golangci-lint runs `govet` over
   the same `go.work` modules, with the default build tags and the test files, and with golangci-lint's default
   analyzer set, which is `go tool vet help`'s Go 1.26 list less `loopclosure` (a no-op from go1.22, and every
@@ -349,7 +352,12 @@ test profile. It builds cold, with the five workspaces sharing one target direct
 semantics (no debug assertions, `panic = "abort"` where set) but drops the whole-program optimisation (thin
 LTO, one codegen unit, opt-level 3) through `CARGO_PROFILE_RELEASE_*`. The compose image smoke runs the
 shipped profile; `NATIVE_RUST_FULL_RELEASE=1` builds it natively. Neither build job
-depends on `ci-build-once`.
+depends on `ci-build-once`. The feature set is the image's: each Containerfile runs `cargo auditable build
+--frozen --release` with no feature flag (default features), and the script runs `cargo build --locked
+--release --bin <service>` with none either, so the lanes never run an `--all-features` binary (the worker's
+`sandbox-supervisor` and the engines' test-only `loopback-git-http` stay off). `--bin` only skips the
+DeepWiki engine's bench and parity binaries; each service is a one-package workspace, so the features resolve
+the same.
 
 What the native table does differently from compose, and why:
 
