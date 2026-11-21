@@ -192,6 +192,27 @@ ORDER BY array_position($1::bigint[], id)`, owners)
 	return names, rows.Err()
 }
 
+// AgentName is the saved agent's display name, "" when it is gone. It implements delegationnotice.NameLister: a live
+// stream frame names the calling agent by it instead of the worker's runtime label (#2276).
+func (e *DelegationEditors) AgentName(ctx context.Context, projectID, applicationID int64) (string, error) {
+	if projectID <= 0 || applicationID <= 0 {
+		return "", nil
+	}
+	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
+	if err != nil {
+		return "", err
+	}
+	var name string
+	err = e.pool.QueryRow(ctx, fmt.Sprintf(`SELECT name FROM %s.applications WHERE id = $1`, schema), applicationID).Scan(&name)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("delegation editors: read the agent name: %w", err)
+	}
+	return delegationnotice.ClipName(strings.TrimSpace(name)), nil
+}
+
 // savedAgentName is the display name of a saved agent, best effort: any
 // failure is logged and answers "", so the notice keeps the worker's label and
 // the frame is never refused for a display name. The read runs under a

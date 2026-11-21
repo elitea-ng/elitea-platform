@@ -145,8 +145,17 @@ WHERE day < (clock_timestamp() AT TIME ZONE 'UTC')::date - $1::int`, SignalsRete
 	return written, nil
 }
 
-// SignalsPass is one run of the daily routine: the signals, then the ratings.
+// SignalsPass is one run of the daily routine: the removed hires, the signals,
+// then the ratings. The reconcile runs first so the signals count a hire whose
+// agent or skill was removed by a path that does not record it (#2089).
 func SignalsPass(ctx context.Context, db DB, logger *slog.Logger) (int64, error) {
+	dismissed, err := ReconcileDismissals(ctx, db)
+	if err != nil {
+		return 0, err
+	}
+	if dismissed > 0 {
+		logger.Info("marketplace signals: hires of removed agents and skills dismissed", "hires", dismissed)
+	}
 	written, err := ComputeSignals(ctx, db)
 	if err != nil {
 		return written, err

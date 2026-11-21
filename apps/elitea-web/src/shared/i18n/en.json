@@ -72,6 +72,7 @@
   "skills.toChat.untitled": "Untitled chat",
   "skills.toChat.explain": "Pin “{{name}}” to a conversation. It applies to every message there, whichever model or agent answers.",
   "skills.toChat.limit": "A conversation holds at most five skills. Remove one to add another.",
+  "skills.toChat.tooLarge": "The skills pinned to that conversation would be over 64 KiB together, more than a turn can apply. Remove one to add another.",
   "skills.toChat.unavailable": "That skill is not available to you.",
   "skills.toChat.forbidden": "You cannot change the skills of that conversation.",
   "skills.toChat.failed": "The skill could not be added. Try again.",

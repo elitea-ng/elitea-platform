@@ -172,4 +172,14 @@ VALUES (1, 216102, 'medium', $1, $2)`, grace, ada); err != nil {
 			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
 		}
 	}
+	// A live frame names the calling agent by its saved name (#2276); a gone one keeps the worker's label.
+	if _, err := pool.Exec(ctx, `UPDATE p_1.applications SET name = 'Release helper' WHERE id = 216101`); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[int64]string{216101: "Release helper", 999999: ""} {
+		got, err := editors.AgentName(ctx, 1, id)
+		if err != nil || got != want {
+			t.Errorf("AgentName(%d) = %q, %v; want %q", id, got, err, want)
+		}
+	}
 }
