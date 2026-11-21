@@ -29,7 +29,11 @@ func provisionPreflightDatabase(t *testing.T, ctx context.Context, adminDSN stri
 	if err != nil {
 		t.Fatalf("connect %s: %v", testDatabaseURLEnv, err)
 	}
-	defer admin.Close(ctx)
+	defer func() {
+		if err := admin.Close(ctx); err != nil {
+			t.Logf("close the admin connection: %v", err)
+		}
+	}()
 	// The name is generated above, never input: no injection surface.
 	if _, err := admin.Exec(ctx, "CREATE DATABASE "+name); err != nil {
 		t.Fatalf("create the preflight database: %v", err)
@@ -42,7 +46,11 @@ func provisionPreflightDatabase(t *testing.T, ctx context.Context, adminDSN stri
 			t.Logf("drop the preflight database %s: %v", name, err)
 			return
 		}
-		defer conn.Close(cleanupCtx)
+		defer func() {
+			if err := conn.Close(cleanupCtx); err != nil {
+				t.Logf("close the cleanup connection: %v", err)
+			}
+		}()
 		if _, err := conn.Exec(cleanupCtx, "DROP DATABASE IF EXISTS "+name+" WITH (FORCE)"); err != nil {
 			t.Logf("drop the preflight database %s: %v", name, err)
 		}
