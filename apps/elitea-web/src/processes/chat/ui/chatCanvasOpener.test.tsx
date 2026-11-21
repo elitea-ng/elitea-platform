@@ -58,11 +58,12 @@ import { server } from '@/test/setup';
 import { useSelectedProjectStore } from '@/widgets/app-shell';
 
 import { ChatWithEditors } from './ChatWithEditors';
+import { testTimeout } from '@/test/timeouts';
 
 // Mounting a whole route through msw is slow enough that the library's 1 s
 // default expires before the first paint on a loaded machine.
-configure({ asyncUtilTimeout: 5_000 });
-vi.setConfig({ testTimeout: 30_000 });
+configure({ asyncUtilTimeout: testTimeout(5_000) });
+vi.setConfig({ testTimeout: testTimeout(30_000) });
 
 // The editor mounts a real CodeMirror, and jsdom lacks the DOM APIs it needs.
 installCodeMirrorTestPolyfills();

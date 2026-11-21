@@ -20,6 +20,7 @@ import { AppShell } from '../ui/AppShell';
 import { useSelectedProjectStore } from '../model/selectedProject.store';
 import { useSidebarCollapsedStore } from '@/widgets/sidebar';
 import { renderWithNavigation } from './testHarness';
+import { testTimeout } from '@/test/timeouts';
 
 /** Default author fixture: a real `personal_project_id` distinct from every entry `getListProjectsMockHandler` returns below, so R1 tests can tell "personal project" apart from "first project in the list". */
 function authorHandler(personalProjectId = '99') {
@@ -554,7 +555,7 @@ describe('AppShell', () => {
    */
   it(
     'settles the shell when the first author answer names no project yet',
-    { timeout: 30_000 },
+    { timeout: testTimeout(30_000) },
     async () => {
       let authorCalls = 0;
       let projectCalls = 0;

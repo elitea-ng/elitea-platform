@@ -42,6 +42,7 @@ import { server } from '@/test/setup';
 // server's clothes.
 import { CreateToolkit } from '../CreateToolkit';
 import { renderToolkitsRoute } from './testRouter';
+import { testTimeout } from '@/test/timeouts';
 
 const TOOLKIT_LIST_URL = '/api/v2/elitea_core/tools/prompt_lib/:projectId';
 const TOOLKIT_TYPES_URL = '/api/v2/elitea_core/toolkits/prompt_lib/:projectId';
@@ -158,7 +159,7 @@ describe('a refused toolkit save lands on the field the server named', () => {
     // 400's body is discarded and nothing but the banner below ever renders.
     expect(await screen.findByText(REFUSAL_MESSAGE)).toBeInTheDocument();
     expect(screen.queryByText(GENERIC_BANNER)).not.toBeInTheDocument();
-  }, 30_000);
+  }, testTimeout(30_000));
 
   it('does not re-issue the same refused request on a second Save', async () => {
     const tracker = mockEndpoints({
@@ -181,7 +182,7 @@ describe('a refused toolkit save lands on the field the server named', () => {
     await waitFor(() => {
       expect(tracker.creates()).toBe(1);
     });
-  }, 30_000);
+  }, testTimeout(30_000));
 
   /*
    * The other direction. A rejection that carries no field-keyed body — a 500,
@@ -200,7 +201,7 @@ describe('a refused toolkit save lands on the field the server named', () => {
 
     expect(await screen.findByText(GENERIC_BANNER)).toBeInTheDocument();
     expect(screen.queryByText(REFUSAL_MESSAGE)).not.toBeInTheDocument();
-  }, 30_000);
+  }, testTimeout(30_000));
 
   /*
    * THE SHAPE-DRIFT CASE, and the one that used to fail silently.
@@ -242,5 +243,5 @@ describe('a refused toolkit save lands on the field the server named', () => {
     await waitFor(() => {
       expect(tracker.creates()).toBe(2);
     });
-  }, 30_000);
+  }, testTimeout(30_000));
 });

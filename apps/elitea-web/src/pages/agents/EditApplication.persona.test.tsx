@@ -16,6 +16,7 @@ import { server } from '@/test/setup';
 
 import { EditApplication } from './EditApplication';
 import { renderAgentsRoute } from './__tests__/testRouter';
+import { testTimeout } from '@/test/timeouts';
 
 installCodeMirrorTestPolyfills();
 
@@ -88,7 +89,7 @@ describe('EditApplication — the Persona tab', () => {
 
     await waitFor(() => expect(bodies).toHaveLength(1));
     expect(bodies[0]?.['soul']).toEqual({ ...STORED_SOUL, role: 'Release reviewer' });
-  }, 20_000);
+  }, testTimeout(20_000));
 
   it('forwards an untouched stored soul unchanged on an unrelated save', async () => {
     server.use(getGetApplicationMockHandler(detail({ ...STORED_SOUL, body: '  keep my spacing  ' })));
@@ -105,7 +106,7 @@ describe('EditApplication — the Persona tab', () => {
 
     await waitFor(() => expect(bodies).toHaveLength(1));
     expect(bodies[0]?.['soul']).toEqual({ ...STORED_SOUL, body: '  keep my spacing  ' });
-  }, 20_000);
+  }, testTimeout(20_000));
 
   it('holds Save back while a Persona field holds what Main would refuse', async () => {
     server.use(getGetApplicationMockHandler(detail(null)));
@@ -123,5 +124,5 @@ describe('EditApplication — the Persona tab', () => {
 
     await user.paste(': defer');
     await waitFor(() => expect(screen.getByTestId('agent-save-button')).toBeEnabled());
-  }, 20_000);
+  }, testTimeout(20_000));
 });

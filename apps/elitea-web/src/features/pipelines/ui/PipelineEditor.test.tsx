@@ -12,6 +12,7 @@ import { server } from '@/test/setup';
 import { renderWithRouterAndProject } from '../__tests__/testUtils';
 import type { PipelineCreateFormSlotProps, PipelineEditorDeps, PipelineEditorHandle, PipelineEditorShellProps } from './PipelineEditor';
 import { PipelineEditor } from './PipelineEditor';
+import { testTimeout } from '@/test/timeouts';
 
 /**
  * The "threads … without crashing when switching to the Flow editor tab"
@@ -288,5 +289,5 @@ describe('PipelineEditor', () => {
     // transform cost for the chain. At 5s it was an order-dependent flake
     // (see this file's own note above); the assertion itself is unchanged.
     expect(await within(bodyContent).findByText('Failed to load the flow editor', {}, { timeout: 20000 })).toBeInTheDocument();
-  }, 30000);
+  }, testTimeout(30000));
 });

@@ -18,6 +18,7 @@ import { server } from '@/test/setup';
 
 import { EditApplication } from './EditApplication';
 import { renderAgentsRoute } from './__tests__/testRouter';
+import { testTimeout } from '@/test/timeouts';
 
 installCodeMirrorTestPolyfills();
 
@@ -121,7 +122,7 @@ describe('EditApplication — the Avatar tab', () => {
     expect(working.querySelector('img')?.getAttribute('src')).toBe(STILL);
     expect(within(working).getByTestId('agent-avatar-motion')).toBeInTheDocument();
     expect(screen.getByTestId('avatar-slot-working-source')).toHaveTextContent('Default motion');
-  }, 20_000);
+  }, testTimeout(20_000));
 
   it('uploads a video into a state, with the still as its poster, and saves the pack', async () => {
     server.use(getGetApplicationMockHandler(detail(STORED_PACK)));
@@ -153,7 +154,7 @@ describe('EditApplication — the Avatar tab', () => {
       schema: 'elitea.avatar_pack/v1',
       slots: { still: { url: STILL }, thinking: { url: THINKING }, speaking: { url: SPEAKING, poster_url: STILL } },
     });
-  }, 20_000);
+  }, testTimeout(20_000));
 
   it("shows the server's refusal and leaves the slot empty", async () => {
     server.use(getGetApplicationMockHandler(detail(STORED_PACK)));
@@ -170,7 +171,7 @@ describe('EditApplication — the Avatar tab', () => {
 
     expect(await screen.findByTestId('avatar-problem')).toHaveTextContent('must be muted');
     expect(screen.getByTestId('avatar-slot-waking')).toHaveAttribute('data-filled', 'false');
-  }, 20_000);
+  }, testTimeout(20_000));
 
   it('refuses a video for a state when the still is an SVG, which the server takes as no poster', async () => {
     const svgStill = media('ab', 'svg');
@@ -188,7 +189,7 @@ describe('EditApplication — the Avatar tab', () => {
 
     expect(await screen.findByTestId('avatar-problem')).toHaveTextContent('PNG, JPEG or WebP still');
     expect(screen.getByTestId('avatar-slot-speaking')).toHaveAttribute('data-filled', 'false');
-  }, 20_000);
+  }, testTimeout(20_000));
 
   it('asks for a still before a state, when the version has no pack', async () => {
     server.use(getGetApplicationMockHandler(detail(null)));
@@ -198,7 +199,7 @@ describe('EditApplication — the Avatar tab', () => {
     await user.click(screen.getByTestId('avatar-slot-idle-upload'));
     expect(screen.getByTestId('avatar-problem')).toHaveTextContent('Add a still first');
     expect(screen.queryByTestId('avatar-generate')).toBeNull();
-  }, 20_000);
+  }, testTimeout(20_000));
 
   it('generates still candidates from the persona with the image model, and a chosen one fills the still', async () => {
     serveModels([{ name: 'gpt-image-1', display_name: 'GPT Image' }]);
@@ -218,5 +219,5 @@ describe('EditApplication — the Avatar tab', () => {
     expect(requests[0]).toMatchObject({ kind: 'still', model: 'gpt-image-1', display_name: 'Ada', role: 'Reviewer', count: 4 });
     await waitFor(() => expect(screen.getByTestId('avatar-slot-still').querySelector('img')?.getAttribute('src')).toBe(STILL));
     expect(screen.getByTestId('avatar-generate-loop')).toBeEnabled();
-  }, 20_000);
+  }, testTimeout(20_000));
 });

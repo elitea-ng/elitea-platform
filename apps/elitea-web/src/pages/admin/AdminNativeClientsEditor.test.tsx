@@ -27,6 +27,7 @@ import { server } from '@/test/setup';
 import { AdminConfiguration } from './Configuration';
 import { AdminNativeClientsEditor } from './AdminNativeClientsEditor';
 import { renderAdminRoute } from './__tests__/testRouter';
+import { testTimeout } from '@/test/timeouts';
 
 const CLIENTS = [
   {
@@ -123,7 +124,7 @@ describe('AdminConfiguration → Native clients (composition)', () => {
 
 // Each case types a whole dialog through userEvent; under the coverage
 // shard that alone can pass the 5 s default.
-describe('AdminNativeClientsEditor', { timeout: 20_000 }, () => {
+describe('AdminNativeClientsEditor', { timeout: testTimeout(20_000) }, () => {
   it('lists each client with its device count, and leaves file entries read-only', async () => {
     useHandlers();
     renderAdminRoute(<AdminNativeClientsEditor />);
@@ -168,7 +169,7 @@ describe('AdminNativeClientsEditor', { timeout: 20_000 }, () => {
     await waitFor(() => expect(screen.queryByTestId('native-client-dialog')).not.toBeInTheDocument());
     // About seventy keystrokes through three MUI fields: well under a second
     // locally, but past vitest's 5 s default on a loaded CI runner.
-  }, 20_000);
+  }, testTimeout(20_000));
 
   it('keeps the dialog open and places each 422 reason beside the URI it refused', async () => {
     useHandlers({

@@ -11,6 +11,7 @@ import type { McpIpc, McpList } from '@/shared/desktop/mcpIpc';
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
 import { McpPanel } from './McpPanel';
+import { testTimeout } from '@/test/timeouts';
 
 const LIST: McpList = {
   allowed: true,
@@ -39,7 +40,7 @@ function setup(list: McpList = LIST) {
   return mocks;
 }
 
-describe('McpPanel', { timeout: 20_000 }, () => {
+describe('McpPanel', { timeout: testTimeout(20_000) }, () => {
   it('lists the servers with their status and output', async () => {
     const ipc = setup();
     const row = await screen.findByTestId('mcp-server-user-github');
