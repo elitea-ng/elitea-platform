@@ -1,17 +1,19 @@
 name: Job environment on the self-hosted pool
 description: >-
-  On eng-runner (deploy/ci-runners/README.md) moves every per-user cache and
-  temporary directory onto the 80 GiB work volume, and optionally installs node
-  or rustup. On a GitHub-hosted runner it does nothing. Every job routed to
+  On eng-runner (deploy/ci-runners/README.md) gives a job the hosted runner's
+  cache paths on the 80 GiB work volume, and optionally installs node or
+  rustup. On a GitHub-hosted runner it does nothing. Every job routed to
   eng-runner uses it straight after its checkout (check-runner-routing.mjs
   refuses one that does not).
   Why: the runner container has an ephemeral-storage limit of 10 GiB, and only
-  /home/runner/_work is a separate volume. Anything written elsewhere
-  (~/go/pkg/mod, ~/.cache/go-build, ~/.npm, ~/.cargo, ~/.cache, /tmp) counts
-  against that limit, and a job that exceeds it gets its pod EVICTED. HOME
-  itself moves, so every `~` path follows: the go-cache and npm-cache actions
-  set GOCACHE, GOMODCACHE and NPM_CONFIG_CACHE from $HOME, and main-write-cache
-  checks its slot paths against $HOME.
+  /home/runner/_work is a separate volume. The pod template mounts ~/.npm,
+  ~/.cache and ~/go from that volume (_homecache/*), so HOME stays
+  /home/runner, as on a hosted runner, and the Go and npm caches sit at the
+  hosted paths: an actions/cache entry main saved restores here unchanged
+  (the cache version hashes the path strings). This action points GOCACHE,
+  GOMODCACHE, XDG_CACHE_HOME and the npm cache back at those paths (the image
+  ENV names _work/_cache), checks the mounts are there, and keeps TMPDIR,
+  CARGO_HOME, RUSTUP_HOME and the tool cache under _work.
 
 inputs:
   node:
@@ -42,31 +44,33 @@ runs:
         # (deploy/ci-runners/image/Containerfile). A pod on an image without
         # one fails here, by name, not halfway through a build.
         missing=""
-        for tool in cc c++ make cmake pkg-config zstd git jq curl unzip gh helm yq shellcheck; do
+        for tool in cc c++ make cmake pkg-config zstd git jq curl unzip gh helm yq shellcheck mountpoint; do
           command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
         done
         if [ -n "$missing" ]; then
           echo "::error::eng-runner-env: this pod's image lacks:$missing. The routed jobs need the eng-runner image (deploy/ci-runners/image/); set ENG_RUNNER to off until the pool runs it."
           exit 1
         fi
-        work="$(dirname -- "$RUNNER_TEMP")"   # /home/runner/_work, the 80 GiB volume
-        home="$work/_home"
-        mkdir -p "$home/.cache" "$RUNNER_TEMP"
-        # The checkout may have written a safe.directory entry to the global config.
-        if [ -f "$HOME/.gitconfig" ]; then cp -- "$HOME/.gitconfig" "$home/.gitconfig"; fi
+        # The pod template mounts these from the work volume (_homecache/*).
+        # Without them a Go or npm cache would fill the 10 GiB ephemeral disk.
+        for dir in "$HOME/.npm" "$HOME/.cache" "$HOME/go"; do
+          if ! mountpoint -q "$dir"; then
+            echo "::error::eng-runner-env: $dir is not a mount; the pool's pod template must mount ~/.npm, ~/.cache and ~/go from the work volume (deploy/ci-runners/README.md). Set ENG_RUNNER to off until it does."
+            exit 1
+          fi
+        done
         {
-          echo "HOME=$home"
-          echo "XDG_CACHE_HOME=$home/.cache"
-          echo "GOPATH=$home/go"
-          echo "GOMODCACHE=$home/go/pkg/mod"
-          echo "GOCACHE=$home/.cache/go-build"
-          echo "GOLANGCI_LINT_CACHE=$home/.cache/golangci-lint"
-          echo "npm_config_cache=$home/.npm"
-          # The image sets both under _work already. Moved with HOME here so
-          # that a pod on an older image cannot fall back to ~/.cargo on the
-          # ephemeral disk; a toolchain and a registry are gigabytes.
-          echo "CARGO_HOME=$home/.cargo"
-          echo "RUSTUP_HOME=$home/.rustup"
+          # The hosted runner's paths (the image ENV names _work/_cache): the
+          # go-cache and npm-cache restores then match main's entries.
+          echo "XDG_CACHE_HOME=$HOME/.cache"
+          echo "GOPATH=$HOME/go"
+          echo "GOMODCACHE=$HOME/go/pkg/mod"
+          echo "GOCACHE=$HOME/.cache/go-build"
+          echo "GOLANGCI_LINT_CACHE=$HOME/.cache/golangci-lint"
+          echo "npm_config_cache=$HOME/.npm"
+          # CARGO_HOME and RUSTUP_HOME stay where the image ENV puts them, under
+          # _work: a toolchain and a registry are gigabytes, and nothing
+          # restores them from a hosted cache.
           echo "TMPDIR=$RUNNER_TEMP"
           # The pod's cgroup gives 4 CPU while nproc reports the node's 8.
           # Every routed job gets the pin here, on the pool only; a job's own
@@ -75,7 +79,7 @@ runs:
           echo "CARGO_BUILD_JOBS=4"
           echo "RUST_TEST_THREADS=4"
         } >> "$GITHUB_ENV"
-        echo "eng-runner: HOME, caches and TMPDIR under $work"
+        echo "eng-runner: hosted cache paths on the mounted work volume; TMPDIR, cargo and rustup under _work"
     - uses: actions/setup-node@v7
       if: runner.environment != 'github-hosted' && inputs.node == 'true'
       with:
@@ -100,6 +104,9 @@ runs:
         RUSTUP_INIT_SHA256: b1c8cb14e30889e7e2999e6b69e62d9e9b9ffc0f4df8180564d306d9680e6c55
       run: |
         set -euo pipefail
+        # The image ENV puts it under _work; unset, rustup would install into
+        # ~/.cargo on the 10 GiB ephemeral disk.
+        case "${CARGO_HOME:-}" in /home/runner/_work/*) ;; *) echo "::error::eng-runner-env: CARGO_HOME (${CARGO_HOME:-unset}) is not under /home/runner/_work; the pool must run the eng-runner image"; exit 1 ;; esac
         [ "$(uname -m)" = x86_64 ] || { echo "::error::eng-runner-env: the rustup pin is x86_64, this pod is $(uname -m)"; exit 1; }
         init="$RUNNER_TEMP/rustup-init"
         curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-all-errors -o "$init" \

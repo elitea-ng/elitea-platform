@@ -79,22 +79,21 @@ description: >-
 # check-cache-path-parity.mjs (No Binaries) fails when any restore of a key
 # family spells its paths differently from its writer.
 #
-# ── GitHub-hosted runners only ──────────────────────────────────────────────
+# ── Writers on GitHub-hosted runners; readers where the layout matches ────
 #
 # The tar inside an entry holds paths RELATIVE TO GITHUB_WORKSPACE: on a
 # hosted runner `~/.npm` is saved as `../../../.npm` (workspace
-# /home/runner/work/<repo>/<repo>, HOME /home/runner). A self-hosted runner
-# with another layout extracts that to wherever `../../..` of ITS workspace
-# is, not to its $HOME, so the tool runs cold while the restore fills a
-# directory nothing reads; and a self-hosted writer would save its own layout
-# under the shared key. Both slots therefore restore and save on
-# GitHub-hosted runners only; elsewhere the steps are skipped (a cold run, the
-# same result the absolute reader path gave there). On eng-runner
-# (.github/actions/eng-runner-env) HOME is /home/runner/_work/_home and the
-# workspace /home/runner/_work/<repo>/<repo>, so a hosted `../../../.npm`
-# would land in /home/runner/.npm: the container's 10 GiB ephemeral disk,
-# which no tool there reads. Only pull requests are routed there; every
-# writer (a run on main) stays hosted.
+# /home/runner/work/<repo>/<repo>, HOME /home/runner). A runner extracts that
+# to wherever `../../..` of ITS workspace is, not to its $HOME. So a restore
+# is useful only where `../../..` of the workspace IS $HOME; elsewhere the tool
+# would run cold while the restore filled a directory nothing reads. The
+# layout step below checks exactly that, and the readers run only when it
+# holds. On eng-runner it holds: HOME stays /home/runner, the workspace is
+# /home/runner/_work/<repo>/<repo>, and the pod template mounts ~/.npm,
+# ~/.cache and ~/go from the work volume (.github/actions/eng-runner-env
+# checks the mounts), so a hosted entry lands where go and npm read it.
+# Writers stay on GitHub-hosted runners: only pull requests are routed to the
+# pool, and every writer is a run on main, so the shared keys hold one layout.
 #
 # One slot can be used ONE time in a job. Two uses would register two saves of
 # the same directory under two keys. The claim step records each slot in
@@ -170,6 +169,17 @@ runs:
           exit 1
         fi
         echo "${marker}=${KEY}" >> "$GITHUB_ENV"
+    - name: Does a hosted entry land in this runner's HOME?
+      id: layout
+      shell: bash
+      run: |
+        # `../../..` of the workspace is where an entry's `~/...` paths
+        # extract (see "Writers on GitHub-hosted runners" in the header).
+        if [ "$(cd "$GITHUB_WORKSPACE/../../.." && pwd -P)" = "$(cd "$HOME" && pwd -P)" ]; then
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "ok=false" >> "$GITHUB_OUTPUT"
+        fi
     - name: Restore, and save at job end (run on main) — go slot
       id: writer-go
       if: inputs.slot == 'go' && runner.environment == 'github-hosted' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && inputs.save != 'false'
@@ -194,7 +204,7 @@ runs:
     # for character. See "Why the reader PATH is the writer's" in the header.
     - name: Restore only (pull requests and every other run) — go slot
       id: reader-go
-      if: ${{ inputs.slot == 'go' && runner.environment == 'github-hosted' && !(github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && inputs.save != 'false') }}
+      if: ${{ inputs.slot == 'go' && (runner.environment == 'github-hosted' || steps.layout.outputs.ok == 'true') && !(runner.environment == 'github-hosted' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && inputs.save != 'false') }}
       uses: actions/cache/restore@v6
       with:
         path: |
@@ -204,7 +214,7 @@ runs:
         restore-keys: ${{ inputs.restore-keys }}
     - name: Restore only (pull requests and every other run) — npm slot
       id: reader-npm
-      if: ${{ inputs.slot == 'npm' && runner.environment == 'github-hosted' && !(github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && inputs.save != 'false') }}
+      if: ${{ inputs.slot == 'npm' && (runner.environment == 'github-hosted' || steps.layout.outputs.ok == 'true') && !(runner.environment == 'github-hosted' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && inputs.save != 'false') }}
       uses: actions/cache/restore@v6
       with:
         path: ~/.npm
@@ -217,10 +227,10 @@ runs:
         MATCHED: ${{ steps.writer-go.outputs.cache-matched-key || steps.writer-npm.outputs.cache-matched-key || steps.reader-go.outputs.cache-matched-key || steps.reader-npm.outputs.cache-matched-key }}
         KEY: ${{ inputs.key }}
         WRITES: ${{ runner.environment == 'github-hosted' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && inputs.save != 'false' }}
-        HOSTED: ${{ runner.environment == 'github-hosted' }}
+        LAYOUT: ${{ runner.environment == 'github-hosted' || steps.layout.outputs.ok == 'true' }}
       run: |
-        if [ "$HOSTED" != "true" ]; then
-          echo "cache: SKIPPED for key '$KEY' on a self-hosted runner (the entries are GitHub-hosted ones; see main-write-cache)"
+        if [ "$LAYOUT" != "true" ]; then
+          echo "cache: SKIPPED for key '$KEY': an entry's ~/ paths would not extract into this runner's HOME (see main-write-cache)"
         elif [ -n "$MATCHED" ]; then
           echo "cache: restored '$MATCHED' (exact hit: ${HIT:-false}) for key '$KEY'; this run writes: $WRITES"
         else

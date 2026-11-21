@@ -112,8 +112,9 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
   request restored main's Go or npm cache for this reason. Every save and restore of one key uses the same
   literal `~/...` lines, in the same order. An expression path is not allowed.
   `scripts/ci/check-cache-path-parity.mjs` (in `No Binaries`) fails when a restore differs from its writer.
-  The Go and npm caches restore and save on GitHub-hosted runners only. The tar holds paths relative to
-  the workspace, so a runner with another home layout extracts them to the wrong directory.
+  The Go and npm caches save on GitHub-hosted runners only, and restore wherever `../../..` of the workspace
+  is `HOME` (hosted runners and eng-runner): the tar holds paths relative to the workspace, so a runner with
+  another home layout would extract them to the wrong directory.
 - **macOS package.** `desktop-package` (heavy tier) runs on a pull request only when `apps/elitea-desktop/**`,
   `libs/rust/vendor/agent-desktop/**`, the Rust toolchain pin, `desktop-package.yml` or the two packaging actions change. The run is an
   unsigned debug dry run. `publish.yml` (the nightly pre-release on main, and every release) runs the signed
@@ -125,7 +126,7 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
 Most jobs run on GitHub-hosted `ubuntu-latest`. The free plan caps hosted jobs at 20 at a time for the whole
 organisation, and queueing was most of a pull request's wall time. The organisation also has a self-hosted
 pool, `eng-runner`. It is an ARC runner scale set on GKE whose pods have 4 vCPU, 16 GiB, an 80 GiB work
-volume and 10 GiB of ephemeral storage. It runs the custom image `ghcr.io/elitea-ng/eng-runner:2.338.2-20261120`:
+volume and 10 GiB of ephemeral storage. It runs the custom image `ghcr.io/elitea-ng/eng-runner:2.338.2-20261120.10`:
 the `actions-runner` image plus build tools such as cc and zstd.
 
 ### What the pool can run
@@ -205,13 +206,15 @@ Every routed job runs `./.github/actions/eng-runner-env` straight after its chec
 it does nothing, so the hosted path is unchanged. On the pool it does these things:
 
 - It fails at once, naming the tool, when the pod's image lacks one the routed jobs take from it (cc, c++,
-  make, cmake, pkg-config, zstd, git, jq, curl, unzip, gh, helm, yq, shellcheck).
+  make, cmake, pkg-config, zstd, git, jq, curl, unzip, gh, helm, yq, shellcheck, mountpoint), and when
+  `~/.npm`, `~/.cache` or `~/go` is not a mount.
 - It pins the parallelism (above).
-- It moves `HOME` to `/home/runner/_work/_home`, and sets `XDG_CACHE_HOME`, `GOPATH`, `GOMODCACHE`,
-  `GOCACHE`, `GOLANGCI_LINT_CACHE`, `npm_config_cache`, `CARGO_HOME` and `RUSTUP_HOME` under it. It also sets
-  `TMPDIR` to `RUNNER_TEMP`, which covers jest's cache in `os.tmpdir()`; vitest caches in `node_modules`. Because
-  `HOME` itself moves, the `go-cache`, `npm-cache` and `main-write-cache` actions follow it: they resolve their
-  paths from `$HOME`.
+- It keeps `HOME` at `/home/runner`, as on a hosted runner. The scale set's pod template mounts `~/.npm`,
+  `~/.cache` and `~/go` from the work volume (`_homecache/*`), so the hosted cache paths are on the 80 GiB
+  disk. It points `XDG_CACHE_HOME`, `GOPATH`, `GOMODCACHE`, `GOCACHE`, `GOLANGCI_LINT_CACHE` and
+  `npm_config_cache` back at those paths (the image ENV names `_work/_cache`), and sets `TMPDIR` to
+  `RUNNER_TEMP`, which covers jest's cache in `os.tmpdir()`; vitest caches in `node_modules`. `CARGO_HOME`,
+  `RUSTUP_HOME` and the tool cache stay under `_work`, where the image puts them.
 - With `node: "true"`, it installs node, for jobs that run node scripts without a `setup-node` step of their own.
 - With `rust: "true"`, it installs rustup (a pinned `rustup-init`, checked against its published SHA-256) with
   no toolchain. The job's `assert-rust-toolchain.sh` step then installs the toolchain `rust-toolchain.toml`
@@ -301,22 +304,21 @@ a pull request.
 then re-run the failed or cancelled jobs (or push again).
 
 **Caches.** `actions/cache` works on the pool through the GitHub cache service. The writers are unchanged, one
-per key: the scheduled runs on main write, and they stay hosted. Pull requests only read. Expect a routed job
-to miss the hosted entries and run cold. An entry is found only when its key AND its version match, and the
+per key: the scheduled runs on main write, and they stay hosted. Pull requests only read, on the pool too. An
+entry is found only when its key AND its version match, and the
 version is the SHA-256 of the `path:` strings exactly as written, plus the compression method
 (`@actions/cache` `getCacheVersion`; the `version` field of the caches REST API shows it). Three things follow:
 
 - The custom image has `zstd`, so the compression part of the version matches the hosted one.
-- A path written from `$HOME`, `CARGO_HOME` or the workspace is a different string on the pool
-  (`/home/runner/_work/_home/...`), so its version differs and the entry is never found. `Swatinem/rust-cache`
-  builds its paths that way; none of the jobs routed here uses it.
-- A `~/...` path string is the same on both, but the archive holds paths relative to `GITHUB_WORKSPACE`, so on
-  the pool it would unpack under `/home/runner` (the 10 GiB ephemeral disk), not under the moved `HOME`. So
-  `.github/actions/main-write-cache` (the Go and npm caches) skips its restore and save on a self-hosted runner,
-  and logs `cache: SKIPPED`.
-
-Mounting the work volume at `/home/runner` in the scale set would keep `HOME` unmoved, and then a `~/...`
-string would match and unpack in the right place (`deploy/ci-runners/README.md`).
+- The Go and npm caches (`.github/actions/main-write-cache`) spell their paths `~/...`, the same string on both
+  kinds of runner, so the version matches.
+- The archive holds paths relative to `GITHUB_WORKSPACE`, and `../../..` of the pool's workspace
+  (`/home/runner/_work/<repo>/<repo>`) is `/home/runner`, as on a hosted runner, so an entry unpacks into the
+  mounted `~/.cache` and `~/go`. The action checks that before it restores, and logs `cache: SKIPPED` on a
+  runner where it does not hold.
+- A path written from `CARGO_HOME` (under `_work` on the pool) is a different string, so its version differs and
+  the entry is never found. `Swatinem/rust-cache` builds its paths that way; none of the jobs routed here uses
+  it.
 
 ### Security model
 

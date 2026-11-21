@@ -13,9 +13,9 @@
 //   * the pull request's head repository IS this repository (not a fork), and its author is not Dependabot;
 //   * the actor, and the actor of a re-run, is not Dependabot.
 //
-// schedule and workflow_dispatch stay hosted on purpose: they are the runs on main that WRITE the caches. On the
-// pool HOME moves under _work, and the cache version hashes the path strings, so an entry it saved would be one
-// every hosted reader (fork and Dependabot pull requests, the jobs that stay hosted) misses. merge_group stays hosted too: its
+// schedule and workflow_dispatch stay hosted on purpose: they are the runs on main that WRITE the caches, and the
+// shared keys hold the hosted layout (main-write-cache): the pool only reads them, through the same `~/` paths,
+// which its pod mounts from the work volume. merge_group stays hosted too: its
 // payload does not say who wrote the queued change, so a Dependabot bump could reach the pool through it.
 //
 // Everything else runs on ubuntu-latest. This is routing, not security: a fork's pull request runs the fork's
@@ -68,8 +68,8 @@ export const HOSTED_ONLY = "runner.environment == 'github-hosted'";
 /** Events a workflow with a routed job may start on. */
 export const ALLOWED_EVENTS = new Set(["pull_request", "schedule", "workflow_dispatch", "workflow_call"]);
 /**
- * The action every routed job runs straight after its checkout: it moves HOME, the Go, npm and XDG caches
- * and TMPDIR onto the work volume. The pod's ephemeral-storage limit is 10 GiB outside /home/runner/_work,
+ * The action every routed job runs straight after its checkout: it points the Go, npm and XDG caches at the
+ * hosted paths, which the pod mounts from the work volume, and TMPDIR at it. The pod's ephemeral-storage limit is 10 GiB outside /home/runner/_work,
  * and a job over it is evicted.
  */
 export const ENV_ACTION = "./.github/actions/eng-runner-env";
@@ -394,7 +394,7 @@ export function check({ workflows, actions }) {
         errors.push(`${where}: routed to ${RUNNER} without ${ENV_ACTION}: outside /home/runner/_work the pod has 10 GiB of ephemeral storage, and the Go, npm and XDG caches would get it evicted. Add it straight after the checkout`);
       } else {
         if (steps[envAt].if !== undefined) errors.push(`${where}: ${ENV_ACTION} must run unconditionally (it is a no-op on hosted runners)`);
-        if (firstAction >= 0 && firstAction < envAt) errors.push(`${where}: step ${firstAction + 1} (${steps[firstAction].uses}) runs before ${ENV_ACTION}, so it writes under the old HOME; move ${ENV_ACTION} up, straight after the checkout`);
+        if (firstAction >= 0 && firstAction < envAt) errors.push(`${where}: step ${firstAction + 1} (${steps[firstAction].uses}) runs before ${ENV_ACTION}, so it writes its caches outside the work volume (the image's paths); move ${ENV_ACTION} up, straight after the checkout`);
       }
       for (const p of servicesProblems(job, steps, envAt, actions)) errors.push(`${where}: routed to ${RUNNER}: ${p}`);
     }

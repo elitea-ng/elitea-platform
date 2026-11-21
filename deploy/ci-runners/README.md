@@ -4,11 +4,14 @@
 
 - **Pod size:** 4 vCPU, 16 GiB of memory, an 80 GiB `_work` volume and 10 GiB of ephemeral storage outside it.
   `minRunners` is 0.
-- **Image:** `ghcr.io/elitea-ng/eng-runner:2.338.2-20261120`, built from [`image/Containerfile`](image/Containerfile).
+- **Image:** `ghcr.io/elitea-ng/eng-runner:2.338.2-20261120.10`, built from [`image/Containerfile`](image/Containerfile).
   It is the `actions-runner` image (Ubuntu 24.04, runner 2.338.2) plus build tools (cc, zstd and others) and
   the native services described in [`image/README.md`](image/README.md).
-- **Limits:** jobs run directly in the pod. There is no Docker daemon, so no `container:` or `services:`, and
-  no root, so no sudo or apt.
+- **Cache mounts:** the pod template mounts `~/.npm`, `~/.cache` and `~/go` from the work volume
+  (`_homecache/*`; `values-eng-runner.yaml` shows them). `HOME` stays `/home/runner`, so the Go and npm caches
+  sit at the hosted paths and restore main's entries.
+- **Limits:** jobs run directly in the pod. There is no Docker daemon, so no `container:` (a job's `services:`
+  run as processes through `.github/actions/native-services`), and no root, so no sudo or apt.
 
 How CI routes jobs to it is in [`docs/contributing/ci.md`](../../docs/contributing/ci.md#runners).
 

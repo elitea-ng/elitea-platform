@@ -221,12 +221,22 @@ test("a routed job must move its caches onto the work volume first", () => {
   assert.deepEqual(check(model({ schedule: [] }, runFirst)).errors, []);
 });
 
-test("this repository's env action moves HOME, the caches and TMPDIR", () => {
+test("this repository's env action keeps HOME and gives the hosted cache paths", () => {
   const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..", "..");
   const text = fs.readFileSync(path.join(root, ENV_ACTION, "action.yml"), "utf8");
-  for (const name of ["HOME", "XDG_CACHE_HOME", "GOPATH", "GOMODCACHE", "GOCACHE", "GOLANGCI_LINT_CACHE", "npm_config_cache", "CARGO_HOME", "RUSTUP_HOME", "TMPDIR"]) {
-    assert.match(text, new RegExp(`echo "${name}=`), name);
+  // HOME stays /home/runner (the pod mounts ~/.npm, ~/.cache, ~/go from the work volume): moving it broke
+  // rustup ("$HOME differs from euid-obtained home directory") and every hosted cache entry's paths.
+  assert.doesNotMatch(text, /echo "HOME=/);
+  // The hosted runner's paths, from $HOME, for the variables the image ENV points at _work/_cache.
+  for (const [name, rel] of [["XDG_CACHE_HOME", ".cache"], ["GOPATH", "go"], ["GOMODCACHE", "go/pkg/mod"], ["GOCACHE", ".cache/go-build"], ["GOLANGCI_LINT_CACHE", ".cache/golangci-lint"], ["npm_config_cache", ".npm"]]) {
+    assert.match(text, new RegExp(`echo "${name}=\\$HOME/${rel.replace(/[./]/g, "\\$&")}"`), name);
   }
+  assert.match(text, /echo "TMPDIR=\$RUNNER_TEMP"/);
+  // The mounts are checked, so a pod template without them fails by name instead of filling the 10 GiB disk.
+  for (const dir of [".npm", ".cache", "go"]) assert.ok(text.includes(`"$HOME/${dir}"`), dir);
+  assert.match(text, /mountpoint -q/);
+  // cargo and rustup stay under _work, where the image puts them.
+  assert.doesNotMatch(text, /echo "(?:CARGO_HOME|RUSTUP_HOME)=/);
   // Parallelism is pinned to the pod's 4 CPUs for every routed job, here, on the pool only.
   for (const name of ["GOMAXPROCS", "CARGO_BUILD_JOBS", "RUST_TEST_THREADS"]) assert.match(text, new RegExp(`echo "${name}=4"`), name);
   // rustup is pinned and checked, never piped from sh.rustup.rs.
