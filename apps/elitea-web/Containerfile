@@ -41,7 +41,9 @@ ENV NODE_OPTIONS="--max-old-space-size=4096"
 # (`shared/config/appVersion.ts`). Declared after `npm ci` so a new release
 # does not invalidate the dependency layer. Unset in a local or CI build: "dev".
 ARG VERSION=dev
-RUN VITE_APP_VERSION="${VERSION}" npm run build
+# build:app only: every stage below copies dist/app. The admin, maintenance
+# and brand-preview bundles are built and gated in ci-web.yml, not served here.
+RUN VITE_APP_VERSION="${VERSION}" npm run build:app
 
 # ── Stage 1b: build the docs site (apps/elitea-docs, Astro Starlight) ────────
 # Its own stage and lockfile, so a docs edit never invalidates the SPA build
