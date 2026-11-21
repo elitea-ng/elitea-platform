@@ -243,6 +243,8 @@ test("this repository's env action keeps HOME and gives the hosted cache paths",
   assert.match(text, /mountpoint -q/);
   // cargo and rustup stay under _work, where the image puts them.
   assert.doesNotMatch(text, /echo "(?:CARGO_HOME|RUSTUP_HOME)=/);
+  // ...and ~/.cargo, ~/.rustup link there, for processes started with a cleared env (local-tools' shell).
+  assert.ok(text.includes('"$CARGO_HOME:$HOME/.cargo" "$RUSTUP_HOME:$HOME/.rustup"'));
   // Parallelism is pinned to the pod's 4 CPUs for every routed job, here, on the pool only.
   for (const name of ["GOMAXPROCS", "CARGO_BUILD_JOBS", "RUST_TEST_THREADS"]) assert.match(text, new RegExp(`echo "${name}=4"`), name);
   // rustup is pinned and checked, never piped from sh.rustup.rs.

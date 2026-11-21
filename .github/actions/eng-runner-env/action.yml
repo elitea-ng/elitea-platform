@@ -124,3 +124,17 @@ runs:
           [ "$attempt" -lt 3 ] || { echo "::error::eng-runner-env: rustup default $pin failed three times"; exit 1; }
           sleep $((attempt * 10))
         done
+        # A process started with a cleared env (local-tools' shell keeps PATH
+        # and HOME, not CARGO_HOME/RUSTUP_HOME) falls back to ~/.cargo and
+        # ~/.rustup. HOME is /home/runner now, so point those at the _work
+        # copies, or rustup finds no default toolchain there.
+        for pair in "$CARGO_HOME:$HOME/.cargo" "$RUSTUP_HOME:$HOME/.rustup"; do
+          target="${pair%%:*}" link="${pair#*:}"
+          [ "$target" = "$link" ] && continue
+          if [ -L "$link" ] || [ ! -e "$link" ]; then
+            ln -sfn -- "$target" "$link"
+          else
+            echo "::error::eng-runner-env: $link exists and is not a link; the toolchain lives in $target"
+            exit 1
+          fi
+        done
