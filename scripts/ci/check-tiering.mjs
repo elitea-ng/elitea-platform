@@ -218,14 +218,17 @@ export function check({ ci, tiers, workflows }) {
 
 // ci-go's shards run no-binaries' two elitea-main gates (api-core, infra-suites) and
 // ci-contract's tests (db-storage). Those run there only when ci-go does not: ci.yml passes
-// both workflows ci-go's own filter as `go_runs`, and each skips on that input alone.
+// no-binaries ci-go's own filter as `go_runs` and its two steps skip on it; ci-contract
+// carries `unless: ci-go` in tier-paths.json.
 export const GO_RUNS = "${{ fromJSON(needs.changes.outputs.run)['ci-go'] }}";
 const GO_DUPLICATES = [
   ["no-binaries", "no-binaries.yml", (wf) => Object.values(wf?.jobs ?? {}).flatMap((j) => j.steps ?? []).filter((s) => /go test -count=1 \.\/(?:internal\/api\/|tests\/deployedge\/)/.test(String(s.run ?? ""))).map((s) => [s.name, s.if])],
-  ["ci-contract", "ci-contract.yml", (wf) => Object.entries(wf?.jobs ?? {}).map(([id, j]) => [id, j.if])],
 ];
-export function checkGoDuplicates(ci, workflows) {
+export function checkGoDuplicates(ci, workflows, tiers = { jobs: {} }) {
   const errors = [];
+  // ci-contract does not start at all where ci-go runs: tier-paths.json `unless`, so the
+  // changes output says false and the gates read its skip as correct, not missing.
+  if (tiers.jobs?.["ci-contract"] && tiers.jobs["ci-contract"].unless !== "ci-go") errors.push("tier-paths.json: ci-contract needs `\"unless\": \"ci-go\"` (its tests are ci-go's db-storage shard)");
   if (String(ci.jobs?.["ci-go"]?.if ?? "") !== "fromJSON(needs.changes.outputs.run)['ci-go']") errors.push("ci-go: its if is no longer its own filter alone; no-binaries' and ci-contract's `go_runs` must follow it");
   for (const [job, file, gated] of GO_DUPLICATES) {
     if (!ci.jobs?.[job]) continue;
@@ -293,7 +296,7 @@ export function main({ root = ROOT, out = console.log, err = console.error } = {
     err(`::error::${error.message}`);
     return 1;
   }
-  const errors = [...check(model), ...checkDesktopPackage(model), ...checkWebUnitSuite(model.ci, model.workflows), ...checkGoDuplicates(model.ci, model.workflows)];
+  const errors = [...check(model), ...checkDesktopPackage(model), ...checkWebUnitSuite(model.ci, model.workflows), ...checkGoDuplicates(model.ci, model.workflows, model.tiers)];
   if (errors.length) {
     for (const e of errors) err(`::error::${e}`);
     return 1;

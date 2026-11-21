@@ -93,6 +93,14 @@ test("patterns: ** crosses directories, * does not, ! excludes, last match wins"
   assert.ok(reaches(["anything"], null));
 });
 
+test("computeRun: an `unless` job does not run where the job it names does", () => {
+  const t = { always: ["scripts/ci/tier-paths.json"], jobs: { go: { tier: "fast", paths: ["svc/**"] }, contract: { tier: "fast", paths: ["svc/tests/contract/**", "contract.yml"], unless: "go" } } };
+  assert.deepEqual(computeRun(t, ["svc/tests/contract/a_test.go"]), { go: true, contract: false });
+  assert.deepEqual(computeRun(t, ["contract.yml"]), { go: false, contract: true });
+  assert.deepEqual(computeRun(t, [], { everything: true }), { go: true, contract: false });
+  assert.throws(() => computeRun({ always: [], jobs: { c: { tier: "fast", paths: ["x"], unless: "nope" } } }, ["x"]), /unless names nope/);
+});
+
 test("computeRun: a change reaches only the jobs whose paths it matches; the tiering files reach all", () => {
   const t = { always: ["scripts/ci/tier-paths.json"], jobs: tiers.jobs };
   assert.deepEqual(computeRun(t, ["a/x.go"]), { a: true, b: true, h: false, g: false });

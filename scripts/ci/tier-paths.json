@@ -110,7 +110,8 @@
         "services/elitea-main/tests/contract/**",
         "services/elitea-main/api/openapi/**",
         ".github/workflows/ci-contract.yml"
-      ]
+      ],
+      "unless": "ci-go"
     },
     "ci-gateway": {
       "tier": "fast",

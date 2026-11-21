@@ -222,23 +222,22 @@ test("one web unit suite: the plain shards stand down only where coverage runs",
 
 test("duplicate Go tests run only where ci-go does not", () => {
   const ok = "${{ !cancelled() && !inputs.go_runs }}";
-  const model = ({ goIf = "fromJSON(needs.changes.outputs.run)['ci-go']", nb = GO_RUNS, cc = GO_RUNS, stepIf = ok, jobIf = "${{ !inputs.go_runs }}", steps = 2 } = {}) => [
-    { jobs: { "ci-go": { if: goIf }, "no-binaries": { with: { go_runs: nb } }, "ci-contract": { with: { go_runs: cc } } } },
+  const model = ({ goIf = "fromJSON(needs.changes.outputs.run)['ci-go']", nb = GO_RUNS, stepIf = ok, steps = 2, unless = "ci-go" } = {}) => [
+    { jobs: { "ci-go": { if: goIf }, "no-binaries": { with: { go_runs: nb } }, "ci-contract": {} } },
     {
       "no-binaries.yml": { parsed: { jobs: { gates: { steps: [
         { name: "edges", if: stepIf, run: "go test -count=1 ./tests/deployedge/..." },
         { name: "grants", if: stepIf, run: "go test -count=1 ./internal/api/" },
       ].slice(0, steps) } } } },
-      "ci-contract.yml": { parsed: { jobs: { compile: { if: jobIf } } } },
     },
+    { jobs: { "ci-contract": { unless } } },
   ];
   assert.deepEqual(checkGoDuplicates(...model()), []);
   assert.match(checkGoDuplicates(...model({ nb: null })).join("\n"), /no-binaries: ci.yml must pass/);
-  assert.match(checkGoDuplicates(...model({ cc: GO_RUNS.replace("ci-go", "ci-web") })).join("\n"), /ci-contract: ci.yml must pass/);
+  assert.match(checkGoDuplicates(...model({ unless: null })).join("\n"), /ci-contract needs/);
   assert.match(checkGoDuplicates(...model({ goIf: "false" })).join("\n"), /ci-go: its if/);
   assert.match(checkGoDuplicates(...model({ stepIf: "${{ !cancelled() }}" })).join("\n"), /edges/);
   assert.match(checkGoDuplicates(...model({ stepIf: "${{ !inputs.go_runs || true }}" })).join("\n"), /grants/);
-  assert.match(checkGoDuplicates(...model({ jobIf: null })).join("\n"), /compile/);
   assert.match(checkGoDuplicates(...model({ steps: 1 })).join("\n"), /1 of the 2/);
 });
 

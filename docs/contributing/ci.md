@@ -79,8 +79,9 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
   registry test no longer compiles a regexp per code over the whole tree (21 minutes to 4 seconds).
 - **Go tests once.** `no-binaries` (no path filter) runs the elitea-main gates `./internal/api/` and
   `./tests/deployedge/...`, and `ci-contract` runs `./tests/contract/`, only when `ci-go` does not run: ci-go's
-  shards (api-core, infra-suites, db-storage) run the same packages with `-race`. ci.yml passes both ci-go's
-  filter as `go_runs`, and `check-tiering.mjs` holds it.
+  shards (api-core, infra-suites, db-storage) run the same packages with `-race`. ci.yml passes `no-binaries`
+  ci-go's filter as `go_runs`; `ci-contract` carries `"unless": "ci-go"` in `tier-paths.json`, so the changes
+  output itself says it does not run and the gates read its skip as correct. `check-tiering.mjs` holds both.
 - **Web coverage.** One web unit suite per run. On a draft, and in the nightly, the unit shards run without
   coverage in the fast tier (`ci-web.yml` `unit-tests`). On a ready pull request `ci-web-coverage.yml` runs every
   unit test with coverage in the heavy tier and enforces the thresholds, and the plain shards are skipped:

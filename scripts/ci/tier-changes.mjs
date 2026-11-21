@@ -96,6 +96,14 @@ export function computeRun(tiers, files, { everything = false } = {}) {
     }
     run[id] = everythingNow || job.union.some((member) => run[member]);
   }
+  // `unless: <job>`: a job whose tests the other job runs too (ci-contract's are ci-go's
+  // db-storage shard) runs only where that one does not. Applied last, so `run` (and the
+  // gates that read it) says false, and a skip there is not a missing job.
+  for (const [id, job] of Object.entries(tiers.jobs)) {
+    if (job.unless === undefined) continue;
+    if (!Object.hasOwn(run, job.unless)) throw new Error(`${id}: its unless names ${job.unless}, which is not a job`);
+    run[id] = run[id] && !run[job.unless];
+  }
   // The file's order, so the output reads like the file.
   return Object.fromEntries(Object.keys(tiers.jobs).map((id) => [id, run[id]]));
 }
