@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync, copyFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, copyFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -72,8 +72,12 @@ test("Dependabot pull request is refused by author, actor and re-run actor", () 
   assert.equal(run({ event: "push", actor: "dependabot[bot]" }).code, 1);
 });
 
+// On a pool pod the real allowlist is mounted at /etc/eng-runner/allowed-repos, and job-started.sh reads it
+// before the built-in list and the file next to the hook; the scenarios that assert those run hosted and locally.
+const MOUNTED = existsSync("/etc/eng-runner/allowed-repos") && "the pool's real allowlist is mounted at /etc/eng-runner and takes precedence (job-started.sh); these run on hosted and locally";
+
 for (const event of ["workflow_dispatch", "schedule", "push"]) {
-  test(`${event} of an allowed repository is accepted`, () => {
+  test(`${event} of an allowed repository is accepted`, { skip: MOUNTED }, () => {
     const r = run({ event });
     assert.equal(r.code, 0);
     assert.match(r.out, /allowlist: built-in list/);
@@ -99,7 +103,7 @@ test("a repository whose name is a prefix or suffix of an allowed one is refused
   assert.equal(run({ repo: "elitea-ng/elitea-platform-x", event: "schedule" }).code, 1);
 });
 
-test("allowed-repos next to the hook replaces the allowlist", () => {
+test("allowed-repos next to the hook replaces the allowlist", { skip: MOUNTED }, () => {
   const file = "# owner/name per line\nelitea-ng/other  # a comment\n\nelitea-ng/third\n";
   assert.equal(run({ event: "schedule", allowedRepos: file }).code, 1, "a built-in entry is no longer allowed");
   const accepted = run({ repo: "elitea-ng/other", event: "schedule", allowedRepos: file });
@@ -109,7 +113,7 @@ test("allowed-repos next to the hook replaces the allowlist", () => {
   assert.match(run({ event: "schedule", allowedRepos: file }).out, /not on the allowlist \(.*allowed-repos\)/);
 });
 
-test("an empty allowed-repos file refuses everything", () => {
+test("an empty allowed-repos file refuses everything", { skip: MOUNTED }, () => {
   assert.equal(run({ event: "schedule", allowedRepos: "" }).code, 1);
   assert.equal(run({ event: "schedule", allowedRepos: "# nothing\n" }).code, 1);
 });
