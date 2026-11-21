@@ -97,7 +97,7 @@
  * importer, so grouping was the only move that did not cost reach.
  */
 import { useCheckStoredConfigurationConnection, useTestConfigurationConnection } from './api/useConfigurations';
-import { classifySchemaField, configurationSectionsOf, initialDataForSchema } from './lib/schemaField';
+import { checkboxOptionsOf, classifySchemaField, configurationSectionsOf, initialDataForSchema } from './lib/schemaField';
 import { useCredentialWarningModal } from './model/useCredentialWarningModal';
 import { CredentialsControls } from './ui/CredentialsControls';
 import { CredentialsTabBar } from './ui/CredentialsTabBar';
@@ -138,6 +138,7 @@ export { CredentialsSelect } from './ui/CredentialsSelect';
  */
 export const SchemaField = {
   classify: classifySchemaField,
+  checkboxOptions: checkboxOptionsOf,
   configurationSections: configurationSectionsOf,
   initialData: initialDataForSchema,
 } as const;
