@@ -107,7 +107,7 @@ export const NATIVE_ONLY_ENV = {
     PG_SOCKET_DIR: "the Unix socket directory: compose's container has its own /var/run/postgresql",
   },
   rustfs: {
-    RUSTFS_ADDRESS: "the bind: the image listens on :9000 by default; natively rustfs's own address",
+    RUSTFS_ADDRESS: "the bind, spelled out: :9000, the image's default (rustfs refuses a loopback alias as its host)",
     RUSTFS_VOLUMES: "the data directory the image keeps at /data",
     RUSTFS_CONSOLE_ENABLE: "the image's console is never published; natively it would bind another port",
     RUSTFS_OBS_LOG_DIRECTORY: "the image writes its logs under /logs; natively under the data dir",
@@ -377,7 +377,11 @@ export default function table(ctx) {
         env: {
           RUSTFS_ACCESS_KEY: "elitea",
           RUSTFS_SECRET_KEY: "elitea-dev-secret",
-          RUSTFS_ADDRESS: `${ip("rustfs")}:9000`,
+          // rustfs refuses a bind host that is not one of the machine's own addresses
+          // ("host in server address should be this server"), and 127.0.0.4 is not one: lo
+          // carries 127.0.0.1/8. So it listens on every address at :9000 (no other service of
+          // the stack uses 9000) and is reached as rustfs, 127.0.0.4, like the rest.
+          RUSTFS_ADDRESS: ":9000",
           RUSTFS_VOLUMES: path.join(data("rustfs"), "data"),
           RUSTFS_CONSOLE_ENABLE: "false",
           RUSTFS_OBS_LOG_DIRECTORY: path.join(data("rustfs"), "logs"),
