@@ -182,8 +182,9 @@ type Access interface {
 	// key ("toolkit:<id>", "builtin:<type>").
 	HoldsToolkit(key string) bool
 	// HoldsCredential reports whether the approver may use the credential
-	// reference id.
-	HoldsCredential(reference string) bool
+	// reference id for the toolkit that names it (the toolkit's key, as
+	// HoldsToolkit takes it).
+	HoldsCredential(toolkit, reference string) bool
 }
 
 // Approvable is the part of requested the approver may approve: the items
@@ -222,7 +223,7 @@ func Approvable(requested GrantSet, choose []Item, access Access) (approved Gran
 				continue
 			}
 		case ItemCredential:
-			if !access.HoldsCredential(item.Name) {
+			if !access.HoldsCredential(item.Toolkit, item.Name) {
 				continue
 			}
 		}

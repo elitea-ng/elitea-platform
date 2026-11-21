@@ -150,8 +150,8 @@ func TestMissingIsSetContainmentNotVersionEquality(t *testing.T) {
 
 type fixedAccess struct{ toolkits, credentials map[string]bool }
 
-func (a fixedAccess) HoldsToolkit(key string) bool          { return a.toolkits[key] }
-func (a fixedAccess) HoldsCredential(reference string) bool { return a.credentials[reference] }
+func (a fixedAccess) HoldsToolkit(key string) bool             { return a.toolkits[key] }
+func (a fixedAccess) HoldsCredential(_, reference string) bool { return a.credentials[reference] }
 
 func TestApprovableLeavesOutWhatTheApproverDoesNotHold(t *testing.T) {
 	requested := GrantSet{

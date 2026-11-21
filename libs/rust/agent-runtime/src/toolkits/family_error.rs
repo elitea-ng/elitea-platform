@@ -24,6 +24,7 @@ use super::families::ado::config::AdoConfigErrorCode;
 use super::families::ado::toolset::AdoToolsetErrorCode;
 use super::families::aha::config::AhaConfigErrorCode;
 use super::families::aha::tools::AhaToolsetErrorCode;
+use super::families::analyse_jira::config::AnalyseJiraErrorCode;
 use super::families::bigquery::config::BigQueryConfigErrorCode;
 use super::families::bigquery::tools::BigQueryToolsetErrorCode;
 use super::families::bitbucket::config::BitbucketConfigErrorCode;
@@ -156,6 +157,19 @@ impl FamilyErrorCode for JiraConfigErrorCode {
 }
 
 impl FamilyErrorCode for JiraToolsetErrorCode {
+    fn failure(self) -> FamilyFailure {
+        match self {
+            Self::InvalidConfiguration | Self::Client | Self::InvalidDefinition => {
+                FamilyFailure::InvalidConfiguration
+            }
+            Self::ResourceExhausted => FamilyFailure::ResourceExhausted,
+            Self::UnsupportedSelection => FamilyFailure::UnsupportedSelection,
+            Self::UnsupportedCapability(setting) => FamilyFailure::UnsupportedCapability(setting),
+        }
+    }
+}
+
+impl FamilyErrorCode for AnalyseJiraErrorCode {
     fn failure(self) -> FamilyFailure {
         match self {
             Self::InvalidConfiguration | Self::Client | Self::InvalidDefinition => {

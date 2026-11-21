@@ -188,6 +188,9 @@ type Review struct {
 	CanReview bool
 	// Editors are the people to ask when the viewer may not, at most MaxEditors.
 	Editors []string
+	// CallerName is the calling agent's saved name, when the lookup knows it. A live frame carries the worker's
+	// runtime label ("elitea-agent") until the answer is stored with the agent's own name (#2276).
+	CallerName string
 }
 
 // Reviewer answers a viewer's Review of the delegations of one agent.
@@ -258,6 +261,7 @@ func StampFrame(ctx context.Context, data []byte, projectID, userID int64, revie
 		return data
 	}
 	Stamp(notice, review)
+	nameCaller(notice, review.CallerName)
 	encoded, err := json.Marshal(notice)
 	if err != nil {
 		return data
@@ -271,6 +275,17 @@ func StampFrame(ctx context.Context, data []byte, projectID, userID int64, revie
 		return data
 	}
 	return out
+}
+
+// nameCaller replaces the worker's runtime label with the calling agent's saved name on a live frame (#2276). A
+// stored notice already carries the name it was saved with, so a rename never rewrites history.
+func nameCaller(notice map[string]any, name string) {
+	name = clip(name)
+	edge, ok := notice["edge"].(map[string]any)
+	if name == "" || !ok {
+		return
+	}
+	edge["caller_name"] = name
 }
 
 // StampMeta returns the served answer's meta with its notices stamped. The

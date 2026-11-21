@@ -33,7 +33,9 @@
  * `agent_state`, so every avatar is the still — which is also what reduced
  * motion shows. The motions are asserted in `AgentAvatar.test.tsx`.
  */
-import { test, expect, type Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
+
+import { test } from './lib/test';
 
 import { BASE_URL } from '../../playwright.config';
 import { keepThemeOffTheServer } from '../fixtures/serverTheme';

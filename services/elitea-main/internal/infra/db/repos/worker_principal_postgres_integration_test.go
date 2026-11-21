@@ -181,11 +181,25 @@ VALUES (('0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e16' || $1::text)::uuid, 7, $2::uuid, $
 		t.Fatalf("references = %v, err = %v; want only the live reference", references, err)
 	}
 	// The project-wide read (the approver's side) lists every active, unexpired
-	// reference whatever toolkit it is for, and none of another project's.
-	if all, err := sources.UsableCredentialReferencesInProject(ctx, 7); err != nil || !slices.Equal(all, []string{principalRefLive, principalRefOutside}) {
-		t.Fatalf("project references = %v, err = %v; want the live and the outside reference", all, err)
+	// (toolkit, reference) pair, and none of another project's (#2215).
+	wantUses := []ToolkitCredential{{ToolkitID: 7, Reference: principalRefLive}, {ToolkitID: 99, Reference: principalRefOutside}}
+	if all, err := sources.UsableCredentialsInProject(ctx, 7); err != nil || !slices.Equal(all, wantUses) {
+		t.Fatalf("project uses = %v, err = %v; want %v", all, err, wantUses)
 	}
-	if all, err := sources.UsableCredentialReferencesInProject(ctx, 8); err != nil || len(all) != 0 {
+	// The read is bounded by the DISTINCT live pairs, not by the grant rows: a project with a long history of
+	// revoked and expired grants (here 1200 revoked rows, half of them also expired, on top of the live ones) answers the same two pairs, so one
+	// approval never loads more than the pairs in use.
+	exec(`
+INSERT INTO elitea_identity.credential_use_grants
+    (id, tenant_project_id, agent_binding_id, toolkit_id, credential_reference_id, target_binding_id,
+     capabilities, operation_scopes, state, epoch, expires_at, proposed_by, approved_by, last_transition_by)
+SELECT gen_random_uuid(), 7, $1::uuid, 7, $2::uuid, $3::uuid, ARRAY['use'], ARRAY['jira.read'],
+       'revoked', 1, CASE WHEN n % 2 = 0 THEN NULL ELSE '2000-01-01T00:00:00Z'::timestamptz END, '100', '200', '200'
+FROM generate_series(1, 1200) AS n`, egressGovBinding, principalRefLive, egressGovJira)
+	if all, err := sources.UsableCredentialsInProject(ctx, 7); err != nil || !slices.Equal(all, wantUses) {
+		t.Fatalf("project uses after a long grant history = %v, err = %v; want %v", all, err, wantUses)
+	}
+	if all, err := sources.UsableCredentialsInProject(ctx, 8); err != nil || len(all) != 0 {
 		t.Fatalf("another project read the grants: %v, err = %v", all, err)
 	}
 	if references, err := sources.UsableCredentialReferences(ctx, 8, reachable); err != nil || len(references) != 0 {

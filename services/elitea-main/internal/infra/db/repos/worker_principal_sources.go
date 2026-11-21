@@ -319,19 +319,26 @@ ORDER BY 1`, projectID, toolkitIDs)
 	return references, nil
 }
 
-// UsableCredentialReferencesInProject answers every credential reference an
-// active, unexpired ADR-0039 `use` grant of the project lets some toolkit use,
-// sorted: the references an approver of a delegation grant can stand behind
-// under the governed profile.
-func (s *WorkerEgressSources) UsableCredentialReferencesInProject(ctx context.Context, projectID int64) ([]string, error) {
+// ToolkitCredential is one (toolkit, credential reference) pair an active ADR-0039 use grant covers.
+type ToolkitCredential struct {
+	ToolkitID int64
+	Reference string
+}
+
+// UsableCredentialsInProject answers every (toolkit, credential reference) an
+// active, unexpired ADR-0039 `use` grant of the project covers, sorted: what an
+// approver of a delegation grant can stand behind under the governed profile,
+// toolkit by toolkit (#2215). A reference one toolkit's grant covers is not
+// thereby held for another toolkit that names the same reference.
+func (s *WorkerEgressSources) UsableCredentialsInProject(ctx context.Context, projectID int64) ([]ToolkitCredential, error) {
 	rows, err := s.pool.Query(ctx, `
-SELECT DISTINCT credential_reference_id::text
+SELECT DISTINCT toolkit_id, credential_reference_id::text
 FROM elitea_identity.credential_use_grants
 WHERE tenant_project_id = $1
   AND state = 'active'
   AND (expires_at IS NULL OR expires_at > clock_timestamp())
   AND 'use' = ANY (capabilities)
-ORDER BY 1`, projectID)
+ORDER BY 1, 2`, projectID)
 	if err != nil {
 		if undefinedTable(err) {
 			return nil, nil
@@ -339,13 +346,13 @@ ORDER BY 1`, projectID)
 		return nil, fmt.Errorf("delegation access: read the credential use grants: %w", err)
 	}
 	defer rows.Close()
-	var references []string
+	var uses []ToolkitCredential
 	for rows.Next() {
-		var reference string
-		if err := rows.Scan(&reference); err != nil {
-			return nil, fmt.Errorf("delegation access: read a credential reference: %w", err)
+		var use ToolkitCredential
+		if err := rows.Scan(&use.ToolkitID, &use.Reference); err != nil {
+			return nil, fmt.Errorf("delegation access: read a credential use: %w", err)
 		}
-		references = append(references, reference)
+		uses = append(uses, use)
 	}
 	if err := rows.Err(); err != nil {
 		if undefinedTable(err) {
@@ -353,5 +360,5 @@ ORDER BY 1`, projectID)
 		}
 		return nil, fmt.Errorf("delegation access: read the credential use grants: %w", err)
 	}
-	return references, nil
+	return uses, nil
 }
