@@ -223,6 +223,51 @@ export function scriptDependencies(scripts, root = ROOT) {
 const ACTION_USE = /uses: \.\/(\.github\/actions\/[A-Za-z0-9_-]+)/g;
 const sorted = (items) => [...items].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 
+// The native legs (ci-web-e2e-native.yml) run the compose lanes' E2E legs on
+// the pool, in their place on a pull request. Their own filter
+// (tier-paths.json `ci-web-e2e-native`) must therefore start on every input
+// of the compose lanes, and on what the native workflow itself runs: the
+// scripts it calls (and their imports) and the native stack's table.
+export const NATIVE_WORKFLOW = "ci-web-e2e-native.yml";
+export const NATIVE_FILES = ["deploy/native/e2e-standalone.mjs", "scripts/e2e/native-stack.mjs", "apps/elitea-web/scripts/lib/stack-backend.sh"];
+
+/**
+ * @param {{native: string[]|undefined, composeInputs: [string, string][], nativeInputs: [string, string][]}} model
+ * @returns {string[]} the problems, one per uncovered input
+ */
+export function nativeFilterProblems({ native, composeInputs, nativeInputs }) {
+  if (!native) return [`tier-paths.json has no ci-web-e2e-native entry, so ${NATIVE_WORKFLOW} never starts`];
+  if (native.some((p) => p.startsWith("!"))) return ["negated path patterns are not modelled by this check (ci-web-e2e-native)"];
+  const errors = [];
+  for (const [file, why] of composeInputs) {
+    if (!covered(file, native)) errors.push(`${file} (${why}) is an input of the E2E lanes and no ci-web-e2e-native pattern covers it; the native legs run them on a pull request`);
+  }
+  for (const [file, why] of nativeInputs) {
+    if (!covered(file, native)) errors.push(`${file} (${why}) is an input of the native E2E legs and no ci-web-e2e-native pattern covers it`);
+  }
+  return errors;
+}
+
+// The scripts a set of workflow texts call, through the local actions they use.
+function workflowScripts(files) {
+  const texts = new Map(files.map((file) => [relativeToRoot(file), fs.readFileSync(file, "utf8")]));
+  for (const [, action] of [...texts.values()].flatMap((text) => [...text.matchAll(ACTION_USE)])) {
+    const file = path.join(ROOT, action, "action.yml");
+    const text = fs.readFileSync(file, "utf8");
+    texts.set(relativeToRoot(file), text);
+    for (const [, nested] of text.matchAll(ACTION_USE)) {
+      texts.set(`${nested}/action.yml`, fs.readFileSync(path.join(ROOT, nested, "action.yml"), "utf8"));
+    }
+  }
+  const found = new Map();
+  for (const [where, text] of texts) {
+    for (const script of scriptReferences(text)) {
+      if (exists(path.join(ROOT, script)) && !found.has(script)) found.set(script, `called from ${where}`);
+    }
+  }
+  return found;
+}
+
 export function main(log = console.log) {
   // The filter is scripts/ci/tier-paths.json (ci.yml runs this workflow as a job).
   const tiers = JSON.parse(fs.readFileSync(path.join(ROOT, "scripts", "ci", "tier-paths.json"), "utf8"));
@@ -251,25 +296,9 @@ export function main(log = console.log) {
       }
     }
   }
-  const texts = new Map(WORKFLOWS.map((file) => [relativeToRoot(file), fs.readFileSync(file, "utf8")]));
-  for (const [, action] of [...texts.values()].flatMap((text) => [...text.matchAll(ACTION_USE)])) {
-    const file = path.join(ROOT, action, "action.yml");
-    const text = fs.readFileSync(file, "utf8");
-    texts.set(relativeToRoot(file), text);
-    for (const [, nested] of text.matchAll(ACTION_USE)) {
-      texts.set(`${nested}/action.yml`, fs.readFileSync(path.join(ROOT, nested, "action.yml"), "utf8"));
-    }
-  }
-  const scripts = new Set();
-  for (const [where, text] of texts) {
-    for (const script of scriptReferences(text)) {
-      if (exists(path.join(ROOT, script))) {
-        setDefault(script, `called from ${where}`);
-        scripts.add(script);
-      }
-    }
-  }
-  for (const [dep, script] of scriptDependencies(scripts)) setDefault(dep, `imported by ${script}`);
+  const called = workflowScripts(WORKFLOWS);
+  for (const [script, why] of called) setDefault(script, why);
+  for (const [dep, script] of scriptDependencies(new Set(called.keys()))) setDefault(dep, `imported by ${script}`);
 
   if (services < MINIMUM_BUILD_SERVICES || inputs.size < MINIMUM_INPUTS) {
     errors.push(`found ${services} build service(s) and ${inputs.size} input(s), below the floors ${MINIMUM_BUILD_SERVICES}/${MINIMUM_INPUTS}: the reader stopped finding things`);
@@ -288,9 +317,17 @@ export function main(log = console.log) {
       errors.push(`${file} (${why}) is an input of the E2E lanes, but e2e-lane-filter.sh says a change to it skips them: ${pyRepr(out.trim())}`);
     }
   }
+  const nativeCalled = workflowScripts([path.join(ROOT, ".github", "workflows", NATIVE_WORKFLOW)]);
+  const nativeInputs = new Map([...NATIVE_FILES.map((f) => [f, "the native stack"]), ...nativeCalled]);
+  for (const [dep, script] of scriptDependencies(new Set([...nativeCalled.keys(), ...NATIVE_FILES.filter((f) => f.endsWith(".mjs"))]))) {
+    if (!nativeInputs.has(dep)) nativeInputs.set(dep, `imported by ${script}`);
+  }
+  const native = tiers.jobs["ci-web-e2e-native"]?.paths;
+  errors.push(...nativeFilterProblems({ native, composeInputs: ordered, nativeInputs: sorted(nativeInputs.keys()).map((k) => [k, nativeInputs.get(k)]) }));
   for (const error of errors) log(`::error::${error}`);
   if (errors.length) return 1;
   log(`ci-web-e2e.yml paths: ${inputs.size} input(s) of ${services} build service(s) and the scripts, all covered by ${pr.length} pattern(s)`);
+  log(`${NATIVE_WORKFLOW} paths: those and ${nativeInputs.size} native input(s), all covered by ${native.length} pattern(s)`);
   return 0;
 }
 

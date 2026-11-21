@@ -275,6 +275,29 @@ copying `nats-server` out of its container) run on hosted runners only; `scripts
 the image's `nats-server` on the pool and checks it is the chart's pin. `index_v2_preflight`'s system test creates
 its database on the job's server (`ELITEA_TEST_DATABASE_URL`) instead of starting a container, on both legs.
 
+### The E2E legs on the pool (no containers)
+
+`ci-web-e2e-native.yml` runs the seven E2E legs of `ci-web-e2e.yml` (chromium 1/2 and 2/2, webkit 1/3 to
+3/3, `platform-flags`, `platform-flags-webkit`) on the pool as `E2E native (<leg>)`, with the same matrix,
+shards and weights (`e2e-journey-shape.test.mjs` holds the two equal). Its `native-build` job builds the Go
+binaries and web bundles the two e2e images carry (`scripts/e2e/build-native-bin.sh`, the way their
+Containerfiles build them), packs them as one artifact, and the legs unpack it after checking its sha256. They
+need no image and no `ci-build-once`. Each leg runs `e2e-stack.sh up` and `seed` with `E2E_STACK=native`, so
+`scripts/e2e/native-stack.mjs` runs the compose services as processes from `deploy/native/e2e-standalone.mjs`.
+Every service binds the address the pod's hostAliases give its compose name. Playwright then runs on the host,
+using the browsers the image bakes in. It runs 4 workers, the config's CI default: the pod has 4 CPUs, as a
+hosted runner does, and the weights were measured at 4. On failure a leg uploads every service's log
+(`native-stack-logs-<leg>`). `check-native-stack-parity.mjs` (no-binaries) fails when the table drifts from the
+compose file: an environment key, a `depends_on` edge, a healthcheck or a one-shot.
+
+These jobs run only where the routing condition sends them to the pool. Where they run, `ci-web-e2e.yml`'s
+compose legs stand down on a pull request to one smoke leg, chromium 1/2. That leg runs only when the change
+reaches what only images prove: a Containerfile, a compose file, the web image's nginx or entrypoint, or the
+bake and image actions (`e2e-lane-filter.sh` `reaches-images`). A fork's or Dependabot's pull request, a run
+with `ENG_RUNNER` off and the nightly run keep the full compose matrix on hosted runners. Each leg therefore
+runs under exactly one name. `visual` and `docs-shots` stay compose on hosted runners, because their pixels
+come from the pinned Playwright container.
+
 ### How a job is routed
 
 A routed job's `runs-on` is exactly `ROUTED_RUNS_ON` from `scripts/ci/check-runner-routing.mjs`. That

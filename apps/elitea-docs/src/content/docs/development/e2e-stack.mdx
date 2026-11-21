@@ -58,6 +58,10 @@ There is no separate `build` or `status` subcommand: `up` builds what it needs, 
 
 `E2E_PROJECT` (default `elitea-e2e`) names the Compose project; set it together with the port variables above to run a second, disposable E2E stack beside the first.
 
+## Without containers
+
+`E2E_STACK=native` runs the same stack as processes. CI's self-hosted pool has no container runtime and uses this mode. Every call the script makes on the running stack goes through `apps/elitea-web/scripts/lib/stack-backend.sh`. With `native`, `scripts/e2e/native-stack.mjs` supervises the services of `deploy/native/e2e-standalone.mjs`, under their compose names and with their compose environment. `psql`, `elitea-migrate` and `rc` then run on the host. `E2E_NATIVE_BIN` names the directory `scripts/e2e/build-native-bin.sh` builds: the binaries and web bundles the e2e images carry. Every service binds its own `127.0.0.x` address, so the host must resolve the compose names to those addresses, as the pool's hostAliases do. `E2E_STACK=compose` is the default and runs exactly the compose commands. A change to the compose file needs the matching change to the native table: `scripts/ci/check-native-stack-parity.mjs` fails when they disagree.
+
 ## Personas and fixtures
 
 The seed step creates exactly two accounts through oidc-mock: `e2e-member@autotest.local` (a normal project member) and `e2e-admin@autotest.local` (holds the admin role). Playwright's own `auth.setup.ts` project signs each one in through a real OIDC round trip — filling the mock's "Subject" field with the persona's email — and saves the result as a storage-state file per persona (`member`, `admin`, and a third, `chat`, used by the streaming/chat specs, which owns its own personal project so it never contends with the other two).

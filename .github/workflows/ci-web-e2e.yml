@@ -121,6 +121,9 @@ on:
       reaches-webkit:
         type: string
         default: ""
+      reaches-images:
+        type: string
+        default: ""
   # No push arm: a merge starts no run (no-binaries.yml's workflow-triggers).
   # The nightly run on main is the one that WRITES the caches pull requests
   # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
@@ -172,7 +175,19 @@ jobs:
     needs: [build-once]
     # A skipped build-once job (a fork pull request) is not a failure: the
     # lane then builds the stack itself. A FAILED build stops the lane.
-    if: ${{ !cancelled() && ((inputs.web-images || needs.build-once.outputs.web-images) == 'success' || (inputs.web-images || needs.build-once.outputs.web-images) == 'skipped') && (inputs.reaches-stack || needs.build-once.outputs.reaches-stack) == 'true' }}
+    #
+    # ON A PULL REQUEST THE POOL RUNS, THESE LEGS ARE THE COMPOSE SMOKE ONLY.
+    # ci-web-e2e-native.yml runs the same seven legs there as processes, from
+    # binaries built on the pool, under `E2E native (<leg>)`; the routing
+    # condition below is check-runner-routing.mjs's ROUTING_CONDITION,
+    # the one that sends those jobs to the pool, so exactly one of the two
+    # runs each leg. What only the images can prove (a Containerfile, a
+    # compose file, the web image's nginx: e2e-lane-filter.sh reaches-images)
+    # still starts this job, and RUN_LEG then runs one chromium leg of it.
+    # Every other run is unchanged: a fork's or Dependabot's pull request, any
+    # run with ENG_RUNNER off, and the nightly run on main (the full compose
+    # matrix).
+    if: ${{ !cancelled() && ((inputs.web-images || needs.build-once.outputs.web-images) == 'success' || (inputs.web-images || needs.build-once.outputs.web-images) == 'skipped') && (inputs.reaches-stack || needs.build-once.outputs.reaches-stack) == 'true' && (github.event_name != 'pull_request' || (inputs.reaches-images || needs.build-once.outputs.reaches-images) == 'true' || !(vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'))) }}
     permissions:
       contents: read
       # Pulls the ci-* images by digest; only the build jobs write packages.
@@ -192,8 +207,9 @@ jobs:
       # changed, and on every run that is not a pull request (the nightly run on
       # main). A job-level `if` cannot read the matrix, so a skipped leg is a leg
       # whose every step is skipped; it reports success having run nothing, and
-      # says so in its "Skipped" step.
-      RUN_LEG: ${{ (matrix.engine != 'webkit' && matrix.engine != 'platform-flags-webkit') || (inputs.reaches-webkit || needs.build-once.outputs.reaches-webkit) == 'true' }}
+      # says so in its "Skipped" step. On a pull request the pool runs
+      # natively (the job `if:` above), only chromium-1of2 runs: the smoke.
+      RUN_LEG: ${{ ((matrix.engine != 'webkit' && matrix.engine != 'platform-flags-webkit') || (inputs.reaches-webkit || needs.build-once.outputs.reaches-webkit) == 'true') && (matrix.leg == 'chromium-1of2' || github.event_name != 'pull_request' || !(vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'))) }}
     strategy:
       # Both engines are validated independently. Issue #60 requires chromium AND
       # webkit; the job used to run whatever `npm run e2e` defaulted to, so half

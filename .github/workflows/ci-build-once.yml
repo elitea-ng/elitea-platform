@@ -47,6 +47,9 @@ on:
       reaches-webkit:
         description: The lane filter for the webkit legs.
         value: ${{ jobs.model-path-changes.outputs.reaches-webkit }}
+      reaches-images:
+        description: The lane filter for ci-web-e2e.yml's compose smoke leg (what only the container stack proves).
+        value: ${{ jobs.model-path-changes.outputs.reaches-images }}
       web-images:
         description: >-
           The result of the `web-images` job (success, skipped, failure,
@@ -111,6 +114,9 @@ jobs:
       # The webkit legs: a web, harness or client change on a pull request, and
       # every non-pull-request run (the nightly one) unconditionally.
       reaches-webkit: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reaches-webkit }}
+      # The compose smoke leg, on a pull request whose E2E legs the pool runs
+      # natively: a Containerfile, a compose file or the web image changed.
+      reaches-images: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reaches-images }}
     steps:
       - uses: actions/checkout@v7
         if: github.event_name == 'pull_request'

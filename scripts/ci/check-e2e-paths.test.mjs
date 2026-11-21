@@ -8,7 +8,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { containerfileInputs, covered, importSpecifiers, scriptDependencies, scriptReferences } from "./check-e2e-paths.mjs";
+import { containerfileInputs, covered, importSpecifiers, nativeFilterProblems, scriptDependencies, scriptReferences } from "./check-e2e-paths.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -170,4 +170,14 @@ test("on the real tree the stack-image script needs its py-compat helper", () =>
   for (const dep of ["scripts/ci/ci-compat.mjs", "scripts/ci/py-compat.mjs", "scripts/ci/package.json", "scripts/ci/package-lock.json"]) {
     assert.ok(yamlReader.has(dep), dep);
   }
+});
+
+test("the native legs' filter must start on every compose-lane input and on its own", () => {
+  const composeInputs = [["services/elitea-main/go.mod", "a build input"]];
+  const nativeInputs = [["scripts/e2e/native-stack.mjs", "the native stack"]];
+  assert.deepEqual(nativeFilterProblems({ native: ["services/elitea-main/**", "scripts/e2e/**"], composeInputs, nativeInputs }), []);
+  assert.match(nativeFilterProblems({ native: ["scripts/e2e/**"], composeInputs, nativeInputs }).join("\n"), /services\/elitea-main\/go\.mod \(a build input\) is an input of the E2E lanes and no ci-web-e2e-native pattern covers it/);
+  assert.match(nativeFilterProblems({ native: ["services/elitea-main/**"], composeInputs, nativeInputs }).join("\n"), /scripts\/e2e\/native-stack\.mjs \(the native stack\) is an input of the native E2E legs/);
+  assert.match(nativeFilterProblems({ native: undefined, composeInputs, nativeInputs }).join("\n"), /no ci-web-e2e-native entry/);
+  assert.match(nativeFilterProblems({ native: ["!x"], composeInputs, nativeInputs }).join("\n"), /negated/);
 });
