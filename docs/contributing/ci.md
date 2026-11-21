@@ -85,7 +85,9 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
   coverage in the fast tier (`ci-web.yml` `unit-tests`). On a ready pull request `ci-web-coverage.yml` runs every
   unit test with coverage in the heavy tier and enforces the thresholds, and the plain shards are skipped:
   ci.yml passes `ci-web` the coverage job's own filter as `coverage_runs`. `check-tiering.mjs` holds that
-  expression, so no run has neither suite.
+  expression, so no run has neither suite. The coverage shards run on eng-runner: instrumentation makes tests
+  2 to 3 times slower, so under `--coverage` `vitest.config.ts` multiplies every test, hook and wait budget by 3
+  (`src/test/timeouts.ts`; `VITEST_TIMEOUT_SCALE` overrides it). There are no retries.
 - **WebKit.** The WebKit E2E legs run on a pull request only when `apps/elitea-web/src`, the E2E harness, the
   package set or `libs/ts/client-core` change. The nightly run on main runs them always.
 - **Image reuse.** The build-once jobs tag each `ci-*` image with a hash of its inputs
@@ -166,7 +168,7 @@ These jobs are routed (when `ENG_RUNNER` is on, on our own pull requests):
 |---|---|
 | `ci.yml` | `changes`, `fast-gate`, `ci-gate` |
 | `ci-web.yml` | `quality`, `unit-tests` (every shard), `gates-static`, `build` |
-| `ci-web-coverage.yml` | `coverage-merge` |
+| `ci-web-coverage.yml` | `unit-tests` (every shard), `coverage-merge` |
 | `ci-go.yml` | `proto`, `sqlc`, `env-drift`, `lint`, `test-plan`, `test-checks`, `test` (the aggregator), `test-shard` (every shard, storage included), `integration`, `editor-lifecycle`, `compiled-snapshots-postgres`, `secretstore-openbao` |
 | `ci-gateway.yml` | `lint`, `test` |
 | `ci-contract.yml` | `compile` |
@@ -198,9 +200,6 @@ Everything else stays hosted:
   check), `helm-install-smoke`, the E2E suites, `ci-browser-session.yml`. helm-lint's `lint` job too: a step it runs calls `docker compose config`.
 - **System packages through apt**: the Tauri host on Linux (`ci-desktop.yml` `pane-drivers`, webkit2gtk).
 - **macOS and Windows**, including `ci-desktop-control.yml`, whose matrix has a Windows leg.
-- **The coverage unit shards** (`ci-web-coverage.yml` `unit-tests`). Under coverage instrumentation the pod
-  runs them 1.5 to 2 times slower, and the heaviest files hit their 15 s per-test timeouts: on T2D nodes too,
-  `CreateApplication.test.tsx` timed out twice in shard 4 of 5 (#2721).
 - **Every event but `pull_request`**, so the scheduled runs on main, which write the caches, stay hosted.
 
 The routed jobs pin their parallelism to the pod's 4 CPUs, because the node reports 8. `eng-runner-env` sets
