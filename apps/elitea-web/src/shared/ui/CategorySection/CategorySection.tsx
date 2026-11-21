@@ -75,6 +75,7 @@ export function CategorySection({
             onClick={item.onClick}
             disabled={item.disabled}
             disabledReason={item.disabledReason}
+            data-testid="category-item-card"
           />
         ))}
         {items.length === 0 ? (emptyPlaceholder ?? null) : null}

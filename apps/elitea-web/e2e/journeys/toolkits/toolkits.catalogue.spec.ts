@@ -235,8 +235,11 @@ function typeSearchBox(page: Page) {
  * Anchored, so `Jira` does not also match a future `Jira Service Desk`.
  */
 function tileFor(page: Page, label: string) {
-  const escaped = label.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
-  return page.getByRole('button', { name: new RegExp(`^${escaped}$`, 'i') });
+  return page.getByRole('button', { name: new RegExp(`^${escapeRegExp(label)}$`, 'i') });
+}
+
+function escapeRegExp(text: string): string {
+  return text.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
 }
 
 test.afterAll(async ({ browser }) => {
@@ -316,6 +319,15 @@ test.describe('JRNY-017C: the served toolkit catalogue', () => {
       // filtered tile on it (native run 44917909298, webkit, "Cloud Browser").
       await page.goto(`${BASE_URL}/app/toolkits/create?query=${encodeURIComponent(representative.label)}`);
       await expect(typeSearchBox(page)).toHaveValue(representative.label, { timeout: 15_000 });
+      // The gallery has really narrowed to the search, so nothing will move
+      // under the click: the type's tile is there, and no tile without the
+      // searched text is.
+      const tiles = page.getByTestId('category-item-card');
+      await expect(tileFor(page, representative.label), `the ${representative.label} tile`).toBeVisible();
+      await expect(
+        tiles.filter({ hasNotText: new RegExp(escapeRegExp(representative.label), 'i') }),
+        `the gallery must show only tiles matching "${representative.label}"`,
+      ).toHaveCount(0);
       await tileFor(page, representative.label).click();
 
       // ── the form really opened, and it is THIS type's form: the name field

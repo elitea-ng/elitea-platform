@@ -18,6 +18,7 @@ import type { ReactElement } from 'react';
 import { Outlet } from '@tanstack/react-router';
 import { describe, expect, it } from 'vitest';
 
+import { Route as ShellRoute } from '../route';
 import { Route as CreateRoute } from './create';
 import { Route as CreateTypeRoute } from './create.$toolkitType';
 import { Route as ToolkitsIndexRoute } from './index';
@@ -118,6 +119,24 @@ describe('/toolkits route leaves', () => {
       expect(Object.keys(validated), `${key} is declared by ROUTE-029 and must be accepted`).toContain(key);
     }
     expect(Object.keys(validated)).not.toContain('an_undeclared_key');
+  });
+
+  it('leaves the gallery search to the shell: /toolkits/create reads `query` as text, even when it looks like JSON', () => {
+    // The type gallery filters on `query` (PageSearch), and a link may open it
+    // already searched (`/toolkits/create?query=Cloud%20Browser`, the toolkit
+    // catalogue journey). `query` is shell-wide (routes/-search/common.ts, on
+    // _shell/route.tsx), so the create route declares no schema of its own: a
+    // second one would parse the same key twice. The router JSON-parses every
+    // raw value (`?query=123` arrives as the number 123); the shell's `text()`
+    // folds it back to the text the box shows.
+    expect(CreateRoute.options.validateSearch, 'query belongs to the shell schema, not to /toolkits/create').toBeUndefined();
+    for (const [raw, text] of [
+      ['Cloud Browser', 'Cloud Browser'],
+      [123, '123'],
+      [true, 'true'],
+    ] as const) {
+      expect(validate(ShellRoute, { query: raw })['query']).toBe(text);
+    }
   });
 
   it('accepts index_name on the toolkit detail route, and nothing else', () => {
