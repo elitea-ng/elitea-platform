@@ -435,6 +435,29 @@ export async function ensureChatPanelExpanded(page: Page): Promise<void> {
 }
 
 /**
+ * Add one node of `label` through the editor's own Add-node menu (no store pokes), and settle on the canvas holding it.
+ *
+ * The menu is a MUI `Menu` whose paper grows in: a CSS transition from `scale(0.75, 0.5625)`, anchored top right, with
+ * opacity from 0. Playwright's "stable" check can pass on the first frames, before the transition has started, and a
+ * click is two input events. On a CPU-starved runner the item moves between them: the `mousedown` lands on it (it takes
+ * focus) and the `mouseup` lands elsewhere, so no `click` fires. The menu then stays open with the item focused and no
+ * node added (native run 44917909298, J16 "every node type": "Decision" focused, no Decision node, and the test waited
+ * out its budget for the Add-node button the open menu hides). So the item is clicked only once Grow has reached its
+ * `entered` state (`transform: none`, which no frame of the transition computes to), and the step ends only when the
+ * menu has closed with exactly one node more on the canvas.
+ */
+export async function addNodeThroughMenu(page: Page, label: string): Promise<void> {
+  const nodes = page.locator('.react-flow__node');
+  const before = await nodes.count();
+  await page.getByRole('button', { name: 'Add node' }).click();
+  const paper = page.locator('#pipeline-add-node-menu .MuiMenu-paper');
+  await expect(paper, 'the Add-node menu must finish growing in before an item is clicked').toHaveCSS('transform', 'none');
+  await paper.getByRole('menuitem', { name: label, exact: true }).click();
+  await expect(page.locator('#pipeline-add-node-menu'), `the ${label} item must close the Add-node menu`).toHaveCount(0);
+  await expect(nodes, `the ${label} item must add exactly one node`).toHaveCount(before + 1);
+}
+
+/**
  * Folds both editor panes so the canvas has the page's width, whichever of
  * them the editor already folded on its own (`useEditorPaneRoom` folds the
  * chat pane at the default 1280px viewport).

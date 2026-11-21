@@ -35,6 +35,7 @@ import { BASE_URL } from '../../../playwright.config';
 import { AUTOTEST_PREFIX, DEFAULT_PROJECT_ID, clickCreateButton, deleteAgent } from '../../fixtures/api';
 import {
   COMPILER_LEGAL_NODE_ID,
+  addNodeThroughMenu,
   parseStoredGraph,
   readStoredPipelineVersion,
   resolveLatestPipelineVersionId,
@@ -99,12 +100,6 @@ const SAVEABLE_NODE_LABELS = ADMITTED_NODE_LABELS.filter(
     label !== 'Parallel' &&
     label !== 'Map',
 );
-
-/** Add one node of `label` through the editor's own menu — no store pokes. */
-async function addNodeThroughMenu(page: Page, label: string): Promise<void> {
-  await page.getByRole('button', { name: 'Add node' }).click();
-  await page.getByRole('menuitem', { name: label, exact: true }).click();
-}
 
 /**
  * Every node id currently drawn on the canvas.
