@@ -12,3 +12,10 @@ paths:
   .github/workflows/ci-governed-scale.yml:
     ignore:
       - 'unexpected key "(command|entrypoint)" for "services" section'
+  # A reusable workflow's outputs may read `jobs.<job_id>.result` (GitHub docs,
+  # "Contexts reference", the `jobs` context: result and outputs). actionlint
+  # 1.7.12 types that context as outputs only. Scoped to the one file and the
+  # one property.
+  .github/workflows/ci-build-once.yml:
+    ignore:
+      - 'property "result" is not defined in object type \{outputs: '

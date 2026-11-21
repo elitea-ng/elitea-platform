@@ -31,6 +31,7 @@ import { useAgentSelection, type AgentSelection } from './useAgentSelection';
 import { useSendPrompt } from './useSendPrompt';
 import WorkspaceSessionPage from './WorkspaceSessionPage';
 import WorkspacesPage from './WorkspacesPage';
+import { testTimeout } from '@/test/timeouts';
 
 const BASE = '/api/v2';
 const PUBLIC_PROJECT_ID = '1';
@@ -74,11 +75,11 @@ function mount(ipc: FakeWorkspaceIpc, path: string, indexIpc?: FakeIndexIpc, app
  * `waitFor`/`findBy` deadline. Measured 2026-10-15; see DEVIATIONS
  * "desktop-followup".
  */
-vi.setConfig({ testTimeout: 30_000 });
+vi.setConfig({ testTimeout: testTimeout(30_000) });
 let asyncUtilTimeout = 1000;
 beforeAll(() => {
   asyncUtilTimeout = getConfig().asyncUtilTimeout;
-  configure({ asyncUtilTimeout: 10_000 });
+  configure({ asyncUtilTimeout: testTimeout(10_000) });
 });
 afterAll(() => {
   configure({ asyncUtilTimeout });
@@ -1309,7 +1310,7 @@ describe('WorkspaceSessionPage', () => {
       await pickMode(user, 'Bypass mode (no approvals)');
       expect(screen.queryByRole('dialog', { name: 'Run without approvals?' })).toBeNull();
       expect(shownMode()).toHaveTextContent('Bypass');
-    }, 30_000);
+    }, testTimeout(30_000));
 
     it('keeps plan mode when the bypass warning is cancelled, and leaves it once bypass is on', async () => {
       forgetBypass();
@@ -1326,7 +1327,7 @@ describe('WorkspaceSessionPage', () => {
       await user.click(within(await screen.findByRole('dialog', { name: 'Run without approvals?' })).getByRole('button', { name: 'Turn on bypass mode' }));
       await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Run without approvals?' })).toBeNull());
       expect(shownMode()).toHaveTextContent('Bypass');
-    }, 30_000);
+    }, testTimeout(30_000));
 
     it('runs to completion by default: each send carries the default grant, without bypass, and no Unattended mode', async () => {
       forgetBypass();
@@ -1345,7 +1346,7 @@ describe('WorkspaceSessionPage', () => {
       expect(started?.plan_mode).toBe(false);
       expect(started?.bypass_approvals).toBeUndefined();
       expect(started?.unattended).toEqual({ grant_id: expect.stringMatching(/^[0-9a-f-]{36}$/u) as string, continue_step_limit: true, continue_tool_call_cap: true, hook_asks: false, remote_confirmations: false, goal_check: true });
-    }, 30_000);
+    }, testTimeout(30_000));
 
     it('keeps the opt-ins and the off choice for the folder, and sends no grant in Plan mode', async () => {
       forgetBypass();
@@ -1370,7 +1371,7 @@ describe('WorkspaceSessionPage', () => {
       await waitFor(() => expect(ipc.calls.started).toHaveLength(2));
       expect(ipc.calls.started[1]).toMatchObject({ plan_mode: true });
       expect(ipc.calls.started[1]?.unattended).toBeUndefined();
-    }, 30_000);
+    }, testTimeout(30_000));
 
     it('sends the turn again without the grant once when an administrator turned grants off, and hides the control', async () => {
       forgetBypass();
@@ -1386,7 +1387,7 @@ describe('WorkspaceSessionPage', () => {
       expect(ipc.calls.started[1]?.prompt).toBe('go');
       await waitFor(() => expect(screen.queryByTestId('workspace-run-to-completion')).toBeNull());
       expect(screen.queryByText('Unattended runs are turned off on this platform.')).toBeNull();
-    }, 30_000);
+    }, testTimeout(30_000));
 
     it('shows the refusal of a grant with hook asks when grants are off, and does not send it again', async () => {
       forgetBypass();
@@ -1400,7 +1401,7 @@ describe('WorkspaceSessionPage', () => {
       expect(await screen.findByText('Unattended runs are turned off on this platform.')).toBeInTheDocument();
       expect(ipc.calls.started).toHaveLength(1);
       await waitFor(() => expect(screen.queryByTestId('workspace-run-to-completion')).toBeNull());
-    }, 30_000);
+    }, testTimeout(30_000));
 
     it('asks the host to read ahead for the selected agent when the composer gets focus', async () => {
       const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
@@ -1509,7 +1510,7 @@ describe('WorkspaceSessionPage', () => {
       expect(created).toBe(1);
       expect(ipc.calls.started[1]?.conversation_id).toBe('78');
       expect(ipc.calls.started[1]?.compact).toBeUndefined();
-    }, 30_000);
+    }, testTimeout(30_000));
 
     it('chooses the turn\'s model and effort from the chip, or with /model, and sends it with the turn', async () => {
       const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });

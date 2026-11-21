@@ -17,6 +17,7 @@ import { resetConfigForTests } from '@/shared/config/get-config';
 import { createFakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
 
 import { routeTree } from '../../routeTree.gen';
+import { testTimeout } from '@/test/timeouts';
 
 const auth: AuthContext = {
   getUser: () => ({ id: 'u1', personal_project_id: 'p1', permissions: [], publicPermissions: [] }),
@@ -70,7 +71,7 @@ beforeAll(async () => {
     delete globals['elitea_ui_config'];
     vi.unstubAllEnvs();
   }
-}, 60_000);
+}, testTimeout(60_000));
 
 beforeEach(() => {
   resetConfigForTests();

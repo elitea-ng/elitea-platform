@@ -108,6 +108,8 @@ updates:
       - /.github/actions/npm-cache
       - /.github/actions/pull-stack-images
       - /.github/actions/eng-runner-env
+      - /.github/actions/native-services
+      - /.github/actions/native-services-logs
       - /.github/actions/stack-images
     multi-ecosystem-group: nightly
     patterns: ["*"]
@@ -335,6 +337,8 @@ updates:
       - /apps/elitea-web
       - /apps/elitea-desktop
       - /scripts/ci
+      # Azurite for the storage shard on eng-runner (native-services).
+      - /.github/actions/native-services/azurite
     multi-ecosystem-group: nightly
     patterns: ["*"]
     ignore:

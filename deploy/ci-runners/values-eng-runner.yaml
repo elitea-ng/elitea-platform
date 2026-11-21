@@ -31,6 +31,21 @@ template:
           - name: eng-runner-hooks
             mountPath: /etc/eng-runner
             readOnly: true
+          # The hosted runner's cache paths, on the 80 GiB work volume (`work`
+          # here: the name of the volume your template mounts at
+          # /home/runner/_work). HOME stays /home/runner, so a Go or npm
+          # actions/cache entry saved on a hosted runner restores here
+          # unchanged; .github/actions/eng-runner-env fails a job when these
+          # are not mounts.
+          - name: work
+            mountPath: /home/runner/.npm
+            subPath: _homecache/npm
+          - name: work
+            mountPath: /home/runner/.cache
+            subPath: _homecache/cache
+          - name: work
+            mountPath: /home/runner/go
+            subPath: _homecache/go
     volumes:
       - name: eng-runner-hooks
         configMap:

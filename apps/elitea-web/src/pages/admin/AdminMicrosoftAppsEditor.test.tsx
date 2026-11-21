@@ -24,6 +24,7 @@ import { server } from '@/test/setup';
 import { AdminConfiguration } from './Configuration';
 import { AdminMicrosoftAppsEditor } from './AdminMicrosoftAppsEditor';
 import { renderAdminRoute } from './__tests__/testRouter';
+import { testTimeout } from '@/test/timeouts';
 
 const SECRET = 's3cr3t~value.from.Entra';
 const APP_ID = '11111111-1111-4111-8111-111111111111';
@@ -204,7 +205,7 @@ describe('AdminConfiguration → Microsoft apps (composition)', () => {
   });
 });
 
-describe('AdminMicrosoftAppsEditor', { timeout: 20_000 }, () => {
+describe('AdminMicrosoftAppsEditor', { timeout: testTimeout(20_000) }, () => {
   it('prints every redirect URI and permission while the registry is empty, and says only Custom app is offered', async () => {
     useHandlers();
     renderAdminRoute(<AdminMicrosoftAppsEditor />);
@@ -274,7 +275,7 @@ describe('AdminMicrosoftAppsEditor', { timeout: 20_000 }, () => {
     await waitFor(() => expect(screen.queryByTestId('microsoft-app-dialog')).not.toBeInTheDocument());
     expect(document.body.textContent).not.toContain(SECRET);
     expect(screen.getByTestId('admin-microsoft-apps-notice')).toHaveTextContent('Saved.');
-  }, 20_000);
+  }, testTimeout(20_000));
 
   it('edits without sending a secret unless one is typed, and starts the field empty', async () => {
     useHandlers({ apps: [APP] });

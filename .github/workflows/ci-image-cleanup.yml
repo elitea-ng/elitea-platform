@@ -1,6 +1,6 @@
 name: CI Image Cleanup
 
-# Prunes the CI-only `ci-*` container packages ci-web-e2e.yml pushes: one
+# Prunes the CI-only `ci-*` container packages ci-build-once.yml pushes: one
 # `ci-<image>:<sha>` version per image per commit, and the untagged manifests
 # each nightly run on main strands in `ci-cache-<image>`. The policy, and the rule that
 # no other package is ever touched, live in scripts/ci/prune-ci-images.mjs,
@@ -36,7 +36,7 @@ jobs:
     name: Prune CI-only images older than the window
     # A dispatch from another branch would run another branch's policy.
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -45,6 +45,11 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume, and node for the node
+      # scripts (none in its image). Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          node: "true"
       - name: The policy still refuses what it must
         run: node --test --test-reporter=spec scripts/ci/prune-ci-images.test.mjs
       # Pinned to the v9.0.0 commit, as cancel-merged-pr-runs.yml pins it:
@@ -73,7 +78,7 @@ jobs:
   actions-cache:
     name: Keep the Actions cache under its cap
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -81,6 +86,11 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume, and node for the node
+      # scripts (none in its image). Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          node: "true"
       - name: The policy still decides what it must
         run: node --test --test-reporter=spec scripts/ci/prune-actions-caches.test.mjs
       # Pinned to the v9.0.0 commit, as the prune above pins it: this step holds actions: write.

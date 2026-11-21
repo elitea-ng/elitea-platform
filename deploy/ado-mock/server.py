@@ -118,6 +118,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
 PORT = int(os.environ.get("ADO_MOCK_PORT", "8097"))
+# The bind host: every address in its container (compose); the native CI stack sets its own
+# loopback address, because a process there must never listen on the pod's network address.
+HOST = os.environ.get("ADO_MOCK_HOST", "0.0.0.0")
 PAT = os.environ.get("ADO_MOCK_PAT", "e2e-ado-pat")
 # What the SEEDED markup uses to address this server. The toolkit reaches the
 # mock on the compose network, so the attachment URLs embedded in comments and
@@ -1143,7 +1146,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+    server = ThreadingHTTPServer((HOST, PORT), Handler)
     print(
         f"ado-mock listening on :{PORT} (pat {PAT[:4]}…, project {PROJECT}, "
         f"{len(ATTACHMENTS)} attachments, public {PUBLIC_URL})",

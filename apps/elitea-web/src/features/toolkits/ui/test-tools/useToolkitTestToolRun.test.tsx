@@ -7,6 +7,7 @@ import { server } from '@/test/setup';
 import { createStorage } from '@/shared/lib/storage';
 
 import { useToolkitTestToolRun } from './useToolkitTestToolRun';
+import { testTimeout } from '@/test/timeouts';
 
 const RUN_PATH = '/api/v2/elitea_core/test_tool/prompt_lib/:projectId/:toolkitId';
 
@@ -201,7 +202,7 @@ it('retrieves the recovered result without a second submission', async () => {
   await waitFor(() => { expect(result.current.outcome).toMatchObject({ kind: 'ok', result: 'recovered' }); }, { timeout: 7000 });
   expect(submissions).toBe(1);
   expect(reads).toBe(2);
-}, 10000);
+}, testTimeout(10000));
 
 
 it('recovers the latest pending execution after remount without resubmitting arguments', async () => {
@@ -317,4 +318,4 @@ it('retains an unconfirmed request for reload and never resubmits it', async () 
   expect(createStorage('session').get('toolkits.pendingTest')).toBe(receipt);
   expect(submissions).toBe(1);
   expect(reads).toBe(2);
-}, 10000);
+}, testTimeout(10000));

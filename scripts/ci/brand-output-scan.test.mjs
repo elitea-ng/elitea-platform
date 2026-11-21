@@ -11,7 +11,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { ALLOWED, eliteaIdentifiers, insideContentHash, isBinary, printableChunks, printableStrings, report, scan, scanText } from './brand-output-scan.mjs';
+import { ALLOWED, binaryNoise, eliteaIdentifiers, insideContentHash, insideCspHash, isBinary, printableChunks, printableStrings, report, scan, scanText } from './brand-output-scan.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SCRIPT = path.join(REPO, 'scripts/ci/brand-output-scan.mjs');
@@ -140,4 +140,27 @@ test('the CLI fails on a literal, fails on nothing scanned, refuses another bran
   const clean = run(['--lane', 'web', tree({ 'app.js': 'title:`Sample Assistant` eliteaFetch' })]);
   assert.equal(clean.status, 0, clean.stdout);
   assert.match(clean.stdout, /1 file\(s\), no ELITEA literal/);
+});
+
+test("a CSP source hash in the host binary is not text; the same letters outside one still are", () => {
+  const csp = "script-src 'self' 'sha256-ARAtYgRzjHR1WI0gDg9I7n18/QTObaePAmaA=''sha256-LdggxwiGclfKPUxkGM0abcdefghijklmnopqrstu='";
+  const at = csp.indexOf("ePAm");
+  assert.equal(insideCspHash(csp, at, 4), true);
+  assert.deepEqual(scanText(csp, { file: "host", lane: "desktop", identifiers: [] }), []);
+  assert.equal(insideCspHash("'sha256-short' ePAm", 15, 4), false);
+  assert.equal(insideCspHash("built by EPAM 'sha256-ARAtYgRzjHR1WI0gDg9I7n18/QTOba='", 9, 4), false);
+  assert.ok(scanText("built by EPAM 'sha256-ARAtYgRzjHR1WI0gDg9I7n18/QTOba='", { file: "host", lane: "desktop", identifiers: [] }).length > 0);
+});
+
+test("in a binary, a random-case or short epam run is compressed noise; brand text in a string is still found", () => {
+  const opts = { file: "host", lane: "desktop", identifiers: [], binary: true };
+  // The run desktop-package hit: random bytes from the embedded, compressed web bundle.
+  assert.deepEqual(scanText("$[&5 jbcJ o+)< wv #R3O fZ2z/\nePAm\neM0_J_ r$&V.5", opts), []);
+  assert.deepEqual(scanText("x\nepam\ny", opts), []); // a lone four-character run
+  assert.equal(binaryNoise("ePAm.example.com", 0, "ePAm"), true);
+  // Real text: a natural case in a longer string.
+  assert.ok(scanText("https://epam.example.com/path", opts).some((f) => f.kind === "epam"));
+  assert.ok(scanText("Copyright EPAMSystems", opts).some((f) => f.kind === "epam"));
+  // Text files keep the strict, case-insensitive match.
+  assert.ok(scanText("ePAm", { ...opts, binary: false }).some((f) => f.kind === "epam"));
 });

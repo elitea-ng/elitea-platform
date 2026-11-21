@@ -14,6 +14,7 @@ import { useNavBlockerStore } from '@/widgets/app-shell';
 
 import { CreateApplication } from './CreateApplication';
 import { renderAgentsRoute } from './__tests__/testRouter';
+import { testTimeout } from '@/test/timeouts';
 
 installCodeMirrorTestPolyfills();
 
@@ -118,7 +119,7 @@ describe('CreateApplication', () => {
     // state — legitimately slower than 5s under CI's shared runners when
     // this test lands near the tail of the full, highly-parallel suite run
     // (observed: PR #21's first batch-2 run, real timeout at 5000ms).
-  }, 15_000);
+  }, testTimeout(15_000));
 
   it('clicking Cancel opens a confirm dialog, and confirming navigates back to /agents/:tab', async () => {
     const user = userEvent.setup();
@@ -162,7 +163,7 @@ describe('CreateApplication', () => {
     await fillAndSave(user);
 
     expect(await screen.findByText('Failed to create the agent.')).toBeInTheDocument();
-  }, 15_000);
+  }, testTimeout(15_000));
 
   it('attributes a duplicate-name conflict to the Name field instead of showing one generic message — old app: useCreateApplication.jsx:85-107\'s formik.setFieldError', async () => {
     server.use(
@@ -179,7 +180,7 @@ describe('CreateApplication', () => {
 
     expect(await screen.findByText('Name: An agent with this name already exists.')).toBeInTheDocument();
     expect(screen.queryByText('Failed to create the agent.')).not.toBeInTheDocument();
-  }, 15_000);
+  }, testTimeout(15_000));
 
   it('clears the create-error banner once a subsequent save succeeds', async () => {
     server.use(
@@ -207,7 +208,7 @@ describe('CreateApplication', () => {
     await user.click(screen.getByTestId('agent-save-button'));
 
     await waitFor(() => expect(router.state.location.pathname).toBe('/agents/latest/1'));
-  }, 15_000);
+  }, testTimeout(15_000));
 
   /*
    * #307 — `CreateAgentForm` now renders the conversation-starters editor
@@ -220,7 +221,7 @@ describe('CreateApplication', () => {
   // default per-keystroke delay it timed out at 15 s on a loaded coverage
   // shard (CI job 131163429639); `delay: null` drops the timers between
   // keystrokes — the same setup the welcome-message test below uses.
-  it('sends a conversation starter typed on the create form in the create POST body', { timeout: 20_000 }, async () => {
+  it('sends a conversation starter typed on the create form in the create POST body', { timeout: testTimeout(20_000) }, async () => {
     const user = userEvent.setup({ delay: null });
     const bodies: Record<string, unknown>[] = [];
     server.use(
@@ -252,7 +253,7 @@ describe('CreateApplication', () => {
    * state proves nothing about what reached the server, which is precisely
    * how this survived.
    */
-  it('sends the welcome message typed on the create form in the create POST body', { timeout: 20_000 }, async () => {
+  it('sends the welcome message typed on the create form in the create POST body', { timeout: testTimeout(20_000) }, async () => {
     const user = userEvent.setup({ delay: null });
     const bodies: Record<string, unknown>[] = [];
     server.use(
@@ -284,7 +285,7 @@ describe('CreateApplication', () => {
     expect(await screen.findByText('GPT-4o')).toBeVisible();
   });
 
-  it('sends the picked model as llm_settings, with a NUMERIC model_project_id', { timeout: 20_000 }, async () => {
+  it('sends the picked model as llm_settings, with a NUMERIC model_project_id', { timeout: testTimeout(20_000) }, async () => {
     const user = userEvent.setup({ delay: null });
     const raw: string[] = [];
     server.use(
@@ -309,7 +310,7 @@ describe('CreateApplication', () => {
     expect(raw[0]).toContain('"model_project_id":1');
   });
 
-  it('omits llm_settings entirely when the author never touches the picker', { timeout: 20_000 }, async () => {
+  it('omits llm_settings entirely when the author never touches the picker', { timeout: testTimeout(20_000) }, async () => {
     const user = userEvent.setup({ delay: null });
     const bodies: Record<string, unknown>[] = [];
     server.use(
@@ -352,7 +353,7 @@ describe('CreateApplication', () => {
    * — the page echoing its own `extraFields` back into the panel proves
    * nothing, which is how the welcome-message drop above survived.
    */
-  it('sends the variables derived from a placeholder typed into the instructions in the create POST body', { timeout: 30_000 }, async () => {
+  it('sends the variables derived from a placeholder typed into the instructions in the create POST body', { timeout: testTimeout(30_000) }, async () => {
     const user = userEvent.setup({ delay: null });
     const bodies: Record<string, unknown>[] = [];
     server.use(

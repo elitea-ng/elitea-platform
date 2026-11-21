@@ -14,6 +14,7 @@ import { useNavBlockerStore } from '@/widgets/app-shell';
 
 import { CreatePipeline } from './CreatePipeline';
 import { renderPipelinesRoute } from './__tests__/testRouter';
+import { testTimeout } from '@/test/timeouts';
 
 /**
  * The Instructions accordion on this page mounts a CodeMirror editor, and CM6
@@ -132,7 +133,7 @@ describe('CreatePipeline', () => {
 
     await user.type(screen.getByTestId('agent-description-input'), 'does a thing');
     await waitFor(() => expect(screen.getByTestId('pipeline-save-button')).not.toBeDisabled());
-  }, 20_000);
+  }, testTimeout(20_000));
 
   it('clicking Cancel opens a confirm dialog, and confirming navigates back to /pipelines/:tab', async () => {
     const user = userEvent.setup();
@@ -173,7 +174,7 @@ describe('CreatePipeline', () => {
    * back and no way for the user to tell. Proven red before the fix: this
    * assertion read `expected 25 to be 7`.
    */
-  it('sends the step limit typed on the page in the create body, not the draft default', { timeout: 20_000 }, async () => {
+  it('sends the step limit typed on the page in the create body, not the draft default', { timeout: testTimeout(20_000) }, async () => {
     const user = userEvent.setup({ delay: null });
     const bodies: Record<string, unknown>[] = [];
     server.use(
@@ -200,7 +201,7 @@ describe('CreatePipeline', () => {
    * the POST body. Asserted off the body — the page echoing its own state is
    * exactly what made this look saved.
    */
-  it('sends the welcome message typed on the create form in the create POST body', { timeout: 20_000 }, async () => {
+  it('sends the welcome message typed on the create form in the create POST body', { timeout: testTimeout(20_000) }, async () => {
     const user = userEvent.setup({ delay: null });
     const bodies: Record<string, unknown>[] = [];
     server.use(
@@ -225,7 +226,7 @@ describe('CreatePipeline', () => {
     expect(await screen.findByText('GPT-4o')).toBeVisible();
   });
 
-  it('sends the picked model as llm_settings, with a NUMERIC model_project_id', { timeout: 20_000 }, async () => {
+  it('sends the picked model as llm_settings, with a NUMERIC model_project_id', { timeout: testTimeout(20_000) }, async () => {
     const user = userEvent.setup({ delay: null });
     const raw: string[] = [];
     server.use(
@@ -248,7 +249,7 @@ describe('CreatePipeline', () => {
     expect(raw[0]).toContain('"model_project_id":1');
   });
 
-  it('omits llm_settings entirely when the author never touches the picker', { timeout: 20_000 }, async () => {
+  it('omits llm_settings entirely when the author never touches the picker', { timeout: testTimeout(20_000) }, async () => {
     const user = userEvent.setup({ delay: null });
     const bodies: Record<string, unknown>[] = [];
     server.use(
@@ -293,7 +294,7 @@ describe('CreatePipeline', () => {
    * a person takes, and it never called it — which is why a green test sat
    * beside a broken screen.
    */
-  it('creates a new pipeline with the runnable starter graph, not an empty document', { timeout: 20_000 }, async () => {
+  it('creates a new pipeline with the runnable starter graph, not an empty document', { timeout: testTimeout(20_000) }, async () => {
     const user = userEvent.setup({ delay: null });
     const bodies: Record<string, unknown>[] = [];
     server.use(
@@ -331,7 +332,7 @@ describe('CreatePipeline', () => {
    * YAML pane and an empty canvas. The person creating the pipeline was shown
    * "you have no graph" while Save was about to write one.
    */
-  it('opens with the starter graph already in the instructions editor', { timeout: 20_000 }, async () => {
+  it('opens with the starter graph already in the instructions editor', { timeout: testTimeout(20_000) }, async () => {
     const { container } = renderPipelinesRoute(<CreatePipeline />, '/pipelines/create', { projectId: '1' });
 
     await screen.findByTestId('agent-name-input');
@@ -350,7 +351,7 @@ describe('CreatePipeline', () => {
 
   // #1979: the compact Instructions field hides the gutter for agent prose only. The page must
   // say it is a pipeline, or its YAML loses its line numbers.
-  it('keeps line numbers beside the pipeline YAML', { timeout: 20_000 }, async () => {
+  it('keeps line numbers beside the pipeline YAML', { timeout: testTimeout(20_000) }, async () => {
     const { container } = renderPipelinesRoute(<CreatePipeline />, '/pipelines/create', { projectId: '1' });
 
     await screen.findByTestId('agent-name-input');
@@ -364,7 +365,7 @@ describe('CreatePipeline', () => {
    * never a replacement for the author's own document. What the editor holds
    * at Save is what gets stored.
    */
-  it('stores the author\'s own graph when one is typed, instead of the starter template', { timeout: 20_000 }, async () => {
+  it('stores the author\'s own graph when one is typed, instead of the starter template', { timeout: testTimeout(20_000) }, async () => {
     const user = userEvent.setup({ delay: null });
     const bodies: Record<string, unknown>[] = [];
     server.use(
@@ -398,7 +399,7 @@ describe('CreatePipeline', () => {
    * editor's own save gate blocked every later save of it. The create page
    * applies the same admission verdict.
    */
-  it('blocks Save with an inline reason when the graph holds a node type the runtime does not run', { timeout: 20_000 }, async () => {
+  it('blocks Save with an inline reason when the graph holds a node type the runtime does not run', { timeout: testTimeout(20_000) }, async () => {
     const user = userEvent.setup({ delay: null });
     const createSpy = vi.fn(() => HttpResponse.json({ id: '7', version_details: { id: '1' } }, { status: 201 }));
     server.use(http.post('*/elitea_core/applications/prompt_lib/:projectId', createSpy));
@@ -426,7 +427,7 @@ describe('CreatePipeline', () => {
     await waitFor(() => expect(screen.getByTestId('pipeline-save-button')).not.toBeDisabled());
   });
 
-  it('shows the server\'s readable refusal instead of the generic create error', { timeout: 20_000 }, async () => {
+  it('shows the server\'s readable refusal instead of the generic create error', { timeout: testTimeout(20_000) }, async () => {
     const user = userEvent.setup({ delay: null });
     const refusal = 'Node "split" uses the "custom" node type, which the pipeline runtime does not support. Remove or replace that node before saving.';
     server.use(http.post('*/elitea_core/applications/prompt_lib/:projectId', () => HttpResponse.json({ error: refusal }, { status: 400 })));

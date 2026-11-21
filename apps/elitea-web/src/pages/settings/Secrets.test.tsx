@@ -50,6 +50,7 @@ import { SECRETS_SKELETON_TESTID } from '@/features/settings/ui/secrets/SecretsT
 import { SECRETS_LOAD_ERROR_TESTID } from '@/features/settings/ui/secrets/SecretsLoadError';
 
 import { SecretsContent } from './Secrets';
+import { testTimeout } from '@/test/timeouts';
 
 const BASE = '/api/v2';
 const PERMISSIONS_PATH = `${BASE}/auth/permissions/prompt_lib/:projectId`;
@@ -200,7 +201,7 @@ describe('SecretsContent — empty list and secret creation (issue 137)', () => 
     });
     expect(screen.getByText('No secrets')).toBeInTheDocument();
     expect(screen.getByText('Rows per page')).toBeInTheDocument();
-  }, 20_000);
+  }, testTimeout(20_000));
 
   it('creates a secret typed into a new row', async () => {
     useSelectedProjectStore.setState({ project: { id: 'proj-1', name: 'Acme' } });
@@ -246,7 +247,7 @@ describe('SecretsContent — empty list and secret creation (issue 137)', () => 
     });
     expect(created[0]!.url).toContain('/api/v2/secrets/secrets/default/proj-1');
     expect(created[0]!.body).toEqual({ name: 'API_KEY', value: 's3cret' });
-  }, 20_000);
+  }, testTimeout(20_000));
 });
 
 /**
@@ -305,7 +306,7 @@ describe('SecretsContent — a viewer lists names and writes nothing (issue 402)
     // The URL flag opens no editable row, so nothing can be typed and posted.
     expect(within(screen.getByRole('grid')).queryAllByRole('textbox')).toHaveLength(0);
     expect(writes).toHaveLength(0);
-  }, 20_000);
+  }, testTimeout(20_000));
 });
 
 /**
@@ -354,7 +355,7 @@ describe('SecretsContent — a failed list shows an error state (UI-UX-1(b))', (
       expect(screen.getAllByText('API_KEY').length).toBeGreaterThan(0);
     });
     expect(screen.queryByTestId(SECRETS_LOAD_ERROR_TESTID)).not.toBeInTheDocument();
-  }, 30_000);
+  }, testTimeout(30_000));
 
   it('offers no create while the list has failed, and ?createSecret=1 opens exactly one row once it recovers', async () => {
     useSelectedProjectStore.setState({ project: { id: 'proj-1', name: 'Acme' } });
@@ -394,7 +395,7 @@ describe('SecretsContent — a failed list shows an error state (UI-UX-1(b))', (
     });
     // The create control is back once the list has loaded.
     expect(screen.getByRole('button', { name: 'Create new secret' })).toBeInTheDocument();
-  }, 30_000);
+  }, testTimeout(30_000));
 
   it('offers no retry for a 403 — retrying cannot help', async () => {
     useSelectedProjectStore.setState({ project: { id: 'proj-1', name: 'Acme' } });
@@ -415,5 +416,5 @@ describe('SecretsContent — a failed list shows an error state (UI-UX-1(b))', (
     expect(within(errorState).getByText('The access is not allowed')).toBeInTheDocument();
     expect(within(errorState).queryByRole('button')).not.toBeInTheDocument();
     expect(screen.queryByText('No secrets')).not.toBeInTheDocument();
-  }, 30_000);
+  }, testTimeout(30_000));
 });

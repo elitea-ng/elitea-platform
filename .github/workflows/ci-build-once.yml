@@ -1,0 +1,310 @@
+name: CI — Build once
+
+# Every stack image, built ONCE per commit and pushed by digest, for every
+# workflow that runs the stack: ci-web-e2e.yml's journey lanes,
+# ci-governed-conformance.yml's governed stack and helm-install-smoke.yml's
+# kind cluster. In ci.yml those three `needs:` this job and take its outputs as
+# inputs; each pulls by digest (.github/actions/pull-stack-images) and builds
+# in its own job only when nothing was built for it: a fork's or Dependabot's
+# pull request, whose token cannot push packages, or a run of its own
+# (schedule, dispatch). Until 2026-11 governed and the helm smoke each rebuilt
+# these images themselves, ~40 and ~20 runner-minutes on every pull request
+# that reached them.
+#
+# ci-web-e2e.yml also calls this, from its own `build-once` job, when it runs
+# on its own and was handed no results: its nightly run on main is still the
+# run that writes the layer cache and the BuildKit mounts.
+#
+# What it builds: the lane filter (`model-path-changes`) decides, as it did
+# inside ci-web-e2e.yml, unless the caller passes `force`. ci.yml does that
+# when governed or the helm smoke will run, or when the change touches Rust:
+# the Rust workflows no longer build `--release` themselves, so the release
+# build of every Rust image is proven here (owner decision 2026-11-20).
+
+on:
+  workflow_call:
+    inputs:
+      force:
+        description: >-
+          Build every image whatever the lane filter says: a consumer outside
+          ci-web-e2e.yml pulls them (governed, the helm smoke), or the change
+          touches Rust and its release build must be proven.
+        type: boolean
+        default: false
+    outputs:
+      reaches-stack:
+        description: The lane filter (scripts/ci/e2e-lane-filter.sh) for the stack lanes.
+        value: ${{ jobs.model-path-changes.outputs.reaches-stack }}
+      reaches-model:
+        description: The lane filter for the real-model lane.
+        value: ${{ jobs.model-path-changes.outputs.reaches-model }}
+      reaches-handoff:
+        description: The lane filter for the handoff journey.
+        value: ${{ jobs.model-path-changes.outputs.reaches-handoff }}
+      reaches-sandbox:
+        description: The lane filter for the code-sandbox lane.
+        value: ${{ jobs.model-path-changes.outputs.reaches-sandbox }}
+      reaches-webkit:
+        description: The lane filter for the webkit legs.
+        value: ${{ jobs.model-path-changes.outputs.reaches-webkit }}
+      reaches-images:
+        description: The lane filter for ci-web-e2e.yml's compose smoke leg (what only the container stack proves).
+        value: ${{ jobs.model-path-changes.outputs.reaches-images }}
+      web-images:
+        description: >-
+          The result of the `web-images` job (success, skipped, failure,
+          cancelled): elitea-main, subapp-host and web, the e2e compose's
+          images. A consumer pulls on success, builds in its own job on
+          skipped, and stops on anything else. A failed lane filter reports
+          its own result: the build jobs are then skipped, and a consumer must
+          not read that as "build it yourself".
+        value: ${{ jobs.model-path-changes.result != 'success' && jobs.model-path-changes.result || jobs.web-images.result }}
+      stack-images:
+        description: The result of the `stack-images` job (the rest of the standalone stack), read the same way.
+        value: ${{ jobs.model-path-changes.result != 'success' && jobs.model-path-changes.result || jobs.stack-images.result }}
+
+permissions:
+  contents: read
+
+jobs:
+  model-path-changes:
+    name: Which E2E lanes does this change reach?
+    # Decides, on a pull request, which ci-web-e2e.yml lanes run (they read
+    # it through this workflow's outputs) and so what the jobs below build.
+    # The main outputs:
+    #
+    #   reaches-stack — false when EVERY changed path is outside the stack:
+    #     prose (*.md at the root, under docs/ or .github/), the desktop host
+    #     or the helm chart minus what a compose stack mounts
+    #     (scripts/ci/e2e-lane-filter.sh says exactly which, and why each is
+    #     safe). The six stack lanes then SKIP. Measured 2026-10-20:
+    #     ci-web-e2e.yml ran on 97% of pull-request SHAs.
+    #   reaches-model — the real-model lane's signal (the gateway's SSE relay
+    #     against a vendor's real chunks, a tool call the model chose) changes
+    #     only when the gateway, a worker, the execution plane, the chat
+    #     surface, the E2E harness or the stack itself changes. A pull request
+    #     that touches none of those gets the mock lanes and skips this one.
+    #
+    # The nightly run on main and every dispatch reach everything, so the mount
+    # cache writers (`index-stream-rust`, `visual`) still run on main.
+    #
+    # A skipped job is reported as "skipped", which a required status check
+    # accepts as passing; nothing waits on a check that never starts. If THIS
+    # job fails, the lanes are skipped too — but this job is then red, so the
+    # skip cannot read as green.
+    #
+    # A plain `git diff`, not a third-party path-filter action: the script is
+    # the whole mechanism and it needs no extra token scope. It is on every
+    # stack lane's critical path, so it is cheap: a push or a dispatch answers
+    # from the expressions below with NO step run at all, and a pull request
+    # checks out its merge commit at depth 2 — the commit and its first
+    # parent, the base it merges onto — which is exactly the diff.
+    #
+    # Matrix lanes skipped by this gate report ONE check each, under the
+    # unexpanded name (e.g. `E2E (${{ matrix.leg }})`), not one per leg. No
+    # status check is required on main today; anyone making these lanes
+    # required must require that skipped name too, or gate inside the steps.
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    outputs:
+      reaches-model: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reaches-model }}
+      reaches-stack: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reaches-stack }}
+      reaches-handoff: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reaches-handoff }}
+      reaches-sandbox: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reaches-sandbox }}
+      # The webkit legs: a web, harness or client change on a pull request, and
+      # every non-pull-request run (the nightly one) unconditionally.
+      reaches-webkit: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reaches-webkit }}
+      # The compose smoke leg, on a pull request whose E2E legs the pool runs
+      # natively: a Containerfile, a compose file or the web image changed.
+      reaches-images: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reaches-images }}
+    steps:
+      - uses: actions/checkout@v7
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 2
+      # eng-runner: caches and TMPDIR on the work volume (does nothing on hosted).
+      - uses: ./.github/actions/eng-runner-env
+      - name: The lane filter decides every case it is tested on
+        if: github.event_name == 'pull_request'
+        working-directory: ${{ github.workspace }}
+        run: bash scripts/ci/e2e-lane-filter-test.sh
+      - id: filter
+        if: github.event_name == 'pull_request'
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          # The pull_request checkout is refs/pull/N/merge: parents (base, head).
+          # Anything else and HEAD^1 is not the base, so fail rather than
+          # diff against the wrong commit.
+          parents="$(git rev-list --parents -n 1 HEAD | wc -w)"
+          if [ "$parents" -ne 3 ]; then
+            echo "::error::HEAD is not a two-parent merge commit (rev-list printed ${parents} ids); cannot diff the pull request against its base"
+            exit 1
+          fi
+          # A failed diff fails this job (pipefail), never an empty list.
+          git diff --name-only HEAD^1 HEAD > "$RUNNER_TEMP/changed.txt"
+          bash scripts/ci/e2e-lane-filter.sh < "$RUNNER_TEMP/changed.txt" >> "$GITHUB_OUTPUT"
+
+  # ── BUILD ONCE PER COMMIT, FAN OUT ──────────────────────────────────────────
+  #
+  # Measured 2026-10-20: every journey lane baked the whole stack itself, so
+  # one pull-request commit built the Rust images ~7.6 times and elitea-main /
+  # subapp-host / web ~16 times; a bake took 35-48 min and lanes hit their
+  # 60-min timeout. Web E2E was 51% of the commit's median 518 runner-minutes.
+  #
+  # Now each image is built ONCE, one runner per heavy image so the builds run
+  # in parallel on separate machines, and pushed under a CI-only name,
+  # `ghcr.io/elitea-ng/ci-<image>:<sha>-<run>-<attempt>` (or reused under its
+  # content tag, `cas-<hash>`: build-stack-images). Each leg uploads its
+  # digest; every consumer pulls by digest and asserts it
+  # (.github/actions/pull-stack-images). Two jobs, kept apart on measurement
+  # (the web images are pushed ~20 min before the Rust ones). A caller's
+  # `needs:` waits for the whole workflow, so ci-web-e2e.yml's e2e-only lanes
+  # now start with the Rust lanes; neither set is on the run's critical path
+  # alone (the Rust lanes wait for the Rust images either way).
+  web-images:
+    name: Build once (${{ matrix.image }})
+    # Same repository and not Dependabot: a fork's token, and Dependabot's on
+    # `pull_request`, are read-only and cannot push packages. Their lanes see
+    # this job SKIPPED and build in-job instead (.github/actions/stack-images).
+    # And only when a consumer will run: the same reaches-stack gate the lanes
+    # carry (`model-path-changes`), so a docs-only pull request builds nothing,
+    # or `force` (governed, the helm smoke, a Rust change: the header).
+    # reaches-handoff also builds: the `handoff-journey` lane brings up the
+    # WHOLE standalone stack (`up` has no service list) and pulls by digest,
+    # asserting every image its compose files build, so a handoff-only change
+    # needs exactly the images of docker-compose.standalone-full.yml plus the
+    # rust-agent overlay, which is what these two jobs build and nothing else.
+    needs: &build-once-needs model-path-changes
+    if: &build-once-if >-
+      (inputs.force ||
+       needs.model-path-changes.outputs.reaches-stack == 'true' ||
+       needs.model-path-changes.outputs.reaches-handoff == 'true' ||
+       needs.model-path-changes.outputs.reaches-sandbox == 'true') &&
+      (github.event_name != 'pull_request' ||
+       (github.event.pull_request.head.repo.full_name == github.repository &&
+        github.actor != 'dependabot[bot]'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions: &build-once-permissions
+      contents: read
+      # The ONLY jobs that write these packages: they push the
+      # CI-only `ghcr.io/elitea-ng/ci-<image>` and, on a run on main, the
+      # `ci-cache-<image>` layer cache. Nothing that ships references either
+      # (scripts/ci/check-ci-image-references.mjs).
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        # `mount-suffix` / `mount-writer`: the BuildKit cache MOUNTS (Go
+        # module + build caches, cargo registry, pip) are one Actions-cache
+        # entry per suffix with ONE writer on main. The consumers do not
+        # build, so the writers are these legs.
+        include:
+          - image: elitea-main
+            targets: elitea-main
+            mount-suffix: go
+            mount-writer: "true"
+          # The sub-application host; `elitea-deepwiki` and `elitea-inventory`
+          # both run it, so one service names it.
+          - image: elitea-subapp-host
+            targets: elitea-deepwiki
+            mount-suffix: go
+            mount-writer: "false"
+          - image: elitea-web
+            targets: elitea-web
+            mount-suffix: light
+            mount-writer: "false"
+    steps: &build-once-steps
+      - uses: actions/checkout@v7
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build ${{ matrix.image }} once and push it by digest
+        uses: ./.github/actions/build-stack-images
+        with:
+          # The superset stack: every image any lane runs is a `build:`
+          # service here, with the SAME build spec the e2e compose declares
+          # (elitea-main at its `e2e` target, the others at their default).
+          # stack-images.mjs records each spec and the pulling lane refuses an
+          # entry whose spec differs from its own compose.
+          compose-files: |
+            docker-compose.standalone-full.yml
+            docker-compose.standalone-rust-agent.yml
+          cache-hcl: |
+            ci/bake-cache.hcl
+            ci/bake-cache-rust.hcl
+          targets: ${{ matrix.targets }}
+          mount-cache-suffix: ${{ matrix.mount-suffix }}
+          mount-cache-writer: ${{ matrix.mount-writer }}
+          push-prefix: ghcr.io/elitea-ng/ci-
+          # Unique to this run AND attempt, so the digest read back after the
+          # push can only be this push's (a re-run of the same commit gets
+          # its own tag).
+          push-tag: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          digests-file: ${{ runner.temp }}/stack-image-digests/${{ matrix.image }}.json
+      - name: Hand the digests to the lanes
+        uses: actions/upload-artifact@v7
+        with:
+          # `web-images-*` or `stack-images-*`: the e2e-compose lanes pull
+          # only the first.
+          name: stack-image-digests-${{ github.job }}-${{ matrix.image }}
+          path: ${{ runner.temp }}/stack-image-digests/${{ matrix.image }}.json
+          if-no-files-found: error
+          # The images themselves are pruned after 7 days (ci-image-cleanup.yml).
+          retention-days: 7
+
+  # The same job over the rest of the stack (YAML anchors: one definition of
+  # the gate, the permissions and the steps). Kept a SEPARATE job, not one
+  # matrix, so it has its own result: a failed Rust image stops the lanes
+  # that pull it, and the e2e-compose lanes (web-images only) still run. (Inside
+  # ci-web-e2e.yml it also let those lanes start ~20 min earlier, run
+  # 39444875153; a caller's `needs:` on this workflow now waits for both.)
+  stack-images:
+    name: Build once (${{ matrix.image }})
+    needs: *build-once-needs
+    if: *build-once-if
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions: *build-once-permissions
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # One runner per Rust image: each is its own cargo chain. Their
+          # mounts hold only the cargo registry and git checkouts now (the
+          # dependency build is a registry-cached layer); the worker's is the
+          # superset, so it is the one writer.
+          - image: elitea-worker-rust
+            targets: elitea-worker
+            mount-suffix: rust
+            mount-writer: "true"
+          - image: elitea-deepwiki-engine-native
+            targets: elitea-deepwiki-engine
+            mount-suffix: rust
+            mount-writer: "false"
+          - image: elitea-inventory-engine
+            targets: elitea-inventory-engine
+            mount-suffix: rust
+            mount-writer: "false"
+          - image: elitea-vector
+            targets: elitea-vector
+            mount-suffix: rust
+            mount-writer: "false"
+          - image: elitea-doc-extractor
+            targets: elitea-doc-extractor
+            mount-suffix: rust
+            mount-writer: "false"
+          # The two small Go services, and the four mocks, share a runner each.
+          - image: go-services
+            targets: elitea-scheduler,elitea-llm-gateway
+            mount-suffix: go
+            mount-writer: "false"
+          - image: mocks
+            targets: llm-mock,mcp-mock,qtest-mock,ado-mock
+            mount-suffix: light
+            mount-writer: "true"
+    steps: *build-once-steps
+

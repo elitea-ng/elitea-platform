@@ -1,5 +1,5 @@
 {
-  "_comment": "The PR tiers (scripts/ci/check-tiering.mjs). Each job of .github/workflows/ci.yml that calls a workflow is listed with its tier (fast: every push; heavy: only a ready PR whose fast tier passed) and the paths that start it (null: always). Patterns are GitHub path-filter patterns (** and *, a leading ! excludes). `always` files start every job: a change to the tiering itself must exercise all of it.",
+  "_comment": "The PR tiers (scripts/ci/check-tiering.mjs). Each job of .github/workflows/ci.yml that calls a workflow is listed with its tier (fast: every push; heavy: only a ready PR whose fast tier passed) and the paths that start it (null: always), or a `union` of other job ids instead of paths: it runs when any of them does (ci-build-once, which builds for its consumers). Patterns are GitHub path-filter patterns (** and *, a leading ! excludes). `always` files start every job: a change to the tiering itself must exercise all of it.",
   "always": [
     ".github/workflows/ci.yml",
     "scripts/ci/tier-paths.json",
@@ -110,7 +110,8 @@
         "services/elitea-main/tests/contract/**",
         "services/elitea-main/api/openapi/**",
         ".github/workflows/ci-contract.yml"
-      ]
+      ],
+      "unless": "ci-go"
     },
     "ci-gateway": {
       "tier": "fast",
@@ -251,6 +252,20 @@
         ".github/workflows/ci-rust-lint.yml"
       ]
     },
+    "ci-build-once": {
+      "tier": "heavy",
+      "union": [
+        "ci-web-e2e",
+        "ci-governed-conformance",
+        "helm-install-smoke",
+        "ci-rust",
+        "ci-rust-shared",
+        "ci-deepwiki-engine",
+        "ci-inventory-engine",
+        "ci-vector",
+        "ci-doc-extractor"
+      ]
+    },
     "ci-web-e2e": {
       "tier": "heavy",
       "paths": [
@@ -291,7 +306,56 @@
         "scripts/ci/check-workflow-cache-writes.mjs",
         "scripts/ci/check-e2e-paths.mjs",
         ".github/workflows/ci-web-e2e.yml",
+        ".github/workflows/ci-build-once.yml",
         "scripts/ci/stack-image-hash.mjs"
+      ]
+    },
+    "ci-web-e2e-native": {
+      "tier": "heavy",
+      "paths": [
+        "apps/elitea-web/**",
+        "libs/ts/client-core/**",
+        "brand/elitea/**",
+        "brand/sample/**",
+        "scripts/brand/**",
+        "services/elitea-main/**",
+        "services/elitea-deepwiki-engine/**",
+        "libs/rust/**",
+        "services/elitea-subapp-host/**",
+        "services/elitea-worker-rust/**",
+        "services/elitea-code-runner/**",
+        "services/elitea-vector/**",
+        "services/elitea-doc-extractor/**",
+        "services/elitea-llm-gateway/**",
+        ".github/actions/**",
+        "deploy/**",
+        "docker-bake.hcl",
+        "apps/elitea-desktop/src-tauri/**",
+        "rust-toolchain.toml",
+        "scripts/ci/assert-rust-toolchain.sh",
+        "conformance/nativeclient/**",
+        "scripts/ci/e2e-lane-filter.sh",
+        "scripts/ci/e2e-lane-filter-test.sh",
+        "services/elitea-scheduler/**",
+        "services/elitea-inventory-engine/**",
+        "libs/go/**",
+        "libs/proto/**",
+        "scripts/ci/stack-images.mjs",
+        "scripts/ci/py-compat.mjs",
+        "scripts/ci/ci-compat.mjs",
+        "scripts/ci/package.json",
+        "scripts/ci/package-lock.json",
+        "scripts/ci/pull-third-party-images.sh",
+        "scripts/ci/check-ci-image-references.mjs",
+        "scripts/ci/check-workflow-cache-writes.mjs",
+        "scripts/ci/check-e2e-paths.mjs",
+        ".github/workflows/ci-web-e2e.yml",
+        ".github/workflows/ci-build-once.yml",
+        "scripts/ci/stack-image-hash.mjs",
+        "scripts/e2e/**",
+        "scripts/ci/check-native-stack-parity.mjs",
+        "scripts/ci/check-runner-routing.mjs",
+        ".github/workflows/ci-web-e2e-native.yml"
       ]
     },
     "ci-web-coverage": {
@@ -523,6 +587,23 @@
         "libs/rust/Cargo.lock",
         "libs/rust/Cargo.toml",
         "libs/rust/rust-toolchain.toml",
+        "libs/rust/local-index/**",
+        "libs/rust/browser-tools/**",
+        "libs/rust/code-parsers/**",
+        "libs/rust/doc-chunk/**",
+        "libs/rust/egress-guard/**",
+        "libs/rust/engine-core/**",
+        "libs/rust/graph-algos/**",
+        "libs/rust/inventory-core/**",
+        "libs/rust/llm-wire/**",
+        "libs/rust/local-embed/**",
+        "libs/rust/platform-rpc/**",
+        "libs/rust/vendor/adk-agent/**",
+        "libs/rust/vendor/adk-runner/**",
+        "libs/proto/elitea/runtime/v1/artifact_object.proto",
+        "libs/proto/elitea/runtime/v1/internal_tool.proto",
+        "libs/proto/contracts/**",
+        "services/elitea-subapp-host/internal/apps/inventory/descriptor.json",
         ".github/workflows/ci-local-tools-macos.yml"
       ]
     },
@@ -535,7 +616,10 @@
         "scripts/ci/assert-rust-toolchain.sh",
         ".github/workflows/desktop-package.yml",
         ".github/actions/desktop-macos-package/**",
-        ".github/actions/desktop-windows-package/**"
+        ".github/actions/desktop-windows-package/**",
+        "brand/**",
+        "scripts/brand/**",
+        "scripts/ci/brand-output-scan.mjs"
       ]
     },
     "helm-install-smoke": {
@@ -555,7 +639,9 @@
         "libs/proto/**",
         "libs/go/natsconn/**",
         "docker-bake.hcl",
-        ".github/workflows/helm-install-smoke.yml"
+        ".github/workflows/helm-install-smoke.yml",
+        ".github/workflows/ci-build-once.yml",
+        "scripts/ci/stack-images.mjs"
       ]
     },
     "ci-governed-conformance": {
@@ -566,7 +652,10 @@
         "deploy/governed/**",
         "deploy/governed-mocks/**",
         "deploy/scripts/governed-conformance.sh",
-        ".github/workflows/ci-governed-conformance.yml"
+        ".github/workflows/ci-governed-conformance.yml",
+        ".github/workflows/ci-build-once.yml",
+        ".github/actions/stack-images/**",
+        ".github/actions/pull-stack-images/**"
       ]
     },
     "ci-handoff-loadgate": {

@@ -11,6 +11,7 @@ import { setFieldValueAtPath } from '../lib/agentFieldChange';
 import type { AgentDraftValues } from '../model/types';
 
 import { CreateAgentForm } from './CreateAgentForm';
+import { testTimeout } from '@/test/timeouts';
 
 installCodeMirrorTestPolyfills();
 
@@ -314,7 +315,7 @@ describe('CreateAgentForm', () => {
     return content;
   }
 
-  it('surfaces a variable row when a placeholder is typed into the instructions', { timeout: 20_000 }, async () => {
+  it('surfaces a variable row when a placeholder is typed into the instructions', { timeout: testTimeout(20_000) }, async () => {
     const user = userEvent.setup({ delay: null });
     const { container } = renderWithProviders(
       <StatefulCreateAgentForm initial={{ ...baseValues, version_details: { ...baseValues.version_details, instructions: '' } }} />,
@@ -330,7 +331,7 @@ describe('CreateAgentForm', () => {
     expect(await screen.findByLabelText('topic')).toHaveValue('');
   });
 
-  it('keeps a value typed into a derived row when the instructions are edited again', { timeout: 20_000 }, async () => {
+  it('keeps a value typed into a derived row when the instructions are edited again', { timeout: testTimeout(20_000) }, async () => {
     const user = userEvent.setup({ delay: null });
     const { container } = renderWithProviders(
       <StatefulCreateAgentForm
@@ -351,7 +352,7 @@ describe('CreateAgentForm', () => {
     expect(screen.getByLabelText('topic')).toHaveValue('weather');
   });
 
-  it('removes the row once its placeholder is deleted from the instructions', { timeout: 20_000 }, async () => {
+  it('removes the row once its placeholder is deleted from the instructions', { timeout: testTimeout(20_000) }, async () => {
     const user = userEvent.setup({ delay: null });
     const { container } = renderWithProviders(
       <StatefulCreateAgentForm

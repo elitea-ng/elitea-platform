@@ -14,6 +14,7 @@ import { server } from '@/test/setup';
 import { renderPipelinesRoute } from '../__tests__/testRouter';
 import type { EditPipelineVersionFieldsState } from '../lib/useEditPipelineVersionFields';
 import { EditPipelineToolsPanel } from './EditPipelineToolsPanel';
+import { testTimeout } from '@/test/timeouts';
 
 const VERSION = {
   id: '1',
@@ -74,7 +75,7 @@ describe('EditPipelineToolsPanel', () => {
     expect(modules.getByText('Attachments')).toBeInTheDocument();
     expect(modules.queryByText('Planner')).not.toBeInTheDocument();
     expect(modules.queryByText('Swarm Mode')).not.toBeInTheDocument();
-  }, 20_000);
+  }, testTimeout(20_000));
 
   it('routes a module switch into the version-level state the save body reads', async () => {
     const applyFieldChange = vi.fn(() => true);
@@ -100,7 +101,7 @@ describe('EditPipelineToolsPanel', () => {
     await user.click(within(screen.getByTestId('internal-tool-attachments')).getByRole('switch'));
 
     await waitFor(() => expect(applyFieldChange).toHaveBeenCalledWith('version_details.meta.internal_tools', ['attachments']));
-  }, 20_000);
+  }, testTimeout(20_000));
 
   /** A public-project viewer keeps the panel and loses the write affordances. */
   it('renders read-only without crashing when the viewer cannot write', async () => {
@@ -118,7 +119,7 @@ describe('EditPipelineToolsPanel', () => {
     );
 
     expect(await screen.findByText('INTERNAL TOOLS')).toBeInTheDocument();
-  }, 20_000);
+  }, testTimeout(20_000));
 
   it('renders before a version has loaded, rather than throwing on the missing ids', async () => {
     renderPipelinesRoute(
@@ -135,7 +136,7 @@ describe('EditPipelineToolsPanel', () => {
     );
 
     expect(await screen.findByText('INTERNAL TOOLS')).toBeInTheDocument();
-  }, 20_000);
+  }, testTimeout(20_000));
 
   /**
    * The attach REFETCH, which is this file's own third job: `ToolMenu`
@@ -204,7 +205,7 @@ describe('EditPipelineToolsPanel', () => {
     fireEvent.click(await screen.findByText('Other Pipeline'));
 
     await waitFor(() => expect(detailReads).toBeGreaterThan(readsBeforeAttach), { timeout: 15_000 });
-  }, 20_000);
+  }, testTimeout(20_000));
 
   it('carries the version attachment toolkit id through to the tool rows', async () => {
     const withAttachmentToolkit = {
@@ -226,5 +227,5 @@ describe('EditPipelineToolsPanel', () => {
     );
 
     expect(await screen.findByText('INTERNAL TOOLS')).toBeInTheDocument();
-  }, 20_000);
+  }, testTimeout(20_000));
 });

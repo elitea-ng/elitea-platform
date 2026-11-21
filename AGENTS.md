@@ -232,11 +232,12 @@ failure modes exercised, and checks that were run or intentionally skipped.
 vet, lint, unit tests, Rust format and Clippy. Follow these steps:
 
 1. Open the pull request with `gh pr create --draft`.
-2. Push fixes until the fast tier is green. Act on the first failed job.
+2. Push fixes until `CI / fast-gate` is green. Act on the first failed job.
+   On a draft `ci-gate` is skipped (grey), not failed: read `fast-gate`.
 3. Mark the pull request ready with `gh pr ready`. This starts the heavy tier:
    E2E, the Rust test chains, desktop and kind.
-4. Merge when `CI / ci-gate` is green. `ci-gate` fails on a draft and fails
-   when a job that must run is missing.
+4. Merge when `CI / ci-gate` is green. `ci-gate` fails when a job that must
+   run failed or is missing.
 
 Do not mark a pull request ready before the fast tier is green. Do not mark a
 pull request ready only to see the heavy tier on code that you have not tested.

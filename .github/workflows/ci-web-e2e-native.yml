@@ -1,0 +1,644 @@
+name: CI — Web E2E (native)
+
+# The E2E legs of ci-web-e2e.yml, run on the self-hosted pool WITHOUT
+# containers: the pool has no Docker daemon and no root
+# (deploy/ci-runners/README.md), so the e2e-standalone compose stack runs as
+# processes. scripts/e2e/native-stack.mjs supervises the services of
+# deploy/native/e2e-standalone.mjs (each compose service under its compose
+# name, on its address from the pod's hostAliases), and
+# apps/elitea-web/scripts/e2e-stack.sh drives it with E2E_STACK=native through
+# lib/stack-backend.sh: the same `up`, the same seed, the same assertions.
+# scripts/ci/check-native-stack-parity.mjs (no-binaries) fails when the
+# table drifts from the compose file.
+#
+# NO IMAGE. `native-build` builds the binaries and the web bundles the two
+# e2e images carry (scripts/e2e/build-native-bin.sh, as their Containerfiles
+# build them) and hands them to the legs as one artifact. So the legs need
+# neither ci-build-once.yml (its Rust images take ~18 min on a cold cache)
+# nor a registry.
+#
+# THE MODE FOLLOWS THE RUNNER, through the one routing condition
+# (scripts/ci/check-runner-routing.mjs ROUTING_CONDITION): every job here
+# runs only when it routes to the pool. Where it does not (a fork's or
+# Dependabot's pull request, ENG_RUNNER off) every job here is skipped and
+# ci-web-e2e.yml's hosted compose legs run in full, under their own names, so
+# no check is reported twice and none goes missing. Where it does, those
+# compose legs stand down on a pull request except one chromium leg, the
+# smoke that proves the images (ci-web-e2e.yml's RUN_LEG says exactly when).
+#
+# THE STANDALONE LANES (`standalone`): chat-stream-rust (3 legs),
+# deepwiki-stack, index-stream-rust, native-client-conformance and
+# handoff-journey run deploy/scripts/standalone-stack.sh with E2E_STACK=native
+# over deploy/native/standalone-full.mjs (the standalone-full compose file
+# plus the Rust agent overlay), from both build jobs' artifacts:
+# `native-build` (the Go binaries and web bundles) and `native-build-rust`
+# (the five Rust services and the gateway, built on the pool: never lifted
+# from an image, whose glibc is not the pool's). ci-web-e2e.yml's compose
+# versions stand down on exactly the pull requests these run on, as the e2e
+# legs do; leg 1of3 of chat-stream-rust and the single-job lanes stay as the
+# image smoke when reaches-images says so.
+#
+# What stays compose, and why (docs/contributing/ci.md, "Native E2E lanes"):
+#   * the compose smoke legs (pull requests that change a Containerfile, a
+#     compose file, the web image's nginx or a stack script's compose half:
+#     e2e-lane-filter.sh reaches-images) and the full compose matrix every
+#     night: only they prove the images;
+#   * `visual` and `docs-shots`: their pixels come from the pinned Playwright
+#     container's rasteriser and fonts;
+#   * chat-stream-real, nightly-real-llm.yml: the llm-real model server is an
+#     image (llama.cpp and two GGUFs); the pool has neither, and a binary is
+#     never lifted from an image;
+#   * deepwiki-real-engine.yml: weekly, its engine_image input is an image by
+#     design, and its overlay swaps llm-mock for an image-only stub;
+#   * code-sandbox: the supervisor runs containers, which the pool cannot;
+#   * ci-governed-conformance.yml stays hosted: its clients call
+#     graph.microsoft.com and login.microsoftonline.com, deliberately absent
+#     from the pod's hostAliases, and governed-mocks binds 443.
+
+on:
+  # Called by ci.yml (the PR tiers and the path filter, tier-paths.json
+  # `ci-web-e2e-native`), which needs nothing built for it.
+  workflow_call:
+  workflow_dispatch:
+  # No push arm (no-binaries.yml's workflow-triggers). The nightly run on main
+  # proves the native legs on the commit the compose matrix ran on.
+  schedule:
+    - cron: "37 1 * * *"
+
+concurrency:
+  group: ci-web-e2e-native-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: apps/elitea-web
+
+jobs:
+  native-build:
+    name: E2E native build
+    # No job-level if: a called workflow whose every job skips reports
+    # `skipped`, and ci-gate reads that as missing. Off the pool (a fork, a
+    # Dependabot run, ENG_RUNNER off) the job runs and does nothing; the
+    # compose matrix in ci-web-e2e.yml carries the legs there.
+    env:
+      NATIVE: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'true' || 'false' }}
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    outputs:
+      # The lane filter, as ci-build-once.yml's `model-path-changes` decides it:
+      # every run that is not a pull request reaches everything.
+      reaches-stack: ${{ env.NATIVE == 'true' && (github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reaches-stack) || 'false' }}
+      reaches-webkit: ${{ env.NATIVE == 'true' && (github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reaches-webkit) || 'false' }}
+      reaches-handoff: ${{ env.NATIVE == 'true' && (github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reaches-handoff) || 'false' }}
+      sha256: ${{ steps.pack.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # A pull request's merge commit and its base: exactly the diff.
+          fetch-depth: 2
+      # eng-runner: caches and TMPDIR on the work volume (does nothing on hosted).
+      - uses: ./.github/actions/eng-runner-env
+      - id: filter
+        name: Which legs does this change reach?
+        if: env.NATIVE == 'true' && github.event_name == 'pull_request'
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          parents="$(git rev-list --parents -n 1 HEAD | wc -w)"
+          if [ "$parents" -ne 3 ]; then
+            echo "::error::HEAD is not a two-parent merge commit (rev-list printed ${parents} ids); cannot diff the pull request against its base"
+            exit 1
+          fi
+          git diff --name-only HEAD^1 HEAD > "$RUNNER_TEMP/changed.txt"
+          bash scripts/ci/e2e-lane-filter.sh < "$RUNNER_TEMP/changed.txt" >> "$GITHUB_OUTPUT"
+      - id: gate
+        name: Does any native leg need the build?
+        if: env.NATIVE == 'true'
+        env:
+          STACK: ${{ github.event_name != 'pull_request' || steps.filter.outputs.reaches-stack == 'true' }}
+          HANDOFF: ${{ github.event_name != 'pull_request' || steps.filter.outputs.reaches-handoff == 'true' }}
+        run: |
+          if [ "$STACK" = true ] || [ "$HANDOFF" = true ]; then echo "build=true"; else echo "build=false"; fi >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v7
+        if: steps.gate.outputs.build == 'true'
+        with:
+          # The cache is .github/actions/go-cache below.
+          cache: false
+          go-version-file: go.work
+      - name: Restore the Go cache (read only)
+        if: steps.gate.outputs.build == 'true'
+        uses: ./.github/actions/go-cache
+        with:
+          # ci-go's test-checks job writes this key (the whole workspace); the
+          # list is the same so this restores it. A literal block: a comment
+          # inside it would become a path.
+          save: 'false'
+          cache-dependency-path: |
+            services/elitea-main/go.sum
+            libs/go/*/go.sum
+            libs/proto/gen/go/go.sum
+      - uses: actions/setup-node@v7
+        if: steps.gate.outputs.build == 'true'
+        with:
+          node-version: "26"
+          package-manager-cache: false
+      - name: Restore the npm cache (pull requests read, main writes)
+        if: steps.gate.outputs.build == 'true'
+        uses: ./.github/actions/npm-cache
+        with:
+          cache-dependency-path: apps/elitea-web/package-lock.json
+      - name: Install (locked)
+        if: steps.gate.outputs.build == 'true'
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            [ "$attempt" = 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
+            echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
+      - name: Build the binaries and the web bundles the e2e images carry
+        if: steps.gate.outputs.build == 'true'
+        working-directory: ${{ github.workspace }}
+        run: bash scripts/e2e/build-native-bin.sh "$RUNNER_TEMP/native-bin"
+      - id: pack
+        name: Pack them (upload-artifact keeps no exec bits)
+        if: steps.gate.outputs.build == 'true'
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          tar --zstd -cf native-bin.tar.zst -C native-bin .
+          echo "sha256=$(sha256sum native-bin.tar.zst | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - name: Upload the build directory
+        if: steps.gate.outputs.build == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-e2e-bin
+          path: ${{ runner.temp }}/native-bin.tar.zst
+          # A re-run of this job replaces its own upload.
+          overwrite: true
+          if-no-files-found: error
+          retention-days: 3
+
+  e2e:
+    name: E2E native (${{ matrix.leg }})
+    needs: [native-build]
+    # The same routing condition as native-build (a skipped build skips this
+    # too), and the lane filter's stack gate.
+    if: ${{ !cancelled() && needs.native-build.result == 'success' && needs.native-build.outputs.reaches-stack == 'true' && vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
+    timeout-minutes: 40
+    env:
+      # As ci-web-e2e.yml: the webkit legs run when the web app, the harness or
+      # the shared client changed, and on every run that is not a pull request.
+      RUN_LEG: ${{ (matrix.engine != 'webkit' && matrix.engine != 'platform-flags-webkit') || needs.native-build.outputs.reaches-webkit == 'true' }}
+      E2E_STACK: native
+      E2E_PORT: "8080"
+      # elitea-web's nginx runs as the runner user, on 8080 (not 80).
+      E2E_STANDIN_PROVIDER_BASE_URL: http://elitea-web:8080/app
+    strategy:
+      fail-fast: false
+      # EXACTLY ci-web-e2e.yml's `e2e` matrix (e2e-journey-shape.test.mjs
+      # asserts it): the same legs, shards and weights, so a leg here runs
+      # the tests its compose namesake runs, and the weights' balance holds.
+      #
+      # PLAYWRIGHT WORKERS: 4, the config's CI default, deliberately the same
+      # as a compose leg. The pod's cgroup gives 4 CPU (eng-runner-env pins
+      # GOMAXPROCS=4), which is what a hosted ubuntu-latest has, and there too
+      # the same 4 CPU run the whole stack beside the browsers. The weights
+      # were measured at 4 workers; another count would make them wrong, and
+      # more workers than CPUs only queues the stack's own processes behind
+      # the browsers'. The flag legs pin `workers: 1` in the config, as on
+      # compose.
+      matrix:
+        include:
+          - engine: chromium
+            leg: chromium-1of2
+            shard: "1/2"
+            weights: "523:242"
+          - engine: chromium
+            leg: chromium-2of2
+            shard: "2/2"
+            weights: "523:242"
+          - engine: webkit
+            leg: webkit-1of3
+            shard: "1/3"
+            weights: "443:164:158"
+          - engine: webkit
+            leg: webkit-2of3
+            shard: "2/3"
+            weights: "443:164:158"
+          - engine: webkit
+            leg: webkit-3of3
+            shard: "3/3"
+            weights: "443:164:158"
+          - engine: platform-flags
+            leg: platform-flags
+            shard: ""
+            weights: ""
+          - engine: platform-flags-webkit
+            leg: platform-flags-webkit
+            shard: ""
+            weights: ""
+    steps:
+      # Unconditional: the next step is a local action, and every routed job
+      # runs it (check-runner-routing.mjs).
+      - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume (does nothing on hosted).
+      - uses: ./.github/actions/eng-runner-env
+      - name: Where the build directory and the supervisor's state go
+        if: ${{ env.RUN_LEG == 'true' }}
+        # On the work volume (RUNNER_TEMP); a job-level env cannot name it.
+        run: |
+          {
+            echo "E2E_NATIVE_BIN=${RUNNER_TEMP}/native-bin"
+            echo "E2E_NATIVE_STATE_DIR=${RUNNER_TEMP}/native-stack"
+          } >> "$GITHUB_ENV"
+      - uses: actions/setup-node@v7
+        if: ${{ env.RUN_LEG == 'true' }}
+        with:
+          node-version: "26"
+          package-manager-cache: false
+      - name: Restore the npm cache (pull requests read, main writes)
+        if: ${{ env.RUN_LEG == 'true' }}
+        uses: ./.github/actions/npm-cache
+        with:
+          cache-dependency-path: apps/elitea-web/package-lock.json
+      - name: Install (locked)
+        if: ${{ env.RUN_LEG == 'true' }}
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            [ "$attempt" = 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
+            echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
+      - name: The suite's shape still matches the E2E workflows
+        if: ${{ env.RUN_LEG == 'true' }}
+        run: npx vitest run --config vitest.config.ts --project scripts scripts/e2e-journey-shape.test.mjs
+      - name: Download the build directory
+        if: ${{ env.RUN_LEG == 'true' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: native-e2e-bin
+          path: ${{ runner.temp }}
+      - name: Unpack it (the archive native-build packed, by its sha256)
+        if: ${{ env.RUN_LEG == 'true' }}
+        working-directory: ${{ runner.temp }}
+        env:
+          SHA256: ${{ needs.native-build.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          echo "${SHA256}  native-bin.tar.zst" | sha256sum -c -
+          mkdir -p native-bin
+          tar --zstd -xf native-bin.tar.zst -C native-bin
+          rm native-bin.tar.zst
+      - name: Bring up the E2E stack (native)
+        if: ${{ env.RUN_LEG == 'true' }}
+        run: bash scripts/e2e-stack.sh up
+      - name: Seed E2E users
+        if: ${{ env.RUN_LEG == 'true' }}
+        run: bash scripts/e2e-stack.sh seed
+      - name: Playwright against the native stack
+        if: ${{ env.RUN_LEG == 'true' }}
+        # The same command the compose leg runs in the pinned container, run
+        # on the host: the pool's image bakes the pinned Playwright's browsers
+        # and their libraries at PLAYWRIGHT_BROWSERS_PATH (read-only; no
+        # `playwright install`). E2E_REUSE_STACK=1: the stack is up already.
+        env:
+          CI: "true"
+          E2E_REUSE_STACK: "1"
+          PLAYWRIGHT_BASE_URL: http://localhost:8080
+          E2E_TZ: UTC
+          PWTEST_SHARD_WEIGHTS: ${{ matrix.weights }}
+        run: npx playwright test --project=${{ matrix.engine }} ${{ matrix.shard && format('--shard={0}', matrix.shard) || '' }}
+      - name: Collect the stack's own logs
+        # As the compose leg: only on failure, before the teardown.
+        if: ${{ failure() && env.RUN_LEG == 'true' }}
+        continue-on-error: true
+        run: bash scripts/e2e-stack.sh logs
+      - name: Upload Playwright report
+        if: ${{ always() && env.RUN_LEG == 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          # Not playwright-report-<leg>: the compose smoke leg uploads that name
+          # in the same ci.yml run.
+          name: playwright-report-native-${{ matrix.leg }}
+          path: |
+            apps/elitea-web/playwright-results/
+            apps/elitea-web/playwright-report/
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Upload the supervisor's state and every service log
+        if: ${{ failure() && env.RUN_LEG == 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-stack-logs-${{ matrix.leg }}
+          path: |
+            ${{ runner.temp }}/native-stack/logs/
+            ${{ runner.temp }}/native-stack/exit/
+            ${{ runner.temp }}/native-stack/run/
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Tear down the E2E stack
+        if: ${{ always() && env.RUN_LEG == 'true' }}
+        run: bash scripts/e2e-stack.sh down
+      - name: Skipped (no web, harness or client change reaches WebKit)
+        if: ${{ env.RUN_LEG != 'true' }}
+        run: echo "::notice::${{ matrix.leg }} skipped - nothing this pull request changes can reach WebKit; the nightly run on main runs it"
+
+  native-build-rust:
+    name: E2E native build (Rust and the gateway)
+    # No job-level if, as native-build: a skipped job reads as missing.
+    env:
+      NATIVE: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'true' || 'false' }}
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
+    defaults:
+      run:
+        working-directory: .
+    # A cold build of five release workspaces on the pod's 4 CPUs. NO
+    # rust-cache: check-cache-budget.mjs plans 7.71 of its 8 GiB, so a
+    # release target directory (~1.3 GiB) has no room to be written, and the
+    # one Rust entry there is (ci-rust.yml's worker-rust-test) caches the
+    # `--all-features` test profile, whose artefacts a release build never
+    # reuses. One shared CARGO_TARGET_DIR compiles a dependency the five share
+    # once (scripts/e2e/build-native-rust.sh), and the script drops the
+    # profile's LTO, codegen-units 1 and opt-level 3 (release semantics kept;
+    # the compose image smoke runs the shipped profile).
+    timeout-minutes: 60
+    outputs:
+      sha256: ${{ steps.pack.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+      # eng-runner: rustup and the caches on the work volume.
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          rust: "true"
+      - id: filter
+        name: Which legs does this change reach?
+        if: env.NATIVE == 'true' && github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          parents="$(git rev-list --parents -n 1 HEAD | wc -w)"
+          if [ "$parents" -ne 3 ]; then
+            echo "::error::HEAD is not a two-parent merge commit (rev-list printed ${parents} ids); cannot diff the pull request against its base"
+            exit 1
+          fi
+          git diff --name-only HEAD^1 HEAD > "$RUNNER_TEMP/changed.txt"
+          bash scripts/ci/e2e-lane-filter.sh < "$RUNNER_TEMP/changed.txt" >> "$GITHUB_OUTPUT"
+      - id: gate
+        name: Does any native leg need the build?
+        if: env.NATIVE == 'true'
+        env:
+          STACK: ${{ github.event_name != 'pull_request' || steps.filter.outputs.reaches-stack == 'true' }}
+          HANDOFF: ${{ github.event_name != 'pull_request' || steps.filter.outputs.reaches-handoff == 'true' }}
+        run: |
+          if [ "$STACK" = true ] || [ "$HANDOFF" = true ]; then echo "build=true"; else echo "build=false"; fi >> "$GITHUB_OUTPUT"
+      - name: Assert the pinned toolchain in each workspace
+        if: steps.gate.outputs.build == 'true'
+        run: |
+          set -euo pipefail
+          for crate in elitea-worker-rust elitea-vector elitea-doc-extractor elitea-deepwiki-engine elitea-inventory-engine; do
+            (cd "services/${crate}" && bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh")
+          done
+      - uses: actions/setup-go@v7
+        if: steps.gate.outputs.build == 'true'
+        with:
+          # The gateway is outside go.work, on its own Go.
+          cache: false
+          go-version-file: services/elitea-llm-gateway/go.mod
+      - name: Build the Rust services and the gateway on the pool
+        if: steps.gate.outputs.build == 'true'
+        env:
+          NATIVE_RUST_TARGET_DIR: ${{ runner.temp }}/native-rust-target
+        run: bash scripts/e2e/build-native-rust.sh "$RUNNER_TEMP/native-rust-bin"
+      - id: pack
+        name: Pack them (upload-artifact keeps no exec bits)
+        if: steps.gate.outputs.build == 'true'
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          tar --zstd -cf native-rust-bin.tar.zst -C native-rust-bin .
+          echo "sha256=$(sha256sum native-rust-bin.tar.zst | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - name: Upload the build directory
+        if: steps.gate.outputs.build == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-e2e-rust-bin
+          path: ${{ runner.temp }}/native-rust-bin.tar.zst
+          overwrite: true
+          if-no-files-found: error
+          retention-days: 3
+
+  standalone:
+    name: E2E native (${{ matrix.lane }})
+    needs: [native-build, native-build-rust]
+    # Both builds, the routing condition, and the lane filter: the handoff
+    # lane on reaches-handoff, every other lane on reaches-stack (RUN_LEG).
+    if: ${{ !cancelled() && needs.native-build.result == 'success' && needs.native-build-rust.result == 'success' && (needs.native-build.outputs.reaches-stack == 'true' || needs.native-build.outputs.reaches-handoff == 'true') && vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
+    defaults:
+      run:
+        working-directory: .
+    timeout-minutes: 60
+    env:
+      RUN_LEG: ${{ matrix.kind == 'handoff' && needs.native-build.outputs.reaches-handoff || needs.native-build.outputs.reaches-stack }}
+      E2E_STACK: native
+      STANDALONE_WORKER: rust
+      CI: "true"
+    strategy:
+      fail-fast: false
+      # ci-web-e2e.yml's standalone lanes, one leg each (chat-stream-rust's
+      # three shards and weights exactly), under `E2E native (<lane>)`.
+      #
+      # PARALLELISM, pinned per lane, as on compose:
+      #   chat-stream-rust ×3, deepwiki-stack, index-stream-rust: ONE
+      #     Playwright worker (chat-stream-e2e.sh `--workers=1`,
+      #     index-stream-e2e.sh `--workers 1`): the journeys share one seeded
+      #     persona, one model mock and its journal;
+      #   native-client-conformance: `go test` (no Playwright), one package
+      #     run at a time against the one stack;
+      #   handoff-journey: `cargo test --test-threads=1` (handoff-live.sh), no
+      #     Playwright.
+      # Main is on 8080 here (the native table serves no other port) and the
+      # mocks on their image ports (8090 llm-mock, 8096 qtest, 8097 ado).
+      matrix:
+        include:
+          - lane: chat-stream-rust-1of3
+            kind: chat
+            shard: "1/3"
+            weights: "61:16:33"
+          - lane: chat-stream-rust-2of3
+            kind: chat
+            shard: "2/3"
+            weights: "61:16:33"
+          - lane: chat-stream-rust-3of3
+            kind: chat
+            shard: "3/3"
+            weights: "61:16:33"
+          - lane: deepwiki-stack
+            kind: deepwiki
+            shard: ""
+            weights: ""
+          - lane: index-stream-rust
+            kind: index
+            shard: ""
+            weights: ""
+          - lane: native-client-conformance
+            kind: conformance
+            shard: ""
+            weights: ""
+          - lane: handoff-journey
+            kind: handoff
+            shard: ""
+            weights: ""
+    steps:
+      - uses: actions/checkout@v7
+      # eng-runner: caches, TMPDIR and rustup (the handoff lane's cargo test).
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          rust: "true"
+      - name: Where the build directory and the supervisor's state go
+        if: ${{ env.RUN_LEG == 'true' }}
+        run: |
+          {
+            echo "E2E_NATIVE_BIN=${RUNNER_TEMP}/native-bin"
+            echo "E2E_NATIVE_STATE_DIR=${RUNNER_TEMP}/native-stack"
+          } >> "$GITHUB_ENV"
+      - uses: actions/setup-node@v7
+        if: ${{ env.RUN_LEG == 'true' }}
+        with:
+          node-version: "26"
+          package-manager-cache: false
+      - name: Restore the npm cache (pull requests read, main writes)
+        if: ${{ env.RUN_LEG == 'true' && matrix.kind != 'conformance' }}
+        uses: ./.github/actions/npm-cache
+        with:
+          cache-dependency-path: apps/elitea-web/package-lock.json
+      - name: Install (locked)
+        if: ${{ env.RUN_LEG == 'true' && matrix.kind != 'conformance' }}
+        working-directory: apps/elitea-web
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            [ "$attempt" = 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
+            echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
+      # The runtime PKI (standalone-stack.sh certs: gen-runtime-certs.sh mints
+      # the Ed25519 command-signing key with python's cryptography) and the
+      # handoff lane's aws CLI. The image's python3 refuses pip (PEP 668).
+      - uses: actions/setup-python@v7
+        if: ${{ env.RUN_LEG == 'true' }}
+        with:
+          python-version: "3.12"
+      - name: Python tools (pinned)
+        if: ${{ env.RUN_LEG == 'true' }}
+        run: |
+          python -m pip install --disable-pip-version-check -q "cryptography==44.0.0" \
+            ${{ matrix.kind == 'handoff' && '"awscli==1.36.0"' || '' }}
+      - uses: actions/setup-go@v7
+        if: ${{ env.RUN_LEG == 'true' && (matrix.kind == 'conformance' || matrix.kind == 'handoff') }}
+        with:
+          cache: false
+          go-version-file: go.work
+      - name: Restore the Go cache (read only, one writer per key)
+        if: ${{ env.RUN_LEG == 'true' && (matrix.kind == 'conformance' || matrix.kind == 'handoff') }}
+        uses: ./.github/actions/go-cache
+        with:
+          save: "false"
+          cache-dependency-path: |
+            services/elitea-main/go.sum
+            libs/go/*/go.sum
+            libs/proto/gen/go/go.sum
+      - name: Download the Go and web build directory
+        if: ${{ env.RUN_LEG == 'true' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: native-e2e-bin
+          path: ${{ runner.temp }}
+      - name: Download the Rust and gateway build directory
+        if: ${{ env.RUN_LEG == 'true' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: native-e2e-rust-bin
+          path: ${{ runner.temp }}
+      - name: Unpack both into one build directory (by their sha256)
+        if: ${{ env.RUN_LEG == 'true' }}
+        working-directory: ${{ runner.temp }}
+        env:
+          SHA256: ${{ needs.native-build.outputs.sha256 }}
+          RUST_SHA256: ${{ needs.native-build-rust.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          echo "${SHA256}  native-bin.tar.zst" | sha256sum -c -
+          echo "${RUST_SHA256}  native-rust-bin.tar.zst" | sha256sum -c -
+          mkdir -p native-bin
+          tar --zstd -xf native-bin.tar.zst -C native-bin
+          tar --zstd -xf native-rust-bin.tar.zst -C native-bin
+          rm native-bin.tar.zst native-rust-bin.tar.zst
+      - name: The handoff lane's host (stub web bundle, pinned toolchain, brand overlay)
+        if: ${{ env.RUN_LEG == 'true' && matrix.kind == 'handoff' }}
+        # The Tauri build libraries are in the pool's image (no apt here).
+        run: |
+          set -euo pipefail
+          mkdir -p apps/elitea-web/dist-desktop
+          printf '<!doctype html><title>stub</title>' > apps/elitea-web/dist-desktop/index.html
+          (cd apps/elitea-desktop/src-tauri && bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh")
+          (cd apps/elitea-desktop && node scripts/tauri-brand.mjs --github-env)
+      - name: Run the lane against a fresh native standalone stack
+        if: ${{ env.RUN_LEG == 'true' }}
+        env:
+          STANDALONE_SKIP_BUILD: "1"
+          KIND: ${{ matrix.kind }}
+          PLAYWRIGHT_SHARD: ${{ matrix.shard }}
+          # chat-stream-rust's shard weights, as ci-web-e2e.yml's.
+          PWTEST_SHARD_WEIGHTS: ${{ matrix.weights }}
+          MOCK_LLM_CHUNK_DELAY_MS: ${{ matrix.kind == 'chat' && '120' || '' }}
+          CHAT_STREAM_PORT: "8080"
+          DEEPWIKI_STREAM_PORT: "8080"
+          INDEX_STREAM_PORT: "8080"
+          INDEX_STREAM_MOCK_PORT: "8090"
+          STANDALONE_PORT: "8080"
+        run: |
+          set -euo pipefail
+          [ -n "$MOCK_LLM_CHUNK_DELAY_MS" ] || unset MOCK_LLM_CHUNK_DELAY_MS
+          case "$KIND" in
+            chat) bash apps/elitea-web/scripts/chat-stream-e2e.sh ;;
+            deepwiki) bash apps/elitea-web/scripts/deepwiki-e2e.sh ;;
+            index) bash apps/elitea-web/scripts/index-stream-e2e.sh ;;
+            conformance) bash deploy/scripts/native-conformance.sh run ;;
+            handoff) bash deploy/scripts/handoff-live.sh run ;;
+            *) echo "::error::unknown lane kind ${KIND}"; exit 1 ;;
+          esac
+      - name: Upload Playwright report
+        if: ${{ always() && env.RUN_LEG == 'true' && matrix.kind != 'conformance' && matrix.kind != 'handoff' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report-native-${{ matrix.lane }}
+          path: |
+            apps/elitea-web/playwright-results/
+            apps/elitea-web/playwright-report/
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Upload the supervisor's state and every service log
+        if: ${{ failure() && env.RUN_LEG == 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-stack-logs-${{ matrix.lane }}
+          path: |
+            ${{ runner.temp }}/native-stack/logs/
+            ${{ runner.temp }}/native-stack/exit/
+            ${{ runner.temp }}/native-stack/run/
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Tear down the stack (the lane scripts do; this catches an early exit)
+        if: ${{ always() && env.RUN_LEG == 'true' }}
+        run: bash deploy/scripts/standalone-stack.sh down -v || true
+      - name: Skipped (this change does not reach the lane)
+        if: ${{ env.RUN_LEG != 'true' }}
+        run: echo "::notice::${{ matrix.lane }} skipped - nothing this pull request changes reaches it; the nightly run on main runs it"

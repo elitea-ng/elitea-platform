@@ -20,6 +20,7 @@ import { usePipelineYamlStore } from '@/features/pipelines/model/pipelineYamlSto
 
 import { EditPipeline } from './EditPipeline';
 import { renderPipelinesRoute, renderPipelinesRouteWithoutSocket } from './__tests__/testRouter';
+import { testTimeout } from '@/test/timeouts';
 
 /**
  * The pipeline's name is the shell's crumb (`Pipelines ▸ My Pipeline`), not a
@@ -42,11 +43,11 @@ function withShell(page: ReactElement): ReactElement {
 // so its first render and MUI exit transitions run past Testing Library's 1 s
 // default under CI coverage instrumentation (unit shard 2 on 26ad27cc,
 // 76adc4e5 and 793cf88e). Every waitFor/findBy in this file gets 5 s.
-configure({ asyncUtilTimeout: 5_000 });
+configure({ asyncUtilTimeout: testTimeout(5_000) });
 // And vitest's own per-test limit is raised to match: a test that legitimately
 // waits twice (not-found, then the post-navigation re-render) can exceed the
 // 5 s default on the same instrumented runner (shard 2 on 51ea184d).
-vi.setConfig({ testTimeout: 30_000 });
+vi.setConfig({ testTimeout: testTimeout(30_000) });
 
 // `ConfigurationTab`'s real `EditorPanel`/`FlowEditor` needs both jsdom
 // polyfills this provides (CodeMirror's YAML mode, `ResizeObserver` for
@@ -479,7 +480,7 @@ describe('EditPipeline', () => {
 
     await waitFor(() => expect(bodies).toHaveLength(1));
     expect(bodies[0]?.['tags']).toEqual([{ name: 'mcp' }]);
-  }, 20_000);
+  }, testTimeout(20_000));
 
   it('reads a stored model back onto the picker instead of the project default', async () => {
     const base = detail();
@@ -529,7 +530,7 @@ describe('EditPipeline', () => {
     expect(settings?.['model_name']).toBe('qwen3.5');
     expect(settings?.['model_project_id']).toBe(9);
     expect(typeof settings?.['model_project_id']).toBe('number');
-  }, 20_000);
+  }, testTimeout(20_000));
 
   it('leaves llm_settings off the PUT body for a version that names no model and was not re-pointed', async () => {
     server.use(getGetApplicationMockHandler(detail()));
@@ -553,7 +554,7 @@ describe('EditPipeline', () => {
     // Rendering the catalogue default must not author it — the omitted key
     // is what leaves the platform's own fallback in charge.
     expect(bodies[0]).not.toHaveProperty('llm_settings');
-  }, 20_000);
+  }, testTimeout(20_000));
 
   it('arms the unsaved-changes guard when only the model is changed (#133)', async () => {
     server.use(getGetApplicationMockHandler(detail()));
@@ -569,7 +570,7 @@ describe('EditPipeline', () => {
     await chooseModel(user, 'Qwen 3.5');
 
     await waitFor(() => expect(useNavBlockerStore.getState().isBlockNav).toBe(true));
-  }, 20_000);
+  }, testTimeout(20_000));
 });
 
 describe('leaving the editor', () => {
@@ -621,7 +622,7 @@ describe('leaving the editor', () => {
     // #133 — the discard itself must not be prompted about: the navigation
     // happened, so the app-wide blocker was disarmed first.
     expect(useNavBlockerStore.getState().isBlockNav).toBe(false);
-  }, 15_000);
+  }, testTimeout(15_000));
 
   it('dismissing the discard dialog stays on the edit page', async () => {
     server.use(getGetApplicationMockHandler(detail()));
@@ -637,7 +638,7 @@ describe('leaving the editor', () => {
     await user.click(cancels[cancels.length - 1] as HTMLElement);
 
     expect(router.state.location.pathname).toBe('/pipelines/all/42');
-  }, 15_000);
+  }, testTimeout(15_000));
 });
 
 describe('talking to the pipeline', () => {
@@ -703,7 +704,7 @@ describe('talking to the pipeline', () => {
       entity_meta: { id: '42', project_id: '9' },
       entity_settings: { version_id: '1', agent_type: 'pipeline' },
     });
-  }, 15_000);
+  }, testTimeout(15_000));
 
   it('a failed conversation create surfaces an error and stays on the page', async () => {
     server.use(
@@ -717,7 +718,7 @@ describe('talking to the pipeline', () => {
 
     expect(await screen.findByText('Failed to open a chat with this pipeline.')).toBeInTheDocument();
     expect(router.state.location.pathname).toBe('/pipelines/all/42');
-  }, 15_000);
+  }, testTimeout(15_000));
 
   /**
    * Audit (handoff brief): TanStack Router's `navigate()` promise resolves
@@ -780,7 +781,7 @@ describe('talking to the pipeline', () => {
     // now it never will.
     await waitFor(() => expect(screen.getByTestId('chat-with-pipeline-button')).toBeEnabled(), { timeout: 2_000 });
     expect(screen.getByTestId('chat-with-pipeline-button')).toHaveTextContent('Chat');
-  }, 15_000);
+  }, testTimeout(15_000));
 });
 
 /**
@@ -830,7 +831,7 @@ describe('pipeline versioning', () => {
     // The dropdown shows the open version, and the write affordance is there.
     expect(await screen.findByTestId('version-selector-trigger')).toHaveTextContent('base');
     expect(await screen.findByRole('button', { name: 'Save As Version' })).toBeVisible();
-  }, 20_000);
+  }, testTimeout(20_000));
 
   /**
    * The acceptance for "a version selector that loads a chosen version's
@@ -886,7 +887,7 @@ describe('pipeline versioning', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/pipelines/all/42/2'));
     await waitFor(() => expect(usePipelineYamlStore.getState().yamlCode).toContain('Printer_2'));
     expect(usePipelineYamlStore.getState().yamlCode).not.toContain('Printer_1');
-  }, 20_000);
+  }, testTimeout(20_000));
 
   /**
    * "Save as a new version" end to end, through the page's own composition.
@@ -968,7 +969,7 @@ describe('pipeline versioning', () => {
     // what a page that never reached the flow editor would send.
     expect(Array.isArray(settings['nodes'])).toBe(true);
     expect((settings['nodes'] as unknown[]).length).toBeGreaterThan(0);
-  }, 30_000);
+  }, testTimeout(30_000));
 
   /**
    * `Set as default` (#147) comes with the reused bar rather than being
@@ -1019,7 +1020,7 @@ describe('pipeline versioning', () => {
     // and this one is the corroborating half.
     await user.click(await screen.findByTestId('version-selector-trigger'));
     expect(await screen.findByTestId('agent-version-default-marker')).toBeVisible();
-  }, 20_000);
+  }, testTimeout(20_000));
 
   /**
    * Saving while a `:version` route is open must re-seed the editor.
@@ -1089,7 +1090,7 @@ describe('pipeline versioning', () => {
     await waitFor(() => expect(puts).toHaveLength(1));
 
     await waitFor(() => expect(versionGets.length).toBeGreaterThan(before));
-  }, 20_000);
+  }, testTimeout(20_000));
 
   /**
    * Old app `ApplicationTabBar.jsx:65`: a public-project viewer keeps the
@@ -1106,7 +1107,7 @@ describe('pipeline versioning', () => {
 
     expect(await screen.findByTestId('version-selector-trigger')).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Save As Version' })).toBeNull();
-  }, 20_000);
+  }, testTimeout(20_000));
   /*
    * J16b's cause. LAST in this file on purpose: it is the only test here that
    * drives a save AND the refetch that follows it, and it therefore leaves the
@@ -1162,7 +1163,7 @@ describe('pipeline versioning', () => {
     await waitFor(() => expect(usePipelineYamlStore.getState().yamlCode).toContain('Printer_1'), {
       timeout: 10_000,
     });
-  }, 20_000);
+  }, testTimeout(20_000));
 });
 
 /**
@@ -1225,7 +1226,7 @@ describe('the pipeline configuration form', () => {
      * and the last writer would silently win.
      */
     expect(panel.queryByTestId('agent-instructions-input')).not.toBeInTheDocument();
-  }, 30_000);
+  }, testTimeout(30_000));
 
   /**
    * The defect this whole unit exists for. `name`/`description` are
@@ -1252,7 +1253,7 @@ describe('the pipeline configuration form', () => {
     // The version PUT still fires, and still pins the executor.
     expect(bodies.version).toHaveLength(1);
     expect(bodies.version[0]?.['agent_type']).toBe('pipeline');
-  }, 30_000);
+  }, testTimeout(30_000));
 
   /**
    * `welcome_message` reached this page's save body nowhere before: the old
@@ -1272,7 +1273,7 @@ describe('the pipeline configuration form', () => {
 
     await waitFor(() => expect(bodies.version).toHaveLength(1), { timeout: 15_000 });
     expect(bodies.version[0]?.['welcome_message']).toBe('Welcome aboard');
-  }, 30_000);
+  }, testTimeout(30_000));
 
   /**
    * `tags` has no key at all on `entities/application-form`'s
@@ -1295,7 +1296,7 @@ describe('the pipeline configuration form', () => {
     await user.click(await screen.findByTestId('pipeline-save-button'));
     await waitFor(() => expect(bodies.version).toHaveLength(1), { timeout: 15_000 });
     expect(bodies.version[0]?.['tags']).toEqual([{ name: 'operations' }, { name: 'mcp' }]);
-  }, 30_000);
+  }, testTimeout(30_000));
 
   it('sends a newly typed tag by name, with no placeholder id', async () => {
     server.use(getGetApplicationMockHandler(detail()));
@@ -1311,7 +1312,7 @@ describe('the pipeline configuration form', () => {
 
     await waitFor(() => expect(bodies.version).toHaveLength(1), { timeout: 15_000 });
     expect(bodies.version[0]?.['tags']).toEqual([{ name: 'operations' }]);
-  }, 30_000);
+  }, testTimeout(30_000));
 
   /**
    * `internal_tools` rides inside the `meta` blob `UpdateVersion` assigns
@@ -1334,7 +1335,7 @@ describe('the pipeline configuration form', () => {
 
     await waitFor(() => expect(bodies.version).toHaveLength(1), { timeout: 15_000 });
     expect(bodies.version[0]?.['meta']).toEqual({ step_limit: 40, internal_tools: ['attachments'], icon_meta: { id: 9 } });
-  }, 30_000);
+  }, testTimeout(30_000));
 
   /**
    * `tools` is accepted by the version PUT's schema
@@ -1356,7 +1357,7 @@ describe('the pipeline configuration form', () => {
     await waitFor(() => expect(bodies.version).toHaveLength(1), { timeout: 15_000 });
     expect(bodies.version[0]).not.toHaveProperty('tools');
     expect(bodies.version[0]).not.toHaveProperty('notes');
-  }, 30_000);
+  }, testTimeout(30_000));
 
   /*
    * "typing a version-level field arms the app-wide unsaved-changes guard"

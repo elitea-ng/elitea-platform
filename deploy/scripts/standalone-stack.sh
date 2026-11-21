@@ -3,7 +3,17 @@
 #
 #   certs        generate local mTLS + runtime-plane material (idempotent)
 #   compose ARGS run a raw compose command (exec, restart, ps...) with the
-#                stack's project and overlays
+#                stack's project and overlays (compose only)
+#   psql ARGS    psql in the postgres service, stdin passed through (both
+#                backends; what a caller used `compose exec -T postgres` for)
+#   restart SVC  restart one service and wait until it is healthy again
+#
+# E2E_STACK=native runs the same verbs on the self-hosted pool, which has no
+# container runtime: deploy/native/standalone-full.mjs under
+# scripts/e2e/native-stack.mjs, with E2E_NATIVE_BIN the build directory
+# (apps/elitea-web/scripts/lib/stack-backend.sh). There the browser port is
+# 8080, `build` builds nothing, and STANDALONE_OVERLAY may name only the
+# overlays that table knows.
 #   build        rebuild the stack's images from source (`up` reuses existing
 #                tags, so a code change needs this first)
 #   up           bring the stack up and wait for healthy. It starts postgres
@@ -142,7 +152,19 @@ OVERLAY="${STANDALONE_OVERLAY:-}"
 . "${REPO_ROOT}/deploy/scripts/lib/seeded-driver.sh"
 # shellcheck source=../../scripts/lib/assertion-floor.sh
 . "${REPO_ROOT}/scripts/lib/assertion-floor.sh"
-detect_compose_bin
+# E2E_STACK=compose (default) or native (the self-hosted pool, no container
+# runtime): apps/elitea-web/scripts/lib/stack-backend.sh, the backend
+# e2e-stack.sh uses. Natively scripts/e2e/native-stack.mjs runs
+# deploy/native/standalone-full.mjs (this compose file plus the Rust agent
+# overlay, and the overlays it knows) and every call below on a container
+# becomes a host call: psql to `postgres`, the probes on the host with the
+# certificate directories spelled out, the build directory's binaries.
+# shellcheck source=../../apps/elitea-web/scripts/lib/stack-backend.sh
+. "${REPO_ROOT}/apps/elitea-web/scripts/lib/stack-backend.sh"
+# shellcheck disable=SC2034 # read by lib/stack-backend.sh
+E2E_PROJECT="$PROJECT"
+export E2E_NATIVE_TABLE="${E2E_NATIVE_TABLE:-${REPO_ROOT}/deploy/native/standalone-full.mjs}"
+stack_init
 
 # The stack runs the native Rust worker; the Python worker was removed. A
 # leftover STANDALONE_WORKER=python is refused rather than ignored, so a script
@@ -166,11 +188,17 @@ done
 # themselves. `|| true` keeps a failing read from aborting the caller under
 # `set -e`: an empty answer is a state those checks report on, not a crash.
 standalone_psql_read() {
-  $COMPOSE_BIN $COMPOSE_F exec -T postgres \
-    psql -U elitea -d elitea -tAc "$1" 2>/dev/null | tr -d '\r' || true
+  stack_service_psql \
+    -U elitea -d elitea -tAc "$1" 2>/dev/null | tr -d '\r' || true
 }
 
 PORT="${STANDALONE_PORT:-8084}"
+if [ "$E2E_STACK" = native ]; then
+  # Internal callers name elitea-main:8080, which compose serves inside its
+  # network whatever it publishes; natively that is the one port.
+  PORT="${STANDALONE_PORT:-8080}"
+  export STANDALONE_PORT="$PORT"
+fi
 # STANDALONE_HOST: the host the BROWSER uses for this stack. Browsers scope
 # cookies by host and ignore the port, so a second stack browsed on
 # `localhost:<other port>` overwrites this stack's `elitea_session` on every
@@ -280,8 +308,8 @@ WORKER_JOIN_TIMEOUT="${STANDALONE_WORKER_JOIN_TIMEOUT:-90}"
 # connected to, so each one is run from inside its own database.
 pg_collation_repair() {
   local dbs db
-  dbs="$($COMPOSE_BIN $COMPOSE_F exec -T postgres \
-           psql -U elitea -d postgres -v ON_ERROR_STOP=1 -tAc \
+  dbs="$(stack_service_psql \
+           -U elitea -d postgres -v ON_ERROR_STOP=1 -tAc \
            "SELECT datname FROM pg_database
              WHERE datallowconn
                AND datcollversion IS DISTINCT FROM pg_database_collation_actual_version(oid)")" || {
@@ -298,15 +326,19 @@ pg_collation_repair() {
     # psql interpolates :"db" (a quoted identifier) only in input it reads,
     # not in -c, so the statements go in on stdin.
     printf 'REINDEX DATABASE :"db";\n' |
-      $COMPOSE_BIN $COMPOSE_F exec -T postgres \
-        psql -U elitea -d "$db" -v ON_ERROR_STOP=1 -v db="$db" -q || return 1
+      stack_service_psql \
+        -U elitea -d "$db" -v ON_ERROR_STOP=1 -v db="$db" -q || return 1
     printf 'ALTER DATABASE :"db" REFRESH COLLATION VERSION;\n' |
-      $COMPOSE_BIN $COMPOSE_F exec -T postgres \
-        psql -U elitea -d postgres -v ON_ERROR_STOP=1 -v db="$db" -q || return 1
+      stack_service_psql \
+        -U elitea -d postgres -v ON_ERROR_STOP=1 -v db="$db" -q || return 1
   done <<< "$dbs"
 }
 
 stack_is_settled() {
+  if [ "$E2E_STACK" = native ]; then
+    stack_settled
+    return
+  fi
   $COMPOSE_BIN $COMPOSE_F ps --all --format json 2>/dev/null | python3 -c '
 import json, re, sys
 
@@ -355,6 +387,10 @@ raise SystemExit(1 if unsettled else 0)
 # on one restarted service must not fail because an unrelated optional service
 # of this large compose file is absent or still starting.
 service_is_healthy() {
+  if [ "$E2E_STACK" = native ]; then
+    stack_service_healthy "$1"
+    return
+  fi
   $COMPOSE_BIN $COMPOSE_F ps --all --format json "$1" 2>/dev/null | python3 -c '
 import json, sys
 
@@ -502,8 +538,18 @@ db_exception() {
       exit 1
       ;;
   esac
-  $COMPOSE_BIN $COMPOSE_F exec -T postgres \
-    psql -v elitea_sql_exception="${exception_name}" -U elitea -d elitea "$@"
+  # The psql command itself, inline per backend, NOT through stack_service_psql:
+  # a function call is traced twice and its body's psql line carries no
+  # elitea_sql_exception=, so the assertion below would count a surplus and
+  # read the shim's line as an offender. Each branch is one traced command
+  # holding both psql and the marker, as the assertion expects.
+  if [ "$E2E_STACK" = native ]; then
+    PGPASSWORD="${E2E_NATIVE_PGPASSWORD:-elitea}" psql -h postgres -p 5432 \
+      -v elitea_sql_exception="${exception_name}" -U elitea -d elitea "$@"
+  else
+    $COMPOSE_BIN $COMPOSE_F exec -T postgres psql \
+      -v elitea_sql_exception="${exception_name}" -U elitea -d elitea "$@"
+  fi
 }
 
 # assert_seed_llm_sql_exceptions reads a command trace and refuses any database
@@ -835,9 +881,7 @@ EOF
       EGRESS_NEEDED="$(printf '%s' "$LLM_API_BASE" | sed -E 's#^https?://##; s#/.*$##')"
       # `ENGINE` is only set inside `check`; derive it the same way here
       # (the container engine is the first word of the compose command).
-      EGRESS_HAVE="$("${COMPOSE_BIN%% *}" inspect "${PROJECT}-elitea-llm-gateway-1" \
-          --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
-          | sed -n 's/^GATEWAY_EGRESS_ALLOWLIST=//p')"
+      EGRESS_HAVE="$(stack_service_env elitea-llm-gateway GATEWAY_EGRESS_ALLOWLIST)"
       case ",${EGRESS_HAVE}," in
         *",${EGRESS_NEEDED},"*)
           echo "→ gateway egress already allows '${EGRESS_NEEDED}'." ;;
@@ -857,6 +901,54 @@ EOF
   if [ "$PROVIDER" = "mock" ]; then
     echo "  (offline mock — no provider key used. Set OPENAI_API_KEY to seed a real one instead.)"
   fi
+}
+
+# rewrite_mount <string> <mount, e.g. /m> <host dir>: sets REPLY to <string>
+# with every path that STARTS with <mount>/ moved to <host dir>/. A path starts
+# at the beginning of the string or after whitespace, a quote, `=` or `(`, so
+# a URL or JSON body that merely contains /m/ (/api/v2/m/...) is left alone,
+# as compose leaves it. Pure bash: the host dir never passes through sed.
+rewrite_mount() {
+  local rest="$1" mount="$2/" dir="$3/" out="" pre last
+  local boundary='[[:space:]"'"'"'=(]'
+  while [[ "$rest" == *"$mount"* ]]; do
+    pre="${rest%%"$mount"*}"
+    rest="${rest#*"$mount"}"
+    last="${pre: -1}"
+    if [ -z "$pre" ] || [[ "$last" =~ $boundary ]]; then
+      out+="${pre}${dir}"
+    else
+      out+="${pre}${mount}"
+    fi
+  done
+  REPLY="${out}${rest}"
+}
+# native_probe <cert dir> <sh script>: the `postgres:18` probe container the
+# compose check runs on the stack's network with <cert dir> at /m, as a host
+# shell (the pool's openssl; the hostnames resolve through the name map).
+native_probe() {
+  rewrite_mount "$2" /m "$1"
+  sh -c "$REPLY" 2>&1 || true
+}
+# native_run <cert dir for /m> <cert dir for /c, or -> <cmd> ARGS…: a probe
+# image's command run on the host, with the mounts it had spelled out: a path
+# under /m/ or /c/ in any argument (rewrite_mount), and an argument that is
+# exactly /proto (libs/proto).
+native_run() {
+  local m="$1" c="$2" a
+  shift 2
+  local argv=()
+  for a in "$@"; do
+    rewrite_mount "$a" /m "$m"
+    a="$REPLY"
+    if [ "$c" != - ]; then
+      rewrite_mount "$a" /c "$c"
+      a="$REPLY"
+    fi
+    [ "$a" = /proto ] && a="${REPO_ROOT}/libs/proto"
+    argv+=("$a")
+  done
+  "${argv[@]}" 2>&1 || true
 }
 
 case "${1:-}" in
@@ -924,6 +1016,15 @@ case "${1:-}" in
     # this exemption a second `up` against an already-healthy standalone stack
     # would find its own container on the port and misreport it as the E2E
     # stack.
+    if [ "$E2E_STACK" = native ]; then
+      # A fresh cluster this pod initdb'd: no collation to repair, and the
+      # supervisor waits for every health check and one-shot itself.
+      echo "→ Bringing up the full standalone stack (native, ${E2E_NATIVE_TABLE#"${REPO_ROOT}/"})…"
+      native_stack up --wait
+      echo "→ Stack ready on http://${HOST}:${PORT}/app/ (gateway health: http://elitea-llm-gateway:8083/healthz)."
+      echo "   Next: $0 seed && $0 seed-runtime && $0 seed-llm && $0 check"
+      exit 0
+    fi
     if ! $COMPOSE_BIN $COMPOSE_F ps --format '{{.Names}}' 2>/dev/null | grep -q 'oidc-mock' \
        && command -v lsof &>/dev/null && lsof -nP -iTCP:"${OIDC_PORT}" -sTCP:LISTEN &>/dev/null; then
       echo "ERROR: port ${OIDC_PORT} (oidc-mock) is already in use." >&2
@@ -990,6 +1091,10 @@ case "${1:-}" in
     # reaches a running stack only when the build is asked for explicitly.
     # Verifying a code change against this stack without it silently tests the
     # PREVIOUS build — which has cost this effort several confusing runs.
+    if [ "$E2E_STACK" = native ]; then
+      echo "→ Nothing to build natively: the binaries are in E2E_NATIVE_BIN (${E2E_NATIVE_BIN}), built by ci-web-e2e-native.yml's build jobs."
+      exit 0
+    fi
     $COMPOSE_BIN $COMPOSE_F build "${@:2}"
     ;;
 
@@ -1001,14 +1106,39 @@ case "${1:-}" in
     # Bounded per service, because a failed chat journey leaves tens of
     # megabytes of streaming frames behind and an unbounded dump buries the
     # twenty lines that name the cause.
-    $COMPOSE_BIN $COMPOSE_F logs --no-color --tail "${STANDALONE_LOG_TAIL:-400}" "${@:2}"
+    stack_service_logs "${STANDALONE_LOG_TAIL:-400}" "${@:2}"
     ;;
 
   down)
+    if [ "$E2E_STACK" = native ]; then
+      native_stack down "${@:2}"
+      exit
+    fi
     $COMPOSE_BIN $COMPOSE_F down --remove-orphans "${@:2}"
     ;;
 
+  psql)
+    stack_service_psql "${@:2}"
+    ;;
+
+  restart)
+    [ -n "${2:-}" ] || { echo "usage: $0 restart <service>" >&2; exit 1; }
+    stack_restart "$2"
+    restart_deadline=$(( $(date +%s) + 120 ))
+    until service_is_healthy "$2"; do
+      if [ "$(date +%s)" -ge "$restart_deadline" ]; then
+        echo "ERROR: $2 did not become healthy after the restart." >&2
+        exit 1
+      fi
+      sleep 2
+    done
+    ;;
+
   compose)
+    if [ "$E2E_STACK" = native ]; then
+      echo "ERROR: '$0 compose' has no native counterpart; use $0 psql|restart|logs, or scripts/e2e/native-stack.mjs exec <service> -- <cmd>." >&2
+      exit 1
+    fi
     # Any other compose verb (exec, restart, ps, ...) against the stack's own
     # project and its one overlay list, so a caller never rebuilds -p/-f.
     $COMPOSE_BIN $COMPOSE_F "${@:2}"
@@ -1039,7 +1169,7 @@ case "${1:-}" in
     # otherwise they appear only after the NEXT `up`, which is what the migrate
     # service's own comment already anticipates.
     echo "→ Applying tenant migrations for newly seeded projects…"
-    $COMPOSE_BIN $COMPOSE_F run --rm --no-deps elitea-migrate -all-tenants
+    stack_run_once elitea-migrate -all-tenants
     # The seeded projects also need the X-SECRET value every project gets from
     # projectprovisioning, and the seeder cannot write one: the value is sealed
     # with the project's Fernet key, so only elitea-main can mint it
@@ -1056,12 +1186,12 @@ case "${1:-}" in
     # agent, or standing in a conversation as a participant, contributes no
     # callable tool and the turn answers as though it were alone.
     echo "→ Restarting elitea-main so the X-SECRET backfill reaches the seeded projects…"
-    $COMPOSE_BIN $COMPOSE_F restart elitea-main
+    stack_restart elitea-main
     restart_deadline=$(( $(date +%s) + 120 ))
     until service_is_healthy elitea-main; do
       if [ "$(date +%s)" -ge "$restart_deadline" ]; then
         echo "ERROR: elitea-main did not become healthy after the seed restart." >&2
-        $COMPOSE_BIN $COMPOSE_F ps --all >&2 || true
+        stack_ps --all >&2 || true
         exit 1
       fi
       sleep 2
@@ -1100,8 +1230,8 @@ case "${1:-}" in
     WORKER_SESSION_ID="${RUNTIME_WORKER_SESSION_ID:-standalone-agent-worker-1}"
     WORKER_PRODUCER_ID="${RUNTIME_WORKER_PRODUCER_ID:-standalone-agent-worker-1}"
     echo "→ Authorizing workload identity ${WORKER_IDENTITY}…"
-    $COMPOSE_BIN $COMPOSE_F exec -T postgres \
-      psql -v ON_ERROR_STOP=1 -U elitea -d elitea \
+    stack_service_psql \
+      -v ON_ERROR_STOP=1 -U elitea -d elitea \
         -v identity="$WORKER_IDENTITY" \
         -v session="$WORKER_SESSION_ID" \
         -v producer="$WORKER_PRODUCER_ID" <<'SQL'
@@ -1151,8 +1281,8 @@ SQL
     # (identityrepo.ActorPATName), which is what tells a seeded key from a
     # signed-in one on /settings/tokens.
     echo "→ Issuing PATs for users without one…"
-    $COMPOSE_BIN $COMPOSE_F exec -T postgres \
-      psql -v ON_ERROR_STOP=1 -U elitea -d elitea <<'SQL'
+    stack_service_psql \
+      -v ON_ERROR_STOP=1 -U elitea -d elitea <<'SQL'
 INSERT INTO public.auth_core__token (uuid, expires, user_id, name)
 SELECT gen_random_uuid()::text, NULL, u.id, 'standalone-runtime'
 FROM public.auth_core__user AS u
@@ -1249,8 +1379,8 @@ SQL
     # the statement below writes it when the row does not exist yet, and leaves
     # an existing name alone.
     EMBEDDING_MODEL="$(resolve_embedding_model "$(resolve_llm_provider)")"
-    INDEX_TARGETS="$($COMPOSE_BIN $COMPOSE_F exec -T postgres \
-        psql -U elitea -d elitea -tAc \
+    INDEX_TARGETS="$(stack_service_psql \
+        -U elitea -d elitea -tAc \
         "SELECT p.id FROM centry.project p
           WHERE (p.id = 1 OR p.name LIKE 'project\_user\_%'
                  OR p.id = ANY(string_to_array(NULLIF('${SEED_EXTRA_PROJECTS:-}', ''), ',')::int[]))
@@ -1263,8 +1393,8 @@ SQL
     fi
     for TARGET in $INDEX_TARGETS; do
     echo "→ Seeding the index plane into project ${TARGET} (toolkit id ${TOOLKIT_ID})…"
-    $COMPOSE_BIN $COMPOSE_F exec -T postgres \
-      psql -v ON_ERROR_STOP=1 -U elitea -d elitea \
+    stack_service_psql \
+      -v ON_ERROR_STOP=1 -U elitea -d elitea \
         -v toolkit="$TOOLKIT_ID" -v embedding="$EMBEDDING_MODEL" \
         -v pid="$TARGET" -v schema="p_${TARGET}" <<'SQL'
 -- 1. The embedding model the resolver binds.
@@ -1336,12 +1466,12 @@ SQL
     # Assert the invariant this step exists to keep (#468). The two names are
     # stored twice, so read both back and compare them. A seed that leaves them
     # different must stop here, not in the worker on the first index run.
-    SEEDED_EMBEDDING="$($COMPOSE_BIN $COMPOSE_F exec -T postgres \
-        psql -U elitea -d elitea -tAc \
+    SEEDED_EMBEDDING="$(stack_service_psql \
+        -U elitea -d elitea -tAc \
         "SELECT data->>'name' FROM p_${TARGET}.configuration
           WHERE elitea_title = 'standalone-embedding'" 2>/dev/null | tr -d '[:space:]')"
-    TOOLKIT_EMBEDDING="$($COMPOSE_BIN $COMPOSE_F exec -T postgres \
-        psql -U elitea -d elitea -tAc \
+    TOOLKIT_EMBEDDING="$(stack_service_psql \
+        -U elitea -d elitea -tAc \
         "SELECT settings->>'embedding_model' FROM p_${TARGET}.elitea_tools
           WHERE id = ${TOOLKIT_ID}" 2>/dev/null | tr -d '[:space:]')"
     if [ -z "$SEEDED_EMBEDDING" ]; then
@@ -1358,8 +1488,8 @@ SQL
     fi
     echo "   embedding model ${SEEDED_EMBEDDING}: catalogue row and toolkit setting agree"
     done
-    INDEX_DRIVER_PROJECT="$($COMPOSE_BIN $COMPOSE_F exec -T postgres \
-        psql -U elitea -d elitea -tAc \
+    INDEX_DRIVER_PROJECT="$(stack_service_psql \
+        -U elitea -d elitea -tAc \
         "SELECT p.id FROM centry.project p
           JOIN public.auth_core__user u ON u.id = p.owner_id
          WHERE p.name = 'project_user_' || u.id::text
@@ -1429,8 +1559,8 @@ SQL
     echo "→ Seeding the native-client conformance fixtures for ${NATIVE_USER}…"
     # The persona travels as a psql variable (:'native_user' quotes it as a
     # literal), never spliced into the SQL text by the shell.
-    $COMPOSE_BIN $COMPOSE_F exec -T postgres \
-      psql -v ON_ERROR_STOP=1 -v native_user="$NATIVE_USER" -U elitea -d elitea <<'SQL'
+    stack_service_psql \
+      -v ON_ERROR_STOP=1 -v native_user="$NATIVE_USER" -U elitea -d elitea <<'SQL'
 SELECT set_config('native.user', :'native_user', false);
 DO $$
 BEGIN
@@ -1477,8 +1607,8 @@ SQL
     # seed has not run (no tenant schema), rather than leaving the journey
     # to report a missing row as a product defect.
     echo "→ Seeding the anonymous GitHub repository toolkit (p_90200.configuration 9011)…"
-    $COMPOSE_BIN $COMPOSE_F exec -T postgres \
-      psql -v ON_ERROR_STOP=1 -U elitea -d elitea <<'SQL'
+    stack_service_psql \
+      -v ON_ERROR_STOP=1 -U elitea -d elitea <<'SQL'
 DO $$
 BEGIN
   IF to_regclass('p_90200.configuration') IS NULL THEN
@@ -1624,12 +1754,15 @@ SQL
     # GatewayService gRPC listener that carries every /llm call from
     # elitea-main, over mutual TLS. It is not published; it is probed from
     # inside the compose network below.
-    echo "→ gateway health on http://localhost:${GW_PORT}:"
+    GW_HEALTH_URL="http://localhost:${GW_PORT}/healthz"
+    # Natively the gateway's infra listener is on its own address, unpublished.
+    [ "$E2E_STACK" = native ] && GW_HEALTH_URL="http://elitea-llm-gateway:8083/healthz"
+    echo "→ gateway health on ${GW_HEALTH_URL%/healthz}:"
     # The answer is CAPTURED and compared (#422). A probe that ends in `&& echo`
     # is a non-final member of an AND list, so `set -e` does not act on it and
     # it cannot turn `check` red.
     gw_health="$(curl -sS -w '\nHTTP %{http_code}' \
-         "http://localhost:${GW_PORT}/healthz" 2>&1 || true)"
+         "${GW_HEALTH_URL}" 2>&1 || true)"
     case "$gw_health" in
       *'"status":"ok"'*'HTTP 200'*)
         ok "the gateway answers /healthz on its infra listener (HTTP 200)" ;;
@@ -1639,6 +1772,10 @@ SQL
     # One-off container on the stack's network with deploy/certs mounted. It
     # needs the openssl CLI, which debian:trixie-slim does not ship.
     gw_probe() {
+      if [ "$E2E_STACK" = native ]; then
+        native_probe "$CERTS" "$1"
+        return
+      fi
       ${COMPOSE_BIN%% *} run --rm --network "${PROJECT}_default" -v "${CERTS}:/m:ro" \
         --entrypoint sh docker.io/library/postgres:18 -c "$1" 2>&1 || true
     }
@@ -1742,12 +1879,12 @@ SQL
     # legitimate path still works through the middleware, and the forged header
     # neither authenticates on its own nor overrides a genuine credential.
     echo "→ client identity-header strip (#326, #1359):"
-    spoof_uuid="$($COMPOSE_BIN $COMPOSE_F exec -T postgres \
-        psql -U elitea -d elitea -tAc \
+    spoof_uuid="$(stack_service_psql \
+        -U elitea -d elitea -tAc \
         "SELECT uuid FROM public.auth_core__token
           WHERE uuid IS NOT NULL ORDER BY user_id LIMIT 1" 2>/dev/null | tr -d '[:space:]')"
-    spoof_user="$($COMPOSE_BIN $COMPOSE_F exec -T postgres \
-        psql -U elitea -d elitea -tAc \
+    spoof_user="$(stack_service_psql \
+        -U elitea -d elitea -tAc \
         "SELECT user_id FROM public.auth_core__token
           WHERE uuid = '${spoof_uuid}'" 2>/dev/null | tr -d '[:space:]')"
     if [ -z "$spoof_uuid" ] || [ -z "$spoof_user" ]; then
@@ -1789,8 +1926,8 @@ PY
       # user_id, which is also what the PAT query above picks — so a hardcoded
       # `1` forges the caller's OWN identity and the assertion passes against a
       # completely unstripped edge. Verified: it did.
-      spoof_other="$($COMPOSE_BIN $COMPOSE_F exec -T postgres \
-          psql -U elitea -d elitea -tAc \
+      spoof_other="$(stack_service_psql \
+          -U elitea -d elitea -tAc \
           "SELECT id FROM public.auth_core__user
             WHERE id <> ${spoof_user} ORDER BY id LIMIT 1" 2>/dev/null | tr -d '[:space:]')"
       if [ -z "$spoof_other" ]; then
@@ -1812,7 +1949,20 @@ PY
     ENGINE="${COMPOSE_BIN%% *}"
     NETWORK="${PROJECT}_default"
     RUNTIME_CERTS="${REPO_ROOT}/deploy/certs/runtime"
+    # elitea-grpc-health: elitea-main's image's, or the build directory's.
+    grpc_health() {
+      if [ "$E2E_STACK" = native ]; then
+        native_run "$RUNTIME_CERTS" - "${E2E_NATIVE_BIN}/elitea-grpc-health" "$@"
+        return
+      fi
+      $ENGINE run --rm --network "$NETWORK" -v "${RUNTIME_CERTS}:/m:ro" --user 0:0 \
+        --entrypoint /elitea-grpc-health ghcr.io/elitea-ng/elitea-main:standalone "$@" 2>&1 || true
+    }
     probe() {
+      if [ "$E2E_STACK" = native ]; then
+        native_probe "$RUNTIME_CERTS" "$1"
+        return
+      fi
       # postgres:18 rather than the slim helper images: this needs the openssl
       # CLI, and debian:trixie-slim does not ship one.
       $ENGINE run --rm --network "$NETWORK" -v "${RUNTIME_CERTS}:/m:ro" \
@@ -1840,11 +1990,20 @@ PY
     # The server image is scratch (no shell, no wget), so the monitoring port
     # is read from the nats-health sidecar, which has Python on the same
     # network.
-    NATS_HEALTH_CONTAINER="$($ENGINE ps --format '{{.Names}}' | grep -m1 "${PROJECT}.*-nats-health-[0-9]" || true)"
+    NATS_HEALTH_CONTAINER=""
+    [ "$E2E_STACK" = native ] || NATS_HEALTH_CONTAINER="$($ENGINE ps --format '{{.Names}}' | grep -m1 "${PROJECT}.*-nats-health-[0-9]" || true)"
+    # python3 where nats-health runs: in its container, or natively on the host.
+    nats_python() {
+      if [ "$E2E_STACK" = native ]; then
+        python3 "$@"
+        return
+      fi
+      $ENGINE exec "$NATS_HEALTH_CONTAINER" python3 "$@"
+    }
     # /jsz?consumers=true from the server's own monitoring port: it names the
     # stream AND its durable, so a stream the bootstrap created without the
     # consumer does not pass.
-    jsz="$($ENGINE exec "$NATS_HEALTH_CONTAINER" python3 -c \
+    jsz="$(nats_python -c \
       "import urllib.request; print(urllib.request.urlopen('http://nats:8222/jsz?consumers=true', timeout=10).read().decode())" 2>&1 || true)"
     case "$jsz" in
       *"${STREAM}"*"${DURABLE}"*) ok "${STREAM} has its durable consumer ${DURABLE}" ;;
@@ -1870,12 +2029,20 @@ PY
     # The two signals that DO separate the cases are this log line and the mTLS
     # listeners above — with the runtime off, nothing binds 9443/9444/9445 and
     # the probe gets ECONNREFUSED rather than a handshake.
-    MAIN_CONTAINER="$($ENGINE ps --format '{{.Names}}' | grep -m1 "${PROJECT}.*elitea-main" || true)"
+    if [ "$E2E_STACK" = native ]; then
+      MAIN_CONTAINER="$(stack_container elitea-main)"
+    else
+      MAIN_CONTAINER="$($ENGINE ps --format '{{.Names}}' | grep -m1 "${PROJECT}.*elitea-main" || true)"
+    fi
     # Captured rather than piped into `grep -q`: this script runs under
     # `set -o pipefail`, and grep -q closes the pipe on its first match, so the
     # producer dies of SIGPIPE and the pipeline reports failure precisely when
     # the assertion SUCCEEDS — an inverted check that reads as a real failure.
-    MAIN_LOGS="$($ENGINE logs "$MAIN_CONTAINER" 2>&1 || true)"
+    if [ "$E2E_STACK" = native ]; then
+      MAIN_LOGS="$([ -z "$MAIN_CONTAINER" ] || native_stack logs elitea-main 2>&1 || true)"
+    else
+      MAIN_LOGS="$($ENGINE logs "$MAIN_CONTAINER" 2>&1 || true)"
+    fi
     case "$MAIN_LOGS" in
       "") fail "elitea-main container not found in project ${PROJECT}" ;;
       *'"runtime_enabled":true'*)
@@ -1884,8 +2051,8 @@ PY
     esac
 
     echo "→ workload session row:"
-    rows="$($COMPOSE_BIN $COMPOSE_F exec -T postgres \
-              psql -U elitea -d elitea -tAc \
+    rows="$(stack_service_psql \
+              -U elitea -d elitea -tAc \
               "SELECT count(*) FROM elitea_runtime.workload_sessions
                 WHERE revoked_at IS NULL AND expires_at > clock_timestamp()" 2>/dev/null || echo 0)"
     if [ "${rows:-0}" -ge 1 ]; then
@@ -1906,7 +2073,7 @@ PY
     # `compose up -d --wait` does not wait for it, and it connects only after a
     # start-up that imports the whole SDK. The poll runs in the nats-health
     # sidecar; the last reply is printed either way.
-    connz="$($ENGINE exec "$NATS_HEALTH_CONTAINER" python3 -c '
+    connz="$(nats_python -c '
 import sys, time, urllib.request
 deadline = time.time() + float(sys.argv[1])
 reply = ""
@@ -1924,7 +2091,13 @@ sys.stdout.write(reply)
       *standalone-agent-worker*) ok "worker connected to the command bus" ;;
       *)
         fail "no worker connection on NATS after ${WORKER_JOIN_TIMEOUT}s — the worker never reached the command bus"
-        WORKER_CONTAINER="$($ENGINE ps -a --format '{{.Names}}' | grep -m1 "${PROJECT}.*elitea-worker" || true)"
+        if [ "$E2E_STACK" = native ]; then
+          echo "    ── last 40 lines of elitea-worker ──" >&2
+          stack_service_logs 40 elitea-worker 2>&1 | sed 's/^/    /' >&2 || true
+          WORKER_CONTAINER=""
+        else
+          WORKER_CONTAINER="$($ENGINE ps -a --format '{{.Names}}' | grep -m1 "${PROJECT}.*elitea-worker" || true)"
+        fi
         if [ -n "$WORKER_CONTAINER" ]; then
           echo "    ── last 40 lines of ${WORKER_CONTAINER} ──" >&2
           $ENGINE logs --tail 40 "$WORKER_CONTAINER" 2>&1 | sed 's/^/    /' >&2 || true
@@ -1939,10 +2112,8 @@ sys.stdout.write(reply)
     # runtime CA alone, which is exactly what the worker's transport checks.
     # The listener is gRPC only (#1359 D1), so the probe is grpc.health.v1
     # through the elitea-grpc-health tool in the elitea-main image.
-    platform="$($ENGINE run --rm --network "$NETWORK" -v "${RUNTIME_CERTS}:/m:ro" --user 0:0 \
-      --entrypoint /elitea-grpc-health ghcr.io/elitea-ng/elitea-main:standalone \
-      --addr elitea-main:9446 --ca /m/runtime-ca.crt --server-name elitea-main \
-      --cert /m/agent-worker-client.crt --key /m/agent-worker-client.key 2>&1 || true)"
+    platform="$(grpc_health --addr elitea-main:9446 --ca /m/runtime-ca.crt --server-name elitea-main \
+      --cert /m/agent-worker-client.crt --key /m/agent-worker-client.key)"
     case "$platform" in
       SERVING) ok "platform listener :9446 serves gRPC health to the worker identity and verifies as elitea-main" ;;
       *) fail "platform listener :9446 refused the worker identity or did not verify as elitea-main: $(printf '%s' "$platform" | tail -1)" ;;
@@ -1951,10 +2122,8 @@ sys.stdout.write(reply)
     # (elitea.runtime.v1.RuntimeContentService). Its grpc.health.v1 answers
     # any runtime-CA workload identity, exactly as the worker and the sandbox
     # supervisor reach it.
-    content="$($ENGINE run --rm --network "$NETWORK" -v "${RUNTIME_CERTS}:/m:ro" --user 0:0 \
-      --entrypoint /elitea-grpc-health ghcr.io/elitea-ng/elitea-main:standalone \
-      --addr elitea-main:9445 --ca /m/runtime-ca.crt --server-name elitea-main \
-      --cert /m/agent-worker-client.crt --key /m/agent-worker-client.key 2>&1 || true)"
+    content="$(grpc_health --addr elitea-main:9445 --ca /m/runtime-ca.crt --server-name elitea-main \
+      --cert /m/agent-worker-client.crt --key /m/agent-worker-client.key)"
     case "$content" in
       SERVING) ok "content listener :9445 serves gRPC health to the worker identity and verifies as elitea-main" ;;
       *) fail "content listener :9445 refused the worker identity or did not verify as elitea-main: $(printf '%s' "$content" | tail -1)" ;;
@@ -1983,6 +2152,15 @@ sys.stdout.write(reply)
     # ELITEA_MODEL_SERVICE_CLIENTS, and the pipeline answers. A status without
     # that trailer is the hop failing instead (grpcauth, the gateway).
     model_rpc() { # model_rpc <cert dir> <cert basename>
+      if [ "$E2E_STACK" = native ]; then
+        native_run "$RUNTIME_CERTS" "$1" "${E2E_NATIVE_BIN}/grpcurl" -v \
+          -cacert /m/runtime-ca.crt -cert "/c/$2.crt" -key "/c/$2.key" \
+          -import-path /proto -proto elitea/llm/v1/model.proto \
+          -H 'authorization: Bearer standalone-stack-invalid-bearer' \
+          -d '{"call":{},"body":""}' \
+          elitea-main:9446 elitea.llm.v1.ModelService/Embeddings
+        return
+      fi
       $ENGINE run --rm --network "$NETWORK" --user 0:0 \
         -v "${RUNTIME_CERTS}:/m:ro" -v "$1:/c:ro" -v "${REPO_ROOT}/libs/proto:/proto:ro" \
         docker.io/fullstorydev/grpcurl:v1.9.1 -v \
@@ -2026,6 +2204,15 @@ sys.stdout.write(reply)
     # PermissionDenied without it is grpcauth refusing an identity missing
     # from ELITEA_ARTIFACT_SERVICE_CLIENTS / ELITEA_INTERNAL_TOOL_SERVICE_CLIENTS.
     runtime_rpc() { # runtime_rpc <cert basename> <proto> <json> <method>
+      if [ "$E2E_STACK" = native ]; then
+        native_run "$RUNTIME_CERTS" - "${E2E_NATIVE_BIN}/grpcurl" -v \
+          -cacert /m/runtime-ca.crt -cert "/m/$1.crt" -key "/m/$1.key" \
+          -import-path /proto -proto "$2" \
+          -H 'authorization: Bearer standalone-stack-invalid-bearer' \
+          -d "$3" \
+          elitea-main:9446 "$4"
+        return
+      fi
       $ENGINE run --rm --network "$NETWORK" --user 0:0 \
         -v "${RUNTIME_CERTS}:/m:ro" -v "${REPO_ROOT}/libs/proto:/proto:ro" \
         docker.io/fullstorydev/grpcurl:v1.9.1 -v \
@@ -2075,6 +2262,23 @@ sys.stdout.write(reply)
       done
     else
       identity_probe() {
+        if [ "$E2E_STACK" = native ]; then
+          local script='
+import ssl, sys, urllib.error, urllib.request
+context = ssl.create_default_context(cafile="/m/runtime-ca.crt")
+headers = dict(item.split(": ", 1) for item in sys.argv[2:])
+request = urllib.request.Request(sys.argv[1], headers=headers)
+try:
+    response = urllib.request.urlopen(request, context=context, timeout=15)
+    print(response.status, response.read().decode()[:400])
+except urllib.error.HTTPError as error:
+    print(error.code)
+except Exception as error:
+    print("ERR", type(error).__name__)
+'
+          native_run "$RUNTIME_CERTS" - python3 -c "$script" "$@"
+          return
+        fi
         $ENGINE run --rm --network "$NETWORK" -v "${RUNTIME_CERTS}:/m:ro" --user 0:0 \
           --entrypoint python3 ghcr.io/elitea-ng/elitea-mock-llm:standalone -c "
 import ssl, sys, urllib.error, urllib.request
@@ -2109,8 +2313,8 @@ except Exception as error:
     echo "→ execution actor PATs:"
     # Without an active PAT the worker's claim dies at actor_pat_issuance, long
     # before any model call, so this is a precondition rather than a nicety.
-    pats="$($COMPOSE_BIN $COMPOSE_F exec -T postgres \
-              psql -U elitea -d elitea -tAc \
+    pats="$(stack_service_psql \
+              -U elitea -d elitea -tAc \
               "SELECT count(*) FROM public.auth_core__token
                 WHERE uuid IS NOT NULL
                   AND (expires IS NULL OR expires > (clock_timestamp() AT TIME ZONE 'UTC'))" 2>/dev/null || echo 0)"
@@ -2166,6 +2370,10 @@ PY
       # an unprivileged uid that cannot read the 0600 host material — so this
       # one probe runs that image as root.
       llm_probe() {
+        if [ "$E2E_STACK" = native ]; then
+          native_run "$RUNTIME_CERTS" - python3 -c "$1"
+          return
+        fi
         $ENGINE run --rm --network "$NETWORK" -v "${RUNTIME_CERTS}:/m:ro" --user 0:0 \
           --entrypoint python3 ghcr.io/elitea-ng/elitea-mock-llm:standalone -c "$1" 2>&1 || true
       }
@@ -2184,11 +2392,11 @@ PY
       # The rows go in the CALLER's personal project, because that is the
       # project the /llm hop resolves the credential from (#290).
       echo "→ configuration write route → gateway visibility (#457):"
-      WRITE_USER="$($COMPOSE_BIN $COMPOSE_F exec -T postgres \
-          psql -U elitea -d elitea -tAc \
+      WRITE_USER="$(stack_service_psql \
+          -U elitea -d elitea -tAc \
           "SELECT user_id FROM public.auth_core__token WHERE uuid = '${LLM_PROBE}'" 2>/dev/null | tr -d '[:space:]')"
-      WRITE_PROJECT="$($COMPOSE_BIN $COMPOSE_F exec -T postgres \
-          psql -U elitea -d elitea -tAc \
+      WRITE_PROJECT="$(stack_service_psql \
+          -U elitea -d elitea -tAc \
           "SELECT id FROM centry.project WHERE name = 'project_user_${WRITE_USER}'" 2>/dev/null | tr -d '[:space:]')"
       if [ -z "$WRITE_PROJECT" ]; then
         skip "the probe caller owns no personal project (run: $0 seed)"
@@ -2200,8 +2408,8 @@ PY
         # deletes; it never writes status_ok. elitea_title is UNIQUE, so a
         # second run would otherwise fail on the insert and say nothing about
         # this defect.
-        $COMPOSE_BIN $COMPOSE_F exec -T postgres \
-          psql -q -U elitea -d elitea -c \
+        stack_service_psql \
+          -q -U elitea -d elitea -c \
           "DELETE FROM p_${WRITE_PROJECT}.configuration
             WHERE elitea_title IN ('${WRITE_CRED}', '${WRITE_MODEL}', '${WRITE_DANGLING}')" >/dev/null 2>&1 || true
 
@@ -2323,8 +2531,8 @@ except Exception as error:
         # passed. Counting what is LEFT in the table answers both.
         write_codes=""
         for write_title in "$WRITE_CRED" "$WRITE_MODEL" "$WRITE_DANGLING"; do
-          write_id="$($COMPOSE_BIN $COMPOSE_F exec -T postgres \
-              psql -U elitea -d elitea -tAc \
+          write_id="$(stack_service_psql \
+              -U elitea -d elitea -tAc \
               "SELECT id FROM p_${WRITE_PROJECT}.configuration
                 WHERE elitea_title = '${write_title}'" 2>/dev/null | tr -d '[:space:]')"
           [ -z "$write_id" ] && continue
@@ -2333,8 +2541,8 @@ except Exception as error:
               "http://localhost:${PORT}/api/v2/configurations/configuration/${WRITE_PROJECT}/${write_id}" || true)"
           write_codes="${write_codes}${write_title}=${write_code} "
         done
-        write_left="$($COMPOSE_BIN $COMPOSE_F exec -T postgres \
-            psql -U elitea -d elitea -tAc \
+        write_left="$(stack_service_psql \
+            -U elitea -d elitea -tAc \
             "SELECT count(*) FROM p_${WRITE_PROJECT}.configuration
               WHERE elitea_title IN ('${WRITE_CRED}', '${WRITE_MODEL}', '${WRITE_DANGLING}')" 2>/dev/null | tr -d '[:space:]')"
         if [ "${write_left:-1}" = "0" ]; then
@@ -2353,18 +2561,18 @@ except Exception as error:
       # LLM_PROVIDER=open_ai. It made `check` PASS on a stack whose two seed
       # steps had written two different embedding names, because the name it
       # probed was the one `seed-index` happened to write last.
-      CHAT_MODEL_TITLE="$($COMPOSE_BIN $COMPOSE_F exec -T postgres \
-          psql -U elitea -d elitea -tAc \
+      CHAT_MODEL_TITLE="$(stack_service_psql \
+          -U elitea -d elitea -tAc \
           "SELECT elitea_title FROM p_${LLM_PROJECT}.configuration
             WHERE section = 'llm' AND type = 'llm_model' AND status_ok = true
             ORDER BY id LIMIT 1" 2>/dev/null | tr -d '[:space:]')"
-      CHAT_MODEL_NAME="$($COMPOSE_BIN $COMPOSE_F exec -T postgres \
-          psql -U elitea -d elitea -tAc \
+      CHAT_MODEL_NAME="$(stack_service_psql \
+          -U elitea -d elitea -tAc \
           "SELECT data->>'name' FROM p_${LLM_PROJECT}.configuration
             WHERE section = 'llm' AND type = 'llm_model' AND status_ok = true
             ORDER BY id LIMIT 1" 2>/dev/null | tr -d '[:space:]')"
-      EMB_MODEL_NAME="$($COMPOSE_BIN $COMPOSE_F exec -T postgres \
-          psql -U elitea -d elitea -tAc \
+      EMB_MODEL_NAME="$(stack_service_psql \
+          -U elitea -d elitea -tAc \
           "SELECT data->>'name' FROM p_${LLM_PROJECT}.configuration
             WHERE elitea_title = 'standalone-embedding'" 2>/dev/null | tr -d '[:space:]')"
       # Counted in BOTH directions (#422). A bare `if empty then fail` reported
@@ -2518,8 +2726,8 @@ except Exception as error:
       # and a counted skip still exits non-zero unless the caller passes
       # --allow-skips (#429). A caller that deliberately skips seed-index says
       # so on the command line.
-      TOOLKIT_EMBEDDING="$($COMPOSE_BIN $COMPOSE_F exec -T postgres \
-          psql -U elitea -d elitea -tAc \
+      TOOLKIT_EMBEDDING="$(stack_service_psql \
+          -U elitea -d elitea -tAc \
           "SELECT settings->>'embedding_model' FROM p_${LLM_PROJECT}.elitea_tools
             WHERE name = 'standalone-artifact-index'" 2>/dev/null | tr -d '[:space:]')"
       if [ -z "$TOOLKIT_EMBEDDING" ]; then
@@ -2609,8 +2817,8 @@ except Exception as error:
     # projectprovisioning writes roles only, on purpose — so it cannot match
     # here. Read that alongside the LLM probe above, which had no permission
     # join and did start picking those projects.
-    CHAT_ROW="$($COMPOSE_BIN $COMPOSE_F exec -T postgres \
-        psql -U elitea -d elitea -tAc \
+    CHAT_ROW="$(stack_service_psql \
+        -U elitea -d elitea -tAc \
         "SELECT t.uuid || ' ' || t.user_id || ' ' || p.id
            FROM public.auth_core__token t
            JOIN centry.project p ON p.name = 'project_user_' || t.user_id::text
@@ -2624,8 +2832,8 @@ except Exception as error:
           LIMIT 1" 2>/dev/null | tr -d '\r')"
     CHAT_PROJECT="$(printf '%s' "$CHAT_ROW" | awk '{print $3}')"
     CHAT_PROJECT="${CHAT_PROJECT:-1}"
-    MISSING_CHAT_TABLES="$($COMPOSE_BIN $COMPOSE_F exec -T postgres \
-        psql -U elitea -d elitea -tAc \
+    MISSING_CHAT_TABLES="$(stack_service_psql \
+        -U elitea -d elitea -tAc \
         "SELECT string_agg(missing.name, ',')
            FROM (VALUES ('chat_messages_text'),('chat_messages_context'),('chat_message_trace_step')) AS missing(name)
           WHERE to_regclass('p_${CHAT_PROJECT}.' || missing.name) IS NULL" 2>/dev/null | tr -d '[:space:]')"
@@ -2671,8 +2879,8 @@ except Exception as error:
         # NAME, so seeding a DIFFERENT model ADDS a row and the first one seeded
         # still wins by id. `seed-llm` now says so when it happens, rather than
         # reporting a re-seed that changed nothing a consumer will read.
-        CHAT_SMOKE_MODEL="$($COMPOSE_BIN $COMPOSE_F exec -T postgres \
-            psql -U elitea -d elitea -tAc \
+        CHAT_SMOKE_MODEL="$(stack_service_psql \
+            -U elitea -d elitea -tAc \
             "SELECT data->>'name' FROM p_${CHAT_PROJECT}.configuration
               WHERE section = 'llm' AND type = 'llm_model' AND status_ok = true
               ORDER BY id LIMIT 1" 2>/dev/null | tr -d '[:space:]')"
@@ -2682,6 +2890,15 @@ except Exception as error:
           echo "  · no chat model row in p_${CHAT_PROJECT}; using chat-smoke.py's default"
         fi
         set +e
+        if [ "$E2E_STACK" = native ]; then
+          python3 "${REPO_ROOT}/deploy/scripts/chat-smoke.py" \
+            --base-url "http://elitea-main:8080" \
+            --pat-uuid "$CHAT_PAT" \
+            --signing-key "${RUNTIME_CERTS}/auth-pat-signing-key" \
+            --user-id "$CHAT_USER" \
+            --project "$CHAT_PROJECT" \
+            ${CHAT_SMOKE_MODEL:+--model "$CHAT_SMOKE_MODEL"}
+        else
         $ENGINE run --rm --network "$NETWORK" \
           -v "${RUNTIME_CERTS}:/m:ro" \
           -v "${REPO_ROOT}/deploy/scripts/chat-smoke.py:/opt/chat-smoke.py:ro" \
@@ -2693,6 +2910,7 @@ except Exception as error:
           --user-id "$CHAT_USER" \
           --project "$CHAT_PROJECT" \
           ${CHAT_SMOKE_MODEL:+--model "$CHAT_SMOKE_MODEL"}
+        fi
         smoke_status=$?
         set -e
         # chat-smoke.py's exit codes, counted rather than swallowed (#429).

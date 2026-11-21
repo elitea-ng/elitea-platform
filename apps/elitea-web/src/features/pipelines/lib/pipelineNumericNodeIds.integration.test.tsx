@@ -18,6 +18,7 @@ import { computeIsPipelineYamlCodeDirty } from './hooks/useIsPipelineYamlCodeDir
 import { judgeLivePipelineGraph } from './livePipelineGraphAdmission';
 import { dumpYaml } from './dumpYaml.helpers';
 import { isIdentifierRespellingRedump, parsePipelineYamlDocument } from './pipelineYamlDocument.helpers';
+import { testTimeout } from '@/test/timeouts';
 
 installCodeMirrorTestPolyfills();
 
@@ -246,5 +247,5 @@ describe('numeric node ids: the real editor panel', () => {
     await act(async () => {
       await Promise.resolve();
     });
-  }, 30000);
+  }, testTimeout(30000));
 });

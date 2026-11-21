@@ -34,8 +34,10 @@ that a later push cancelled.
 - A job that failed or was cancelled fails the gate.
 - A job that should have run and did not (for example, a heavy job skipped because the fast tier failed) fails
   the gate as **missing**.
-- While the pull request is a draft, the gate fails with the word `draft`. The heavy tier has not run, so the
-  pull request has no verdict yet.
+- On a draft, ci-gate is skipped; fast-gate green means mark it ready. A skipped gate lets nothing through: a
+  draft cannot be merged, and marking it ready (`ready_for_review`, one of `CI`'s trigger types) runs the
+  workflow again on the same head, where ci-gate stays pending until the heavy tier finishes and then passes or
+  fails on its result. (`scripts/ci/ci-gate.mjs` still fails a draft if it is ever run for one.)
 
 A required status check can point at `CI / ci-gate` alone. The repository ruleset does not require it today.
 
@@ -75,14 +77,33 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
   test jobs no longer run them.
 - **Go shards.** `scripts/go/test-shards.json` has a shard `infra-suites` for the slow packages. The fault
   registry test no longer compiles a regexp per code over the whole tree (21 minutes to 4 seconds).
-- **Web coverage.** The unit shards run without coverage in the fast tier. `ci-web-coverage.yml` runs them with
-  coverage in the heavy tier and enforces the thresholds.
+- **Go tests once.** `no-binaries` (no path filter) runs the elitea-main gates `./internal/api/` and
+  `./tests/deployedge/...`, and `ci-contract` runs `./tests/contract/`, only when `ci-go` does not run: ci-go's
+  shards (api-core, infra-suites, db-storage) run the same packages with `-race`. ci.yml passes `no-binaries`
+  ci-go's filter as `go_runs`; `ci-contract` carries `"unless": "ci-go"` in `tier-paths.json`, so the changes
+  output itself says it does not run and the gates read its skip as correct. `check-tiering.mjs` holds both.
+- **Web coverage.** One web unit suite per run. On a draft, and in the nightly, the unit shards run without
+  coverage in the fast tier (`ci-web.yml` `unit-tests`). On a ready pull request `ci-web-coverage.yml` runs every
+  unit test with coverage in the heavy tier and enforces the thresholds, and the plain shards are skipped:
+  ci.yml passes `ci-web` the coverage job's own filter as `coverage_runs`. `check-tiering.mjs` holds that
+  expression, so no run has neither suite. The coverage shards run on eng-runner: instrumentation makes tests
+  2 to 3 times slower, so under `--coverage` `vitest.config.ts` multiplies every test, hook and wait budget by 3
+  (`src/test/timeouts.ts`; `VITEST_TIMEOUT_SCALE` overrides it). There are no retries.
 - **WebKit.** The WebKit E2E legs run on a pull request only when `apps/elitea-web/src`, the E2E harness, the
   package set or `libs/ts/client-core` change. The nightly run on main runs them always.
 - **Image reuse.** The build-once jobs tag each `ci-*` image with a hash of its inputs
   (`ci-<image>:cas-<hash>`, `scripts/ci/stack-image-hash.mjs`) and skip the build when that tag exists. A run on
   main always builds. A fork pull request builds in its own job, as before. The code sandbox supervisor is
   published the same way as `ci-elitea-sandbox-supervisor`.
+- **Build once.** `ci-build-once.yml` (heavy tier, job `ci-build-once`) builds every stack image once per
+  commit. `ci-web-e2e`, `ci-governed-conformance` and `helm-install-smoke` need it and pull its images by
+  digest. Each builds in its own job only when nothing was built for it: a fork or Dependabot pull request,
+  or its own schedule or dispatch. The job runs when any of the three would run, or when the change touches
+  Rust. Its `tier-paths.json` entry is a `union` of those jobs, with no paths of its own.
+- **Release builds.** The Rust workflows build no `--release` binaries. The worker, engine, vector and
+  doc-extractor images are their release builds, and `ci-build-once` builds them on every pull request that
+  touches Rust. The engine and doc-extractor jobs run the Go host tests and the `--version` smoke against the
+  debug binary that `cargo test` built.
 - **Actions cache.** The cache has a 10 GB cap. `ci-image-cleanup.yml` runs
   `scripts/ci/prune-actions-caches.mjs` every night: it keeps one entry per key family, removes pull-request
   copies, and removes the least recently used entries above 9 GiB. It then compares what main's entries hold
@@ -104,9 +125,20 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
 
   The workspace Go key has one writer, `ci-go.yml` `test-checks`. Its nightly run compiles every `go.work`
   module with `go test -race -run '^$' -exec true`.
+- **Path parity.** A cache entry has a key and a version, and a restore matches only when both match. The
+  version is a hash of the `path:` lines exactly as written. So `~/.npm` and `/home/runner/.npm` are two
+  versions, and a reader with one never restores what a writer with the other saved. Until 2026-11-20 no pull
+  request restored main's Go or npm cache for this reason. Every save and restore of one key uses the same
+  literal `~/...` lines, in the same order. An expression path is not allowed.
+  `scripts/ci/check-cache-path-parity.mjs` (in `No Binaries`) fails when a restore differs from its writer.
+  The Go and npm caches save on GitHub-hosted runners only, and restore wherever `../../..` of the workspace
+  is `HOME` (hosted runners and eng-runner): the tar holds paths relative to the workspace, so a runner with
+  another home layout would extract them to the wrong directory.
 - **macOS package.** `desktop-package` (heavy tier) runs on a pull request only when `apps/elitea-desktop/**`,
-  `libs/rust/vendor/agent-desktop/**`, the Rust toolchain pin, `desktop-package.yml` or the two packaging actions change. The run is an
-  unsigned debug dry run. `publish.yml` (the nightly pre-release on main, and every release) runs the signed
+  `libs/rust/vendor/agent-desktop/**`, the Rust toolchain pin, `desktop-package.yml`, the two packaging actions, the brands
+  (`brand/**`, `scripts/brand/**`) or the brand output scan change. The run is an unsigned debug dry run of brand/sample, and
+  it is the desktop lane of the brand output scan (the macOS host job in `ci-desktop.yml` no longer builds a second binary
+  for it; `ci-local-tools-macos.yml` runs the local-index tests that job used to). `publish.yml` (the nightly pre-release on main, and every release) runs the signed
   release build and verifies it. `check-tiering.mjs` holds the path list, the dry-run inputs and
   `require_signed: true` in `publish.yml`. The app is Apple silicon only.
 
@@ -115,55 +147,230 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
 Most jobs run on GitHub-hosted `ubuntu-latest`. The free plan caps hosted jobs at 20 at a time for the whole
 organisation, and queueing was most of a pull request's wall time. The organisation also has a self-hosted
 pool, `eng-runner`. It is an ARC runner scale set on GKE whose pods have 4 vCPU, 16 GiB, an 80 GiB work
-volume and 10 GiB of ephemeral storage. It runs the custom image `ghcr.io/elitea-ng/eng-runner:2.338.2-20261120`:
+volume and 10 GiB of ephemeral storage. It runs the custom image `ghcr.io/elitea-ng/eng-runner:2.338.2-20261120.10`:
 the `actions-runner` image plus build tools such as cc and zstd.
 
 ### What the pool can run
 
 A job runs directly in the pod (Ubuntu 24.04):
 
-- **No Docker daemon.** No `container:`, no `services:`, no docker, podman, compose or kind.
+- **No Docker daemon.** No `container:`, no docker, podman, compose or kind. A job's `services:` run as
+  processes instead (below).
 - **No root.** No sudo and no apt.
-- **Toolchains come from the job.** node and Go come from `setup-*` actions or from a download into the job's
-  own directories.
+- **Build tools, no toolchains.** The image (`deploy/ci-runners/image/`) has build-essential (cc for cgo and
+  the `cc` crate), cmake, pkg-config, zstd, shellcheck, gh, helm, yq and skopeo. node, Go, Python and rustup come
+  from the job: `setup-*` actions, or `eng-runner-env` with `node: "true"` or `rust: "true"`. Its `python3` is
+  Ubuntu's, whose pip refuses to install (PEP 668), so a job that runs `python`, `pip` or `python3 -m pip
+  install` sets up Python. `setup-python` needs no root here: the image points `RUNNER_TOOL_CACHE` and
+  `AGENT_TOOLSDIRECTORY` at `/home/runner/_work/_tool`, and the Python installer only copies into that
+  directory. The aws CLI is not in the image; `repo-gates` installs it with pip on the pool.
+  **Keep `LD_LIBRARY_PATH` in child environments.** Outside `/opt/hostedtoolcache` the setup-python
+  interpreter finds `libpython3.12.so.1.0` only through the `LD_LIBRARY_PATH` setup-python exports, so a script
+  or test that starts `python3` with a scrubbed env (`{PATH, GITHUB_*}`) must pass it through, as
+  `eng-runner-hook.test.mjs` does. This libpython rpath issue is also why the Python jobs first stayed hosted.
 - **10 GiB of disk outside `/home/runner/_work`.** That is the container's ephemeral-storage limit. Only
   `_work` is the separate 80 GiB volume, and a pod that writes past the limit is evicted. The default places
-  for `~/go/pkg/mod`, `~/.cache/go-build`, `~/.npm`, `~/.cache` and `/tmp` all count against it.
+  for `~/go/pkg/mod`, `~/.cache/go-build`, `~/.npm`, `~/.cargo`, `~/.cache` and `/tmp` all count against it.
 
-The routed set below was chosen for the plain `actions-runner` image, which had no C compiler, zstd, gh, yq,
-Helm or pip. The custom image unlocks more jobs; `deploy/ci-runners/README.md` ("Next step") lists them. Today
-only toolchain-only jobs are routed:
+These jobs are routed (when `ENG_RUNNER` is on, on our own pull requests):
 
 | Workflow | Jobs |
 |---|---|
 | `ci.yml` | `changes`, `fast-gate`, `ci-gate` |
 | `ci-web.yml` | `quality`, `unit-tests` (every shard), `gates-static`, `build` |
-| `ci-web-coverage.yml` | `coverage-merge` |
-| `ci-go.yml` | `sqlc`, `lint`, `test-plan`, `test` (the aggregator) |
-| `ci-gateway.yml` | `lint` |
+| `ci-web-coverage.yml` | `unit-tests` (every shard), `coverage-merge` |
+| `ci-go.yml` | `proto`, `sqlc`, `env-drift`, `lint`, `test-plan`, `test-checks`, `test` (the aggregator), `test-shard` (every shard, storage included), `integration`, `editor-lifecycle`, `compiled-snapshots-postgres`, `secretstore-openbao` |
+| `ci-gateway.yml` | `lint`, `test` |
+| `ci-contract.yml` | `compile` |
+| `ci-vector.yml` | `vector` |
+| `ci-inventory-engine.yml` | `engine` (with the Go host against the binary) |
+| `ci-handoff-loadgate.yml` | `loadgate` |
 | `ci-governed-conformance.yml` | `unit` |
 | `ci-docs.yml`, `ci-mobile.yml` | `docs`, `check` |
-| `ci-web-e2e.yml` | `model-path-changes` |
+| `ci-build-once.yml` | `model-path-changes` |
 | `image-matrix.yml` | `gate-selftest`, `issue-script` |
-| `no-binaries.yml` | `history-gates` |
+| `no-binaries.yml` | `repo-gates`, `history-gates` |
+| `dependency-scanning.yml` | `scan` |
+| `helm-lint.yml` | `template` (both charts) |
+| `ci-rust-lint.yml` | `lint` (every workspace) |
+| `ci-rust-shared.yml` | `shared-crates` (tests) |
+| `ci-rust.yml` | `code-runner` |
+| `ci-doc-extractor.yml` | `extractor` |
+| `ci-deepwiki-engine.yml` | `serde-order`, `engine` (with the Go host against the binary) |
+| `ci-mock-llm.yml` | `unit` |
+| `ci-deepwiki-conformance.yml` | `fixtures` |
+| `ci-web.yml` | `storybook`, `desktop-journeys` (Chromium from the image's `/ms-playwright`; a hosted run installs it) |
+| `ci-governed-scale.yml` | `scale` (PostgreSQL and NATS as processes) |
+| `ci-web-mutation.yml`, `codeql.yml`, `docs-pages.yml` | `mutation-spotcheck`, `analyze`, `build-and-deploy` |
+| `publish.yml`, `release-retention.yml`, `ci-image-cleanup.yml` | `release`, `prune`; `admin`, `prune`; `prune`, `actions-cache` |
+| `eng-runner-image.yml` | `runner-pin` |
+| `mobile-eas-build.yml`, `mobile-eas-submit.yml` | `build`, `submit` (EAS builds in Expo's cloud) |
 
-Everything else stays hosted. That covers the jobs that need Docker, services or kind, every Rust job, the Go
-test shards and the race build, and the Python jobs (`setup-python` cannot install into the hosted tool cache
-path without root). It also covers jobs that rely on tools the hosted image ships (gh, shellcheck, Helm, yq,
-pip), macOS, Windows, and every job outside the pull-request pipeline.
+Everything else stays hosted, because it needs what the pool does not have (audited 2026-11-21: 45 hosted
+job definitions, down from 59; every other job is routed):
 
-The coverage unit shards stay hosted: under coverage instrumentation the pod ran them 1.5 to 2 times slower,
-and the heaviest test files hit their per-test timeouts. The routed jobs set `GOMAXPROCS=4` and `--maxWorkers=4`. The pod's cgroup limit is 4 CPUs, but the node reports
-8. `scripts/ci/install-golangci-lint.sh` fetches golangci-lint with curl and jq (no gh), on both kinds of runner.
+- **Docker next to the services.** `ci-rust.yml`'s "Test with PostgreSQL 18" also builds the sandbox images
+  with buildx, and `check-worker-ignored-tests.mjs` credits only unconditional steps, so it cannot gate those
+  steps to hosted runners; "Workspace runs on Docker" needs a registry container.
+- **Image builds and pushes**: the `ci-build-once.yml` image legs, `publish.yml` (`build`, `scan`,
+  `publish-image`, `chart`, `rollback`), `eng-runner-image.yml` (`build`, `publish`), `mirror-buildkit.yml`,
+  `nightly-image-scan.yml`, `image-matrix.yml` (`docker buildx bake --print`), and the code sandbox's
+  supervisor image in `ci-web-e2e.yml`.
+- **Docker, compose, kind or gVisor**: the E2E suites (`ci-web-e2e.yml`, `deepwiki-real-engine.yml`,
+  `nightly-real-llm.yml`), `ci-governed-conformance.yml` `stack`, `helm-install-smoke`, `ci-browser-session.yml`
+  and `browser-bakeoff.yml` (gVisor). helm-lint's `lint` job too: a step it runs calls `docker compose config`.
+- **System packages through apt**: the Tauri host on Linux (`ci-desktop.yml` `pane-drivers`, webkit2gtk).
+- **The pool's own janitor**: `cancel-merged-pr-runs.yml` (`cancel`, `delete-caches`) cancels the runs of
+  merged pull requests to free the pool. Queued on the pool, it would wait behind the very runs it cancels.
+- **macOS and Windows**: `ci-desktop.yml` `desktop` and `windows-host`, `ci-local-tools-macos.yml`,
+  `desktop-package.yml`, and `ci-desktop-control.yml`, whose matrix has a Windows leg.
+
+The routed jobs pin their parallelism to the pod's 4 CPUs, because the node reports 8. `eng-runner-env` sets
+`GOMAXPROCS=4`, `CARGO_BUILD_JOBS=4` and `RUST_TEST_THREADS=4` on the pool only, and a job's own `env:` still wins
+(`CARGO_BUILD_JOBS=1` in `code-runner`); the web jobs pass `--maxWorkers=4`. A step that
+frees hosted-runner disk with `sudo rm` runs on hosted runners only (`if: runner.environment ==
+'github-hosted'`): the pool builds on its 80 GiB work volume. Binaries a job downloads (kubeconform,
+cargo-deny) go into a directory under `RUNNER_TEMP` on `PATH`, not `/usr/local/bin`.
+`scripts/ci/install-golangci-lint.sh` fetches golangci-lint with curl and jq (no gh), on both kinds of runner.
 
 Every routed job runs `./.github/actions/eng-runner-env` straight after its checkout. On a GitHub-hosted runner
-it does nothing, so the hosted path is unchanged. On the pool it does two things:
+it does nothing, so the hosted path is unchanged. On the pool it does these things:
 
-- It moves `HOME` to `/home/runner/_work/_home`, and sets `XDG_CACHE_HOME`, `GOPATH`, `GOMODCACHE`,
-  `GOCACHE`, `GOLANGCI_LINT_CACHE` and `npm_config_cache` under it. It also sets `TMPDIR` to `RUNNER_TEMP`, which
-  covers jest's cache in `os.tmpdir()`; vitest caches in `node_modules`. Because `HOME` itself moves, the
-  `go-cache`, `npm-cache` and `main-write-cache` actions follow it: they resolve their paths from `$HOME`.
+- It fails at once, naming the tool, when the pod's image lacks one the routed jobs take from it (cc, c++,
+  make, cmake, pkg-config, zstd, git, jq, curl, unzip, gh, helm, yq, shellcheck, mountpoint), and when
+  `~/.npm`, `~/.cache` or `~/go` is not a mount.
+- It pins the parallelism (above).
+- It keeps `HOME` at `/home/runner`, as on a hosted runner. The scale set's pod template mounts `~/.npm`,
+  `~/.cache` and `~/go` from the work volume (`_homecache/*`), so the hosted cache paths are on the 80 GiB
+  disk. It points `XDG_CACHE_HOME`, `GOPATH`, `GOMODCACHE`, `GOCACHE`, `GOLANGCI_LINT_CACHE` and
+  `npm_config_cache` back at those paths (the image ENV names `_work/_cache`), and sets `TMPDIR` to
+  `RUNNER_TEMP`, which covers jest's cache in `os.tmpdir()`; vitest caches in `node_modules`. `CARGO_HOME`,
+  `RUSTUP_HOME` and the tool cache stay under `_work`, where the image puts them.
 - With `node: "true"`, it installs node, for jobs that run node scripts without a `setup-node` step of their own.
+- With `rust: "true"`, it installs rustup (a pinned `rustup-init`, checked against its published SHA-256) with
+  no toolchain. The job's `assert-rust-toolchain.sh` step then installs the toolchain `rust-toolchain.toml`
+  pins, as it does on a hosted runner, where rustup is preinstalled.
+
+### Services as processes
+
+A routed job keeps its `services:` block for hosted runners, and names every image through
+`poolEmptyImage(<image>)` from `scripts/ci/check-runner-routing.mjs`:
+
+```yaml
+image: ${{ !(<the routing condition>) && 'postgres:18' || '' }}
+```
+
+The condition is the routing condition, word for word, so the image is empty exactly where the job runs on
+the pool, and GitHub does not start a service whose image is empty. (The inverted form,
+`<condition> && '' || 'postgres:18'`, is always the image: `''` is falsy.) The job then runs
+`./.github/actions/native-services` after `eng-runner-env`. On the pool that action starts the same servers
+from the image's binaries (PostgreSQL 18, nats-server, Qdrant, OpenBao, and with `storage: "true"` RustFS,
+Azurite and fake-gcs-server in place of `deploy/docker-compose.storage-test.yml`). They run as the runner user
+under `RUNNER_TEMP`, on 127.0.0.1, at the ports and with the credentials the block maps (the storage ports and
+keys are read from the compose file). The binary must be the release the block names, and PostgreSQL is
+initialised with the image's locale (`en_US.UTF-8`), so text sorts the same on both legs. The action waits until
+each server is healthy and fails with the log's tail when one is not. PostgreSQL runs with `fsync`,
+`synchronous_commit` and `full_page_writes` off: it is a throwaway CI database. The job's last step,
+`./.github/actions/native-services-logs` with `if: failure()`, uploads the servers' logs whichever step failed. On
+a hosted runner both actions do nothing. The few steps that call docker directly (the storage compose file,
+copying `nats-server` out of its container) run on hosted runners only; `scripts/nats/ci-secure-test-env.sh` takes
+the image's `nats-server` on the pool and checks it is the chart's pin. `index_v2_preflight`'s system test creates
+its database on the job's server (`ELITEA_TEST_DATABASE_URL`) instead of starting a container, on both legs.
+
+### The E2E legs on the pool (no containers)
+
+`ci-web-e2e-native.yml` runs the seven E2E legs of `ci-web-e2e.yml` (chromium 1/2 and 2/2, webkit 1/3 to
+3/3, `platform-flags`, `platform-flags-webkit`) on the pool as `E2E native (<leg>)`, with the same matrix,
+shards and weights (`e2e-journey-shape.test.mjs` holds the two equal). Its `native-build` job builds the Go
+binaries and web bundles the two e2e images carry (`scripts/e2e/build-native-bin.sh`, the way their
+Containerfiles build them), packs them as one artifact, and the legs unpack it after checking its sha256. They
+need no image and no `ci-build-once`. Each leg runs `e2e-stack.sh up` and `seed` with `E2E_STACK=native`, so
+`scripts/e2e/native-stack.mjs` runs the compose services as processes from `deploy/native/e2e-standalone.mjs`.
+Every service binds the address the pod's hostAliases give its compose name. Playwright then runs on the host,
+using the browsers the image bakes in. It runs 4 workers, the config's CI default: the pod has 4 CPUs, as a
+hosted runner does, and the weights were measured at 4. On failure a leg uploads every service's log
+(`native-stack-logs-<leg>`). `check-native-stack-parity.mjs` (no-binaries) fails when the table drifts from the
+compose file: an environment key, a value (beyond the mechanical rewrites: interpolation defaults, mount paths
+moved to host paths, listen addresses bound to loopback; anything else is listed in the table's `REWRITTEN_ENV`
+with its reason), a `depends_on` edge, a healthcheck or a one-shot.
+
+**Loopback only.** The pool is a shared cluster, so no native service may listen on the pod's network
+address. The parity check fails a table whose address, bind-shaped env value (`*_ADDR`, `*_ADDRESS`, `*_HOST`,
+`*_LISTEN`, `*_BIND`), argument or config file names `0.0.0.0`, `::`, `*` or a bare `:port`. After `up --wait`,
+`native-stack.mjs` also reads `/proc/net/tcp{,6}` and fails the stack when any socket its processes hold listens
+on a non-loopback address, which catches a bind a program hard-codes. Each service binds its own `127.0.0.x`
+from the name map, except rustfs: it refuses a bind host that is not an interface address, so it binds
+`127.0.0.1:9000` and its native clients use `http://127.0.0.1:9000` (`RUSTFS_ENDPOINT`).
+
+These jobs run only where the routing condition sends them to the pool. Where they run, `ci-web-e2e.yml`'s
+compose legs stand down on a pull request to one smoke leg, chromium 1/2. That leg runs only when the change
+reaches what only images prove: a Containerfile, a compose file, the web image's nginx or entrypoint, or the
+bake and image actions (`e2e-lane-filter.sh` `reaches-images`). A fork's or Dependabot's pull request, a run
+with `ENG_RUNNER` off and the nightly run keep the full compose matrix on hosted runners. Each leg therefore
+runs under exactly one name. `visual` and `docs-shots` stay compose on hosted runners, because their pixels
+come from the pinned Playwright container.
+
+### The standalone lanes on the pool
+
+The same workflow runs five standalone-stack lanes natively as `E2E native (<lane>)`: chat-stream-rust (three
+shards, the compose lane's weights `61:16:33`), deepwiki-stack, index-stream-rust, native-client-conformance
+and handoff-journey. They run `deploy/scripts/standalone-stack.sh` with `E2E_STACK=native` over
+`deploy/native/standalone-full.mjs`, the standalone-full compose file plus the Rust agent overlay as a native
+table. That table also carries the deltas of the conformance and handoff overlays. The lanes need both build
+jobs. `native-build` builds the Go binaries and web bundles, now including `elitea-scheduler`,
+`elitea-grpc-health` and `grpcurl`. `native-build-rust` (`scripts/e2e/build-native-rust.sh`) builds the five
+Rust services (worker, vector, doc-extractor, the DeepWiki and Inventory engines) and the LLM gateway. The
+gateway is Go outside `go.work`, so it builds with `GOWORK=off` on its own `go.mod`'s Go. They are built on the
+pool and never lifted from an image, because the images link a different glibc from the pool's. That job has
+no Rust cache: the cache budget has no room for a release target directory, and the one Rust entry caches the
+test profile. It builds cold, with the five workspaces sharing one target directory. It keeps the release
+semantics (no debug assertions, `panic = "abort"` where set) but drops the whole-program optimisation (thin
+LTO, one codegen unit, opt-level 3) through `CARGO_PROFILE_RELEASE_*`. The compose image smoke runs the
+shipped profile; `NATIVE_RUST_FULL_RELEASE=1` builds it natively. Neither build job
+depends on `ci-build-once`.
+
+What the native table does differently from compose, and why:
+
+- The runtime PKI is minted on the host (`standalone-stack.sh certs`), which needs Python's `cryptography`,
+  so each lane installs a pinned copy with `actions/setup-python`. The handoff lane adds a pinned `awscli`.
+- Host names in `worker-runtime.rust.json` resolve through the pod's `127.0.0.x` name map. The gateway's
+  egress allowlist gains `127.0.0.0/8`. The worker's allowlist matches host names, not addresses, so it
+  needs no change.
+- doc-extractor's `network_mode: none` becomes `PEER_UIDS` set to the runner's uid. It only listens on its
+  Unix socket. Its read-only root, dropped capabilities and memory and pid limits have no native equivalent.
+- The Python and Go mocks run from source. The migrate and init jobs are one-shots. The OpenTelemetry
+  collector is a sink that accepts OTLP/HTTP and discards it.
+- No Redis and no new internal HTTP: the services talk gRPC over mTLS or NATS, exactly as in compose.
+
+Pinned parallelism per lane:
+
+| Lane | Runner | Parallelism |
+|------|--------|-------------|
+| chat-stream-rust ×3, deepwiki-stack | Playwright | 1 worker (`chat-stream-e2e.sh --workers=1`) |
+| index-stream-rust | Playwright | 1 worker (`index-stream-e2e.sh --workers 1`) |
+| native-client-conformance | `go test` | one run against the one stack |
+| handoff-journey | `cargo test` | `--test-threads=1` (`handoff-live.sh`) |
+
+Where these lanes run, `ci-web-e2e.yml`'s compose versions stand down on a pull request. They come back as the
+image smoke when `reaches-images` says the change touches what only images prove. That now includes the
+compose half of the standalone stack scripts. Only leg 1of3 of chat-stream-rust runs as the smoke (`RUN_LEG`).
+Pushes, the nightly run, forks, Dependabot and runs with `ENG_RUNNER` off keep the full compose versions.
+
+What stays compose or hosted, and why:
+
+- **chat-stream-real and `nightly-real-llm.yml`** stay compose. The model server (`llm-real`) is an image
+  holding llama.cpp and two GGUF models, and the pool has neither. The table lists the service as
+  `NATIVE_ABSENT` and refuses the `real-llm` profile. Taking them native needs a pinned llama.cpp release
+  binary and the models, with their sha256s, in the pool image.
+- **`deepwiki-real-engine.yml`** stays compose. Its `engine_image` input is an image by design, its overlay
+  replaces llm-mock with an image-only stub, its script builds the images, and it runs weekly, so there is no
+  queue to win back.
+- **code-sandbox** stays compose: its supervisor runs containers, which the pool cannot.
+- **`visual` and `docs-shots`** stay compose, for the rasteriser reason above.
+- **`ci-governed-conformance.yml`** stays on hosted runners. Its clients call `graph.microsoft.com` and
+  `login.microsoftonline.com`, which the governed mocks answer. Those names are deliberately absent from the
+  pod's hostAliases, so a pool job cannot resolve them to the mocks. Also, governed-mocks binds port 443,
+  which a non-root process cannot.
 
 ### How a job is routed
 
@@ -172,34 +379,41 @@ expression sends the job to `eng-runner` only when **all** of these hold. Otherw
 `ubuntu-latest`.
 
 1. The repository variable `ENG_RUNNER` is `on`. It is unset by default.
-2. The event is `pull_request`.
-3. The pull request's head repository is this repository, so it is not a fork.
-4. Its author is not Dependabot.
-5. Neither `github.actor` nor `github.triggering_actor` is `dependabot[bot]`.
+2. The repository is `elitea-ng/elitea-platform`, so a fork's own push or schedule stays hosted.
+3. Neither `github.actor` nor `github.triggering_actor` is `dependabot[bot]`.
+4. The event is one of:
+   - `pull_request`, when its head repository is this repository (not a fork) and its author is not
+     Dependabot;
+   - `push` (no workflow starts on one today: `check-no-push-triggers.mjs`);
+   - `schedule` and `workflow_dispatch`, the runs on main that write the caches. The Go and npm cache paths are
+     the same strings on both kinds of runner and unpack into the same `HOME`, so an entry the pool saves is the
+     one a hosted reader would have saved. One writer per key still holds.
 
-It is an allowlist of one event. A condition written as "anything but `pull_request`" would let
-`pull_request_target`, `workflow_run` and `issue_comment` through, and none of those may reach the pool.
-
-These events stay hosted:
-
-- **`schedule` and `workflow_dispatch`** (the runs on main). They write the caches. An entry saved on the pool
-  would be saved under the moved `HOME` paths, and the cache version hashes the path strings, so every hosted
-  reader would miss it.
-- **`merge_group`.** Its payload does not say who wrote the queued change, so a Dependabot bump could reach the
-  pool through it.
+These are the events the job-started hook accepts. Each is an `==` arm of an allowlist. A condition written as
+"anything but X" would let `pull_request_target`, `workflow_run` and `issue_comment` through, and none of those
+may reach the pool. `merge_group` stays hosted: its payload does not say who wrote the queued change, so a
+Dependabot bump could reach the pool through it.
 
 `scripts/ci/check-runner-routing.mjs` (run in `no-binaries.yml`) fails the pull request when:
 
 - a `runs-on` can resolve to `eng-runner` without that exact expression, whether as a literal, a list, a group,
   a matrix value or any other expression;
-- a routed job has `container:` or `services:`;
+- a routed job has `container:`;
+- a routed job has `services:` and an image is not `poolEmptyImage(<image>)`, or it does not run
+  `native-services` exactly once, unconditionally, after `eng-runner-env`, with inputs that match the block:
+  the same kind of server, version, ports, user, password, database, `postgres -c` settings and NATS
+  JetStream; with `storage` set exactly when the hosted compose step runs; and with
+  `native-services-logs` on `failure()` after it. A service the action cannot run (a registry, say) keeps the
+  job hosted;
 - a routed job has a step, or a step inside a local composite action it uses, that runs docker, podman, kind,
-  sudo, apt or systemctl, or uses a `docker/*` or kind action, unless that step's `if:` starts with
+  sudo, apt, systemctl or `playwright install` (the image bakes the browsers, read-only), or uses a
+  `docker/*` or kind action, unless that step's `if:` starts with
   `runner.environment == 'github-hosted'`;
 - a routed job is in a workflow, or is called from a workflow, that can start on an event outside
   `pull_request`, `schedule` and `workflow_dispatch`;
-- a routed job runs `node`, `npm`, `npx` or `go` but has no step that installs it (`actions/setup-node`,
-  `actions/setup-go`, or `eng-runner-env` with `node: "true"`);
+- a routed job runs `node`, `npm`, `npx`, `go`, `cargo`, `rustc`, `rustup` (or `assert-rust-toolchain.sh`),
+  `python`, `pip` or `python3 -m pip install` but has no step that installs it (`actions/setup-node`,
+  `actions/setup-go`, `actions/setup-python`, or `eng-runner-env` with `node: "true"` or `rust: "true"`);
 - a routed job does not run `./.github/actions/eng-runner-env` unconditionally, before every action other than
   the checkout. A sparse checkout must include that action's directory.
 
@@ -215,13 +429,21 @@ a pull request.
 then re-run the failed or cancelled jobs (or push again).
 
 **Caches.** `actions/cache` works on the pool through the GitHub cache service. The writers are unchanged, one
-per key: the scheduled runs on main write, and they stay hosted. Pull requests only read. Expect a routed job
-to miss the hosted entries and run cold: the restore paths sit under the moved `HOME`, and the cache version
-hashes the path strings. The custom image has `zstd`, so the compression part of the version already matches.
+per key: the scheduled runs on main write, on the pool when they are routed. Pull requests only read. An
+entry is found only when its key AND its version match, and the
+version is the SHA-256 of the `path:` strings exactly as written, plus the compression method
+(`@actions/cache` `getCacheVersion`; the `version` field of the caches REST API shows it). Three things follow:
 
-The Go jobs also build with cgo off, so the hosted Go build cache would only partly apply to them anyway. Mounting
-the work volume at `/home/runner` in the scale set would keep `HOME` unmoved, and the cache versions would then
-match (`deploy/ci-runners/README.md`, "Next step").
+- The custom image has `zstd`, so the compression part of the version matches the hosted one.
+- The Go and npm caches (`.github/actions/main-write-cache`) spell their paths `~/...`, the same string on both
+  kinds of runner, so the version matches.
+- The archive holds paths relative to `GITHUB_WORKSPACE`, and `../../..` of the pool's workspace
+  (`/home/runner/_work/<repo>/<repo>`) is `/home/runner`, as on a hosted runner, so an entry unpacks into the
+  mounted `~/.cache` and `~/go`. The action checks that before it restores, and logs `cache: SKIPPED` on a
+  runner where it does not hold.
+- A path written from `CARGO_HOME` (under `_work` on the pool) is a different string, so its version differs and
+  the entry is never found. `Swatinem/rust-cache` builds its paths that way; none of the jobs routed here uses
+  it.
 
 ### Security model
 

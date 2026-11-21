@@ -46,7 +46,7 @@ env:
 jobs:
   lint:
     name: Lint
-    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
     env:
       # The pod's cgroup gives 4 CPU while the node reports 8; hosted runners have 4.
       GOMAXPROCS: "4"
@@ -123,7 +123,7 @@ jobs:
 
   test:
     name: Test
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
     defaults:
       run:
         working-directory: services/elitea-llm-gateway
@@ -135,9 +135,13 @@ jobs:
     # read as green (ci-go.yml's #423 pattern). Plain PostgreSQL 18 (Debian
     # 13), the server every deployment runs: the gateway's DDL needs no
     # extension.
+    # eng-runner has no container engine. There every image below is empty, so
+    # GitHub creates no service, and .github/actions/native-services runs the
+    # same servers as processes at the same ports and credentials
+    # (scripts/ci/check-runner-routing.mjs poolEmptyImage; it checks the two agree).
     services:
       postgres:
-        image: postgres:18
+        image: ${{ !(vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'postgres:18' || '' }}
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -151,6 +155,14 @@ jobs:
           --health-retries=5
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume. Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+      # eng-runner: the services block's PostgreSQL as a process.
+      # Does nothing on a hosted runner, where the services block runs them.
+      - name: Start the services as processes (eng-runner)
+        uses: ./.github/actions/native-services
+        with:
+          postgres: "true"
       - uses: actions/setup-go@v7
         with:
           # The cache is .github/actions/go-cache below: setup-go's own
@@ -199,14 +211,19 @@ jobs:
         # core; a silent coverage drop there is how untested gaps slip in.
         run: ./scripts/coverage-floor.sh coverage.out
 
+      # yq is preinstalled on hosted runners and in the eng-runner image; this
+      # fallback (sudo) is for a hosted image that lacks it.
+      - name: yq for the env-drift gate (hosted fallback)
+        if: runner.environment == 'github-hosted'
+        run: |
+          command -v yq >/dev/null || { sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && sudo chmod +x /usr/local/bin/yq; }
+
       - name: Env-drift gate — code env reads vs Helm chart
         # Fails if the code reads a required env var (os.Getenv, no default) that
         # the Helm chart cannot set. This class of bug (NATS_URL vs
         # GATEWAY_NATS_URL; missing GATEWAY_TLS_*) recurred twice in review and
         # no unit test catches it. yq is needed to read values.yaml.
-        run: |
-          command -v yq >/dev/null || { sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && sudo chmod +x /usr/local/bin/yq; }
-          ./scripts/env-drift-check.sh
+        run: ./scripts/env-drift-check.sh
 
       - name: Generate llmproxy cobertura coverage (BF0.6t gate)
         # Emits internal/llmproxy/coverage.xml consumed by the BF0.6t
@@ -224,3 +241,9 @@ jobs:
       # The former `build` job is gone: `go vet ./...` above type-checks
       # cmd/elitea-llm-gateway too, so a main that stops compiling already
       # fails here. Production images are built from the Containerfile.
+
+      # eng-runner: the logs of the services native-services started, when
+      # anything in the job failed. Does nothing on a hosted runner.
+      - name: Upload the service logs (eng-runner)
+        if: failure()
+        uses: ./.github/actions/native-services-logs

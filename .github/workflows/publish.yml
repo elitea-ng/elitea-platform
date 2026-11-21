@@ -69,7 +69,7 @@ jobs:
   # Every later job reads only these three outputs, whichever channel set them.
   release:
     name: Version (${{ github.event_name == 'schedule' && 'nightly' || inputs.channel }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
     outputs:
       new_release_published: ${{ steps.stable.outputs.new_release_published || steps.pre.outputs.published }}
       new_release_version: ${{ steps.stable.outputs.new_release_version || steps.pre.outputs.version }}
@@ -81,6 +81,8 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      # eng-runner: caches and TMPDIR on the work volume (does nothing on hosted).
+      - uses: ./.github/actions/eng-runner-env
 
       - name: Channel
         id: channel
@@ -1357,7 +1359,7 @@ jobs:
     name: Prune old pre-releases
     needs: [release, chart]
     if: needs.release.outputs.new_release_published == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
     # Rate-limit waits can be long; the prune stops itself at its deadline
     # below, and the next release's prune carries on.
     timeout-minutes: 90
@@ -1368,6 +1370,8 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      # eng-runner: caches and TMPDIR on the work volume (does nothing on hosted).
+      - uses: ./.github/actions/eng-runner-env
       # Pinned to the v9.0.0 commit, as ci-image-cleanup.yml pins it: this
       # step holds packages: write.
       - name: Prune

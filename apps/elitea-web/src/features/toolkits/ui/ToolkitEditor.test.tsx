@@ -19,6 +19,7 @@ import { createTestQueryClient } from '../__tests__/testUtils';
 import { resolveToolkitFormDisabled } from './ToolkitEditorParts';
 import { ToolkitEditor } from './ToolkitEditor';
 import type { ToolkitEditorDeps, ToolkitEditorParticipant, ToolkitEditorProps, ToolkitEditorShellProps } from './ToolkitEditor';
+import { testTimeout } from '@/test/timeouts';
 
 const theme = buildEliteaTheme(DEFAULT_BRAND_PACK);
 const globals = globalThis as unknown as Record<string, unknown>;
@@ -232,7 +233,7 @@ describe('a refused save is not re-issued', () => {
 
     await user.click(save);
     await waitFor(() => expect(createToolkit).toHaveBeenCalledTimes(1));
-  }, 30_000);
+  }, testTimeout(30_000));
 });
 
 /** #2016 — a refusal the server did not key to a field used to be silent in the chat editor (no banner exists there). */
@@ -253,7 +254,7 @@ describe('a save the server refused without naming a field', () => {
     await user.click(save);
 
     expect(await screen.findByText('The toolkit service is not reachable.')).toBeInTheDocument();
-  }, 30_000);
+  }, testTimeout(30_000));
 });
 
 /**
