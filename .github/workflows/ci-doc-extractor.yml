@@ -42,13 +42,18 @@ env:
 jobs:
   extractor:
     name: elitea-doc-extractor — lint, test, the smallvec floor
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
     timeout-minutes: 30
     defaults:
       run:
         working-directory: services/elitea-doc-extractor
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume, and rustup (none in
+      # its image). Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          rust: "true"
 
       - name: Assert the pinned toolchain
         run: |

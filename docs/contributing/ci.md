@@ -34,8 +34,10 @@ that a later push cancelled.
 - A job that failed or was cancelled fails the gate.
 - A job that should have run and did not (for example, a heavy job skipped because the fast tier failed) fails
   the gate as **missing**.
-- While the pull request is a draft, the gate fails with the word `draft`. The heavy tier has not run, so the
-  pull request has no verdict yet.
+- On a draft, ci-gate is skipped; fast-gate green means mark it ready. A skipped gate lets nothing through: a
+  draft cannot be merged, and marking it ready (`ready_for_review`, one of `CI`'s trigger types) runs the
+  workflow again on the same head, where ci-gate stays pending until the heavy tier finishes and then passes or
+  fails on its result. (`scripts/ci/ci-gate.mjs` still fails a draft if it is ever run for one.)
 
 A required status check can point at `CI / ci-gate` alone. The repository ruleset does not require it today.
 
@@ -132,46 +134,81 @@ A job runs directly in the pod (Ubuntu 24.04):
 
 - **No Docker daemon.** No `container:`, no `services:`, no docker, podman, compose or kind.
 - **No root.** No sudo and no apt.
-- **Toolchains come from the job.** node and Go come from `setup-*` actions or from a download into the job's
-  own directories.
+- **Build tools, no toolchains.** The image (`deploy/ci-runners/image/`) has build-essential (cc for cgo and
+  the `cc` crate), cmake, pkg-config, zstd, shellcheck, gh, helm, yq and skopeo. node, Go, Python and rustup come
+  from the job: `setup-*` actions, or `eng-runner-env` with `node: "true"` or `rust: "true"`. Its `python3` is
+  Ubuntu's, whose pip refuses to install (PEP 668), so a job that runs `python`, `pip` or `python3 -m pip
+  install` sets up Python. `setup-python` needs no root here: the image points `RUNNER_TOOL_CACHE` and
+  `AGENT_TOOLSDIRECTORY` at `/home/runner/_work/_tool`, and the Python installer only copies into that
+  directory. The aws CLI is not in the image; `repo-gates` installs it with pip on the pool.
+  **Keep `LD_LIBRARY_PATH` in child environments.** Outside `/opt/hostedtoolcache` the setup-python
+  interpreter finds `libpython3.12.so.1.0` only through the `LD_LIBRARY_PATH` setup-python exports, so a script
+  or test that starts `python3` with a scrubbed env (`{PATH, GITHUB_*}`) must pass it through, as
+  `eng-runner-hook.test.mjs` does. This libpython rpath issue is also why the Python jobs first stayed hosted.
 - **10 GiB of disk outside `/home/runner/_work`.** That is the container's ephemeral-storage limit. Only
   `_work` is the separate 80 GiB volume, and a pod that writes past the limit is evicted. The default places
-  for `~/go/pkg/mod`, `~/.cache/go-build`, `~/.npm`, `~/.cache` and `/tmp` all count against it.
+  for `~/go/pkg/mod`, `~/.cache/go-build`, `~/.npm`, `~/.cargo`, `~/.cache` and `/tmp` all count against it.
 
-The routed set below was chosen for the plain `actions-runner` image, which had no C compiler, zstd, gh, yq,
-Helm or pip. The custom image unlocks more jobs; `deploy/ci-runners/README.md` ("Next step") lists them. Today
-only toolchain-only jobs are routed:
+These jobs are routed (when `ENG_RUNNER` is on, on our own pull requests):
 
 | Workflow | Jobs |
 |---|---|
 | `ci.yml` | `changes`, `fast-gate`, `ci-gate` |
 | `ci-web.yml` | `quality`, `unit-tests` (every shard), `gates-static`, `build` |
-| `ci-web-coverage.yml` | `coverage-merge` |
-| `ci-go.yml` | `sqlc`, `lint`, `test-plan`, `test` (the aggregator) |
+| `ci-web-coverage.yml` | `unit-tests` (every shard), `coverage-merge` |
+| `ci-go.yml` | `proto`, `sqlc`, `env-drift`, `lint`, `test-plan`, `test-checks`, `test` (the aggregator) |
 | `ci-gateway.yml` | `lint` |
 | `ci-governed-conformance.yml` | `unit` |
 | `ci-docs.yml`, `ci-mobile.yml` | `docs`, `check` |
 | `ci-web-e2e.yml` | `model-path-changes` |
 | `image-matrix.yml` | `gate-selftest`, `issue-script` |
-| `no-binaries.yml` | `history-gates` |
+| `no-binaries.yml` | `repo-gates`, `history-gates` |
+| `dependency-scanning.yml` | `scan` |
+| `helm-lint.yml` | `template` (both charts) |
+| `ci-rust-lint.yml` | `lint` (every workspace) |
+| `ci-rust-shared.yml` | `shared-crates` (rustdoc and tests) |
+| `ci-rust.yml` | `code-runner`, `quality` (docs and release build) |
+| `ci-doc-extractor.yml` | `extractor` |
+| `ci-deepwiki-engine.yml` | `serde-order` |
+| `ci-mock-llm.yml` | `unit` |
+| `ci-deepwiki-conformance.yml` | `fixtures` |
 
-Everything else stays hosted. That covers the jobs that need Docker, services or kind, every Rust job, the Go
-test shards and the race build, and the Python jobs (`setup-python` cannot install into the hosted tool cache
-path without root). It also covers jobs that rely on tools the hosted image ships (gh, shellcheck, Helm, yq,
-pip), macOS, Windows, and every job outside the pull-request pipeline.
+Everything else stays hosted:
 
-The coverage unit shards stay hosted: under coverage instrumentation the pod ran them 1.5 to 2 times slower,
-and the heaviest test files hit their per-test timeouts. The routed jobs set `GOMAXPROCS=4` and `--maxWorkers=4`. The pod's cgroup limit is 4 CPUs, but the node reports
-8. `scripts/ci/install-golangci-lint.sh` fetches golangci-lint with curl and jq (no gh), on both kinds of runner.
+- **`services:` or `container:`.** The Go test shards, `integration`, `editor-lifecycle`,
+  `compiled-snapshots-postgres` and `secretstore-openbao` in `ci-go.yml`; the gateway's `test`; the engine jobs
+  of `ci-deepwiki-engine.yml` and `ci-inventory-engine.yml` (Postgres, so their "Go host against the binary"
+  steps stay with them); `ci-vector.yml`; `ci-contract.yml`; and `ci-rust.yml`'s "Test with PostgreSQL 18" and
+  "Workspace runs on Docker".
+- **Docker, compose, kind or gVisor**: image builds and `docker buildx bake --print` (`image-matrix.yml`'s list
+  check), `helm-install-smoke`, the E2E suites, `ci-browser-session.yml`. helm-lint's `lint` job too: a step it runs calls `docker compose config`.
+- **System packages through apt**: the Tauri host on Linux (`ci-desktop.yml` `pane-drivers`, webkit2gtk).
+- **macOS and Windows**, including `ci-desktop-control.yml`, whose matrix has a Windows leg.
+- **Every event but `pull_request`**, so the scheduled runs on main, which write the caches, stay hosted.
+
+The routed jobs pin their parallelism to the pod's 4 CPUs, because the node reports 8. `eng-runner-env` sets
+`GOMAXPROCS=4`, `CARGO_BUILD_JOBS=4` and `RUST_TEST_THREADS=4` on the pool only, and a job's own `env:` still wins
+(`CARGO_BUILD_JOBS=1` in `code-runner`); the web jobs pass `--maxWorkers=4`. A step that
+frees hosted-runner disk with `sudo rm` runs on hosted runners only (`if: runner.environment ==
+'github-hosted'`): the pool builds on its 80 GiB work volume. Binaries a job downloads (kubeconform,
+cargo-deny) go into a directory under `RUNNER_TEMP` on `PATH`, not `/usr/local/bin`.
+`scripts/ci/install-golangci-lint.sh` fetches golangci-lint with curl and jq (no gh), on both kinds of runner.
 
 Every routed job runs `./.github/actions/eng-runner-env` straight after its checkout. On a GitHub-hosted runner
-it does nothing, so the hosted path is unchanged. On the pool it does two things:
+it does nothing, so the hosted path is unchanged. On the pool it does these things:
 
+- It fails at once, naming the tool, when the pod's image lacks one the routed jobs take from it (cc, c++,
+  make, cmake, pkg-config, zstd, git, jq, curl, unzip, gh, helm, yq, shellcheck).
+- It pins the parallelism (above).
 - It moves `HOME` to `/home/runner/_work/_home`, and sets `XDG_CACHE_HOME`, `GOPATH`, `GOMODCACHE`,
-  `GOCACHE`, `GOLANGCI_LINT_CACHE` and `npm_config_cache` under it. It also sets `TMPDIR` to `RUNNER_TEMP`, which
-  covers jest's cache in `os.tmpdir()`; vitest caches in `node_modules`. Because `HOME` itself moves, the
-  `go-cache`, `npm-cache` and `main-write-cache` actions follow it: they resolve their paths from `$HOME`.
+  `GOCACHE`, `GOLANGCI_LINT_CACHE`, `npm_config_cache`, `CARGO_HOME` and `RUSTUP_HOME` under it. It also sets
+  `TMPDIR` to `RUNNER_TEMP`, which covers jest's cache in `os.tmpdir()`; vitest caches in `node_modules`. Because
+  `HOME` itself moves, the `go-cache`, `npm-cache` and `main-write-cache` actions follow it: they resolve their
+  paths from `$HOME`.
 - With `node: "true"`, it installs node, for jobs that run node scripts without a `setup-node` step of their own.
+- With `rust: "true"`, it installs rustup (a pinned `rustup-init`, checked against its published SHA-256) with
+  no toolchain. The job's `assert-rust-toolchain.sh` step then installs the toolchain `rust-toolchain.toml`
+  pins, as it does on a hosted runner, where rustup is preinstalled.
 
 ### How a job is routed
 
@@ -206,8 +243,9 @@ These events stay hosted:
   `runner.environment == 'github-hosted'`;
 - a routed job is in a workflow, or is called from a workflow, that can start on an event outside
   `pull_request`, `schedule` and `workflow_dispatch`;
-- a routed job runs `node`, `npm`, `npx` or `go` but has no step that installs it (`actions/setup-node`,
-  `actions/setup-go`, or `eng-runner-env` with `node: "true"`);
+- a routed job runs `node`, `npm`, `npx`, `go`, `cargo`, `rustc`, `rustup` (or `assert-rust-toolchain.sh`),
+  `python`, `pip` or `python3 -m pip install` but has no step that installs it (`actions/setup-node`,
+  `actions/setup-go`, `actions/setup-python`, or `eng-runner-env` with `node: "true"` or `rust: "true"`);
 - a routed job does not run `./.github/actions/eng-runner-env` unconditionally, before every action other than
   the checkout. A sparse checkout must include that action's directory.
 
@@ -224,12 +262,19 @@ then re-run the failed or cancelled jobs (or push again).
 
 **Caches.** `actions/cache` works on the pool through the GitHub cache service. The writers are unchanged, one
 per key: the scheduled runs on main write, and they stay hosted. Pull requests only read. Expect a routed job
-to miss the hosted entries and run cold: the restore paths sit under the moved `HOME`, and the cache version
-hashes the path strings. The custom image has `zstd`, so the compression part of the version already matches.
+to miss the hosted entries and run cold. An entry is found only when its key AND its version match, and the
+version is the SHA-256 of the `path:` strings exactly as written, plus the compression method
+(`@actions/cache` `getCacheVersion`; the `version` field of the caches REST API shows it). Three things follow:
 
-The Go jobs also build with cgo off, so the hosted Go build cache would only partly apply to them anyway. Mounting
-the work volume at `/home/runner` in the scale set would keep `HOME` unmoved, and the cache versions would then
-match (`deploy/ci-runners/README.md`, "Next step").
+- The custom image has `zstd`, so the compression part of the version matches the hosted one.
+- A path written from `$HOME`, `CARGO_HOME` or the workspace is a different string on the pool
+  (`/home/runner/_work/_home/...`), so its version differs and the entry is never found. `Swatinem/rust-cache`
+  builds its paths that way; none of the jobs routed here uses it.
+- A `~/...` path string is the same on both, but the archive holds paths relative to `GITHUB_WORKSPACE`, so on
+  the pool it would unpack under `/home/runner` (the 10 GiB ephemeral disk), not under the moved `HOME`.
+
+Mounting the work volume at `/home/runner` in the scale set would keep `HOME` unmoved, and then a `~/...`
+string would match and unpack in the right place (`deploy/ci-runners/README.md`).
 
 ### Security model
 

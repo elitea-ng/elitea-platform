@@ -8,8 +8,9 @@ name: CI
 #          tier passed AND the pull request is not a draft; marking a draft ready
 #          for review starts this workflow again (`ready_for_review`).
 #
-# `ci-gate` is the one verdict: it fails while the pull request is a draft and
-# when a heavy job that should have run is missing. A required status check can
+# `ci-gate` is the one verdict: it is skipped while the pull request is a draft
+# (fast-gate is the draft's signal), and it fails when a heavy job that should
+# have run is missing. A required status check can
 # point at `CI / ci-gate` alone. Each job below calls a workflow that keeps its
 # own schedule and workflow_dispatch arms; what starts it on a pull request is
 # scripts/ci/tier-paths.json. scripts/ci/check-tiering.mjs keeps this file, that
@@ -274,7 +275,12 @@ jobs:
   ci-gate:
     name: ci-gate
     needs: [changes, fast-gate, no-binaries, dependency-scanning, helm-lint, ci-docs, ci-go, ci-web, ci-contract, ci-gateway, ci-mock-llm, ci-mobile, ci-deepwiki-conformance, image-matrix, ci-rust-lint, ci-web-e2e, ci-web-coverage, ci-rust, ci-rust-shared, ci-deepwiki-engine, ci-inventory-engine, ci-doc-extractor, ci-vector, ci-browser-session, ci-desktop, ci-desktop-control, ci-local-tools-macos, desktop-package, helm-install-smoke, ci-governed-conformance, ci-handoff-loadgate]
-    if: always()
+    # Skipped (grey) on a draft, never red: a red gate on a draft read as a
+    # failure to watchers (#2721). fast-gate is the draft's signal. A draft
+    # cannot be merged, and `ready_for_review` starts this workflow again on
+    # the same head, where the gate waits for the heavy tier and decides.
+    # `!= true`, not `== false`: an event without a pull request still runs it.
+    if: always() && github.event.pull_request.draft != true
     runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:

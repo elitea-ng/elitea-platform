@@ -23,7 +23,7 @@ permissions:
 jobs:
   proto:
     name: Protobuf contracts (lint, breaking, generated drift)
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
     # #1359 D3: libs/proto is the one protobuf tree (the legacy proto/ +
     # gen/ were deleted), and every internal hop is gRPC, so a contract edit
     # is a wire change. Three gates, run only when the contracts, their
@@ -38,6 +38,8 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+      # eng-runner: caches and TMPDIR on the work volume (does nothing on hosted).
+      - uses: ./.github/actions/eng-runner-env
       - name: Did the contracts change?
         id: changes
         env:
@@ -145,7 +147,7 @@ jobs:
 
   env-drift:
     name: Env-drift gate — elitea-main code env reads vs Helm chart
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
     # S17: ci-gateway.yml already runs this same script (no-args form, both
     # services) but only triggers on services/elitea-llm-gateway/** paths —
     # an elitea-main-only or chart-only change never touches that workflow at
@@ -154,7 +156,12 @@ jobs:
     # single-target form here instead of duplicating the gateway's own check.
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume (does nothing on hosted).
+      - uses: ./.github/actions/eng-runner-env
+      # The eng-runner image ships yq (deploy/ci-runners/image/), and the pool
+      # has no sudo; the hosted image usually ships it too.
       - name: Install yq
+        if: runner.environment == 'github-hosted'
         run: |
           command -v yq >/dev/null || { sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && sudo chmod +x /usr/local/bin/yq; }
       - name: Check elitea-main env vars are settable by its Helm chart
@@ -299,9 +306,11 @@ jobs:
 
   test-checks:
     name: Test checks (vet, generated code)
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume (does nothing on hosted).
+      - uses: ./.github/actions/eng-runner-env
       - uses: actions/setup-go@v7
         with:
           # The cache is .github/actions/go-cache below: setup-go's own

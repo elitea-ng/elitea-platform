@@ -96,28 +96,21 @@ Set `ENG_RUNNER` to `off` (or delete it). Every job goes back to `ubuntu-latest`
 request is needed. To cut the pool off from the repository entirely, also untick it under the runner group's
 **Repository access**.
 
-## Next step: move the jobs the custom image unlocks
+## Moving a job to the pool
 
-The routed set in `docs/contributing/ci.md` was chosen for the plain `actions-runner` image. The custom image
-adds tools that let more jobs move. Each tool is listed with what it unlocks; check that it is in
-[`image/Containerfile`](image/Containerfile) before moving a job:
+The jobs the custom image ([`image/Containerfile`](image/Containerfile)) unlocked (the Rust builds and lints,
+`test-checks`, the Python jobs, `repo-gates`, helm-lint `template`, `env-drift` and `scan`) are routed;
+`docs/contributing/ci.md` ("Runners") lists every routed job and why the rest stay hosted.
 
-| Tool | Unlocks |
-|---|---|
-| A C toolchain (cc, make), `pkg-config`, `libssl-dev` | The Rust jobs (rust-lint, rust-shared, `code-runner`, `quality`, doc-extractor, `serde-order`), and Go with cgo: `go test -race` (`test-checks`, the shards that need no services) |
-| `zstd` | The cache client's zstd version. Hosted entries become readable once the cache paths match too (see below) |
-| `python3-venv`, `python3-pip` | The Python jobs (ci-go `proto`, mock-llm `unit`, deepwiki-conformance `fixtures`) |
-| `shellcheck`, `gh`, `helm`, `yq`, `protoc` | no-binaries `repo-gates`, helm-lint `lint` and `template`, ci-go `env-drift`, dependency-scanning `scan` |
-
-To move a job, switch its `runs-on` to `ROUTED_RUNS_ON`, add `./.github/actions/eng-runner-env` after its
-checkout, and let `check-runner-routing.mjs` approve it. The guard's "runs go or node without installing it"
-rule and its docker and sudo rules still apply.
+To move another job, switch its `runs-on` to `ROUTED_RUNS_ON`, add `./.github/actions/eng-runner-env` after
+its checkout (`node: "true"` or `rust: "true"` when it needs them), and let `check-runner-routing.mjs` approve
+it. Its toolchain rules (node, go, rust, python) and its docker and sudo rules apply.
 
 **Cache paths.** `.github/actions/eng-runner-env` moves `HOME` and every cache under `_work`. Outside `_work`
 the pod has only 10 GiB of ephemeral storage, and a pod that writes past it is evicted. A side effect is that
-the cache paths differ from the hosted ones, so hosted entries stay unreadable. Mounting the work volume at
-`/home/runner` would let `HOME` stay where it is. The cache paths would then match, and main's cache writers
-could move too.
+hosted entries stay unreadable: a cache version is the hash of the `path:` strings, which differ, and a `~/...`
+entry would unpack relative to the workspace, under `/home/runner`. Mounting the work volume at `/home/runner`
+would let `HOME` stay where it is. The cache paths would then match, and main's cache writers could move too.
 
 Jobs that need Docker, `services:` or kind stay hosted until there is a daemon option, such as an in-cluster
 BuildKit or a separate dind scale set.

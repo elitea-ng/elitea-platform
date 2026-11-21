@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { check, checkDesktopPackage, load, main, DESKTOP_PACKAGE_PATHS, DRAFT_CONDITION, FAST_GATE_CONDITION, MINIMUM_CALL_JOBS } from "./check-tiering.mjs";
+import { check, checkDesktopPackage, load, main, DESKTOP_PACKAGE_PATHS, DRAFT_CONDITION, FAST_GATE_CONDITION, GATE_DRAFT_SKIP, MINIMUM_CALL_JOBS } from "./check-tiering.mjs";
 
 const call = (id, extra = {}) => ({ needs: ["changes"], if: `fromJSON(needs.changes.outputs.run)['${id}']`, uses: `./.github/workflows/${id}.yml`, ...extra });
 const heavyCall = (id) =>
@@ -27,7 +27,7 @@ function model() {
     jobs[id] = heavyCall(id);
     tierJobs[id] = { tier: "heavy", paths: ["x/**"] };
   }
-  jobs["ci-gate"] = { if: "always()", needs: Object.keys(jobs) };
+  jobs["ci-gate"] = { if: `always() && ${GATE_DRAFT_SKIP}`, needs: Object.keys(jobs) };
   for (const id of [...fast, ...heavy]) {
     workflows[`${id}.yml`] = { parsed: { on: { workflow_call: null, workflow_dispatch: null } }, text: `concurrency:\n  group: ${id}-\${{ github.ref }}\n` };
   }
@@ -67,6 +67,15 @@ test("ci-gate and fast-gate run with always()", () => {
   const errors = check(m);
   has(errors, "ci-gate must run with");
   has(errors, "fast-gate must run with");
+});
+
+test("ci-gate is skipped on a draft, not failed", () => {
+  const m = model();
+  m.ci.jobs["ci-gate"].if = "always()";
+  has(check(m), "ci-gate must be skipped on a draft");
+  // == false would also skip an event that has no pull request; != true runs it.
+  m.ci.jobs["ci-gate"].if = "always() && github.event.pull_request.draft == false";
+  has(check(m), "ci-gate must be skipped on a draft");
 });
 
 test("fast-gate lists every fast job and no heavy one", () => {

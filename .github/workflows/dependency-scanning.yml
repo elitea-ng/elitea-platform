@@ -37,13 +37,19 @@ permissions:
 jobs:
   scan:
     name: Dependency scanning
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
         with:
           # The vendored-manifest gate's three-dot diff needs the merge base.
           fetch-depth: 0
+      # eng-runner: caches and TMPDIR on the work volume, and rustup and node (none in
+      # its image). Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          node: "true"
+          rust: "true"
 
       # ── Every manifest is scanned ─────────────────────────────────────────────
       - name: Check dependabot coverage
@@ -176,8 +182,18 @@ jobs:
             "https://github.com/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_VERSION}/${archive}.tar.gz"
           echo "${CARGO_DENY_SHA256}  ${RUNNER_TEMP}/cargo-deny.tgz" | sha256sum -c -
           tar -xzf "${RUNNER_TEMP}/cargo-deny.tgz" -C "${RUNNER_TEMP}" "${archive}/cargo-deny"
-          sudo install -m 0755 "${RUNNER_TEMP}/${archive}/cargo-deny" /usr/local/bin/cargo-deny
-          cargo-deny --version
+          # A directory of the job's own, on PATH for the steps below: the
+          # self-hosted pool has no sudo for /usr/local/bin.
+          bin="${RUNNER_TEMP}/cargo-deny-bin"
+          install -D -m 0755 "${RUNNER_TEMP}/${archive}/cargo-deny" "${bin}/cargo-deny"
+          echo "${bin}" >> "$GITHUB_PATH"
+          "${bin}/cargo-deny" --version
+      # `cargo deny` runs from the repository root, so cargo is the toolchain
+      # rust-toolchain.toml pins there. Installed explicitly (with retries)
+      # rather than on cargo's first call.
+      - name: Assert the pinned toolchain
+        if: ${{ !cancelled() && steps.reach.outputs.rust == 'true' }}
+        run: bash scripts/ci/assert-rust-toolchain.sh
       - name: cargo-deny over every Cargo.lock
         if: ${{ !cancelled() && steps.reach.outputs.rust == 'true' }}
         run: node scripts/ci/cargo-deny.mjs
