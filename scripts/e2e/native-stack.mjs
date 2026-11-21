@@ -66,7 +66,9 @@ const SELF = fileURLToPath(import.meta.url);
 export const REPO = path.resolve(path.dirname(SELF), "..", "..");
 export const DEFAULT_TABLE = path.join(REPO, "deploy", "native", "e2e-standalone.mjs");
 /** The caller's variables a service sees; everything else comes from its table entry. */
-export const BASE_ENV = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL", "TZ", "GOMAXPROCS", "SSL_CERT_FILE", "SSL_CERT_DIR"];
+// LD_LIBRARY_PATH travels with PATH: a tool cache interpreter first on PATH (setup-python's shared
+// python3, which the mocks run on) finds its libpython through it, and exits 127 without it.
+export const BASE_ENV = ["PATH", "LD_LIBRARY_PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL", "TZ", "GOMAXPROCS", "SSL_CERT_FILE", "SSL_CERT_DIR"];
 export const STOP_GRACE_MS = 10_000;
 export const TAIL_ON_FAILURE = 80;
 const CONDITIONS = new Set(["healthy", "completed", "started"]);
