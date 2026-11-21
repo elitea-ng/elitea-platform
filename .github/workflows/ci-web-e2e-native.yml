@@ -326,13 +326,17 @@ jobs:
           PWTEST_SHARD_WEIGHTS: ${{ matrix.weights }}
           ENGINE: ${{ matrix.engine }}
           SHARD: ${{ matrix.shard }}
+          # Playwright workers for the sharded legs (the flag projects cap
+          # themselves at 1 in playwright.config.ts). MEASURING: 3 against 4,
+          # for the pod's 4-CPU quota (PR #2740).
+          PLAYWRIGHT_WORKERS: "3"
         run: |
           cpu_stat() { cat /sys/fs/cgroup/cpu.stat 2>/dev/null || true; }
           shard_args=()
           [ -z "$SHARD" ] || shard_args=("--shard=$SHARD")
           before="$(cpu_stat)"
           status=0
-          npx playwright test --project="$ENGINE" "${shard_args[@]}" || status=$?
+          npx playwright test --project="$ENGINE" --workers="$PLAYWRIGHT_WORKERS" "${shard_args[@]}" || status=$?
           after="$(cpu_stat)"
           # nr_throttled of nr_periods, and throttled_usec, over the run.
           node "$GITHUB_WORKSPACE/scripts/ci/cgroup-cpu-report.mjs" "$before" "$after" | tee -a "$GITHUB_STEP_SUMMARY" || true
