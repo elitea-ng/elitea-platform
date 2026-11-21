@@ -529,13 +529,11 @@
     "desktop-package": {
       "tier": "heavy",
       "paths": [
+        "apps/elitea-desktop/**",
+        "libs/rust/vendor/agent-desktop/**",
+        "rust-toolchain.toml",
+        "scripts/ci/assert-rust-toolchain.sh",
         ".github/workflows/desktop-package.yml",
-        "apps/elitea-desktop/scripts/desktop-package.mjs",
-        "apps/elitea-desktop/scripts/macos-pkg.sh",
-        "apps/elitea-desktop/scripts/windows-package.mjs",
-        "apps/elitea-desktop/scripts/stamp-version.mjs",
-        "apps/elitea-desktop/src-tauri/tauri.conf.json",
-        "apps/elitea-desktop/src-tauri/tauri.sidecar.conf.json",
         ".github/actions/desktop-macos-package/**",
         ".github/actions/desktop-windows-package/**"
       ]

@@ -17,6 +17,13 @@
 // This replaces check-workflow-branch-coverage.mjs, whose subject — every push
 // arm that names main also names the release staging branch — no longer exists.
 //
+// The same reader refuses `pull_request_target`. It runs a fork's pull request
+// with the base repository's write token and secrets, GitHub blocks it by
+// default from 2026-12-02, and it is an event the self-hosted runner pool must
+// never see (deploy/ci-runners/README.md). Housekeeping that needs a write
+// token on close uses `pull_request: [closed]` plus a schedule sweep
+// (cancel-merged-pr-runs.yml).
+//
 // This reads the workflows as text with the regular expressions below (no YAML
 // parser) and uses only node's standard library, so no job needs to install
 // anything. It fails, rather than passes, when it finds fewer workflows or
@@ -93,13 +100,20 @@ export function main({ root = REPOSITORY_ROOT, out = console.log, err = console.
           "and give main a `schedule:` (a cache writer, a nightly) or `workflow_dispatch:` instead.",
       );
     }
+    if (events.includes("pull_request_target")) {
+      failures.push(
+        `${name} starts on pull_request_target. It runs a fork's pull request with the base repository's write ` +
+          "token and secrets, and GitHub blocks it by default from 2026-12-02: use `pull_request` (a fork gets a " +
+          "read-only token) and a `schedule:` sweep for what needs write access.",
+      );
+    }
   }
 
   if (failures.length) {
     for (const failure of failures) err(`::error::${failure}`);
     return 1;
   }
-  out(`no push triggers: ${names.length} workflow(s) checked`);
+  out(`no push or pull_request_target triggers: ${names.length} workflow(s) checked`);
   return 0;
 }
 

@@ -10,8 +10,8 @@ name: CI — desktop control on Windows and Linux
 # windows-latest and ubuntu-latest.
 #
 # Cheap on purpose: two jobs, path-filtered to the crate, the vendored
-# adapters and the lock, and the cargo cache read everywhere but written on
-# main only. The last step of each job checks that its OS's input tests
+# adapters and the lock, and no cargo cache (a registry-only entry is not
+# worth its share of the cap). The last step of each job checks that its OS's input tests
 # actually ran: a test binary whose cfg-gated module compiled to nothing
 # would otherwise pass.
 
@@ -20,9 +20,9 @@ on:
   # (scripts/ci/tier-paths.json); no `pull_request` arm of its own.
   workflow_call:
   # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
-  # The nightly run on main is the one that WRITES the caches pull requests
-  # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
-  # other cache writers, ahead of publish.yml's 02:07 nightly pre-release.
+  # The nightly run on main tests main. The caches it may write follow
+  # scripts/ci/check-cache-budget.mjs (one writer per key); staggered ahead
+  # of publish.yml's 02:07 nightly pre-release.
   schedule:
     - cron: "53 0 * * *"
   workflow_dispatch:
@@ -65,12 +65,9 @@ jobs:
       - name: Assert the pinned toolchain
         run: bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
 
-      - name: Cache cargo registry and build artefacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          cache-targets: false  # registry and git only: the 10 GB cap (scripts/ci/check-cache-budget.mjs)
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          workspaces: libs/rust
+      # No cargo cache here (scripts/ci/cache-budget.json, measured 2026-11-20): a
+      # registry-only entry is 0.3-0.6 GiB of the 10 GB cap and saves about the
+      # time cargo takes to fetch the crates. The budget goes to target caches.
 
       - name: Check
         run: cargo check --locked -p elitea-desktop-control --all-targets

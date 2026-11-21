@@ -51,6 +51,7 @@ import { AdminScimClientsEditor } from "./AdminScimClientsEditor";
 import { AdminScimGroupBindingsEditor } from "./AdminScimGroupBindingsEditor";
 import { ProviderTable } from "./AdminIdentityProviderTable";
 import { configFailureReason } from "./api/adminConfigurationApi";
+import { identityTrustFailureReason } from "./api/identityTrustRefusal";
 import {
   useAdminIdentityProviders,
   useDeleteAdminIdentityProvider,
@@ -71,13 +72,34 @@ function ProviderAlerts({
   loadError,
   actionError,
   onDismissAction,
+  rebindIssuer,
+  onDismissRebind,
 }: {
   readonly loadError: unknown;
   readonly actionError: string | undefined;
   readonly onDismissAction: () => void;
+  readonly rebindIssuer: string | undefined;
+  readonly onDismissRebind: () => void;
 }) {
   return (
     <>
+      {/* After an issuer change the existing accounts are still bound to the
+          old issuer (issue 2558): say so at once, before every user's next
+          sign-in is refused with no hint of why. */}
+      {rebindIssuer !== undefined ? (
+        <Alert
+          severity="warning"
+          onClose={onDismissRebind}
+          data-testid="admin-identity-providers-rebind-note"
+        >
+          {t(
+            "pages.admin.identityProviders.rebindNote",
+            "The existing accounts are still bound to the previous issuer {{issuer}}, so they cannot sign in through the new one. If the identity provider really moved, a super admin re-binds them: see Authentication, Rotate an issuer, in the documentation.",
+            { issuer: rebindIssuer },
+          )}
+        </Alert>
+      ) : null}
+
       {loadError != null ? (
         <Alert severity="warning" data-testid="admin-identity-providers-error">
           {configFailureReason(loadError) ??
@@ -136,6 +158,9 @@ export function AdminIdentityProvidersEditor() {
   >(undefined);
   const [saveError, setSaveError] = useState<string | undefined>(undefined);
   const [actionError, setActionError] = useState<string | undefined>(undefined);
+  const [rebindIssuer, setRebindIssuer] = useState<string | undefined>(
+    undefined,
+  );
 
   // `listQuery.data ?? []` would allocate a new array every render, so the memo
   // below would never hit. Memoising the fallback is what makes the dependency
@@ -161,16 +186,17 @@ export function AdminIdentityProvidersEditor() {
   const handleSubmit = (draft: AdminIdentityProviderDraft): void => {
     setSaveError(undefined);
     saveMutation.mutate(draft, {
-      onSuccess: () => {
+      onSuccess: (result) => {
         setDialogOpen(false);
         setEditing(undefined);
+        setRebindIssuer(result.previousIssuer);
       },
       // The dialog STAYS OPEN on failure, holding what was typed. Closing it
       // would discard the operator's input along with the reason it was
       // refused — and on this screen that input includes a secret they would
       // have to find again.
       onError: (error: unknown) => {
-        setSaveError(configFailureReason(error) ?? "save");
+        setSaveError(identityTrustFailureReason(error) ?? "save");
       },
     });
   };
@@ -220,6 +246,10 @@ export function AdminIdentityProvidersEditor() {
         actionError={actionError}
         onDismissAction={() => {
           setActionError(undefined);
+        }}
+        rebindIssuer={rebindIssuer}
+        onDismissRebind={() => {
+          setRebindIssuer(undefined);
         }}
       />
 

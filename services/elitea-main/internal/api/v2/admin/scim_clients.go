@@ -19,6 +19,18 @@ package admin
 // identity provider editor beside it) would let its holder mint a credential
 // with more power than they have. No new permission string arrives, so the
 // grant gate in router_permission_grant_gate_test.go stays untripped.
+//
+// # Creating, rotating and deleting need super_admin
+//
+// `admin.auth.users` is held by `admin` as well, and a SCIM client is more
+// than the Users page: its holder pushes any user, itself included, into any
+// bound group, and so into whatever role the group binding grants. That makes
+// minting one a global-administrator power (ADR-0059 R3B-1, issue 2558). The
+// create, the rotate (a fresh secret is a fresh credential) and the delete
+// therefore also need rolepolicy.SuperAdminPermission (identity_trust.go); a
+// refusal is a 403 with code CodeSCIMClientSuperAdminRequired and an audit row.
+// Listing and revoking stay open to the route gate: neither gives anybody a
+// credential.
 
 import (
 	"context"
@@ -31,6 +43,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/scimclient"
 )
@@ -181,6 +194,9 @@ func (h *Handler) SCIMClientCreate(w http.ResponseWriter, r *http.Request) {
 	if !h.scimClientsReady(w) {
 		return
 	}
+	if !h.requireSuperAdmin(w, r, scimClientGate("")) {
+		return
+	}
 	var body scimClientCreateBody
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10))
 	decoder.DisallowUnknownFields()
@@ -218,6 +234,7 @@ func (h *Handler) SCIMClientCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "the SCIM client could not be created"})
 		return
 	}
+	annotateTrustChange(r, AuditSCIMClientCreated, "scim_client", issued.Client.Name, audit.ID(issued.Client.ID), nil)
 	noStoreSecret(w)
 	writeJSON(w, http.StatusCreated, issuedBody(issued))
 }
@@ -243,6 +260,9 @@ func (h *Handler) SCIMClientRotate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !h.requireSuperAdmin(w, r, scimClientGate(strconv.FormatInt(id, 10))) {
+		return
+	}
 	issued, err := h.scimClients.Rotate(r.Context(), id)
 	switch {
 	case errors.Is(err, scimclient.ErrNotFound):
@@ -256,6 +276,7 @@ func (h *Handler) SCIMClientRotate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "the SCIM client could not be rotated"})
 		return
 	}
+	annotateTrustChange(r, AuditSCIMClientRotated, "scim_client", issued.Client.Name, audit.ID(id), nil)
 	noStoreSecret(w)
 	writeJSON(w, http.StatusOK, issuedBody(issued))
 }
@@ -291,6 +312,9 @@ func (h *Handler) SCIMClientDelete(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !h.requireSuperAdmin(w, r, scimClientGate(strconv.FormatInt(id, 10))) {
+		return
+	}
 	err := h.scimClients.Delete(r.Context(), id)
 	switch {
 	case errors.Is(err, scimclient.ErrNotFound):
@@ -301,5 +325,18 @@ func (h *Handler) SCIMClientDelete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "the SCIM client could not be deleted"})
 		return
 	}
+	annotateTrustChange(r, AuditSCIMClientDeleted, "scim_client", "", audit.ID(id), nil)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// scimClientGate is the super_admin gate of a SCIM client write. entity is the
+// client id, or "" for a create.
+func scimClientGate(entity string) trustGate {
+	return trustGate{
+		code:          CodeSCIMClientSuperAdminRequired,
+		message:       "only a super admin can create, rotate or delete a SCIM client",
+		refusedAction: AuditSCIMClientRefused,
+		entityType:    "scim_client",
+		entityName:    entity,
+	}
 }

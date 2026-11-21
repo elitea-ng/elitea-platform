@@ -79,7 +79,7 @@ func newUserProjectPermissionsEnvironment(t *testing.T) (*pgxpool.Pool, chi.Rout
 			t.Fatalf("seed %q: %v", statement, err)
 		}
 	}
-	return pool, userProjectPermissionsRouter(admin.NewHandler(pool))
+	return pool, userProjectPermissionsRouter(admin.NewHandler(pool, admin.WithPermissionResolver(superAdminResolver())))
 }
 
 func readRoleMap(t *testing.T, router chi.Router) map[string][]string {
