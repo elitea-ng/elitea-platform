@@ -1,11 +1,13 @@
 name: Desktop macOS package
 description: >-
-  The universal (Apple silicon + Intel) desktop app and its silent .pkg for device
-  management (ADR-0052 W2b), signed with the brand owner's Developer ID, notarised and
-  stapled, or an unsigned dry run when no signing secret is set. Used by this
+  The Apple silicon (arm64) desktop app and its silent .pkg for device management
+  (ADR-0052 W2b), signed with the brand owner's Developer ID, notarised and stapled,
+  or an unsigned dry run when no signing secret is set. Intel Macs are not supported
+  (owner decision, 2026-11-20): the package refuses to install on one. Used by this
   repository's desktop-package.yml and, from a checkout of a release tag, by brand
   repositories (ADR-0052 W5, docs/brand-template/). The caller checks out the tree,
-  sets up Node and restores caches; ELITEA_BRAND selects the brand.
+  sets up Node and restores caches; ELITEA_BRAND selects the brand. It runs on an
+  Apple silicon runner (macos-latest) and builds for that host.
 
 inputs:
   root:
@@ -19,6 +21,12 @@ inputs:
     default: ""
   dry-run:
     description: "`true`: never sign (a pull request)."
+    default: "false"
+  debug:
+    description: >-
+      `true`: a debug build of the app and the sidecar (only with dry-run: a pull
+      request's check reuses ci-desktop.yml's cached debug target). A signed package
+      is always a release build.
     default: "false"
   require-signed:
     description: "`true`: fail unless every signing secret is set."
@@ -47,10 +55,21 @@ runs:
       shell: bash
       env:
         ROOT: ${{ inputs.root }}
+        DRY_RUN: ${{ inputs.dry-run }}
+        DEBUG: ${{ inputs.debug }}
       run: |
         set -euo pipefail
         root="$(cd "$ROOT" && pwd)"
-        echo "ELITEA_ROOT=$root" >> "$GITHUB_ENV"
+        if [ "$DEBUG" = true ] && [ "$DRY_RUN" != true ]; then
+          echo "::error::debug: true needs dry-run: true (a package that may be signed is a release build)"; exit 1
+        fi
+        profile=release
+        [ "$DEBUG" = true ] && profile=debug
+        {
+          echo "ELITEA_ROOT=$root"
+          echo "DESKTOP_PROFILE=$profile"
+          echo "DESKTOP_BUNDLE=$root/apps/elitea-desktop/src-tauri/target/$profile/bundle/macos"
+        } >> "$GITHUB_ENV"
         echo "out=$RUNNER_TEMP/out" >> "$GITHUB_OUTPUT"
 
     - name: Sign or dry run
@@ -88,43 +107,32 @@ runs:
         npm ci --prefix "$ELITEA_ROOT/apps/elitea-web"
         npm ci --prefix "$ELITEA_ROOT/apps/elitea-desktop"
 
-    - name: Assert the pinned toolchain, with both macOS targets
+    # The package is built for the runner's own architecture, with no --target:
+    # an Intel runner would build an Intel app, so the host triple is asserted.
+    - name: Assert the pinned toolchain on Apple silicon
       shell: bash
       working-directory: ${{ inputs.root }}/apps/elitea-desktop/src-tauri
       run: |
+        set -euo pipefail
         bash "$ELITEA_ROOT/scripts/ci/assert-rust-toolchain.sh"
-        rustup target add aarch64-apple-darwin x86_64-apple-darwin
+        host="$(rustc -vV | sed -n 's/^host: //p')"
+        if [ "$host" != aarch64-apple-darwin ]; then
+          echo "::error::the macOS package is Apple silicon only; this runner's host is $host (use macos-latest)"; exit 1
+        fi
 
-    # Restore only: ci-desktop.yml's nightly run writes the host cache here; a
-    # brand repository starts cold.
-    - name: Restore the cargo cache
-      uses: Swatinem/rust-cache@v2
-      with:
-        save-if: false
-        workspaces: ${{ inputs.root }}/apps/elitea-desktop/src-tauri
-
-    # The document extractor (ADR-0029 decision 4) is the app's externalBin. A
-    # universal app needs a universal sidecar named for the universal triple.
-    - name: Build the document sidecar (universal)
+    # The document extractor (ADR-0029 decision 4) is the app's externalBin, named
+    # for the host triple as Tauri expects.
+    - name: Build the document sidecar
       shell: bash
       working-directory: ${{ inputs.root }}/apps/elitea-desktop/doc-extract-sidecar
       run: |
         set -euo pipefail
         bash "$ELITEA_ROOT/scripts/ci/assert-rust-toolchain.sh"
-        rustup target add aarch64-apple-darwin x86_64-apple-darwin
-        for t in aarch64-apple-darwin x86_64-apple-darwin; do
-          cargo build --release --locked --target "$t"
-        done
+        flags=(--locked)
+        [ "$DESKTOP_PROFILE" = release ] && flags+=(--release)
+        cargo build "${flags[@]}"
         mkdir -p ../src-tauri/binaries
-        # tauri build compiles each architecture on its own, and each compile's
-        # build script wants the sidecar for ITS triple; the bundle takes the
-        # universal one.
-        for t in aarch64-apple-darwin x86_64-apple-darwin; do
-          cp "target/$t/release/elitea-doc-extract-sidecar" "../src-tauri/binaries/elitea-doc-extract-sidecar-$t"
-        done
-        lipo -create -output ../src-tauri/binaries/elitea-doc-extract-sidecar-universal-apple-darwin \
-          target/aarch64-apple-darwin/release/elitea-doc-extract-sidecar \
-          target/x86_64-apple-darwin/release/elitea-doc-extract-sidecar
+        cp "target/$DESKTOP_PROFILE/elitea-doc-extract-sidecar" ../src-tauri/binaries/elitea-doc-extract-sidecar-aarch64-apple-darwin
 
     - name: Prepare the notarisation key
       if: steps.plan.outputs.sign == 'true'
@@ -141,7 +149,7 @@ runs:
     # Signed: the Tauri CLI imports the certificate into a temporary keychain, signs
     # with the hardened runtime, notarises and staples. Unsigned: the same build with
     # no APPLE_* in its environment (Tauri then signs nothing).
-    - name: Build the universal app
+    - name: Build the app
       shell: bash
       working-directory: ${{ inputs.root }}/apps/elitea-desktop
       env:
@@ -157,26 +165,25 @@ runs:
           [ -n "${!name}" ] || unset "$name"
         done
         node scripts/tauri-brand.mjs
-        npx tauri build --target universal-apple-darwin --bundles app \
-          --config src-tauri/tauri.brand.json --config src-tauri/tauri.sidecar.conf.json
+        flags=(--bundles app --config src-tauri/tauri.brand.json --config src-tauri/tauri.sidecar.conf.json)
+        [ "$DESKTOP_PROFILE" = debug ] && flags+=(--debug)
+        npx tauri build "${flags[@]}"
         {
           echo "DESKTOP_APP=$(node -p 'require("./src-tauri/tauri.brand.json").productName').app"
           echo "DESKTOP_ID=$(node -p 'require("./src-tauri/tauri.brand.json").identifier')"
           echo "DESKTOP_VERSION=$(node -p 'require("./src-tauri/tauri.conf.json").version')"
         } >> "$GITHUB_ENV"
 
-    - name: Both architectures are in the app
+    - name: The app is Apple silicon only
       shell: bash
-      working-directory: ${{ inputs.root }}/apps/elitea-desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos
       run: |
         set -euo pipefail
-        bin="${DESKTOP_APP}/Contents/MacOS/elitea-desktop"
-        # `lipo -archs` (not -verify_arch, whose argument rules differ between Xcode
-        # releases): each binary holds exactly arm64 and x86_64.
-        for f in "$bin" "${DESKTOP_APP}/Contents/MacOS/elitea-doc-extract-sidecar"; do
-          archs="$(lipo -archs "$f" | tr ' ' '\n' | sort | xargs)"
-          if [ "$archs" != "arm64 x86_64" ]; then
-            echo "::error::$(basename "$f") holds \"$archs\", not arm64 and x86_64"; exit 1
+        cd "$DESKTOP_BUNDLE"
+        # `lipo -archs` names every slice: exactly arm64, no x86_64 and no universal binary.
+        for f in "${DESKTOP_APP}/Contents/MacOS/elitea-desktop" "${DESKTOP_APP}/Contents/MacOS/elitea-doc-extract-sidecar"; do
+          archs="$(lipo -archs "$f")"
+          if [ "$archs" != arm64 ]; then
+            echo "::error::$(basename "$f") holds \"$archs\", not arm64 alone"; exit 1
           fi
           echo "$(basename "$f"): $archs"
         done
@@ -193,9 +200,23 @@ runs:
         APPLE_API_KEY: ${{ steps.plan.outputs.sign == 'true' && inputs.apple-api-key || '' }}
         APPLE_API_ISSUER: ${{ steps.plan.outputs.sign == 'true' && inputs.apple-api-issuer || '' }}
       run: |
-        bash scripts/macos-pkg.sh \
-          "src-tauri/target/universal-apple-darwin/release/bundle/macos/${DESKTOP_APP}" \
-          "$DESKTOP_ID" "$DESKTOP_VERSION" "$RUNNER_TEMP/out"
+        bash scripts/macos-pkg.sh "${DESKTOP_BUNDLE}/${DESKTOP_APP}" "$DESKTOP_ID" "$DESKTOP_VERSION" "$RUNNER_TEMP/out"
+
+    # The installer refuses an Intel Mac: the product's distribution names arm64
+    # as its only host architecture (scripts/macos-pkg.sh).
+    - name: The package installs on Apple silicon only
+      shell: bash
+      run: |
+        set -euo pipefail
+        pkg="$(ls "$RUNNER_TEMP"/out/*-arm64.pkg)"
+        dist="$RUNNER_TEMP/distribution"
+        rm -rf "$dist" && mkdir -p "$dist"
+        (cd "$dist" && xar -xf "$pkg" Distribution)
+        if ! grep -q 'hostArchitectures="arm64"' "$dist/Distribution"; then
+          cat "$dist/Distribution"
+          echo "::error::$(basename "$pkg") does not limit its host architecture to arm64"; exit 1
+        fi
+        echo "$(basename "$pkg"): hostArchitectures=arm64"
 
     # Proven, not assumed: Gatekeeper accepts the app and the package, and both
     # carry a stapled ticket.
@@ -204,7 +225,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        app="$ELITEA_ROOT/apps/elitea-desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/${DESKTOP_APP}"
+        app="${DESKTOP_BUNDLE}/${DESKTOP_APP}"
         pkg="$(ls "$RUNNER_TEMP"/out/*.pkg)"
         codesign --verify --deep --strict --verbose=2 "$app"
         spctl -a -vv --type execute "$app"
@@ -230,7 +251,7 @@ runs:
         if grep -q '/\._' "$RUNNER_TEMP/payload.txt"; then
           echo "::error::the package payload carries AppleDouble ._ files"; exit 1
         fi
-        echo "::notice::unsigned dry run: $(basename "$pkg") built; signing and notarisation skipped"
+        echo "::notice::unsigned dry run ($DESKTOP_PROFILE build): $(basename "$pkg") built; signing and notarisation skipped"
 
     - name: Remove the notarisation key
       if: always()

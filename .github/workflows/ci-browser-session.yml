@@ -24,9 +24,9 @@ on:
   # (scripts/ci/tier-paths.json); no `pull_request` arm of its own.
   workflow_call:
   # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
-  # The nightly run on main is the one that WRITES the caches pull requests
-  # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
-  # other cache writers, ahead of publish.yml's 02:07 nightly pre-release.
+  # The nightly run on main tests main. The caches it may write follow
+  # scripts/ci/check-cache-budget.mjs (one writer per key); staggered ahead
+  # of publish.yml's 02:07 nightly pre-release.
   schedule:
     - cron: "33 0 * * *"
   workflow_dispatch:
@@ -70,16 +70,9 @@ jobs:
           grep -q "amd64) platform=linux64; sum=${CFT_SHA256_LINUX64} ;;" "$file" \
             || { echo "::error::$file does not pin the linux64 checksum this workflow verifies"; exit 1; }
 
-      # Read everywhere, write on main only. Registry and git only: this
-      # crate's own build is small, and a target directory per job crowds
-      # the 10 GB Actions cache.
-      - name: Cache cargo registry
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: browser-session
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-targets: false
-          workspaces: libs/rust
+      # No cargo cache here (scripts/ci/cache-budget.json, measured 2026-11-20): a
+      # registry-only entry is 0.3-0.6 GiB of the 10 GB cap and saves about the
+      # time cargo takes to fetch the crates. The budget goes to target caches.
 
       - name: Fetch the pinned chrome-headless-shell
         run: |

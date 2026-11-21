@@ -27,6 +27,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -38,6 +39,12 @@ const (
 	OIDCProviderRefPrefix = "oidc:"
 	SAMLProviderRefPrefix = "saml:"
 )
+
+// IsFederatedProviderRef reports whether ref is in a federated namespace, the
+// links that are bound to a provider and issuer (identity_bindings).
+func IsFederatedProviderRef(ref string) bool {
+	return strings.HasPrefix(ref, OIDCProviderRefPrefix) || strings.HasPrefix(ref, SAMLProviderRefPrefix)
+}
 
 // FederatedRefPatterns is the federated namespaces as SQL LIKE patterns.
 func FederatedRefPatterns() []string {

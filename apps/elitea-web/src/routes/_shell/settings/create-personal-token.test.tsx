@@ -258,6 +258,55 @@ describe('project binding — the §4 error contract', () => {
     expect(alert).not.toHaveTextContent('Try again.');
   });
 
+  /*
+   * Issue 2559: the desktop app signs in with a native device session, and the
+   * server refuses a mint from one for an owner with administration
+   * permissions. The page sends the user to the browser, not to a retry.
+   */
+  it.each([
+    [
+      'token_mint_native_admin',
+      'Your account has administrator permissions, so this app cannot create a personal token for it. Create it in the web app in a browser.',
+    ],
+    [
+      'token_mint_wider_than_caller',
+      'Your sign-in is limited to one project, so the token must be bound to it. Create the token in the web app in a browser.',
+    ],
+    [
+      'token_mint_caller_unresolved',
+      'The system could not check your sign-in, so it did not create the token. Create it in the web app in a browser.',
+    ],
+    [
+      'token_mint_browser_session_required',
+      'A personal token can be created only after you sign in with a browser, not with another token.',
+    ],
+  ])('names the way forward for a 403 %s', async (code, message) => {
+    selectProject('42', 'Marketing');
+    mockCreateFailure(403, { error: { message: 'refused', type: 'permission_error', code } });
+    mount();
+
+    await submit(userEvent.setup());
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(message);
+    expect(alert).not.toHaveTextContent('Try again.');
+  });
+
+  it('names the project a bound sign-in is limited to', async () => {
+    selectProject('42', 'Marketing');
+    mockCreateFailure(403, {
+      error: { message: 'refused', type: 'permission_error', code: 'token_mint_wider_than_caller', project_id: 5 },
+    });
+    mount();
+
+    await submit(userEvent.setup());
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(
+      'Your sign-in is limited to the project with ID 5. Select that project in the sidebar and create the token again, or create it in the web app in a browser.',
+    );
+  });
+
   it('falls back to the generic message for the FLAT error envelope every other failure uses', async () => {
     selectProject('42', 'Marketing');
     mockCreateFailure(500, { error: 'internal server error' });

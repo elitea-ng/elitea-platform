@@ -30,7 +30,7 @@ permissions:
 jobs:
   changes:
     name: Which workflows does this change reach?
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -42,8 +42,16 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          sparse-checkout: scripts/ci
+          # The local action below must be in the checkout too.
+          sparse-checkout: |
+            scripts/ci
+            .github/actions/eng-runner-env
           persist-credentials: false
+      # eng-runner: caches and TMPDIR on the work volume, and node (none in its
+      # image). Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          node: "true"
       - id: paths
         run: node scripts/ci/tier-changes.mjs
         env:
@@ -136,13 +144,21 @@ jobs:
     name: fast-gate
     needs: [changes, no-binaries, dependency-scanning, helm-lint, ci-docs, ci-go, ci-web, ci-contract, ci-gateway, ci-mock-llm, ci-mobile, ci-deepwiki-conformance, image-matrix, ci-rust-lint]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
         with:
-          sparse-checkout: scripts/ci
+          # The local action below must be in the checkout too.
+          sparse-checkout: |
+            scripts/ci
+            .github/actions/eng-runner-env
           persist-credentials: false
+      # eng-runner: caches and TMPDIR on the work volume, and node (none in its
+      # image). Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          node: "true"
       - name: The fast tier passed
         run: node scripts/ci/ci-gate.mjs fast
         env:
@@ -259,13 +275,21 @@ jobs:
     name: ci-gate
     needs: [changes, fast-gate, no-binaries, dependency-scanning, helm-lint, ci-docs, ci-go, ci-web, ci-contract, ci-gateway, ci-mock-llm, ci-mobile, ci-deepwiki-conformance, image-matrix, ci-rust-lint, ci-web-e2e, ci-web-coverage, ci-rust, ci-rust-shared, ci-deepwiki-engine, ci-inventory-engine, ci-doc-extractor, ci-vector, ci-browser-session, ci-desktop, ci-desktop-control, ci-local-tools-macos, desktop-package, helm-install-smoke, ci-governed-conformance, ci-handoff-loadgate]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
         with:
-          sparse-checkout: scripts/ci
+          # The local action below must be in the checkout too.
+          sparse-checkout: |
+            scripts/ci
+            .github/actions/eng-runner-env
           persist-credentials: false
+      # eng-runner: caches and TMPDIR on the work volume, and node (none in its
+      # image). Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          node: "true"
       - name: Every job that should have run passed (and the pull request is ready)
         run: node scripts/ci/ci-gate.mjs final
         env:

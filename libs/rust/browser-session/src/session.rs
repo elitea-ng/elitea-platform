@@ -53,6 +53,14 @@ pub const REQUEST_USER_TIMEOUT: Duration = Duration::from_secs(80);
 /// so a page still rendering is not taken for one Moli cannot read.
 const EMPTY_SNAPSHOT_RETRY: Duration = Duration::from_millis(500);
 
+/// How many times `view` asks for the screencast, and how long it waits
+/// between tries. The engine can refuse `Page.startScreencast` for a moment,
+/// such as while a failed navigation settles or an engine switch lands
+/// (seen under gVisor in the conformance run). A view still unavailable
+/// after these tries is reported as `view_unavailable`.
+const VIEW_ATTEMPTS: u32 = 3;
+const VIEW_RETRY: Duration = Duration::from_millis(250);
+
 /// How long one call may take, end to end, switch included: the agent
 /// line protocol's 90 s result limit (`CALL_TIMEOUT` in the worker's
 /// `browser_session_agent.rs`), under the worker's own 120 s.
@@ -629,15 +637,26 @@ impl Backend for Session {
     }
 
     async fn view(&self, max_fps: u32) -> Option<Box<dyn FrameSource>> {
-        let mut slot = self.driver.subscribe();
-        let driver = slot.borrow_and_update().clone()?;
-        let viewer = driver.screencast().subscribe(max_fps).await.ok()?;
-        Some(Box::new(Frames {
-            slot,
-            driver,
-            viewer,
-            max_fps,
-        }))
+        for attempt in 1..=VIEW_ATTEMPTS {
+            let mut slot = self.driver.subscribe();
+            let driver = slot.borrow_and_update().clone();
+            if let Some(driver) = driver {
+                // A refused subscribe drops its viewer, which undoes the
+                // viewer count, so the next try starts clean.
+                if let Ok(viewer) = driver.screencast().subscribe(max_fps).await {
+                    return Some(Box::new(Frames {
+                        slot,
+                        driver,
+                        viewer,
+                        max_fps,
+                    }));
+                }
+            }
+            if attempt < VIEW_ATTEMPTS {
+                tokio::time::sleep(VIEW_RETRY).await;
+            }
+        }
+        None
     }
 
     async fn input(&self, event: &Value) -> Result<(), &'static str> {

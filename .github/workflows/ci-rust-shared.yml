@@ -17,9 +17,9 @@ on:
   # (scripts/ci/tier-paths.json); no `pull_request` arm of its own.
   workflow_call:
   # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
-  # The nightly run on main is the one that WRITES the caches pull requests
-  # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
-  # other cache writers, ahead of publish.yml's 02:07 nightly pre-release.
+  # The nightly run on main tests main. The caches it may write follow
+  # scripts/ci/check-cache-budget.mjs (one writer per key); staggered ahead
+  # of publish.yml's 02:07 nightly pre-release.
   schedule:
     - cron: "23 0 * * *"
   workflow_dispatch:
@@ -62,19 +62,9 @@ jobs:
             || echo "::warning::could not remove every preinstalled toolchain; continuing"
           df -h / | tail -1
 
-      # Read everywhere, write on main only. Its own `shared-key`: rust-cache
-      # otherwise keys on the job id, and one key per target directory keeps
-      # one writer per entry.
-      - name: Cache cargo registry and build artefacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: rust-shared-crates
-          # Registry and git only. The nightly run saved 2.6 GiB for this one entry
-          # (2026-11-19), a quarter of the cap; LRU evicted it before any pull
-          # request restored it. The key itself matched (prefix v0-rust-rust-shared-crates-Linux-x64-<env hash>).
-          cache-targets: false
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          workspaces: libs/rust
+      # No cargo cache here (scripts/ci/cache-budget.json, measured 2026-11-20): a
+      # registry-only entry is 0.3-0.6 GiB of the 10 GB cap and saves about the
+      # time cargo takes to fetch the crates. The budget goes to target caches.
 
       # Formatting and Clippy (the workspace, and the two production feature
       # sets of the agent runtime) run in ci-rust-lint.yml, in the fast tier.

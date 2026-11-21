@@ -127,6 +127,14 @@ const (
 	// via:oidc-relink. No subject is in the event, and no digest of one: a
 	// subject is often guessable (a numeric id, an email address), so its
 	// unsalted digest would disclose it.
+	//
+	// The action identity.binding.rebound (issue 2558) is a super_admin's
+	// re-bind of the accounts linked under one provider and issuer onto a
+	// provider's current issuer (POST
+	// /api/v2/admin/identity_providers/administration/{key}/rebind).
+	// ResourceType is "identity_provider" and ResourceID its key, and the
+	// reasons are provider_namespace:<oidc|saml>, from_provider:<key> or
+	// from:unbound, to_provider:<key> and rebound:<count>.
 	TypeIdentityLinkChanged EventType = "ai.elitea.security.v1.identity.link.changed"
 	// TypeAgentMemoryChanged is a change of an agent's own memory (ADR-0050
 	// decision 1b, #1607): action agent.memory.remembered, .approved,

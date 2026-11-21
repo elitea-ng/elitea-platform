@@ -439,9 +439,30 @@ type tokenExpiration struct {
 }
 
 func (h *Handler) TokenCreate(w http.ResponseWriter, r *http.Request) {
-	ownerID, ok := tokenOwnerID(r)
+	user, ok := identity.UserFromContext(r.Context())
 	if !ok {
 		apierr.Write(w, apierr.Unauthorized("not authenticated"))
+		return
+	}
+	ownerID, ok := user.OwningUserID()
+	if !ok {
+		apierr.Write(w, apierr.Unauthorized("not authenticated"))
+		return
+	}
+	// Which credential is calling decides whether it may mint at all (issue
+	// 2559, token_mint_policy.go). It runs before the service check and before
+	// the body is read, so a refused credential learns nothing about the
+	// deployment or about request validation.
+	credential := classifyMintCredential(r, user)
+	refusal, err := authorizeMintCredential(credential, func() (bool, error) {
+		return h.ownerHoldsAdministration(r, user)
+	})
+	if err != nil {
+		writeTokenMintFault(w, r, credential, err)
+		return
+	}
+	if refusal != nil {
+		writeTokenMintRefusal(w, r, refusal)
 		return
 	}
 	if !h.tokenServiceAvailable(w) {
@@ -462,6 +483,25 @@ func (h *Handler) TokenCreate(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, apierr.BadRequest("invalid request body"))
 		return
 	}
+	// The scope half of the rule runs as soon as the binding can be read, and
+	// before every other field is validated: a project-bound caller that asks
+	// for another binding is refused for that, whatever else the body says.
+	// A malformed project_id is no binding, so it is refused the same way.
+	projectID, projectErr := resolveTokenProjectID(request.ProjectID)
+	if refusal := authorizeMintScope(credential, user, projectID); refusal != nil {
+		writeTokenMintRefusal(w, r, refusal)
+		return
+	}
+	if projectErr != nil {
+		writeTokenJSONError(
+			w,
+			http.StatusBadRequest,
+			"invalid_request_error",
+			"invalid_project_id",
+			"project_id must be a positive integer",
+		)
+		return
+	}
 	if !request.Name.present {
 		apierr.Write(w, apierr.BadRequest("Name is required"))
 		return
@@ -476,17 +516,6 @@ func (h *Handler) TokenCreate(w http.ResponseWriter, r *http.Request) {
 	expires, err := request.Expires.resolve(time.Now().UTC())
 	if err != nil {
 		apierr.Write(w, apierr.BadRequest(err.Error()))
-		return
-	}
-	projectID, err := resolveTokenProjectID(request.ProjectID)
-	if err != nil {
-		writeTokenJSONError(
-			w,
-			http.StatusBadRequest,
-			"invalid_request_error",
-			"invalid_project_id",
-			"project_id must be a positive integer",
-		)
 		return
 	}
 	record, err := h.tokens.Create(r.Context(), tokenCreateInput{

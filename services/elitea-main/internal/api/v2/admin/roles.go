@@ -64,6 +64,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -494,9 +495,9 @@ func (h *Handler) AdminPermissionsSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	granted, revoked, err := h.saveGrants(ctx, scope, mode, current, submission)
+	granted, revoked, err := h.saveGrants(r, scope, mode, current, submission)
 	if err != nil {
-		writeMatrixError(w, err)
+		writeRoleWriteError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -604,9 +605,17 @@ func rowPermissionName(row map[string]json.RawMessage, index int) (string, error
 // the project appeared to have would be gone, without a single failed request.
 //
 // So an inherited matrix is MATERIALISED: the whole submitted set is written.
+//
+// ## The no-escalation rule (issue 2488)
+//
+// The diff is checked before anything is written, against the CALLER's own
+// set read from the database (internal/rolepolicy). A refusal comes back as a
+// *rolepolicy.Refusal and nothing is written. The materialised cells of an
+// inherited matrix count as grants: they are new rows.
 func (h *Handler) saveGrants(
-	ctx context.Context, scope, mode string, current permissionMatrix, submission matrixSubmission,
+	r *http.Request, scope, mode string, current permissionMatrix, submission matrixSubmission,
 ) (granted, revoked int, err error) {
+	ctx := r.Context()
 	baseline := current.granted
 	if current.inherited {
 		baseline = map[string]map[string]bool{}
@@ -616,10 +625,99 @@ func (h *Handler) saveGrants(
 	if len(toGrant) == 0 && len(toRevoke) == 0 {
 		return 0, 0, nil
 	}
-	if err := h.applyGrantChanges(ctx, scope, mode, toGrant, toRevoke); err != nil {
+	caller, refusal := rolepolicy.ResolveCaller(r, h.resolver)
+	if refusal != nil {
+		return 0, 0, refusal
+	}
+	centralPlane := scope == scopeAdministration && rolepolicy.AdministrationPlane(mode)
+	check := func(ctx context.Context, q rolepolicy.Querier) error {
+		return h.checkMatrixEdit(ctx, q, caller, centralPlane, mode, current, toGrant, toRevoke)
+	}
+	if err := h.applyGrantChanges(ctx, scope, mode, toGrant, toRevoke, caller, !centralPlane, check); err != nil {
 		return 0, 0, err
 	}
 	return len(toGrant), len(toRevoke), nil
+}
+
+// checkMatrixEdit applies the rule of the plane the edited roles resolve in.
+//
+// An administration-plane matrix (the central `administration` or `developer`
+// mode) gets the full rule: the reserved super_admin permission, the own-role
+// lock and the subset rule. A project-plane matrix (the central `default`
+// template, the public and support projects) gets the reserved permission
+// here, and the effect guard inside the write transaction: those roles never
+// resolve in the administration plane, so the risk there is a caller who
+// widens the caller's own project set.
+//
+// The materialised cells of an inherited project matrix are the cells the
+// project already HAD through the central fallback, so they are not checked
+// as new grants of the reserved permission. The effect guard still measures
+// them.
+//
+// It runs inside the write transaction, after rolepolicy.LockRoleWrites, and
+// reads the caller again there.
+func (h *Handler) checkMatrixEdit(
+	ctx context.Context, q rolepolicy.Querier, caller rolepolicy.Caller, centralPlane bool, mode string,
+	current permissionMatrix, toGrant, toRevoke []grant,
+) error {
+	if !centralPlane {
+		added := toGrant
+		if current.inherited {
+			added = nil
+			for _, cell := range toGrant {
+				if !current.granted[cell.role][cell.permission] {
+					added = append(added, cell)
+				}
+			}
+		}
+		if refusal := rolepolicy.CheckReserved("", policyCells(added)); refusal != nil {
+			return refusal
+		}
+		return nil
+	}
+	caller, err := caller.Reload(ctx)
+	if err != nil {
+		return rolepolicy.Unresolved("your own permissions could not be read, so the role change was refused")
+	}
+	callerSet, err := caller.CentralSet(ctx, mode)
+	if err != nil {
+		return fmt.Errorf("read the caller's %s permissions: %w", mode, err)
+	}
+	held, err := rolepolicy.HeldCentralRoles(ctx, q, caller.UserID, mode)
+	if err != nil {
+		return err
+	}
+	if refusal := rolepolicy.CheckCentralEdit(rolepolicy.CentralEdit{
+		Caller:     callerSet,
+		SuperAdmin: caller.SuperAdmin,
+		HeldRoles:  held,
+		Mode:       mode,
+		Granted:    policyCells(toGrant),
+		Revoked:    policyCells(toRevoke),
+	}); refusal != nil {
+		return refusal
+	}
+	return nil
+}
+
+func policyCells(cells []grant) []rolepolicy.Cell {
+	converted := make([]rolepolicy.Cell, 0, len(cells))
+	for _, cell := range cells {
+		converted = append(converted, rolepolicy.Cell{Role: cell.role, Permission: cell.permission})
+	}
+	return converted
+}
+
+// writeRoleWriteError answers a refusal of the no-escalation rule as a 403
+// with its code and audit annotation, and any other error as writeMatrixError
+// does.
+func writeRoleWriteError(w http.ResponseWriter, r *http.Request, err error) {
+	var refusal *rolepolicy.Refusal
+	if errors.As(err, &refusal) {
+		rolepolicy.Write(w, r, refusal)
+		return
+	}
+	writeMatrixError(w, err)
 }
 
 // diffGrants returns the cells to add and the cells to remove.
@@ -665,8 +763,18 @@ func sortGrants(cells []grant) {
 // add/remove calls, and its public/support PUT deletes every override before
 // inserting any. A failure part-way through that leaves a project with a matrix
 // nobody asked for — including, in the delete-then-insert case, an empty one.
+//
+// A project-plane write (guardSelf) runs the effect guard of the
+// no-escalation rule on the same transaction: the caller's own per-project
+// sets are read before the first statement and again before the commit, and a
+// gain rolls the whole write back.
+//
+// `check` is the no-escalation check of the edit. It runs after
+// rolepolicy.LockRoleWrites and before the first statement, so no concurrent
+// role write can outdate it before the commit.
 func (h *Handler) applyGrantChanges(
 	ctx context.Context, scope, mode string, granted, revoked []grant,
+	caller rolepolicy.Caller, guardSelf bool, check func(context.Context, rolepolicy.Querier) error,
 ) error {
 	insertSQL, deleteSQL, scopeArg, err := h.grantStatements(ctx, scope, mode)
 	if err != nil {
@@ -679,6 +787,20 @@ func (h *Handler) applyGrantChanges(
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
 
+	if err := rolepolicy.LockRoleWrites(ctx, transaction); err != nil {
+		return err
+	}
+	if check != nil {
+		if err := check(ctx, transaction); err != nil {
+			return err
+		}
+	}
+	var guard *rolepolicy.SelfGuard
+	if guardSelf {
+		if guard, err = rolepolicy.BeginSelfGuard(ctx, transaction, caller); err != nil {
+			return err
+		}
+	}
 	for _, cell := range granted {
 		if _, err := transaction.Exec(ctx, insertSQL, scopeArg, cell.role, cell.permission); err != nil {
 			return fmt.Errorf("grant %s to %s: %w", cell.permission, cell.role, err)
@@ -688,6 +810,9 @@ func (h *Handler) applyGrantChanges(
 		if _, err := transaction.Exec(ctx, deleteSQL, scopeArg, cell.role, cell.permission); err != nil {
 			return fmt.Errorf("revoke %s from %s: %w", cell.permission, cell.role, err)
 		}
+	}
+	if err := guard.Check(ctx, transaction); err != nil {
+		return err
 	}
 	if err := transaction.Commit(ctx); err != nil {
 		return fmt.Errorf("commit permission update: %w", err)
@@ -760,9 +885,14 @@ func (h *Handler) AdminPermissionsSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.syncDefaultPermissionsToProjects(r.Context())
+	caller, refusal := rolepolicy.ResolveCaller(r, h.resolver)
+	if refusal != nil {
+		rolepolicy.Write(w, r, refusal)
+		return
+	}
+	result, err := h.syncDefaultPermissionsToProjects(r.Context(), caller)
 	if err != nil {
-		writeMatrixError(w, err)
+		writeRoleWriteError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -788,7 +918,10 @@ type syncResult struct {
 	revoked      int64
 }
 
-func (h *Handler) syncDefaultPermissionsToProjects(ctx context.Context) (syncResult, error) {
+// The sync rewrites the caller's own project roles too, wherever the caller is
+// a member of a shared project, so it runs the effect guard of the
+// no-escalation rule on its transaction (issue 2488).
+func (h *Handler) syncDefaultPermissionsToProjects(ctx context.Context, caller rolepolicy.Caller) (syncResult, error) {
 	publicProjectID, err := h.scopeProjectID(ctx, scopePublic)
 	if err != nil {
 		return syncResult{}, err
@@ -799,6 +932,11 @@ func (h *Handler) syncDefaultPermissionsToProjects(ctx context.Context) (syncRes
 		return syncResult{}, fmt.Errorf("begin sync: %w", err)
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
+
+	guard, err := rolepolicy.BeginSelfGuard(ctx, transaction, caller)
+	if err != nil {
+		return syncResult{}, err
+	}
 
 	// 1. Every in-scope project gets a project_role row for each central role.
 	createdTag, err := transaction.Exec(ctx, `
@@ -850,6 +988,9 @@ WHERE project_role.id = override.role_id
 		return syncResult{}, fmt.Errorf("prune project permissions: %w", err)
 	}
 
+	if err := guard.Check(ctx, transaction); err != nil {
+		return syncResult{}, err
+	}
 	if err := transaction.Commit(ctx); err != nil {
 		return syncResult{}, fmt.Errorf("commit sync: %w", err)
 	}

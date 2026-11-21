@@ -115,7 +115,7 @@ func callSCIMClients(router http.Handler, method, target, body string) *httptest
 
 func TestSCIMClientSecretIsReturnedOnceAndNeverListed(t *testing.T) {
 	store := &stubSCIMClientStore{}
-	router := scimClientRouter(NewHandler(nil, WithSCIMClients(store)))
+	router := scimClientRouter(NewHandler(nil, WithSCIMClients(store), superAdmin))
 
 	response := callSCIMClients(router, http.MethodPost, "/scim_clients/administration",
 		`{"name":"Entra ID","auth_method":"client_credentials"}`)
@@ -154,7 +154,7 @@ func TestSCIMClientSecretIsReturnedOnceAndNeverListed(t *testing.T) {
 
 func TestSCIMClientRotateReturnsANewSecretAndRevokeAndDeleteWork(t *testing.T) {
 	store := &stubSCIMClientStore{}
-	router := scimClientRouter(NewHandler(nil, WithSCIMClients(store)))
+	router := scimClientRouter(NewHandler(nil, WithSCIMClients(store), superAdmin))
 	created := callSCIMClients(router, http.MethodPost, "/scim_clients/administration", `{"name":"okta","auth_method":"bearer"}`)
 	require.Equal(t, http.StatusCreated, created.Code)
 	var first struct {
@@ -198,7 +198,7 @@ func TestSCIMClientRefusalsAreTyped(t *testing.T) {
 		{"unknown field", nil, `{"name":"x","auth_method":"bearer","secret":"mine"}`, http.StatusBadRequest},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			router := scimClientRouter(NewHandler(nil, WithSCIMClients(&stubSCIMClientStore{err: testCase.err})))
+			router := scimClientRouter(NewHandler(nil, WithSCIMClients(&stubSCIMClientStore{err: testCase.err}), superAdmin))
 			response := callSCIMClients(router, http.MethodPost, "/scim_clients/administration", testCase.body)
 			require.Equal(t, testCase.status, response.Code)
 			require.NotContains(t, response.Body.String(), "dial tcp")
@@ -213,7 +213,7 @@ func TestSCIMClientRefusalsAreTyped(t *testing.T) {
 
 func TestSCIMClientCreatePassesTheExpiry(t *testing.T) {
 	store := &stubSCIMClientStore{}
-	router := scimClientRouter(NewHandler(nil, WithSCIMClients(store)))
+	router := scimClientRouter(NewHandler(nil, WithSCIMClients(store), superAdmin))
 	response := callSCIMClients(router, http.MethodPost, "/scim_clients/administration",
 		`{"name":"x","auth_method":"bearer","expires_at":"2031-05-01T00:00:00Z"}`)
 	require.Equal(t, http.StatusCreated, response.Code, response.Body.String())
