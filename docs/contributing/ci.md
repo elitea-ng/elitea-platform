@@ -105,6 +105,20 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
   (`ci-<image>:cas-<hash>`, `scripts/ci/stack-image-hash.mjs`) and skip the build when that tag exists. A run on
   main always builds. A fork pull request builds in its own job, as before. The code sandbox supervisor is
   published the same way as `ci-elitea-sandbox-supervisor`.
+- **Code runner images.** The code sandbox's runner images (`services/elitea-code-runner/Containerfile`
+  targets `verification`, `default` (Deno/Pyodide) and `rust-runtime`) are built once, by the
+  `code-runner-images` job in `ci-build-once.yml`, through `.github/actions/code-runner-images`. Each target is
+  published as `ci-elitea-code-runner:<target>-cas-<hash>`. The hash comes from `stack-image-hash.mjs`: the
+  build spec, the pinned base digests and every COPY source of the target's stages. The job builds a target
+  only when that tag is missing, so only a change to `services/elitea-code-runner/` builds it. A run on main
+  always builds, because it is the one writer of the three `elitea-code-runner-<target>-linux-amd64` GHA layer
+  cache scopes. Pull requests only read those scopes. Two jobs consume the images, and each pulls them by
+  digest. `ci-web-e2e.yml`'s `code-sandbox` takes the digests from the `code-runner-image-digests` artifact.
+  `ci-rust.yml`'s `test` runs beside `ci-build-once`, not after it. It resolves the same content tags and
+  waits up to 20 minutes for them (ci.yml passes `code-runner-producer: true`). A consumer builds a target
+  itself only when nothing was published for it: a fork or Dependabot pull request, or a tag that did not
+  appear in time. Every build, in the producer or in a consumer, reads the GHA cache first. When that attempt
+  fails, it retries once without `cache-from`.
 - **Build once.** `ci-build-once.yml` (heavy tier, job `ci-build-once`) builds every stack image once per
   commit. `ci-web-e2e`, `ci-governed-conformance` and `helm-install-smoke` need it and pull its images by
   digest. Each builds in its own job only when nothing was built for it: a fork or Dependabot pull request,
@@ -216,16 +230,17 @@ These jobs are routed (when `ENG_RUNNER` is on, on our own pull requests):
 | `eng-runner-image.yml` | `runner-pin` |
 | `mobile-eas-build.yml`, `mobile-eas-submit.yml` | `build`, `submit` (EAS builds in Expo's cloud) |
 
-Everything else stays hosted, because it needs what the pool does not have (audited 2026-11-21: 45 hosted
+Everything else stays hosted, because it needs what the pool does not have (audited 2026-11-21: 46 hosted
 job definitions, down from 59; every other job is routed):
 
-- **Docker next to the services.** `ci-rust.yml`'s "Test with PostgreSQL 18" also builds the sandbox images
-  with buildx, and `check-worker-ignored-tests.mjs` credits only unconditional steps, so it cannot gate those
-  steps to hosted runners; "Workspace runs on Docker" needs a registry container.
+- **Docker next to the services.** `ci-rust.yml`'s "Test with PostgreSQL 18" runs the sandbox images in
+  Docker (it pulls them from `ci-build-once`, or builds them with buildx when nothing was published), and
+  `check-worker-ignored-tests.mjs` credits only unconditional steps, so it cannot gate those steps to hosted
+  runners; "Workspace runs on Docker" needs a registry container.
 - **Image builds and pushes**: the `ci-build-once.yml` image legs, `publish.yml` (`build`, `scan`,
   `publish-image`, `chart`, `rollback`), `eng-runner-image.yml` (`build`, `publish`), `mirror-buildkit.yml`,
-  `nightly-image-scan.yml`, `image-matrix.yml` (`docker buildx bake --print`), and the code sandbox's
-  supervisor image in `ci-web-e2e.yml`.
+  `nightly-image-scan.yml`, `image-matrix.yml` (`docker buildx bake --print`), the code sandbox's
+  supervisor image in `ci-web-e2e.yml`, and its runner images (`code-runner-images` in `ci-build-once.yml`).
 - **Docker, compose, kind or gVisor**: the E2E suites (`ci-web-e2e.yml`, `deepwiki-real-engine.yml`,
   `nightly-real-llm.yml`), `ci-governed-conformance.yml` `stack`, `helm-install-smoke`, `ci-browser-session.yml`
   and `browser-bakeoff.yml` (gVisor). helm-lint's `lint` job too: a step it runs calls `docker compose config`.

@@ -116,9 +116,11 @@ export function ciPackages(hclTexts) {
 /**
  * CI-only packages no cache ref in the HCL names: pushed by a workflow step
  * directly. ci-web-e2e.yml's `sandbox-supervisor-image` publishes the code
- * sandbox's supervisor under its content address, `ci-elitea-sandbox-supervisor`.
+ * sandbox's supervisor under its content address, `ci-elitea-sandbox-supervisor`;
+ * ci-build-once.yml's `code-runner-images` publishes its runner images,
+ * `ci-elitea-code-runner:<target>-cas-<hash>` (.github/actions/code-runner-images).
  */
-export const EXTRA_CI_PACKAGES = ["ci-elitea-sandbox-supervisor"];
+export const EXTRA_CI_PACKAGES = ["ci-elitea-code-runner", "ci-elitea-sandbox-supervisor"];
 
 export function hclSources(root = ROOT) {
   const dir = path.join(root, "deploy", "ci");

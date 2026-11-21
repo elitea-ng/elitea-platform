@@ -105,6 +105,10 @@ on:
         description: ci-build-once.yml's `stack-images` output.
         type: string
         default: ""
+      code-runner-images:
+        description: ci-build-once.yml's `code-runner-images` output (the code sandbox's runner images).
+        type: string
+        default: ""
       reaches-stack:
         description: ci-build-once.yml's lane filter outputs, passed through.
         type: string
@@ -779,7 +783,7 @@ jobs:
   code-sandbox:
     name: Agent run_code on the real code sandbox
     needs: [build-once, sandbox-supervisor-image]
-    if: ${{ !cancelled() && ((inputs.web-images || needs.build-once.outputs.web-images) == 'success' || (inputs.web-images || needs.build-once.outputs.web-images) == 'skipped') && ((inputs.stack-images || needs.build-once.outputs.stack-images) == 'success' || (inputs.stack-images || needs.build-once.outputs.stack-images) == 'skipped') && needs.sandbox-supervisor-image.result == 'success' && (inputs.reaches-sandbox || needs.build-once.outputs.reaches-sandbox) == 'true' }}
+    if: ${{ !cancelled() && ((inputs.web-images || needs.build-once.outputs.web-images) == 'success' || (inputs.web-images || needs.build-once.outputs.web-images) == 'skipped') && ((inputs.stack-images || needs.build-once.outputs.stack-images) == 'success' || (inputs.stack-images || needs.build-once.outputs.stack-images) == 'skipped') && ((inputs.code-runner-images || needs.build-once.outputs.code-runner-images) == 'success' || (inputs.code-runner-images || needs.build-once.outputs.code-runner-images) == 'skipped') && needs.sandbox-supervisor-image.result == 'success' && (inputs.reaches-sandbox || needs.build-once.outputs.reaches-sandbox) == 'true' }}
     permissions:
       contents: read
       # Pulls the ci-* images by digest; only the build jobs write packages.
@@ -827,69 +831,22 @@ jobs:
       - name: Load the supervisor image
         working-directory: ${{ github.workspace }}
         run: gunzip -c "${RUNNER_TEMP}/sandbox-supervisor/elitea-sandbox-supervisor.tar.gz" | docker load
-      - uses: docker/setup-buildx-action@v4
+      # The runner images, published ONCE per content address by ci-build-once.yml's
+      # `code-runner-images` and pulled here at the digest its artifact names.
+      # Built here (with the GHA layer cache, retried without it when the
+      # cached attempt fails) only when nothing was published for this run: a
+      # fork's or Dependabot's pull request (.github/actions/code-runner-images).
+      - uses: actions/download-artifact@v8
+        if: ${{ (inputs.code-runner-images || needs.build-once.outputs.code-runner-images) == 'success' }}
         with:
-          driver-opts: image=ghcr.io/elitea-ng/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
-      # The runner images, from the same Actions-cache scopes ci-rust.yml writes
-      # (each target reads all three, as there).
-      # A cache read that fails (the Actions cache service is down, or a scope
-      # is corrupt) must not fail the lane: each build below is retried from
-      # scratch, without `cache-from`, only when the cached attempt failed. A
-      # genuine Containerfile error fails the retry too, so nothing is hidden.
-      - name: Build the code runner Deno/Pyodide image
-        id: build-deno
-        continue-on-error: true
-        uses: docker/build-push-action@v7
+          name: code-runner-image-digests
+          path: ${{ runner.temp }}/code-runner-image-digests
+      - name: Code runner images (pulled by digest; built here on a fork)
+        uses: ./.github/actions/code-runner-images
         with:
-          context: services/elitea-code-runner
-          file: services/elitea-code-runner/Containerfile
-          target: default
-          push: false
-          load: true
-          tags: elitea-code-runner:ci-default
-          platforms: linux/amd64
-          cache-from: |
-            type=gha,scope=elitea-code-runner-verification-linux-amd64
-            type=gha,scope=elitea-code-runner-default-linux-amd64
-            type=gha,scope=elitea-code-runner-rust-runtime-linux-amd64
-      - name: Build the code runner Deno/Pyodide image (no cache, fallback)
-        if: ${{ steps.build-deno.outcome == 'failure' }}
-        uses: docker/build-push-action@v7
-        with:
-          context: services/elitea-code-runner
-          file: services/elitea-code-runner/Containerfile
-          target: default
-          push: false
-          load: true
-          tags: elitea-code-runner:ci-default
-          platforms: linux/amd64
-      - name: Build the code runner Rust image
-        id: build-rust
-        continue-on-error: true
-        uses: docker/build-push-action@v7
-        with:
-          context: services/elitea-code-runner
-          file: services/elitea-code-runner/Containerfile
-          target: rust-runtime
-          push: false
-          load: true
-          tags: elitea-code-runner:ci-rust
-          platforms: linux/amd64
-          cache-from: |
-            type=gha,scope=elitea-code-runner-verification-linux-amd64
-            type=gha,scope=elitea-code-runner-default-linux-amd64
-            type=gha,scope=elitea-code-runner-rust-runtime-linux-amd64
-      - name: Build the code runner Rust image (no cache, fallback)
-        if: ${{ steps.build-rust.outcome == 'failure' }}
-        uses: docker/build-push-action@v7
-        with:
-          context: services/elitea-code-runner
-          file: services/elitea-code-runner/Containerfile
-          target: rust-runtime
-          push: false
-          load: true
-          tags: elitea-code-runner:ci-rust
-          platforms: linux/amd64
+          targets: default rust-runtime
+          registry: ${{ (inputs.code-runner-images || needs.build-once.outputs.code-runner-images) == 'success' }}
+          digests-file: ${{ runner.temp }}/code-runner-image-digests/code-runner.json
       - name: Run the journeys against a fresh stack with the code sandbox
         working-directory: ${{ github.workspace }}
         env:

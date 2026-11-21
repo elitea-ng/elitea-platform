@@ -20,6 +20,11 @@ name: CI — Build once
 # when governed or the helm smoke will run, or when the change touches Rust:
 # the Rust workflows no longer build `--release` themselves, so the release
 # build of every Rust image is proven here (owner decision 2026-11-20).
+#
+# And the code sandbox's runner images (`code-runner-images`), for
+# ci-web-e2e.yml's `code-sandbox` lane and ci-rust.yml's `test`: published once
+# per content address, so a change outside services/elitea-code-runner/
+# builds nothing (the job's comment says how each consumer gets them).
 
 on:
   workflow_call:
@@ -29,6 +34,13 @@ on:
           Build every image whatever the lane filter says: a consumer outside
           ci-web-e2e.yml pulls them (governed, the helm smoke), or the change
           touches Rust and its release build must be proven.
+        type: boolean
+        default: false
+      code-runner:
+        description: >-
+          Publish the code sandbox's runner images (`code-runner-images`)
+          whatever the lane filter says: ci-rust.yml's `test` will run and
+          pulls them (ci.yml passes its tier result).
         type: boolean
         default: false
     outputs:
@@ -68,6 +80,12 @@ on:
       stack-images:
         description: The result of the `stack-images` job (the rest of the standalone stack), read the same way.
         value: ${{ jobs.model-path-changes.result != 'success' && jobs.model-path-changes.result || jobs.stack-images.result }}
+      code-runner-images:
+        description: >-
+          The result of the `code-runner-images` job (the code sandbox's runner
+          images), read the same way: pull on success (the digests are the
+          `code-runner-image-digests` artifact), build in the job on skipped.
+        value: ${{ jobs.model-path-changes.result != 'success' && jobs.model-path-changes.result || jobs.code-runner-images.result }}
 
 permissions:
   contents: read
@@ -332,3 +350,52 @@ jobs:
             mount-writer: "true"
     steps: *build-once-steps
 
+  # The code sandbox's runner images (services/elitea-code-runner/Containerfile:
+  # `verification`, `default` = Deno/Pyodide, `rust-runtime`). Not compose
+  # services, so not a bake leg above: .github/actions/code-runner-images,
+  # publish mode. Until 2026-11 ci-rust.yml's `test` and ci-web-e2e.yml's
+  # `code-sandbox` each built them on every pull request that reached them, and
+  # the `default` target's RUN downloads Pyodide and its wheels. Now this ONE
+  # job publishes each target under its content address,
+  # `ghcr.io/elitea-ng/ci-elitea-code-runner:<target>-cas-<hash>`
+  # (scripts/ci/stack-image-hash.mjs), and builds only when that tag is missing,
+  # i.e. when services/elitea-code-runner/ (a COPY source, the Containerfile or
+  # a base digest) changed. A run on main always builds: it is the one writer
+  # of the three GHA layer-cache scopes. The consumers pull by digest:
+  # `code-sandbox` from the `code-runner-image-digests` artifact (it `needs:`
+  # this workflow), ci-rust.yml's `test` by the same content tag, waiting for
+  # this job when ci.yml says it runs beside it (ci-rust.yml does not wait for
+  # the whole of this workflow, whose Rust legs take ~40 min).
+  #
+  # Same gate as the legs above (same repository, not Dependabot: a read-only
+  # token cannot push; those consumers build in-job), but only when a consumer
+  # runs: the sandbox lane (`reaches-sandbox`) or ci-rust (`code-runner`).
+  code-runner-images:
+    name: Build once (elitea-code-runner)
+    needs: *build-once-needs
+    if: >-
+      (inputs.code-runner ||
+       needs.model-path-changes.outputs.reaches-sandbox == 'true') &&
+      (github.event_name != 'pull_request' ||
+       (github.event.pull_request.head.repo.full_name == github.repository &&
+        github.actor != 'dependabot[bot]'))
+    # Hosted: it builds with Docker.
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions: *build-once-permissions
+    steps:
+      - uses: actions/checkout@v7
+      - name: Publish the code runner images once, by content address
+        uses: ./.github/actions/code-runner-images
+        with:
+          targets: verification default rust-runtime
+          publish: "true"
+          registry: "true"
+          digests-file: ${{ runner.temp }}/code-runner-image-digests/code-runner.json
+      - name: Hand the digests to the consumers
+        uses: actions/upload-artifact@v7
+        with:
+          name: code-runner-image-digests
+          path: ${{ runner.temp }}/code-runner-image-digests/code-runner.json
+          if-no-files-found: error
+          retention-days: 7

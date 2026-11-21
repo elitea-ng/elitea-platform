@@ -1,0 +1,342 @@
+name: Code runner images
+description: >-
+  The code sandbox's runner images (services/elitea-code-runner/Containerfile:
+  `verification`, `default` = Deno/Pyodide, `rust-runtime`), built ONCE and
+  reused by content address. Publish mode (ci-build-once.yml's
+  `code-runner-images`, the one producer) pushes each target to
+  `ghcr.io/elitea-ng/ci-elitea-code-runner:<target>-cas-<hash>` unless that tag
+  already exists, and writes the digests for the consumers. Load mode (the
+  consumers: ci-rust.yml's `test`, ci-web-e2e.yml's `code-sandbox`) pulls each
+  target by digest into the local store as `elitea-code-runner:ci-<name>`, and
+  builds it in the job only when nothing was published for it.
+#
+# ── Why (measured 2026-11-21) ────────────────────────────────────────────────
+#
+# ci-rust.yml's `test` and ci-web-e2e.yml's `code-sandbox` each built these
+# images themselves on every pull request that reached them. The `default`
+# target's RUN downloads Pyodide and its wheels from jsdelivr and PyPI, so each
+# GHA-cache miss was a network build, twice per commit.
+#
+# ── The content address ──────────────────────────────────────────────────────
+#
+# scripts/ci/stack-image-hash.mjs, the one the stack images use: the build
+# spec (context services/elitea-code-runner, Containerfile, target), the
+# digest of every FROM (all pinned by digest here), and the git blob ids of
+# every COPY source of the stages the target runs, plus the .dockerignore.
+# A change outside those inputs reuses the published image; a change to them
+# builds it once, in the producer.
+#
+# ── The no-cache fallback ───────────────────────────────────────────────────
+#
+# Every build here (producer and consumer) first reads the three GHA layer
+# cache scopes, and is retried from scratch, without `cache-from`, only when
+# the cached attempt failed: a cache service outage or a corrupt scope must
+# not fail the job, and a genuine Containerfile error fails the retry too.
+#
+# ── Who writes ───────────────────────────────────────────────────────────────
+#
+# Only the producer on a run on main (the nightly) exports the layer cache
+# (mode=max, one scope per target) and re-pushes the content tags, so the
+# prune clock (ci-image-cleanup.yml, 7 days) restarts nightly. A pull request
+# reads. A consumer never writes and never pushes.
+inputs:
+  targets:
+    description: Space-separated Containerfile targets (verification, default, rust-runtime).
+    required: true
+  publish:
+    description: >-
+      "true": publish mode (push the content tags, write `digests-file`).
+      Anything else: load mode (pull or build into the local store).
+    required: false
+    default: "false"
+  registry:
+    description: >-
+      "true" when this job's token may read (load mode) or write (publish mode)
+      the ci-* packages: same repository, not Dependabot. "false" (a fork's
+      pull request) builds every target in the job.
+    required: false
+    default: "false"
+  digests-file:
+    description: >-
+      Publish mode: where to write {<target>: {ref, digest}}. Load mode: the
+      producer's file, when the caller downloaded it; a target it lists is
+      pulled at exactly that digest.
+    required: false
+    default: ""
+  wait-minutes:
+    description: >-
+      Load mode: how long to wait for a content tag that is not there yet,
+      because the producer is still building it in this same run (ci-rust.yml
+      starts beside ci-build-once.yml). "0" looks once.
+    required: false
+    default: "0"
+  cache-write:
+    description: >-
+      Publish mode only: whether this run exports the layer cache and always
+      builds. Defaults to "a run on main"; a caller may only pass "false".
+    required: false
+    default: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+runs:
+  using: composite
+  steps:
+    - name: Install the content-address script's one dependency
+      if: inputs.registry == 'true'
+      uses: ./.github/actions/ci-scripts-deps
+    - uses: docker/login-action@v4
+      if: inputs.registry == 'true'
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+
+    # Decides, per target: reuse (a digest, pulled here in load mode) or build.
+    - name: Look for the images published for these inputs
+      id: resolve
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        TARGET_LIST: ${{ inputs.targets }}
+        PUBLISH: ${{ inputs.publish }}
+        REGISTRY: ${{ inputs.registry }}
+        DIGESTS_FILE: ${{ inputs.digests-file }}
+        WAIT_MINUTES: ${{ inputs.wait-minutes }}
+        WRITE: ${{ inputs.cache-write }}
+        REPO: ghcr.io/elitea-ng/ci-elitea-code-runner
+      run: |
+        set -euo pipefail
+        read -r -a targets <<< "$TARGET_LIST"
+        [ "${#targets[@]}" -gt 0 ] || { echo "::error::no targets"; exit 1; }
+        if [ "$PUBLISH" = "true" ] && [ "$REGISTRY" != "true" ]; then
+          echo "::error::publish mode needs registry: true (a token that can push the ci-* packages)"
+          exit 1
+        fi
+        local_tag() {
+          case "$1" in
+            rust-runtime) echo "elitea-code-runner:ci-rust" ;;
+            verification|default) echo "elitea-code-runner:ci-$1" ;;
+            *) echo "::error::unknown code runner target: $1" >&2; return 1 ;;
+          esac
+        }
+        digest_of() {
+          docker buildx imagetools inspect "$1" --format '{{json .Manifest.Digest}}' 2>/dev/null | tr -d '"'
+        }
+        any_build=false
+        deadline=$((SECONDS + WAIT_MINUTES * 60))
+        for target in "${targets[@]}"; do
+          tag="$(local_tag "$target")"
+          build=true
+          ref=""
+          digest=""
+          if [ "$REGISTRY" = "true" ]; then
+            hash="$(node scripts/ci/stack-image-hash.mjs "$GITHUB_WORKSPACE" services/elitea-code-runner Containerfile "$target")"
+            ref="${REPO}:${target}-cas-${hash}"
+            if [ "$PUBLISH" = "true" ] && [ "$WRITE" = "true" ]; then
+              echo "  build $ref (this run writes the layer cache)"
+            else
+              if [ -n "$DIGESTS_FILE" ] && [ -f "$DIGESTS_FILE" ]; then
+                listed="$(node -e 'const e = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))[process.argv[2]]; if (e) console.log(e.ref + " " + e.digest)' "$DIGESTS_FILE" "$target")"
+                if [ -n "$listed" ]; then
+                  if [ "${listed%% *}" != "$ref" ]; then
+                    echo "::error::the producer published ${listed%% *} for ${target}, but this checkout's inputs address ${ref}"
+                    exit 1
+                  fi
+                  digest="${listed##* }"
+                fi
+              fi
+              while [ -z "$digest" ]; do
+                digest="$(digest_of "$ref" || true)"
+                case "$digest" in sha256:*) break ;; esac
+                digest=""
+                if [ "$SECONDS" -ge "$deadline" ]; then break; fi
+                echo "  waiting for $ref (the producer is building it)"
+                sleep 30
+              done
+              if [ -n "$digest" ]; then
+                if [ "$PUBLISH" = "true" ]; then
+                  build=false
+                  echo "  have  $ref ($digest)"
+                elif docker pull -q "${REPO}@${digest}" > /dev/null; then
+                  docker tag "${REPO}@${digest}" "$tag"
+                  build=false
+                  echo "  pull  ${REPO}@${digest} as $tag"
+                else
+                  echo "::warning::could not pull ${REPO}@${digest} (pruned?); building ${target} here"
+                fi
+              else
+                echo "  build $ref (not published)"
+              fi
+            fi
+          else
+            echo "  build $target (this token cannot read the ci-* packages)"
+          fi
+          if [ "$build" = "true" ]; then any_build=true; fi
+          {
+            echo "${target}-build=${build}"
+            echo "${target}-ref=${ref}"
+            echo "${target}-digest=${digest}"
+            echo "${target}-tag=${tag}"
+          } >> "$GITHUB_OUTPUT"
+        done
+        echo "any-build=${any_build}" >> "$GITHUB_OUTPUT"
+
+    - uses: docker/setup-buildx-action@v4
+      if: steps.resolve.outputs.any-build == 'true'
+      with:
+        # The builder image from the org's own mirror (mirror-buildkit.yml), by
+        # digest: no anonymous Docker Hub pull per job.
+        driver-opts: image=ghcr.io/elitea-ng/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+
+    # One GHA scope PER TARGET, each target reading all three: a single shared
+    # scope kept only the LAST export (each `cache-to` replaces the scope's
+    # manifest), so the Deno/Pyodide layers were rebuilt from the network.
+    # Publish mode pushes the content tag; load mode loads the local tag.
+    - name: Build the code runner verification image
+      id: build-verification
+      if: steps.resolve.outputs.verification-build == 'true'
+      continue-on-error: true
+      uses: docker/build-push-action@v7
+      with:
+        context: services/elitea-code-runner
+        file: services/elitea-code-runner/Containerfile
+        target: verification
+        push: ${{ inputs.publish == 'true' }}
+        load: ${{ inputs.publish != 'true' }}
+        provenance: false
+        tags: ${{ inputs.publish == 'true' && steps.resolve.outputs.verification-ref || steps.resolve.outputs.verification-tag }}
+        platforms: linux/amd64
+        cache-from: |
+          type=gha,scope=elitea-code-runner-verification-linux-amd64
+          type=gha,scope=elitea-code-runner-default-linux-amd64
+          type=gha,scope=elitea-code-runner-rust-runtime-linux-amd64
+        cache-to: ${{ inputs.publish == 'true' && inputs.cache-write == 'true' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && 'type=gha,mode=max,scope=elitea-code-runner-verification-linux-amd64,ignore-error=true' || '' }}
+    - name: Build the code runner verification image (no cache, fallback)
+      id: build-verification-nocache
+      if: steps.resolve.outputs.verification-build == 'true' && steps.build-verification.outcome == 'failure'
+      uses: docker/build-push-action@v7
+      with:
+        context: services/elitea-code-runner
+        file: services/elitea-code-runner/Containerfile
+        target: verification
+        push: ${{ inputs.publish == 'true' }}
+        load: ${{ inputs.publish != 'true' }}
+        provenance: false
+        tags: ${{ inputs.publish == 'true' && steps.resolve.outputs.verification-ref || steps.resolve.outputs.verification-tag }}
+        platforms: linux/amd64
+
+    - name: Build the code runner Deno/Pyodide image
+      id: build-default
+      if: steps.resolve.outputs.default-build == 'true'
+      continue-on-error: true
+      uses: docker/build-push-action@v7
+      with:
+        context: services/elitea-code-runner
+        file: services/elitea-code-runner/Containerfile
+        target: default
+        push: ${{ inputs.publish == 'true' }}
+        load: ${{ inputs.publish != 'true' }}
+        provenance: false
+        tags: ${{ inputs.publish == 'true' && steps.resolve.outputs.default-ref || steps.resolve.outputs.default-tag }}
+        platforms: linux/amd64
+        cache-from: |
+          type=gha,scope=elitea-code-runner-verification-linux-amd64
+          type=gha,scope=elitea-code-runner-default-linux-amd64
+          type=gha,scope=elitea-code-runner-rust-runtime-linux-amd64
+        cache-to: ${{ inputs.publish == 'true' && inputs.cache-write == 'true' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && 'type=gha,mode=max,scope=elitea-code-runner-default-linux-amd64,ignore-error=true' || '' }}
+    - name: Build the code runner Deno/Pyodide image (no cache, fallback)
+      id: build-default-nocache
+      if: steps.resolve.outputs.default-build == 'true' && steps.build-default.outcome == 'failure'
+      uses: docker/build-push-action@v7
+      with:
+        context: services/elitea-code-runner
+        file: services/elitea-code-runner/Containerfile
+        target: default
+        push: ${{ inputs.publish == 'true' }}
+        load: ${{ inputs.publish != 'true' }}
+        provenance: false
+        tags: ${{ inputs.publish == 'true' && steps.resolve.outputs.default-ref || steps.resolve.outputs.default-tag }}
+        platforms: linux/amd64
+
+    # The Rust language image (vendored Cargo tree + the Rust adapter).
+    - name: Build the code runner Rust image
+      id: build-rust-runtime
+      if: steps.resolve.outputs.rust-runtime-build == 'true'
+      continue-on-error: true
+      uses: docker/build-push-action@v7
+      with:
+        context: services/elitea-code-runner
+        file: services/elitea-code-runner/Containerfile
+        target: rust-runtime
+        push: ${{ inputs.publish == 'true' }}
+        load: ${{ inputs.publish != 'true' }}
+        provenance: false
+        tags: ${{ inputs.publish == 'true' && steps.resolve.outputs.rust-runtime-ref || steps.resolve.outputs.rust-runtime-tag }}
+        platforms: linux/amd64
+        cache-from: |
+          type=gha,scope=elitea-code-runner-verification-linux-amd64
+          type=gha,scope=elitea-code-runner-default-linux-amd64
+          type=gha,scope=elitea-code-runner-rust-runtime-linux-amd64
+        cache-to: ${{ inputs.publish == 'true' && inputs.cache-write == 'true' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && 'type=gha,mode=max,scope=elitea-code-runner-rust-runtime-linux-amd64,ignore-error=true' || '' }}
+    - name: Build the code runner Rust image (no cache, fallback)
+      id: build-rust-runtime-nocache
+      if: steps.resolve.outputs.rust-runtime-build == 'true' && steps.build-rust-runtime.outcome == 'failure'
+      uses: docker/build-push-action@v7
+      with:
+        context: services/elitea-code-runner
+        file: services/elitea-code-runner/Containerfile
+        target: rust-runtime
+        push: ${{ inputs.publish == 'true' }}
+        load: ${{ inputs.publish != 'true' }}
+        provenance: false
+        tags: ${{ inputs.publish == 'true' && steps.resolve.outputs.rust-runtime-ref || steps.resolve.outputs.rust-runtime-tag }}
+        platforms: linux/amd64
+
+    # Publish mode: the digest of every target, built or reused, for the
+    # consumers. Each was pushed under its content tag above, or already had it.
+    - name: Record the digests
+      if: inputs.publish == 'true'
+      shell: bash
+      env:
+        TARGET_LIST: ${{ inputs.targets }}
+        DIGESTS_FILE: ${{ inputs.digests-file }}
+        RESOLVED: ${{ toJSON(steps.resolve.outputs) }}
+        BUILT: >-
+          {"verification": "${{ steps.build-verification.outputs.digest || steps.build-verification-nocache.outputs.digest }}",
+           "default": "${{ steps.build-default.outputs.digest || steps.build-default-nocache.outputs.digest }}",
+           "rust-runtime": "${{ steps.build-rust-runtime.outputs.digest || steps.build-rust-runtime-nocache.outputs.digest }}"}
+      run: |
+        set -euo pipefail
+        [ -n "$DIGESTS_FILE" ] || { echo "::error::publish mode needs digests-file"; exit 1; }
+        mkdir -p "$(dirname "$DIGESTS_FILE")"
+        node -e '
+          const [file, targets] = process.argv.slice(1);
+          const resolved = JSON.parse(process.env.RESOLVED);
+          const built = JSON.parse(process.env.BUILT);
+          const out = {};
+          for (const t of targets.split(/\s+/).filter(Boolean)) {
+            const ref = resolved[t + "-ref"];
+            const digest = resolved[t + "-build"] === "true" ? built[t] : resolved[t + "-digest"];
+            if (!ref || !/^sha256:[0-9a-f]{64}$/.test(digest || "")) {
+              console.log("::error::no digest for the " + t + " image (ref " + (ref || "none") + ")");
+              process.exit(1);
+            }
+            out[t] = { ref, digest };
+            console.log(t + ": " + ref + " " + digest);
+          }
+          require("fs").writeFileSync(file, JSON.stringify(out, null, 2));
+        ' "$DIGESTS_FILE" "$TARGET_LIST"
+
+    # Load mode: every target is in the local store, pulled or built, or the
+    # job fails here with the image named.
+    - name: Every code runner image is in the local store
+      if: inputs.publish != 'true'
+      shell: bash
+      env:
+        TARGET_LIST: ${{ inputs.targets }}
+      run: |
+        set -euo pipefail
+        read -r -a targets <<< "$TARGET_LIST"
+        for target in "${targets[@]}"; do
+          case "$target" in rust-runtime) tag="elitea-code-runner:ci-rust" ;; *) tag="elitea-code-runner:ci-${target}" ;; esac
+          docker image inspect "$tag" > /dev/null || { echo "::error::${tag} (target ${target}) is not in the local store"; exit 1; }
+          echo "${tag}: $(docker image inspect --format '{{.Id}}' "$tag")"
+        done

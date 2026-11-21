@@ -105,8 +105,8 @@ SANDBOX='^('\
 'services/elitea-main/(internal/(runtimecomposition|domain/codesandbox|api/v2/toolkits)/|cmd/elitea-main/)|ci/|\\.github/actions/(npm-cache|go-cache)/|'\
 'deploy/(docker-compose\.(standalone-full|standalone-rust-agent|sandbox|sandbox-postgres-tls|sandbox-code-owner)\.yml|runtime/(worker-runtime\.rust\.json|postgres-tls-entrypoint\.sh|install-material\.sh)|scripts/(standalone-stack|sandbox-compose-material|gen-sandbox-certs|gen-runtime-certs)\.sh|scripts/lib/|mock-llm/)|'\
 'apps/elitea-web/(scripts/(chat-stream-e2e|code-sandbox-e2e)\.sh|scripts/lib/(compose-detect|stack-backend)\.sh|playwright\.config\.ts|e2e/(fixtures/|streaming/code-sandbox\.))|'\
-'\.github/(actions/(stack-images|build-stack-images|pull-stack-images)/|workflows/ci-(web-e2e|web-e2e-native|build-once)\.yml)|'\
-'scripts/ci/(e2e-lane-filter|stack-image)'\
+'\.github/(actions/(stack-images|build-stack-images|pull-stack-images|code-runner-images|ci-scripts-deps)/|workflows/ci-(web-e2e|web-e2e-native|build-once)\.yml)|'\
+'scripts/ci/(e2e-lane-filter|stack-image|check-e2e-paths\.mjs$)'\
 ')'
 
 # What only the container stack proves (reaches-images, the sixth line). On

@@ -416,6 +416,10 @@
         ".github/actions/ci-scripts-deps/**",
         ".github/actions/npm-cache/**",
         ".github/actions/main-write-cache/**",
+        ".github/actions/code-runner-images/**",
+        "scripts/ci/stack-image-hash.mjs",
+        "scripts/ci/check-e2e-paths.mjs",
+        ".github/workflows/ci-build-once.yml",
         ".github/workflows/ci-rust.yml"
       ]
     },
