@@ -3079,6 +3079,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Put("/identity_providers/administration/{key}", adminHandler.IdentityProviderSave)
 				r.With(requireRuntimePlugins).
 					Delete("/identity_providers/administration/{key}", adminHandler.IdentityProviderDelete)
+				// Moves the accounts linked under an old issuer onto the
+				// provider's current one (issue 2558). The handler also
+				// requires super_admin, as it does for a trust-field save.
+				r.With(requireRuntimePlugins).
+					Post("/identity_providers/administration/{key}/rebind", adminHandler.IdentityProviderRebind)
 				// The Microsoft Default app registry (ADR-0057 decisions 5 and
 				// 11; epic 2254 story S1b). Its own permission, granted to
 				// super_admin and admin by shared migration 0255: an app's

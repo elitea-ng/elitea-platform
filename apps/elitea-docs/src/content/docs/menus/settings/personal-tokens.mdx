@@ -15,6 +15,19 @@ A personal access token (PAT) authenticates API calls and IDE integrations as yo
   <Step title="Generate and copy">The full token is shown only once — copy it immediately. It cannot be retrieved again after you close the dialog.</Step>
 </Steps>
 
+## Where you can create a token
+
+A personal access token acts with all of your permissions, so only a sign-in can create one, never another token:
+
+| You are signed in with | Can you create a token? |
+|---|---|
+| The web app in a browser | Yes. |
+| The desktop app | Yes, if your account holds no administrator permission. An administrator sees "Your account has administrator permissions, so this app cannot create a personal token for it" and creates the token in the web app in a browser instead. |
+| The mobile app | The mobile app has no Personal Tokens page. |
+| A personal access token, or the token an agent run uses | No. The API answers `403` with `code` `token_mint_browser_session_required`. |
+
+If your sign-in is limited to one project, the new token must be bound to that same project. The error names the project. Every refused attempt is recorded in the audit trail with the action `token.mint_refused` and the refusal code.
+
 <Warning title="Never expiring tokens are a risk">
 Use "Never" only for personal development — set an expiration for anything used in a shared or production context.
 </Warning>
@@ -29,6 +42,7 @@ The table shows each token's last-4-characters value and an expiration status (a
   <Accordion title="Lost the token value">It cannot be shown again — delete it and generate a new one.</Accordion>
   <Accordion title="IDE download icons are missing">They only appear once a model configuration is selected and you are outside the Public project.</Accordion>
   <Accordion title="An integration stopped working">Check whether its token expired; expired tokens stop authenticating immediately.</Accordion>
+  <Accordion title="A script that created tokens now gets 403">A token can no longer create another token (`token_mint_browser_session_required`). Create the token once in the web app and give it to the script.</Accordion>
 </AccordionGroup>
 
 <Info title="Related">

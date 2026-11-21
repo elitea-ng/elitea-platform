@@ -128,6 +128,20 @@ func (s *Store) Enabled(ctx context.Context, kind Kind) (Provider, error) {
 // to the admin write path, which owns the vault; this store must not acquire a
 // second way to touch secrets.
 func (s *Store) Upsert(ctx context.Context, provider Provider) (Provider, error) {
+	return s.upsert(ctx, provider, nil)
+}
+
+// UpsertAtRevision is Upsert that writes only while the stored row is still
+// at expected, the revision the caller read (0: no row yet). Otherwise it
+// writes nothing and returns ErrRevisionConflict (issue 2558). The admin
+// write path decides whether a save is a super_admin's trust change by
+// comparing it with the row it read; without this check a save that matched a
+// stale read would silently revert a trust change made in between.
+func (s *Store) UpsertAtRevision(ctx context.Context, provider Provider, expected int) (Provider, error) {
+	return s.upsert(ctx, provider, &expected)
+}
+
+func (s *Store) upsert(ctx context.Context, provider Provider, expected *int) (Provider, error) {
 	if s == nil || s.pool == nil {
 		return Provider{}, ErrNoPool
 	}
@@ -169,12 +183,21 @@ func (s *Store) Upsert(ctx context.Context, provider Provider) (Provider, error)
 		         secret_ref   = EXCLUDED.secret_ref,
 		         revision     = elitea_auth.identity_providers.revision + 1,
 		         updated_at   = now()
+		   WHERE $7::integer IS NULL OR elitea_auth.identity_providers.revision = $7::integer
 		 RETURNING `+providerColumns,
 		validated.Key, string(validated.Kind), validated.DisplayName,
-		validated.Enabled, document, validated.SecretRef)
+		validated.Enabled, document, validated.SecretRef, expected)
 	stored, err := scanProvider(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Provider{}, ErrRevisionConflict
+	}
 	if err != nil {
 		return Provider{}, err
+	}
+	// The row the caller read was deleted in between, and this write created
+	// it again: a create is not the edit the caller was allowed to make.
+	if expected != nil && *expected > 0 && stored.Revision == 1 {
+		return Provider{}, ErrRevisionConflict
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return Provider{}, err

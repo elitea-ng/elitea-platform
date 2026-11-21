@@ -42,6 +42,40 @@ func TestUpsertBumpsTheRevisionSoAReaderCacheInvalidates(t *testing.T) {
 	require.Contains(t, second.OIDC.Scopes, "groups")
 }
 
+// A save decided against revision N writes only while the row is still at N,
+// and a create (0) only while there is no row (issue 2558). Nothing else
+// changes the row on a refused write.
+func TestUpsertAtRevisionRefusesARowThatMovedOn(t *testing.T) {
+	pool := newProviderPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+
+	created, err := store.UpsertAtRevision(ctx, validOIDC(), 0)
+	require.NoError(t, err)
+	require.Equal(t, 1, created.Revision)
+	_, err = store.UpsertAtRevision(ctx, validOIDC(), 0)
+	require.ErrorIs(t, err, ErrRevisionConflict, "a create over an existing row")
+
+	moved, err := store.UpsertAtRevision(ctx, validOIDC(), 1)
+	require.NoError(t, err)
+	require.Equal(t, 2, moved.Revision)
+	stale := validOIDC()
+	stale.OIDC.Issuer = "https://stale.example.com"
+	_, err = store.UpsertAtRevision(ctx, stale, 1)
+	require.ErrorIs(t, err, ErrRevisionConflict, "a save over a newer revision")
+	current, err := store.Lookup(ctx, moved.Key)
+	require.NoError(t, err)
+	require.Equal(t, 2, current.Revision)
+	require.Equal(t, moved.OIDC.Issuer, current.OIDC.Issuer)
+
+	_, err = store.Delete(ctx, moved.Key)
+	require.NoError(t, err)
+	_, err = store.UpsertAtRevision(ctx, validOIDC(), 2)
+	require.ErrorIs(t, err, ErrRevisionConflict, "an edit must not re-create a deleted row")
+	_, err = store.Lookup(ctx, moved.Key)
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
 // A save REPLACES the document. A merge would make removing a scope impossible:
 // the operator deletes it from the form, and it comes back.
 func TestUpsertReplacesTheDocumentRatherThanMergingIt(t *testing.T) {

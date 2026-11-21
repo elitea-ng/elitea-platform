@@ -1181,7 +1181,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// sealed PKCE verifier, single use) and microsoft_login_handoffs (the
 	// finished sign-in, parked for the starter to redeem, 60 seconds) (ADR-0057
 	// decision 6, epic 2254 story S1c). No permission.
-	require.EqualValues(t, 257, Head(shared))
+	//
+	// 258: shared/0258_identity_provider_bindings.sql, which binds every
+	// federated link to the provider and issuer that asserted it
+	// (elitea_auth.identity_bindings) and backfills the existing links to the
+	// enabled provider of their protocol (issue 2558). No permission.
+	require.EqualValues(t, 258, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

@@ -44,6 +44,7 @@ import {
   type AdminScimClientDraft,
   type AdminScimClientSecret,
 } from "./api/adminScimClientsApi";
+import { identityTrustFailureReason } from "./api/identityTrustRefusal";
 
 function loadErrorMessage(error: unknown): string {
   if (configFailureStatus(error) === 403) {
@@ -67,7 +68,7 @@ function actionFailure(
     revoke: t("pages.admin.scimClients.error.revoke", "Failed to revoke that SCIM client."),
     delete: t("pages.admin.scimClients.error.delete", "Failed to delete that SCIM client."),
   }[action];
-  return configFailureReason(error) ?? fallback;
+  return identityTrustFailureReason(error) ?? fallback;
 }
 
 /** Absolute URLs an identity provider is configured with, for this origin. */
@@ -115,7 +116,7 @@ export function AdminScimClientsEditor() {
       },
       onError: (error: unknown) => {
         setCreateError(
-          configFailureReason(error) ??
+          identityTrustFailureReason(error) ??
             t(
               "pages.admin.scimClients.error.create",
               "Failed to create that SCIM client.",

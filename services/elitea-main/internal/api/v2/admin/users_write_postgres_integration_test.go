@@ -73,6 +73,14 @@ func grantingResolver(permissions ...string) permissionResolverFunc {
 	}
 }
 
+// superAdminResolver is a caller who holds admin.auth.users.super_admin, and
+// so is exempt from the no-escalation rule (issue 2488). Fixtures whose cases
+// are not about that rule use it; role_escalation_postgres_integration_test.go
+// covers the rule itself.
+func superAdminResolver() permissionResolverFunc {
+	return grantingResolver("admin.auth.users", "admin.auth.users.super_admin", "modes.users")
+}
+
 // adminUsersRouter mounts the three routes exactly as internal/api/router.go
 // does, minus the route-level permission middleware (which needs the whole auth
 // stack; `TestRequireCentralPermissions*` in internal/api/middleware covers that
@@ -236,7 +244,7 @@ func TestAuthUsersDeleteRejectsAnEmptySelection(t *testing.T) {
 func TestSetAdminRoleAssignsReplacesAndClears(t *testing.T) {
 	pool := newAdminUsersPool(t)
 	prepareAdminUsersFixture(t, pool)
-	router := adminUsersRouter(admin.NewHandler(pool), &auth.User{ID: "1", UserID: "1"})
+	router := adminUsersRouter(admin.NewHandler(pool, admin.WithPermissionResolver(superAdminResolver())), &auth.User{ID: "1", UserID: "1"})
 
 	const target = "a14-plain@autotest.local"
 	id := userID(t, pool, target)
@@ -326,7 +334,7 @@ func TestSetAdminRoleRollsBackWhenTheRoleIsNotDefinedInThisDeployment(t *testing
 		`DELETE FROM public.auth_core__role WHERE name = 'viewer' AND mode = 'administration'`); err != nil {
 		t.Fatalf("drop viewer role: %v", err)
 	}
-	router := adminUsersRouter(admin.NewHandler(pool), &auth.User{ID: "1", UserID: "1"})
+	router := adminUsersRouter(admin.NewHandler(pool, admin.WithPermissionResolver(superAdminResolver())), &auth.User{ID: "1", UserID: "1"})
 
 	const target = "a14-editor@autotest.local"
 	id := userID(t, pool, target)

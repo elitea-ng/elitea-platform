@@ -23,6 +23,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/scimdirectory"
 )
 
@@ -98,8 +100,16 @@ func serveBinding(
 	router.Put("/bindings/{id}", handler.SCIMGroupBindingSave)
 	router.Delete("/bindings/{id}", handler.SCIMGroupBindingDelete)
 
+	// These tests are about the store seam, so the caller is a super_admin,
+	// whom the no-escalation rule exempts. scim_binding_escalation_internal_test.go
+	// covers the rule.
+	if handler.resolver == nil {
+		handler.resolver = fixedResolver{rolepolicy.SuperAdminPermission}
+	}
+	request := httptest.NewRequest(method, target, strings.NewReader(body))
+	request = request.WithContext(auth.ContextWithUser(request.Context(), auth.User{ID: "5", UserID: "5"}))
 	recorder := httptest.NewRecorder()
-	router.ServeHTTP(recorder, httptest.NewRequest(method, target, strings.NewReader(body)))
+	router.ServeHTTP(recorder, request)
 	return recorder
 }
 

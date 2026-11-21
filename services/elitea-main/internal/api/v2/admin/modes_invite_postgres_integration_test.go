@@ -152,9 +152,12 @@ WHERE role.mode = 'administration' AND role.name = 'admin'`, operatorID); err !=
 	}
 
 	options := []admin.Option{}
-	if resolver != nil {
-		options = append(options, admin.WithPermissionResolver(resolver))
+	if resolver == nil {
+		// A super_admin caller: these cases are not about the no-escalation
+		// rule, which role_escalation_postgres_integration_test.go covers.
+		resolver = superAdminResolver()
 	}
+	options = append(options, admin.WithPermissionResolver(resolver))
 	options = append(options, extra...)
 	router := modesRouter(admin.NewHandler(pool, options...), &auth.User{ID: "1", UserID: "1"})
 	return pool, router, operatorID, memberID

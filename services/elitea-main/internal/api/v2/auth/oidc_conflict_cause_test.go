@@ -44,7 +44,7 @@ func TestARefusedFallbackReportsItsCause(t *testing.T) {
 				tc.row,
 			}}
 			_, err := resolveProvisionedUserFor(
-				context.Background(), tx, "oidc:sub-N", "nina@corp.com", "Nina", nil, false, tc.adopt,
+				context.Background(), tx, testBinding, "oidc:sub-N", "nina@corp.com", "Nina", nil, false, tc.adopt,
 			)
 			if !errors.Is(err, errIdentityConflict) || identityConflictCauseOf(err) != tc.want {
 				t.Fatalf("err = %v, want the conflict cause %s", err, tc.want)
@@ -66,17 +66,17 @@ func TestARefusedFallbackReportsItsCause(t *testing.T) {
 // another account holds, and a link that a concurrent login won.
 func TestTheOtherConflictsCarryTheirCause(t *testing.T) {
 	tx := &scriptedTx{
-		rows:       []scriptedRow{{values: []any{7, false}}},
+		rows:       []scriptedRow{{values: []any{7, false, true, true}}},
 		execErrors: map[string]error{"SET last_login": &pgconn.PgError{Code: "23505"}},
 	}
-	_, err := resolveProvisionedUser(context.Background(), tx, "oidc:sub-A", "taken@corp.com", "Alice", nil, false)
+	_, err := resolveProvisionedUser(context.Background(), tx, testBinding, "oidc:sub-A", "taken@corp.com", "Alice", nil, false)
 	if identityConflictCauseOf(err) != conflictEmailTaken ||
 		strings.Contains(oidcIdentityConflictMessage(conflictEmailTaken), "oidc-relink") {
 		t.Fatalf("err = %v, want %s without the relink remedy", err, conflictEmailTaken)
 	}
 
 	tx = &scriptedTx{rows: []scriptedRow{{err: pgx.ErrNoRows}, {values: []any{11}}, {values: []any{7}}}}
-	_, err = resolveProvisionedUser(context.Background(), tx, "oidc:sub-A", "carol@corp.com", "Carol", nil, false)
+	_, err = resolveProvisionedUser(context.Background(), tx, testBinding, "oidc:sub-A", "carol@corp.com", "Carol", nil, false)
 	if identityConflictCauseOf(err) != conflictConcurrentChange {
 		t.Fatalf("err = %v, want %s", err, conflictConcurrentChange)
 	}

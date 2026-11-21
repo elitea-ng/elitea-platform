@@ -63,7 +63,7 @@ func TestTokenCreatePersistsCurrentBaselineContractForOwningUser(t *testing.T) {
 		},
 	}
 
-	req := authenticatedTokenRequest(http.MethodPost, "/token/", `{"name":"ci-token","expires":{"measure":"hours","value":24}}`)
+	req := browserSessionTokenRequest("/token/", `{"name":"ci-token","expires":{"measure":"hours","value":24}}`)
 	rec := httptest.NewRecorder()
 	handler.Routes().ServeHTTP(rec, req)
 
@@ -74,7 +74,7 @@ func TestTokenCreatePersistsCurrentBaselineContractForOwningUser(t *testing.T) {
 		t.Fatalf("Cache-Control = %q, want no-store", got)
 	}
 	if gotOwnerID != 7 {
-		t.Fatalf("persisted owner = %d, want 7; token row ID 42 must not be treated as user ID", gotOwnerID)
+		t.Fatalf("persisted owner = %d, want 7, the browser session's user", gotOwnerID)
 	}
 	if gotName == nil || *gotName != "ci-token" || gotExpires == nil {
 		t.Fatalf("persisted token name=%v expires=%v", gotName, gotExpires)
@@ -135,7 +135,7 @@ func TestTokenCreateRejectsTrailingJSONDocument(t *testing.T) {
 		},
 	}
 
-	req := authenticatedTokenRequest(http.MethodPost, "/token/", `{"name":"first"}{"name":"second"}`)
+	req := browserSessionTokenRequest("/token/", `{"name":"first"}{"name":"second"}`)
 	rec := httptest.NewRecorder()
 	handler.Routes().ServeHTTP(rec, req)
 
@@ -162,7 +162,7 @@ func TestTokenCreateDistinguishesMissingAndExplicitNullName(t *testing.T) {
 			},
 		}
 		rec := httptest.NewRecorder()
-		handler.Routes().ServeHTTP(rec, authenticatedTokenRequest(http.MethodPost, "/token/", `{}`))
+		handler.Routes().ServeHTTP(rec, browserSessionTokenRequest("/token/", `{}`))
 		if rec.Code != http.StatusBadRequest || createCalls != 0 {
 			t.Fatalf("status = %d, create calls = %d, body = %s", rec.Code, createCalls, rec.Body.String())
 		}
@@ -183,7 +183,7 @@ func TestTokenCreateDistinguishesMissingAndExplicitNullName(t *testing.T) {
 			},
 		}
 		rec := httptest.NewRecorder()
-		handler.Routes().ServeHTTP(rec, authenticatedTokenRequest(http.MethodPost, "/token/", `{"name":null}`))
+		handler.Routes().ServeHTTP(rec, browserSessionTokenRequest("/token/", `{"name":null}`))
 		if rec.Code != http.StatusOK || createCalls != 1 {
 			t.Fatalf("status = %d, create calls = %d, body = %s", rec.Code, createCalls, rec.Body.String())
 		}
@@ -220,8 +220,8 @@ func TestTokenCreateBindsRequestedProject(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	handler.Routes().ServeHTTP(rec, authenticatedTokenRequest(
-		http.MethodPost, "/token/", `{"name":"team-key","project_id":42}`,
+	handler.Routes().ServeHTTP(rec, browserSessionTokenRequest(
+		"/token/", `{"name":"team-key","project_id":42}`,
 	))
 
 	if rec.Code != http.StatusOK {
@@ -260,7 +260,7 @@ func TestTokenCreateTreatsAbsentAndNullProjectAsUnbound(t *testing.T) {
 				},
 			}
 			rec := httptest.NewRecorder()
-			handler.Routes().ServeHTTP(rec, authenticatedTokenRequest(http.MethodPost, "/token/", body))
+			handler.Routes().ServeHTTP(rec, browserSessionTokenRequest("/token/", body))
 			if rec.Code != http.StatusOK || !seen {
 				t.Fatalf("status = %d, create called = %v, body = %s", rec.Code, seen, rec.Body.String())
 			}
@@ -291,8 +291,8 @@ func TestTokenCreateRefusesNonMemberProject(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	handler.Routes().ServeHTTP(rec, authenticatedTokenRequest(
-		http.MethodPost, "/token/", `{"name":"team-key","project_id":42}`,
+	handler.Routes().ServeHTTP(rec, browserSessionTokenRequest(
+		"/token/", `{"name":"team-key","project_id":42}`,
 	))
 
 	if rec.Code != http.StatusForbidden {
@@ -338,7 +338,7 @@ func TestTokenCreateRefusesMalformedProjectID(t *testing.T) {
 				},
 			}
 			rec := httptest.NewRecorder()
-			handler.Routes().ServeHTTP(rec, authenticatedTokenRequest(http.MethodPost, "/token/", body))
+			handler.Routes().ServeHTTP(rec, browserSessionTokenRequest("/token/", body))
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want 400, body = %s", rec.Code, rec.Body.String())
 			}
@@ -536,6 +536,15 @@ func authenticatedTokenRequest(method, target, body string) *http.Request {
 		AuthType: "token",
 	}
 	return req.WithContext(identity.ContextWithUser(req.Context(), principal))
+}
+
+// browserSessionTokenRequest authenticates as user 7 through a browser
+// session, the credential that may mint a personal access token (issue 2559).
+func browserSessionTokenRequest(target, body string) *http.Request {
+	req := httptest.NewRequest(http.MethodPost, target, bytes.NewBufferString(body))
+	principal := identity.User{ID: "7", UserID: "7", BrowserSessionRef: 3}
+	return req.WithContext(identity.ContextWithAuthenticatedUser(
+		req.Context(), principal, identity.AuthenticationSourceSession))
 }
 
 func stringAddress(value string) *string {

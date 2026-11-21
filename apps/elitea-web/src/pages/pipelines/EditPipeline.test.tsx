@@ -313,7 +313,9 @@ describe('EditPipeline', () => {
       projectId: '9',
     });
 
-    expect(await screen.findByText('Version not found')).toBeInTheDocument();
+    // Same settle budget as the isFromCreation test below: on a loaded shard (the 4-CPU eng-runner pool took
+    // 276 s for this file) the first route needs more than findByText's default 1 s.
+    expect(await screen.findByText('Version not found', {}, { timeout: 10_000 })).toBeInTheDocument();
   });
 
   it('skips the not-found check when isFromCreation=true', async () => {
