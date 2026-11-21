@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// ci-web-e2e.yml starts on every change that can change what its lanes run.
+// ci-web-e2e.yml starts on every change that can change what its lanes run
+// (and ci-build-once.yml, which builds their images, with it).
 //
 // The workflow is path-filtered, and a path filter is a list someone has to
 // keep complete: a change to an input it does not name never starts the lanes
@@ -9,7 +10,7 @@
 //   * every `build:` service of the compose files the lanes run: its
 //     Containerfile and every COPY source (from the build context) of the
 //     stages its `target` builds, and
-//   * every repository script the workflow or the local actions it uses call
+//   * every repository script the two workflows or the local actions they use call
 //     (`scripts/...` references in their YAML), and what each `.mjs` one
 //     imports: its relative imports, transitively, and for a bare package
 //     import the package.json and package-lock.json `npm ci` installs from,
@@ -40,7 +41,8 @@ import { fnmatchcase, pyRepr, splitlines } from "./py-compat.mjs";
 
 const SELF = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(SELF), "..", "..");
-const WORKFLOW = path.join(ROOT, ".github", "workflows", "ci-web-e2e.yml");
+// The lanes, and the workflow that builds their images (ci-web-e2e.yml calls it).
+const WORKFLOWS = ["ci-web-e2e.yml", "ci-build-once.yml"].map((name) => path.join(ROOT, ".github", "workflows", name));
 export const COMPOSE_FILES = [
   "deploy/docker-compose.e2e-standalone.yml",
   "deploy/docker-compose.standalone-full.yml",
@@ -222,7 +224,6 @@ const ACTION_USE = /uses: \.\/(\.github\/actions\/[A-Za-z0-9_-]+)/g;
 const sorted = (items) => [...items].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 
 export function main(log = console.log) {
-  const workflowText = fs.readFileSync(WORKFLOW, "utf8");
   // The filter is scripts/ci/tier-paths.json (ci.yml runs this workflow as a job).
   const tiers = JSON.parse(fs.readFileSync(path.join(ROOT, "scripts", "ci", "tier-paths.json"), "utf8"));
   const pr = [...(tiers.jobs["ci-web-e2e"]?.paths ?? [])];
@@ -250,8 +251,8 @@ export function main(log = console.log) {
       }
     }
   }
-  const texts = new Map([[relativeToRoot(WORKFLOW), workflowText]]);
-  for (const [, action] of workflowText.matchAll(ACTION_USE)) {
+  const texts = new Map(WORKFLOWS.map((file) => [relativeToRoot(file), fs.readFileSync(file, "utf8")]));
+  for (const [, action] of [...texts.values()].flatMap((text) => [...text.matchAll(ACTION_USE)])) {
     const file = path.join(ROOT, action, "action.yml");
     const text = fs.readFileSync(file, "utf8");
     texts.set(relativeToRoot(file), text);

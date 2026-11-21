@@ -124,6 +124,36 @@ test("a concurrency group built from github.workflow is refused in a called work
   has(check(m), "fast-4.yml: its concurrency group uses github.workflow");
 });
 
+function unionModel() {
+  const m = model();
+  m.tiers.jobs["heavy-0"] = { tier: "heavy", union: ["heavy-1", "heavy-2"] };
+  for (const id of ["heavy-1", "heavy-2"]) m.ci.jobs[id].needs = ["changes", "fast-gate", "heavy-0"];
+  return m;
+}
+
+test("a union entry whose consumers are its members is sound", () => {
+  assert.deepEqual(check(unionModel()), []);
+});
+
+test("a job that needs a union job but is not in its union is refused", () => {
+  const m = unionModel();
+  m.ci.jobs["heavy-3"].needs = ["changes", "fast-gate", "heavy-0"];
+  has(check(m), "heavy-3: needs heavy-0 but is not in its union");
+});
+
+test("a union names jobs with entries of their own, one level, and has no paths", () => {
+  const m = unionModel();
+  m.tiers.jobs["heavy-0"].union.push("ghost", "heavy-4");
+  m.tiers.jobs["heavy-4"] = { tier: "heavy", union: ["heavy-5"] };
+  m.tiers.jobs["heavy-0"].paths = ["x/**"];
+  const errors = check(m);
+  has(errors, "heavy-0: its union names ghost, which has no entry");
+  has(errors, "heavy-0: its union names heavy-4, another union");
+  has(errors, "heavy-0: has both union and paths");
+  m.tiers.jobs["heavy-0"] = { tier: "heavy", union: [] };
+  has(check(m), "heavy-0: its union must be a non-empty list");
+});
+
 test("a parser that finds nothing fails", () => {
   const m = model();
   m.ci = { jobs: {} };

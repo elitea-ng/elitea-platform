@@ -94,6 +94,11 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
   (`ci-<image>:cas-<hash>`, `scripts/ci/stack-image-hash.mjs`) and skip the build when that tag exists. A run on
   main always builds. A fork pull request builds in its own job, as before. The code sandbox supervisor is
   published the same way as `ci-elitea-sandbox-supervisor`.
+- **Build once.** `ci-build-once.yml` (heavy tier, job `ci-build-once`) builds every stack image once per
+  commit. `ci-web-e2e`, `ci-governed-conformance` and `helm-install-smoke` need it and pull its images by
+  digest. Each builds in its own job only when nothing was built for it: a fork or Dependabot pull request,
+  or its own schedule or dispatch. The job runs when any of the three would run, or when the change touches
+  Rust. Its `tier-paths.json` entry is a `union` of those jobs, with no paths of its own.
 - **Actions cache.** The cache has a 10 GB cap. `ci-image-cleanup.yml` runs
   `scripts/ci/prune-actions-caches.mjs` every night: it keeps one entry per key family, removes pull-request
   copies, and removes the least recently used entries above 9 GiB. It then compares what main's entries hold
@@ -177,7 +182,7 @@ These jobs are routed (when `ENG_RUNNER` is on, on our own pull requests):
 | `ci-handoff-loadgate.yml` | `loadgate` |
 | `ci-governed-conformance.yml` | `unit` |
 | `ci-docs.yml`, `ci-mobile.yml` | `docs`, `check` |
-| `ci-web-e2e.yml` | `model-path-changes` |
+| `ci-build-once.yml` | `model-path-changes` |
 | `image-matrix.yml` | `gate-selftest`, `issue-script` |
 | `no-binaries.yml` | `repo-gates`, `history-gates` |
 | `dependency-scanning.yml` | `scan` |
@@ -197,7 +202,7 @@ Everything else stays hosted:
   steps to hosted runners; "Workspace runs on Docker" needs a registry container.
 - **Nightly only.** `ci-governed-scale.yml` runs on `schedule` and `workflow_dispatch`, which stay hosted.
 - **Docker, compose, kind or gVisor**: image builds and `docker buildx bake --print` (`image-matrix.yml`'s list
-  check), `helm-install-smoke`, the E2E suites, `ci-browser-session.yml`. helm-lint's `lint` job too: a step it runs calls `docker compose config`.
+  check), the `ci-build-once.yml` image legs, `helm-install-smoke`, the E2E suites, `ci-browser-session.yml`. helm-lint's `lint` job too: a step it runs calls `docker compose config`.
 - **System packages through apt**: the Tauri host on Linux (`ci-desktop.yml` `pane-drivers`, webkit2gtk).
 - **macOS and Windows**, including `ci-desktop-control.yml`, whose matrix has a Windows leg.
 - **Every event but `pull_request`**, so the scheduled runs on main, which write the caches, stay hosted.

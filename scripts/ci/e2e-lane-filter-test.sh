@@ -42,6 +42,7 @@ expect true false "a helm file a compose stack bind-mounts" "deploy/helm/elitea/
 expect true false "docs plus one Go file" "README.md" "services/elitea-main/cmd/x.go"
 expect true true  "the gateway" "services/elitea-llm-gateway/main.go"
 expect true true  "the e2e workflow" ".github/workflows/ci-web-e2e.yml"
+expect true true  "the build-once workflow" ".github/workflows/ci-build-once.yml"
 expect true true  "worker docs (under services/, so not prose-only)" "services/elitea-worker-rust/docs/x.md"
 
 # The handoff journey's own signal (third line): decided on every changed
@@ -60,6 +61,7 @@ expect_handoff() {
 }
 expect_handoff true "the desktop handoff host (skipped by the stack lanes)" "apps/elitea-desktop/src-tauri/src/handoff/mod.rs"
 expect_handoff true "the live tests" "apps/elitea-desktop/src-tauri/src/handoff_live_tests.rs"
+expect_handoff true "the build-once workflow" ".github/workflows/ci-build-once.yml"
 expect_handoff true "the cloud-turn simulator" "services/elitea-main/cmd/handoff-live-cloudturn/main.go"
 expect_handoff true "the store service" "services/elitea-main/internal/application/workspacestore/service.go"
 expect_handoff true "the shared workspace store crate" "libs/rust/workspace-store/src/sync.rs"
@@ -102,6 +104,7 @@ expect_sandbox true "the material script" "deploy/scripts/sandbox-compose-materi
 expect_sandbox true "the lane's journey" "apps/elitea-web/e2e/streaming/code-sandbox.run-code.spec.ts"
 expect_sandbox true "the lane's wrapper" "apps/elitea-web/scripts/code-sandbox-e2e.sh"
 expect_sandbox true "the workflow" ".github/workflows/ci-web-e2e.yml"
+expect_sandbox true "the build-once workflow" ".github/workflows/ci-build-once.yml"
 expect_sandbox false "a web page" "apps/elitea-web/src/pages/a.tsx"
 expect_sandbox false "docs only" "README.md"
 expect_sandbox false "the DeepWiki overlay" "deploy/docker-compose.deepwiki-native-real-engine.yml"
@@ -127,6 +130,7 @@ expect_webkit true "the Playwright config" "apps/elitea-web/playwright.config.ts
 expect_webkit true "the package lock (Playwright's version)" "apps/elitea-web/package-lock.json"
 expect_webkit true "the shared client package" "libs/ts/client-core/src/index.ts"
 expect_webkit true "the workflow" ".github/workflows/ci-web-e2e.yml"
+expect_webkit true "the build-once workflow" ".github/workflows/ci-build-once.yml"
 expect_webkit true "the nginx CSP and headers" "apps/elitea-web/nginx/spa.conf"
 expect_webkit true "the web image" "apps/elitea-web/Containerfile"
 expect_webkit false "a Go service" "services/elitea-main/cmd/x.go"

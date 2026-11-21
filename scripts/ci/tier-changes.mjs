@@ -76,14 +76,28 @@ export function reaches(files, patterns) {
   });
 }
 
-/** One boolean per job id of the tiers file. */
+/**
+ * One boolean per job id of the tiers file. An entry with `union` (a list of
+ * other job ids, and no `paths`) runs when any of them does: a job that serves
+ * others (ci-build-once) runs exactly when one of its consumers would, with no
+ * copy of their paths to drift.
+ */
 export function computeRun(tiers, files, { everything = false } = {}) {
   const everythingNow = everything || files.some((f) => tiers.always.includes(f));
   const run = {};
   for (const [id, job] of Object.entries(tiers.jobs)) {
+    if (job.union) continue;
     run[id] = everythingNow || reaches(files, job.paths);
   }
-  return run;
+  for (const [id, job] of Object.entries(tiers.jobs)) {
+    if (!job.union) continue;
+    for (const member of job.union) {
+      if (!Object.hasOwn(run, member)) throw new Error(`${id}: its union names ${member}, which is not a job with paths`);
+    }
+    run[id] = everythingNow || job.union.some((member) => run[member]);
+  }
+  // The file's order, so the output reads like the file.
+  return Object.fromEntries(Object.keys(tiers.jobs).map((id) => [id, run[id]]));
 }
 
 async function changedFiles(token, repo, number, fetchImpl = fetch) {

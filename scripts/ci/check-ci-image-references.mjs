@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // The CI-only images stay CI-only.
 //
-// ci-web-e2e.yml builds each stack image once per commit and pushes it to
+// ci-build-once.yml builds each stack image once per commit and pushes it to
 // `ghcr.io/elitea-ng/ci-<image>:<sha>`, and the layer cache lives at
 // `ghcr.io/elitea-ng/ci-cache-<image>`. Those are built from pull-request code,
 // pruned after 7 days (ci-image-cleanup.yml) and never scanned or signed, so
@@ -34,7 +34,8 @@ const PATTERN = "ghcr\\.io/[A-Za-z0-9_.-]+/" + "ci-";
 const CACHE_PATTERN = "ghcr\\.io/[A-Za-z0-9_.-]+/" + "ci-" + "cache-";
 
 export const ALLOWED = {
-  ".github/workflows/ci-web-e2e.yml": "builds and pulls them",
+  ".github/workflows/ci-build-once.yml": "builds and pushes them",
+  ".github/workflows/ci-web-e2e.yml": "builds (the sandbox supervisor) and pulls them",
   ".github/workflows/ci-image-cleanup.yml": "prunes them",
   ".github/actions/build-stack-images/action.yml": "pushes them (push mode) and documents the cache",
   ".github/actions/pull-stack-images/action.yml": "pulls them",
@@ -53,7 +54,7 @@ export const CACHE_ONLY = {
 };
 
 // References the allowed files must hold between them (measured when this was
-// written: ci-web-e2e.yml's push prefix, the 14 + 1 cache refs in the HCL).
+// written: the build-once push prefix, the 14 + 1 cache refs in the HCL).
 export const MINIMUM_ALLOWED_REFERENCES = 15;
 
 const count = (pattern, line) => (line.match(new RegExp(pattern, "g")) || []).length;

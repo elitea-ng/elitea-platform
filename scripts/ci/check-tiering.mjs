@@ -17,6 +17,9 @@
 //   * a job that calls a workflow has no entry (tier and paths) in
 //     scripts/ci/tier-paths.json, or an entry has no job, or the tier in the file
 //     disagrees with the job's `needs`;
+//   * a `union` entry (a job that runs when any of the listed jobs does,
+//     ci-build-once) names a job without its own entry or another union, also
+//     has paths, or a job that needs it is not in it;
 //   * a workflow ci.yml calls has no `workflow_call` arm or still starts on its
 //     own `pull_request`, or a workflow outside the allowlist starts on a pull
 //     request without being called by ci.yml (a new workflow would run untiered);
@@ -159,6 +162,25 @@ export function check({ ci, tiers, workflows }) {
   }
   for (const id of Object.keys(tierJobs)) {
     if (!jobs[id]) errors.push(`${id}: in tier-paths.json but ci.yml has no such job`);
+  }
+  // A `union` entry (ci-build-once) runs when any member does. Its members are
+  // jobs with paths, and every job that needs it is a member: a consumer left
+  // out of the union could run on a change that builds nothing for it.
+  for (const [id, entry] of Object.entries(tierJobs)) {
+    if (entry.union === undefined) continue;
+    if (!Array.isArray(entry.union) || entry.union.length === 0) {
+      errors.push(`${id}: its union must be a non-empty list of job ids`);
+      continue;
+    }
+    if (entry.paths !== undefined) errors.push(`${id}: has both union and paths; a union entry runs when a member does, from no paths of its own`);
+    for (const member of entry.union) {
+      if (!tierJobs[member]) errors.push(`${id}: its union names ${member}, which has no entry in tier-paths.json`);
+      else if (tierJobs[member].union !== undefined) errors.push(`${id}: its union names ${member}, another union (one level only)`);
+    }
+    for (const [other, job] of Object.entries(jobs)) {
+      if (other === "ci-gate" || !asList(job.needs).includes(id)) continue;
+      if (!entry.union.includes(other)) errors.push(`${other}: needs ${id} but is not in its union in tier-paths.json, so it can run when ${id} does not`);
+    }
   }
 
   const gate = jobs["fast-gate"];
