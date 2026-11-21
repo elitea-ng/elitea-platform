@@ -63,8 +63,10 @@ The desktop app reaches people only through the organization's device management
 
 | Platform | Package | Signed with |
 |---|---|---|
-| macOS 12 or later, Apple silicon and Intel | `<Name>-<version>-universal.pkg` | Developer ID Installer; the app inside with Developer ID Application. Both notarised and stapled. |
+| macOS 12 or later, Apple silicon (M1 or later) only | `<Name>-<version>-arm64.pkg` | Developer ID Installer; the app inside with Developer ID Application. Both notarised and stapled. |
 | Windows 10 2004 or later, x64 | `.msi` and `.msix` | Azure Artifact Signing or the organization's code-signing certificate, timestamped |
+
+Intel Macs are not supported. The macOS package is built for Apple silicon only, and the installer refuses to install it on an Intel Mac. Scope the MDM assignment to Apple silicon computers: in Jamf, a smart group on **Architecture Type** `arm64`; in Intune, a filter on the device's processor architecture.
 
 The desktop host builds and passes its tests on Windows. The Windows package job is not on yet, so only the macOS package is available for now. On Windows, local commands that need a sandbox are refused: see **Local work on Windows** in [Features and configuration](/admin/features-and-configuration).
 
@@ -92,7 +94,7 @@ The `.pkg` installs the app into `/Applications` with no interface and no reboot
 - **By hand or from a script:**
 
   ```bash
-  sudo installer -pkg Elitea-1.62.0-universal.pkg -target /
+  sudo installer -pkg Elitea-1.62.0-arm64.pkg -target /
   ```
 
 A newer package upgrades the app in place; it keeps the person's settings and the macOS privacy grants (Accessibility, Screen Recording), which stay valid while the bundle id and the signing team do not change. Allow these grants ahead of time with a Privacy Preferences Policy Control (PPPC) profile for the bundle id and team, where the MDM supports it (Screen Recording can only be allowed by the person).

@@ -47,6 +47,15 @@ jobs:
     # minute cap cancelled a green run mid-compile (PR #1545). The cap costs
     # nothing on a fast run.
     timeout-minutes: 60
+    # No debug info in the dev profile: the dev-profile target is what the
+    # cache below keeps, and debug info is most of its size. Measured
+    # 2026-11-20, the two targets' dependencies compressed: 2.29 GiB with line
+    # tables, 1.17 GiB without (11.8 to 7.0 GiB on disk). A
+    # failed assertion still names its file and line (that is the panic's
+    # location, not debug info); only a backtrace loses its line numbers. desktop-package.yml's pull-request dry run sets the same
+    # value, because the CARGO_* environment is part of the rust-cache key.
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
       - uses: actions/checkout@v7
 
@@ -95,13 +104,16 @@ jobs:
         run: |
           bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
 
-      # Read everywhere, write on main only: a pull request's target directory
-      # is a large part of the repository's 10 GB Actions cache, duplicated per
-      # branch (the same policy as ci-rust.yml).
+      # Read everywhere, write on main only: this workflow's nightly is the one
+      # writer. The entry keeps the dev-profile target (registry, git and the
+      # compiled dependencies), so Clippy, the tests, the WebKit run and the
+      # sample-brand build below start warm. desktop-package.yml's pull-request
+      # dry run restores the same entry (shared-key `desktop-host`); its size is
+      # counted in scripts/ci/cache-budget.json.
       - name: Cache cargo registry and build artefacts
         uses: Swatinem/rust-cache@v2
         with:
-          cache-targets: false  # registry and git only: the 10 GB cap (scripts/ci/check-cache-budget.mjs)
+          shared-key: desktop-host
           save-if: ${{ github.ref == 'refs/heads/main' }}
           workspaces: |
             apps/elitea-desktop/src-tauri
@@ -119,6 +131,9 @@ jobs:
 
       # The flow tests bind loopback ports and run an in-process deployment; the
       # keychain is a mock, so a runner with no login keychain is fine.
+      # The same package set and features as Clippy (`--workspace --all-targets`),
+      # in the one target directory: build scripts and proc macros compile once
+      # for both, and the dependencies come from the cache.
       - name: Run tests
         working-directory: apps/elitea-desktop/src-tauri
         run: cargo test --locked --workspace --all-targets
@@ -130,6 +145,8 @@ jobs:
       - name: Browser driver on WebKit
         working-directory: apps/elitea-desktop/src-tauri
         timeout-minutes: 5
+        # -p on purpose: the driver alone, without the `tauri` feature the host
+        # turns on, so this also proves that build (a small rebuild of the driver).
         run: cargo test --locked -p elitea-browser-driver-macos --test webkit -- --ignored
 
       # The host never links the document extractor: xberg turns on
@@ -266,13 +283,9 @@ jobs:
         working-directory: apps/elitea-desktop/src-tauri
         run: bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
 
-      - name: Cache cargo registry and build artefacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          cache-targets: false  # registry and git only: the 10 GB cap (scripts/ci/check-cache-budget.mjs)
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          workspaces: apps/elitea-desktop/src-tauri
-          prefix-key: pane-drivers
+      # No cargo cache here (scripts/ci/cache-budget.json, measured 2026-11-20): a
+      # registry-only entry is 0.3-0.6 GiB of the 10 GB cap and saves about the
+      # time cargo takes to fetch the crates. The budget goes to target caches.
 
       - name: Run Clippy (Linux the host and every pane driver, Windows its drivers)
         working-directory: apps/elitea-desktop/src-tauri
@@ -335,19 +348,9 @@ jobs:
         working-directory: apps/elitea-desktop/src-tauri
         run: bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
 
-      - name: Cache cargo registry and build artefacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          # Registry and git only. Measured 2026-11-19: this ONE entry held 2.77
-          # GiB (a quarter of the 10 GB cap), and its eviction pressure removed
-          # the entries the other Rust jobs restore. The target directory is
-          # not worth that (scripts/ci/cache-budget.json).
-          cache-targets: false
-          workspaces: |
-            apps/elitea-desktop/src-tauri
-            libs/rust
-          prefix-key: windows-host
+      # No cargo cache here (scripts/ci/cache-budget.json, measured 2026-11-20): a
+      # registry-only entry is 0.3-0.6 GiB of the 10 GB cap and saves about the
+      # time cargo takes to fetch the crates. The budget goes to target caches.
 
       - name: Run Clippy (host)
         working-directory: apps/elitea-desktop/src-tauri

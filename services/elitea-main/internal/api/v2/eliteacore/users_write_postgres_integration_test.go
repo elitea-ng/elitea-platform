@@ -30,6 +30,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	dbschema "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/schema"
 	infradb "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db"
 )
@@ -49,8 +50,23 @@ type usersListBody struct {
 // usersWriteRouter mounts the four verbs exactly as internal/api/router.go
 // does, minus the permission middleware (which needs the whole auth stack; the
 // E2E journey covers it through a real logged-in session instead).
+//
+// It puts user 1 on the context. The fixtures pair it with superAdminCaller,
+// which is exempt from the no-escalation rule (issue 2488); the rule itself is
+// covered by users_write_escalation_postgres_integration_test.go.
 func usersWriteRouter(handler *eliteacore.Handler) chi.Router {
+	return usersWriteRouterAs(handler, auth.User{ID: "1", UserID: "1"})
+}
+
+func usersWriteRouterAs(handler *eliteacore.Handler, principal auth.User) chi.Router {
 	router := chi.NewRouter()
+	router.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(auth.ContextWithUser(r.Context(), principal)))
+		})
+	})
+	router.Post("/admin/users/administration/{projectID}", handler.AdministrationUsersCreate)
+	router.Put("/admin/users/administration/{projectID}", handler.AdministrationUsersUpdate)
 	router.Get("/admin/users/{mode}/{projectID}", handler.Users)
 	router.Post("/admin/users/{mode}/{projectID}", handler.UsersCreate)
 	router.Put("/admin/users/{mode}/{projectID}", handler.UsersUpdate)
@@ -107,7 +123,7 @@ func memberRoles(listing usersListBody, email string) ([]string, bool) {
 func TestUsersWriteVerbsPersistProjectMembership(t *testing.T) {
 	pool := newUsersWritePostgresPool(t)
 	prepareUsersWriteFixture(t, pool)
-	router := usersWriteRouter(eliteacore.NewHandler(pool))
+	router := usersWriteRouter(eliteacore.NewHandler(pool, eliteacore.WithPermissionResolver(superAdminCaller{})))
 
 	const invited = "e2e-invited@autotest.local"
 	const existing = "e2e-member@autotest.local"
@@ -355,7 +371,7 @@ const otherProjectID = 4242
 func TestUsersDeleteRevokesTokenProjectBindingsForThatProjectOnly(t *testing.T) {
 	pool := newUsersWritePostgresPool(t)
 	prepareUsersWriteFixture(t, pool)
-	router := usersWriteRouter(eliteacore.NewHandler(pool))
+	router := usersWriteRouter(eliteacore.NewHandler(pool, eliteacore.WithPermissionResolver(superAdminCaller{})))
 
 	const leaving = "e2e-member@autotest.local"
 	const staying = "e2e-admin@autotest.local"
@@ -410,7 +426,7 @@ func TestUsersDeleteRevokesTokenProjectBindingsForThatProjectOnly(t *testing.T) 
 func TestUsersUpdateRoleChangeKeepsTokenProjectBindings(t *testing.T) {
 	pool := newUsersWritePostgresPool(t)
 	prepareUsersWriteFixture(t, pool)
-	router := usersWriteRouter(eliteacore.NewHandler(pool))
+	router := usersWriteRouter(eliteacore.NewHandler(pool, eliteacore.WithPermissionResolver(superAdminCaller{})))
 
 	const edited = "e2e-member@autotest.local"
 	tokenID := seedBoundPAT(t, pool, "edited-member", edited, usersWriteProjectID)
@@ -454,7 +470,7 @@ func TestUsersUpdateRoleChangeKeepsTokenProjectBindings(t *testing.T) {
 func TestUsersDeleteBindingRevocationRollsBackWithTheAssignment(t *testing.T) {
 	pool := newUsersWritePostgresPool(t)
 	prepareUsersWriteFixture(t, pool)
-	router := usersWriteRouter(eliteacore.NewHandler(pool))
+	router := usersWriteRouter(eliteacore.NewHandler(pool, eliteacore.WithPermissionResolver(superAdminCaller{})))
 
 	const member = "e2e-member@autotest.local"
 	tokenID := seedBoundPAT(t, pool, "rollback-member", member, usersWriteProjectID)
@@ -519,7 +535,7 @@ func TestUsersDeleteBindingRevocationRollsBackWithTheAssignment(t *testing.T) {
 func TestUsersCreateBulkBatchIsPerAddress(t *testing.T) {
 	pool := newUsersWritePostgresPool(t)
 	prepareUsersWriteFixture(t, pool)
-	router := usersWriteRouter(eliteacore.NewHandler(pool))
+	router := usersWriteRouter(eliteacore.NewHandler(pool, eliteacore.WithPermissionResolver(superAdminCaller{})))
 
 	const fresh = "bulk-new@autotest.local"
 	const alsoFresh = "bulk-second@autotest.local"

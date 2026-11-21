@@ -1,0 +1,53 @@
+name: Job environment on the self-hosted pool
+description: >-
+  On eng-runner (deploy/ci-runners/README.md) moves every per-user cache and
+  temporary directory onto the 80 GiB work volume, and optionally installs node.
+  On a GitHub-hosted runner it does nothing. Every job routed to eng-runner
+  uses it straight after its checkout (check-runner-routing.mjs refuses one
+  that does not).
+  Why: the runner container has an ephemeral-storage limit of 10 GiB, and only
+  /home/runner/_work is a separate volume. Anything written elsewhere
+  (~/go/pkg/mod, ~/.cache/go-build, ~/.npm, ~/.cache, /tmp) counts against
+  that limit, and a job that exceeds it gets its pod EVICTED. HOME itself
+  moves, so every `~` path follows: the go-cache and npm-cache actions set
+  GOCACHE, GOMODCACHE and NPM_CONFIG_CACHE from $HOME, and main-write-cache
+  checks its slot paths against $HOME.
+
+inputs:
+  node:
+    description: >-
+      "true" installs node on the pool, for a job that runs node scripts
+      without a setup-node step of its own (the pool's image has no node).
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Per-user caches and TMPDIR on the work volume
+      if: runner.environment != 'github-hosted'
+      shell: bash
+      run: |
+        set -euo pipefail
+        work="$(dirname -- "$RUNNER_TEMP")"   # /home/runner/_work, the 80 GiB volume
+        home="$work/_home"
+        mkdir -p "$home/.cache" "$RUNNER_TEMP"
+        # The checkout may have written a safe.directory entry to the global config.
+        if [ -f "$HOME/.gitconfig" ]; then cp -- "$HOME/.gitconfig" "$home/.gitconfig"; fi
+        {
+          echo "HOME=$home"
+          echo "XDG_CACHE_HOME=$home/.cache"
+          echo "GOPATH=$home/go"
+          echo "GOMODCACHE=$home/go/pkg/mod"
+          echo "GOCACHE=$home/.cache/go-build"
+          echo "GOLANGCI_LINT_CACHE=$home/.cache/golangci-lint"
+          echo "npm_config_cache=$home/.npm"
+          echo "TMPDIR=$RUNNER_TEMP"
+        } >> "$GITHUB_ENV"
+        echo "eng-runner: HOME, caches and TMPDIR under $work"
+    - uses: actions/setup-node@v7
+      if: runner.environment != 'github-hosted' && inputs.node == 'true'
+      with:
+        node-version: "26"
+        # Nothing to install: no automatic cache (check-workflow-cache-writes).
+        package-manager-cache: false

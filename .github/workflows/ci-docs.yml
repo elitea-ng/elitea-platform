@@ -27,7 +27,7 @@ permissions:
 jobs:
   docs:
     name: Content checks, types, build, links and CSP
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
     timeout-minutes: 15
     defaults:
       run:
@@ -37,6 +37,8 @@ jobs:
       DOCS_BASE: /docs/
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume (does nothing on hosted).
+      - uses: ./.github/actions/eng-runner-env
       - uses: actions/setup-node@v7
         with:
           node-version: "26"

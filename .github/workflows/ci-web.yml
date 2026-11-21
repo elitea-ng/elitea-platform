@@ -65,9 +65,11 @@ jobs:
     # same installed tree, and each spent more time on runner setup + `npm ci`
     # than on its own work. They are steps here; a failure still names the step.
     name: Quality (typecheck + lint)
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume (does nothing on hosted).
+      - uses: ./.github/actions/eng-runner-env
       - uses: actions/setup-node@v7
         with:
           node-version: "26"
@@ -247,7 +249,7 @@ jobs:
 
   unit-tests:
     name: Unit tests (sharded)
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -260,6 +262,8 @@ jobs:
         shardCount: [5]
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume (does nothing on hosted).
+      - uses: ./.github/actions/eng-runner-env
       - uses: actions/setup-node@v7
         with:
           node-version: "26"
@@ -297,7 +301,9 @@ jobs:
             exit 1
           fi
           echo "$(grep -c '' <<< "$unit_tests") unit test file(s) found"
-          npm run test:unit -- --run --shard=${{ matrix.shardIndex }}/${{ matrix.shardCount }} --coverage.enabled=false
+          # 4 workers: the 4 vCPU of a hosted runner and of an eng-runner pod,
+          # whose node sees the host's 8 cores, not the pod's cgroup limit.
+          npm run test:unit -- --run --shard=${{ matrix.shardIndex }}/${{ matrix.shardCount }} --coverage.enabled=false --maxWorkers=4
 
   gates-static:
     # The eighteen single-script gates that need nothing but a checkout and
@@ -313,9 +319,11 @@ jobs:
     # skip `npm ci` for that reason; they now ride the shared install, which
     # costs the job nothing extra because the other thirteen need it.
     name: Static gates (node scripts)
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume (does nothing on hosted).
+      - uses: ./.github/actions/eng-runner-env
       - uses: actions/setup-node@v7
         with:
           node-version: "26"
@@ -667,9 +675,11 @@ jobs:
     # `build` and the old `gate-bundle-secret` job both ran `npm run build` on
     # their own runner and then read `dist/`. One build now feeds both checks.
     name: Build (four entries + bundle budget + bundle secrets)
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume (does nothing on hosted).
+      - uses: ./.github/actions/eng-runner-env
       - uses: actions/setup-node@v7
         with:
           node-version: "26"

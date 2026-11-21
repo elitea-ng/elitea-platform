@@ -82,6 +82,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/personalproject"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/browsersession"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/identityproviders"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identityrepo"
 )
 
 const (
@@ -416,7 +417,7 @@ func (h *SAMLHandler) ACS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID, err := h.provisionUser(r.Context(), assertion.NameID, email, name, runtime.document.AdoptSCIMUsers)
+	userID, err := h.provisionUser(r.Context(), runtime.binding, assertion.NameID, email, name, runtime.document.AdoptSCIMUsers)
 	if err != nil {
 		h.writeProvisioningFailure(w, err, email)
 		return
@@ -681,7 +682,7 @@ func samlAttribute(assertion *saml2.AssertionInfo, authored string, fallbacks []
 // `adoptSCIMUsers` is the provider's `adopt_scim_users`: whether this first
 // login may adopt a SCIM-provisioned account. See joinAccountByEmail.
 func (h *SAMLHandler) provisionUser(
-	ctx context.Context, nameID, email, name string, adoptSCIMUsers bool,
+	ctx context.Context, binding identityrepo.ProviderBinding, nameID, email, name string, adoptSCIMUsers bool,
 ) (string, error) {
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
@@ -690,7 +691,7 @@ func (h *SAMLHandler) provisionUser(
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	providerRef := SAMLProviderRefPrefix + nameID
-	userID, err := resolveProvisionedUserFor(ctx, tx, providerRef, email, name, nil, false, adoptSCIMUsers)
+	userID, err := resolveProvisionedUserFor(ctx, tx, binding, providerRef, email, name, nil, false, adoptSCIMUsers)
 	if err != nil {
 		return "", err
 	}
@@ -722,6 +723,11 @@ func (h *SAMLHandler) writeProvisioningFailure(w http.ResponseWriter, err error,
 	case errors.Is(err, errUserSuspended):
 		slog.Warn("SAML: suspended user attempted login", "email", email)
 		http.Error(w, "account suspended", http.StatusForbidden)
+	case identityConflictCauseOf(err) == conflictProviderNotBound:
+		// The NameID is linked, but not to this provider and IdP entity id
+		// (issue 2558): usually an edit of the provider's entity id.
+		slog.Warn("SAML: refused a login whose link is bound to another provider or issuer", "email", email)
+		http.Error(w, providerNotBoundMessage, http.StatusConflict)
 	case errors.Is(err, errIdentityConflict):
 		// The subject and the address name two different accounts. Only an
 		// operator can decide which one survives, so the login stops here

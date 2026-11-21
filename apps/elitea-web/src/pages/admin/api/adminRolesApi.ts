@@ -30,6 +30,7 @@ import {
 } from '@tanstack/react-query';
 
 import { EliteaApiError, eliteaFetch } from '@/shared/api/generated/mutator';
+import { t } from '@/shared/i18n';
 import { unwrapListPage } from '@/shared/api/unwrap';
 
 /** Which matrix is being read or written. See this module's header. */
@@ -87,8 +88,65 @@ export function permissionMatrixFailureReason(error: unknown): string | undefine
   if (failure.kind !== 'http') return undefined;
   const body = failure.body;
   if (typeof body !== 'object' || body === null) return undefined;
+  const refusal = roleRefusalReason(body);
+  if (refusal !== undefined) return refusal;
   const reason = (body as { error?: unknown }).error;
   return typeof reason === 'string' && reason !== '' ? reason : undefined;
+}
+
+/** The 403 body of a refusal by the server's no-escalation rule (issue 2488). */
+interface RoleRefusalBody {
+  readonly code?: unknown;
+  readonly role?: unknown;
+  readonly permissions?: unknown;
+}
+
+/**
+ * The no-escalation refusals, keyed on the server's stable `code`
+ * (internal/rolepolicy). The server's `error` sentence is the fallback for a
+ * code this client does not know yet.
+ */
+const ROLE_REFUSAL_MESSAGES: Readonly<Record<string, () => string>> = {
+  role_permission_not_held: () =>
+    t('pages.admin.roles.refusal.notHeld', 'You can grant, assign or remove only permissions that you hold yourself.'),
+  role_own_set_locked: () =>
+    t('pages.admin.roles.refusal.ownRole', 'You hold this role, so you cannot change its permissions. Ask a super admin.'),
+  role_permission_reserved: () =>
+    t('pages.admin.roles.refusal.reserved', 'The super admin permission can be granted only to the super admin role.'),
+  role_super_admin_required: () =>
+    t('pages.admin.roles.refusal.superAdmin', 'Only a super admin can assign or remove the super admin role.'),
+  role_self_escalation: () =>
+    t('pages.admin.roles.refusal.selfEscalation', 'This change would give you permissions that you do not hold.'),
+  role_caller_unresolved: () =>
+    t(
+      'pages.admin.roles.refusal.unresolved',
+      'Your own permissions could not be checked, so the change was not saved. Try again.',
+    ),
+};
+
+/**
+ * The reason, then what it is about. Each part is a whole sentence with its
+ * own key, so a translation never has to agree with a fragment of another
+ * key, and the details read the same in any order.
+ */
+function roleRefusalReason(body: RoleRefusalBody): string | undefined {
+  if (typeof body.code !== 'string') return undefined;
+  const message = ROLE_REFUSAL_MESSAGES[body.code];
+  if (message === undefined) return undefined;
+  const permissions = Array.isArray(body.permissions)
+    ? body.permissions.filter((name): name is string => typeof name === 'string')
+    : [];
+  const role = typeof body.role === 'string' ? body.role : '';
+  const sentences = [message()];
+  if (role !== '') sentences.push(t('pages.admin.roles.refusal.role', 'Role: {{role}}.', { role }));
+  if (permissions.length > 0) {
+    sentences.push(
+      t('pages.admin.roles.refusal.permissions', 'Permissions: {{permissions}}.', {
+        permissions: permissions.join(', '),
+      }),
+    );
+  }
+  return sentences.join(' ');
 }
 
 /** `GET /admin/permissions/{scope}/{targetMode}` — the whole matrix, unpaginated. */

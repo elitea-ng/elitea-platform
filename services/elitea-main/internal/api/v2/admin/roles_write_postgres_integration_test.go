@@ -423,7 +423,7 @@ func newRolesEnvironment(t *testing.T) (*pgxpool.Pool, chi.Router) {
 	pool := newRolesPool(t)
 	prepareRolesFixture(t, pool)
 	t.Setenv("AI_PROJECT_ID", fmt.Sprint(publicProjectID))
-	return pool, rolesRouter(admin.NewHandler(pool), nil, &auth.User{ID: "1", UserID: "1"})
+	return pool, rolesRouter(admin.NewHandler(pool, admin.WithPermissionResolver(superAdminResolver())), nil, &auth.User{ID: "1", UserID: "1"})
 }
 
 /* ── read ──────────────────────────────────────────────────────────────── */
@@ -975,10 +975,10 @@ func TestPermissionMatrixRefusesACallerWithoutTheEditPermission(t *testing.T) {
 		auth.PermissionModeAdministration,
 		"configuration.roles.permissions.edit",
 	)
-	guarded := rolesRouter(admin.NewHandler(pool), viewerGate, &auth.User{ID: "1", UserID: "1"})
+	guarded := rolesRouter(admin.NewHandler(pool, admin.WithPermissionResolver(superAdminResolver())), viewerGate, &auth.User{ID: "1", UserID: "1"})
 	// A second, ungated router is used only to READ the matrix back, so the
 	// assertion "nothing moved" does not depend on the gate under test.
-	open := rolesRouter(admin.NewHandler(pool), nil, &auth.User{ID: "1", UserID: "1"})
+	open := rolesRouter(admin.NewHandler(pool, admin.WithPermissionResolver(superAdminResolver())), nil, &auth.User{ID: "1", UserID: "1"})
 
 	before := readMatrix(t, open, "administration", "default")
 	body := setCell(t, before, "models.alpha.view", "viewer", false)
@@ -1015,7 +1015,7 @@ func TestPermissionMatrixReadIsGated(t *testing.T) {
 		auth.PermissionModeAdministration,
 		"configuration.roles.permissions.view",
 	)
-	router := rolesRouter(admin.NewHandler(pool), gate, &auth.User{ID: "1", UserID: "1"})
+	router := rolesRouter(admin.NewHandler(pool, admin.WithPermissionResolver(superAdminResolver())), gate, &auth.User{ID: "1", UserID: "1"})
 
 	recorder := adminDo(t, router, http.MethodGet, "/admin/permissions/administration/default", nil)
 	if recorder.Code != http.StatusForbidden {

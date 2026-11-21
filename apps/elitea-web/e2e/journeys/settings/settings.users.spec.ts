@@ -638,15 +638,20 @@ test.describe('#130 write path', () => {
     ] as const;
 
     /** What the pair is invited with, and what the batch edit must REPLACE. */
-    const BATCH_ROLE_BEFORE = 'viewer';
+    const BATCH_ROLE_BEFORE = 'editor';
     /**
      * What the batch edit sets. Deliberately NOT `editor`: e2e-member holds
      * `editor`, so a handler that applied the update to the whole project
      * instead of to the ids it was given would leave that persona looking
-     * untouched. With `admin` as the target, such a bug moves e2e-member off
+     * untouched. With `viewer` as the target, such a bug moves e2e-member off
      * `editor` and the assertion below sees it.
+     *
+     * Deliberately NOT `admin` either. The edit runs as e2e-member, a project
+     * `editor`, and the server refuses to assign or remove a role whose
+     * permissions the caller does not hold (issue 2488): `editor` and `viewer`
+     * are within an editor's own set, `admin` is not.
      */
-    const BATCH_ROLE_AFTER = 'admin';
+    const BATCH_ROLE_AFTER = 'viewer';
 
     test.beforeAll(async ({ browser }) => {
       const context = await browser.newContext({ storageState: STORAGE_STATE.member });
@@ -786,14 +791,14 @@ test.describe('#130 write path', () => {
         const member = after.find((row) => row.email === email);
         expect(member, `PUT returned success but ${email} is no longer a member`).toBeTruthy();
         // REPLACEMENT, and for BOTH: a handler that split the id list but
-        // merged instead of replacing reports ['admin','viewer'] here, and one
-        // that took only the first id leaves batch-b on ['viewer'].
+        // merged instead of replacing reports ['editor','viewer'] here, and one
+        // that took only the first id leaves batch-b on ['editor'].
         expect([...(member?.roles ?? [])].sort(), `${email} after the batch edit`).toEqual([
           BATCH_ROLE_AFTER,
         ]);
       }
       // Blast radius: the write touched the two ids it was given and nothing
-      // else. e2e-member is still `editor`, which `admin` would have overwritten.
+      // else. e2e-member is still `editor`, which `viewer` would have overwritten.
       for (const seeded of SEEDED_MEMBERS) {
         const member = after.find((row) => row.email === seeded.email);
         expect(member?.roles, `seeded ${seeded.email} must be untouched`).toEqual([seeded.role]);
