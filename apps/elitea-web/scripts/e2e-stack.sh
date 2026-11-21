@@ -9,6 +9,13 @@
 #   CI (GitHub Actions ubuntu-latest) has `docker compose` (v2 plugin).
 #   Local dev on this machine uses podman compose (podman is installed, docker is not).
 #   Override with: COMPOSE_BIN="docker compose" ./scripts/e2e-stack.sh up
+#
+# E2E_STACK=native runs the same stack without containers, on the self-hosted
+# pool: every call on the running stack goes through lib/stack-backend.sh,
+# which drives scripts/e2e/native-stack.mjs over deploy/native/
+# e2e-standalone.mjs instead of compose (E2E_NATIVE_BIN names the built
+# binaries). The default, E2E_STACK=compose, runs exactly the compose
+# commands it always did.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
@@ -20,6 +27,8 @@ REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 . "$(dirname "$0")/lib/container-lookup.sh"
 # shellcheck source=lib/compose-detect.sh
 . "$(dirname "$0")/lib/compose-detect.sh"
+# shellcheck source=lib/stack-backend.sh
+. "$(dirname "$0")/lib/stack-backend.sh"
 # Standalone file: self-contained, no port conflicts with the centry dev stack.
 # In CI set E2E_PORT=8080 (free on ubuntu-latest); locally defaults to 8082.
 # -p elitea-e2e: explicit project name avoids clashing with the deploy- project.
@@ -32,6 +41,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 # postgres" fallback and the seed would have been applied to the other stack's
 # database.
 E2E_PROJECT="${E2E_PROJECT:-elitea-e2e}"
+# shellcheck disable=SC2034 # read by lib/stack-backend.sh (compose mode)
 COMPOSE_F="-p ${E2E_PROJECT} -f ${REPO_ROOT}/deploy/docker-compose.e2e-standalone.yml"
 
 # The IANA zone this seed computes its calendar-day boundaries in (issue #214).
@@ -47,8 +57,8 @@ COMPOSE_F="-p ${E2E_PROJECT} -f ${REPO_ROOT}/deploy/docker-compose.e2e-standalon
 # whatever the runner and the postgres session happened to be set to.
 E2E_TZ="${E2E_TZ:-UTC}"
 
-# ── compose binary detection ─────────────────────────────────────────────────
-detect_compose_bin
+# ── backend: compose (binary detection) or native ────────────────────────────
+stack_init
 
 CMD="${1:-}"
 
@@ -69,26 +79,10 @@ case "$CMD" in
     # certificate, off the same CA.
     bash "${REPO_ROOT}/deploy/scripts/gen-platform-listener-certs.sh"
     echo "→ Bringing up E2E stack (${COMPOSE_BIN})…"
-    # --wait: wait for every healthcheck to report healthy before returning.
-    # elitea-main runs migrations on startup; postgres is its dependency.
-    # --remove-orphans drops the `traefik` container a pre-#1359 stack still
-    # runs; it holds E2E_PORT, which elitea-main now publishes itself.
-    # A service that dies before it is healthy fails `up --wait` with only
-    # "container ... exited (1)"; its reason is in its own log, and the
-    # `logs` step's file is an artifact nobody opens first (#1359: elitea-main
-    # refused its platform key and the job log said nothing). So on this
-    # failure print, into the job log, the tail of every service that is not
-    # running or not healthy, then fail as before. Never fatal itself.
-    if ! $COMPOSE_BIN $COMPOSE_F up -d --wait --remove-orphans; then
-      echo "✗ The E2E stack did not come up. Services that are not running and healthy:" >&2
-      $COMPOSE_BIN $COMPOSE_F ps -a >&2 || true
-      # A one-shot that exited 0 (bucket init, NATS bootstrap) is fine.
-      for service in $($COMPOSE_BIN $COMPOSE_F ps -a --format '{{.Service}} {{.State}} {{.ExitCode}} {{.Health}}' 2>/dev/null \
-          | awk '($2 != "running" && $3 != "0") || ($2 == "running" && $4 != "" && $4 != "healthy") { print $1 }' \
-          | sort -u); do
-        echo "=== ${service}: last 80 log lines ===" >&2
-        $COMPOSE_BIN $COMPOSE_F logs --no-color --tail 80 "$service" >&2 || true
-      done
+    # stack_up (lib/stack-backend.sh) waits for every healthcheck and, when a
+    # service does not come up, prints the tail of each one that is not
+    # running and healthy into the job log before it fails.
+    if ! stack_up; then
       exit 1
     fi
     echo "→ Stack ready."
@@ -96,7 +90,7 @@ case "$CMD" in
 
   down)
     echo "→ Tearing down E2E stack…"
-    $COMPOSE_BIN $COMPOSE_F down --remove-orphans -v
+    stack_down
     ;;
 
   seed)
@@ -118,13 +112,11 @@ case "$CMD" in
     # date.
     INIT_SQL="${REPO_ROOT}/services/elitea-main/internal/infra/db/migrations/001_initial.sql"
     if [ -f "$INIT_SQL" ]; then
-      EXEC_BIN_EARLY="${COMPOSE_BIN%% *}"
       # Detect the postgres container early (needed here before the full lookup below).
-      PG_EARLY=$(resolve_container_name "$E2E_PROJECT" 'postgres' \
-        "$($EXEC_BIN_EARLY ps --format '{{.Names}}' 2>/dev/null || true)")
+      PG_EARLY=$(stack_container postgres)
       if [ -n "$PG_EARLY" ]; then
         echo "  → Applying 001_initial.sql (centry schema bootstrap)…"
-        $EXEC_BIN_EARLY exec -i "$PG_EARLY" psql -U elitea -d elitea < "$INIT_SQL" >/dev/null 2>&1 || true
+        stack_psql "$PG_EARLY" -U elitea -d elitea < "$INIT_SQL" >/dev/null 2>&1 || true
       fi
     fi
     # ── elitea-migrate, in TWO passes ────────────────────────────────────────
@@ -154,8 +146,7 @@ case "$CMD" in
     # `|| true`, so this is what guarantees the seed SQL has a schema to write
     # into at all. It also has to stay a SEPARATE invocation because the seed
     # SQL between the two passes writes rows the tenant pass then depends on.
-    MAIN_CONTAINER=$(resolve_container_name "$E2E_PROJECT" "${E2E_PROJECT}.*elitea-main" \
-      "$("${COMPOSE_BIN%% *}" ps --format '{{.Names}}' 2>/dev/null || true)")
+    MAIN_CONTAINER=$(stack_container elitea-main "${E2E_PROJECT}.*elitea-main")
     # Absence used to be silent (`if [ -n "$MAIN_CONTAINER" ]`), which is the
     # same failure the postgres lookup below refuses to accept: a seed that
     # cannot find the container cannot migrate, and every consequence of that
@@ -179,7 +170,7 @@ case "$CMD" in
       shift
       local out
       local status=0
-      out=$("${COMPOSE_BIN%% *}" exec "$MAIN_CONTAINER" /elitea-migrate "$@" 2>&1) || status=$?
+      out=$(stack_exec_main "$MAIN_CONTAINER" /elitea-migrate "$@" 2>&1) || status=$?
       if [ "$status" -ne 0 ]; then
         echo "ERROR: elitea-migrate ${label} failed (exit ${status})." >&2
         echo "  command: /elitea-migrate $*" >&2
@@ -194,8 +185,7 @@ case "$CMD" in
     # Resolve postgres container name.
     # Project name is `${E2E_PROJECT}` so the container is <project>-postgres-1.
     # Fallback: probe by name pattern in case the compose tool normalises differently.
-    POSTGRES_CONTAINER=$(resolve_container_name "$E2E_PROJECT" 'postgres' \
-      "$(${COMPOSE_BIN%% *} ps --format '{{.Names}}' 2>/dev/null || true)")
+    POSTGRES_CONTAINER=$(stack_container postgres)
     if [ -z "$POSTGRES_CONTAINER" ]; then
       echo "ERROR: could not locate the postgres container. Is the stack up?" >&2
       exit 1
@@ -210,7 +200,7 @@ case "$CMD" in
 
     # Wait for the mock to be reachable (up already handles healthcheck,
     # but the seed command may be called independently).
-    for i in $(seq 1 20); do
+    for _ in $(seq 1 20); do
       if curl -sf "${OIDC_BASE}/.well-known/openid-configuration" >/dev/null 2>&1; then
         break
       fi
@@ -1848,8 +1838,6 @@ SELECT setval(
 );
 ENDSQL
 
-    # Use the correct binary for exec: podman exec or docker exec.
-    EXEC_BIN="${COMPOSE_BIN%% *}"  # first word of COMPOSE_BIN (podman or docker)
     # ON_ERROR_STOP=1: without it psql reports a failed statement on stderr and
     # then carries on to the next one, exiting 0 — so the script printed
     #   ERROR:  duplicate key value violates unique constraint "auth_core__user_pkey"
@@ -1864,7 +1852,7 @@ ENDSQL
     # parameter "TimeZone"` and ON_ERROR_STOP=1 halts the seed there, which is
     # the correct outcome: a seed that fell back to the session's zone would
     # reintroduce exactly the disagreement #214 is about, silently.
-    $EXEC_BIN exec -i "$POSTGRES_CONTAINER" psql -v ON_ERROR_STOP=1 -v e2e_tz="$E2E_TZ" \
+    stack_psql "$POSTGRES_CONTAINER" -v ON_ERROR_STOP=1 -v e2e_tz="$E2E_TZ" \
       -U elitea -d elitea < "$SEED_TMP"
     rm -f "$SEED_TMP"
     echo "  ✓ DB rows seeded (calendar-day fixtures anchored in ${E2E_TZ})."
@@ -1925,7 +1913,7 @@ ENDSQL
       echo "  would otherwise pass on every stack, migrated or not." >&2
       exit 1
     fi
-    TENANT_LEDGER_GAPS=$($EXEC_BIN exec -i "$POSTGRES_CONTAINER" psql -U elitea -d elitea -tAc "
+    TENANT_LEDGER_GAPS=$(stack_psql "$POSTGRES_CONTAINER" -U elitea -d elitea -tAc "
       SELECT COALESCE(string_agg(id::text || ':' || applied::text, ', ' ORDER BY id), '')
       FROM (
         SELECT p.id AS id,
@@ -1950,7 +1938,7 @@ ENDSQL
       echo "  Rebuild it (compose build / standalone-stack.sh build) and re-seed." >&2
       exit 1
     fi
-    TENANT_SCHEMAS=$($EXEC_BIN exec -i "$POSTGRES_CONTAINER" psql -U elitea -d elitea -tAc "
+    TENANT_SCHEMAS=$(stack_psql "$POSTGRES_CONTAINER" -U elitea -d elitea -tAc "
       SELECT COUNT(*) FROM centry.project WHERE create_success = TRUE;")
     echo "  ✓ tenant history verified: ${TENANT_MIGRATIONS} migration(s) applied to all ${TENANT_SCHEMAS} tenant schema(s)."
 
@@ -1976,13 +1964,13 @@ ENDSQL
     # Assert the end state rather than trusting the exit codes. A stack that
     # cannot authorise anything must fail here, loudly, instead of handing every
     # downstream journey a mystery.
-    GRANTS=$($EXEC_BIN exec -i "$POSTGRES_CONTAINER" psql -U elitea -d elitea -tAc "
+    GRANTS=$(stack_psql "$POSTGRES_CONTAINER" -U elitea -d elitea -tAc "
       SELECT COUNT(*)
       FROM auth_core__project_user_role pur
       JOIN auth_core__user u ON u.id = pur.user_id
       WHERE pur.project_id = 1
         AND u.email IN ('e2e-admin@autotest.local','e2e-member@autotest.local');")
-    PERMS=$($EXEC_BIN exec -i "$POSTGRES_CONTAINER" psql -U elitea -d elitea -tAc "
+    PERMS=$(stack_psql "$POSTGRES_CONTAINER" -U elitea -d elitea -tAc "
       SELECT COUNT(*) FROM auth_core__project_role_permission WHERE project_id = 1;")
 
     if [ "${GRANTS:-0}" -lt 2 ] || [ "${PERMS:-0}" -lt 1 ]; then
@@ -2005,7 +1993,7 @@ ENDSQL
     # for everyone. Asserted as the RESOLVED permission — the exact join
     # legacyrbac.PostgresResolver performs — not as "the rows were inserted".
     resolves_admin_users() {
-      $EXEC_BIN exec -i "$POSTGRES_CONTAINER" psql -U elitea -d elitea -tAc "
+      stack_psql "$POSTGRES_CONTAINER" -U elitea -d elitea -tAc "
         SELECT COUNT(DISTINCT rp.permission)
         FROM auth_core__user u
         JOIN auth_core__user_role ur ON ur.user_id = u.id
@@ -2039,7 +2027,7 @@ ENDSQL
     # Same again for the Roles matrix (unit A14). Its READ is gated, so without
     # this grant the page is a 403 and the journey would be asserting against an
     # authorisation failure rather than against the matrix.
-    ROLES_GRANT=$($EXEC_BIN exec -i "$POSTGRES_CONTAINER" psql -U elitea -d elitea -tAc "
+    ROLES_GRANT=$(stack_psql "$POSTGRES_CONTAINER" -U elitea -d elitea -tAc "
       SELECT COUNT(DISTINCT rp.permission)
       FROM auth_core__user u
       JOIN auth_core__user_role ur ON ur.user_id = u.id
@@ -2062,7 +2050,7 @@ ENDSQL
     # rather than a write that quietly fails — but the failure mode is the same
     # class, so it is asserted the same way: as the resolved permission, not as
     # an inserted row.
-    PROJECT_PERMS=$($EXEC_BIN exec -i "$POSTGRES_CONTAINER" psql -U elitea -d elitea -tAc "
+    PROJECT_PERMS=$(stack_psql "$POSTGRES_CONTAINER" -U elitea -d elitea -tAc "
       SELECT COUNT(DISTINCT rp.permission)
       FROM auth_core__user u
       JOIN auth_core__user_role ur ON ur.user_id = u.id
@@ -2083,7 +2071,7 @@ ENDSQL
       exit 1
     fi
 
-    SEEDED_PROJECTS=$($EXEC_BIN exec -i "$POSTGRES_CONTAINER" psql -U elitea -d elitea -tAc "
+    SEEDED_PROJECTS=$(stack_psql "$POSTGRES_CONTAINER" -U elitea -d elitea -tAc "
       SELECT COUNT(*) FROM centry.project WHERE id IN (90001, 90002, 90003);")
     if [ "${SEEDED_PROJECTS:-0}" -lt 3 ]; then
       echo "ERROR: seed did not create the three admin-projects fixture rows (got ${SEEDED_PROJECTS:-0})." >&2
@@ -2099,7 +2087,7 @@ ENDSQL
     # broken listing and not as a seed that wrote nothing. Both rows must
     # exist AND both must start Active, because that journey asserts the
     # Active precondition before it suspends.
-    SUSPEND_FIXTURES=$($EXEC_BIN exec -i "$POSTGRES_CONTAINER" psql -U elitea -d elitea -tAc "
+    SUSPEND_FIXTURES=$(stack_psql "$POSTGRES_CONTAINER" -U elitea -d elitea -tAc "
       SELECT COUNT(*) FROM auth_core__user
       WHERE email IN (
         'e2e-suspend-chromium@autotest.local',
@@ -2140,7 +2128,7 @@ ENDSQL
     # command string. Measured — `-c "… :'e2e_tz' …"` answers
     #   ERROR:  syntax error at or near ":"
     # so the zone would have had to be pasted in by the shell instead.
-    AUDIT_FIXTURE=$($EXEC_BIN exec -i "$POSTGRES_CONTAINER" psql -U elitea -d elitea -tAq \
+    AUDIT_FIXTURE=$(stack_psql "$POSTGRES_CONTAINER" -U elitea -d elitea -tAq \
       -v ON_ERROR_STOP=1 -v e2e_tz="$E2E_TZ" <<'ENDFIXTURE'
 SELECT json_build_object(
   'timeZone', :'e2e_tz',
@@ -2194,7 +2182,7 @@ ENDFIXTURE
     # github toolkit with a resolvable credential, and this stack has none; the
     # repository is set directly instead, which is the other branch of the same
     # resolver and the one a project without a code toolkit uses.
-    $EXEC_BIN exec -i "$POSTGRES_CONTAINER" psql -U elitea -d elitea -v ON_ERROR_STOP=1 >/dev/null <<'DEEPWIKI_SQL'
+    stack_psql "$POSTGRES_CONTAINER" -U elitea -d elitea -v ON_ERROR_STOP=1 >/dev/null <<'DEEPWIKI_SQL'
 -- `owner_id` AND `author_id`, both NOT NULL. Measured against a running stack:
 -- omitting owner_id fails with a null-constraint violation naming a column the
 -- INSERT never mentioned, because the positional row it prints is the table's
@@ -2364,11 +2352,11 @@ WIKI_PAGE
 
     # `rc` is the tool the compose file already uses to create the S3 bucket
     # (rustfs-bucket-init), so this adds no new dependency to the stack.
-    $EXEC_BIN run --rm --network "${E2E_PROJECT}_default" \
-      -v "${WIKI_TMP}:/wiki:ro" \
-      --entrypoint sh rustfs/rc:latest -c "
+    # stack_probe mounts WIKI_TMP at $PROBE_SRC (compose), or runs rc on the
+    # host with PROBE_SRC=WIKI_TMP (native).
+    stack_probe rustfs/rc:latest "${WIKI_TMP}" "
         rc alias set rustfs http://rustfs:9000 elitea elitea-dev-secret >/dev/null &&
-        rc cp --recursive /wiki/${WIKI_ID} rustfs/elitea-artifacts/p/90200/b/wiki-artifacts/o/${WIKI_ID}/ >/dev/null
+        rc cp --recursive \"\$PROBE_SRC/${WIKI_ID}\" rustfs/elitea-artifacts/p/90200/b/wiki-artifacts/o/${WIKI_ID}/ >/dev/null
       " || {
         echo "ERROR: could not write the seeded wiki objects into rustfs." >&2
         echo "  The DeepWiki journey would then find an empty bucket, which is" >&2
@@ -2383,8 +2371,7 @@ WIKI_PAGE
     # Not "rc reported success": a copy into the wrong prefix succeeds and
     # leaves the browser empty. This lists the exact prefix elitea-main derives
     # for (project 1, bucket wiki-artifacts) and requires the manifest in it.
-    WIKI_OBJECTS=$($EXEC_BIN run --rm --network "${E2E_PROJECT}_default" \
-      --entrypoint sh rustfs/rc:latest -c "
+    WIKI_OBJECTS=$(stack_probe rustfs/rc:latest "" "
         rc alias set rustfs http://rustfs:9000 elitea elitea-dev-secret >/dev/null &&
         rc ls --recursive rustfs/elitea-artifacts/p/90200/b/wiki-artifacts/o/ 2>/dev/null
       " || true)
@@ -2418,7 +2405,7 @@ WIKI_PAGE
     # row (the same trap the DeepWiki block records).
     echo "  → Seeding two Inventory toolkits and their source…"
 
-    $EXEC_BIN exec -i "$POSTGRES_CONTAINER" psql -U elitea -d elitea -v ON_ERROR_STOP=1 >/dev/null <<'INVENTORY_SQL'
+    stack_psql "$POSTGRES_CONTAINER" -U elitea -d elitea -v ON_ERROR_STOP=1 >/dev/null <<'INVENTORY_SQL'
 -- `type = 'inventory'` is the provider's own toolkit name lowercased, the way
 -- the SPI addresses it in /tools/{toolkit_name}/{tool_name}/invoke. It is also
 -- what `entities/inventory`'s INVENTORY_TOOLKIT_TYPE filters the project's
@@ -2591,7 +2578,7 @@ INVENTORY_SQL
     # rows, so this model is visible in 90500 and in no other project.
     echo "  → Seeding the project-private model in project 90500…"
 
-    $EXEC_BIN exec -i "$POSTGRES_CONTAINER" psql -U elitea -d elitea -v ON_ERROR_STOP=1 >/dev/null <<'PUBLISH_SQL'
+    stack_psql "$POSTGRES_CONTAINER" -U elitea -d elitea -v ON_ERROR_STOP=1 >/dev/null <<'PUBLISH_SQL'
 -- The MODEL CATALOGUE row, `section = 'llm'` — the section the picker and
 -- `GET /configurations/models/{project}` read, and a different section from
 -- the `models` credential row. The project-1 pair above states why the three
@@ -2687,7 +2674,7 @@ PUBLISH_SQL
     # random IV, so "the pass wrote something" is exactly "the digest changed".
     # Read through a function because it is read once before and once per poll.
     project_one_vault_digest() {
-      $EXEC_BIN exec -i "$POSTGRES_CONTAINER" psql -U elitea -d elitea -tAc \
+      stack_psql "$POSTGRES_CONTAINER" -U elitea -d elitea -tAc \
         "SELECT md5(data) FROM centry.secrets_data WHERE id = 'project-1';" 2>/dev/null \
         | tr -d '[:space:]'
     }
@@ -2700,7 +2687,7 @@ PUBLISH_SQL
       exit 1
     fi
 
-    $COMPOSE_BIN $COMPOSE_F restart elitea-main
+    stack_restart elitea-main
 
     # The digest has to CHANGE, and waiting for the container to report healthy
     # is not the same assertion. The backfill runs before the listeners bind, so
@@ -2731,10 +2718,10 @@ PUBLISH_SQL
     # And it has to be SERVING again before the browser arrives. The same probe
     # the compose healthcheck runs, so "healthy" means here what it means there.
     HEALTH_DEADLINE=$(( $(date +%s) + 120 ))
-    until $EXEC_BIN exec "$MAIN_CONTAINER" /elitea-main -healthcheck >/dev/null 2>&1; do
+    until stack_exec_main "$MAIN_CONTAINER" /elitea-main -healthcheck >/dev/null 2>&1; do
       if [ "$(date +%s)" -ge "$HEALTH_DEADLINE" ]; then
         echo "ERROR: elitea-main did not become healthy after the seed restart." >&2
-        $COMPOSE_BIN $COMPOSE_F ps --all >&2 || true
+        stack_ps --all >&2 || true
         exit 1
       fi
       sleep 2
@@ -2792,7 +2779,7 @@ PUBLISH_SQL
     fi
     {
       echo "=== compose ps ==="
-      $COMPOSE_BIN $COMPOSE_F ps 2>&1 || true
+      stack_ps 2>&1 || true
       echo
       echo "=== compose logs (--no-color, timestamps) ==="
     } >> "$OUT" 2>&1
@@ -2802,7 +2789,7 @@ PUBLISH_SQL
     # would never fire.
     LOGS_HEADER_LINES="$(wc -l < "$OUT" | tr -d ' ')"
     LOGS_STDERR="$(mktemp)"
-    $COMPOSE_BIN $COMPOSE_F logs --no-color --timestamps >> "$OUT" 2> "$LOGS_STDERR" || true
+    stack_logs >> "$OUT" 2> "$LOGS_STDERR" || true
     LOGS_LINES=$(( $(wc -l < "$OUT" | tr -d ' ') - LOGS_HEADER_LINES ))
     if [ -s "$LOGS_STDERR" ]; then
       { echo; echo "=== compose logs stderr ==="; cat "$LOGS_STDERR"; } >> "$OUT"

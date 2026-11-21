@@ -787,7 +787,9 @@ describe('the publish journeys must find the tenancy their fixtures resolve', ()
  */
 export function runtimeSecretHeaderSeeded(seedSource, setupSource) {
   const vaultInsert = seedSource.indexOf('INSERT INTO centry.secrets_data');
-  const restart = seedSource.indexOf('$COMPOSE_F restart elitea-main');
+  // The restart goes through lib/stack-backend.sh, which restarts the compose
+  // service or the native process (E2E_STACK); either way it is this call.
+  const restart = seedSource.indexOf('stack_restart elitea-main');
   if (vaultInsert < 0 || restart < 0 || restart < vaultInsert) return false;
 
   // The digest of project 1's vault, and a bounded wait on it AFTER the
@@ -822,7 +824,7 @@ describe("the seeded project's X-SECRET value is a property of the stack", () =>
 
   it('rejects a seed that never restarts elitea-main', () => {
     const seed = read(SEED_SCRIPT).replace(
-      '$COMPOSE_BIN $COMPOSE_F restart elitea-main',
+      'stack_restart elitea-main',
       '# restart removed',
     );
     expect(runtimeSecretHeaderSeeded(seed, read(SETUP))).toBe(false);
@@ -830,12 +832,12 @@ describe("the seeded project's X-SECRET value is a property of the stack", () =>
 
   it('rejects a restart that runs before the vaults it is meant to fill', () => {
     const seed = read(SEED_SCRIPT).replace(
-      '$COMPOSE_BIN $COMPOSE_F restart elitea-main',
+      'stack_restart elitea-main',
       '# moved',
     );
     const moved = seed.replace(
       'INSERT INTO centry.secrets_data',
-      '$COMPOSE_BIN $COMPOSE_F restart elitea-main\nINSERT INTO centry.secrets_data',
+      'stack_restart elitea-main\nINSERT INTO centry.secrets_data',
     );
     expect(runtimeSecretHeaderSeeded(moved, read(SETUP))).toBe(false);
   });
@@ -847,7 +849,7 @@ describe("the seeded project's X-SECRET value is a property of the stack", () =>
 
   it('rejects a seed that reads the digest once and never waits on it', () => {
     const seed = read(SEED_SCRIPT);
-    const poll = seed.indexOf('$COMPOSE_BIN $COMPOSE_F restart elitea-main');
+    const poll = seed.indexOf('stack_restart elitea-main');
     const trimmed =
       seed.slice(0, poll) +
       seed.slice(poll).replaceAll('project_one_vault_digest', 'true # digest wait removed');
