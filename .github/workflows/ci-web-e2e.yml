@@ -242,15 +242,13 @@ jobs:
       # duration-balanced split, computed from a run's Playwright reports
       # against a local `playwright test --list --shard=…` so the boundaries
       # are the ones the runner will really pick — not an estimate of them.
-      # Re-derived from the native legs of run 44917909298 (795 tests per
-      # engine). Balanced totals, in test-time:
-      #
-      #   chromium  505:290       34.4 / 34.2 min  (523:242 had drifted to 38.7 / 29.9)
-      #   webkit    445:152:198   45.5 / 45.3 / 45.4 min  (443:164:158: 49.0 / 52.1 / 35.1)
-      #
-      # Four workers run those, so divide by four for the Playwright step.
-      # The split is by test time, so it holds at three workers too: no
-      # single test (1.8 min at most) is near a shard's wall time.
+      # The numbers live ONLY in scripts/ci/e2e-legs.mjs (with the run they
+      # were derived from and the balance they gave); ci-web-e2e-native.yml's
+      # literal matrix repeats them, and e2e-journey-shape.test.mjs fails if
+      # the two disagree. They are relative test-time cuts, so they carry
+      # between runners whose per-test cost scales evenly (the native pool's
+      # and a hosted runner's), and between worker counts as long as no
+      # single test is near a shard's wall time.
       #
       # THE WEIGHTS ARE A SPEED KNOB AND NEVER A CORRECTNESS ONE: every test
       # runs in exactly one shard whatever the weights say, and a Playwright

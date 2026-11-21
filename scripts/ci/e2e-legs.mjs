@@ -18,7 +18,16 @@
 import { pathToFileURL } from 'node:url';
 
 // Shards and weights: the reasoning lives on each job in ci-web-e2e.yml.
-// `weights` is PWTEST_SHARD_WEIGHTS for the leg (one weight per shard).
+// `weights` is PWTEST_SHARD_WEIGHTS for the leg (one weight per shard): the
+// test counts of a duration-balanced cut over `playwright test --list`.
+// e2e: re-derived from the native legs of run 44917909298 (795 tests per
+// engine), test time per shard: chromium 34.4 / 34.2 min (523:242 had
+// drifted to 38.7 / 29.9), webkit 45.5 / 45.3 / 45.4 min (443:164:158 gave
+// 49.0 / 52.1 / 35.1). Measured on the throttled pool, applied to the
+// compose legs too: the cut is relative, and holds wherever per-test cost
+// scales evenly. Re-check the compose legs' balance on the next nightly run.
+// Here is the one place to change them (and the native matrix, which the
+// shape test holds equal).
 export const LEGS = Object.freeze({
   e2e: [
     { engine: 'chromium', leg: 'chromium-1of2', shard: '1/2', weights: '505:290' },
