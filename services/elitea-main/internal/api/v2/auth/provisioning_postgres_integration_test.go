@@ -33,7 +33,7 @@ func resolveOnce(t *testing.T, pool *pgxpool.Pool, providerRef, email string) (i
 	require.NoError(t, err)
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	userID, err := resolveProvisionedUser(ctx, tx, providerRef, email, "Alice", nil, false)
+	userID, err := resolveProvisionedUser(ctx, tx, testBinding, providerRef, email, "Alice", nil, false)
 	if err != nil {
 		return 0, err
 	}
@@ -234,6 +234,13 @@ func newProvisioningPool(t *testing.T) *pgxpool.Pool {
 	_, err = pool.Exec(ctx, string(migration))
 	require.NoError(t, err)
 
+	// The provider bindings every resolution reads and writes (issue 2558),
+	// from the shipped file, so the foreign key to the link is the real one.
+	bindings, err := os.ReadFile("../../../../migrations/shared/0258_identity_provider_bindings.sql")
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, string(bindings))
+	require.NoError(t, err)
+
 	return pool
 }
 
@@ -261,7 +268,7 @@ func resolveOnceFor(t *testing.T, pool *pgxpool.Pool, providerRef, email string,
 	require.NoError(t, err)
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	userID, err := resolveProvisionedUserFor(ctx, tx, providerRef, email, "Alice", nil, false, adoptSCIMUsers)
+	userID, err := resolveProvisionedUserFor(ctx, tx, testBinding, providerRef, email, "Alice", nil, false, adoptSCIMUsers)
 	if err != nil {
 		return 0, err
 	}

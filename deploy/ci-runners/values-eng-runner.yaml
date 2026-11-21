@@ -1,0 +1,39 @@
+# Values for the `eng-runner` ARC runner scale set (chart
+# oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set,
+# ARC 0.15.x), showing ONLY what the job-started hook adds. Merge it into the
+# values you install with today; keep your githubConfigUrl, secret, min/max
+# runners and resources. See README.md in this directory for the order of steps.
+#
+# The pool runs jobs directly in the runner pod (no containerMode), so the hook
+# goes on the `runner` container. The ConfigMap is created from the reference
+# script in this directory:
+#
+#   kubectl -n saas-eng-runner create configmap eng-runner-hooks \
+#     --from-file=job-started.sh=deploy/ci-runners/job-started.sh \
+#     --dry-run=client -o yaml | kubectl apply -f -
+#
+# To change the repository allowlist, add a key `allowed-repos` to the SAME
+# ConfigMap (one owner/name per line; it replaces the built-in list):
+#     --from-file=allowed-repos=<your file>
+# There is deliberately no environment-variable override: a workflow's job
+# `env:`, which a fork controls, may reach the hook process.
+template:
+  spec:
+    containers:
+      - name: runner
+        image: ghcr.io/actions/actions-runner:latest # keep the image/tag you run today
+        command: ["/home/runner/run.sh"]
+        env:
+          # Runs in "Set up runner", before any step; non-zero exit fails the job.
+          - name: ACTIONS_RUNNER_HOOK_JOB_STARTED
+            value: /etc/eng-runner/job-started.sh
+        volumeMounts:
+          - name: eng-runner-hooks
+            mountPath: /etc/eng-runner
+            readOnly: true
+    volumes:
+      - name: eng-runner-hooks
+        configMap:
+          name: eng-runner-hooks
+          # Executable for the runner user; read-only, owned by root.
+          defaultMode: 0555

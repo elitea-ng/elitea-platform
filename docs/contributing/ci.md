@@ -118,6 +118,143 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
   release build and verifies it. `check-tiering.mjs` holds the path list, the dry-run inputs and
   `require_signed: true` in `publish.yml`. The app is Apple silicon only.
 
+## Runners
+
+Most jobs run on GitHub-hosted `ubuntu-latest`. The free plan caps hosted jobs at 20 at a time for the whole
+organisation, and queueing was most of a pull request's wall time. The organisation also has a self-hosted
+pool, `eng-runner`. It is an ARC runner scale set on GKE whose pods have 4 vCPU, 16 GiB, an 80 GiB work
+volume and 10 GiB of ephemeral storage. It runs the custom image `ghcr.io/elitea-ng/eng-runner:2.338.2-20261120`:
+the `actions-runner` image plus build tools such as cc and zstd.
+
+### What the pool can run
+
+A job runs directly in the pod (Ubuntu 24.04):
+
+- **No Docker daemon.** No `container:`, no `services:`, no docker, podman, compose or kind.
+- **No root.** No sudo and no apt.
+- **Toolchains come from the job.** node and Go come from `setup-*` actions or from a download into the job's
+  own directories.
+- **10 GiB of disk outside `/home/runner/_work`.** That is the container's ephemeral-storage limit. Only
+  `_work` is the separate 80 GiB volume, and a pod that writes past the limit is evicted. The default places
+  for `~/go/pkg/mod`, `~/.cache/go-build`, `~/.npm`, `~/.cache` and `/tmp` all count against it.
+
+The routed set below was chosen for the plain `actions-runner` image, which had no C compiler, zstd, gh, yq,
+Helm or pip. The custom image unlocks more jobs; `deploy/ci-runners/README.md` ("Next step") lists them. Today
+only toolchain-only jobs are routed:
+
+| Workflow | Jobs |
+|---|---|
+| `ci.yml` | `changes`, `fast-gate`, `ci-gate` |
+| `ci-web.yml` | `quality`, `unit-tests` (every shard), `gates-static`, `build` |
+| `ci-web-coverage.yml` | `coverage-merge` |
+| `ci-go.yml` | `sqlc`, `lint`, `test-plan`, `test` (the aggregator) |
+| `ci-gateway.yml` | `lint` |
+| `ci-governed-conformance.yml` | `unit` |
+| `ci-docs.yml`, `ci-mobile.yml` | `docs`, `check` |
+| `ci-web-e2e.yml` | `model-path-changes` |
+| `image-matrix.yml` | `gate-selftest`, `issue-script` |
+| `no-binaries.yml` | `history-gates` |
+
+Everything else stays hosted. That covers the jobs that need Docker, services or kind, every Rust job, the Go
+test shards and the race build, and the Python jobs (`setup-python` cannot install into the hosted tool cache
+path without root). It also covers jobs that rely on tools the hosted image ships (gh, shellcheck, Helm, yq,
+pip), macOS, Windows, and every job outside the pull-request pipeline.
+
+The coverage unit shards stay hosted: under coverage instrumentation the pod ran them 1.5 to 2 times slower,
+and the heaviest test files hit their per-test timeouts. The routed jobs set `GOMAXPROCS=4` and `--maxWorkers=4`. The pod's cgroup limit is 4 CPUs, but the node reports
+8. `scripts/ci/install-golangci-lint.sh` fetches golangci-lint with curl and jq (no gh), on both kinds of runner.
+
+Every routed job runs `./.github/actions/eng-runner-env` straight after its checkout. On a GitHub-hosted runner
+it does nothing, so the hosted path is unchanged. On the pool it does two things:
+
+- It moves `HOME` to `/home/runner/_work/_home`, and sets `XDG_CACHE_HOME`, `GOPATH`, `GOMODCACHE`,
+  `GOCACHE`, `GOLANGCI_LINT_CACHE` and `npm_config_cache` under it. It also sets `TMPDIR` to `RUNNER_TEMP`, which
+  covers jest's cache in `os.tmpdir()`; vitest caches in `node_modules`. Because `HOME` itself moves, the
+  `go-cache`, `npm-cache` and `main-write-cache` actions follow it: they resolve their paths from `$HOME`.
+- With `node: "true"`, it installs node, for jobs that run node scripts without a `setup-node` step of their own.
+
+### How a job is routed
+
+A routed job's `runs-on` is exactly `ROUTED_RUNS_ON` from `scripts/ci/check-runner-routing.mjs`. That
+expression sends the job to `eng-runner` only when **all** of these hold. Otherwise the job goes to
+`ubuntu-latest`.
+
+1. The repository variable `ENG_RUNNER` is `on`. It is unset by default.
+2. The event is `pull_request`.
+3. The pull request's head repository is this repository, so it is not a fork.
+4. Its author is not Dependabot.
+5. Neither `github.actor` nor `github.triggering_actor` is `dependabot[bot]`.
+
+It is an allowlist of one event. A condition written as "anything but `pull_request`" would let
+`pull_request_target`, `workflow_run` and `issue_comment` through, and none of those may reach the pool.
+
+These events stay hosted:
+
+- **`schedule` and `workflow_dispatch`** (the runs on main). They write the caches. An entry saved on the pool
+  would be saved under the moved `HOME` paths, and the cache version hashes the path strings, so every hosted
+  reader would miss it.
+- **`merge_group`.** Its payload does not say who wrote the queued change, so a Dependabot bump could reach the
+  pool through it.
+
+`scripts/ci/check-runner-routing.mjs` (run in `no-binaries.yml`) fails the pull request when:
+
+- a `runs-on` can resolve to `eng-runner` without that exact expression, whether as a literal, a list, a group,
+  a matrix value or any other expression;
+- a routed job has `container:` or `services:`;
+- a routed job has a step, or a step inside a local composite action it uses, that runs docker, podman, kind,
+  sudo, apt or systemctl, or uses a `docker/*` or kind action, unless that step's `if:` starts with
+  `runner.environment == 'github-hosted'`;
+- a routed job is in a workflow, or is called from a workflow, that can start on an event outside
+  `pull_request`, `schedule` and `workflow_dispatch`;
+- a routed job runs `node`, `npm`, `npx` or `go` but has no step that installs it (`actions/setup-node`,
+  `actions/setup-go`, or `eng-runner-env` with `node: "true"`);
+- a routed job does not run `./.github/actions/eng-runner-env` unconditionally, before every action other than
+  the checkout. A sparse checkout must include that action's directory.
+
+Its test evaluates the expression the way GitHub evaluates it. It covers a fork, a same-repository PR,
+Dependabot, `merge_group`, `push`, `schedule`, `workflow_dispatch`, `pull_request_target`, `workflow_run`, and
+the variable unset or off. `check-no-push-triggers.mjs` refuses `pull_request_target` in every workflow.
+
+**Turn it on or off.** Go to Settings → Secrets and variables → Actions → Variables and set `ENG_RUNNER` to `on`.
+Set it to `off`, or delete it, to send every job back to `ubuntu-latest` on its next run. Neither change needs
+a pull request.
+
+**When the pool is down.** Routed jobs stay queued, and `ci-gate` waits for them. Set `ENG_RUNNER` to `off`,
+then re-run the failed or cancelled jobs (or push again).
+
+**Caches.** `actions/cache` works on the pool through the GitHub cache service. The writers are unchanged, one
+per key: the scheduled runs on main write, and they stay hosted. Pull requests only read. Expect a routed job
+to miss the hosted entries and run cold: the restore paths sit under the moved `HOME`, and the cache version
+hashes the path strings. The custom image has `zstd`, so the compression part of the version already matches.
+
+The Go jobs also build with cgo off, so the hosted Go build cache would only partly apply to them anyway. Mounting
+the work volume at `/home/runner` in the scale set would keep `HOME` unmoved, and the cache versions would then
+match (`deploy/ci-runners/README.md`, "Next step").
+
+### Security model
+
+The repository is public. A fork's pull request runs the fork's copy of the workflow files, so it can write
+`runs-on: eng-runner` itself. The routing above decides where **our** jobs go and keeps fork and Dependabot
+jobs on hosted runners, but it is not a security control. The guards are:
+
+1. **The runner group gives access to selected repositories only.** Organisation settings → Actions → Runner
+   groups.
+2. **Fork pull-request runs need approval for every external contributor.**
+3. **The job-started hook (deployed 2026-11-20).** `deploy/ci-runners/job-started.sh` runs on the
+   runner before any step. It refuses every job that is not from an allowed repository, and every event outside
+   `pull_request`, `schedule`, `workflow_dispatch` and `push`. It also refuses a pull request whose head is a
+   fork, and Dependabot. The owner's GitOps chart deploys it; the repository copy is the tested reference.
+   The runbook is `deploy/ci-runners/README.md`.
+
+The hook is the only layer that refuses a fork job whose own YAML targets `eng-runner`, so keep approving fork
+runs with care. The close-time run of `cancel-merged-pr-runs.yml`, which a fork's close also queues for
+approval, needs no approval: its hourly sweep covers that pull request.
+
+`cancel-merged-pr-runs.yml` uses `pull_request: [closed]` and an hourly schedule, not `pull_request_target`.
+GitHub blocks `pull_request_target` by default from 2026-12-02. A fork or Dependabot close gets a read-only
+token, so the close-time pass logs a notice and does nothing. The hourly sweep then cancels the unfinished
+runs of every pull request merged in the last 2 hours and deletes closed pull requests' caches.
+
 ## Security scanners
 
 | Scanner | Where | When |
@@ -129,3 +266,15 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
 
 An advisory that cannot be fixed now goes in `deny.toml` (`ignore`) or `scripts/ci/govulncheck-allowlist.json`
 with a reason and an expiry date. An entry with no date, or a date in the past, fails the job.
+
+## Services on the self-hosted pool
+
+The `eng-runner` image ([`deploy/ci-runners/image`](../../deploy/ci-runners/image/README.md)) carries the
+servers that jobs otherwise get from `services:` or compose. These are PostgreSQL 18, nats-server and the nats CLI,
+Qdrant, OpenBao, RustFS and `rc`, fake-gcs-server, oidc-provider-mock and nginx. It also carries the Playwright
+1.62.1 browsers with their system libraries. The pool has no container engine, so a job there runs them as
+processes, as the runner user, with their data under `_work`. Their versions are the ones the workflows and the
+compose files pin. A change to one of those pins needs the same change in the Containerfile.
+`check-playwright-image-tag.mjs` enforces this for Playwright. A native stack reaches its services by their
+compose names through the pod's per-service loopback addresses
+([name map](../../deploy/ci-runners/README.md#native-stack-name-map)).

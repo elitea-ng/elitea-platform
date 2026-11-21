@@ -1,8 +1,12 @@
 # The runner image of the org self-hosted pool `eng-runner`.
 #
 # The stock ghcr.io/actions/actions-runner image plus the native build tools
-# our jobs need and cannot install themselves: the runner pods have no root
-# (NoNewPrivs, CapEff=0), so `sudo apt-get install` in a job fails. Toolchains
+# and service binaries our jobs need and cannot install themselves: the runner
+# pods have no root (NoNewPrivs, CapEff=0), so `sudo apt-get install` in a job
+# fails. The services (PostgreSQL 18, NATS, Qdrant, OpenBao, RustFS, the
+# storage and OIDC emulators, nginx) and the Playwright browsers are here so a
+# job can run them as plain processes in place of `services:` and compose
+# containers, which the pool cannot start (no daemon). Toolchains
 # are NOT here: Go, Node, Python and Rust versions come from the setup actions
 # into the tool cache below, exactly as on GitHub-hosted runners. No container
 # engine either: the pool has no daemon and no privileges to run one.
@@ -21,9 +25,27 @@
 ARG RUNNER_VERSION=2.338.2
 ARG RUNNER_DIGEST=sha256:6d0b2d80d80f143f77dcb676e50920100bbb547e39e883454d57f45ab8c31300
 
+# Playwright: the browsers come out of Microsoft's image for the SAME version as
+# apps/elitea-web's @playwright/test (apps/elitea-web/scripts/check-playwright-
+# image-tag.mjs fails a mismatch). The digest is the multi-arch index of
+# v1.62.1-noble, resolved 2026-11-20 with
+#   skopeo inspect --raw docker://mcr.microsoft.com/playwright:v1.62.1-noble | sha256sum
+# Change the version and the digest together (README, "Bumping").
+ARG PLAYWRIGHT_VERSION=1.62.1
+ARG PLAYWRIGHT_DIGEST=sha256:dcc5531e97840b9b5e794f2814476b21571c5124a3fca2267d73041f56e7580e
+
+# Only the browsers the suites launch (chromium, its headless shell, webkit,
+# ffmpeg); firefox is dropped. Read-only for everyone but root: a job uses the
+# browsers as baked and never installs into this directory.
+FROM mcr.microsoft.com/playwright:v${PLAYWRIGHT_VERSION}-noble@${PLAYWRIGHT_DIGEST} AS playwright
+RUN rm -rf /ms-playwright/firefox-* /ms-playwright/.links \
+ && chmod -R a+rX,go-w /ms-playwright \
+ && ls /ms-playwright
+
 FROM ghcr.io/actions/actions-runner:${RUNNER_VERSION}@${RUNNER_DIGEST}
 
 ARG RUNNER_VERSION
+ARG PLAYWRIGHT_VERSION
 
 # Pinned CLI releases. Each SHA-256 is the one the project publishes for the
 # linux amd64 asset; the build checks the download against BOTH this pin and
@@ -36,8 +58,42 @@ ARG HELM_SHA256=d1c0278d46beab79582d7e50f5b3dc206944ba8e577cde618513fd07daa53983
 ARG YQ_VERSION=v4.54.3
 ARG YQ_SHA256=129534601871538efe0ba4c5e62a34fb1d5f469bcb975c4fddeb467d82974973
 
+# Pinned service releases, verified the same two ways where the project
+# publishes a checksum file (qdrant does not: its pin is the only check).
+# Versions are the ones the workflows' `services:` and the compose files run:
+# nats 2.12.0 (ci-go.yml, docker-compose*.yml), natscli 0.4.0 (nats-box 0.19.7,
+# scripts/nats/ci-secure-test-env.sh), qdrant v1.19.2 (ci-vector.yml), openbao
+# 2.4.1 (ci-go.yml, docker-compose.governed.yml), rustfs 1.0.0
+# (docker-compose.e2e-standalone.yml). rc and fake-gcs-server run `:latest` in
+# compose; the pins are their latest releases on 2026-11-20.
+ARG NATS_SERVER_VERSION=2.12.0
+ARG NATS_SERVER_SHA256=42f233b3e883ff96e9fa9ba0882b958138534bc5dd6c4da7318e296afc0da909
+ARG NATSCLI_VERSION=0.4.0
+ARG NATSCLI_SHA256=8dbd437c826b953dbd7432cf890ef22ba3c33dccc3dce5e71b3e8d055427849c
+ARG QDRANT_VERSION=v1.19.2
+ARG QDRANT_SHA256=34a788a09a4cb278b5c6d2af96d9a6db30c8c7e88ae3550455f7a4d425bb8d4b
+ARG OPENBAO_VERSION=2.4.1
+ARG OPENBAO_SHA256=b82f5d05d0ab83244340893b8860542dccb9ff25422a30b3b9d60df0e34fb19d
+ARG RUSTFS_VERSION=1.0.0
+ARG RUSTFS_SHA256=c30a95b76546f25122c9ca387090ddb30c391ca5605621b0d7c881703c0f21c8
+ARG RC_VERSION=v0.1.38
+ARG RC_SHA256=9741028f46f5f5a152da1e3257980e9c7be2714c21b5b14a8bb5ac7d93f882e9
+ARG FAKE_GCS_VERSION=1.56.1
+ARG FAKE_GCS_SHA256=0f2f9f6884417acd5cc27126a9aa237ccc627372a4aa5008b399641de6db9469
+
+# The PGDG apt repository's signing key, by full fingerprint. The key is
+# downloaded at build time and must have exactly this fingerprint; apt then
+# trusts it for that one repository only (signed-by).
+ARG PGDG_FINGERPRINT=B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8
+ARG POSTGRES_MAJOR=18
+
+# The Playwright CLI that runs `install-deps`: playwright-core (no
+# dependencies), its tarball pinned by SHA-256 and checked against the npm
+# registry's published integrity of the same version.
+ARG PLAYWRIGHT_CORE_SHA256=954be1e183d0ddb9748fe0d2d08b0b66a9210c74dd75c397aeb70303b9f08a00
+
 LABEL org.opencontainers.image.source="https://github.com/elitea-ng/elitea-platform" \
-      org.opencontainers.image.description="eng-runner: actions-runner ${RUNNER_VERSION} with native build tools" \
+      org.opencontainers.image.description="eng-runner: actions-runner ${RUNNER_VERSION} with native build tools and service binaries" \
       org.opencontainers.image.version="${RUNNER_VERSION}"
 
 USER root
@@ -55,11 +111,18 @@ RUN apt-get update \
       zstd \
       python3-venv \
       python3-pip \
+      python3-yaml \
       shellcheck \
       unzip \
       xz-utils \
       skopeo \
       ca-certificates \
+      gnupg \
+      openssl \
+      locales \
+ && locale-gen en_US.UTF-8 \
+ && locales="$(locale -a)" \
+ && { grep -qx 'en_US\.utf8' <<<"$locales" || { echo "locale-gen produced no en_US.utf8: ${locales}" >&2; exit 1; }; } \
  && rm -rf /var/lib/apt/lists/*
 
 # The base installs Docker's static bundle into /usr/bin: the CLI and buildx
@@ -113,6 +176,174 @@ RUN set -eux; \
     install -m 0755 "$yq" /usr/local/bin/yq; \
     \
     cd /; rm -rf "$work"
+
+# PostgreSQL 18 (server, client, pgbouncer) from PGDG, the same major as the
+# `postgres:18` service image; nginx-light (in noble, Ubuntu's `nginx` plus the
+# echo module) for the web container's config; the Tauri Linux build
+# libraries the handoff journey's host test links (the list ci-web-e2e.yml
+# installs with sudo today).
+#
+# No service is started or created here. policy-rc.d keeps the maintainer
+# scripts from starting pgbouncer and nginx in the build; createcluster.d keeps
+# postgresql-common from creating the default `18/main` cluster, and the check
+# after the install refuses one that appeared anyway. A job runs `initdb` into
+# its own directory under _work, as the runner user. The server binaries are
+# linked into /usr/local/bin, so `initdb`, `pg_ctl` and `postgres` are on PATH
+# (Debian keeps them in /usr/lib/postgresql/<major>/bin).
+# hadolint ignore=DL3008
+RUN set -eux; \
+    . /etc/os-release; test "$VERSION_CODENAME" = noble; \
+    GNUPGHOME="$(mktemp -d)"; export GNUPGHOME; \
+    curl -fsSL --retry 5 --retry-all-errors https://www.postgresql.org/media/keys/ACCC4CF8.asc -o "$GNUPGHOME/pgdg.asc"; \
+    test "$(gpg --batch --show-keys --with-colons "$GNUPGHOME/pgdg.asc" | grep -c '^pub:')" = 1; \
+    fpr="$(gpg --batch --show-keys --with-colons "$GNUPGHOME/pgdg.asc" | awk -F: '$1 == "fpr" { print $10; exit }')"; \
+    if [ "$fpr" != "$PGDG_FINGERPRINT" ]; then \
+      echo "PGDG key fingerprint is '${fpr}', pinned is '${PGDG_FINGERPRINT}'" >&2; exit 1; \
+    fi; \
+    gpg --batch --dearmor < "$GNUPGHOME/pgdg.asc" > /usr/share/keyrings/pgdg.gpg; \
+    rm -rf "$GNUPGHOME"; unset GNUPGHOME; \
+    echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
+      > /etc/apt/sources.list.d/pgdg.list; \
+    mkdir -p /etc/postgresql-common/createcluster.d; \
+    echo 'create_main_cluster = false' > /etc/postgresql-common/createcluster.d/00-no-main-cluster.conf; \
+    printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d; chmod 0755 /usr/sbin/policy-rc.d; \
+    apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      "postgresql-${POSTGRES_MAJOR}" \
+      "postgresql-client-${POSTGRES_MAJOR}" \
+      pgbouncer \
+      nginx-light \
+      libwebkit2gtk-4.1-dev \
+      libgtk-3-dev \
+      libsoup-3.0-dev \
+      libayatana-appindicator3-dev \
+      librsvg2-dev \
+      libssl-dev \
+      libxdo-dev; \
+    rm /usr/sbin/policy-rc.d; \
+    if [ -n "$(ls -A "/etc/postgresql/${POSTGRES_MAJOR}" 2>/dev/null)" ] \
+       || [ -n "$(ls -A "/var/lib/postgresql/${POSTGRES_MAJOR}" 2>/dev/null)" ]; then \
+      echo "a default PostgreSQL cluster was created in the image" >&2; exit 1; \
+    fi; \
+    for b in "/usr/lib/postgresql/${POSTGRES_MAJOR}/bin/"*; do ln -sf "$b" /usr/local/bin/; done; \
+    rm -rf /var/lib/apt/lists/*
+
+# The system libraries Playwright's browsers need, installed by Playwright's own
+# `install-deps` for chromium and webkit (the package list it keeps per OS
+# release). That CLI needs node, which the image must not ship (toolchains come
+# from the setup actions): the Playwright stage's node binary is bind-mounted
+# for this one step and is not part of any layer.
+#
+# The same step proves the Playwright stage holds THIS release's browsers:
+# every browser revision playwright-core's browsers.json names must be a
+# directory there. A digest left behind by a version bump pulls the old image
+# (the digest wins over the tag) and fails here, not at the first launch.
+# hadolint ignore=DL3008
+RUN --mount=type=bind,from=playwright,source=/usr/bin/node,target=/opt/build-node/node \
+    --mount=type=bind,from=playwright,source=/ms-playwright,target=/opt/build-browsers \
+    set -eux; \
+    work="$(mktemp -d)"; cd "$work"; \
+    tgz="playwright-core-${PLAYWRIGHT_VERSION}.tgz"; \
+    curl -fsSLO --retry 5 --retry-all-errors "https://registry.npmjs.org/playwright-core/-/${tgz}"; \
+    echo "${PLAYWRIGHT_CORE_SHA256}  ${tgz}" | sha256sum -c -; \
+    published="$(curl -fsSL --retry 5 --retry-all-errors "https://registry.npmjs.org/playwright-core/${PLAYWRIGHT_VERSION}" | jq -r .dist.integrity)"; \
+    actual="sha512-$(openssl dgst -sha512 -binary "$tgz" | base64 -w0)"; \
+    if [ "$published" != "$actual" ]; then \
+      echo "npm publishes ${published} for ${tgz}, the download is ${actual}" >&2; exit 1; \
+    fi; \
+    tar -xzf "$tgz"; \
+    for name in chromium chromium-headless-shell webkit ffmpeg; do \
+      rev="$(jq -r --arg n "$name" '.browsers[] | select(.name == $n) | .revision' package/browsers.json)"; \
+      dir="${name//-/_}-${rev}"; \
+      if [ -z "$rev" ] || [ ! -d "/opt/build-browsers/${dir}" ]; then \
+        echo "the Playwright stage has no ${dir} for playwright-core ${PLAYWRIGHT_VERSION}: PLAYWRIGHT_DIGEST is another release's" >&2; \
+        ls /opt/build-browsers >&2; exit 1; \
+      fi; \
+    done; \
+    DEBIAN_FRONTEND=noninteractive /opt/build-node/node package/cli.js install-deps chromium webkit; \
+    cd /; rm -rf "$work" /var/lib/apt/lists/*
+
+COPY --from=playwright /ms-playwright /ms-playwright
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+# nats-server, the nats CLI, qdrant, openbao (`bao`), rustfs, its `rc` client
+# and fake-gcs-server, each from its official release. Only the binary is kept
+# (the rustfs zip also carries a second 260 MB `rustfs-cli`, left out).
+RUN set -eux; \
+    work="$(mktemp -d)"; cd "$work"; \
+    fetch() { curl -fsSLO --retry 5 --retry-all-errors "$1"; }; \
+    sums() { curl -fsSL --retry 5 --retry-all-errors -o "$2" "$1"; }; \
+    sum_of() { awk -v f="$1" '$2 == f || $2 == "*" f { print $1 }' "$2"; }; \
+    verify() { \
+      local file="$1" pinned="$2" published="$3"; \
+      echo "${pinned}  ${file}" | sha256sum -c -; \
+      if [ "$published" != "$pinned" ]; then \
+        echo "published checksum of ${file} is '${published}', pinned is '${pinned}'" >&2; exit 1; \
+      fi; \
+    }; \
+    rel="https://github.com"; \
+    \
+    f="nats-server-v${NATS_SERVER_VERSION}-linux-amd64.tar.gz"; \
+    fetch "${rel}/nats-io/nats-server/releases/download/v${NATS_SERVER_VERSION}/${f}"; \
+    sums "${rel}/nats-io/nats-server/releases/download/v${NATS_SERVER_VERSION}/SHA256SUMS" nats.sums; \
+    verify "$f" "$NATS_SERVER_SHA256" "$(sum_of "$f" nats.sums)"; \
+    tar -xzf "$f"; \
+    install -m 0755 "nats-server-v${NATS_SERVER_VERSION}-linux-amd64/nats-server" /usr/local/bin/nats-server; \
+    \
+    f="nats-${NATSCLI_VERSION}-linux-amd64.zip"; \
+    fetch "${rel}/nats-io/natscli/releases/download/v${NATSCLI_VERSION}/${f}"; \
+    sums "${rel}/nats-io/natscli/releases/download/v${NATSCLI_VERSION}/SHA256SUMS" natscli.sums; \
+    verify "$f" "$NATSCLI_SHA256" "$(sum_of "$f" natscli.sums)"; \
+    unzip -q "$f"; \
+    install -m 0755 "nats-${NATSCLI_VERSION}-linux-amd64/nats" /usr/local/bin/nats; \
+    \
+    f="qdrant-x86_64-unknown-linux-gnu.tar.gz"; \
+    fetch "${rel}/qdrant/qdrant/releases/download/${QDRANT_VERSION}/${f}"; \
+    echo "${QDRANT_SHA256}  ${f}" | sha256sum -c -; \
+    tar -xzf "$f" qdrant; \
+    install -m 0755 qdrant /usr/local/bin/qdrant; \
+    \
+    f="bao_${OPENBAO_VERSION}_Linux_x86_64.tar.gz"; \
+    fetch "${rel}/openbao/openbao/releases/download/v${OPENBAO_VERSION}/${f}"; \
+    sums "${rel}/openbao/openbao/releases/download/v${OPENBAO_VERSION}/checksums-linux.txt" bao.sums; \
+    verify "$f" "$OPENBAO_SHA256" "$(sum_of "$f" bao.sums)"; \
+    tar -xzf "$f" bao; \
+    install -m 0755 bao /usr/local/bin/bao; \
+    \
+    f="rustfs-linux-x86_64-musl-v${RUSTFS_VERSION}.zip"; \
+    fetch "${rel}/rustfs/rustfs/releases/download/${RUSTFS_VERSION}/${f}"; \
+    sums "${rel}/rustfs/rustfs/releases/download/${RUSTFS_VERSION}/SHA256SUMS" rustfs.sums; \
+    verify "$f" "$RUSTFS_SHA256" "$(sum_of "$f" rustfs.sums)"; \
+    unzip -q "$f" rustfs; \
+    install -m 0755 rustfs /usr/local/bin/rustfs; \
+    \
+    f="rustfs-cli-linux-amd64-${RC_VERSION}.tar.gz"; \
+    fetch "${rel}/rustfs/cli/releases/download/${RC_VERSION}/${f}"; \
+    sums "${rel}/rustfs/cli/releases/download/${RC_VERSION}/${f}.sha256" rc.sums; \
+    verify "$f" "$RC_SHA256" "$(sum_of "$f" rc.sums)"; \
+    tar -xzf "$f" rc; \
+    install -m 0755 rc /usr/local/bin/rc; \
+    \
+    f="fake-gcs-server_${FAKE_GCS_VERSION}_Linux_amd64.tar.gz"; \
+    fetch "${rel}/fsouza/fake-gcs-server/releases/download/v${FAKE_GCS_VERSION}/${f}"; \
+    sums "${rel}/fsouza/fake-gcs-server/releases/download/v${FAKE_GCS_VERSION}/checksums.txt" fake-gcs.sums; \
+    verify "$f" "$FAKE_GCS_SHA256" "$(sum_of "$f" fake-gcs.sums)"; \
+    tar -xzf "$f" fake-gcs-server; \
+    install -m 0755 fake-gcs-server /usr/local/bin/fake-gcs-server; \
+    \
+    cd /; rm -rf "$work"
+
+# oidc-provider-mock, the PyPI package behind ghcr.io/geigerzaehler/oidc-provider-mock
+# (compose runs its `:latest`), in its own venv on the system Python 3.12.
+# Every distribution is pinned by hash in oidc-provider-mock.requirements.txt
+# (README, "Bumping"), wheels only, so nothing is built from source here.
+COPY oidc-provider-mock.requirements.txt /opt/oidc-provider-mock/requirements.txt
+RUN set -eux; \
+    python3 -m venv /opt/oidc-provider-mock; \
+    /opt/oidc-provider-mock/bin/pip install --no-cache-dir --disable-pip-version-check \
+      --require-hashes --only-binary=:all: -r /opt/oidc-provider-mock/requirements.txt; \
+    /opt/oidc-provider-mock/bin/pip check; \
+    ln -s /opt/oidc-provider-mock/bin/oidc-provider-mock /usr/local/bin/oidc-provider-mock
 
 # Every cache and the temp dir default to the _work volume. On the pool the
 # runner container's root filesystem has an ephemeral-storage limit of 1Gi:

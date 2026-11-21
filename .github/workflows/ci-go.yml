@@ -125,9 +125,14 @@ jobs:
 
   sqlc:
     name: Reproduce SQLC queries
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
+    env:
+      # The pod's cgroup gives 4 CPU while the node reports 8; hosted runners have 4.
+      GOMAXPROCS: "4"
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume (does nothing on hosted).
+      - uses: ./.github/actions/eng-runner-env
       - uses: sqlc-dev/setup-sqlc@v5
         with:
           sqlc-version: "1.31.1"
@@ -164,7 +169,10 @@ jobs:
 
   lint:
     name: Lint (workspace)
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
+    env:
+      # The pod's cgroup gives 4 CPU while the node reports 8; hosted runners have 4.
+      GOMAXPROCS: "4"
     # Issue #427. This job used to carry a hand-written matrix of two modules,
     # `services/elitea-main` and `services/elitea-scheduler`, while go.work
     # named many more (twelve today). The libs/go modules, libs/proto/gen/go
@@ -178,6 +186,8 @@ jobs:
     # lints on its own Go release).
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume (does nothing on hosted).
+      - uses: ./.github/actions/eng-runner-env
       - uses: actions/setup-go@v7
         with:
           # The cache is .github/actions/go-cache below: setup-go's own
@@ -204,23 +214,14 @@ jobs:
       # run that proves a change can never match what CI will do. Raise this
       # value deliberately, and read the release notes when you do.
       # Through the API, not the github.com release download link (504s),
-      # and checked against the release's checksums file.
+      # and checked against the pinned sha256 (scripts/ci/install-golangci-lint.sh,
+      # shared with ci-gateway.yml; curl and jq, so it also runs on eng-runner).
       - name: Install golangci-lint
         env:
           GOLANGCI_LINT_VERSION: "2.9.0"
           GOLANGCI_LINT_SHA256: 493aaaca2eba6c8bcef847d92716bbd91bbac4b22cdbb0ab5b6a581b32946091
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          archive="golangci-lint-${GOLANGCI_LINT_VERSION}-linux-amd64.tar.gz"
-          gh release download "v${GOLANGCI_LINT_VERSION}" --repo golangci/golangci-lint \
-            --pattern "${archive}" --output "/tmp/${archive}" --clobber
-          echo "${GOLANGCI_LINT_SHA256}  /tmp/${archive}" | sha256sum -c -
-          bin="$(go env GOPATH)/bin"
-          mkdir -p "$bin"
-          tar -xzf "/tmp/${archive}" -C "$bin" --strip-components=1 "golangci-lint-${GOLANGCI_LINT_VERSION}-linux-amd64/golangci-lint"
-          echo "$bin" >> "$GITHUB_PATH"
-          "$bin/golangci-lint" version
+        run: bash scripts/ci/install-golangci-lint.sh "${GOLANGCI_LINT_VERSION}" "${GOLANGCI_LINT_SHA256}" "$(go env GOPATH)/bin"
 
       # The script fails when the binary is absent, so a broken install above
       # cannot turn into a green "nothing to report" below.
@@ -253,11 +254,19 @@ jobs:
   #                coverage profiles into the one `coverage` artifact.
   test-plan:
     name: Test plan (Go shards)
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
+    env:
+      # The pod's cgroup gives 4 CPU while the node reports 8; hosted runners have 4.
+      GOMAXPROCS: "4"
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume, and node (none in its
+      # image). Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          node: "true"
       - uses: actions/setup-go@v7
         with:
           # `go list -find` reads directories only. It needs no module cache.
@@ -645,7 +654,7 @@ jobs:
     name: Test
     if: always()
     needs: [test-plan, test-checks, test-shard]
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
     steps:
       - name: Every shard and check passed
         env:
@@ -663,7 +672,15 @@ jobs:
           done
       - uses: actions/checkout@v7
         with:
-          sparse-checkout: scripts/ci
+          # The local action below must be in the checkout too.
+          sparse-checkout: |
+            scripts/ci
+            .github/actions/eng-runner-env
+      # eng-runner: caches and TMPDIR on the work volume, and node (none in its
+      # image). Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          node: "true"
       - name: Download shard coverage
         uses: actions/download-artifact@v8
         with:

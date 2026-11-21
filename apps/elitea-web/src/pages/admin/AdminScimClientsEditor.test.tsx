@@ -298,6 +298,32 @@ describe("Admin › Authentication › SCIM clients", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("explains that only a super admin can create a SCIM client (#2558)", async () => {
+    useClientHandlers({
+      createStatus: 403,
+      createBody: {
+        error: "only a super admin can create, rotate or delete a SCIM client",
+        code: "scim_client_super_admin_required",
+      },
+    });
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminScimClientsEditor />);
+    await screen.findByText("Entra production");
+
+    await user.click(screen.getByTestId("admin-scim-clients-add"));
+    await user.type(screen.getByTestId("admin-scim-client-name"), "Okta");
+    await user.click(screen.getByTestId("admin-scim-client-create-submit"));
+
+    expect(
+      await screen.findByTestId("admin-scim-client-create-error"),
+    ).toHaveTextContent(
+      "Only a super admin can create, rotate or delete a SCIM client.",
+    );
+    expect(
+      screen.queryByTestId("admin-scim-client-secret-dialog"),
+    ).not.toBeInTheDocument();
+  });
+
   it("confirms a rotate, then reveals the new secret", async () => {
     const user = userEvent.setup();
     renderAdminRoute(<AdminScimClientsEditor />);

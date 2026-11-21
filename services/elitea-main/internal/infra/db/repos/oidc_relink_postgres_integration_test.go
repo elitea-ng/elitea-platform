@@ -48,6 +48,9 @@ func TestRelinkOIDCIdentity(t *testing.T) {
 		(910003, 'oidc:first'),
 		(910003, 'oidc:second'),
 		(910008, 'oidc:scim-old')`)
+	// The provider binding of the subject to be replaced (issue 2558).
+	mustExec(`INSERT INTO elitea_auth.identity_bindings (provider_ref, provider_key, issuer, user_id)
+		VALUES ('oidc:old-sub', 'corporate', 'https://idp.example', 910001)`)
 	mustExec(`INSERT INTO elitea_auth.scim_users (user_id, external_id) VALUES
 		(910007, 'scim-ext-1'), (910008, 'scim-ext-2')`)
 
@@ -132,6 +135,17 @@ WHERE event_type = 'ai.elitea.security.v1.identity.link.changed' AND event->'dat
 		}
 		if got := links(910001); got != "oidc:new-sub" {
 			t.Fatalf("links = %q", got)
+		}
+		// The new subject signs in through the same provider and issuer as the
+		// one it replaces, and the old subject's binding is gone.
+		var bound string
+		if err := pool.QueryRow(ctx, `
+SELECT coalesce(string_agg(provider_ref || '@' || provider_key || '@' || issuer, ',' ORDER BY provider_ref), '')
+FROM elitea_auth.identity_bindings WHERE user_id = 910001`).Scan(&bound); err != nil {
+			t.Fatal(err)
+		}
+		if bound != "oidc:new-sub@corporate@https://idp.example" {
+			t.Fatalf("bindings = %q, want the old subject's binding on the new subject", bound)
 		}
 		if n := events(ActionOIDCLinkReplaced); n != 1 {
 			t.Fatalf("replaced events = %d", n)
