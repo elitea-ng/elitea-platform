@@ -229,7 +229,7 @@ const sorted = (items) => [...items].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)
 // of the compose lanes, and on what the native workflow itself runs: the
 // scripts it calls (and their imports) and the native stack's table.
 export const NATIVE_WORKFLOW = "ci-web-e2e-native.yml";
-export const NATIVE_FILES = ["deploy/native/e2e-standalone.mjs", "scripts/e2e/native-stack.mjs", "apps/elitea-web/scripts/lib/stack-backend.sh"];
+export const NATIVE_FILES = ["deploy/native/e2e-standalone.mjs", "deploy/native/standalone-full.mjs", "scripts/e2e/native-stack.mjs", "apps/elitea-web/scripts/lib/stack-backend.sh"];
 
 /**
  * @param {{native: string[]|undefined, composeInputs: [string, string][], nativeInputs: [string, string][]}} model

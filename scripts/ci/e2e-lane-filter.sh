@@ -118,8 +118,8 @@ SANDBOX='^('\
 # ever too wide, never too narrow: a miss is an image change no pull-request
 # lane builds.
 IMAGES='(^|/)(Containerfile|Dockerfile)(\.[^/]+)?$|(^|/)\.dockerignore$|'\
-'^deploy/(docker-compose[^/]*\.ya?ml$|ci/)|^docker-bake\.hcl$|'\
-'^apps/elitea-web/(nginx/|docker-entrypoint\.sh$|scripts/(e2e-stack\.sh|lib/(stack-backend|compose-detect|container-lookup)\.sh)$)|'\
+'^deploy/(docker-compose[^/]*\.ya?ml$|ci/|scripts/(standalone-stack|embedding-path-check|handoff-live|native-conformance)\.sh$)|^docker-bake\.hcl$|'\
+'^apps/elitea-web/(nginx/|docker-entrypoint\.sh$|scripts/((e2e-stack|chat-stream-e2e|deepwiki-e2e|index-stream-e2e)\.sh|lib/(stack-backend|compose-detect|container-lookup)\.sh)$)|'\
 '^\.github/(actions/(stack-images|build-stack-images|pull-stack-images)/|workflows/ci-(web-e2e|build-once)\.yml$)|'\
 '^scripts/ci/(e2e-lane-filter|stack-image|pull-third-party-images)'
 

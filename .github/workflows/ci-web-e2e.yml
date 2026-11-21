@@ -556,7 +556,12 @@ jobs:
     needs: [build-once]
     # A skipped build-once job (a fork pull request) is not a failure: the
     # lane then builds the stack itself. A FAILED build stops the lane.
-    if: ${{ !cancelled() && ((inputs.web-images || needs.build-once.outputs.web-images) == 'success' || (inputs.web-images || needs.build-once.outputs.web-images) == 'skipped') && ((inputs.stack-images || needs.build-once.outputs.stack-images) == 'success' || (inputs.stack-images || needs.build-once.outputs.stack-images) == 'skipped') && (inputs.reaches-stack || needs.build-once.outputs.reaches-stack) == 'true' }}
+    # ON THE POOL this lane runs natively (ci-web-e2e-native.yml, `E2E native
+    # (chat-stream-rust-<leg>)`): on a pull request that routes there it stands down here,
+    # unless the change reaches what only images prove (e2e-lane-filter.sh
+    # reaches-images), when it runs as the image smoke, leg 1of3 only (RUN_LEG). Forks,
+    # Dependabot, ENG_RUNNER off, pushes and the nightly run keep it in full.
+    if: ${{ !cancelled() && ((inputs.web-images || needs.build-once.outputs.web-images) == 'success' || (inputs.web-images || needs.build-once.outputs.web-images) == 'skipped') && ((inputs.stack-images || needs.build-once.outputs.stack-images) == 'success' || (inputs.stack-images || needs.build-once.outputs.stack-images) == 'skipped') && (inputs.reaches-stack || needs.build-once.outputs.reaches-stack) == 'true' && (github.event_name != 'pull_request' || (inputs.reaches-images || needs.build-once.outputs.reaches-images) == 'true' || !(vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'))) }}
     permissions:
       contents: read
       # Pulls the ci-* images by digest; only the build jobs write packages.
@@ -608,18 +613,24 @@ jobs:
             shard: "3/3"
     env:
       PWTEST_SHARD_WEIGHTS: "61:16:33"
+      # The image smoke on a pull request that routes to the pool is leg 1of3;
+      # the native legs run all three.
+      RUN_LEG: ${{ matrix.leg == '1of3' || github.event_name != 'pull_request' || !(vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
+        if: ${{ env.RUN_LEG == 'true' }}
         with:
           node-version: "26"
           # The npm cache is .github/actions/npm-cache below.
           package-manager-cache: false
       - name: Restore the npm cache (pull requests read, main writes)
+        if: ${{ env.RUN_LEG == 'true' }}
         uses: ./.github/actions/npm-cache
         with:
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
+        if: ${{ env.RUN_LEG == 'true' }}
         # npm's fetch retries (the npm-cache action) cover a refused request,
         # not a registry reset mid-tarball (`read ECONNRESET`), which ends
         # `npm ci` at once. Three bounded attempts on a clean tree.
@@ -631,6 +642,7 @@ jobs:
             sleep $((attempt * 20))
           done
       - name: Pre-pull the pinned Playwright container (background)
+        if: ${{ env.RUN_LEG == 'true' }}
         # Started with nohup and left running while the bake below uses the
         # CPU: the runner does not reap a step's background processes. This is
         # fire-and-forget — nothing here waits on it. The script this job
@@ -642,6 +654,7 @@ jobs:
         run: |
           nohup bash -c 'timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.62.1-noble' >/tmp/prepull.log 2>&1 &
       - name: Stack images for this lane (pulled by digest; built here on a fork)
+        if: ${{ env.RUN_LEG == 'true' }}
         # Built ONCE per commit by the build-once jobs and pulled by digest
         # (.github/actions/stack-images, which also answers issue #154).
         uses: ./.github/actions/stack-images
@@ -656,6 +669,7 @@ jobs:
           targets: standalone-rust
           mount-cache-suffix: rust
       - name: Run the journeys against a fresh Rust-runtime stack
+        if: ${{ env.RUN_LEG == 'true' }}
         # The Rust worker is compiled from source by the stack's own `build`
         # step, which is why this job's budget is larger than `chat-stream`'s.
         #
@@ -681,10 +695,10 @@ jobs:
           PLAYWRIGHT_SHARD: ${{ matrix.shard }}
         run: bash apps/elitea-web/scripts/chat-stream-e2e.sh
       - name: Give the report back to the runner user
-        if: always()
+        if: ${{ always() && env.RUN_LEG == 'true' }}
         run: sudo chown -R "$(id -u):$(id -g)" playwright-results playwright-report 2>/dev/null || true
       - name: Upload Playwright report
-        if: always()
+        if: ${{ always() && env.RUN_LEG == 'true' }}
         uses: actions/upload-artifact@v7
         with:
           name: playwright-report-chat-stream-rust-${{ matrix.leg }}
@@ -704,6 +718,10 @@ jobs:
   # build inputs: scripts/ci/stack-image-hash.mjs), and a push whose inputs
   # already have that tag pulls it instead of building. A fork's pull request
   # (a read-only token) builds as before and publishes nothing.
+      - name: Skipped (the native legs run this leg on the pool)
+        if: ${{ env.RUN_LEG != 'true' }}
+        run: echo "::notice::chat-stream-rust ${{ matrix.leg }} stands down on this pull request - E2E native (chat-stream-rust-${{ matrix.leg }}) runs it on the pool; leg 1of3 is the image smoke"
+
   sandbox-supervisor-image:
     name: Build the code sandbox supervisor image
     needs: [build-once]
@@ -1294,7 +1312,12 @@ jobs:
     needs: [build-once]
     # A skipped build-once job (a fork pull request) is not a failure: the
     # lane then builds the stack itself. A FAILED build stops the lane.
-    if: ${{ !cancelled() && ((inputs.web-images || needs.build-once.outputs.web-images) == 'success' || (inputs.web-images || needs.build-once.outputs.web-images) == 'skipped') && ((inputs.stack-images || needs.build-once.outputs.stack-images) == 'success' || (inputs.stack-images || needs.build-once.outputs.stack-images) == 'skipped') && (inputs.reaches-stack || needs.build-once.outputs.reaches-stack) == 'true' }}
+    # ON THE POOL this lane runs natively (ci-web-e2e-native.yml, `E2E native
+    # (deepwiki-stack)`): on a pull request that routes there it stands down here,
+    # unless the change reaches what only images prove (e2e-lane-filter.sh
+    # reaches-images), when it runs as the image smoke. Forks,
+    # Dependabot, ENG_RUNNER off, pushes and the nightly run keep it in full.
+    if: ${{ !cancelled() && ((inputs.web-images || needs.build-once.outputs.web-images) == 'success' || (inputs.web-images || needs.build-once.outputs.web-images) == 'skipped') && ((inputs.stack-images || needs.build-once.outputs.stack-images) == 'success' || (inputs.stack-images || needs.build-once.outputs.stack-images) == 'skipped') && (inputs.reaches-stack || needs.build-once.outputs.reaches-stack) == 'true' && (github.event_name != 'pull_request' || (inputs.reaches-images || needs.build-once.outputs.reaches-images) == 'true' || !(vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'))) }}
     permissions:
       contents: read
       # Pulls the ci-* images by digest; only the build jobs write packages.
@@ -1387,7 +1410,12 @@ jobs:
     needs: [build-once]
     # A skipped build-once job (a fork pull request) is not a failure: the
     # lane then builds the stack itself. A FAILED build stops the lane.
-    if: ${{ !cancelled() && ((inputs.web-images || needs.build-once.outputs.web-images) == 'success' || (inputs.web-images || needs.build-once.outputs.web-images) == 'skipped') && ((inputs.stack-images || needs.build-once.outputs.stack-images) == 'success' || (inputs.stack-images || needs.build-once.outputs.stack-images) == 'skipped') && (inputs.reaches-stack || needs.build-once.outputs.reaches-stack) == 'true' }}
+    # ON THE POOL this lane runs natively (ci-web-e2e-native.yml, `E2E native
+    # (native-client-conformance)`): on a pull request that routes there it stands down here,
+    # unless the change reaches what only images prove (e2e-lane-filter.sh
+    # reaches-images), when it runs as the image smoke. Forks,
+    # Dependabot, ENG_RUNNER off, pushes and the nightly run keep it in full.
+    if: ${{ !cancelled() && ((inputs.web-images || needs.build-once.outputs.web-images) == 'success' || (inputs.web-images || needs.build-once.outputs.web-images) == 'skipped') && ((inputs.stack-images || needs.build-once.outputs.stack-images) == 'success' || (inputs.stack-images || needs.build-once.outputs.stack-images) == 'skipped') && (inputs.reaches-stack || needs.build-once.outputs.reaches-stack) == 'true' && (github.event_name != 'pull_request' || (inputs.reaches-images || needs.build-once.outputs.reaches-images) == 'true' || !(vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'))) }}
     permissions:
       contents: read
       # Pulls the ci-* images by digest; only the build jobs write packages.
@@ -1457,7 +1485,12 @@ jobs:
     # change to apps/elitea-desktop alone is outside the stack lanes and is
     # exactly the change this lane exists for.
     needs: [build-once]
-    if: ${{ !cancelled() && ((inputs.web-images || needs.build-once.outputs.web-images) == 'success' || (inputs.web-images || needs.build-once.outputs.web-images) == 'skipped') && ((inputs.stack-images || needs.build-once.outputs.stack-images) == 'success' || (inputs.stack-images || needs.build-once.outputs.stack-images) == 'skipped') && (inputs.reaches-handoff || needs.build-once.outputs.reaches-handoff) == 'true' }}
+    # ON THE POOL this lane runs natively (ci-web-e2e-native.yml, `E2E native
+    # (handoff-journey)`): on a pull request that routes there it stands down here,
+    # unless the change reaches what only images prove (e2e-lane-filter.sh
+    # reaches-images), when it runs as the image smoke. Forks,
+    # Dependabot, ENG_RUNNER off, pushes and the nightly run keep it in full.
+    if: ${{ !cancelled() && ((inputs.web-images || needs.build-once.outputs.web-images) == 'success' || (inputs.web-images || needs.build-once.outputs.web-images) == 'skipped') && ((inputs.stack-images || needs.build-once.outputs.stack-images) == 'success' || (inputs.stack-images || needs.build-once.outputs.stack-images) == 'skipped') && (inputs.reaches-handoff || needs.build-once.outputs.reaches-handoff) == 'true' && (github.event_name != 'pull_request' || (inputs.reaches-images || needs.build-once.outputs.reaches-images) == 'true' || !(vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'))) }}
     permissions:
       contents: read
       # Pulls the ci-* images by digest; only the build jobs write packages.
@@ -1560,7 +1593,12 @@ jobs:
     needs: [build-once]
     # A skipped build-once job (a fork pull request) is not a failure: the
     # lane then builds the stack itself. A FAILED build stops the lane.
-    if: ${{ !cancelled() && ((inputs.web-images || needs.build-once.outputs.web-images) == 'success' || (inputs.web-images || needs.build-once.outputs.web-images) == 'skipped') && ((inputs.stack-images || needs.build-once.outputs.stack-images) == 'success' || (inputs.stack-images || needs.build-once.outputs.stack-images) == 'skipped') && (inputs.reaches-stack || needs.build-once.outputs.reaches-stack) == 'true' }}
+    # ON THE POOL this lane runs natively (ci-web-e2e-native.yml, `E2E native
+    # (index-stream-rust)`): on a pull request that routes there it stands down here,
+    # unless the change reaches what only images prove (e2e-lane-filter.sh
+    # reaches-images), when it runs as the image smoke. Forks,
+    # Dependabot, ENG_RUNNER off, pushes and the nightly run keep it in full.
+    if: ${{ !cancelled() && ((inputs.web-images || needs.build-once.outputs.web-images) == 'success' || (inputs.web-images || needs.build-once.outputs.web-images) == 'skipped') && ((inputs.stack-images || needs.build-once.outputs.stack-images) == 'success' || (inputs.stack-images || needs.build-once.outputs.stack-images) == 'skipped') && (inputs.reaches-stack || needs.build-once.outputs.reaches-stack) == 'true' && (github.event_name != 'pull_request' || (inputs.reaches-images || needs.build-once.outputs.reaches-images) == 'true' || !(vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'))) }}
     permissions:
       contents: read
       # Pulls the ci-* images by digest; only the build jobs write packages.
