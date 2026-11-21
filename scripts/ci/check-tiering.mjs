@@ -10,7 +10,8 @@
 //   * a heavy job (one that needs `fast-gate`) has no `github.event.pull_request.draft == false`
 //     in its `if:` — it would run for a draft, which is what the tiers exist to prevent;
 //   * a fast job needs `fast-gate`, or `fast-gate` does not list every fast job;
-//   * `ci-gate` or `fast-gate` does not run with `if: always()`, or `ci-gate`
+//   * `ci-gate` or `fast-gate` does not run with `if: always()`, `ci-gate` is not
+//     skipped on a draft (GATE_DRAFT_SKIP), or `ci-gate`
 //     does not list every other job of the workflow (a job missing from `needs`
 //     cannot fail the verdict);
 //   * a job that calls a workflow has no entry (tier and paths) in
@@ -50,6 +51,8 @@ export const OWN_PR_TRIGGER = new Map([
   ["eng-runner-image.yml", "starts only when the eng-runner image or its own file changes; it builds a CI runner image, not product code"],
 ]);
 export const DRAFT_CONDITION = "github.event.pull_request.draft == false";
+/** ci-gate's half of the draft rule: skipped on a draft, so a draft shows fast-gate's verdict and a grey gate. */
+export const GATE_DRAFT_SKIP = "github.event.pull_request.draft != true";
 /**
  * The pull-request gate of the macOS package job (owner decision 2026-11-20): the
  * desktop app (its Tauri config and packaging scripts are under it), the vendored
@@ -151,6 +154,8 @@ export function check({ ci, tiers, workflows }) {
   }
   if (final) {
     if (!/\balways\(\)/.test(String(final.if ?? ""))) errors.push("ci-gate must run with `if: always()`");
+    // Skipped on a draft (grey, not red); `!= true` keeps an event without a pull request running it.
+    if (!String(final.if ?? "").includes(GATE_DRAFT_SKIP)) errors.push(`ci-gate must be skipped on a draft: its if needs \`${GATE_DRAFT_SKIP}\``);
     const needs = asList(final.needs);
     for (const id of Object.keys(jobs)) {
       if (id !== "ci-gate" && !needs.includes(id)) errors.push(`ci-gate: needs does not list ${id}`);

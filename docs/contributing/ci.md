@@ -34,8 +34,10 @@ that a later push cancelled.
 - A job that failed or was cancelled fails the gate.
 - A job that should have run and did not (for example, a heavy job skipped because the fast tier failed) fails
   the gate as **missing**.
-- While the pull request is a draft, the gate fails with the word `draft`. The heavy tier has not run, so the
-  pull request has no verdict yet.
+- On a draft, ci-gate is skipped; fast-gate green means mark it ready. A skipped gate lets nothing through: a
+  draft cannot be merged, and marking it ready (`ready_for_review`, one of `CI`'s trigger types) runs the
+  workflow again on the same head, where ci-gate stays pending until the heavy tier finishes and then passes or
+  fails on its result. (`scripts/ci/ci-gate.mjs` still fails a draft if it is ever run for one.)
 
 A required status check can point at `CI / ci-gate` alone. The repository ruleset does not require it today.
 
