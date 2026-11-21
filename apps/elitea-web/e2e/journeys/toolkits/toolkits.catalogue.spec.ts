@@ -306,10 +306,16 @@ test.describe('JRNY-017C: the served toolkit catalogue', () => {
     for (const representative of representatives) {
       const name = toolkitName(representative.type);
 
-      // ── the chooser
-      await page.goto(`${BASE_URL}/app/toolkits/create`);
-      await expect(typeSearchBox(page)).toBeVisible({ timeout: 15_000 });
-      await typeSearchBox(page).fill(representative.label);
+      // ── the chooser, opened on its search for this type. The search text
+      // lives in the URL (`PageSearch`), so the gallery's first paint is
+      // already filtered. Typing it instead commits the text 300 ms after the
+      // last key (SimpleSearchBar's debounce), and the filtered gallery then
+      // moves the tile up the page: on a CPU-starved runner the click's
+      // mousedown landed on the tile where it was and its mouseup where it no
+      // longer was, so no click fired and the chooser stayed open with the
+      // filtered tile on it (native run 44917909298, webkit, "Cloud Browser").
+      await page.goto(`${BASE_URL}/app/toolkits/create?query=${encodeURIComponent(representative.label)}`);
+      await expect(typeSearchBox(page)).toHaveValue(representative.label, { timeout: 15_000 });
       await tileFor(page, representative.label).click();
 
       // ── the form really opened, and it is THIS type's form: the name field
