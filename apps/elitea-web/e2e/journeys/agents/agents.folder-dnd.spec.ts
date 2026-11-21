@@ -78,6 +78,35 @@ async function dragCardToFolder(page: Page, agentName: string, folderName: strin
   await expect(page.getByTestId('entity-folder-dnd-status')).toContainText(`Moved ${agentName} to ${folderName}`);
 }
 
+/**
+ * Carries a picked-up keyboard drag onto the folder row named `folderName`, one arrow key at a time.
+ *
+ * The panel lists the newest folder first, and other journeys add folders to the same project while
+ * this one runs (the selection test below starts on another worker at the same moment), so the row
+ * ArrowRight lands on, and the side the new folder is on, are not fixed. Each step reads where the drag
+ * is (the row marked `data-drop-over`) and where the folder is, presses toward it, and waits until
+ * dnd-kit announces the next row before it reads again: a read straight after the key press can still
+ * see the previous announcement, and a walk steered by it steps past the folder.
+ */
+async function keyboardDragOnto(page: Page, live: Locator, folderName: string): Promise<void> {
+  const rows = page.getByTestId('entity-folder-drop');
+  const target = rows.filter({ hasText: folderName });
+  const over = page.locator('[data-testid="entity-folder-drop"][data-drop-over="true"]');
+  // Right moves the drag onto the nearest folder row in the side panel.
+  await page.keyboard.press('ArrowRight');
+  await expect(live.first()).toContainText(' is over ');
+  let said = (await live.first().textContent()) ?? '';
+  const steps = await rows.count();
+  for (let step = 0; step < steps && !said.includes(`is over ${folderName}`); step += 1) {
+    const from = await centre(over);
+    const to = await centre(target);
+    await page.keyboard.press(to.y < from.y ? 'ArrowUp' : 'ArrowDown');
+    await expect(live.first()).not.toHaveText(said);
+    said = (await live.first().textContent()) ?? '';
+  }
+  await expect(live.first()).toContainText(`is over ${folderName}`);
+}
+
 async function folderItems(request: import('@playwright/test').APIRequestContext, folderId: string): Promise<number[]> {
   const response = await request.get(FOLDERS);
   const body = (await response.json()) as { items: { id: string; item_ids: number[] }[] };
@@ -103,14 +132,7 @@ test('T6: four agents into a new folder, three by pointer and one by keyboard wi
   await page.keyboard.press('Space');
   const live = page.locator('[aria-live]').filter({ hasText: /Picked up|is over|dropped/ });
   await expect(live.first()).toContainText('Picked up');
-  // Right moves the drag onto the nearest folder row in the side panel; the new folder is the top row, so Up reaches it from any row below.
-  await page.keyboard.press('ArrowRight');
-  // Other journeys create folders at the same time, so the new one is not always the top row: walk up, then down, until the announcement names it.
-  const overTarget = async (): Promise<boolean> => ((await live.first().textContent()) ?? '').includes(`is over ${folderName}`);
-  for (const key of ['ArrowUp', 'ArrowDown']) {
-    for (let step = 0; step < 16 && !(await overTarget()); step += 1) await page.keyboard.press(key);
-  }
-  await expect(live.first()).toContainText(`is over ${folderName}`);
+  await keyboardDragOnto(page, live, folderName);
   const moved = page.waitForResponse((r) => r.url().includes('/items/') && r.request().method() === 'PUT');
   await page.keyboard.press('Space');
   await expect(live.first()).toContainText(`dropped on ${folderName}`);
