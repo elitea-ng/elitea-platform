@@ -15,8 +15,11 @@
 # Sourced by apps/elitea-web/scripts/e2e-stack.sh. The caller sets REPO_ROOT,
 # E2E_PROJECT and COMPOSE_F (compose's project and files) before calling
 # stack_init, and sources lib/container-lookup.sh and lib/compose-detect.sh
-# first. A second stack script (deploy/scripts/standalone-stack.sh, stage 2)
-# sets E2E_NATIVE_TABLE to its own table and reuses every function.
+# first. deploy/scripts/standalone-stack.sh (and embedding-path-check.sh) set
+# E2E_NATIVE_TABLE to deploy/native/standalone-full.mjs and use the same
+# functions, plus the service-addressed ones at the end of this file (a psql
+# in `postgres`, a one-shot run again, one service's health, logs and
+# environment, every service settled).
 
 E2E_STACK="${E2E_STACK:-compose}"
 NATIVE_STACK="${REPO_ROOT}/scripts/e2e/native-stack.mjs"
@@ -184,4 +187,84 @@ stack_probe() {
   else
     $EXEC_BIN run --rm --network "${E2E_PROJECT}_default" --entrypoint sh "$image" -c "$script"
   fi
+}
+
+# ── Service-addressed calls (standalone-stack.sh) ────────────────────────────
+# Compose's `<compose> exec -T postgres psql`, `run --rm --no-deps`, `ps`,
+# `logs` and `inspect`, addressed by SERVICE name rather than container name.
+
+# stack_service_psql ARGS…: psql in the postgres service (stdin passes through).
+stack_service_psql() {
+  if [ "$E2E_STACK" = native ]; then
+    PGPASSWORD="${E2E_NATIVE_PGPASSWORD:-elitea}" psql -h postgres -p 5432 "$@"
+    return
+  fi
+  $COMPOSE_BIN $COMPOSE_F exec -T postgres psql "$@"
+}
+
+# stack_run_once SERVICE [ARGS…]: run a one-shot again, without its
+# dependencies, and wait for it. Natively the table's own arguments run: ARGS
+# must be exactly those (the caller states them for the compose call).
+stack_run_once() {
+  local service="$1"
+  shift
+  if [ "$E2E_STACK" = native ]; then
+    native_stack run-init "$service"
+    return
+  fi
+  $COMPOSE_BIN $COMPOSE_F run --rm --no-deps "$service" "$@"
+}
+
+# stack_service_healthy SERVICE: exit 0 when SERVICE runs and is healthy (or
+# has no health check). Native only: standalone-stack.sh keeps its compose
+# `ps --format json` reader for compose.
+stack_service_healthy() {
+  if [ "$E2E_STACK" = native ]; then
+    native_stack ps --json 2>/dev/null | node -e '
+      const rows = JSON.parse(require("fs").readFileSync(0, "utf8"));
+      const r = rows.find((x) => x.service === process.argv[1]);
+      process.exit(r && r.state === "running" && (r.health === "" || r.health === "healthy") ? 0 : 1);
+    ' "$1"
+    return
+  fi
+  echo "stack_service_healthy: native only" >&2
+  return 2
+}
+
+# stack_settled: exit 0 when every service runs healthy and every one-shot
+# exited 0; print the others on stderr. Native only, as stack_service_healthy.
+stack_settled() {
+  if [ "$E2E_STACK" = native ]; then
+    native_stack ps --json 2>/dev/null | node -e '
+      const rows = JSON.parse(require("fs").readFileSync(0, "utf8"));
+      const bad = rows.filter((r) => (r.init ? !(r.state === "exited" && r.exit === 0) : !(r.state === "running" && (r.health === "" || r.health === "healthy"))));
+      for (const r of bad) console.error(`${r.service}: ${r.state}${r.exit === null || r.exit === undefined ? "" : ` (${r.exit})`}${r.health ? ` ${r.health}` : ""}`);
+      process.exit(bad.length ? 1 : 0);
+    '
+    return
+  fi
+  echo "stack_settled: native only" >&2
+  return 2
+}
+
+# stack_service_logs TAIL [SERVICE…]: the last TAIL lines of each service.
+stack_service_logs() {
+  local tail="$1"
+  shift
+  if [ "$E2E_STACK" = native ]; then
+    native_stack logs --tail "$tail" "$@"
+    return
+  fi
+  $COMPOSE_BIN $COMPOSE_F logs --no-color --tail "$tail" "$@"
+}
+
+# stack_service_env SERVICE VAR: the value VAR has in SERVICE's environment.
+stack_service_env() {
+  if [ "$E2E_STACK" = native ]; then
+    native_stack exec "$1" -- printenv "$2" 2>/dev/null || true
+    return
+  fi
+  "${COMPOSE_BIN%% *}" inspect "${E2E_PROJECT}-$1-1" \
+    --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+    | sed -n "s/^$2=//p"
 }
