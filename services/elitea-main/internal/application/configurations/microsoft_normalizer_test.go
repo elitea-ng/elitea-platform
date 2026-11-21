@@ -216,10 +216,9 @@ func TestMicrosoftCreateStoresTheNormalizedDefaultScopesWhenNoneWereSent(t *test
 	}
 }
 
-// Until the sign-in works on every client the four types are kept out of the
-// create pickers (metadata.hidden, which the web selector and desktop honour;
-// mobile has no credential-type picker) but stay in the catalogue.
-func TestMicrosoftNativeTypesAreHiddenFromThePickersAndOwnTheirNormalizer(t *testing.T) {
+// The four types are offered in the create pickers (the web credential form
+// signs the person in, S1d) and own their normalizer.
+func TestMicrosoftNativeTypesAreOfferedInThePickersAndOwnTheirNormalizer(t *testing.T) {
 	catalog, err := LoadPinnedCurrentAvailableCatalog()
 	if err != nil {
 		t.Fatal(err)
@@ -227,8 +226,11 @@ func TestMicrosoftNativeTypesAreHiddenFromThePickersAndOwnTheirNormalizer(t *tes
 	for _, typeName := range []string{"outlook", "teams", "ms_graph", "dataverse"} {
 		schema, ok := catalog.DataSchemaByType(typeName)
 		metadata, _ := schema["metadata"].(map[string]any)
-		if !ok || metadata["hidden"] != true {
-			t.Errorf("%s is not hidden: %v", typeName, metadata)
+		if !ok {
+			t.Fatalf("%s is not in the catalogue", typeName)
+		}
+		if _, hidden := metadata["hidden"]; hidden {
+			t.Errorf("%s is still hidden from the create pickers: %v", typeName, metadata)
 		}
 		if currentNativeConfigurationType(typeName) || !currentMicrosoftConfigurationType(typeName) {
 			t.Errorf("%s must be owned by the Microsoft normalizer alone", typeName)
