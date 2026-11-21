@@ -116,8 +116,10 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
   is `HOME` (hosted runners and eng-runner): the tar holds paths relative to the workspace, so a runner with
   another home layout would extract them to the wrong directory.
 - **macOS package.** `desktop-package` (heavy tier) runs on a pull request only when `apps/elitea-desktop/**`,
-  `libs/rust/vendor/agent-desktop/**`, the Rust toolchain pin, `desktop-package.yml` or the two packaging actions change. The run is an
-  unsigned debug dry run. `publish.yml` (the nightly pre-release on main, and every release) runs the signed
+  `libs/rust/vendor/agent-desktop/**`, the Rust toolchain pin, `desktop-package.yml`, the two packaging actions, the brands
+  (`brand/**`, `scripts/brand/**`) or the brand output scan change. The run is an unsigned debug dry run of brand/sample, and
+  it is the desktop lane of the brand output scan (the macOS host job in `ci-desktop.yml` no longer builds a second binary
+  for it; `ci-local-tools-macos.yml` runs the local-index tests that job used to). `publish.yml` (the nightly pre-release on main, and every release) runs the signed
   release build and verifies it. `check-tiering.mjs` holds the path list, the dry-run inputs and
   `require_signed: true` in `publish.yml`. The app is Apple silicon only.
 

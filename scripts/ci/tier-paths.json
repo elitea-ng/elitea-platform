@@ -523,6 +523,23 @@
         "libs/rust/Cargo.lock",
         "libs/rust/Cargo.toml",
         "libs/rust/rust-toolchain.toml",
+        "libs/rust/local-index/**",
+        "libs/rust/browser-tools/**",
+        "libs/rust/code-parsers/**",
+        "libs/rust/doc-chunk/**",
+        "libs/rust/egress-guard/**",
+        "libs/rust/engine-core/**",
+        "libs/rust/graph-algos/**",
+        "libs/rust/inventory-core/**",
+        "libs/rust/llm-wire/**",
+        "libs/rust/local-embed/**",
+        "libs/rust/platform-rpc/**",
+        "libs/rust/vendor/adk-agent/**",
+        "libs/rust/vendor/adk-runner/**",
+        "libs/proto/elitea/runtime/v1/artifact_object.proto",
+        "libs/proto/elitea/runtime/v1/internal_tool.proto",
+        "libs/proto/contracts/**",
+        "services/elitea-subapp-host/internal/apps/inventory/descriptor.json",
         ".github/workflows/ci-local-tools-macos.yml"
       ]
     },
@@ -535,7 +552,10 @@
         "scripts/ci/assert-rust-toolchain.sh",
         ".github/workflows/desktop-package.yml",
         ".github/actions/desktop-macos-package/**",
-        ".github/actions/desktop-windows-package/**"
+        ".github/actions/desktop-windows-package/**",
+        "brand/**",
+        "scripts/brand/**",
+        "scripts/ci/brand-output-scan.mjs"
       ]
     },
     "helm-install-smoke": {

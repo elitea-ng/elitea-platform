@@ -70,6 +70,10 @@ export const DESKTOP_PACKAGE_PATHS = [
   ".github/workflows/desktop-package.yml",
   ".github/actions/desktop-macos-package/**",
   ".github/actions/desktop-windows-package/**",
+  // The dry run is the desktop lane of the brand output scan (brand/sample).
+  "brand/**",
+  "scripts/brand/**",
+  "scripts/ci/brand-output-scan.mjs",
 ];
 const PR_ONLY = "${{ github.event_name == 'pull_request' }}";
 // A heavy job's own if must not lean on the implicit success(): that is false when ANY
