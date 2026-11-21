@@ -379,7 +379,7 @@ async fn the_effects_are_not_read_only_and_the_reads_are() {
             assert!(!tool.is_concurrency_safe(), "{}", tool.name());
         }
     }
-    assert_eq!(rig.tools.len(), 37);
+    assert_eq!(rig.tools.len(), 38);
     assert!(script.hits().is_empty(), "building tools sends nothing");
 }
 
