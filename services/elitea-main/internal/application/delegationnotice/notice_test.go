@@ -233,3 +233,28 @@ func TestSanitizeNamesAnUnnamedCalleeRatherThanHidingTheRefusal(t *testing.T) {
 		t.Fatalf("notice = %+v, %v", notice, ok)
 	}
 }
+
+type namingEditors struct {
+	fakeEditors
+	name string
+}
+
+func (n namingEditors) AgentName(context.Context, int64, int64) (string, error) { return n.name, nil }
+
+func TestALiveFrameNamesTheCallingAgentAndAStoredNoticeKeepsItsName(t *testing.T) {
+	edge := map[string]any{"caller_id": float64(2), "caller_name": "elitea-agent"}
+	meta := map[string]any{MetaKey: []any{map[string]any{"reason": "no_grant", "edge": edge}}}
+	review, err := NewService(fakePermissions{allowed: true}, namingEditors{name: "Release helper"}).DelegationReview(t.Context(), 1, 2, 2)
+	if err != nil || review.CallerName != "Release helper" {
+		t.Fatalf("review = %+v %v", review, err)
+	}
+	served := StampMeta(t.Context(), meta, 1, 2, &fakeReviewer{review: review})
+	if got := served[MetaKey].([]any)[0].(map[string]any)["edge"].(map[string]any)["caller_name"]; got != "elitea-agent" || edge["caller_name"] != "elitea-agent" {
+		t.Fatalf("a stored notice keeps the name it was saved with: %v", got)
+	}
+	frame := `{"response_metadata":{"delegation_v1":` + refusedJSON + `}}`
+	out := StampFrame(t.Context(), []byte(frame), 1, 2, &fakeReviewer{review: Review{CallerName: "Release helper"}})
+	if !strings.Contains(string(out), `"caller_name":"Release helper"`) {
+		t.Fatalf("a live frame keeps the runtime label: %s", out)
+	}
+}

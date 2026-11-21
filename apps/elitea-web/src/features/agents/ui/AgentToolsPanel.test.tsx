@@ -1,3 +1,7 @@
+import type { ReactNode } from 'react';
+
+import { useLocation } from '@tanstack/react-router';
+
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { HttpResponse, http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -329,5 +333,39 @@ describe('AgentToolsPanel', () => {
 
     expect(await screen.findByRole('dialog', { name: 'What DB specialist will be able to use' })).toBeVisible();
     expect(previewed).toEqual([9]);
+  });
+
+  it('drops a review_delegation link that names a callee with no grant row once the grants have loaded (#2236)', async () => {
+    const DB_AGENT: VersionToolRef = { id: 8, tool_id: 79, entity_type: 'agent', name: 'DB specialist', type: 'application', config: { application_id: '9', application_version_id: '90' } };
+    let grantsRead = 0;
+    server.use(
+      http.get('*/elitea_core/delegation_grants/prompt_lib/:projectId/:applicationId', () => {
+        grantsRead += 1;
+        return HttpResponse.json({ grants: [] });
+      }),
+    );
+    function Probe(): ReactNode {
+      const search = useLocation({ select: (location) => location.searchStr });
+      return <output data-testid="search">{search}</output>;
+    }
+    renderWithRouterAndProject(
+      <>
+        <AgentToolsPanel
+          entity={{ applicationId: 42, versionId: 100, versionStatus: 'draft' }}
+          versionTools={[DB_AGENT]}
+          dirty={false}
+          internalTools={{ value: [], onChange: vi.fn() }}
+          readOnly={false}
+          viewMode="owner"
+        />
+        <Probe />
+      </>,
+      'proj-1',
+      undefined,
+      '/?review_delegation=9',
+    );
+
+    await waitFor(() => expect(grantsRead).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getByTestId('search')).not.toHaveTextContent('review_delegation'));
   });
 });
