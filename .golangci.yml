@@ -22,8 +22,32 @@ linters:
     - ineffassign
     - staticcheck
     - unused
+  # govet is the workspace's only `go vet`: ci-go.yml has no standalone vet
+  # step. With no settings it runs golangci-lint's default analyzer set, which
+  # in v2.9.0 is `go tool vet help`'s Go 1.26 list (35 analyzers) minus
+  # loopclosure, which golangci-lint drops because it reports nothing for a
+  # file at go1.22 or later (every go.work module is at 1.26 and no file
+  # lowers its version with a //go:build go1.N line). Do not narrow this set:
+  # it is what keeps the coverage equal to `go vet ./...`.
+  #
+  # `go vet` also checks generated code, so govet has to see it too. That is
+  # why `generated` is `disable` (it used to be `lax`, which hid every linter,
+  # govet included, from these files) and the other linters skip them by
+  # path instead. The paths match exactly the 92 files that carry the
+  # `// Code generated ... DO NOT EDIT.` header today; the hand-written tests
+  # in sqlcgen/ are linted in full. A new generator outside these paths fails
+  # the lint loudly rather than hiding anything, so add its output here.
   exclusions:
-    generated: lax
+    generated: disable
+    rules:
+      - path: '^libs/proto/gen/go/.*\.pb\.go$'
+        linters: [errcheck, ineffassign, staticcheck, unused]
+      - path: '^services/elitea-main/internal/db/sqlcgen/([^/]+\.sql|db|models|querier)\.go$'
+        linters: [errcheck, ineffassign, staticcheck, unused]
+      - path: '^services/elitea-main/internal/api/generated/api\.gen\.go$'
+        linters: [errcheck, ineffassign, staticcheck, unused]
+      - path: '^libs/go/faults/codes_gen\.go$'
+        linters: [errcheck, ineffassign, staticcheck, unused]
 
 issues:
   max-issues-per-linter: 0

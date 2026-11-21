@@ -7,7 +7,7 @@ verdict job, `ci-gate`.
 
 | Tier | Starts | What runs | Signal |
 |---|---|---|---|
-| Fast | Every push to the pull request | Static gates, Go vet, lint and unit shards, web unit, typecheck and lint, Rust format and Clippy, the small contract suites, the dependency scanners | About 5 minutes to the first result |
+| Fast | Every push to the pull request | Static gates, Go lint (golangci-lint, govet included) and unit shards, web unit, typecheck and lint, Rust format and Clippy, the small contract suites, the dependency scanners | About 5 minutes to the first result |
 | Heavy | Only when the pull request is **not a draft** and the fast tier passed | Web E2E (every lane, visual), web coverage, the Rust test chains, desktop, Helm and kind smoke, WebKit | About 35 minutes |
 
 The path filter decides which jobs of a tier run. It lives in `scripts/ci/tier-paths.json`. A docs-only change
@@ -75,6 +75,13 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
   named steps. Every gate step runs even when an earlier one failed, so one run shows every red gate.
 - **Rust.** `ci-rust-lint.yml` runs `cargo fmt` and one `cargo clippy` per Cargo workspace in the fast tier. The
   test jobs no longer run them.
+- **Go vet once.** `ci-go.yml` runs no standalone `go vet`: the `lint` job's golangci-lint runs `govet` over
+  the same `go.work` modules, with the default build tags and the test files, and with golangci-lint's default
+  analyzer set, which is `go tool vet help`'s Go 1.26 list less `loopclosure` (a no-op from go1.22, and every
+  module is at 1.26). `go vet` also checks generated code, so `.golangci.yml` sets `exclusions.generated:
+  disable` and keeps the other linters off the 92 generated files by path. `task vet` still runs `go vet`.
+  The gateway (`ci-gateway.yml`, Go 1.27 and golangci-lint 2.15) and the `conformance`-tagged vet in
+  `ci-governed-conformance.yml` keep their own `go vet`.
 - **Go shards.** `scripts/go/test-shards.json` has a shard `infra-suites` for the slow packages. The fault
   registry test no longer compiles a regexp per code over the whole tree (21 minutes to 4 seconds).
 - **Go tests once.** `no-binaries` (no path filter) runs the elitea-main gates `./internal/api/` and

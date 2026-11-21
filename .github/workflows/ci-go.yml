@@ -204,7 +204,7 @@ jobs:
       - name: Restore the Go cache (read only, one writer per key)
         uses: ./.github/actions/go-cache
         with:
-          # Only test-checks (go vet over every module) writes this key.
+          # Only test-checks (the nightly build-cache warm on main) writes this key.
           save: 'false'
           # This job lints every go.work module, so the cache key reads every
           # module that has a go.sum. The block below is a literal string, so a
@@ -249,8 +249,9 @@ jobs:
   #   test-plan    reads scripts/go/test-shards.json and the go tool's package
   #                list, and FAILS if a package is in no shard or in two
   #                (scripts/ci/go-test-shards.mjs). Its output is the matrix.
-  #   test-checks  the checks that run one time: Go vet, the generated OpenAPI
-  #                server, the static API contract.
+  #   test-checks  the checks that run one time: the generated OpenAPI
+  #                server, the static API contract. (Go vet is golangci-lint's
+  #                govet, in the lint job.)
   #   test-shard   one job per shard, each with its own PostgreSQL and NATS,
   #                and the storage emulators only where the shard sets
   #                `storage`. Each shard runs the skip ledger with
@@ -305,7 +306,7 @@ jobs:
           echo "matrix=${matrix}" >> "$GITHUB_OUTPUT"
 
   test-checks:
-    name: Test checks (vet, generated code)
+    name: Test checks (generated code, API contract)
     runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
@@ -322,7 +323,7 @@ jobs:
         uses: ./.github/actions/go-cache
         with:
           # Restores only. The save is the last step of this job, so a red
-          # gate above it (a vet finding) still saves the cache it warmed;
+          # gate above it (a stale generated server) still saves the cache it warmed;
           # the action's own post-step save runs on success only.
           save: 'false'
           cache-dependency-path: |
@@ -348,11 +349,11 @@ jobs:
       - name: Static API contract (handler response shapes)
         run: bash services/elitea-main/scripts/validate_contract_static.sh
 
-      # One aggregation for CI and for `task vet`. The inline loop that used to
-      # live here reported the status of its LAST module only (#409). It ran
-      # in series before the tests (3.5 minutes); here it runs beside them.
-      - name: Go vet (workspace)
-        run: bash scripts/go/workspace-run.sh vet
+      # No `go vet` step: the lint job's golangci-lint runs govet over the same
+      # go.work modules, with the same (default) build tags and test files,
+      # and the same analyzers `go tool vet help` lists for Go 1.26, generated
+      # code included (.golangci.yml says how). A second run found nothing the
+      # first could not. `task vet` still runs `go vet` locally.
 
       # THE ONE WRITER of the workspace Go key (scripts/ci/check-cache-budget.mjs,
       # "one writer per cache key"): every other job that restores it is read
@@ -476,7 +477,7 @@ jobs:
       - name: Restore the Go cache (read only, one writer per key)
         uses: ./.github/actions/go-cache
         with:
-          # Only test-checks (go vet over every module) writes this key.
+          # Only test-checks (the nightly build-cache warm on main) writes this key.
           save: 'false'
           cache-dependency-path: |
             services/elitea-main/go.sum
@@ -683,7 +684,7 @@ jobs:
           path: ${{ runner.temp }}/go-coverage
           if-no-files-found: error
 
-      # The former `build` job is gone: `go vet ./...` in the lint job
+      # The former `build` job is gone: golangci-lint in the lint job
       # type-checks every package including cmd/, so a main that stops
       # compiling already fails there, and a link-stage failure for a
       # pure-Go CGO_ENABLED=0 binary is not a case this repository has seen.
