@@ -317,6 +317,8 @@ pub fn remove(repo: &Repo, entry: &RegisteredWorktree, keep_branch: bool) -> Too
                 common.join("refs/heads/elitea"),
                 common.join("packed-refs"),
                 common.join("packed-refs.lock"),
+                // git rewrites packed-refs through a `packed-refs.new` temp file.
+                common.join("packed-refs.new"),
             ])
             .run(&["update-ref", "-d", &format!("refs/heads/{branch}")]);
     }
