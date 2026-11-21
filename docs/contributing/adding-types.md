@@ -133,3 +133,12 @@ The `tavily` toolkit type (SDK `elitea_sdk/tools/tavily`, commit 0c1ce249) was a
 It was served hidden until #2261 built it (`families/web/tavily_toolkit.rs`, on the `web` family's Tavily
 adapter, registered in `materialize.rs`) and added `tavily` to the worker capability snapshot and to
 `rustNativeToolTypes`. The credential it references, `tavily`, already existed.
+
+A second example, for a type with **no upstream schema to capture**: `analyse_jira` (#2263). Upstream's
+wrapper is in no public branch or tag, so `families/analyse_jira/catalogue.rs` authors the entry from what
+survives (a skipped integration test and the library the wrapper called) and says so in its header; there is
+no `testdata/sdk-fixtures/analyse_jira.json`, because a fixture made from our own schema would test nothing.
+The evidence that does exist is pinned as a Rust test (`the_reconstructed_upstream_surface_is_kept`), and the
+toolkit's docs page lists which tools are upstream's by name and which are this platform's. Do the same when
+a source is unrecoverable: say what was reconstructed, keep the surviving evidence in a test, and never
+present an authored schema as a captured one.

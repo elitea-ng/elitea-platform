@@ -98,6 +98,11 @@
       "search_documents": "read",
       "search_records": "read"
     },
+    "analyse_jira": {
+      "get_jira_fields_overview": "read",
+      "get_jira_statuses": "read",
+      "get_number_off_all_issues": "read"
+    },
     "artifact": {
       "delete_file": "delete",
       "get_file_metadata": "read",

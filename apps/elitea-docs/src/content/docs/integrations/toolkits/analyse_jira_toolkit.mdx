@@ -1,0 +1,163 @@
+---
+title: "Jira analysis"
+description: "Extract Jira issues with their status history into datasets in an artifact bucket, and calculate flow metrics (lead time, cycle time, throughput) over them. Settings, tools, limits, and what differs from the upstream toolkit."
+---
+
+Pull issues out of Jira in bulk, with the history of each status change, and measure how work flows: lead time, cycle time, life time, throughput, flow efficiency and flow load. The toolkit writes the extracted data as CSV files in an artifact bucket, so the [Data Analysis](/menus/internal-tools#data-analysis) tool and the Code sandbox read the same files. It's listed under the **project management** category in the toolkit type picker, as **Jira analysis**.
+
+It reuses the **`jira`** credential. There is no new credential type: a saved Jira credential works as it is.
+
+## Prerequisites
+
+- A saved **`jira`** credential (`/credentials/create-credential/<type>`). The account needs read access to the projects you analyse. Jira Cloud (REST v3) and Jira Server or Data Center (REST v2) both work.
+- Boards and sprints need the Jira Software (Agile) API, only for the sprint tool.
+
+## Connect the toolkit
+
+<Steps>
+<Step title="Open the toolkit type picker">
+In the left navigation, open **Toolkits**, then select **New**. Filter by the **project management** category, or search for "Jira analysis".
+</Step>
+
+<Step title="Pick or create a credential">
+Choose an existing **jira** credential, or select **Create credential** to add one without leaving the form.
+</Step>
+
+<Step title="Set the analysis settings">
+Set the **closed status** your workflow ends in, the **defect types**, the **project keys** the tools use by default, and the **custom fields** you want as columns (for example the team). The defaults fit a workflow that ends in `Done` with a `Defect` issue type.
+</Step>
+
+<Step title="Save">
+Name the toolkit and select **Create**. It's now available to attach to agents, pipelines and conversations in this project.
+</Step>
+</Steps>
+
+## Settings
+
+| Setting | Default | What it does |
+|---|---|---|
+| **Jira credential** | none | The saved `jira` credential. Required. |
+| **API version** | Auto | Jira REST version: Auto picks v3 for Cloud and v2 for Server. |
+| **Artifact bucket path** | `analyse-jira` | The bucket the datasets are written to. It is created when it does not exist. |
+| **Closed status** | `Done` | The status that marks an issue closed when a run closes issues by status. |
+| **Defects name** | `Defect` | An issue type, or comma-separated types, that count as defects. |
+| **Custom fields** | `{"team": ""}` | Extra dataset columns: the column name, and the Jira field name or comma-separated names it reads (the first one with a value wins). Names are matched without regard to case. The `team` column is always there. |
+| **Project keys** | empty | The projects a call uses when it names none. |
+| **Max issues** | 5000 | The most issues one extraction reads (at most 50000). |
+
+## Available tools
+
+Three of the tools only read Jira and answer in the chat. The other three write a dataset to the artifact bucket, so a run needs the project's artifact store for them. Without it, only the three read tools are offered, and the run says which tools were left out.
+
+<Accordion title="Available tools (6)">
+
+The category of a tool decides when a run needs human approval to call it. See [Runtime safety](/admin/enterprise-controls/runtime-safety#tool-categories-and-approval-policy).
+
+| Tool | Category |
+|---|---|
+| Calculate jira metrics | `write` |
+| Get jira fields overview | `read` |
+| Get jira issues | `write` |
+| Get jira sprints | `write` |
+| Get jira statuses | `read` |
+| Get number off all issues | `read` |
+
+</Accordion>
+
+| Tool | What it does |
+|---|---|
+| `get_number_off_all_issues` | Counts the issues updated on or after `after_date` in each project, all visible projects or the ones in `project_keys`. Returns `projects` and `projects_summary`. |
+| `get_jira_issues` | Extracts issues with their changelog into a work-items file and a statuses file. Arguments: `project_keys`, `closed_issues_based_on` (1 closed by status, 2 closed by resolution date), `resolved_after`, `updated_after`, `created_after`, `add_filter`. Closed by resolution date (2) chooses closed issues by `resolved_after` alone; `updated_after` bounds the open ones. Answers `Data has been extracted successfully.` with the two file paths. |
+| `get_jira_fields_overview` | Shows how many issues of each project have a value in each field, for at most 2000 issues. |
+| `get_jira_sprints` | Extracts the sprints of the scrum boards of some projects. |
+| `get_jira_statuses` | Lists every status of the instance with its category. |
+| `calculate_jira_metrics` | Calculates a metric over the files `get_jira_issues` wrote, writes the result as a CSV file and shows its first rows. |
+
+## The datasets
+
+`get_jira_issues` writes two files to the bucket, named after the projects, for example `data_work_items_alp.csv` and `map_statuses_alp.csv`. A file is never replaced: a second run writes `data_work_items_alp-2.csv`.
+
+**The work-items file** has one row per issue, request type and status interval. Its columns are `issue_key`, `issue_id`, `project_name`, `project_key`, `issue_type`, `total_time_spent`, `priority`, `resolution`, `summary`, `status`, `labels`, `created_date`, `resolved_date`, `last_updated_date`, `start_date`, `components`, `subtasks`, `linked_issues`, `fix_versions`, your custom columns, then `request_type`, `status_history`, `from_date`, `to_date` and `time_in_status` (days).
+
+- `request_type` is `closed` or `open`, by the rule you chose, and `defect` again for the issues of a defect type created on or after `created_after`. The defect rows are copies for your own analysis in `data_analysis`; no metric reads them.
+- An interval runs from the previous status change (the first, from the creation date) to the change that left the status. An open issue's last interval runs to the time of the extraction. A closed issue's last interval has no end, so it has no days.
+- A closed issue with a released fix version has one more row, `Waiting for release`, from its resolution to the latest release date, unless the release came before the resolution. Versions Jira marks unreleased are ignored.
+- The closed status is matched without regard to case, as Jira matches it.
+- Times are the wall clock of the Jira instance as it reports them, without the time zone offset.
+
+**The statuses file** maps each status to `Active` or `Waiting` and says whether it counts toward cycle time (`add_to_cycle_time`). The rows come in workflow order. Edit it before calculating if your workflow names differ from the defaults.
+
+Because they are CSV files, `data_analysis` reads them as they are, and so does the Code sandbox.
+
+## The metrics
+
+All times are in days. A metric is calculated per group, by default per project, issue type, and team when the dataset has one, and per month where it says so.
+
+| Metric | Definition |
+|---|---|
+| `lead_time` | Total time of a closed issue across its statuses, averaged per group. |
+| `cycle_time` | The part of that time spent in statuses marked `add_to_cycle_time`, averaged per group. |
+| `life_time` | Age of an open issue, averaged per group. |
+| `throughput` | Closed issues per day of the month, per group and month. |
+| `flow_efficiency` | The share of a closed issue's time spent in `Active` statuses, averaged per group. |
+| `flow_load` | Issues that were in a status at midnight on some day of the month, per group and month. |
+| `closed_items` | Lead time, cycle time and number of closed issues per month. |
+| `open_items` | Life time and number of open issues per status. |
+| `queue` | Lead time, throughput and `WIP` (throughput times lead time) per month. |
+| `flow` | Flow efficiency, load, time (lead time) and velocity (number of closed issues) per month. |
+
+`group_by` names other columns to group by. `aggregate_by` adds `median`, `min`, `max`, `sum`, `count` or `std` of the per-issue values next to the mean. An issue with no value in a group column is its own group with an empty name.
+
+## Example
+
+Ask an agent with this toolkit and the Data Analysis tool:
+
+> Extract the issues of project ALP updated since 2026-01-01, closed by resolution date, then show the cycle time per month for stories and a chart of the throughput.
+
+The agent calls `get_jira_issues` with `closed_issues_based_on` 2 and the three dates, then `calculate_jira_metrics` with `cycle_time` (or `closed_items`) over the two files, and `data_analysis` to chart the written metrics file.
+
+## Limits
+
+- One extraction reads at most **Max issues** issues. When a query would read more, it stops and writes nothing: narrow the projects, the dates or `add_filter`, or raise the setting.
+- A dataset has at most 250000 rows and 32 MiB. A run is cut off after four minutes. A bound that is hit never leaves a file behind: both files of an extraction are checked before the first is stored. If storing the second file itself fails, the tool says which file was written.
+- On Jira Cloud a project's issue count is Jira's own approximate count (one request). If this Jira does not have it, the count pages through key-only results, up to 10000 issues, and a larger count is shown as a lower bound.
+- A long changelog is read one issue at a time. That is bounded by the four minute limit: an extraction that cannot finish stops and writes nothing, so narrow it.
+- Jira pages are requested 50 issues at a time. A rate limit or a short outage is retried up to three times.
+- A long changelog is read in full through the changelog endpoint. A Jira that does not have it (older Server versions) gives only the first page of each long changelog; the tool says how many issues are affected.
+- `add_filter` is added with `AND` inside parentheses and must not contain `ORDER BY`. Project keys are letters, digits and underscores.
+- Spreadsheet formula injection: a text cell that starts with `=`, `+`, `-` or `@` is written with a leading `'`.
+
+Jira is reached from the agent worker through the egress allowlist, so the Jira host must be allowed as for the [Jira toolkit](/integrations/toolkits/jira_toolkit).
+
+## Where the tools come from
+
+The upstream SDK lists `analyse_jira` (a Jira analysis toolkit), but the code behind it is not in any public branch or tag of the SDK. What survives is a skipped integration test and the `elitea-analyse` library on PyPI that the toolkit called. This toolkit is built from those two:
+
+- **Kept as upstream has it.** The tool names `get_number_off_all_issues` and `get_jira_issues`, their arguments, the result keys `projects` and `projects_summary`, the success sentence, the settings `closed_status`, `defects_name`, `custom_fields` and `project_keys`, and the default bucket `analyse-jira`.
+- **Added here.** `get_jira_fields_overview`, `get_jira_sprints`, `get_jira_statuses` and `calculate_jira_metrics` cover the rest of what the library does. Their names are this platform's.
+- **Written from behaviour, not copied.** The library declares no licence, so its code is not used: the extraction and the metrics were written again in Rust from what the library does. The platform's owners are asking upstream for the wrapper source and the library's licence (#2263); this page will record the answer.
+
+### Deliberately not reproduced
+
+- The library's sprint commitment metrics (committed, added, removed and completed issues and story points per sprint). The sprint dataset is extracted; the metrics are not calculated yet.
+- Dropping issues with no team (or any other empty group value) from a grouped metric. They are their own group here.
+- The library's second "per issue type" field statistic, which overwrote the first; the fields overview shows one statistic per project, with the percentage of that project's issues.
+- The inward label of a link on an outward link; the outward label is used.
+- A "Waiting for release" interval that would be negative, and a release Jira marks unreleased.
+- A fix version with no release date winning the "latest version" choice; the latest released version is used.
+- Reading credentials from AWS Secrets Manager or Azure Key Vault, writing to S3 or SharePoint, and the file dialogs; credentials come from the saved Jira credential and files go to the artifact bucket.
+- ADO, GitLab and GitHub analysis. They follow on the same core (#2264).
+
+## Common issues
+
+<Note>
+`The extraction would read more than N issues` means the filter is too wide for the toolkit's **Max issues**. Narrow it by project, by date or with `add_filter`.
+</Note>
+
+<Note>
+`These custom_fields names are not fields of this Jira` lists the names that match no field of the instance. Use the field's name as Jira shows it; matching ignores case.
+</Note>
+
+<Note>
+A metric that needs the statuses file (`cycle_time`, `flow_efficiency`, `closed_items`, `flow`) says so when `statuses_file` is missing, and names a status that is in the work-items file but not in the statuses file.
+</Note>

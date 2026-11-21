@@ -35,6 +35,7 @@ export const integrationsTab: NavTab = {
         { kind: 'page', slug: 'integrations/toolkits/google_places_toolkit', title: 'Google Places' },
         { kind: 'page', slug: 'integrations/toolkits/imagegen_toolkit', title: 'ImageGen' },
         { kind: 'page', slug: 'integrations/toolkits/jira_toolkit', title: 'Jira' },
+        { kind: 'page', slug: 'integrations/toolkits/analyse_jira_toolkit', title: 'Jira analysis' },
         { kind: 'page', slug: 'integrations/toolkits/openapi_toolkit', title: 'OpenAPI' },
         { kind: 'page', slug: 'integrations/toolkits/postman_toolkit', title: 'Postman' },
         { kind: 'page', slug: 'integrations/toolkits/powerpoint_toolkit', title: 'PowerPoint' },

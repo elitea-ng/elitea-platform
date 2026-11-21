@@ -4,6 +4,8 @@ pub(crate) mod ado_plans;
 pub(crate) mod ado_repos;
 pub(crate) mod ado_wiki;
 pub(crate) mod aha;
+pub(crate) mod analyse_jira;
+pub(crate) mod analysis_core;
 pub(crate) mod attachment_host;
 // Public only to the worker's composition suites (`test-support`).
 #[cfg(any(test, feature = "test-support"))]
@@ -258,6 +260,9 @@ pub(crate) fn rust_only_catalogue_document() -> serde_json::Value {
             // snapshot (the worked example of docs/contributing/adding-types.md),
             // built by `web::tavily_toolkit` (#2261).
             "tavily": web::tavily_catalogue::tavily_type_entry(),
+            // The Jira analysis toolkit (#2263), authored here: its upstream
+            // wrapper is not public (see `analyse_jira::catalogue`).
+            "analyse_jira": analyse_jira::catalogue::analyse_jira_type_entry(),
         },
     })
 }
