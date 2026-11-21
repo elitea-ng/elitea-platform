@@ -324,21 +324,18 @@ jobs:
           PLAYWRIGHT_BASE_URL: http://localhost:8080
           E2E_TZ: UTC
           PWTEST_SHARD_WEIGHTS: ${{ matrix.weights }}
+          ENGINE: ${{ matrix.engine }}
+          SHARD: ${{ matrix.shard }}
         run: |
           cpu_stat() { cat /sys/fs/cgroup/cpu.stat 2>/dev/null || true; }
+          shard_args=()
+          [ -z "$SHARD" ] || shard_args=("--shard=$SHARD")
           before="$(cpu_stat)"
           status=0
-          npx playwright test --project=${{ matrix.engine }} ${{ matrix.shard && format('--shard={0}', matrix.shard) || '' }} || status=$?
+          npx playwright test --project="$ENGINE" "${shard_args[@]}" || status=$?
           after="$(cpu_stat)"
-          # nr_periods / nr_throttled / throttled_usec over the run.
-          node -e '
-            const parse = (t) => Object.fromEntries(t.split("\n").filter(Boolean).map((l) => l.split(" ")).map(([k, v]) => [k, Number(v)]));
-            const [a, b] = [parse(process.argv[1]), parse(process.argv[2])];
-            const d = (k) => (b[k] ?? 0) - (a[k] ?? 0);
-            if (!("nr_periods" in b)) { console.log("cgroup cpu.stat: not readable"); process.exit(0); }
-            const pct = d("nr_periods") ? (100 * d("nr_throttled") / d("nr_periods")).toFixed(1) : "0";
-            console.log(`cgroup CPU over the run: ${d("nr_throttled")} of ${d("nr_periods")} periods throttled (${pct}%), ${(d("throttled_usec") / 1e6).toFixed(1)} s throttled, cpu.max ${require("node:fs").readFileSync("/sys/fs/cgroup/cpu.max", "utf8").trim()}`);
-          ' "$before" "$after" | tee -a "$GITHUB_STEP_SUMMARY" || true
+          # nr_throttled of nr_periods, and throttled_usec, over the run.
+          node "$GITHUB_WORKSPACE/scripts/ci/cgroup-cpu-report.mjs" "$before" "$after" | tee -a "$GITHUB_STEP_SUMMARY" || true
           exit "$status"
       - name: Collect the stack's own logs
         # As the compose leg: only on failure, before the teardown.

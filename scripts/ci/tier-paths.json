@@ -355,6 +355,7 @@
         "scripts/e2e/**",
         "scripts/ci/check-native-stack-parity.mjs",
         "scripts/ci/check-runner-routing.mjs",
+        "scripts/ci/cgroup-cpu-report.mjs",
         ".github/workflows/ci-web-e2e-native.yml"
       ]
     },
