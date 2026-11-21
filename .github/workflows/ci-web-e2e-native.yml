@@ -630,6 +630,13 @@ jobs:
           INDEX_STREAM_PORT: "8080"
           INDEX_STREAM_MOCK_PORT: "8090"
           STANDALONE_PORT: "8080"
+          # The specs read the mocks' journals from the host. Compose publishes
+          # them on localhost; natively nothing is published, and each mock is
+          # on its own 127.0.0.x under its compose name (the pod's name map),
+          # so the specs take the whole origin.
+          STANDALONE_MOCK_ORIGIN: http://llm-mock:8090
+          STANDALONE_QTEST_ORIGIN: http://qtest-mock:8096
+          STANDALONE_ADO_ORIGIN: http://ado-mock:8097
         run: |
           set -euo pipefail
           [ -n "$MOCK_LLM_CHUNK_DELAY_MS" ] || unset MOCK_LLM_CHUNK_DELAY_MS

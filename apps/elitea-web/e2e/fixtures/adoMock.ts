@@ -21,8 +21,13 @@ import {
   readStoredTranscript,
 } from './api';
 
-/** Where the fake ADO is published on the host — the journal/state reads below. */
-export const ADO_HOST = `http://localhost:${process.env['STANDALONE_ADO_PORT'] ?? '8097'}`;
+/**
+ * Where the fake ADO is published on the host — the journal/state reads below.
+ * STANDALONE_ADO_ORIGIN replaces the whole origin on the native stack, which
+ * publishes nothing on localhost (`http://ado-mock:8097`, the pod's name map).
+ */
+export const ADO_HOST =
+  process.env['STANDALONE_ADO_ORIGIN'] || `http://localhost:${process.env['STANDALONE_ADO_PORT'] ?? '8097'}`;
 /** Where the TOOLKIT reaches it: a compose-network address, never the published one. */
 export const ADO_ORGANIZATION_URL = process.env['STANDALONE_ADO_URL'] ?? 'http://ado-mock:8097';
 export const ADO_PAT = process.env['STANDALONE_ADO_PAT'] ?? 'e2e-ado-pat';
