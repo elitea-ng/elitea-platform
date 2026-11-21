@@ -89,7 +89,12 @@ description: >-
 # directory nothing reads; and a self-hosted writer would save its own layout
 # under the shared key. Both slots therefore restore and save on
 # GitHub-hosted runners only; elsewhere the steps are skipped (a cold run, the
-# same result the absolute reader path gave there).
+# same result the absolute reader path gave there). On eng-runner
+# (.github/actions/eng-runner-env) HOME is /home/runner/_work/_home and the
+# workspace /home/runner/_work/<repo>/<repo>, so a hosted `../../../.npm`
+# would land in /home/runner/.npm: the container's 10 GiB ephemeral disk,
+# which no tool there reads. Only pull requests are routed there; every
+# writer (a run on main) stays hosted.
 #
 # One slot can be used ONE time in a job. Two uses would register two saves of
 # the same directory under two keys. The claim step records each slot in
