@@ -14,7 +14,8 @@ name: CI — elitea-doc-extractor
 #     cannot (kube-client caps it `< 1.16`). A future dependency that drags
 #     kube or serde-saphyr into this crate would fail here, not in a
 #     mysterious resolver error later;
-#   * the release binary.
+#   * the binary's command line, on the debug build the tests made (the
+#     release build is the image's, in ci-build-once.yml).
 
 on:
   # Called by ci.yml, which owns the PR tiers and the path filter
@@ -101,13 +102,16 @@ jobs:
             *) echo "::warning::the worker's lock resolves smallvec v${worker} (>= 1.16): the sidecar's reason for a separate lock may be gone; see services/elitea-doc-extractor/README.md" ;;
           esac
 
-      - name: Build the release binary
-        run: cargo build --locked --release
+      # The debug binary: the release build (no features, cargo-auditable) is
+      # the image's, and ci-build-once.yml builds it on every pull request
+      # that touches Rust. The tests already built these units.
+      - name: Build the debug binary (the units the tests built)
+        run: cargo build --locked --all-features --bins
 
       - name: The binary answers --version and refuses an unknown command
         run: |
           set -euo pipefail
-          bin=target/release/elitea-doc-extractor
+          bin=target/debug/elitea-doc-extractor
           "$bin" --version | grep -q '^elitea-doc-extractor '
           if "$bin" bogus 2>/dev/null; then
             echo "::error::an unknown command exited 0"; exit 1

@@ -99,6 +99,10 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
   digest. Each builds in its own job only when nothing was built for it: a fork or Dependabot pull request,
   or its own schedule or dispatch. The job runs when any of the three would run, or when the change touches
   Rust. Its `tier-paths.json` entry is a `union` of those jobs, with no paths of its own.
+- **Release builds.** The Rust workflows build no `--release` binaries. The worker, engine, vector and
+  doc-extractor images are their release builds, and `ci-build-once` builds them on every pull request that
+  touches Rust. The engine and doc-extractor jobs run the Go host tests and the `--version` smoke against the
+  debug binary that `cargo test` built.
 - **Actions cache.** The cache has a 10 GB cap. `ci-image-cleanup.yml` runs
   `scripts/ci/prune-actions-caches.mjs` every night: it keeps one entry per key family, removes pull-request
   copies, and removes the least recently used entries above 9 GiB. It then compares what main's entries hold
@@ -189,7 +193,7 @@ These jobs are routed (when `ENG_RUNNER` is on, on our own pull requests):
 | `helm-lint.yml` | `template` (both charts) |
 | `ci-rust-lint.yml` | `lint` (every workspace) |
 | `ci-rust-shared.yml` | `shared-crates` (rustdoc and tests) |
-| `ci-rust.yml` | `code-runner`, `quality` (docs and release build) |
+| `ci-rust.yml` | `code-runner`, `quality` (docs) |
 | `ci-doc-extractor.yml` | `extractor` |
 | `ci-deepwiki-engine.yml` | `serde-order`, `engine` (with the Go host against the binary) |
 | `ci-mock-llm.yml` | `unit` |

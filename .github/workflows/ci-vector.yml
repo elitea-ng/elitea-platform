@@ -101,8 +101,9 @@ jobs:
           ELITEA_VECTOR_REQUIRE_QDRANT: "1"
         run: cargo test --locked --all-targets --all-features
 
-      - name: Build the release binary
-        run: cargo build --locked --release
+      # No release build: nothing here ran it. The release build (no
+      # features, cargo-auditable) is the image's, in ci-build-once.yml, which
+      # runs on every pull request that touches Rust.
 
       # eng-runner: the logs of the services native-services started, when
       # anything in the job failed. Does nothing on a hosted runner.

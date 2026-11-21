@@ -17,7 +17,9 @@ name: CI — Inventory native engine
 #     (conformance/provider/fixtures/inventory — the files the Go and Rust
 #     fixture runners are held to), the tool table against the descriptor
 #     the host serves, and the engine over a REAL Unix socket;
-#   * the release binary, and then the Go sub-application host's own tests
+#   * the debug binary the tests built (with --all-features; the release
+#     build is the image's, in ci-build-once.yml), and then the Go
+#     sub-application host's own tests
 #     against it (internal/apps/inventory/run, native_engine_test.go): the
 #     host's sidecar client, composition and upload over the Rust engine,
 #     answering what the host's own fixture runner answers.
@@ -129,8 +131,13 @@ jobs:
           INVENTORY_REQUIRE_POSTGRES: "1"
         run: cargo test --locked --all-targets --all-features
 
-      - name: Build the release binary
-        run: cargo build --locked --release
+      # The debug binary, not a release one: the release build (no features,
+      # cargo-auditable) is the image's, and ci-build-once.yml builds it on
+      # every pull request that touches Rust. The tests above already built
+      # these units (`--all-targets` builds the bin for the integration
+      # tests), so this only makes sure it is linked where the Go host reads it.
+      - name: Build the debug binary (the units the tests built)
+        run: cargo build --locked --all-features --bins
 
       - uses: actions/setup-go@v7
         with:
@@ -166,7 +173,7 @@ jobs:
       - name: Run the Go host's sidecar tests against the binary
         working-directory: services/elitea-subapp-host
         env:
-          ELITEA_INVENTORY_NATIVE_ENGINE_BIN: ${{ github.workspace }}/services/elitea-inventory-engine/target/release/elitea-inventory-engine
+          ELITEA_INVENTORY_NATIVE_ENGINE_BIN: ${{ github.workspace }}/services/elitea-inventory-engine/target/debug/elitea-inventory-engine
           ELITEA_REQUIRE_NATIVE_ENGINE: "1"
         run: go test -race -count=1 -run 'NativeEngine' -v ./internal/apps/inventory/run
 

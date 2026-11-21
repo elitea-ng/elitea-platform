@@ -23,7 +23,9 @@ name: CI — DeepWiki native engine
 #     ci-rust-shared.yml, which runs when libs/rust changes. Here they cost
 #     22 min cold on the engine's critical path and pushed the Go host tests
 #     past the 45-min timeout (job 118778015092, run on PR #1329);
-#   * the release binary, and then the Go sub-application host's own tests
+#   * the debug binary the tests built (with --all-features; the release
+#     build is the image's, in ci-build-once.yml), and then the Go
+#     sub-application host's own tests
 #     against it (internal/apps/deepwiki/run, native_engine_test.go): the
 #     host's sidecar client, composition and upload over the Rust engine.
 #     ELITEA_REQUIRE_NATIVE_ENGINE=1 turns their "no binary → skip" into a
@@ -139,8 +141,13 @@ jobs:
           DEEPWIKI_REQUIRE_POSTGRES: "1"
         run: cargo test --locked --all-targets --all-features
 
-      - name: Build the release binary
-        run: cargo build --locked --release
+      # The debug binary, not a release one: the release build (no features,
+      # cargo-auditable) is the image's, and ci-build-once.yml builds it on
+      # every pull request that touches Rust. The tests above already built
+      # these units (`--all-targets` builds the bin for the integration
+      # tests), so this only makes sure it is linked where the Go host reads it.
+      - name: Build the debug binary (the units the tests built)
+        run: cargo build --locked --all-features --bins
 
       - uses: actions/setup-go@v7
         with:
@@ -176,7 +183,7 @@ jobs:
       - name: Run the Go host's sidecar tests against the binary
         working-directory: services/elitea-subapp-host
         env:
-          ELITEA_DEEPWIKI_NATIVE_ENGINE_BIN: ${{ github.workspace }}/services/elitea-deepwiki-engine/target/release/elitea-deepwiki-engine
+          ELITEA_DEEPWIKI_NATIVE_ENGINE_BIN: ${{ github.workspace }}/services/elitea-deepwiki-engine/target/debug/elitea-deepwiki-engine
           ELITEA_REQUIRE_NATIVE_ENGINE: "1"
         run: go test -race -count=1 -run 'Native' -v ./internal/apps/deepwiki/run
 
