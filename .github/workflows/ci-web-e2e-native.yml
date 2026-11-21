@@ -59,14 +59,19 @@ defaults:
 jobs:
   native-build:
     name: E2E native build
-    if: ${{ vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    # No job-level if: a called workflow whose every job skips reports
+    # `skipped`, and ci-gate reads that as missing. Off the pool (a fork, a
+    # Dependabot run, ENG_RUNNER off) the job runs and does nothing; the
+    # compose matrix in ci-web-e2e.yml carries the legs there.
+    env:
+      NATIVE: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'true' || 'false' }}
     runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
     timeout-minutes: 30
     outputs:
       # The lane filter, as ci-build-once.yml's `model-path-changes` decides it:
       # every run that is not a pull request reaches everything.
-      reaches-stack: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reaches-stack }}
-      reaches-webkit: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reaches-webkit }}
+      reaches-stack: ${{ env.NATIVE == 'true' && (github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reaches-stack) || 'false' }}
+      reaches-webkit: ${{ env.NATIVE == 'true' && (github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reaches-webkit) || 'false' }}
       sha256: ${{ steps.pack.outputs.sha256 }}
     steps:
       - uses: actions/checkout@v7
@@ -77,7 +82,7 @@ jobs:
       - uses: ./.github/actions/eng-runner-env
       - id: filter
         name: Which legs does this change reach?
-        if: github.event_name == 'pull_request'
+        if: env.NATIVE == 'true' && github.event_name == 'pull_request'
         working-directory: ${{ github.workspace }}
         run: |
           set -euo pipefail
@@ -89,13 +94,13 @@ jobs:
           git diff --name-only HEAD^1 HEAD > "$RUNNER_TEMP/changed.txt"
           bash scripts/ci/e2e-lane-filter.sh < "$RUNNER_TEMP/changed.txt" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-go@v7
-        if: github.event_name != 'pull_request' || steps.filter.outputs.reaches-stack == 'true'
+        if: env.NATIVE == 'true' && (github.event_name != 'pull_request' || steps.filter.outputs.reaches-stack == 'true')
         with:
           # The cache is .github/actions/go-cache below.
           cache: false
           go-version-file: go.work
       - name: Restore the Go cache (read only)
-        if: github.event_name != 'pull_request' || steps.filter.outputs.reaches-stack == 'true'
+        if: env.NATIVE == 'true' && (github.event_name != 'pull_request' || steps.filter.outputs.reaches-stack == 'true')
         uses: ./.github/actions/go-cache
         with:
           # ci-go's test-checks job writes this key (the whole workspace); the
@@ -107,17 +112,17 @@ jobs:
             libs/go/*/go.sum
             libs/proto/gen/go/go.sum
       - uses: actions/setup-node@v7
-        if: github.event_name != 'pull_request' || steps.filter.outputs.reaches-stack == 'true'
+        if: env.NATIVE == 'true' && (github.event_name != 'pull_request' || steps.filter.outputs.reaches-stack == 'true')
         with:
           node-version: "26"
           package-manager-cache: false
       - name: Restore the npm cache (pull requests read, main writes)
-        if: github.event_name != 'pull_request' || steps.filter.outputs.reaches-stack == 'true'
+        if: env.NATIVE == 'true' && (github.event_name != 'pull_request' || steps.filter.outputs.reaches-stack == 'true')
         uses: ./.github/actions/npm-cache
         with:
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
-        if: github.event_name != 'pull_request' || steps.filter.outputs.reaches-stack == 'true'
+        if: env.NATIVE == 'true' && (github.event_name != 'pull_request' || steps.filter.outputs.reaches-stack == 'true')
         run: |
           for attempt in 1 2 3; do
             npm ci && exit 0
@@ -126,19 +131,19 @@ jobs:
             sleep $((attempt * 20))
           done
       - name: Build the binaries and the web bundles the e2e images carry
-        if: github.event_name != 'pull_request' || steps.filter.outputs.reaches-stack == 'true'
+        if: env.NATIVE == 'true' && (github.event_name != 'pull_request' || steps.filter.outputs.reaches-stack == 'true')
         working-directory: ${{ github.workspace }}
         run: bash scripts/e2e/build-native-bin.sh "$RUNNER_TEMP/native-bin"
       - id: pack
         name: Pack them (upload-artifact keeps no exec bits)
-        if: github.event_name != 'pull_request' || steps.filter.outputs.reaches-stack == 'true'
+        if: env.NATIVE == 'true' && (github.event_name != 'pull_request' || steps.filter.outputs.reaches-stack == 'true')
         working-directory: ${{ runner.temp }}
         run: |
           set -euo pipefail
           tar --zstd -cf native-bin.tar.zst -C native-bin .
           echo "sha256=$(sha256sum native-bin.tar.zst | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
       - name: Upload the build directory
-        if: github.event_name != 'pull_request' || steps.filter.outputs.reaches-stack == 'true'
+        if: env.NATIVE == 'true' && (github.event_name != 'pull_request' || steps.filter.outputs.reaches-stack == 'true')
         uses: actions/upload-artifact@v7
         with:
           name: native-e2e-bin
