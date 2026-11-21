@@ -53,6 +53,22 @@ export const OWN_PR_TRIGGER = new Map([
 export const DRAFT_CONDITION = "github.event.pull_request.draft == false";
 /** ci-gate's half of the draft rule: skipped on a draft, so a draft shows fast-gate's verdict and a grey gate. */
 export const GATE_DRAFT_SKIP = "github.event.pull_request.draft != true";
+// One web unit suite per run: ci-web's plain shards stand down exactly where ci-web-coverage
+// runs every unit test. ci.yml passes ci-web the coverage job's own filter, and the shards
+// are skipped on that input alone, so a run never has neither suite.
+export const WEB_COVERAGE_RUNS = "${{ github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-web-coverage'] }}";
+export function checkWebUnitSuite(ci, workflows) {
+  const errors = [];
+  const call = ci.jobs?.["ci-web"];
+  if (!call) return errors;
+  if (String(call.with?.coverage_runs ?? "") !== WEB_COVERAGE_RUNS) errors.push(`ci-web: ci.yml must pass \`coverage_runs: ${WEB_COVERAGE_RUNS}\` (the plain unit shards stand down only where ci-web-coverage runs)`);
+  const coverage = ci.jobs?.["ci-web-coverage"];
+  if (!/github\.event\.pull_request\.draft == false/.test(String(coverage?.if ?? "")) || !/\['ci-web-coverage'\]/.test(String(coverage?.if ?? ""))) errors.push("ci-web-coverage: its if no longer reads `draft == false` and its own filter; ci-web's coverage_runs must follow it");
+  const unit = workflows["ci-web.yml"]?.parsed?.jobs?.["unit-tests"];
+  if (unit && String(unit.if ?? "") !== "${{ !inputs.coverage_runs }}") errors.push("ci-web.yml: `unit-tests` must be `if: ${{ !inputs.coverage_runs }}` and nothing else");
+  return errors;
+}
+
 /**
  * The pull-request gate of the macOS package job (owner decision 2026-11-20): the
  * desktop app (its Tauri config and packaging scripts are under it), the vendored
@@ -231,7 +247,7 @@ export function main({ root = ROOT, out = console.log, err = console.error } = {
     err(`::error::${error.message}`);
     return 1;
   }
-  const errors = [...check(model), ...checkDesktopPackage(model)];
+  const errors = [...check(model), ...checkDesktopPackage(model), ...checkWebUnitSuite(model.ci, model.workflows)];
   if (errors.length) {
     for (const e of errors) err(`::error::${e}`);
     return 1;

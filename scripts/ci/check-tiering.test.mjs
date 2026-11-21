@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { check, checkDesktopPackage, load, main, DESKTOP_PACKAGE_PATHS, DRAFT_CONDITION, FAST_GATE_CONDITION, GATE_DRAFT_SKIP, MINIMUM_CALL_JOBS } from "./check-tiering.mjs";
+import { check, checkDesktopPackage, checkWebUnitSuite, load, main, DESKTOP_PACKAGE_PATHS, WEB_COVERAGE_RUNS, DRAFT_CONDITION, FAST_GATE_CONDITION, GATE_DRAFT_SKIP, MINIMUM_CALL_JOBS } from "./check-tiering.mjs";
 
 const call = (id, extra = {}) => ({ needs: ["changes"], if: `fromJSON(needs.changes.outputs.run)['${id}']`, uses: `./.github/workflows/${id}.yml`, ...extra });
 const heavyCall = (id) =>
@@ -171,6 +171,23 @@ test("the macOS package gate: a pull request stays a dry run, publish.yml stays 
   has(errors, "publish.yml: the desktop-package call must pass `require_signed: true`");
   delete m.ci.jobs["desktop-package"];
   has(checkDesktopPackage(m), "ci.yml has no `desktop-package` job");
+});
+
+test("one web unit suite: the plain shards stand down only where coverage runs", () => {
+  const web = (unitIf) => ({ "ci-web.yml": { parsed: { jobs: { "unit-tests": { if: unitIf } } } } });
+  const ci = (coverageRuns, coverageIf = `${FAST_GATE_CONDITION} && ${DRAFT_CONDITION} && fromJSON(needs.changes.outputs.run)['ci-web-coverage']`) => ({
+    jobs: { "ci-web": { with: coverageRuns === undefined ? undefined : { coverage_runs: coverageRuns } }, "ci-web-coverage": { if: coverageIf } },
+  });
+  const ok = "${{ !inputs.coverage_runs }}";
+  assert.deepEqual(checkWebUnitSuite(ci(WEB_COVERAGE_RUNS), web(ok)), []);
+  // No input: the shards would never be told; another filter: a run with neither suite.
+  assert.match(checkWebUnitSuite(ci(undefined), web(ok)).join("\n"), /coverage_runs/);
+  assert.match(checkWebUnitSuite(ci(WEB_COVERAGE_RUNS.replace("ci-web-coverage", "ci-web")), web(ok)).join("\n"), /coverage_runs/);
+  // The coverage job lost its draft rule: the input no longer mirrors it.
+  assert.match(checkWebUnitSuite(ci(WEB_COVERAGE_RUNS, "fromJSON(needs.changes.outputs.run)['ci-web-coverage']"), web(ok)).join("\n"), /ci-web-coverage/);
+  // The shard job reads something else, or nothing.
+  assert.match(checkWebUnitSuite(ci(WEB_COVERAGE_RUNS), web(undefined)).join("\n"), /unit-tests/);
+  assert.match(checkWebUnitSuite(ci(WEB_COVERAGE_RUNS), web("${{ !inputs.coverage_runs || true }}")).join("\n"), /unit-tests/);
 });
 
 test("the repository passes", () => {

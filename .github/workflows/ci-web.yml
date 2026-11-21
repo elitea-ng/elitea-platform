@@ -17,7 +17,8 @@ name: CI — Web
 # in ~12 jobs: the single-script gates are grouped behind ONE checkout +
 # `npm ci` (`gates-static`), typecheck and lint share a job (`quality`), the
 # unit matrix is 5 shards rather than 10. Coverage and its thresholds moved to
-# ci-web-coverage.yml (heavy tier). Each gate keeps its own step, named after the job
+# ci-web-coverage.yml (heavy tier); on a ready pull request it is the one unit
+# suite, and the shards here are skipped (input `coverage_runs`). Each gate keeps its own step, named after the job
 # it used to be, so the evidence stays legible in the Checks UI.
 #
 # The heavy containerised suites are NOT here (issue #157):
@@ -40,6 +41,14 @@ on:
   # Called by ci.yml, which owns the PR tiers and the path filter
   # (scripts/ci/tier-paths.json); no `pull_request` arm of its own.
   workflow_call:
+    inputs:
+      coverage_runs:
+        description: >-
+          ci.yml: true when ci-web-coverage runs in the same run (a ready pull
+          request). Its shards run every unit test, so this workflow's plain
+          shards are skipped.
+        type: boolean
+        default: false
   # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
   # The nightly run on main is the one that WRITES the caches pull requests
   # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
@@ -249,6 +258,9 @@ jobs:
 
   unit-tests:
     name: Unit tests (sharded)
+    # Skipped where ci-web-coverage runs the same tests (input above); a draft,
+    # the nightly and a dispatch run them here.
+    if: ${{ !inputs.coverage_runs }}
     runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
     strategy:
       fail-fast: false

@@ -97,6 +97,11 @@ jobs:
     needs: [changes]
     if: fromJSON(needs.changes.outputs.run)['ci-web']
     uses: ./.github/workflows/ci-web.yml
+    # One web unit suite per run: on a ready pull request ci-web-coverage runs
+    # every unit test (with coverage), so ci-web's plain shards stand down.
+    # Exactly this expression (check-tiering.mjs): the coverage job's own filter.
+    with:
+      coverage_runs: ${{ github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-web-coverage'] }}
     secrets: inherit
 
   ci-contract:

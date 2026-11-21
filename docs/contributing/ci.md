@@ -77,8 +77,11 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
   test jobs no longer run them.
 - **Go shards.** `scripts/go/test-shards.json` has a shard `infra-suites` for the slow packages. The fault
   registry test no longer compiles a regexp per code over the whole tree (21 minutes to 4 seconds).
-- **Web coverage.** The unit shards run without coverage in the fast tier. `ci-web-coverage.yml` runs them with
-  coverage in the heavy tier and enforces the thresholds.
+- **Web coverage.** One web unit suite per run. On a draft, and in the nightly, the unit shards run without
+  coverage in the fast tier (`ci-web.yml` `unit-tests`). On a ready pull request `ci-web-coverage.yml` runs every
+  unit test with coverage in the heavy tier and enforces the thresholds, and the plain shards are skipped:
+  ci.yml passes `ci-web` the coverage job's own filter as `coverage_runs`. `check-tiering.mjs` holds that
+  expression, so no run has neither suite.
 - **WebKit.** The WebKit E2E legs run on a pull request only when `apps/elitea-web/src`, the E2E harness, the
   package set or `libs/ts/client-core` change. The nightly run on main runs them always.
 - **Image reuse.** The build-once jobs tag each `ci-*` image with a hash of its inputs
