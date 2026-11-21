@@ -192,8 +192,8 @@ These jobs are routed (when `ENG_RUNNER` is on, on our own pull requests):
 | `dependency-scanning.yml` | `scan` |
 | `helm-lint.yml` | `template` (both charts) |
 | `ci-rust-lint.yml` | `lint` (every workspace) |
-| `ci-rust-shared.yml` | `shared-crates` (rustdoc and tests) |
-| `ci-rust.yml` | `code-runner`, `quality` (docs) |
+| `ci-rust-shared.yml` | `shared-crates` (tests) |
+| `ci-rust.yml` | `code-runner` |
 | `ci-doc-extractor.yml` | `extractor` |
 | `ci-deepwiki-engine.yml` | `serde-order`, `engine` (with the Go host against the binary) |
 | `ci-mock-llm.yml` | `unit` |

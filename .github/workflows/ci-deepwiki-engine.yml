@@ -130,10 +130,7 @@ jobs:
       # Formatting and Clippy for this crate run in ci-rust-lint.yml (fast
       # tier), so they fail in minutes and before this job's build.
 
-      - name: Build documentation
-        env:
-          RUSTDOCFLAGS: "-D warnings"
-        run: cargo doc --locked --no-deps --all-features
+      # rustdoc (deny warnings) runs beside Clippy in ci-rust-lint.yml (fast tier).
 
       - name: Run the crate's tests
         env:

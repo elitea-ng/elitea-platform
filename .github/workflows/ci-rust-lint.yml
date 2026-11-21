@@ -44,19 +44,25 @@ jobs:
         include:
           - name: shared crates
             dir: libs/rust
+            doc: --workspace
           - name: worker
             dir: services/elitea-worker-rust
+            doc: --
           - name: code runner
             dir: services/elitea-code-runner
             jobs: "1"
           - name: deepwiki engine
             dir: services/elitea-deepwiki-engine
+            doc: --
           - name: inventory engine
             dir: services/elitea-inventory-engine
+            doc: --
           - name: vector
             dir: services/elitea-vector
+            doc: --
           - name: doc extractor
             dir: services/elitea-doc-extractor
+            doc: --
     defaults:
       run:
         working-directory: ${{ matrix.dir }}
@@ -97,6 +103,20 @@ jobs:
 
       - name: Run Clippy
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      # rustdoc, deny warnings: the `cargo doc` each test workflow used to run in
+      # its heavy job, here beside Clippy so a broken doc link fails in minutes.
+      # `doc` is the leg's extra argument (`--workspace` for libs/rust, `--` for
+      # none); the code runner had no rustdoc gate and gets none.
+      - name: rustdoc (deny warnings)
+        if: matrix.doc
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+          DOC_ARGS: ${{ matrix.doc }}
+        run: |
+          args=()
+          [ "$DOC_ARGS" = -- ] || args+=("$DOC_ARGS")
+          cargo doc --locked --no-deps --all-features "${args[@]}"
 
       # The workspace run above uses --all-features, which turns on
       # `test-support`, and that switches off the agent runtime's
