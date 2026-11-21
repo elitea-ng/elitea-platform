@@ -205,7 +205,7 @@ export default function table(ctx) {
   const spiffe = d("RUNTIME_WORKER_SPIFFE_ID", "spiffe://elitea.standalone/ns/default/sa/agent-worker");
   const pg = data("postgres");
   // A Unix socket path is limited to ~104 bytes (.github/actions/native-services/start.sh).
-  const short = (dir, tag) => (path.join(dir, "x.sock").length > 90 ? path.join("/tmp", `ns-${tag}-${path.basename(ctx.state)}`) : dir);
+  const short = (dir, tag) => (path.join(dir, "x.sock").length > 90 ? ctx.short(tag) : dir);
   const pgSocket = short(path.join(pg, "sock"), "pg");
   const deepwikiSock = path.join(short(data("elitea-deepwiki-engine"), "dw"), "engine.sock");
   const inventorySock = path.join(short(data("elitea-inventory-engine"), "inv"), "engine.sock");

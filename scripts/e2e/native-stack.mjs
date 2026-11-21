@@ -54,6 +54,7 @@
 // No dependencies beyond node: it runs before `npm ci` and with any node the job installed.
 
 import { spawn, spawnSync } from "node:child_process";
+import crypto from "node:crypto";
 import dns from "node:dns/promises";
 import fs from "node:fs";
 import net from "node:net";
@@ -81,6 +82,13 @@ const secs = (v, d) => Math.round((v ?? d) * 1000);
 
 // ── the table ─────────────────────────────────────────────────────────────────
 
+/**
+ * A short directory for one stack's Unix sockets, when the state path is too long for one (~104 bytes):
+ * /tmp/ns-<hash of the state dir>/<tag>. Keyed on the state dir, so two stacks (or two jobs on one pod) never
+ * share one, and `down -v` removes it with the data.
+ */
+export const shortRoot = (state) => path.join("/tmp", `ns-${crypto.createHash("sha256").update(path.resolve(state)).digest("hex").slice(0, 12)}`);
+
 /** Loads a table module and validates it: unique names, known dependencies and conditions, no cycle. */
 export async function loadTable(file, { state, env = process.env } = {}) {
   const mod = await import(pathToFileURL(path.resolve(file)).href);
@@ -89,6 +97,7 @@ export async function loadTable(file, { state, env = process.env } = {}) {
     repo: REPO,
     state: st,
     data: (svc) => path.join(st, "data", svc),
+    short: (tag) => path.join(shortRoot(st), tag),
     bin: env.E2E_NATIVE_BIN ? path.resolve(env.E2E_NATIVE_BIN) : path.join(REPO, ".native-bin"),
     env,
   };
@@ -167,6 +176,29 @@ export function exitCode(st, name) {
 }
 
 /** The process group still has a live member (a zombie leader alone does not count). */
+/** The live (not zombie) processes whose process group is pgid, read from /proc (Linux). */
+export function groupMembers(pgid, proc = "/proc") {
+  const out = [];
+  let entries = [];
+  try {
+    entries = fs.readdirSync(proc);
+  } catch {
+    return out;
+  }
+  for (const name of entries) {
+    if (!/^\d+$/.test(name)) continue;
+    try {
+      const stat = fs.readFileSync(path.join(proc, name, "stat"), "utf8");
+      // pid (comm) state ppid pgrp ...: comm may hold spaces and parens, so split after the last ")".
+      const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+      if (Number(fields[2]) === pgid && fields[0] !== "Z" && fields[0] !== "X") out.push(Number(name));
+    } catch {
+      // gone between readdir and read
+    }
+  }
+  return out;
+}
+
 export function groupAlive(pgid) {
   if (!pgid) return false;
   try {
@@ -179,9 +211,8 @@ export function groupAlive(pgid) {
     const stat = fs.readFileSync(`/proc/${pgid}/stat`, "utf8");
     const st = stat.slice(stat.lastIndexOf(")") + 2, stat.lastIndexOf(")") + 3);
     if (st === "Z" || st === "X") {
-      // The leader is a zombie; another member of the group may still run.
-      const others = spawnSync("pgrep", ["-g", String(pgid)], { encoding: "utf8" });
-      return others.status === 0 && others.stdout.split(/\s+/).filter(Boolean).some((p) => Number(p) !== pgid);
+      // The leader is a zombie; another member of the group may still run (and hold its port).
+      return groupMembers(pgid).some((p) => p !== pgid);
     }
   } catch {
     // not Linux, or gone: kill(0) said it exists
@@ -399,7 +430,7 @@ function tailLines(file, n) {
   try {
     const lines = fs.readFileSync(file, "utf8").split("\n");
     if (lines.at(-1) === "") lines.pop();
-    return lines.slice(-n);
+    return n > 0 ? lines.slice(-n) : [];
   } catch {
     return [];
   }
@@ -486,6 +517,7 @@ export async function down(table, { volumes = false, env = process.env, out = co
     fs.rmSync(`${paths(st, svc.name).run}.spec`, { force: true });
     if (volumes) fs.rmSync(paths(st, svc.name).data, { recursive: true, force: true });
   }
+  if (volumes) fs.rmSync(shortRoot(st), { recursive: true, force: true });
   return 0;
 }
 
@@ -568,6 +600,10 @@ export async function main(argv = process.argv.slice(2), { env = process.env, ou
   let tableFile = env.E2E_NATIVE_TABLE || DEFAULT_TABLE;
   const args = [];
   for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--") {
+      args.push(...argv.slice(i));
+      break;
+    }
     if (argv[i] === "--table") tableFile = argv[++i];
     else args.push(argv[i]);
   }

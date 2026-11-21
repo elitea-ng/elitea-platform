@@ -117,7 +117,7 @@ export default function table(ctx) {
   const ip = (svc) => ADDRESSES[svc];
   const pg = data("postgres");
   // A Unix socket path is limited to ~104 bytes (.github/actions/native-services/start.sh).
-  const pgSocket = path.join(pg, "sock").length > 80 ? path.join("/tmp", `ns-pg-${path.basename(ctx.state)}`) : path.join(pg, "sock");
+  const pgSocket = path.join(pg, "sock").length > 80 ? ctx.short("pg") : path.join(pg, "sock");
   const web = data("elitea-web");
   const readNginx = (f) => () => fs.readFileSync(path.join(repo, "apps", "elitea-web", "nginx", f), "utf8");
 

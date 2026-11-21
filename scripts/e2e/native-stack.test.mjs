@@ -10,7 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
 
-import { groupAlive, main, topoSort, validate } from "./native-stack.mjs";
+import { groupAlive, groupMembers, main, shortRoot, topoSort, validate } from "./native-stack.mjs";
 
 const NODE = process.execPath;
 const roots = [];
@@ -217,4 +217,56 @@ test("up refuses when a table hostname does not resolve to its address", async (
   assert.equal(code, 1);
   assert.match(err.join("\n"), /localhost -> 127\.0\.0\.1, want 127\.0\.0\.42[\s\S]*hostAliases/);
   assert.ok(!fs.existsSync(path.join(s.state, "run", "x.json")), "nothing started");
+});
+
+test("logs --tail 0 prints no history, as compose's does", async () => {
+  const s = stack(`[
+    { name: "talker", cmd: "sh", args: ["-c", "echo one; echo two; sleep 30"] },
+  ]`);
+  assert.equal((await s.run("up")).code, 0);
+  await new Promise((r) => setTimeout(r, 400));
+  assert.equal((await s.run("logs", "talker", "--tail", "0")).out, "");
+  assert.match((await s.run("logs", "talker", "--tail", "1")).out, /talker \| two/);
+  await s.run("down");
+});
+
+test("exec passes everything after -- to the command, --table included", async () => {
+  const s = stack(`[
+    { name: "svc", cmd: "sleep", args: ["30"] },
+  ]`);
+  assert.equal((await s.run("up")).code, 0);
+  const outFile = path.join(s.root, "args.txt");
+  const r = await s.run("exec", "svc", "--", "sh", "-c", `printf '%s ' "$@" > ${outFile}`, "sh", "--table", "foo");
+  assert.equal(r.code, 0, r.err);
+  assert.equal(fs.readFileSync(outFile, "utf8"), "--table foo ");
+  await s.run("down");
+});
+
+test("down -v removes the stack's short socket directory; each state dir has its own", async () => {
+  assert.notEqual(shortRoot("/a/state"), shortRoot("/b/state"));
+  const s = stack(`[
+    { name: "svc", cmd: "sleep", args: ["30"] },
+  ]`);
+  assert.equal((await s.run("up")).code, 0);
+  const dir = path.join(shortRoot(s.state), "pg");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, ".s.PGSQL.5432.lock"), "stale");
+  assert.equal((await s.run("down", "-v")).code, 0);
+  assert.ok(!fs.existsSync(shortRoot(s.state)));
+});
+
+test("a zombie leader's group is found from /proc, without pgrep", () => {
+  const proc = fs.mkdtempSync(path.join(os.tmpdir(), "nsproc-"));
+  roots.push(proc);
+  const add = (pid, comm, state, pgrp) => {
+    fs.mkdirSync(path.join(proc, String(pid)));
+    fs.writeFileSync(path.join(proc, String(pid), "stat"), `${pid} (${comm}) ${state} 1 ${pgrp} ${pgrp} 0 -1\n`);
+  };
+  add(100, "node", "Z", 100);
+  add(101, "nginx: worker (x)", "S", 100);
+  add(102, "other", "S", 200);
+  add(103, "dead", "Z", 100);
+  fs.mkdirSync(path.join(proc, "self"));
+  assert.deepEqual(groupMembers(100, proc).sort(), [101]);
+  assert.deepEqual(groupMembers(300, proc), []);
 });
