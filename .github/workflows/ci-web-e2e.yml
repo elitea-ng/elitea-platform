@@ -238,15 +238,19 @@ jobs:
       #
       # `PWTEST_SHARD_WEIGHTS` (a colon-separated weight per shard, honoured
       # by the same `filterForShard`) moves the cut points. The weights below
-      # are the exact test counts of a duration-balanced split, computed from
-      # that run's Playwright reports against a local `playwright test --list
-      # --shard=…` so the boundaries are the ones the runner will really pick
-      # — not an estimate of them. Balanced totals, in test-time:
+      # (in scripts/ci/e2e-legs.mjs) are the exact test counts of a
+      # duration-balanced split, computed from a run's Playwright reports
+      # against a local `playwright test --list --shard=…` so the boundaries
+      # are the ones the runner will really pick — not an estimate of them.
+      # Re-derived from the native legs of run 44917909298 (795 tests per
+      # engine). Balanced totals, in test-time:
       #
-      #   chromium  523:242       33.2 / 33.2 min  (was 66.5 in one leg)
-      #   webkit    443:164:158   35.5 / 35.4 / 35.4 min  (was 23.2 / 83.1)
+      #   chromium  505:290       34.4 / 34.2 min  (523:242 had drifted to 38.7 / 29.9)
+      #   webkit    445:152:198   45.5 / 45.3 / 45.4 min  (443:164:158: 49.0 / 52.1 / 35.1)
       #
       # Four workers run those, so divide by four for the Playwright step.
+      # The split is by test time, so it holds at three workers too: no
+      # single test (1.8 min at most) is near a shard's wall time.
       #
       # THE WEIGHTS ARE A SPEED KNOB AND NEVER A CORRECTNESS ONE: every test
       # runs in exactly one shard whatever the weights say, and a Playwright

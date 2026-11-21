@@ -21,11 +21,11 @@ import { pathToFileURL } from 'node:url';
 // `weights` is PWTEST_SHARD_WEIGHTS for the leg (one weight per shard).
 export const LEGS = Object.freeze({
   e2e: [
-    { engine: 'chromium', leg: 'chromium-1of2', shard: '1/2', weights: '523:242' },
-    { engine: 'chromium', leg: 'chromium-2of2', shard: '2/2', weights: '523:242' },
-    { engine: 'webkit', leg: 'webkit-1of3', shard: '1/3', weights: '443:164:158' },
-    { engine: 'webkit', leg: 'webkit-2of3', shard: '2/3', weights: '443:164:158' },
-    { engine: 'webkit', leg: 'webkit-3of3', shard: '3/3', weights: '443:164:158' },
+    { engine: 'chromium', leg: 'chromium-1of2', shard: '1/2', weights: '505:290' },
+    { engine: 'chromium', leg: 'chromium-2of2', shard: '2/2', weights: '505:290' },
+    { engine: 'webkit', leg: 'webkit-1of3', shard: '1/3', weights: '445:152:198' },
+    { engine: 'webkit', leg: 'webkit-2of3', shard: '2/3', weights: '445:152:198' },
+    { engine: 'webkit', leg: 'webkit-3of3', shard: '3/3', weights: '445:152:198' },
     { engine: 'platform-flags', leg: 'platform-flags', shard: '', weights: '' },
     { engine: 'platform-flags-webkit', leg: 'platform-flags-webkit', shard: '', weights: '' },
   ],
