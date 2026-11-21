@@ -4,6 +4,14 @@ on:
   # Called by ci.yml, which owns the PR tiers and the path filter
   # (scripts/ci/tier-paths.json); no `pull_request` arm of its own.
   workflow_call:
+    inputs:
+      go_runs:
+        description: >-
+          ci.yml: true when ci-go runs in the same run. Its test shards run
+          `services/elitea-main/tests/contract` (shard db-storage, the same storage
+          emulators) with -race, so this workflow does not run them again.
+        type: boolean
+        default: false
   # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
   # The nightly run on main tests main. The caches it may write follow
   # scripts/ci/check-cache-budget.mjs (one writer per key); staggered ahead
@@ -28,6 +36,9 @@ jobs:
   #    the agent-execution protocol contract. ──
   compile:
     name: Compile & Run
+    # Skipped when ci-go runs: its db-storage shard runs these tests (input
+    # go_runs). The nightly and a dispatch run them here.
+    if: ${{ !inputs.go_runs }}
     runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
     # eng-runner has no container engine. There every image below is empty, so
     # GitHub creates no service, and .github/actions/native-services runs the

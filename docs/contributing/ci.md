@@ -77,6 +77,10 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
   test jobs no longer run them.
 - **Go shards.** `scripts/go/test-shards.json` has a shard `infra-suites` for the slow packages. The fault
   registry test no longer compiles a regexp per code over the whole tree (21 minutes to 4 seconds).
+- **Go tests once.** `no-binaries` (no path filter) runs the elitea-main gates `./internal/api/` and
+  `./tests/deployedge/...`, and `ci-contract` runs `./tests/contract/`, only when `ci-go` does not run: ci-go's
+  shards (api-core, infra-suites, db-storage) run the same packages with `-race`. ci.yml passes both ci-go's
+  filter as `go_runs`, and `check-tiering.mjs` holds it.
 - **Web coverage.** One web unit suite per run. On a draft, and in the nightly, the unit shards run without
   coverage in the fast tier (`ci-web.yml` `unit-tests`). On a ready pull request `ci-web-coverage.yml` runs every
   unit test with coverage in the heavy tier and enforces the thresholds, and the plain shards are skipped:

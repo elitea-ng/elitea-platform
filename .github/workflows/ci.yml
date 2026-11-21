@@ -67,6 +67,9 @@ jobs:
     needs: [changes]
     if: fromJSON(needs.changes.outputs.run)['no-binaries']
     uses: ./.github/workflows/no-binaries.yml
+    # Its two elitea-main Go gates run here only when ci-go does not (check-tiering.mjs).
+    with:
+      go_runs: ${{ fromJSON(needs.changes.outputs.run)['ci-go'] }}
     secrets: inherit
 
   dependency-scanning:
@@ -108,6 +111,9 @@ jobs:
     needs: [changes]
     if: fromJSON(needs.changes.outputs.run)['ci-contract']
     uses: ./.github/workflows/ci-contract.yml
+    # Its tests are ci-go's db-storage shard; they run here only when ci-go does not.
+    with:
+      go_runs: ${{ fromJSON(needs.changes.outputs.run)['ci-go'] }}
     secrets: inherit
 
   ci-gateway:

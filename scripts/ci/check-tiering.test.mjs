@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { check, checkDesktopPackage, checkWebUnitSuite, load, main, DESKTOP_PACKAGE_PATHS, WEB_COVERAGE_RUNS, DRAFT_CONDITION, FAST_GATE_CONDITION, GATE_DRAFT_SKIP, MINIMUM_CALL_JOBS } from "./check-tiering.mjs";
+import { check, checkDesktopPackage, checkGoDuplicates, checkWebUnitSuite, GO_RUNS, load, main, DESKTOP_PACKAGE_PATHS, WEB_COVERAGE_RUNS, DRAFT_CONDITION, FAST_GATE_CONDITION, GATE_DRAFT_SKIP, MINIMUM_CALL_JOBS } from "./check-tiering.mjs";
 
 const call = (id, extra = {}) => ({ needs: ["changes"], if: `fromJSON(needs.changes.outputs.run)['${id}']`, uses: `./.github/workflows/${id}.yml`, ...extra });
 const heavyCall = (id) =>
@@ -188,6 +188,28 @@ test("one web unit suite: the plain shards stand down only where coverage runs",
   // The shard job reads something else, or nothing.
   assert.match(checkWebUnitSuite(ci(WEB_COVERAGE_RUNS), web(undefined)).join("\n"), /unit-tests/);
   assert.match(checkWebUnitSuite(ci(WEB_COVERAGE_RUNS), web("${{ !inputs.coverage_runs || true }}")).join("\n"), /unit-tests/);
+});
+
+test("duplicate Go tests run only where ci-go does not", () => {
+  const ok = "${{ !cancelled() && !inputs.go_runs }}";
+  const model = ({ goIf = "fromJSON(needs.changes.outputs.run)['ci-go']", nb = GO_RUNS, cc = GO_RUNS, stepIf = ok, jobIf = "${{ !inputs.go_runs }}", steps = 2 } = {}) => [
+    { jobs: { "ci-go": { if: goIf }, "no-binaries": { with: { go_runs: nb } }, "ci-contract": { with: { go_runs: cc } } } },
+    {
+      "no-binaries.yml": { parsed: { jobs: { gates: { steps: [
+        { name: "edges", if: stepIf, run: "go test -count=1 ./tests/deployedge/..." },
+        { name: "grants", if: stepIf, run: "go test -count=1 ./internal/api/" },
+      ].slice(0, steps) } } } },
+      "ci-contract.yml": { parsed: { jobs: { compile: { if: jobIf } } } },
+    },
+  ];
+  assert.deepEqual(checkGoDuplicates(...model()), []);
+  assert.match(checkGoDuplicates(...model({ nb: null })).join("\n"), /no-binaries: ci.yml must pass/);
+  assert.match(checkGoDuplicates(...model({ cc: GO_RUNS.replace("ci-go", "ci-web") })).join("\n"), /ci-contract: ci.yml must pass/);
+  assert.match(checkGoDuplicates(...model({ goIf: "false" })).join("\n"), /ci-go: its if/);
+  assert.match(checkGoDuplicates(...model({ stepIf: "${{ !cancelled() }}" })).join("\n"), /edges/);
+  assert.match(checkGoDuplicates(...model({ stepIf: "${{ !inputs.go_runs || true }}" })).join("\n"), /grants/);
+  assert.match(checkGoDuplicates(...model({ jobIf: null })).join("\n"), /compile/);
+  assert.match(checkGoDuplicates(...model({ steps: 1 })).join("\n"), /1 of the 2/);
 });
 
 test("the repository passes", () => {

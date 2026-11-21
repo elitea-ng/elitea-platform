@@ -194,6 +194,30 @@ export function check({ ci, tiers, workflows }) {
   return errors;
 }
 
+// ci-go's shards run no-binaries' two elitea-main gates (api-core, infra-suites) and
+// ci-contract's tests (db-storage). Those run there only when ci-go does not: ci.yml passes
+// both workflows ci-go's own filter as `go_runs`, and each skips on that input alone.
+export const GO_RUNS = "${{ fromJSON(needs.changes.outputs.run)['ci-go'] }}";
+const GO_DUPLICATES = [
+  ["no-binaries", "no-binaries.yml", (wf) => Object.values(wf?.jobs ?? {}).flatMap((j) => j.steps ?? []).filter((s) => /go test -count=1 \.\/(?:internal\/api\/|tests\/deployedge\/)/.test(String(s.run ?? ""))).map((s) => [s.name, s.if])],
+  ["ci-contract", "ci-contract.yml", (wf) => Object.entries(wf?.jobs ?? {}).map(([id, j]) => [id, j.if])],
+];
+export function checkGoDuplicates(ci, workflows) {
+  const errors = [];
+  if (String(ci.jobs?.["ci-go"]?.if ?? "") !== "fromJSON(needs.changes.outputs.run)['ci-go']") errors.push("ci-go: its if is no longer its own filter alone; no-binaries' and ci-contract's `go_runs` must follow it");
+  for (const [job, file, gated] of GO_DUPLICATES) {
+    if (!ci.jobs?.[job]) continue;
+    if (String(ci.jobs[job].with?.go_runs ?? "") !== GO_RUNS) errors.push(`${job}: ci.yml must pass \`go_runs: ${GO_RUNS}\` (its duplicate Go tests run only where ci-go does not)`);
+    const items = gated(workflows[file]?.parsed);
+    if (job === "no-binaries" && items.length !== 2) errors.push(`no-binaries.yml: found ${items.length} of the 2 elitea-main gate steps (./internal/api/, ./tests/deployedge/...)`);
+    for (const [name, cond] of items) {
+      const c = String(cond ?? "");
+      if (!/!inputs\.go_runs\b/.test(c) || /\|\|/.test(c)) errors.push(`${file}: \`${name}\` must skip on \`!inputs.go_runs\` (no \`||\`): ci-go runs the same tests`);
+    }
+  }
+  return errors;
+}
+
 /**
  * The macOS package job keeps its gate: exact pull-request paths, a dry run (and a
  * debug build) on a pull request only, and the full signed run from publish.yml.
@@ -247,7 +271,7 @@ export function main({ root = ROOT, out = console.log, err = console.error } = {
     err(`::error::${error.message}`);
     return 1;
   }
-  const errors = [...check(model), ...checkDesktopPackage(model), ...checkWebUnitSuite(model.ci, model.workflows)];
+  const errors = [...check(model), ...checkDesktopPackage(model), ...checkWebUnitSuite(model.ci, model.workflows), ...checkGoDuplicates(model.ci, model.workflows)];
   if (errors.length) {
     for (const e of errors) err(`::error::${e}`);
     return 1;
