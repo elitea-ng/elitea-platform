@@ -19,6 +19,13 @@
 //     map"), which is what the hostnames resolve to on the pool;
 //   * it reads fewer services or keys than its floors: a reader that found nothing must not pass.
 //
+// A table may also export COMPOSE_OVERLAYS (files its stack script always adds: compared against the MERGE,
+// as compose merges them: `environment:`, `depends_on:` and `healthcheck:` per key, anything else replaced,
+// a new service added), OVERLAYS (optional overlay files, each with its native delta: the table built with
+// STANDALONE_OVERLAY=<file> is compared against the merge with that file too), and NATIVE_ABSENT (compose
+// services with no native process, each with its reason: their depends_on edges are dropped before the
+// comparison, and an entry for a service the compose files no longer have, or that the table runs, fails).
+//
 // Run with the runner's node after `npm ci --prefix scripts/ci` (the `yaml` package).
 
 import fs from "node:fs";
@@ -31,7 +38,10 @@ const SELF = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(SELF), "..", "..");
 
 /** The native tables and the floors each must clear. */
-export const TABLES = [{ table: "deploy/native/e2e-standalone.mjs", minServices: 10, minEnvKeys: 80 }];
+export const TABLES = [
+  { table: "deploy/native/e2e-standalone.mjs", minServices: 10, minEnvKeys: 80 },
+  { table: "deploy/native/standalone-full.mjs", minServices: 30, minEnvKeys: 240 },
+];
 export const README = "deploy/ci-runners/README.md";
 
 const CONDITION = { service_healthy: "healthy", service_completed_successfully: "completed", service_started: "started" };
@@ -50,6 +60,30 @@ export function composeDeps(dependsOn) {
   return pairs.map(([n, c]) => `${n}:${c}`).sort();
 }
 
+const asMap = (environment) =>
+  Array.isArray(environment) ? Object.fromEntries(environment.map((e) => [String(e).split("=")[0], String(e).split("=").slice(1).join("=")])) : { ...(environment ?? {}) };
+const depsMap = (dependsOn) => (Array.isArray(dependsOn) ? Object.fromEntries(dependsOn.map((n) => [n, { condition: "service_started" }])) : { ...(dependsOn ?? {}) });
+
+/** compose files merged as compose merges them, for the keys this check reads. */
+export function mergeCompose(...docs) {
+  const services = {};
+  for (const doc of docs) {
+    for (const [name, svc] of Object.entries(doc?.services ?? {})) {
+      const base = services[name];
+      if (!base) {
+        services[name] = { ...svc };
+        continue;
+      }
+      const merged = { ...base, ...svc };
+      if (base.environment || svc.environment) merged.environment = { ...asMap(base.environment), ...asMap(svc.environment) };
+      if (base.depends_on || svc.depends_on) merged.depends_on = { ...depsMap(base.depends_on), ...depsMap(svc.depends_on) };
+      if (base.healthcheck && svc.healthcheck) merged.healthcheck = { ...base.healthcheck, ...svc.healthcheck };
+      services[name] = merged;
+    }
+  }
+  return { services };
+}
+
 /** The README's name map: hostname -> address. */
 export function nameMap(readme) {
   const start = readme.indexOf("## Native stack name map");
@@ -66,10 +100,24 @@ export function nameMap(readme) {
  * @param {{compose: any, table: {services: any[]}, nativeOnly?: object, exempt?: object, names?: object}} input
  * @returns {{errors: string[], services: number, keys: number}}
  */
-export function check({ compose, table, nativeOnly = {}, exempt = {}, names = {} }) {
+export function check({ compose, table, nativeOnly = {}, exempt = {}, names = {}, absent = {} }) {
   const errors = [];
-  const composeServices = compose?.services ?? {};
   const native = new Map((table?.services ?? []).map((s) => [s.name, s]));
+  for (const [name, why] of Object.entries(absent)) {
+    if (!(name in (compose?.services ?? {}))) errors.push(`${name}: NATIVE_ABSENT lists it, but the compose file has no such service; drop it`);
+    else if (native.has(name)) errors.push(`${name}: NATIVE_ABSENT lists it, but the native table runs it; drop it from the list`);
+    else if (!String(why ?? "").trim()) errors.push(`${name}: NATIVE_ABSENT has no reason`);
+  }
+  const composeServices = Object.fromEntries(
+    Object.entries(compose?.services ?? {})
+      .filter(([name]) => !(name in absent))
+      .map(([name, svc]) => {
+        if (!svc.depends_on) return [name, svc];
+        const deps = depsMap(svc.depends_on);
+        for (const gone of Object.keys(absent)) delete deps[gone];
+        return [name, { ...svc, depends_on: deps }];
+      }),
+  );
   let keys = 0;
   for (const [name, svc] of Object.entries(composeServices)) {
     const entry = native.get(name);
@@ -134,14 +182,25 @@ export async function main({ root = ROOT, tables = TABLES, out = console.log, er
       errors.push(`${t.table}: exports no COMPOSE_FILE`);
       continue;
     }
-    const compose = loadYaml(fs.readFileSync(path.join(root, composeFile), "utf8"));
-    const ctx = { repo: root, state: "/state", data: (s) => `/state/data/${s}`, bin: "/bin", env: {} };
-    const table = mod.default(ctx);
-    const r = check({ compose, table, nativeOnly: mod.NATIVE_ONLY_ENV, exempt: mod.EXEMPT_ENV, names });
-    for (const e of r.errors) errors.push(`${t.table} vs ${composeFile}: ${e}`);
-    if (r.services < t.minServices) errors.push(`${composeFile}: read ${r.services} service(s), expected at least ${t.minServices}`);
-    if (r.keys < t.minEnvKeys) errors.push(`${composeFile}: read ${r.keys} environment key(s), expected at least ${t.minEnvKeys}`);
-    if (!r.errors.length) out(`${t.table} matches ${composeFile}: ${r.services} service(s), ${r.keys} environment key(s), every depends_on edge, healthcheck and one-shot`);
+    const load = (f) => loadYaml(fs.readFileSync(path.join(root, f), "utf8"));
+    const always = mod.COMPOSE_OVERLAYS ?? [];
+    const variants = [[null, []], ...Object.keys(mod.OVERLAYS ?? {}).map((o) => [o, [o]])];
+    for (const [overlay, extra] of variants) {
+      const files = [composeFile, ...always, ...extra];
+      const compose = mergeCompose(...files.map(load));
+      const ctx = { repo: root, state: "/state", data: (s) => `/state/data/${s}`, bin: "/bin", env: overlay ? { STANDALONE_OVERLAY: overlay } : {} };
+      const table = mod.default(ctx);
+      const r = check({ compose, table, nativeOnly: mod.NATIVE_ONLY_ENV, exempt: mod.EXEMPT_ENV, names, absent: mod.NATIVE_ABSENT });
+      const what = files.join(" + ");
+      for (const e of r.errors) errors.push(`${t.table} vs ${what}: ${e}`);
+      if (overlay !== null) {
+        if (!r.errors.length) out(`${t.table} with STANDALONE_OVERLAY=${overlay} matches ${what}`);
+        continue;
+      }
+      if (r.services < t.minServices) errors.push(`${composeFile}: read ${r.services} service(s), expected at least ${t.minServices}`);
+      if (r.keys < t.minEnvKeys) errors.push(`${composeFile}: read ${r.keys} environment key(s), expected at least ${t.minEnvKeys}`);
+      if (!r.errors.length) out(`${t.table} matches ${what}: ${r.services} service(s), ${r.keys} environment key(s), every depends_on edge, healthcheck and one-shot`);
+    }
   }
   for (const e of errors) err(`::error::${e}`);
   return errors.length ? 1 : 0;

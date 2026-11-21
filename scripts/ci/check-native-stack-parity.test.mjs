@@ -2,7 +2,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { check, composeDeps, envKeys, main, nameMap } from "./check-native-stack-parity.mjs";
+import standaloneFull, { overlaysOf, rewrite } from "../../deploy/native/standalone-full.mjs";
+import { validate } from "../e2e/native-stack.mjs";
+import { check, composeDeps, envKeys, main, mergeCompose, nameMap } from "./check-native-stack-parity.mjs";
 
 const compose = () => ({
   services: {
@@ -92,6 +94,55 @@ test("the repository's e2e-standalone table matches its compose file", async () 
   const err = [];
   assert.equal(await main({ out: (l) => out.push(l), err: (l) => err.push(l) }), 0, err.join("\n"));
   assert.match(out.join("\n"), /e2e-standalone\.mjs matches deploy\/docker-compose\.e2e-standalone\.yml: 12 service/);
+  // The standalone-full table: the base and the Rust agent overlay merged, then each optional overlay.
+  assert.match(out.join("\n"), /standalone-full\.mjs matches deploy\/docker-compose\.standalone-full\.yml \+ deploy\/docker-compose\.standalone-rust-agent\.yml: 34 service/);
+  assert.match(out.join("\n"), /STANDALONE_OVERLAY=deploy\/docker-compose\.native-conformance\.yml matches/);
+  assert.match(out.join("\n"), /STANDALONE_OVERLAY=deploy\/docker-compose\.handoff-live\.yml matches/);
+});
+
+test("an overlay merges as compose merges it: environment and depends_on per key, command replaced, a new service added", () => {
+  const base = { services: { w: { command: ["a"], environment: ["A=1", "B=2"], depends_on: ["db"] } } };
+  const over = { services: { w: { command: ["b"], environment: { B: "3", C: "4" }, depends_on: { x: { condition: "service_healthy" } } }, x: { restart: "no" } } };
+  const m = mergeCompose(base, over);
+  assert.deepEqual(m.services.w.command, ["b"]);
+  assert.deepEqual(m.services.w.environment, { A: "1", B: "3", C: "4" });
+  assert.deepEqual(composeDeps(m.services.w.depends_on), ["db:started", "x:healthy"]);
+  assert.deepEqual(m.services.x, { restart: "no" });
+});
+
+test("a service absent natively needs a reason, drops its edges, and cannot go stale", () => {
+  const c = compose();
+  c.services.real = { profiles: ["x"] };
+  c.services.app.depends_on.real = { condition: "service_healthy" };
+  assert.match(check({ compose: c, table: table(), names }).errors.join("\n"), /real: in the compose file, not in the native table/);
+  assert.deepEqual(check({ compose: c, table: table(), names, absent: { real: "no binary on the pool" } }).errors, []);
+  assert.match(check({ compose: c, table: table(), names, absent: { real: " " } }).errors.join("\n"), /real: NATIVE_ABSENT has no reason/);
+  assert.match(check({ compose: compose(), table: table(), names, absent: { real: "why" } }).errors.join("\n"), /real: NATIVE_ABSENT lists it, but the compose file has no such service/);
+  assert.match(check({ compose: compose(), table: table(), names, absent: { app: "why" } }).errors.join("\n"), /app: NATIVE_ABSENT lists it, but the native table runs it/);
+});
+
+test("the standalone-full table refuses what it has no native counterpart for", () => {
+  const ctx = (env) => ({ repo: process.cwd(), state: "/s", data: (s) => `/s/data/${s}`, bin: "/b", env });
+  assert.equal(standaloneFull(ctx({})).services.length, 34);
+  // The supervisor accepts it, and every rendered file renders from the repository's sources (each rewrite
+  // throws when its source stopped containing what it rewrites).
+  validate(standaloneFull(ctx({})).services);
+  const rendered = standaloneFull(ctx({})).services.flatMap((svc) => (svc.files ?? []).map((f) => [svc.name, typeof f.content === "function" ? f.content() : f.content]));
+  assert.ok(rendered.length >= 10, `rendered ${rendered.length} file(s)`);
+  const worker = Object.fromEntries(rendered)["elitea-worker"];
+  assert.doesNotMatch(worker, /"\/run\/|"\/var\/lib/);
+  assert.equal(JSON.parse(worker).nats_url, "nats://nats:4222");
+  assert.throws(() => standaloneFull(ctx({ STANDALONE_PORT: "8084" })), /STANDALONE_PORT must be 8080 natively/);
+  assert.throws(() => standaloneFull(ctx({ COMPOSE_PROFILES: "real-llm" })), /real-llm has no native counterpart/);
+  assert.throws(() => overlaysOf("deploy/docker-compose.sandbox.yml", "/r"), /has no native delta/);
+  assert.deepEqual(overlaysOf("/r/deploy/docker-compose.handoff-live.yml", "/r"), ["deploy/docker-compose.handoff-live.yml"]);
+  const main = (env) => standaloneFull(ctx(env)).services.find((s) => s.name === "elitea-main").env;
+  assert.equal(main({ STANDALONE_OVERLAY: "deploy/docker-compose.handoff-live.yml" }).S3_PRESIGN, "false");
+  assert.equal(main({}).S3_PRESIGN, undefined);
+  const gw = standaloneFull(ctx({})).services.find((s) => s.name === "elitea-llm-gateway").env;
+  assert.match(gw.GATEWAY_EGRESS_ALLOWLIST, /,127\.0\.0\.0\/8$/);
+  assert.equal(rewrite("a=1\n", [[/^a=1$/m, "a=2"]], "x"), "a=2\n");
+  assert.throws(() => rewrite("b\n", [["a", "c"]], "the source"), /the source no longer contains a/);
 });
 
 test("the floors fail a reader that found too little", async () => {

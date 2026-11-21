@@ -77,6 +77,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 PORT = int(os.environ.get("MOCK_MCP_PORT", "8443"))
+# The bind address. The container binds every address; the pool's native stack
+# (deploy/native/standalone-full.mjs) binds mcp-mock's own 127.0.0.x, because
+# the LLM gateway already holds 8443 on another loopback address.
+HOST = os.environ.get("MOCK_MCP_HOST", "0.0.0.0")
 CERT_FILE = os.environ.get("MOCK_MCP_CERT", "/opt/mock-mcp/tls/server-chain.crt")
 KEY_FILE = os.environ.get("MOCK_MCP_KEY", "/opt/mock-mcp/tls/server.key")
 SERVER_NAME = "elitea-mock-mcp"
@@ -633,7 +637,7 @@ def _tls_server(port: int, handler, cert_file: str, key_file: str) -> LoggingTLS
     # that would still accept a protocol production refuses.
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(certfile=cert_file, keyfile=key_file)
-    server = LoggingTLSServer(("0.0.0.0", port), handler)
+    server = LoggingTLSServer((HOST, port), handler)
     server.socket = context.wrap_socket(server.socket, server_side=True)
     return server
 
