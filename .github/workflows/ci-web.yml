@@ -109,10 +109,10 @@ jobs:
 
   storybook:
     name: Storybook tests
-    runs-on: ubuntu-latest
-    # This job keeps its own runner because of the job-level `container:`
-    # below — it cannot be folded into `quality` or `gates-static`, which run
-    # on the bare runner.
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
+    # On eng-runner, whose image carries the pinned Playwright's Chromium and
+    # its system libraries (/ms-playwright), so it runs on the host; the
+    # history below is why it used to run in the Playwright container.
     #
     # @storybook/addon-vitest launches a real headless Chromium for every
     # story's interaction/a11y test (independently of the plain vitest
@@ -142,11 +142,10 @@ jobs:
     # scans EVERY workflow and asserts each
     # `mcr.microsoft.com/playwright:vX.Y.Z-noble` matches the pinned
     # @playwright/test — so this reference is gated automatically.
-    container:
-      image: mcr.microsoft.com/playwright:v1.62.1-noble
-      options: --ipc=host
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume (does nothing on hosted).
+      - uses: ./.github/actions/eng-runner-env
       - uses: actions/setup-node@v7
         with:
           node-version: "26"
@@ -167,6 +166,13 @@ jobs:
             echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
             sleep $((attempt * 20))
           done
+      # A hosted runner (a fork, Dependabot, or ENG_RUNNER off) fetches Chromium
+      # and its system libraries. eng-runner has them in its image
+      # (/ms-playwright, PLAYWRIGHT_BROWSERS_PATH, the same Playwright release:
+      # deploy/ci-runners/image/Containerfile).
+      - name: Install Chromium (hosted runners only)
+        if: runner.environment == 'github-hosted'
+        run: npx playwright install --with-deps chromium
       - name: Storybook tests
         # Issue #483, the fourth gate of the same shape. This step read
         # `if [ -d .storybook ] … else echo "storybook project pending"`. The
@@ -203,20 +209,18 @@ jobs:
 
   desktop-journeys:
     name: Desktop journeys (harness)
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
     # The desktop shell's Playwright journeys (e2e/desktop, #1806: a thread
     # with a local and a cloud agent) against its DEV HARNESS: `vite --mode
     # desktop` serves the desktop entry and `/?harness` mounts the shell with
     # the in-memory host fakes and canned API answers. No compose stack and no
     # Tauri host, so it is a fast gate here rather than in ci-web-e2e.yml.
-    # The same pinned Playwright image as `storybook` (Chromium and its system
-    # libraries pre-installed; scripts/check-playwright-image-tag.mjs keeps
-    # the tag honest). The host's own side is D0's Rust tests (ci-desktop.yml).
-    container:
-      image: mcr.microsoft.com/playwright:v1.62.1-noble
-      options: --ipc=host
+    # Chromium as in `storybook`: from the eng-runner image, or installed on a
+    # hosted runner. The host's own side is D0's Rust tests (ci-desktop.yml).
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume (does nothing on hosted).
+      - uses: ./.github/actions/eng-runner-env
       - uses: actions/setup-node@v7
         with:
           node-version: "26"
@@ -235,6 +239,13 @@ jobs:
             echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
             sleep $((attempt * 20))
           done
+      # A hosted runner (a fork, Dependabot, or ENG_RUNNER off) fetches Chromium
+      # and its system libraries. eng-runner has them in its image
+      # (/ms-playwright, PLAYWRIGHT_BROWSERS_PATH, the same Playwright release:
+      # deploy/ci-runners/image/Containerfile).
+      - name: Install Chromium (hosted runners only)
+        if: runner.environment == 'github-hosted'
+        run: npx playwright install --with-deps chromium
       - name: Desktop journeys
         shell: bash
         run: |

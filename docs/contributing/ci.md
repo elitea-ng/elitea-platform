@@ -198,17 +198,29 @@ These jobs are routed (when `ENG_RUNNER` is on, on our own pull requests):
 | `ci-deepwiki-engine.yml` | `serde-order`, `engine` (with the Go host against the binary) |
 | `ci-mock-llm.yml` | `unit` |
 | `ci-deepwiki-conformance.yml` | `fixtures` |
+| `ci-web.yml` | `storybook`, `desktop-journeys` (Chromium from the image's `/ms-playwright`; a hosted run installs it) |
+| `ci-governed-scale.yml` | `scale` (PostgreSQL and NATS as processes) |
+| `ci-web-mutation.yml`, `codeql.yml`, `docs-pages.yml` | `mutation-spotcheck`, `analyze`, `build-and-deploy` |
+| `publish.yml`, `release-retention.yml`, `ci-image-cleanup.yml` | `release`, `prune`; `admin`, `prune`; `prune`, `actions-cache` |
+| `cancel-merged-pr-runs.yml`, `eng-runner-image.yml` | `cancel`, `delete-caches`; `runner-pin` |
+| `mobile-eas-build.yml`, `mobile-eas-submit.yml` | `build`, `submit` (EAS builds in Expo's cloud) |
 
-Everything else stays hosted:
+Everything else stays hosted, because it needs what the pool does not have (audited 2026-11-21: 43 hosted
+job definitions, down from 59; every other job is routed):
 
 - **Docker next to the services.** `ci-rust.yml`'s "Test with PostgreSQL 18" also builds the sandbox images
   with buildx, and `check-worker-ignored-tests.mjs` credits only unconditional steps, so it cannot gate those
   steps to hosted runners; "Workspace runs on Docker" needs a registry container.
-- **Nightly only.** `ci-governed-scale.yml` runs on `schedule` and `workflow_dispatch`, which stay hosted.
-- **Docker, compose, kind or gVisor**: image builds and `docker buildx bake --print` (`image-matrix.yml`'s list
-  check), the `ci-build-once.yml` image legs, `helm-install-smoke`, the E2E suites, `ci-browser-session.yml`. helm-lint's `lint` job too: a step it runs calls `docker compose config`.
+- **Image builds and pushes**: the `ci-build-once.yml` image legs, `publish.yml` (`build`, `scan`,
+  `publish-image`, `chart`, `rollback`), `eng-runner-image.yml` (`build`, `publish`), `mirror-buildkit.yml`,
+  `nightly-image-scan.yml`, `image-matrix.yml` (`docker buildx bake --print`), and the code sandbox's
+  supervisor image in `ci-web-e2e.yml`.
+- **Docker, compose, kind or gVisor**: the E2E suites (`ci-web-e2e.yml`, `deepwiki-real-engine.yml`,
+  `nightly-real-llm.yml`), `ci-governed-conformance.yml` `stack`, `helm-install-smoke`, `ci-browser-session.yml`
+  and `browser-bakeoff.yml` (gVisor). helm-lint's `lint` job too: a step it runs calls `docker compose config`.
 - **System packages through apt**: the Tauri host on Linux (`ci-desktop.yml` `pane-drivers`, webkit2gtk).
-- **macOS and Windows**, including `ci-desktop-control.yml`, whose matrix has a Windows leg.
+- **macOS and Windows**: `ci-desktop.yml` `desktop` and `windows-host`, `ci-local-tools-macos.yml`,
+  `desktop-package.yml`, and `ci-desktop-control.yml`, whose matrix has a Windows leg.
 
 The routed jobs pin their parallelism to the pod's 4 CPUs, because the node reports 8. `eng-runner-env` sets
 `GOMAXPROCS=4`, `CARGO_BUILD_JOBS=4` and `RUST_TEST_THREADS=4` on the pool only, and a job's own `env:` still wins
