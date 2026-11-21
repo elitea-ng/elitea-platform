@@ -10,12 +10,16 @@
 //   * a heavy job (one that needs `fast-gate`) has no `github.event.pull_request.draft == false`
 //     in its `if:` — it would run for a draft, which is what the tiers exist to prevent;
 //   * a fast job needs `fast-gate`, or `fast-gate` does not list every fast job;
-//   * `ci-gate` or `fast-gate` does not run with `if: always()`, or `ci-gate`
+//   * `ci-gate` or `fast-gate` does not run with `if: always()`, `ci-gate` is not
+//     skipped on a draft (GATE_DRAFT_SKIP), or `ci-gate`
 //     does not list every other job of the workflow (a job missing from `needs`
 //     cannot fail the verdict);
 //   * a job that calls a workflow has no entry (tier and paths) in
 //     scripts/ci/tier-paths.json, or an entry has no job, or the tier in the file
 //     disagrees with the job's `needs`;
+//   * a `union` entry (a job that runs when any of the listed jobs does,
+//     ci-build-once) names a job without its own entry or another union, also
+//     has paths, or a job that needs it is not in it;
 //   * a workflow ci.yml calls has no `workflow_call` arm or still starts on its
 //     own `pull_request`, or a workflow outside the allowlist starts on a pull
 //     request without being called by ci.yml (a new workflow would run untiered);
@@ -50,6 +54,24 @@ export const OWN_PR_TRIGGER = new Map([
   ["eng-runner-image.yml", "starts only when the eng-runner image or its own file changes; it builds a CI runner image, not product code"],
 ]);
 export const DRAFT_CONDITION = "github.event.pull_request.draft == false";
+/** ci-gate's half of the draft rule: skipped on a draft, so a draft shows fast-gate's verdict and a grey gate. */
+export const GATE_DRAFT_SKIP = "github.event.pull_request.draft != true";
+// One web unit suite per run: ci-web's plain shards stand down exactly where ci-web-coverage
+// runs every unit test. ci.yml passes ci-web the coverage job's own filter, and the shards
+// are skipped on that input alone, so a run never has neither suite.
+export const WEB_COVERAGE_RUNS = "${{ github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-web-coverage'] }}";
+export function checkWebUnitSuite(ci, workflows) {
+  const errors = [];
+  const call = ci.jobs?.["ci-web"];
+  if (!call) return errors;
+  if (String(call.with?.coverage_runs ?? "") !== WEB_COVERAGE_RUNS) errors.push(`ci-web: ci.yml must pass \`coverage_runs: ${WEB_COVERAGE_RUNS}\` (the plain unit shards stand down only where ci-web-coverage runs)`);
+  const coverage = ci.jobs?.["ci-web-coverage"];
+  if (!/github\.event\.pull_request\.draft == false/.test(String(coverage?.if ?? "")) || !/\['ci-web-coverage'\]/.test(String(coverage?.if ?? ""))) errors.push("ci-web-coverage: its if no longer reads `draft == false` and its own filter; ci-web's coverage_runs must follow it");
+  const unit = workflows["ci-web.yml"]?.parsed?.jobs?.["unit-tests"];
+  if (unit && String(unit.if ?? "") !== "${{ !inputs.coverage_runs }}") errors.push("ci-web.yml: `unit-tests` must be `if: ${{ !inputs.coverage_runs }}` and nothing else");
+  return errors;
+}
+
 /**
  * The pull-request gate of the macOS package job (owner decision 2026-11-20): the
  * desktop app (its Tauri config and packaging scripts are under it), the vendored
@@ -67,6 +89,10 @@ export const DESKTOP_PACKAGE_PATHS = [
   ".github/workflows/desktop-package.yml",
   ".github/actions/desktop-macos-package/**",
   ".github/actions/desktop-windows-package/**",
+  // The dry run is the desktop lane of the brand output scan (brand/sample).
+  "brand/**",
+  "scripts/brand/**",
+  "scripts/ci/brand-output-scan.mjs",
 ];
 const PR_ONLY = "${{ github.event_name == 'pull_request' }}";
 // A heavy job's own if must not lean on the implicit success(): that is false when ANY
@@ -137,6 +163,25 @@ export function check({ ci, tiers, workflows }) {
   for (const id of Object.keys(tierJobs)) {
     if (!jobs[id]) errors.push(`${id}: in tier-paths.json but ci.yml has no such job`);
   }
+  // A `union` entry (ci-build-once) runs when any member does. Its members are
+  // jobs with paths, and every job that needs it is a member: a consumer left
+  // out of the union could run on a change that builds nothing for it.
+  for (const [id, entry] of Object.entries(tierJobs)) {
+    if (entry.union === undefined) continue;
+    if (!Array.isArray(entry.union) || entry.union.length === 0) {
+      errors.push(`${id}: its union must be a non-empty list of job ids`);
+      continue;
+    }
+    if (entry.paths !== undefined) errors.push(`${id}: has both union and paths; a union entry runs when a member does, from no paths of its own`);
+    for (const member of entry.union) {
+      if (!tierJobs[member]) errors.push(`${id}: its union names ${member}, which has no entry in tier-paths.json`);
+      else if (tierJobs[member].union !== undefined) errors.push(`${id}: its union names ${member}, another union (one level only)`);
+    }
+    for (const [other, job] of Object.entries(jobs)) {
+      if (other === "ci-gate" || !asList(job.needs).includes(id)) continue;
+      if (!entry.union.includes(other)) errors.push(`${other}: needs ${id} but is not in its union in tier-paths.json, so it can run when ${id} does not`);
+    }
+  }
 
   const gate = jobs["fast-gate"];
   const final = jobs["ci-gate"];
@@ -151,6 +196,8 @@ export function check({ ci, tiers, workflows }) {
   }
   if (final) {
     if (!/\balways\(\)/.test(String(final.if ?? ""))) errors.push("ci-gate must run with `if: always()`");
+    // Skipped on a draft (grey, not red); `!= true` keeps an event without a pull request running it.
+    if (!String(final.if ?? "").includes(GATE_DRAFT_SKIP)) errors.push(`ci-gate must be skipped on a draft: its if needs \`${GATE_DRAFT_SKIP}\``);
     const needs = asList(final.needs);
     for (const id of Object.keys(jobs)) {
       if (id !== "ci-gate" && !needs.includes(id)) errors.push(`ci-gate: needs does not list ${id}`);
@@ -164,6 +211,33 @@ export function check({ ci, tiers, workflows }) {
     const pr = "pull_request" in on || "pull_request_target" in on;
     if (pr && !OWN_PR_TRIGGER.has(file) && !called.has(file)) {
       errors.push(`${file}: starts on a pull request but is not a job of ci.yml, so it runs outside the tiers and outside ci-gate`);
+    }
+  }
+  return errors;
+}
+
+// ci-go's shards run no-binaries' two elitea-main gates (api-core, infra-suites) and
+// ci-contract's tests (db-storage). Those run there only when ci-go does not: ci.yml passes
+// no-binaries ci-go's own filter as `go_runs` and its two steps skip on it; ci-contract
+// carries `unless: ci-go` in tier-paths.json.
+export const GO_RUNS = "${{ fromJSON(needs.changes.outputs.run)['ci-go'] }}";
+const GO_DUPLICATES = [
+  ["no-binaries", "no-binaries.yml", (wf) => Object.values(wf?.jobs ?? {}).flatMap((j) => j.steps ?? []).filter((s) => /go test -count=1 \.\/(?:internal\/api\/|tests\/deployedge\/)/.test(String(s.run ?? ""))).map((s) => [s.name, s.if])],
+];
+export function checkGoDuplicates(ci, workflows, tiers = { jobs: {} }) {
+  const errors = [];
+  // ci-contract does not start at all where ci-go runs: tier-paths.json `unless`, so the
+  // changes output says false and the gates read its skip as correct, not missing.
+  if (tiers.jobs?.["ci-contract"] && tiers.jobs["ci-contract"].unless !== "ci-go") errors.push("tier-paths.json: ci-contract needs `\"unless\": \"ci-go\"` (its tests are ci-go's db-storage shard)");
+  if (String(ci.jobs?.["ci-go"]?.if ?? "") !== "fromJSON(needs.changes.outputs.run)['ci-go']") errors.push("ci-go: its if is no longer its own filter alone; no-binaries' and ci-contract's `go_runs` must follow it");
+  for (const [job, file, gated] of GO_DUPLICATES) {
+    if (!ci.jobs?.[job]) continue;
+    if (String(ci.jobs[job].with?.go_runs ?? "") !== GO_RUNS) errors.push(`${job}: ci.yml must pass \`go_runs: ${GO_RUNS}\` (its duplicate Go tests run only where ci-go does not)`);
+    const items = gated(workflows[file]?.parsed);
+    if (job === "no-binaries" && items.length !== 2) errors.push(`no-binaries.yml: found ${items.length} of the 2 elitea-main gate steps (./internal/api/, ./tests/deployedge/...)`);
+    for (const [name, cond] of items) {
+      const c = String(cond ?? "");
+      if (!/!inputs\.go_runs\b/.test(c) || /\|\|/.test(c)) errors.push(`${file}: \`${name}\` must skip on \`!inputs.go_runs\` (no \`||\`): ci-go runs the same tests`);
     }
   }
   return errors;
@@ -222,7 +296,7 @@ export function main({ root = ROOT, out = console.log, err = console.error } = {
     err(`::error::${error.message}`);
     return 1;
   }
-  const errors = [...check(model), ...checkDesktopPackage(model)];
+  const errors = [...check(model), ...checkDesktopPackage(model), ...checkWebUnitSuite(model.ci, model.workflows), ...checkGoDuplicates(model.ci, model.workflows, model.tiers)];
   if (errors.length) {
     for (const e of errors) err(`::error::${e}`);
     return 1;

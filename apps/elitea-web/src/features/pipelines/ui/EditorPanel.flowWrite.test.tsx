@@ -11,6 +11,7 @@ import { usePipelineEditorStore } from '../model/pipelineEditorStore';
 import { usePipelineYamlStore } from '../model/pipelineYamlStore';
 import { EditorPanel } from './EditorPanel';
 import { usePipelineVersionSync } from './usePipelineEditorLifecycle';
+import { testTimeout } from '@/test/timeouts';
 
 /*
  * No `vi.mock`: this renders the REAL EditorPanel -> lazily loaded FlowWrapper/FlowEditor -> real Add node menu,
@@ -64,7 +65,7 @@ describe('EditorPanel: flow-pane document writes', () => {
     await waitFor(() => expect(canvasNodeIds(container)).toContain('Agent_1'));
     expect(canvasNodeIds(container)).toHaveLength(before.length + 1);
     expect((load(usePipelineYamlStore.getState().yamlCode) as Doc).nodes.map((node) => node['id'])).toContain('Agent_1');
-  }, 30000);
+  }, testTimeout(30000));
 
   it('adds no canvas node, and keeps the stored YAML, when the serializer refuses the document', async () => {
     seed({ refusable: true });
@@ -83,5 +84,5 @@ describe('EditorPanel: flow-pane document writes', () => {
     expect(canvasNodeIds(container)).toEqual(before);
     expect(usePipelineYamlStore.getState().yamlCode).toBe(storedYaml);
     expect(usePipelineYamlStore.getState().yamlJsonObject).toBe(storedDocument);
-  }, 30000);
+  }, testTimeout(30000));
 });

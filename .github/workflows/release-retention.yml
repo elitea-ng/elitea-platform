@@ -51,11 +51,18 @@ jobs:
   admin:
     name: Refuse anyone but an admin
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
     timeout-minutes: 5
     permissions:
       contents: read
     steps:
+      # The local env action below needs the tree; this job reads nothing else.
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/actions
+          persist-credentials: false
+      # eng-runner: caches and TMPDIR on the work volume (does nothing on hosted).
+      - uses: ./.github/actions/eng-runner-env
       # Pinned to the v9.0.0 commit, as ci-image-cleanup.yml pins it.
       - name: Check the actor and the triggering actor
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
@@ -75,7 +82,7 @@ jobs:
   prune:
     name: Prune releases, images and charts
     needs: admin
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
     timeout-minutes: 360
     permissions:
       # Deletes releases and tags.
@@ -86,6 +93,11 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      # eng-runner: caches and TMPDIR on the work volume, and node for the node
+      # scripts (none in its image). Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          node: "true"
       - name: The policy still refuses what it must
         run: node --test --test-reporter=spec scripts/ci/prune-releases.test.mjs scripts/ci/prune-prereleases.test.mjs
       - name: Prune

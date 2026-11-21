@@ -25,6 +25,7 @@ import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
 import { parseMarkdownTable } from '../../lib/markdownTable';
 import { CanvasEditor } from './CanvasEditor';
+import { testTimeout } from '@/test/timeouts';
 
 installCodeMirrorTestPolyfills();
 
@@ -235,7 +236,7 @@ describe('CanvasEditor — mermaid canvas', () => {
       { timeout: 15000 },
     );
     expect(screen.queryByTestId('canvas-mermaid-quick-fix')).toBeNull();
-  }, 20000);
+  }, testTimeout(20000));
 
   it('offers the quick-fix control once the diagram fails to render', async () => {
     const quickFix = {
@@ -253,7 +254,7 @@ describe('CanvasEditor — mermaid canvas', () => {
     );
 
     await waitFor(() => expect(screen.getByTestId('canvas-mermaid-quick-fix')).toBeTruthy(), { timeout: 15000 });
-  }, 20000);
+  }, testTimeout(20000));
 });
 
 describe('CanvasEditor — concurrent-edit notice', () => {

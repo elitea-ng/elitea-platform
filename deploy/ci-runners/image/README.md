@@ -142,9 +142,13 @@ in `helm-lint.yml`. That checker reads workflows only, not this file.
 - A job that falls back to the image's binary runs the image's version, so a
   render can differ between the pools.
 
-When the heavy-tier PR routes a helm or yq job here, either bump the workflow
-pins to the image's versions or keep the job's own install step. Until then,
-the image's copies are fallbacks.
+The routed helm and yq jobs keep their pins or never had one: helm-lint
+`template` installs its pinned Helm 4 and Helm 3 with `setup-helm`, and ci-go
+`env-drift` runs the image's yq on the pool (its hosted step installs `latest`
+when the runner lacks one, so it was never pinned). helm-lint `lint`, the job
+that pins `YQ_VERSION`, stays hosted. A job routed later that falls back to the
+image's helm or yq should either bump its pin to the image's version or keep
+its own install step.
 
 ### Disk: everything on `_work` (1Gi root limit)
 

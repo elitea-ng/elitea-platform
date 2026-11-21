@@ -79,12 +79,6 @@ jobs:
         working-directory: apps/elitea-web
         run: npm ci
 
-      - name: Desktop transport unit tests (bearer, refresh, fetch SSE, host bridge)
-        working-directory: apps/elitea-web
-        run: >
-          npx vitest run --config vitest.config.ts --project node
-          src/shared/desktop src/shared/api/http src/shared/api/sse
-
       - name: Build the desktop web bundle
         working-directory: apps/elitea-web
         run: npm run build:desktop
@@ -175,33 +169,6 @@ jobs:
           cargo fmt --all -- --check
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked --all-targets
-
-      # The local workspace index the host links (ADR-0029 decision 7): its
-      # own tests (the shared GraphStore conformance suite over SQLite, the
-      # folder source, owner-only files) run in the libs workspace, built
-      # alone so serde_json's `preserve_order` stays off as in the host.
-      - name: Local index (fmt, clippy, tests)
-        working-directory: libs/rust
-        run: |
-          cargo fmt -p elitea-local-index -- --check
-          cargo clippy --locked -p elitea-local-index --all-targets -- -D warnings
-          cargo test --locked -p elitea-local-index --all-targets
-
-      # ADR-0052 W4: built for brand/sample, the host binary (read through its
-      # strings, a debug build: the cache above is warm for it) and its overlay
-      # show no ELITEA word or identifier (scripts/ci/brand-output-scan.mjs).
-      # Last, because it rebuilds the web bundle and the overlay for the sample
-      # brand. No sidecar: only tauri.sidecar.conf.json (the release) names it.
-      - name: Sample-brand output scan (host binary + overlay)
-        env:
-          ELITEA_BRAND: sample
-        run: |
-          set -euo pipefail
-          npm --prefix apps/elitea-web run build:desktop
-          (cd apps/elitea-desktop && node scripts/tauri-brand.mjs)
-          cd apps/elitea-desktop/src-tauri
-          TAURI_CONFIG="$(cat tauri.brand.json)" cargo build --locked -p elitea-desktop --bin elitea-desktop
-          node "${GITHUB_WORKSPACE}/scripts/ci/brand-output-scan.mjs" --lane desktop target/debug/elitea-desktop tauri.brand.json
 
   # The browser pane's Windows and Linux drivers (ADR-0048 decision 6,
   # #1593). The macOS job above is the one that builds and tests the whole

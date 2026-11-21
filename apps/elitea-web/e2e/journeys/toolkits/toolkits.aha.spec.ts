@@ -59,7 +59,10 @@ const NAME_MAX = 128;
  * credential" means to the checker. No vendor is contacted, and nothing here
  * depends on the internet.
  */
-const STANDIN_PROVIDER_BASE_URL = 'http://elitea-web/app';
+// The native stack (E2E_STACK=native) runs elitea-web's nginx as a non-root
+// process, on 8080 instead of 80, and its workflow names the URL here.
+const STANDIN_PROVIDER_BASE_URL =
+  process.env['E2E_STANDIN_PROVIDER_BASE_URL'] ?? 'http://elitea-web/app';
 /**
  * A host nothing can reach, for the cases that want a REFUSAL. `.example` is
  * reserved (RFC 2606) and the name is not in the stack's allowlist either, so

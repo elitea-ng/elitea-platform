@@ -787,7 +787,9 @@ describe('the publish journeys must find the tenancy their fixtures resolve', ()
  */
 export function runtimeSecretHeaderSeeded(seedSource, setupSource) {
   const vaultInsert = seedSource.indexOf('INSERT INTO centry.secrets_data');
-  const restart = seedSource.indexOf('$COMPOSE_F restart elitea-main');
+  // The restart goes through lib/stack-backend.sh, which restarts the compose
+  // service or the native process (E2E_STACK); either way it is this call.
+  const restart = seedSource.indexOf('stack_restart elitea-main');
   if (vaultInsert < 0 || restart < 0 || restart < vaultInsert) return false;
 
   // The digest of project 1's vault, and a bounded wait on it AFTER the
@@ -822,7 +824,7 @@ describe("the seeded project's X-SECRET value is a property of the stack", () =>
 
   it('rejects a seed that never restarts elitea-main', () => {
     const seed = read(SEED_SCRIPT).replace(
-      '$COMPOSE_BIN $COMPOSE_F restart elitea-main',
+      'stack_restart elitea-main',
       '# restart removed',
     );
     expect(runtimeSecretHeaderSeeded(seed, read(SETUP))).toBe(false);
@@ -830,12 +832,12 @@ describe("the seeded project's X-SECRET value is a property of the stack", () =>
 
   it('rejects a restart that runs before the vaults it is meant to fill', () => {
     const seed = read(SEED_SCRIPT).replace(
-      '$COMPOSE_BIN $COMPOSE_F restart elitea-main',
+      'stack_restart elitea-main',
       '# moved',
     );
     const moved = seed.replace(
       'INSERT INTO centry.secrets_data',
-      '$COMPOSE_BIN $COMPOSE_F restart elitea-main\nINSERT INTO centry.secrets_data',
+      'stack_restart elitea-main\nINSERT INTO centry.secrets_data',
     );
     expect(runtimeSecretHeaderSeeded(moved, read(SETUP))).toBe(false);
   });
@@ -847,7 +849,7 @@ describe("the seeded project's X-SECRET value is a property of the stack", () =>
 
   it('rejects a seed that reads the digest once and never waits on it', () => {
     const seed = read(SEED_SCRIPT);
-    const poll = seed.indexOf('$COMPOSE_BIN $COMPOSE_F restart elitea-main');
+    const poll = seed.indexOf('stack_restart elitea-main');
     const trimmed =
       seed.slice(0, poll) +
       seed.slice(poll).replaceAll('project_one_vault_digest', 'true # digest wait removed');
@@ -1310,6 +1312,67 @@ describe('a sharded lane must carry one weight per shard', () => {
       '          - shard: "1/3"',
     ].join('\n');
     expect(shardWeightMismatches(twoJobs)).toEqual([]);
+  });
+});
+
+const NATIVE_WORKFLOW = '../../.github/workflows/ci-web-e2e-native.yml';
+
+/**
+ * The `e2e` job's matrix entries, each as `engine leg shard weights`. Read
+ * from the job's own block only (`  e2e:` to the next job), so another job's
+ * matrix in the same file cannot answer for it.
+ */
+export function e2eMatrix(workflowSource) {
+  const entries = [];
+  let inJob = false;
+  let current = null;
+  for (const line of workflowSource.split('\n')) {
+    if (/^ {2}[A-Za-z0-9_-]+:\s*$/.test(line)) inJob = line.trim() === 'e2e:';
+    if (!inJob) continue;
+    const field = line.match(/^\s*(- )?(engine|leg|shard|weights):\s*"?([^"]*?)"?\s*$/);
+    if (!field) continue;
+    if (field[1]) {
+      current = {};
+      entries.push(current);
+    }
+    if (current) current[field[2]] = field[3];
+  }
+  return entries.map((e) => [e.engine, e.leg, e.shard, e.weights].join(' '));
+}
+
+describe('the native legs run exactly what the compose legs run', () => {
+  // ci-web-e2e-native.yml replaces ci-web-e2e.yml's e2e legs on a pull
+  // request the pool runs. A leg, shard or weight that existed in only one of
+  // the two would be a slice of the suite that runs on one kind of runner and
+  // silently not on the other.
+  it('the two e2e matrices are the same legs, shards and weights', () => {
+    const compose = e2eMatrix(read(E2E_WORKFLOW));
+    expect(compose.length).toBe(7);
+    expect(e2eMatrix(read(NATIVE_WORKFLOW))).toEqual(compose);
+  });
+
+  it('the native workflow runs both flag projects and weights every shard', () => {
+    const native = read(NATIVE_WORKFLOW);
+    expect(flagProjectsWiredIntoCI(native)).toEqual(PLATFORM_FLAG_PROJECTS);
+    expect(shardLegsWithWeights(native).length).toBeGreaterThan(0);
+    expect(shardWeightMismatches(native)).toEqual([]);
+  });
+
+  it('rejects a native matrix that lost a leg', () => {
+    const job = (legs) =>
+      [
+        '  e2e:',
+        '    strategy:',
+        '      matrix:',
+        '        include:',
+        ...legs.flatMap((l) => [`          - engine: ${l}`, `            leg: ${l}`]),
+      ].join('\n');
+    expect(e2eMatrix(job(['chromium', 'webkit']))).not.toEqual(e2eMatrix(job(['chromium'])));
+  });
+
+  it('reads only the e2e job, not a later job\'s matrix', () => {
+    const two = ['  e2e:', '          - engine: chromium', '  visual:', '          - engine: webkit'].join('\n');
+    expect(e2eMatrix(two)).toEqual(['chromium   ']);
   });
 });
 

@@ -69,9 +69,7 @@ jobs:
       # registry-only entry is 0.3-0.6 GiB of the 10 GB cap and saves about the
       # time cargo takes to fetch the crates. The budget goes to target caches.
 
-      - name: Check
-        run: cargo check --locked -p elitea-desktop-control --all-targets
-
+      # No separate `cargo check`: Clippy type-checks the same targets.
       - name: Clippy
         run: cargo clippy --locked -p elitea-desktop-control --all-targets -- -D warnings
 

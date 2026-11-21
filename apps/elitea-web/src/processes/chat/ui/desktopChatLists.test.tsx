@@ -33,6 +33,7 @@ import { useSelectedProjectStore } from '@/widgets/app-shell';
 import { DesktopFrame, useDesktopLayout } from '@/widgets/desktop-shell';
 
 import { ChatWithEditors } from './ChatWithEditors';
+import { testTimeout } from '@/test/timeouts';
 
 const BASE = '/api/v2';
 const PROJECT = '77';
@@ -215,7 +216,7 @@ afterEach(() => {
 
 // The waits below allow 10 s each (the whole shell boots); the test
 // timeout has to cover them, not the 5 s default.
-describe('the desktop chat: the sidebar is the one list', { timeout: 30_000 }, () => {
+describe('the desktop chat: the sidebar is the one list', { timeout: testTimeout(30_000) }, () => {
   it('keeps the chat when the sidebar is hidden', async () => {
     mount();
     expect(await screen.findByTestId('shell-chats', {}, { timeout: 10_000 })).toBeInTheDocument();
@@ -241,7 +242,7 @@ describe('the desktop chat: the sidebar is the one list', { timeout: 30_000 }, (
   });
 });
 
-describe('the desktop chat: the title row and the selection', { timeout: 30_000 }, () => {
+describe('the desktop chat: the title row and the selection', { timeout: testTimeout(30_000) }, () => {
   it('names the open conversation in the title, and renames it on a double-click', async () => {
     const user = userEvent.setup();
     mount();
@@ -269,7 +270,7 @@ describe('the desktop chat: the title row and the selection', { timeout: 30_000 
   });
 });
 
-describe('the desktop chat: a message moves the chat to Today', { timeout: 30_000 }, () => {
+describe('the desktop chat: a message moves the chat to Today', { timeout: testTimeout(30_000) }, () => {
   it('moves a conversation from an older group to the top of Today when a message is sent', async () => {
     conversations = [
       { id: 40, name: 'Fresh chat', folderId: null },
@@ -306,7 +307,7 @@ describe('the desktop chat: a message moves the chat to Today', { timeout: 30_00
   });
 });
 
-describe('the desktop chat: folders in the sidebar', { timeout: 30_000 }, () => {
+describe('the desktop chat: folders in the sidebar', { timeout: testTimeout(30_000) }, () => {
   it('creates a folder from the Chats row', async () => {
     const user = userEvent.setup();
     mount();
@@ -337,7 +338,7 @@ describe('the desktop chat: folders in the sidebar', { timeout: 30_000 }, () => 
   });
 });
 
-describe('the desktop chat: both lists read one listing', { timeout: 30_000 }, () => {
+describe('the desktop chat: both lists read one listing', { timeout: testTimeout(30_000) }, () => {
   it('shows the conversation the first send created in the sidebar', async () => {
     const user = userEvent.setup();
     mount('/chat');

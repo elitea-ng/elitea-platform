@@ -25,9 +25,10 @@ import { server } from '@/test/setup';
 
 import { AdminBulkInviteDialog } from './AdminBulkInviteDialog';
 import { renderAdminRoute } from './__tests__/testRouter';
+import { testTimeout } from '@/test/timeouts';
 
-configure({ asyncUtilTimeout: 5_000 });
-vi.setConfig({ testTimeout: 30_000 });
+configure({ asyncUtilTimeout: testTimeout(5_000) });
+vi.setConfig({ testTimeout: testTimeout(30_000) });
 
 const USERS_BODY = {
   rows: [

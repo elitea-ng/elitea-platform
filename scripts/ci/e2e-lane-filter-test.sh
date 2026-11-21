@@ -42,6 +42,7 @@ expect true false "a helm file a compose stack bind-mounts" "deploy/helm/elitea/
 expect true false "docs plus one Go file" "README.md" "services/elitea-main/cmd/x.go"
 expect true true  "the gateway" "services/elitea-llm-gateway/main.go"
 expect true true  "the e2e workflow" ".github/workflows/ci-web-e2e.yml"
+expect true true  "the build-once workflow" ".github/workflows/ci-build-once.yml"
 expect true true  "worker docs (under services/, so not prose-only)" "services/elitea-worker-rust/docs/x.md"
 
 # The handoff journey's own signal (third line): decided on every changed
@@ -60,10 +61,15 @@ expect_handoff() {
 }
 expect_handoff true "the desktop handoff host (skipped by the stack lanes)" "apps/elitea-desktop/src-tauri/src/handoff/mod.rs"
 expect_handoff true "the live tests" "apps/elitea-desktop/src-tauri/src/handoff_live_tests.rs"
+expect_handoff true "the build-once workflow" ".github/workflows/ci-build-once.yml"
 expect_handoff true "the cloud-turn simulator" "services/elitea-main/cmd/handoff-live-cloudturn/main.go"
 expect_handoff true "the store service" "services/elitea-main/internal/application/workspacestore/service.go"
 expect_handoff true "the shared workspace store crate" "libs/rust/workspace-store/src/sync.rs"
 expect_handoff true "the lane's script" "deploy/scripts/handoff-live.sh"
+expect_handoff true "the native table (its handoff overlay delta)" "deploy/native/standalone-full.mjs"
+expect_handoff true "the native supervisor" "scripts/e2e/native-stack.mjs"
+expect_handoff true "the backend shim" "apps/elitea-web/scripts/lib/stack-backend.sh"
+expect_handoff true "the native workflow" ".github/workflows/ci-web-e2e-native.yml"
 expect_handoff true "empty list" 
 expect_handoff false "a web page" "apps/elitea-web/src/pages/a.tsx"
 expect_handoff true "any desktop host source (the lane builds the whole crate)" "apps/elitea-desktop/src-tauri/src/tray.rs"
@@ -94,6 +100,7 @@ expect_sandbox() {
 }
 expect_sandbox true "empty list"
 expect_sandbox true "the run_code tool" "libs/rust/agent-runtime/src/toolkits/families/data_analysis/sandbox_tool.rs"
+expect_sandbox true "the backend shim the compose lane runs through" "apps/elitea-web/scripts/lib/stack-backend.sh"
 expect_sandbox true "the worker's code tool" "services/elitea-worker-rust/src/agents/graph/code_tool.rs"
 expect_sandbox true "the runner image" "services/elitea-code-runner/Containerfile"
 expect_sandbox true "the sandbox overlay" "deploy/docker-compose.sandbox.yml"
@@ -102,6 +109,7 @@ expect_sandbox true "the material script" "deploy/scripts/sandbox-compose-materi
 expect_sandbox true "the lane's journey" "apps/elitea-web/e2e/streaming/code-sandbox.run-code.spec.ts"
 expect_sandbox true "the lane's wrapper" "apps/elitea-web/scripts/code-sandbox-e2e.sh"
 expect_sandbox true "the workflow" ".github/workflows/ci-web-e2e.yml"
+expect_sandbox true "the build-once workflow" ".github/workflows/ci-build-once.yml"
 expect_sandbox false "a web page" "apps/elitea-web/src/pages/a.tsx"
 expect_sandbox false "docs only" "README.md"
 expect_sandbox false "the DeepWiki overlay" "deploy/docker-compose.deepwiki-native-real-engine.yml"
@@ -121,12 +129,15 @@ expect_webkit() {
   fi
 }
 expect_webkit true "empty list"
+expect_webkit true "the native e2e table" "deploy/native/e2e-standalone.mjs"
+expect_webkit true "the native workflow" ".github/workflows/ci-web-e2e-native.yml"
 expect_webkit true "a web source file" "apps/elitea-web/src/pages/a.tsx"
 expect_webkit true "an e2e journey" "apps/elitea-web/e2e/chat/a.spec.ts"
 expect_webkit true "the Playwright config" "apps/elitea-web/playwright.config.ts"
 expect_webkit true "the package lock (Playwright's version)" "apps/elitea-web/package-lock.json"
 expect_webkit true "the shared client package" "libs/ts/client-core/src/index.ts"
 expect_webkit true "the workflow" ".github/workflows/ci-web-e2e.yml"
+expect_webkit true "the build-once workflow" ".github/workflows/ci-build-once.yml"
 expect_webkit true "the nginx CSP and headers" "apps/elitea-web/nginx/spa.conf"
 expect_webkit true "the web image" "apps/elitea-web/Containerfile"
 expect_webkit false "a Go service" "services/elitea-main/cmd/x.go"
@@ -135,6 +146,52 @@ expect_webkit false "the chart" "deploy/helm/elitea/values.yaml"
 expect_webkit false "docs only" "README.md" "docs/ARCHITECTURE.md"
 expect_webkit false "the desktop host" "apps/elitea-desktop/src-tauri/src/main.rs"
 expect_webkit true "docs plus one web source file" "README.md" "apps/elitea-web/src/a.ts"
+
+# The compose smoke leg's own signal (sixth line): what only the container
+# stack proves. Decided on every changed path.
+expect_images() {
+  local want="$1" label="$2"; shift 2
+  local out
+  out="$(printf '%s\n' "$@" | bash "$filter" 2>/dev/null | grep '^reaches-images=')"
+  ran=$((ran + 1))
+  if [ "$out" != "reaches-images=$want" ]; then
+    echo "FAIL: $label — got: $out"
+    fails=$((fails + 1))
+  else
+    echo "ok:   $label"
+  fi
+}
+expect_images true "empty list"
+expect_images true "elitea-main's Containerfile" "services/elitea-main/Containerfile"
+expect_images true "the web image" "apps/elitea-web/Containerfile"
+expect_images true "a suffixed Containerfile" "deploy/docker/Containerfile.elitea-ui"
+expect_images true "a .dockerignore" "services/elitea-main/.dockerignore"
+expect_images true "the e2e compose file" "deploy/docker-compose.e2e-standalone.yml"
+expect_images true "an overlay compose file" "deploy/docker-compose.standalone-rust-agent.yml"
+expect_images true "the nginx config" "apps/elitea-web/nginx/spa.conf"
+expect_images true "the web entrypoint" "apps/elitea-web/docker-entrypoint.sh"
+expect_images true "the stack script (its compose half)" "apps/elitea-web/scripts/e2e-stack.sh"
+expect_images true "the stack backend (its compose half)" "apps/elitea-web/scripts/lib/stack-backend.sh"
+expect_images true "the standalone stack script (its compose half)" "deploy/scripts/standalone-stack.sh"
+expect_images true "the handoff lane script (its compose half)" "deploy/scripts/handoff-live.sh"
+expect_images true "the chat lane script (its Playwright container)" "apps/elitea-web/scripts/chat-stream-e2e.sh"
+expect_images false "the native standalone table" "deploy/native/standalone-full.mjs"
+expect_images false "a cert script" "deploy/scripts/gen-runtime-certs.sh"
+expect_images true "the bake file" "docker-bake.hcl"
+expect_images true "the image action" ".github/actions/pull-stack-images/action.yml"
+expect_images true "the compose workflow" ".github/workflows/ci-web-e2e.yml"
+expect_images true "the build-once workflow" ".github/workflows/ci-build-once.yml"
+expect_images true "the lane filter" "scripts/ci/e2e-lane-filter.sh"
+expect_images true "docs plus one Containerfile" "README.md" "services/elitea-subapp-host/Containerfile"
+expect_images false "a web source file" "apps/elitea-web/src/pages/a.tsx"
+expect_images false "a Go service source" "services/elitea-main/cmd/elitea-main/main.go"
+expect_images false "a journey" "apps/elitea-web/e2e/journeys/a.spec.ts"
+expect_images false "the native table" "deploy/native/e2e-standalone.mjs"
+expect_images false "the supervisor" "scripts/e2e/native-stack.mjs"
+expect_images false "the native workflow" ".github/workflows/ci-web-e2e-native.yml"
+expect_images false "a look-alike of the nginx dir" "apps/elitea-web/nginxish/a.conf"
+expect_images false "the chart" "deploy/helm/elitea/values.yaml"
+expect_images false "docs only" "README.md" "docs/ARCHITECTURE.md"
 
 # The compose-referenced helm list is READ, not written: against a fixture
 # compose dir that references a different helm file, that file reaches the

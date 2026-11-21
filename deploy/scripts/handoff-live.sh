@@ -32,20 +32,33 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 export STANDALONE_PROJECT="${STANDALONE_PROJECT:-elitea-handoff-live}"
-export STANDALONE_PORT="${STANDALONE_PORT:-8089}"
 export HANDOFF_RUSTFS_PORT="${HANDOFF_RUSTFS_PORT:-19000}"
 export STANDALONE_PG_PORT="${STANDALONE_PG_PORT:-15433}"
 export STANDALONE_OVERLAY="${REPO_ROOT}/deploy/docker-compose.handoff-live.yml${STANDALONE_OVERLAY:+ ${STANDALONE_OVERLAY}}"
 PERSONA="${HANDOFF_LIVE_PERSONA:-e2e-chat@autotest.local}"
-# shellcheck source=../../apps/elitea-web/scripts/lib/compose-detect.sh
-. "${REPO_ROOT}/apps/elitea-web/scripts/lib/compose-detect.sh"
-detect_compose_bin
-export COMPOSE_BIN
+if [ "${E2E_STACK:-compose}" = native ]; then
+  # The pool's native stack (standalone-stack.sh with E2E_STACK=native): Main
+  # on 8080, and Main's database and object store at their own addresses
+  # (the pod's name map), not at compose's published host ports.
+  export STANDALONE_PORT="${STANDALONE_PORT:-8080}"
+  MAIN_DATABASE_URL="postgres://elitea:elitea@postgres:5432/elitea?sslmode=disable"
+  # rustfs binds 127.0.0.1 only natively (RUSTFS_BIND in deploy/native/e2e-standalone.mjs).
+  MAIN_S3_ENDPOINT="http://127.0.0.1:9000"
+else
+  export STANDALONE_PORT="${STANDALONE_PORT:-8089}"
+  MAIN_DATABASE_URL="postgres://elitea:elitea@127.0.0.1:${STANDALONE_PG_PORT}/elitea?sslmode=disable"
+  MAIN_S3_ENDPOINT="http://127.0.0.1:${HANDOFF_RUSTFS_PORT}"
+  # shellcheck source=../../apps/elitea-web/scripts/lib/compose-detect.sh
+  . "${REPO_ROOT}/apps/elitea-web/scripts/lib/compose-detect.sh"
+  detect_compose_bin
+  export COMPOSE_BIN
+fi
 
-# Every compose call goes through standalone-stack.sh, which owns the project
-# and the one overlay list (base, the Rust agent, STANDALONE_OVERLAY).
+# Every stack call goes through standalone-stack.sh, which owns the project
+# and the one overlay list (base, the Rust agent, STANDALONE_OVERLAY), and the
+# backend (compose, or the native stack).
 stack() { "${REPO_ROOT}/deploy/scripts/standalone-stack.sh" "$@"; }
-psql_main() { stack compose exec -T postgres psql -v ON_ERROR_STOP=1 -At -U elitea -d elitea "$@"; }
+psql_main() { stack psql -v ON_ERROR_STOP=1 -At -U elitea -d elitea "$@"; }
 
 # Main answers HTTP again (any status: a connection failure is code 000).
 wait_main() {
@@ -66,12 +79,12 @@ wait_main() {
 encrypt_bucket() {
   echo "→ Adding the bucket's default encryption rule…"
   AWS_ACCESS_KEY_ID=elitea AWS_SECRET_ACCESS_KEY=elitea-dev-secret AWS_DEFAULT_REGION=us-east-1 \
-    aws --endpoint-url "http://127.0.0.1:${HANDOFF_RUSTFS_PORT}" s3api put-bucket-encryption \
+    aws --endpoint-url "${MAIN_S3_ENDPOINT}" s3api put-bucket-encryption \
       --bucket elitea-artifacts \
       --server-side-encryption-configuration \
       '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
   AWS_ACCESS_KEY_ID=elitea AWS_SECRET_ACCESS_KEY=elitea-dev-secret AWS_DEFAULT_REGION=us-east-1 \
-    aws --endpoint-url "http://127.0.0.1:${HANDOFF_RUSTFS_PORT}" s3api get-bucket-encryption --bucket elitea-artifacts
+    aws --endpoint-url "${MAIN_S3_ENDPOINT}" s3api get-bucket-encryption --bucket elitea-artifacts
 }
 
 # What a deployment's admin and a signed-in desktop leave behind, written the
@@ -142,9 +155,9 @@ run_tests() {
   export ELITEA_HANDOFF_LIVE_PROJECT="${project}"
   export ELITEA_HANDOFF_LIVE_SIM="${SIM_PATH}"
   # The simulator is Main's own composition: Main's database and object store.
-  export DATABASE_URL="postgres://elitea:elitea@127.0.0.1:${STANDALONE_PG_PORT}/elitea?sslmode=disable"
+  export DATABASE_URL="${MAIN_DATABASE_URL}"
   export STORAGE_BACKEND=s3 STORAGE_CONTAINER=elitea-artifacts
-  export S3_ENDPOINT_URL="http://127.0.0.1:${HANDOFF_RUSTFS_PORT}"
+  export S3_ENDPOINT_URL="${MAIN_S3_ENDPOINT}"
   export S3_ACCESS_KEY=elitea S3_SECRET_KEY=elitea-dev-secret S3_REGION=us-east-1 S3_FORCE_PATH_STYLE=true
   export AWS_REQUEST_CHECKSUM_CALCULATION=when_required
   echo "→ Running the handoff live tests (project ${project})…"
@@ -190,7 +203,7 @@ case "${1:-}" in
     stack up
     stack seed
     encrypt_bucket
-    stack compose restart elitea-main
+    stack restart elitea-main
     wait_main
     build_sim
     run_tests

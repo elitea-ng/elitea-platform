@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { renderWithTheme } from '../lib/testTheme';
 import { MermaidDiagram } from '.';
 import { isMermaidEngineLoaded, sanitizeDiagramSvg } from './mermaidLoader';
+import { testTimeout } from '@/test/timeouts';
 
 const VALID = 'graph TD;\n  A[Start] --> B[Finish];';
 const INVALID = 'graph TD;\n  A -->';
@@ -51,7 +52,7 @@ describe('MermaidDiagram — rendering', () => {
       { timeout: 15000 },
     );
     expect(getByTestId('diagram').querySelector('[role="alert"]')).toBeNull();
-  }, 20000);
+  }, testTimeout(20000));
 
   it('reports an invalid diagram instead of throwing', async () => {
     const { getByTestId, getByRole } = renderWithTheme(<MermaidDiagram code={INVALID} data-testid="diagram" />);
@@ -63,7 +64,7 @@ describe('MermaidDiagram — rendering', () => {
     );
     expect(getByRole('alert').textContent).not.toBe('');
     expect(getByTestId('diagram').querySelector('svg')).toBeNull();
-  }, 20000);
+  }, testTimeout(20000));
 
   it('recovers when a broken diagram is replaced by a valid one', async () => {
     const { getByTestId, rerender, queryByRole } = renderWithTheme(
@@ -78,7 +79,7 @@ describe('MermaidDiagram — rendering', () => {
       expect(getByTestId('diagram').querySelector('svg')).not.toBeNull();
     }, { timeout: 15000 });
     expect(queryByRole('alert')).toBeNull();
-  }, 30000);
+  }, testTimeout(30000));
 });
 
 /**
@@ -96,7 +97,7 @@ describe('MermaidDiagram — onError reporting', () => {
     await waitFor(() => expect(onError).toHaveBeenCalled(), { timeout: 15000 });
     const summary = onError.mock.calls.at(-1)?.[0] as string;
     expect(summary).not.toBe('');
-  }, 20000);
+  }, testTimeout(20000));
 
   it('reports the empty string for a diagram that renders', async () => {
     const onError = vi.fn();
@@ -108,7 +109,7 @@ describe('MermaidDiagram — onError reporting', () => {
       expect(getByTestId('diagram').querySelector('svg')).not.toBeNull();
     }, { timeout: 15000 });
     expect(onError.mock.calls.at(-1)?.[0]).toBe('');
-  }, 20000);
+  }, testTimeout(20000));
 
   it('clears a previously reported error when the diagram is fixed', async () => {
     const onError = vi.fn();
@@ -121,7 +122,7 @@ describe('MermaidDiagram — onError reporting', () => {
     rerender(<MermaidDiagram code={VALID} onError={onError} data-testid="diagram" />);
     await waitFor(() => expect(queryByRole('alert')).toBeNull(), { timeout: 15000 });
     expect(onError.mock.calls.at(-1)?.[0]).toBe('');
-  }, 30000);
+  }, testTimeout(30000));
 
   it('reports the empty string for an empty diagram without loading the engine', async () => {
     const onError = vi.fn();

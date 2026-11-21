@@ -36,9 +36,11 @@ defaults:
 jobs:
   unit-tests:
     name: Unit tests (sharded + coverage)
-    # Hosted, not eng-runner: under coverage instrumentation the 4-CPU pod ran these shards 1.5-2x slower,
-    # and the heaviest files (EditApplication, MarketplaceProposals) hit their per-test timeouts.
-    runs-on: ubuntu-latest
+    # On eng-runner. Coverage instrumentation runs these shards 2-3x slower; under --coverage
+    # vitest.config.ts scales every test, hook and wait budget by 3 (src/test/timeouts.ts), so the
+    # heavy files (CreateApplication, EditApplication, EditPipeline) keep the margin they have
+    # without it. No retries.
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -53,6 +55,8 @@ jobs:
         shardCount: [5]
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume (does nothing on hosted).
+      - uses: ./.github/actions/eng-runner-env
       - uses: actions/setup-node@v7
         with:
           node-version: "26"
@@ -100,7 +104,7 @@ jobs:
             exit 1
           fi
           echo "$(grep -c '' <<< "$unit_tests") unit test file(s) found — §6.6 coverage thresholds armed"
-          npm run test:unit -- --run --shard=${{ matrix.shardIndex }}/${{ matrix.shardCount }} --coverage --coverage.reporter=json --coverage.reportsDirectory=coverage-shards/shard-${{ matrix.shardIndex }} --coverage.clean=false --coverage.thresholds.lines=0 --coverage.thresholds.statements=0 --coverage.thresholds.functions=0 --coverage.thresholds.branches=0 --coverage.thresholds.perFile=false
+          npm run test:unit -- --run --shard=${{ matrix.shardIndex }}/${{ matrix.shardCount }} --coverage --coverage.reporter=json --coverage.reportsDirectory=coverage-shards/shard-${{ matrix.shardIndex }} --coverage.clean=false --coverage.thresholds.lines=0 --coverage.thresholds.statements=0 --coverage.thresholds.functions=0 --coverage.thresholds.branches=0 --coverage.thresholds.perFile=false --maxWorkers=4
       - name: Upload coverage shard
         uses: actions/upload-artifact@v7
         with:
@@ -119,7 +123,7 @@ jobs:
     # a failed merge step ends the job before they run. The artifact names are
     # unchanged (`elitea-web-coverage`), and so are the commands.
     name: Coverage merge + validation
-    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]') && 'eng-runner' || 'ubuntu-latest' }}
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
     needs:
       - unit-tests
     steps:

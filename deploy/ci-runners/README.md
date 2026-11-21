@@ -4,11 +4,14 @@
 
 - **Pod size:** 4 vCPU, 16 GiB of memory, an 80 GiB `_work` volume and 10 GiB of ephemeral storage outside it.
   `minRunners` is 0.
-- **Image:** `ghcr.io/elitea-ng/eng-runner:2.338.2-20261120`, built from [`image/Containerfile`](image/Containerfile).
+- **Image:** `ghcr.io/elitea-ng/eng-runner:2.338.2-20261120.10`, built from [`image/Containerfile`](image/Containerfile).
   It is the `actions-runner` image (Ubuntu 24.04, runner 2.338.2) plus build tools (cc, zstd and others) and
   the native services described in [`image/README.md`](image/README.md).
-- **Limits:** jobs run directly in the pod. There is no Docker daemon, so no `container:` or `services:`, and
-  no root, so no sudo or apt.
+- **Cache mounts:** the pod template mounts `~/.npm`, `~/.cache` and `~/go` from the work volume
+  (`_homecache/*`; `values-eng-runner.yaml` shows them). `HOME` stays `/home/runner`, so the Go and npm caches
+  sit at the hosted paths and restore main's entries.
+- **Limits:** jobs run directly in the pod. There is no Docker daemon, so no `container:` (a job's `services:`
+  run as processes through `.github/actions/native-services`), and no root, so no sudo or apt.
 
 How CI routes jobs to it is in [`docs/contributing/ci.md`](../../docs/contributing/ci.md#runners).
 
@@ -23,7 +26,8 @@ step, and refuses every job that is not ours.
 >
 > - the runner group, which gives access to selected repositories only;
 > - approval of fork workflow runs for every external contributor;
-> - the YAML routing (`docs/contributing/ci.md`), which keeps fork and Dependabot jobs on GitHub-hosted runners.
+> - the YAML routing (`docs/contributing/ci.md`), which keeps fork and Dependabot jobs on GitHub-hosted runners
+>   and sends this repository's pull requests, schedules and dispatches to the pool.
 >
 > Keep approving fork runs with care. The hook refuses a fork job that targets `eng-runner`, but it is the
 > only layer that does.
@@ -86,7 +90,7 @@ Settings → Secrets and variables → Actions → **Variables** → New reposit
 This step does not depend on steps 1 and 2, but turn routing on only with the hook deployed (it is, as of
 2026-11-20).
 
-The next run of a same-repo pull request sends the toolchain-only jobs to `eng-runner`. Their "Set up job" log
+The next same-repo pull request, schedule or dispatch sends the routed jobs to `eng-runner`. Their "Set up job" log
 shows `Runner name: eng-runner-…`, and "Set up runner" shows
 `eng-runner: accepted pull_request job of …`.
 
@@ -96,28 +100,20 @@ Set `ENG_RUNNER` to `off` (or delete it). Every job goes back to `ubuntu-latest`
 request is needed. To cut the pool off from the repository entirely, also untick it under the runner group's
 **Repository access**.
 
-## Next step: move the jobs the custom image unlocks
+## Moving a job to the pool
 
-The routed set in `docs/contributing/ci.md` was chosen for the plain `actions-runner` image. The custom image
-adds tools that let more jobs move. Each tool is listed with what it unlocks; check that it is in
-[`image/Containerfile`](image/Containerfile) before moving a job:
+The jobs the custom image ([`image/Containerfile`](image/Containerfile)) unlocked (the Rust builds and lints,
+`test-checks`, the Python jobs, `repo-gates`, helm-lint `template`, `env-drift` and `scan`) are routed;
+`docs/contributing/ci.md` ("Runners") lists every routed job and why the rest stay hosted.
 
-| Tool | Unlocks |
-|---|---|
-| A C toolchain (cc, make), `pkg-config`, `libssl-dev` | The Rust jobs (rust-lint, rust-shared, `code-runner`, `quality`, doc-extractor, `serde-order`), and Go with cgo: `go test -race` (`test-checks`, the shards that need no services) |
-| `zstd` | The cache client's zstd version. Hosted entries become readable once the cache paths match too (see below) |
-| `python3-venv`, `python3-pip` | The Python jobs (ci-go `proto`, mock-llm `unit`, deepwiki-conformance `fixtures`) |
-| `shellcheck`, `gh`, `helm`, `yq`, `protoc` | no-binaries `repo-gates`, helm-lint `lint` and `template`, ci-go `env-drift`, dependency-scanning `scan` |
+To move another job, switch its `runs-on` to `ROUTED_RUNS_ON`, add `./.github/actions/eng-runner-env` after
+its checkout (`node: "true"` or `rust: "true"` when it needs them), and let `check-runner-routing.mjs` approve
+it. Its toolchain rules (node, go, rust, python) and its docker and sudo rules apply.
 
-To move a job, switch its `runs-on` to `ROUTED_RUNS_ON`, add `./.github/actions/eng-runner-env` after its
-checkout, and let `check-runner-routing.mjs` approve it. The guard's "runs go or node without installing it"
-rule and its docker and sudo rules still apply.
-
-**Cache paths.** `.github/actions/eng-runner-env` moves `HOME` and every cache under `_work`. Outside `_work`
-the pod has only 10 GiB of ephemeral storage, and a pod that writes past it is evicted. A side effect is that
-the cache paths differ from the hosted ones, so hosted entries stay unreadable. Mounting the work volume at
-`/home/runner` would let `HOME` stay where it is. The cache paths would then match, and main's cache writers
-could move too.
+**Cache paths.** `HOME` stays `/home/runner`; the pod mounts `~/.npm`, `~/.cache` and `~/go` from the work
+volume, and `.github/actions/eng-runner-env` checks the mounts and keeps every other cache under `_work`.
+Outside `_work` the pod has only 10 GiB of ephemeral storage, and a pod that writes past it is evicted. The Go
+and npm cache paths match a hosted runner's, so main's cache writers run on the pool too.
 
 Jobs that need Docker, `services:` or kind stay hosted until there is a daemon option, such as an in-cluster
 BuildKit or a separate dind scale set.
@@ -144,6 +140,12 @@ runner pod `hostAliases`, and each compose service name gets its own
   compose writes them.
 
 Linux answers the whole of `127.0.0.0/8` on `lo`, so no privilege is needed.
+
+Every native service binds loopback only, never a wildcard: the pool is a shared cluster, and a CI service with
+dev credentials must not listen on the pod's network address (`check-native-stack-parity.mjs` and the
+supervisor's socket check enforce it). One exception to the map: rustfs refuses a bind host that is not an
+interface address, so natively it binds `127.0.0.1:9000` and its clients use that endpoint; `rustfs` stays in
+the map for the names compose-shaped configs carry.
 
 | Address | Names |
 |---|---|

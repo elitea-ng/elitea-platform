@@ -31,6 +31,7 @@ import { server } from '@/test/setup';
 
 import { EditToolkit } from '../EditToolkit';
 import { renderToolkitsRoute } from './testRouter';
+import { testTimeout } from '@/test/timeouts';
 
 // `ToolkitForm`'s raw-JSON editor mounts a real CodeMirror instance for this
 // fixture's untyped `github` schema (same reason `EditToolkit.test.tsx`
@@ -84,7 +85,7 @@ afterEach(() => {
 });
 
 describe('EditToolkit — Indexes "Run" tab settles over the REST test-tool run', () => {
-  it('clicking "Run" for a non-index_data tool POSTs tool_name/tool_params to /test_tool, and never emits chat_predict', { timeout: 15_000 }, async () => {
+  it('clicking "Run" for a non-index_data tool POSTs tool_name/tool_params to /test_tool, and never emits chat_predict', { timeout: testTimeout(15_000) }, async () => {
     mockRealToolkit();
     let testToolBody: unknown;
     server.use(

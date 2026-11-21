@@ -8,7 +8,9 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { check, classifyRunsOn, main, ROUTED_RUNS_ON, ROUTING_CONDITION, HOSTED_ONLY, ENV_ACTION } from "./check-runner-routing.mjs";
+import { check, classifyRunsOn, load, main, ROUTED_RUNS_ON, ROUTING_CONDITION, HOSTED_ONLY, ENV_ACTION, NATIVE_SERVICES_ACTION, NATIVE_SERVICES_LOGS_ACTION, poolEmptyImage } from "./check-runner-routing.mjs";
+
+const strip = (e) => e.replace(/^\$\{\{\s*/, "").replace(/\s*\}\}$/, "");
 
 // ── A GitHub Actions expression evaluator, for the subset the condition uses ──
 // Literals ('str', null, true, false, numbers), property paths, == != ! && || and parentheses. Semantics
@@ -79,8 +81,8 @@ function evaluate(source, context) {
 }
 
 const REPO = "elitea-ng/elitea-platform";
-function runsOn({ event, vars = { ENG_RUNNER: "on" }, actor = "alice", triggering = actor, head = REPO, author = "alice" }) {
-  const github = { event_name: event, repository: REPO, actor, triggering_actor: triggering, event: {} };
+function runsOn({ event, vars = { ENG_RUNNER: "on" }, actor = "alice", triggering = actor, head = REPO, author = "alice", repository = REPO }) {
+  const github = { event_name: event, repository, actor, triggering_actor: triggering, event: {} };
   if (event === "pull_request" || event === "pull_request_target") {
     github.event.pull_request = { head: { repo: head === null ? null : { full_name: head } }, user: { login: author } };
   }
@@ -102,12 +104,18 @@ const TABLE = [
   ["a Dependabot pull request", { event: "pull_request", author: "dependabot[bot]", actor: "dependabot[bot]" }, "ubuntu-latest"],
   ["a human push on top of a Dependabot pull request", { event: "pull_request", author: "dependabot[bot]" }, "ubuntu-latest"],
   ["a Dependabot re-run of a human pull request", { event: "pull_request", triggering: "dependabot[bot]" }, "ubuntu-latest"],
-  // The runs on main write the caches; they stay hosted (moved-HOME cache paths). merge_group cannot tell who
-  // wrote the queued change.
+  // Trusted runs of this repository go to the pool too: the cache paths are the same on both kinds of runner.
+  ["schedule", { event: "schedule" }, "eng-runner"],
+  ["workflow_dispatch", { event: "workflow_dispatch" }, "eng-runner"],
+  ["push", { event: "push" }, "eng-runner"],
+  ["a Dependabot push", { event: "push", actor: "dependabot[bot]" }, "ubuntu-latest"],
+  ["a Dependabot re-run of a schedule", { event: "schedule", triggering: "dependabot[bot]" }, "ubuntu-latest"],
+  ["a fork's own schedule", { event: "schedule", repository: "mallory/elitea-platform" }, "ubuntu-latest"],
+  ["a fork's own push", { event: "push", repository: "mallory/elitea-platform" }, "ubuntu-latest"],
+  ["a pull request inside a fork", { event: "pull_request", repository: "mallory/elitea-platform", head: "mallory/elitea-platform" }, "ubuntu-latest"],
+  ["schedule with the variable off", { event: "schedule", vars: { ENG_RUNNER: "off" } }, "ubuntu-latest"],
+  // merge_group cannot tell who wrote the queued change.
   ["merge_group", { event: "merge_group" }, "ubuntu-latest"],
-  ["schedule", { event: "schedule" }, "ubuntu-latest"],
-  ["workflow_dispatch", { event: "workflow_dispatch" }, "ubuntu-latest"],
-  ["push", { event: "push" }, "ubuntu-latest"],
   ["pull_request_target, even from this repository", { event: "pull_request_target" }, "ubuntu-latest"],
   ["workflow_run", { event: "workflow_run" }, "ubuntu-latest"],
   ["issue_comment", { event: "issue_comment" }, "ubuntu-latest"],
@@ -135,6 +143,37 @@ test("a routed job that runs node or go must install it", () => {
   assert.deepEqual(check(model({ schedule: [] }, routedJob({ steps: [{ uses: "actions/setup-go@v7" }, { run: "go vet ./..." }] }))).errors, []);
   // Prose and paths are not invocations.
   assert.deepEqual(check(model({ schedule: [] }, routedJob({ steps: [{ run: "echo go to node_modules; cat package.json" }] }))).errors, []);
+});
+
+test("a routed job that runs cargo, rustc, rustup or the toolchain assert must install rustup", () => {
+  const withRust = (steps) => routedJob({ raw: [{ uses: "actions/checkout@v7" }, { uses: ENV_ACTION, with: { rust: "true" } }, ...steps] });
+  for (const run of ["cargo test --locked", "cargo clippy -- -D warnings", "rustc --version", "rustup toolchain install", 'bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"', "x=$(cargo tree -i smallvec)"]) {
+    assert.match(check(model({ schedule: [] }, routedJob({ steps: [{ run }] }))).errors.join(), /runs rust, but no step installs it.*rust: "true"/, run);
+    assert.deepEqual(check(model({ schedule: [] }, withRust([{ run }]))).errors, [], `${run} with rust: "true"`);
+  }
+  // node: "true" is not rust: "true".
+  const wrong = routedJob({ raw: [{ uses: "actions/checkout@v7" }, { uses: ENV_ACTION, with: { node: "true" } }, { run: "cargo build" }] });
+  assert.match(check(model({ schedule: [] }, wrong)).errors.join(), /runs rust/);
+  // A hosted-only step, and words that only contain the names, are not uses.
+  assert.deepEqual(check(model({ schedule: [] }, routedJob({ steps: [{ if: HOSTED_ONLY, run: "cargo build" }] }))).errors, []);
+  assert.deepEqual(check(model({ schedule: [] }, routedJob({ steps: [{ run: "python3 scripts/contract/test_cargo_target_cache_freshness.py" }] }))).errors, []);
+});
+
+test("a toolchain installed after its first use is refused", () => {
+  const late = routedJob({ steps: [{ run: "python -m pytest" }, { uses: "actions/setup-python@v7" }] });
+  assert.match(check(model({ schedule: [] }, late)).errors.join(), /step 3 runs python before step 4 installs it/);
+  const goLate = routedJob({ steps: [{ run: "go vet ./..." }, { uses: "actions/setup-go@v7" }] });
+  assert.match(check(model({ schedule: [] }, goLate)).errors.join(), /runs go before/);
+});
+
+test("a routed job that runs python or pip must set up python; the image's python3 runs, but cannot pip install", () => {
+  for (const run of ["python -m pytest -q", "pip install pytest", "python3 -m pip install --quiet pyyaml", "python3 -c 'import yaml' || python3 -m pip install pyyaml"]) {
+    assert.match(check(model({ schedule: [] }, routedJob({ steps: [{ run }] }))).errors.join(), /runs python, but no step installs it.*setup-python/, run);
+    assert.deepEqual(check(model({ schedule: [] }, routedJob({ steps: [{ uses: "actions/setup-python@v7" }, { run }] }))).errors, [], run);
+  }
+  for (const run of ["python3 scripts/check.py", "python3 -m unittest discover", "bash scripts/python_lint.sh"]) {
+    assert.deepEqual(check(model({ schedule: [] }, routedJob({ steps: [{ run }] }))).errors, [], run);
+  }
 });
 
 // ── classifyRunsOn ──
@@ -188,12 +227,31 @@ test("a routed job must move its caches onto the work volume first", () => {
   assert.deepEqual(check(model({ schedule: [] }, runFirst)).errors, []);
 });
 
-test("this repository's env action moves HOME, the caches and TMPDIR", () => {
+test("this repository's env action keeps HOME and gives the hosted cache paths", () => {
   const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..", "..");
   const text = fs.readFileSync(path.join(root, ENV_ACTION, "action.yml"), "utf8");
-  for (const name of ["HOME", "XDG_CACHE_HOME", "GOPATH", "GOMODCACHE", "GOCACHE", "GOLANGCI_LINT_CACHE", "npm_config_cache", "TMPDIR"]) {
-    assert.match(text, new RegExp(`echo "${name}=`), name);
+  // HOME stays /home/runner (the pod mounts ~/.npm, ~/.cache, ~/go from the work volume): moving it broke
+  // rustup ("$HOME differs from euid-obtained home directory") and every hosted cache entry's paths.
+  assert.doesNotMatch(text, /echo "HOME=/);
+  // The hosted runner's paths, from $HOME, for the variables the image ENV points at _work/_cache.
+  for (const [name, rel] of [["XDG_CACHE_HOME", ".cache"], ["GOPATH", "go"], ["GOMODCACHE", "go/pkg/mod"], ["GOCACHE", ".cache/go-build"], ["GOLANGCI_LINT_CACHE", ".cache/golangci-lint"], ["npm_config_cache", ".npm"]]) {
+    assert.match(text, new RegExp(`echo "${name}=\\$HOME/${rel.replace(/[./]/g, "\\$&")}"`), name);
   }
+  assert.match(text, /echo "TMPDIR=\$RUNNER_TEMP"/);
+  // The mounts are checked, so a pod template without them fails by name instead of filling the 10 GiB disk.
+  for (const dir of [".npm", ".cache", "go"]) assert.ok(text.includes(`"$HOME/${dir}"`), dir);
+  assert.match(text, /mountpoint -q/);
+  // cargo and rustup stay under _work, where the image puts them.
+  assert.doesNotMatch(text, /echo "(?:CARGO_HOME|RUSTUP_HOME)=/);
+  // ...and ~/.cargo, ~/.rustup link there, for processes started with a cleared env (local-tools' shell).
+  assert.ok(text.includes('"$CARGO_HOME:$HOME/.cargo" "$RUSTUP_HOME:$HOME/.rustup"'));
+  // Parallelism is pinned to the pod's 4 CPUs for every routed job, here, on the pool only.
+  for (const name of ["GOMAXPROCS", "CARGO_BUILD_JOBS", "RUST_TEST_THREADS"]) assert.match(text, new RegExp(`echo "${name}=4"`), name);
+  // rustup is pinned and checked, never piped from sh.rustup.rs.
+  assert.match(text, /RUSTUP_VERSION: "\d+\.\d+\.\d+"/);
+  assert.match(text, /RUSTUP_INIT_SHA256: [0-9a-f]{64}\n/);
+  assert.match(text, /sha256sum -c -/);
+  assert.doesNotMatch(text, /\|\s*(?:ba)?sh\b/, "nothing is piped into a shell");
 });
 
 test("a clean routed job passes and is counted", () => {
@@ -202,9 +260,130 @@ test("a clean routed job passes and is counted", () => {
   assert.deepEqual(routed, ["w.yml j"]);
 });
 
-test("container: and services: are refused on a routed job", () => {
+test("container: is refused on a routed job", () => {
   assert.match(check(model({ schedule: [] }, routedJob({ container: "node:26" }))).errors.join("\n"), /container/);
-  assert.match(check(model({ schedule: [] }, routedJob({ services: { pg: { image: "postgres" } } }))).errors.join("\n"), /services/);
+});
+
+// ── services: on the pool, through the pool-empty image and the native-services action ──
+const NATIVE_ACTIONS = {
+  [NATIVE_SERVICES_ACTION.replace(/^\.\//, "")]: {
+    inputs: Object.fromEntries(
+      Object.entries({
+        postgres: "false", "postgres-version": "18", "postgres-port": "5432", "postgres-user": "postgres", "postgres-password": "postgres", "postgres-db": "postgres", "postgres-args": "",
+        nats: "false", "nats-version": "2.12.0", "nats-port": "4222", "nats-monitor-port": "8222", "nats-args": "-js",
+        qdrant: "false", "qdrant-version": "v1.19.2", "qdrant-http-port": "6333", "qdrant-grpc-port": "6334",
+        openbao: "false", "openbao-version": "2.4.1", "openbao-port": "8200", "openbao-root-token": "root", "openbao-tls-cert-dir": "",
+        storage: "false",
+      }).map(([k, v]) => [k, { default: v }]),
+    ),
+    runs: { using: "composite", steps: [{ if: "runner.environment != 'github-hosted'", run: 'bash "$NS_ACTION_DIR/start.sh"' }] },
+  },
+  [NATIVE_SERVICES_LOGS_ACTION.replace(/^\.\//, "")]: { runs: { using: "composite", steps: [{ uses: "actions/upload-artifact@v7" }] } },
+};
+const pg = (extra = {}) => ({ image: poolEmptyImage("postgres:18"), env: { POSTGRES_USER: "postgres", POSTGRES_PASSWORD: "postgres", POSTGRES_DB: "postgres" }, ports: ["5432:5432"], ...extra });
+const LOGS_STEP = { if: "failure()", uses: NATIVE_SERVICES_LOGS_ACTION };
+const servicesJob = (services, withInputs, { at = 2, logs = LOGS_STEP, extra = [], ...rest } = {}) => {
+  const steps = [{ uses: "actions/checkout@v7" }, { uses: ENV_ACTION }, { uses: "actions/setup-node@v7" }, { run: "npm test" }, ...extra];
+  if (withInputs !== null) steps.splice(at, 0, { uses: NATIVE_SERVICES_ACTION, with: withInputs, ...rest });
+  if (logs) steps.push(logs);
+  return routedJob({ raw: steps, services });
+};
+const servicesErrors = (job) => check(model({ schedule: [] }, job, NATIVE_ACTIONS)).errors.join("\n");
+
+test("the pool-empty image is empty exactly where the job is routed, the image everywhere else", () => {
+  const image = (ctx) => {
+    const github = { event_name: ctx.event, repository: ctx.repository ?? REPO, actor: "alice", triggering_actor: "alice", event: {} };
+    if (ctx.event === "pull_request") github.event.pull_request = { head: { repo: { full_name: ctx.head ?? REPO } }, user: { login: "alice" } };
+    return evaluate(strip(poolEmptyImage("postgres:18")), { github, vars: ctx.vars ?? { ENG_RUNNER: "on" } });
+  };
+  for (const [what, ctx] of TABLE) {
+    const routedThere = runsOn(ctx) === "eng-runner";
+    if (ctx.author || ctx.actor || ctx.triggering || ctx.head === null) continue; // covered by the condition's table
+    assert.equal(image(ctx), routedThere ? "" : "postgres:18", what);
+  }
+  assert.ok(poolEmptyImage("x").includes(ROUTING_CONDITION), "the textual routing condition, nothing else");
+});
+
+test("a routed job with pool-empty services and matching native inputs passes", () => {
+  assert.equal(servicesErrors(servicesJob({ postgres: pg() }, { postgres: "true" })), "");
+  const full = servicesJob(
+    {
+      postgres: pg({ env: { POSTGRES_USER: "elitea", POSTGRES_PASSWORD: "pw", POSTGRES_DB: "db" }, ports: ["127.0.0.1:15444:5432"], command: "postgres -c max_locks_per_transaction=512" }),
+      nats: { image: poolEmptyImage("nats:2.12.0-alpine"), command: "-js -m 8222", ports: ["4222:4222", "8222:8222"] },
+      qdrant: { image: poolEmptyImage("qdrant/qdrant:v1.19.2"), ports: ["6334:6334"] },
+      bao: { image: poolEmptyImage("quay.io/openbao/openbao:2.4.1"), command: "server -dev -dev-root-token-id=tok", ports: ["127.0.0.1:8210:8200"], volumes: ["/tmp/tls:/tls"] },
+    },
+    {
+      postgres: "true", "postgres-port": "15444", "postgres-user": "elitea", "postgres-password": "pw", "postgres-db": "db", "postgres-args": "-c max_locks_per_transaction=512",
+      nats: "true", qdrant: "true", openbao: "true", "openbao-port": "8210", "openbao-root-token": "tok", "openbao-tls-cert-dir": "/tmp/tls",
+    },
+  );
+  assert.equal(servicesErrors(full), "");
+});
+
+test("a routed job's service image must be the pool-empty expression", () => {
+  assert.match(servicesErrors(servicesJob({ postgres: pg({ image: "postgres:18" }) }, { postgres: "true" })), /poolEmptyImage/);
+  // The inverted form is always the image: '' is falsy, so `COND && '' || 'x'` never yields ''.
+  const inverted = `\${{ (${ROUTING_CONDITION}) && '' || 'postgres:18' }}`;
+  assert.match(servicesErrors(servicesJob({ postgres: pg({ image: inverted }) }, { postgres: "true" })), /poolEmptyImage/);
+  // Another condition, however close, is not the routing one.
+  const other = poolEmptyImage("postgres:18").replace("vars.ENG_RUNNER == 'on'", "vars.ENG_RUNNER == 'yes'");
+  assert.match(servicesErrors(servicesJob({ postgres: pg({ image: other }) }, { postgres: "true" })), /poolEmptyImage/);
+  assert.match(servicesErrors(servicesJob({ r: { image: poolEmptyImage("registry:2.8.3") } }, {})), /no counterpart/);
+});
+
+test("a routed job with services must run native-services once, unconditionally, after the env action", () => {
+  assert.match(servicesErrors(servicesJob({ postgres: pg() }, null)), /exactly once \(found 0\)/);
+  assert.match(servicesErrors(servicesJob({ postgres: pg() }, { postgres: "true" }, { if: "always()" })), /must run unconditionally/);
+  assert.match(servicesErrors(servicesJob({ postgres: pg() }, { postgres: "true" }, { at: 1 })), /runs before \.\/\.github\/actions\/eng-runner-env/);
+  assert.match(servicesErrors(servicesJob(undefined, { postgres: "true" })), /has no `services:` block/);
+});
+
+test("the native inputs must match the services block", () => {
+  assert.match(servicesErrors(servicesJob({ postgres: pg() }, {})), /needs `postgres: "true"`/);
+  assert.match(servicesErrors(servicesJob({ postgres: pg({ ports: ["15432:5432"] }) }, { postgres: "true" })), /postgres-port is "5432", the services block's is "15432"/);
+  assert.match(servicesErrors(servicesJob({ postgres: pg({ env: { POSTGRES_USER: "x", POSTGRES_PASSWORD: "postgres", POSTGRES_DB: "postgres" } }) }, { postgres: "true" })), /postgres-user/);
+  assert.match(servicesErrors(servicesJob({ postgres: pg({ image: poolEmptyImage("postgres:17") }) }, { postgres: "true" })), /postgres-version is "18", the services block's is "17"/);
+  assert.match(servicesErrors(servicesJob({ postgres: pg({ command: "postgres -c max_connections=500" }) }, { postgres: "true" })), /passes `-c max_connections=500`/);
+  assert.match(servicesErrors(servicesJob({ postgres: pg() }, { postgres: "true", qdrant: "true" })), /starts qdrant, which the services block does not run/);
+  const nats = { image: poolEmptyImage("nats:2.12.0-alpine"), command: "-m 8222", ports: ["4222:4222"] };
+  assert.match(servicesErrors(servicesJob({ nats }, { nats: "true" })), /JetStream/);
+  const bao = { image: poolEmptyImage("quay.io/openbao/openbao:2.4.1"), command: "server -dev -dev-root-token-id=tok", ports: ["8200:8200"] };
+  assert.match(servicesErrors(servicesJob({ bao }, { openbao: "true" })), /openbao-root-token is "root", the services block's is "tok"/);
+});
+
+test("postgres -c settings are compared as whole words", () => {
+  const svc = pg({ command: "postgres -c max_locks_per_transaction=512" });
+  assert.match(servicesErrors(servicesJob({ postgres: svc }, { postgres: "true", "postgres-args": "-c max_locks_per_transaction=5120" })), /passes `-c max_locks_per_transaction=512`/);
+  assert.equal(servicesErrors(servicesJob({ postgres: svc }, { postgres: "true", "postgres-args": "-c a=1  -c max_locks_per_transaction=512" })), "");
+});
+
+test("the services' logs step is required, last-ish, and on failure()", () => {
+  assert.match(servicesErrors(servicesJob({ postgres: pg() }, { postgres: "true" }, { logs: null })), /native-services-logs with `if: failure\(\)`/);
+  assert.match(servicesErrors(servicesJob({ postgres: pg() }, { postgres: "true" }, { logs: { uses: NATIVE_SERVICES_LOGS_ACTION } })), /native-services-logs/);
+  assert.match(servicesErrors(servicesJob({ postgres: pg() }, { postgres: "true" }, { logs: { ...LOGS_STEP, if: "always()" } })), /native-services-logs/);
+});
+
+test("storage starts on the pool exactly when the hosted compose step does", () => {
+  const up = (cond) => ({ name: "Start storage emulators", if: cond, run: "docker compose -f deploy/docker-compose.storage-test.yml up -d --wait" });
+  const job = (storage, cond) => servicesJob({ postgres: pg() }, { postgres: "true", ...(storage === undefined ? {} : { storage }) }, { extra: cond === null ? [] : [up(cond)] });
+  assert.equal(servicesErrors(job("true", "runner.environment == 'github-hosted'")), "");
+  assert.equal(servicesErrors(job("${{ matrix.storage && 'true' || 'false' }}", "runner.environment == 'github-hosted' && matrix.storage")), "");
+  assert.match(servicesErrors(job(undefined, "runner.environment == 'github-hosted'")), /storage is "false"; .* must be "true"/);
+  assert.match(servicesErrors(job("true", "runner.environment == 'github-hosted' && matrix.storage")), /must be "\$\{\{ matrix\.storage && 'true' \|\| 'false' \}\}"/);
+  assert.match(servicesErrors(job("true", null)), /no step starts deploy\/docker-compose\.storage-test\.yml/);
+});
+
+test("this repository's native-services action matches what the check expects of it", () => {
+  const action = load().actions[NATIVE_SERVICES_ACTION.replace(/^\.\//, "")];
+  assert.ok(action, "the action exists");
+  for (const name of Object.keys(NATIVE_ACTIONS[NATIVE_SERVICES_ACTION.replace(/^\.\//, "")].inputs)) assert.ok(Object.hasOwn(action.inputs, name), `input ${name}`);
+  // It does nothing on a hosted runner, where the services block runs the containers.
+  for (const step of action.runs.steps) assert.match(String(step.if ?? ""), /runner\.environment != 'github-hosted'|failure\(\)/, step.name);
+});
+
+test("playwright install is refused on a routed job: the image bakes the browsers read-only", () => {
+  assert.match(check(model({ schedule: [] }, routedJob({ steps: [{ uses: "actions/setup-node@v7" }, { run: "npx playwright install --with-deps chromium" }] }))).errors.join(), /playwright install/);
 });
 
 test("docker, podman, kind, sudo, apt and systemctl steps are refused", () => {

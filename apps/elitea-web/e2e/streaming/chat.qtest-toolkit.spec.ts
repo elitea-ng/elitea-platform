@@ -53,8 +53,13 @@ import {
 const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/;
 const MOCK_MODEL = process.env['E2E_MOCK_MODEL'] ?? 'vllm/E2E-MOCK-MODEL';
 
-/** Where the fake qTest is published on the host — the journal/state reads below. */
-const QTEST_HOST = `http://localhost:${process.env['STANDALONE_QTEST_PORT'] ?? '8096'}`;
+/**
+ * Where the fake qTest is published on the host — the journal/state reads below.
+ * STANDALONE_QTEST_ORIGIN replaces the whole origin on the native stack, which
+ * publishes nothing on localhost (`http://qtest-mock:8096`, the pod's name map).
+ */
+const QTEST_HOST =
+  process.env['STANDALONE_QTEST_ORIGIN'] || `http://localhost:${process.env['STANDALONE_QTEST_PORT'] ?? '8096'}`;
 /** Where the TOOLKIT reaches it: a compose-network address, never the published one. */
 const QTEST_BASE_URL = process.env['STANDALONE_QTEST_URL'] ?? 'http://qtest-mock:8096';
 const QTEST_TOKEN = process.env['STANDALONE_QTEST_TOKEN'] ?? 'e2e-qtest-token';
