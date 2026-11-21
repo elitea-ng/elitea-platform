@@ -101,6 +101,7 @@ updates:
       - /.github/actions/build-stack-images
       - /.github/actions/build-stack-images/cap-saved-mounts
       - /.github/actions/ci-scripts-deps
+      - /.github/actions/code-runner-images
       - /.github/actions/desktop-macos-package
       - /.github/actions/desktop-windows-package
       - /.github/actions/go-cache
