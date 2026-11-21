@@ -233,6 +233,7 @@
       "get_me": "read",
       "get_pull_request": "read",
       "get_workflow_logs": "read",
+      "get_workflow_runs": "read",
       "get_workflow_status": "read",
       "grep_file": "read",
       "list_branches_in_repo": "read",
