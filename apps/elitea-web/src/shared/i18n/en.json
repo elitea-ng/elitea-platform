@@ -7211,6 +7211,7 @@
   "features.microsoftLogin.failure.permissionMissing": "The account lacks a permission this credential needs. Tick it in the credential and sign in again.",
   "features.microsoftLogin.failure.handoffInvalid": "The sign-in is no longer valid. Sign in again.",
   "features.microsoftLogin.failure.credentialChanged": "The credential changed while you were signing in. Sign in again.",
+  "features.microsoftLogin.failure.notAvailable": "Microsoft sign-in is not set up on this deployment. Ask an administrator.",
   "features.microsoftLogin.failure.generic": "The Microsoft sign-in did not finish. Try again.",
   "credentials.form.testNeedsSignIn": "Sign in with Microsoft first. The connection is checked with your own sign-in."
 }

@@ -7,18 +7,20 @@
  * ## What is real, and what is mocked
  *
  * REAL: the catalogue (the four Microsoft types are offered, not hidden), the schema-driven
- * form, the credential save, and `POST /microsoft_login:start`, which the real Main answers
- * for the saved credential (PKCE, `state`, the Entra authorization URL, the channel name).
+ * form and the credential save (create, then update on the second sign-in).
  *
- * MOCKED, at the browser: Microsoft Entra (`login.microsoftonline.com`) and Main's own
- * callback and redeem. Main reaches Entra for the token exchange and the identity read,
- * over a host that is pinned to `login.microsoftonline.com` in code (ADR-0057 decision 10),
- * so no stack in CI can serve it a fake Entra. Those server halves (code exchange, handoff
- * parking, single use, a foreign redeemer refused) are covered against a fixture Entra by
- * the Go tests of `internal/microsoftlogin` (story S1c, #2268). What this journey covers is
- * the client half, which nothing else drives in a browser: the popup, the handoff on
- * postMessage and BroadcastChannel matched on `state`, redeem, the account, the check, and
- * the repeat sign-in.
+ * MOCKED, at the browser: Main's `start`, callback and redeem, and Microsoft Entra
+ * (`login.microsoftonline.com`). Main composes the sign-in only with a vault master key
+ * (the PKCE verifier and the parked token are sealed under it), and the e2e stack runs
+ * without one on purpose (`deploy/docker-compose.e2e-standalone.yml`: its seeded vault
+ * keys are unwrapped), so the real `start` answers 503 `not_available` there. Main also
+ * reaches Entra over a host pinned to `login.microsoftonline.com` in code (ADR-0057
+ * decision 10), so no stack in CI can serve it a fake Entra. The server halves (start,
+ * code exchange, handoff parking, single use, a foreign redeemer refused) are covered
+ * against a fixture Entra by the Go tests of `internal/microsoftlogin` (story S1c, #2268).
+ * What this journey covers is the client half, which nothing else drives in a browser:
+ * save before start, the popup, the handoff on postMessage and BroadcastChannel matched
+ * on `state`, redeem, the account, the check, and the repeat sign-in.
  *
  * The mocked callback page is the real page's script (`internal/api/v2/microsoftlogin/
  * page.go`): it posts `{type, state, handoff}` to `window.opener`, targeted at the
@@ -37,7 +39,16 @@ const CLIENT_ID = '11111111-2222-4333-8444-555555555555';
 const ACCESS_TOKEN = 'e2e-access-token';
 const ACCOUNT = 'E2E Tester';
 
-/** The callback page's script, as the server serves it. `__STATE__` is the sign-in's own state. */
+/**
+ * Entra's answer: the person signed in, and the browser goes on to the redirect URI. A page
+ * that moves on by itself, not a fulfilled 302, so every engine follows it the same way.
+ */
+function entraPage(state: string): string {
+  const callback = `${BASE_URL}/api/v2/microsoft_login:callback?state=${encodeURIComponent(state)}&code=e2e-code`;
+  return `<!doctype html><html><body><script>location.replace(${JSON.stringify(callback)});</script></body></html>`;
+}
+
+/** The callback page's script, as the server serves it, for the sign-in's own state. */
 function callbackPage(state: string): string {
   return `<!doctype html><html><body><p>You are signed in. You can close this window.</p><script>
 (function(){var m={type:'elitea:microsoft-login',state:${JSON.stringify(state)},handoff:'e2e-handoff'};
@@ -48,7 +59,7 @@ try{window.close()}catch(e){}})();
 }
 
 interface SignInTrace {
-  /** What the real `start` answered, per sign-in. */
+  /** Each `start`: the credential it was asked for and what it answered. */
   starts: { credentialId: string; state: string; authorizationUrl: string; channel: string }[];
   /** The access token each connection check carried, `undefined` when it carried none. */
   checks: (string | undefined)[];
@@ -64,29 +75,31 @@ async function mockEntra(page: Page, mode: { check: 'ok' | 'refused' }): Promise
   const trace: SignInTrace = { starts: [], checks: [], entraVisits: [] };
   const context = page.context();
 
-  page.on('response', (response) => {
-    if (!response.url().includes('microsoft_login:start') || response.request().method() !== 'POST') return;
-    void (async () => {
-      const body = (await response.json()) as { state: string; authorization_url: string; channel_name: string };
-      const sent = response.request().postDataJSON() as { credential_id: string };
-      trace.starts.push({
-        credentialId: sent.credential_id,
-        state: body.state,
-        authorizationUrl: body.authorization_url,
-        channel: body.channel_name,
-      });
-    })();
+  // Main's start, in the shape it answers (the stack cannot compose it; see the header).
+  await context.route('**/api/v2/microsoft_login:start', async (route: Route) => {
+    const sent = route.request().postDataJSON() as { credential_id: string };
+    const state = `e2e-state-${String(trace.starts.length + 1)}-${RUN_ID}`;
+    const authorizationUrl = `${AUTHORITY}/oauth2/v2.0/authorize?client_id=${CLIENT_ID}&response_type=code&state=${state}`;
+    const channel = 'elitea-microsoft-login';
+    trace.starts.push({ credentialId: sent.credential_id, state, authorizationUrl, channel });
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        authorization_url: authorizationUrl,
+        state,
+        expires_at: new Date(Date.now() + 600_000).toISOString(),
+        app: 'custom',
+        handoff_ttl_seconds: 120,
+        channel_name: channel,
+      }),
+    });
   });
-
   // Entra: "the person signed in" and Entra sends the browser to the redirect URI with the state.
   await context.route('https://login.microsoftonline.com/**', async (route: Route) => {
     const url = new URL(route.request().url());
     trace.entraVisits.push(url.toString());
-    const state = url.searchParams.get('state') ?? '';
-    await route.fulfill({
-      status: 302,
-      headers: { Location: `${BASE_URL}/api/v2/microsoft_login:callback?state=${encodeURIComponent(state)}&code=e2e-code` },
-    });
+    await route.fulfill({ status: 200, contentType: 'text/html', body: entraPage(url.searchParams.get('state') ?? '') });
   });
   await context.route('**/api/v2/microsoft_login:callback*', async (route: Route) => {
     const state = new URL(route.request().url()).searchParams.get('state') ?? '';
@@ -219,13 +232,11 @@ test('MS-2: Login saves the credential, signs in through the popup, shows the ac
   await expect(page.getByText(`Microsoft tenant: ${TENANT}`)).toBeVisible();
   await expect(page.getByText(`Runs act as ${ACCOUNT}`)).toBeVisible();
 
-  // The real start answered for the credential the form just saved, on Entra, with the web channel.
+  // Start was asked for the credential the form had just saved, and the popup went to Entra.
   expect(trace.starts).toHaveLength(1);
-  const start = trace.starts[0];
-  expect(start?.credentialId).toBe(credential.uuid);
-  expect(start?.authorizationUrl.startsWith(`${AUTHORITY}/oauth2/v2.0/authorize?`)).toBe(true);
-  expect(start?.channel).toBe('elitea-microsoft-login');
+  expect(trace.starts[0]?.credentialId).toBe(credential.uuid);
   expect(trace.entraVisits).toHaveLength(1);
+  expect(trace.entraVisits[0]?.startsWith(`${AUTHORITY}/oauth2/v2.0/authorize?`)).toBe(true);
 
   // The check that follows the sign-in carries the token and passes.
   await expect(page.getByTestId('credential-test-result')).toHaveText('Connection successful', { timeout: 30_000 });

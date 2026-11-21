@@ -21,6 +21,8 @@ const MESSAGES: Readonly<Record<string, () => string>> = {
   permission_missing: () => t('features.microsoftLogin.failure.permissionMissing', 'The account lacks a permission this credential needs. Tick it in the credential and sign in again.'),
   handoff_invalid: () => t('features.microsoftLogin.failure.handoffInvalid', 'The sign-in is no longer valid. Sign in again.'),
   credential_changed: () => t('features.microsoftLogin.failure.credentialChanged', 'The credential changed while you were signing in. Sign in again.'),
+  not_available: () =>
+    t('features.microsoftLogin.failure.notAvailable', 'Microsoft sign-in is not set up on this deployment. Ask an administrator.'),
 };
 
 export function failureMessage(code: string): string {

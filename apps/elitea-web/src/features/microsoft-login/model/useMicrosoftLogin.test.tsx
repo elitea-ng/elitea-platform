@@ -11,6 +11,7 @@ import type { MockInstance } from 'vitest';
 import { server } from '../../../test/setup';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 
+import { failureMessage } from '../lib/failures';
 import { MESSAGE_TYPE } from '../lib/handoff';
 import { readSession, rememberSession } from '../lib/session';
 import { useMicrosoftLogin } from './useMicrosoftLogin';
@@ -206,6 +207,21 @@ describe('useMicrosoftLogin', () => {
     });
     await waitFor(() => expect(result.current.failure).toBe('custom_apps_disabled'));
     expect(result.current.phase).toBe('failed');
+    expect(popup.close).toHaveBeenCalled();
+  });
+
+  it('says a deployment without the sign-in is not set up, not that the sign-in failed', async () => {
+    server.use(
+      http.post(`${BASE}/microsoft_login\\:start`, () =>
+        HttpResponse.json({ error: 'Microsoft sign-in is not available on this deployment', code: 'not_available' }, { status: 503 }),
+      ),
+    );
+    const { result } = setup();
+    act(() => {
+      result.current.login();
+    });
+    await waitFor(() => expect(result.current.failure).toBe('not_available'));
+    expect(failureMessage('not_available')).toBe('Microsoft sign-in is not set up on this deployment. Ask an administrator.');
     expect(popup.close).toHaveBeenCalled();
   });
 
