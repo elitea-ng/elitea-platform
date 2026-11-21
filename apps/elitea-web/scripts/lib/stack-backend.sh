@@ -33,6 +33,27 @@ else
 fi
 export STACK_S3_ENDPOINT
 
+# stack_browser_source: the source address a browser-origin probe connects
+# from. elitea-main's edge withholds /readyz and /startupz from every peer but
+# a loopback one (internal/api/webedge fromLoopback). On compose the host's
+# curl arrives through the port forward from a non-loopback address, so the
+# check sees what a browser sees. Natively every service listens on loopback
+# only, and a plain curl would be a trusted loopback peer. So the probe binds
+# the host's own non-loopback IPv4 as its source: Linux delivers that to a
+# 127.0.0.x listener, which then sees a non-loopback peer, as on compose, and
+# nothing has to listen off loopback. Compose: empty (no binding). Native with
+# no such address: exits non-zero, because a loopback probe would pass for the
+# wrong reason.
+stack_browser_source() {
+  [ "$E2E_STACK" = native ] || return 0
+  node -e '
+    const os = require("node:os");
+    const a = Object.values(os.networkInterfaces()).flat()
+      .find((i) => i && i.family === "IPv4" && !i.internal);
+    if (!a) { console.error("no non-loopback IPv4 address to probe the browser origin from"); process.exit(1); }
+    console.log(a.address);'
+}
+
 # stack_init: pick the backend. Compose mode needs a compose binary; native
 # mode needs node (the supervisor) and must not look for docker or podman.
 stack_init() {

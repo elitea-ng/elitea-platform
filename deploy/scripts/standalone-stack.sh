@@ -1807,8 +1807,17 @@ SQL
     # to elitea-web (internal/api/webedge) and serves everything else itself.
     # The relayed answers carry nginx's Server header and elitea-main's do
     # not, which is what tells the two sides apart here.
+    # A browser is not a loopback peer of the edge: natively the probes bind
+    # the host's non-loopback address (stack_browser_source), as compose's
+    # port forward does, so /readyz below is refused for the same reason.
+    edge_curl=(curl -sS)
+    if edge_source="$(stack_browser_source)"; then
+      [ -n "$edge_source" ] && edge_curl+=(--interface "$edge_source")
+    else
+      fail "no non-loopback source address for the browser-origin probes"
+    fi
     edge_probe() { # $1 path → "<code> <location> <server>"
-      curl -sS -o /dev/null -w '%{http_code} %{redirect_url} %header{server}' \
+      "${edge_curl[@]}" -o /dev/null -w '%{http_code} %{redirect_url} %header{server}' \
            "http://localhost:${PORT}$1" 2>/dev/null || echo "000"
     }
     edge_root="$(edge_probe '/?utm_source=check')"
@@ -1833,7 +1842,7 @@ SQL
       000*|*nginx*) fail "/app/1/mcp did not reach elitea-main (the MCP carve-out): ${edge_mcp}" ;;
       *) ok "/app/1/mcp reaches elitea-main, not the SPA (${edge_mcp%% *})" ;;
     esac
-    edge_health="$(curl -sS "http://localhost:${PORT}/healthz" 2>/dev/null || true)"
+    edge_health="$("${edge_curl[@]}" "http://localhost:${PORT}/healthz" 2>/dev/null || true)"
     case "$edge_health" in
       *'"status":"ok"'*) ok "/healthz is public on the browser origin" ;;
       *) fail "/healthz did not answer {\"status\":\"ok\"}: $(printf '%s' "$edge_health" | cut -c1-200)" ;;
