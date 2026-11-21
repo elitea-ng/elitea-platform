@@ -26,7 +26,8 @@ step, and refuses every job that is not ours.
 >
 > - the runner group, which gives access to selected repositories only;
 > - approval of fork workflow runs for every external contributor;
-> - the YAML routing (`docs/contributing/ci.md`), which keeps fork and Dependabot jobs on GitHub-hosted runners.
+> - the YAML routing (`docs/contributing/ci.md`), which keeps fork and Dependabot jobs on GitHub-hosted runners
+>   and sends this repository's pull requests, schedules and dispatches to the pool.
 >
 > Keep approving fork runs with care. The hook refuses a fork job that targets `eng-runner`, but it is the
 > only layer that does.
@@ -89,7 +90,7 @@ Settings → Secrets and variables → Actions → **Variables** → New reposit
 This step does not depend on steps 1 and 2, but turn routing on only with the hook deployed (it is, as of
 2026-11-20).
 
-The next run of a same-repo pull request sends the toolchain-only jobs to `eng-runner`. Their "Set up job" log
+The next same-repo pull request, schedule or dispatch sends the routed jobs to `eng-runner`. Their "Set up job" log
 shows `Runner name: eng-runner-…`, and "Set up runner" shows
 `eng-runner: accepted pull_request job of …`.
 
@@ -109,11 +110,10 @@ To move another job, switch its `runs-on` to `ROUTED_RUNS_ON`, add `./.github/ac
 its checkout (`node: "true"` or `rust: "true"` when it needs them), and let `check-runner-routing.mjs` approve
 it. Its toolchain rules (node, go, rust, python) and its docker and sudo rules apply.
 
-**Cache paths.** `.github/actions/eng-runner-env` moves `HOME` and every cache under `_work`. Outside `_work`
-the pod has only 10 GiB of ephemeral storage, and a pod that writes past it is evicted. A side effect is that
-hosted entries stay unreadable: a cache version is the hash of the `path:` strings, which differ, and a `~/...`
-entry would unpack relative to the workspace, under `/home/runner`. Mounting the work volume at `/home/runner`
-would let `HOME` stay where it is. The cache paths would then match, and main's cache writers could move too.
+**Cache paths.** `HOME` stays `/home/runner`; the pod mounts `~/.npm`, `~/.cache` and `~/go` from the work
+volume, and `.github/actions/eng-runner-env` checks the mounts and keeps every other cache under `_work`.
+Outside `_work` the pod has only 10 GiB of ephemeral storage, and a pod that writes past it is evicted. The Go
+and npm cache paths match a hosted runner's, so main's cache writers run on the pool too.
 
 Jobs that need Docker, `services:` or kind stay hosted until there is a daemon option, such as an in-cluster
 BuildKit or a separate dind scale set.

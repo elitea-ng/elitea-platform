@@ -209,7 +209,6 @@ Everything else stays hosted:
   check), the `ci-build-once.yml` image legs, `helm-install-smoke`, the E2E suites, `ci-browser-session.yml`. helm-lint's `lint` job too: a step it runs calls `docker compose config`.
 - **System packages through apt**: the Tauri host on Linux (`ci-desktop.yml` `pane-drivers`, webkit2gtk).
 - **macOS and Windows**, including `ci-desktop-control.yml`, whose matrix has a Windows leg.
-- **Every event but `pull_request`**, so the scheduled runs on main, which write the caches, stay hosted.
 
 The routed jobs pin their parallelism to the pod's 4 CPUs, because the node reports 8. `eng-runner-env` sets
 `GOMAXPROCS=4`, `CARGO_BUILD_JOBS=4` and `RUST_TEST_THREADS=4` on the pool only, and a job's own `env:` still wins
@@ -270,21 +269,20 @@ expression sends the job to `eng-runner` only when **all** of these hold. Otherw
 `ubuntu-latest`.
 
 1. The repository variable `ENG_RUNNER` is `on`. It is unset by default.
-2. The event is `pull_request`.
-3. The pull request's head repository is this repository, so it is not a fork.
-4. Its author is not Dependabot.
-5. Neither `github.actor` nor `github.triggering_actor` is `dependabot[bot]`.
+2. The repository is `elitea-ng/elitea-platform`, so a fork's own push or schedule stays hosted.
+3. Neither `github.actor` nor `github.triggering_actor` is `dependabot[bot]`.
+4. The event is one of:
+   - `pull_request`, when its head repository is this repository (not a fork) and its author is not
+     Dependabot;
+   - `push` (no workflow starts on one today: `check-no-push-triggers.mjs`);
+   - `schedule` and `workflow_dispatch`, the runs on main that write the caches. The Go and npm cache paths are
+     the same strings on both kinds of runner and unpack into the same `HOME`, so an entry the pool saves is the
+     one a hosted reader would have saved. One writer per key still holds.
 
-It is an allowlist of one event. A condition written as "anything but `pull_request`" would let
-`pull_request_target`, `workflow_run` and `issue_comment` through, and none of those may reach the pool.
-
-These events stay hosted:
-
-- **`schedule` and `workflow_dispatch`** (the runs on main). They write the caches. An entry saved on the pool
-  would be saved under the moved `HOME` paths, and the cache version hashes the path strings, so every hosted
-  reader would miss it.
-- **`merge_group`.** Its payload does not say who wrote the queued change, so a Dependabot bump could reach the
-  pool through it.
+These are the events the job-started hook accepts. Each is an `==` arm of an allowlist. A condition written as
+"anything but X" would let `pull_request_target`, `workflow_run` and `issue_comment` through, and none of those
+may reach the pool. `merge_group` stays hosted: its payload does not say who wrote the queued change, so a
+Dependabot bump could reach the pool through it.
 
 `scripts/ci/check-runner-routing.mjs` (run in `no-binaries.yml`) fails the pull request when:
 
@@ -321,7 +319,7 @@ a pull request.
 then re-run the failed or cancelled jobs (or push again).
 
 **Caches.** `actions/cache` works on the pool through the GitHub cache service. The writers are unchanged, one
-per key: the scheduled runs on main write, and they stay hosted. Pull requests only read, on the pool too. An
+per key: the scheduled runs on main write, on the pool when they are routed. Pull requests only read. An
 entry is found only when its key AND its version match, and the
 version is the SHA-256 of the `path:` strings exactly as written, plus the compression method
 (`@actions/cache` `getCacheVersion`; the `version` field of the caches REST API shows it). Three things follow:

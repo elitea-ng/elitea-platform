@@ -81,8 +81,8 @@ function evaluate(source, context) {
 }
 
 const REPO = "elitea-ng/elitea-platform";
-function runsOn({ event, vars = { ENG_RUNNER: "on" }, actor = "alice", triggering = actor, head = REPO, author = "alice" }) {
-  const github = { event_name: event, repository: REPO, actor, triggering_actor: triggering, event: {} };
+function runsOn({ event, vars = { ENG_RUNNER: "on" }, actor = "alice", triggering = actor, head = REPO, author = "alice", repository = REPO }) {
+  const github = { event_name: event, repository, actor, triggering_actor: triggering, event: {} };
   if (event === "pull_request" || event === "pull_request_target") {
     github.event.pull_request = { head: { repo: head === null ? null : { full_name: head } }, user: { login: author } };
   }
@@ -104,12 +104,18 @@ const TABLE = [
   ["a Dependabot pull request", { event: "pull_request", author: "dependabot[bot]", actor: "dependabot[bot]" }, "ubuntu-latest"],
   ["a human push on top of a Dependabot pull request", { event: "pull_request", author: "dependabot[bot]" }, "ubuntu-latest"],
   ["a Dependabot re-run of a human pull request", { event: "pull_request", triggering: "dependabot[bot]" }, "ubuntu-latest"],
-  // The runs on main write the caches; they stay hosted (moved-HOME cache paths). merge_group cannot tell who
-  // wrote the queued change.
+  // Trusted runs of this repository go to the pool too: the cache paths are the same on both kinds of runner.
+  ["schedule", { event: "schedule" }, "eng-runner"],
+  ["workflow_dispatch", { event: "workflow_dispatch" }, "eng-runner"],
+  ["push", { event: "push" }, "eng-runner"],
+  ["a Dependabot push", { event: "push", actor: "dependabot[bot]" }, "ubuntu-latest"],
+  ["a Dependabot re-run of a schedule", { event: "schedule", triggering: "dependabot[bot]" }, "ubuntu-latest"],
+  ["a fork's own schedule", { event: "schedule", repository: "mallory/elitea-platform" }, "ubuntu-latest"],
+  ["a fork's own push", { event: "push", repository: "mallory/elitea-platform" }, "ubuntu-latest"],
+  ["a pull request inside a fork", { event: "pull_request", repository: "mallory/elitea-platform", head: "mallory/elitea-platform" }, "ubuntu-latest"],
+  ["schedule with the variable off", { event: "schedule", vars: { ENG_RUNNER: "off" } }, "ubuntu-latest"],
+  // merge_group cannot tell who wrote the queued change.
   ["merge_group", { event: "merge_group" }, "ubuntu-latest"],
-  ["schedule", { event: "schedule" }, "ubuntu-latest"],
-  ["workflow_dispatch", { event: "workflow_dispatch" }, "ubuntu-latest"],
-  ["push", { event: "push" }, "ubuntu-latest"],
   ["pull_request_target, even from this repository", { event: "pull_request_target" }, "ubuntu-latest"],
   ["workflow_run", { event: "workflow_run" }, "ubuntu-latest"],
   ["issue_comment", { event: "issue_comment" }, "ubuntu-latest"],
@@ -284,7 +290,7 @@ const servicesErrors = (job) => check(model({ schedule: [] }, job, NATIVE_ACTION
 
 test("the pool-empty image is empty exactly where the job is routed, the image everywhere else", () => {
   const image = (ctx) => {
-    const github = { event_name: ctx.event, repository: REPO, actor: "alice", triggering_actor: "alice", event: {} };
+    const github = { event_name: ctx.event, repository: ctx.repository ?? REPO, actor: "alice", triggering_actor: "alice", event: {} };
     if (ctx.event === "pull_request") github.event.pull_request = { head: { repo: { full_name: ctx.head ?? REPO } }, user: { login: "alice" } };
     return evaluate(strip(poolEmptyImage("postgres:18")), { github, vars: ctx.vars ?? { ENG_RUNNER: "on" } });
   };

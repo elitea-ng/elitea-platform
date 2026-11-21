@@ -8,15 +8,17 @@
 // through ROUTED_RUNS_ON below, which sends it there only when ALL of these hold:
 //
 //   * the repository variable ENG_RUNNER is `on` (unset by default: the kill switch);
-//   * the event is pull_request — an allowlist of one, never an "everything but pull_request" condition, which
-//     pull_request_target, workflow_run and issue_comment would pass;
-//   * the pull request's head repository IS this repository (not a fork), and its author is not Dependabot;
-//   * the actor, and the actor of a re-run, is not Dependabot.
+//   * the repository is elitea-ng/elitea-platform (a fork's own push or schedule stays hosted);
+//   * the actor, and the actor of a re-run, is not Dependabot;
+//   * the event is one of an allowlist, each an `==` arm (never an "everything but X" condition, which
+//     pull_request_target, workflow_run and issue_comment would pass): pull_request whose head repository IS
+//     this repository and whose author is not Dependabot, push, schedule or workflow_dispatch. These are
+//     the events the job-started hook accepts (deploy/ci-runners/job-started.sh).
 //
-// schedule and workflow_dispatch stay hosted on purpose: they are the runs on main that WRITE the caches, and the
-// shared keys hold the hosted layout (main-write-cache): the pool only reads them, through the same `~/` paths,
-// which its pod mounts from the work volume. merge_group stays hosted too: its
-// payload does not say who wrote the queued change, so a Dependabot bump could reach the pool through it.
+// The runs on main that WRITE the caches (schedule, workflow_dispatch) run on the pool too: the Go and npm
+// caches use the same `~/` paths on both kinds of runner (main-write-cache), and one writer per key still
+// holds. merge_group stays hosted: its payload does not say who wrote the queued change, so a Dependabot bump
+// could reach the pool through it.
 //
 // Everything else runs on ubuntu-latest. This is routing, not security: a fork's pull request runs the fork's
 // own YAML. The guards for that are the runner group's repository list, fork-run approval, and the job-started
@@ -55,18 +57,23 @@ const ROOT = path.resolve(path.dirname(SELF), "..", "..");
 
 export const RUNNER = "eng-runner";
 /** The ONE routing condition, as a bare expression (without `${{ }}`). */
+export const REPOSITORY = "elitea-ng/elitea-platform";
 export const ROUTING_CONDITION =
   "vars.ENG_RUNNER == 'on'" +
-  " && github.event_name == 'pull_request'" +
+  ` && github.repository == '${REPOSITORY}'` +
+  " && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]'" +
+  " && ((github.event_name == 'pull_request'" +
   " && github.event.pull_request.head.repo.full_name == github.repository" +
-  " && github.event.pull_request.user.login != 'dependabot[bot]'" +
-  " && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]'";
+  " && github.event.pull_request.user.login != 'dependabot[bot]')" +
+  " || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')";
+/** The events ROUTING_CONDITION names, each as an `==` arm: the allowlist, never a negation. */
+export const ROUTED_EVENTS = ["pull_request", "push", "schedule", "workflow_dispatch"];
 /** The only runs-on a job may use to reach the pool. */
 export const ROUTED_RUNS_ON = `\${{ (${ROUTING_CONDITION}) && 'eng-runner' || 'ubuntu-latest' }}`;
 /** A step whose `if:` starts with this runs on GitHub-hosted runners only. */
 export const HOSTED_ONLY = "runner.environment == 'github-hosted'";
 /** Events a workflow with a routed job may start on. */
-export const ALLOWED_EVENTS = new Set(["pull_request", "schedule", "workflow_dispatch", "workflow_call"]);
+export const ALLOWED_EVENTS = new Set([...ROUTED_EVENTS, "workflow_call"]);
 /**
  * The action every routed job runs straight after its checkout: it points the Go, npm and XDG caches at the
  * hosted paths, which the pod mounts from the work volume, and TMPDIR at it. The pod's ephemeral-storage limit is 10 GiB outside /home/runner/_work,
