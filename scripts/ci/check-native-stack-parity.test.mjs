@@ -4,7 +4,7 @@ import { test } from "node:test";
 
 import standaloneFull, { overlaysOf, rewrite } from "../../deploy/native/standalone-full.mjs";
 import { validate } from "../e2e/native-stack.mjs";
-import { check, composeDeps, envKeys, main, mergeCompose, nameMap } from "./check-native-stack-parity.mjs";
+import { check, composeDeps, envKeys, main, mergeCompose, nameMap, sameValue } from "./check-native-stack-parity.mjs";
 
 const compose = () => ({
   services: {
@@ -21,7 +21,7 @@ const table = () => ({
   services: [
     { name: "db", ip: "127.0.0.2", hostnames: ["db"], env: { POSTGRES_USER: "u" }, health: { kind: "pg" } },
     { name: "init", init: true, dependsOn: [{ name: "db", condition: "healthy" }] },
-    { name: "app", env: { DATABASE_URL: "x", FLAG: "1" }, dependsOn: [{ name: "db", condition: "started" }, { name: "init", condition: "completed" }], health: { kind: "cmd" } },
+    { name: "app", env: { DATABASE_URL: "postgres://db", FLAG: "1" }, dependsOn: [{ name: "db", condition: "started" }, { name: "init", condition: "completed" }], health: { kind: "cmd" } },
   ],
 });
 const names = { db: "127.0.0.2" };
@@ -122,7 +122,7 @@ test("a service absent natively needs a reason, drops its edges, and cannot go s
 });
 
 test("the standalone-full table refuses what it has no native counterpart for", () => {
-  const ctx = (env) => ({ repo: process.cwd(), state: "/s", data: (s) => `/s/data/${s}`, bin: "/b", env });
+  const ctx = (env) => ({ repo: process.cwd(), state: "/s", data: (s) => `/s/data/${s}`, short: (t) => `/tmp/ns-test/${t}`, bin: "/b", env });
   assert.equal(standaloneFull(ctx({})).services.length, 34);
   // The supervisor accepts it, and every rendered file renders from the repository's sources (each rewrite
   // throws when its source stopped containing what it rewrites).
@@ -150,4 +150,31 @@ test("the floors fail a reader that found too little", async () => {
   const code = await main({ tables: [{ table: "deploy/native/e2e-standalone.mjs", minServices: 999, minEnvKeys: 1 }], out: () => {}, err: (l) => err.push(l) });
   assert.equal(code, 1);
   assert.match(err.join("\n"), /read 12 service\(s\), expected at least 999/);
+});
+
+test("a compose value the native table does not carry fails, unless REWRITTEN_ENV says why", () => {
+  const c = compose();
+  c.services.app.environment = ["DATABASE_URL=postgres://db", "FLAG=2"];
+  assert.deepEqual(check({ compose: c, table: table(), names }).errors, [
+    'app: FLAG is "2" in compose, "1" natively (carry the compose value, or list it in REWRITTEN_ENV with the reason)',
+  ]);
+  assert.deepEqual(check({ compose: c, table: table(), names, rewritten: { app: { FLAG: "natively off" } } }).errors, []);
+  assert.deepEqual(check({ compose: c, table: table(), names, rewritten: { app: { FLAG: " " } } }).errors, ["app: REWRITTEN_ENV FLAG has no reason"]);
+  // A listed key whose values agree again is stale.
+  assert.deepEqual(check({ compose: compose(), table: table(), names, rewritten: { app: { FLAG: "natively off" } } }).errors, [
+    "app: REWRITTEN_ENV lists FLAG, but the native value is compose's; drop it from the list",
+  ]);
+});
+
+test("the mechanical rewrites need no entry, and nothing wider passes", () => {
+  assert.ok(sameValue("${X:-on}", "on"));
+  assert.ok(sameValue("${X-}", ""));
+  assert.ok(sameValue("/certs/ca.crt", "/home/runner/_work/deploy/certs/ca.crt"));
+  assert.ok(sameValue(":9443", "127.0.0.5:9443"));
+  assert.ok(sameValue("0.0.0.0:9470", "127.0.0.12:9470"));
+  assert.ok(!sameValue("${X:-on}", "off"));
+  assert.ok(!sameValue("/certs/ca.crt", "/certs/other.crt"));
+  assert.ok(!sameValue(":9443", "127.0.0.5:9444"));
+  assert.ok(!sameValue(":9443", "10.0.0.5:9443"));
+  assert.ok(!sameValue("a,b", "a,b,c"));
 });

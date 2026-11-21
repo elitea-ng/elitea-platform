@@ -134,6 +134,27 @@ export const NATIVE_ONLY_ENV = {
   },
 };
 
+/**
+ * Compose values the native table changes, and why (the parity check compares values too; the mechanical
+ * rewrites, such as a mount path or a listen address, need no entry).
+ */
+export const REWRITTEN_ENV = {
+  postgres: { PGDATA: "the cluster directory under the service's data dir; the image's volume path does not exist natively" },
+  "elitea-main": {
+    ELITEA_WEB_UPSTREAM: "the non-root nginx listens on 8080 natively (WEB_PORT); the container binds 80",
+    DEPLOYMENT_URL: "natively the browser reaches the stack at localhost:8080 (elitea-main's own bind); compose publishes it on 8084",
+    OIDC_REDIRECT_URI: "as DEPLOYMENT_URL: localhost:8080 natively, 8084 where compose publishes it",
+  },
+  "elitea-llm-gateway": { GATEWAY_EGRESS_ALLOWLIST: "127.0.0.0/8 added: natively every service is a loopback address (the pod's name map), which the container networks never were" },
+  "elitea-doc-extractor": {
+    ELITEA_EXTRACTOR_PEER_UIDS: "the runner's own uid: natively every process runs as it, where compose gives each container its own uid",
+  },
+  "elitea-deepwiki": { ELITEA_DEEPWIKI_SCRATCH_PATH: "the container's private /tmp; natively a per-service directory under the stack state, so two services never share one" },
+  "elitea-deepwiki-engine": { ELITEA_DEEPWIKI_SCRATCH_PATH: "the container's private /tmp; natively a per-service directory under the stack state, so two services never share one" },
+  "elitea-inventory": { ELITEA_INVENTORY_SCRATCH_PATH: "the container's private /tmp; natively a per-service directory under the stack state, so two services never share one" },
+  "elitea-inventory-engine": { ELITEA_INVENTORY_SCRATCH_PATH: "the container's private /tmp; natively a per-service directory under the stack state, so two services never share one" },
+};
+
 /** Compose variables that do not apply natively, and why. Empty: every one has a native value. */
 export const EXEMPT_ENV = {};
 

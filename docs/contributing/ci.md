@@ -290,7 +290,9 @@ Every service binds the address the pod's hostAliases give its compose name. Pla
 using the browsers the image bakes in. It runs 4 workers, the config's CI default: the pod has 4 CPUs, as a
 hosted runner does, and the weights were measured at 4. On failure a leg uploads every service's log
 (`native-stack-logs-<leg>`). `check-native-stack-parity.mjs` (no-binaries) fails when the table drifts from the
-compose file: an environment key, a `depends_on` edge, a healthcheck or a one-shot.
+compose file: an environment key, a value (beyond the mechanical rewrites: interpolation defaults, mount paths
+moved to host paths, listen addresses bound to loopback; anything else is listed in the table's `REWRITTEN_ENV`
+with its reason), a `depends_on` edge, a healthcheck or a one-shot.
 
 These jobs run only where the routing condition sends them to the pool. Where they run, `ci-web-e2e.yml`'s
 compose legs stand down on a pull request to one smoke leg, chromium 1/2. That leg runs only when the change

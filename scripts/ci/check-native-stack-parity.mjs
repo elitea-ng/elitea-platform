@@ -7,6 +7,11 @@
 // would say so. This fails, naming the service and the key, when:
 //
 //   * a compose service has no table entry, or the table has a service compose does not;
+//   * a key both set carries a different VALUE natively, unless the difference is one of the mechanical
+//     rewrites (sameValue below: compose interpolation resolved to its default, a container path moved to a
+//     host path with the same file name, a `:port` or `0.0.0.0:port` listen address bound to a loopback address on that port)
+//     or the table's REWRITTEN_ENV lists the key with a reason (and, as with the other lists, a listed key
+//     whose values now agree fails, so the list cannot go stale);
 //   * a compose `environment:` key is missing from the entry's env, unless the table's EXEMPT_ENV lists it
 //     with a reason; or the entry's env has a key compose does not, unless NATIVE_ONLY_ENV lists it with a
 //     reason (an exemption whose key left the compose file, or that the table sets anyway, fails too: the
@@ -60,6 +65,26 @@ export function composeDeps(dependsOn) {
   return pairs.map(([n, c]) => `${n}:${c}`).sort();
 }
 
+/** compose `${VAR:-default}` / `${VAR-default}` / `${VAR}` with an empty environment, as compose reads it. */
+export function interpolate(value) {
+  return String(value ?? "").replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)(?::?-([^}]*))?\}/g, (_, _name, def) => def ?? "");
+}
+
+/**
+ * Whether a native value is compose's value up to a mechanical rewrite: compose interpolation resolved with an
+ * empty environment; an absolute container path moved to an absolute host path ending in the same file name; a
+ * `:port` listen address bound to a loopback address on the same port.
+ */
+export function sameValue(composeValue, nativeValue) {
+  const c = interpolate(composeValue);
+  const n = String(nativeValue ?? "");
+  if (c === n) return true;
+  if (/^\/[^\s,;]*$/.test(c) && /^\/[^\s,;]*$/.test(n) && path.posix.basename(c) === path.posix.basename(n)) return true;
+  const port = /^(?::|0\.0\.0\.0:)(\d+)$/.exec(c);
+  if (port && new RegExp(`^127\\.\\d+\\.\\d+\\.\\d+:${port[1]}$`).test(n)) return true;
+  return false;
+}
+
 const asMap = (environment) =>
   Array.isArray(environment) ? Object.fromEntries(environment.map((e) => [String(e).split("=")[0], String(e).split("=").slice(1).join("=")])) : { ...(environment ?? {}) };
 const depsMap = (dependsOn) => (Array.isArray(dependsOn) ? Object.fromEntries(dependsOn.map((n) => [n, { condition: "service_started" }])) : { ...(dependsOn ?? {}) });
@@ -100,7 +125,7 @@ export function nameMap(readme) {
  * @param {{compose: any, table: {services: any[]}, nativeOnly?: object, exempt?: object, names?: object}} input
  * @returns {{errors: string[], services: number, keys: number}}
  */
-export function check({ compose, table, nativeOnly = {}, exempt = {}, names = {}, absent = {} }) {
+export function check({ compose, table, nativeOnly = {}, exempt = {}, names = {}, absent = {}, rewritten = {} }) {
   const errors = [];
   const native = new Map((table?.services ?? []).map((s) => [s.name, s]));
   for (const [name, why] of Object.entries(absent)) {
@@ -119,6 +144,9 @@ export function check({ compose, table, nativeOnly = {}, exempt = {}, names = {}
       }),
   );
   let keys = 0;
+  // REWRITTEN_ENV keys both sides set in this variant; main() fails one that no variant sets (an overlay may be
+  // the only file that sets it).
+  const rewrittenSeen = new Set();
   for (const [name, svc] of Object.entries(composeServices)) {
     const entry = native.get(name);
     if (!entry) {
@@ -130,15 +158,22 @@ export function check({ compose, table, nativeOnly = {}, exempt = {}, names = {}
     const ex = exempt[name] ?? {};
     const only = nativeOnly[name] ?? {};
     keys += want.size;
+    const values = asMap(svc.environment);
+    const rw = rewritten[name] ?? {};
     for (const k of want) {
       if (have.has(k)) {
         if (k in ex) errors.push(`${name}: ${k} is exempted (EXEMPT_ENV) but the native table sets it; drop the exemption`);
+        const same = sameValue(values[k], entry.env[k]);
+        if (!same && !(k in rw)) errors.push(`${name}: ${k} is ${JSON.stringify(interpolate(values[k]))} in compose, ${JSON.stringify(String(entry.env[k]))} natively (carry the compose value, or list it in REWRITTEN_ENV with the reason)`);
+        else if (!same && !String(rw[k] ?? "").trim()) errors.push(`${name}: REWRITTEN_ENV ${k} has no reason`);
+        else if (same && k in rw) errors.push(`${name}: REWRITTEN_ENV lists ${k}, but the native value is compose's; drop it from the list`);
         continue;
       }
       if (!(k in ex)) errors.push(`${name}: compose sets ${k}, the native table does not (add it, or list it in EXEMPT_ENV with the reason it does not apply natively)`);
       else if (!String(ex[k] ?? "").trim()) errors.push(`${name}: EXEMPT_ENV ${k} has no reason`);
     }
     for (const k of Object.keys(ex)) if (!want.has(k)) errors.push(`${name}: EXEMPT_ENV lists ${k}, which the compose file no longer sets; drop it`);
+    for (const k of Object.keys(rw)) if (want.has(k) && have.has(k)) rewrittenSeen.add(`${name}/${k}`);
     for (const k of have) {
       if (want.has(k)) {
         if (k in only) errors.push(`${name}: NATIVE_ONLY_ENV lists ${k}, which the compose file sets too; drop it from the list`);
@@ -165,10 +200,10 @@ export function check({ compose, table, nativeOnly = {}, exempt = {}, names = {}
     }
   }
   for (const name of native.keys()) if (!(name in composeServices)) errors.push(`${name}: in the native table, not in the compose file`);
-  for (const name of [...Object.keys(exempt), ...Object.keys(nativeOnly)]) {
+  for (const name of [...Object.keys(exempt), ...Object.keys(nativeOnly), ...Object.keys(rewritten)]) {
     if (!(name in composeServices)) errors.push(`${name}: an env list names a service the compose file does not have`);
   }
-  return { errors, services: Object.keys(composeServices).length, keys };
+  return { errors, services: Object.keys(composeServices).length, keys, rewrittenSeen };
 }
 
 export async function main({ root = ROOT, tables = TABLES, out = console.log, err = console.error } = {}) {
@@ -185,12 +220,14 @@ export async function main({ root = ROOT, tables = TABLES, out = console.log, er
     const load = (f) => loadYaml(fs.readFileSync(path.join(root, f), "utf8"));
     const always = mod.COMPOSE_OVERLAYS ?? [];
     const variants = [[null, []], ...Object.keys(mod.OVERLAYS ?? {}).map((o) => [o, [o]])];
+    const seen = new Set();
     for (const [overlay, extra] of variants) {
       const files = [composeFile, ...always, ...extra];
       const compose = mergeCompose(...files.map(load));
-      const ctx = { repo: root, state: "/state", data: (s) => `/state/data/${s}`, bin: "/bin", env: overlay ? { STANDALONE_OVERLAY: overlay } : {} };
+      const ctx = { repo: root, state: "/state", data: (s) => `/state/data/${s}`, short: (t) => `/tmp/ns-test/${t}`, bin: "/bin", env: overlay ? { STANDALONE_OVERLAY: overlay } : {} };
       const table = mod.default(ctx);
-      const r = check({ compose, table, nativeOnly: mod.NATIVE_ONLY_ENV, exempt: mod.EXEMPT_ENV, names, absent: mod.NATIVE_ABSENT });
+      const r = check({ compose, table, nativeOnly: mod.NATIVE_ONLY_ENV, exempt: mod.EXEMPT_ENV, names, absent: mod.NATIVE_ABSENT, rewritten: mod.REWRITTEN_ENV });
+      for (const k of r.rewrittenSeen) seen.add(k);
       const what = files.join(" + ");
       for (const e of r.errors) errors.push(`${t.table} vs ${what}: ${e}`);
       if (overlay !== null) {
@@ -200,6 +237,9 @@ export async function main({ root = ROOT, tables = TABLES, out = console.log, er
       if (r.services < t.minServices) errors.push(`${composeFile}: read ${r.services} service(s), expected at least ${t.minServices}`);
       if (r.keys < t.minEnvKeys) errors.push(`${composeFile}: read ${r.keys} environment key(s), expected at least ${t.minEnvKeys}`);
       if (!r.errors.length) out(`${t.table} matches ${what}: ${r.services} service(s), ${r.keys} environment key(s), every depends_on edge, healthcheck and one-shot`);
+    }
+    for (const [svc, keys] of Object.entries(mod.REWRITTEN_ENV ?? {})) {
+      for (const k of Object.keys(keys)) if (!seen.has(`${svc}/${k}`)) errors.push(`${t.table}: REWRITTEN_ENV lists ${svc} ${k}, which no compose variant and the native table both set; drop it`);
     }
   }
   for (const e of errors) err(`::error::${e}`);

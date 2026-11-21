@@ -66,6 +66,19 @@ export const NATIVE_ONLY_ENV = {
 };
 
 /**
+ * Compose values the native table changes, and why (the parity check compares values too; the mechanical
+ * rewrites, such as a mount path or a listen address, need no entry).
+ */
+export const REWRITTEN_ENV = {
+  "elitea-main": {
+    ELITEA_TOOLKIT_CHECK_ALLOWLIST: "127.0.0.0/8 added: natively every service is a loopback address (the pod's name map), which the container networks never were",
+    ELITEA_WEB_UPSTREAM: "the non-root nginx listens on 8080 natively (WEB_PORT); the container binds 80",
+  },
+  "elitea-deepwiki": { ELITEA_DEEPWIKI_SCRATCH_PATH: "the container's private /tmp; natively a per-service directory under the stack state, so two services never share one" },
+  "elitea-inventory": { ELITEA_INVENTORY_SCRATCH_PATH: "the container's private /tmp; natively a per-service directory under the stack state, so two services never share one" },
+};
+
+/**
  * Compose variables that do not apply natively, and why. Empty today: every compose variable of this stack
  * has a native value. An entry whose variable left the compose file fails the parity check, so the list
  * cannot go stale.
