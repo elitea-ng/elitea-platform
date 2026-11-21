@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"expvar"
 	"io"
 	"net"
@@ -46,12 +47,8 @@ func scrape(t *testing.T, url string) (int, string) {
 }
 
 // scrapeServed scrapes like scrape, but a refused connection is retried for a
-// few seconds and, when it persists, fails with the gateway's own log. The port
-// comes from freeLoopbackAddr, which releases it before the gateway binds it, so
-// a parallel test can answer /healthz on that port a moment before the gateway
-// does; one refused scrape then says nothing about the route under test, and
-// the log shows which process held the port.
-func scrapeServed(t *testing.T, url string, log *strings.Builder) (int, string) {
+// few seconds and, when it persists, fails with the gateway's own log.
+func scrapeServed(t *testing.T, url string, log *safeBuffer) (int, string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
@@ -194,12 +191,14 @@ func TestMetricsRoute_IsServedByTheRunningGateway(t *testing.T) {
 		t.Fatalf("build the gateway: %v\n%s", err, out)
 	}
 
-	addr := freeLoopbackAddr(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	gw := exec.CommandContext(ctx, bin)
 	gw.Env = append(append(os.Environ(), grpcListenerTestEnv(t)...),
-		"GATEWAY_HTTP_ADDR="+addr,
+		// The kernel picks the port and the gateway logs the one it bound.
+		// A port reserved here, closed and passed on raced with every other
+		// listener for it (run 44937234764: "bind: address already in use").
+		"GATEWAY_HTTP_ADDR=127.0.0.1:0",
 		// Required once a database pool exists (issue #11). The pool is lazy,
 		// so no database has to answer for the process to start and serve.
 		"GATEWAY_IDENTITY_SECRET=test-identity-secret",
@@ -208,8 +207,9 @@ func TestMetricsRoute_IsServedByTheRunningGateway(t *testing.T) {
 		// No NATS: budget enforcement is off, so the gauge must read 0.
 		"GATEWAY_NATS_URL=",
 	)
-	var out strings.Builder
-	gw.Stdout, gw.Stderr = &out, &out
+	// Written by exec's copy goroutine while the test reads it.
+	out := &safeBuffer{}
+	gw.Stdout, gw.Stderr = out, out
 	if err := gw.Start(); err != nil {
 		t.Fatalf("start the gateway: %v", err)
 	}
@@ -218,9 +218,10 @@ func TestMetricsRoute_IsServedByTheRunningGateway(t *testing.T) {
 		_ = gw.Wait()
 	})
 
-	waitForLiveness(t, "http://"+addr+"/healthz", &out)
+	addr := waitForListenAddr(t, out)
+	waitForLiveness(t, "http://"+addr+"/healthz", out)
 
-	status, body := scrapeServed(t, "http://"+addr+"/metrics", &out)
+	status, body := scrapeServed(t, "http://"+addr+"/metrics", out)
 	if status != http.StatusOK {
 		t.Fatalf("GET /metrics on the running gateway: status = %d, want 200; body=%s\nlog:\n%s",
 			status, body, out.String())
@@ -249,22 +250,37 @@ func TestMetricsRoute_IsServedByTheRunningGateway(t *testing.T) {
 	}
 }
 
-// freeLoopbackAddr returns a loopback address that is free right now.
-func freeLoopbackAddr(t *testing.T) string {
+// listeningMsg is the line the gateway logs once its HTTP listener is BOUND,
+// with the address the kernel gave it (internal/server ListenAndServe).
+const listeningMsg = "gateway health and metrics listening"
+
+// waitForListenAddr reads the bound HTTP address from the gateway's JSON log,
+// or fails the test with the log. A log line that is not JSON is skipped.
+func waitForListenAddr(t *testing.T, log *safeBuffer) string {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("reserve a port: %v", err)
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, line := range strings.Split(log.String(), "\n") {
+			var rec struct {
+				Msg  string `json:"msg"`
+				Addr string `json:"addr"`
+			}
+			if json.Unmarshal([]byte(line), &rec) != nil || rec.Msg != listeningMsg {
+				continue
+			}
+			if _, port, err := net.SplitHostPort(rec.Addr); err != nil || port == "0" {
+				t.Fatalf("the gateway logged %q with addr %q, want the bound host:port\nlog:\n%s", listeningMsg, rec.Addr, log.String())
+			}
+			return rec.Addr
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
-	addr := l.Addr().String()
-	if err := l.Close(); err != nil {
-		t.Fatalf("release the port: %v", err)
-	}
-	return addr
+	t.Fatalf("the gateway did not log %q in 30s\nlog:\n%s", listeningMsg, log.String())
+	return ""
 }
 
 // waitForLiveness polls /healthz until the gateway answers, or fails the test.
-func waitForLiveness(t *testing.T, url string, log *strings.Builder) {
+func waitForLiveness(t *testing.T, url string, log *safeBuffer) {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
