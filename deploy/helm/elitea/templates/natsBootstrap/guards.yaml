@@ -29,8 +29,24 @@ authorization error.
 {{- if ne ($b.accounts | default list | join ",") "main,gateway,runtime,worker" -}}
 {{- fail (printf "natsBootstrap.accounts is [%s], and must be [main, gateway, runtime, worker]. The NATS server has one account per plane and each plane's assets are created by that account's own bootstrap identity (#1076); an account left out is an account whose streams nobody creates." ($b.accounts | default list | join ", ")) -}}
 {{- end -}}
-{{- if and $b.tls.certificate.create (gt (int ($b.connectWait | default 0)) (sub (int $b.activeDeadlineSeconds) 60)) -}}
-{{- fail (printf "natsBootstrap.connectWait (%vs) leaves the Job under a minute of its %vs activeDeadlineSeconds to reconcile the assets." $b.connectWait $b.activeDeadlineSeconds) -}}
+{{- if $b.tls.certificate.create -}}
+{{- $issueWait := int (trimAll "\"" (include "nats-bootstrap.int" (list "tls.certificate.issueWait" $b.tls.certificate.issueWait))) -}}
+{{- if lt $issueWait 1 -}}
+{{- fail (printf "natsBootstrap.tls.certificate.issueWait is %v: the Job's init container needs at least a second to wait for its certificates." $b.tls.certificate.issueWait) -}}
+{{- end -}}
+{{- if gt (add (int ($b.connectWait | default 0)) $issueWait) (sub (int $b.activeDeadlineSeconds) 60) -}}
+{{- fail (printf "natsBootstrap.connectWait (%vs) plus natsBootstrap.tls.certificate.issueWait (%vs) leaves the Job under a minute of its %vs activeDeadlineSeconds to reconcile the assets." $b.connectWait $issueWait $b.activeDeadlineSeconds) -}}
+{{- end -}}
+{{- /* The Job creates the Certificates and deletes their Secrets before each
+       run (#1370, #2911), so a Secret named here would be deleted and
+       overwritten with a one-hour bootstrap certificate. */ -}}
+{{- if $b.tls.secretNames -}}
+{{- fail "natsBootstrap.tls.secretNames names your own certificate Secrets, and natsBootstrap.tls.certificate.create is true: the chart would delete those Secrets and issue into them on every run. Set natsBootstrap.tls.certificate.create=false to use your own Secrets, or remove natsBootstrap.tls.secretNames." -}}
+{{- end -}}
+{{- $mp := trimSuffix "/" ($b.tls.mountPath | default "") -}}
+{{- if or (not $mp) (not (hasPrefix "/" $mp)) -}}
+{{- fail (printf "natsBootstrap.tls.mountPath %q must be an absolute directory other than /: the bootstrap container mounts its certificates there." ($b.tls.mountPath | default "")) -}}
+{{- end -}}
 {{- end -}}
 {{- if and (not $b.tls.certificate.create) (ne (len ($b.tls.secretNames | default dict)) 4) -}}
 {{- fail "natsBootstrap.tls.certificate.create is false, so natsBootstrap.tls.secretNames must name an existing certificate Secret for each of main, gateway, runtime and worker." -}}

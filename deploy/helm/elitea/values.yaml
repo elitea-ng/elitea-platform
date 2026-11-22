@@ -1683,6 +1683,19 @@ natsBootstrap:
       # so nothing renews them; an hour covers the Job's own deadline.
       duration: 1h
       renewBefore: 15m
+      # Seconds the Job's init container waits for all four Certificates to be
+      # Ready before it fails, naming each one's conditions (the kubelet then
+      # restarts it in place, and it keeps its Certificates). connectWait plus
+      # this must leave a minute of activeDeadlineSeconds.
+      issueWait: 120
+      # A ValidatingAdmissionPolicy (templates/natsBootstrap/issuer-policy.yaml)
+      # that lets the Job's issuer ServiceAccount create only the four
+      # bootstrap Certificates, exactly as rendered. Its Role may create any
+      # Certificate in the namespace (RBAC cannot limit create by name), for as
+      # long as an install or sync runs. Cluster-scoped, so opt-in: false never
+      # renders, true requires Kubernetes 1.30+, "auto" renders when the
+      # cluster serves admissionregistration.k8s.io/v1 ValidatingAdmissionPolicy.
+      admissionPolicy: false
 
   # Stream/KV replicas — MUST match the NATS profile:
   #   scale-1 -> 1 (default; HA waived)
@@ -1772,14 +1785,13 @@ natsBootstrap:
 
   # Seconds bootstrap.sh waits for the server to accept each account's identity,
   # and for that account's JetStream API to answer, before failing
-  # (NATS_CONNECT_WAIT). Covers NATS or its JetStream still starting and a
-  # bootstrap certificate cert-manager is still (re-)issuing: an upgrade finds
-  # last install's expired certificate in the Secret, and the kubelet takes up to
-  # about a minute to show the re-issued one in the mounted volume.
+  # (NATS_CONNECT_WAIT). Covers NATS or its JetStream still starting. (The
+  # chart-issued certificates are Ready before bootstrap.sh starts: see
+  # tls.certificate.issueWait.)
   connectWait: 300
 
   # The Job's own deadline, bounding a wedged run (NATS never comes up). Also
-  # bounds how long the hook bootstrap certificates are needed.
+  # bounds how long the bootstrap certificates are needed.
   activeDeadlineSeconds: 600
 
   resources:

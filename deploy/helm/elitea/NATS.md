@@ -121,6 +121,23 @@ What narrows them:
   cluster operators only — not to workloads or to every namespace member.
   An admin role that already holds those verbs everywhere holds every NATS
   identity.
+  The chart's one workload exception is the bootstrap Job's issuer
+  (`elitea-nats-bootstrap-issuer`, `templates/natsBootstrap/issuer.yaml`). For as
+  long as an install or sync runs, its Role may create Certificates. RBAC
+  cannot limit that by name, so the Role covers any Certificate in the
+  namespace. The ServiceAccount, Role and RoleBinding are hooks deleted when
+  the phase ends. Only the Job's init container mounts the token, which
+  expires in 10 minutes. The bootstrap container, which NATS admits, holds no
+  token.
+* **The bootstrap issuer's admission policy**
+  (`natsBootstrap.tls.certificate.admissionPolicy`,
+  `templates/natsBootstrap/issuer-policy.yaml`). It is a
+  ValidatingAdmissionPolicy, Kubernetes 1.30+. For that ServiceAccount alone,
+  it denies every Certificate except the four bootstrap identities exactly as
+  rendered: name, Secret, common name, URI SAN, issuer, duration and `client
+  auth`, with no other SAN and no CA. That leaves the issuer only what the
+  chart renders. It is cluster-scoped, so it is off by default: `true` or
+  `auto` turns it on where the deployer may create cluster-scoped objects.
 * **approver-policy** (`nats.security.approverPolicy`, `templates/nats/approver-policy.yaml`).
   With [cert-manager approver-policy](https://cert-manager.io/docs/policy/approval/approver-policy/)
   installed and cert-manager's built-in approver disabled

@@ -30,15 +30,21 @@ The rest is the lifecycle the hooks had:
     exist before the Job (weight 0), and Helm deletes them when the phase
     ends. Argo CD: Sync hooks in wave -11, before the Job's wave -10 (the NATS
     CA Issuer that signs the Certificates is in wave -10 too, and the script
-    waits for it), deleted once the sync ends.
+    waits for it), deleted once the sync ends. Not when wave -11 ends: the
+    sync engine (gitops-engine sync_context.go, Argo CD v3.3) deletes
+    HookSucceeded hooks only when no task of any later wave remains, and
+    HookFailed ones when the operation fails. Helm likewise deletes
+    hook-succeeded hooks after every hook of the phase has run.
 
 Least privilege: the Role may get and delete only the bootstrap Certificates
 and Secrets, by name. `create` cannot be limited by name in Kubernetes RBAC,
-so it covers any Certificate in the namespace. Only the init container holds
-the token: the pod does not automount one, the init container mounts a
-projected token that expires in 10 minutes, and the bootstrap container,
-which is admitted to NATS, has none. Everything here is deleted when the hook
-phase ends.
+so it covers any Certificate in the namespace; issuer-policy.yaml
+(natsBootstrap.tls.certificate.admissionPolicy, opt-in because it is
+cluster-scoped) narrows it to the four rendered identities. Only the init
+container holds the token: the pod does not automount one, the init
+container mounts a projected token that expires in 10 minutes, and the
+bootstrap container, which is admitted to NATS, has none. Everything here is
+deleted when the hook phase ends.
 */ -}}
 {{- $name := printf "%s-issuer" (include "nats-bootstrap.fullname" .) }}
 {{- $secrets := list }}

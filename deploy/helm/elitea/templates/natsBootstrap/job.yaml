@@ -71,7 +71,7 @@ spec:
             - name: TOKEN_DIR
               value: /var/run/secrets/nats-bootstrap-issuer
             - name: ISSUE_WAIT
-              value: "120"
+              value: {{ include "nats-bootstrap.int" (list "tls.certificate.issueWait" .Values.natsBootstrap.tls.certificate.issueWait) }}
             - name: JOB_NAME
               value: {{ include "nats-bootstrap.fullname" . }}
             - name: JOB_UID

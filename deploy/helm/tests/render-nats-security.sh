@@ -307,6 +307,18 @@ if "$HELM" template "${EL[@]}" --set natsBootstrap.tls.certificate.create=false 
 else
   echo "REFUSED-A-VALID-TOPOLOGY	bootstrap: your own certificate Secrets	$(tail -1 "$TMP/own-certs.err")" >> "$TMP/refusals"
 fi
+# The Job's issuer (#2911): Secrets it would delete and overwrite, a mount it
+# cannot make, and waits that leave no time to reconcile are refused.
+refuse "bootstrap: secretNames with certificate.create" "would delete those Secrets" "${EL[@]}" --set natsBootstrap.tls.secretNames.main=shared
+refuse "bootstrap: mountPath /"                         "absolute directory other than /" "${EL[@]}" --set natsBootstrap.tls.mountPath=/
+refuse "bootstrap: issueWait + connectWait past the deadline" "issueWait" "${EL[@]}" --set natsBootstrap.tls.certificate.issueWait=300
+refuse "bootstrap: issueWait not an integer"            "must be an integer" "${EL[@]}" --set natsBootstrap.tls.certificate.issueWait=2m
+refuse "bootstrap: admissionPolicy true without the API" "does not serve admissionregistration.k8s.io/v1" "${EL[@]}" --set natsBootstrap.tls.certificate.admissionPolicy=true
+refuse "bootstrap: admissionPolicy not a mode"          "set true, false or" "${EL[@]}" --set natsBootstrap.tls.certificate.admissionPolicy=yes
+# The admission policy that pins what the issuer may create: opt-in.
+"$HELM" template "${EL[@]}" --set natsBootstrap.tls.certificate.admissionPolicy=auto \
+  --api-versions admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy > "$TMP/issuer-policy.yaml"
+"$HELM" template "${EL[@]}" --set natsBootstrap.tls.certificate.admissionPolicy=auto > "$TMP/issuer-policy-unserved.yaml"
 
 python3 - "$TMP" "$NS" "$DIR/argocd/applications" <<'PY'
 import json, pathlib, re, sys, yaml
@@ -679,6 +691,38 @@ for d in il:
     check(f"issuer: {d['kind']} exists before the Job (Helm weight, Argo CD wave)",
           a.get("helm.sh/hook") == jobmeta.get("helm.sh/hook") and int(a.get("helm.sh/hook-weight", "0")) < jweight
           and a.get("argocd.argoproj.io/hook") == "Sync" and int(a.get("argocd.argoproj.io/sync-wave", "0")) < int(jobmeta.get("argocd.argoproj.io/sync-wave", "0")), a)
+
+# The admission policy: off by default (cluster-scoped), and when on it
+# admits, for the issuer's ServiceAccount alone, exactly the four rendered
+# identities.
+check("issuer policy: not rendered by default (cluster-scoped, opt-in)",
+      not [d for d in docs("bootstrap.yaml") if d["kind"].startswith("ValidatingAdmissionPolicy")])
+check("issuer policy: auto renders nothing where the API is not served",
+      not [d for d in docs("issuer-policy-unserved.yaml") if d["kind"].startswith("ValidatingAdmissionPolicy")])
+ip = docs("issuer-policy.yaml")
+vap = kinds(ip, "ValidatingAdmissionPolicy")
+vapb = kinds(ip, "ValidatingAdmissionPolicyBinding")
+check("issuer policy: a policy and a Deny binding", len(vap) == 1 and len(vapb) == 1 and vapb[0]["spec"]["policyName"] == vap[0]["metadata"]["name"]
+      and vapb[0]["spec"]["validationActions"] == ["Deny"], [d["kind"] for d in ip if d["kind"].startswith("Validating")])
+vspec = vap[0]["spec"] if vap else {}
+check("issuer policy: fails closed, on Certificate create and update in this namespace",
+      vspec.get("failurePolicy") == "Fail"
+      and vspec.get("matchConstraints", {}).get("namespaceSelector", {}).get("matchLabels") == {"kubernetes.io/metadata.name": ns}
+      and vspec.get("matchConstraints", {}).get("resourceRules") == [{"apiGroups": ["cert-manager.io"], "apiVersions": ["*"], "operations": ["CREATE", "UPDATE"], "resources": ["certificates"]}],
+      vspec.get("matchConstraints"))
+check("issuer policy: applies to the issuer ServiceAccount only",
+      [m["expression"] for m in vspec.get("matchConditions", [])] == [f"request.userInfo.username == 'system:serviceaccount:{ns}:{job.get('serviceAccountName')}'"],
+      vspec.get("matchConditions"))
+allowed = next((v["expression"] for v in vspec.get("variables", []) if v["name"] == "allowed"), "")
+for name, c in bcerts.items():
+    check(f"issuer policy: admits {name} with its own Secret, common name and URI SAN",
+          f"'{c['metadata']['name']}': ['{c['spec']['secretName']}', '{c['spec']['commonName']}', '{c['spec']['uris'][0]}']" in allowed, allowed)
+vexpr = " ".join(v["expression"] for v in vspec.get("validations", []))
+check("issuer policy: pins the issuer, the duration, client auth and no other SAN or CA",
+      "object.spec.issuerRef.name == 'elitea-nats-ca'" in vexpr and "object.spec.duration == '1h'" in vexpr
+      and "object.spec.usages == ['client auth']" in vexpr and "!has(object.spec.dnsNames)" in vexpr and "object.spec.isCA == false" in vexpr, vexpr)
+check("issuer policy: in place before the Job on Argo CD",
+      all(int(d["metadata"]["annotations"]["argocd.argoproj.io/sync-wave"]) < int(jobmeta.get("argocd.argoproj.io/sync-wave", "0")) for d in vap + vapb))
 
 # certificate.create=false: your Secrets, mounted as they are, no issuer.
 oj = [d for d in docs("own-certs.yaml") if d["kind"] == "Job" and d["metadata"]["name"] == "elitea-nats-bootstrap"]

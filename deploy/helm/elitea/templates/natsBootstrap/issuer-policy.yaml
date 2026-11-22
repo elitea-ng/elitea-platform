@@ -1,0 +1,99 @@
+{{- if and .Values.natsBootstrap.enabled .Values.natsBootstrap.tls.certificate.create }}
+{{- /*
+Pins what the bootstrap issuer may create (#2911). Kubernetes RBAC cannot
+limit `create` by name, so the issuer's Role (issuer.yaml) lets its token
+create any Certificate in the namespace, from any Issuer there. This
+ValidatingAdmissionPolicy denies every Certificate that ServiceAccount
+creates unless it is one of the four bootstrap identities exactly as rendered:
+its name, Secret, common name, URI SAN, issuer, duration and `client auth`,
+with no DNS name, IP address or e-mail SAN, and not a CA.
+
+Cluster-scoped, so it is opt-in: a deployer limited to the release's
+namespace (a namespace admin running helm, or an Argo CD project with no
+cluster resources allowed) cannot create it.
+natsBootstrap.tls.certificate.admissionPolicy: false (default) never renders,
+true requires admissionregistration.k8s.io/v1 ValidatingAdmissionPolicy
+(Kubernetes 1.30+), "auto" renders when the cluster serves it.
+
+Helm: an ordinary resource, so it exists before any post-install hook.
+Argo CD: wave -11, with the issuer's RBAC and before the Job.
+*/ -}}
+{{- $mode := toString .Values.natsBootstrap.tls.certificate.admissionPolicy -}}
+{{- $served := .Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy" -}}
+{{- if not (has $mode (list "true" "false" "auto")) -}}
+{{- fail (printf "natsBootstrap.tls.certificate.admissionPolicy is %q: set true, false or \"auto\"." $mode) -}}
+{{- end -}}
+{{- if and (eq $mode "true") (not $served) -}}
+{{- fail "natsBootstrap.tls.certificate.admissionPolicy is true, but the cluster does not serve admissionregistration.k8s.io/v1 ValidatingAdmissionPolicy (Kubernetes 1.30+). Set it to \"auto\" or false." -}}
+{{- end -}}
+{{- if or (eq $mode "true") (and (eq $mode "auto") $served) }}
+{{- $name := printf "%s-issuer-%s" (include "nats-bootstrap.fullname" .) .Release.Namespace }}
+{{- $sa := printf "system:serviceaccount:%s:%s-issuer" .Release.Namespace (include "nats-bootstrap.fullname" .) }}
+{{- $issuer := include "nats-bootstrap.issuerRef" . | fromYaml }}
+{{- $allowed := list }}
+{{- range $acct := .Values.natsBootstrap.accounts }}
+{{- $c := include "nats-bootstrap.certificate" (dict "account" $acct "ctx" $) | fromYaml }}
+{{- $allowed = append $allowed (printf "'%s': ['%s', '%s', '%s']" $c.metadata.name $c.spec.secretName $c.spec.commonName (first $c.spec.uris)) }}
+{{- end }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "nats-bootstrap.issuerLabels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-11"
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ .Release.Namespace }}
+    resourceRules:
+      - apiGroups: ["cert-manager.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["certificates"]
+  matchConditions:
+    # Only the bootstrap issuer's own requests; nobody else is affected.
+    - name: bootstrap-issuer
+      expression: request.userInfo.username == {{ $sa | squote }}
+  variables:
+    # name -> [secretName, commonName, URI SAN]
+    - name: allowed
+      expression: {{ printf "{%s}" (join ", " $allowed) | quote }}
+  validations:
+    - expression: object.metadata.name in variables.allowed
+      message: the NATS bootstrap issuer may create only the four bootstrap Certificates
+    - expression: >-
+        !(object.metadata.name in variables.allowed) ||
+        (object.spec.secretName == variables.allowed[object.metadata.name][0]
+        && has(object.spec.commonName) && object.spec.commonName == variables.allowed[object.metadata.name][1]
+        && has(object.spec.uris) && object.spec.uris == [variables.allowed[object.metadata.name][2]])
+      message: a bootstrap Certificate must carry its own Secret, common name and URI SAN
+    - expression: >-
+        !has(object.spec.dnsNames) && !has(object.spec.ipAddresses) && !has(object.spec.emailAddresses)
+        && (!has(object.spec.isCA) || object.spec.isCA == false)
+        && has(object.spec.usages) && object.spec.usages == ['client auth']
+      message: a bootstrap Certificate is a client certificate with one URI SAN, not a CA
+    - expression: >-
+        object.spec.issuerRef.name == {{ $issuer.name | squote }}
+        && (has(object.spec.issuerRef.kind) ? object.spec.issuerRef.kind : 'Issuer') == {{ $issuer.kind | squote }}
+      message: a bootstrap Certificate is issued by the NATS bootstrap issuer
+    - expression: has(object.spec.duration) && object.spec.duration == {{ .Values.natsBootstrap.tls.certificate.duration | toString | squote }}
+      message: a bootstrap Certificate lives natsBootstrap.tls.certificate.duration
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "nats-bootstrap.issuerLabels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-11"
+spec:
+  policyName: {{ $name }}
+  validationActions: ["Deny"]
+{{- end }}
+{{- end }}

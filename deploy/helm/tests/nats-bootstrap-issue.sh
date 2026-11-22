@@ -174,7 +174,10 @@ for a in ACCOUNTS:
     for k in ("ca.crt", "tls.crt", "tls.key"):
         f = d / "out" / a / k
         check(f"leftover: {a}/{k} is the issued certificate", f.exists() and f.read_text() == f"{CERT(a)}/{k}", f.exists() and f.read_text())
-    check(f"leftover: {a}'s files are private", (d / "out" / a / "tls.key").stat().st_mode & 0o077 == 0)
+    # As a Secret volume gives them: the bootstrap container may run as any uid.
+    check(f"leftover: {a}'s files are readable whatever uid the bootstrap runs as",
+          (d / "out" / a / "tls.key").stat().st_mode & 0o777 == 0o644 and (d / "out" / a).stat().st_mode & 0o777 == 0o755,
+          oct((d / "out" / a / "tls.key").stat().st_mode))
 check("leftover: the log says what it did", "deleted the Certificate" in p.stdout and "is Ready" in p.stdout, p.stdout)
 
 # ── 2. a restarted pod of the same Job ────────────────────────────────────
@@ -183,6 +186,16 @@ p, d = run(api, "restart")
 check("restart: the run succeeds", p.returncode == 0, p.stderr + p.stdout)
 check("restart: its own Certificates and Secrets are kept", not [e for e in api.log if e[0] in ("DELETE", "POST")], api.log)
 check("restart: the identities are copied again", all((d / "out" / a / "tls.key").exists() for a in ACCOUNTS))
+
+# ── 2b. this Job's Certificate, but not the identity rendered now ─────────
+api.certs[CERT("main")]["spec"]["commonName"] = "someone-else"
+api.log.clear()
+p, d = run(api, "drifted")
+check("drifted: the run succeeds", p.returncode == 0, p.stderr + p.stdout)
+check("drifted: a Certificate of this Job with another identity is re-created",
+      [m for m, pth in api.log if pth.endswith("/certificates/" + CERT("main")) and m == "DELETE"]
+      and [m for m, pth in api.log if m == "POST"] and api.certs[CERT("main")]["spec"]["commonName"] == "elitea-nats-bootstrap-main", api.log)
+check("drifted: the matching one is kept", not [e for e in api.log if e[0] in ("DELETE", "POST") and CERT("gateway") in e[1]], api.log)
 
 # ── 3. a Certificate that never becomes Ready ─────────────────────────────
 api = API(never_ready={CERT("gateway")})

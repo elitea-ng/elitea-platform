@@ -81,6 +81,13 @@ gone() {
   done
 }
 
+# identity FILE: the fields of a Certificate that make it this identity. A
+# live object carries defaults and status besides, so the whole spec is not
+# compared.
+identity() {
+  jq -c '.spec | {secretName, commonName, uris, duration, issuer: (.issuerRef.name), kind: (.issuerRef.kind // "Issuer")}' "$1"
+}
+
 # delete URL WHAT deletes and waits until it is gone.
 delete() {
   code=$(call DELETE "$1")
@@ -101,13 +108,15 @@ for acct in $ACCOUNTS; do
   code=$(call GET "$certs/$name")
   case "$code" in
     200)
-      if [ "$(jq -r --arg uid "$uid" '[.metadata.ownerReferences[]? | select(.uid == $uid)] | length' "$body")" != 0 ]; then
+      mine=$(jq -r --arg uid "$uid" '[.metadata.ownerReferences[]? | select(.uid == $uid)] | length' "$body")
+      if [ "$mine" != 0 ] && [ "$(identity "$body")" = "$(identity "$src")" ]; then
         # A restarted pod of this same Job: its Certificate stands.
-        log "Certificate $name is this Job's already"
+        log "the Certificate $name is this Job's already"
         continue
       fi
       # Left by an earlier run (or an earlier chart, whose Certificates were
-      # hooks). Delete it first, so it cannot re-write the Secret.
+      # hooks), or not the identity rendered now. Delete it first, so it
+      # cannot re-write the Secret.
       delete "$certs/$name" "the Certificate $name of an earlier run"
       ;;
     404) ;;
@@ -154,7 +163,12 @@ for acct in $ACCOUNTS; do
     v=$(jq -r --arg k "$k" '.data[$k] // empty' "$body")
     [ -n "$v" ] || fail "the Secret $secret has no $k"
     printf '%s' "$v" | base64 -d > "$OUT_DIR/$acct/$k"
+    # The modes a Secret volume gives (0644): the bootstrap container reads
+    # them as whatever uid it runs as. The volume is this pod's alone, in
+    # memory.
+    chmod 0644 "$OUT_DIR/$acct/$k"
   done
+  chmod 0755 "$OUT_DIR/$acct"
   log "copied the $acct identity"
 done
 rm -f "$body" "$WORK_DIR/create.json"

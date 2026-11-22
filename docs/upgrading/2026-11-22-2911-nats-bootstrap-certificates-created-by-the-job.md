@@ -26,6 +26,22 @@ attempt's Certificate wrote straight back.
   Certificates: Kubernetes RBAC cannot limit `create` by name. The pod
   automounts no token. Only the init container mounts a projected token,
   which expires in 10 minutes.
+- **New values:**
+  - `natsBootstrap.tls.certificate.issueWait` (default `120`) is how long, in
+    seconds, the init container waits for the Certificates to become Ready.
+    `connectWait` plus `issueWait` must leave a minute of
+    `activeDeadlineSeconds`. The default 300 + 120 fits the default 600.
+  - `natsBootstrap.tls.certificate.admissionPolicy` (default `false`;
+    `true` or `"auto"`) renders a ValidatingAdmissionPolicy (Kubernetes
+    1.30+). For the issuer ServiceAccount alone, it admits only the four
+    bootstrap Certificates exactly as rendered. It is cluster-scoped, so turn
+    it on only where the deployer may create cluster-scoped objects.
+- **Now refused at render:**
+  - `natsBootstrap.tls.secretNames` together with `certificate.create: true`.
+    The Job would delete those Secrets and issue into them on every run, and
+    the old cleanup Job already did the first. Set `certificate.create: false`
+    to use your own Secrets.
+  - `natsBootstrap.tls.mountPath: /` with `certificate.create: true`.
 - **Who is affected:** installs with `natsBootstrap.enabled` and
   `natsBootstrap.tls.certificate.create` (both default `true`). With
   `certificate.create: false` the Job mounts your Secrets as before, with no
@@ -38,5 +54,5 @@ attempt's Certificate wrote straight back.
   who may create cert-manager `Certificate`s in the namespace, allow the
   `elitea-nats-bootstrap-issuer` ServiceAccount.
 - **Troubleshooting:** `kubectl -n <namespace> logs job/elitea-nats-bootstrap -c issue`
-  names each object, the HTTP status and the API's reason, or, after two
-  minutes, the conditions of a Certificate that did not become Ready.
+  names each object, the HTTP status and the API's reason, or, after
+  `issueWait`, the conditions of a Certificate that did not become Ready.
