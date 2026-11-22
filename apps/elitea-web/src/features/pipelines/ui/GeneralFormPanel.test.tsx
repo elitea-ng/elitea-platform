@@ -92,4 +92,14 @@ describe('GeneralFormPanel', () => {
     expect(onCollapsed).toHaveBeenNthCalledWith(2, false);
     expect(screen.getByTestId('form-slot')).toBeInTheDocument();
   });
+
+  it('expands full width with visible overflow and non-shrinking flex on narrow viewports (< 1200px)', () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, writable: true, value: 900 });
+    renderWithTheme(<GeneralFormPanel applicationId="42" onCollapsed={vi.fn()} renderConfigurationForm={() => <div data-testid="form-slot" />} />);
+    const panel = screen.getByTestId('pipeline-config-tab');
+    expect(getComputedStyle(panel).minWidth).toBe('100%');
+    expect(getComputedStyle(panel).overflowY).toBe('visible');
+    expect(getComputedStyle(panel).flexShrink).toBe('0');
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  });
 });

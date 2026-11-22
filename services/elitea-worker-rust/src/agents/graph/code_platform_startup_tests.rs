@@ -62,6 +62,7 @@ fn invocation(language: CodeLanguage) -> CodeInvocation<'static> {
         original: None,
         debug: None,
         workspace: None,
+        timeout_ms: None,
     }
 }
 

@@ -111,6 +111,7 @@ fn invocation() -> CodeInvocation<'static> {
         trace: None,
         original: None,
         debug: None,
+        timeout_ms: None,
         workspace: Some(CodeWorkspaceInvocation {
             selection: manifest.selection().clone(),
             declaration: CodeOriginalDeclaration {

@@ -115,6 +115,9 @@ pub(crate) mod resume;
 use elitea_agent_runtime::graph::router;
 #[cfg(test)]
 mod node_admission_parity_tests;
+#[cfg(feature = "node-settings-bench")]
+#[doc(hidden)]
+pub mod node_settings_bench;
 #[cfg(test)]
 mod pipeline_pg_test_support;
 #[cfg(test)]
@@ -132,6 +135,7 @@ mod split_out;
 #[cfg(test)]
 mod split_out_tests;
 use elitea_agent_runtime::graph::state_modifier;
+pub(crate) mod state_modifier_trace;
 #[cfg(test)]
 mod state_reducer_compiler_tests;
 #[cfg(test)]
