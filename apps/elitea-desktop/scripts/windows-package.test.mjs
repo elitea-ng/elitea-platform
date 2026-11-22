@@ -1,11 +1,24 @@
 // node --test scripts/windows-package.test.mjs (npm run test:scripts)
 //
 // The Windows packaging inputs (ADR-0052 W2b.2): the signing overlay for each signer,
-// the MSIX version rule, and an MSIX manifest whose Publisher is the certificate subject.
+// the MSIX version rule, and an MSIX manifest whose Publisher is the certificate subject
+// (signed) or carries the unsigned-publisher OID (unsigned, until a signer exists).
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { appxManifest, msixVersion, TIMESTAMP_URL, windowsOverlay } from './windows-package.mjs';
+import { appxManifest, msixPublisher, msixVersion, TIMESTAMP_URL, UNSIGNED_PUBLISHER_OID, windowsOverlay } from './windows-package.mjs';
+
+test('an unsigned MSIX carries the unsigned-publisher OID; a signed one the certificate subject', () => {
+  assert.equal(UNSIGNED_PUBLISHER_OID, 'OID.2.25.311729368913984317654407730594956997722=1');
+  assert.equal(msixPublisher('EPAM Systems', ''), `CN=EPAM Systems, ${UNSIGNED_PUBLISHER_OID}`);
+  assert.equal(msixPublisher('EPAM Systems', undefined), `CN=EPAM Systems, ${UNSIGNED_PUBLISHER_OID}`);
+  // A distinguished-name special character is quoted.
+  assert.equal(msixPublisher('Acme, Inc.', ' '), `CN="Acme, Inc.", ${UNSIGNED_PUBLISHER_OID}`);
+  assert.equal(msixPublisher('EPAM Systems', ' CN=EPAM Systems, O=EPAM Systems, C=US '), 'CN=EPAM Systems, O=EPAM Systems, C=US');
+  assert.throws(() => msixPublisher('', ''), /no publisher/);
+  const xml = appxManifest({ identifier: 'ai.elitea.desktop', displayName: 'Elitea', publisherDisplayName: 'EPAM Systems', publisher: msixPublisher('EPAM Systems'), version: '7.8.0', executable: 'elitea-desktop.exe' });
+  assert.match(xml, /Publisher="CN=EPAM Systems, OID\.2\.25\.311729368913984317654407730594956997722=1"/);
+});
 
 const THUMB = 'ab'.repeat(20);
 

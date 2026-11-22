@@ -299,7 +299,9 @@ jobs:
     if: ${{ !cancelled() && needs.fast-gate.result == 'success' && github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['desktop-package'] }}
     uses: ./.github/workflows/desktop-package.yml
     with:
-      require_signed: false
+      # A dry run on both platforms (macOS debug, Windows release profile); uploads nothing.
+      require_signed_macos: false
+      require_signed_windows: false
     secrets: inherit
 
   helm-install-smoke:

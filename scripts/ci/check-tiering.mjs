@@ -27,10 +27,14 @@
 //     called workflow that is the CALLER's name, so every called workflow shares
 //     one group and they cancel each other).
 //
-// And the macOS package job (`desktop-package`, checkDesktopPackage) keeps its gate:
+// And the desktop package job (`desktop-package`, checkDesktopPackage) keeps its gate:
 // on a pull request it runs only for DESKTOP_PACKAGE_PATHS (exactly those), as an
-// unsigned debug dry run; publish.yml (the nightly on main and every release) runs
-// it in full, signed and verified (`require_signed: true`).
+// unsigned dry run of both platforms (macOS debug) that uploads nothing; publish.yml
+// (the nightly on main and every release) runs it in full and attaches the packages
+// (`upload_release_assets: true`): macOS signed and verified
+// (`require_signed_macos: true`), Windows with `require_signed_windows` stated (false
+// until a Windows signer exists, owner decision 2026-11-22). The Windows job has no
+// `if:`: it runs wherever the macOS one does.
 //
 // Reads YAML with the `yaml` package (./ci-compat.mjs; `npm ci --prefix scripts/ci`)
 // and runs with the runner's node. It fails when it finds fewer jobs than its
@@ -244,8 +248,9 @@ export function checkGoDuplicates(ci, workflows, tiers = { jobs: {} }) {
 }
 
 /**
- * The macOS package job keeps its gate: exact pull-request paths, a dry run (and a
- * debug build) on a pull request only, and the full signed run from publish.yml.
+ * The desktop package job keeps its gate: exact pull-request paths, a dry run of both
+ * platforms (and a macOS debug build) on a pull request only, and the full run from
+ * publish.yml that attaches the packages, macOS signed.
  * @param {{ci: any, tiers: any, workflows: Record<string, {parsed: any, text: string}>}} model
  * @returns {string[]}
  */
@@ -259,19 +264,30 @@ export function checkDesktopPackage({ ci, tiers, workflows }) {
   if (JSON.stringify(got) !== JSON.stringify(want)) {
     errors.push(`desktop-package: tier-paths.json paths are ${JSON.stringify(paths)}, not exactly ${JSON.stringify(DESKTOP_PACKAGE_PATHS)} (check-tiering.mjs DESKTOP_PACKAGE_PATHS)`);
   }
-  if (job.with?.require_signed !== false) errors.push("desktop-package: ci.yml must pass `require_signed: false` (a pull request is a dry run)");
-  const steps = workflows["desktop-package.yml"]?.parsed?.jobs?.macos?.steps ?? [];
-  const pkg = steps.find((s) => String(s.uses ?? "") === "./.github/actions/desktop-macos-package");
-  if (!pkg) {
-    errors.push("desktop-package.yml: the `macos` job does not use ./.github/actions/desktop-macos-package");
-  } else {
-    for (const input of ["dry-run", "debug"]) {
-      if (String(pkg.with?.[input] ?? "") !== PR_ONLY) errors.push(`desktop-package.yml: the package step's \`${input}\` must be \`${PR_ONLY}\` (pull requests only; main and releases build in full)`);
+  for (const os of ["macos", "windows"]) {
+    if (job.with?.[`require_signed_${os}`] !== false) errors.push(`desktop-package: ci.yml must pass \`require_signed_${os}: false\` (a pull request is a dry run)`);
+  }
+  if (job.with?.upload_release_assets === true) errors.push("desktop-package: ci.yml must not pass `upload_release_assets: true` (a pull request uploads nothing)");
+  const jobs = workflows["desktop-package.yml"]?.parsed?.jobs ?? {};
+  const packaging = { macos: ["./.github/actions/desktop-macos-package", ["dry-run", "debug"]], windows: ["./.github/actions/desktop-windows-package", ["dry-run"]] };
+  for (const [name, [action, inputs]] of Object.entries(packaging)) {
+    const pkg = (jobs[name]?.steps ?? []).find((s) => String(s.uses ?? "") === action);
+    if (!pkg) {
+      errors.push(`desktop-package.yml: the \`${name}\` job does not use ${action}`);
+      continue;
+    }
+    if (jobs[name].if !== undefined) errors.push(`desktop-package.yml: the \`${name}\` job has an \`if:\` (${jobs[name].if}); it runs on every call (owner decision 2026-11-22)`);
+    for (const input of inputs) {
+      if (String(pkg.with?.[input] ?? "") !== PR_ONLY) errors.push(`desktop-package.yml: the \`${name}\` package step's \`${input}\` must be \`${PR_ONLY}\` (pull requests only; main and releases build in full)`);
     }
   }
   const publish = Object.values(workflows["publish.yml"]?.parsed?.jobs ?? {}).filter((j) => j.uses === "./.github/workflows/desktop-package.yml");
-  if (publish.length !== 1) errors.push(`publish.yml: ${publish.length} job(s) call desktop-package.yml, expected 1 (the nightly and release package check)`);
-  for (const j of publish) if (j.with?.require_signed !== true) errors.push("publish.yml: the desktop-package call must pass `require_signed: true` (signed and verified)");
+  if (publish.length !== 1) errors.push(`publish.yml: ${publish.length} job(s) call desktop-package.yml, expected 1 (the nightly and release packages)`);
+  for (const j of publish) {
+    if (j.with?.require_signed_macos !== true) errors.push("publish.yml: the desktop-package call must pass `require_signed_macos: true` (signed, notarised and verified)");
+    if (typeof j.with?.require_signed_windows !== "boolean") errors.push("publish.yml: the desktop-package call must state `require_signed_windows` (false until a Windows signer exists)");
+    if (j.with?.upload_release_assets !== true) errors.push("publish.yml: the desktop-package call must pass `upload_release_assets: true` (the packages are attached to the release)");
+  }
   return errors;
 }
 

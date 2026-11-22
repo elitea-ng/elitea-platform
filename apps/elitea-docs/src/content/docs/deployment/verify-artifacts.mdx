@@ -14,7 +14,7 @@ Use this page to verify an install by hand, and to configure your cluster to ref
 | Images (`elitea-main`, `elitea-web`, …) | `ghcr.io/elitea-ng/<image>:<version>` | cosign, on the multi-arch index | On the multi-arch index | CycloneDX, one per platform image (`linux/amd64`, `linux/arm64`) |
 | Charts (`elitea`, `elitea-sandbox-runtime`) | `oci://ghcr.io/elitea-ng/charts/<chart>` | cosign | Yes | No |
 
-The GitHub release carries no desktop or mobile app. Those reach your devices through your organization's device management, signed by the app's publisher; check them with your MDM and the operating system's own signature checks.
+The GitHub release also carries the desktop app: the macOS `.pkg` and `.app.zip` (Apple silicon, signed with a Developer ID and notarised) and the Windows `.msi` and `.msix` (x64, unsigned until a Windows signer is set up, and named `-unsigned`), with a `SHA256SUMS` file. Check a macOS download with `pkgutil --check-signature <file>.pkg` and `spctl -a -vv --type install <file>.pkg` (or `spctl -a -vv` on the unzipped app), and any download against `SHA256SUMS`. See [Managed devices](/admin/managed-devices#download-from-the-release). The mobile apps are not on the release: they reach devices through your organization's device management.
 
 Build provenance follows the [SLSA v1](https://slsa.dev/spec/v1.0/) format. It records the repository, the commit, the workflow file and the run that built the artifact. The attestations are stored in GitHub's attestation store and pushed next to the image in the registry. Every signature is recorded in the public Sigstore transparency log, Rekor.
 
@@ -76,7 +76,7 @@ gh attestation verify "oci://ghcr.io/elitea-ng/elitea-main@${DIGEST}" \
   | jq '.[0].verificationResult.statement.predicate' > elitea-main-amd64.cdx.json
 ```
 
-The output is a standard CycloneDX document. Feed it to Dependency-Track, Grype, `trivy sbom` or any other tool that reads CycloneDX. The desktop SBOM is also attached to the GitHub release as a plain file. It lists the crates and npm packages the app is built from: the Tauri shell, the document sidecar and the web bundle.
+The output is a standard CycloneDX document. Feed it to Dependency-Track, Grype, `trivy sbom` or any other tool that reads CycloneDX. The desktop packages on the release carry no SBOM yet.
 
 ## Enforce it in the cluster
 

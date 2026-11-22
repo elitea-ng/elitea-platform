@@ -59,16 +59,33 @@ The app's source documents every key, both platforms and the full Intune and Wor
 
 ## Desktop app
 
-The desktop app reaches people only through the organization's device management; it is not published for download. The brand owner builds the packages by hand: GitHub Actions › **Desktop — package for device management** › Run workflow, with **keep_artifacts** ticked. The run's artifacts (kept for 7 days) are the packages to upload to the MDM.
+### Download from the release
 
-| Platform | Package | Signed with |
+Every Elitea release, and every nightly pre-release, carries the desktop packages as release assets. Open the release on GitHub (**Releases** in the `elitea-ng/elitea-platform` repository), then **Assets**. The files are named `<Name>-<version>-<os>-<arch>[-unsigned].<ext>`:
+
+| Platform | Asset | Signed |
 |---|---|---|
-| macOS 12 or later, Apple silicon (M1 or later) only | `<Name>-<version>-arm64.pkg` | Developer ID Installer; the app inside with Developer ID Application. Both notarised and stapled. |
-| Windows 10 2004 or later, x64 | `.msi` and `.msix` | Azure Artifact Signing or the organization's code-signing certificate, timestamped |
+| macOS 12 or later, Apple silicon (M1 or later) only | `Elitea-<version>-macos-arm64.pkg`: the installer package, for the MDM or a double-click | Yes. The package with Developer ID Installer, the app inside with Developer ID Application. Both notarised and stapled. |
+| macOS 12 or later, Apple silicon only | `Elitea-<version>-macos-arm64.app.zip`: the app itself. Unzip it and move it to Applications. | Yes, notarised and stapled |
+| Windows 10 2004 or later, x64 | `Elitea-<version>-windows-x64-unsigned.msi`: for Intune, SCCM or `msiexec /i <file> /qn` | **No**, until a Windows code-signing certificate is set up |
+| Windows 10 2004 or later, x64 | `Elitea-<version>-windows-x64-unsigned.msix` | **No**: see below |
+
+`SHA256SUMS` lists the SHA-256 of each file. Check a download before you deploy it: `shasum -a 256 -c SHA256SUMS` on macOS (files you did not download show as missing), or compare `Get-FileHash <file>` in PowerShell with its line. The release notes' **Desktop downloads** section says the same per release.
 
 Intel Macs are not supported. The macOS package is built for Apple silicon only, and the installer refuses to install it on an Intel Mac. Scope the MDM assignment to Apple silicon computers: in Jamf, a smart group on **Architecture Type** `arm64`; in Intune, a filter on the device's processor architecture.
 
-The desktop host builds and passes its tests on Windows. The Windows package job is not on yet, so only the macOS package is available for now. On Windows, local commands that need a sandbox are refused: see **Local work on Windows** in [Features and configuration](/admin/features-and-configuration).
+### Windows packages are unsigned for now
+
+The Windows packages carry no code signature until a Windows signer (Azure Artifact Signing or a code-signing certificate) is configured for the release. Once it is, the same files are built signed, and their names lose `-unsigned`. Until then:
+
+- **The MSI** installs, but Windows SmartScreen first says that it protected your PC from an unrecognized app. Choose **More info**, then **Run anyway**. Some browsers also flag the download; keep it. Intune and SCCM install an unsigned MSI silently, with no prompt. If a policy refuses unsigned installers on your PCs (AppLocker, WDAC, Smart App Control), wait for the signed build or allow the file by its hash from `SHA256SUMS`.
+- **The MSIX** does not install by double-click. It installs only with Developer Mode on (Settings › System › For developers), from PowerShell: `Add-AppxPackage -Path <file> -AllowUnsigned`, on a Windows version that supports unsigned packages. The Microsoft Store and Intune do not take it. Use the MSI unless you are testing the MSIX.
+
+The desktop host builds and passes its tests on Windows. On Windows, local commands that need a sandbox are refused: see **Local work on Windows** in [Features and configuration](/admin/features-and-configuration).
+
+### A package of your own brand
+
+A brand built from this code ([Build your own brand](/development/build-your-own-brand)) signs its packages with its own certificates and hands them to its device management. To build a package from this repository without a release, run GitHub Actions › **Desktop — package for device management** › Run workflow with **keep_artifacts** ticked: the run keeps the packages as artifacts for 7 days. The macOS package of such a run is always signed.
 
 Windows shows a notification only for an app that its Start Menu shortcut or its package names. The `.msi` shortcut sets `System.AppUserModel.ID` to the brand's desktop identifier, and the app sends its notifications under that identifier. The `.msix` app sends them under its package identity (`<PackageFamilyName>!App`).
 
