@@ -4,19 +4,22 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
-import { AddNodeMenu } from './AddNodeMenu';
 import * as RuntimeContractConstants from '../lib/flow-editor/constants/runtimeContract.constants';
+import { AddNodeMenu } from './AddNodeMenu';
 
 describe('AddNodeMenu', () => {
-  it('opens the menu on trigger click and lists every non-deprecated node type once, alphabetically', async () => {
+  it('opens the palette on trigger click and lists every non-deprecated node type once, alphabetically', async () => {
     const user = userEvent.setup();
     renderWithTheme(<AddNodeMenu onAddNode={vi.fn()} />);
 
-    await user.click(screen.getByRole('button', { name: 'Add node' }));
+    const trigger = screen.getByRole('button', { name: 'Add node' });
+    expect(trigger).toHaveTextContent('Node');
+    await user.click(trigger);
 
     const menu = await screen.findByRole('menu');
+    expect(within(menu).getByText('Select node type')).toBeInTheDocument();
     const items = within(menu).getAllByRole('menuitem');
-    const labels = items.map((item) => item.textContent);
+    const labels = items.map((item) => item.getAttribute('aria-label'));
 
     // Deprecated/invisible node types must never appear.
     expect(labels).not.toContain('Tool');
@@ -29,7 +32,7 @@ describe('AddNodeMenu', () => {
     expect(labels).not.toContain('Ghost');
     expect(labels).not.toContain('Default');
 
-    // A representative non-deprecated type must be present.
+    // Representative non-deprecated types must be present.
     expect(labels).toContain('Agent');
     expect(labels).toContain('LLM');
 
@@ -47,12 +50,12 @@ describe('AddNodeMenu', () => {
     const menu = await screen.findByRole('menu');
     const labels = within(menu)
       .getAllByRole('menuitem')
-      .map(item => item.textContent);
+      .map((item) => item.getAttribute('aria-label'));
 
     expect(labels).toContain('Code');
     expect(labels).not.toContain('Custom');
 
-    expect([...labels].sort()).toEqual(
+    expect([...labels].sort((a, b) => (a ?? '').localeCompare(b ?? ''))).toEqual(
       [
         'Agent',
         'Aggregate',
@@ -68,43 +71,44 @@ describe('AddNodeMenu', () => {
         'SplitOut',
         'State modifier',
         'Toolkit',
-      ].sort(),
+      ].sort((a, b) => a.localeCompare(b)),
     );
   });
 
-  /* elitea_issues: #2661 — the node picker must render exactly 2 columns, not 3. */
-  it('renders the node list in exactly 2 columns', async () => {
+  /* elitea_issues: #2661 — the node picker must render 2 columns by default, not 3. */
+  it('renders the node palette in 2 columns by default', async () => {
     const user = userEvent.setup();
     renderWithTheme(<AddNodeMenu onAddNode={vi.fn()} />);
 
     await user.click(screen.getByRole('button', { name: 'Add node' }));
-    const menu = await screen.findByRole('menu');
-    const columns = within(menu).getAllByTestId('add-node-menu-column');
+    const menu = await screen.findByTestId('pipeline-node-type-selector');
 
-    expect(columns).toHaveLength(2);
+    expect(menu).toHaveAttribute('data-columns', '2');
   });
 
   it.each([
     ['Agent', 'agent'],
+    ['Aggregate', 'aggregate'],
     ['Code', 'code'],
     ['Decision', 'decision'],
     ['Human-in-the-loop', 'hitl'],
     ['LLM', 'llm'],
+    ['Map', 'map'],
     ['MCP', 'mcp'],
+    ['Parallel', 'parallel'],
     ['Printer', 'printer'],
     ['Router', 'router'],
+    ['SplitOut', 'split_out'],
     ['State modifier', 'state_modifier'],
     ['Toolkit', 'toolkit'],
   ])('the %s item dispatches its exact compiler-admitted node type', async (label, expectedType) => {
-    // Guards the wiring, not just the copy: a label can be right while the
-    // `onAddNode` payload is a type the runtime refuses.
     const user = userEvent.setup();
     const onAddNode = vi.fn();
     renderWithTheme(<AddNodeMenu onAddNode={onAddNode} />);
 
     await user.click(screen.getByRole('button', { name: 'Add node' }));
     const menu = await screen.findByRole('menu');
-    await user.click(within(menu).getByText(label));
+    await user.click(within(menu).getByRole('menuitem', { name: label }));
 
     const type = onAddNode.mock.calls[0]?.[0] as string;
     expect(onAddNode).toHaveBeenCalledTimes(1);
@@ -112,14 +116,14 @@ describe('AddNodeMenu', () => {
     expect(RuntimeContractConstants.isCompilerAdmittedNodeType(type)).toBe(true);
   });
 
-  it('calls onAddNode with the clicked type and closes the menu', async () => {
+  it('calls onAddNode with the clicked type and closes the palette', async () => {
     const user = userEvent.setup();
     const onAddNode = vi.fn();
     renderWithTheme(<AddNodeMenu onAddNode={onAddNode} />);
 
     await user.click(screen.getByRole('button', { name: 'Add node' }));
     const menu = await screen.findByRole('menu');
-    await user.click(within(menu).getByText('Agent'));
+    await user.click(within(menu).getByRole('menuitem', { name: 'Agent' }));
 
     expect(onAddNode).toHaveBeenCalledWith('agent');
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();

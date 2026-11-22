@@ -7267,5 +7267,9 @@
   "pipelines.toolPicker.toolsSectionTitle": "Tools",
   "pipelines.toolPicker.unnamedVersion": "Unnamed version",
   "pipelines.toolPicker.usedBy": "Used by",
-  "pipelines.toolPicker.versionLabel": "Version"
+  "pipelines.toolPicker.versionLabel": "Version",
+  "features.pipelines.addNode.buttonLabel": "Node",
+  "features.pipelines.addNode.selectNodeType": "Select node type",
+  "features.pipelines.emptyState.addNode": "Add Node",
+  "features.pipelines.emptyState.message": "Start by adding your first node to the canvas!"
 }
