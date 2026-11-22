@@ -65,7 +65,12 @@ async function offLadder(page: Page): Promise<Offender[]> {
         // never painted, so it has no size to hold to the ladder. It inherits
         // whatever its host has, e.g. a button's 13.33px UA default for the
         // chat rail's "Finished" glyph label.
-        if (box.width <= 1 && box.height <= 1 && style.overflow === 'hidden') continue;
+        // Keyed on the clip too: an `sx` width of 1 is 100%, not 1px.
+        const clipped =
+          style.clip === 'rect(0px, 0px, 0px, 0px)' ||
+          style.clipPath === 'inset(50%)' ||
+          (style.position === 'absolute' && box.width <= 2 && box.height <= 2);
+        if (clipped) continue;
         const size = Math.round(Number.parseFloat(style.fontSize) * 100) / 100;
         if (!ladder.includes(size)) {
           out.push({

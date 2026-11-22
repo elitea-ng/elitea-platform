@@ -58,7 +58,7 @@ function Step({ step }: { step: PlanStep }): React.JSX.Element {
         })}
       >
         {step.step}
-        <Box component="span" sx={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>
+        <Box component="span" sx={{ position: 'absolute', width: '1px', height: '1px', overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>
           {` (${statusLabel(step.status)})`}
         </Box>
       </Typography>
