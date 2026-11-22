@@ -39,6 +39,7 @@ export const ALLOWED = {
   ".github/workflows/ci-image-cleanup.yml": "prunes them",
   ".github/actions/build-stack-images/action.yml": "pushes them (push mode) and documents the cache",
   ".github/actions/pull-stack-images/action.yml": "pulls them",
+  ".github/actions/code-runner-images/action.yml": "publishes and pulls the code sandbox's runner images",
   "deploy/ci/bake-cache.hcl": "the CI layer-cache refs",
   "deploy/ci/bake-cache-rust.hcl": "the CI layer-cache ref for the Rust worker",
   "scripts/ci/stack-images.test.mjs": "fixtures",

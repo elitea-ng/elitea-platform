@@ -105,6 +105,10 @@ on:
         description: ci-build-once.yml's `stack-images` output.
         type: string
         default: ""
+      code-runner-images:
+        description: ci-build-once.yml's `code-runner-images` output (the code sandbox's runner images).
+        type: string
+        default: ""
       reaches-stack:
         description: ci-build-once.yml's lane filter outputs, passed through.
         type: string
@@ -122,6 +126,14 @@ on:
         type: string
         default: ""
       reaches-images:
+        type: string
+        default: ""
+      e2e-legs:
+        description: ci-build-once.yml's `e2e-legs` output (the e2e matrix include list).
+        type: string
+        default: ""
+      chat-stream-rust-legs:
+        description: ci-build-once.yml's `chat-stream-rust-legs` output.
         type: string
         default: ""
   # No push arm: a merge starts no run (no-binaries.yml's workflow-triggers).
@@ -183,7 +195,8 @@ jobs:
     # the one that sends those jobs to the pool, so exactly one of the two
     # runs each leg. What only the images can prove (a Containerfile, a
     # compose file, the web image's nginx: e2e-lane-filter.sh reaches-images)
-    # still starts this job, and RUN_LEG then runs one chromium leg of it.
+    # still starts this job, with one chromium leg in its matrix (the legs
+    # list below).
     # Every other run is unchanged: a fork's or Dependabot's pull request, any
     # run with ENG_RUNNER off, and the nightly run on main (the full compose
     # matrix).
@@ -202,14 +215,6 @@ jobs:
     # below so chromium and webkit are each still validated (§6.6/§7.6).
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    env:
-      # The webkit legs run when the web app, the harness or the shared client
-      # changed, and on every run that is not a pull request (the nightly run on
-      # main). A job-level `if` cannot read the matrix, so a skipped leg is a leg
-      # whose every step is skipped; it reports success having run nothing, and
-      # says so in its "Skipped" step. On a pull request the pool runs
-      # natively (the job `if:` above), only chromium-1of2 runs: the smoke.
-      RUN_LEG: ${{ ((matrix.engine != 'webkit' && matrix.engine != 'platform-flags-webkit') || (inputs.reaches-webkit || needs.build-once.outputs.reaches-webkit) == 'true') && (matrix.leg == 'chromium-1of2' || github.event_name != 'pull_request' || !(vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'))) }}
     strategy:
       # Both engines are validated independently. Issue #60 requires chromium AND
       # webkit; the job used to run whatever `npm run e2e` defaulted to, so half
@@ -233,15 +238,17 @@ jobs:
       #
       # `PWTEST_SHARD_WEIGHTS` (a colon-separated weight per shard, honoured
       # by the same `filterForShard`) moves the cut points. The weights below
-      # are the exact test counts of a duration-balanced split, computed from
-      # that run's Playwright reports against a local `playwright test --list
-      # --shard=…` so the boundaries are the ones the runner will really pick
-      # — not an estimate of them. Balanced totals, in test-time:
-      #
-      #   chromium  523:242       33.2 / 33.2 min  (was 66.5 in one leg)
-      #   webkit    443:164:158   35.5 / 35.4 / 35.4 min  (was 23.2 / 83.1)
-      #
-      # Four workers run those, so divide by four for the Playwright step.
+      # (in scripts/ci/e2e-legs.mjs) are the exact test counts of a
+      # duration-balanced split, computed from a run's Playwright reports
+      # against a local `playwright test --list --shard=…` so the boundaries
+      # are the ones the runner will really pick — not an estimate of them.
+      # The numbers live ONLY in scripts/ci/e2e-legs.mjs (with the run they
+      # were derived from and the balance they gave); ci-web-e2e-native.yml's
+      # literal matrix repeats them, and e2e-journey-shape.test.mjs fails if
+      # the two disagree. They are relative test-time cuts, so they carry
+      # between runners whose per-test cost scales evenly (the native pool's
+      # and a hosted runner's), and between worker counts as long as no
+      # single test is near a shard's wall time.
       #
       # THE WEIGHTS ARE A SPEED KNOB AND NEVER A CORRECTNESS ONE: every test
       # runs in exactly one shard whatever the weights say, and a Playwright
@@ -275,54 +282,28 @@ jobs:
       # build, the same `e2e-stack.sh up`/`seed` stack, the same
       # `E2E_REUSE_STACK=1` container run, the same chown/log-collection/
       # artifact steps, which are all keyed on `matrix.leg`.
+      #
+      # THE LEGS ARE scripts/ci/e2e-legs.mjs's LEGS.e2e, and the list this
+      # run needs comes from ci-build-once.yml's lane filter job. On a pull
+      # request the pool runs, that is only chromium-1of2 (the image smoke);
+      # the webkit legs also need a change that reaches WebKit. A leg left out
+      # starts no runner (it used to start one and skip every step).
       matrix:
-        include:
-          - engine: chromium
-            leg: chromium-1of2
-            shard: "1/2"
-            weights: "523:242"
-          - engine: chromium
-            leg: chromium-2of2
-            shard: "2/2"
-            weights: "523:242"
-          - engine: webkit
-            leg: webkit-1of3
-            shard: "1/3"
-            weights: "443:164:158"
-          - engine: webkit
-            leg: webkit-2of3
-            shard: "2/3"
-            weights: "443:164:158"
-          - engine: webkit
-            leg: webkit-3of3
-            shard: "3/3"
-            weights: "443:164:158"
-          - engine: platform-flags
-            leg: platform-flags
-            shard: ""
-            weights: ""
-          - engine: platform-flags-webkit
-            leg: platform-flags-webkit
-            shard: ""
-            weights: ""
+        include: ${{ fromJSON(inputs.e2e-legs || needs.build-once.outputs.e2e-legs) }}
     # E2E needs Docker + docker-compose for the stack.
     # GitHub-hosted ubuntu-latest has Docker and docker compose (v2 plugin) pre-installed.
     steps:
       - uses: actions/checkout@v7
-        if: ${{ env.RUN_LEG == 'true' }}
       - uses: actions/setup-node@v7
-        if: ${{ env.RUN_LEG == 'true' }}
         with:
           node-version: "26"
           # The npm cache is .github/actions/npm-cache below.
           package-manager-cache: false
       - name: Restore the npm cache (pull requests read, main writes)
-        if: ${{ env.RUN_LEG == 'true' }}
         uses: ./.github/actions/npm-cache
         with:
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
-        if: ${{ env.RUN_LEG == 'true' }}
         # npm's fetch retries (the npm-cache action) cover a refused request,
         # not a registry reset mid-tarball (`read ECONNRESET`), which ends
         # `npm ci` at once. Three bounded attempts on a clean tree.
@@ -334,7 +315,6 @@ jobs:
             sleep $((attempt * 20))
           done
       - name: The suite's shape still matches this workflow
-        if: ${{ env.RUN_LEG == 'true' }}
         # Three seconds, on every leg, and it is here rather than only in
         # ci-web.yml because of what ci-web.yml does NOT fire on: its `paths`
         # list names `.github/workflows/ci-web.yml` and not this file, so a
@@ -349,7 +329,6 @@ jobs:
         # anything, and the remaining ones can.
         run: npx vitest run --config vitest.config.ts --project scripts scripts/e2e-journey-shape.test.mjs
       - name: Pre-pull the pinned Playwright container (background)
-        if: ${{ env.RUN_LEG == 'true' }}
         # Network-bound, so it overlaps the CPU-bound bake below. Started with
         # nohup and left running: the runner does not reap a step's background
         # processes. Fire-and-forget on purpose — nothing here waits on it or
@@ -361,7 +340,6 @@ jobs:
         run: |
           nohup timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.62.1-noble >/tmp/playwright-pull.log 2>&1 &
       - name: Stack images for this lane (pulled by digest; built here on a fork)
-        if: ${{ env.RUN_LEG == 'true' }}
         # Built ONCE per commit by the build-once jobs and pulled by digest
         # (.github/actions/stack-images, which also answers issue #154).
         uses: ./.github/actions/stack-images
@@ -375,7 +353,6 @@ jobs:
           targets: e2e
           mount-cache-suffix: go
       - name: Bring up E2E stack
-        if: ${{ env.RUN_LEG == 'true' }}
         # e2e-stack.sh uses deploy/docker-compose.e2e-standalone.yml which references
         # elitea-main:e2e and elitea-web:e2e (both built and asserted above).
         # The script auto-detects `docker compose` (CI) vs `podman compose` (local).
@@ -387,13 +364,11 @@ jobs:
           test -d e2e || { echo "release tag without an e2e suite (unit V1) — refusing"; exit 1; }
           bash scripts/e2e-stack.sh up
       - name: Seed E2E users
-        if: ${{ env.RUN_LEG == 'true' }}
         env:
           COMPOSE_BIN: docker compose
           E2E_PORT: "8080"
         run: bash scripts/e2e-stack.sh seed
       - name: Playwright against the real stack (pinned container, host network)
-        if: ${{ env.RUN_LEG == 'true' }}
         # No `npx playwright install --with-deps` step. That step cost 57s on the
         # chromium leg and 82s on the webkit leg, and the browser downloads were
         # only ~14s of it — the other ~67s was apt fetching 114 MB of system
@@ -476,7 +451,7 @@ jobs:
         # logs". That step writes playwright-results/stack-logs.txt as the
         # runner user, and with the chown after it the write failed on every
         # run, `|| true` hid it, and "0 line(s) collected" was green (#859).
-        if: ${{ always() && env.RUN_LEG == 'true' }}
+        if: ${{ always() }}
         run: sudo chown -R "$(id -u):$(id -g)" playwright-results playwright-report 2>/dev/null || true
       - name: Collect the stack's own logs
         # ONLY ON FAILURE, AFTER the chown above, and BEFORE the teardown below
@@ -496,14 +471,14 @@ jobs:
         # nothing (unwritable file, zero log lines), and a step that is visibly
         # failed in the run view is how that gets noticed instead of hidden
         # behind a green tick (#859).
-        if: ${{ failure() && env.RUN_LEG == 'true' }}
+        if: ${{ failure() }}
         continue-on-error: true
         working-directory: apps/elitea-web
         env:
           COMPOSE_BIN: docker compose
         run: bash scripts/e2e-stack.sh logs
       - name: Upload Playwright report
-        if: ${{ always() && env.RUN_LEG == 'true' }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
           # Per-engine name: upload-artifact v7 rejects a duplicate name, so a
@@ -530,7 +505,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Upload failed test video recordings
-        if: ${{ failure() && env.RUN_LEG == 'true' }}
+        if: ${{ failure() }}
         uses: actions/upload-artifact@v7
         with:
           name: playwright-failed-videos-${{ matrix.leg }}
@@ -538,16 +513,10 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
       - name: Tear down E2E stack
-        if: ${{ always() && env.RUN_LEG == 'true' }}
+        if: ${{ always() }}
         env:
           COMPOSE_BIN: docker compose
         run: bash scripts/e2e-stack.sh down
-      - name: Skipped (no web, harness or client change reaches WebKit)
-        if: ${{ env.RUN_LEG != 'true' }}
-        # The job's default working directory (apps/elitea-web) does not exist here,
-        # because checkout was skipped; bash could not start in it.
-        working-directory: ${{ github.workspace }}
-        run: echo "::notice::${{ matrix.leg }} skipped - nothing this pull request changes can reach WebKit; the nightly run on main runs it"
 
   chat-stream-rust:
     name: Chat journey on the native Rust runtime (${{ matrix.leg }})
@@ -559,7 +528,7 @@ jobs:
     # ON THE POOL this lane runs natively (ci-web-e2e-native.yml, `E2E native
     # (chat-stream-rust-<leg>)`): on a pull request that routes there it stands down here,
     # unless the change reaches what only images prove (e2e-lane-filter.sh
-    # reaches-images), when it runs as the image smoke, leg 1of3 only (RUN_LEG). Forks,
+    # reaches-images), when it runs as the image smoke, leg 1of3 only (its matrix list). Forks,
     # Dependabot, ENG_RUNNER off, pushes and the nightly run keep it in full.
     if: ${{ !cancelled() && ((inputs.web-images || needs.build-once.outputs.web-images) == 'success' || (inputs.web-images || needs.build-once.outputs.web-images) == 'skipped') && ((inputs.stack-images || needs.build-once.outputs.stack-images) == 'success' || (inputs.stack-images || needs.build-once.outputs.stack-images) == 'skipped') && (inputs.reaches-stack || needs.build-once.outputs.reaches-stack) == 'true' && (github.event_name != 'pull_request' || (inputs.reaches-images || needs.build-once.outputs.reaches-images) == 'true' || !(vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'))) }}
     permissions:
@@ -603,34 +572,25 @@ jobs:
       # split would be balanced for at most one of them. Measured per leg from
       # the same run (35606872334): 4.33 / 4.54 / 4.23 min of turn time.
       fail-fast: false
+      # The legs are scripts/ci/e2e-legs.mjs's LEGS["chat-stream-rust"] (each
+      # carries its weights); on a pull request the pool runs, only 1of3, the
+      # image smoke, is in the list.
       matrix:
-        include:
-          - leg: 1of3
-            shard: "1/3"
-          - leg: 2of3
-            shard: "2/3"
-          - leg: 3of3
-            shard: "3/3"
+        include: ${{ fromJSON(inputs.chat-stream-rust-legs || needs.build-once.outputs.chat-stream-rust-legs) }}
     env:
-      PWTEST_SHARD_WEIGHTS: "61:16:33"
-      # The image smoke on a pull request that routes to the pool is leg 1of3;
-      # the native legs run all three.
-      RUN_LEG: ${{ matrix.leg == '1of3' || github.event_name != 'pull_request' || !(vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) }}
+      PWTEST_SHARD_WEIGHTS: ${{ matrix.weights }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
-        if: ${{ env.RUN_LEG == 'true' }}
         with:
           node-version: "26"
           # The npm cache is .github/actions/npm-cache below.
           package-manager-cache: false
       - name: Restore the npm cache (pull requests read, main writes)
-        if: ${{ env.RUN_LEG == 'true' }}
         uses: ./.github/actions/npm-cache
         with:
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
-        if: ${{ env.RUN_LEG == 'true' }}
         # npm's fetch retries (the npm-cache action) cover a refused request,
         # not a registry reset mid-tarball (`read ECONNRESET`), which ends
         # `npm ci` at once. Three bounded attempts on a clean tree.
@@ -642,7 +602,6 @@ jobs:
             sleep $((attempt * 20))
           done
       - name: Pre-pull the pinned Playwright container (background)
-        if: ${{ env.RUN_LEG == 'true' }}
         # Started with nohup and left running while the bake below uses the
         # CPU: the runner does not reap a step's background processes. This is
         # fire-and-forget — nothing here waits on it. The script this job
@@ -654,7 +613,6 @@ jobs:
         run: |
           nohup bash -c 'timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.62.1-noble' >/tmp/prepull.log 2>&1 &
       - name: Stack images for this lane (pulled by digest; built here on a fork)
-        if: ${{ env.RUN_LEG == 'true' }}
         # Built ONCE per commit by the build-once jobs and pulled by digest
         # (.github/actions/stack-images, which also answers issue #154).
         uses: ./.github/actions/stack-images
@@ -669,7 +627,6 @@ jobs:
           targets: standalone-rust
           mount-cache-suffix: rust
       - name: Run the journeys against a fresh Rust-runtime stack
-        if: ${{ env.RUN_LEG == 'true' }}
         # The Rust worker is compiled from source by the stack's own `build`
         # step, which is why this job's budget is larger than `chat-stream`'s.
         #
@@ -695,10 +652,10 @@ jobs:
           PLAYWRIGHT_SHARD: ${{ matrix.shard }}
         run: bash apps/elitea-web/scripts/chat-stream-e2e.sh
       - name: Give the report back to the runner user
-        if: ${{ always() && env.RUN_LEG == 'true' }}
+        if: ${{ always() }}
         run: sudo chown -R "$(id -u):$(id -g)" playwright-results playwright-report 2>/dev/null || true
       - name: Upload Playwright report
-        if: ${{ always() && env.RUN_LEG == 'true' }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
           name: playwright-report-chat-stream-rust-${{ matrix.leg }}
@@ -718,9 +675,6 @@ jobs:
   # build inputs: scripts/ci/stack-image-hash.mjs), and a push whose inputs
   # already have that tag pulls it instead of building. A fork's pull request
   # (a read-only token) builds as before and publishes nothing.
-      - name: Skipped (the native legs run this leg on the pool)
-        if: ${{ env.RUN_LEG != 'true' }}
-        run: echo "::notice::chat-stream-rust ${{ matrix.leg }} stands down on this pull request - E2E native (chat-stream-rust-${{ matrix.leg }}) runs it on the pool; leg 1of3 is the image smoke"
 
   sandbox-supervisor-image:
     name: Build the code sandbox supervisor image
@@ -831,7 +785,7 @@ jobs:
   code-sandbox:
     name: Agent run_code on the real code sandbox
     needs: [build-once, sandbox-supervisor-image]
-    if: ${{ !cancelled() && ((inputs.web-images || needs.build-once.outputs.web-images) == 'success' || (inputs.web-images || needs.build-once.outputs.web-images) == 'skipped') && ((inputs.stack-images || needs.build-once.outputs.stack-images) == 'success' || (inputs.stack-images || needs.build-once.outputs.stack-images) == 'skipped') && needs.sandbox-supervisor-image.result == 'success' && (inputs.reaches-sandbox || needs.build-once.outputs.reaches-sandbox) == 'true' }}
+    if: ${{ !cancelled() && ((inputs.web-images || needs.build-once.outputs.web-images) == 'success' || (inputs.web-images || needs.build-once.outputs.web-images) == 'skipped') && ((inputs.stack-images || needs.build-once.outputs.stack-images) == 'success' || (inputs.stack-images || needs.build-once.outputs.stack-images) == 'skipped') && ((inputs.code-runner-images || needs.build-once.outputs.code-runner-images) == 'success' || (inputs.code-runner-images || needs.build-once.outputs.code-runner-images) == 'skipped') && needs.sandbox-supervisor-image.result == 'success' && (inputs.reaches-sandbox || needs.build-once.outputs.reaches-sandbox) == 'true' }}
     permissions:
       contents: read
       # Pulls the ci-* images by digest; only the build jobs write packages.
@@ -879,69 +833,22 @@ jobs:
       - name: Load the supervisor image
         working-directory: ${{ github.workspace }}
         run: gunzip -c "${RUNNER_TEMP}/sandbox-supervisor/elitea-sandbox-supervisor.tar.gz" | docker load
-      - uses: docker/setup-buildx-action@v4
+      # The runner images, published ONCE per content address by ci-build-once.yml's
+      # `code-runner-images` and pulled here at the digest its artifact names.
+      # Built here (with the GHA layer cache, retried without it when the
+      # cached attempt fails) only when nothing was published for this run: a
+      # fork's or Dependabot's pull request (.github/actions/code-runner-images).
+      - uses: actions/download-artifact@v8
+        if: ${{ (inputs.code-runner-images || needs.build-once.outputs.code-runner-images) == 'success' }}
         with:
-          driver-opts: image=ghcr.io/elitea-ng/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
-      # The runner images, from the same Actions-cache scopes ci-rust.yml writes
-      # (each target reads all three, as there).
-      # A cache read that fails (the Actions cache service is down, or a scope
-      # is corrupt) must not fail the lane: each build below is retried from
-      # scratch, without `cache-from`, only when the cached attempt failed. A
-      # genuine Containerfile error fails the retry too, so nothing is hidden.
-      - name: Build the code runner Deno/Pyodide image
-        id: build-deno
-        continue-on-error: true
-        uses: docker/build-push-action@v7
+          name: code-runner-image-digests
+          path: ${{ runner.temp }}/code-runner-image-digests
+      - name: Code runner images (pulled by digest; built here on a fork)
+        uses: ./.github/actions/code-runner-images
         with:
-          context: services/elitea-code-runner
-          file: services/elitea-code-runner/Containerfile
-          target: default
-          push: false
-          load: true
-          tags: elitea-code-runner:ci-default
-          platforms: linux/amd64
-          cache-from: |
-            type=gha,scope=elitea-code-runner-verification-linux-amd64
-            type=gha,scope=elitea-code-runner-default-linux-amd64
-            type=gha,scope=elitea-code-runner-rust-runtime-linux-amd64
-      - name: Build the code runner Deno/Pyodide image (no cache, fallback)
-        if: ${{ steps.build-deno.outcome == 'failure' }}
-        uses: docker/build-push-action@v7
-        with:
-          context: services/elitea-code-runner
-          file: services/elitea-code-runner/Containerfile
-          target: default
-          push: false
-          load: true
-          tags: elitea-code-runner:ci-default
-          platforms: linux/amd64
-      - name: Build the code runner Rust image
-        id: build-rust
-        continue-on-error: true
-        uses: docker/build-push-action@v7
-        with:
-          context: services/elitea-code-runner
-          file: services/elitea-code-runner/Containerfile
-          target: rust-runtime
-          push: false
-          load: true
-          tags: elitea-code-runner:ci-rust
-          platforms: linux/amd64
-          cache-from: |
-            type=gha,scope=elitea-code-runner-verification-linux-amd64
-            type=gha,scope=elitea-code-runner-default-linux-amd64
-            type=gha,scope=elitea-code-runner-rust-runtime-linux-amd64
-      - name: Build the code runner Rust image (no cache, fallback)
-        if: ${{ steps.build-rust.outcome == 'failure' }}
-        uses: docker/build-push-action@v7
-        with:
-          context: services/elitea-code-runner
-          file: services/elitea-code-runner/Containerfile
-          target: rust-runtime
-          push: false
-          load: true
-          tags: elitea-code-runner:ci-rust
-          platforms: linux/amd64
+          targets: default rust-runtime
+          registry: ${{ (inputs.code-runner-images || needs.build-once.outputs.code-runner-images) == 'success' }}
+          digests-file: ${{ runner.temp }}/code-runner-image-digests/code-runner.json
       - name: Run the journeys against a fresh stack with the code sandbox
         working-directory: ${{ github.workspace }}
         env:

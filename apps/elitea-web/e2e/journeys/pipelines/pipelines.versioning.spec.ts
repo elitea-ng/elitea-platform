@@ -28,6 +28,7 @@ import { BASE_URL } from '../../../playwright.config';
 import { API_BASE, AUTOTEST_PREFIX, DEFAULT_PROJECT_ID, clickCreateButton, deleteAgent } from '../../fixtures/api';
 import {
   COMPILER_LEGAL_NODE_ID,
+  addNodeThroughMenu,
   parseStoredGraph,
   readDefaultPipelineVersionId,
   readStoredPipelineVersion,
@@ -43,32 +44,6 @@ test.afterEach(async ({ page }) => {
     if (id !== undefined) await deleteAgent(page.request, id);
   }
 });
-
-/**
- * Add one node of `label` through the editor's own menu — no store pokes.
- *
- * Settles on the EDITOR, not on the click. CI run 43990543445 (chromium-2of2)
- * left the menu open with "LLM" focused and no new node: the item click was
- * lost while the editor was re-rendering from the Save that had just
- * persisted, and Playwright reports a lost click as a success. The next
- * action, "Save As Version", then waited 30 s behind the open menu's backdrop.
- * So the click is retried until the canvas holds one more node; a round starts
- * by checking the count, so a click that landed late is never repeated.
- */
-async function addNodeThroughMenu(page: Page, label: string): Promise<void> {
-  const nodes = page.locator('.react-flow__node');
-  const before = await nodes.count();
-  const menu = page.locator('#pipeline-add-node-menu');
-  await expect(async () => {
-    // Idempotent: a previous round whose click landed late has already added
-    // the node, and clicking again would add a second.
-    if ((await nodes.count()) > before) return;
-    if (!(await menu.isVisible())) await page.getByRole('button', { name: 'Add node' }).click({ timeout: 5_000 });
-    await menu.getByRole('menuitem', { name: label, exact: true }).click({ timeout: 5_000 });
-    await expect(nodes).toHaveCount(before + 1, { timeout: 3_000 });
-  }).toPass({ timeout: 30_000 });
-  await expect(menu).toBeHidden({ timeout: 10_000 });
-}
 
 /**
  * Drive the real create form to completion and return the backend-assigned id.

@@ -121,10 +121,14 @@ jobs:
       # The workspace run above uses --all-features, which turns on
       # `test-support`, and that switches off the agent runtime's
       # deny(clippy::expect_used, panic, unwrap_used, ...) guard. Lint the two
-      # production feature sets with the guard on: the worker's
-      # (`toolkit-sql`, `toolkit-office`) and the desktop host's (no features).
+      # production feature sets with the guard on: the worker's (exactly the
+      # list services/elitea-worker-rust/Cargo.toml's [dependencies] entry
+      # names: `toolkit-sql`, `toolkit-office`, `toolkit-data-analysis`,
+      # `toolkit-delta-lake`) and the desktop host's (no features). The
+      # `data_analysis` module compiles only under `toolkit-data-analysis`, so
+      # without it here that shipped code was linted with the guard off only.
       - name: Agent runtime — production feature sets (panic guard on)
         if: matrix.dir == 'libs/rust'
         run: |
-          cargo clippy --locked -p elitea-agent-runtime --all-targets --features toolkit-sql,toolkit-office,toolkit-delta-lake -- -D warnings
+          cargo clippy --locked -p elitea-agent-runtime --all-targets --features toolkit-sql,toolkit-office,toolkit-data-analysis,toolkit-delta-lake -- -D warnings
           cargo clippy --locked -p elitea-agent-runtime --all-targets -- -D warnings

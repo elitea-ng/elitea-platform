@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"sync"
@@ -271,9 +272,20 @@ func (s *Server) RedialNATS(ctx context.Context) (NATSClient, error) {
 // /llm surface and everything a caller can act on is served by the
 // GatewayService gRPC listener, which always requires mutual TLS. The
 // GATEWAY_TLS_* material belongs to that listener.
+//
+// It binds first and logs the address it BOUND, not the one configured: with
+// GATEWAY_HTTP_ADDR=127.0.0.1:0 the kernel picks the port, and the log line is
+// the only way to learn it. The tests that start the binary read it from there
+// instead of reserving a port, closing it and passing it on, which raced with
+// every other listener (the gateway's own gRPC listener on :0 among them) for
+// the port in between.
 func (s *Server) ListenAndServe() error {
-	s.logger.Info("gateway health and metrics listening", "addr", s.cfg.HTTPAddr)
-	if err := s.http.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	ln, err := net.Listen("tcp", s.cfg.HTTPAddr)
+	if err != nil {
+		return err
+	}
+	s.logger.Info("gateway health and metrics listening", "addr", ln.Addr().String())
+	if err := s.http.Serve(ln); err != nil && err != http.ErrServerClosed {
 		return err
 	}
 	return nil

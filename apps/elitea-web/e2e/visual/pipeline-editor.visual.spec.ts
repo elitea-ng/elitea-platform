@@ -133,6 +133,7 @@ import { test } from './lib/test';
 
 import { BASE_URL } from '../../playwright.config';
 import { SNAPSHOT_TOLERANCE, settle, shellSettled, volatileRegions } from './lib/settle';
+import { addNodeThroughMenu } from '../fixtures/pipelines';
 import { keepThemeOffTheServer } from '../fixtures/serverTheme';
 
 
@@ -286,24 +287,6 @@ async function openEditor(page: Page, instructions: string): Promise<void> {
   // proves the canvas mounted, not that this document's nodes are on it, and
   // the two documents used here terminate differently. Each test below names
   // a node id its own document must produce.
-}
-
-/**
- * Add one node of `label` through the editor's OWN menu — no store pokes.
- *
- * The same helper shape the pipelines journeys use, and the reason it is the
- * menu rather than a seeded document is that the minted id is half of what
- * these shots are for: `Agent_1`, with an underscore, is the fix 58600cb0
- * landed, and it is legible on the node card.
- */
-async function addNodeThroughMenu(page: Page, label: string): Promise<void> {
-  await page.getByTestId('pipeline-add-node-button').click();
-  await page.getByRole('menuitem', { name: label, exact: true }).click();
-  // The menu is a MUI `Menu` in a portal; it must be gone before the shutter,
-  // or the shot photographs a closing popover. Its own transition is frozen by
-  // `settle()`, but only after it has been removed from the DOM.
-  await expect(page.getByRole('menu')).toHaveCount(0, { timeout: 10_000 });
-  await pinScrollToTop(page);
 }
 
 /**
@@ -476,8 +459,10 @@ test('@visual pipeline-editor-authored-graph', async ({ page }) => {
   await expect(page.getByTestId('pipeline-empty-state')).toBeVisible({ timeout: 20_000 });
   await expect(page.locator('.react-flow__node[data-id="END"]')).toHaveCount(0);
 
+  // The shared helper: one node per item, the menu gone before the shutter (a closing popover would be in the shot).
   for (const label of ['LLM', 'Router', 'Printer']) {
     await addNodeThroughMenu(page, label);
+    await pinScrollToTop(page);
   }
   await expect(page.getByTestId('pipeline-empty-state')).toHaveCount(0);
   await expect(page.locator('.react-flow__node[data-id="END"]')).toBeVisible({ timeout: 15_000 });
@@ -536,6 +521,7 @@ test('@visual pipeline-editor-node-admission', async ({ page }) => {
   await expect(page.getByTestId('pipeline-empty-state')).toBeVisible({ timeout: 20_000 });
   await expect(page.locator('.react-flow__node[data-id="END"]')).toHaveCount(0);
   await addNodeThroughMenu(page, 'Agent');
+  await pinScrollToTop(page);
   await expect(page.getByTestId('pipeline-empty-state')).toHaveCount(0);
   await expect(page.locator('.react-flow__node[data-id="END"]')).toBeVisible({ timeout: 15_000 });
 

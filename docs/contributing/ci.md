@@ -7,7 +7,7 @@ verdict job, `ci-gate`.
 
 | Tier | Starts | What runs | Signal |
 |---|---|---|---|
-| Fast | Every push to the pull request | Static gates, Go vet, lint and unit shards, web unit, typecheck and lint, Rust format and Clippy, the small contract suites, the dependency scanners | About 5 minutes to the first result |
+| Fast | Every push to the pull request | Static gates, Go lint (golangci-lint, govet included) and unit shards, web unit, typecheck and lint, Rust format and Clippy, the small contract suites, the dependency scanners | About 5 minutes to the first result |
 | Heavy | Only when the pull request is **not a draft** and the fast tier passed | Web E2E (every lane, visual), web coverage, the Rust test chains, desktop, Helm and kind smoke, WebKit | About 35 minutes |
 
 The path filter decides which jobs of a tier run. It lives in `scripts/ci/tier-paths.json`. A docs-only change
@@ -74,7 +74,17 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
 - **Folded jobs.** `No Binaries` (9 jobs), `Dependency Scanning` (4) and `Helm lint` (4) are 2, 1 and 3 jobs of
   named steps. Every gate step runs even when an earlier one failed, so one run shows every red gate.
 - **Rust.** `ci-rust-lint.yml` runs `cargo fmt` and one `cargo clippy` per Cargo workspace in the fast tier. The
-  test jobs no longer run them.
+  test jobs no longer run them. Those runs use `--all-features`, which turns on the agent runtime's
+  `test-support` and with it switches off its panic guard, so the `libs/rust` leg also lints the agent runtime
+  with the worker's exact feature list (`toolkit-sql`, `toolkit-office`, `toolkit-data-analysis`,
+  `toolkit-delta-lake`) and with none (the desktop host).
+- **Go vet once.** `ci-go.yml` runs no standalone `go vet`: the `lint` job's golangci-lint runs `govet` over
+  the same `go.work` modules, with the default build tags and the test files, and with golangci-lint's default
+  analyzer set, which is `go tool vet help`'s Go 1.26 list less `loopclosure` (a no-op from go1.22, and every
+  module is at 1.26). `go vet` also checks generated code, so `.golangci.yml` sets `exclusions.generated:
+  disable` and keeps the other linters off the 92 generated files by path. `task vet` still runs `go vet`.
+  The gateway (`ci-gateway.yml`, Go 1.27 and golangci-lint 2.15) and the `conformance`-tagged vet in
+  `ci-governed-conformance.yml` keep their own `go vet`.
 - **Go shards.** `scripts/go/test-shards.json` has a shard `infra-suites` for the slow packages. The fault
   registry test no longer compiles a regexp per code over the whole tree (21 minutes to 4 seconds).
 - **Go tests once.** `no-binaries` (no path filter) runs the elitea-main gates `./internal/api/` and
@@ -95,6 +105,20 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
   (`ci-<image>:cas-<hash>`, `scripts/ci/stack-image-hash.mjs`) and skip the build when that tag exists. A run on
   main always builds. A fork pull request builds in its own job, as before. The code sandbox supervisor is
   published the same way as `ci-elitea-sandbox-supervisor`.
+- **Code runner images.** The code sandbox's runner images (`services/elitea-code-runner/Containerfile`
+  targets `verification`, `default` (Deno/Pyodide) and `rust-runtime`) are built once, by the
+  `code-runner-images` job in `ci-build-once.yml`, through `.github/actions/code-runner-images`. Each target is
+  published as `ci-elitea-code-runner:<target>-cas-<hash>`. The hash comes from `stack-image-hash.mjs`: the
+  build spec, the pinned base digests and every COPY source of the target's stages. The job builds a target
+  only when that tag is missing, so only a change to `services/elitea-code-runner/` builds it. A run on main
+  always builds, because it is the one writer of the three `elitea-code-runner-<target>-linux-amd64` GHA layer
+  cache scopes. Pull requests only read those scopes. Two jobs consume the images, and each pulls them by
+  digest. `ci-web-e2e.yml`'s `code-sandbox` takes the digests from the `code-runner-image-digests` artifact.
+  `ci-rust.yml`'s `test` runs beside `ci-build-once`, not after it. It resolves the same content tags and
+  waits up to 20 minutes for them (ci.yml passes `code-runner-producer: true`). A consumer builds a target
+  itself only when nothing was published for it: a fork or Dependabot pull request, or a tag that did not
+  appear in time. Every build, in the producer or in a consumer, reads the GHA cache first. When that attempt
+  fails, it retries once without `cache-from`.
 - **Build once.** `ci-build-once.yml` (heavy tier, job `ci-build-once`) builds every stack image once per
   commit. `ci-web-e2e`, `ci-governed-conformance` and `helm-install-smoke` need it and pull its images by
   digest. Each builds in its own job only when nothing was built for it: a fork or Dependabot pull request,
@@ -131,7 +155,22 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
   request restored main's Go or npm cache for this reason. Every save and restore of one key uses the same
   literal `~/...` lines, in the same order. An expression path is not allowed.
   `scripts/ci/check-cache-path-parity.mjs` (in `No Binaries`) fails when a restore differs from its writer.
-  The Go and npm caches save on GitHub-hosted runners only, and restore wherever `../../..` of the workspace
+- **Compression parity.** The version also hashes the compression: zstd when the `zstd` binary is on `PATH`,
+  gzip otherwise. On 2026-11-21 main held the web npm key twice: a zstd entry from the hosted writers, and a
+  gzip entry saved by the Storybook job inside the Playwright image, which has no zstd. So a job that runs in
+  a job-level `container:` never saves a cache. It restores only, with `save: "false"` or
+  `actions/cache/restore`, or it runs on the host. The eng-runner image ships zstd, and `eng-runner-env`
+  checks for it. The same parity check fails when a containerised job reaches a save, directly or through
+  local actions.
+- **One npm slot per job.** `main-write-cache` lets a job use each slot once. A nested action that installs
+  `scripts/ci` dependencies, such as `code-runner-images`, calls `ci-scripts-deps` with `npm-cache: "false"`,
+  so it never claims the slot its caller has already used.
+- **Reading the cache report.** `main-write-cache` ends with one `cache:` line: exact hit, restored from a
+  prefix, or MISS. On a writer run, the full `actions/cache` reports only `cache-hit`, which is `true` on an
+  exact hit, `false` on a prefix hit and unset on a miss. It never exposes the matched key, so the report
+  says "restored from a restore-keys prefix" without naming the key. Its `Cache restored from key` log line
+  names it.
+- **Home layout.** The Go and npm caches save on a run on main (hosted or eng-runner), and save and restore only wherever `../../..` of the workspace
   is `HOME` (hosted runners and eng-runner): the tar holds paths relative to the workspace, so a runner with
   another home layout would extract them to the wrong directory.
 - **Desktop packages.** `desktop-package` (heavy tier) runs on a pull request only when `apps/elitea-desktop/**`,
@@ -210,16 +249,17 @@ These jobs are routed (when `ENG_RUNNER` is on, on our own pull requests):
 | `eng-runner-image.yml` | `runner-pin` |
 | `mobile-eas-build.yml`, `mobile-eas-submit.yml` | `build`, `submit` (EAS builds in Expo's cloud) |
 
-Everything else stays hosted, because it needs what the pool does not have (audited 2026-11-21: 45 hosted
+Everything else stays hosted, because it needs what the pool does not have (audited 2026-11-21: 46 hosted
 job definitions, down from 59; every other job is routed):
 
-- **Docker next to the services.** `ci-rust.yml`'s "Test with PostgreSQL 18" also builds the sandbox images
-  with buildx, and `check-worker-ignored-tests.mjs` credits only unconditional steps, so it cannot gate those
-  steps to hosted runners; "Workspace runs on Docker" needs a registry container.
+- **Docker next to the services.** `ci-rust.yml`'s "Test with PostgreSQL 18" runs the sandbox images in
+  Docker (it pulls them from `ci-build-once`, or builds them with buildx when nothing was published), and
+  `check-worker-ignored-tests.mjs` credits only unconditional steps, so it cannot gate those steps to hosted
+  runners; "Workspace runs on Docker" needs a registry container.
 - **Image builds and pushes**: the `ci-build-once.yml` image legs, `publish.yml` (`build`, `scan`,
   `publish-image`, `chart`, `rollback`), `eng-runner-image.yml` (`build`, `publish`), `mirror-buildkit.yml`,
-  `nightly-image-scan.yml`, `image-matrix.yml` (`docker buildx bake --print`), and the code sandbox's
-  supervisor image in `ci-web-e2e.yml`.
+  `nightly-image-scan.yml`, `image-matrix.yml` (`docker buildx bake --print`), the code sandbox's
+  supervisor image in `ci-web-e2e.yml`, and its runner images (`code-runner-images` in `ci-build-once.yml`).
 - **Docker, compose, kind or gVisor**: the E2E suites (`ci-web-e2e.yml`, `deepwiki-real-engine.yml`,
   `nightly-real-llm.yml`), `ci-governed-conformance.yml` `stack`, `helm-install-smoke`, `ci-browser-session.yml`
   and `browser-bakeoff.yml` (gVisor). helm-lint's `lint` job too: a step it runs calls `docker compose config`.
@@ -314,8 +354,8 @@ non-loopback peer, as through compose's port forward, and still refuses it `/rea
 
 **Test timeout.** The native E2E legs set `E2E_TIMEOUT_SCALE=1.5` (`playwright.config.ts`, 1 to 3, default 1),
 which scales the per-test timeout and nothing else. The pod is a 4-CPU CFS quota on a shared 8-thread node, and a
-burst from the browser's threads throttles the whole cgroup, stack included; the WebKit pipeline-canvas journeys
-ran past their budgets there. The Playwright step prints the cgroup's throttled periods for the run, so the
+burst from the browser's threads throttles the whole cgroup, stack included: at 4 workers, 91-96% of periods
+were throttled (run 44917909298). The Playwright step prints the cgroup's throttled periods for the run, so the
 reason stays measured. Retries are the compose legs', unchanged.
 
 These jobs run only where the routing condition sends them to the pool. Where they run, `ci-web-e2e.yml`'s
@@ -323,7 +363,10 @@ compose legs stand down on a pull request to one smoke leg, chromium 1/2. That l
 reaches what only images prove: a Containerfile, a compose file, the web image's nginx or entrypoint, or the
 bake and image actions (`e2e-lane-filter.sh` `reaches-images`). A fork's or Dependabot's pull request, a run
 with `ENG_RUNNER` off and the nightly run keep the full compose matrix on hosted runners. Each leg therefore
-runs under exactly one name. `visual` and `docs-shots` stay compose on hosted runners, because their pixels
+runs under exactly one name. The compose legs are `scripts/ci/e2e-legs.mjs` (`LEGS`), and the matrices of
+`e2e` and `chat-stream-rust` are `fromJSON` of the list the run needs, which ci-build-once.yml's lane filter
+job computes (`e2e-legs`, `chat-stream-rust-legs`). A stood-down leg is not in the list, so it starts no runner;
+it used to start a hosted runner that skipped every step. `visual` and `docs-shots` stay compose on hosted runners, because their pixels
 come from the pinned Playwright container.
 
 ### The standalone lanes on the pool
@@ -343,7 +386,12 @@ test profile. It builds cold, with the five workspaces sharing one target direct
 semantics (no debug assertions, `panic = "abort"` where set) but drops the whole-program optimisation (thin
 LTO, one codegen unit, opt-level 3) through `CARGO_PROFILE_RELEASE_*`. The compose image smoke runs the
 shipped profile; `NATIVE_RUST_FULL_RELEASE=1` builds it natively. Neither build job
-depends on `ci-build-once`.
+depends on `ci-build-once`. The feature set is the image's: each Containerfile runs `cargo auditable build
+--frozen --release` with no feature flag (default features), and the script runs `cargo build --locked
+--release --bin <service>` with none either, so the lanes never run an `--all-features` binary (the worker's
+`sandbox-supervisor` and the engines' test-only `loopback-git-http` stay off). `--bin` only skips the
+DeepWiki engine's bench and parity binaries; each service is a one-package workspace, so the features resolve
+the same.
 
 What the native table does differently from compose, and why:
 
@@ -369,7 +417,7 @@ Pinned parallelism per lane:
 
 Where these lanes run, `ci-web-e2e.yml`'s compose versions stand down on a pull request. They come back as the
 image smoke when `reaches-images` says the change touches what only images prove. That now includes the
-compose half of the standalone stack scripts. Only leg 1of3 of chat-stream-rust runs as the smoke (`RUN_LEG`).
+compose half of the standalone stack scripts. Only leg 1of3 of chat-stream-rust runs as the smoke (its computed matrix list).
 Pushes, the nightly run, forks, Dependabot and runs with `ENG_RUNNER` off keep the full compose versions.
 
 What stays compose or hosted, and why:

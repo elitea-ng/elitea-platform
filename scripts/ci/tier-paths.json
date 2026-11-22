@@ -291,6 +291,7 @@
         "scripts/ci/assert-rust-toolchain.sh",
         "conformance/nativeclient/**",
         "scripts/ci/e2e-lane-filter.sh",
+        "scripts/ci/e2e-legs.mjs",
         "scripts/ci/e2e-lane-filter-test.sh",
         "services/elitea-scheduler/**",
         "services/elitea-inventory-engine/**",
@@ -335,6 +336,7 @@
         "scripts/ci/assert-rust-toolchain.sh",
         "conformance/nativeclient/**",
         "scripts/ci/e2e-lane-filter.sh",
+        "scripts/ci/e2e-legs.mjs",
         "scripts/ci/e2e-lane-filter-test.sh",
         "services/elitea-scheduler/**",
         "services/elitea-inventory-engine/**",
@@ -414,6 +416,10 @@
         ".github/actions/ci-scripts-deps/**",
         ".github/actions/npm-cache/**",
         ".github/actions/main-write-cache/**",
+        ".github/actions/code-runner-images/**",
+        "scripts/ci/stack-image-hash.mjs",
+        "scripts/ci/check-e2e-paths.mjs",
+        ".github/workflows/ci-build-once.yml",
         ".github/workflows/ci-rust.yml"
       ]
     },

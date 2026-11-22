@@ -31,7 +31,8 @@ export interface ConversationActivityGlyphProps {
 
 const REDUCED_MOTION = '(prefers-reduced-motion: reduce)';
 
-const visuallyHidden = { position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap' } as const;
+// '1px', not 1: in `sx` a number up to 1 is a fraction, so `width: 1` is 100%.
+const visuallyHidden = { position: 'absolute', width: '1px', height: '1px', overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap' } as const;
 
 /** The accessible name of each kind. */
 export function activityGlyphLabel(kind: ActivityGlyphKind): string {

@@ -18,7 +18,12 @@
 #
 # Each service is its own Cargo workspace. `cargo build --locked --release`,
 # as the images run it (they add `cargo auditable`, which only embeds the
-# dependency list for the image scanner). One CARGO_TARGET_DIR for all five
+# dependency list for the image scanner). NO FEATURE FLAGS, as no image passes
+# any: the lanes must run the shipped feature set, never `--all-features` (it
+# would add the worker's `sandbox-supervisor` and the engines' test-only
+# `loopback-git-http`). `--bin` only skips the DeepWiki engine's bench and
+# parity binaries; each service is a one-package workspace, so its features
+# resolve as in the image. One CARGO_TARGET_DIR for all five
 # (NATIVE_RUST_TARGET_DIR, default <out-dir>/../native-rust-target), so a
 # dependency the workspaces share at one version and feature set is compiled
 # once. The gateway is outside go.work and needs its own Go

@@ -41,6 +41,19 @@
 //      directory and give four versions. This catches a step whose key no rule
 //      above resolves (a matrix or env key) caching main's Go or npm directory.
 //
+//   4. No job that runs in a job-level `container:` SAVES a cache, directly or
+//      through local composite actions (one passed `save: "false"`, by an
+//      action that declares a `save` input, restores only). The version also
+//      hashes the COMPRESSION, and @actions/cache picks zstd only when the
+//      `zstd` binary is on PATH, else gzip. Measured 2026-11-21: main held
+//      node-cache-Linux-x64-npm-955ed20c… twice, version c242501c… (zstd, the
+//      hosted and eng-runner writers) and 9e0ba804… (gzip), saved by the
+//      Storybook job inside the Playwright image, which has no zstd. Its own
+//      restore missed the zstd entry, so it saved a second copy no other job
+//      reads. One writer per key means one compression per key; a container
+//      image is not checked for zstd (eng-runner-env checks the pool image),
+//      so a containerised job restores only.
+//
 // It fails, rather than passes, when it finds fewer cache steps than its floor,
 // or when a required family (go-v1-, node-cache-) has no writer and no reader:
 // "found nothing, therefore clean" is how a guard stops guarding in silence.
@@ -185,6 +198,64 @@ function readsLocalActionOutput(docs, steps, key) {
   return false;
 }
 
+/**
+ * Every saving cache step a job reaches, as "via" chains: its own steps, and
+ * the steps of the local composite actions it runs, transitively. A local
+ * action called with a literal `save: "false"` is not followed when it
+ * declares a `save` input (main-write-cache, go-cache): its writers are gated
+ * on that input.
+ */
+function savingStepsReached(docs, steps, via, seen = new Set(), callerWith = null) {
+  const out = [];
+  for (const step of steps) {
+    if (!isDict(step)) continue;
+    // Inside a composite: a step whose `inputs.<y> == '<v>'` condition the
+    // caller's literal `<y>` contradicts never runs (main-write-cache's slot).
+    if (callerWith && contradicted(step, callerWith)) continue;
+    const uses = actionOf(step);
+    const label = str(get(step, "name")) || str(get(step, "id")) || uses;
+    if (CACHE_ACTIONS.get(uses)?.saves) {
+      out.push([...via, `'${label}'`].join(" → "));
+      continue;
+    }
+    const action = localAction(docs, uses);
+    if (!action || seen.has(action)) continue;
+    const doc = docs.get(action);
+    const declaresSave = isDict(get(get(doc, "inputs"), "save"));
+    if (declaresSave && str(get(get(step, "with"), "save")).trim() === "false") continue;
+    const inner = Array.isArray(get(get(doc, "runs"), "steps")) ? doc.runs.steps : [];
+    const with_ = isDict(get(step, "with")) ? step.with : {};
+    out.push(...savingStepsReached(docs, inner, [...via, action], new Set([...seen, action]), with_));
+  }
+  return out;
+}
+
+/** True when a literal input the caller passes contradicts one of the step's `inputs.<y> == '<v>'` conditions. */
+function contradicted(step, callerWith) {
+  for (const [, name, value] of str(get(step, "if")).matchAll(INPUT_EQUALS)) {
+    if (!Object.hasOwn(callerWith, name)) continue;
+    const given = str(callerWith[name]).trim();
+    if (!given.includes("${{") && given !== value) return true;
+  }
+  return false;
+}
+
+/** Jobs with a job-level `container:` that save a cache: [{where, chain}]. */
+export function containerWriters(docs) {
+  const out = [];
+  for (const [file, doc] of docs) {
+    const jobs = get(doc, "jobs");
+    if (!isDict(jobs)) continue;
+    for (const [id, job] of Object.entries(jobs)) {
+      const container = get(job, "container");
+      if (container === undefined || container === null || str(container).trim() === "") continue;
+      const steps = Array.isArray(get(job, "steps")) ? job.steps : [];
+      for (const chain of savingStepsReached(docs, steps, [])) out.push({ where: `${file} [${id}]`, chain });
+    }
+  }
+  return out;
+}
+
 const overlaps = (a, b) => a.startsWith(b) || b.startsWith(a);
 const spelled = (s) => `${s.paths.map((p) => JSON.stringify(p)).join(" | ") || "(none)"}${s.crossOs ? " enableCrossOsArchive" : ""}`;
 
@@ -257,6 +328,11 @@ export function check(docs, { requiredFamilies = REQUIRED_FAMILIES } = {}) {
     if (lines.size < 2) continue;
     const listed = [...lines].map(([line, where]) => `${JSON.stringify(line)} (${where})`).join(", ");
     errors.push(`the directory ${dir} is spelled ${lines.size} ways: ${listed}. Each spelling is another cache version; write it as ${JSON.stringify(dir)} everywhere.`);
+  }
+  // 3. A job container saves nothing: its image decides the compression, and
+  //    a gzip entry is a second version of the key no zstd runner restores.
+  for (const { where, chain } of containerWriters(docs)) {
+    errors.push(`${where}: runs in a job \`container:\` and saves a cache (${chain}). @actions/cache compresses with zstd only when the image has the \`zstd\` binary, else gzip, and the compression is part of the entry's version: a gzip save is a second copy of the key that no zstd runner restores, and the container's own restore misses the zstd entry. Restore only here (\`save: "false"\`, or actions/cache/restore), or run the job on the host.`);
   }
   for (const family of requiredFamilies) {
     const members = steps.filter((s) => s.families.some((f) => overlaps(f, family)));

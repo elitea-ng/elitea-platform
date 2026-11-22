@@ -193,6 +193,8 @@ jobs:
     uses: ./.github/workflows/ci-build-once.yml
     with:
       force: ${{ fromJSON(needs.changes.outputs.run)['ci-governed-conformance'] || fromJSON(needs.changes.outputs.run)['helm-install-smoke'] || fromJSON(needs.changes.outputs.run)['ci-rust'] || fromJSON(needs.changes.outputs.run)['ci-rust-shared'] || fromJSON(needs.changes.outputs.run)['ci-deepwiki-engine'] || fromJSON(needs.changes.outputs.run)['ci-inventory-engine'] || fromJSON(needs.changes.outputs.run)['ci-vector'] || fromJSON(needs.changes.outputs.run)['ci-doc-extractor'] }}
+      # ci-rust's `test` pulls the code runner images this publishes.
+      code-runner: ${{ fromJSON(needs.changes.outputs.run)['ci-rust'] }}
     secrets: inherit
 
   # The consumers of ci-build-once run whatever its result: each reads the
@@ -211,12 +213,15 @@ jobs:
     with:
       web-images: ${{ needs.ci-build-once.outputs.web-images }}
       stack-images: ${{ needs.ci-build-once.outputs.stack-images }}
+      code-runner-images: ${{ needs.ci-build-once.outputs.code-runner-images }}
       reaches-stack: ${{ needs.ci-build-once.outputs.reaches-stack }}
       reaches-model: ${{ needs.ci-build-once.outputs.reaches-model }}
       reaches-handoff: ${{ needs.ci-build-once.outputs.reaches-handoff }}
       reaches-sandbox: ${{ needs.ci-build-once.outputs.reaches-sandbox }}
       reaches-webkit: ${{ needs.ci-build-once.outputs.reaches-webkit }}
       reaches-images: ${{ needs.ci-build-once.outputs.reaches-images }}
+      e2e-legs: ${{ needs.ci-build-once.outputs.e2e-legs }}
+      chat-stream-rust-legs: ${{ needs.ci-build-once.outputs.chat-stream-rust-legs }}
     secrets: inherit
 
   # The E2E legs on the self-hosted pool, as processes (no image, so no
@@ -237,7 +242,17 @@ jobs:
   ci-rust:
     needs: [changes, fast-gate]
     if: ${{ !cancelled() && needs.fast-gate.result == 'success' && github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-rust'] }}
+    permissions:
+      contents: read
+      # `test` pulls the code runner images ci-build-once publishes.
+      packages: read
     uses: ./.github/workflows/ci-rust.yml
+    with:
+      # ci-build-once runs whenever ci-rust does (its tier entry is a union
+      # holding ci-rust) and publishes the code runner images for it: `test`
+      # waits for them instead of building them (not `needs:`, which would
+      # hold all of ci-rust behind the ~40-min Rust image legs).
+      code-runner-producer: true
     secrets: inherit
 
   ci-rust-shared:

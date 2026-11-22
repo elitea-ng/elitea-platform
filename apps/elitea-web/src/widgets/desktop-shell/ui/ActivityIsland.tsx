@@ -183,7 +183,7 @@ function usePopoverState(): { open: (has: boolean) => boolean; enter: () => void
   };
 }
 
-const visuallyHidden = { position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap' } as const;
+const visuallyHidden = { position: 'absolute', width: '1px', height: '1px', overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap' } as const;
 
 /** An approval opens its thread; one with no known folder (a turn from before this window listened) opens the list instead. */
 const canFocus = (activity: Activity): boolean => activity.kind === 'approval' && activity.workspaceId !== null;

@@ -165,7 +165,12 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	// agent page opened without a version in the URL showed whichever version
 	// sorted first, not the default (issue 1568).
 	if id := detailVersionID(versions); id != "" {
-		if vd := h.fetchVersionDetails(r.Context(), projectID, applicationID, id); vd != nil {
+		vd, err := h.fetchVersionDetails(r.Context(), projectID, applicationID, id)
+		if err != nil {
+			apierr.Write(w, err)
+			return
+		}
+		if vd != nil {
 			result["version_details"] = vd
 		}
 	}
@@ -329,22 +334,25 @@ func (h *Handler) getVersions(ctx context.Context, projectID, applicationID stri
 }
 
 // fetchVersionDetails returns full version details for a single version, or nil on error.
-func (h *Handler) fetchVersionDetails(ctx context.Context, projectID, applicationID, versionID string) map[string]any {
+// fetchVersionDetails is the version detail, nil (and no error) when the
+// version does not exist, or an error a read that must not be dropped
+// returned (the legacy sub-agent rows on a legacy-migrated tenant).
+func (h *Handler) fetchVersionDetails(ctx context.Context, projectID, applicationID, versionID string) (map[string]any, error) {
 	if h.pool == nil {
 		version, err := h.repo.GetVersion(ctx, projectID, applicationID, versionID)
 		if err != nil {
-			return nil
+			return nil, nil
 		}
 		b, _ := json.Marshal(version)
 		var m map[string]any
 		// b is from json.Marshal above — cannot fail
 		_ = json.Unmarshal(b, &m)
-		return m
+		return m, nil
 	}
 
 	s, ok := tenantSchema(projectID)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 
 	var id int
@@ -382,7 +390,7 @@ func (h *Handler) fetchVersionDetails(ctx context.Context, projectID, applicatio
 		&authorID, &authorEmail, &authorName, &soulJSON, &avatarPackJSON,
 	)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 
 	var llmSettings, meta, starters, pipelineSettings any
@@ -450,30 +458,11 @@ func (h *Handler) fetchVersionDetails(ctx context.Context, projectID, applicatio
 		authorIDStr = strconv.Itoa(*authorID)
 	}
 
-	appToolRows, err := h.pool.Query(ctx, fmt.Sprintf(`
-		SELECT id, name, type, settings::text
-		FROM %s.application_tools
-		WHERE application_version_id = $1`, s), versionID)
-	if err == nil {
-		defer appToolRows.Close()
-		for appToolRows.Next() {
-			var atID int
-			var atName, atType, settingsStr string
-			if err := appToolRows.Scan(&atID, &atName, &atType, &settingsStr); err != nil {
-				continue
-			}
-			var settings any
-			// settingsStr is DB-stored JSON — cannot fail
-			_ = json.Unmarshal([]byte(settingsStr), &settings)
-			tools = append(tools, map[string]any{
-				"id":        atID,
-				"name":      atName,
-				"type":      atType,
-				"settings":  settings,
-				"author_id": authorIDStr,
-			})
-		}
+	legacyTools, err := legacyApplicationTools(ctx, h.pool, s, versionID, map[string]any{"author_id": authorIDStr})
+	if err != nil {
+		return nil, err
 	}
+	tools = append(tools, legacyTools...)
 
 	variables := make([]map[string]any, 0)
 	varRows, err := h.pool.Query(ctx, fmt.Sprintf(`
@@ -535,7 +524,7 @@ func (h *Handler) fetchVersionDetails(ctx context.Context, projectID, applicatio
 			"id": authorIDStr, "email": authorEmail, "name": authorName,
 		}
 	}
-	return detail
+	return detail, nil
 }
 
 // principal resolves the owning auth_core__user id of the authenticated
@@ -1284,7 +1273,11 @@ func (h *Handler) GetVersion(w http.ResponseWriter, r *http.Request) {
 	applicationID := chi.URLParam(r, "applicationID")
 	versionID := chi.URLParam(r, "versionID")
 
-	resp := h.fetchVersionDetails(r.Context(), projectID, applicationID, versionID)
+	resp, err := h.fetchVersionDetails(r.Context(), projectID, applicationID, versionID)
+	if err != nil {
+		apierr.Write(w, err)
+		return
+	}
 	if resp == nil {
 		apierr.Write(w, apierr.NotFound("version not found"))
 		return
@@ -2361,32 +2354,14 @@ func (h *Handler) GetVersionExpanded(w http.ResponseWriter, r *http.Request) {
 		authorIDStr = strconv.Itoa(*authorID)
 	}
 
-	// Also fetch from application_tools (legacy-migrated tenants only)
-	appToolRows, err := h.pool.Query(ctx, fmt.Sprintf(`
-		SELECT id, name, type, settings::text
-		FROM %s.application_tools
-		WHERE application_version_id = $1`, s), versionID)
-	if err == nil {
-		defer appToolRows.Close()
-		for appToolRows.Next() {
-			var atID int
-			var atName, atType, settingsStr string
-			if err := appToolRows.Scan(&atID, &atName, &atType, &settingsStr); err != nil {
-				continue
-			}
-			var settings any
-			// settingsStr is DB-stored JSON — cannot fail
-			_ = json.Unmarshal([]byte(settingsStr), &settings)
-			tools = append(tools, map[string]any{
-				"id":         atID,
-				"name":       atName,
-				"type":       atType,
-				"settings":   settings,
-				"author_id":  authorIDStr,
-				"project_id": projIDInt,
-			})
-		}
+	// The legacy runtime's sub-agent rows, on a legacy-migrated tenant only
+	// (legacyApplicationTools probes for the table).
+	legacyTools, err := legacyApplicationTools(ctx, h.pool, s, versionID, map[string]any{"author_id": authorIDStr, "project_id": projIDInt})
+	if err != nil {
+		apierr.Write(w, err)
+		return
 	}
+	tools = append(tools, legacyTools...)
 
 	variables, err := h.versionVariables(ctx, s, versionID)
 	if err != nil {

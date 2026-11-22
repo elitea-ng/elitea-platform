@@ -434,6 +434,78 @@ export async function ensureChatPanelExpanded(page: Page): Promise<void> {
   await expect(collapse).toBeVisible({ timeout: 10_000 });
 }
 
+/** Every node on the canvas except END, which the editor places itself. */
+const AUTHORED_NODES = '.react-flow__node:not([data-id="END"])';
+
+/**
+ * Add one node of `label` through the editor's own Add-node menu (no store pokes), and settle on the canvas holding it.
+ *
+ * The palette is a MUI `Popover` whose paper grows in: a CSS transition from `scale(0.75, 0.5625)`, anchored top right, with
+ * opacity from 0. Playwright's "stable" check can pass on the first frames, before the transition has started, and a
+ * click is two input events. On a CPU-starved runner the item moves between them: the `mousedown` lands on it (it takes
+ * focus) and the `mouseup` lands elsewhere, so no `click` fires. The menu then stays open with the item focused and no
+ * node added (native run 44917909298, J16 "every node type": "Decision" focused, no Decision node, and the test waited
+ * out its budget for the Add-node button the open menu hides). So the item is clicked only once Grow has reached its
+ * `entered` state (`transform: none`, which no frame of the transition computes to). The journey projects also run with
+ * reduced motion, under which the theme gives the menu no transition at all; the wait still holds for the projects that
+ * do not.
+ *
+ * A click can also be swallowed by a re-render of the editor right after a Save (run 43990543445, pipelines.versioning:
+ * "LLM" focused, no node). So the click is idempotent and repeated only while it has added nothing: each round reads
+ * the node count first and returns as soon as it has risen, so a click that landed late is never repeated. That repeats
+ * the action within this step; it is not a test retry. The step ends only when the menu has closed with exactly one node
+ * more than the settled canvas held before.
+ */
+export async function addNodeThroughMenu(page: Page, label: string): Promise<void> {
+  // END is not counted: an empty canvas (#2719) hides it until the first node
+  // is added, so it would appear together with that node and read as two.
+  const nodes = page.locator(AUTHORED_NODES);
+  const before = await settledNodeCount(page);
+  // The palette is a Popover whose paper carries the id itself (#2719); it
+  // was a Menu with the id on a wrapper and a `.MuiMenu-paper` child before.
+  const menu = page.locator('#pipeline-add-node-menu');
+  await expect(async () => {
+    if ((await nodes.count()) > before) return;
+    // By test id: a role name of 'Add node' also matches the empty canvas's
+    // own "Add Node" button (role names match case-insensitively), which
+    // opens the same menu from a different anchor.
+    if ((await menu.count()) === 0) await page.getByTestId('pipeline-add-node-button').click({ timeout: 5_000 });
+    await expect(menu, 'the Add-node menu must finish growing in before an item is clicked').toHaveCSS('transform', 'none', { timeout: 5_000 });
+    await menu.getByRole('menuitem', { name: label, exact: true }).click({ timeout: 5_000 });
+    await expect(nodes).toHaveCount(before + 1, { timeout: 3_000 });
+  }, `the ${label} item of the Add-node menu must add a node`).toPass({ timeout: 30_000 });
+  await expect(menu, `the ${label} item must close the Add-node menu`).toHaveCount(0);
+  await expect(nodes, `the ${label} item must add exactly one node`).toHaveCount(before + 1);
+}
+
+/**
+ * The number of nodes on a canvas that has finished drawing: the END node is on it and two reads in a row agree. A
+ * caller that arrives straight from API reads would otherwise count a starter graph that is still hydrating, and its
+ * "one node more" would be measured against too few.
+ */
+async function settledNodeCount(page: Page): Promise<number> {
+  const nodes = page.locator(AUTHORED_NODES);
+  // A drawn canvas shows either its END node or, for a document with no node
+  // yet, the empty state (#2719), which hides END until the first node lands.
+  await expect(
+    page.locator('.react-flow__node[data-id="END"]').or(page.getByTestId('pipeline-empty-state')),
+    'the canvas must draw its END node or its empty state',
+  ).toBeVisible();
+  let previous = -1;
+  await expect
+    .poll(
+      async () => {
+        const count = await nodes.count();
+        const settled = count === previous;
+        previous = count;
+        return settled;
+      },
+      { message: 'the canvas node count must settle before a node is added' },
+    )
+    .toBe(true);
+  return previous;
+}
+
 /**
  * Folds both editor panes so the canvas has the page's width, whichever of
  * them the editor already folded on its own (`useEditorPaneRoom` folds the

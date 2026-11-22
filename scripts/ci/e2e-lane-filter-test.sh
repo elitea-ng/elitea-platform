@@ -110,6 +110,8 @@ expect_sandbox true "the lane's journey" "apps/elitea-web/e2e/streaming/code-san
 expect_sandbox true "the lane's wrapper" "apps/elitea-web/scripts/code-sandbox-e2e.sh"
 expect_sandbox true "the workflow" ".github/workflows/ci-web-e2e.yml"
 expect_sandbox true "the build-once workflow" ".github/workflows/ci-build-once.yml"
+expect_sandbox true "the runner images' action" ".github/actions/code-runner-images/action.yml"
+expect_sandbox true "the runner images' content address" "scripts/ci/stack-image-hash.mjs"
 expect_sandbox false "a web page" "apps/elitea-web/src/pages/a.tsx"
 expect_sandbox false "docs only" "README.md"
 expect_sandbox false "the DeepWiki overlay" "deploy/docker-compose.deepwiki-native-real-engine.yml"

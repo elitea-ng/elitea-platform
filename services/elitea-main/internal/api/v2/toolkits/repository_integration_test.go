@@ -18,6 +18,7 @@ package toolkits
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -346,8 +347,9 @@ type instanceSeed struct {
 
 func instanceFilterFixture() []instanceSeed {
 	var seeds []instanceSeed
-	// 25 plain toolkits that sort BEFORE every MCP, so the first page of an
-	// unfiltered list holds no MCP at all (the picker regression). Every third
+	// 25 plain toolkits that are NEWER than every MCP (the seed loop stamps
+	// earlier seeds later, see instanceSeedCreatedAt), so the first page of an
+	// unfiltered newest-first list holds no MCP at all (the picker regression). Every third
 	// has a NULL meta: NOT(mcp predicate) must keep a NULL meta row.
 	for i := 0; i < 25; i++ {
 		seed := instanceSeed{name: fmt.Sprintf("a-tool-%02d", i), typ: "github", meta: `{}`}
@@ -387,6 +389,13 @@ func instanceFilterFixture() []instanceSeed {
 	return seeds
 }
 
+// instanceSeedCreatedAt stamps seed i: earlier seeds are newer, and seeds
+// come in pairs that share one instant, so the newest-first order has
+// created_at ties for id to break.
+func instanceSeedCreatedAt(base time.Time, i int) time.Time {
+	return base.Add(-time.Duration(i/2) * time.Minute)
+}
+
 func TestToolkitInstanceListFiltersAgainstPostgres(t *testing.T) {
 	pool := newToolkitsIntegrationPool(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -398,19 +407,23 @@ func TestToolkitInstanceListFiltersAgainstPostgres(t *testing.T) {
 
 	seeds := instanceFilterFixture()
 	byID := map[string]instanceSeed{}
-	for _, seed := range seeds {
+	createdAt := map[string]time.Time{}
+	base := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	for i, seed := range seeds {
 		var meta any
 		if seed.meta != "" {
 			meta = seed.meta
 		}
 		var id int
+		stamp := instanceSeedCreatedAt(base, i)
 		if err := pool.QueryRow(ctx, `
 			INSERT INTO p_1.elitea_tools (name, type, description, owner_id, author_id, meta, created_at)
-			VALUES ($1, $2, NULLIF($3, ''), 1, 1, $4::jsonb, now() AT TIME ZONE 'UTC') RETURNING id`,
-			seed.name, seed.typ, seed.desc, meta).Scan(&id); err != nil {
+			VALUES ($1, $2, NULLIF($3, ''), 1, 1, $4::jsonb, $5) RETURNING id`,
+			seed.name, seed.typ, seed.desc, meta, stamp).Scan(&id); err != nil {
 			t.Fatalf("seed %q: %v", seed.name, err)
 		}
 		byID[strconv.Itoa(id)] = seed
+		createdAt[strconv.Itoa(id)] = stamp
 	}
 
 	boolRef := func(v bool) *bool { return &v }
@@ -533,19 +546,60 @@ func TestToolkitInstanceListFiltersAgainstPostgres(t *testing.T) {
 		}
 	})
 
-	t.Run("the order is name then id, so duplicate names keep a stable order", func(t *testing.T) {
+	t.Run("newest first, id breaks a created_at tie, so a new toolkit is on page one", func(t *testing.T) {
 		served, _ := readAll(t, InstanceListFilter{}, 5)
-		for i := 1; i < len(served); i++ {
-			prev, cur := byID[served[i-1]], byID[served[i]]
-			prevID, _ := strconv.Atoi(served[i-1])
-			curID, _ := strconv.Atoi(served[i])
-			if prev.name == cur.name && prevID > curID {
-				t.Errorf("rows named %q are served with id %d before id %d", cur.name, prevID, curID)
+		// The order, stated independently of the SQL: created_at descending,
+		// then id descending.
+		expected := make([]string, 0, len(createdAt))
+		for id := range createdAt {
+			expected = append(expected, id)
+		}
+		sort.Slice(expected, func(a, b int) bool {
+			ta, tb := createdAt[expected[a]], createdAt[expected[b]]
+			if !ta.Equal(tb) {
+				return ta.After(tb)
 			}
+			ia, _ := strconv.Atoi(expected[a])
+			ib, _ := strconv.Atoi(expected[b])
+			return ia > ib
+		})
+		if strings.Join(served, ",") != strings.Join(expected, ",") {
+			t.Fatalf("served order %v, want newest first then id descending %v", served, expected)
 		}
 		again, _ := readAll(t, InstanceListFilter{}, 5)
 		if strings.Join(served, ",") != strings.Join(again, ",") {
 			t.Error("two reads served the rows in a different order")
+		}
+
+		// The e2e regression: a project holding more than a page of toolkits,
+		// one of them created just now with a name that sorts last. It must be
+		// the first row of page one, not on whichever page its name lands.
+		var newID int
+		if err := pool.QueryRow(ctx, `
+			INSERT INTO p_1.elitea_tools (name, type, owner_id, author_id, meta, created_at)
+			VALUES ('zzzz-just-created', 'github', 1, 1, '{}'::jsonb, $1) RETURNING id`,
+			base.Add(time.Hour)).Scan(&newID); err != nil {
+			t.Fatalf("seed the new toolkit: %v", err)
+		}
+		t.Cleanup(func() {
+			if _, err := pool.Exec(context.Background(), `DELETE FROM p_1.elitea_tools WHERE id = $1`, newID); err != nil {
+				t.Errorf("remove the new toolkit: %v", err)
+			}
+		})
+		for _, filter := range []InstanceListFilter{{}, {MCP: boolRef(false)}} {
+			rows, total, err := repo.ListToolkitInstances(ctx, "1", filter, 1, 20)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if total <= 20 {
+				t.Fatalf("fixture error: total %d fits on one page of 20", total)
+			}
+			if len(rows) == 0 {
+				t.Fatalf("filter %+v: page one is empty", filter)
+			}
+			if rows[0]["id"] != strconv.Itoa(newID) {
+				t.Errorf("filter %+v: page one starts with %v, want the toolkit created just now (id %d)", filter, rows[0]["name"], newID)
+			}
 		}
 	})
 

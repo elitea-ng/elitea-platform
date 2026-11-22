@@ -78,6 +78,94 @@ async function dragCardToFolder(page: Page, agentName: string, folderName: strin
   await expect(page.getByTestId('entity-folder-dnd-status')).toContainText(`Moved ${agentName} to ${folderName}`);
 }
 
+/** Where a keyboard drag is: the folder row marked `data-drop-over` (-1: over no folder row), the target row, and what dnd-kit said. */
+interface DragState {
+  readonly over: number;
+  readonly target: number;
+  readonly overName: string;
+  readonly said: string;
+  /** The announcement and the highlighted row describe the same place: one can lag the other by a render. */
+  readonly agrees: boolean;
+}
+
+async function readDragState(page: Page, live: Locator, folderName: string): Promise<DragState> {
+  const said = (await live.first().textContent()) ?? '';
+  // The row's name is the Typography after the folder icon; the count follows it.
+  const rows = await page
+    .getByTestId('entity-folder-drop')
+    .evaluateAll((elements) =>
+      elements.map((element) => ({
+        over: element.getAttribute('data-drop-over') === 'true',
+        name: element.querySelector('[data-testid="entity-folder-row"]')?.children[1]?.textContent ?? '',
+      })),
+    );
+  const over = rows.findIndex((row) => row.over);
+  const target = rows.findIndex((row) => row.name === folderName);
+  const overName = rows[over]?.name ?? '';
+  const named = rows.some((row) => row.name !== '' && said.includes(`is over ${row.name}`));
+  const agrees = over === -1 ? !named : said.includes(`is over ${overName}`);
+  return { over, target, overName, said, agrees };
+}
+
+function describeDrag(state: DragState): string {
+  return state.over === -1 ? `over no folder row ("${state.said}")` : `over row ${state.over + 1}, ${state.overName}`;
+}
+
+/** The drag's state once the announcement and the highlighted row agree, and (given `from`) once it has left `from`; undefined when it never does. */
+async function nextDragState(page: Page, live: Locator, folderName: string, from?: DragState): Promise<DragState | undefined> {
+  let state: DragState | undefined;
+  const moved = (s: DragState): boolean => from === undefined || s.over !== from.over || s.said !== from.said;
+  try {
+    await expect
+      .poll(async () => {
+        state = await readDragState(page, live, folderName);
+        return state.agrees && moved(state);
+      })
+      .toBe(true);
+  } catch {
+    return undefined;
+  }
+  return state;
+}
+
+/** The arrow toward the target row: by row order when the drag is on a row, else by where the dragged item is drawn. */
+async function arrowToward(page: Page, state: DragState): Promise<'ArrowUp' | 'ArrowDown'> {
+  if (state.over !== -1) return state.target < state.over ? 'ArrowUp' : 'ArrowDown';
+  const from = await centre(page.getByTestId('entity-folder-drag-overlay'));
+  const to = await centre(page.getByTestId('entity-folder-drop').nth(state.target));
+  return to.y < from.y ? 'ArrowUp' : 'ArrowDown';
+}
+
+/**
+ * Carries a picked-up keyboard drag onto the folder row named `folderName`, one arrow key at a time.
+ *
+ * The panel lists the newest folder first, and other journeys add folders to the same project while
+ * this one runs (the selection test below starts on another worker at the same moment), so the row
+ * ArrowRight lands on, and the side the new folder is on, are not fixed. Each step reads where the drag
+ * is once dnd-kit's announcement and the row marked `data-drop-over` agree, presses toward the folder,
+ * and reads again only once the drag has moved: a read straight after the key press can still see the
+ * previous announcement, and a walk steered by it steps past the folder. Every step ends: a key that
+ * does not move the drag, or a walk longer than the panel, fails naming where the drag is.
+ */
+async function keyboardDragOnto(page: Page, live: Locator, folderName: string): Promise<void> {
+  // Right moves the drag onto the nearest folder row in the side panel.
+  await page.keyboard.press('ArrowRight');
+  await expect(live.first()).toContainText(' is over ');
+  let state = await nextDragState(page, live, folderName);
+  const limit = (await page.getByTestId('entity-folder-drop').count()) + 2;
+  for (let step = 0; state === undefined || state.over === -1 || state.over !== state.target; step += 1) {
+    if (state === undefined) throw new Error('the drag announcement and the highlighted folder row never agreed');
+    if (state.target === -1) throw new Error(`the folder panel has no row named ${folderName}`);
+    if (step >= limit) throw new Error(`the keyboard drag did not reach ${folderName} (row ${state.target + 1}) in ${limit} keys: it is ${describeDrag(state)}`);
+    const key = await arrowToward(page, state);
+    await page.keyboard.press(key);
+    const next = await nextDragState(page, live, folderName, state);
+    if (next === undefined) throw new Error(`${key} did not move the keyboard drag toward ${folderName} (row ${state.target + 1}): it stayed ${describeDrag(state)}`);
+    state = next;
+  }
+  await expect(live.first()).toContainText(`is over ${folderName}`);
+}
+
 async function folderItems(request: import('@playwright/test').APIRequestContext, folderId: string): Promise<number[]> {
   const response = await request.get(FOLDERS);
   const body = (await response.json()) as { items: { id: string; item_ids: number[] }[] };
@@ -103,14 +191,7 @@ test('T6: four agents into a new folder, three by pointer and one by keyboard wi
   await page.keyboard.press('Space');
   const live = page.locator('[aria-live]').filter({ hasText: /Picked up|is over|dropped/ });
   await expect(live.first()).toContainText('Picked up');
-  // Right moves the drag onto the nearest folder row in the side panel; the new folder is the top row, so Up reaches it from any row below.
-  await page.keyboard.press('ArrowRight');
-  // Other journeys create folders at the same time, so the new one is not always the top row: walk up, then down, until the announcement names it.
-  const overTarget = async (): Promise<boolean> => ((await live.first().textContent()) ?? '').includes(`is over ${folderName}`);
-  for (const key of ['ArrowUp', 'ArrowDown']) {
-    for (let step = 0; step < 16 && !(await overTarget()); step += 1) await page.keyboard.press(key);
-  }
-  await expect(live.first()).toContainText(`is over ${folderName}`);
+  await keyboardDragOnto(page, live, folderName);
   const moved = page.waitForResponse((r) => r.url().includes('/items/') && r.request().method() === 'PUT');
   await page.keyboard.press('Space');
   await expect(live.first()).toContainText(`dropped on ${folderName}`);

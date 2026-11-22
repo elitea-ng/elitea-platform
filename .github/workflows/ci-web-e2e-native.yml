@@ -217,23 +217,23 @@ jobs:
           - engine: chromium
             leg: chromium-1of2
             shard: "1/2"
-            weights: "523:242"
+            weights: "505:290"
           - engine: chromium
             leg: chromium-2of2
             shard: "2/2"
-            weights: "523:242"
+            weights: "505:290"
           - engine: webkit
             leg: webkit-1of3
             shard: "1/3"
-            weights: "443:164:158"
+            weights: "445:152:198"
           - engine: webkit
             leg: webkit-2of3
             shard: "2/3"
-            weights: "443:164:158"
+            weights: "445:152:198"
           - engine: webkit
             leg: webkit-3of3
             shard: "3/3"
-            weights: "443:164:158"
+            weights: "445:152:198"
           - engine: platform-flags
             leg: platform-flags
             shard: ""
@@ -312,10 +312,10 @@ jobs:
         # CFS quota on a shared 8-thread node, and WebKit and Node size their
         # thread pools from the 8 CPUs they see, so a burst exhausts the quota
         # and the whole cgroup (stack included) waits out the period. A hosted
-        # runner's 4 vCPU are not quota'd. Measured on webkit-2of3: every
-        # pipeline-canvas action 4-5 s, and J16's twelve-node journey ran past
-        # its 90 s at the eleventh node. The step prints the cgroup's throttling for the
-        # run, so the reason stays measured. No retries are added: the
+        # runner's 4 vCPU are not quota'd. Measured at 4 workers (run
+        # 44917909298): 91-96% of periods throttled, canvas actions 4-5 s.
+        # The step prints the cgroup's throttling for the run, so the reason
+        # stays measured. No retries are added: the
         # config's CI retries are the compose leg's, unchanged.
         env:
           CI: "true"

@@ -112,6 +112,11 @@ jobs:
               core.info(`sweep: ${prs.length} pull request(s) merged in the last ${process.env.SWEEP_HOURS} h`);
             }
 
+            // The workflow this run belongs to, read once: belongsToPr skips
+            // every run of it.
+            const ownWorkflowId = (await github.rest.actions.getWorkflowRun({
+              owner, repo, run_id: context.runId,
+            })).data.workflow_id;
             // The unfinished runs of one pull request.
             const runsOf = async (pr) => {
               // head.repo is null when the fork was deleted; the sha match
@@ -126,6 +131,12 @@ jobs:
               );
               const belongsToPr = (run) =>
                 run.status !== 'completed' &&
+                // Never this workflow's own runs. Its close-time run is itself
+                // a `pull_request` run at one of this PR's shas, so without
+                // this it matched, cancelled itself and failed every merge
+                // (run 45035823050). Matched by workflow id, not name or path,
+                // so a rename cannot reopen it.
+                run.workflow_id !== ownWorkflowId &&
                 shas.has(run.head_sha) &&
                 (headRepo === null || run.head_repository?.full_name === headRepo) &&
                 (run.pull_requests.length === 0 ||

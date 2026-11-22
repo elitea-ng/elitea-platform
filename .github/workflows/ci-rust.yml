@@ -4,6 +4,14 @@ on:
   # Called by ci.yml, which owns the PR tiers and the path filter
   # (scripts/ci/tier-paths.json); no `pull_request` arm of its own.
   workflow_call:
+    inputs:
+      code-runner-producer:
+        description: >-
+          ci-build-once.yml's `code-runner-images` publishes the code runner
+          images in this same run (ci.yml passes true): the `test` job waits
+          for their content tags instead of building them itself.
+        type: boolean
+        default: false
   # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
   # The nightly run on main is the one that WRITES the caches pull requests
   # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
@@ -69,11 +77,17 @@ jobs:
   test:
     name: Test with PostgreSQL 18
     runs-on: ubuntu-latest
-    # About 28 min of work on a warm cache: 12 for the full test run, 3 for
-    # the code runner images, under 2 for the Docker tests once the ledger
-    # helper reuses this job's build (it once rebuilt for 7.5 min on the
-    # runner's stable rustc; the helper step now refuses any rebuild).
-    timeout-minutes: 45
+    permissions:
+      contents: read
+      # Pulls the code runner images ci-build-once.yml published (ci-* packages).
+      packages: read
+    # About 25 min of work on a warm cache: 12 for the full test run, a pull
+    # of the code runner images (they were 3 min of building here), under 2
+    # for the Docker tests once the ledger helper reuses this job's build (it
+    # once rebuilt for 7.5 min on the runner's stable rustc; the helper step
+    # now refuses any rebuild). The headroom covers the bounded wait for
+    # ci-build-once.yml's code runner images plus a build here after it.
+    timeout-minutes: 60
     services:
       postgres:
         image: postgres:18
@@ -278,71 +292,26 @@ jobs:
       # Docker supervisor. They need a code runner image by ID: the
       # `verification` target (python + the PID-1 runner) for recovery and for
       # the test-only adapter that scripts/runtime/test_sandbox_ledger.py
-      # commits on top of it, and the default target (Deno/Pyodide adapters)
-      # for the mTLS case, which reads the real adapter's JSON envelope.
+      # commits on top of it, the default target (Deno/Pyodide adapters) for
+      # the mTLS case, which reads the real adapter's JSON envelope, and the
+      # Rust language image (vendored Cargo tree + the Rust adapter) for the
+      # Docker PID-limit test, which compiles and runs user Rust code in it.
       #
-      # CACHE: one GHA scope PER TARGET, each target reading all three. A
-      # single shared scope kept only the LAST export (each `cache-to` replaces
-      # the scope's manifest), so the Deno/Pyodide layers, whose RUN downloads
-      # Pyodide and wheels from jsdelivr and PyPI, were rebuilt from the network
-      # on every pull request. `mode=max` also exports the intermediate stages
-      # (the cargo builder, deno-runtime), which `min` drops; these three scopes
-      # are small next to the 10 GB Actions cache.
-      - uses: docker/setup-buildx-action@v4
+      # NOT BUILT HERE. ci-build-once.yml's `code-runner-images` publishes each
+      # target ONCE under its content address (.github/actions/code-runner-images,
+      # scripts/ci/stack-image-hash.mjs); this pulls it by digest. Under ci.yml
+      # that job runs beside this workflow, so this waits for its tags (it has
+      # usually finished: this step comes after ~12 min of tests). The step
+      # builds a target itself, with the GHA layer cache and a no-cache retry,
+      # only when nothing was published: a fork's or Dependabot's pull request,
+      # a nightly whose inputs main has not published yet, or a producer that
+      # did not finish in time.
+      - name: Code runner images (pulled by digest; built here when unpublished)
+        uses: ./.github/actions/code-runner-images
         with:
-          # The builder image from the org's own mirror (mirror-buildkit.yml), by
-          # digest: no anonymous Docker Hub pull per job.
-          driver-opts: image=ghcr.io/elitea-ng/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
-
-      - name: Build the code runner verification image
-        uses: docker/build-push-action@v7
-        with:
-          context: services/elitea-code-runner
-          file: services/elitea-code-runner/Containerfile
-          target: verification
-          push: false
-          load: true
-          tags: elitea-code-runner:ci-verification
-          platforms: linux/amd64
-          cache-from: |
-            type=gha,scope=elitea-code-runner-verification-linux-amd64
-            type=gha,scope=elitea-code-runner-default-linux-amd64
-            type=gha,scope=elitea-code-runner-rust-runtime-linux-amd64
-          cache-to: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=elitea-code-runner-verification-linux-amd64,ignore-error=true' || '' }}
-
-      - name: Build the code runner Deno/Pyodide image
-        uses: docker/build-push-action@v7
-        with:
-          context: services/elitea-code-runner
-          file: services/elitea-code-runner/Containerfile
-          target: default
-          push: false
-          load: true
-          tags: elitea-code-runner:ci-default
-          platforms: linux/amd64
-          cache-from: |
-            type=gha,scope=elitea-code-runner-verification-linux-amd64
-            type=gha,scope=elitea-code-runner-default-linux-amd64
-            type=gha,scope=elitea-code-runner-rust-runtime-linux-amd64
-          cache-to: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=elitea-code-runner-default-linux-amd64,ignore-error=true' || '' }}
-
-      # The Rust language image (vendored Cargo tree + the Rust adapter): the
-      # Docker PID-limit test compiles and runs user Rust code in it.
-      - name: Build the code runner Rust image
-        uses: docker/build-push-action@v7
-        with:
-          context: services/elitea-code-runner
-          file: services/elitea-code-runner/Containerfile
-          target: rust-runtime
-          push: false
-          load: true
-          tags: elitea-code-runner:ci-rust
-          platforms: linux/amd64
-          cache-from: |
-            type=gha,scope=elitea-code-runner-verification-linux-amd64
-            type=gha,scope=elitea-code-runner-default-linux-amd64
-            type=gha,scope=elitea-code-runner-rust-runtime-linux-amd64
-          cache-to: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=elitea-code-runner-rust-runtime-linux-amd64,ignore-error=true' || '' }}
+          targets: verification default rust-runtime
+          registry: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]') }}
+          wait-minutes: ${{ inputs.code-runner-producer && '20' || '0' }}
 
       # The helper starts its own disposable postgres:18 container
       # (--pull=never; the service above already pulled the image), generates
