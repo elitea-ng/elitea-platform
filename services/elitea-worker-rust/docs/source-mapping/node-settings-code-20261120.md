@@ -65,7 +65,7 @@ Builds directly on 5b-1 PR A ([`node-settings-core-20261111.md`](node-settings-c
 | Main | `services/elitea-main/internal/infra/db/repos/code_registration_real_path_postgres_integration_test.go`, `services/elitea-main/internal/infra/storage/runtime_saved_code_input_policy_test.go` | `TestOriginalCodeSettingsRetryDispatchIdentityPostgres` and `TestOriginalCodeSettingsNodeErrorsVisitPostgres` real-PG integration tests + `TestSavedCodeInputPolicy*` unit tests |
 | Web | `apps/elitea-web/src/features/pipelines/lib/nodeSettings.helpers.ts` | Admits Code keys; drops `max_tries`/`wait_between_tries_ms` when `retry_on_fail` toggles off |
 | Web | `apps/elitea-web/src/features/pipelines/ui/settings/NodeSettings.tsx`, `ui/nodes/CodeNode.tsx`, `src/shared/i18n/en.json` | Renders Retry / Max tries / Wait / Timeout rows only on admitted families (`code`) + wires Code error handle + 7 i18n keys |
-| Docs | `docs/upgrading/2026-11-20-0-node-settings-code.md`, `services/elitea-worker-rust/docs/recovery-guarantees.md`, `services/elitea-worker-rust/docs/source-mapping/README.md` | Rollout order (C7), R/I/C/F/L guarantee row, source-mapping index |
+| Docs | `docs/upgrading/2026-11-20-2902-node-settings-code.md`, `services/elitea-worker-rust/docs/recovery-guarantees.md`, `services/elitea-worker-rust/docs/source-mapping/README.md` | Rollout order (C7), R/I/C/F/L guarantee row, source-mapping index |
 
 No new third-party dependencies were added in Rust, Go, or Web.
 
@@ -122,7 +122,7 @@ Because `NodeSettings::to_recovery_policy` constructs a standard `NodeRecoveryPo
 
 ### Binding condition C7 — Rollout order and version-skew proof
 
-- Upgrade note [`docs/upgrading/2026-11-20-0-node-settings-code.md`](../../../docs/upgrading/2026-11-20-0-node-settings-code.md) leads with **"Main ships before the Worker"**.
+- Upgrade note [`docs/upgrading/2026-11-20-2902-node-settings-code.md`](../../../docs/upgrading/2026-11-20-2902-node-settings-code.md) leads with **"Main ships before the Worker"**.
 - **Old Main + new Worker fails closed:** Before this PR, Main's `MatchOriginalSavedCodeConfiguration` stripped only `recovery` and `failure_handler` (`runtime_saved_code_policy.go:334-335`) and `ReadSavedCodeDeclaration` rejected any key outside its 14-key allowlist (`runtime_saved_code_policy.go:366`). A saved Code node carrying `settings:` therefore fails closed on an older Main (`ErrContentUnauthorized` / `ErrContentRejected`) rather than silently stripping or widening dispatch identity.
 - **New Main + old Worker:** Old Worker rejects `settings:` on Code at compile time (`pipeline.node_settings.invalid`), and rejects `SCHEMA_V4` journal payloads as `corrupt_journal` (`node_recovery_codec.rs:21-38`). No silent misinterpretation occurs in either direction.
 
