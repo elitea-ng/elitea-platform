@@ -194,4 +194,26 @@ describe('useRunEvent', () => {
     expect(result.current.pipelineRunNodes).toEqual([]);
     expect(setFlowNodes).not.toHaveBeenCalled();
   });
+
+  it('records failureCode on execution.failed so typed refusals stay distinguishable from runtime errors', () => {
+    const response = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const { setFlowNodes } = makeStatefulSetFlowNodes([{ id: 'step', type: 'agent', position: { x: 0, y: 0 }, data: {} }]);
+    const { result } = renderHook(() => useRunEvent(setFlowNodes, { nodes: [{ id: 'step' }] }));
+    act(() => result.current.onRcvAgentEvent({ type: 'agent_start', message_id: response, execution_generation: '1', response_metadata: {} }));
+    act(() =>
+      result.current.onRcvAgentEvent({
+        type: 'execution.failed',
+        message_id: response,
+        execution_generation: '1',
+        code: 'AUTHORIZATION_FAILED',
+        content: 'Execution authorization failed.',
+        response_metadata: {},
+      }),
+    );
+    expect(result.current.pipelineRunNodes[0]?.data).toMatchObject({
+      status: PipelineStatus.Error,
+      error: 'Execution authorization failed.',
+      failureCode: 'AUTHORIZATION_FAILED',
+    });
+  });
 });

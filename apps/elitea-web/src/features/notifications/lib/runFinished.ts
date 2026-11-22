@@ -19,6 +19,8 @@ export function runFinishedText(outcome: string | undefined): RunFinishedText {
   switch (outcome) {
     case 'failed':
       return { title: t('notifications.runFinished.failed.title', 'Run failed'), body: t('notifications.runFinished.failed.body', 'A run stopped with an error.') };
+    case 'refused':
+      return { title: t('notifications.runFinished.refused.title', 'Run refused'), body: t('notifications.runFinished.refused.body', 'A run was refused by policy or permissions.') };
     case 'waiting':
       return { title: t('notifications.runFinished.waiting.title', 'Run needs you'), body: t('notifications.runFinished.waiting.body', 'A run waits for your answer.') };
     case 'limit_reached':

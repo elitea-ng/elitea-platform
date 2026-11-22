@@ -162,9 +162,9 @@ export function useChatStreamTransport(
       const replayInto = takePendingReplay();
       setChatHistory((prev) => {
         const replayed = replayInto === undefined ? prev : resetTurnForReplay(prev, replayInto);
-        // Bind assembly results that arrive without agent_start to the admitted generation.
+        // Bind assembly results that arrive without agent_start to the admitted generation, clearing prior-generation failure/delegation state.
         const owned = generation && replayed.some((message) => message.id === responseId && message.executionGeneration !== generation)
-          ? replayed.map((message) => message.id === responseId ? { ...message, executionGeneration: generation } : message) : replayed;
+          ? replayed.map((message) => message.id === responseId ? { ...message, executionGeneration: generation, isStreaming: true, isLoading: true, delegationNotices: undefined, failureCode: undefined, failureCap: undefined, exception: undefined } : message) : replayed;
         return stampExecution(applyChatStreamFrame(owned, identifiedFrame, contextRef.current ?? {}), responseId, executionRef.current);
       });
       // Success progress precedes full_message; the result releases the durable observer.
