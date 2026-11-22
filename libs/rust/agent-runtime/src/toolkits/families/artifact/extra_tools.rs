@@ -49,8 +49,9 @@ use crate::toolkits::families::vcs_text::{
 use super::ArtifactToolAuthority;
 use super::tools::{
     MAX_CONTENT_CHARS, MAX_FILENAME_BYTES, artifact_effect_failure_text, artifact_failure_text,
-    failure_cause, line_range, normalized_key, optional_bool, optional_line, optional_string,
-    over_limit_value, parse_filepath, string_argument, target_bucket, tool_description,
+    check_bucket_scope, failure_cause, line_range, normalized_key, optional_bool, optional_line,
+    optional_string, over_limit_value, parse_filepath, string_argument, target_bucket,
+    tool_description,
 };
 
 const READ_MULTIPLE_FILES: &str = "read_multiple_files";
@@ -441,6 +442,9 @@ impl ExtraTool {
             .zip(limit)
             .map(|(offset, limit)| offset.saturating_add(limit).saturating_sub(1));
         let default_bucket = target_bucket(arguments, &self.bucket);
+        if let Err(refusal) = check_bucket_scope(&self.authority, &self.bucket, &default_bucket) {
+            return sentence(refusal);
+        }
         let mut results = Map::new();
         let mut cumulative = 0_usize;
         for path in paths {
@@ -482,6 +486,7 @@ impl ExtraTool {
         } else {
             (default_bucket.to_owned(), normalized_key(path))
         };
+        check_bucket_scope(&self.authority, &self.bucket, &bucket)?;
         let request = ArtifactReadRequest { bucket, name: key };
         match self.authority.writer().read_artifact(&request).await {
             Ok(outcome) if outcome.over_limit => Ok(over_limit_value(&outcome)),
@@ -537,6 +542,9 @@ impl ExtraTool {
             },
         };
         let bucket = target_bucket(arguments, &self.bucket);
+        if let Err(refusal) = check_bucket_scope(&self.authority, &self.bucket, &bucket) {
+            return sentence(refusal);
+        }
         let key = normalized_key(&file_path);
         let outcome = match self
             .read_text(GREP_FILE, "search the file", &bucket, &key)
@@ -574,6 +582,9 @@ impl ExtraTool {
             ));
         }
         let bucket = target_bucket(arguments, &self.bucket);
+        if let Err(refusal) = check_bucket_scope(&self.authority, &self.bucket, &bucket) {
+            return sentence(refusal);
+        }
         let key = normalized_key(&file_path);
         let before = match self.marker(EDIT_FILE, "edit the file", &bucket, &key).await {
             Ok(before) => before,
@@ -665,6 +676,9 @@ impl ExtraTool {
         };
         let create_if_missing = optional_bool(arguments, "create_if_missing").unwrap_or(true);
         let bucket = target_bucket(arguments, &self.bucket);
+        if let Err(refusal) = check_bucket_scope(&self.authority, &self.bucket, &bucket) {
+            return sentence(refusal);
+        }
         let key = normalized_key(&filename);
         let lower = key.to_ascii_lowercase();
         if NOT_TEXT_EXTENSIONS
@@ -780,6 +794,9 @@ impl ExtraTool {
         } else {
             return metadata_error("Must provide either 'filepath' or 'filename'.", None, &[]);
         };
+        if let Err(refusal) = check_bucket_scope(&self.authority, &self.bucket, &bucket) {
+            return metadata_error(&refusal, Some(&key), &[("bucket", bucket.as_str())]);
+        }
         let listing = ArtifactListRequest {
             bucket: bucket.clone(),
             prefix: key.clone(),
@@ -908,6 +925,12 @@ impl ExtraTool {
     // ----- create_new_bucket -------------------------------------------------
 
     async fn create_new_bucket(&self, arguments: &Value) -> Value {
+        if self.authority.is_bucket_pinned() {
+            return sentence(format!(
+                "This delegated artifact toolkit is restricted to its configured bucket '{}' and cannot create new buckets.",
+                self.bucket
+            ));
+        }
         let Some(requested) = string_argument(arguments, "bucket_name") else {
             return sentence("Could not create the bucket: a non-empty bucket_name is required.");
         };
