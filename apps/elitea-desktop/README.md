@@ -396,8 +396,8 @@ executable; a build without it reads text files only.
 
 ## Release signing and packaging
 
-`.github/workflows/desktop-package.yml` (ADR-0052 W2b) builds the app for device
-management:
+`.github/workflows/desktop-package.yml` (ADR-0052 W2b) builds the app for every
+release and for device management:
 
 - **macOS:** an **Apple silicon** (arm64) app, signed with the
   brand owner's Developer ID and the hardened runtime, notarised and stapled.
@@ -409,7 +409,12 @@ management:
   `/Applications` with no UI, signed with the Developer ID Installer identity,
   notarised and stapled. The workflow verifies both with `codesign`,
   `spctl -a -vv`, `pkgutil --check-signature` and `stapler validate`.
-- **Windows:** an MSI and an MSIX. The host builds and passes its tests on Windows since #1828; #1699 turns the package job on.
+- **Windows:** an x64 MSI (Tauri's WiX bundle) and an MSIX (`makeappx`). They are
+  unsigned until a Windows signer's secrets are set; then the same job signs and
+  verifies them. An unsigned MSIX's `Publisher` carries the unsigned-publisher OID
+  (`scripts/windows-package.mjs` `msixPublisher`), so it installs with Developer
+  Mode on through `Add-AppxPackage -AllowUnsigned` (a recent Windows 11). A pull request that changes the
+  app builds both in full, unsigned.
 
 `scripts/desktop-package.mjs` decides, for each platform, whether the workflow signs:
 
@@ -418,14 +423,32 @@ management:
 - **Only some are set:** the job fails.
 
 A pull request never signs. Every release (`publish.yml`'s `desktop` job) runs
-the workflow with `require_signed` as a release check.
+the workflow with `require_signed_macos: true` and `require_signed_windows: false`:
+macOS must be signed and notarised, Windows is signed only once a signer exists.
+A half-configured signer fails on either platform.
 
-**Nothing is published** (owner decision 10). No package is attached to the
-GitHub release, and the release check keeps no artifact: in a public
-repository, artifacts are downloadable. To get a package for MDM, the brand
-owner runs **Desktop — package for device management** by hand
-(workflow_dispatch) with `keep_artifacts`. The package is then kept as a
-workflow artifact for 7 days.
+**Attached to every release** (owner decision 2026-11-22, amending ADR-0052
+decision 10). The stable release and the nightly pre-release carry, named
+`<Brand>-<version>-<os>-<arch>[-unsigned].<ext>` (`scripts/desktop-package.mjs`
+`assetName`):
+
+| Asset | What it is |
+| --- | --- |
+| `Elitea-<version>-macos-arm64.pkg` | the signed, notarised installer package (device management, or a double-click) |
+| `Elitea-<version>-macos-arm64.app.zip` | the notarised, stapled app, zipped with `ditto -c -k --keepParent` |
+| `Elitea-<version>-windows-x64-unsigned.msi` | the MSI (SmartScreen warns: **More info** › **Run anyway**) |
+| `Elitea-<version>-windows-x64-unsigned.msix` | the MSIX (testing only: a recent Windows 11, Developer Mode and `Add-AppxPackage -AllowUnsigned`) |
+| `SHA256SUMS` | the SHA-256 of each file above |
+
+`publish.yml`'s `desktop-assets` job attaches them with `gh release upload --clobber`
+and adds a **Desktop downloads** section to the release notes. It runs when the
+`desktop` job failed too, so a broken Windows build still leaves the signed macOS
+packages on the release, and the `desktop` job stays red. A failure never deletes
+the release (rollback does not wait on either job).
+
+To get a package without a release, run **Desktop — package for device
+management** by hand (workflow_dispatch) with `keep_artifacts`. It is then kept
+as a workflow artifact for 7 days; the macOS package must be signed.
 
 The version is stamped at build time, so neither file is bumped by hand:
 - Cargo.toml gets the full release version, which `X-Client-Version` sends;
@@ -451,8 +474,8 @@ fixed names:
 | `APPLE_API_ISSUER` | the **Issuer ID** (UUID) shown above that key list | same page |
 | `APPLE_API_PRIVATE_KEY` | base64 of the downloaded `AuthKey_<KEYID>.p8` | `base64 -i AuthKey_<KEYID>.p8 \| pbcopy` (it can be downloaded once) |
 
-Windows (the job is off until #1699; the repository variable
-`DESKTOP_WINDOWS_PACKAGE=true` switches it on). Set **one** of the two sets.
+Windows (none is set yet, so the packages ship unsigned). Set **one** of the two
+sets, in full: the next release signs with no workflow change.
 `WINDOWS_PUBLISHER` is the certificate's subject (`CN=…, O=…, C=…`), and the
 MSIX `Publisher` must equal it.
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // The Windows half of .github/workflows/desktop-package.yml (ADR-0052 decisions 4 and 8;
 // W2b.2, #1699): the Tauri signing overlay the MSI is built with, and the MSIX manifest
-// makeappx packs. The job is off until the host builds on Windows (#1828); this module is
-// tested now so the job only has to be switched on.
+// makeappx packs. Every release builds them (owner decision 2026-11-22), unsigned until a
+// Windows signer's secrets exist.
 //
 //   node scripts/windows-package.mjs overlay <trusted|pfx|none>   write src-tauri/tauri.windows.json
 //   node scripts/windows-package.mjs manifest <layout-dir> <X.Y.Z> write <layout-dir>/AppxManifest.xml
@@ -22,6 +22,27 @@ import { TAURI_DIR } from './tauri-brand.mjs';
 export const OVERLAY_FILE = join(TAURI_DIR, 'tauri.windows.json');
 /** RFC 3161 timestamping: a signature stays valid after the certificate expires. */
 export const TIMESTAMP_URL = 'http://timestamp.acs.microsoft.com';
+
+/**
+ * The OID that marks an MSIX Publisher as unsigned. Windows installs an unsigned package
+ * (`Add-AppxPackage -AllowUnsigned`, Developer Mode on) only when its Publisher carries it.
+ */
+export const UNSIGNED_PUBLISHER_OID = 'OID.2.25.311729368913984317654407730594956997722=1';
+
+/**
+ * The MSIX Publisher: the signing certificate's subject (WINDOWS_PUBLISHER) when there is
+ * a signer, else `CN=<publisher>` plus the unsigned OID.
+ */
+export function msixPublisher(publisherName, subject) {
+  const s = subject?.trim();
+  if (s) return s;
+  const name = String(publisherName ?? '').trim();
+  if (!name) throw new Error('MSIX: the brand has no publisher');
+  // A distinguished-name value with a special character is quoted.
+  // Inside the quotes a backslash escapes, so it is escaped first, then each quote.
+  const cn = /[,+="<>#;\\]/.test(name) ? `"${name.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"` : name;
+  return `CN=${cn}, ${UNSIGNED_PUBLISHER_OID}`;
+}
 
 /** The MSIX version: four numeric parts, the last 0 (the Store reserves it). */
 export function msixVersion(version) {
@@ -118,7 +139,7 @@ if (isMain) {
           identifier: m.desktop.identifier,
           displayName: m.shortName,
           publisherDisplayName: m.publisher,
-          publisher: process.env.WINDOWS_PUBLISHER?.trim() || `CN=${m.publisher}`,
+          publisher: msixPublisher(m.publisher, process.env.WINDOWS_PUBLISHER),
           version,
           executable: 'elitea-desktop.exe',
         }),

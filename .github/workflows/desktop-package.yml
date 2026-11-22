@@ -1,21 +1,30 @@
 name: Desktop — package for device management
 
-# The desktop app's MDM packages (ADR-0052 decisions 4, 6 and 8; W2b): an Apple
-# silicon (arm64) macOS app signed with the brand owner's Developer ID, notarised and
-# stapled, in a signed `.pkg` that installs silently and refuses an Intel Mac (Intel
-# is not supported, owner decision 2026-11-20); and (once the host builds on
-# Windows, #1828) an MSI for Intune and an MSIX for the Store.
+# The desktop app's packages (ADR-0052 decisions 4, 6 and 8; W2b): an Apple silicon
+# (arm64) macOS app signed with the brand owner's Developer ID, notarised and stapled,
+# in a signed `.pkg` that installs silently and refuses an Intel Mac (Intel is not
+# supported, owner decision 2026-11-20); and an x64 MSI (Intune, SCCM, msiexec) and
+# MSIX (the Store, Intune) for Windows.
 #
-# NOTHING IS ATTACHED TO A RELEASE (owner decision 10). ELITEA's desktop app reaches
-# clients only through their device management. The packages stay WORKFLOW
-# ARTIFACTS, and only on a run the brand owner starts by hand (workflow_dispatch)
-# with `keep_artifacts`: a public repository's artifacts are downloadable, so the
-# release check (publish.yml) never keeps them.
+# ATTACHED TO EVERY RELEASE (owner decision 2026-11-22, amending ADR-0052 decision
+# 10, which kept them off the release). Called from publish.yml with
+# `upload_release_assets`, each job stages its packages under their release names
+# (`<Brand>-<version>-<os>-<arch>[-unsigned].<ext>`, desktop-package.mjs assetName)
+# and uploads them as a one-day workflow artifact; publish.yml `desktop-assets`
+# attaches them, with SHA256SUMS, to the GitHub release (stable and nightly).
+#   macOS     signed and notarised, ALWAYS (`require_signed_macos`): the .pkg and the
+#             notarised .app zipped (`ditto -c -k --keepParent`).
+#   Windows   UNSIGNED until a Windows signer's secrets exist (`require_signed_windows`
+#             is false), named `-unsigned`. Once a signer's full set is set, the same
+#             run signs. The unsigned MSIX installs only on a recent Windows 11
+#             (Developer Mode, `Add-AppxPackage -AllowUnsigned`); the MSI shows a SmartScreen warning.
 #
 # SECRETS BY FIXED NAME (scripts/desktop-package.mjs `SECRETS`, the list W5
-# publishes). All of a platform's secrets: sign and verify. None: an unsigned dry
-# run with a notice, so forks and pull requests stay green. Some: a failure. A
-# pull request is ALWAYS a dry run: its code must not run with the certificates.
+# publishes). All of a platform's secrets: sign and verify. None: an unsigned build
+# with a notice, so forks and pull requests stay green (and, for Windows, the
+# release ships unsigned). Some: a failure, always. `require_signed_<os>`: none is a
+# failure too. A pull request is ALWAYS a dry run: its code must not run with the
+# certificates.
 #
 # WHEN.
 #   pull_request        through ci.yml (heavy tier), only when the desktop app, its
@@ -27,11 +36,16 @@ name: Desktop — package for device management
 #                       It builds brand/sample and is also the desktop lane of
 #                       the ADR-0052 W4 output scan (scripts/ci/brand-output-scan.mjs):
 #                       the packaged host binary and its overlay carry no ELITEA
-#                       literal. Main and releases build the ELITEA brand.
+#                       literal. The Windows job builds the ELITEA brand in full
+#                       (release profile, unsigned): `tauri build`, the sidecar,
+#                       the MSI and makeappx, and stages the release asset names.
+#                       Main and releases build the ELITEA brand.
 #   workflow_call       publish.yml, on main: the nightly pre-release (its schedule)
-#                       and every release. The full release build, signed and
-#                       verified (`require_signed`).
-#   workflow_dispatch   by hand: a signed package to hand to device management.
+#                       and every release. The full release build, macOS signed and
+#                       verified, Windows signed when a signer exists; the
+#                       packages go to the release (`upload_release_assets`).
+#   workflow_dispatch   by hand: a package to hand to device management (macOS
+#                       signed; Windows as the release builds it).
 on:
   workflow_call:
     inputs:
@@ -45,10 +59,23 @@ on:
         type: string
         required: false
         default: ""
-      require_signed:
-        description: Fail unless every package is signed (the release check).
+      require_signed_macos:
+        description: Fail unless the macOS app and package are signed and notarised (the release check).
         type: boolean
         default: true
+      require_signed_windows:
+        description: >-
+          Fail unless the Windows packages are signed. False until a Windows signer
+          exists (owner decision 2026-11-22): the release ships them unsigned. A
+          half-configured signer fails either way.
+        type: boolean
+        default: false
+      upload_release_assets:
+        description: >-
+          Stage the packages under their release names and upload them as one-day
+          workflow artifacts (desktop-release-<os>) for publish.yml `desktop-assets`.
+        type: boolean
+        default: false
     secrets:
       APPLE_CERTIFICATE: { required: false }
       APPLE_CERTIFICATE_PASSWORD: { required: false }
@@ -153,7 +180,7 @@ jobs:
           dry-run: ${{ github.event_name == 'pull_request' }}
           debug: ${{ github.event_name == 'pull_request' }}
           # A kept package goes to device management: it must be signed.
-          require-signed: ${{ inputs.require_signed == true || inputs.keep_artifacts == true }}
+          require-signed: ${{ inputs.require_signed_macos == true || inputs.keep_artifacts == true }}
           apple-certificate: ${{ secrets.APPLE_CERTIFICATE }}
           apple-certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           apple-signing-identity: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -181,22 +208,71 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
-  # OFF UNTIL W2b.2 (#1699): the host and local-tools build and pass their tests on
-  # windows-latest since #1828 (ci-desktop.yml, `windows-host`). #1699 turns this job on
-  # (the repository variable DESKTOP_WINDOWS_PACKAGE=true) once `tauri build`, the
-  # sidecar and makeappx run green here; the inputs (signing overlay, MSIX manifest) are
-  # tested in windows-package.test.mjs. The MSI's Start Menu shortcut sets
-  # System.AppUserModel.ID to the brand's desktop identifier (Tauri's WiX template), the
-  # id the host's toasts use; the MSIX build reads `<PackageFamilyName>!App` (src/aumid.rs).
+      # The release names (desktop-package.mjs assetName), staged on EVERY run so a
+      # pull request's dry run proves them too (`-unsigned` there). The .pkg, and the
+      # notarised .app zipped with `ditto -c -k --keepParent`: the stapled ticket is
+      # inside the bundle, so the unzipped app passes Gatekeeper offline.
+      - name: Stage the release assets
+        id: assets
+        env:
+          VERSION: ${{ inputs.version }}
+          SIGNED: ${{ steps.package.outputs.signed }}
+          PACKAGE_DIR: ${{ steps.package.outputs.package-dir }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          script=apps/elitea-desktop/scripts/desktop-package.mjs
+          brand="$(node -p 'require("./apps/elitea-desktop/src-tauri/tauri.brand.json").productName')"
+          version="${VERSION:-$DESKTOP_VERSION}"
+          out="$RUNNER_TEMP/release-assets"
+          rm -rf "$out" && mkdir -p "$out"
+          pkgs=("$PACKAGE_DIR"/*.pkg)
+          if [ "${#pkgs[@]}" -ne 1 ]; then echo "::error::want one .pkg in $PACKAGE_DIR, found ${#pkgs[@]}"; exit 1; fi
+          cp "${pkgs[0]}" "$out/$(node "$script" asset-name macos pkg "$brand" "$version" "$SIGNED")"
+          ditto -c -k --keepParent "${DESKTOP_BUNDLE}/${DESKTOP_APP}" "$out/$(node "$script" asset-name macos app.zip "$brand" "$version" "$SIGNED")"
+          ls -l "$out"
+          echo "dir=$out" >> "$GITHUB_OUTPUT"
+
+      # One day: publish.yml `desktop-assets` attaches them to the release in the same run.
+      - name: Upload the release assets (publish.yml attaches them)
+        if: inputs.upload_release_assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-release-macos
+          path: ${{ steps.assets.outputs.dir }}/*
+          retention-days: 1
+          if-no-files-found: error
+          # A .pkg and a .zip are compressed already.
+          compression-level: 0
+
+  # ON IN EVERY RELEASE (owner decision 2026-11-22, #1699). No repository variable gates
+  # it any more: DESKTOP_WINDOWS_PACKAGE was never set, so the job never ran, and a kill
+  # switch that defaults on is a state nobody tests. A broken Windows build fails this
+  # job red and leaves the release (and its macOS assets) in place: publish.yml's
+  # rollback does not wait on `desktop`, and `desktop-assets` attaches what was built.
+  # The pull request's dry run (ci.yml heavy tier, DESKTOP_PACKAGE_PATHS) runs it in
+  # full: `tauri build` in the release profile, the sidecar, the MSI and makeappx.
+  #
+  # The MSI's Start Menu shortcut sets System.AppUserModel.ID to the brand's desktop
+  # identifier (Tauri's WiX template), the id the host's toasts use; the MSIX build reads
+  # `<PackageFamilyName>!App` (src/aumid.rs).
   #
   # An MSI (Tauri's WiX bundle: Intune, SCCM, `msiexec /i … /qn`) and an MSIX (makeappx:
-  # the Store, Intune), the host, the sidecar, the MSI and the MSIX all signed with Azure
+  # the Store, Intune). UNSIGNED until a signer exists (`require_signed_windows: false`
+  # in publish.yml): the files are named `-unsigned`, and the MSIX Publisher carries the
+  # unsigned OID (windows-package.mjs msixPublisher). With one signer's full set of
+  # secrets, the host, the sidecar, the MSI and the MSIX are all signed with Azure
   # Artifact Signing or a code-signing certificate (PFX), timestamped, then verified.
   windows:
     name: Windows (.msi, .msix)
-    if: vars.DESKTOP_WINDOWS_PACKAGE == 'true'
     runs-on: windows-latest
     timeout-minutes: 90
+    # `npm ci` fetches cold (no npm cache on Windows, below): one ECONNRESET
+    # with npm's default 2 retries would fail the job.
+    env:
+      NPM_CONFIG_FETCH_RETRIES: "6"
+      NPM_CONFIG_FETCH_RETRY_MINTIMEOUT: "20000"
+      NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: "120000"
     defaults:
       run:
         shell: bash
@@ -207,14 +283,14 @@ jobs:
           ref: ${{ inputs.ref }}
           persist-credentials: false
 
+      # No npm cache: on Windows `npm config get cache` answers a backslash path,
+      # which main-write-cache's literal-path guard (written for $HOME/.npm)
+      # refuses, as in ci-desktop.yml `windows-host`. `npm ci` runs cold, with the
+      # registry patience the npm-cache action sets elsewhere (the job's env).
       - uses: actions/setup-node@v7
         with:
           node-version: "26"
           package-manager-cache: false
-      - name: Restore the npm cache (pull requests read, main writes)
-        uses: ./.github/actions/npm-cache
-        with:
-          cache-dependency-path: apps/elitea-web/package-lock.json
 
       - name: Build, sign and verify (or dry run)
         id: package
@@ -222,7 +298,9 @@ jobs:
         with:
           version: ${{ inputs.version }}
           dry-run: ${{ github.event_name == 'pull_request' }}
-          require-signed: ${{ inputs.require_signed == true || inputs.keep_artifacts == true }}
+          # Not keep_artifacts: a kept Windows package is what the release ships,
+          # unsigned until a signer exists. A half-configured signer still fails.
+          require-signed: ${{ inputs.require_signed_windows == true }}
           windows-publisher: ${{ secrets.WINDOWS_PUBLISHER }}
           azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
           azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
@@ -232,6 +310,11 @@ jobs:
           azure-signing-profile: ${{ secrets.AZURE_SIGNING_PROFILE }}
           windows-certificate: ${{ secrets.WINDOWS_CERTIFICATE }}
           windows-certificate-password: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+
+      # Said, not silent: a kept unsigned package must not pass for a signed one.
+      - name: Say a kept Windows package is unsigned
+        if: github.event_name == 'workflow_dispatch' && inputs.keep_artifacts && steps.package.outputs.signed != 'true'
+        run: echo "::warning::the kept .msi and .msix are UNSIGNED (no Windows signer's secrets); SmartScreen warns on the MSI and the MSIX needs Developer Mode"
 
       - name: Keep the packages (by hand only)
         if: github.event_name == 'workflow_dispatch' && inputs.keep_artifacts
@@ -243,3 +326,36 @@ jobs:
             ${{ steps.package.outputs.package-dir }}/*.msix
           retention-days: 7
           if-no-files-found: error
+
+      # The release names, staged on every run (the pull request proves them too).
+      - name: Stage the release assets
+        id: assets
+        env:
+          VERSION: ${{ inputs.version }}
+          SIGNED: ${{ steps.package.outputs.signed }}
+          PACKAGE_DIR: ${{ steps.package.outputs.package-dir }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          script=apps/elitea-desktop/scripts/desktop-package.mjs
+          brand="$(node -p 'require("./apps/elitea-desktop/src-tauri/tauri.brand.json").productName')"
+          version="${VERSION:-$DESKTOP_VERSION}"
+          out="$RUNNER_TEMP/release-assets"
+          rm -rf "$out" && mkdir -p "$out"
+          for ext in msi msix; do
+            files=("$PACKAGE_DIR"/*."$ext")
+            if [ "${#files[@]}" -ne 1 ]; then echo "::error::want one .$ext in $PACKAGE_DIR, found ${#files[@]}"; exit 1; fi
+            cp "${files[0]}" "$out/$(node "$script" asset-name windows "$ext" "$brand" "$version" "$SIGNED")"
+          done
+          ls -l "$out"
+          echo "dir=$out" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the release assets (publish.yml attaches them)
+        if: inputs.upload_release_assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-release-windows
+          path: ${{ steps.assets.outputs.dir }}/*
+          retention-days: 1
+          if-no-files-found: error
+          compression-level: 0

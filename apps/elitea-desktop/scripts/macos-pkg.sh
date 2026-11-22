@@ -74,7 +74,11 @@ build_product() {
 }
 
 pkg="$out/${name}-${version}-arm64.pkg"
-if [ -z "${INSTALLER_IDENTITY:-}" ]; then
+# A secret pasted with a trailing newline or space names no identity: trim it.
+INSTALLER_IDENTITY="${INSTALLER_IDENTITY:-}"
+INSTALLER_IDENTITY="${INSTALLER_IDENTITY#"${INSTALLER_IDENTITY%%[![:space:]]*}"}"
+INSTALLER_IDENTITY="${INSTALLER_IDENTITY%"${INSTALLER_IDENTITY##*[![:space:]]}"}"
+if [ -z "$INSTALLER_IDENTITY" ]; then
   build_product
   echo "unsigned package: $pkg"
   exit 0
@@ -100,8 +104,20 @@ while IFS= read -r line; do
   [ -n "$line" ] && existing+=("$line")
 done < <(security list-keychains -d user)
 security list-keychains -d user -s "$keychain" "${existing[@]}"
-if ! security find-identity -v "$keychain" | grep -qF "$INSTALLER_IDENTITY"; then
-  echo "::error::the certificate holds no identity \"$INSTALLER_IDENTITY\" (a Developer ID Installer identity is needed)" >&2
+security find-identity "$keychain" > "$work/identities.txt"
+security find-identity -v "$keychain" > "$work/valid.txt"
+if ! grep -qF "$INSTALLER_IDENTITY" "$work/valid.txt"; then
+  # Why, without printing a name: absent from the .p12, or present but not valid
+  # (the reason security gives, e.g. CSSMERR_TP_NOT_TRUSTED for a missing
+  # Developer ID intermediate, or an expired certificate).
+  installers="$(grep -c '"Developer ID Installer: ' "$work/valid.txt" || true)"
+  apps="$(grep -c '"Developer ID Application: ' "$work/valid.txt" || true)"
+  reason="$(grep -F "$INSTALLER_IDENTITY" "$work/identities.txt" | head -n 1 | sed -nE 's/.*" \((.*)\)$/\1/p' || true)"
+  if grep -qF "$INSTALLER_IDENTITY" "$work/identities.txt"; then
+    echo "::error::the certificate holds the identity APPLE_INSTALLER_SIGNING_IDENTITY names, but macOS does not accept it as valid (${reason:-no reason given})" >&2
+  else
+    echo "::error::the certificate holds no identity named by APPLE_INSTALLER_SIGNING_IDENTITY (a Developer ID Installer identity is needed). Valid identities in it: ${installers} Developer ID Installer, ${apps} Developer ID Application. Export both identities into the APPLE_CERTIFICATE .p12, and set the secret to the full name \`security find-identity -v\` prints." >&2
+  fi
   exit 1
 fi
 

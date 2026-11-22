@@ -163,11 +163,22 @@ test("a parser that finds nothing fails", () => {
 function packageModel() {
   const pr = "${{ github.event_name == 'pull_request' }}";
   return {
-    ci: { jobs: { "desktop-package": { needs: ["changes", "fast-gate"], uses: "./.github/workflows/desktop-package.yml", with: { require_signed: false } } } },
+    ci: { jobs: { "desktop-package": { needs: ["changes", "fast-gate"], uses: "./.github/workflows/desktop-package.yml", with: { require_signed_macos: false, require_signed_windows: false } } } },
     tiers: { jobs: { "desktop-package": { tier: "heavy", paths: [...DESKTOP_PACKAGE_PATHS].reverse() } } },
     workflows: {
-      "desktop-package.yml": { parsed: { jobs: { macos: { steps: [{ uses: "./.github/actions/desktop-macos-package", with: { "dry-run": pr, debug: pr } }] } } }, text: "" },
-      "publish.yml": { parsed: { jobs: { desktop: { uses: "./.github/workflows/desktop-package.yml", with: { require_signed: true } } } }, text: "" },
+      "desktop-package.yml": {
+        parsed: {
+          jobs: {
+            macos: { steps: [{ uses: "./.github/actions/desktop-macos-package", with: { "dry-run": pr, debug: pr } }] },
+            windows: { steps: [{ uses: "./.github/actions/desktop-windows-package", with: { "dry-run": pr } }] },
+          },
+        },
+        text: "",
+      },
+      "publish.yml": {
+        parsed: { jobs: { desktop: { uses: "./.github/workflows/desktop-package.yml", with: { require_signed_macos: true, require_signed_windows: false, upload_release_assets: true } } } },
+        text: "",
+      },
     },
   };
 }
@@ -190,17 +201,41 @@ test("the macOS package gate: a path added to or dropped from the PR filter is r
 
 test("the macOS package gate: a pull request stays a dry run, publish.yml stays signed", () => {
   const m = packageModel();
-  m.ci.jobs["desktop-package"].with.require_signed = true;
+  m.ci.jobs["desktop-package"].with.require_signed_macos = true;
+  m.ci.jobs["desktop-package"].with.upload_release_assets = true;
   m.workflows["desktop-package.yml"].parsed.jobs.macos.steps[0].with.debug = "false";
   m.workflows["desktop-package.yml"].parsed.jobs.macos.steps[0].with["dry-run"] = "true";
-  m.workflows["publish.yml"].parsed.jobs.desktop.with.require_signed = false;
+  m.workflows["publish.yml"].parsed.jobs.desktop.with.require_signed_macos = false;
   const errors = checkDesktopPackage(m);
-  has(errors, "ci.yml must pass `require_signed: false`");
-  has(errors, "the package step's `debug` must be");
-  has(errors, "the package step's `dry-run` must be");
-  has(errors, "publish.yml: the desktop-package call must pass `require_signed: true`");
+  has(errors, "ci.yml must pass `require_signed_macos: false`");
+  has(errors, "ci.yml must not pass `upload_release_assets: true`");
+  has(errors, "the `macos` package step's `debug` must be");
+  has(errors, "the `macos` package step's `dry-run` must be");
+  has(errors, "publish.yml: the desktop-package call must pass `require_signed_macos: true`");
   delete m.ci.jobs["desktop-package"];
   has(checkDesktopPackage(m), "ci.yml has no `desktop-package` job");
+});
+
+test("the Windows package gate: on in every call, a dry run on a pull request, its signing stated in publish.yml", () => {
+  const m = packageModel();
+  m.ci.jobs["desktop-package"].with.require_signed_windows = true;
+  m.workflows["desktop-package.yml"].parsed.jobs.windows.if = "vars.DESKTOP_WINDOWS_PACKAGE == 'true'";
+  m.workflows["desktop-package.yml"].parsed.jobs.windows.steps[0].with["dry-run"] = "false";
+  delete m.workflows["publish.yml"].parsed.jobs.desktop.with.require_signed_windows;
+  delete m.workflows["publish.yml"].parsed.jobs.desktop.with.upload_release_assets;
+  const errors = checkDesktopPackage(m);
+  has(errors, "ci.yml must pass `require_signed_windows: false`");
+  has(errors, "the `windows` job has an `if:`");
+  has(errors, "the `windows` package step's `dry-run` must be");
+  has(errors, "must state `require_signed_windows`");
+  has(errors, "must pass `upload_release_assets: true`");
+  // A Windows signer later flips it to true: still a sound model.
+  const signed = packageModel();
+  signed.workflows["publish.yml"].parsed.jobs.desktop.with.require_signed_windows = true;
+  assert.deepEqual(checkDesktopPackage(signed), []);
+  const gone = packageModel();
+  delete gone.workflows["desktop-package.yml"].parsed.jobs.windows;
+  has(checkDesktopPackage(gone), "the `windows` job does not use ./.github/actions/desktop-windows-package");
 });
 
 test("one web unit suite: the plain shards stand down only where coverage runs", () => {

@@ -21,8 +21,8 @@ name: Release & Publish
 # ignores pre-release versions when it looks for the last release of `main`.
 #
 # A pre-release builds, scans, signs and publishes the same images and charts a
-# release does, and runs the same macOS signing check (the `desktop` job, which
-# publishes nothing), under its own version only — the manifest step never gives a
+# release does, and builds and attaches the same desktop packages (the `desktop` and
+# `desktop-assets` jobs), under its own version only — the manifest step never gives a
 # version with a `-` the moving tags. The `prune` job keeps the newest
 # PRERELEASE_KEEP of each pre-release channel and deletes the rest; after a
 # stable release it deletes every pre-release cut before it. Stable releases
@@ -1282,26 +1282,32 @@ jobs:
           VERSION="${{ needs.release.outputs.new_release_version }}"
           helm show chart "oci://${REGISTRY}/charts/${{ matrix.chart }}" --version "$VERSION"
 
-  # ── Job 5: Desktop — package, sign and notarise for device management; publish nothing ─
+  # ── Job 5: Desktop — package, sign and notarise; attach to the release ───────
   #
-  # A release check, not a distribution channel (owner decision 10). The desktop
-  # app is not attached to the GitHub release and no workflow artifact is kept:
-  # ELITEA's desktop builds reach clients through their device management,
-  # signed by the brand owner (ADR-0052 decision 8). desktop-package.yml builds
-  # the Apple silicon macOS app and its silent `.pkg`, signs, notarises, staples and
-  # verifies them (`spctl -a -vv`, `stapler validate`), then discards them. The
-  # brand owner runs that workflow by hand to keep a package for MDM.
+  # The desktop packages are attached to every release, stable and pre-release
+  # (owner decision 2026-11-22, amending ADR-0052 decision 10, which kept them
+  # off the release). desktop-package.yml builds the Apple silicon macOS app and
+  # its silent `.pkg`, signs, notarises, staples and verifies them (`spctl -a
+  # -vv`, `stapler validate`), and builds the Windows MSI and MSIX. Each job
+  # uploads its packages, under their release names, as a one-day workflow
+  # artifact; `desktop-assets` below attaches them to the release.
+  #
+  # SIGNING PER PLATFORM. macOS: always signed and notarised
+  # (`require_signed_macos`; a missing secret fails the job). Windows: unsigned
+  # until a signer exists (`require_signed_windows: false`), and the files say
+  # `-unsigned`; once one signer's full set of secrets is set, the same run signs.
+  # A half-configured signer fails on either platform.
   #
   # THE VERSION IS STAMPED, NOT COMMITTED: desktop-package.yml writes the full
   # version to Cargo.toml (`X-Client-Version`) and the numeric `X.Y.Z` to
   # tauri.conf.json (CFBundleShortVersionString); CFBundleVersion is the run number.
   #
   # NOT IN ROLLBACK'S `needs`. The images and charts are the release; a failed
-  # notarisation (Apple's service, an expired certificate) must not delete
-  # them. Re-run this job alone. Signing never degrades in silence:
-  # `require_signed` fails the job when any signing secret is missing.
+  # notarisation (Apple's service, an expired certificate) or a broken Windows
+  # build must not delete them. The job fails red, the release stays, and
+  # `desktop-assets` attaches what was built. Re-run the failed jobs.
   desktop:
-    name: Desktop (package for MDM)
+    name: Desktop (package)
     needs: release
     if: needs.release.outputs.new_release_published == 'true'
     permissions:
@@ -1310,7 +1316,9 @@ jobs:
     with:
       ref: ${{ needs.release.outputs.new_release_git_tag }}
       version: ${{ needs.release.outputs.new_release_version }}
-      require_signed: true
+      require_signed_macos: true
+      require_signed_windows: false
+      upload_release_assets: true
     secrets:
       APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
       APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -1328,6 +1336,90 @@ jobs:
       AZURE_SIGNING_PROFILE: ${{ secrets.AZURE_SIGNING_PROFILE }}
       WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
       WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+
+  # ── Job 5b: Desktop assets — attach the packages to the release ─────────────
+  #
+  # Attaches what `desktop` built: the macOS `.pkg` and `.app.zip`, the Windows
+  # `.msi` and `.msix`, and SHA256SUMS over them. desktop-package.mjs
+  # `release-assets` checks every name (`<Brand>-<version>-<os>-<arch>[-unsigned]
+  # .<ext>`, one version, never an unsigned macOS file) and writes the release
+  # notes' "Desktop downloads" section, which replaces the one a run before added.
+  # `--clobber`: re-running the job replaces the files.
+  #
+  # `!cancelled()`, so it runs when `desktop` failed too: a broken Windows build
+  # still leaves the signed macOS packages on the release, and `desktop` stays red.
+  # When `desktop` passed, every package must be there (`--complete`). The one job
+  # that writes to the release after `release`, so the only one here granted
+  # `contents: write` for it. The pool: it only downloads, hashes and calls gh.
+  desktop-assets:
+    name: Desktop (attach to the release)
+    needs: [release, desktop]
+    if: ${{ !cancelled() && needs.release.outputs.new_release_published == 'true' }}
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      # The release tag, as `desktop` built it: the names are checked by the code
+      # that made them, also when this job is re-run after main moved on.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release.outputs.new_release_git_tag }}
+          sparse-checkout: |
+            apps/elitea-desktop/scripts
+            .github/actions/eng-runner-env
+          persist-credentials: false
+      # eng-runner: caches and TMPDIR on the work volume, and node (none in its
+      # image). Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          node: "true"
+      # A failed `desktop` may have uploaded nothing, and a pattern that matches no
+      # artifact is not this step's failure: the next step decides from the result.
+      - name: Download the packages
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          pattern: desktop-release-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/desktop
+      - name: Attach them to the release, with SHA256SUMS and the notes section
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release.outputs.new_release_git_tag }}
+          DESKTOP_RESULT: ${{ needs.desktop.result }}
+        run: |
+          set -euo pipefail
+          # Rollback (an image or chart failure) may have deleted the release while
+          # the desktop built: nothing to attach to, and not this job's failure.
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json tagName >/dev/null; then
+            echo "::warning::release ${TAG} no longer exists (rolled back or deleted); no desktop package attached"
+            exit 0
+          fi
+          dir="$RUNNER_TEMP/desktop"
+          mkdir -p "$dir"
+          if [ -z "$(ls -A "$dir")" ]; then
+            if [ "$DESKTOP_RESULT" = success ]; then
+              echo "::error::the desktop job passed but no package reached this job"; exit 1
+            fi
+            echo "::warning::no desktop package was built (desktop: ${DESKTOP_RESULT}); ${TAG} carries none"
+            exit 0
+          fi
+          script=apps/elitea-desktop/scripts/desktop-package.mjs
+          flags=()
+          [ "$DESKTOP_RESULT" = success ] && flags+=(--complete)
+          node "$script" release-assets "$dir" "$RUNNER_TEMP/section.md" "${flags[@]}"
+          gh release upload "$TAG" "$dir"/* --clobber --repo "$GITHUB_REPOSITORY"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body > "$RUNNER_TEMP/body.md"
+          node "$script" notes "$RUNNER_TEMP/body.md" "$RUNNER_TEMP/section.md" > "$RUNNER_TEMP/notes.md"
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file "$RUNNER_TEMP/notes.md"
+          {
+            echo "### Desktop assets on ${TAG}"
+            for f in "$dir"/*; do printf -- '- %s\n' "$(basename "$f")"; done
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$DESKTOP_RESULT" != success ]; then
+            echo "::warning::desktop: ${DESKTOP_RESULT}; ${TAG} carries only the packages that were built"
+          fi
 
   # ── Job 6: Docs — deploy the docs site for a stable release ─────────────────
   #

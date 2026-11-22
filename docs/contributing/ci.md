@@ -134,13 +134,17 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
   The Go and npm caches save on GitHub-hosted runners only, and restore wherever `../../..` of the workspace
   is `HOME` (hosted runners and eng-runner): the tar holds paths relative to the workspace, so a runner with
   another home layout would extract them to the wrong directory.
-- **macOS package.** `desktop-package` (heavy tier) runs on a pull request only when `apps/elitea-desktop/**`,
+- **Desktop packages.** `desktop-package` (heavy tier) runs on a pull request only when `apps/elitea-desktop/**`,
   `libs/rust/vendor/agent-desktop/**`, the Rust toolchain pin, `desktop-package.yml`, the two packaging actions, the brands
-  (`brand/**`, `scripts/brand/**`) or the brand output scan change. The run is an unsigned debug dry run of brand/sample, and
+  (`brand/**`, `scripts/brand/**`) or the brand output scan change. The macOS run is an unsigned debug dry run of brand/sample, and
   it is the desktop lane of the brand output scan (the macOS host job in `ci-desktop.yml` no longer builds a second binary
-  for it; `ci-local-tools-macos.yml` runs the local-index tests that job used to). `publish.yml` (the nightly pre-release on main, and every release) runs the signed
-  release build and verifies it. `check-tiering.mjs` holds the path list, the dry-run inputs and
-  `require_signed: true` in `publish.yml`. The app is Apple silicon only.
+  for it; `ci-local-tools-macos.yml` runs the local-index tests that job used to). The Windows run builds the ELITEA MSI and
+  MSIX in full, unsigned (`tauri build` in the release profile, the sidecar, makeappx). Both stage the release asset names.
+  `publish.yml` (the nightly pre-release on main, and every release) runs the release build, macOS signed and verified,
+  Windows unsigned until a signer exists, and its `desktop-assets` job (on the pool) attaches the packages and `SHA256SUMS`
+  to the release. `check-tiering.mjs` holds the path list, the dry-run inputs, `require_signed_macos: true`, a stated
+  `require_signed_windows` and `upload_release_assets: true` in `publish.yml`, and a Windows job with no `if:`.
+  The macOS app is Apple silicon only.
 
 ## Runners
 
