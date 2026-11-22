@@ -8191,6 +8191,9 @@ member_pipeline_tool_kill_test!(
 #[path = "root_saved_agent_frontier_pg_tests.rs"]
 mod root_saved_agent_frontier;
 
+#[path = "pipeline_tool_node_writer_pg_tests.rs"]
+mod pipeline_tool_node_writer;
+
 /// Review A: a Map worker or Parallel branch that is a saved pipeline (app
 /// 3, version 4) whose Agent node runs a saved Agent (app 5, version 6) that
 /// calls a saved pipeline (app 7, version 8) as a tool. The member's family

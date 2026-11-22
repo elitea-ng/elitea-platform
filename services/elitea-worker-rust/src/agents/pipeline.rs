@@ -116,6 +116,10 @@ struct PipelineApplicationRuntime<'a> {
     /// effectful direct nodes run behind a journal too (FU-248). `None` where
     /// the run has no root journal owner (a pipeline served as an agent's tool).
     node_recovery: Option<Arc<dyn super::graph::node_recovery_runtime::NodeRecoveryFactory>>,
+    /// FU-358: lends a claim-fenced journal factory scoped to one call of a
+    /// saved pipeline offered as a tool of a non-member agent.
+    pipeline_tool_journals:
+        Option<Arc<dyn super::graph::node_recovery_runtime::PipelineToolJournalAuthority>>,
     /// FU-323a: the root Agent-node re-entries this claim's inspect step
     /// proved; `None` outside a checkpoint recovery and below the root.
     root_reentry: Option<Arc<scoped_runtime::RootAgentReentry>>,
@@ -609,6 +613,9 @@ impl PipelineNativeAgentAssembler {
         conversation_thread_id: String,
         conversation_id: String,
         node_recovery: Option<Arc<dyn super::graph::node_recovery_runtime::NodeRecoveryFactory>>,
+        pipeline_tool_journals: Option<
+            Arc<dyn super::graph::node_recovery_runtime::PipelineToolJournalAuthority>,
+        >,
         root_reentry: Option<Arc<scoped_runtime::RootAgentReentry>>,
     ) -> Result<PipelineRuntimeBindings, NativeAgentAssemblyError> {
         let has_llm_nodes = profile.definition().has_llm_nodes();
@@ -853,6 +860,7 @@ impl PipelineNativeAgentAssembler {
                     conversation_thread_id,
                     materialization: materialization.clone(),
                     node_recovery: node_recovery.clone(),
+                    pipeline_tool_journals: pipeline_tool_journals.clone(),
                     root_reentry: root_reentry.clone(),
                 },
             );
@@ -1559,6 +1567,7 @@ impl PipelineNativeAgentAssembler {
                     plan.session_id().to_owned(),
                     plan.conversation_id().to_owned(),
                     state.node_recovery_authority(),
+                    state.pipeline_tool_journals(),
                     root_reentry,
                 )
                 .await?;
@@ -1771,6 +1780,13 @@ impl PipelineApplicationResolver for NativePipelineApplicationResolver {
         journals: Arc<dyn super::graph::node_recovery_runtime::NodeRecoveryFactory>,
     ) -> Option<Arc<dyn PipelineApplicationResolver>> {
         Some(Arc::new(self.rebind_branch_journals(&journals)))
+    }
+
+    fn for_pipeline_tool_journals(
+        &self,
+        journals: Arc<dyn super::graph::node_recovery_runtime::NodeRecoveryFactory>,
+    ) -> Option<Arc<dyn PipelineApplicationResolver>> {
+        Some(Arc::new(self.rebind_pipeline_tool_journals(&journals)))
     }
 
     fn for_tool_pipelines(
@@ -2296,6 +2312,9 @@ pub(super) async fn materialize_saved_pipeline_tool(
     code: Option<Arc<dyn super::graph::CodeSandboxRuntime>>,
     conversation_thread_id: String,
     materialization: ApplicationMaterializationPath,
+    pipeline_tool_journals: Option<
+        Arc<dyn super::graph::node_recovery_runtime::PipelineToolJournalAuthority>,
+    >,
 ) -> Result<SavedPipelineTool, NativeAgentAssemblyError> {
     let runtime = PipelineApplicationRuntime {
         platform,
@@ -2311,6 +2330,7 @@ pub(super) async fn materialize_saved_pipeline_tool(
         conversation_thread_id,
         materialization,
         node_recovery: None,
+        pipeline_tool_journals,
         root_reentry: None,
     };
     let (definition, bound, definition_sha256) = match admit_saved_pipeline_child(
@@ -2927,6 +2947,7 @@ async fn bind_scoped_agent(
         .with_model_scopes(runtime.model_scopes.clone())
         .with_code(runtime.code.clone())
         .with_conversation_thread(runtime.conversation_thread_id.clone())
+        .with_pipeline_tool_journals(runtime.pipeline_tool_journals.clone())
         .with_materialization(runtime.materialization.for_graph_agent()?),
         Some(&selected),
     )

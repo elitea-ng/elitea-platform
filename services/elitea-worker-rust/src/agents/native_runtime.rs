@@ -253,7 +253,8 @@ impl NativeRuntimeAssembler<OrdinaryNativeAgentAssembler, PipelineNativeAgentAss
             Arc::clone(&model_facade),
             Arc::clone(&tool_policy),
         )
-        .with_postgres_sessions(pool.clone(), session_limits);
+        .with_postgres_sessions(pool.clone(), session_limits)
+        .with_checkpoint_limits(checkpoint_limits);
         let pipeline = PipelineNativeAgentAssembler::postgres(
             pool,
             session_limits,

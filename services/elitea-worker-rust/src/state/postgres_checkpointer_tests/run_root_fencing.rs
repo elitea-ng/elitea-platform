@@ -304,3 +304,364 @@ transition: END
     }
     assert_eq!(writers(&database.pool, "n1:%").await, 2);
 }
+
+/// FU-358: pipeline-tool node journals use a distinct domain tag from run-root
+/// and subgraph node journals, so a tool call can never collide with a root or
+/// subgraph journal even if a model picks a call id matching a graph node name.
+#[test]
+fn pipeline_tool_journal_identity_is_domain_separated_from_root_and_subgraph_journals() {
+    let authority = writer("execution-1", "claim-1", 1, 1, [0x41; 32], [0x61; 32]);
+    let mut activation = NodeAttemptActivation {
+        root_thread_id: "thread-1/delegate".to_owned(),
+        node_id: "lookup".to_owned(),
+        step: 2,
+        node_digest: [0x07; 32],
+        input_digest: [0x09; 32],
+        visit: Some([0x0b; 32]),
+    };
+    let policy = NodeRecoveryPolicy::default();
+    let subgraph_id = crate::state::postgres_checkpointer::journal_activation_id(
+        &authority,
+        &activation,
+        &policy,
+    )
+    .expect("subgraph identity");
+    let tool_id = crate::state::postgres_checkpointer::pipeline_tool_journal_activation_id(
+        &authority,
+        &activation,
+        &policy,
+    )
+    .expect("pipeline tool identity");
+    assert_ne!(tool_id, subgraph_id);
+
+    activation.visit = Some([0x0c; 32]);
+    let other_visit = crate::state::postgres_checkpointer::pipeline_tool_journal_activation_id(
+        &authority,
+        &activation,
+        &policy,
+    )
+    .expect("other visit identity");
+    assert_ne!(tool_id, other_visit);
+
+    activation.visit = Some([0x0b; 32]);
+    activation.root_thread_id = "thread-1/call-2".to_owned();
+    let other_call = crate::state::postgres_checkpointer::pipeline_tool_journal_activation_id(
+        &authority,
+        &activation,
+        &policy,
+    )
+    .expect("other call identity");
+    assert_ne!(tool_id, other_call);
+}
+
+struct CountAttemptBody {
+    invocations: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl adk_rust::graph::Node for CountAttemptBody {
+    fn name(&self) -> &'static str {
+        "lookup"
+    }
+    async fn execute(
+        &self,
+        _: &adk_rust::graph::NodeContext,
+    ) -> Result<adk_rust::graph::NodeOutput, adk_rust::graph::GraphError> {
+        unreachable!()
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::agents::graph::node_recovery_runtime::NodeAttemptBody for CountAttemptBody {
+    async fn execute_attempt(
+        &self,
+        _: &adk_rust::graph::NodeContext,
+        _: &crate::agents::graph::node_recovery_runtime::NodeAttemptAuthority,
+    ) -> Result<adk_rust::graph::NodeOutput, crate::agents::graph::node_recovery::NodeFailure> {
+        self.invocations
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(adk_rust::graph::NodeOutput::new().with_update("result", serde_json::json!("ok")))
+    }
+}
+
+fn tool_activation(thread: &str, step: u64, visit: Option<[u8; 32]>) -> NodeAttemptActivation {
+    NodeAttemptActivation {
+        root_thread_id: thread.to_owned(),
+        node_id: "lookup".to_owned(),
+        step,
+        node_digest: [0x07; 32],
+        input_digest: [0x09; 32],
+        visit,
+    }
+}
+
+/// FU-358 (pipeline root): `ApplicationCheckpointers` lends a call-scoped
+/// journal factory that admits only the call's own thread and statically
+/// admitted descendants, enforces a non-empty visit, and caps distinct
+/// journals per call at `MAX_PIPELINE_TOOL_JOURNALS_PER_CALL` (64).
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL database creation through ELITEA_TEST_DATABASE_URL"]
+async fn pipeline_tool_journals_enforce_scope_and_per_call_cap() {
+    use crate::agents::graph::node_recovery_runtime::PipelineToolJournalAuthority as _;
+    use std::collections::BTreeSet;
+
+    let database = database().await;
+    let family = Arc::new(
+        root(database.pool.clone(), 1)
+            .await
+            .with_application_children(["delegate"].into_iter())
+            .await
+            .expect("activate root family"),
+    );
+    let lent = family
+        .for_pipeline_tool_call(
+            "thread-1/call-1".to_owned(),
+            BTreeSet::from(["sub".to_owned()]),
+        )
+        .expect("call-scoped journal factory");
+    let policy = NodeRecoveryPolicy::default();
+
+    for bad in [
+        tool_activation("thread-1", 0, None),
+        tool_activation("thread-1", 0, Some([0x0b; 32])),
+        tool_activation("thread-1/delegate", 0, Some([0x0b; 32])),
+        tool_activation("thread-1/call-2", 0, Some([0x0b; 32])),
+        tool_activation("thread-1/call-1/unadmitted", 0, Some([0x0b; 32])),
+        tool_activation("thread-1/call-1", 0, None),
+    ] {
+        assert!(lent.open(&bad, &policy).await.is_err(), "{bad:?}");
+    }
+    assert_eq!(writers(&database.pool, "n1:%").await, 0);
+
+    lent.open(
+        &tool_activation("thread-1/call-1/sub", 0, Some([0x0c; 32])),
+        &policy,
+    )
+    .await
+    .expect("descendant opens");
+    for step in 0..63_u64 {
+        lent.open(
+            &tool_activation("thread-1/call-1", step, Some([0x0b; 32])),
+            &policy,
+        )
+        .await
+        .expect("within per-call cap");
+    }
+    lent.open(
+        &tool_activation("thread-1/call-1", 0, Some([0x0b; 32])),
+        &policy,
+    )
+    .await
+    .expect("re-opening same journal stays within cap");
+    let cap_err = lent
+        .open(
+            &tool_activation("thread-1/call-1", 63, Some([0x0b; 32])),
+            &policy,
+        )
+        .await
+        .err()
+        .expect("65th journal refused");
+    assert!(cap_err.to_string().contains("journal_limit"), "{cap_err}");
+    assert_eq!(writers(&database.pool, "n1:%").await, 64);
+}
+
+/// FU-358 (pipeline root): takeover of the run root fences both new journal
+/// opens and already-opened journal handles under the superseded claim.
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL database creation through ELITEA_TEST_DATABASE_URL"]
+async fn pipeline_tool_journals_fence_new_and_opened_handles_after_root_takeover() {
+    use crate::agents::graph::node_recovery_runtime::{
+        PipelineToolJournalAuthority as _, RecoverableNode,
+    };
+    use adk_rust::graph::{ExecutionConfig, Node as _, NodeContext};
+    use std::collections::{BTreeSet, HashMap};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let database = database().await;
+    let family = Arc::new(
+        root(database.pool.clone(), 1)
+            .await
+            .with_application_children(["delegate"].into_iter())
+            .await
+            .expect("activate root family"),
+    );
+    let policy = NodeRecoveryPolicy::default();
+    let second_call = family
+        .for_pipeline_tool_call("thread-1/call-2".to_owned(), BTreeSet::new())
+        .expect("second call factory");
+    let opened_before_takeover = second_call
+        .open(
+            &tool_activation("thread-1/call-2", 0, Some([0x0d; 32])),
+            &policy,
+        )
+        .await
+        .expect("claim 1 opens before takeover");
+    let _claim_2 = root(database.pool.clone(), 2).await;
+
+    let open_err = second_call
+        .open(
+            &tool_activation("thread-1/call-2", 1, Some([0x0d; 32])),
+            &policy,
+        )
+        .await
+        .err()
+        .expect("superseded claim cannot open");
+    assert!(
+        open_err.to_string().contains("writer_not_current"),
+        "{open_err}"
+    );
+    let stale_handle_err = opened_before_takeover
+        .verify_applied_revision(0)
+        .await
+        .expect_err("already-opened journal handle must also be fenced after root takeover");
+    assert!(
+        stale_handle_err.to_string().contains("writer_not_current"),
+        "{stale_handle_err}"
+    );
+
+    let invocations = Arc::new(AtomicUsize::new(0));
+    let recoverable = RecoverableNode::new(
+        Arc::new(CountAttemptBody {
+            invocations: Arc::clone(&invocations),
+        }),
+        [0x07; 32],
+        policy,
+        Arc::clone(&second_call),
+        None,
+    );
+    let ctx = NodeContext::new(
+        HashMap::from([(
+            crate::agents::graph::APPLICATION_VISIT_STATE_KEY.to_owned(),
+            serde_json::json!("0d".repeat(32)),
+        )]),
+        ExecutionConfig::new("thread-1/call-2"),
+        0,
+    );
+    let exec_err = recoverable
+        .execute(&ctx)
+        .await
+        .err()
+        .expect("superseded claim cannot execute");
+    assert!(
+        exec_err.to_string().contains("writer_not_current"),
+        "{exec_err}"
+    );
+    assert_eq!(invocations.load(Ordering::SeqCst), 0);
+}
+
+/// FU-358 (ordinary chat root): `PostgresSessionService::pipeline_tool_journals`
+/// fences `n1:` journals against `agent_session_writers` with zero upfront
+/// checkpoint rows, and takeover of `agent_session_writers` alone fences claim 1
+/// on both new opens and already-opened journals.
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL database creation through ELITEA_TEST_DATABASE_URL"]
+async fn ordinary_session_pipeline_tool_journals_enforce_session_root_fence_and_takeover() {
+    use crate::state::postgres_session_tests::install_schema as install_session_schema;
+    use crate::state::{PostgresSessionService, SessionLimits, SessionWriterAuthority};
+    use std::collections::BTreeSet;
+
+    let database = database().await;
+    install_session_schema(&database.pool).await;
+
+    let activate_session = |attempt: u64| {
+        let pool = database.pool.clone();
+        async move {
+            let auth = SessionWriterAuthority::new(
+                "tenant-1".to_owned(),
+                11,
+                11,
+                APPLICATION_CAPABILITY_ID,
+                [0x41; 32],
+                "thread-1".to_owned(),
+                "elitea-agent".to_owned(),
+                "user-1".to_owned(),
+                "session-1".to_owned(),
+                "execution-1".to_owned(),
+                1,
+                format!("claim-{attempt}"),
+                attempt,
+                attempt,
+                1_700_000_000_000_000 + i64::try_from(attempt).unwrap(),
+                format!("workload-{attempt}"),
+                format!("producer-{attempt}"),
+                [0x61; 32],
+            )
+            .expect("session writer authority");
+            Arc::new(
+                PostgresSessionService::activate(
+                    pool,
+                    auth,
+                    SessionLimits::default(),
+                    Arc::new(TestStateWriterLease::current()),
+                )
+                .await
+                .expect("activate session"),
+            )
+        }
+    };
+
+    let session_1 = activate_session(1).await;
+    // Zero checkpoint writer rows exist before any pipeline tool runs.
+    assert_eq!(writers(&database.pool, "%").await, 0);
+
+    let authority_1 = session_1.pipeline_tool_journals(CheckpointLimits::default());
+    assert!(
+        authority_1
+            .for_pipeline_tool_call("thread-1".to_owned(), BTreeSet::new())
+            .is_err(),
+        "must refuse session root thread"
+    );
+    let factory_1 = authority_1
+        .for_pipeline_tool_call("thread-1/call-1".to_owned(), BTreeSet::new())
+        .expect("call factory");
+    let policy = NodeRecoveryPolicy::default();
+    let activation = NodeAttemptActivation {
+        root_thread_id: "thread-1/call-1".to_owned(),
+        node_id: "rev".to_owned(),
+        step: 0,
+        node_digest: [0x11; 32],
+        input_digest: [0x22; 32],
+        visit: Some([0x33; 32]),
+    };
+    let mut unscoped = activation.clone();
+    unscoped.visit = None;
+    assert!(factory_1.open(&unscoped, &policy).await.is_err());
+
+    let opened_1 = factory_1
+        .open(&activation, &policy)
+        .await
+        .expect("claim 1 opens journal under session writer");
+    assert_eq!(writers(&database.pool, "n1:%").await, 1);
+
+    // Claim 2 takes over ONLY `agent_session_writers`.
+    let session_2 = activate_session(2).await;
+
+    // Claim 1 is now fenced on both already-opened handles and new opens against `agent_session_writers`.
+    let stale_err = opened_1
+        .verify_applied_revision(0)
+        .await
+        .expect_err("already-opened session journal fenced after session takeover");
+    assert!(
+        stale_err.to_string().contains("writer_not_current"),
+        "{stale_err}"
+    );
+    let mut next_step = activation.clone();
+    next_step.step = 1;
+    let err = factory_1
+        .open(&next_step, &policy)
+        .await
+        .err()
+        .expect("claim 1 fenced after session takeover");
+    assert!(err.to_string().contains("writer_not_current"), "{err}");
+
+    // Claim 2 opens the exact same journal cleanly under its own session claim.
+    let factory_2 = session_2
+        .pipeline_tool_journals(CheckpointLimits::default())
+        .for_pipeline_tool_call("thread-1/call-1".to_owned(), BTreeSet::new())
+        .expect("claim 2 call factory");
+    factory_2
+        .open(&activation, &policy)
+        .await
+        .expect("claim 2 takes over the same journal");
+    assert_eq!(writers(&database.pool, "n1:%").await, 1);
+}

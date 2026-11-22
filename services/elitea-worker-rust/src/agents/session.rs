@@ -1405,6 +1405,7 @@ pub(crate) enum NativeSessionBackend {
     Postgres {
         pool: PgPool,
         limits: SessionLimits,
+        checkpoint_limits: CheckpointLimits,
     },
     #[cfg(test)]
     Injected(Arc<dyn SessionService>),
@@ -1417,8 +1418,39 @@ impl NativeSessionBackend {
     }
 
     #[must_use]
-    pub(crate) const fn postgres(pool: PgPool, limits: SessionLimits) -> Self {
-        Self::Postgres { pool, limits }
+    pub(crate) fn postgres(pool: PgPool, limits: SessionLimits) -> Self {
+        Self::Postgres {
+            pool,
+            limits,
+            checkpoint_limits: CheckpointLimits::default(),
+        }
+    }
+
+    #[must_use]
+    pub(crate) const fn with_checkpoint_limits(
+        mut self,
+        checkpoint_limits: CheckpointLimits,
+    ) -> Self {
+        if let Self::Postgres {
+            checkpoint_limits: slot,
+            ..
+        } = &mut self
+        {
+            *slot = checkpoint_limits;
+        }
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn checkpoint_limits(&self) -> CheckpointLimits {
+        match self {
+            Self::Postgres {
+                checkpoint_limits, ..
+            } => *checkpoint_limits,
+            Self::InvocationLocal => CheckpointLimits::default(),
+            #[cfg(test)]
+            Self::Injected(_) => CheckpointLimits::default(),
+        }
     }
 
     #[cfg(test)]
@@ -1527,7 +1559,7 @@ impl NativeSessionBackend {
                 );
                 Ok((service, scopes, None))
             }
-            Self::Postgres { pool, limits } => {
+            Self::Postgres { pool, limits, .. } => {
                 let resource_project_id = claim
                     .resource_project_id
                     .parse::<i32>()
@@ -1729,6 +1761,7 @@ impl NativePipelineStateBackend {
                     checkpointer: Arc::clone(checkpointer),
                     parallel_authority: None,
                     node_recovery_authority: None,
+                    pipeline_tool_journals: None,
                     fanout_decisions: None,
                     model_scopes: plan.model_scope_sessions(
                         super::model_scope::ModelScopeBackend::Local(sessions.clone()),
@@ -1855,19 +1888,12 @@ async fn activate_pipeline_postgres(
         sessions.clone(),
     ));
     let holder = Arc::new(checkpointer);
-    let node_recovery_authority: Arc<dyn super::graph::node_recovery_runtime::NodeRecoveryFactory> =
-        holder.clone();
-    let authority: Arc<dyn super::graph::ParallelCheckpointAuthority> = holder;
-    let checkpointer: Arc<dyn Checkpointer> = authority.clone();
-    Ok(PipelineStateServices {
-        event_source: Some(Arc::clone(&sessions)),
+    Ok(PipelineStateServices::postgres(
         sessions,
-        checkpointer,
-        parallel_authority: Some(authority),
-        node_recovery_authority: Some(node_recovery_authority),
+        holder,
         fanout_decisions,
         model_scopes,
-    })
+    ))
 }
 
 pub(super) struct PipelineStateServices {
@@ -1878,6 +1904,10 @@ pub(super) struct PipelineStateServices {
     parallel_authority: Option<Arc<dyn super::graph::ParallelCheckpointAuthority>>,
     node_recovery_authority:
         Option<Arc<dyn super::graph::node_recovery_runtime::NodeRecoveryFactory>>,
+    /// FU-358: claim-fenced journal lending for saved pipelines offered as
+    /// tools of non-member agents beneath this pipeline root.
+    pipeline_tool_journals:
+        Option<Arc<dyn super::graph::node_recovery_runtime::PipelineToolJournalAuthority>>,
     /// This claim's fenced decision source, when the deployment lends the
     /// content client. The fan-out composition plugs it into Parallel.
     fanout_decisions: Option<Arc<crate::execution::fanout_decisions::FanoutDecisionClient>>,
@@ -1885,6 +1915,38 @@ pub(super) struct PipelineStateServices {
 }
 
 impl PipelineStateServices {
+    fn postgres<H>(
+        sessions: Arc<PostgresSessionService>,
+        holder: Arc<H>,
+        fanout_decisions: Option<Arc<crate::execution::fanout_decisions::FanoutDecisionClient>>,
+        model_scopes: super::model_scope::ModelScopeSessions,
+    ) -> Self
+    where
+        H: super::graph::ParallelCheckpointAuthority
+            + super::graph::node_recovery_runtime::NodeRecoveryFactory
+            + super::graph::node_recovery_runtime::PipelineToolJournalAuthority
+            + 'static,
+    {
+        let node_recovery_authority: Arc<
+            dyn super::graph::node_recovery_runtime::NodeRecoveryFactory,
+        > = holder.clone();
+        let pipeline_tool_journals: Arc<
+            dyn super::graph::node_recovery_runtime::PipelineToolJournalAuthority,
+        > = holder.clone();
+        let authority: Arc<dyn super::graph::ParallelCheckpointAuthority> = holder;
+        let checkpointer: Arc<dyn Checkpointer> = authority.clone();
+        Self {
+            event_source: Some(Arc::clone(&sessions)),
+            sessions,
+            checkpointer,
+            parallel_authority: Some(authority),
+            node_recovery_authority: Some(node_recovery_authority),
+            pipeline_tool_journals: Some(pipeline_tool_journals),
+            fanout_decisions,
+            model_scopes,
+        }
+    }
+
     pub(super) async fn inspect_node_recovery(
         &self,
         plan: &OrdinaryNativeAgentPlan,
@@ -1956,6 +2018,12 @@ impl PipelineStateServices {
         &self,
     ) -> Option<Arc<dyn super::graph::node_recovery_runtime::NodeRecoveryFactory>> {
         self.node_recovery_authority.clone()
+    }
+
+    pub(super) fn pipeline_tool_journals(
+        &self,
+    ) -> Option<Arc<dyn super::graph::node_recovery_runtime::PipelineToolJournalAuthority>> {
+        self.pipeline_tool_journals.clone()
     }
     /// This claim's decision source for the fan-out runner.
     pub(super) fn fanout_decisions(
@@ -6076,6 +6144,7 @@ mod fanout_start_tests {
             checkpointer,
             parallel_authority: None,
             node_recovery_authority: None,
+            pipeline_tool_journals: None,
             fanout_decisions: None,
             model_scopes: plan.model_scope_sessions(
                 super::super::model_scope::ModelScopeBackend::Local(sessions),

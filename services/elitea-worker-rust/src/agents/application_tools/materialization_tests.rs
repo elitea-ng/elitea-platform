@@ -294,6 +294,7 @@ impl Fixture {
             None,
             THREAD.to_owned(),
             ApplicationMaterializationPath::default(),
+            None,
         )
         .await
         .unwrap()

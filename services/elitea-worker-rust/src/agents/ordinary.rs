@@ -227,6 +227,15 @@ impl OrdinaryNativeAgentAssembler {
         self
     }
 
+    #[must_use]
+    pub(crate) fn with_checkpoint_limits(
+        mut self,
+        checkpoint_limits: crate::state::CheckpointLimits,
+    ) -> Self {
+        self.sessions = self.sessions.with_checkpoint_limits(checkpoint_limits);
+        self
+    }
+
     #[cfg(test)]
     #[must_use]
     pub(crate) fn with_sessions(
@@ -451,6 +460,9 @@ impl OrdinaryNativeAgentAssembler {
         // Built once per assembly (#1820): the sub-agent grant below and
         // `materialize_runtime` (envelope, Smart Tools Selection) share it.
         let toolkit_kinds = toolkit_kinds(&tool_snapshot);
+        let pipeline_tool_journals = event_source
+            .as_ref()
+            .map(|session| session.pipeline_tool_journals(self.sessions.checkpoint_limits()));
         let (runtime, fresh_execution_mode) = self
             .materialize_runtime(
                 &tool_snapshot,
@@ -464,6 +476,7 @@ impl OrdinaryNativeAgentAssembler {
                 plan.thread_id().to_owned(),
                 plan.conversation_id().to_owned(),
                 code_runtime,
+                pipeline_tool_journals,
                 attachment_library,
                 browser_host.as_ref(),
                 &recalled,
@@ -687,6 +700,9 @@ impl OrdinaryNativeAgentAssembler {
         conversation_thread_id: String,
         conversation_id: String,
         code: Option<Arc<dyn super::graph::CodeSandboxRuntime>>,
+        pipeline_tool_journals: Option<
+            Arc<dyn super::graph::node_recovery_runtime::PipelineToolJournalAuthority>,
+        >,
         attachment_library: Option<Arc<super::attachment_tools::AttachmentLibrary>>,
         browser_host: Option<&elitea_agent_runtime::toolkits::BrowserToolHost>,
         recalled: &Arc<super::agent_memory_tools::RecalledEntries>,
@@ -915,6 +931,7 @@ impl OrdinaryNativeAgentAssembler {
             )
             .with_model_scopes(model_scopes)
             .with_conversation_thread(conversation_thread_id)
+            .with_pipeline_tool_journals(pipeline_tool_journals)
             .with_code(code)
             .with_delegation(super::application_tools::root_delegation_scope(
                 runtime_context,

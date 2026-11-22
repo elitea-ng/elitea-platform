@@ -153,6 +153,8 @@ pub(crate) use agent::{
     PIPELINE_COMPLETED_METADATA_VALUE, PIPELINE_REUSED_RESULT_METADATA_KEY,
     pipeline_completed_event, pipeline_result_event,
 };
+#[cfg(test)]
+pub(crate) use application::APPLICATION_VISIT_STATE_KEY;
 pub(crate) use application::{
     ApplicationExecutionError, PIPELINE_APPLICATION_HITL_SCHEMA, PipelineApplicationResolver,
     PipelineApplicationSelection, ResolvedApplicationParticipant,

@@ -2986,6 +2986,10 @@ pub(crate) struct ApplicationToolDependencies<'a> {
     /// pipeline children — the pipeline PARENT is exactly that caller, because
     /// it owns its pipeline participants itself through its graph.
     conversation_thread_id: Option<String>,
+    /// FU-358: lends a claim-fenced node-recovery journal scoped to one
+    /// non-member call of any saved pipeline offered as an agent's tool.
+    pipeline_tool_journals:
+        Option<Arc<dyn super::graph::node_recovery_runtime::PipelineToolJournalAuthority>>,
     materialization: ApplicationMaterializationPath,
 }
 
@@ -3007,8 +3011,19 @@ impl<'a> ApplicationToolDependencies<'a> {
             resume: None,
             model_scopes: None,
             conversation_thread_id: None,
+            pipeline_tool_journals: None,
             materialization: ApplicationMaterializationPath::default(),
         }
+    }
+
+    pub(super) fn with_pipeline_tool_journals(
+        mut self,
+        journals: Option<
+            Arc<dyn super::graph::node_recovery_runtime::PipelineToolJournalAuthority>,
+        >,
+    ) -> Self {
+        self.pipeline_tool_journals = journals;
+        self
     }
 
     pub(super) fn with_code(
@@ -3360,6 +3375,7 @@ async fn materialize_pipeline_children(
             dependencies.code.clone(),
             conversation_thread_id.clone(),
             dependencies.materialization.clone(),
+            dependencies.pipeline_tool_journals.clone(),
         )
         .await;
         let (definition, runtimes, child_tools, delegation, definition_sha256) = match built {
@@ -3419,6 +3435,7 @@ async fn materialize_pipeline_children(
                 conversation_thread_id: conversation_thread_id.clone(),
                 event_sender: dependencies.event_sender.clone(),
                 resume: dependencies.resume.clone(),
+                tool_journals: dependencies.pipeline_tool_journals.clone(),
             },
             definition_sha256,
         ));
@@ -3487,6 +3504,7 @@ pub(crate) async fn materialize_application_tools(
         model_scopes: dependencies.model_scopes,
         code: dependencies.code,
         conversation_thread_id: dependencies.conversation_thread_id,
+        pipeline_tool_journals: dependencies.pipeline_tool_journals,
         materialization: dependencies.materialization,
         skipped: Vec::new(),
     };
@@ -3559,6 +3577,8 @@ struct ApplicationAssemblyState<'a> {
     model_scopes: Option<ModelScopeSessions>,
     code: Option<Arc<dyn super::graph::CodeSandboxRuntime>>,
     conversation_thread_id: Option<String>,
+    pipeline_tool_journals:
+        Option<Arc<dyn super::graph::node_recovery_runtime::PipelineToolJournalAuthority>>,
     materialization: ApplicationMaterializationPath,
     /// Nested pipeline attachments this Worker could not build, named on the
     /// root's skipped notice (#990).
@@ -3832,6 +3852,7 @@ impl ApplicationAssemblyState<'_> {
             resume: self.resume.clone(),
             model_scopes: self.model_scopes.clone(),
             conversation_thread_id: self.conversation_thread_id.clone(),
+            pipeline_tool_journals: self.pipeline_tool_journals.clone(),
             materialization: self.materialization.clone(),
         };
         let built = materialize_pipeline_children(

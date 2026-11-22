@@ -251,6 +251,21 @@ pub(crate) trait NodeRecoveryFactory: Send + Sync {
     ) -> Result<NodeAttemptJournal, GraphError>;
 }
 
+/// Lends a claim-fenced [`NodeRecoveryFactory`] scoped to one non-member
+/// agent's saved-pipeline tool call (FU-358).
+///
+/// The returned factory opens node-attempt journals only for `call_thread` and
+/// its statically admitted subgraph descendants, always requires a non-empty
+/// visit, and fences every open and write against the run's current claim
+/// writer row and live lease.
+pub(crate) trait PipelineToolJournalAuthority: Send + Sync {
+    fn for_pipeline_tool_call(
+        &self,
+        call_thread: String,
+        admitted_descendants: std::collections::BTreeSet<String>,
+    ) -> Result<Arc<dyn NodeRecoveryFactory>, GraphError>;
+}
+
 #[async_trait]
 pub(crate) trait NodeRecoveryOperatorAuthorizer: Send + Sync {
     /// Authenticate the server-owned action and exact current receipt/fence.
