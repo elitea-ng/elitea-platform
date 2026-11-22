@@ -267,6 +267,12 @@ jobs:
     name: Windows (.msi, .msix)
     runs-on: windows-latest
     timeout-minutes: 90
+    # `npm ci` fetches cold (no npm cache on Windows, below): one ECONNRESET
+    # with npm's default 2 retries would fail the job.
+    env:
+      NPM_CONFIG_FETCH_RETRIES: "6"
+      NPM_CONFIG_FETCH_RETRY_MINTIMEOUT: "20000"
+      NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: "120000"
     defaults:
       run:
         shell: bash
@@ -277,14 +283,14 @@ jobs:
           ref: ${{ inputs.ref }}
           persist-credentials: false
 
+      # No npm cache: on Windows `npm config get cache` answers a backslash path,
+      # which main-write-cache's literal-path guard (written for $HOME/.npm)
+      # refuses, as in ci-desktop.yml `windows-host`. `npm ci` runs cold, with the
+      # registry patience the npm-cache action sets elsewhere (the job's env).
       - uses: actions/setup-node@v7
         with:
           node-version: "26"
           package-manager-cache: false
-      - name: Restore the npm cache (pull requests read, main writes)
-        uses: ./.github/actions/npm-cache
-        with:
-          cache-dependency-path: apps/elitea-web/package-lock.json
 
       - name: Build, sign and verify (or dry run)
         id: package
