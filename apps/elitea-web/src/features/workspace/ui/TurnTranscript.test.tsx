@@ -217,5 +217,30 @@ describe('TurnTranscript', () => {
     rerender(<TurnTranscript view={explainedView} busy={false} />);
     expect(screen.getByTestId('delegation-notices')).toHaveTextContent('Delegation refused');
     expect(screen.queryByTestId('turn-refusal')).toBeNull();
+
+    // SEC-FU359-01: non-fatal tool/child notices and distinct non-generic messages keep TurnError visible.
+    for (const edgeKind of ['agent_tool', 'pipeline_child', 'sub_agent'] as const) {
+      rerender(
+        <TurnTranscript
+          view={{
+            ...explainedView,
+            delegationNotices: [{ ...explainedView.delegationNotices[0]!, edgeKind }],
+          }}
+          busy={false}
+        />,
+      );
+      expect(screen.getByTestId('turn-refusal')).toHaveTextContent('Execution authorization failed.');
+    }
+
+    rerender(
+      <TurnTranscript
+        view={{
+          ...explainedView,
+          error: { code: 'AUTHORIZATION_FAILED', message: 'Governance session revoked.' },
+        }}
+        busy={false}
+      />,
+    );
+    expect(screen.getByTestId('turn-refusal')).toHaveTextContent('Governance session revoked.');
   });
 });

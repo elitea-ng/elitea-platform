@@ -27,12 +27,14 @@ export function reduceDelegationFrame(
   if (type !== SocketMessageType.DelegationRefused && type !== SocketMessageType.DelegationNarrowed) return undefined;
   const notice = delegationNoticeOf(frame.response_metadata);
   if (notice === undefined) return history;
+  if ((type === SocketMessageType.DelegationRefused) !== (notice.kind === 'refused')) return history;
   const current = history[index];
   if (!current) {
-    // FU-360: an assembly-time refusal of a pipeline Agent node or saved-pipeline
-    // node (#2235) publishes `delegation_refused` BEFORE `agent_start` (and before
-    // `execution.failed`). Create the in-flight assistant message so the notice
-    // appears live and survives `settleInFlight` on `execution.failed`.
+    // FU-360: only assembly-time `pipeline_node` `delegation_refused` frames
+    // arrive before `agent_start` (and before `execution.failed`). Create the
+    // in-flight assistant message so the notice appears live and survives
+    // `settleInFlight` on `execution.failed`.
+    if (type !== SocketMessageType.DelegationRefused || notice.edgeKind !== 'pipeline_node') return history;
     return [...history, { ...createAssistantMessage(frame, context), delegationNotices: foldDelegationNotice([], notice) }];
   }
   return replaceAt(history, index, { delegationNotices: foldDelegationNotice(current.delegationNotices ?? [], notice) });

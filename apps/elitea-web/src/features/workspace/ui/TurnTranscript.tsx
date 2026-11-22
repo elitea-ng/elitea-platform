@@ -318,7 +318,7 @@ export function TurnTranscript({ view, busy, onRetryCommit, onTextContextMenu, o
         ),
       )}
       <DelegationNotices notices={view.delegationNotices} />
-      {view.error !== undefined && !delegationRefusalExplainsFailure(view.error.code, view.delegationNotices) && <TurnError error={view.error} onRetry={onRetryTurn} />}
+      {view.error !== undefined && !delegationRefusalExplainsFailure(view.error.code, view.delegationNotices, view.error.message) && <TurnError error={view.error} onRetry={onRetryTurn} />}
       <RetryNotice view={view} />
       <StopNotices view={view} onContinue={onContinue} />
       {view.commitFailed !== undefined && <CommitFailed key={view.commitFailed.seq} failed={view.commitFailed} {...(onRetryCommit === undefined ? {} : { onRetry: onRetryCommit })} />}

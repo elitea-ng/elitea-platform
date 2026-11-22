@@ -65,12 +65,20 @@ describe('classifyRuntimeFailure', () => {
 });
 
 describe('delegationRefusalExplainsFailure', () => {
-  it('returns true only when AUTHORIZATION_FAILED is accompanied by a refused delegation notice', () => {
-    expect(delegationRefusalExplainsFailure('AUTHORIZATION_FAILED', [{ kind: 'refused' }])).toBe(true);
-    expect(delegationRefusalExplainsFailure('AUTHORIZATION_FAILED', [{ kind: 'narrowed' }])).toBe(false);
+  it('returns true only when AUTHORIZATION_FAILED has a fatal pipeline_node refused notice and a generic message', () => {
+    expect(delegationRefusalExplainsFailure('AUTHORIZATION_FAILED', [{ kind: 'refused', edgeKind: 'pipeline_node' }])).toBe(true);
+    expect(delegationRefusalExplainsFailure('AUTHORIZATION_FAILED', [{ kind: 'refused', edgeKind: 'pipeline_node' }], 'Execution authorization failed.')).toBe(true);
+    expect(delegationRefusalExplainsFailure('AUTHORIZATION_FAILED', [{ kind: 'refused', edgeKind: 'pipeline_node' }], 'AUTHORIZATION_FAILED')).toBe(true);
+    // SEC-FU359-01: non-fatal tool/child notices never suppress a fatal AUTHORIZATION_FAILED banner.
+    expect(delegationRefusalExplainsFailure('AUTHORIZATION_FAILED', [{ kind: 'refused', edgeKind: 'agent_tool' }])).toBe(false);
+    expect(delegationRefusalExplainsFailure('AUTHORIZATION_FAILED', [{ kind: 'refused', edgeKind: 'pipeline_child' }])).toBe(false);
+    expect(delegationRefusalExplainsFailure('AUTHORIZATION_FAILED', [{ kind: 'refused', edgeKind: 'sub_agent' }])).toBe(false);
+    // Distinct non-generic authorization failure sentences are never suppressed.
+    expect(delegationRefusalExplainsFailure('AUTHORIZATION_FAILED', [{ kind: 'refused', edgeKind: 'pipeline_node' }], 'Code node authorization failed.')).toBe(false);
+    expect(delegationRefusalExplainsFailure('AUTHORIZATION_FAILED', [{ kind: 'narrowed', edgeKind: 'pipeline_node' }])).toBe(false);
     expect(delegationRefusalExplainsFailure('AUTHORIZATION_FAILED', [])).toBe(false);
     expect(delegationRefusalExplainsFailure('AUTHORIZATION_FAILED', undefined)).toBe(false);
-    expect(delegationRefusalExplainsFailure('INTERNAL', [{ kind: 'refused' }])).toBe(false);
+    expect(delegationRefusalExplainsFailure('INTERNAL', [{ kind: 'refused', edgeKind: 'pipeline_node' }])).toBe(false);
   });
 });
 

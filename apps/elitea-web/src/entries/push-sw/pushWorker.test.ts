@@ -68,6 +68,16 @@ describe('push worker: push', () => {
     });
   });
 
+  it.each(['toString', 'constructor', '__proto__'])('SEC-FU359-04: ignores prototype key %s as run_finished outcome', async (outcome) => {
+    const { fake, push } = worker();
+    await push({ type: 'run_finished', notification_id: 124, project_id: 1, conversation_uuid: 'c-1', outcome });
+    expect(fake.registration.showNotification).toHaveBeenCalledWith('Run finished', {
+      body: 'A run is done.',
+      tag: 'elitea-124',
+      data: { url: `${SCOPE}1/chat?conversation=c-1` },
+    });
+  });
+
   it('shows "Run needs you" for an approval request', async () => {
     const { fake, push } = worker();
     await push({ type: 'agent_approval_required', notification_id: 5, project_id: 1, conversation_uuid: 'c-2' });

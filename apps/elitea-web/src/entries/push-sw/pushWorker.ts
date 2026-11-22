@@ -112,7 +112,11 @@ function readPayload(event: PushEventLike): PushPayload {
 
 function noticeText(payload: PushPayload, product: string): NoticeText {
   if (payload.type === 'agent_approval_required') return TEXT.waiting;
-  if (payload.type === 'run_finished') return TEXT[payload.outcome as keyof typeof TEXT] ?? TEXT.completed;
+  if (payload.type === 'run_finished') {
+    return typeof payload.outcome === 'string' && Object.hasOwn(TEXT, payload.outcome)
+      ? TEXT[payload.outcome as keyof typeof TEXT]
+      : TEXT.completed;
+  }
   return { title: product, body: FALLBACK_BODY };
 }
 

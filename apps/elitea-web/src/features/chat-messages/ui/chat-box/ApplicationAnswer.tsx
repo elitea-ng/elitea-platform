@@ -327,7 +327,7 @@ export function ApplicationAnswer({
             <>
               {renderedContent}
               <AnswerGuardrails answer={answer} projectId={feedbackProjectId} settled={!isProcessing}>
-                {!!exception && !delegationRefusalExplainsFailure(answer.failureCode, answer.delegationNotices) && <ErrorTrace error={exception} failureCode={answer.failureCode} />}
+                {!!exception && !delegationRefusalExplainsFailure(answer.failureCode, answer.delegationNotices, exception) && <ErrorTrace error={exception} failureCode={answer.failureCode} />}
               </AnswerGuardrails>
               {!!exception && <BudgetUsageLink code={answer.failureCode} />}
               {!!exception && <CapOverrideAction projectId={feedbackProjectId} messageId={messageId} code={answer.failureCode} cap={answer.failureCap} />}

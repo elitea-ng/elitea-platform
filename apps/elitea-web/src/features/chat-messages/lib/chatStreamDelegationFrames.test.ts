@@ -157,6 +157,55 @@ describe('delegation notices on the live stream', () => {
     const history = [question];
     expect(applyChatStreamFrame(history, frame('delegation_refused', { id: 'broken' }), CONTEXT)).toBe(history);
   });
+
+  it('SEC-FU359-03: rejects mismatched frame type vs notice kind and scopes pre-agent_start creation to pipeline_node refusals', () => {
+    const historyWithPending = [pending];
+    expect(applyChatStreamFrame(historyWithPending, frame('delegation_refused', narrowed), CONTEXT)).toBe(historyWithPending);
+    expect(applyChatStreamFrame(historyWithPending, frame('delegation_narrowed', refused), CONTEXT)).toBe(historyWithPending);
+
+    const question: ChatMessage = {
+      id: 'q-1',
+      role: 'user',
+      name: 'Alice',
+      content: 'hi',
+      createdAt: '2026-11-10T00:00:00.000Z',
+    };
+    const beforeStart = [question];
+    // Non-pipeline_node refusals and narrowed notices do not create a new answer before agent_start.
+    expect(applyChatStreamFrame(beforeStart, frame('delegation_refused', refused), CONTEXT)).toBe(beforeStart);
+    expect(applyChatStreamFrame(beforeStart, frame('delegation_narrowed', narrowed), CONTEXT)).toBe(beforeStart);
+  });
+
+  it('SEC-FU359-02: clears prior-generation delegationNotices and failure codes on a new agent_start while keeping same-generation notices', () => {
+    const priorFailed: ChatMessage = {
+      ...pending,
+      isStreaming: false,
+      isLoading: false,
+      executionGeneration: 'gen-1',
+      exception: 'Execution authorization failed.',
+      failureCode: 'AUTHORIZATION_FAILED',
+      failureCap: 'max_tool_calls',
+      delegationNotices: applyChatStreamFrame([pending], frame('delegation_refused', refused), CONTEXT)[0]?.delegationNotices,
+    };
+    const nextGen = applyChatStreamFrame(
+      [priorFailed],
+      { type: 'agent_start', message_id: MESSAGE_ID, execution_generation: 'gen-2' },
+      CONTEXT,
+    );
+    expect(nextGen[0]?.delegationNotices).toBeUndefined();
+    expect(nextGen[0]?.failureCode).toBeUndefined();
+    expect(nextGen[0]?.failureCap).toBeUndefined();
+    expect(nextGen[0]?.exception).toBeUndefined();
+
+    // Same-generation agent_start preserves same-generation notices.
+    const sameGen = applyChatStreamFrame(
+      [priorFailed],
+      { type: 'agent_start', message_id: MESSAGE_ID, execution_generation: 'gen-1' },
+      CONTEXT,
+    );
+    expect(sameGen[0]?.delegationNotices).toHaveLength(1);
+    expect(sameGen[0]?.failureCode).toBeUndefined();
+  });
 });
 
 describe('meta.delegation_notices_v1 after a reload', () => {

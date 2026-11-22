@@ -65,16 +65,30 @@ export function isTypedRefusalCode(code: string | undefined): boolean {
   return classifyRuntimeFailure(code).kind === 'refusal';
 }
 
+const GENERIC_AUTH_FAILURE_MESSAGES: ReadonlySet<string> = new Set([
+  '',
+  'AUTHORIZATION_FAILED',
+  'Execution authorization failed.',
+]);
+
 /**
- * True when an `AUTHORIZATION_FAILED` turn already carries a `delegation_refused`
- * notice (live or persisted in `meta.delegation_notices_v1`), so the generic
- * "Execution authorization failed." banner would only repeat the refusal less clearly.
+ * True when an `AUTHORIZATION_FAILED` turn already carries a fatal graph-node
+ * (`edgeKind === 'pipeline_node'`) `delegation_refused` notice (live or
+ * persisted in `meta.delegation_notices_v1`), and the failure carries no
+ * distinct non-generic authorization message. Non-fatal tool/sub-agent refusal
+ * notices (`agent_tool`, `pipeline_child`, `sub_agent`) never suppress a
+ * subsequent fatal `AUTHORIZATION_FAILED` error banner.
  */
 export function delegationRefusalExplainsFailure(
   failureCode: string | undefined,
-  notices: readonly Pick<DelegationNotice, 'kind'>[] | undefined,
+  notices: readonly Pick<DelegationNotice, 'kind' | 'edgeKind'>[] | undefined,
+  exception?: unknown,
 ): boolean {
-  return failureCode === 'AUTHORIZATION_FAILED' && notices !== undefined && notices.some((notice) => notice.kind === 'refused');
+  if (failureCode !== 'AUTHORIZATION_FAILED' || notices === undefined) return false;
+  if (exception !== undefined && (typeof exception !== 'string' || !GENERIC_AUTH_FAILURE_MESSAGES.has(exception.trim()))) {
+    return false;
+  }
+  return notices.some((notice) => notice.kind === 'refused' && notice.edgeKind === 'pipeline_node');
 }
 
 /** Sentence-case status heading for a typed refusal. */

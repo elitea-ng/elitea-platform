@@ -38,9 +38,16 @@
 - **Pipeline run pill (`parseRunsByEvent.support.ts`, `useRunEvent.ts`, `RunStateNode.tsx`):** Preserves `failureCode` on `execution.failed`; `RunStateNode` displays `"Run was refused"` tooltip and warning accent for typed refusals without editing `ConfigurationTab`, `EditorPanel`, `NodeCard`, or `RunStateDialog`.
 - **Notifications (`runFinished.ts`, `pushWorker.ts`, `en.json`):** Adds explicit `'refused'` handling (`Run refused` / `A run was refused by policy or permissions.`) so refused `run_finished` notices do not fall through to `"Run finished"`, while keeping `'failed'` copy intact for real runtime errors.
 
+## Security hardening (`SEC-FU359-01`..`SEC-FU359-04`)
+
+- **`SEC-FU359-01`:** Scoped `delegationRefusalExplainsFailure` (`runtimeFailure.ts`, `ApplicationAnswer.tsx`, `TurnTranscript.tsx`) strictly to fatal `pipeline_node` refusal notices with generic `AUTHORIZATION_FAILED` messages, so non-fatal `agent_tool`/`pipeline_child`/`sub_agent` notices and distinct authorization error messages never hide `<ErrorTrace>` or `<TurnError>`.
+- **`SEC-FU359-02`:** Cleared prior-generation `delegationNotices`, `failureCode`, and `failureCap` across regeneration in `regeneratingPatch.ts`, `chatStreamTurnFrames.ts`, `useChatStreamTransport.ts`, and Main's `ResetCurrentAgentResponse` (`agent_chat.sql` + regenerated `sqlcgen/agent_chat.sql.go`, stripping `delegation_notices_v1`, `is_error`, `error`, `error_code`, and `cap`).
+- **`SEC-FU359-03`:** Enforced frame-type vs `notice.kind` consistency in `chatStreamDelegationFrames.ts`, `repos/delegation_notice.go`, and `delegationnotice.StampFrame`, and restricted pre-`agent_start` assistant message creation to `pipeline_node` `delegation_refused` frames.
+- **`SEC-FU359-04`:** Guarded the `run_finished` `TEXT` outcome lookup in `pushWorker.ts` with `Object.hasOwn`.
+
 ## Verification
 
-- **Main (Go):** `go vet` and `go test -race` pass on `internal/application/workerdelegation`, `internal/application/delegationnotice`, and `internal/api/v2/executions`.
-- **Worker / Runtime (Rust, offline locked):** `elitea-agent-runtime` delegation suite (`42 passed`), `elitea-worker-rust` `protocol::delegation` (`10 passed`), and `agents::pipeline_tests::root_grant_tests` (`28 passed`).
-- **Web (Node 24):** `vitest` (`13/13` files, `226/226` tests), `typecheck`, `lint -- --deny-warnings` (0 warnings / 6,582 files), `theme-gate`, `check-budgets`, `check-testid-namespace`, `check-layer-cycle`, `check-dead-code`, `i18n-backfill --check`, `check-handlers` all pass.
+- **Main (Go):** `go vet` and `go test -race` pass on `internal/application/workerdelegation`, `internal/application/delegationnotice`, `internal/api/v2/executions`, `internal/db/sqlcgen`, and `internal/infra/db/repos` (`TestSavedAgentName`).
+- **Worker / Runtime (Rust, offline locked, unchanged in security delta):** `elitea-agent-runtime` delegation suite (`42 passed`), `elitea-worker-rust` `protocol::delegation` (`10 passed`), and `agents::pipeline_tests::root_grant_tests` (`28 passed`).
+- **Web (Node 24):** `vitest` (`14/14` files, `237/237` tests), `typecheck`, `lint -- --deny-warnings` (0 warnings / 6,583 files), `theme-gate`, `check-budgets`, `check-testid-namespace`, `check-layer-cycle`, `check-dead-code`, `i18n-backfill --check`, `check-handlers` all pass.
 - **Browser proof:** Deferred to integration stack verification (no Docker image build in this slice).

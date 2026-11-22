@@ -34,6 +34,12 @@ func TestRegenerationAdmitsAndKeepsCanvasItems(t *testing.T) {
 		"kept_canvases AS (",
 		"WHERE canvas_item.item_type = 'canvas_message'",
 		"AND (SELECT count(*) FROM kept_canvases) >= 0",
+		// Prior-generation delegation notices and failure markers are cleared.
+		"- 'delegation_notices_v1'",
+		"- 'is_error'",
+		"- 'error'",
+		"- 'error_code'",
+		"- 'cap'",
 	} {
 		if !strings.Contains(normalized, fragment) {
 			t.Errorf("ResetCurrentAgentResponse is missing %q", fragment)
