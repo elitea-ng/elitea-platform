@@ -359,3 +359,51 @@ func TestDelegatedReasonPreservesProvenance(t *testing.T) {
 		t.Fatalf("root actor chain = %v, want empty", rootEvent.ActorChain)
 	}
 }
+
+func TestDirectAgentMemoryTargetTypeAndReachabilityOpenAI(t *testing.T) {
+	t.Parallel()
+	for _, allowed := range []string{"agent", "openai"} {
+		if !isDirectAgentMemoryTargetType(allowed) {
+			t.Errorf("isDirectAgentMemoryTargetType(%q) = false, want true", allowed)
+		}
+	}
+	for _, refused := range []string{"pipeline", "react", "dial", "", "custom"} {
+		if isDirectAgentMemoryTargetType(refused) {
+			t.Errorf("isDirectAgentMemoryTargetType(%q) = true, want false", refused)
+		}
+	}
+
+	ctx := context.Background()
+	source := &stubNestedBatchSource{
+		projectID: 7,
+		nodes: map[[2]int64]nestedMemoryVersionNode{
+			{20, 200}: {
+				ApplicationID: 20, VersionID: 200, AgentType: "openai",
+				Meta: json.RawMessage(`{"memory":{"enabled":true,"write":"auto_attended"}}`),
+			},
+			{40, 400}: {
+				ApplicationID: 40, VersionID: 400, AgentType: "pipeline",
+				Meta: json.RawMessage(`{"memory":{"enabled":true,"write":"auto"}}`),
+			},
+			{41, 401}: {
+				ApplicationID: 41, VersionID: 401, AgentType: "react",
+				Meta: json.RawMessage(`{"memory":{"enabled":true,"write":"auto"}}`),
+			},
+		},
+	}
+	rootInput := &runtimev1.AgentExecutionInputV1{
+		Application: []byte(`{"id":10,"version_id":100,"version_details":{"tools":[
+			{"type":"application","settings":{"application_id":20,"application_version_id":200}},
+			{"type":"application","settings":{"application_id":40,"application_version_id":400}},
+			{"type":"application","settings":{"application_id":41,"application_version_id":401}}
+		]}}`),
+	}
+	if _, chain, err := resolveReachableNestedVersion(ctx, source.deps(), 7, 42, 10, rootInput, storage.AgentMemoryTarget{ApplicationID: 20, VersionID: 200}, 4); err != nil || !slices.Equal(chain, []int64{10, 20}) {
+		t.Fatalf("stored openai direct agent target = (%v, %v), want [10 20], nil", chain, err)
+	}
+	for _, nonAgent := range []storage.AgentMemoryTarget{{ApplicationID: 40, VersionID: 400}, {ApplicationID: 41, VersionID: 401}} {
+		if _, _, err := resolveReachableNestedVersion(ctx, source.deps(), 7, 42, 10, rootInput, nonAgent, 4); !errors.Is(err, storage.ErrContentUnauthorized) {
+			t.Fatalf("non-direct target %+v: want ErrContentUnauthorized, got %v", nonAgent, err)
+		}
+	}
+}

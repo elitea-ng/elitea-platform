@@ -116,10 +116,11 @@ const (
 // claim; projectID is the project it resolved. When target names a nested
 // saved agent (FU-353), Main proves composition reachability from the frozen
 // root input within projectID, checks lifecycle and folder visibility across
-// every intermediate hop and the target, requires target agent_type == "agent",
-// rejects explicit self-targeting, reads the target version's own meta.memory,
-// caps auto writes at max risk tier across the full ancestor chain (root +
-// intermediate hops + target), and sets Attended = false (D3).
+// every intermediate hop and the target, requires a direct agent target
+// ("agent" or stored "openai"), rejects explicit self-targeting, reads the
+// target version's own meta.memory, caps auto writes at max risk tier across
+// the full ancestor chain (root + intermediate hops + target), and sets
+// Attended = false (D3).
 func (s *AgentMemory) ResolveAgentMemoryRun(ctx context.Context, projectID int64, executionID string, generation uint64, target storage.AgentMemoryTarget) (storage.AgentMemoryRun, error) {
 	if generation == 0 || generation > 1<<63-1 {
 		return storage.AgentMemoryRun{}, storage.ErrContentUnauthorized
@@ -286,10 +287,19 @@ type nestedBFSItem struct {
 	ancestors []int64
 }
 
+// isDirectAgentMemoryTargetType admits both the canonical runtime spelling
+// ("agent") and the stored DB direct-agent spelling ("openai", normalized
+// to "agent" at runtime freeze in agentexecution.normalizeCurrentAgentTypeField),
+// while continuing to refuse "pipeline", "react", "dial", and empty/unknown types.
+func isDirectAgentMemoryTargetType(agentType string) bool {
+	return agentType == "agent" || agentType == "openai"
+}
+
 // resolveReachableNestedVersion performs a level-batched, bounded, cycle-safe
 // BFS from the frozen root tools to prove (target.ApplicationID, target.VersionID)
 // is reachable within projectID at depth <= maxDepth with no retired or
-// actor-hidden intermediate hop, and that target has agent_type == "agent".
+// actor-hidden intermediate hop, and that target is a direct agent ("agent" or
+// stored "openai").
 func resolveReachableNestedVersion(
 	ctx context.Context,
 	deps nestedMemoryTraversalDeps,
@@ -379,9 +389,10 @@ func resolveReachableNestedVersion(
 			copy(chain, item.ancestors)
 			chain[len(item.ancestors)] = node.ApplicationID
 			if node.ApplicationID == target.ApplicationID && node.VersionID == target.VersionID {
-				// FU-353-03: match Worker binding (assembly.rs) — only saved
-				// agents (agent_type == "agent") hold agent_memory.
-				if node.AgentType != "agent" {
+				// FU-353-03: match Worker binding (assembly.rs after
+				// normalizeCurrentAgentTypeField) — only saved direct agents
+				// ("agent" or stored "openai") hold agent_memory.
+				if !isDirectAgentMemoryTargetType(node.AgentType) {
 					return nil, nil, storage.ErrContentUnauthorized
 				}
 				return node.Meta, chain, nil
