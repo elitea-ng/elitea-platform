@@ -72,7 +72,7 @@ function editorIsLoading(isFetching: boolean, detail: unknown): boolean {
 }
 
 /** The editor's controls (versions, chat, save) in the page toolbar. */
-const actionsSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', gap: '0.5rem' };
+const actionsSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', flexWrap: 'wrap', minWidth: 0, gap: '0.5rem' };
 const contentSx: SxProps<Theme> = {
   flex: 1,
   minHeight: 0,
