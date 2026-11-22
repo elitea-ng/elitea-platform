@@ -107,6 +107,19 @@ impl ContextRoutes for SavedVersions {
         let value = if call.route == "elitea-client-token" {
             json!({"schema_version":"elitea.runtime.elitea-client-token.v1","project_id":17,
                 "token":"stub"})
+        } else if call.route == "artifacts/list" {
+            json!({
+                "schema_version": "elitea.runtime.artifact-list.v1",
+                "project_id": 17,
+                "bucket": "docs",
+                "files": [{
+                    "name": "ok.txt",
+                    "byte_length": 5,
+                    "media_type": "text/plain",
+                    "modified_at": "2026-11-22T00:00:00Z"
+                }],
+                "truncated": false
+            })
         } else {
             let parts = call.route.split('/').collect::<Vec<_>>();
             let identity = parts
@@ -1425,4 +1438,128 @@ fn a_pipeline_roots_own_credentials_stay_within_the_principal() {
             super::super::pipeline::root_delegation_and_credentials(&authority, &profile, toolsets);
         assert_eq!(credentials.len(), expected, "bounded by P: {bounded}");
     }
+}
+
+/// FU-353: ADR-0044 refuses ungranted nested `artifact` and `memory` toolkits
+/// under `Enforce`, and `PrincipalBound` refuses principal-hidden ones in BOTH
+/// `Enforce` and `Report` modes.
+#[test]
+fn fu353_delegation_refuses_ungranted_or_hidden_nested_artifact_and_memory_toolkits() {
+    let artifact_kit = json!({
+        "id": 50,
+        "type": "artifact",
+        "toolkit_name": "docs_kit",
+        "settings": {"bucket": "docs", "selected_tools": ["list_files", "read_file"]}
+    });
+    let memory_kit = json!({
+        "id": 51,
+        "type": "memory",
+        "toolkit_name": "notes_mem",
+        "settings": {"namespace": "notes", "selected_tools": ["manage_memory", "search_memory"]}
+    });
+    let principal_with_both = PrincipalBound::new(
+        [
+            PrincipalToolkit {
+                id: 50,
+                tools: None,
+            },
+            PrincipalToolkit {
+                id: 51,
+                tools: None,
+            },
+        ],
+        None,
+        Vec::<String>::new(),
+    )
+    .expect("principal bound");
+    let principal_with_neither =
+        PrincipalBound::new(Vec::<PrincipalToolkit>::new(), None, Vec::<String>::new())
+            .expect("empty principal bound");
+
+    // Root holds neither toolkit; under Enforce, ungranted child artifact & memory are refused.
+    let empty_root_policy =
+        Arc::new(enforcing_policy(DEFAULT_DEPTH).with_principal(principal_with_both.clone()));
+    let empty_scope = DelegationScope::root(empty_root_policy, GrantSet::from_tools(&[]));
+    for kit in [&artifact_kit, &memory_kit] {
+        let (outcome, _) = delegated(&empty_scope, std::slice::from_ref(kit));
+        assert!(
+            outcome.is_err(),
+            "ungranted nested toolkit must be refused under Enforce: {outcome:?}"
+        );
+    }
+
+    // Even when root holds both toolkits, PrincipalBound hiding them refuses in
+    // BOTH Enforce and Report modes.
+    for mode in [NarrowingMode::Enforce, NarrowingMode::Report] {
+        let policy = Arc::new(
+            DelegationPolicy::new(DEFAULT_DEPTH, mode, [])
+                .expect("policy")
+                .with_principal(principal_with_neither.clone()),
+        );
+        let root_scope = DelegationScope::root(
+            policy,
+            GrantSet::from_tools(&[artifact_kit.clone(), memory_kit.clone()]),
+        );
+        for kit in [&artifact_kit, &memory_kit] {
+            let (outcome, _) = delegated(&root_scope, std::slice::from_ref(kit));
+            assert!(
+                outcome
+                    .as_ref()
+                    .is_err_and(|refused| refused.starts_with("PrincipalBound")),
+                "principal-hidden toolkit must be refused in {mode:?}: {outcome:?}"
+            );
+        }
+    }
+
+    // When root holds both toolkits AND PrincipalBound admits them, delegation succeeds.
+    let admitted_policy =
+        Arc::new(enforcing_policy(DEFAULT_DEPTH).with_principal(principal_with_both));
+    let admitted_scope = DelegationScope::root(
+        admitted_policy,
+        GrantSet::from_tools(&[artifact_kit.clone(), memory_kit.clone()]),
+    );
+    let (ok, kept) = delegated(&admitted_scope, &[artifact_kit, memory_kit]);
+    assert!(ok.is_ok(), "admitted nested toolkits must succeed: {ok:?}");
+    assert_eq!(kept.len(), 2);
+}
+
+/// FU-353 D6(a): a nested saved pipeline (`bind_saved_pipeline_runtimes`) gets
+/// the run's pinned `ArtifactToolAuthority` and runs its direct `artifact`
+/// toolkit node under an enforcing delegation policy.
+#[tokio::test(flavor = "current_thread")]
+async fn fu353_nested_saved_pipeline_runs_pinned_artifact_toolkit_node() {
+    let artifact_kit = json!({
+        "id": 50,
+        "type": "artifact",
+        "toolkit_name": "docs_kit",
+        "settings": {"bucket": "docs", "selected_tools": ["list_files"]}
+    });
+    let child_yaml = "state:\n  input: str\n  messages: list\n  listing: dict\nentry_point: ls\nnodes:\n  - id: ls\n    type: toolkit\n    toolkit_name: docs_kit\n    tool: list_files\n    input_mapping: {}\n    output: [listing]\n    transition: END\n";
+    let versions = BTreeMap::from([(
+        (7, 8),
+        saved_version(
+            "pipeline",
+            child_yaml,
+            &json!({}),
+            vec![artifact_kit.clone()],
+        ),
+    )]);
+    let fixture = fixture(&versions, Vec::new());
+    let request = root_request(
+        &root_yaml("p_art"),
+        vec![artifact_kit, reference((7, 8), "pipeline", "p_art")],
+    );
+    let invocation = fixture
+        .assembler
+        .assemble(enforcing(&request))
+        .await
+        .unwrap_or_else(|error| {
+            panic!("nested artifact pipeline was refused: {}", describe(&error))
+        });
+    let _browser = collect_pipeline_completion(invocation).await;
+    let routes = fixture.routes.lock().expect("routes").clone();
+    assert!(
+        routes.iter().any(|route| route == "artifacts/list"),
+        "expected nested pipeline to call artifacts/list, saw: {routes:?}"
+    );
 }

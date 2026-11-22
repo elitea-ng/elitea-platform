@@ -48,7 +48,7 @@ use super::events::{
 use super::graph::pipeline_node_event_channel;
 use super::internal_tools::{ASK_USER_TOOL_NAME, ASK_USER_TOOLSET_NAME, InternalToolCatalog};
 use super::model_scope::{ModelScopeSessions, ScopedModelCheckpoint};
-use super::pipeline::materialize_saved_pipeline_tool;
+use super::pipeline::{NestedPipelineCapabilities, materialize_saved_pipeline_tool};
 mod materialization;
 #[cfg(test)]
 mod materialization_tests;
@@ -65,8 +65,9 @@ use super::session::{
 };
 use crate::protocol::control::ClaimBoundRuntimeContextAuthority;
 use crate::toolkits::{
-    AdmittedToolSnapshot, DelegatedAuthorizationCatalog, FrozenToolKind, FrozenToolSnapshot,
-    FrozenToolSnapshotErrorCode, McpConnector, McpMaterializationErrorCode, ToolAdmissionPolicy,
+    AdmittedToolSnapshot, ArtifactToolAuthority, DelegatedAuthorizationCatalog, FrozenToolKind,
+    FrozenToolSnapshot, FrozenToolSnapshotErrorCode, IndexToolAuthority, IndexToolSupport,
+    IndexToolsWithheld, McpConnector, McpMaterializationErrorCode, ToolAdmissionPolicy,
     ToolBindingError, ToolsetMaterializationErrorCode, bind_toolsets,
 };
 use crate::transport::model_facade::{
@@ -2986,6 +2987,12 @@ pub(crate) struct ApplicationToolDependencies<'a> {
     /// pipeline children — the pipeline PARENT is exactly that caller, because
     /// it owns its pipeline participants itself through its graph.
     conversation_thread_id: Option<String>,
+    /// FU-353 D4(a)/D6(a): plain pinned claim-bound artifact authority (no
+    /// Office/Web/Browser hosts) for delegated `artifact` toolkits.
+    artifacts: Option<ArtifactToolAuthority>,
+    /// FU-353 D6(a): claim-bound index/memory toolkit authority lent to nested
+    /// agents and nested saved pipelines.
+    index_tools: Result<IndexToolAuthority, IndexToolsWithheld>,
     materialization: ApplicationMaterializationPath,
 }
 
@@ -3007,6 +3014,8 @@ impl<'a> ApplicationToolDependencies<'a> {
             resume: None,
             model_scopes: None,
             conversation_thread_id: None,
+            artifacts: None,
+            index_tools: Err(IndexToolsWithheld::NotServedOnThisPath),
             materialization: ApplicationMaterializationPath::default(),
         }
     }
@@ -3017,6 +3026,30 @@ impl<'a> ApplicationToolDependencies<'a> {
     ) -> Self {
         self.code = code;
         self
+    }
+
+    /// FU-353 D4(a): enforce bucket pinning on every nested artifact authority.
+    #[must_use]
+    pub(super) fn with_artifacts(mut self, artifacts: Option<ArtifactToolAuthority>) -> Self {
+        self.artifacts = artifacts.map(ArtifactToolAuthority::with_pinned_bucket);
+        self
+    }
+
+    /// FU-353 D6(a): lend the run's claim-bound index/memory toolkit support.
+    #[must_use]
+    pub(super) fn with_index_tools(
+        mut self,
+        index_tools: Result<IndexToolAuthority, IndexToolsWithheld>,
+    ) -> Self {
+        self.index_tools = index_tools;
+        self
+    }
+
+    fn pipeline_capabilities(&self) -> NestedPipelineCapabilities {
+        NestedPipelineCapabilities {
+            artifacts: self.artifacts.clone(),
+            index_tools: self.index_tools.clone(),
+        }
     }
 
     pub(super) fn with_model_scopes(mut self, scopes: ModelScopeSessions) -> Self {
@@ -3360,6 +3393,7 @@ async fn materialize_pipeline_children(
             dependencies.code.clone(),
             conversation_thread_id.clone(),
             dependencies.materialization.clone(),
+            dependencies.pipeline_capabilities(),
         )
         .await;
         let (definition, runtimes, child_tools, delegation, definition_sha256) = match built {
@@ -3487,6 +3521,8 @@ pub(crate) async fn materialize_application_tools(
         model_scopes: dependencies.model_scopes,
         code: dependencies.code,
         conversation_thread_id: dependencies.conversation_thread_id,
+        artifacts: dependencies.artifacts,
+        index_tools: dependencies.index_tools,
         materialization: dependencies.materialization,
         skipped: Vec::new(),
     };
@@ -3559,6 +3595,8 @@ struct ApplicationAssemblyState<'a> {
     model_scopes: Option<ModelScopeSessions>,
     code: Option<Arc<dyn super::graph::CodeSandboxRuntime>>,
     conversation_thread_id: Option<String>,
+    artifacts: Option<ArtifactToolAuthority>,
+    index_tools: Result<IndexToolAuthority, IndexToolsWithheld>,
     materialization: ApplicationMaterializationPath,
     /// Nested pipeline attachments this Worker could not build, named on the
     /// root's skipped notice (#990).
@@ -3832,6 +3870,8 @@ impl ApplicationAssemblyState<'_> {
             resume: self.resume.clone(),
             model_scopes: self.model_scopes.clone(),
             conversation_thread_id: self.conversation_thread_id.clone(),
+            artifacts: self.artifacts.clone(),
+            index_tools: self.index_tools.clone(),
             materialization: self.materialization.clone(),
         };
         let built = materialize_pipeline_children(
@@ -3955,6 +3995,10 @@ impl ApplicationAssemblyState<'_> {
     > {
         // A governed run (#1474): the nested agent's own frozen toolkits
         // redeem through the run's governed seam, as on an ordinary agent.
+        let index_support = match self.index_tools.as_ref() {
+            Ok(authority) => IndexToolSupport::Lent(authority),
+            Err(reason) => IndexToolSupport::Withheld(*reason),
+        };
         let super::governed_nested::NestedToolsets {
             configured: mut toolsets,
             mcp: mut mcp_toolsets,
@@ -3967,6 +4011,8 @@ impl ApplicationAssemblyState<'_> {
                 policy: &self.policy,
                 connector: &self.mcp_connector,
                 mcp_tokens: self.mcp_tokens,
+                artifacts: self.artifacts.as_ref(),
+                index_tools: index_support,
             },
             &super::governed_nested::NestedErrorMapping {
                 configured: toolset_error,

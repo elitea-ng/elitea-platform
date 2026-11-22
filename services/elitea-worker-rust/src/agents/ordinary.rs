@@ -714,6 +714,10 @@ impl OrdinaryNativeAgentAssembler {
             Arc::clone(runtime_context),
         ));
         let mut artifact_authority = ArtifactToolAuthority::new(Arc::clone(&platform_writer));
+        // FU-353 D4(a): nested agents and nested saved pipelines get a plain
+        // pinned artifact authority (no Office/Web/Browser hosts).
+        let nested_artifact_authority =
+            ArtifactToolAuthority::new(Arc::clone(&platform_writer)).with_pinned_bucket();
         // The Office host (ADR-0032) rides on the artifact authority, built
         // only when the snapshot has an Office toolkit: it mints a credential
         // and binds nothing until a tool calls the model.
@@ -804,11 +808,15 @@ impl OrdinaryNativeAgentAssembler {
         // host (and the second model binding it carries) is built only when
         // the snapshot has an I1 toolkit carrying a catalog — the only case
         // anything would call it (review round 1).
-        let index_authority = if snapshot_carries_index_catalog(tool_snapshot) {
-            self.index_tool_authority(runtime_context, &context, profile, &toolkit_model_budget)
-        } else {
-            Err(IndexToolsWithheld::NotRequested)
-        };
+        // FU-353: also build the lazy index authority when nested applications
+        // are attached, so a nested agent or saved pipeline with a `memory` or
+        // index toolkit works even when the root holds no index catalog.
+        let index_authority =
+            if snapshot_carries_index_catalog(tool_snapshot) || nested_application_count > 0 {
+                self.index_tool_authority(runtime_context, &context, profile, &toolkit_model_budget)
+            } else {
+                Err(IndexToolsWithheld::NotRequested)
+            };
         let index_support = match index_authority.as_ref() {
             Ok(authority) => IndexToolSupport::Lent(authority),
             Err(reason) => IndexToolSupport::Withheld(*reason),
@@ -916,6 +924,8 @@ impl OrdinaryNativeAgentAssembler {
             .with_model_scopes(model_scopes)
             .with_conversation_thread(conversation_thread_id)
             .with_code(code)
+            .with_artifacts(Some(nested_artifact_authority))
+            .with_index_tools(index_authority)
             .with_delegation(super::application_tools::root_delegation_scope(
                 runtime_context,
                 profile.kind(),

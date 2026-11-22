@@ -200,24 +200,38 @@ async fn an_unserved_artifact_toolkit_is_refused_as_unsupported_not_out_of_scope
     assert_direct_tool_node_message(&error);
 }
 
-/// The production-reachable unserved position: a saved child pipeline still
-/// materializes without the claim, so its artifact direct node is refused as
-/// unsupported before anything runs, never as out of scope.
+/// FU-353 D6(a): a saved child pipeline now receives a plain pinned
+/// `ArtifactToolAuthority` (no Office/Web/Browser hosts), so its `artifact`
+/// direct node assembles cleanly while an Office (`pptx`) direct node on a
+/// saved child pipeline remains refused as unsupported before anything runs.
 #[tokio::test]
-async fn a_saved_child_pipelines_artifact_node_is_refused_as_unsupported() {
-    let child = artifact_pipeline_request(ARTIFACT_LIST_PIPELINE)
+async fn a_saved_child_pipelines_artifact_node_assembles_and_office_stays_unsupported() {
+    let artifact_child = artifact_pipeline_request(ARTIFACT_LIST_PIPELINE)
         .payload
         .application["version_details"]
         .clone();
-    let (platform, model_facade, _, _) = pipeline_runtime(&child, Vec::new());
+    let (platform, model_facade, _, _) = pipeline_runtime(&artifact_child, Vec::new());
     let assembler = PipelineNativeAgentAssembler::with_state(
         Arc::new(InMemorySessionService::new()),
         Arc::new(MemoryCheckpointer::new()),
     )
     .with_runtime_clients(platform, model_facade);
     let request = agent_pipeline_request("release-agent", "pipeline");
+    if let Err(error) = assembler.assemble(authorized(&request)).await {
+        panic!(
+            "a saved child pipeline's artifact node should assemble under FU-353 D6(a): {error}"
+        );
+    }
+
+    let pptx_child = pptx_pipeline_request().payload.application["version_details"].clone();
+    let (platform, model_facade, _, _) = pipeline_runtime(&pptx_child, Vec::new());
+    let assembler = PipelineNativeAgentAssembler::with_state(
+        Arc::new(InMemorySessionService::new()),
+        Arc::new(MemoryCheckpointer::new()),
+    )
+    .with_runtime_clients(platform, model_facade);
     let Err(error) = assembler.assemble(authorized(&request)).await else {
-        panic!("a saved child pipeline bound an artifact toolkit without the claim");
+        panic!("a saved child pipeline must not bind an Office toolkit");
     };
     assert_eq!(
         error.code(),

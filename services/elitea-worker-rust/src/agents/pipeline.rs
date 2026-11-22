@@ -98,6 +98,23 @@ struct SavedPipelineParticipantReference<'a> {
     version_id: u64,
 }
 
+/// FU-353: claim-bound capabilities lent into a saved pipeline child (pinned
+/// artifact authority + index/memory toolkit support).
+#[derive(Clone)]
+pub(super) struct NestedPipelineCapabilities {
+    pub(super) artifacts: Option<ArtifactToolAuthority>,
+    pub(super) index_tools: Result<IndexToolAuthority, IndexToolsWithheld>,
+}
+
+impl Default for NestedPipelineCapabilities {
+    fn default() -> Self {
+        Self {
+            artifacts: None,
+            index_tools: Err(IndexToolsWithheld::NotServedOnThisPath),
+        }
+    }
+}
+
 #[derive(Clone)]
 struct PipelineApplicationRuntime<'a> {
     platform: &'a PlatformClient,
@@ -112,6 +129,12 @@ struct PipelineApplicationRuntime<'a> {
     model_scopes: ModelScopeSessions,
     conversation_thread_id: String,
     materialization: ApplicationMaterializationPath,
+    /// FU-353 D4(a)/D6(a): plain pinned artifact authority (no Office/Web/Browser
+    /// hosts) lent to nested agents and nested saved pipelines.
+    nested_artifacts: Option<ArtifactToolAuthority>,
+    /// FU-353 D6(a): claim-bound index/memory toolkit authority lent to nested
+    /// agents and nested saved pipelines.
+    index_tools: Result<IndexToolAuthority, IndexToolsWithheld>,
     /// The run's fenced node journals, lent to every saved child pipeline so its
     /// effectful direct nodes run behind a journal too (FU-248). `None` where
     /// the run has no root journal owner (a pipeline served as an agent's tool).
@@ -119,6 +142,26 @@ struct PipelineApplicationRuntime<'a> {
     /// FU-323a: the root Agent-node re-entries this claim's inspect step
     /// proved; `None` outside a checkpoint recovery and below the root.
     root_reentry: Option<Arc<scoped_runtime::RootAgentReentry>>,
+}
+
+impl<'a> PipelineApplicationRuntime<'a> {
+    fn application_dependencies(
+        &self,
+        connector: Arc<dyn McpConnector>,
+        materialization: ApplicationMaterializationPath,
+    ) -> ApplicationToolDependencies<'a> {
+        ApplicationToolDependencies::new(
+            Arc::clone(&self.model_facade),
+            Arc::clone(&self.tool_policy),
+            connector,
+            self.mcp_tokens,
+        )
+        .with_model_scopes(self.model_scopes.clone())
+        .with_code(self.code.clone())
+        .with_artifacts(self.nested_artifacts.clone())
+        .with_index_tools(self.index_tools.clone())
+        .with_materialization(materialization)
+    }
 }
 
 /// Frozen, fully admitted application pipeline definition.
@@ -834,6 +877,15 @@ impl PipelineNativeAgentAssembler {
         let materialization = ApplicationMaterializationPath::native_graph(continuation)
             .with_delegation(delegation_root)
             .with_governed(governed.clone());
+        // FU-353 D4(a)/D6(a): nested agents and nested saved pipelines receive
+        // a plain pinned `ArtifactToolAuthority` (no Office/Web/Browser hosts).
+        let nested_artifacts = self.platform.as_ref().map(|platform| {
+            ArtifactToolAuthority::new(Arc::new(ClaimPlatformWriter::new(
+                Arc::clone(platform),
+                Arc::clone(runtime_context),
+            )))
+            .with_pinned_bucket()
+        });
         let application_runtime = context
             .clone()
             .zip(model_facade.clone())
@@ -852,6 +904,8 @@ impl PipelineNativeAgentAssembler {
                     model_scopes: model_scopes.clone(),
                     conversation_thread_id,
                     materialization: materialization.clone(),
+                    nested_artifacts: nested_artifacts.clone(),
+                    index_tools: index_tools.clone(),
                     node_recovery: node_recovery.clone(),
                     root_reentry: root_reentry.clone(),
                 },
@@ -962,15 +1016,10 @@ impl PipelineNativeAgentAssembler {
             runtime_context,
             Arc::clone(&runtime.context),
             profile.shell(),
-            ApplicationToolDependencies::new(
-                Arc::clone(&runtime.model_facade),
-                Arc::clone(&runtime.tool_policy),
+            runtime.application_dependencies(
                 Arc::clone(&self.mcp_connector),
-                runtime.mcp_tokens,
-            )
-            .with_model_scopes(runtime.model_scopes.clone())
-            .with_code(runtime.code.clone())
-            .with_materialization(runtime.materialization.clone()),
+                runtime.materialization.clone(),
+            ),
             Some(&direct_aliases),
         )
         .await?;
@@ -2296,6 +2345,7 @@ pub(super) async fn materialize_saved_pipeline_tool(
     code: Option<Arc<dyn super::graph::CodeSandboxRuntime>>,
     conversation_thread_id: String,
     materialization: ApplicationMaterializationPath,
+    capabilities: NestedPipelineCapabilities,
 ) -> Result<SavedPipelineTool, NativeAgentAssemblyError> {
     let runtime = PipelineApplicationRuntime {
         platform,
@@ -2310,6 +2360,10 @@ pub(super) async fn materialize_saved_pipeline_tool(
         model_scopes,
         conversation_thread_id,
         materialization,
+        nested_artifacts: capabilities
+            .artifacts
+            .map(ArtifactToolAuthority::with_pinned_bucket),
+        index_tools: capabilities.index_tools,
         node_recovery: None,
         root_reentry: None,
     };
@@ -2918,16 +2972,12 @@ async fn bind_scoped_agent(
         runtime.authority,
         Arc::clone(&runtime.context),
         shell,
-        ApplicationToolDependencies::new(
-            Arc::clone(&runtime.model_facade),
-            Arc::clone(&runtime.tool_policy),
-            Arc::clone(&runtime.connector),
-            runtime.mcp_tokens,
-        )
-        .with_model_scopes(runtime.model_scopes.clone())
-        .with_code(runtime.code.clone())
-        .with_conversation_thread(runtime.conversation_thread_id.clone())
-        .with_materialization(runtime.materialization.for_graph_agent()?),
+        runtime
+            .application_dependencies(
+                Arc::clone(&runtime.connector),
+                runtime.materialization.for_graph_agent()?,
+            )
+            .with_conversation_thread(runtime.conversation_thread_id.clone()),
         Some(&selected),
     )
     .await?;
@@ -2991,6 +3041,10 @@ async fn bind_saved_pipeline_runtimes(
     let selected = snapshot.retain_toolkit_names(&aliases);
     // A governed run (#1474): the saved pipeline's own frozen toolkits redeem
     // through the run's governed seam, as on the root.
+    let index_support = match runtime.index_tools.as_ref() {
+        Ok(authority) => IndexToolSupport::Lent(authority),
+        Err(reason) => IndexToolSupport::Withheld(*reason),
+    };
     let super::governed_nested::NestedToolsets {
         configured: mut materialized,
         mut mcp,
@@ -3003,6 +3057,8 @@ async fn bind_saved_pipeline_runtimes(
             policy: &runtime.tool_policy,
             connector: &runtime.connector,
             mcp_tokens: runtime.mcp_tokens,
+            artifacts: runtime.nested_artifacts.as_ref(),
+            index_tools: index_support,
         },
         &super::governed_nested::NestedErrorMapping {
             configured: tool_materialization_error,
