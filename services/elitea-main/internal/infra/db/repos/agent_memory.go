@@ -818,7 +818,7 @@ RETURNING id`, schema),
 				return err
 			}
 		}
-		return s.append(ctx, tx, run.ProjectID, "agent.memory.remembered", 0, run.ApplicationID, id, delegatedReason(string(write.Status), run.DelegatedFromApplicationID), run.ExecutionID)
+		return s.appendDelegated(ctx, tx, run.ProjectID, "agent.memory.remembered", 0, run.ApplicationID, id, run.DelegatedFromApplicationID, string(write.Status), run.ExecutionID)
 	})
 	if err != nil {
 		if errors.Is(err, storage.ErrAgentMemorySubjectOptedOut) || errors.Is(err, storage.ErrContentRejected) {
@@ -915,7 +915,7 @@ WHERE id = $1 AND application_id = $2 AND kind <> 'cursor'
 		if !forgotten {
 			return nil
 		}
-		return s.append(ctx, tx, run.ProjectID, "agent.memory.deleted", 0, run.ApplicationID, entryID, delegatedReason("agent", run.DelegatedFromApplicationID), run.ExecutionID)
+		return s.appendDelegated(ctx, tx, run.ProjectID, "agent.memory.deleted", 0, run.ApplicationID, entryID, run.DelegatedFromApplicationID, "agent", run.ExecutionID)
 	})
 	if err != nil {
 		return false, fmt.Errorf("agent memory: forget: %w", err)
@@ -923,18 +923,18 @@ WHERE id = $1 AND application_id = $2 AND kind <> 'cursor'
 	return forgotten, nil
 }
 
-func delegatedReason(base string, delegatedFrom int64) string {
-	if delegatedFrom <= 0 {
-		return base
+func delegatedReasons(base string, delegatedFrom int64) []string {
+	reasons := make([]string, 0, 2)
+	if base != "" {
+		reasons = append(reasons, base)
 	}
-	if base == "" {
-		return "delegated_from:" + strconv.FormatInt(delegatedFrom, 10)
+	if delegatedFrom > 0 {
+		reasons = append(reasons, "delegated_from:"+strconv.FormatInt(delegatedFrom, 10))
 	}
-	return base + ",delegated_from:" + strconv.FormatInt(delegatedFrom, 10)
+	return reasons
 }
 
-// append writes one audit event. actorID 0 is the agent.
-func (s *AgentMemory) append(ctx context.Context, tx pgx.Tx, projectID int64, action string, actorID, applicationID, entryID int64, reason, executionID string) error {
+func buildAgentMemoryAuditEvent(projectID int64, action string, actorID, applicationID, entryID, delegatedFrom int64, reason, executionID string) securityaudit.SecurityEvent {
 	principal := "agent:" + strconv.FormatInt(applicationID, 10)
 	if actorID > 0 {
 		principal = "user:" + strconv.FormatInt(actorID, 10)
@@ -943,15 +943,25 @@ func (s *AgentMemory) append(ctx context.Context, tx pgx.Tx, projectID int64, ac
 	if entryID > 0 {
 		resource += ":" + strconv.FormatInt(entryID, 10)
 	}
-	reasons := []string{}
-	if reason != "" {
-		reasons = append(reasons, reason)
+	var actorChain []string
+	if delegatedFrom > 0 {
+		actorChain = []string{"agent:" + strconv.FormatInt(delegatedFrom, 10)}
 	}
-	event := securityaudit.SecurityEvent{
+	return securityaudit.SecurityEvent{
 		Type: securityaudit.TypeAgentMemoryChanged, TenantProjectID: projectID, Action: action,
-		Reasons: reasons, PrincipalRef: principal, ResourceType: "agent_memory_entry", ResourceID: resource,
+		Reasons: delegatedReasons(reason, delegatedFrom), PrincipalRef: principal, ActorChain: actorChain,
+		ResourceType: "agent_memory_entry", ResourceID: resource,
 		ExecutionID: executionID, Time: time.Now().UTC(),
 	}
+}
+
+// append writes one audit event. actorID 0 is the agent.
+func (s *AgentMemory) append(ctx context.Context, tx pgx.Tx, projectID int64, action string, actorID, applicationID, entryID int64, reason, executionID string) error {
+	return s.appendDelegated(ctx, tx, projectID, action, actorID, applicationID, entryID, 0, reason, executionID)
+}
+
+func (s *AgentMemory) appendDelegated(ctx context.Context, tx pgx.Tx, projectID int64, action string, actorID, applicationID, entryID, delegatedFrom int64, reason, executionID string) error {
+	event := buildAgentMemoryAuditEvent(projectID, action, actorID, applicationID, entryID, delegatedFrom, reason, executionID)
 	if err := s.audit.Append(ctx, tx, event); err != nil {
 		return fmt.Errorf("agent memory: append the audit event %s: %w", action, err)
 	}

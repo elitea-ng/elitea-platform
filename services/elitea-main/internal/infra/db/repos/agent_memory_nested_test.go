@@ -323,13 +323,39 @@ func TestValidateNestedMemoryTargetActorRejectsSelfTargetAndMissingActor(t *test
 
 func TestDelegatedReasonPreservesProvenance(t *testing.T) {
 	t.Parallel()
-	if got := delegatedReason("pending", 0); got != "pending" {
-		t.Fatalf("root reason = %q", got)
+	if got := delegatedReasons("pending", 0); !slices.Equal(got, []string{"pending"}) {
+		t.Fatalf("root reasons = %v, want [pending]", got)
 	}
-	if got := delegatedReason("pending", 11); got != "pending,delegated_from:11" {
-		t.Fatalf("nested reason = %q", got)
+	if got := delegatedReasons("pending", 11); !slices.Equal(got, []string{"pending", "delegated_from:11"}) {
+		t.Fatalf("nested reasons = %v, want [pending delegated_from:11]", got)
 	}
-	if got := delegatedReason("", 11); got != "delegated_from:11" {
-		t.Fatalf("empty base nested reason = %q", got)
+	if got := delegatedReasons("", 11); !slices.Equal(got, []string{"delegated_from:11"}) {
+		t.Fatalf("empty base nested reasons = %v, want [delegated_from:11]", got)
+	}
+	if got := delegatedReasons("", 0); len(got) != 0 {
+		t.Fatalf("empty root reasons = %v, want []", got)
+	}
+
+	delegated := buildAgentMemoryAuditEvent(1, "agent.memory.remembered", 0, 990189, 42, 990188, "active", "exec-1")
+	delegated.ID = "11111111-1111-4111-8111-111111111111"
+	delegated.Source = "elitea-main/test"
+	if err := delegated.Validate(); err != nil {
+		t.Fatalf("delegated audit event invalid: %v", err)
+	}
+	if !slices.Equal(delegated.Reasons, []string{"active", "delegated_from:990188"}) {
+		t.Fatalf("delegated reasons = %v", delegated.Reasons)
+	}
+	if !slices.Equal(delegated.ActorChain, []string{"agent:990188"}) {
+		t.Fatalf("delegated actor chain = %v, want [agent:990188]", delegated.ActorChain)
+	}
+
+	rootEvent := buildAgentMemoryAuditEvent(1, "agent.memory.remembered", 0, 990188, 43, 0, "active", "exec-2")
+	rootEvent.ID = "22222222-2222-4222-8222-222222222222"
+	rootEvent.Source = "elitea-main/test"
+	if err := rootEvent.Validate(); err != nil {
+		t.Fatalf("root audit event invalid: %v", err)
+	}
+	if len(rootEvent.ActorChain) != 0 {
+		t.Fatalf("root actor chain = %v, want empty", rootEvent.ActorChain)
 	}
 }

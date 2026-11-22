@@ -295,8 +295,11 @@ CREATE TABLE IF NOT EXISTS p_1.entity_folders (id INTEGER PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS p_1.social_folder_items (folder_id INTEGER NOT NULL, entity TEXT NOT NULL, entity_id INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS p_1.folder_access_overrides (folder_id INTEGER NOT NULL, user_id INTEGER NOT NULL, access_level TEXT NOT NULL);
 INSERT INTO p_1.entity_folders (id) VALUES (77) ON CONFLICT DO NOTHING;
-INSERT INTO p_1.social_folder_items (folder_id, entity, entity_id) VALUES (77, 'toolkit', $1);
-INSERT INTO p_1.folder_access_overrides (folder_id, user_id, access_level) VALUES (77, 42, 'no_access');`, hiddenToolkit); err != nil {
+INSERT INTO p_1.folder_access_overrides (folder_id, user_id, access_level) VALUES (77, 42, 'no_access');`); err != nil {
+		t.Fatalf("seed folder tables: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO p_1.social_folder_items (folder_id, entity, entity_id) VALUES (77, 'toolkit', $1)`, hiddenToolkit); err != nil {
 		t.Fatalf("seed folder override: %v", err)
 	}
 	parent := `{"id":7,"version_id":9,"version_details":{"tools":[
