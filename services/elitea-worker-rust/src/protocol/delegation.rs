@@ -336,6 +336,27 @@ mod tests {
     }
 
     #[test]
+    fn grants_enforced_with_only_pending_grants_keeps_root_application_id() {
+        let on = policy_from_command(&command(Some(WorkerDelegationPolicyV1 {
+            root_application_id: 174,
+            grants_enforced: true,
+            ..WorkerDelegationPolicyV1::default()
+        })))
+        .expect("policy");
+        assert!(on.grants_enforced());
+        assert_eq!(on.root_application_id(), 174);
+
+        let off = policy_from_command(&command(Some(WorkerDelegationPolicyV1 {
+            root_application_id: 174,
+            grants_enforced: false,
+            ..WorkerDelegationPolicyV1::default()
+        })))
+        .expect("policy");
+        assert!(!off.grants_enforced());
+        assert_eq!(off.root_application_id(), 0);
+    }
+
+    #[test]
     fn a_grant_that_does_not_match_its_digest_or_names_no_kind_is_refused() {
         for message in [
             grant_message(EMPTY_SET, &"0".repeat(64)),

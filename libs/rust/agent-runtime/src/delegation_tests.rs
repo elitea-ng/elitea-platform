@@ -1084,6 +1084,52 @@ fn a_missing_grant_is_a_refused_notice_with_reason_no_grant() {
 }
 
 #[test]
+fn pending_only_grants_still_mark_enforcement_and_name_the_root_caller() {
+    let policy = DelegationPolicy::new(DEFAULT_MAX_DEPTH, NarrowingMode::Enforce, [])
+        .expect("policy")
+        .with_grants(175, [])
+        .expect("empty approved grants");
+    assert!(policy.grants_enforced());
+    assert_eq!(policy.root_application_id(), 175);
+
+    let git = [toolkit(7, "Git", &json!({}))];
+    let parent = root_scope(policy, &[]);
+    let refused = parent
+        .delegate_edge(
+            Some(171),
+            &mut git.to_vec(),
+            &BTreeSet::new(),
+            &PublicPolicy::Open,
+        )
+        .expect_err("pending-only edge must be refused");
+    let notice = refused.evidence.notice(&notice_context()).expect("notice");
+    assert_eq!(notice.value["edge"]["caller_id"], 175);
+    assert_eq!(notice.value["edge"]["callee_id"], 171);
+
+    let unenforced = DelegationPolicy::new(DEFAULT_MAX_DEPTH, NarrowingMode::Enforce, [])
+        .expect("unenforced policy");
+    assert!(!unenforced.grants_enforced());
+    assert_eq!(unenforced.root_application_id(), 0);
+    let refused_without_grants = root_scope(unenforced, &[])
+        .delegate_edge(
+            Some(171),
+            &mut git.to_vec(),
+            &BTreeSet::new(),
+            &PublicPolicy::Open,
+        )
+        .expect_err("unenforced refusal");
+    let notice_without_caller = refused_without_grants
+        .evidence
+        .notice(&notice_context())
+        .expect("notice");
+    assert!(
+        notice_without_caller.value["edge"]
+            .get("caller_id")
+            .is_none()
+    );
+}
+
+#[test]
 fn a_principal_refusal_is_reason_principal_and_never_names_a_grant_to_approve() {
     let caller = scope(
         &[toolkit(9, "Repo", &json!({}))],

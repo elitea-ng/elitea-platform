@@ -41,6 +41,7 @@ describe('the bell row of a run_finished notification', () => {
   it.each([
     ['completed', 'Run finished', 'A run is done.'],
     ['failed', 'Run failed', 'A run stopped with an error.'],
+    ['refused', 'Run refused', 'A run was refused by policy or permissions.'],
     ['waiting', 'Run needs you', 'A run waits for your answer.'],
     ['limit_reached', 'Run stopped at its limit', 'A run reached its chain limit.'],
   ])('%s reads "%s %s"', async (outcome, title, body) => {

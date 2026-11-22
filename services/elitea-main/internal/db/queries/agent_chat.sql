@@ -2976,6 +2976,14 @@ WITH resolved AS MATERIALIZED (
             -- answer is a new cloud turn with its own epoch and commit.
             - 'workspace_epoch'
             - 'workspace_commit'
+            -- Delegation notices and terminal failure markers (FU-359/FU-360):
+            -- a regenerated answer starts a fresh turn without prior refusal
+            -- notices or failure codes surviving from the replaced generation.
+            - 'delegation_notices_v1'
+            - 'is_error'
+            - 'error'
+            - 'error_code'
+            - 'cap'
         ) || jsonb_build_object(
             'execution_generation', sqlc.arg(execution_generation)::text,
             -- The answer is rewritten in place, so a Stop before its first

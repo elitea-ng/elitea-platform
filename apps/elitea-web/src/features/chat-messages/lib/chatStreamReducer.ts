@@ -122,7 +122,7 @@ export function applyChatStreamFrame(
     reduceSummaryFrame(history, frame, type, context, index) ??
     reduceMessageSyncFrame(history, frame, type, context) ??
     reduceSubAgentFrame(history, frame, type, index) ??
-    reduceDelegationFrame(history, frame, type, index) ??
+    reduceDelegationFrame(history, frame, type, context, index) ??
     reduceFinalResultFrame(history, frame, context, index) ??
     // Not yet ported (see the module doc). Returning the input reference is the
     // point: an unported frame must be inert, never a partial write.
