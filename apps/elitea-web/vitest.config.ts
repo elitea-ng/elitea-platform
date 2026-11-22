@@ -26,6 +26,38 @@ import { storybookTest } from '@storybook/addon-vitest/vitest-plugin';
 // project (`extends: true`) inherits it.
 import { withClientCoreAccess } from './vite.config';
 
+// [#coverage-pool] Coverage instrumentation makes the `node` project 2-3x
+// slower on the self-hosted 4-vCPU pool, and fixed budgets sized for a plain
+// run timed out there (CreateApplication.test.tsx at its 15 s), which is what
+// sent ci-web-coverage.yml's shards back to hosted runners. Rather than
+// retries, every budget scales by one multiplier under coverage: 3 when this
+// run passes `--coverage` or `--coverage.enabled=true`, 1 when it passes
+// `--coverage.enabled=false` (ci-web.yml's plain shards) or no flag at all.
+// `VITEST_TIMEOUT_SCALE` (a number >= 1) overrides the detection either way.
+// The value reaches the workers through `test.env`, where src/test/timeouts.ts
+// applies it to per-file budgets and to the testing-library wait ceilings.
+// Outside coverage the scale is 1 and every number below is what it was.
+const COVERAGE_TIMEOUT_SCALE = 3;
+
+/** The last coverage flag on the command line wins, as it does for vitest's own parser. */
+function coverageRequested(argv: readonly string[]): boolean {
+  let on = false;
+  for (const arg of argv) {
+    if (arg === '--coverage' || arg === '--coverage=true' || arg === '--coverage.enabled' || arg === '--coverage.enabled=true') on = true;
+    else if (arg === '--no-coverage' || arg === '--coverage=false' || arg === '--coverage.enabled=false') on = false;
+  }
+  return on;
+}
+
+function timeoutScale(): number {
+  const raw = process.env.VITEST_TIMEOUT_SCALE?.trim();
+  const override = Number(raw);
+  if (raw && Number.isFinite(override) && override >= 1) return override;
+  return coverageRequested(process.argv) ? COVERAGE_TIMEOUT_SCALE : 1;
+}
+
+const TIMEOUT_SCALE = timeoutScale();
+
 export default defineConfig(withClientCoreAccess({
   plugins: [react(), tsconfigPaths(), svgr({ svgrOptions: { ref: true } })],
   test: {
@@ -44,8 +76,12 @@ export default defineConfig(withClientCoreAccess({
           // setup.ts raises the testing-library wait ceiling to 5 s; a test
           // ceiling equal to that would cut every slow-but-correct wait off
           // before it can report. Files that need more still raise their own
-          // with `vi.setConfig`.
-          testTimeout: 20_000,
+          // with `vi.setConfig`, through src/test/timeouts.ts.
+          // [#coverage-pool] Both ceilings scale by TIMEOUT_SCALE (above), and
+          // the workers get the same factor for the per-file budgets.
+          testTimeout: 20_000 * TIMEOUT_SCALE,
+          hookTimeout: 10_000 * TIMEOUT_SCALE,
+          env: { VITEST_TIMEOUT_SCALE: String(TIMEOUT_SCALE) },
         },
       },
       // [#424] The `browser` project that used to sit here is GONE. No CI job

@@ -36,8 +36,9 @@ runs:
       run: |
         set -euo pipefail
         [ -f "$GITHUB_WORKSPACE/$LOCKFILE" ] || { echo "::error::cache-dependency-path '$LOCKFILE' is not a file"; exit 1; }
-        # The writer in main-write-cache saves the LITERAL path ~/.npm (the
-        # post step loses the composite's contexts; see its header). That is
+        # main-write-cache saves AND restores the LITERAL path ~/.npm (the
+        # post step loses the composite's contexts, and a restore matches only
+        # the path string its entry was saved with; see its header). That is
         # npm's default on Linux and macOS; setting it makes it a fact. Every
         # later npm call of the job inherits it through GITHUB_ENV.
         export NPM_CONFIG_CACHE="$HOME/.npm"

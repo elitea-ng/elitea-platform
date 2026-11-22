@@ -14,7 +14,8 @@ name: CI — elitea-doc-extractor
 #     cannot (kube-client caps it `< 1.16`). A future dependency that drags
 #     kube or serde-saphyr into this crate would fail here, not in a
 #     mysterious resolver error later;
-#   * the release binary.
+#   * the binary's command line, on the debug build the tests made (the
+#     release build is the image's, in ci-build-once.yml).
 
 on:
   # Called by ci.yml, which owns the PR tiers and the path filter
@@ -42,13 +43,18 @@ env:
 jobs:
   extractor:
     name: elitea-doc-extractor — lint, test, the smallvec floor
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
     timeout-minutes: 30
     defaults:
       run:
         working-directory: services/elitea-doc-extractor
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume, and rustup (none in
+      # its image). Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          rust: "true"
 
       - name: Assert the pinned toolchain
         run: |
@@ -61,10 +67,7 @@ jobs:
       # Formatting and Clippy for this crate run in ci-rust-lint.yml (fast
       # tier), so they fail in minutes and before this job's build.
 
-      - name: Build documentation
-        env:
-          RUSTDOCFLAGS: "-D warnings"
-        run: cargo doc --locked --no-deps --all-features
+      # rustdoc (deny warnings) runs beside Clippy in ci-rust-lint.yml (fast tier).
 
       - name: Run the tests
         run: cargo test --locked --all-targets --all-features
@@ -96,13 +99,16 @@ jobs:
             *) echo "::warning::the worker's lock resolves smallvec v${worker} (>= 1.16): the sidecar's reason for a separate lock may be gone; see services/elitea-doc-extractor/README.md" ;;
           esac
 
-      - name: Build the release binary
-        run: cargo build --locked --release
+      # The debug binary: the release build (no features, cargo-auditable) is
+      # the image's, and ci-build-once.yml builds it on every pull request
+      # that touches Rust. The tests already built these units.
+      - name: Build the debug binary (the units the tests built)
+        run: cargo build --locked --all-features --bins
 
       - name: The binary answers --version and refuses an unknown command
         run: |
           set -euo pipefail
-          bin=target/release/elitea-doc-extractor
+          bin=target/debug/elitea-doc-extractor
           "$bin" --version | grep -q '^elitea-doc-extractor '
           if "$bin" bogus 2>/dev/null; then
             echo "::error::an unknown command exited 0"; exit 1

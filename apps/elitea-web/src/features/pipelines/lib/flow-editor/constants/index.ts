@@ -27,6 +27,8 @@ import * as StateDrawerConstantsNamespace from './stateDrawer.constants';
 import * as DeprecatedConstantsNamespace from './deprecated.constants';
 import * as RuntimeContractConstantsNamespace from './runtimeContract.constants';
 import * as NodeDefaultsConstantsNamespace from './nodeDefaults.constants';
+import * as NodeDocsConstantsNamespace from './nodeDocs.constants';
+import * as NodeFieldInfoConstantsNamespace from './nodeFieldInfo.constants';
 
 export const FlowEditorConstants = FlowEditorConstantsNamespace;
 export const StateDrawerConstants = StateDrawerConstantsNamespace;
@@ -40,4 +42,6 @@ export const DeprecatedConstants = DeprecatedConstantsNamespace;
 export const RuntimeContractConstants = RuntimeContractConstantsNamespace;
 /** `InitialNodeData` — the per-node-type seed payload, split out of `flowEditor.constants` for the §3.5 file-length budget. */
 export const NodeDefaultsConstants = NodeDefaultsConstantsNamespace;
+export const NodeDocsConstants = NodeDocsConstantsNamespace;
+export const NodeFieldInfoConstants = NodeFieldInfoConstantsNamespace;
 export { ValidationErrors } from './validation.constants';

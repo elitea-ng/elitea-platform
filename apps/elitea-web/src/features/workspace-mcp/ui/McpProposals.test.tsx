@@ -13,6 +13,7 @@ import type { McpIpc, McpList } from '@/shared/desktop/mcpIpc';
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
 import { McpProposals } from './McpProposals';
+import { testTimeout } from '@/test/timeouts';
 
 const LIST: McpList = {
   allowed: true,
@@ -55,7 +56,7 @@ function setup(list: McpList = LIST) {
   return mocks;
 }
 
-describe('McpProposals', { timeout: 20_000 }, () => {
+describe('McpProposals', { timeout: testTimeout(20_000) }, () => {
   it('shows the proposal and adds only the ticked servers', async () => {
     const ipc = setup();
     const card = await screen.findByTestId('mcp-proposal');

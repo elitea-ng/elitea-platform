@@ -70,6 +70,24 @@
       "label": "Aha!"
     }
   },
+  "analyse_jira": {
+    "metadata": {
+      "categories": [
+        "project management"
+      ],
+      "extra_categories": [
+        "analysis",
+        "jira",
+        "atlassian",
+        "flow metrics",
+        "cycle time",
+        "lead time",
+        "throughput"
+      ],
+      "icon_url": "jira-icon.svg",
+      "label": "Jira analysis"
+    }
+  },
   "application": {
     "metadata": {
       "label": "Agent"

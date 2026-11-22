@@ -16,11 +16,26 @@ name: CI — Governed-profile conformance
 # adds an image the build-once jobs do not build (governed-mocks), the run is
 # long, and it is wanted nightly and on demand rather than on every stack
 # change. Pull requests run it only when they touch the suite or its stack.
+#
+# The stack images: on a pull request ci.yml runs ci-build-once.yml first and
+# passes its results in, and the `stack` job pulls the images it pushed by
+# digest (.github/actions/stack-images). It builds them itself, reading the
+# shared cache and writing none, only when nothing was built for it: a fork's
+# or Dependabot's pull request, or its own schedule or dispatch.
 
 on:
   # Called by ci.yml, which owns the PR tiers and the path filter
   # (scripts/ci/tier-paths.json); no `pull_request` arm of its own.
   workflow_call:
+    inputs:
+      web-images:
+        description: ci-build-once.yml's `web-images` output (the job result); empty when nothing was built for this run.
+        type: string
+        default: ""
+      stack-images:
+        description: ci-build-once.yml's `stack-images` output.
+        type: string
+        default: ""
   schedule:
     - cron: "41 2 * * *"
   workflow_dispatch:
@@ -38,10 +53,15 @@ jobs:
   # (GOV-001's unit leg), and a compile of the tagged suite and the mocks.
   unit:
     name: Scanner, skip ledger, golden vectors
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
+    env:
+      # The pod's cgroup gives 4 CPU while the node reports 8; hosted runners have 4.
+      GOMAXPROCS: "4"
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume (does nothing on hosted).
+      - uses: ./.github/actions/eng-runner-env
       - uses: actions/setup-go@v7
         with:
           cache: false
@@ -80,6 +100,19 @@ jobs:
       contents: read
       packages: read
     steps:
+      # success: pull. skipped or empty: build here. Anything else is a build
+      # that failed for this commit, and the stack cannot be what it tests.
+      - name: The build-once images for this commit did not fail
+        env:
+          WEB: ${{ inputs.web-images }}
+          STACK: ${{ inputs.stack-images }}
+        run: |
+          for result in "$WEB" "$STACK"; do
+            case "$result" in
+              "" | success | skipped) ;;
+              *) echo "::error::ci-build-once.yml did not build this commit's images (web-images: ${WEB}, stack-images: ${STACK})"; exit 1 ;;
+            esac
+          done
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
@@ -105,11 +138,15 @@ jobs:
             /usr/local/share/boost /opt/hostedtoolcache/CodeQL \
             || echo "::warning::could not remove every preinstalled toolchain; continuing"
           df -h / | tail -1
-      - name: Build the stack images (shared cache, read only)
+      - name: Stack images (pulled by digest; built here when nothing was built for this run)
         # The base stack only: governed-mocks is not a bake target, and the
         # script builds it (STANDALONE_SKIP_BUILD=1 builds that one image).
-        uses: ./.github/actions/build-stack-images
+        # Built ONCE per commit by ci-build-once.yml (the same compose files
+        # and Containerfiles); the fallback build reads the shared cache and
+        # writes none.
+        uses: ./.github/actions/stack-images
         with:
+          built: ${{ inputs.web-images == 'success' && inputs.stack-images == 'success' }}
           compose-files: |
             docker-compose.standalone-full.yml
             docker-compose.standalone-rust-agent.yml
@@ -118,7 +155,6 @@ jobs:
             ci/bake-cache-rust.hcl
           targets: standalone-rust
           mount-cache-suffix: rust
-          cache-write: "false"
       - name: Run the governed conformance phases and the canary scan
         env:
           COMPOSE_BIN: docker compose

@@ -29,7 +29,7 @@ describe('fixed Parallel is admitted for authoring (Point 5 2a-2)', () => {
     const user = userEvent.setup();
     renderWithTheme(<AddNodeMenu onAddNode={vi.fn()} />);
     await user.click(screen.getByRole('button', { name: 'Add node' }));
-    const entries = within(await screen.findByRole('menu')).getAllByRole('menuitem').map((item) => item.textContent);
+    const entries = within(await screen.findByRole('menu')).getAllByRole('menuitem').map((item) => item.getAttribute('aria-label'));
     expect(entries).toHaveLength(14);
     expect(entries).toContain('Parallel');
     expect(entries).toContain('Code');

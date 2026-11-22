@@ -1,6 +1,7 @@
 // toolkit_check_vendors.go carries the probes for the project-management and
 // test-management families added for #2143: ado, qtest, testrail, xray,
-// zephyr_enterprise, zephyr_essential, sharepoint, report_portal and testio.
+// zephyr_enterprise, zephyr_essential, sharepoint, report_portal, testio and
+// openapi (client credentials).
 // Each is a port of the `check_connection` of the matching class in
 // elitea-sdk (elitea_sdk/configurations/<type>.py), restated under this
 // package's rules: one bounded request to the endpoint the stored credential
@@ -14,16 +15,18 @@
 //     without a token) is `unsupported_type`, not `ok`. The SDK reads an
 //     anonymous healthcheck for those and reports success, which says the host
 //     is up and nothing about the credential.
-//   - A SharePoint credential that names no site (the normal case since the
-//     site moved onto the toolkit) is `unsupported_type`. The SDK returns
-//     success without making a request; the Entra tenant this probe signs in
-//     to is derived from the site host, so without one there is nothing to ask.
+//   - A SharePoint credential that names neither a site nor a tenant (the
+//     normal case since the site moved onto the toolkit) is `unsupported_type`.
+//     The SDK returns success without making a request; the Entra tenant this
+//     probe signs in to is the credential's `tenant_id` or, failing that, the
+//     one derived from the site host, so with neither there is nothing to ask.
+//     A credential that names a tenant and no site mints a token and is `ok`
+//     on that alone (#2251).
 //
-// `openapi` is deliberately NOT here. A custom OpenAPI spec has no identity
-// endpoint: the SDK itself skips validation for anonymous and API-key
-// credentials and only exchanges a token for an OAuth client-credentials one,
-// against a token URL the tenant typed. There is no honest probe for the
-// common shapes, so it keeps the `unsupported_type` answer.
+// `openapi` is here for one shape only: an OAuth client-credentials
+// credential (client id, secret and token URL), whose probe is the token mint
+// the SDK also makes (#2252). A custom OpenAPI spec has no identity endpoint,
+// so an API-key or anonymous credential keeps the `unsupported_type` answer.
 package configurations
 
 import (
@@ -108,7 +111,13 @@ func vendorProbes() map[string]toolkitProbe {
 		// with the stored client id and secret, spent on ONE Graph read of the
 		// site the credential names, and dropped. Delegated and app-mode
 		// credentials never reach this probe (check_connection_oauth.go).
-		"sharepoint": {mint: &tokenMint{build: buildSharepointMint, spend: sharepointSpendURL}},
+		// openapi (OAuth client credentials only): a token mint against the
+		// tenant-typed token URL is the verdict, as in the SDK. Any other
+		// OpenAPI credential stays unsupported (see the file comment).
+		"openapi": {mint: &tokenMint{build: buildOpenAPIMint}},
+		"sharepoint": {mint: &tokenMint{
+			build: buildSharepointMint, spend: sharepointSpendURL, mintIsVerdict: sharepointSkipsSpend,
+		}},
 	}
 }
 

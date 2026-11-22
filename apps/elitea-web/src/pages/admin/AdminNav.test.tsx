@@ -42,6 +42,7 @@ import {
   COLLAPSED_SIDE_BAR_WIDTH_REM,
   SIDE_BAR_WIDTH_REM,
 } from '@/shared/ui/layout/sidebarWidth';
+import { testTimeout } from '@/test/timeouts';
 
 installWebStorageShim();
 
@@ -413,7 +414,7 @@ describe('active route', () => {
     // reported `Test timed out in 5000ms` at 5006ms). The assertion is
     // unchanged; only the time it is allowed to take is stated deliberately
     // instead of inherited.
-  }, 30_000);
+  }, testTimeout(30_000));
 
   it('marks nothing when no nav item owns the route', () => {
     // Better than defaulting to the first item: a nav claiming you are on a page

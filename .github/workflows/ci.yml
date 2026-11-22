@@ -8,8 +8,9 @@ name: CI
 #          tier passed AND the pull request is not a draft; marking a draft ready
 #          for review starts this workflow again (`ready_for_review`).
 #
-# `ci-gate` is the one verdict: it fails while the pull request is a draft and
-# when a heavy job that should have run is missing. A required status check can
+# `ci-gate` is the one verdict: it is skipped while the pull request is a draft
+# (fast-gate is the draft's signal), and it fails when a heavy job that should
+# have run is missing. A required status check can
 # point at `CI / ci-gate` alone. Each job below calls a workflow that keeps its
 # own schedule and workflow_dispatch arms; what starts it on a pull request is
 # scripts/ci/tier-paths.json. scripts/ci/check-tiering.mjs keeps this file, that
@@ -30,7 +31,7 @@ permissions:
 jobs:
   changes:
     name: Which workflows does this change reach?
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -42,8 +43,16 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          sparse-checkout: scripts/ci
+          # The local action below must be in the checkout too.
+          sparse-checkout: |
+            scripts/ci
+            .github/actions/eng-runner-env
           persist-credentials: false
+      # eng-runner: caches and TMPDIR on the work volume, and node (none in its
+      # image). Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          node: "true"
       - id: paths
         run: node scripts/ci/tier-changes.mjs
         env:
@@ -58,6 +67,9 @@ jobs:
     needs: [changes]
     if: fromJSON(needs.changes.outputs.run)['no-binaries']
     uses: ./.github/workflows/no-binaries.yml
+    # Its two elitea-main Go gates run here only when ci-go does not (check-tiering.mjs).
+    with:
+      go_runs: ${{ fromJSON(needs.changes.outputs.run)['ci-go'] }}
     secrets: inherit
 
   dependency-scanning:
@@ -88,6 +100,11 @@ jobs:
     needs: [changes]
     if: fromJSON(needs.changes.outputs.run)['ci-web']
     uses: ./.github/workflows/ci-web.yml
+    # One web unit suite per run: on a ready pull request ci-web-coverage runs
+    # every unit test (with coverage), so ci-web's plain shards stand down.
+    # Exactly this expression (check-tiering.mjs): the coverage job's own filter.
+    with:
+      coverage_runs: ${{ github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-web-coverage'] }}
     secrets: inherit
 
   ci-contract:
@@ -136,13 +153,21 @@ jobs:
     name: fast-gate
     needs: [changes, no-binaries, dependency-scanning, helm-lint, ci-docs, ci-go, ci-web, ci-contract, ci-gateway, ci-mock-llm, ci-mobile, ci-deepwiki-conformance, image-matrix, ci-rust-lint]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
         with:
-          sparse-checkout: scripts/ci
+          # The local action below must be in the checkout too.
+          sparse-checkout: |
+            scripts/ci
+            .github/actions/eng-runner-env
           persist-credentials: false
+      # eng-runner: caches and TMPDIR on the work volume, and node (none in its
+      # image). Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          node: "true"
       - name: The fast tier passed
         run: node scripts/ci/ci-gate.mjs fast
         env:
@@ -151,13 +176,56 @@ jobs:
           DRAFT: ${{ github.event.pull_request.draft }}
 
   # ── Heavy tier: not a draft, and the fast tier passed ───────────────────────
-  ci-web-e2e:
+  # Every stack image once per commit, pushed by digest, for the three jobs
+  # that run the stack: ci-web-e2e, ci-governed-conformance, helm-install-smoke
+  # (they need it and take its outputs). It runs when any of them would, or
+  # the change touches Rust (tier-paths.json `union`): the Rust workflows build
+  # no release binaries of their own, so the release build is proven here.
+  # `force` builds every image even when the E2E lane filter skips the stack
+  # (a chart change for the helm smoke, a crate the lanes never load).
+  ci-build-once:
     needs: [changes, fast-gate]
+    if: ${{ !cancelled() && needs.fast-gate.result == 'success' && github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-build-once'] }}
+    permissions:
+      contents: read
+      # Pushes the CI-only ci-* images (pruned by ci-image-cleanup.yml).
+      packages: write
+    uses: ./.github/workflows/ci-build-once.yml
+    with:
+      force: ${{ fromJSON(needs.changes.outputs.run)['ci-governed-conformance'] || fromJSON(needs.changes.outputs.run)['helm-install-smoke'] || fromJSON(needs.changes.outputs.run)['ci-rust'] || fromJSON(needs.changes.outputs.run)['ci-rust-shared'] || fromJSON(needs.changes.outputs.run)['ci-deepwiki-engine'] || fromJSON(needs.changes.outputs.run)['ci-inventory-engine'] || fromJSON(needs.changes.outputs.run)['ci-vector'] || fromJSON(needs.changes.outputs.run)['ci-doc-extractor'] }}
+    secrets: inherit
+
+  # The consumers of ci-build-once run whatever its result: each reads the
+  # two build results it is passed (pull on success, build in the job on
+  # skipped, stop on failure), as the lanes did inside one workflow.
+  ci-web-e2e:
+    needs: [changes, fast-gate, ci-build-once]
     if: ${{ !cancelled() && needs.fast-gate.result == 'success' && github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-web-e2e'] }}
     permissions:
       contents: read
+      # Its own `build-once` job (a run on its own) pushes; on a pull request
+      # that job is skipped, but a called workflow may not ask for more than
+      # the caller grants.
       packages: write
     uses: ./.github/workflows/ci-web-e2e.yml
+    with:
+      web-images: ${{ needs.ci-build-once.outputs.web-images }}
+      stack-images: ${{ needs.ci-build-once.outputs.stack-images }}
+      reaches-stack: ${{ needs.ci-build-once.outputs.reaches-stack }}
+      reaches-model: ${{ needs.ci-build-once.outputs.reaches-model }}
+      reaches-handoff: ${{ needs.ci-build-once.outputs.reaches-handoff }}
+      reaches-sandbox: ${{ needs.ci-build-once.outputs.reaches-sandbox }}
+      reaches-webkit: ${{ needs.ci-build-once.outputs.reaches-webkit }}
+      reaches-images: ${{ needs.ci-build-once.outputs.reaches-images }}
+    secrets: inherit
+
+  # The E2E legs on the self-hosted pool, as processes (no image, so no
+  # ci-build-once): its jobs run only where they route to the pool, and
+  # ci-web-e2e's compose legs stand down there to one smoke leg.
+  ci-web-e2e-native:
+    needs: [changes, fast-gate]
+    if: ${{ !cancelled() && needs.fast-gate.result == 'success' && github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-web-e2e-native'] }}
+    uses: ./.github/workflows/ci-web-e2e-native.yml
     secrets: inherit
 
   ci-web-coverage:
@@ -235,18 +303,29 @@ jobs:
     secrets: inherit
 
   helm-install-smoke:
-    needs: [changes, fast-gate]
+    needs: [changes, fast-gate, ci-build-once]
     if: ${{ !cancelled() && needs.fast-gate.result == 'success' && github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['helm-install-smoke'] }}
+    permissions:
+      contents: read
+      # Pulls the ci-* images ci-build-once pushed, by digest.
+      packages: read
     uses: ./.github/workflows/helm-install-smoke.yml
+    with:
+      web-images: ${{ needs.ci-build-once.outputs.web-images }}
+      stack-images: ${{ needs.ci-build-once.outputs.stack-images }}
     secrets: inherit
 
   ci-governed-conformance:
-    needs: [changes, fast-gate]
+    needs: [changes, fast-gate, ci-build-once]
     if: ${{ !cancelled() && needs.fast-gate.result == 'success' && github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-governed-conformance'] }}
     permissions:
       contents: read
+      # Pulls the ci-* images ci-build-once pushed, by digest.
       packages: read
     uses: ./.github/workflows/ci-governed-conformance.yml
+    with:
+      web-images: ${{ needs.ci-build-once.outputs.web-images }}
+      stack-images: ${{ needs.ci-build-once.outputs.stack-images }}
     secrets: inherit
 
   ci-handoff-loadgate:
@@ -257,15 +336,28 @@ jobs:
 
   ci-gate:
     name: ci-gate
-    needs: [changes, fast-gate, no-binaries, dependency-scanning, helm-lint, ci-docs, ci-go, ci-web, ci-contract, ci-gateway, ci-mock-llm, ci-mobile, ci-deepwiki-conformance, image-matrix, ci-rust-lint, ci-web-e2e, ci-web-coverage, ci-rust, ci-rust-shared, ci-deepwiki-engine, ci-inventory-engine, ci-doc-extractor, ci-vector, ci-browser-session, ci-desktop, ci-desktop-control, ci-local-tools-macos, desktop-package, helm-install-smoke, ci-governed-conformance, ci-handoff-loadgate]
-    if: always()
-    runs-on: ubuntu-latest
+    needs: [changes, fast-gate, no-binaries, dependency-scanning, helm-lint, ci-docs, ci-go, ci-web, ci-contract, ci-gateway, ci-mock-llm, ci-mobile, ci-deepwiki-conformance, image-matrix, ci-rust-lint, ci-build-once, ci-web-e2e, ci-web-e2e-native, ci-web-coverage, ci-rust, ci-rust-shared, ci-deepwiki-engine, ci-inventory-engine, ci-doc-extractor, ci-vector, ci-browser-session, ci-desktop, ci-desktop-control, ci-local-tools-macos, desktop-package, helm-install-smoke, ci-governed-conformance, ci-handoff-loadgate]
+    # Skipped (grey) on a draft, never red: a red gate on a draft read as a
+    # failure to watchers (#2721). fast-gate is the draft's signal. A draft
+    # cannot be merged, and `ready_for_review` starts this workflow again on
+    # the same head, where the gate waits for the heavy tier and decides.
+    # `!= true`, not `== false`: an event without a pull request still runs it.
+    if: always() && github.event.pull_request.draft != true
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
         with:
-          sparse-checkout: scripts/ci
+          # The local action below must be in the checkout too.
+          sparse-checkout: |
+            scripts/ci
+            .github/actions/eng-runner-env
           persist-credentials: false
+      # eng-runner: caches and TMPDIR on the work volume, and node (none in its
+      # image). Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          node: "true"
       - name: Every job that should have run passed (and the pull request is ready)
         run: node scripts/ci/ci-gate.mjs final
         env:

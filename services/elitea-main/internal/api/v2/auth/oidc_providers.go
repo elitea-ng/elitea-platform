@@ -57,11 +57,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/identityproviders"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identityrepo"
 )
 
 // IdentityProviderSource is the store seam. It is an interface so this package does
@@ -104,6 +106,12 @@ type oidcRuntime struct {
 	// operator debugging a login needs to know whether the deployment used the
 	// row they just saved or the environment it fell back to.
 	origin string
+
+	// binding is the provider key and configured issuer every link this
+	// runtime resolves must be bound to (issue 2558; identityrepo.ProviderBinding).
+	// A stored provider's key and document issuer, or EnvironmentProviderKey
+	// and OIDC_ISSUER_URL.
+	binding identityrepo.ProviderBinding
 
 	// entra is the Entra mode of this provider (oidc_entra.go). Nil unless
 	// credential governance is on and the provider is marked `entra`.
@@ -236,6 +244,7 @@ func (h *OIDCHandler) buildRuntime(
 		requireEmailVerified: document.RequireEmailVerified,
 		adoptSCIMUsers:       document.AdoptSCIMUsers,
 		origin:               fmt.Sprintf("provider %s revision %d", provider.Key, provider.Revision),
+		binding:              provider.Binding(),
 	}, nil
 }
 
@@ -261,6 +270,9 @@ func newOIDCRuntimeFromEnvironment(ctx context.Context, cfg *OIDCConfig) (*oidcR
 		requireEmailVerified: oidcRequiresVerifiedEmail(),
 		adoptSCIMUsers:       oidcAdoptsSCIMUsers(),
 		origin:               "environment",
+		binding: identityrepo.ProviderBinding{
+			Key: identityrepo.EnvironmentProviderKey, Issuer: strings.TrimSpace(cfg.IssuerURL),
+		},
 	}, nil
 }
 

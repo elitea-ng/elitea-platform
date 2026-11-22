@@ -12,6 +12,7 @@ import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
 import { HooksPanel } from './HooksPanel';
 import { HooksProposals } from './HooksProposals';
+import { testTimeout } from '@/test/timeouts';
 
 const LIST: HooksList = {
   allowed: false,
@@ -49,7 +50,7 @@ function setup() {
   return mocks;
 }
 
-describe('HooksPanel', { timeout: 20_000 }, () => {
+describe('HooksPanel', { timeout: testTimeout(20_000) }, () => {
   it('lists the hooks with their last run and toggles one', async () => {
     const ipc = setup();
     const row = await screen.findByTestId('hook-user-fmt');

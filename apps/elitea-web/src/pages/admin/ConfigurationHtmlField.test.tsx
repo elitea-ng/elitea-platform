@@ -13,9 +13,10 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { ConfigurationHtmlField } from './ConfigurationHtmlField';
 import { widgetFor } from './configurationFields';
+import { testTimeout } from '@/test/timeouts';
 
-configure({ asyncUtilTimeout: 5_000 });
-vi.setConfig({ testTimeout: 30_000 });
+configure({ asyncUtilTimeout: testTimeout(5_000) });
+vi.setConfig({ testTimeout: testTimeout(30_000) });
 
 const FIELD = {
   key: 'maintenance_html',

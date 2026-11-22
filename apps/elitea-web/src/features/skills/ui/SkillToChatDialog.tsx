@@ -21,12 +21,12 @@ import Typography from '@mui/material/Typography';
 import { useNavigate } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 
-import { conversationSkillKeys } from '@/entities/conversation-skill';
-import { pinConversationSkill, useListConversations } from '@/shared/api/generated/chat/chat';
+import { CONVERSATION_SKILL_LIMIT, conversationSkillKeys } from '@/entities/conversation-skill';
+import { listConversationSkills, pinConversationSkill, useListConversations } from '@/shared/api/generated/chat/chat';
 import { EliteaApiError } from '@/shared/api/generated/mutator';
 import type { PinConversationSkillRequest } from '@/shared/api/generated/model';
 import { findLocalThreadPin } from '@/shared/desktop/localThreadPin';
-import { unwrapList } from '@/shared/api/unwrap';
+import { unwrapList, unwrapListPage } from '@/shared/api/unwrap';
 import { t } from '@/shared/i18n';
 import { BaseModal } from '@/shared/ui/BaseModal';
 
@@ -64,6 +64,7 @@ function pinRefusalText(error: unknown): string {
   // The desktop host's own refusals for a local thread (IPC.md "Thread history").
   const code = typeof error === 'object' && error !== null ? (error as { code?: unknown }).code : undefined;
   if (code === 'thread_skills_full') return t('skills.toChat.limit', 'A conversation holds at most five skills. Remove one to add another.');
+  if (code === 'skill_too_large') return t('skills.toChat.tooLarge', 'The skills pinned to that conversation would be over 64 KiB together, more than a turn can apply. Remove one to add another.');
   if (code === 'skill_unknown') return t('skills.toChat.unavailable', 'That skill is not available to you.');
   const status = error instanceof EliteaApiError && error.failure.kind === 'http' ? error.failure.status : undefined;
   if (status === 409) return t('skills.toChat.limit', 'A conversation holds at most five skills. Remove one to add another.');
@@ -82,6 +83,23 @@ function useConversationChoices(projectId: string | undefined, open: boolean): r
       ),
     [query.data],
   );
+}
+
+/**
+ * Checks the conversation before the pin is resolved: "Add to a conversation" forks a listing into the project, and a
+ * pin the target then refuses would leave that copy behind, one more on every retry (#2294). A conversation this
+ * computer ran as a local thread keeps its pins in the host, which refuses its own full list; the fork there is the
+ * host's to reuse, so only a conversation the server holds is read.
+ */
+async function checkTarget(projectId: string, choice: string): Promise<void> {
+  if (choice === NEW_CHAT) return;
+  if ((await findLocalThreadPin(choice, Number(projectId))) !== null) return;
+  // A list that cannot be read leaves the answer to the pin itself, which says why it was refused.
+  const pins = await listConversationSkills(projectId, choice).then(
+    (page) => unwrapListPage(page, 'conversationSkills').rows,
+    () => [],
+  );
+  if (pins.length >= CONVERSATION_SKILL_LIMIT) throw Object.assign(new Error('The conversation holds the most skills.'), { code: 'thread_skills_full' });
 }
 
 export function SkillToChatDialog({
@@ -114,7 +132,8 @@ export function SkillToChatDialog({
     if (choice === '' || projectId === undefined) return;
     setMessage(undefined);
     setBusy(true);
-    void resolvePin()
+    void checkTarget(projectId, choice)
+      .then(resolvePin)
       .then(async (pin) => {
         if (choice === NEW_CHAT) {
           onNewChat?.(pin);

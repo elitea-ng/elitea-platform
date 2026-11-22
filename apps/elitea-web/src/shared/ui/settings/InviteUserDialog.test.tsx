@@ -13,9 +13,10 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { InviteUserDialog } from './InviteUserDialog';
 import { readInviteRows } from './inviteResults';
+import { testTimeout } from '@/test/timeouts';
 
-configure({ asyncUtilTimeout: 5_000 });
-vi.setConfig({ testTimeout: 30_000 });
+configure({ asyncUtilTimeout: testTimeout(5_000) });
+vi.setConfig({ testTimeout: testTimeout(30_000) });
 
 const ROLES = [
   { label: 'Admin', value: 'admin' },

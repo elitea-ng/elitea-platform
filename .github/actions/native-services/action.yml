@@ -1,0 +1,151 @@
+name: Native services on the self-hosted pool
+description: >-
+  On eng-runner, starts the job's services (PostgreSQL, NATS, Qdrant, OpenBao,
+  the storage emulators) as processes of the runner user, from the binaries in
+  the pool's image (deploy/ci-runners/image), on 127.0.0.1 at the SAME ports
+  and credentials the job's `services:` block maps on a hosted runner. It waits
+  for each one to be healthy, and fails with the log's tail when one is not.
+  Data, sockets and logs live under $RUNNER_TEMP/native-services; the job's
+  last step, ./.github/actions/native-services-logs with `if: failure()`,
+  uploads the logs.
+  On a GitHub-hosted runner it does nothing: there the `services:` block runs
+  the containers. That block names every image through the pool-empty
+  expression (an empty image is a service GitHub does not create), so the two
+  never both run. check-runner-routing.mjs refuses a routed job whose services
+  and inputs here disagree.
+
+inputs:
+  postgres:
+    description: '"true" starts PostgreSQL.'
+    required: false
+    default: "false"
+  postgres-version:
+    description: The PostgreSQL major the services block runs (`postgres:18`).
+    required: false
+    default: "18"
+  postgres-port:
+    description: The host port the services block maps.
+    required: false
+    default: "5432"
+  postgres-user:
+    description: POSTGRES_USER of the services block (the superuser).
+    required: false
+    default: postgres
+  postgres-password:
+    description: POSTGRES_PASSWORD of the services block.
+    required: false
+    default: postgres
+  postgres-db:
+    description: POSTGRES_DB of the services block (created when it is not `postgres`).
+    required: false
+    default: postgres
+  postgres-args:
+    description: >-
+      Server settings the services block's `command:` passes, as
+      `-c name=value` words (for example `-c max_locks_per_transaction=512`).
+    required: false
+    default: ""
+  nats:
+    description: '"true" starts nats-server.'
+    required: false
+    default: "false"
+  nats-version:
+    description: The nats-server release the services block runs (`nats:2.12.0-alpine`).
+    required: false
+    default: "2.12.0"
+  nats-port:
+    description: The client port the services block maps.
+    required: false
+    default: "4222"
+  nats-monitor-port:
+    description: The monitoring port the services block maps (`-m`).
+    required: false
+    default: "8222"
+  nats-args:
+    description: Flags of the services block's `command:` other than `-m` (for example `-js`).
+    required: false
+    default: "-js"
+  qdrant:
+    description: '"true" starts Qdrant.'
+    required: false
+    default: "false"
+  qdrant-version:
+    description: The Qdrant release the services block runs (`qdrant/qdrant:v1.19.2`).
+    required: false
+    default: "v1.19.2"
+  qdrant-http-port:
+    description: The REST port.
+    required: false
+    default: "6333"
+  qdrant-grpc-port:
+    description: The gRPC port the services block maps.
+    required: false
+    default: "6334"
+  openbao:
+    description: '"true" starts an OpenBao dev server with TLS (`bao server -dev -dev-tls`).'
+    required: false
+    default: "false"
+  openbao-version:
+    description: The OpenBao release the services block runs (`openbao:2.4.1`).
+    required: false
+    default: "2.4.1"
+  openbao-port:
+    description: The host port the services block maps.
+    required: false
+    default: "8200"
+  openbao-root-token:
+    description: -dev-root-token-id of the services block.
+    required: false
+    default: ""
+  openbao-tls-cert-dir:
+    description: Where -dev-tls writes vault-ca.pem (the host directory the services block mounts).
+    required: false
+    default: ""
+  storage:
+    description: >-
+      "true" starts the storage emulators of deploy/docker-compose.storage-test.yml
+      at its ports and keys: rustfs (19000), Azurite blob (10000) and
+      fake-gcs-server (4443). Azurite needs node on PATH (eng-runner-env with
+      `node: "true"`).
+    required: false
+    default: "false"
+
+outputs:
+  nats-server-bin:
+    description: The nats-server binary (empty on a hosted runner).
+    value: ${{ steps.start.outputs.nats-server-bin }}
+
+runs:
+  using: composite
+  steps:
+    - name: Start the services as processes
+      id: start
+      if: runner.environment != 'github-hosted'
+      shell: bash
+      env:
+        NS_POSTGRES: ${{ inputs.postgres }}
+        NS_POSTGRES_VERSION: ${{ inputs.postgres-version }}
+        NS_POSTGRES_PORT: ${{ inputs.postgres-port }}
+        NS_POSTGRES_USER: ${{ inputs.postgres-user }}
+        NS_POSTGRES_PASSWORD: ${{ inputs.postgres-password }}
+        NS_POSTGRES_DB: ${{ inputs.postgres-db }}
+        NS_POSTGRES_ARGS: ${{ inputs.postgres-args }}
+        NS_NATS: ${{ inputs.nats }}
+        NS_NATS_VERSION: ${{ inputs.nats-version }}
+        NS_NATS_PORT: ${{ inputs.nats-port }}
+        NS_NATS_MONITOR_PORT: ${{ inputs.nats-monitor-port }}
+        NS_NATS_ARGS: ${{ inputs.nats-args }}
+        NS_QDRANT: ${{ inputs.qdrant }}
+        NS_QDRANT_VERSION: ${{ inputs.qdrant-version }}
+        NS_QDRANT_HTTP_PORT: ${{ inputs.qdrant-http-port }}
+        NS_QDRANT_GRPC_PORT: ${{ inputs.qdrant-grpc-port }}
+        NS_OPENBAO: ${{ inputs.openbao }}
+        NS_OPENBAO_VERSION: ${{ inputs.openbao-version }}
+        NS_OPENBAO_PORT: ${{ inputs.openbao-port }}
+        NS_OPENBAO_ROOT_TOKEN: ${{ inputs.openbao-root-token }}
+        NS_OPENBAO_TLS_CERT_DIR: ${{ inputs.openbao-tls-cert-dir }}
+        NS_STORAGE: ${{ inputs.storage }}
+        NS_ACTION_DIR: ${{ github.action_path }}
+      # The logs, on a failure here or later in the job, are uploaded by the
+      # job's last step, ./.github/actions/native-services-logs.
+      run: bash "$NS_ACTION_DIR/start.sh"

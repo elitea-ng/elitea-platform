@@ -179,6 +179,12 @@ does not animate WebP: Android builds with `expo.webp.animated=false`, iOS anima
 video state its poster, each with the default motion. An SVG is not drawn (the still, then the old icon).
 Reduced motion shows the still only and downloads nothing else.
 
+## Client contract 1.65
+
+| Area | What |
+|---|---|
+| Toolkit list type filter (#2189) | `listToolkitInstances` takes a repeatable `type` query parameter (exact match on the stored type, combines with `mcp` and `query`, `total` is the filtered total). The app needs nothing new: it never sends it. A server before 1.65 ignores it. |
+
 ## Client contract 1.64
 
 | Area | What |

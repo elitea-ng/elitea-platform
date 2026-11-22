@@ -297,6 +297,12 @@ pub struct ProjectProfile {
     /// The stamp of every marker looked for (absent: `None`) and of every
     /// folder listed.
     stamps: Vec<(WsPath, Option<EntryStamp>)>,
+    /// The folders one level below the root that detection listed. A
+    /// folder's appearing changes the root's mtime, but Linux takes that
+    /// mtime from a coarse clock (one jiffy, 1-10 ms): a folder made in the
+    /// same tick as the stamp leaves the stamp equal. The listing itself is
+    /// compared too, so that change is never missed.
+    subdirs: Vec<WsPath>,
 }
 
 impl ProjectProfile {
@@ -306,6 +312,7 @@ impl ProjectProfile {
         self.stamps
             .iter()
             .all(|(path, stamp)| workspace.stamp(path).ok().flatten() == *stamp)
+            && list_subdirs(workspace) == self.subdirs
     }
 
     /// The runner a run in `cwd` uses: the nearest folder at or above
@@ -520,21 +527,28 @@ impl Scan<'_> {
         PackageManager::Npm
     }
 
-    /// The folders one level below the root, as the listing tools see them
-    /// (`.gitignore` honoured, denied ones pruned), hidden ones left out.
+    /// The folders one level below the root ([`list_subdirs`]), with the
+    /// root's stamp recorded.
     fn subdirs(&mut self) -> Vec<WsPath> {
         self.look(&WsPath::root());
-        let Ok(walk) = files::walker(self.workspace, &WsPath::root(), None, Some(1)) else {
-            return Vec::new();
-        };
-        walk.flatten()
-            .filter(|entry| entry.depth() == 1)
-            .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_dir()))
-            .filter_map(|entry| files::relative(self.workspace, entry.path()))
-            .filter(|path| !path.file_name().is_some_and(|name| name.starts_with('.')))
-            .take(MAX_SUBDIRS)
-            .collect()
+        list_subdirs(self.workspace)
     }
+}
+
+/// The folders one level below the root, as the listing tools see them
+/// (`.gitignore` honoured, denied ones pruned), hidden ones left out. The
+/// walker sorts by name, so two listings of one tree compare equal.
+fn list_subdirs(workspace: &Workspace) -> Vec<WsPath> {
+    let Ok(walk) = files::walker(workspace, &WsPath::root(), None, Some(1)) else {
+        return Vec::new();
+    };
+    walk.flatten()
+        .filter(|entry| entry.depth() == 1)
+        .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_dir()))
+        .filter_map(|entry| files::relative(workspace, entry.path()))
+        .filter(|path| !path.file_name().is_some_and(|name| name.starts_with('.')))
+        .take(MAX_SUBDIRS)
+        .collect()
 }
 
 /// Detect the workspace's runners: the root, the folders one level below
@@ -546,7 +560,8 @@ pub fn detect(workspace: &Workspace, mentioned: &[WsPath]) -> ProjectProfile {
         stamps: Vec::new(),
     };
     let mut runners = scan.folder(&WsPath::root());
-    let mut dirs = scan.subdirs();
+    let subdirs = scan.subdirs();
+    let mut dirs = subdirs.clone();
     for mention in mentioned {
         if workspace.denied_by(mention, Intent::Read).is_some() {
             continue;
@@ -584,6 +599,7 @@ pub fn detect(workspace: &Workspace, mentioned: &[WsPath]) -> ProjectProfile {
     ProjectProfile {
         runners,
         stamps: scan.stamps,
+        subdirs,
     }
 }
 

@@ -247,6 +247,12 @@ test('J16: active interrupt controls roundtrip the exact stored node lists', asy
 
 /* onetest: Invalid static pause identities cannot replace a saved, legal document. */
 test('J16: missing and duplicate static interrupt identities are refused before save', async ({ page }) => {
+  // test.slow() (90 s), as the other create-edit-save journeys in this file:
+  // it creates a pipeline, saves it, reads the stored document back, then
+  // re-authors it twice with a stored-document read after each. That is
+  // three API round trips and three YAML authorings on top of a create and a
+  // save, which the bare 30 s budget only just held on a compose leg.
+  test.slow();
   const id = await createPipeline(page, `${AUTOTEST_PREFIX}invalid-intr-${Date.now() % 1e9}`);
   await authorYaml(page, INTERRUPTED_YAML);
   await saveAndAwaitPersist(page);

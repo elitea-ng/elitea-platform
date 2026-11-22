@@ -24,6 +24,10 @@ name: Desktop — package for device management
 #                       held exact by scripts/ci/check-tiering.mjs): an unsigned
 #                       DEBUG dry run that restores ci-desktop.yml's cached debug
 #                       target (key `desktop-host`, written by its nightly on main).
+#                       It builds brand/sample and is also the desktop lane of
+#                       the ADR-0052 W4 output scan (scripts/ci/brand-output-scan.mjs):
+#                       the packaged host binary and its overlay carry no ELITEA
+#                       literal. Main and releases build the ELITEA brand.
 #   workflow_call       publish.yml, on main: the nightly pre-release (its schedule)
 #                       and every release. The full release build, signed and
 #                       verified (`require_signed`).
@@ -93,6 +97,9 @@ jobs:
     # rust-cache key, so the pull-request dry run restores that job's entry.
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
+      # A pull request's dry run builds the sample brand (the output scan below);
+      # empty is the default brand, ELITEA (scripts/brand/load.mjs).
+      ELITEA_BRAND: ${{ github.event_name == 'pull_request' && 'sample' || '' }}
     defaults:
       run:
         shell: bash
@@ -154,6 +161,16 @@ jobs:
           apple-api-key: ${{ secrets.APPLE_API_KEY }}
           apple-api-issuer: ${{ secrets.APPLE_API_ISSUER }}
           apple-api-private-key: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+
+      # ADR-0052 W4, desktop lane: the host binary the dry run packaged (debug,
+      # brand/sample) and its overlay show no ELITEA word or identifier. Not the
+      # sidecar: only tauri.sidecar.conf.json (the release) names it.
+      - name: Sample-brand output scan (host binary + overlay)
+        if: github.event_name == 'pull_request'
+        run: >
+          node scripts/ci/brand-output-scan.mjs --lane desktop
+          "${DESKTOP_BUNDLE}/${DESKTOP_APP}/Contents/MacOS/elitea-desktop"
+          apps/elitea-desktop/src-tauri/tauri.brand.json
 
       - name: Keep the package (by hand only)
         if: github.event_name == 'workflow_dispatch' && inputs.keep_artifacts

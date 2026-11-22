@@ -105,9 +105,10 @@ test('T6: four agents into a new folder, three by pointer and one by keyboard wi
   await expect(live.first()).toContainText('Picked up');
   // Right moves the drag onto the nearest folder row in the side panel; the new folder is the top row, so Up reaches it from any row below.
   await page.keyboard.press('ArrowRight');
-  for (let step = 0; step < 8; step += 1) {
-    if (((await live.first().textContent()) ?? '').includes(`is over ${folderName}`)) break;
-    await page.keyboard.press('ArrowUp');
+  // Other journeys create folders at the same time, so the new one is not always the top row: walk up, then down, until the announcement names it.
+  const overTarget = async (): Promise<boolean> => ((await live.first().textContent()) ?? '').includes(`is over ${folderName}`);
+  for (const key of ['ArrowUp', 'ArrowDown']) {
+    for (let step = 0; step < 16 && !(await overTarget()); step += 1) await page.keyboard.press(key);
   }
   await expect(live.first()).toContainText(`is over ${folderName}`);
   const moved = page.waitForResponse((r) => r.url().includes('/items/') && r.request().method() === 'PUT');

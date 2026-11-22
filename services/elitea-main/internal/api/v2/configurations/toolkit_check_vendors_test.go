@@ -430,16 +430,144 @@ func TestSharepointStaysUnsupportedWhereThereIsNoAppSecretOrNoSiteToProve(t *tes
 	}
 }
 
-func TestOpenAPIKeepsTheUnsupportedAnswer(t *testing.T) {
+// #2251: a credential that names its own Entra tenant is checked without a
+// site; the minted token is the whole proof and no Graph read is made.
+func TestSharepointWithAnExplicitTenantAndNoSiteMintsAndAnswersOk(t *testing.T) {
+	for _, tenant := range []string{"contoso.onmicrosoft.com", "0f6d2c3e-1b4a-4c8e-9a7d-5e2f3a4b6c7d"} {
+		login, graph := sharepointStubs(t, http.StatusOK, `{"access_token":"graph-token"}`, http.StatusOK)
+		checker := handler.NewToolkitConnectionChecker(allowAnyHost())
+
+		outcome := checker.CheckToolkit(context.Background(), "sharepoint", map[string]any{
+			"client_id": "a", "client_secret": "b", "tenant_id": tenant,
+		})
+
+		if outcome.Reason != handler.ToolkitCheckReasonOK {
+			t.Fatalf("tenant %q: expected ok, got %+v", tenant, outcome)
+		}
+		if uri := login.only(t).uri; uri != "/"+tenant+"/oauth2/v2.0/token" {
+			t.Fatalf("minted at %q", uri)
+		}
+		if len(graph.requests) != 0 {
+			t.Fatalf("there is no site to read: %+v", graph.requests)
+		}
+	}
+}
+
+func TestSharepointExplicitTenantWinsOverTheSiteHostAndStillRefusesABadSecret(t *testing.T) {
+	login, _ := sharepointStubs(t, http.StatusBadRequest, `{"error":"invalid_client"}`, http.StatusOK)
 	checker := handler.NewToolkitConnectionChecker(allowAnyHost())
 
-	outcome := checker.CheckToolkit(context.Background(), "openapi", map[string]any{"api_key": "k"})
+	outcome := checker.CheckToolkit(context.Background(), "sharepoint", map[string]any{
+		"client_id": "a", "client_secret": "b", "tenant_id": "fabrikam.com", "site_url": "https://contoso.sharepoint.com",
+	})
 
-	if outcome.Reason != handler.ToolkitCheckReasonUnsupportedType {
-		t.Fatalf("expected unsupported_type, got %+v", outcome)
+	if outcome.Reason != handler.ToolkitCheckReasonAuthFailed {
+		t.Fatalf("expected auth_failed, got %+v", outcome)
 	}
-	if handler.IsToolkitCheckableType("openapi") {
-		t.Fatal("openapi has no honest probe and must stay off the probe table")
+	if uri := login.only(t).uri; uri != "/fabrikam.com/oauth2/v2.0/token" {
+		t.Fatalf("the explicit tenant must win, minted at %q", uri)
+	}
+}
+
+func TestSharepointRefusesATenantThatIsNotOneBeforeDialling(t *testing.T) {
+	for _, tenant := range []string{"a/b", "../x", "x..y", "https://evil.example", "a b", "-lead", "common", "Organizations", "consumers"} {
+		login, graph := sharepointStubs(t, http.StatusOK, `{"access_token":"x"}`, http.StatusOK)
+		checker := handler.NewToolkitConnectionChecker(allowAnyHost())
+
+		outcome := checker.CheckToolkit(context.Background(), "sharepoint", map[string]any{
+			"client_id": "a", "client_secret": "b", "tenant_id": tenant,
+		})
+
+		if outcome.Reason != handler.ToolkitCheckReasonUnsupportedType {
+			t.Fatalf("tenant %q: expected unsupported_type, got %+v", tenant, outcome)
+		}
+		if len(login.requests)+len(graph.requests) != 0 {
+			t.Fatalf("tenant %q: nothing may be dialled", tenant)
+		}
+	}
+}
+
+func TestOpenAPIKeepsTheUnsupportedAnswerWithoutClientCredentials(t *testing.T) {
+	for name, data := range map[string]map[string]any{
+		"api key":        {"api_key": "k"},
+		"anonymous":      {},
+		"no token url":   {"client_id": "a", "client_secret": "b"},
+		"http token url": {"client_id": "a", "client_secret": "b", "token_url": "http://idp.example.test/token"},
+		"delegated":      {"client_id": "a", "client_secret": "b", "token_url": "https://idp.example.test/token", "oauth_discovery_endpoint": "https://idp.example.test/t"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			checker := handler.NewToolkitConnectionChecker(allowAnyHost())
+
+			outcome := checker.CheckToolkit(context.Background(), "openapi", data)
+
+			if outcome.Reason != handler.ToolkitCheckReasonUnsupportedType {
+				t.Fatalf("expected unsupported_type, got %+v", outcome)
+			}
+		})
+	}
+}
+
+// #2252: the client-credentials mint is the verdict.
+func TestOpenAPIClientCredentialsMintsAndAnswersOkWithTheClientInTheBody(t *testing.T) {
+	t.Cleanup(handler.SetOpenAPITokenSchemeForTest("http"))
+	stub := newVendorStub(t, http.StatusOK, `{"access_token":"t","token_type":"Bearer"}`)
+	checker := handler.NewToolkitConnectionChecker(allowAnyHost())
+
+	outcome := checker.CheckToolkit(context.Background(), "openapi", map[string]any{
+		"client_id": "cid", "client_secret": "sec", "token_url": stub.server.URL + "/tenant/token", "scope": "api://x/.default",
+	})
+
+	if outcome.Reason != handler.ToolkitCheckReasonOK {
+		t.Fatalf("expected ok, got %+v", outcome)
+	}
+	request := stub.only(t)
+	if request.method != http.MethodPost || request.uri != "/tenant/token" || request.auth != "" {
+		t.Fatalf("default method: %s %q auth=%q", request.method, request.uri, request.auth)
+	}
+	form, err := url.ParseQuery(request.body)
+	if err != nil || form.Get("grant_type") != "client_credentials" || form.Get("client_id") != "cid" ||
+		form.Get("client_secret") != "sec" || form.Get("scope") != "api://x/.default" {
+		t.Fatalf("the grant is wrong: %v %v", form, err)
+	}
+	if strings.Contains(outcome.Message, "sec") || strings.Contains(outcome.Message, "cid") {
+		t.Fatalf("credential material leaked into the message: %q", outcome.Message)
+	}
+}
+
+func TestOpenAPIBasicMethodKeepsTheSecretOutOfTheBody(t *testing.T) {
+	t.Cleanup(handler.SetOpenAPITokenSchemeForTest("http"))
+	stub := newVendorStub(t, http.StatusOK, `{"access_token":"t"}`)
+	checker := handler.NewToolkitConnectionChecker(allowAnyHost())
+
+	outcome := checker.CheckToolkit(context.Background(), "openapi", map[string]any{
+		"client_id": "cid", "client_secret": "sec", "token_url": stub.server.URL + "/token", "method": "Basic",
+	})
+
+	if outcome.Reason != handler.ToolkitCheckReasonOK {
+		t.Fatalf("expected ok, got %+v", outcome)
+	}
+	request := stub.only(t)
+	if want := "Basic " + base64.StdEncoding.EncodeToString([]byte("cid:sec")); request.auth != want {
+		t.Fatalf("Basic header = %q", request.auth)
+	}
+	if strings.Contains(request.body, "sec") || strings.Contains(request.body, "client_id") {
+		t.Fatalf("the secret rode in the body too: %q", request.body)
+	}
+}
+
+func TestOpenAPIClientCredentialsRefusedByTheProviderIsAuthFailed(t *testing.T) {
+	t.Cleanup(handler.SetOpenAPITokenSchemeForTest("http"))
+	for _, status := range []int{http.StatusBadRequest, http.StatusUnauthorized} {
+		stub := newVendorStub(t, status, `{"error":"invalid_client"}`)
+		checker := handler.NewToolkitConnectionChecker(allowAnyHost())
+
+		outcome := checker.CheckToolkit(context.Background(), "openapi", map[string]any{
+			"client_id": "cid", "client_secret": "bad", "token_url": stub.server.URL + "/token",
+		})
+
+		if outcome.Reason != handler.ToolkitCheckReasonAuthFailed {
+			t.Fatalf("status %d must be auth_failed, got %+v", status, outcome)
+		}
 	}
 }
 

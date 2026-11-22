@@ -40,6 +40,8 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 export STANDALONE_PROJECT="${STANDALONE_PROJECT:-elitea-native-conformance}"
 export STANDALONE_PORT="${STANDALONE_PORT:-8084}"
+# The pool's native stack serves Main on 8080 only (deploy/native/standalone-full.mjs).
+[ "${E2E_STACK:-compose}" = native ] && export STANDALONE_PORT=8080
 export E2E_OIDC_PORT="${E2E_OIDC_PORT:-9400}"
 export MOCK_LLM_CHUNK_DELAY_MS="${MOCK_LLM_CHUNK_DELAY_MS:-150}"
 export STANDALONE_OVERLAY="${REPO_ROOT}/deploy/docker-compose.native-conformance.yml${STANDALONE_OVERLAY:+ ${STANDALONE_OVERLAY}}"

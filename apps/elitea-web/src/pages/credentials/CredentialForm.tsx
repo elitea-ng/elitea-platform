@@ -46,6 +46,7 @@ import { PageToolbar, pageBodySx, pageSx } from '@/widgets/page-header';
 import { CredentialsActions } from '@/features/credentials';
 
 import { CredentialSchemaField } from './CredentialFormFields';
+import { MicrosoftCredentialSignIn } from './MicrosoftCredentialSignIn';
 import {
   CredentialFormSection,
   credentialSectionFieldKeys,
@@ -179,6 +180,7 @@ export function CredentialForm(props: CredentialFormProps): ReactNode {
               required={c.schemaRequiredFields.includes(fieldKey)}
               projectId={context.projectId}
               isTeamProject={context.isTeamProject}
+              {...(c.effectiveType !== undefined ? { credentialType: c.effectiveType } : {})}
               onChange={c.setField}
             />
           );
@@ -194,9 +196,15 @@ export function CredentialForm(props: CredentialFormProps): ReactNode {
             fieldErrors={c.fieldErrors}
             projectId={context.projectId}
             isTeamProject={context.isTeamProject}
+            {...(c.effectiveType !== undefined ? { credentialType: c.effectiveType } : {})}
             onChange={c.setField}
           />
         ))}
+        <MicrosoftCredentialSignIn
+          controller={c}
+          projectId={context.projectId}
+          canUpdate={context.canUpdate}
+        />
         {c.apiError && (
           <Typography
             variant="labelSmall"
@@ -253,6 +261,16 @@ function TestConnectionBlock({ controller }: TestConnectionBlockProps): ReactNod
           data-testid="credential-test-result"
         >
           {successMessage(controller)}
+        </Typography>
+      )}
+      {/* Not a failure either: a delegated credential is checked with the person's own sign-in. */}
+      {controller.testResult === 'signin' && (
+        <Typography
+          variant="labelSmall"
+          color="text.secondary"
+          data-testid="credential-test-signin"
+        >
+          {t('credentials.form.testNeedsSignIn', 'Sign in with Microsoft first. The connection is checked with your own sign-in.')}
         </Typography>
       )}
       {controller.testResult === 'failure' && (

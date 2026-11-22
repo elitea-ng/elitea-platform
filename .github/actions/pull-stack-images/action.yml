@@ -1,6 +1,6 @@
 name: Pull stack images
 description: >-
-  Pulls, by digest, the stack images ci-web-e2e.yml's build-once jobs pushed
+  Pulls, by digest, the stack images ci-build-once.yml's jobs pushed
   for this commit, retags each to the local name the compose files expect, and
   asserts every image compose would build is in the local store AND is the
   pulled digest — so compose can neither build nor pull anything itself.
@@ -32,7 +32,7 @@ description: >-
 #      then finds every image present and never reaches a registry for them.
 #
 # A fork pull request cannot write packages, so it never gets here: its lanes
-# fall back to build-stack-images in load mode (see ci-web-e2e.yml).
+# fall back to build-stack-images in load mode (.github/actions/stack-images).
 inputs:
   compose-files:
     description: Newline-separated compose files RELATIVE TO deploy/, in the order the lane's stack script takes them.

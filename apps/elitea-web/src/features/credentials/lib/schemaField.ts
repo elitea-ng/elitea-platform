@@ -18,7 +18,7 @@
  */
 import type { ConfigSchemaNode } from '../api/configurations';
 
-export type SchemaFieldKind = 'secret' | 'boolean' | 'number' | 'enum' | 'string' | 'configuration';
+export type SchemaFieldKind = 'secret' | 'boolean' | 'number' | 'enum' | 'string' | 'configuration' | 'oauthApp' | 'checkboxList';
 
 /**
  * WORDS, not substrings. The heuristic used to be one alternation run with
@@ -193,11 +193,40 @@ export function configurationSectionsOf(property: ConfigSchemaNode | undefined):
   return undefined;
 }
 
+/** One tick box of a `checkbox_list` field (a Microsoft credential's scope list). */
+export interface CheckboxOption {
+  readonly value: string;
+  readonly label: string;
+  readonly description: string;
+}
+
+function checkboxOptionOf(entry: unknown): CheckboxOption | undefined {
+  const node = asSchemaNode(entry);
+  const value = node?.['value'];
+  if (typeof value !== 'string' || value === '') return undefined;
+  const label = node?.['label'];
+  const description = node?.['description'];
+  return {
+    value,
+    label: typeof label === 'string' && label !== '' ? label : value,
+    description: typeof description === 'string' ? description : '',
+  };
+}
+
+/** The tick boxes a `checkbox_list` field offers, or `undefined` when the property is not one. */
+export function checkboxOptionsOf(property: ConfigSchemaNode | undefined): readonly CheckboxOption[] | undefined {
+  const raw = property?.['ui_component'] === 'checkbox_list' ? property['checkbox_options'] : undefined;
+  if (!Array.isArray(raw)) return undefined;
+  const options = raw.map(checkboxOptionOf).filter((option): option is CheckboxOption => option !== undefined);
+  return options.length > 0 ? options : undefined;
+}
+
 /**
  * Classification order is deliberate and is itself the fix for the
  * `max_output_tokens` defect (see `SECRET_WHOLE_KEYS`' comment above):
  *
  *   1. the schema's explicit secret markers — the only unambiguous signal;
+ *      (then the Microsoft credentials' `ui_component` widgets);
  *   2. a `configuration_sections` reference field;
  *   3. the DECLARED type (boolean, then number/integer);
  *   4. only then the secret-NAME heuristic, which is a guess;
@@ -208,6 +237,9 @@ export function configurationSectionsOf(property: ConfigSchemaNode | undefined):
  */
 export function classifySchemaField(key: string, property: ConfigSchemaNode | undefined): SchemaFieldKind {
   if (hasExplicitSecretMarker(property)) return 'secret';
+  // The Microsoft credentials' own widgets (ADR-0057): the Default app picker and the scope tick boxes.
+  if (property?.['ui_component'] === 'oauth_app_select') return 'oauthApp';
+  if (checkboxOptionsOf(property) !== undefined) return 'checkboxList';
   if (configurationSectionsOf(property) !== undefined) return 'configuration';
   const branches = [property, ...asSchemaNodeArray(property?.anyOf), ...asSchemaNodeArray(property?.oneOf)].filter(
     (branch): branch is ConfigSchemaNode => branch !== undefined,

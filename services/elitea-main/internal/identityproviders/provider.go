@@ -74,6 +74,11 @@ var ErrNotFound = errors.New("identityproviders: no such identity provider")
 // a broken deployment into a silently unfederated one.
 var ErrNoPool = errors.New("identityproviders: no database pool")
 
+// ErrRevisionConflict reports that the row changed since the caller read it
+// (UpsertAtRevision). The admin write path decides who may save from what it
+// read, so a save over a newer row would bypass that decision.
+var ErrRevisionConflict = errors.New("identityproviders: the definition changed since it was read")
+
 // Provider is one authored definition.
 //
 // Exactly one of OIDC and SAML is set, and which one is decided by Kind.

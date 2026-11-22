@@ -81,7 +81,9 @@
  */
 import { fileURLToPath } from 'node:url';
 
-import { test, expect, type Locator, type Page } from '@playwright/test';
+import { expect, type Locator, type Page } from '@playwright/test';
+
+import { test } from './lib/test';
 
 import { BASE_URL, STORAGE_STATE } from '../../playwright.config';
 import { keepThemeOffTheServer } from '../fixtures/serverTheme';

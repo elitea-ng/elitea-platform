@@ -38,6 +38,7 @@ import (
 	dsig "github.com/russellhaering/goxmldsig"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/identityproviders"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identityrepo"
 )
 
 // errNoSAMLProvider reports that this deployment federates no SAML logins.
@@ -56,6 +57,10 @@ type samlRuntime struct {
 
 	// origin names where this runtime came from, for the log line only.
 	origin string
+
+	// binding is the provider key and IdP entity id every link this runtime
+	// resolves must be bound to (issue 2558; identityrepo.ProviderBinding).
+	binding identityrepo.ProviderBinding
 }
 
 // runtime resolves the service provider this request must use.
@@ -160,6 +165,7 @@ func (h *SAMLHandler) buildRuntime(
 		document:         *document,
 		clockSkewSeconds: document.ClockSkewSeconds,
 		origin:           fmt.Sprintf("provider %s revision %d", provider.Key, provider.Revision),
+		binding:          provider.Binding(),
 	}, nil
 }
 
