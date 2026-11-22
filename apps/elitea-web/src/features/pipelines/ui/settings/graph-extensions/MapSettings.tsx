@@ -1,9 +1,10 @@
 import type { ReactNode } from 'react';
 import { useContext } from 'react';
-import Button from '@mui/material/Button';
+import Box from '@mui/material/Box';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import { t } from '@/shared/i18n';
+import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { SingleSelect } from '@/shared/ui/SingleSelect';
 import { FlowEditorContext } from '../../../lib/flow-editor/flowEditorContext';
 import { MAP_WORKER_TYPES } from '../../../lib/graphMapAdmission.helpers';
@@ -78,31 +79,35 @@ export function MapSettings({ node, disabled, change }: ExtensionSettingsProps):
       <StateChannelSelect label={t('pipelines.graphExtensions.broadcastChannel', 'Broadcast state variable {{index}}', { index: index + 1 })}
         value={key} types={['str', 'string', 'int', 'number', 'float', 'bool', 'list', 'dict']} disabled={disabled}
         change={(value) => change('broadcast', rawBroadcast.map((entry, ordinal) => ordinal === index ? value : entry))} />
-      <Button disabled={disabled} onClick={() => change('broadcast', rawBroadcast.filter((_, ordinal) => ordinal !== index))}>
+      <BaseBtn variant="text" size="small" className="nodrag nopan nowheel" disabled={disabled} onClick={() => change('broadcast', rawBroadcast.filter((_, ordinal) => ordinal !== index))}>
         {t('pipelines.graphExtensions.removeBroadcast', 'Remove broadcast {{index}}', { index: index + 1 })}
-      </Button>
+      </BaseBtn>
     </Stack>)}
-    <Button disabled={disabled || broadcast.length >= 64} onClick={() => change('broadcast', [...rawBroadcast, ''])}>
+    <BaseBtn variant="secondary" size="small" className="nodrag nopan nowheel" disabled={disabled || broadcast.length >= 64} onClick={() => change('broadcast', [...rawBroadcast, ''])}>
       {t('pipelines.graphExtensions.addBroadcast', 'Add broadcast state variable')}
-    </Button>
+    </BaseBtn>
     {selectedOutputs.map((key, index) => <Stack key={index} spacing={1}>
       <ExtensionChoice label={t('pipelines.graphExtensions.workerOutput', 'Worker output {{index}}', { index: index + 1 })} value={key}
         disabled={disabled} choices={['', ...extensionStrings(workerNode?.output)]}
         change={(value) => change('outputs', rawOutputs.map((entry, ordinal) => ordinal === index ? value : entry))} />
-      <Button disabled={disabled} onClick={() => change('outputs', rawOutputs.filter((_, ordinal) => ordinal !== index))}>
+      <BaseBtn variant="text" size="small" className="nodrag nopan nowheel" disabled={disabled} onClick={() => change('outputs', rawOutputs.filter((_, ordinal) => ordinal !== index))}>
         {t('pipelines.graphExtensions.removeWorkerOutput', 'Remove worker output {{index}}', { index: index + 1 })}
-      </Button>
+      </BaseBtn>
     </Stack>)}
-    <Button disabled={disabled || selectedOutputs.length >= 64} onClick={() => change('outputs', [...rawOutputs, ''])}>
+    <BaseBtn variant="secondary" size="small" className="nodrag nopan nowheel" disabled={disabled || selectedOutputs.length >= 64} onClick={() => change('outputs', [...rawOutputs, ''])}>
       {t('pipelines.graphExtensions.addWorkerOutput', 'Add worker output')}
-    </Button>
-    <SingleSelect label={t('pipelines.graphExtensions.mapOnError', 'On Error')} value={onError} disabled={disabled}
-      options={['continue', 'stop'].map(policyOption)}
-      onChange={(value) => changePolicy('on_error', value)} />
+    </BaseBtn>
+    <Box className="nodrag nopan nowheel">
+      <SingleSelect label={t('pipelines.graphExtensions.mapOnError', 'On Error')} value={onError} disabled={disabled}
+        options={['continue', 'stop'].map(policyOption)}
+        onChange={(value) => changePolicy('on_error', value)} />
+    </Box>
     <Typography variant="bodySmall">{t('pipelines.graphExtensions.mapOnErrorHelp', 'Continue keeps the other items and returns partial results. Stop fails the node after running items finish.')}</Typography>
-    <SingleSelect label={t('pipelines.graphExtensions.mapJoin', 'Join')} value={join} disabled={disabled}
-      options={['append', 'keyed'].map(policyOption)}
-      onChange={(value) => changePolicy('join', value)} />
+    <Box className="nodrag nopan nowheel">
+      <SingleSelect label={t('pipelines.graphExtensions.mapJoin', 'Join')} value={join} disabled={disabled}
+        options={['append', 'keyed'].map(policyOption)}
+        onChange={(value) => changePolicy('join', value)} />
+    </Box>
     <Typography variant="bodySmall">{t('pipelines.graphExtensions.mapJoinHelp', 'Append lists the item results in source order. Keyed maps them by item index.')}</Typography>
     <StateChannelSelect label={t('pipelines.graphExtensions.mapDestination', 'Result list state variable')} value={destination}
       types={join === 'append' ? ['list'] : ['dict']} disabled={disabled} change={(value) => change('destination', value)} />

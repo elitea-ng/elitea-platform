@@ -1,9 +1,9 @@
 import type { ReactNode } from 'react';
 import { useContext } from 'react';
-import Button from '@mui/material/Button';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import { t } from '@/shared/i18n';
+import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { FlowEditorContext } from '../../../lib/flow-editor/flowEditorContext';
 import { extensionRecord, extensionStrings, extensionText, extensionValues, patchGraphExtensionNode } from '../../../lib/graphExtensions.helpers';
 import { moveParallelBranch, nextParallelBranchId, parallelAgentReferenceCounts, parallelOwnedAgent, patchParallelBranch } from '../../../lib/graphParallel.helpers';
@@ -46,9 +46,9 @@ function OwnedAgentSummary({ ownerId, ordinal, disabled }: { readonly ownerId: s
         inputs: codeInputs(agent.input), outputs,
       })
       : t('pipelines.parallel.agentOutputs', 'Declared outputs: {{outputs}}. Task mapping: {{mode}}.', { outputs, mode: extensionText(task['type']) })}</Typography>
-    {agent.transition !== undefined && agent.transition !== null && <Button disabled={disabled} onClick={removeTransition}>
+    {agent.transition !== undefined && agent.transition !== null && <BaseBtn variant="text" size="small" className="nodrag nopan nowheel" disabled={disabled} onClick={removeTransition}>
       {t('pipelines.parallel.removeTransition', 'Remove transition from {{node}}', { node: agent.id })}
-    </Button>}
+    </BaseBtn>}
   </Stack>;
 }
 
@@ -75,20 +75,20 @@ export function ParallelBranches({ ownerId, branches, disabled, change }: Parall
           change={(next) => update(patchParallelBranch(branches, ordinal, 'node', next))} />
         <OwnedAgentSummary ownerId={ownerId} ordinal={ordinal} disabled={disabled} />
         <Stack direction="row" spacing={1}>
-          <Button disabled={disabled || ordinal === 0} onClick={() => update(moveParallelBranch(branches, ordinal, -1))}>
+          <BaseBtn variant="secondary" size="small" className="nodrag nopan nowheel" disabled={disabled || ordinal === 0} onClick={() => update(moveParallelBranch(branches, ordinal, -1))}>
             {t('pipelines.parallel.moveUp', 'Move branch {{number}} up', { number })}
-          </Button>
-          <Button disabled={disabled || ordinal === rows.length - 1} onClick={() => update(moveParallelBranch(branches, ordinal, 1))}>
+          </BaseBtn>
+          <BaseBtn variant="secondary" size="small" className="nodrag nopan nowheel" disabled={disabled || ordinal === rows.length - 1} onClick={() => update(moveParallelBranch(branches, ordinal, 1))}>
             {t('pipelines.parallel.moveDown', 'Move branch {{number}} down', { number })}
-          </Button>
-          <Button disabled={disabled || rows.length <= 2} onClick={() => update(rows.filter((_, index) => index !== ordinal))}>
+          </BaseBtn>
+          <BaseBtn variant="text" size="small" className="nodrag nopan nowheel" disabled={disabled || rows.length <= 2} onClick={() => update(rows.filter((_, index) => index !== ordinal))}>
             {t('pipelines.parallel.removeBranch', 'Remove branch {{number}}', { number })}
-          </Button>
+          </BaseBtn>
         </Stack>
       </Stack>;
     })}
-    <Button disabled={disabled || rows.length >= 16} onClick={() => update([...rows, { id: nextParallelBranchId(branches), node: '' }])}>
+    <BaseBtn variant="secondary" size="small" className="nodrag nopan nowheel" disabled={disabled || rows.length >= 16} onClick={() => update([...rows, { id: nextParallelBranchId(branches), node: '' }])}>
       {t('pipelines.parallel.addBranch', 'Add fixed branch')}
-    </Button>
+    </BaseBtn>
   </Stack>;
 }
