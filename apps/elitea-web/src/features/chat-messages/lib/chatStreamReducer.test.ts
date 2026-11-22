@@ -331,7 +331,7 @@ describe('the ported boundary is explicit', () => {
             result_chunk_v1: { offset_bytes: 0, total_bytes: 1, sha256: 'a'.repeat(64), final: true },
             context_status: { version: 1, phase: 'compacting' },
             subagent_v1: { kind: 'started', agent_id: 'a_1', parent_call_id: 'run-x', ordinal: 1 },
-            delegation_v1: { id: 'run-x', kind: 'refused', reason: 'no_grant', edge: { callee_name: 'Agent1', kind: 'agent_tool' }, missing: [{ kind: 'toolkit', name: 'git' }] },
+            delegation_v1: { id: 'run-x', kind: type === SocketMessageType.DelegationNarrowed ? 'narrowed' : 'refused', reason: type === SocketMessageType.DelegationNarrowed ? 'stale' : 'no_grant', edge: { callee_name: 'Agent1', kind: 'agent_tool' }, missing: [{ kind: 'toolkit', name: 'git' }] },
             tool_output_chunk: {
               tool_call_id: 'run-x',
               index: 0,
