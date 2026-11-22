@@ -618,3 +618,81 @@ nodes:
 	}
 	waitNoAdvisoryLocks(t, r.w)
 }
+
+func TestOriginalCodeSettingsNodeErrorsVisitPostgres(t *testing.T) {
+	instructions := `entry_point: broken_code
+state:
+  out: str
+  verdict: str
+nodes:
+  - id: broken_code
+    type: code
+    language: python
+    code: '1'
+    output: [out]
+    settings:
+      on_error: error_output
+      error_transition: handle_err
+    transition: END
+  - id: handle_err
+    type: code
+    language: python
+    code: '2'
+    input: [node_errors]
+    output: [verdict]
+    transition: END
+`
+	brokenCfg := `{"id":"broken_code","type":"code","language":"python","code":{"type":"fixed","value":"1"},"input":[],"output":["out"],"structured_output":false,"debug":false,"transition":"END"}`
+	handlerCfg := `{"id":"handle_err","type":"code","language":"python","code":{"type":"fixed","value":"2"},"input":["node_errors"],"output":["verdict"],"structured_output":false,"debug":false,"transition":"END"}`
+	r := newRealPathWorldWith(t, effectsParent, effectsClaim2, 4, instructions)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+
+	registerNode := func(nodeID, cfgJSON, preparedInputJSON, activation string, step uint64) error {
+		policy, err := storage.OriginalSavedCodePolicy(r.instructions, r.yamlSHA, nodeID)
+		if err != nil {
+			return err
+		}
+		declaration, err := storage.MatchOriginalSavedCodeConfiguration(policy, cfgJSON)
+		if err != nil {
+			return err
+		}
+		source := "1"
+		if nodeID == "handle_err" {
+			source = "2"
+		}
+		prepared := []byte(`{"revision":1,"language":"python","source":"` + source + `","input":` + preparedInputJSON + `,"image_digest":"sha256:` + strings.Repeat("9", 64) + `","policy_revision":"code-v1","timeout_seconds":5}`)
+		visitReq := code.VisitRequest{
+			Schema:                        "elitea.sandbox.original-code-visit-request.v1",
+			ActivationID:                  activation,
+			NodeID:                        nodeID,
+			GraphThread:                   r.root,
+			Step:                          step,
+			Attempt:                       1,
+			NodeDigest:                    hex.EncodeToString(declaration.ConfigurationDigest[:]),
+			OwningYAMLSHA256:              r.yamlSHA,
+			ConfigurationBase64URL:        base64.RawURLEncoding.EncodeToString([]byte(cfgJSON)),
+			PreWorkspacePreparedBase64URL: base64.RawURLEncoding.EncodeToString(prepared),
+			SavedChildScope:               json.RawMessage("null"),
+		}
+		_, err = r.repo.RegisterOriginalCodeVisit(ctx, r.claim, visitReq)
+		return err
+	}
+
+	// broken_code (input: []) includes synthesized node_errors: [] alongside input: "hi".
+	if err := registerNode("broken_code", brokenCfg, `{"input":"hi","node_errors":[]}`, strings.Repeat("5", 64), 1); err != nil {
+		t.Fatalf("broken_code visit with synthesized node_errors refused: %v", err)
+	}
+	// handle_err explicitly selects synthesized node_errors.
+	if err := registerNode("handle_err", handlerCfg, `{"node_errors":[{"node":"broken_code"}]}`, strings.Repeat("6", 64), 2); err != nil {
+		t.Fatalf("handle_err visit selecting node_errors refused: %v", err)
+	}
+	// Non-list node_errors must fail closed at stage "input".
+	if err := registerNode("broken_code", brokenCfg, `{"node_errors":"not-a-list"}`, strings.Repeat("7", 64), 1); err == nil {
+		t.Fatal("non-list node_errors was admitted")
+	}
+	if visits := r.count(t, "original_code_visits"); visits != 2 {
+		t.Fatalf("visits = %d, want 2", visits)
+	}
+	waitNoAdvisoryLocks(t, r.w)
+}

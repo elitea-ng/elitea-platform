@@ -95,6 +95,7 @@ func (d *SavedCodeDocument) savedCodeInputPolicy(yamlSHA256, nodeID string, loca
 		return empty, err
 	}
 	types := map[string]string{"input": "str"}
+	reducers := map[string]string{}
 	if state, present := fields["state"]; present {
 		state, err = savedCodeResolvedNode(state)
 		if err != nil || state.Kind != yaml.MappingNode || len(state.Content)/2 > 256 {
@@ -108,13 +109,29 @@ func (d *SavedCodeDocument) savedCodeInputPolicy(yamlSHA256, nodeID string, loca
 			if !savedCodeStateKey(key) || savedCodeReservedStateKey(key) {
 				return empty, ErrContentRejected
 			}
-			kind, err := savedCodeStateType(descriptor)
-			if err != nil || (key == "input" && kind != "str") || (key == "messages" && kind != "list") {
+			kind, reducer, hasReducer, err := savedCodeStateDescriptor(descriptor)
+			if err != nil || (key == "input" && kind != "str") || (key == "messages" && kind != "list") || ((key == "input" || key == "messages") && hasReducer) {
 				return empty, ErrContentRejected
 			}
 			if key != "messages" {
 				types[key] = kind
+				if reducer != "" {
+					reducers[key] = reducer
+				}
 			}
+		}
+	}
+	usesNodeErrors, err := d.usesNodeErrors()
+	if err != nil {
+		return empty, err
+	}
+	if usesNodeErrors {
+		if declaredKind, declared := types["node_errors"]; declared {
+			if declaredKind != "list" || reducers["node_errors"] != "append" {
+				return empty, ErrContentRejected
+			}
+		} else {
+			types["node_errors"] = "list"
 		}
 	}
 	// A Map's item and index are child-local: they never shadow a business root.
@@ -156,36 +173,126 @@ func (p SavedCodeInputPolicy) ValidateInput(raw json.RawMessage) error {
 	return nil
 }
 
+func (d *SavedCodeDocument) usesNodeErrors() (bool, error) {
+	nodes, err := d.Nodes()
+	if err != nil {
+		return false, err
+	}
+	uses := false
+	for _, rawNode := range nodes.Content {
+		fields, err := savedCodeShallowFields(rawNode)
+		if err != nil {
+			return false, err
+		}
+		rawSettings, present := fields["settings"]
+		if !present {
+			continue
+		}
+		settingsNode, err := savedCodeResolvedNode(rawSettings)
+		if err != nil || settingsNode.Kind != yaml.MappingNode {
+			return false, ErrContentRejected
+		}
+		if len(settingsNode.Content) == 0 {
+			continue
+		}
+		settingsFields, err := savedCodeShallowFields(settingsNode)
+		if err != nil {
+			return false, err
+		}
+		onErrorNode, ok := settingsFields["on_error"]
+		if !ok {
+			continue
+		}
+		onError, err := savedCodeScalar(onErrorNode)
+		if err != nil {
+			return false, ErrContentRejected
+		}
+		switch onError {
+		case "continue", "error_output":
+			uses = true
+		case "stop":
+		default:
+			return false, ErrContentRejected
+		}
+	}
+	return uses, nil
+}
+
 func savedCodeStateType(node *yaml.Node) (string, error) {
+	kind, _, _, err := savedCodeStateDescriptor(node)
+	return kind, err
+}
+
+func savedCodeStateDescriptor(node *yaml.Node) (string, string, bool, error) {
 	node, err := savedCodeResolvedNode(node)
 	if err != nil {
-		return "", err
+		return "", "", false, err
 	}
+	typeNode := node
+	var reducerNode *yaml.Node
+	reducerPresent := false
 	if node.Kind == yaml.MappingNode {
 		fields, err := savedCodeShallowFields(node)
 		if err != nil {
-			return "", err
+			return "", "", false, err
 		}
 		for key := range fields {
-			if key != "type" && key != "value" {
-				return "", ErrContentRejected
+			if key != "type" && key != "value" && key != "reducer" {
+				return "", "", false, ErrContentRejected
 			}
 		}
-		node = fields["type"]
+		typeNode = fields["type"]
+		reducerNode, reducerPresent = fields["reducer"]
 	}
-	kind, err := savedCodeScalar(node)
+	rawKind, err := savedCodeScalar(typeNode)
 	if err != nil {
-		return "", err
+		return "", "", false, err
 	}
-	switch kind {
+	var kind string
+	switch rawKind {
 	case "str", "string":
-		return "str", nil
+		kind = "str"
 	case "int", "number":
-		return "int", nil
+		kind = "int"
 	case "float", "bool", "list", "dict":
-		return kind, nil
+		kind = rawKind
 	default:
-		return "", ErrContentRejected
+		return "", "", false, ErrContentRejected
+	}
+	if !reducerPresent {
+		return kind, "", false, nil
+	}
+	reducerNode, err = savedCodeResolvedNode(reducerNode)
+	if err != nil {
+		return "", "", false, ErrContentRejected
+	}
+	if reducerNode.Kind == yaml.ScalarNode && reducerNode.ShortTag() == "!!null" {
+		return kind, "", false, nil
+	}
+	rawReducer, err := savedCodeScalar(reducerNode)
+	if err != nil {
+		return "", "", false, ErrContentRejected
+	}
+	switch rawReducer {
+	case "overwrite":
+		return kind, "", true, nil
+	case "append":
+		if kind != "list" {
+			return "", "", false, ErrContentRejected
+		}
+		return kind, "append", true, nil
+	case "sum_int":
+		if kind != "int" {
+			return "", "", false, ErrContentRejected
+		}
+		return kind, "sum_int", true, nil
+	case "merge":
+		if kind != "dict" {
+			return "", "", false, ErrContentRejected
+		}
+		return kind, "merge", true, nil
+	default:
+		return "", "", false, ErrContentRejected
 	}
 }
 
@@ -200,7 +307,7 @@ func savedCodeReservedStateKey(key string) bool {
 		return true
 	}
 	switch key {
-	case "__elitea_hitl_resume_v1", "__elitea_tool_resume_v1", "__elitea_llm_tool_resume_v1", "__elitea_parallel_resume_v1", "__elitea_parallel_agent_inputs_v1", "__elitea_parallel_llm_inputs_v1", "__elitea_pipeline_node_event_scope_v1", "__elitea_pipeline_terminal_json_producers_v1", "__elitea_pipeline_result_trace_v1", "__elitea_application_task_v1", "__elitea_application_messages_v1", "__elitea_application_result_v1", "__elitea_subgraph_result_v1", "__elitea_subgraph_entry_v1", "output", "result", "router_output", "elitea_response", "printer_output", "state_types", "context_info", "hitl_decisions", "hitl_interrupt", "parallel_tasks", "_pipeline_blocked", "session_id", "thread_id", "execution_finished", "chat_history":
+	case "__elitea_hitl_resume_v1", "__elitea_tool_resume_v1", "__elitea_llm_tool_resume_v1", "__elitea_parallel_resume_v1", "__elitea_parallel_agent_inputs_v1", "__elitea_parallel_llm_inputs_v1", "__elitea_pipeline_node_event_scope_v1", "__elitea_pipeline_terminal_json_producers_v1", "__elitea_pipeline_result_trace_v1", "__elitea_application_task_v1", "__elitea_application_messages_v1", "__elitea_application_result_v1", "__elitea_subgraph_result_v1", "__elitea_subgraph_entry_v1", "__elitea_executed_once_v1", "output", "result", "router_output", "elitea_response", "printer_output", "state_types", "context_info", "hitl_decisions", "hitl_interrupt", "parallel_tasks", "_pipeline_blocked", "session_id", "thread_id", "execution_finished", "chat_history":
 		return true
 	default:
 		return false
