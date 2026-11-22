@@ -787,3 +787,224 @@ nodes:
         std::any::type_name::<NodeAttemptActivation>(),
     );
 }
+
+/// SEC-5B1B-01: a Code node that fails try 1 with stderr detail and succeeds on
+/// try 2 must leave both the in-memory `terminal_detail` slot and PostgreSQL
+/// `sandbox_run_failure_details` empty.
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn real_pg_sec_5b1b_01_retry_then_succeed_keeps_failure_detail_empty() {
+    let h = harness(QUIET, Duration::ZERO).await;
+    install(&h).await;
+    let (execution, generation) = h.authority.trace_identity();
+    h.answers.lock().unwrap().extend([
+        pb::SubmitSandboxJobResponseV1 {
+            failure_detail: "transient stderr from try 1".into(),
+            ..terminal("sandbox.deadline_exceeded")
+        },
+        completed(),
+    ]);
+    let yaml = "\
+entry_point: work
+state:
+  count: {type: int, value: 0}
+nodes:
+  - id: work
+    type: code
+    language: python
+    code: 'return 41'
+    input: []
+    output: [count]
+    settings: {retry_on_fail: true, max_tries: 3, wait_between_tries_ms: 100}
+    transition: END
+";
+    let definition = PipelineDefinition::from_yaml(yaml).unwrap();
+    let (_, graph) = compile_root(&h, 1, "sec-5b1b-01-retry", &definition).await;
+    let state = graph
+        .invoke(HashMap::new(), ExecutionConfig::new("sec-5b1b-01-retry"))
+        .await
+        .expect("try 2 should succeed");
+    assert_eq!(state["count"], json!(41));
+    assert_eq!(
+        crate::protocol::terminal_detail::noted(execution, generation),
+        None
+    );
+    assert_eq!(h.dispatch.failure_detail(&h.scope).await.unwrap(), None);
+}
+
+/// SEC-5B1B-01: a handled Code failure under `on_error: continue` must never
+/// populate `terminal_detail` or `sandbox_run_failure_details`, even if a later
+/// node fails fatally without stderr detail.
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn real_pg_sec_5b1b_01_continued_failure_keeps_failure_detail_empty() {
+    let h_cont = harness(QUIET, Duration::ZERO).await;
+    install(&h_cont).await;
+    let (exec_cont, gen_cont) = h_cont.authority.trace_identity();
+    h_cont.answers.lock().unwrap().extend([
+        pb::SubmitSandboxJobResponseV1 {
+            failure_detail: "handled step-1 diagnostic".into(),
+            ..terminal("sandbox.code_failed")
+        },
+        pb::SubmitSandboxJobResponseV1 {
+            failure_detail: String::new(),
+            ..terminal("sandbox.code_failed")
+        },
+    ]);
+    let cont_yaml = "\
+entry_point: first
+state:
+  count: {type: int, value: 0}
+nodes:
+  - id: first
+    type: code
+    language: python
+    code: 'raise RuntimeError()'
+    input: []
+    output: [count]
+    settings: {on_error: continue}
+    transition: second
+  - id: second
+    type: code
+    language: python
+    code: 'return 1'
+    input: []
+    output: [count]
+    transition: END
+";
+    let cont_def = PipelineDefinition::from_yaml(cont_yaml).unwrap();
+    let (_, g_cont) = compile_root(&h_cont, 1, "sec-5b1b-01-cont", &cont_def).await;
+    let err = g_cont
+        .invoke(HashMap::new(), ExecutionConfig::new("sec-5b1b-01-cont"))
+        .await
+        .expect_err("second node must fail fatally");
+    assert!(err.to_string().contains("pipeline.node_recovery.failed"));
+    assert_eq!(
+        crate::protocol::terminal_detail::noted(exec_cont, gen_cont),
+        None,
+        "stale detail from continued first node must not leak onto second terminal"
+    );
+    assert_eq!(
+        h_cont.dispatch.failure_detail(&h_cont.scope).await.unwrap(),
+        None
+    );
+}
+
+/// SEC-5B1B-01: a handled Code failure under `on_error: error_output` must
+/// never populate `terminal_detail` or `sandbox_run_failure_details`.
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn real_pg_sec_5b1b_01_error_output_failure_keeps_failure_detail_empty() {
+    let h_route = harness(QUIET, Duration::ZERO).await;
+    install(&h_route).await;
+    let (exec_route, gen_route) = h_route.authority.trace_identity();
+    h_route
+        .answers
+        .lock()
+        .unwrap()
+        .push_back(pb::SubmitSandboxJobResponseV1 {
+            failure_detail: "handled error-output diagnostic".into(),
+            ..terminal("sandbox.code_failed")
+        });
+    let route_yaml = "\
+entry_point: work
+state:
+  count: {type: int, value: 0}
+  handled: {type: str, value: ''}
+nodes:
+  - id: work
+    type: code
+    language: python
+    code: 'raise RuntimeError()'
+    input: []
+    output: [count]
+    settings: {on_error: error_output, error_transition: recover}
+    transition: END
+  - id: recover
+    type: state_modifier
+    template: 'recovered'
+    input: []
+    output: [handled]
+    transition: END
+";
+    let route_def = PipelineDefinition::from_yaml(route_yaml).unwrap();
+    let (_, g_route) = compile_root(&h_route, 1, "sec-5b1b-01-route", &route_def).await;
+    let state = g_route
+        .invoke(HashMap::new(), ExecutionConfig::new("sec-5b1b-01-route"))
+        .await
+        .expect("error_output should route to recover");
+    assert_eq!(state["handled"], json!("recovered"));
+    assert_eq!(
+        crate::protocol::terminal_detail::noted(exec_route, gen_route),
+        None
+    );
+    assert_eq!(
+        h_route
+            .dispatch
+            .failure_detail(&h_route.scope)
+            .await
+            .unwrap(),
+        None
+    );
+}
+
+/// SEC-5B1B-01: a handled Code failure inside a saved child must not write to
+/// the parent run's `terminal_detail` slot or `sandbox_run_failure_details`.
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn real_pg_sec_5b1b_01_saved_child_continued_code_failure_keeps_parent_detail_empty() {
+    let root_yaml = "\
+entry_point: run_saved
+state:
+  input: {type: str, value: 'go'}
+  messages: {type: list, value: []}
+  count: {type: int, value: 0}
+nodes:
+  - id: run_saved
+    type: agent
+    tool: saved_child
+    input_mapping: {task: {type: fixed, value: work}}
+    output: [count]
+    transition: END
+";
+    let child_yaml = "\
+entry_point: child_code
+state:
+  input: {type: str, value: ''}
+  messages: {type: list, value: []}
+  count: {type: int, value: 0}
+nodes:
+  - id: child_code
+    type: code
+    language: python
+    code: 'raise RuntimeError()'
+    input: [input]
+    output: [count]
+    settings: {on_error: continue, always_output_data: true}
+    transition: END
+";
+    let root = PipelineDefinition::from_yaml(root_yaml).unwrap();
+    let child = PipelineDefinition::from_yaml(child_yaml).unwrap();
+    let h = harness(QUIET, Duration::ZERO).await;
+    install(&h).await;
+    let (execution, generation) = h.authority.trace_identity();
+    h.answers
+        .lock()
+        .unwrap()
+        .push_back(pb::SubmitSandboxJobResponseV1 {
+            failure_detail: "child stderr diagnostic".into(),
+            ..terminal("sandbox.code_failed")
+        });
+    let graph =
+        compile_with_saved_child(&h, 1, "sec-5b1b-01-child", &root, &child, "run_saved").await;
+    let state = graph
+        .invoke(HashMap::new(), ExecutionConfig::new("sec-5b1b-01-child"))
+        .await
+        .expect("saved child continued failure should complete parent");
+    assert_eq!(state["count"], json!(0));
+    assert_eq!(
+        crate::protocol::terminal_detail::noted(execution, generation),
+        None
+    );
+    assert_eq!(h.dispatch.failure_detail(&h.scope).await.unwrap(), None);
+}

@@ -30,6 +30,9 @@ struct RawNodeSettings {
 #[derive(Default)]
 pub(super) struct RawSettingsCatalog {
     nodes: BTreeMap<String, RawNodeSettings>,
+    /// Nodes that declare a dedicated `failure_handler:` block (SEC-5B1B-03).
+    /// `settings.error_transition` must never target them.
+    failure_handlers: BTreeSet<String>,
 }
 
 /// The admitted node family of a `settings:` block (`NotYet` and `Pause` are
@@ -84,6 +87,11 @@ impl RawSettingsCatalog {
             let Some(map) = node.as_mapping_mut() else {
                 continue;
             };
+            if map.contains_key(Value::String("failure_handler".into()))
+                && let Some(id) = map.get(Value::String("id".into())).and_then(Value::as_str)
+            {
+                catalog.failure_handlers.insert(id.to_owned());
+            }
             let Some(raw) = map.remove(Value::String("settings".into())) else {
                 continue;
             };
@@ -164,6 +172,18 @@ impl RawSettingsCatalog {
         Ok((state, defaults, declaration_order, reducers))
     }
 
+    /// Every non-END `settings.error_transition` target declared in this
+    /// document, passed to `RawRecoveryCatalog::admit` so dedicated
+    /// `failure_handler` nodes remain isolated (SEC-5B1B-03).
+    pub(super) fn error_transition_targets(&self) -> BTreeSet<String> {
+        self.nodes
+            .values()
+            .filter_map(|raw| raw.settings.error_transition.as_deref())
+            .filter(|target| *target != "END")
+            .map(str::to_owned)
+            .collect()
+    }
+
     #[allow(
         clippy::too_many_lines,
         reason = "Keep ordered per-node settings admission checks in one pass."
@@ -222,6 +242,7 @@ impl RawSettingsCatalog {
                 && target != "END"
                 && (target == id
                     || owned.contains(target)
+                    || self.failure_handlers.contains(target)
                     || !nodes.iter().any(|node| node.id() == target))
             {
                 return Err(refusal(&id, NodeSettingsRefusal::ErrorTransitionTarget));

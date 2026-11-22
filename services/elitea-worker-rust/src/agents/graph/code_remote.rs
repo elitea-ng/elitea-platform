@@ -914,6 +914,10 @@ impl CodeSandboxRuntime for RemoteCodeRuntime {
         Box::pin(code_attempt_scope(self.execute_reporting(invocation, None))).await
     }
 
+    async fn record_terminal_failure_detail(&self, detail: Option<&str>) {
+        self.keep_failure_detail(detail).await;
+    }
+
     async fn execute_node(
         &self,
         invocation: CodeInvocation<'_>,

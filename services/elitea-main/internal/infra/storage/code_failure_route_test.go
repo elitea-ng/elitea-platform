@@ -28,7 +28,7 @@ func TestCodeFailureRouteMatchesDedicatedTypedHandlerAndWorkerTuple(t *testing.T
 }
 func TestCodeFailureRouteRejectsSuccessPathsOwnedNodesAndDenial(t *testing.T) {
 	original, route := codeFailureRouteFixture()
-	for _, name := range []string{"stale source", "forged route hash", "handler is entry", "wrong state type", "handler source dynamic", "handler writes error", "producer reads error", "handler has normal predecessor", "router default predecessor", "decision predecessor", "HITL predecessor", "Map owns handler", "Parallel owns handler", "denial class", "runtime lost class", "deadline insufficient class", "multi document"} {
+	for _, name := range []string{"stale source", "forged route hash", "handler is entry", "wrong state type", "handler source dynamic", "handler writes error", "producer reads error", "handler has normal predecessor", "settings error_transition predecessor", "router default predecessor", "decision predecessor", "HITL predecessor", "Map owns handler", "Parallel owns handler", "denial class", "runtime lost class", "deadline insufficient class", "multi document"} {
 		t.Run(name, func(t *testing.T) {
 			instructions := original
 			f := *route
@@ -52,6 +52,8 @@ func TestCodeFailureRouteRejectsSuccessPathsOwnedNodesAndDenial(t *testing.T) {
 				instructions = strings.Replace(instructions, "input: []", "input: [failure]", 1)
 			case "handler has normal predecessor":
 				instructions = strings.Replace(instructions, "transition: END", "transition: handler", 1)
+			case "settings error_transition predecessor":
+				instructions += "  - id: other\n    type: state_modifier\n    template: x\n    output: [answer]\n    settings: {on_error: error_output, error_transition: handler}\n    transition: END\n"
 			case "router default predecessor":
 				instructions += "  - id: route\n    type: router\n    routes: [END]\n    default_output: handler\n"
 			case "decision predecessor":

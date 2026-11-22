@@ -1055,6 +1055,10 @@ impl PipelineDefinition {
         Ok(definition)
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Sequential pipeline document validation and digest binding."
+    )]
     fn from_raw(mut raw: RawPipelineDefinition) -> Result<Self, PipelineConfigurationError> {
         if raw.nodes.len() > MAX_PIPELINE_NODES {
             return Err(PipelineConfigurationError::LimitExceeded(
@@ -1120,8 +1124,15 @@ impl PipelineDefinition {
             .collect();
         validate_overwrite_channels(&nodes, &state_reducers, &recovery_owned)?;
         validate_fanout_joins(&nodes, &state_reducers)?;
-        let recovery = raw_recovery.admit(&nodes, &state, &raw.entry_point, &recovery_owned)?;
+        let settings_targets = raw_settings.error_transition_targets();
         let settings = raw_settings.admit(&nodes, &state, &state_reducers, &recovery_owned)?;
+        let recovery = raw_recovery.admit(
+            &nodes,
+            &state,
+            &raw.entry_point,
+            &recovery_owned,
+            &settings_targets,
+        )?;
         let interrupt_before = validate_static_interrupts(raw.interrupt_before, &node_ids)?;
         let interrupt_after = validate_static_interrupts(raw.interrupt_after, &node_ids)?;
         let definition_digest = fold_policy_digests(

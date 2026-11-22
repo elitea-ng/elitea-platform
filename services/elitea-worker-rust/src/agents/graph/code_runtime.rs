@@ -81,13 +81,16 @@ fn terminal_failure_code(
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CodeAttemptFailure {
     pub(crate) phase: CodeAttemptPhase,
     pub(crate) failure: NodeFailure,
     // Owning call detail; generic graph recovery still uses the whole dispatch.
     pub(crate) platform_call_effect: Option<[u8; 32]>,
     pub(crate) preparation: Option<CodePreparationFailure>,
+    /// Bounded diagnostic output held only in memory until a claim-fenced,
+    /// non-continued terminal stop commits (SEC-5B1B-01 / #2240).
+    pub(crate) failure_detail: Option<String>,
 }
 
 impl CodeAttemptFailure {
@@ -101,10 +104,11 @@ impl CodeAttemptFailure {
             failure: NodeFailure { class, replay },
             platform_call_effect: None,
             preparation: None,
+            failure_detail: None,
         }
     }
     /// The registered upstream code the node reports for this failure.
-    fn terminal_code(self) -> Option<&'static str> {
+    fn terminal_code(&self) -> Option<&'static str> {
         terminal_failure_code(self.failure.class, self.preparation)
     }
     pub(crate) fn with_preparation_failure(mut self, failure: CodePreparationFailure) -> Self {
@@ -113,6 +117,10 @@ impl CodeAttemptFailure {
     }
     pub(crate) fn with_platform_call_effect(mut self, effect: Option<[u8; 32]>) -> Self {
         self.platform_call_effect = effect;
+        self
+    }
+    pub(crate) fn with_failure_detail(mut self, detail: Option<&str>) -> Self {
+        self.failure_detail = detail.and_then(crate::protocol::terminal_detail::bounded);
         self
     }
 }
@@ -202,6 +210,10 @@ pub(in crate::agents) trait CodeSandboxRuntime: Send + Sync {
     ) -> Option<(u64, u64)> {
         None
     }
+
+    /// Persist bounded failure detail strictly for a claim-fenced,
+    /// non-continued terminal stop (SEC-5B1B-01 / #2240).
+    async fn record_terminal_failure_detail(&self, _detail: Option<&str>) {}
 
     /// Bind only the actual Main registered saved family at the compiler seam.
     /// Default runtimes cannot acquire scoped authority from a child definition.
@@ -479,6 +491,7 @@ impl NodeAttemptBody for CodeNode {
                 replay: ReplaySafety::NoExternalEffect,
             },
             terminal_code: terminal_failure_code(class, None),
+            failure_detail: None,
         };
         if !authority.matches(
             self.definition.id(),
@@ -539,9 +552,13 @@ impl NodeAttemptBody for CodeNode {
                 authority,
             )
             .await
-            .map_err(|failure| NodeAttemptReportedFailure {
-                failure: failure.failure,
-                terminal_code: failure.terminal_code(),
+            .map_err(|failure| {
+                let terminal_code = failure.terminal_code();
+                NodeAttemptReportedFailure {
+                    failure: failure.failure,
+                    terminal_code,
+                    failure_detail: failure.failure_detail,
+                }
             })?;
         let updates = project_code_receipt(
             &receipt,
@@ -557,6 +574,7 @@ impl NodeAttemptBody for CodeNode {
                 },
             },
             terminal_code: terminal_failure_code(NodeFailureClass::InvalidResult, None),
+            failure_detail: None,
         })?;
         let mut output = NodeOutput::new();
         for (key, value) in updates {
@@ -606,6 +624,10 @@ impl NodeAttemptBody for CodeNode {
             }
         }
         Ok(())
+    }
+
+    async fn record_terminal_failure_detail(&self, detail: Option<&str>) {
+        self.runtime.record_terminal_failure_detail(detail).await;
     }
 
     fn retry_deadline_budget(&self) -> Option<(u64, u64)> {

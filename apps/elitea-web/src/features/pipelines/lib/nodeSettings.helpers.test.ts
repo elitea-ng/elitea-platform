@@ -2,7 +2,14 @@ import { describe, expect, it } from 'vitest';
 
 import { collectGraphAdmissionIssues } from './graphAdmission.helpers';
 import type { YamlPipelineDocument, YamlPipelineNode } from './flow-editor/helpers/pipelineFlow.types';
-import { declaresNodeErrors, readNodeSettings, writeNodeSettings } from './nodeSettings.helpers';
+import {
+  declaresNodeErrors,
+  graphNodeSettingsIssues,
+  NodeSettingsRefusalTexts,
+  nodeSettingsFamilyKeys,
+  readNodeSettings,
+  writeNodeSettings,
+} from './nodeSettings.helpers';
 
 const node = (settings?: Record<string, unknown>): YamlPipelineNode =>
   ({ id: 'a', type: 'state_modifier', template: 'x', output: ['out'], transition: 'b', ...(settings ? { settings } : {}) });
@@ -42,5 +49,62 @@ describe('node settings helpers', () => {
     const subjects = (doc: YamlPipelineDocument) => collectGraphAdmissionIssues(doc).filter((issue) => issue.severity !== 'warning').map((issue) => issue.subject);
     expect(subjects(document({ on_error: 'continue' }))).toEqual([]);
     expect(subjects(document({ execute_once: true }))).toContain('node_errors');
+  });
+
+  it('refuses settings.error_transition targeting a dedicated failure_handler node (SEC-5B1B-03)', () => {
+    const doc: YamlPipelineDocument = {
+      state: { out: 'str', err_ctx: 'dict', handled: 'str' },
+      entry_point: 'a',
+      nodes: [
+        {
+          id: 'a',
+          type: 'state_modifier',
+          template: 'x',
+          output: ['out'],
+          settings: { on_error: 'error_output', error_transition: 'dedicated' },
+          transition: 'producer',
+        },
+        {
+          id: 'producer',
+          type: 'code',
+          language: 'python',
+          code: { type: 'fixed', value: 'return 1' },
+          input: [],
+          output: ['out'],
+          recovery: {
+            max_attempts: 1,
+            on_failure: { route: 'dedicated', error_input: 'err_ctx', classes: ['invalid_result'] },
+          },
+          transition: 'END',
+        },
+        {
+          id: 'dedicated',
+          type: 'code',
+          language: 'python',
+          code: { type: 'fixed', value: 'return "ok"' },
+          input: ['err_ctx'],
+          output: ['handled'],
+          failure_handler: { error_input: 'err_ctx' },
+          transition: 'END',
+        },
+      ],
+    };
+    const issues = graphNodeSettingsIssues(doc);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.message).toBe(`Node a: ${NodeSettingsRefusalTexts['error_transition_target']}`);
+  });
+
+  it('guards NodeSettingsFamilies lookup against prototype properties (SEC-5B1B-04)', () => {
+    for (const protoKey of ['constructor', 'toString', '__proto__', 'valueOf']) {
+      expect(nodeSettingsFamilyKeys(protoKey)).toBeUndefined();
+      const doc: YamlPipelineDocument = {
+        state: { out: 'str' },
+        entry_point: 'a',
+        nodes: [{ id: 'a', type: protoKey, settings: { execute_once: true }, transition: 'END' }],
+      };
+      const issues = graphNodeSettingsIssues(doc);
+      expect(issues).toHaveLength(1);
+      expect(issues[0]?.message).toBe(`Node a: ${NodeSettingsRefusalTexts['family_not_yet']}`);
+    }
   });
 });

@@ -27,8 +27,8 @@ import { ERROR_OUTPUT_HANDLE } from '../../lib/flow-editor/helpers/nodeErrorRout
 import {
   NODE_ON_ERROR,
   NODE_SETTINGS_KEY,
-  NodeSettingsFamilies,
   NodeSettingsLimits,
+  nodeSettingsFamilyKeys,
   type NodeSettings as ParsedNodeSettings,
   readNodeSettings,
   writeNodeSettings,
@@ -180,7 +180,7 @@ export function NodeSettings({ id, type, disabled }: NodeSettingsProps): ReactNo
   const context = useContext(FlowEditorContext);
   const [open, setOpen] = useState(false);
   const node = context?.yamlJsonObject.nodes?.find((entry) => entry.id === id);
-  const allowedKeys = NodeSettingsFamilies[type];
+  const allowedKeys = nodeSettingsFamilyKeys(type);
   if (!context || !node || allowedKeys === undefined) return null;
   const settings = readNodeSettings(node);
   const supportsRetry = allowedKeys.includes('retry_on_fail');

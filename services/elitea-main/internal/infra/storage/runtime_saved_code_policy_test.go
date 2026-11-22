@@ -360,6 +360,7 @@ nodes:
 		"missing_error_route":    base + `,"settings":{"on_error":"error_output"}}`,
 		"unexpected_error_route": base + `,"settings":{"on_error":"continue","error_transition":"END"}}`,
 		"bad_error_route_id":     base + `,"settings":{"on_error":"error_output","error_transition":"../escape"}}`,
+		"self_error_route":       base + `,"settings":{"on_error":"error_output","error_transition":"run"}}`,
 	}
 	for name, rawPolicy := range rejected {
 		t.Run(name, func(t *testing.T) {
@@ -370,5 +371,139 @@ nodes:
 				t.Fatalf("invalid saved settings %s passed ReadSavedCodeDeclaration", name)
 			}
 		})
+	}
+}
+
+// SEC-5B1B-04: YAML whole-number floats are rejected before JSON marshaling,
+// legacy labels and numeric IDs on settings.error_transition are normalized
+// identically to pipelinelimits, and self-transitions are refused.
+func TestSavedCodeSettingsYAMLFloatLabelNormalizationAndSelfTransition(t *testing.T) {
+	config := `{"id":"run","type":"code","language":"python","code":{"type":"fixed","value":"7"},"input":[],"output":["answer"],"structured_output":false,"debug":false,"transition":"END"}`
+
+	floatYAML := `entry_point: run
+state: {answer: int}
+nodes:
+ - id: run
+   type: code
+   language: python
+   code: '7'
+   output: [answer]
+   settings:
+     retry_on_fail: true
+     max_tries: 3.0
+   transition: END
+`
+	if _, err := SavedCodePolicies(floatYAML); err == nil {
+		t.Fatalf("YAML whole-number float max_tries: 3.0 must be rejected")
+	}
+
+	floatTimeoutYAML := `entry_point: run
+state: {answer: int}
+nodes:
+ - id: run
+   type: code
+   language: python
+   code: '7'
+   output: [answer]
+   settings:
+     timeout_ms: 5000.0
+   transition: END
+`
+	if _, err := SavedCodePolicies(floatTimeoutYAML); err == nil {
+		t.Fatalf("YAML whole-number float timeout_ms: 5000.0 must be rejected")
+	}
+
+	legacyLabelYAML := `entry_point: run
+state: {answer: int}
+nodes:
+ - id: run
+   type: code
+   language: python
+   code: '7'
+   output: [answer]
+   settings:
+     on_error: error_output
+     error_transition: "My Handler"
+   transition: END
+ - id: "My Handler"
+   type: state_modifier
+   template: x
+   output: [answer]
+   transition: END
+`
+	policies, err := SavedCodePolicies(legacyLabelYAML)
+	if err != nil {
+		t.Fatalf("legacy label settings.error_transition rejected: %v", err)
+	}
+	if _, err := MatchOriginalSavedCodeConfiguration(policies["run"], config); err != nil {
+		t.Fatalf("normalized legacy label settings.error_transition failed MatchOriginalSavedCodeConfiguration: %v", err)
+	}
+
+	selfYAML := `entry_point: run
+state: {answer: int}
+nodes:
+ - id: run
+   type: code
+   language: python
+   code: '7'
+   output: [answer]
+   settings:
+     on_error: error_output
+     error_transition: run
+   transition: END
+`
+	selfPolicies, err := SavedCodePolicies(selfYAML)
+	if err != nil {
+		t.Fatalf("SavedCodePolicies: %v", err)
+	}
+	if _, err := MatchOriginalSavedCodeConfiguration(selfPolicies["run"], config); err == nil {
+		t.Fatalf("self-transition settings.error_transition must be rejected")
+	}
+}
+
+// SEC-5B1B-05: MatchCodePrepared enforces the saved settings.timeout_ms upper
+// bound (`ceil(timeout_ms / 1000)`) on prepared jobs.
+func TestMatchCodePreparedEnforcesSettingsTimeoutCeiling(t *testing.T) {
+	config := `{"id":"run","type":"code","language":"python","code":{"type":"fixed","value":"7"},"input":[],"output":["answer"],"structured_output":false,"debug":false,"transition":"END"}`
+	yamlDoc := `entry_point: run
+state: {answer: int}
+nodes:
+ - id: run
+   type: code
+   language: python
+   code: '7'
+   output: [answer]
+   settings:
+     timeout_ms: 4500
+   transition: END
+`
+	policies, err := SavedCodePolicies(yamlDoc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decl, err := MatchOriginalSavedCodeConfiguration(policies["run"], config)
+	if err != nil {
+		t.Fatalf("MatchOriginalSavedCodeConfiguration: %v", err)
+	}
+	if decl.SettingsTimeoutSeconds != 5 {
+		t.Fatalf("SettingsTimeoutSeconds = %d, want 5 (ceil(4500/1000))", decl.SettingsTimeoutSeconds)
+	}
+	baseJob := CodePreparedRequest{
+		Revision:       1,
+		Language:       "python",
+		Source:         "7",
+		Input:          []byte("{}"),
+		PreparedSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Fingerprint:    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		ImageDigest:    "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+		PolicyRevision: "rev-1",
+		TimeoutSeconds: 5,
+	}
+	if _, err := matchCodePreparedSemantics(decl, baseJob); err != nil {
+		t.Fatalf("TimeoutSeconds == ceil(timeout_ms/1000) should be admitted, got %v", err)
+	}
+	baseJob.TimeoutSeconds = 6
+	if _, err := matchCodePreparedSemantics(decl, baseJob); err == nil {
+		t.Fatalf("TimeoutSeconds > ceil(timeout_ms/1000) must be rejected")
 	}
 }

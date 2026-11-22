@@ -308,9 +308,13 @@ func checkNodeSettings(declared []map[string]*yaml.Node, state *yaml.Node) error
 	}
 	ids := map[string]struct{}{}
 	owned := map[string]struct{}{}
+	failureHandlers := map[string]struct{}{}
 	for _, fields := range declared {
 		if id, ok := graphIDScalar(fields["id"]); ok {
 			ids[id] = struct{}{}
+			if fields["failure_handler"] != nil {
+				failureHandlers[id] = struct{}{}
+			}
 		}
 		nodeType, _ := stringScalar(fields["type"])
 		switch nodeType {
@@ -330,14 +334,14 @@ func checkNodeSettings(declared []map[string]*yaml.Node, state *yaml.Node) error
 	}
 	sort.SliceStable(blocks, func(i, j int) bool { return blocks[i].id < blocks[j].id })
 	for _, block := range blocks {
-		if err := checkOneNodeSettings(block, ids, owned, reducers); err != nil {
+		if err := checkOneNodeSettings(block, ids, owned, failureHandlers, reducers); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func checkOneNodeSettings(block declaredSettings, ids, owned map[string]struct{}, reducers map[string]string) error {
+func checkOneNodeSettings(block declaredSettings, ids, owned, failureHandlers map[string]struct{}, reducers map[string]string) error {
 	id, settings, fields := block.id, block.settings, block.fields
 	if fields["recovery"] != nil || fields["failure_handler"] != nil {
 		return settingsRefusal(id, "with_recovery")
@@ -362,7 +366,8 @@ func checkOneNodeSettings(block declaredSettings, ids, owned map[string]struct{}
 	if target := settings.errorTransition; target != nil && *target != "END" {
 		_, declared := ids[*target]
 		_, targetOwned := owned[*target]
-		if *target == id || targetOwned || !declared {
+		_, targetHandler := failureHandlers[*target]
+		if *target == id || targetOwned || targetHandler || !declared {
 			return settingsRefusal(id, "error_transition_target")
 		}
 	}

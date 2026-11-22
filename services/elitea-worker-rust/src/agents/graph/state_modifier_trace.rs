@@ -13,7 +13,8 @@ use adk_rust::{
 };
 use async_trait::async_trait;
 use chrono::Utc;
-use elitea_agent_runtime::graph::node_settings::NODE_ERRORS_KEY;
+use elitea_agent_runtime::graph::node_settings::{MAX_NODE_ERRORS, NODE_ERRORS_KEY};
+use elitea_agent_runtime::memory_tools::looks_like_secret;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -29,26 +30,78 @@ pub(crate) const TRANSITIONAL_EDGE_METADATA_KEY: &str = "elitea.pipeline.transit
 const MAX_TRANSITIONAL_EDGE_BYTES: usize = 24 * 1024;
 const MAX_TRANSITIONAL_EDGE_STATE_BYTES: usize = 20 * 1024;
 const MAX_REDACT_DEPTH: usize = 16;
+const MAX_SANITIZE_NODES: usize = 2_048;
+const MAX_SECRET_SCAN_EXTRA_BYTES: usize = 1_024;
 const REDACTED: &str = "[REDACTED]";
 const TRUNCATED_SUFFIX: &str = "...[truncated]";
 
+/// Normalized (alphanumeric-only, lowercase) key tokens matching `events.rs`
+/// `sensitive_argument_key` so separator variants (`api-token`, `AuthSecret`,
+/// `x_api_key`, `auth-header`) match consistently (SEC-5B1B-02).
 const SENSITIVE_KEY_TOKENS: &[&str] = &[
     "password",
     "passwd",
     "secret",
     "token",
-    "api_key",
     "apikey",
     "authorization",
     "credential",
-    "private_key",
-    "access_key",
+    "privatekey",
+    "accesskey",
     "cookie",
     "bearer",
-    "auth_header",
-    "x-api-key",
-    "x_api_key",
+    "authheader",
 ];
+
+/// Zero-allocation supplemental secret-prefix scanner on top of
+/// `elitea_agent_runtime::memory_tools::looks_like_secret`, covering `Basic`/short
+/// `Bearer` headers, GitLab PATs (`glpat-`), shorter GitHub/OpenAI prefixes, and
+/// PEM key headers without allocating lowercased copies of input strings (SEC-5B1B-02).
+fn contains_ascii_word_prefix_ci(text: &str, needle: &[u8]) -> bool {
+    let bytes = text.as_bytes();
+    if bytes.len() <= needle.len() {
+        return false;
+    }
+    for i in 0..=bytes.len() - needle.len() {
+        let before_ok = i == 0 || !bytes[i - 1].is_ascii_alphanumeric();
+        if !before_ok {
+            continue;
+        }
+        if bytes[i..i + needle.len()].eq_ignore_ascii_case(needle) {
+            let rest = &bytes[i + needle.len()..];
+            if rest.first().is_some_and(u8::is_ascii_whitespace)
+                && rest.iter().any(|b| !b.is_ascii_whitespace())
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn has_extra_secret_marker(text: &str) -> bool {
+    if contains_ascii_word_prefix_ci(text, b"bearer")
+        || contains_ascii_word_prefix_ci(text, b"basic")
+        || text.contains("-----BEGIN ")
+        || text.contains("glpat-")
+        || text.contains("sk-proj-")
+        || text.contains("sk-ant-")
+    {
+        return true;
+    }
+    for prefix in ["ghp_", "gho_", "ghu_", "ghs_", "ghr_"] {
+        let mut rest = text;
+        while let Some(pos) = rest.find(prefix) {
+            let tail = &rest[pos + prefix.len()..];
+            let run = tail.bytes().take_while(u8::is_ascii_alphanumeric).count();
+            if run >= 16 {
+                return true;
+            }
+            rest = tail;
+        }
+    }
+    false
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -170,76 +223,92 @@ fn is_omitted_state_key(key: &str) -> bool {
 }
 
 fn is_sensitive_key(key: &str) -> bool {
-    let lower = key.to_ascii_lowercase();
+    let normalized: String = key
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .flat_map(char::to_lowercase)
+        .collect();
     SENSITIVE_KEY_TOKENS
         .iter()
-        .any(|token| lower.contains(token))
+        .any(|token| normalized.contains(token))
 }
 
-fn looks_like_secret_value(text: &str) -> bool {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-    let lower = trimmed.to_ascii_lowercase();
-    if lower.starts_with("bearer ")
-        || lower.starts_with("basic ")
-        || trimmed.contains("-----BEGIN ")
-        || trimmed.starts_with("sk-")
-        || trimmed.starts_with("ghp_")
-        || trimmed.starts_with("gho_")
-        || trimmed.starts_with("ghu_")
-        || trimmed.starts_with("ghs_")
-        || trimmed.starts_with("glpat-")
-        || trimmed.starts_with("xoxb-")
-        || trimmed.starts_with("xoxp-")
-        || trimmed.starts_with("AKIA")
-    {
-        return true;
-    }
-    // Redact inline credentials in URLs (`scheme://user:pass@host`) or
-    // embedded `Bearer <token>` / `sk-...` tokens inside longer strings.
-    if lower.contains("bearer ")
-        || trimmed.contains("sk-proj-")
-        || trimmed.contains("sk-ant-")
-        || trimmed.contains("ghp_")
-        || trimmed.contains("glpat-")
-        || trimmed.contains("AKIA")
-    {
-        return true;
-    }
-    if let Some(scheme_end) = trimmed.find("://") {
-        let rest = &trimmed[scheme_end + 3..];
-        let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+fn has_credentialed_uri(text: &str) -> bool {
+    let mut rest = text;
+    while let Some(scheme_end) = rest.find("://") {
+        let after = &rest[scheme_end + 3..];
+        let authority = after
+            .split(['/', '?', '#', ' ', '\t', '\r', '\n', '"', '\''])
+            .next()
+            .unwrap_or("");
         if let Some(at) = authority.rfind('@')
             && authority[..at].contains(':')
         {
             return true;
         }
+        rest = after;
     }
     false
 }
 
-fn sanitize_value(value: &Value, depth: usize, max_str_bytes: usize) -> Value {
+fn bounded_scan_slice(text: &str, max_str_bytes: usize) -> &str {
+    let limit = max_str_bytes.saturating_add(MAX_SECRET_SCAN_EXTRA_BYTES);
+    if text.len() <= limit {
+        return text;
+    }
+    let mut end = limit;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
+fn looks_like_secret_value(text: &str, max_str_bytes: usize) -> bool {
+    let slice = bounded_scan_slice(text, max_str_bytes).trim();
+    if slice.is_empty() {
+        return false;
+    }
+    looks_like_secret(slice) || has_credentialed_uri(slice) || has_extra_secret_marker(slice)
+}
+
+fn sanitize_value(
+    value: &Value,
+    depth: usize,
+    max_str_bytes: usize,
+    nodes_left: &mut usize,
+) -> Option<Value> {
+    if *nodes_left == 0 {
+        return None;
+    }
+    *nodes_left -= 1;
     if depth >= MAX_REDACT_DEPTH {
-        return Value::String(TRUNCATED_SUFFIX.to_owned());
+        return Some(Value::String(TRUNCATED_SUFFIX.to_owned()));
     }
     match value {
-        Value::Null | Value::Bool(_) | Value::Number(_) => value.clone(),
+        Value::Null | Value::Bool(_) | Value::Number(_) => Some(value.clone()),
         Value::String(text) => {
-            if looks_like_secret_value(text) {
-                Value::String(REDACTED.to_owned())
+            if looks_like_secret_value(text, max_str_bytes) {
+                Some(Value::String(REDACTED.to_owned()))
             } else {
-                Value::String(truncate_utf8(text, max_str_bytes))
+                Some(Value::String(truncate_utf8(text, max_str_bytes)))
             }
         }
-        Value::Array(items) => Value::Array(
-            items
-                .iter()
-                .map(|item| sanitize_value(item, depth + 1, max_str_bytes))
-                .collect(),
-        ),
+        Value::Array(items) => {
+            if items.len() > *nodes_left {
+                *nodes_left = 0;
+                return None;
+            }
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                out.push(sanitize_value(item, depth + 1, max_str_bytes, nodes_left)?);
+            }
+            Some(Value::Array(out))
+        }
         Value::Object(map) => {
+            if map.len() > *nodes_left {
+                *nodes_left = 0;
+                return None;
+            }
             let mut out = Map::with_capacity(map.len());
             for (k, v) in map {
                 if is_omitted_state_key(k) {
@@ -248,10 +317,13 @@ fn sanitize_value(value: &Value, depth: usize, max_str_bytes: usize) -> Value {
                 if is_sensitive_key(k) {
                     out.insert(k.clone(), Value::String(REDACTED.to_owned()));
                 } else {
-                    out.insert(k.clone(), sanitize_value(v, depth + 1, max_str_bytes));
+                    out.insert(
+                        k.clone(),
+                        sanitize_value(v, depth + 1, max_str_bytes, nodes_left)?,
+                    );
                 }
             }
-            Value::Object(out)
+            Some(Value::Object(out))
         }
     }
 }
@@ -273,6 +345,67 @@ fn truncate_utf8(text: &str, max_bytes: usize) -> String {
 
 fn encoded_len(map: &Map<String, Value>) -> usize {
     serde_json::to_string(map).map_or(usize::MAX, |s| s.len())
+}
+
+fn try_sanitize_map(
+    merged: &BTreeMap<String, Value>,
+    max_str_bytes: usize,
+) -> Option<Map<String, Value>> {
+    let mut nodes_left = MAX_SANITIZE_NODES;
+    if merged.len() > nodes_left {
+        return None;
+    }
+    let mut candidate = Map::with_capacity(merged.len());
+    for (k, v) in merged {
+        if is_sensitive_key(k) {
+            if nodes_left == 0 {
+                return None;
+            }
+            nodes_left -= 1;
+            candidate.insert(k.clone(), Value::String(REDACTED.to_owned()));
+        } else {
+            candidate.insert(
+                k.clone(),
+                sanitize_value(v, 0, max_str_bytes, &mut nodes_left)?,
+            );
+        }
+    }
+    Some(candidate)
+}
+
+/// Preserve the most recent sanitized `node_errors` entries that fit within
+/// `MAX_TRANSITIONAL_EDGE_STATE_BYTES` in a single O(N) byte-accumulator pass.
+fn bounded_node_errors_fallback(errors: &Value) -> Option<Value> {
+    let Value::Array(entries) = errors else {
+        return None;
+    };
+    let mut shell = Map::new();
+    shell.insert("_truncated".to_owned(), Value::Bool(true));
+    shell.insert(NODE_ERRORS_KEY.to_owned(), Value::Array(Vec::new()));
+    let mut used_bytes = encoded_len(&shell);
+    if used_bytes > MAX_TRANSITIONAL_EDGE_STATE_BYTES {
+        return None;
+    }
+    let mut kept = Vec::new();
+    for entry in entries.iter().rev().take(MAX_NODE_ERRORS) {
+        let mut entry_budget = 64;
+        let Some(sanitized) = sanitize_value(entry, 0, 128, &mut entry_budget) else {
+            continue;
+        };
+        let Ok(entry_json) = serde_json::to_string(&sanitized) else {
+            continue;
+        };
+        let separator = usize::from(!kept.is_empty());
+        if used_bytes.saturating_add(separator + entry_json.len())
+            > MAX_TRANSITIONAL_EDGE_STATE_BYTES
+        {
+            break;
+        }
+        used_bytes += separator + entry_json.len();
+        kept.push(sanitized);
+    }
+    kept.reverse();
+    Some(Value::Array(kept))
 }
 
 pub(crate) fn sanitize_and_bound_state(
@@ -304,14 +437,10 @@ pub(crate) fn sanitize_and_bound_state(
     }
 
     for max_str_bytes in [4096usize, 1024, 256, 64] {
-        let mut candidate = Map::with_capacity(merged.len());
-        for (k, v) in &merged {
-            if is_sensitive_key(k) {
-                candidate.insert(k.clone(), Value::String(REDACTED.to_owned()));
-            } else {
-                candidate.insert(k.clone(), sanitize_value(v, 0, max_str_bytes));
-            }
-        }
+        let Some(candidate) = try_sanitize_map(&merged, max_str_bytes) else {
+            // Node/element budget exceeded — short-circuit straight to bounded fallback.
+            break;
+        };
         if encoded_len(&candidate) <= MAX_TRANSITIONAL_EDGE_STATE_BYTES {
             return candidate;
         }
@@ -321,31 +450,10 @@ pub(crate) fn sanitize_and_bound_state(
     // Preserve bounded `node_errors` (D12) and mark truncation explicitly.
     let mut minimal = Map::new();
     minimal.insert("_truncated".to_owned(), Value::Bool(true));
-    if let Some(errors) = merged.get(NODE_ERRORS_KEY) {
-        let sanitized = sanitize_value(errors, 0, 128);
-        minimal.insert(NODE_ERRORS_KEY.to_owned(), sanitized);
-        if encoded_len(&minimal) > MAX_TRANSITIONAL_EDGE_STATE_BYTES {
-            if let Some(Value::Array(entries)) = minimal.get(NODE_ERRORS_KEY).cloned() {
-                // Keep the most recent entries that fit within budget.
-                let mut kept = Vec::new();
-                for entry in entries.into_iter().rev() {
-                    kept.push(entry);
-                    let mut probe = Map::new();
-                    probe.insert("_truncated".to_owned(), Value::Bool(true));
-                    let mut ordered = kept.clone();
-                    ordered.reverse();
-                    probe.insert(NODE_ERRORS_KEY.to_owned(), Value::Array(ordered));
-                    if encoded_len(&probe) > MAX_TRANSITIONAL_EDGE_STATE_BYTES {
-                        kept.pop();
-                        break;
-                    }
-                }
-                kept.reverse();
-                minimal.insert(NODE_ERRORS_KEY.to_owned(), Value::Array(kept));
-            } else {
-                minimal.remove(NODE_ERRORS_KEY);
-            }
-        }
+    if let Some(errors) = merged.get(NODE_ERRORS_KEY)
+        && let Some(bounded) = bounded_node_errors_fallback(errors)
+    {
+        minimal.insert(NODE_ERRORS_KEY.to_owned(), bounded);
     }
     minimal
 }
@@ -454,5 +562,78 @@ mod tests {
             sanitized[NODE_ERRORS_KEY],
             json!([{"node": "first"}, {"node": "second"}])
         );
+    }
+
+    #[test]
+    fn redacts_platform_tokens_separator_keys_and_later_credentialed_uris() {
+        let mut state = State::new();
+        state.insert("api-token".into(), json!("sep-token-value"));
+        state.insert("AuthSecret".into(), json!("camel-secret-value"));
+        state.insert("x_api_key".into(), json!("snake-key-value"));
+
+        let native_tok = format!("{}_{}", "elnat", "0123456789abcdef0123456789");
+        let gh_fine = format!("{}_{}", "github_pat", "0123456789abcdef0123456789");
+        let gcp_key = format!("{}{}", "AIza", "0123456789abcdef0123456789abcdef0123");
+        let multi_uri = "see https://docs.example.test/ok and https://bob:s3cr3t@db.internal/app";
+
+        let mut updates = HashMap::new();
+        updates.insert("native".into(), json!(native_tok));
+        updates.insert("gh_fine".into(), json!(gh_fine));
+        updates.insert("gcp".into(), json!(gcp_key));
+        updates.insert("uris".into(), json!(multi_uri));
+
+        let sanitized = sanitize_and_bound_state(&state, &updates);
+        let serialized = serde_json::to_string(&sanitized).expect("json");
+        for key in [
+            "api-token",
+            "AuthSecret",
+            "x_api_key",
+            "native",
+            "gh_fine",
+            "gcp",
+            "uris",
+        ] {
+            assert_eq!(
+                sanitized[key],
+                json!(REDACTED),
+                "key {key} must be redacted"
+            );
+        }
+        assert!(!serialized.contains("sep-token-value"));
+        assert!(!serialized.contains("camel-secret-value"));
+        assert!(!serialized.contains("s3cr3t"));
+        assert!(!serialized.contains("elnat_"));
+        assert!(!serialized.contains("github_pat_"));
+        assert!(!serialized.contains("AIza"));
+    }
+
+    #[test]
+    fn short_circuits_oversized_numeric_array_and_bounds_64_node_errors() {
+        let mut state = State::new();
+        let big_numbers: Vec<Value> = (0..50_000).map(|i| json!(i)).collect();
+        state.insert("numbers".into(), Value::Array(big_numbers));
+        let errors: Vec<Value> = (0..64)
+            .map(|i| {
+                json!({
+                    "node": format!("step_{i:02}"),
+                    "handled": "continue",
+                    "code": "pipeline.code.failed",
+                    "message": format!("error entry {i:02} {}", "m".repeat(80))
+                })
+            })
+            .collect();
+        let mut updates = HashMap::new();
+        updates.insert(NODE_ERRORS_KEY.into(), Value::Array(errors));
+
+        let bounded = sanitize_and_bound_state(&state, &updates);
+        let encoded = serde_json::to_string(&bounded).expect("json");
+        assert!(encoded.len() <= MAX_TRANSITIONAL_EDGE_STATE_BYTES);
+        assert_eq!(bounded["_truncated"], json!(true));
+        assert!(!bounded.contains_key("numbers"));
+        let kept = bounded[NODE_ERRORS_KEY]
+            .as_array()
+            .expect("node_errors array preserved");
+        assert_ne!(kept.len(), 0);
+        assert_eq!(kept.last().unwrap()["node"], json!("step_63"));
     }
 }

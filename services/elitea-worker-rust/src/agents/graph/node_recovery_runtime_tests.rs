@@ -928,6 +928,7 @@ impl NodeAttemptBody for ReportBody {
         result.map_err(|failure| NodeAttemptReportedFailure {
             failure,
             terminal_code: Some("pipeline.code_preparation_unconfirmed"),
+            failure_detail: None,
         })
     }
     async fn report_terminal_failure(

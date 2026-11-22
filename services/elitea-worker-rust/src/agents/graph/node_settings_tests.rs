@@ -938,3 +938,52 @@ fn the_result_policy_reads_the_error_route_and_never_the_owned_list() {
             .any(|key| key == "node_errors")
     );
 }
+
+/// SEC-5B1B-03: `settings.error_transition` must never target a dedicated
+/// `failure_handler` node.
+#[test]
+fn settings_error_transition_cannot_target_a_dedicated_failure_handler() {
+    let yaml = "\
+state:
+  out: str
+  err_ctx: dict
+  handled: str
+entry_point: a
+nodes:
+  - id: a
+    type: state_modifier
+    template: x
+    output: [out]
+    settings: {on_error: error_output, error_transition: dedicated}
+    transition: producer
+  - id: producer
+    type: code
+    language: python
+    code: 'return 1'
+    input: []
+    output: [out]
+    recovery:
+      max_attempts: 1
+      on_failure:
+        route: dedicated
+        error_input: err_ctx
+        classes: [invalid_result]
+    transition: END
+  - id: dedicated
+    type: code
+    language: python
+    code: 'return \"ok\"'
+    input: [err_ctx]
+    output: [handled]
+    failure_handler:
+      error_input: err_ctx
+    transition: END
+";
+    let error = PipelineDefinition::from_yaml(yaml)
+        .err()
+        .expect("settings.error_transition targeting failure_handler must be refused");
+    assert_eq!(
+        error.to_string(),
+        NodeSettingsRefusal::ErrorTransitionTarget.message("a")
+    );
+}

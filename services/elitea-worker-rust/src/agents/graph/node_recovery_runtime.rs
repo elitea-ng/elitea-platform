@@ -151,6 +151,7 @@ impl NodeAttemptAuthority {
 pub(crate) struct NodeAttemptReportedFailure {
     pub(crate) failure: NodeFailure,
     pub(crate) terminal_code: Option<&'static str>,
+    pub(crate) failure_detail: Option<String>,
 }
 
 impl From<NodeFailure> for NodeAttemptReportedFailure {
@@ -158,6 +159,7 @@ impl From<NodeFailure> for NodeAttemptReportedFailure {
         Self {
             failure,
             terminal_code: None,
+            failure_detail: None,
         }
     }
 }
@@ -217,6 +219,10 @@ pub(crate) trait NodeAttemptBody: Node {
     ) -> Result<(), GraphError> {
         Ok(())
     }
+
+    /// Persist bounded failure detail strictly after a claim-fenced,
+    /// non-continued terminal stop commits (SEC-5B1B-01 / #2240).
+    async fn record_terminal_failure_detail(&self, _: Option<&str>) {}
 
     /// Remaining run-deadline budget and required attempt window for retry
     /// clamping (`record_failure_within`, PLAN §3.3). Returns
@@ -1237,6 +1243,9 @@ impl RecoverableNode {
                             && let Some(code) = failure.terminal_code
                         {
                             journal.ensure_current()?;
+                            self.body
+                                .record_terminal_failure_detail(failure.failure_detail.as_deref())
+                                .await;
                             self.body
                                 .report_terminal_failure_classified(
                                     context,

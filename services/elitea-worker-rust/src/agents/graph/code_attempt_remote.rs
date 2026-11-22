@@ -236,13 +236,11 @@ impl RemoteCodeRuntime {
         {
             Ok(selected) => selected,
             Err(error) => {
-                // The compiler failed the program (#2228): its diagnostic ends
-                // the run after the registered sentence, as an execution
-                // failure's output does.
-                if let Some((_, detail)) = error.compile_failure() {
-                    self.keep_failure_detail(detail).await;
-                }
-                return Err(before(error.phase(), error.class()));
+                // Carry the compiler diagnostic (#2228) in memory only; the
+                // journal owner persists it strictly after a claim-fenced,
+                // non-continued terminal stop commits (SEC-5B1B-01).
+                let detail = error.compile_failure().and_then(|(_, detail)| detail);
+                return Err(before(error.phase(), error.class()).with_failure_detail(detail));
             }
         };
         let scope = self.authority.dispatch_scope().map_err(|_| {
@@ -686,10 +684,6 @@ impl RemoteCodeRuntime {
                         ))
                     }
                     SandboxOutcome::Failed { code, detail } => {
-                        // #2227: the failed program's output ends the run
-                        // after the registered sentence (built into the
-                        // terminal frame, not into the node's error text).
-                        self.keep_failure_detail(detail.as_deref()).await;
                         let _resolved = self
                             .journal
                             .resolve(
@@ -725,12 +719,17 @@ impl RemoteCodeRuntime {
                                     }
                                     Err(_) => true,
                                 });
+                        // Carry the failed program's output (#2227 / #2234) in
+                        // memory only; the journal owner persists it strictly
+                        // after a claim-fenced, non-continued terminal stop
+                        // commits (SEC-5B1B-01).
                         Err(classify(
                             CodeAttemptPhase::Observation,
                             terminal_failure_class(&code, invocation.platform_client || effect_possible),
                             invocation.activation,
                             effect_possible,
-                        ))
+                        )
+                        .with_failure_detail(detail.as_deref()))
                     }
                     SandboxOutcome::Uncertain { .. } => {
                         Err(classify(

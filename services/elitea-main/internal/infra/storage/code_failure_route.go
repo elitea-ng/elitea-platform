@@ -184,8 +184,14 @@ func containsCodeRoute(value any, target string) bool {
 	return false
 }
 
-// Mirrors PipelineNodeDefinition::route_targets, not every string in a node.
+// Mirrors PipelineNodeDefinition::route_targets plus settings.error_transition
+// (SEC-5B1B-03), isolating dedicated failure_handler nodes from all other routes.
 func codeNodeSuccessRoutesContain(node map[string]any, nodeType, target string) bool {
+	if settings, ok := node["settings"].(map[string]any); ok {
+		if containsCodeRoute(settings["error_transition"], target) {
+			return true
+		}
+	}
 	switch nodeType {
 	case "decision":
 		return containsCodeRoute(node["nodes"], target) || containsCodeRoute(node["default_output"], target)
