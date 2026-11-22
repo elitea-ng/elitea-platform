@@ -1903,7 +1903,11 @@ func (r *pgRepo) ListToolkitInstances(ctx context.Context, projectID string, fil
 		return nil, 0, err
 	}
 
-	// id breaks name ties, so offset paging neither skips nor repeats a row.
+	// Newest first, like the legacy toolkits_listing default (sort_by=created_at,
+	// sort_order=desc): a toolkit someone has just created is on page one, not
+	// wherever its name sorts in a project of more than one page. id breaks
+	// created_at ties (and orders a NULL created_at, which sorts last), so offset
+	// paging neither skips nor repeats a row.
 	limitN := strconv.Itoa(len(args) + 1)
 	offsetN := strconv.Itoa(len(args) + 2)
 	q := `
@@ -1911,7 +1915,7 @@ func (r *pgRepo) ListToolkitInstances(ctx context.Context, projectID string, fil
 		       COALESCE(settings::text,'{}'), COALESCE(meta::text,'{}'),
 		       created_at, author_id
 		FROM ` + s + `.elitea_tools` + where + `
-		ORDER BY name, id LIMIT $` + limitN + ` OFFSET $` + offsetN
+		ORDER BY created_at DESC NULLS LAST, id DESC LIMIT $` + limitN + ` OFFSET $` + offsetN
 	args = append(args, pageSize, offset)
 	rows, err := r.pool.Query(ctx, q, args...)
 	if err != nil {
