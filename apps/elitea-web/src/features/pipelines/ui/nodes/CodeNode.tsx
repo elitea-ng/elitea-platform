@@ -30,10 +30,12 @@ import { useCodeInputMapping } from '../../lib/flow-editor/hooks/useCodeInputMap
 import { useNodeAiAssistantConfig } from '../../lib/flow-editor/hooks/useNodeAiAssistantConfig';
 import { NodeCard } from './BaseNode/NodeCard';
 import { CustomHandle } from './CustomHandle';
+import { NodeErrorOutputHandle } from './NodeErrorOutputHandle';
 import { CodeLanguageSelect } from './CodeLanguageSelect';
 import { InputSelect } from '../select/InputSelect';
 import { OutputSelect } from '../select/OutputSelect';
 import { CommonInterruptSettings } from '../settings/CommonInterruptSettings';
+import { NodeSettings } from '../settings/NodeSettings';
 import { SimpleLLMInputs } from '../settings/SimpleLLMInputs';
 import { CodeDebugSettings } from '../settings/CodeDebugSettings';
 import { t } from '@/shared/i18n';
@@ -68,6 +70,7 @@ function useCodeNodeYamlState(id: string): CodeNodeYamlState {
 }
 
 interface CodeNodeHandlesProps {
+  readonly id: string;
   readonly isRunningPipeline: boolean | undefined;
   readonly disabled: boolean | undefined;
   readonly isSourceConnectable: boolean;
@@ -75,7 +78,7 @@ interface CodeNodeHandlesProps {
 }
 
 /** `CodeNode.jsx:42-69` (the `handles` render-prop body) as its own named component. */
-function CodeNodeHandles({ isRunningPipeline, disabled, isSourceConnectable, isPerforming }: CodeNodeHandlesProps): ReactNode {
+function CodeNodeHandles({ id, isRunningPipeline, disabled, isSourceConnectable, isPerforming }: CodeNodeHandlesProps): ReactNode {
   return (
     <>
       <CustomHandle
@@ -90,6 +93,12 @@ function CodeNodeHandles({ isRunningPipeline, disabled, isSourceConnectable, isP
         id="source"
         isConnectable={isSourceConnectable && !isRunningPipeline && !disabled}
         isRunningPipeline={Boolean(isRunningPipeline)}
+        isPerforming={Boolean(isPerforming)}
+      />
+      <NodeErrorOutputHandle
+        id={id}
+        isRunningPipeline={Boolean(isRunningPipeline)}
+        disabled={Boolean(disabled)}
         isPerforming={Boolean(isPerforming)}
       />
     </>
@@ -124,6 +133,7 @@ export const CodeNode = memo(function CodeNode({ id, data, selected, llmSettings
       id={id}
       handles={() => (
         <CodeNodeHandles
+          id={id}
           isRunningPipeline={isRunningPipeline}
           disabled={disabled}
           isSourceConnectable={isSourceConnectable}
@@ -156,6 +166,11 @@ export const CodeNode = memo(function CodeNode({ id, data, selected, llmSettings
         disabled={Boolean(isRunningPipeline || disabled)}
       />
       <CommonInterruptSettings
+        id={id}
+        type={PipelineNodeTypes.Code}
+        disabled={Boolean(isRunningPipeline || disabled)}
+      />
+      <NodeSettings
         id={id}
         type={PipelineNodeTypes.Code}
         disabled={Boolean(isRunningPipeline || disabled)}

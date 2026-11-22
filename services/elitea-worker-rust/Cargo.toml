@@ -16,6 +16,7 @@ required-features = ["sandbox-supervisor"]
 sandbox-supervisor = ["dep:adk-sandbox", "dep:elitea-browser-tools", "dep:x509-parser", "dep:kube", "dep:k8s-openapi", "dep:futures-util", "dep:bollard"]
 # Benchmark entry points only; never enabled in an image and never a gate.
 graph-shaping-bench = []
+node-settings-bench = []
 
 [dependencies]
 adk-anthropic = "=2.3.0"
@@ -161,6 +162,11 @@ tonic-prost-build = "=0.14.9"
 name = "graph_shaping"
 harness = false
 required-features = ["graph-shaping-bench"]
+
+[[bench]]
+name = "node_settings"
+harness = false
+required-features = ["node-settings-bench"]
 
 [dev-dependencies]
 # The shared child-process log capture (FU-299).

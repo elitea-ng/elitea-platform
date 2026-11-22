@@ -50,6 +50,8 @@ const (
 	PipelineAggregateFailed Code = "pipeline.aggregate.failed"
 	// A Code attempt was refused before it started because the run's remaining time is shorter than the Code timeout plus the observation margin.
 	PipelineCodeDeadlineInsufficient Code = "pipeline.code.deadline_insufficient"
+	// The Code node could not complete this execution.
+	PipelineCodeFailed Code = "pipeline.code.failed"
 	// Main answered a Code visit or intent call with a retryable failure, so the Worker sends the same idempotent call again until the attempt's deadline.
 	PipelineCodeMainRetrying Code = "pipeline.code.main_retrying"
 	// A Code attempt that already held a Code slot asked for a second one, so it was refused at once instead of waiting for a slot it holds itself.
@@ -58,6 +60,8 @@ const (
 	PipelineCodeSlotWaited Code = "pipeline.code.slot_waited"
 	// The sandbox Supervisor answered busy to a Code attempt, so the attempt keeps its slot and retries with backoff until the Supervisor has room.
 	PipelineCodeSupervisorBusy Code = "pipeline.code.supervisor_busy"
+	// The Code node exceeded its execution timeout.
+	PipelineCodeTimeout Code = "pipeline.code.timeout"
 	// A pipeline node failed and its settings recorded the failure in node_errors, so the run went on.
 	PipelineNodeFailedContinued Code = "pipeline.node.failed_continued"
 	// This run already recorded the most node failures one run may hold, so the next failure stopped the run instead of continuing.

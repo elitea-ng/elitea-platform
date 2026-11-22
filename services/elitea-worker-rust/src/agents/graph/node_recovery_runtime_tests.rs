@@ -928,6 +928,7 @@ impl NodeAttemptBody for ReportBody {
         result.map_err(|failure| NodeAttemptReportedFailure {
             failure,
             terminal_code: Some("pipeline.code_preparation_unconfirmed"),
+            failure_detail: None,
         })
     }
     async fn report_terminal_failure(
@@ -1407,6 +1408,10 @@ async fn code_typed_fresh_and_historical_failures_keep_category_without_reexecut
             "pipeline.code_authorization_failed",
         ),
         (NodeFailureClass::Cancelled, "pipeline.code_cancelled"),
+        (
+            NodeFailureClass::DeadlineInsufficient,
+            crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE,
+        ),
     ] {
         let factory = factory();
         let runtime = typed_code_failure(factory.clone(), class);
@@ -1641,4 +1646,302 @@ async fn parent_cancellation_keeps_control_stop_without_attempt_or_code_projecti
     assert_eq!(stored.ledger.history(), []);
     assert!(body.body.calls.lock().await.is_empty());
     assert_eq!(body.reports.load(Ordering::SeqCst), 0);
+}
+
+mod code_settings_tests {
+    use super::*;
+    use crate::agents::graph::compiler::{AdmittedNodeFamily, AdmittedNodeSettings};
+    use elitea_agent_runtime::graph::node_recovery::StopReason;
+    use elitea_agent_runtime::graph::node_settings::{
+        EXECUTED_ONCE_KEY, NODE_ERRORS_KEY, NodeSettings, OnNodeError,
+    };
+
+    fn code_admitted(
+        on_error: OnNodeError,
+        error_transition: Option<&str>,
+        always_output_data: bool,
+        execute_once: bool,
+        retry_on_fail: bool,
+    ) -> AdmittedNodeSettings {
+        AdmittedNodeSettings {
+            settings: NodeSettings {
+                on_error,
+                error_transition: error_transition.map(str::to_owned),
+                always_output_data,
+                execute_once,
+                retry_on_fail,
+                max_tries: if retry_on_fail { Some(2) } else { None },
+                wait_between_tries_ms: if retry_on_fail { Some(100) } else { None },
+                timeout_ms: None,
+            },
+            family: AdmittedNodeFamily::Code,
+            outputs: vec![("result".to_owned(), "int".to_owned())],
+            router_default: None,
+        }
+    }
+
+    struct BudgetedBody {
+        body: Body,
+        deadline: Option<(u64, u64)>,
+    }
+
+    #[async_trait]
+    impl Node for BudgetedBody {
+        #[allow(
+            clippy::unnecessary_literal_bound,
+            reason = "Match the existing runtime trait signature in this fixture."
+        )]
+        fn name(&self) -> &str {
+            self.body.name()
+        }
+        async fn execute(&self, ctx: &NodeContext) -> Result<NodeOutput, GraphError> {
+            self.body.execute(ctx).await
+        }
+    }
+
+    #[async_trait]
+    impl NodeAttemptBody for BudgetedBody {
+        fn legacy_dispatch_identity(
+            &self,
+            ctx: &NodeContext,
+        ) -> Result<Option<[u8; 32]>, GraphError> {
+            self.body.legacy_dispatch_identity(ctx)
+        }
+        fn retry_deadline_budget(&self) -> Option<(u64, u64)> {
+            self.deadline
+        }
+        async fn execute_attempt(
+            &self,
+            ctx: &NodeContext,
+            authority: &NodeAttemptAuthority,
+        ) -> Result<NodeOutput, NodeFailure> {
+            self.body.execute_attempt(ctx, authority).await
+        }
+    }
+
+    struct CountingFactory {
+        inner: Arc<Factory>,
+        opens: AtomicU64,
+    }
+
+    #[async_trait]
+    impl NodeRecoveryFactory for CountingFactory {
+        async fn open(
+            &self,
+            activation: &NodeAttemptActivation,
+            policy: &NodeRecoveryPolicy,
+        ) -> Result<NodeAttemptJournal, GraphError> {
+            self.opens.fetch_add(1, Ordering::SeqCst);
+            self.inner.open(activation, policy).await
+        }
+    }
+
+    #[tokio::test]
+    async fn code_settings_continue_and_error_output_match_on_live_and_restore_paths() {
+        for (on_error, error_transition, class, expected_code) in [
+            (
+                OnNodeError::Continue,
+                None,
+                NodeFailureClass::InvalidResult,
+                "pipeline.code.failed",
+            ),
+            (
+                OnNodeError::ErrorOutput,
+                Some("handler"),
+                NodeFailureClass::AttemptTimeout,
+                "pipeline.code.timeout",
+            ),
+        ] {
+            let admitted = code_admitted(on_error, error_transition, true, false, false);
+            let policy = admitted.settings.to_recovery_policy().expect("policy");
+            let fac = factory();
+            let body = Arc::new(Body {
+                outcomes: Mutex::new(VecDeque::from([Err(NodeFailure {
+                    class,
+                    replay: ReplaySafety::NoExternalEffect,
+                })])),
+                calls: Mutex::new(Vec::new()),
+            });
+            let mut node =
+                RecoverableNode::new(body.clone(), [2; 32], policy.clone(), fac.clone(), None)
+                    .with_legacy_first_attempt()
+                    .with_settings(admitted.clone(), Some(Arc::new("exec-1".to_owned())));
+            node.clock = Arc::new(Clock(AtomicU64::new(1_000)));
+
+            // Live path settles the committed Stop failure.
+            let live = node.execute(&context()).await.expect("live settles");
+            assert_eq!(body.calls.lock().await.len(), 1);
+            assert_eq!(live.updates["result"], serde_json::json!(0));
+            assert_eq!(
+                live.updates[NODE_ERRORS_KEY][0]["error"]["code"],
+                serde_json::json!(expected_code)
+            );
+            assert_eq!(
+                live.updates[NODE_ERRORS_KEY][0]["node_type"],
+                serde_json::json!("code")
+            );
+            assert_eq!(
+                live.goto,
+                error_transition.map(|target| vec![target.to_owned()])
+            );
+
+            // Restore path reads the same committed journal entry with ZERO re-execution
+            // and produces the byte-identical node_errors entry and output.
+            let restore_body = Arc::new(Body {
+                outcomes: Mutex::new(VecDeque::new()),
+                calls: Mutex::new(Vec::new()),
+            });
+            let mut restored_node =
+                RecoverableNode::new(restore_body.clone(), [2; 32], policy, fac.clone(), None)
+                    .with_legacy_first_attempt()
+                    .with_settings(admitted, Some(Arc::new("exec-1".to_owned())));
+            restored_node.clock = Arc::new(Clock(AtomicU64::new(2_000)));
+            let restored = restored_node
+                .execute(&context())
+                .await
+                .expect("restore settles identically");
+            assert!(restore_body.calls.lock().await.is_empty());
+            assert_eq!(restored.updates, live.updates);
+            assert_eq!(restored.goto, live.goto);
+        }
+    }
+
+    #[tokio::test]
+    async fn code_execute_once_skips_revisit_without_opening_journal() {
+        let admitted = code_admitted(OnNodeError::Stop, None, false, true, false);
+        let policy = admitted.settings.to_recovery_policy().expect("policy");
+        let counting = Arc::new(CountingFactory {
+            inner: factory(),
+            opens: AtomicU64::new(0),
+        });
+        let body = Arc::new(Body {
+            outcomes: Mutex::new(VecDeque::from([Ok(42)])),
+            calls: Mutex::new(Vec::new()),
+        });
+        let mut node = RecoverableNode::new(body.clone(), [2; 32], policy, counting.clone(), None)
+            .with_legacy_first_attempt()
+            .with_settings(admitted, Some(Arc::new("exec-1".to_owned())));
+        node.clock = Arc::new(Clock(AtomicU64::new(1_000)));
+
+        let first = node.execute(&context()).await.expect("first visit runs");
+        assert_eq!(first.updates["result"], serde_json::json!(42));
+        assert!(first.updates.contains_key(EXECUTED_ONCE_KEY));
+        assert_eq!(counting.opens.load(Ordering::SeqCst), 1);
+        assert_eq!(body.calls.lock().await.len(), 1);
+
+        // Second visit sees the node in `__elitea_executed_once_v1` and skips BEFORE opening a journal.
+        let mut revisit_ctx = context();
+        revisit_ctx.step = 5;
+        revisit_ctx.state.insert(
+            EXECUTED_ONCE_KEY.to_owned(),
+            first.updates[EXECUTED_ONCE_KEY].clone(),
+        );
+        let second = node.execute(&revisit_ctx).await.expect("revisit skips");
+        assert!(second.updates.is_empty());
+        assert_eq!(counting.opens.load(Ordering::SeqCst), 1);
+        assert_eq!(body.calls.lock().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn c1_never_continues_elapsed_limit_deadline_insufficient_denial_or_reconcile() {
+        // 1. ElapsedLimit via record_failure_within (retry would breach run deadline) is NEVER continued.
+        {
+            let admitted = code_admitted(OnNodeError::Continue, None, false, false, true);
+            let policy = admitted.settings.to_recovery_policy().expect("policy");
+            let fac = factory();
+            let body = Arc::new(BudgetedBody {
+                body: Body {
+                    outcomes: Mutex::new(VecDeque::from([Err(NodeFailure {
+                        class: NodeFailureClass::DependencyUnavailable,
+                        replay: ReplaySafety::NoExternalEffect,
+                    })])),
+                    calls: Mutex::new(Vec::new()),
+                },
+                // now = 1000, remaining = 500 -> run_deadline = 1500;
+                // wait = 100 -> not_before = 1100; required = 500 -> 1600 > 1500!
+                deadline: Some((500, 500)),
+            });
+            let mut node = RecoverableNode::new(body, [2; 32], policy.clone(), fac.clone(), None)
+                .with_settings(admitted, Some(Arc::new("exec-1".to_owned())));
+            node.clock = Arc::new(Clock(AtomicU64::new(1_000)));
+            let err = node
+                .execute(&context())
+                .await
+                .err()
+                .expect("ElapsedLimit must stop, not continue");
+            assert!(
+                err.to_string().contains("pipeline.node_recovery.failed"),
+                "{err}"
+            );
+            let activation =
+                NodeAttemptActivation::from_context("code", [2; 32], &context()).unwrap();
+            let stored = fac
+                .open(&activation, &policy)
+                .await
+                .unwrap()
+                .load()
+                .await
+                .unwrap();
+            assert!(matches!(
+                stored.ledger.phase(),
+                NodeAttemptPhase::Failed(RecoveryDecision::Stop(StopReason::ElapsedLimit))
+            ));
+        }
+
+        // 2. DeadlineInsufficient and AuthorizationDenied are NEVER continued (fail closed).
+        for class in [
+            NodeFailureClass::DeadlineInsufficient,
+            NodeFailureClass::AuthorizationDenied,
+        ] {
+            let admitted = code_admitted(OnNodeError::Continue, None, false, false, false);
+            let policy = admitted.settings.to_recovery_policy().expect("policy");
+            let fac = factory();
+            let body = Arc::new(Body {
+                outcomes: Mutex::new(VecDeque::from([Err(NodeFailure {
+                    class,
+                    replay: ReplaySafety::NoExternalEffect,
+                })])),
+                calls: Mutex::new(Vec::new()),
+            });
+            let mut node = RecoverableNode::new(body, [2; 32], policy, fac, None)
+                .with_legacy_first_attempt()
+                .with_settings(admitted, Some(Arc::new("exec-1".to_owned())));
+            node.clock = Arc::new(Clock(AtomicU64::new(1_000)));
+            let err = node
+                .execute(&context())
+                .await
+                .err()
+                .expect("must not be continued");
+            assert!(
+                err.to_string().contains("pipeline.node_recovery.failed"),
+                "{class:?}: {err}"
+            );
+        }
+
+        // 3. UnknownExternalEffect (C1 timeout after egress/platform call) keeps its Reconcile
+        // pause card and is NEVER continued or re-dispatched.
+        {
+            let admitted = code_admitted(OnNodeError::Continue, None, false, false, true);
+            let policy = admitted.settings.to_recovery_policy().expect("policy");
+            let fac = factory();
+            let body = Arc::new(Body {
+                outcomes: Mutex::new(VecDeque::from([Err(NodeFailure {
+                    class: NodeFailureClass::AttemptTimeout,
+                    replay: ReplaySafety::UnknownExternalEffect { effect_id: [7; 32] },
+                })])),
+                calls: Mutex::new(Vec::new()),
+            });
+            let mut node = RecoverableNode::new(body.clone(), [2; 32], policy, fac, None)
+                .with_settings(admitted, Some(Arc::new("exec-1".to_owned())));
+            node.clock = Arc::new(Clock(AtomicU64::new(1_000)));
+            let output = node
+                .execute(&context())
+                .await
+                .expect("reconcile raises pause card");
+            assert!(output.interrupt.is_some(), "reconcile card must be raised");
+            assert!(output.updates.is_empty(), "must not append node_errors");
+            assert!(output.goto.is_none(), "must not route away");
+            assert_eq!(body.calls.lock().await.len(), 1, "zero re-dispatches");
+        }
+    }
 }
