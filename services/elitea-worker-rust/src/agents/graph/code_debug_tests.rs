@@ -6,6 +6,7 @@ fn invocation(source: &str) -> CodeInvocation<'_> {
         original: None,
         platform_client: false,
         workspace: None,
+        timeout_ms: None,
         activation: [7; 32],
         language: CodeLanguage::Python,
         source,

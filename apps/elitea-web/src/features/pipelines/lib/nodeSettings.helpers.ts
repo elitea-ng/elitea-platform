@@ -38,6 +38,7 @@ const DETERMINISTIC_KEYS = ['on_error', 'error_transition', 'always_output_data'
 /** The node types that take a `settings:` block, and the keys each admits (contract `families`). */
 export const NodeSettingsFamilies: Readonly<Record<string, readonly string[]>> = {
   aggregate: DETERMINISTIC_KEYS,
+  code: NODE_SETTINGS_KEYS,
   router: DETERMINISTIC_KEYS,
   split_out: DETERMINISTIC_KEYS,
   state_modifier: DETERMINISTIC_KEYS,
@@ -265,7 +266,12 @@ export function graphNodeSettingsIssues(rawDocument: YamlPipelineDocument): read
   if (blocks.length === 0) return [];
   const owner = blocks.some((block) => usesNodeErrors(block.settings)) ? nodeErrorsIssue(document) : undefined;
   if (owner !== undefined) return [owner];
-  const context: NodeContext = { ids: new Set(nodes.map((node) => node.id)), owned: fanoutOwnedNodes(nodes), reducerOf: reducerIn(document) };
+  const context: NodeContext = {
+    ids: new Set(nodes.map((node) => node.id)),
+    owned: fanoutOwnedNodes(nodes),
+    failureHandlers: new Set(nodes.filter((node) => node['failure_handler'] !== undefined).map((node) => node.id)),
+    reducerOf: reducerIn(document),
+  };
   const sorted = [...blocks].sort((left, right) => (left.node.id < right.node.id ? -1 : left.node.id > right.node.id ? 1 : 0));
   for (const block of sorted) {
     const refusal = NODE_CHECKS.find(([check]) => check(block, context));
@@ -277,14 +283,21 @@ export function graphNodeSettingsIssues(rawDocument: YamlPipelineDocument): read
 interface NodeContext {
   readonly ids: ReadonlySet<string>;
   readonly owned: ReadonlySet<string>;
+  readonly failureHandlers: ReadonlySet<string>;
   readonly reducerOf: (key: string) => string | undefined;
 }
 
-const familyKeys = (node: YamlPipelineNode): readonly string[] | undefined => NodeSettingsFamilies[node.type ?? ''];
+/** Own-property lookup into `NodeSettingsFamilies` (SEC-5B1B-04). */
+export function nodeSettingsFamilyKeys(type: string | undefined): readonly string[] | undefined {
+  if (typeof type !== 'string' || !Object.hasOwn(NodeSettingsFamilies, type)) return undefined;
+  return NodeSettingsFamilies[type];
+}
 
-function badErrorTarget({ node, settings }: Block, { ids, owned }: NodeContext): boolean {
+const familyKeys = (node: YamlPipelineNode): readonly string[] | undefined => nodeSettingsFamilyKeys(node.type);
+
+function badErrorTarget({ node, settings }: Block, { ids, owned, failureHandlers }: NodeContext): boolean {
   const target = settings.error_transition;
-  return target !== undefined && target !== 'END' && (target === node.id || owned.has(target) || !ids.has(target));
+  return target !== undefined && target !== 'END' && (target === node.id || owned.has(target) || failureHandlers.has(target) || !ids.has(target));
 }
 
 /** The per-node admission, in the Worker's order (first match wins). */
@@ -335,6 +348,10 @@ export function readNodeSettings(node: YamlPipelineNode | undefined): NodeSettin
 export function writeNodeSettings(current: Readonly<Record<string, unknown>> | undefined, change: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> | undefined {
   const next: Record<string, unknown> = { ...(isRecord(current) ? current : {}), ...change };
   if (next['on_error'] !== 'error_output') delete next['error_transition'];
+  if (next['retry_on_fail'] !== true) {
+    delete next['max_tries'];
+    delete next['wait_between_tries_ms'];
+  }
   for (const [key, value] of Object.entries(next)) {
     if (value === undefined || value === false || (key === 'on_error' && value === 'stop')) delete next[key];
   }

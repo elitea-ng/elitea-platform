@@ -107,6 +107,7 @@ impl RawRecoveryCatalog {
         state: &BTreeMap<String, String>,
         entry: &str,
         owned: &BTreeSet<String>,
+        settings_error_targets: &BTreeSet<String>,
     ) -> Result<RecoveryCatalog, PipelineConfigurationError> {
         let mut result = RecoveryCatalog::default();
         let mut used_handlers = BTreeSet::new();
@@ -145,6 +146,7 @@ impl RawRecoveryCatalog {
                         || nodes
                             .iter()
                             .any(|node| node.route_targets().contains(&route.route.as_str()))
+                        || settings_error_targets.contains(&route.route)
                         || nodes
                             .iter()
                             .any(|node| node.output_keys().contains(&route.error_input))

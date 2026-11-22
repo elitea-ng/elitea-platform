@@ -93,3 +93,44 @@ describe('NodeSettings shows the stored values (browser W1)', () => {
     expect(getByRole('switch', { name: 'Always output data' })).toBeChecked();
   });
 });
+
+describe('NodeSettings Code rows (5b-1 PR B)', () => {
+  it('hides Retry on fail and Timeout on deterministic nodes', async () => {
+    const { getByRole, queryByRole, queryByLabelText } = renderSettings(undefined, 'state_modifier');
+    await userEvent.click(getByRole('button', { name: 'Settings' }));
+    expect(queryByRole('switch', { name: 'Retry on fail' })).not.toBeInTheDocument();
+    expect(queryByLabelText('Timeout (ms)')).not.toBeInTheDocument();
+  });
+
+  it('shows Retry on fail and Timeout on Code, reveals retry fields when enabled, and cleans up defaults', async () => {
+    const user = userEvent.setup();
+    const first = renderSettings(undefined, 'code');
+    await user.click(first.getByRole('button', { name: 'Settings' }));
+    expect(first.getByRole('switch', { name: 'Retry on fail' })).not.toBeChecked();
+    expect(first.queryByLabelText('Max tries')).not.toBeInTheDocument();
+    expect(first.queryByLabelText('Wait between tries (ms)')).not.toBeInTheDocument();
+    expect(first.getByLabelText('Timeout (ms)')).toHaveValue(null);
+
+    await user.click(first.getByRole('switch', { name: 'Retry on fail' }));
+    expect(first.written()['settings']).toEqual({ retry_on_fail: true });
+    first.unmount();
+
+    const second = renderSettings({ retry_on_fail: true, max_tries: 4, wait_between_tries_ms: 500, timeout_ms: 5000 }, 'code');
+    await user.click(second.getByRole('button', { name: 'Settings' }));
+    expect(second.getByRole('switch', { name: 'Retry on fail' })).toBeChecked();
+    expect(second.getByLabelText('Max tries')).toHaveValue(4);
+    expect(second.getByLabelText('Wait between tries (ms)')).toHaveValue(500);
+    expect(second.getByLabelText('Timeout (ms)')).toHaveValue(5000);
+
+    // Turning Retry on fail off strips max_tries and wait_between_tries_ms while keeping timeout_ms.
+    await user.click(second.getByRole('switch', { name: 'Retry on fail' }));
+    expect(second.written()['settings']).toEqual({ timeout_ms: 5000 });
+    second.unmount();
+
+    // Clearing Timeout when it is the sole setting drops the settings block completely.
+    const third = renderSettings({ timeout_ms: 5000 }, 'code');
+    await user.click(third.getByRole('button', { name: 'Settings' }));
+    await user.clear(third.getByLabelText('Timeout (ms)'));
+    expect(Object.hasOwn(third.written(), 'settings')).toBe(false);
+  });
+});

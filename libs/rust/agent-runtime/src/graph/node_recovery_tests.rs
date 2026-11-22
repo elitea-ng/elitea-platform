@@ -858,3 +858,187 @@ fn operator_cannot_override_denial_cancel_lease_or_unknown_effects() {
         Err(NodeRecoveryError::InvalidTransition)
     );
 }
+
+#[test]
+fn deadline_insufficient_is_never_retried_routed_or_operator_retried_and_uses_v4() {
+    let all_conditions = BTreeSet::from([
+        RetryCondition::DependencyUnavailable,
+        RetryCondition::RateLimited,
+        RetryCondition::AttemptTimeout,
+        RetryCondition::WorkerInterrupted,
+    ]);
+    let policy = NodeRecoveryPolicy::admit(
+        3,
+        all_conditions,
+        Some(NodeBackoff {
+            initial_ms: 100,
+            maximum_ms: 1_000,
+            multiplier: 2,
+        }),
+        Some(10_000),
+        None,
+    )
+    .unwrap();
+    let failure = NodeFailure::new(
+        NodeFailureClass::DeadlineInsufficient,
+        ReplaySafety::NoExternalEffect,
+    );
+    assert!(failure.class.deadline());
+    assert_eq!(failure.class.retry_condition(), None);
+    assert_eq!(
+        NodeErrorRoute::admit(
+            ROUTE,
+            BTreeSet::from([NodeFailureClass::DeadlineInsufficient]),
+            ErrorRouteContract {
+                dedicated_typed_error_input: true,
+                requires_success_output: false,
+                reexecutes_failed_operation: false,
+                explicitly_handles_denial: true,
+            },
+        ),
+        Err(NodeRecoveryError::InvalidErrorRoute)
+    );
+    let ledger = NodeAttemptLedger::new(ACTIVATION, policy.clone())
+        .unwrap()
+        .start_attempt(1_000)
+        .unwrap()
+        .record_failure(failure, 1_010)
+        .unwrap();
+    assert_eq!(
+        ledger.phase(),
+        NodeAttemptPhase::Failed(RecoveryDecision::Stop(StopReason::NotRetryable))
+    );
+    assert_eq!(
+        ledger.operator_retry(
+            OperatorRetryRequest {
+                request_id: [5; 32],
+                activation_id: ACTIVATION,
+                expected_revision: ledger.revision(),
+            },
+            1_020,
+        ),
+        Err(NodeRecoveryError::OperatorRetryDenied)
+    );
+    let wire = codec::encode(&ledger).unwrap();
+    assert_eq!(wire["schema"], "elitea.pipeline.node-recovery.v4");
+    assert_eq!(codec::decode(&wire, ACTIVATION, &policy).unwrap(), ledger);
+    for stale in [
+        "elitea.pipeline.node-recovery.v1",
+        "elitea.pipeline.node-recovery.v2",
+        "elitea.pipeline.node-recovery.v3",
+    ] {
+        let mut forged = wire.clone();
+        forged["schema"] = serde_json::json!(stale);
+        assert_eq!(
+            codec::decode(&forged, ACTIVATION, &policy),
+            Err(NodeRecoveryError::InvalidHistory),
+            "forged schema {stale} must be refused"
+        );
+    }
+}
+
+#[test]
+fn record_failure_within_admits_exact_fit_and_stops_at_plus_one_ms_without_wait() {
+    let policy = NodeRecoveryPolicy::admit(
+        3,
+        BTreeSet::from([RetryCondition::DependencyUnavailable]),
+        Some(NodeBackoff {
+            initial_ms: 1_000,
+            maximum_ms: 1_000,
+            multiplier: 1,
+        }),
+        Some(MAX_ELAPSED_MS),
+        None,
+    )
+    .unwrap();
+    let started = NodeAttemptLedger::new(ACTIVATION, policy.clone())
+        .unwrap()
+        .start_attempt(10_000)
+        .unwrap();
+    // Fails at 10_500 -> retry at 11_500, needs 120_000 ms -> finishes at 131_500.
+    let required_ms = 120_000;
+    let exact_deadline = 11_500 + required_ms;
+
+    // Exact fit: admitted as RetryAt, keeps v1 schema.
+    let admitted = started
+        .record_failure_within(transient(), 10_500, exact_deadline, required_ms)
+        .unwrap();
+    assert_eq!(
+        admitted.phase(),
+        NodeAttemptPhase::Failed(RecoveryDecision::RetryAt {
+            not_before_ms: 11_500,
+            next_attempt: 2,
+            effect_id: None,
+        })
+    );
+    let wire_ok = codec::encode(&admitted).unwrap();
+    assert_eq!(wire_ok["schema"], "elitea.pipeline.node-recovery.v1");
+    assert_eq!(
+        codec::decode(&wire_ok, ACTIVATION, &policy).unwrap(),
+        admitted
+    );
+
+    // +1 ms past deadline: clamped to persisted Stop(ElapsedLimit), uses v4 schema,
+    // no wait, cannot start another attempt, and cannot be overridden by operator_retry.
+    let stopped = started
+        .record_failure_within(transient(), 10_500, exact_deadline - 1, required_ms)
+        .unwrap();
+    assert_eq!(
+        stopped.phase(),
+        NodeAttemptPhase::Failed(RecoveryDecision::Stop(StopReason::ElapsedLimit))
+    );
+    assert_eq!(
+        stopped.start_attempt(11_500),
+        Err(NodeRecoveryError::InvalidTransition)
+    );
+    assert_eq!(
+        stopped.operator_retry(
+            OperatorRetryRequest {
+                request_id: [7; 32],
+                activation_id: ACTIVATION,
+                expected_revision: stopped.revision(),
+            },
+            10_600,
+        ),
+        Err(NodeRecoveryError::OperatorRetryDenied)
+    );
+    let wire_stopped = codec::encode(&stopped).unwrap();
+    assert_eq!(wire_stopped["schema"], "elitea.pipeline.node-recovery.v4");
+    assert_eq!(
+        codec::decode(&wire_stopped, ACTIVATION, &policy).unwrap(),
+        stopped
+    );
+    // Forged v1/v2/v3 schema is refused.
+    for stale in [
+        "elitea.pipeline.node-recovery.v1",
+        "elitea.pipeline.node-recovery.v2",
+        "elitea.pipeline.node-recovery.v3",
+    ] {
+        let mut forged = wire_stopped.clone();
+        forged["schema"] = serde_json::json!(stale);
+        assert_eq!(
+            codec::decode(&forged, ACTIVATION, &policy),
+            Err(NodeRecoveryError::InvalidHistory)
+        );
+    }
+
+    // Non-RetryAt decision (e.g. Reconcile on unknown effect) is untouched.
+    let unknown = started
+        .record_failure_within(
+            NodeFailure::new(
+                NodeFailureClass::AttemptTimeout,
+                ReplaySafety::UnknownExternalEffect { effect_id: EFFECT },
+            ),
+            10_500,
+            10_500,
+            required_ms,
+        )
+        .unwrap();
+    assert_eq!(
+        unknown.phase(),
+        NodeAttemptPhase::Failed(RecoveryDecision::Reconcile {
+            effect_id: Some(EFFECT),
+            completed_receipt: None,
+        })
+    );
+}

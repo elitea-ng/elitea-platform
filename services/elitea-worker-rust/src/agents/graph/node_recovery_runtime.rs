@@ -151,6 +151,7 @@ impl NodeAttemptAuthority {
 pub(crate) struct NodeAttemptReportedFailure {
     pub(crate) failure: NodeFailure,
     pub(crate) terminal_code: Option<&'static str>,
+    pub(crate) failure_detail: Option<String>,
 }
 
 impl From<NodeFailure> for NodeAttemptReportedFailure {
@@ -158,6 +159,7 @@ impl From<NodeFailure> for NodeAttemptReportedFailure {
         Self {
             failure,
             terminal_code: None,
+            failure_detail: None,
         }
     }
 }
@@ -216,6 +218,17 @@ pub(crate) trait NodeAttemptBody: Node {
         _: NodeFailureClass,
     ) -> Result<(), GraphError> {
         Ok(())
+    }
+
+    /// Persist bounded failure detail strictly after a claim-fenced,
+    /// non-continued terminal stop commits (SEC-5B1B-01 / #2240).
+    async fn record_terminal_failure_detail(&self, _: Option<&str>) {}
+
+    /// Remaining run-deadline budget and required attempt window for retry
+    /// clamping (`record_failure_within`, PLAN §3.3). Returns
+    /// `Some((remaining_ms, required_ms))` when a run deadline is bound.
+    fn retry_deadline_budget(&self) -> Option<(u64, u64)> {
+        None
     }
 }
 
@@ -875,6 +888,11 @@ impl AppliedNodeRecoveryAction {
     }
 }
 
+struct RecoverableNodeSettings {
+    admitted: Arc<super::compiler::AdmittedNodeSettings>,
+    execution_id: Option<Arc<String>>,
+}
+
 pub(crate) struct RecoverableNode {
     body: Arc<dyn NodeAttemptBody>,
     node_digest: [u8; 32],
@@ -883,6 +901,7 @@ pub(crate) struct RecoverableNode {
     error_route: Option<(String, String)>,
     clock: Arc<dyn NodeRecoveryClock>,
     legacy_first_attempt: bool,
+    settings: Option<RecoverableNodeSettings>,
 }
 
 #[async_trait]
@@ -921,17 +940,94 @@ impl RecoverableNode {
             error_route,
             clock: Arc::new(NodeRecoverySystemClock),
             legacy_first_attempt: false,
+            settings: None,
         }
     }
     pub(crate) fn with_legacy_first_attempt(mut self) -> Self {
         self.legacy_first_attempt = true;
         self
     }
+    pub(crate) fn with_settings(
+        mut self,
+        admitted: super::compiler::AdmittedNodeSettings,
+        execution_id: Option<Arc<String>>,
+    ) -> Self {
+        self.settings = Some(RecoverableNodeSettings {
+            admitted: Arc::new(admitted),
+            execution_id,
+        });
+        self
+    }
+
+    /// C1 / D6: only worker-settled node failures may continue under
+    /// `settings.on_error`. Control stops, denials, run-deadline /
+    /// deadline-admission stops (`DeadlineInsufficient` and `ElapsedLimit`),
+    /// `Reconcile` and `OperatorApprovalRequired` never continue.
+    fn can_settle_stop(
+        &self,
+        reason: super::node_recovery::StopReason,
+        class: NodeFailureClass,
+    ) -> bool {
+        let Some(settings) = &self.settings else {
+            return false;
+        };
+        if settings.admitted.settings.on_error
+            == elitea_agent_runtime::graph::node_settings::OnNodeError::Stop
+        {
+            return false;
+        }
+        matches!(
+            reason,
+            super::node_recovery::StopReason::NotRetryable
+                | super::node_recovery::StopReason::RetryDisabled
+                | super::node_recovery::StopReason::AttemptsExhausted
+        ) && !class.control_stop()
+            && !class.denial()
+            && !class.deadline()
+    }
+
+    /// Settle a committed Code `Stop` identically on both live and restore
+    /// paths using only durable ledger facts (`class`, `history.len()`).
+    fn settle_code_failure(
+        &self,
+        context: &NodeContext,
+        ledger: &NodeAttemptLedger,
+        class: NodeFailureClass,
+    ) -> Result<NodeOutput, GraphError> {
+        let Some(settings) = &self.settings else {
+            return Err(recovery_error("pipeline.node_recovery.failed"));
+        };
+        let attempts = u16::try_from(ledger.history().len()).unwrap_or(1).max(1);
+        super::node_settings_runtime::settle_node_failure(
+            &settings.admitted,
+            settings.execution_id.as_deref().map(String::as_str),
+            self.body.name(),
+            context,
+            super::node_settings_runtime::code_failure_fault(class),
+            class.retry_condition().is_some(),
+            attempts,
+        )
+    }
+
     #[allow(
         clippy::too_many_lines,
         reason = "Keep ordered authority checks and durable phases in one owner operation."
     )]
     async fn execute_inner(&self, context: &NodeContext) -> Result<NodeOutput, GraphError> {
+        // D8: a revisit in the same turn runs no body, opens no journal, and
+        // changes no state.
+        if self
+            .settings
+            .as_ref()
+            .is_some_and(|settings| settings.admitted.settings.execute_once)
+            && elitea_agent_runtime::graph::node_settings::executed_once(
+                context.get(elitea_agent_runtime::graph::node_settings::EXECUTED_ONCE_KEY),
+                self.body.name(),
+            )
+            .is_some()
+        {
+            return Ok(NodeOutput::new());
+        }
         let activation =
             NodeAttemptActivation::from_context(self.body.name(), self.node_digest, context)?;
         let journal = self.journal_factory.open(&activation, &self.policy).await?;
@@ -964,9 +1060,24 @@ impl RecoverableNode {
             let recovering_started = snapshot.ledger.phase() == NodeAttemptPhase::Running;
             match snapshot.ledger.phase() {
                 NodeAttemptPhase::Completed { .. } => {
-                    return output_from_updates(snapshot.updates.as_ref().ok_or_else(|| {
-                        recovery_error("pipeline.node_recovery.corrupt_journal")
-                    })?);
+                    let mut output =
+                        output_from_updates(snapshot.updates.as_ref().ok_or_else(|| {
+                            recovery_error("pipeline.node_recovery.corrupt_journal")
+                        })?)?;
+                    if let Some(settings) = &self.settings {
+                        output = super::node_settings_runtime::fill_neutral_outputs(
+                            &settings.admitted,
+                            output,
+                        );
+                        output = super::node_settings_runtime::mark_node_executed_once(
+                            &settings.admitted,
+                            self.body.name(),
+                            context,
+                            output,
+                            None,
+                        )?;
+                    }
+                    return Ok(output);
                 }
                 // FU-248: a saved child's visit has no operator reconcile route
                 // (Main's receipts name the run root). A call that may have
@@ -996,9 +1107,12 @@ impl RecoverableNode {
                         data: Some(serde_json::json!({ "guardrail_type": "pipeline_node_recovery", "receipt": receipt })),
                     }));
                 }
-                NodeAttemptPhase::Failed(RecoveryDecision::Stop(_)) => {
+                NodeAttemptPhase::Failed(RecoveryDecision::Stop(reason)) => {
                     let failure = snapshot.ledger.effective_failure().map_err(policy_error)?;
                     journal.ensure_current()?;
+                    if self.can_settle_stop(reason, failure.class) {
+                        return self.settle_code_failure(context, &snapshot.ledger, failure.class);
+                    }
                     if failure.class != NodeFailureClass::LeaseLost {
                         self.body
                             .report_restored_terminal_failure(context, failure.class)
@@ -1093,27 +1207,55 @@ impl RecoverableNode {
                     snapshot = journal.append(&snapshot, completed, Some(updates)).await?;
                 }
                 Err(failure) => {
-                    let failed = snapshot
-                        .ledger
-                        .record_failure(failure.failure, self.clock.now_ms()?)
-                        .map_err(policy_error)?;
-                    snapshot = journal.append(&snapshot, failed, None).await?;
-                    if failure.failure.class != NodeFailureClass::LeaseLost
-                        && let Some(code) = failure.terminal_code
-                        && matches!(snapshot.ledger.phase(), NodeAttemptPhase::Failed(
-                            RecoveryDecision::Stop(reason)
-                        ) if reason != super::node_recovery::StopReason::OperatorApprovalRequired)
+                    let now = self.clock.now_ms()?;
+                    let failed = if let Some((remaining_ms, required_ms)) =
+                        self.body.retry_deadline_budget()
                     {
-                        journal.ensure_current()?;
-                        self.body
-                            .report_terminal_failure_classified(
-                                context,
-                                &authority,
-                                code,
-                                failure.failure.class,
+                        snapshot
+                            .ledger
+                            .record_failure_within(
+                                failure.failure,
+                                now,
+                                now.saturating_add(remaining_ms),
+                                required_ms,
                             )
-                            .await?;
-                        return Err(recovery_error("pipeline.node_recovery.failed"));
+                            .map_err(policy_error)?
+                    } else {
+                        snapshot
+                            .ledger
+                            .record_failure(failure.failure, now)
+                            .map_err(policy_error)?
+                    };
+                    snapshot = journal.append(&snapshot, failed, None).await?;
+                    if let NodeAttemptPhase::Failed(RecoveryDecision::Stop(reason)) =
+                        snapshot.ledger.phase()
+                    {
+                        if self.can_settle_stop(reason, failure.failure.class) {
+                            journal.ensure_current()?;
+                            return self.settle_code_failure(
+                                context,
+                                &snapshot.ledger,
+                                failure.failure.class,
+                            );
+                        }
+                        if failure.failure.class != NodeFailureClass::LeaseLost
+                            && reason != super::node_recovery::StopReason::OperatorApprovalRequired
+                            && let Some(code) = failure.terminal_code
+                        {
+                            journal.ensure_current()?;
+                            self.body
+                                .record_terminal_failure_detail(failure.failure_detail.as_deref())
+                                .await;
+                            self.body
+                                .report_terminal_failure_classified(
+                                    context,
+                                    &authority,
+                                    code,
+                                    failure.failure.class,
+                                )
+                                .await?;
+                            return Err(recovery_error("pipeline.node_recovery.failed"));
+                        }
                     }
                 }
             }

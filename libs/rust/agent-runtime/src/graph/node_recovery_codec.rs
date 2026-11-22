@@ -15,10 +15,28 @@ const SCHEMA_V2: &str = "elitea.pipeline.node-recovery.v2";
 /// A ledger that recorded a lost sandbox runtime. Earlier Workers do not know
 /// the class, so they refuse the record by its schema instead of guessing.
 const SCHEMA_V3: &str = "elitea.pipeline.node-recovery.v3";
+/// A ledger that recorded `NodeFailureClass::DeadlineInsufficient` (FU-309) or
+/// a run-deadline-clamped failure decision. Earlier Workers refuse it by schema
+/// instead of misclassifying or replaying a retry past the run deadline.
+const SCHEMA_V4: &str = "elitea.pipeline.node-recovery.v4";
 
 /// The oldest schema that can express every event in `ledger`.
 fn schema_for(ledger: &NodeAttemptLedger) -> &'static str {
     if ledger.events.iter().any(|event| {
+        matches!(
+            event,
+            NodeRecoveryEvent::FailureWithin { .. }
+                | NodeRecoveryEvent::Failure {
+                    failure: NodeFailure {
+                        class: NodeFailureClass::DeadlineInsufficient,
+                        ..
+                    },
+                    ..
+                }
+        )
+    }) {
+        SCHEMA_V4
+    } else if ledger.events.iter().any(|event| {
         matches!(
             event,
             NodeRecoveryEvent::Failure {
@@ -51,6 +69,12 @@ pub enum NodeRecoveryEvent {
     Failure {
         failure: NodeFailure,
         now_ms: u64,
+    },
+    FailureWithin {
+        failure: NodeFailure,
+        now_ms: u64,
+        run_deadline_ms: u64,
+        required_ms: u64,
     },
     Success {
         receipt_id: [u8; 32],
@@ -160,6 +184,12 @@ fn apply_event(
     match *event {
         NodeRecoveryEvent::Start { now_ms } => ledger.start_attempt(now_ms),
         NodeRecoveryEvent::Failure { failure, now_ms } => ledger.record_failure(failure, now_ms),
+        NodeRecoveryEvent::FailureWithin {
+            failure,
+            now_ms,
+            run_deadline_ms,
+            required_ms,
+        } => ledger.record_failure_within(failure, now_ms, run_deadline_ms, required_ms),
         NodeRecoveryEvent::Success { receipt_id, now_ms } => {
             ledger.record_success(receipt_id, now_ms)
         }

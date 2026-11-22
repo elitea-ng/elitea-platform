@@ -11,7 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var codeFailureClasses = []string{"dependency_unavailable", "rate_limited", "attempt_timeout", "worker_interrupted", "invalid_configuration", "invalid_input", "invalid_result", "model_output_incomplete", "authentication_denied", "authorization_denied", "sensitive_rejected", "cancelled", "lease_lost", "unknown"}
+var codeFailureClasses = []string{"dependency_unavailable", "rate_limited", "attempt_timeout", "worker_interrupted", "invalid_configuration", "invalid_input", "invalid_result", "model_output_incomplete", "authentication_denied", "authorization_denied", "sensitive_rejected", "cancelled", "lease_lost", "unknown", "runtime_lost", "deadline_insufficient"}
 
 func codeFailureClassIndex(class string) int {
 	for i, v := range codeFailureClasses {
@@ -135,7 +135,7 @@ func MatchCodeFailureRoute(instructions, yamlSHA, producer string, f *NodeRecove
 	classes := map[string]bool{}
 	for _, class := range route.Classes {
 		index := codeFailureClassIndex(class)
-		if index < 0 || index >= 8 && index <= 12 {
+		if index < 0 || (index >= 8 && index <= 12) || index >= 14 {
 			return "", ErrContentRejected
 		}
 		classes[class] = true
@@ -184,8 +184,14 @@ func containsCodeRoute(value any, target string) bool {
 	return false
 }
 
-// Mirrors PipelineNodeDefinition::route_targets, not every string in a node.
+// Mirrors PipelineNodeDefinition::route_targets plus settings.error_transition
+// (SEC-5B1B-03), isolating dedicated failure_handler nodes from all other routes.
 func codeNodeSuccessRoutesContain(node map[string]any, nodeType, target string) bool {
+	if settings, ok := node["settings"].(map[string]any); ok {
+		if containsCodeRoute(settings["error_transition"], target) {
+			return true
+		}
+	}
 	switch nodeType {
 	case "decision":
 		return containsCodeRoute(node["nodes"], target) || containsCodeRoute(node["default_output"], target)
