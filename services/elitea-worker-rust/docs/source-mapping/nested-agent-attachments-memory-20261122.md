@@ -1,8 +1,8 @@
 # Nested saved-agent attachments, agent memory, artifact, and memory toolkits (FU-353)
 
 Date: 2026-11-22
-Branch: `feat/fu353-nested-agent-tools` (base `4f9d63873`)
-Commits: `529d1ee1c` (C1 Main nested agent memory), `a6a6fe828` (C2 Main hidden memory toolkit defense-in-depth), `4eceae59b` (C3 `agent-runtime` bucket-pinned artifact authority), `f57c675d0` (C4 Worker nested `artifact`/`memory` toolkits + nested saved pipelines), `7cb6082db` (C5 Worker nested `attachments` + `agent_memory` + version-skew).
+Branch: `feat/fu353-nested-agent-tools` (base `9452818f6`)
+Commits: `77f896589` (C1 Main nested agent memory), `1780c71e5` (C2 Main hidden memory toolkit defense-in-depth), `3bdbdaa0d` (C3 `agent-runtime` bucket-pinned artifact authority), `2d7d71f13` (C4 Worker nested `artifact`/`memory` toolkits + nested saved pipelines), `ad7b6bcb2` (C5 Worker nested `attachments` + `agent_memory` + version-skew), `8777c62d8` (C6 docs + upgrade note), `180ee62d6` (`FU353-01..07` hardening), `848b9eb7a` (real-PG audit reason + fixture fix).
 
 ## 1. Scope and approved decisions
 
@@ -47,8 +47,8 @@ Closes FU-353 under ADR-0044 (`own(root) ∩ P` monotonic non-widening delegatio
 
 - **Go (Main):**
   - `go vet ./internal/infra/storage/... ./internal/infra/db/repos/... ./internal/application/agentexecution/... ./internal/runtimecomposition/...`: PASS
-  - `go test -race -count=1` on touched storage/repos/admission suites: **15 passed, 0 failed, 3 skipped** (incl. `DisallowUnknownFields` version-skew, canonical top-level + `settings` `project_id` parity, level-batched BFS + retired/hidden intermediate hops + full ancestor risk-tier chain, `agent_type == "agent"` target check, explicit self-target refusal, malformed non-numeric actor refusal, hidden intermediate sub-agent admission skipping, and provenance)
-  - PostgreSQL integration tests (`TestPostgresCapAutoWriteForAgentsUsesMaxRiskTier` incl. 3-hop intermediate risk tier, `TestPostgresNestedAgentMemoryIsolationAndOptOut`, `TestPostgresHiddenNestedMemoryToolkitExcludedFromVectorToken` incl. mid-run live revocation in `VectorClaimTokens.Facts`): compiled cleanly; **skipped** in local sandbox because `ELITEA_TEST_DATABASE_URL` is unset (CI executes these against real PostgreSQL).
+  - Go unit + race (`go test -race -count=1` on touched storage/repos/admission suites): **15 passed, 0 failed** (incl. `DisallowUnknownFields` version-skew, canonical top-level + `settings` `project_id` parity, level-batched BFS + retired/hidden intermediate hops + full ancestor risk-tier chain, `agent_type == "agent"` target check, explicit self-target refusal, malformed non-numeric actor refusal, hidden intermediate sub-agent admission skipping, and provenance)
+  - Go real-PostgreSQL 18 integration (`./internal/infra/db/repos` against `pgvector/pgvector:0.8.1-pg18`, `ELITEA_TEST_DATABASE_URL` set — `TestPostgresCapAutoWriteForAgentsUsesMaxRiskTier` incl. 3-hop intermediate risk tier, `TestPostgresNestedAgentMemoryIsolationAndOptOut`, `TestPostgresHiddenNestedMemoryToolkitExcludedFromVectorToken` incl. mid-run live revocation in `VectorClaimTokens.Facts`): **3 passed, 0 failed, 0 skipped** (`3.695s`).
 - **Rust (`libs/rust`, `--offline --locked --all-features`):**
   - `cargo fmt --all -- --check`: PASS
   - `cargo clippy --offline --locked -p elitea-agent-runtime --all-targets --all-features -- -D warnings`: PASS (`0` warnings)
@@ -57,6 +57,8 @@ Closes FU-353 under ADR-0044 (`own(root) ∩ P` monotonic non-widening delegatio
   - `cargo fmt --all -- --check`: PASS
   - `cargo clippy --offline --locked --all-targets --all-features -- -D warnings`: PASS (`0` warnings)
   - `cargo test --offline --locked --lib --all-features -- attachment_tools agent_memory runtime_context_tests governed_nested_tests root_grant_tests assembly_tests a_saved_child_pipelines_artifact_node_assembles_and_office_stays_unsupported`: **145 passed, 0 failed** (incl. nested pinned `artifact`, nested `memory` toolkit, nested saved pipeline `D6=A`, ADR-0044 negative authz + `PrincipalBound` in Enforce/Report, strict monotonic `attachments` ceiling + multi-hop narrowing + ad-hoc root, attachment `UntrustedReads` taint propagation to `remember`, target-scoped `agent_memory` + `write: off` + isolated `RecalledEntries` + root-only builder exclusion, reserved toolset shadowing refusal/aliasing, and Old Main version-skew refusal).
-  - Note: 3 pre-existing Office-host loopback tests in `pipeline_artifact_tests` (`docx`/`pptx`/`xlsx`) bind localhost HTTP sockets blocked by the local sandbox; PostgreSQL Map tests in `root_grant_tests` skip cleanly when `ELITEA_TEST_DATABASE_URL` is unset.
+  - Worker real-PostgreSQL 18 integration (`root_grant_tests::postgres_` against `pgvector/pgvector:0.8.1-pg18`, `ELITEA_TEST_DATABASE_URL` set): **5 passed, 0 failed, 0 skipped** (`0.76s`).
+  - Note: 3 pre-existing Office-host loopback tests in `pipeline_artifact_tests` (`docx`/`pptx`/`xlsx`) bind localhost HTTP sockets blocked by the local sandbox (executed in CI).
+  - Live real-browser verification on a disposable `production-profile` real-model stack is pending before marking the PR Ready for review.
 - **Upgrade note gate:** `node scripts/ci/check-upgrading-notes.mjs`: PASS.
-- **Secret scan:** `0` hits across `git diff 4f9d63873..HEAD`.
+- **Secret scan:** `0` hits across `git diff 9452818f6..HEAD`.
