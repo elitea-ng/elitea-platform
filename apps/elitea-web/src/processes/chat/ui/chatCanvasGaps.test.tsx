@@ -47,9 +47,10 @@ import { server } from '@/test/setup';
 import { useSelectedProjectStore } from '@/widgets/app-shell';
 
 import { ChatWithEditors } from './ChatWithEditors';
+import { testTimeout } from '@/test/timeouts';
 
-configure({ asyncUtilTimeout: 5_000 });
-vi.setConfig({ testTimeout: 120_000 });
+configure({ asyncUtilTimeout: testTimeout(5_000) });
+vi.setConfig({ testTimeout: testTimeout(120_000) });
 
 installCodeMirrorTestPolyfills();
 

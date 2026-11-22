@@ -87,9 +87,10 @@ COMPOSE_DIR="${COMPOSE_DIR:-deploy}"
 HANDOFF='^('\
 'apps/elitea-desktop/src-tauri/|'\
 'libs/(rust|proto)/|rust-toolchain\.toml$|scripts/ci/assert-rust-toolchain\.sh$|'\
-'apps/elitea-web/scripts/lib/compose-detect\.sh$|'\
+'apps/elitea-web/scripts/lib/(compose-detect|stack-backend)\.sh$|'\
+'deploy/native/|scripts/e2e/|'\
 'deploy/(scripts/(standalone-stack|handoff-live)\.sh|scripts/lib/|docker-compose\.(standalone-full|standalone-rust-agent|handoff-live)\.yml)|'\
-'\.github/(actions/(stack-images|build-stack-images|pull-stack-images)/|workflows/ci-web-e2e\.yml)|'\
+'\.github/(actions/(stack-images|build-stack-images|pull-stack-images)/|workflows/ci-(web-e2e|web-e2e-native|build-once)\.yml)|'\
 'scripts/ci/(e2e-lane-filter|stack-image)|'\
 'services/elitea-main/(cmd/handoff-live-cloudturn/|migrations/|'\
 'internal/(application/(workspacehandoff|workspacestore|workspacechanges|workspaceruntime|workspaceexecutor|nativeauth)/|'\
@@ -103,16 +104,31 @@ SANDBOX='^('\
 'libs/(rust|proto)/|rust-toolchain\.toml$|'\
 'services/elitea-main/(internal/(runtimecomposition|domain/codesandbox|api/v2/toolkits)/|cmd/elitea-main/)|ci/|\\.github/actions/(npm-cache|go-cache)/|'\
 'deploy/(docker-compose\.(standalone-full|standalone-rust-agent|sandbox|sandbox-postgres-tls|sandbox-code-owner)\.yml|runtime/(worker-runtime\.rust\.json|postgres-tls-entrypoint\.sh|install-material\.sh)|scripts/(standalone-stack|sandbox-compose-material|gen-sandbox-certs|gen-runtime-certs)\.sh|scripts/lib/|mock-llm/)|'\
-'apps/elitea-web/(scripts/(chat-stream-e2e|code-sandbox-e2e)\.sh|scripts/lib/compose-detect\.sh|playwright\.config\.ts|e2e/(fixtures/|streaming/code-sandbox\.))|'\
-'\.github/(actions/(stack-images|build-stack-images|pull-stack-images)/|workflows/ci-web-e2e\.yml)|'\
+'apps/elitea-web/(scripts/(chat-stream-e2e|code-sandbox-e2e)\.sh|scripts/lib/(compose-detect|stack-backend)\.sh|playwright\.config\.ts|e2e/(fixtures/|streaming/code-sandbox\.))|'\
+'\.github/(actions/(stack-images|build-stack-images|pull-stack-images)/|workflows/ci-(web-e2e|web-e2e-native|build-once)\.yml)|'\
 'scripts/ci/(e2e-lane-filter|stack-image)'\
 ')'
+
+# What only the container stack proves (reaches-images, the sixth line). On
+# the self-hosted pool the E2E legs run the stack as processes
+# (ci-web-e2e-native.yml) from binaries built on the pool, so a Containerfile,
+# a compose file, the web image's nginx and entrypoint, the bake and image
+# actions, and the compose half of the stack scripts are exercised on a pull
+# request only by ci-web-e2e.yml's compose smoke leg, which this line starts.
+# The nightly run on main runs the full compose matrix whatever it says. Only
+# ever too wide, never too narrow: a miss is an image change no pull-request
+# lane builds.
+IMAGES='(^|/)(Containerfile|Dockerfile)(\.[^/]+)?$|(^|/)\.dockerignore$|'\
+'^deploy/(docker-compose[^/]*\.ya?ml$|ci/|scripts/(standalone-stack|embedding-path-check|handoff-live|native-conformance)\.sh$)|^docker-bake\.hcl$|'\
+'^apps/elitea-web/(nginx/|docker-entrypoint\.sh$|scripts/((e2e-stack|chat-stream-e2e|deepwiki-e2e|index-stream-e2e)\.sh|lib/(stack-backend|compose-detect|container-lookup)\.sh)$)|'\
+'^\.github/(actions/(stack-images|build-stack-images|pull-stack-images)/|workflows/ci-(web-e2e|build-once)\.yml$)|'\
+'^scripts/ci/(e2e-lane-filter|stack-image|pull-third-party-images)'
 
 # What the webkit legs observe. Only ever too wide, never too narrow.
 WEBKIT='^('\
 'apps/elitea-web/(src/|e2e/|public/|nginx/|Containerfile$|docker-entrypoint\.sh$|index\.html$|playwright[^/]*\.ts$|package(-lock)?\.json$|vite\.config\.ts$|tsconfig[^/]*\.json$|scripts/lib/|scripts/[^/]*e2e[^/]*)|'\
-'libs/ts/client-core/|brand/|'\
-'\.github/(actions/(npm-cache|stack-images|build-stack-images|pull-stack-images)/|workflows/ci-web-e2e\.yml)|'\
+'libs/ts/client-core/|brand/|deploy/native/|scripts/e2e/|'\
+'\.github/(actions/(npm-cache|stack-images|build-stack-images|pull-stack-images)/|workflows/ci-(web-e2e|web-e2e-native|build-once)\.yml)|'\
 'scripts/ci/(e2e-lane-filter|stack-image)'\
 ')'
 
@@ -133,17 +149,19 @@ used_by_compose() {
   done
   return 1
 }
-MODEL='^(services/elitea-llm-gateway/|services/elitea-worker-rust/|libs/rust/llm-wire/|libs/rust/agent-runtime/|libs/rust/connectors/|services/elitea-main/internal/api/v2/executions/|services/elitea-main/internal/llmproxy/|services/elitea-main/internal/runtimecomposition/|apps/elitea-web/src/features/chat-|apps/elitea-web/e2e/|apps/elitea-web/scripts/chat-stream-e2e\.sh|apps/elitea-web/playwright\.config\.ts|deploy/docker-compose\.standalone-(full|rust-agent)\.yml|deploy/scripts/|deploy/ci/|\.github/actions/|\.github/workflows/ci-web-e2e\.yml)'
+MODEL='^(services/elitea-llm-gateway/|services/elitea-worker-rust/|libs/rust/llm-wire/|libs/rust/agent-runtime/|libs/rust/connectors/|services/elitea-main/internal/api/v2/executions/|services/elitea-main/internal/llmproxy/|services/elitea-main/internal/runtimecomposition/|apps/elitea-web/src/features/chat-|apps/elitea-web/e2e/|apps/elitea-web/scripts/chat-stream-e2e\.sh|apps/elitea-web/playwright\.config\.ts|deploy/docker-compose\.standalone-(full|rust-agent)\.yml|deploy/scripts/|deploy/ci/|\.github/actions/|\.github/workflows/ci-(web-e2e|web-e2e-native|build-once)\.yml)'
 
 total=0
 reaching=()
 handoff=false
 sandbox=false
 webkit=false
+images=false
 while IFS= read -r f; do
   [ -n "$f" ] || continue
   total=$((total + 1))
   if [[ "$f" =~ $WEBKIT ]]; then webkit=true; fi
+  if [[ "$f" =~ $IMAGES ]]; then images=true; fi
   if [[ "$f" =~ $HANDOFF ]]; then handoff=true; fi
   if [[ "$f" =~ $SANDBOX ]]; then sandbox=true; fi
   if [[ "$f" =~ $SKIP_TREE ]] && ! used_by_compose "$f"; then
@@ -162,6 +180,7 @@ if [ "$total" -eq 0 ]; then
   echo "reaches-handoff=true"
   echo "reaches-sandbox=true"
   echo "reaches-webkit=true"
+  echo "reaches-images=true"
   exit 0
 fi
 
@@ -172,6 +191,7 @@ if [ "${#reaching[@]}" -eq 0 ]; then
   echo "reaches-handoff=${handoff}"
   echo "reaches-sandbox=${sandbox}"
   echo "reaches-webkit=${webkit}"
+  echo "reaches-images=${images}"
   exit 0
 fi
 
@@ -189,3 +209,4 @@ fi
 echo "reaches-handoff=${handoff}"
 echo "reaches-sandbox=${sandbox}"
 echo "reaches-webkit=${webkit}"
+echo "reaches-images=${images}"

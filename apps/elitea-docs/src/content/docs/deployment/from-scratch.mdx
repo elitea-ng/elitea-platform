@@ -827,7 +827,7 @@ elitea-main is the browser edge. It serves the API, redirects `/` to `/app/`, re
 2. **Keep streams open.** Chat, the events stream, `/llm` and MCP `tools/call` are server-sent events, and a model answer can stream for several minutes. elitea-main writes a comment into an idle stream every 25 seconds, so an idle timeout above 60 seconds is enough; disable the per-request timeout and turn off response buffering. `/llm/v1/realtime` needs WebSocket upgrades.
 3. **Accept large uploads**, at least 150 MiB, or whatever `ARTIFACT_MAX_OBJECT_BYTES` is set to.
 
-You do not need to strip identity headers or hide `/readyz` and `/startupz`: elitea-main deletes client-supplied identity headers itself before any route runs, and answers the two probe paths to a loopback caller only (its probes run inside the container).
+You do not need to strip identity headers or hide `/readyz` and `/startupz`: elitea-main deletes client-supplied identity headers itself before any route runs, and answers the two probe paths to a loopback caller only (its probes run inside the container). A request that carries a `Forwarded`, `X-Forwarded-For` or `X-Real-IP` header is never treated as that caller, so a reverse proxy on the same host or a mesh sidecar, whose requests arrive from loopback, still gets `404` for them.
 
 ### The route
 

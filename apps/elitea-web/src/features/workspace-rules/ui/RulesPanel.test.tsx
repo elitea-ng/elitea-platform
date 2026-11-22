@@ -7,6 +7,7 @@ import { createFakeRulesIpc } from '@/shared/desktop/rulesIpc.fake';
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
 import { RulesPanel } from './RulesPanel';
+import { testTimeout } from '@/test/timeouts';
 
 const VIEW: RulesView = {
   scopes: [
@@ -35,7 +36,7 @@ const VIEW: RulesView = {
 // Each test types into MUI fields; on a cold, loaded run (the whole node
 // project transforming at once) that outlasted the 5 s default once, and the
 // timed-out test's late updates then failed the tests after it.
-describe('RulesPanel', { timeout: 20_000 }, () => {
+describe('RulesPanel', { timeout: testTimeout(20_000) }, () => {
   it('lists both files with decision, pattern, justification and examples, and the proposal', async () => {
     renderWithTheme(<RulesPanel ipc={createFakeRulesIpc(VIEW)} workspaceId="w1" />);
     const forbidden = await screen.findByTestId('rule-workspace-1');

@@ -25,13 +25,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { adminNavGroups } from '@/pages/admin/adminNavItems';
 
 import { AdminApp } from './AdminApp';
+import { testTimeout } from '@/test/timeouts';
 
 // This file mounts the real router through `AdminApp` (lazy route chunks
 // included), same as `pages/pipelines/EditPipeline.test.tsx`: both the
 // async-util wait and vitest's own per-test limit need headroom under CI
 // coverage instrumentation.
-configure({ asyncUtilTimeout: 5_000 });
-vi.setConfig({ testTimeout: 30_000 });
+configure({ asyncUtilTimeout: testTimeout(5_000) });
+vi.setConfig({ testTimeout: testTimeout(30_000) });
 
 const ALL_PERMISSIONS = adminNavGroups().flatMap((group) => group.items.flatMap((item) => item.anyPermission));
 

@@ -44,6 +44,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PROJECT="${STANDALONE_PROJECT:-elitea-standalone}"
+# shellcheck disable=SC2034 # read by lib/stack-backend.sh
 COMPOSE_F="-p ${PROJECT} -f ${REPO_ROOT}/deploy/docker-compose.standalone-full.yml"
 
 # shellcheck source=../../apps/elitea-web/scripts/lib/compose-detect.sh
@@ -52,7 +53,14 @@ COMPOSE_F="-p ${PROJECT} -f ${REPO_ROOT}/deploy/docker-compose.standalone-full.y
 . "${REPO_ROOT}/deploy/scripts/lib/seeded-driver.sh"
 # shellcheck source=../../scripts/lib/assertion-floor.sh
 . "${REPO_ROOT}/scripts/lib/assertion-floor.sh"
-detect_compose_bin
+# E2E_STACK=native: the pool's native stack, as standalone-stack.sh runs it
+# (apps/elitea-web/scripts/lib/stack-backend.sh).
+# shellcheck source=../../apps/elitea-web/scripts/lib/stack-backend.sh
+. "${REPO_ROOT}/apps/elitea-web/scripts/lib/stack-backend.sh"
+# shellcheck disable=SC2034 # read by lib/stack-backend.sh
+E2E_PROJECT="$PROJECT"
+export E2E_NATIVE_TABLE="${E2E_NATIVE_TABLE:-${REPO_ROOT}/deploy/native/standalone-full.mjs}"
+stack_init
 
 ENGINE="${COMPOSE_BIN%% *}"
 NETWORK="${PROJECT}_default"
@@ -76,8 +84,8 @@ fail() { ran=$((ran + 1)); failed=$((failed + 1)); echo "  ✗ $1" >&2; }
 abort() { echo "ERROR: $1" >&2; exit 1; }
 
 psql_read() {
-  $COMPOSE_BIN $COMPOSE_F exec -T postgres \
-    psql -U elitea -d elitea -tAc "$1" 2>/dev/null | tr -d '\r' || true
+  stack_service_psql \
+    -U elitea -d elitea -tAc "$1" 2>/dev/null | tr -d '\r' || true
 }
 
 # The driver: a PAT whose user OWNS a personal project AND whose project holds
@@ -122,6 +130,11 @@ PY
 # read the 0600 signing material. The same pattern `check` uses.
 MOCK_IMAGE="ghcr.io/elitea-ng/elitea-mock-llm:standalone"
 probe_py() {
+  if [ "$E2E_STACK" = native ]; then
+    # The host's python3, with the runtime material where the container mounts it.
+    python3 -c "${1//\/m\//${RUNTIME_CERTS}/}" 2>&1 || true
+    return
+  fi
   $ENGINE run --rm --network "$NETWORK" -v "${RUNTIME_CERTS}:/m:ro" --user 0:0 \
     --entrypoint python3 "$MOCK_IMAGE" -c "$1" 2>&1 || true
 }

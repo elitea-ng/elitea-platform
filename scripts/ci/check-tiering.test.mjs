@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { check, checkDesktopPackage, load, main, DESKTOP_PACKAGE_PATHS, DRAFT_CONDITION, FAST_GATE_CONDITION, MINIMUM_CALL_JOBS } from "./check-tiering.mjs";
+import { check, checkDesktopPackage, checkGoDuplicates, checkWebUnitSuite, GO_RUNS, load, main, DESKTOP_PACKAGE_PATHS, WEB_COVERAGE_RUNS, DRAFT_CONDITION, FAST_GATE_CONDITION, GATE_DRAFT_SKIP, MINIMUM_CALL_JOBS } from "./check-tiering.mjs";
 
 const call = (id, extra = {}) => ({ needs: ["changes"], if: `fromJSON(needs.changes.outputs.run)['${id}']`, uses: `./.github/workflows/${id}.yml`, ...extra });
 const heavyCall = (id) =>
@@ -27,7 +27,7 @@ function model() {
     jobs[id] = heavyCall(id);
     tierJobs[id] = { tier: "heavy", paths: ["x/**"] };
   }
-  jobs["ci-gate"] = { if: "always()", needs: Object.keys(jobs) };
+  jobs["ci-gate"] = { if: `always() && ${GATE_DRAFT_SKIP}`, needs: Object.keys(jobs) };
   for (const id of [...fast, ...heavy]) {
     workflows[`${id}.yml`] = { parsed: { on: { workflow_call: null, workflow_dispatch: null } }, text: `concurrency:\n  group: ${id}-\${{ github.ref }}\n` };
   }
@@ -67,6 +67,15 @@ test("ci-gate and fast-gate run with always()", () => {
   const errors = check(m);
   has(errors, "ci-gate must run with");
   has(errors, "fast-gate must run with");
+});
+
+test("ci-gate is skipped on a draft, not failed", () => {
+  const m = model();
+  m.ci.jobs["ci-gate"].if = "always()";
+  has(check(m), "ci-gate must be skipped on a draft");
+  // == false would also skip an event that has no pull request; != true runs it.
+  m.ci.jobs["ci-gate"].if = "always() && github.event.pull_request.draft == false";
+  has(check(m), "ci-gate must be skipped on a draft");
 });
 
 test("fast-gate lists every fast job and no heavy one", () => {
@@ -113,6 +122,36 @@ test("a concurrency group built from github.workflow is refused in a called work
   const m = model();
   m.workflows["fast-4.yml"].text = "concurrency:\n  group: ${{ github.workflow }}-${{ github.ref }}\n  cancel-in-progress: true\n";
   has(check(m), "fast-4.yml: its concurrency group uses github.workflow");
+});
+
+function unionModel() {
+  const m = model();
+  m.tiers.jobs["heavy-0"] = { tier: "heavy", union: ["heavy-1", "heavy-2"] };
+  for (const id of ["heavy-1", "heavy-2"]) m.ci.jobs[id].needs = ["changes", "fast-gate", "heavy-0"];
+  return m;
+}
+
+test("a union entry whose consumers are its members is sound", () => {
+  assert.deepEqual(check(unionModel()), []);
+});
+
+test("a job that needs a union job but is not in its union is refused", () => {
+  const m = unionModel();
+  m.ci.jobs["heavy-3"].needs = ["changes", "fast-gate", "heavy-0"];
+  has(check(m), "heavy-3: needs heavy-0 but is not in its union");
+});
+
+test("a union names jobs with entries of their own, one level, and has no paths", () => {
+  const m = unionModel();
+  m.tiers.jobs["heavy-0"].union.push("ghost", "heavy-4");
+  m.tiers.jobs["heavy-4"] = { tier: "heavy", union: ["heavy-5"] };
+  m.tiers.jobs["heavy-0"].paths = ["x/**"];
+  const errors = check(m);
+  has(errors, "heavy-0: its union names ghost, which has no entry");
+  has(errors, "heavy-0: its union names heavy-4, another union");
+  has(errors, "heavy-0: has both union and paths");
+  m.tiers.jobs["heavy-0"] = { tier: "heavy", union: [] };
+  has(check(m), "heavy-0: its union must be a non-empty list");
 });
 
 test("a parser that finds nothing fails", () => {
@@ -162,6 +201,44 @@ test("the macOS package gate: a pull request stays a dry run, publish.yml stays 
   has(errors, "publish.yml: the desktop-package call must pass `require_signed: true`");
   delete m.ci.jobs["desktop-package"];
   has(checkDesktopPackage(m), "ci.yml has no `desktop-package` job");
+});
+
+test("one web unit suite: the plain shards stand down only where coverage runs", () => {
+  const web = (unitIf) => ({ "ci-web.yml": { parsed: { jobs: { "unit-tests": { if: unitIf } } } } });
+  const ci = (coverageRuns, coverageIf = `${FAST_GATE_CONDITION} && ${DRAFT_CONDITION} && fromJSON(needs.changes.outputs.run)['ci-web-coverage']`) => ({
+    jobs: { "ci-web": { with: coverageRuns === undefined ? undefined : { coverage_runs: coverageRuns } }, "ci-web-coverage": { if: coverageIf } },
+  });
+  const ok = "${{ !inputs.coverage_runs }}";
+  assert.deepEqual(checkWebUnitSuite(ci(WEB_COVERAGE_RUNS), web(ok)), []);
+  // No input: the shards would never be told; another filter: a run with neither suite.
+  assert.match(checkWebUnitSuite(ci(undefined), web(ok)).join("\n"), /coverage_runs/);
+  assert.match(checkWebUnitSuite(ci(WEB_COVERAGE_RUNS.replace("ci-web-coverage", "ci-web")), web(ok)).join("\n"), /coverage_runs/);
+  // The coverage job lost its draft rule: the input no longer mirrors it.
+  assert.match(checkWebUnitSuite(ci(WEB_COVERAGE_RUNS, "fromJSON(needs.changes.outputs.run)['ci-web-coverage']"), web(ok)).join("\n"), /ci-web-coverage/);
+  // The shard job reads something else, or nothing.
+  assert.match(checkWebUnitSuite(ci(WEB_COVERAGE_RUNS), web(undefined)).join("\n"), /unit-tests/);
+  assert.match(checkWebUnitSuite(ci(WEB_COVERAGE_RUNS), web("${{ !inputs.coverage_runs || true }}")).join("\n"), /unit-tests/);
+});
+
+test("duplicate Go tests run only where ci-go does not", () => {
+  const ok = "${{ !cancelled() && !inputs.go_runs }}";
+  const model = ({ goIf = "fromJSON(needs.changes.outputs.run)['ci-go']", nb = GO_RUNS, stepIf = ok, steps = 2, unless = "ci-go" } = {}) => [
+    { jobs: { "ci-go": { if: goIf }, "no-binaries": { with: { go_runs: nb } }, "ci-contract": {} } },
+    {
+      "no-binaries.yml": { parsed: { jobs: { gates: { steps: [
+        { name: "edges", if: stepIf, run: "go test -count=1 ./tests/deployedge/..." },
+        { name: "grants", if: stepIf, run: "go test -count=1 ./internal/api/" },
+      ].slice(0, steps) } } } },
+    },
+    { jobs: { "ci-contract": { unless } } },
+  ];
+  assert.deepEqual(checkGoDuplicates(...model()), []);
+  assert.match(checkGoDuplicates(...model({ nb: null })).join("\n"), /no-binaries: ci.yml must pass/);
+  assert.match(checkGoDuplicates(...model({ unless: null })).join("\n"), /ci-contract needs/);
+  assert.match(checkGoDuplicates(...model({ goIf: "false" })).join("\n"), /ci-go: its if/);
+  assert.match(checkGoDuplicates(...model({ stepIf: "${{ !cancelled() }}" })).join("\n"), /edges/);
+  assert.match(checkGoDuplicates(...model({ stepIf: "${{ !inputs.go_runs || true }}" })).join("\n"), /grants/);
+  assert.match(checkGoDuplicates(...model({ steps: 1 })).join("\n"), /1 of the 2/);
 });
 
 test("the repository passes", () => {

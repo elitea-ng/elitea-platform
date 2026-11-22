@@ -1,0 +1,66 @@
+---
+title: "Microsoft sign-in"
+description: "Create an Outlook, Teams, Microsoft Graph or Dataverse credential, sign in with your own Microsoft account from the credential form, check the connection, and sign in again or sign out."
+---
+
+Outlook, Teams, Microsoft Graph and Dataverse credentials act **as you**. They hold no shared key: you sign in with your own Microsoft account, and what a toolkit can do is what that account may do. The credential holds the Microsoft Entra application that asks you to sign in, never your password, and never a refresh token.
+
+An administrator prepares the Microsoft Entra side once; see [Microsoft apps](/admin/microsoft-apps#what-microsoft-entra-needs) for the app registration, the redirect URI and the permissions. SharePoint's delegated sign-in is separate and unchanged.
+
+## Create the credential
+
+<Steps>
+<Step title="Pick the type">
+Open **Credentials**, then **New credential**, and choose **Outlook**, **Teams**, **Microsoft Graph** or **Dataverse (OneCRM)** (search for "Microsoft" or the product name).
+</Step>
+
+<Step title="Choose how the app is supplied">
+- **Default app.** An administrator registered an Entra app for everyone. Pick it from **App**. You never see its client ID or secret. This choice appears only when an app is registered for the type and your project.
+- **Custom app.** Enter your own Entra application's **Client Id**, **Client Secret** (a project secret is best) and **OAuth Discovery Endpoint**, `https://login.microsoftonline.com/<tenant id>`. This choice is hidden when an administrator turned Custom app off. Dataverse asks for the environment **Url** and the **Tenant Id** instead of the endpoint.
+</Step>
+
+<Step title="Tick the scopes">
+Outlook and Teams list the permissions as checkboxes with a line of help each; Microsoft Graph takes free text such as `Mail.Read Files.Read`. Microsoft gives the sign-in every permission you already consented to for that Entra app, so unticking a box does not remove one. For a strict limit, use a separate Entra app that has only the permissions you want. With a Default app, the app's administrator sets a ceiling: the form shows what it removed.
+</Step>
+
+<Step title="Name it and sign in">
+Type a **Name** and select **Save and sign in with Microsoft**. The form saves the credential first (Microsoft starts a sign-in for a saved credential only), then opens a Microsoft window. Sign in and approve; the window closes by itself.
+</Step>
+</Steps>
+
+If your browser blocks the window, allow pop-ups for this site and try again. **Cancel** ends a sign-in you abandoned; an unfinished sign-in also expires on its own after 10 minutes.
+
+## What you see after you sign in
+
+- **Signed in as** your account name, the **Microsoft tenant**, and **Runs act as** the same account.
+- When the sign-in **lasts until**. A Microsoft access token lasts about an hour. After that, sign in again; the form shows the time.
+- **Connection successful**, once the form checks the connection with your sign-in. The check reads who you are (Microsoft Graph `/me`, or Dataverse `WhoAmI`); it never reads your mail, chats or records.
+
+The form stays open after the sign-in. Select **Save** to keep further changes, or **Discard**. A credential that the sign-in created is updated, not duplicated, by the next **Save**.
+
+## Sign in again, and sign out
+
+- **Sign in again** repeats the sign-in with the same credential, for example after you changed the scopes.
+- If **Test connection** says Microsoft refused your sign-in (it ended, or the account lost a permission), the form drops it and asks you to sign in again.
+- **Sign out** forgets the sign-in in this browser. Runs stop using it at once. It does not remove the permission you gave the Entra app; to do that, use [My Apps](https://myapps.microsoft.com).
+
+Without a sign-in, **Test connection** says to sign in first instead of failing.
+
+## If a sign-in does not finish
+
+| Message | What to do |
+|---|---|
+| The sign-in window was blocked | Allow pop-ups for this site. |
+| An administrator turned off Custom app sign-in | Choose a Default app for this credential. |
+| The Default app is not available | Choose another app, or ask an administrator. |
+| A different Microsoft tenant than the app is set up for | Sign in with an account of the app's tenant. |
+| The account lacks a permission | Tick it in the credential, save, and sign in again. |
+| The sign-in is no longer valid | The result waits 60 seconds for you to collect it. Sign in again. |
+
+## Who can sign in
+
+Signing in needs the permission to update the credential in the project. A person without it sees **Login managed by a project admin** and cannot start a sign-in or replace the login.
+
+## Where this works
+
+The sign-in window is part of the web app. The desktop app shows the same form, but its sign-in belongs in the system browser and arrives in a later release, as does the mobile app's own sign-in: until then, sign in on the web. Scheduled and unattended runs cannot use these credentials until a stored login ships. See [Microsoft apps](/admin/microsoft-apps#how-a-sign-in-works) for how a sign-in is protected.

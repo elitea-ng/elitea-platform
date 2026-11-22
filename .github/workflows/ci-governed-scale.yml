@@ -43,13 +43,17 @@ concurrency:
 jobs:
   scale:
     name: Governed credential scale report
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
     timeout-minutes: 45
+    # eng-runner has no container engine. There every image below is empty, so
+    # GitHub creates no service, and .github/actions/native-services runs the
+    # same servers as processes at the same ports and credentials
+    # (scripts/ci/check-runner-routing.mjs poolEmptyImage; it checks the two agree).
     services:
       postgres:
         # Plain PostgreSQL 18, the server every deployment runs. The default
         # 100 connections: the run stays inside them.
-        image: postgres:18
+        image: ${{ !(vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'postgres:18' || '' }}
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -64,7 +68,7 @@ jobs:
       # The invalidation fan-out runs over core NATS on the production
       # subject. The -alpine tag for a shell the health command needs.
       nats:
-        image: nats:2.12.0-alpine
+        image: ${{ !(vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'nats:2.12.0-alpine' || '' }}
         command: -js -m 8222
         ports:
           - 4222:4222
@@ -76,6 +80,16 @@ jobs:
           --health-retries=10
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume (does nothing on hosted).
+      - uses: ./.github/actions/eng-runner-env
+      # eng-runner: the services block's PostgreSQL and NATS as processes.
+      # Does nothing on a hosted runner, where the services block runs them.
+      - name: Start the services as processes (eng-runner)
+        uses: ./.github/actions/native-services
+        with:
+          postgres: "true"
+          nats: "true"
+          nats-args: -js
       - uses: actions/setup-go@v7
         with:
           # The cache is .github/actions/go-cache below.
@@ -112,7 +126,7 @@ jobs:
           cat scale.log
           {
             echo '### Governed credential scale (synthetic)'
-            echo 'Synthetic dimensions only; no claim beyond them. Runner: GitHub-hosted ubuntu-latest.'
+            echo 'Synthetic dimensions only; no claim beyond them. Runner: '"${RUNNER_ENVIRONMENT:-unknown}"' ('"${RUNNER_NAME:-}"').'
             echo '```'
             cat "$ELITEA_GOVERNED_SCALE_REPORT" 2>/dev/null || echo 'no report was written'
             echo '```'
@@ -139,3 +153,9 @@ jobs:
             services/elitea-main/scale.log
           if-no-files-found: warn
           retention-days: 30
+
+      # eng-runner: the logs of the services native-services started, when
+      # anything in the job failed. Does nothing on a hosted runner.
+      - name: Upload the service logs (eng-runner)
+        if: failure()
+        uses: ./.github/actions/native-services-logs

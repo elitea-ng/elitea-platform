@@ -18,9 +18,10 @@ import { createTestQueryClient } from '../../__tests__/testUtils';
 
 import { TestToolPane } from './TestToolPane';
 import { rememberToolkitTest, forgetToolkitTest } from '../../api/toolkitTestRecovery';
+import { testTimeout } from '@/test/timeouts';
 
-configure({ asyncUtilTimeout: 5_000 });
-vi.setConfig({ testTimeout: 30_000 });
+configure({ asyncUtilTimeout: testTimeout(5_000) });
+vi.setConfig({ testTimeout: testTimeout(30_000) });
 
 const RUN_PATH = '/api/v2/elitea_core/test_tool/prompt_lib/:projectId/:toolkitId';
 const theme = buildEliteaTheme(DEFAULT_BRAND_PACK);

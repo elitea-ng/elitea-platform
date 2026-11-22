@@ -17,6 +17,7 @@ import {
 } from './reference-scan';
 import { renderAllSurfaces } from './render-surfaces';
 import { COVERED_OVERRIDE_KEYS, WIRED_OVERRIDE_KEYS } from './surfaces';
+import { testTimeout } from '@/test/timeouts';
 
 /**
  * §4.6 check 7 — the brand-pack round trip. `npm run theme-gate` runs exactly
@@ -207,7 +208,7 @@ describe('§4.6 check 7 — brand-pack round trip', () => {
     // the scan learned to skip files that cannot contribute, 2.07s after
     // (`reference-scan.ts`'s CANDIDATE_RE — ~90% of the tree is skipped, and
     // the results are identical). Without coverage it is ~2.2s and ~0.9s.
-  }, 20_000);
+  }, testTimeout(20_000));
 
   it('(c) renders the available surface under a hostile pack with zero default-pack colours', () => {
     // Colours the default pack states, minus the ones a bare MUI theme also

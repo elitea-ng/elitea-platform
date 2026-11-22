@@ -38,6 +38,15 @@ on:
   # Called by ci.yml, which owns the PR tiers and the path filter
   # (scripts/ci/tier-paths.json); no `pull_request` arm of its own.
   workflow_call:
+    inputs:
+      web-images:
+        description: ci-build-once.yml's `web-images` output (the job result); empty when nothing was built for this run.
+        type: string
+        default: ""
+      stack-images:
+        description: ci-build-once.yml's `stack-images` output.
+        type: string
+        default: ""
   schedule:
     # Sunday 05:23 UTC, after the Saturday Dependabot slot and its merges.
     - cron: "23 5 * * 0"
@@ -65,7 +74,16 @@ jobs:
     # writes no cache, so a rerun is just as cold: 50 min cancelled it in the
     # side-load step. 80 leaves room for that case and still ends a hang.
     timeout-minutes: 80
-    # The cache policy: READ ONLY, on every event. Each image reads the
+    # The images: on a pull request ci.yml runs ci-build-once.yml first, and
+    # this job PULLS the five by digest and tags them for kind-stack.sh. It
+    # bakes them itself only when nothing was built for it (a fork's or
+    # Dependabot's pull request, the weekly schedule, a dispatch). The pull
+    # asserts that what Build once built is what this bake would build: the
+    # bake spec (`docker buildx bake --print`, the same targets and `set`)
+    # goes through scripts/ci/stack-images.mjs `resolve`, which refuses an
+    # image built from another context, Containerfile, target or build args.
+    #
+    # The cache policy of that bake: READ ONLY, on every event. Each image reads the
     # registry layer cache ci-web-e2e.yml's build-once jobs write for the
     # same Containerfile and stage (ghcr.io/elitea-ng/ci-cache-<image>:
     # linux-amd64, public, written by a run on main only), and an empty
@@ -74,8 +92,91 @@ jobs:
     # smoke writing it too would cost the E2E stacks their layers on every
     # weekly run. (Until 2026-10-20 this wrote `type=gha,mode=max` from main,
     # into the 10 GB Actions cache that kept evicting it.)
+    env:
+      # success on both: pull. Empty (no caller passed them) or skipped: bake.
+      BUILT: ${{ inputs.web-images == 'success' && inputs.stack-images == 'success' }}
     steps:
+      # Anything but success, skipped or empty is a build that failed for this
+      # commit; baking here instead would hide it.
+      - name: The build-once images for this commit did not fail
+        env:
+          WEB: ${{ inputs.web-images }}
+          STACK: ${{ inputs.stack-images }}
+        run: |
+          for result in "$WEB" "$STACK"; do
+            case "$result" in
+              "" | success | skipped) ;;
+              *) echo "::error::ci-build-once.yml did not build this commit's images (web-images: ${WEB}, stack-images: ${STACK})"; exit 1 ;;
+            esac
+          done
+
       - uses: actions/checkout@v7
+
+      # Build once pushed them: the same digest-map download the lanes do
+      # (.github/actions/pull-stack-images), with its one retry.
+      - name: Download the digest maps for this commit
+        if: env.BUILT == 'true'
+        id: digests
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          pattern: stack-image-digests-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/stack-image-digests
+      - name: Download the digest maps for this commit (retry)
+        if: env.BUILT == 'true' && steps.digests.outcome == 'failure'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: stack-image-digests-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/stack-image-digests
+
+      - name: Pull the five images by digest and tag them for kind-stack.sh
+        if: env.BUILT == 'true'
+        env:
+          TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$TOKEN" | docker login ghcr.io --username "$ACTOR" --password-stdin
+          # The spec the bake step below would build (the same targets and the
+          # same `elitea-main.target=e2e`), as a compose-shaped config whose
+          # images carry kind-stack.sh's names (KIND_IMAGE_TAG default `kind`).
+          docker buildx bake -f docker-bake.hcl --print --set elitea-main.target=e2e \
+            elitea-main elitea-subapp-host elitea-deepwiki-engine-native elitea-inventory-engine elitea-vector \
+            > "${RUNNER_TEMP}/helm-bake.json"
+          # shellcheck disable=SC2016 # the ${...} below are JavaScript template literals
+          node -e '
+            const fs = require("fs");
+            const [file, workspace] = process.argv.slice(1);
+            const services = {};
+            for (const [name, t] of Object.entries(JSON.parse(fs.readFileSync(file, "utf8")).target)) {
+              const image = t.tags[0].split("/").pop().split(":")[0];
+              services[name] = {
+                image: `ghcr.io/elitea-ng/${image}:kind`,
+                build: { context: t.context.startsWith("/") ? t.context : `${workspace}/${t.context}`, dockerfile: t.dockerfile, target: t.target, args: t.args ?? {} },
+              };
+            }
+            if (Object.keys(services).length !== 5) throw new Error(`bake printed ${Object.keys(services).length} targets, expected 5`);
+            process.stdout.write(JSON.stringify({ services }));
+          ' "${RUNNER_TEMP}/helm-bake.json" "$GITHUB_WORKSPACE" > "${RUNNER_TEMP}/helm-config.json"
+          # Fails, naming the image, when Build once built it from another spec.
+          node scripts/ci/stack-images.mjs resolve \
+            "${RUNNER_TEMP}/helm-config.json" "$GITHUB_WORKSPACE" "${RUNNER_TEMP}/stack-image-digests" \
+            > "${RUNNER_TEMP}/helm-pulls.tsv"
+          [ "$(wc -l < "${RUNNER_TEMP}/helm-pulls.tsv")" -eq 5 ] || { echo "::error::expected 5 images, resolved $(wc -l < "${RUNNER_TEMP}/helm-pulls.tsv")"; exit 1; }
+          while IFS=$'\t' read -r local remote; do
+            for attempt in 1 2 3 4; do
+              if docker pull -q "$remote"; then break; fi
+              [ "$attempt" -lt 4 ] || { echo "::error::could not pull $remote"; exit 1; }
+              echo "pull of $remote failed (attempt $attempt), retrying"
+              sleep $((attempt * 10))
+            done
+            docker tag "$remote" "$local"
+            digests="$(docker image inspect --format '{{join .RepoDigests " "}}' "$local")"
+            [[ " $digests " == *"@${remote##*@} "* ]] || { echo "::error::$local is not $remote (has: $digests)"; exit 1; }
+            echo "  ✓ $local = $remote"
+          done < "${RUNNER_TEMP}/helm-pulls.tsv"
 
       # No disk-clearing step: the five images (the engines and elitea-vector
       # are distroless Rust binaries), the pinned third-party images and a
@@ -84,6 +185,7 @@ jobs:
       # GitHub's runners — and helm/kind-action, which installs INTO it, died.
 
       - uses: docker/setup-buildx-action@v4
+        if: env.BUILT != 'true'
         id: buildx
         with:
           # The builder image from the org's own mirror (mirror-buildkit.yml), by
@@ -91,6 +193,8 @@ jobs:
           driver-opts: image=ghcr.io/elitea-ng/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
 
       - name: Build the five images the chart installs (shared layer cache)
+        # Only when nothing was built for this run (the job's `BUILT`).
+        if: env.BUILT != 'true'
         # Under the tags kind-stack.sh looks for (KIND_IMAGE_TAG default
         # `kind`), so its own build step finds them present and skips; the
         # tags and the `e2e` target restate deploy/kind/kind-stack.sh's

@@ -13,6 +13,7 @@ import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
 import { resetGuardrailNoticeCache, mayHaveGuardrailNotice } from '../../model/useGuardrailNotices';
 import { AnswerGuardrails } from './AnswerGuardrails';
+import { testTimeout } from '@/test/timeouts';
 
 const URL = '/api/v2/elitea_core/guardrail_notices/prompt_lib/3/run-1';
 /** The turn's verdicts are read this long after it settles, so a test waits past it. */
@@ -74,7 +75,7 @@ describe('AnswerGuardrails', () => {
     renderWithTheme(<AnswerGuardrails answer={live} projectId="3" settled />);
     expect(await screen.findByTestId('guardrail-notice-warned', {}, { timeout: 8000 })).toBeInTheDocument();
     expect(asked).toBe(2);
-  }, 12000);
+  }, testTimeout(12000));
 
   it('asks again after a failed read, and does not keep the failure for good', async () => {
     server.use(http.get(URL, () => {
@@ -90,7 +91,7 @@ describe('AnswerGuardrails', () => {
     renderWithTheme(<AnswerGuardrails answer={live} projectId="3" settled />);
     expect(screen.getByTestId('guardrail-notice-redacted')).toBeInTheDocument();
     expect(asked).toBe(2);
-  }, 12000);
+  }, testTimeout(12000));
 
   it('replaces the generic runtime error of a blocked message', async () => {
     serve([notice({ kind: 'blocked', action: 'block', guardrail: 'keys', labels: ['github-token'] })]);

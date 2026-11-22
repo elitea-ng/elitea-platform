@@ -15,8 +15,9 @@
 //     `/app/<numeric project id>/mcp[/…]` and the two icon file servers
 //     `/app/application_icon/` and `/app/application_tool_icon/`.
 //  3. `/readyz` and `/startupz` are not published at this edge. Their bodies
-//     name each dependency's state; a probe inside the container (loopback)
-//     still reaches them. The chart runs its startup and readiness probes as
+//     name each dependency's state; a probe inside the container (loopback,
+//     with no Forwarded, X-Forwarded-For or X-Real-IP header: a proxy on
+//     loopback relays browsers) still reaches them. The chart runs its startup and readiness probes as
 //     `elitea-main -healthcheck <path>` for that reason: a kubelet httpGet
 //     arrives from the node's address and would be refused.
 //  4. Everything else reaches elitea-main's own router, which strips every
@@ -172,7 +173,22 @@ func isNotPublished(path string) bool {
 	return false
 }
 
+// forwardingHeaders mark a request a proxy relayed. Any one of them means the
+// loopback peer is a proxy, not a probe inside the container.
+var forwardingHeaders = []string{"Forwarded", "X-Forwarded-For", "X-Real-Ip"}
+
+// fromLoopback answers whether r is a probe inside the container: a loopback
+// peer that no proxy relayed. A reverse proxy on loopback in front of the edge
+// (a mesh sidecar, which forwards inbound traffic from 127.0.0.6, or an nginx
+// on the same host) makes every browser request a loopback peer, so a request
+// carrying a forwarding header is never trusted as one; the -healthcheck exec
+// probe sends none.
 func fromLoopback(r *http.Request) bool {
+	for _, name := range forwardingHeaders {
+		if len(r.Header.Values(name)) > 0 {
+			return false
+		}
+	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr

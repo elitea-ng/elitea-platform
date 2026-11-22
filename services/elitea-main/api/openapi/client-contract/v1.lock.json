@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.64",
+  "client_contract": "1.65",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -16763,6 +16763,16 @@
           "schema": {
             "type": "string",
             "max_length": 128
+          }
+        },
+        "query:type": {
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "max_length": 64
+            },
+            "max_items": 32
           }
         }
       },

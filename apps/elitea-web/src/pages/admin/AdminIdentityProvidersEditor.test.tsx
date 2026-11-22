@@ -79,7 +79,7 @@ interface RecordedRequest {
 let recorded: RecordedRequest[] = [];
 
 function useProviderHandlers(
-  options: { saveStatus?: number; saveBody?: Record<string, string> } = {},
+  options: { saveStatus?: number; saveBody?: Record<string, unknown> } = {},
 ): void {
   server.use(
     http.get('*/admin/identity_providers/administration', ({ request }) => {
@@ -212,6 +212,52 @@ describe('Admin › Authentication › identity providers', () => {
     expect(await screen.findByText(/plaintext federation endpoint/)).toBeInTheDocument();
     // And the dialog is still open, still holding what was typed.
     expect(screen.getByTestId('identity-provider-save')).toBeInTheDocument();
+  });
+
+  it('explains a super admin refusal of a trust change and names the changed fields (#2558)', async () => {
+    useProviderHandlers({
+      saveStatus: 403,
+      saveBody: {
+        error: 'only a super admin can create an identity provider or change its issuer',
+        code: 'identity_provider_trust_super_admin_required',
+        fields: ['issuer'],
+      },
+    });
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminIdentityProvidersEditor />);
+    await openEditFor('Corporate SSO');
+
+    await user.click(screen.getByTestId('identity-provider-save'));
+
+    expect(
+      await screen.findByText(
+        'Only a super admin can create an identity provider, turn it on or off, replace its secret, or change its issuer, metadata, certificates or identity attributes. Changed: issuer.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId('identity-provider-save')).toBeInTheDocument();
+  });
+
+  it('says the accounts are still bound to the previous issuer after an issuer change (#2558)', async () => {
+    server.use(
+      http.put('*/admin/identity_providers/administration/*', async ({ request }) => {
+        recorded.push({ method: 'PUT', url: request.url, body: await request.json() });
+        return HttpResponse.json({
+          key: 'corporate',
+          kind: 'oidc',
+          display_name: 'Corporate SSO',
+          previous_issuer: 'https://old-idp.example.com',
+        });
+      }),
+    );
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminIdentityProvidersEditor />);
+    await openEditFor('Corporate SSO');
+
+    await user.click(screen.getByTestId('identity-provider-save'));
+
+    expect(await screen.findByTestId('admin-identity-providers-rebind-note')).toHaveTextContent(
+      'https://old-idp.example.com',
+    );
   });
 
   it('sends the login domains inside the document its kind names', async () => {

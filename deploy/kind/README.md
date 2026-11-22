@@ -171,7 +171,8 @@ proves them on a cluster.
 
 Measured on an Apple-silicon laptop under podman, `down` then `up` then
 `verify`. The GitHub runner path (`helm-install-smoke.yml`, docker, images
-from the shared layer cache) records its own duration in the job summary;
+pulled from ci-build-once.yml on a pull request, otherwise built over the
+shared layer cache) records its own duration in the job summary;
 the laptop numbers below say nothing about it.
 
 * **`up` from no cluster at all: 2m26s**, with the three application images

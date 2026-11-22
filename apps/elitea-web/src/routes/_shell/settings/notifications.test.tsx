@@ -54,6 +54,7 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 
 import { server } from '../../../test/setup';
 import { NotificationsPage } from '@/routes/-pages/Notifications';
+import { testTimeout } from '@/test/timeouts';
 
 const BASE = '/api/v2';
 const LIST_PATH = `${BASE}/notifications/notifications/prompt_lib/:projectId`;
@@ -184,7 +185,7 @@ describe('finding 2 — pagination, page size, sort and search are all reachable
       },
       { timeout: 3000 },
     );
-  }, 20000);
+  }, testTimeout(20000));
 });
 
 /**
@@ -211,7 +212,7 @@ describe('issue 413 — a failed list read renders as an error, not as an empty 
       'The requested resource was not found!',
     );
     expect(screen.queryByText('No notifications yet')).not.toBeInTheDocument();
-  }, 15000);
+  }, testTimeout(15000));
 
   it('still shows the empty state when the list request succeeds with no rows', async () => {
     server.use(http.get(LIST_PATH, () => HttpResponse.json({ rows: [], total: 0 })));

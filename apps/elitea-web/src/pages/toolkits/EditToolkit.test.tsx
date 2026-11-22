@@ -14,6 +14,7 @@ import { server } from '@/test/setup';
 
 import { EditToolkit } from './EditToolkit';
 import { renderToolkitsRoute } from './__tests__/testRouter';
+import { testTimeout } from '@/test/timeouts';
 
 // The `github` mock schema below has no `type` field (matches every other
 // fixture in this file — `getToolComponent`, `features/toolkits/lib/helpers/
@@ -27,8 +28,8 @@ installCodeMirrorTestPolyfills();
 // before anything is on screen. The repo's own convention for a route-mounting
 // vitest file (see the wave preamble) is a widened async util timeout plus a
 // widened per-test timeout.
-configure({ asyncUtilTimeout: 5_000 });
-vi.setConfig({ testTimeout: 30_000 });
+configure({ asyncUtilTimeout: testTimeout(5_000) });
+vi.setConfig({ testTimeout: testTimeout(30_000) });
 
 beforeEach(() => {
   configureGeneratedClient({ baseUrl: '/api/v2' });

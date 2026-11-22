@@ -36,7 +36,7 @@ env:
 jobs:
   lint:
     name: lint (${{ matrix.name }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
     timeout-minutes: 25
     strategy:
       fail-fast: false
@@ -44,19 +44,25 @@ jobs:
         include:
           - name: shared crates
             dir: libs/rust
+            doc: --workspace
           - name: worker
             dir: services/elitea-worker-rust
+            doc: --
           - name: code runner
             dir: services/elitea-code-runner
             jobs: "1"
           - name: deepwiki engine
             dir: services/elitea-deepwiki-engine
+            doc: --
           - name: inventory engine
             dir: services/elitea-inventory-engine
+            doc: --
           - name: vector
             dir: services/elitea-vector
+            doc: --
           - name: doc extractor
             dir: services/elitea-doc-extractor
+            doc: --
     defaults:
       run:
         working-directory: ${{ matrix.dir }}
@@ -64,12 +70,19 @@ jobs:
       CARGO_BUILD_JOBS: ${{ matrix.jobs || '4' }}
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume, and rustup (none in
+      # its image). Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          rust: "true"
 
       - name: Assert the pinned toolchain
         run: |
           bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
 
       - name: Free runner disk for the build
+        # Hosted only: the pool builds on its 80 GiB work volume, and has no sudo.
+        if: runner.environment == 'github-hosted'
         # The jobs this replaces freed this space before a build on top of a
         # restored target/ (ENOSPC, PR #1547). Bounded and NON-FATAL: a refused
         # rm only warns, and the build then fails honestly on ENOSPC.
@@ -90,6 +103,20 @@ jobs:
 
       - name: Run Clippy
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      # rustdoc, deny warnings: the `cargo doc` each test workflow used to run in
+      # its heavy job, here beside Clippy so a broken doc link fails in minutes.
+      # `doc` is the leg's extra argument (`--workspace` for libs/rust, `--` for
+      # none); the code runner had no rustdoc gate and gets none.
+      - name: rustdoc (deny warnings)
+        if: matrix.doc
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+          DOC_ARGS: ${{ matrix.doc }}
+        run: |
+          args=()
+          [ "$DOC_ARGS" = -- ] || args+=("$DOC_ARGS")
+          cargo doc --locked --no-deps --all-features "${args[@]}"
 
       # The workspace run above uses --all-features, which turns on
       # `test-support`, and that switches off the agent runtime's

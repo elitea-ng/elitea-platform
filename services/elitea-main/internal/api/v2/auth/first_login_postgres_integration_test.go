@@ -153,7 +153,7 @@ func TestAnEmailEntryGrantsNothingWithoutAStatedVerification(t *testing.T) {
 			handler := (&OIDCHandler{pool: pool}).WithFirstLoginPolicy(
 				FirstLoginPolicy{InitialGlobalAdmins: []string{"email:alice@corp.com"}})
 
-			id, err := handler.provisionUser(context.Background(),
+			id, err := handler.provisionUser(context.Background(), testBinding,
 				"mallory-sub", "alice@corp.com", "Mallory", emailVerified, false, false)
 			require.NoError(t, err)
 
@@ -271,12 +271,12 @@ func TestTheHandlersApplyTheProvidersSCIMAdoptionSetting(t *testing.T) {
 	provisioned := seedSCIMAccount(t, pool, "alice@corp.com")
 
 	oidcHandler := (&OIDCHandler{pool: pool}).WithFirstLoginPolicy(FirstLoginPolicy{})
-	_, err := oidcHandler.provisionUser(context.Background(),
+	_, err := oidcHandler.provisionUser(context.Background(), testBinding,
 		"github|mallory", "alice@corp.com", "Mallory", nil, false, false)
 	require.ErrorIs(t, err, errIdentityConflict)
 
 	samlHandler := (&SAMLHandler{pool: pool}).WithFirstLoginPolicy(FirstLoginPolicy{})
-	id, err := samlHandler.provisionUser(context.Background(), "entra-nameid", "alice@corp.com", "Alice", true)
+	id, err := samlHandler.provisionUser(context.Background(), testBinding, "entra-nameid", "alice@corp.com", "Alice", true)
 	require.NoError(t, err)
 	require.Equal(t, provisioned, atoiUserID(t, id))
 }
@@ -285,7 +285,7 @@ func TestTheHandlersApplyTheProvidersSCIMAdoptionSetting(t *testing.T) {
 
 func signInWithOIDC(t *testing.T, handler *OIDCHandler, sub, email string) int {
 	t.Helper()
-	id, err := handler.provisionUser(context.Background(), sub, email, "Alice", nil, false, false)
+	id, err := handler.provisionUser(context.Background(), testBinding, sub, email, "Alice", nil, false, false)
 	require.NoError(t, err)
 	return atoiUserID(t, id)
 }
@@ -298,14 +298,14 @@ func signInWithVerifiedOIDC(
 ) int {
 	t.Helper()
 	id, err := handler.provisionUser(
-		context.Background(), sub, email, "Alice", &emailVerified, false, false)
+		context.Background(), testBinding, sub, email, "Alice", &emailVerified, false, false)
 	require.NoError(t, err)
 	return atoiUserID(t, id)
 }
 
 func signInWithSAML(t *testing.T, handler *SAMLHandler, nameID, email string) int {
 	t.Helper()
-	id, err := handler.provisionUser(context.Background(), nameID, email, "Alice", false)
+	id, err := handler.provisionUser(context.Background(), testBinding, nameID, email, "Alice", false)
 	require.NoError(t, err)
 	return atoiUserID(t, id)
 }

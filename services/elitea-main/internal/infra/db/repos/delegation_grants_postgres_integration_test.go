@@ -21,8 +21,8 @@ import (
 
 type holdsAccess struct{ toolkits, credentials map[string]bool }
 
-func (a holdsAccess) HoldsToolkit(key string) bool          { return a.toolkits[key] }
-func (a holdsAccess) HoldsCredential(reference string) bool { return a.credentials[reference] }
+func (a holdsAccess) HoldsToolkit(key string) bool             { return a.toolkits[key] }
+func (a holdsAccess) HoldsCredential(_, reference string) bool { return a.credentials[reference] }
 
 func newDelegationGrantStore(t *testing.T, pool *pgxpool.Pool) *DelegationGrants {
 	t.Helper()

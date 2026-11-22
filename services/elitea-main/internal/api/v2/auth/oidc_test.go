@@ -50,7 +50,13 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identityrepo"
 )
+
+// testBinding is the provider every resolution in these tests asserts from: a
+// stored provider key and its configured issuer (issue 2558).
+var testBinding = identityrepo.ProviderBinding{Key: "corporate", Issuer: "https://idp.corp.example"}
 
 /* ── transaction stub ──────────────────────────────────────────────────── */
 
@@ -130,9 +136,9 @@ func statementIndex(t *testing.T, tx *scriptedTx, fragment string) int {
 // The subject must be looked up BEFORE the email. This is the whole defect:
 // with the order reversed, the address decides the account.
 func TestProvisioningReadsTheProviderSubjectBeforeTheEmail(t *testing.T) {
-	tx := &scriptedTx{rows: []scriptedRow{{values: []any{7, false}}}}
+	tx := &scriptedTx{rows: []scriptedRow{{values: []any{7, false, true, true}}}}
 
-	userID, err := resolveProvisionedUser(context.Background(), tx, "oidc:sub-A", "alice@corp.com", "Alice", nil, false)
+	userID, err := resolveProvisionedUser(context.Background(), tx, testBinding, "oidc:sub-A", "alice@corp.com", "Alice", nil, false)
 	if err != nil {
 		t.Fatalf("resolveProvisionedUser: %v", err)
 	}
@@ -153,10 +159,10 @@ func TestProvisioningReadsTheProviderSubjectBeforeTheEmail(t *testing.T) {
 // An identity provider that changes a person's address must not orphan the
 // account. The subject still names the row, and the row learns the new address.
 func TestALinkedSubjectWithANewEmailKeepsItsAccount(t *testing.T) {
-	tx := &scriptedTx{rows: []scriptedRow{{values: []any{7, false}}}}
+	tx := &scriptedTx{rows: []scriptedRow{{values: []any{7, false, true, true}}}}
 
 	userID, err := resolveProvisionedUser(
-		context.Background(), tx, "oidc:sub-A", "alice.smith@corp.com", "Alice", nil, false,
+		context.Background(), tx, testBinding, "oidc:sub-A", "alice.smith@corp.com", "Alice", nil, false,
 	)
 	if err != nil {
 		t.Fatalf("resolveProvisionedUser: %v", err)
@@ -172,10 +178,10 @@ func TestALinkedSubjectWithANewEmailKeepsItsAccount(t *testing.T) {
 // A suspended account still refuses the login, and it refuses it on the path
 // that now resolves the account.
 func TestALinkedSubjectOnASuspendedAccountIsRefused(t *testing.T) {
-	tx := &scriptedTx{rows: []scriptedRow{{values: []any{7, true}}}}
+	tx := &scriptedTx{rows: []scriptedRow{{values: []any{7, true, true, true}}}}
 
 	if _, err := resolveProvisionedUser(
-		context.Background(), tx, "oidc:sub-A", "alice@corp.com", "Alice", nil, false,
+		context.Background(), tx, testBinding, "oidc:sub-A", "alice@corp.com", "Alice", nil, false,
 	); !errors.Is(err, errUserSuspended) {
 		t.Fatalf("error is %v, want errUserSuspended", err)
 	}
@@ -194,7 +200,7 @@ func TestANewSubjectCannotJoinAnAccountBoundToAnotherSubject(t *testing.T) {
 	}}
 
 	_, err := resolveProvisionedUser(
-		context.Background(), tx, "oidc:sub-B", "alice@corp.com", "Mallory", nil, false,
+		context.Background(), tx, testBinding, "oidc:sub-B", "alice@corp.com", "Mallory", nil, false,
 	)
 	if !errors.Is(err, errIdentityConflict) {
 		t.Fatalf("error is %v, want errIdentityConflict", err)
@@ -220,7 +226,7 @@ func TestTheBoundAccountGuardReadsOnlyThisHandlersNamespace(t *testing.T) {
 	}}
 
 	if _, err := resolveProvisionedUser(
-		context.Background(), tx, "oidc:sub-E", "legacy@corp.com", "Legacy", nil, false,
+		context.Background(), tx, testBinding, "oidc:sub-E", "legacy@corp.com", "Legacy", nil, false,
 	); err != nil {
 		t.Fatalf("resolveProvisionedUser: %v", err)
 	}
@@ -269,7 +275,7 @@ func TestANewSubjectOnASuspendedAddressIsReportedAsSuspended(t *testing.T) {
 	}}
 
 	if _, err := resolveProvisionedUser(
-		context.Background(), tx, "oidc:sub-B", "alice@corp.com", "Alice", nil, false,
+		context.Background(), tx, testBinding, "oidc:sub-B", "alice@corp.com", "Alice", nil, false,
 	); !errors.Is(err, errUserSuspended) {
 		t.Fatalf("error is %v, want errUserSuspended", err)
 	}
@@ -285,7 +291,7 @@ func TestAFirstLoginCreatesAndLinksTheAccount(t *testing.T) {
 	}}
 
 	userID, err := resolveProvisionedUser(
-		context.Background(), tx, "oidc:sub-C", "carol@corp.com", "Carol", nil, false,
+		context.Background(), tx, testBinding, "oidc:sub-C", "carol@corp.com", "Carol", nil, false,
 	)
 	if err != nil {
 		t.Fatalf("resolveProvisionedUser: %v", err)
@@ -309,7 +315,7 @@ func TestALinkOwnedByAnotherAccountIsRefusedRatherThanSwallowed(t *testing.T) {
 	}}
 
 	if _, err := resolveProvisionedUser(
-		context.Background(), tx, "oidc:sub-A", "carol@corp.com", "Carol", nil, false,
+		context.Background(), tx, testBinding, "oidc:sub-A", "carol@corp.com", "Carol", nil, false,
 	); !errors.Is(err, errIdentityConflict) {
 		t.Fatalf("error is %v, want errIdentityConflict", err)
 	}
@@ -327,7 +333,7 @@ func TestTheEmailFallbackCanRequireAVerifiedAddress(t *testing.T) {
 	tx := &scriptedTx{rows: []scriptedRow{{err: pgx.ErrNoRows}}}
 
 	if _, err := resolveProvisionedUser(
-		context.Background(), tx, "oidc:sub-D", "dave@corp.com", "Dave", nil, true,
+		context.Background(), tx, testBinding, "oidc:sub-D", "dave@corp.com", "Dave", nil, true,
 	); !errors.Is(err, errEmailNotVerified) {
 		t.Fatalf("error is %v, want errEmailNotVerified", err)
 	}
@@ -339,7 +345,7 @@ func TestTheEmailFallbackCanRequireAVerifiedAddress(t *testing.T) {
 		{values: []any{12}},
 	}}
 	if _, err := resolveProvisionedUser(
-		context.Background(), tx, "oidc:sub-D", "dave@corp.com", "Dave", &verified, true,
+		context.Background(), tx, testBinding, "oidc:sub-D", "dave@corp.com", "Dave", &verified, true,
 	); err != nil {
 		t.Fatalf("a verified address was refused: %v", err)
 	}
@@ -353,7 +359,7 @@ func TestTheEmailFallbackCanRequireAVerifiedAddress(t *testing.T) {
 		{values: []any{13}},
 	}}
 	if _, err := resolveProvisionedUser(
-		context.Background(), tx, "oidc:sub-E", "erin@corp.com", "Erin", nil, false,
+		context.Background(), tx, testBinding, "oidc:sub-E", "erin@corp.com", "Erin", nil, false,
 	); err != nil {
 		t.Fatalf("an absent claim was refused with the requirement off: %v", err)
 	}
@@ -382,7 +388,7 @@ func TestTheEmailFallbackCarriesTheSCIMAdoptionGuard(t *testing.T) {
 		{values: []any{11}},
 	}}
 	if _, err := resolveProvisionedUserFor(
-		context.Background(), tx, "oidc:sub-F", "fay@corp.com", "Fay", nil, false, true,
+		context.Background(), tx, testBinding, "oidc:sub-F", "fay@corp.com", "Fay", nil, false, true,
 	); err != nil {
 		t.Fatalf("resolveProvisionedUserFor: %v", err)
 	}
@@ -396,10 +402,10 @@ func TestTheEmailFallbackCarriesTheSCIMAdoptionGuard(t *testing.T) {
 // the subject, so the claim decides nothing there.
 func TestALinkedSubjectIsNotHeldToTheVerifiedAddressRule(t *testing.T) {
 	t.Setenv("OIDC_REQUIRE_EMAIL_VERIFIED", "true")
-	tx := &scriptedTx{rows: []scriptedRow{{values: []any{7, false}}}}
+	tx := &scriptedTx{rows: []scriptedRow{{values: []any{7, false, true, true}}}}
 
 	if _, err := resolveProvisionedUser(
-		context.Background(), tx, "oidc:sub-A", "alice@corp.com", "Alice", nil, false,
+		context.Background(), tx, testBinding, "oidc:sub-A", "alice@corp.com", "Alice", nil, false,
 	); err != nil {
 		t.Fatalf("a linked subject was refused: %v", err)
 	}
@@ -409,12 +415,12 @@ func TestALinkedSubjectIsNotHeldToTheVerifiedAddressRule(t *testing.T) {
 // need them merged, and only an operator can decide that.
 func TestARepairedAddressThatIsTakenIsRefusedRatherThanFailing(t *testing.T) {
 	tx := &scriptedTx{
-		rows:       []scriptedRow{{values: []any{7, false}}},
+		rows:       []scriptedRow{{values: []any{7, false, true, true}}},
 		execErrors: map[string]error{"SET last_login": &pgconn.PgError{Code: "23505"}},
 	}
 
 	if _, err := resolveProvisionedUser(
-		context.Background(), tx, "oidc:sub-A", "taken@corp.com", "Alice", nil, false,
+		context.Background(), tx, testBinding, "oidc:sub-A", "taken@corp.com", "Alice", nil, false,
 	); !errors.Is(err, errIdentityConflict) {
 		t.Fatalf("error is %v, want errIdentityConflict", err)
 	}

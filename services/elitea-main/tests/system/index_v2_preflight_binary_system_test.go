@@ -27,6 +27,12 @@ import (
 
 const indexV2PreflightSystemTestOptIn = "ELITEA_INDEX_V2_PREFLIGHT_SYSTEM_TEST"
 
+// testDatabaseURLEnv, when set, is the superuser URL of a PostgreSQL server
+// that is already running (the CI job's): the test creates its own database
+// there instead of starting a postgres container. The self-hosted CI pool has
+// no container engine, and this way both CI legs run the job's PostgreSQL 18.
+const testDatabaseURLEnv = "ELITEA_TEST_DATABASE_URL"
+
 // preflightStream is the index route's command stream the preflight reads.
 const preflightStream = commandbus.StreamIndex
 
@@ -40,7 +46,10 @@ func TestIndexV2PreflightShippedBinary(t *testing.T) {
 	if os.Getenv(indexV2PreflightSystemTestOptIn) != "1" {
 		t.Skip("set ELITEA_INDEX_V2_PREFLIGHT_SYSTEM_TEST=1 to run the binary cutover system test")
 	}
-	requireCommand(t, "docker")
+	adminDSN := testpg.DSN(os.Getenv(testDatabaseURLEnv))
+	if adminDSN == "" {
+		requireCommand(t, "docker")
+	}
 	requireCommand(t, "go")
 
 	repositoryRoot := findRepositoryRoot(t)
@@ -50,27 +59,30 @@ func TestIndexV2PreflightShippedBinary(t *testing.T) {
 	natsServer := natstest.Start(t)
 	natsServer.Bootstrap(t, nil)
 
-	postgresPort := freePort(t)
-	containers := &containerSet{}
-	t.Cleanup(containers.stopAll)
-	postgresName := containers.start(t,
-		"preflight-postgres", "postgres:16-trixie",
-		[]string{
-			"-e", "POSTGRES_USER=elitea",
-			"-e", "POSTGRES_PASSWORD=elitea",
-			"-e", "POSTGRES_DB=elitea",
-			"-p", fmt.Sprintf("127.0.0.1:%d:5432", postgresPort),
-		},
-	)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
+	containers := &containerSet{}
+	t.Cleanup(containers.stopAll)
+	var postgresName, rawDatabaseURL string
+	if adminDSN != "" {
+		// The job's server: a fresh database of its own on it.
+		rawDatabaseURL = provisionPreflightDatabase(t, ctx, adminDSN)
+	} else {
+		postgresPort := freePort(t)
+		postgresName = containers.start(t,
+			"preflight-postgres", "postgres:16-trixie",
+			[]string{
+				"-e", "POSTGRES_USER=elitea",
+				"-e", "POSTGRES_PASSWORD=elitea",
+				"-e", "POSTGRES_DB=elitea",
+				"-p", fmt.Sprintf("127.0.0.1:%d:5432", postgresPort),
+			},
+		)
+		rawDatabaseURL = fmt.Sprintf("postgres://elitea:elitea@127.0.0.1:%d/elitea?sslmode=disable", postgresPort)
+	}
 	// The child binaries get the same non-UTC session time zone as this
 	// test's own pool (internal/testpg).
-	databaseURL := testpg.DSN(fmt.Sprintf(
-		"postgres://elitea:elitea@127.0.0.1:%d/elitea?sslmode=disable",
-		postgresPort,
-	))
+	databaseURL := testpg.DSN(rawDatabaseURL)
 	pool := waitForPostgres(t, ctx, databaseURL, containers, postgresName)
 	defer pool.Close()
 	bootstrapDatabase(t, ctx, repositoryRoot, pool)

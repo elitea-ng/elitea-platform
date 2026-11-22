@@ -93,4 +93,26 @@ func TestEdgeRoutesEveryBrowserFamily(t *testing.T) {
 			t.Errorf("GET %s from a pod-network peer = %d by %q; the edge must refuse it", path, recorder.Code, recorder.Header().Get("X-Answered-By"))
 		}
 	}
+
+	// A loopback peer is a probe inside the container only when no proxy
+	// relayed it: a reverse proxy on loopback (a mesh sidecar, a same-host
+	// nginx) carries a forwarding header, and the browser behind it is refused.
+	for _, header := range [][2]string{
+		{"", ""},
+		{"X-Forwarded-For", "203.0.113.7"},
+		{"Forwarded", "for=203.0.113.7"},
+		{"X-Real-IP", "203.0.113.7"},
+	} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+		request.RemoteAddr = "127.0.0.6:40000"
+		if header[0] != "" {
+			request.Header.Set(header[0], header[1])
+		}
+		Middleware(upstream)(main).ServeHTTP(recorder, request)
+		relayed := header[0] != ""
+		if refused := recorder.Code == http.StatusNotFound; refused != relayed {
+			t.Errorf("GET /readyz from loopback with %q = %d; refused must be %v", header[0], recorder.Code, relayed)
+		}
+	}
 }

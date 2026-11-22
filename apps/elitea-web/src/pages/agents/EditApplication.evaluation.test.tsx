@@ -29,6 +29,7 @@ import { server } from '@/test/setup';
 
 import { EditApplication } from './EditApplication';
 import { renderAgentsRoute } from './__tests__/testRouter';
+import { testTimeout } from '@/test/timeouts';
 
 installCodeMirrorTestPolyfills();
 
@@ -144,7 +145,7 @@ describe('EditApplication — the Evaluation tab', () => {
     expect(panel).toContainElement(screen.getByTestId('evaluation-view-library'));
     expect(panel).toContainElement(screen.getByTestId('evaluation-view-datasets'));
     expect(panel).toContainElement(screen.getByTestId('evaluation-view-runs'));
-  }, 20_000);
+  }, testTimeout(20_000));
 
   it('reaches a dataset through the Datasets sub-view', async () => {
     renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
@@ -153,7 +154,7 @@ describe('EditApplication — the Evaluation tab', () => {
     await userEvent.click(await screen.findByTestId('evaluation-view-datasets', {}, { timeout: 5_000 }));
 
     expect(await screen.findByText('Support answers', {}, { timeout: 5_000 })).toBeInTheDocument();
-  }, 20_000);
+  }, testTimeout(20_000));
 
   /*
    * THE WIRING TEST. The run start form needs the version the editor has open;
@@ -171,7 +172,7 @@ describe('EditApplication — the Evaluation tab', () => {
     await waitFor(() => expect(form).not.toHaveTextContent('Save this agent'));
     // The remaining blocker is the one a person can clear on this screen.
     expect(screen.getByTestId('run-start-error')).toHaveTextContent('Choose a dataset.');
-  }, 20_000);
+  }, testTimeout(20_000));
 
   it('opens a run’s scorecard from the editor', async () => {
     renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
@@ -187,5 +188,5 @@ describe('EditApplication — the Evaluation tab', () => {
     // reader does not take the number for a measurement of the whole agent.
     expect(screen.getByTestId('scorecard-execution-mode')).toHaveTextContent('Tools and toolkits were not used');
     expect(screen.getByTestId('scorecard-unavailable')).toHaveTextContent('no human-score surface');
-  }, 20_000);
+  }, testTimeout(20_000));
 });
