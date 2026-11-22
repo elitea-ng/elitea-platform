@@ -31,9 +31,9 @@ tokio = { version = "1", default-features = false, features = ["sync", "time"] }
 [target.'cfg(target_os = "linux")'.dependencies]
 webkit2gtk = { version = "2.0.2", features = ["v2_40"] }
 # The script's answers are JavaScriptCore values (`to_str`).
-javascriptcore-rs = "1.1"
+javascriptcore-rs = "2.0"
 gtk = "0.18"
-cairo-rs = { version = "0.18", features = ["png"] }
+cairo-rs = { version = "0.22", features = ["png"] }
 tauri = { version = "2.12", default-features = false, features = ["wry"], optional = true }
 # The toplevel's X window id (`gdk_x11_window_get_xid`, safe), to check the
 # pointer is over the pane before a trusted click. In the tree through tao.
