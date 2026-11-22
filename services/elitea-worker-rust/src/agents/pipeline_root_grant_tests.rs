@@ -121,6 +121,16 @@ impl ContextRoutes for SavedVersions {
                 }],
                 "truncated": false
             })
+        } else if call.route == "attachments/docs/ok.txt" {
+            json!({
+                "schema_version": "elitea.runtime.attachment-object.v1",
+                "project_id": 17,
+                "bucket": "docs",
+                "name": "ok.txt",
+                "media_type": "text/plain",
+                "byte_length": 19,
+                "content": "untrusted file body"
+            })
         } else if call.route == "agent-memory/remember" {
             let body: Value = serde_json::from_slice(&call.body).unwrap_or(Value::Null);
             self.memory_calls
@@ -1925,5 +1935,57 @@ async fn fu353_adhoc_ordinary_root_lends_attachments_to_nested_agent() {
     assert!(
         child_tools.iter().any(|t| t == "search_attachment"),
         "{child_tools:?}"
+    );
+}
+
+/// FU-353-05: when a nested saved agent reads a conversation attachment via
+/// `read_attachment` and then calls `remember`, the shared `UntrustedReads`
+/// taint sets `from_tool_output: true` on `agent-memory/remember`.
+#[tokio::test(flavor = "current_thread")]
+async fn fu353_nested_attachment_read_taints_subsequent_remember_write() {
+    let child_meta = json!({
+        "internal_tools": ["attachments"],
+        "memory": {"enabled": true, "write": "auto"}
+    });
+    let versions = BTreeMap::from([(
+        (3, 4),
+        saved_version("agent", "Read then remember.", &child_meta, Vec::new()),
+    )]);
+    let mut req = root_request(
+        &root_yaml("worker"),
+        vec![reference((3, 4), "agent", "worker")],
+    );
+    req.payload.application["version_details"]["meta"] = json!({"internal_tools": ["attachments"]});
+    let fix = fixture(
+        &versions,
+        vec![
+            TestModelGatewayOutcome::Response(tool_call_response(
+                "call-att-1",
+                "read_attachment",
+                &json!({"name": "ok.txt"}),
+            )),
+            TestModelGatewayOutcome::Response(tool_call_response(
+                "call-mem-2",
+                "remember",
+                &json!({"kind": "fact", "content": "Fact derived from attachment."}),
+            )),
+            text("done"),
+        ],
+    );
+    let inv = fix
+        .assembler
+        .assemble(enforcing(&req))
+        .await
+        .expect("assemble");
+    let _ = collect_pipeline_completion(inv).await;
+
+    let calls = fix.memory_calls.lock().expect("memory calls").clone();
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    assert_eq!(calls[0].0, "agent-memory/remember");
+    assert_eq!(calls[0].1["target_application_id"], 3);
+    assert_eq!(calls[0].1["target_version_id"], 4);
+    assert_eq!(
+        calls[0].1["from_tool_output"], true,
+        "read_attachment must record untrusted-read taint before remember"
     );
 }

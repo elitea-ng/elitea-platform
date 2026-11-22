@@ -1527,6 +1527,8 @@ impl PipelineNativeAgentAssembler {
                         &current_attachments,
                     );
                     library
+                        .attach_untrusted(Arc::clone(tool_policy.content_controls().untrusted()));
+                    library
                 })
             } else {
                 None

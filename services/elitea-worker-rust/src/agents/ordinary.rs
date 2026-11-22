@@ -426,6 +426,14 @@ impl OrdinaryNativeAgentAssembler {
         } else {
             None
         };
+        // FU-353-05: record untrusted-read taint whenever root or nested
+        // agents read or search conversation attachments.
+        if let Some(library) = attachment_library.as_ref() {
+            library.attach_untrusted(Arc::clone(tool_policy.content_controls().untrusted()));
+        }
+        if let Some(library) = nested_attachment_library.as_ref() {
+            library.attach_untrusted(Arc::clone(tool_policy.content_controls().untrusted()));
+        }
         // ADR-0044 decision 3: a sub-agent is a delegation one level below
         // this run's root.
         let delegation_root = super::application_tools::root_delegation_scope(

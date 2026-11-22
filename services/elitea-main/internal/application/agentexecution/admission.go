@@ -229,6 +229,9 @@ type AdmissionService struct {
 	// hiddenToolkits filters memory_toolkit_ids against project folder access
 	// overrides for the acting user (WithHiddenMemoryToolkits, FU-353).
 	hiddenToolkits HiddenMemoryToolkits
+	// hiddenApps skips folder-hidden intermediate sub-agents during nested
+	// memory-toolkit traversal (WithHiddenNestedApplications / FU-353-07).
+	hiddenApps HiddenNestedApplications
 	// retired refuses a run of a retired agent, or of one that nests a
 	// retired agent (WithRetiredAgents, ADR-0050 decision 5g).
 	retired RetiredAgents
@@ -564,11 +567,31 @@ type HiddenMemoryToolkits interface {
 	HiddenToolkits(ctx context.Context, projectID, userID int64, toolkitIDs []int64) ([]int64, error)
 }
 
+// HiddenNestedApplications answers which of applicationIDs project folder
+// access hides from userID (repos.WorkerEgressSources.HiddenApplications).
+type HiddenNestedApplications interface {
+	HiddenApplications(ctx context.Context, projectID, userID int64, applicationIDs []int64) ([]int64, error)
+}
+
 // WithHiddenMemoryToolkits strips memory toolkits hidden from the acting user
 // before writing execution_jobs.memory_toolkit_ids (FU-353 defense-in-depth).
+// When filter also implements HiddenNestedApplications, folder-hidden
+// intermediate sub-agents are skipped during nested memory-toolkit traversal.
 func (s *AdmissionService) WithHiddenMemoryToolkits(filter HiddenMemoryToolkits) *AdmissionService {
 	if s != nil && filter != nil {
 		s.hiddenToolkits = filter
+		if apps, ok := filter.(HiddenNestedApplications); ok {
+			s.hiddenApps = apps
+		}
+	}
+	return s
+}
+
+// WithHiddenNestedApplications skips folder-hidden intermediate sub-agents
+// during nested memory-toolkit traversal (FU-353-07).
+func (s *AdmissionService) WithHiddenNestedApplications(filter HiddenNestedApplications) *AdmissionService {
+	if s != nil && filter != nil {
+		s.hiddenApps = filter
 	}
 	return s
 }
@@ -685,7 +708,7 @@ func (s *AdmissionService) runToolkitSet(ctx context.Context, request SubmitRequ
 		if depth >= maxNestedMemoryDepth {
 			return nil, nil, fmt.Errorf("%w: sub-agents nest deeper than %d", ErrInvalidAgentAdmission, maxNestedMemoryDepth)
 		}
-		var next [][2]int64
+		var unseen [][2]int64
 		for _, child := range frontier {
 			if seen[child] {
 				continue
@@ -693,6 +716,17 @@ func (s *AdmissionService) runToolkitSet(ctx context.Context, request SubmitRequ
 			seen[child] = true
 			if len(seen) > maxNestedMemoryVersions {
 				return nil, nil, fmt.Errorf("%w: more than %d sub-agent versions", ErrInvalidAgentAdmission, maxNestedMemoryVersions)
+			}
+			unseen = append(unseen, child)
+		}
+		hiddenApps, err := s.hiddenNestedAppsForLevel(ctx, project, request, unseen)
+		if err != nil {
+			return nil, nil, err
+		}
+		var next [][2]int64
+		for _, child := range unseen {
+			if hiddenApps[child[0]] {
+				continue
 			}
 			tools, err := s.nested.NestedApplicationTools(ctx, project, child[0], child[1])
 			if err != nil {
@@ -725,8 +759,40 @@ func (s *AdmissionService) runToolkitSet(ctx context.Context, request SubmitRequ
 	return filtered, finishToolkitTypes(types), nil
 }
 
+// hiddenNestedAppsForLevel returns the folder-hidden application ids in level
+// for the acting user (FU-353-07). Fails closed on lookup error or malformed
+// non-numeric actor ids.
+func (s *AdmissionService) hiddenNestedAppsForLevel(ctx context.Context, project int64, request SubmitRequest, level [][2]int64) (map[int64]bool, error) {
+	if s.hiddenApps == nil || len(level) == 0 {
+		return nil, nil
+	}
+	actor, hasActor, err := parseStrictAdmissionActorID(request.Identity.ActorID)
+	if err != nil {
+		return nil, ErrInvalidAgentAdmission
+	}
+	if !hasActor {
+		return nil, nil
+	}
+	appIDs := childApplications(level)
+	slices.Sort(appIDs)
+	appIDs = slices.Compact(appIDs)
+	hidden, err := s.hiddenApps.HiddenApplications(ctx, project, actor, appIDs)
+	if err != nil {
+		return nil, fmt.Errorf("filter hidden nested applications for actor: %w", err)
+	}
+	if len(hidden) == 0 {
+		return nil, nil
+	}
+	out := make(map[int64]bool, len(hidden))
+	for _, id := range hidden {
+		out[id] = true
+	}
+	return out, nil
+}
+
 // filterHiddenMemoryToolkits removes any memory toolkit hidden from the acting
-// user by project folder access rules. Fails closed on read errors.
+// user by project folder access rules. Fails closed on read errors or malformed
+// non-numeric actor ids.
 func (s *AdmissionService) filterHiddenMemoryToolkits(ctx context.Context, request SubmitRequest, ids []int64) ([]int64, error) {
 	if s.hiddenToolkits == nil || len(ids) == 0 {
 		return ids, nil
@@ -735,8 +801,11 @@ func (s *AdmissionService) filterHiddenMemoryToolkits(ctx context.Context, reque
 	if err != nil || project <= 0 {
 		return nil, ErrInvalidAgentAdmission
 	}
-	actor, err := strconv.ParseInt(request.Identity.ActorID, 10, 64)
-	if err != nil || actor <= 0 {
+	actor, hasActor, err := parseStrictAdmissionActorID(request.Identity.ActorID)
+	if err != nil {
+		return nil, ErrInvalidAgentAdmission
+	}
+	if !hasActor {
 		return ids, nil
 	}
 	hidden, err := s.hiddenToolkits.HiddenToolkits(ctx, project, actor, ids)
@@ -757,6 +826,25 @@ func (s *AdmissionService) filterHiddenMemoryToolkits(ctx context.Context, reque
 		}
 	}
 	return out, nil
+}
+
+func parseStrictAdmissionActorID(raw string) (int64, bool, error) {
+	if raw == "" {
+		return 0, false, nil
+	}
+	if raw[0] < '1' || raw[0] > '9' || len(raw) > 19 {
+		return 0, false, errors.New("malformed actor id")
+	}
+	for i := 1; i < len(raw); i++ {
+		if raw[i] < '0' || raw[i] > '9' {
+			return 0, false, errors.New("malformed actor id")
+		}
+	}
+	parsed, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || parsed <= 0 {
+		return 0, false, errors.New("malformed actor id")
+	}
+	return parsed, true, nil
 }
 
 // childApplications is the application ids of sub-agent references.

@@ -320,6 +320,16 @@ INSERT INTO p_1.folder_access_overrides (folder_id, user_id, access_level) VALUE
 	if err != nil || !slices.Equal(facts.MemoryToolkits, []int64{visibleToolkit}) {
 		t.Fatalf("token memory toolkits = %v, %v; want [%d]", facts.MemoryToolkits, err, visibleToolkit)
 	}
+	// FU353-07: live mid-run revocation via folder_access_overrides strips the
+	// toolkit immediately on the next introspection call.
+	if _, err := pool.Exec(ctx, `
+INSERT INTO p_1.social_folder_items (folder_id, entity, entity_id) VALUES (77, 'toolkit', $1)`, visibleToolkit); err != nil {
+		t.Fatalf("seed mid-run hide: %v", err)
+	}
+	factsAfter, err := store.Facts(ctx, sha256.Sum256([]byte("bearer-nested-hidden")), MemoryIntentNone)
+	if err != nil || len(factsAfter.MemoryToolkits) != 0 {
+		t.Fatalf("live revoked memory toolkits = %v, %v; want empty", factsAfter.MemoryToolkits, err)
+	}
 }
 
 // A nil memory-toolkit list (an admission store called directly, without the

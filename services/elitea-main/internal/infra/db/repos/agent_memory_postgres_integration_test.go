@@ -140,6 +140,16 @@ ON CONFLICT (tenant_project_id, application_id) DO UPDATE SET risk_tier = $2`, a
 	setTier(rootApp, "low")
 	setTier(nestedApp, "high")
 	require.Equal(t, agentmemory.WriteAutoAttended, store.capAutoWriteForAgents(ctx, project, []int64{rootApp, nestedApp}, auto).Write)
+
+	// FU353-02: low root -> high intermediate hop -> low nested -> downgraded to auto_attended.
+	const midApp int64 = 990187
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM elitea_lifecycle.agent_registry WHERE tenant_project_id = 1 AND application_id = $1`, midApp)
+	})
+	setTier(rootApp, "low")
+	setTier(midApp, "high")
+	setTier(nestedApp, "low")
+	require.Equal(t, agentmemory.WriteAutoAttended, store.capAutoWriteForAgents(ctx, project, []int64{rootApp, midApp, nestedApp}, auto).Write)
 }
 
 func TestPostgresNestedAgentMemoryIsolationAndOptOut(t *testing.T) {

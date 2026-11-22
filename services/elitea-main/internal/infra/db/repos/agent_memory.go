@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"slices"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -108,17 +108,18 @@ WHERE j.execution_id = $1 AND j.generation = $2 AND j.resource_project_id = $3`
 
 const (
 	// maxNestedAgentMemoryVersions bounds the server-side BFS reachability
-	// walk when authorizing a nested agent memory target (FU-353), matching
-	// agentexecution.maxNestedMemoryVersions.
-	maxNestedAgentMemoryVersions = 100
+	// walk when authorizing a nested agent memory target (FU-353-06).
+	maxNestedAgentMemoryVersions = 64
 )
 
 // ResolveAgentMemoryRun reads the claimed run. The caller has authorized the
 // claim; projectID is the project it resolved. When target names a nested
 // saved agent (FU-353), Main proves composition reachability from the frozen
-// root input within projectID, checks lifecycle and folder visibility, reads
-// the target version's own meta.memory, caps auto writes at max(root, target)
-// risk tier, and sets Attended = false (D3).
+// root input within projectID, checks lifecycle and folder visibility across
+// every intermediate hop and the target, requires target agent_type == "agent",
+// rejects explicit self-targeting, reads the target version's own meta.memory,
+// caps auto writes at max risk tier across the full ancestor chain (root +
+// intermediate hops + target), and sets Attended = false (D3).
 func (s *AgentMemory) ResolveAgentMemoryRun(ctx context.Context, projectID int64, executionID string, generation uint64, target storage.AgentMemoryTarget) (storage.AgentMemoryRun, error) {
 	if generation == 0 || generation > 1<<63-1 {
 		return storage.AgentMemoryRun{}, storage.ErrContentUnauthorized
@@ -137,7 +138,12 @@ func (s *AgentMemory) ResolveAgentMemoryRun(ctx context.Context, projectID int64
 	if err != nil {
 		return storage.AgentMemoryRun{}, fmt.Errorf("agent memory: read the run: %w", err)
 	}
-	actorID, _ := strconv.ParseInt(actor, 10, 64)
+	// FU-353-07: fail closed on malformed non-numeric actor ids so folder
+	// visibility checks can never be silently bypassed by actorID == 0.
+	actorID, hasActor, actorErr := parseStrictAgentMemoryActorID(actor)
+	if actorErr != nil {
+		return storage.AgentMemoryRun{}, storage.ErrContentUnauthorized
+	}
 	conversation, err := uuid.Parse(stream)
 	if err != nil {
 		// No conversation: a run memory cannot attribute.
@@ -155,37 +161,28 @@ func (s *AgentMemory) ResolveAgentMemoryRun(ctx context.Context, projectID int64
 		}
 		settings = s.capAutoWrite(ctx, projectID, applicationID, settings)
 	} else {
+		if err := validateNestedMemoryTargetActor(applicationID, hasActor, target); err != nil {
+			return storage.AgentMemoryRun{}, err
+		}
 		decodedInput, decodeErr := decodeAgentMemoryInput(input)
 		if decodeErr != nil {
 			return storage.AgentMemoryRun{}, storage.ErrContentRejected
 		}
-		if applicationID > 0 && target.ApplicationID == applicationID {
-			rootVersionID, versionErr := frozenRootVersionID(decodedInput.Application)
-			if versionErr != nil || rootVersionID != target.VersionID {
-				return storage.AgentMemoryRun{}, storage.ErrContentUnauthorized
-			}
-			settings, err = frozenInputMemorySettings(decodedInput)
-			if err != nil {
-				return storage.AgentMemoryRun{}, storage.ErrContentRejected
-			}
-			settings = s.capAutoWrite(ctx, projectID, applicationID, settings)
-		} else {
-			nestedDetails, nestedErr := s.authorizeNestedMemoryTarget(ctx, projectID, actorID, decodedInput, target)
-			if nestedErr != nil {
-				return storage.AgentMemoryRun{}, nestedErr
-			}
-			settings, err = versionDetailsMemorySettings(nestedDetails)
-			if err != nil {
-				return storage.AgentMemoryRun{}, storage.ErrContentRejected
-			}
-			settings = s.capAutoWriteForAgents(ctx, projectID, []int64{applicationID, target.ApplicationID}, settings)
-			targetAppID = target.ApplicationID
-			delegatedFrom = applicationID
-			// D3(a): a nested saved agent is invoked by a parent agent or
-			// pipeline, never directly attended by a human, so auto_attended
-			// writes land in pending review.
-			attended = false
+		nestedMeta, ancestorChain, nestedErr := s.authorizeNestedMemoryTarget(ctx, projectID, actorID, applicationID, decodedInput, target)
+		if nestedErr != nil {
+			return storage.AgentMemoryRun{}, nestedErr
 		}
+		settings, err = metaMemorySettings(nestedMeta)
+		if err != nil {
+			return storage.AgentMemoryRun{}, storage.ErrContentRejected
+		}
+		settings = s.capAutoWriteForAgents(ctx, projectID, ancestorChain, settings)
+		targetAppID = target.ApplicationID
+		delegatedFrom = applicationID
+		// D3(a): a nested saved agent is invoked by a parent agent or
+		// pipeline, never directly attended by a human, so auto_attended
+		// writes land in pending review.
+		attended = false
 	}
 
 	run := storage.AgentMemoryRun{
@@ -211,24 +208,40 @@ func (s *AgentMemory) ResolveAgentMemoryRun(ctx context.Context, projectID int64
 	return run, nil
 }
 
+type nestedMemoryVersionNode struct {
+	ApplicationID int64
+	VersionID     int64
+	AgentType     string
+	Meta          json.RawMessage
+	Tools         json.RawMessage
+}
+
+type nestedMemoryTraversalDeps struct {
+	readBatch  func(ctx context.Context, projectID int64, pairs [][2]int64) (map[[2]int64]nestedMemoryVersionNode, error)
+	retiredIDs func(ctx context.Context, projectID int64, appIDs []int64) (map[int64]bool, error)
+	hiddenIDs  func(ctx context.Context, projectID, actorID int64, appIDs []int64) (map[int64]bool, error)
+}
+
 // authorizeNestedMemoryTarget proves server-side that target is reachable from
 // the claimed run's frozen root input inside projectID within the delegation
-// depth bound, is not retired, and is visible to actorID under project folder
-// access rules (FU-353 D2(a1)). Any absence or mismatch returns
-// ErrContentUnauthorized with no existence oracle.
+// depth bound, is an `agent` (not a pipeline), has no retired or actor-hidden
+// hop anywhere on the traversal path, and returns target's meta plus the full
+// ancestor chain (root + intermediate hops + target) for risk-tier capping
+// (FU-353 D2(a1), FU-353-02, FU-353-03, FU-353-06).
 func (s *AgentMemory) authorizeNestedMemoryTarget(
 	ctx context.Context,
 	projectID int64,
 	actorID int64,
+	rootApplicationID int64,
 	input *runtimev1.AgentExecutionInputV1,
 	target storage.AgentMemoryTarget,
-) (json.RawMessage, error) {
-	if projectID <= 0 || target.ApplicationID <= 0 || target.VersionID <= 0 {
-		return nil, storage.ErrContentUnauthorized
+) (json.RawMessage, []int64, error) {
+	if projectID <= 0 || actorID <= 0 || target.ApplicationID <= 0 || target.VersionID <= 0 {
+		return nil, nil, storage.ErrContentUnauthorized
 	}
 	delegationSettings, err := platformconfig.LoadDelegationSettings(ctx, s.pool)
 	if err != nil {
-		return nil, fmt.Errorf("agent memory: read delegation depth: %w", err)
+		return nil, nil, fmt.Errorf("agent memory: read delegation depth: %w", err)
 	}
 	maxDepth := delegationSettings.MaxDepth
 	if maxDepth < platformconfig.MinDelegationMaxDepth {
@@ -237,87 +250,235 @@ func (s *AgentMemory) authorizeNestedMemoryTarget(
 	if maxDepth > platformconfig.MaxDelegationMaxDepth {
 		maxDepth = platformconfig.MaxDelegationMaxDepth
 	}
-	versions, err := NewCurrentNestedApplicationVersionRepository(s.pool)
+	sources, err := NewWorkerEgressSources(s.pool)
 	if err != nil {
-		return nil, fmt.Errorf("agent memory: nested version reader: %w", err)
+		return nil, nil, fmt.Errorf("agent memory: visibility reader: %w", err)
 	}
-	details, err := resolveReachableNestedVersion(ctx, versions, projectID, input, target, maxDepth)
-	if err != nil {
-		return nil, err
+	deps := nestedMemoryTraversalDeps{
+		readBatch: s.readNestedMemoryVersionsBatch,
+		retiredIDs: func(ctx context.Context, projectID int64, appIDs []int64) (map[int64]bool, error) {
+			retired, err := retiredAgents(ctx, s.pool, projectID, appIDs)
+			if err != nil && undefinedTable(err) {
+				return nil, nil
+			}
+			return retired, err
+		},
+		hiddenIDs: func(ctx context.Context, projectID, actorID int64, appIDs []int64) (map[int64]bool, error) {
+			hidden, err := sources.HiddenApplications(ctx, projectID, actorID, appIDs)
+			if err != nil {
+				return nil, err
+			}
+			if len(hidden) == 0 {
+				return nil, nil
+			}
+			out := make(map[int64]bool, len(hidden))
+			for _, id := range hidden {
+				out[id] = true
+			}
+			return out, nil
+		},
 	}
-	retired, err := retiredAgents(ctx, s.pool, projectID, []int64{target.ApplicationID})
-	if err != nil && !undefinedTable(err) {
-		return nil, fmt.Errorf("agent memory: read target lifecycle: %w", err)
-	}
-	if retired[target.ApplicationID] {
-		return nil, storage.ErrContentUnauthorized
-	}
-	if actorID > 0 {
-		hidden, err := s.nestedApplicationHiddenFromActor(ctx, projectID, actorID, target.ApplicationID)
-		if err != nil {
-			return nil, err
-		}
-		if hidden {
-			return nil, storage.ErrContentUnauthorized
-		}
-	}
-	return details, nil
+	return resolveReachableNestedVersion(ctx, deps, projectID, actorID, rootApplicationID, input, target, maxDepth)
 }
 
-// resolveReachableNestedVersion performs a bounded, cycle-safe BFS from the
-// frozen root tools to prove (target.ApplicationID, target.VersionID) is
-// reachable within projectID at depth <= maxDepth.
+type nestedBFSItem struct {
+	pair      [2]int64
+	ancestors []int64
+}
+
+// resolveReachableNestedVersion performs a level-batched, bounded, cycle-safe
+// BFS from the frozen root tools to prove (target.ApplicationID, target.VersionID)
+// is reachable within projectID at depth <= maxDepth with no retired or
+// actor-hidden intermediate hop, and that target has agent_type == "agent".
 func resolveReachableNestedVersion(
 	ctx context.Context,
-	versions storage.CurrentApplicationVersionSource,
+	deps nestedMemoryTraversalDeps,
 	projectID int64,
+	actorID int64,
+	rootApplicationID int64,
 	input *runtimev1.AgentExecutionInputV1,
 	target storage.AgentMemoryTarget,
 	maxDepth int,
-) (json.RawMessage, error) {
+) (json.RawMessage, []int64, error) {
+	if deps.readBatch == nil {
+		return nil, nil, storage.ErrContentUnauthorized
+	}
 	rootTools, err := frozenInputToolsRaw(input)
 	if err != nil {
-		return nil, storage.ErrContentUnauthorized
+		return nil, nil, storage.ErrContentUnauthorized
 	}
-	frontier := nestedApplicationChildren(rootTools, projectID)
+	var rootAncestors []int64
+	if rootApplicationID > 0 {
+		rootAncestors = []int64{rootApplicationID}
+	}
+	rootChildren := nestedApplicationChildren(rootTools, projectID)
+	frontier := make([]nestedBFSItem, 0, len(rootChildren))
+	for _, child := range rootChildren {
+		frontier = append(frontier, nestedBFSItem{pair: child, ancestors: rootAncestors})
+	}
 	seen := map[[2]int64]bool{}
 	for depth := 1; depth <= maxDepth && len(frontier) > 0; depth++ {
-		var next [][2]int64
-		for _, child := range frontier {
-			if seen[child] {
+		var level []nestedBFSItem
+		appIDSet := map[int64]bool{}
+		for _, item := range frontier {
+			if seen[item.pair] {
 				continue
 			}
-			seen[child] = true
+			seen[item.pair] = true
 			if len(seen) > maxNestedAgentMemoryVersions {
-				return nil, storage.ErrContentUnauthorized
+				return nil, nil, storage.ErrContentUnauthorized
 			}
-			record, err := versions.ReadCurrentApplicationVersion(ctx, projectID, child[0], child[1])
-			if errors.Is(err, storage.ErrContentNotFound) {
+			level = append(level, item)
+			appIDSet[item.pair[0]] = true
+		}
+		if len(level) == 0 {
+			break
+		}
+		appIDs := make([]int64, 0, len(appIDSet))
+		for id := range appIDSet {
+			appIDs = append(appIDs, id)
+		}
+		slices.Sort(appIDs)
+		var retired map[int64]bool
+		if deps.retiredIDs != nil {
+			retired, err = deps.retiredIDs(ctx, projectID, appIDs)
+			if err != nil {
+				return nil, nil, fmt.Errorf("agent memory: read nested lifecycle: %w", err)
+			}
+		}
+		var hidden map[int64]bool
+		if deps.hiddenIDs != nil && actorID > 0 {
+			hidden, err = deps.hiddenIDs(ctx, projectID, actorID, appIDs)
+			if err != nil {
+				return nil, nil, fmt.Errorf("agent memory: check nested folder visibility: %w", err)
+			}
+		}
+		allowedLevel := make([]nestedBFSItem, 0, len(level))
+		batchPairs := make([][2]int64, 0, len(level))
+		for _, item := range level {
+			if retired[item.pair[0]] || hidden[item.pair[0]] {
 				continue
 			}
-			if err != nil {
-				return nil, fmt.Errorf("agent memory: read nested version: %w", err)
+			allowedLevel = append(allowedLevel, item)
+			batchPairs = append(batchPairs, item.pair)
+		}
+		if len(allowedLevel) == 0 {
+			break
+		}
+		nodes, err := deps.readBatch(ctx, projectID, batchPairs)
+		if err != nil {
+			return nil, nil, fmt.Errorf("agent memory: read nested versions: %w", err)
+		}
+		var next []nestedBFSItem
+		for _, item := range allowedLevel {
+			node, ok := nodes[item.pair]
+			if !ok {
+				continue
 			}
-			if record.ApplicationID == target.ApplicationID && record.VersionID == target.VersionID {
-				return record.VersionDetails, nil
-			}
-			if depth < maxDepth {
-				var details struct {
-					Tools json.RawMessage `json:"tools"`
+			chain := make([]int64, len(item.ancestors)+1)
+			copy(chain, item.ancestors)
+			chain[len(item.ancestors)] = node.ApplicationID
+			if node.ApplicationID == target.ApplicationID && node.VersionID == target.VersionID {
+				// FU-353-03: match Worker binding (assembly.rs) — only saved
+				// agents (agent_type == "agent") hold agent_memory.
+				if node.AgentType != "agent" {
+					return nil, nil, storage.ErrContentUnauthorized
 				}
-				if json.Unmarshal(record.VersionDetails, &details) == nil && len(details.Tools) > 0 {
-					next = append(next, nestedApplicationChildren(details.Tools, projectID)...)
+				return node.Meta, chain, nil
+			}
+			if depth < maxDepth && len(node.Tools) > 0 {
+				for _, child := range nestedApplicationChildren(node.Tools, projectID) {
+					next = append(next, nestedBFSItem{pair: child, ancestors: chain})
 				}
 			}
 		}
 		frontier = next
 	}
-	return nil, storage.ErrContentUnauthorized
+	return nil, nil, storage.ErrContentUnauthorized
+}
+
+// readNestedMemoryVersionsBatch reads agent_type, meta, and child application
+// tools for all (application_id, version_id) pairs of one BFS level in a
+// single tenant-scoped query (FU-353-06).
+func (s *AgentMemory) readNestedMemoryVersionsBatch(
+	ctx context.Context,
+	projectID int64,
+	pairs [][2]int64,
+) (map[[2]int64]nestedMemoryVersionNode, error) {
+	if len(pairs) == 0 {
+		return nil, nil
+	}
+	schema, err := tenantschema.QuoteInt(projectID)
+	if err != nil {
+		return nil, err
+	}
+	appIDs := make([]int32, 0, len(pairs))
+	verIDs := make([]int32, 0, len(pairs))
+	for _, pair := range pairs {
+		appKey, okApp := currentAgentDatabaseID(pair[0])
+		verKey, okVer := currentAgentDatabaseID(pair[1])
+		if !okApp || !okVer {
+			continue
+		}
+		appIDs = append(appIDs, appKey)
+		verIDs = append(verIDs, verKey)
+	}
+	if len(appIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
+SELECT av.application_id::bigint,
+       av.id::bigint,
+       COALESCE(av.agent_type, ''),
+       COALESCE(NULLIF(av.meta::jsonb, 'null'::jsonb), '{}'::jsonb)::text,
+       COALESCE((
+           SELECT jsonb_agg(
+               jsonb_build_object(
+                   'type', tool.type,
+                   'settings', tool.settings
+               )
+               ORDER BY m.id
+           )
+           FROM %[1]s.entity_tool_mapping AS m
+           JOIN %[1]s.elitea_tools AS tool ON tool.id = m.tool_id
+           WHERE m.entity_version_id = av.id
+             AND m.entity_id = av.application_id
+             AND m.entity_type = 'agent'
+             AND tool.type = 'application'
+       ), '[]'::jsonb)::text
+FROM %[1]s.application_versions AS av
+JOIN unnest($1::integer[], $2::integer[]) AS req(application_id, version_id)
+  ON av.application_id = req.application_id
+ AND av.id = req.version_id`, schema), appIDs, verIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[[2]int64]nestedMemoryVersionNode, len(appIDs))
+	for rows.Next() {
+		var (
+			node           nestedMemoryVersionNode
+			metaText       string
+			childToolsText string
+		)
+		if err := rows.Scan(&node.ApplicationID, &node.VersionID, &node.AgentType, &metaText, &childToolsText); err != nil {
+			return nil, err
+		}
+		node.Meta = json.RawMessage(metaText)
+		node.Tools = json.RawMessage(childToolsText)
+		out[[2]int64{node.ApplicationID, node.VersionID}] = node
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // nestedApplicationChildren extracts same-project (application_id, version_id)
-// pairs from a frozen tools array. Entries naming a foreign project or invalid
-// ids are ignored (never traversed).
+// pairs from a frozen tools array. Checks BOTH top-level and settings
+// `project_id` with canonical positive integer parsing matching Worker
+// (snapshot.rs) so floats, leading zeros, whitespace, strings, non-positive
+// values, or mismatched project_id fail closed (FU-353-01).
 func nestedApplicationChildren(rawTools json.RawMessage, projectID int64) [][2]int64 {
 	if len(rawTools) == 0 {
 		return nil
@@ -338,14 +499,20 @@ func nestedApplicationChildren(rawTools json.RawMessage, projectID int64) [][2]i
 		if settings == nil {
 			continue
 		}
-		if rawProject, hasProject := settings["project_id"]; hasProject && rawProject != nil {
-			nestedProject, ok := positiveJSONInt64OrString(rawProject)
-			if !ok || nestedProject != projectID {
+		if rawTopProject, hasTop := entry["project_id"]; hasTop && rawTopProject != nil {
+			topProject, ok := canonicalPositiveJSONInt64(rawTopProject)
+			if !ok || topProject != projectID {
 				continue
 			}
 		}
-		appID, okApp := positiveJSONInt64(settings["application_id"])
-		verID, okVer := positiveJSONInt64(settings["application_version_id"])
+		if rawSettingsProject, hasSettings := settings["project_id"]; hasSettings && rawSettingsProject != nil {
+			settingsProject, ok := canonicalPositiveJSONInt64(rawSettingsProject)
+			if !ok || settingsProject != projectID {
+				continue
+			}
+		}
+		appID, okApp := canonicalPositiveJSONInt64(settings["application_id"])
+		verID, okVer := canonicalPositiveJSONInt64(settings["application_version_id"])
 		if !okApp || !okVer || appID > math.MaxInt32 || verID > math.MaxInt32 {
 			continue
 		}
@@ -354,70 +521,65 @@ func nestedApplicationChildren(rawTools json.RawMessage, projectID int64) [][2]i
 	return out
 }
 
-func positiveJSONInt64OrString(raw any) (int64, bool) {
-	if s, ok := raw.(string); ok {
-		parsed, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
-		return parsed, err == nil && parsed > 0
-	}
-	return positiveJSONInt64(raw)
-}
-
-func positiveJSONInt64(raw any) (int64, bool) {
-	switch value := raw.(type) {
-	case json.Number:
-		parsed, err := strconv.ParseInt(value.String(), 10, 64)
-		return parsed, err == nil && parsed > 0
-	case float64:
-		if value <= 0 || math.Trunc(value) != value || value > float64(math.MaxInt64) {
-			return 0, false
-		}
-		return int64(value), true
-	default:
+// canonicalPositiveJSONInt64 accepts only canonical base-10 positive JSON
+// integers (`^[1-9][0-9]{0,18}$`), matching Rust's `Value::as_u64` positive
+// integer check (snapshot.rs) and rejecting floats, leading zeros, whitespace,
+// strings, and non-positive values (FU-353-01).
+func canonicalPositiveJSONInt64(raw any) (int64, bool) {
+	num, ok := raw.(json.Number)
+	if !ok {
 		return 0, false
 	}
+	s := num.String()
+	if len(s) == 0 || len(s) > 19 || s[0] < '1' || s[0] > '9' {
+		return 0, false
+	}
+	for i := 1; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return 0, false
+		}
+	}
+	parsed, err := strconv.ParseInt(s, 10, 64)
+	return parsed, err == nil && parsed > 0
 }
 
-// nestedApplicationHiddenFromActor enforces project folder no_access overrides
-// on the target application (matching worker_principal_sources.go's 3-state
-// probe: absent tables hide none, partially installed tables fail closed).
-func (s *AgentMemory) nestedApplicationHiddenFromActor(ctx context.Context, projectID, actorID, applicationID int64) (bool, error) {
-	schema, err := tenantschema.QuoteInt(projectID)
-	if err != nil {
-		return false, err
+// validateNestedMemoryTargetActor enforces fail-closed preconditions before
+// nested target traversal: explicit self-targeting is refused (FU-353-04) and
+// a positive numeric actor id is required for folder visibility checks
+// (FU-353-07).
+func validateNestedMemoryTargetActor(rootApplicationID int64, hasActor bool, target storage.AgentMemoryTarget) error {
+	if target.ApplicationID <= 0 || target.VersionID <= 0 {
+		return storage.ErrContentUnauthorized
 	}
-	name := strings.Trim(schema, `"`)
-	var state int
-	if err := s.pool.QueryRow(ctx, `
-SELECT CASE
-    WHEN to_regclass($1) IS NOT NULL
-     AND to_regclass($2) IS NOT NULL
-     AND to_regclass($3) IS NOT NULL THEN 1
-    WHEN to_regclass($3) IS NULL THEN 0
-    ELSE -1
-END::integer`, name+".entity_folders", name+".social_folder_items", name+".folder_access_overrides").Scan(&state); err != nil {
-		return false, fmt.Errorf("agent memory: probe folder access tables: %w", err)
+	if rootApplicationID > 0 && target.ApplicationID == rootApplicationID {
+		return storage.ErrContentUnauthorized
 	}
-	switch state {
-	case 0:
-		return false, nil
-	case 1:
-	default:
-		return false, errors.New("agent memory: the project's folder access is partially installed")
+	if !hasActor {
+		return storage.ErrContentUnauthorized
 	}
-	var hidden bool
-	if err := s.pool.QueryRow(ctx, fmt.Sprintf(`
-SELECT EXISTS (
-    SELECT 1
-    FROM %[1]s.social_folder_items AS item
-    JOIN %[1]s.folder_access_overrides AS access ON access.folder_id = item.folder_id
-    WHERE item.entity IN ('agent', 'pipeline', 'application')
-      AND item.entity_id = $1
-      AND access.user_id = $2
-      AND access.access_level = 'no_access'
-)`, schema), applicationID, actorID).Scan(&hidden); err != nil {
-		return false, fmt.Errorf("agent memory: check target folder visibility: %w", err)
+	return nil
+}
+
+// parseStrictAgentMemoryActorID parses j.actor_id strictly: empty string is
+// treated as absent (hasActor=false), while any non-empty malformed or
+// non-positive value fails closed (FU-353-07).
+func parseStrictAgentMemoryActorID(raw string) (int64, bool, error) {
+	if raw == "" {
+		return 0, false, nil
 	}
-	return hidden, nil
+	if len(raw) > 19 || raw[0] < '1' || raw[0] > '9' {
+		return 0, false, errors.New("agent memory: malformed actor id")
+	}
+	for i := 1; i < len(raw); i++ {
+		if raw[i] < '0' || raw[i] > '9' {
+			return 0, false, errors.New("agent memory: malformed actor id")
+		}
+	}
+	parsed, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || parsed <= 0 {
+		return 0, false, errors.New("agent memory: malformed actor id")
+	}
+	return parsed, true, nil
 }
 
 // capAutoWrite holds the memory auto limit at run time (ADR-0050 decision
@@ -546,49 +708,38 @@ func versionDetailsMemorySettings(raw json.RawMessage) (agentmemory.Settings, er
 		return agentmemory.Off, nil
 	}
 	var details struct {
-		Meta map[string]any `json:"meta"`
+		Meta json.RawMessage `json:"meta"`
 	}
 	if err := json.Unmarshal(raw, &details); err != nil {
 		return agentmemory.Settings{}, err
 	}
-	return agentmemory.Parse(details.Meta[agentmemory.MetaKey])
+	return metaMemorySettings(details.Meta)
 }
 
-func frozenRootVersionID(rawApp json.RawMessage) (int64, error) {
-	if len(rawApp) == 0 {
-		return 0, errors.New("agent memory: missing root application")
+func metaMemorySettings(rawMeta json.RawMessage) (agentmemory.Settings, error) {
+	if len(rawMeta) == 0 {
+		return agentmemory.Off, nil
 	}
-	decoder := json.NewDecoder(bytes.NewReader(rawApp))
-	decoder.UseNumber()
-	var application struct {
-		VersionID      any `json:"version_id"`
-		VersionDetails struct {
-			ID any `json:"id"`
-		} `json:"version_details"`
+	var meta map[string]any
+	if err := json.Unmarshal(rawMeta, &meta); err != nil {
+		return agentmemory.Settings{}, err
 	}
-	if err := decoder.Decode(&application); err != nil {
-		return 0, err
-	}
-	if id, ok := positiveJSONInt64(application.VersionID); ok {
-		return id, nil
-	}
-	if id, ok := positiveJSONInt64(application.VersionDetails.ID); ok {
-		return id, nil
-	}
-	return 0, errors.New("agent memory: missing root version id")
+	return agentmemory.Parse(meta[agentmemory.MetaKey])
 }
 
 func frozenInputToolsRaw(input *runtimev1.AgentExecutionInputV1) (json.RawMessage, error) {
 	if len(input.Application) > 0 {
 		var application struct {
-			VersionDetails struct {
+			VersionDetails *struct {
 				Tools json.RawMessage `json:"tools"`
 			} `json:"version_details"`
 		}
 		if err := json.Unmarshal(input.Application, &application); err != nil {
 			return nil, err
 		}
-		return application.VersionDetails.Tools, nil
+		if application.VersionDetails != nil {
+			return application.VersionDetails.Tools, nil
+		}
 	}
 	return input.Tools, nil
 }
