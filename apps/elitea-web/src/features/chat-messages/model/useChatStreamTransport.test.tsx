@@ -780,6 +780,68 @@ describe("useChatStreamTransport", () => {
     expect(failure?.id).toBe(RESPONSE_MESSAGE_ID);
   });
 
+  it("FU-360: preserves an assembly-time pipeline_node delegation_refused notice when execution.failed settles the turn live", async () => {
+    okStart();
+    const { api, history, Probe } = harness([userQuestion()]);
+    render(<Probe />);
+    await started(api);
+
+    act(() => {
+      registry.emit(
+        "execution.node_event",
+        JSON.stringify({
+          type: "delegation_refused",
+          message_id: RESPONSE_MESSAGE_ID,
+          execution_generation: QUESTION_ID,
+          response_metadata: {
+            delegation_v1: {
+              id: "pipeline_node:delegate",
+              kind: "refused",
+              reason: "no_grant",
+              code: "DELEGATION_GRANT_MISSING",
+              edge: {
+                caller_id: 174,
+                caller_name: "P0r refusal",
+                callee_id: 171,
+                callee_name: "delegate",
+                kind: "pipeline_node",
+              },
+              missing: [{ kind: "toolkit", name: "c1mockmcp" }],
+              can_review: true,
+            },
+          },
+        }),
+      );
+      registry.emit(
+        "execution.failed",
+        JSON.stringify({
+          code: "AUTHORIZATION_FAILED",
+          safe_message: "Execution authorization failed.",
+          retryable: false,
+        }),
+      );
+    });
+
+    expect(history.current).toHaveLength(2);
+    const answer = history.current[1];
+    expect(answer?.id).toBe(RESPONSE_MESSAGE_ID);
+    expect(answer?.isStreaming).toBe(false);
+    expect(answer?.isLoading).toBe(false);
+    expect(answer?.failureCode).toBe("AUTHORIZATION_FAILED");
+    expect(answer?.delegationNotices).toHaveLength(1);
+    expect(answer?.delegationNotices?.[0]).toMatchObject({
+      id: "pipeline_node:delegate",
+      kind: "refused",
+      reason: "no_grant",
+      callerId: 174,
+      callerName: "P0r refusal",
+      calleeId: 171,
+      calleeName: "delegate",
+      edgeKind: "pipeline_node",
+      canReview: true,
+    });
+  });
+
   it("keeps the user's question when the turn is refused", async () => {
     // Observed once in the browser as a question that vanished on refusal.
     // Nothing in this transport removes it — the assertion pins that.

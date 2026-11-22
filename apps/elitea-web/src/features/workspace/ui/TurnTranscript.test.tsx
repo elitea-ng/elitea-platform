@@ -182,4 +182,40 @@ describe('TurnTranscript', () => {
     expect(screen.getByTestId('commit-failed')).toHaveTextContent('Not saved.');
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
   });
+
+  it('renders typed refusals with a refusal status and suppresses redundant error when a delegation notice explains it', () => {
+    const refusalView = {
+      phase: 'done' as const,
+      items: [],
+      approvals: [],
+      error: { code: 'AUTHORIZATION_FAILED', message: 'Execution authorization failed.' },
+    };
+    const { rerender } = renderWithTheme(<TurnTranscript view={refusalView} busy={false} />);
+    expect(screen.getByTestId('turn-refusal')).toHaveTextContent('Authorization refused');
+    expect(screen.getByTestId('turn-refusal')).toHaveTextContent('Execution authorization failed.');
+
+    const explainedView = {
+      ...refusalView,
+      delegationNotices: [
+        {
+          id: 'pipeline_node:delegate',
+          kind: 'refused' as const,
+          reason: 'no_grant' as const,
+          code: 'DELEGATION_GRANT_MISSING',
+          callerId: 174,
+          callerName: 'P0r',
+          calleeId: 171,
+          calleeName: 'delegate',
+          edgeKind: 'pipeline_node' as const,
+          missing: [{ kind: 'toolkit' as const, name: 'c1mockmcp' }],
+          missingTotal: 1,
+          canReview: true,
+          editors: [],
+        },
+      ],
+    };
+    rerender(<TurnTranscript view={explainedView} busy={false} />);
+    expect(screen.getByTestId('delegation-notices')).toHaveTextContent('Delegation refused');
+    expect(screen.queryByTestId('turn-refusal')).toBeNull();
+  });
 });

@@ -56,6 +56,7 @@ export interface RunPipelineStatus {
     status: string;
     recoveryPaused?: boolean;
     error?: string;
+    failureCode?: string;
   };
   type: string;
 }

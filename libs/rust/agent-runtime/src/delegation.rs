@@ -183,6 +183,9 @@ pub struct DelegationPolicy {
     /// The approved delegation grants of the run, by edge (ADR-0044
     /// Amendment 1, #2166). Empty unless Main's grant switch is on.
     grants: Grants,
+    /// Whether Main's grant switch is on (`WorkerDelegationPolicyV1.grants_enforced`).
+    /// True even when every grant is still pending (0 approved grants).
+    grants_enforced: bool,
     /// The saved agent or pipeline the run starts with; 0 for none.
     root_application_id: u64,
 }
@@ -195,6 +198,7 @@ impl Default for DelegationPolicy {
             root_data_classes: BTreeSet::new(),
             principal: None,
             grants: Grants::new(),
+            grants_enforced: false,
             root_application_id: 0,
         }
     }
@@ -221,12 +225,15 @@ impl DelegationPolicy {
             root_data_classes: data_classes(root_data_classes)?,
             principal: None,
             grants: Grants::new(),
+            grants_enforced: false,
             root_application_id: 0,
         })
     }
 
     /// This policy with the run's approved delegation grants, which also turns
-    /// grant enforcement on: an edge that has one is bounded by `E(Y) ∪ G`.
+    /// grant enforcement on: an edge that has one is bounded by `E(Y) ∪ G`, and
+    /// `root_application_id` names the root even when no grant is approved yet
+    /// (FU-359).
     ///
     /// # Errors
     ///
@@ -237,6 +244,7 @@ impl DelegationPolicy {
         root_application_id: u64,
         grants: impl IntoIterator<Item = (EdgeKey, DelegationGrant)>,
     ) -> Result<Self, DelegationPolicyError> {
+        self.grants_enforced = true;
         self.root_application_id = root_application_id;
         for (edge, grant) in grants {
             self.grants.insert(edge, grant);
@@ -277,11 +285,11 @@ impl DelegationPolicy {
         })
     }
 
-    /// Whether the run carries grants (Main's switch is on and some edge of
-    /// the root's closure has one).
+    /// Whether grant enforcement is on (Main's switch is on, with or without
+    /// approved grants).
     #[must_use]
-    pub fn grants_enforced(&self) -> bool {
-        !self.grants.is_empty()
+    pub const fn grants_enforced(&self) -> bool {
+        self.grants_enforced
     }
 
     /// The saved agent or pipeline the run starts with, 0 for none.

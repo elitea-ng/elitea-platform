@@ -14,6 +14,7 @@ import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import CloseIcon from '@mui/icons-material/Close';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import Alert from '@mui/material/Alert';
+import AlertTitle from '@mui/material/AlertTitle';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import ButtonBase from '@mui/material/ButtonBase';
@@ -27,6 +28,7 @@ import Typography from '@mui/material/Typography';
 
 import { RunBriefCard } from '@/entities/run-brief';
 import { t } from '@/shared/i18n';
+import { classifyRuntimeFailure, delegationRefusalExplainsFailure, refusalCategoryTitle, refusalFallbackMessage } from '@/shared/lib/runtimeFailure';
 import { Markdown } from '@/shared/ui/Markdown';
 import { conversationBubbleSx } from '@/shared/ui/conversation-column';
 
@@ -221,8 +223,26 @@ export interface TurnTranscriptProps {
  */
 const RETRYABLE = new Set(['model_gateway.incomplete_stream', 'model_gateway.unavailable', 'model_gateway.upstream_timeout', 'model_gateway.rate_limited']);
 
-/** The turn's error, with "Retry" when another try may mend it. */
+/** The turn's error, with "Retry" when another try may mend it. Typed refusals show a refusal status instead of a generic error. */
 function TurnError({ error, onRetry }: { error: NonNullable<TurnView['error']>; onRetry?: (() => void) | undefined }): React.JSX.Element {
+  const classification = classifyRuntimeFailure(error.code);
+  if (classification.kind === 'refusal') {
+    const reason = error.message === error.code ? refusalFallbackMessage(classification.category) : error.message;
+    return (
+      <Alert severity="warning" data-testid="turn-refusal" data-refusal-category={classification.category}>
+        <AlertTitle>{refusalCategoryTitle(classification.category)}</AlertTitle>
+        {reason}
+      </Alert>
+    );
+  }
+  if (classification.kind === 'cancelled') {
+    return (
+      <Alert severity="info" data-testid="turn-cancelled">
+        <AlertTitle>{t('runtimeFailure.cancelledTitle', 'Run stopped')}</AlertTitle>
+        {error.message}
+      </Alert>
+    );
+  }
   const action =
     onRetry === undefined || !RETRYABLE.has(error.code) ? undefined : (
       <Button color="inherit" size="small" onClick={onRetry} data-testid="turn-error-retry">
@@ -298,7 +318,7 @@ export function TurnTranscript({ view, busy, onRetryCommit, onTextContextMenu, o
         ),
       )}
       <DelegationNotices notices={view.delegationNotices} />
-      {view.error !== undefined && <TurnError error={view.error} onRetry={onRetryTurn} />}
+      {view.error !== undefined && !delegationRefusalExplainsFailure(view.error.code, view.delegationNotices) && <TurnError error={view.error} onRetry={onRetryTurn} />}
       <RetryNotice view={view} />
       <StopNotices view={view} onContinue={onContinue} />
       {view.commitFailed !== undefined && <CommitFailed key={view.commitFailed.seq} failed={view.commitFailed} {...(onRetryCommit === undefined ? {} : { onRetry: onRetryCommit })} />}

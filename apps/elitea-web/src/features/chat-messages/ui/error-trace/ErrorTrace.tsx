@@ -8,17 +8,22 @@
 import type { ReactNode } from 'react';
 import { useState } from 'react';
 
+import BlockOutlinedIcon from '@mui/icons-material/BlockOutlined';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DownloadOutlinedIcon from '@mui/icons-material/DownloadOutlined';
 import ErrorOutlinedIcon from '@mui/icons-material/ErrorOutlined';
+import Alert from '@mui/material/Alert';
+import AlertTitle from '@mui/material/AlertTitle';
 import Box from '@mui/material/Box';
 import Collapse from '@mui/material/Collapse';
 import IconButton from '@mui/material/IconButton';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
+import { t } from '@/shared/i18n';
 import { handleCopy } from '@/shared/lib/clipboard';
 import { triggerBlobDownload } from '@/shared/lib/download';
+import { classifyRuntimeFailure, refusalCategoryTitle, refusalFallbackMessage } from '@/shared/lib/runtimeFailure';
 import type { Theme } from '@mui/material/styles';
 
 /** @public Props for `ErrorTrace`. */
@@ -27,6 +32,8 @@ export interface ErrorTraceProps {
   readonly error: unknown;
   /** Whether to expand the trace by default. */
   readonly defaultExpanded?: boolean;
+  /** Typed server failure code (`execution.failed` `code` or persisted `meta.error_code`). */
+  readonly failureCode?: string | undefined;
 }
 
 /** The always-visible headline (baseline: `headline`). */
@@ -47,15 +54,53 @@ function errorDetail(error: unknown, headline: string): string | undefined {
 /**
  * `ErrorTrace` — renders an always-visible error headline, plus (when there
  * is supplementary detail beyond the headline) an expandable trace panel
- * with download/copy actions.
+ * with download/copy actions. Typed policy, authorization, and validation
+ * refusals render with a refusal status and reason instead of a generic red
+ * runtime-error banner.
  */
-export function ErrorTrace({ error, defaultExpanded = false }: ErrorTraceProps): ReactNode {
+export function ErrorTrace({ error, defaultExpanded = false, failureCode }: ErrorTraceProps): ReactNode {
   const [expanded, setExpanded] = useState(defaultExpanded);
 
   if (!error) return null;
 
   const headline = errorHeadline(error);
   const trace = errorDetail(error, headline);
+  const classification = classifyRuntimeFailure(failureCode);
+
+  if (classification.kind === 'refusal') {
+    const reason = headline === failureCode ? refusalFallbackMessage(classification.category) : headline;
+    return (
+      <Alert
+        severity="warning"
+        icon={<BlockOutlinedIcon fontSize="small" />}
+        data-testid="error-trace"
+        data-outcome="refusal"
+        data-refusal-category={classification.category}
+        sx={{ mt: 1, mb: 1, alignSelf: 'stretch', width: '100%' }}
+      >
+        <AlertTitle>{refusalCategoryTitle(classification.category)}</AlertTitle>
+        <Typography variant="bodySmall" component="p">
+          {reason}
+        </Typography>
+      </Alert>
+    );
+  }
+
+  if (classification.kind === 'cancelled') {
+    return (
+      <Alert
+        severity="info"
+        data-testid="error-trace"
+        data-outcome="cancelled"
+        sx={{ mt: 1, mb: 1, alignSelf: 'stretch', width: '100%' }}
+      >
+        <AlertTitle>{t('runtimeFailure.cancelledTitle', 'Run stopped')}</AlertTitle>
+        <Typography variant="bodySmall" component="p">
+          {headline}
+        </Typography>
+      </Alert>
+    );
+  }
 
   const handleDownload = (): void => {
     if (!trace) return;
@@ -70,6 +115,7 @@ export function ErrorTrace({ error, defaultExpanded = false }: ErrorTraceProps):
   return (
     <Box
       data-testid="error-trace"
+      data-outcome="error"
       sx={{
         mt: 1,
         mb: 1,

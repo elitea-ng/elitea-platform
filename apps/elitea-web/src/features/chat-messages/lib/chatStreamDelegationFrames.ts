@@ -13,7 +13,7 @@
  */
 import { delegationNoticeOf, foldDelegationNotice } from '@elitea/client-core/stream';
 
-import { replaceAt } from './chatStreamShared';
+import { createAssistantMessage, replaceAt, type ChatStreamContext } from './chatStreamShared';
 import { SocketMessageType, type ChatStreamFrame } from './chatStreamFrame';
 import type { ChatMessage } from './convertMessagesToChatHistory';
 
@@ -21,11 +21,19 @@ export function reduceDelegationFrame(
   history: readonly ChatMessage[],
   frame: ChatStreamFrame,
   type: string,
+  context: ChatStreamContext,
   index: number,
 ): readonly ChatMessage[] | undefined {
   if (type !== SocketMessageType.DelegationRefused && type !== SocketMessageType.DelegationNarrowed) return undefined;
-  const current = history[index];
   const notice = delegationNoticeOf(frame.response_metadata);
-  if (!current || notice === undefined) return history;
+  if (notice === undefined) return history;
+  const current = history[index];
+  if (!current) {
+    // FU-360: an assembly-time refusal of a pipeline Agent node or saved-pipeline
+    // node (#2235) publishes `delegation_refused` BEFORE `agent_start` (and before
+    // `execution.failed`). Create the in-flight assistant message so the notice
+    // appears live and survives `settleInFlight` on `execution.failed`.
+    return [...history, { ...createAssistantMessage(frame, context), delegationNotices: foldDelegationNotice([], notice) }];
+  }
   return replaceAt(history, index, { delegationNotices: foldDelegationNotice(current.delegationNotices ?? [], notice) });
 }

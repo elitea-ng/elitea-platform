@@ -90,6 +90,7 @@ export interface PushWorkerScope {
 const TEXT = {
   completed: { title: 'Run finished', body: 'A run is done.' },
   failed: { title: 'Run failed', body: 'A run stopped with an error.' },
+  refused: { title: 'Run refused', body: 'A run was refused by policy or permissions.' },
   waiting: { title: 'Run needs you', body: 'A run waits for your answer.' },
   limit_reached: { title: 'Run stopped at its limit', body: 'A run reached its chain limit.' },
 } as const satisfies Record<string, NoticeText>;
