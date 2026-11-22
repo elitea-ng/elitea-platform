@@ -7271,5 +7271,12 @@
   "features.pipelines.addNode.buttonLabel": "Node",
   "features.pipelines.addNode.selectNodeType": "Select node type",
   "features.pipelines.emptyState.addNode": "Add Node",
-  "features.pipelines.emptyState.message": "Start by adding your first node to the canvas!"
+  "features.pipelines.emptyState.message": "Start by adding your first node to the canvas!",
+  "pipelines.flowEditor.state.collapseGroup": "Collapse {{groupLabel}} ({{count}} steps)",
+  "pipelines.flowEditor.state.expandAllSteps": "Expand all steps",
+  "pipelines.flowEditor.state.expandGroup": "Expand {{groupLabel}} ({{count}} steps)",
+  "pipelines.flowEditor.state.supportRefLabel": "Support ref: {{ref}}",
+  "pipelines.flowEditor.state.timelineGroupStepCount": "{{count}} steps",
+  "pipelines.flowEditor.state.timelineGroupStepCountInGroup": "{{count}} steps in {{groupLabel}}",
+  "pipelines.flowEditor.state.timelineRegionLabel": "Pipeline timeline steps"
 }
