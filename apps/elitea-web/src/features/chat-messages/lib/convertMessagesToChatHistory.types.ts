@@ -66,9 +66,9 @@ export interface ChatMessage {
   readonly interactionUuid?: string | undefined;
   readonly toolActions?: readonly SubAgentGroupable[] | undefined;
   readonly exception?: unknown;
-  readonly failureCode?: string;
+  readonly failureCode?: string | undefined;
   /** The run cap a CAP_REACHED answer stopped at (`meta.cap`, or the failure frame's `cap`). */
-  readonly failureCap?: string;
+  readonly failureCap?: string | undefined;
   readonly isStreaming?: boolean | undefined;
   readonly isLoading?: boolean | undefined;
   /**

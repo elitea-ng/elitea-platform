@@ -252,9 +252,19 @@ func TestALiveFrameNamesTheCallingAgentAndAStoredNoticeKeepsItsName(t *testing.T
 	if got := served[MetaKey].([]any)[0].(map[string]any)["edge"].(map[string]any)["caller_name"]; got != "elitea-agent" || edge["caller_name"] != "elitea-agent" {
 		t.Fatalf("a stored notice keeps the name it was saved with: %v", got)
 	}
-	frame := `{"response_metadata":{"delegation_v1":` + refusedJSON + `}}`
+	frame := `{"type":"delegation_refused","response_metadata":{"delegation_v1":` + refusedJSON + `}}`
 	out := StampFrame(t.Context(), []byte(frame), 1, 2, &fakeReviewer{review: Review{CallerName: "Release helper"}})
 	if !strings.Contains(string(out), `"caller_name":"Release helper"`) {
 		t.Fatalf("a live frame keeps the runtime label: %s", out)
+	}
+	// Non-delegation frames and mismatched frame-type/notice-kind frames pass through unstamped.
+	for _, bad := range []string{
+		`{"type":"agent_tool_end","response_metadata":{"delegation_v1":` + refusedJSON + `}}`,
+		`{"type":"delegation_narrowed","response_metadata":{"delegation_v1":` + refusedJSON + `}}`,
+		`{"response_metadata":{"delegation_v1":` + refusedJSON + `}}`,
+	} {
+		if got := StampFrame(t.Context(), []byte(bad), 1, 2, &fakeReviewer{review: Review{CanReview: true}}); string(got) != bad {
+			t.Fatalf("mismatched/unrelated frame was stamped: %s", got)
+		}
 	}
 }

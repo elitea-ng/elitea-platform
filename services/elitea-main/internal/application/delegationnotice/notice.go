@@ -246,6 +246,10 @@ func StampFrame(ctx context.Context, data []byte, projectID, userID int64, revie
 	if json.Unmarshal(data, &frame) != nil {
 		return data
 	}
+	var frameType string
+	if json.Unmarshal(frame["type"], &frameType) != nil || (frameType != EventRefused && frameType != EventNarrowed) {
+		return data
+	}
 	var metadata map[string]json.RawMessage
 	if json.Unmarshal(frame["response_metadata"], &metadata) != nil {
 		return data
@@ -254,6 +258,10 @@ func StampFrame(ctx context.Context, data []byte, projectID, userID int64, revie
 	decoder := json.NewDecoder(bytes.NewReader(metadata[FrameKey]))
 	decoder.UseNumber()
 	if decoder.Decode(&notice) != nil || notice == nil {
+		return data
+	}
+	kind, _ := notice["kind"].(string)
+	if (frameType == EventRefused) != (kind == "refused") || !kinds[kind] {
 		return data
 	}
 	review, err := reviewer.DelegationReview(ctx, projectID, userID, CallerOf(notice))

@@ -95,6 +95,11 @@ export function reduceTurnFrame(
       const current = history[index];
       if (!current) return history;
       const continuingOutput = frame.response_metadata?.should_continue === true;
+      const sameGeneration = Boolean(
+        frame.execution_generation &&
+        current.executionGeneration &&
+        frame.execution_generation === current.executionGeneration,
+      );
       return replaceAt(history, index, {
         content: continuingOutput ? current.content : '',
         continuedResultPrefix: continuingOutput ? current.content : undefined,
@@ -108,6 +113,8 @@ export function reduceTurnFrame(
         isLoading: true,
         references: continuingOutput ? current.references : [],
         exception: undefined,
+        ...(!continuingOutput ? { failureCode: undefined, failureCap: undefined } : {}),
+        ...(!continuingOutput && !sameGeneration ? { delegationNotices: undefined } : {}),
         requiresConfirmation: undefined,
         ...(frame.execution_generation ? { executionGeneration: frame.execution_generation } : {}),
         ...(frame.question_id !== undefined ? { questionId: frame.question_id } : {}),

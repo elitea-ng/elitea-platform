@@ -55,6 +55,7 @@ describe('push worker: push', () => {
   it.each([
     ['completed', 'Run finished', 'A run is done.'],
     ['failed', 'Run failed', 'A run stopped with an error.'],
+    ['refused', 'Run refused', 'A run was refused by policy or permissions.'],
     ['waiting', 'Run needs you', 'A run waits for your answer.'],
     ['limit_reached', 'Run stopped at its limit', 'A run reached its chain limit.'],
   ])('run_finished %s shows "%s"', async (outcome, title, body) => {
@@ -63,6 +64,16 @@ describe('push worker: push', () => {
     expect(fake.registration.showNotification).toHaveBeenCalledWith(title, {
       body,
       tag: 'elitea-123',
+      data: { url: `${SCOPE}1/chat?conversation=c-1` },
+    });
+  });
+
+  it.each(['toString', 'constructor', '__proto__'])('SEC-FU359-04: ignores prototype key %s as run_finished outcome', async (outcome) => {
+    const { fake, push } = worker();
+    await push({ type: 'run_finished', notification_id: 124, project_id: 1, conversation_uuid: 'c-1', outcome });
+    expect(fake.registration.showNotification).toHaveBeenCalledWith('Run finished', {
+      body: 'A run is done.',
+      tag: 'elitea-124',
       data: { url: `${SCOPE}1/chat?conversation=c-1` },
     });
   });

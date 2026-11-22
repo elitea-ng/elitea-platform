@@ -1152,6 +1152,63 @@ async fn with_grants_on_an_edge_without_a_grant_is_refused_with_the_notice() {
     assert_eq!(fixture.dials.dials_to(BATCH_URL), 0);
 }
 
+/// FU-359: when every grant of a pipeline root is still pending (Main sends
+/// `grants_enforced: true`, `root_application_id: ROOT_ID`, `grants: []`), a
+/// refusal at either an Agent node or a saved-pipeline node still names
+/// `caller_id == ROOT_ID` so the Web offers Review delegation.
+#[tokio::test(flavor = "current_thread")]
+async fn with_only_pending_grants_pipeline_root_refusals_name_the_root_caller() {
+    let agent_fixture = fixture(&s_holding_batch(), vec![text("unexpected")]);
+    let agent_request = root_request(
+        &root_yaml("worker"),
+        vec![reference((3, 4), "agent", "worker")],
+    );
+    let policy = granted(NarrowingMode::Enforce, Vec::new());
+    assert!(policy.grants_enforced());
+    assert_eq!(policy.root_application_id(), ROOT_ID);
+    let Err(agent_error) = agent_fixture
+        .assembler
+        .assemble(under(&agent_request, policy.clone()))
+        .await
+    else {
+        panic!("Agent node with only pending grants must be refused");
+    };
+    assert_refused_with_notice_from(
+        &agent_error,
+        "delegate",
+        ("no_grant", "batch"),
+        Some(ROOT_ID),
+    );
+
+    let pipeline_versions = BTreeMap::from([(
+        (3, 4),
+        saved_version(
+            "pipeline",
+            MCP_NODE_PIPELINE,
+            &json!({}),
+            vec![mcp_toolkit()],
+        ),
+    )]);
+    let pipeline_fixture = fixture(&pipeline_versions, vec![text("unexpected")]);
+    let pipeline_request = root_request(
+        &root_yaml("subpipe"),
+        vec![reference((3, 4), "pipeline", "subpipe")],
+    );
+    let Err(pipeline_error) = pipeline_fixture
+        .assembler
+        .assemble(under(&pipeline_request, policy))
+        .await
+    else {
+        panic!("saved-pipeline node with only pending grants must be refused");
+    };
+    assert_refused_with_notice_from(
+        &pipeline_error,
+        "delegate",
+        ("no_grant", "batch"),
+        Some(ROOT_ID),
+    );
+}
+
 /// A stale or partly approved grant covers only the set it recorded: what S
 /// holds beyond it, and the root does not hold, is narrowed out.
 #[tokio::test(flavor = "current_thread")]

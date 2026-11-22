@@ -1186,7 +1186,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// federated link to the provider and issuer that asserted it
 	// (elitea_auth.identity_bindings) and backfills the existing links to the
 	// enabled provider of their protocol (issue 2558). No permission.
-	require.EqualValues(t, 258, Head(shared))
+	//
+	// 259: shared/0259_index_meta_terminal_quarantine.sql, which lets a
+	// terminal index-metadata effect that keeps failing validation rest as
+	// QUARANTINED (with its error code) instead of staying PENDING and
+	// stalling the terminal reconciler. No permission.
+	require.EqualValues(t, 259, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

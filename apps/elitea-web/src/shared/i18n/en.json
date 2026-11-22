@@ -7316,5 +7316,15 @@
   "pipelines.flowEditor.state.supportRefLabel": "Support ref: {{ref}}",
   "pipelines.flowEditor.state.timelineGroupStepCount": "{{count}} steps",
   "pipelines.flowEditor.state.timelineGroupStepCountInGroup": "{{count}} steps in {{groupLabel}}",
-  "pipelines.flowEditor.state.timelineRegionLabel": "Pipeline timeline steps"
+  "pipelines.flowEditor.state.timelineRegionLabel": "Pipeline timeline steps",
+  "notifications.runFinished.refused.body": "A run was refused by policy or permissions.",
+  "notifications.runFinished.refused.title": "Run refused",
+  "pipelines.flowEditor.runStateNode.runWasRefused": "Run was refused",
+  "runtimeFailure.cancelledTitle": "Run stopped",
+  "runtimeFailure.refusal.authorizationFallback": "This run was refused because authorization failed.",
+  "runtimeFailure.refusal.authorizationTitle": "Authorization refused",
+  "runtimeFailure.refusal.policyFallback": "This run was refused by a platform or budget policy.",
+  "runtimeFailure.refusal.policyTitle": "Request refused by policy",
+  "runtimeFailure.refusal.validationFallback": "This run was refused because the request or configuration could not be accepted.",
+  "runtimeFailure.refusal.validationTitle": "Request refused"
 }
