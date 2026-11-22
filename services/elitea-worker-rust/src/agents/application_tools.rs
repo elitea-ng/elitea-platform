@@ -48,7 +48,7 @@ use super::events::{
 use super::graph::pipeline_node_event_channel;
 use super::internal_tools::{ASK_USER_TOOL_NAME, ASK_USER_TOOLSET_NAME, InternalToolCatalog};
 use super::model_scope::{ModelScopeSessions, ScopedModelCheckpoint};
-use super::pipeline::materialize_saved_pipeline_tool;
+use super::pipeline::{NestedPipelineCapabilities, materialize_saved_pipeline_tool};
 mod materialization;
 #[cfg(test)]
 mod materialization_tests;
@@ -65,8 +65,9 @@ use super::session::{
 };
 use crate::protocol::control::ClaimBoundRuntimeContextAuthority;
 use crate::toolkits::{
-    AdmittedToolSnapshot, DelegatedAuthorizationCatalog, FrozenToolKind, FrozenToolSnapshot,
-    FrozenToolSnapshotErrorCode, McpConnector, McpMaterializationErrorCode, ToolAdmissionPolicy,
+    AdmittedToolSnapshot, ArtifactToolAuthority, DelegatedAuthorizationCatalog, FrozenToolKind,
+    FrozenToolSnapshot, FrozenToolSnapshotErrorCode, IndexToolAuthority, IndexToolSupport,
+    IndexToolsWithheld, McpConnector, McpMaterializationErrorCode, ToolAdmissionPolicy,
     ToolBindingError, ToolsetMaterializationErrorCode, bind_toolsets,
 };
 use crate::transport::model_facade::{
@@ -2986,6 +2987,21 @@ pub(crate) struct ApplicationToolDependencies<'a> {
     /// pipeline children — the pipeline PARENT is exactly that caller, because
     /// it owns its pipeline participants itself through its graph.
     conversation_thread_id: Option<String>,
+    /// FU-358: lends a claim-fenced node-recovery journal scoped to one
+    /// non-member call of any saved pipeline offered as an agent's tool.
+    pipeline_tool_journals:
+        Option<Arc<dyn super::graph::node_recovery_runtime::PipelineToolJournalAuthority>>,
+    /// FU-353 D4(a)/D6(a): plain pinned claim-bound artifact authority (no
+    /// Office/Web/Browser hosts) for delegated `artifact` toolkits.
+    artifacts: Option<ArtifactToolAuthority>,
+    /// FU-353 D6(a): claim-bound index/memory toolkit authority lent to nested
+    /// agents and nested saved pipelines.
+    index_tools: Result<IndexToolAuthority, IndexToolsWithheld>,
+    /// FU-353 D1(a): conversation attachment library + monotonic caller ceiling.
+    attachment_library: Option<Arc<super::attachment_tools::AttachmentLibrary>>,
+    caller_attachments_enabled: bool,
+    /// FU-353 D2(a1): claim-bound agent memory authority (re-targeted per child).
+    agent_memory: Option<super::agent_memory_tools::AgentMemoryAuthority>,
     materialization: ApplicationMaterializationPath,
 }
 
@@ -3007,8 +3023,24 @@ impl<'a> ApplicationToolDependencies<'a> {
             resume: None,
             model_scopes: None,
             conversation_thread_id: None,
+            pipeline_tool_journals: None,
+            artifacts: None,
+            index_tools: Err(IndexToolsWithheld::NotServedOnThisPath),
+            attachment_library: None,
+            caller_attachments_enabled: false,
+            agent_memory: None,
             materialization: ApplicationMaterializationPath::default(),
         }
+    }
+
+    pub(super) fn with_pipeline_tool_journals(
+        mut self,
+        journals: Option<
+            Arc<dyn super::graph::node_recovery_runtime::PipelineToolJournalAuthority>,
+        >,
+    ) -> Self {
+        self.pipeline_tool_journals = journals;
+        self
     }
 
     pub(super) fn with_code(
@@ -3017,6 +3049,57 @@ impl<'a> ApplicationToolDependencies<'a> {
     ) -> Self {
         self.code = code;
         self
+    }
+
+    /// FU-353 D4(a): enforce bucket pinning on every nested artifact authority.
+    #[must_use]
+    pub(super) fn with_artifacts(mut self, artifacts: Option<ArtifactToolAuthority>) -> Self {
+        self.artifacts = artifacts.map(ArtifactToolAuthority::with_pinned_bucket);
+        self
+    }
+
+    /// FU-353 D6(a): lend the run's claim-bound index/memory toolkit support.
+    #[must_use]
+    pub(super) fn with_index_tools(
+        mut self,
+        index_tools: Result<IndexToolAuthority, IndexToolsWithheld>,
+    ) -> Self {
+        self.index_tools = index_tools;
+        self
+    }
+
+    /// FU-353 D1(a): lend the conversation attachment library under the
+    /// caller's monotonic `attachments` ceiling.
+    #[must_use]
+    pub(super) fn with_attachments(
+        mut self,
+        library: Option<Arc<super::attachment_tools::AttachmentLibrary>>,
+        caller_enabled: bool,
+    ) -> Self {
+        self.attachment_library = if caller_enabled { library } else { None };
+        self.caller_attachments_enabled = caller_enabled;
+        self
+    }
+
+    /// FU-353 D2(a1): lend the claim-bound agent memory authority (re-targeted
+    /// per nested saved agent version).
+    #[must_use]
+    pub(super) fn with_agent_memory(
+        mut self,
+        agent_memory: Option<super::agent_memory_tools::AgentMemoryAuthority>,
+    ) -> Self {
+        self.agent_memory = agent_memory;
+        self
+    }
+
+    fn pipeline_capabilities(&self) -> NestedPipelineCapabilities {
+        NestedPipelineCapabilities {
+            artifacts: self.artifacts.clone(),
+            index_tools: self.index_tools.clone(),
+            attachment_library: self.attachment_library.clone(),
+            caller_attachments_enabled: self.caller_attachments_enabled,
+            agent_memory: self.agent_memory.clone(),
+        }
     }
 
     pub(super) fn with_model_scopes(mut self, scopes: ModelScopeSessions) -> Self {
@@ -3360,6 +3443,8 @@ async fn materialize_pipeline_children(
             dependencies.code.clone(),
             conversation_thread_id.clone(),
             dependencies.materialization.clone(),
+            dependencies.pipeline_tool_journals.clone(),
+            dependencies.pipeline_capabilities(),
         )
         .await;
         let (definition, runtimes, child_tools, delegation, definition_sha256) = match built {
@@ -3419,6 +3504,7 @@ async fn materialize_pipeline_children(
                 conversation_thread_id: conversation_thread_id.clone(),
                 event_sender: dependencies.event_sender.clone(),
                 resume: dependencies.resume.clone(),
+                tool_journals: dependencies.pipeline_tool_journals.clone(),
             },
             definition_sha256,
         ));
@@ -3487,6 +3573,12 @@ pub(crate) async fn materialize_application_tools(
         model_scopes: dependencies.model_scopes,
         code: dependencies.code,
         conversation_thread_id: dependencies.conversation_thread_id,
+        pipeline_tool_journals: dependencies.pipeline_tool_journals,
+        artifacts: dependencies.artifacts,
+        index_tools: dependencies.index_tools,
+        attachment_library: dependencies.attachment_library,
+        caller_attachments_enabled: dependencies.caller_attachments_enabled,
+        agent_memory: dependencies.agent_memory,
         materialization: dependencies.materialization,
         skipped: Vec::new(),
     };
@@ -3548,10 +3640,10 @@ struct ApplicationAssemblyState<'a> {
     policy: Arc<ToolAdmissionPolicy>,
     mcp_connector: Arc<dyn McpConnector>,
     mcp_tokens: &'a Map<String, Value>,
-    /// Built children by identity and by the caller's delegation scope: one
-    /// child called from two callers with different grants is narrowed for
-    /// each (ADR-0044 decision 3).
-    applications: HashMap<(ApplicationIdentity, String), AssembledApplication>,
+    /// Built children by identity, caller delegation scope, and caller
+    /// attachments ceiling (FU-353 D1(a)): one child called from two callers
+    /// with different grants or attachment ceilings is narrowed for each.
+    applications: HashMap<(ApplicationIdentity, String, bool), AssembledApplication>,
     resolving: HashSet<ApplicationIdentity>,
     hops: usize,
     event_sender: Option<ApplicationEventSender>,
@@ -3559,6 +3651,13 @@ struct ApplicationAssemblyState<'a> {
     model_scopes: Option<ModelScopeSessions>,
     code: Option<Arc<dyn super::graph::CodeSandboxRuntime>>,
     conversation_thread_id: Option<String>,
+    pipeline_tool_journals:
+        Option<Arc<dyn super::graph::node_recovery_runtime::PipelineToolJournalAuthority>>,
+    artifacts: Option<ArtifactToolAuthority>,
+    index_tools: Result<IndexToolAuthority, IndexToolsWithheld>,
+    attachment_library: Option<Arc<super::attachment_tools::AttachmentLibrary>>,
+    caller_attachments_enabled: bool,
+    agent_memory: Option<super::agent_memory_tools::AgentMemoryAuthority>,
     materialization: ApplicationMaterializationPath,
     /// Nested pipeline attachments this Worker could not build, named on the
     /// root's skipped notice (#990).
@@ -3604,7 +3703,11 @@ impl ApplicationAssemblyState<'_> {
                     return Err(invalid_configuration());
                 }
                 let next_path = self.materialization.enter_agent(identity)?;
-                let cache_key = (identity, self.materialization.delegation().cache_key());
+                let cache_key = (
+                    identity,
+                    self.materialization.delegation().cache_key(),
+                    self.caller_attachments_enabled,
+                );
                 if let Some(application) = self.applications.get(&cache_key) {
                     tracing::Span::current().record("cache_hit", true);
                     return Ok(application.clone());
@@ -3677,6 +3780,24 @@ impl ApplicationAssemblyState<'_> {
         // so nothing the user asked for is lost — the write happens one level
         // up, where it was authorized.
         toolsets.extend(internal_tools.toolsets(None));
+        // FU-353 D1(a): nested attachments require BOTH caller ceiling AND the
+        // child's own `"attachments"` toggle.
+        let child_attachments_enabled =
+            self.caller_attachments_enabled && internal_tools.attachments_enabled();
+        if child_attachments_enabled && let Some(library) = self.attachment_library.as_ref() {
+            toolsets.push(library.toolset());
+        }
+        // FU-353 D2(a1) / D5(a): nested saved agents bind recall/remember/forget
+        // tools targeting their own `(application_id, version_id)` with an
+        // isolated `RecalledEntries` recorder.
+        if let (Some(binding), Some(base_memory)) =
+            (profile.agent_memory(), self.agent_memory.as_ref())
+        {
+            toolsets.push(super::agent_memory_tools::toolset(
+                binding,
+                &base_memory.for_nested_target(reference.identity.0, reference.identity.1),
+            ));
+        }
         let has_non_application_tools = !toolsets.is_empty();
         let nested_references = application_references(&frozen, None)?;
         let parallel_applications = !nested_references.is_empty()
@@ -3685,19 +3806,32 @@ impl ApplicationAssemblyState<'_> {
                 .all(|reference| reference.kind() == FrozenToolKind::Application)
             && sensitive_tools.is_empty()
             && delegated_authorization.is_empty()
-            && internal_tools.is_empty();
-        let pipeline_children = self
-            .materialize_nested_pipeline_children(&frozen, &profile)
-            .await?;
-        let mut reserved_toolsets = BTreeSet::from([ASK_USER_TOOLSET_NAME.to_owned()]);
-        let (nested_toolset, child_tools) = self
-            .build_nested_toolset(
+            && internal_tools.is_empty()
+            && profile.agent_memory().is_none();
+        let parent_attachments_enabled = std::mem::replace(
+            &mut self.caller_attachments_enabled,
+            child_attachments_enabled,
+        );
+        let children_result = async {
+            let pipeline_children = self
+                .materialize_nested_pipeline_children(&frozen, &profile)
+                .await?;
+            self.build_nested_toolset(
                 nested_references,
                 pipeline_children,
                 reference.identity,
                 tier,
             )
-            .await?;
+            .await
+        }
+        .await;
+        self.caller_attachments_enabled = parent_attachments_enabled;
+        let (nested_toolset, child_tools) = children_result?;
+        let mut reserved_toolsets = BTreeSet::from([
+            ASK_USER_TOOLSET_NAME.to_owned(),
+            super::attachment_tools::TOOLSET_NAME.to_owned(),
+            super::agent_memory_tools::TOOLSET_NAME.to_owned(),
+        ]);
         if let Some(nested_toolset) = nested_toolset {
             reserved_toolsets.insert(nested_toolset.name().to_owned());
             toolsets.push(nested_toolset);
@@ -3832,6 +3966,16 @@ impl ApplicationAssemblyState<'_> {
             resume: self.resume.clone(),
             model_scopes: self.model_scopes.clone(),
             conversation_thread_id: self.conversation_thread_id.clone(),
+            pipeline_tool_journals: self.pipeline_tool_journals.clone(),
+            artifacts: self.artifacts.clone(),
+            index_tools: self.index_tools.clone(),
+            attachment_library: if self.caller_attachments_enabled {
+                self.attachment_library.clone()
+            } else {
+                None
+            },
+            caller_attachments_enabled: self.caller_attachments_enabled,
+            agent_memory: self.agent_memory.clone(),
             materialization: self.materialization.clone(),
         };
         let built = materialize_pipeline_children(
@@ -3955,6 +4099,10 @@ impl ApplicationAssemblyState<'_> {
     > {
         // A governed run (#1474): the nested agent's own frozen toolkits
         // redeem through the run's governed seam, as on an ordinary agent.
+        let index_support = match self.index_tools.as_ref() {
+            Ok(authority) => IndexToolSupport::Lent(authority),
+            Err(reason) => IndexToolSupport::Withheld(*reason),
+        };
         let super::governed_nested::NestedToolsets {
             configured: mut toolsets,
             mcp: mut mcp_toolsets,
@@ -3967,6 +4115,8 @@ impl ApplicationAssemblyState<'_> {
                 policy: &self.policy,
                 connector: &self.mcp_connector,
                 mcp_tokens: self.mcp_tokens,
+                artifacts: self.artifacts.as_ref(),
+                index_tools: index_support,
             },
             &super::governed_nested::NestedErrorMapping {
                 configured: toolset_error,

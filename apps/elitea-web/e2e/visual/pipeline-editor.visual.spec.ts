@@ -336,7 +336,7 @@ async function pinScrollToTop(page: Page): Promise<void> {
 }
 
 /**
- * The editor's first open: the default `END`-only canvas, the configuration
+ * The editor's first open: the empty-state canvas with `END` hidden until the first node is added, the configuration
  * column with the model picker, and the test-chat pane LIVE.
  *
  * The chat assertion is not decoration. `ChatPanel` computes
@@ -347,7 +347,8 @@ async function pinScrollToTop(page: Page): Promise<void> {
  */
 test('@visual pipeline-editor-empty', async ({ page }) => {
   await openEditor(page, EMPTY_GRAPH);
-  await expect(page.locator('.react-flow__node[data-id="END"]')).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId('pipeline-empty-state')).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('.react-flow__node[data-id="END"]')).toHaveCount(0);
   await expect(page.getByTestId('edit-pipeline-test-chat')).toBeVisible({ timeout: 20_000 });
   await settle(page);
 
@@ -369,7 +370,8 @@ test.describe('at 1280', () => {
 
   test('@visual pipeline-editor-1280-chat-folded', async ({ page }) => {
     await openEditor(page, EMPTY_GRAPH);
-    await expect(page.locator('.react-flow__node[data-id="END"]')).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId('pipeline-empty-state')).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator('.react-flow__node[data-id="END"]')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Expand the chat panel' })).toBeVisible({ timeout: 20_000 });
     await expect(page.getByRole('button', { name: 'Collapse the configuration panel' })).toBeVisible();
     const canvas = await page.getByTestId('rf__wrapper').boundingBox();
@@ -414,7 +416,8 @@ test('@visual pipeline-editor-empty-light', async ({ page }) => {
     .toBe('light');
 
   await openEditor(page, EMPTY_GRAPH);
-  await expect(page.locator('.react-flow__node[data-id="END"]')).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId('pipeline-empty-state')).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('.react-flow__node[data-id="END"]')).toHaveCount(0);
   await expect(page.getByTestId('edit-pipeline-test-chat')).toBeVisible({ timeout: 20_000 });
   // Re-asserted on the route under test: a navigation that reset the scheme
   // would otherwise produce a second dark baseline under a light name, and it
@@ -453,13 +456,16 @@ test('@visual pipeline-editor-empty-light', async ({ page }) => {
  */
 test('@visual pipeline-editor-authored-graph', async ({ page }) => {
   await openEditor(page, EMPTY_GRAPH);
-  await expect(page.locator('.react-flow__node[data-id="END"]')).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId('pipeline-empty-state')).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('.react-flow__node[data-id="END"]')).toHaveCount(0);
 
   // The shared helper: one node per item, the menu gone before the shutter (a closing popover would be in the shot).
   for (const label of ['LLM', 'Router', 'Printer']) {
     await addNodeThroughMenu(page, label);
     await pinScrollToTop(page);
   }
+  await expect(page.getByTestId('pipeline-empty-state')).toHaveCount(0);
+  await expect(page.locator('.react-flow__node[data-id="END"]')).toBeVisible({ timeout: 15_000 });
 
   // The minted ids, on the canvas. Underscored — `Agent 1`/`LLM 1` with a
   // space is the id `valid_graph_id` (worker `graph/yaml.rs:362`) refuses and
@@ -512,9 +518,12 @@ test('@visual pipeline-editor-authored-graph', async ({ page }) => {
  */
 test('@visual pipeline-editor-node-admission', async ({ page }) => {
   await openEditor(page, EMPTY_GRAPH);
-  await expect(page.locator('.react-flow__node[data-id="END"]')).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId('pipeline-empty-state')).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('.react-flow__node[data-id="END"]')).toHaveCount(0);
   await addNodeThroughMenu(page, 'Agent');
   await pinScrollToTop(page);
+  await expect(page.getByTestId('pipeline-empty-state')).toHaveCount(0);
+  await expect(page.locator('.react-flow__node[data-id="END"]')).toBeVisible({ timeout: 15_000 });
 
   const card = page.locator('.react-flow__node[data-id="Agent_1"]');
   await expect(card).toBeVisible({ timeout: 15_000 });

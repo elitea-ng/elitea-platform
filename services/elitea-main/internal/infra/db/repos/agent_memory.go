@@ -1,11 +1,14 @@
 package repos
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
+	"slices"
 	"strconv"
 	"time"
 
@@ -103,9 +106,22 @@ JOIN elitea_runtime.input_bundle_entries AS e
  AND e.semantic_role = '` + executiondomain.AgentExecutionRequestRole + `'
 WHERE j.execution_id = $1 AND j.generation = $2 AND j.resource_project_id = $3`
 
+const (
+	// maxNestedAgentMemoryVersions bounds the server-side BFS reachability
+	// walk when authorizing a nested agent memory target (FU-353-06).
+	maxNestedAgentMemoryVersions = 64
+)
+
 // ResolveAgentMemoryRun reads the claimed run. The caller has authorized the
-// claim; projectID is the project it resolved.
-func (s *AgentMemory) ResolveAgentMemoryRun(ctx context.Context, projectID int64, executionID string, generation uint64) (storage.AgentMemoryRun, error) {
+// claim; projectID is the project it resolved. When target names a nested
+// saved agent (FU-353), Main proves composition reachability from the frozen
+// root input within projectID, checks lifecycle and folder visibility across
+// every intermediate hop and the target, requires a direct agent target
+// ("agent" or stored "openai"), rejects explicit self-targeting, reads the
+// target version's own meta.memory, caps auto writes at max risk tier across
+// the full ancestor chain (root + intermediate hops + target), and sets
+// Attended = false (D3).
+func (s *AgentMemory) ResolveAgentMemoryRun(ctx context.Context, projectID int64, executionID string, generation uint64, target storage.AgentMemoryTarget) (storage.AgentMemoryRun, error) {
 	if generation == 0 || generation > 1<<63-1 {
 		return storage.AgentMemoryRun{}, storage.ErrContentUnauthorized
 	}
@@ -123,21 +139,57 @@ func (s *AgentMemory) ResolveAgentMemoryRun(ctx context.Context, projectID int64
 	if err != nil {
 		return storage.AgentMemoryRun{}, fmt.Errorf("agent memory: read the run: %w", err)
 	}
-	actorID, _ := strconv.ParseInt(actor, 10, 64)
+	// FU-353-07: fail closed on malformed non-numeric actor ids so folder
+	// visibility checks can never be silently bypassed by actorID == 0.
+	actorID, hasActor, actorErr := parseStrictAgentMemoryActorID(actor)
+	if actorErr != nil {
+		return storage.AgentMemoryRun{}, storage.ErrContentUnauthorized
+	}
 	conversation, err := uuid.Parse(stream)
 	if err != nil {
 		// No conversation: a run memory cannot attribute.
 		return storage.AgentMemoryRun{}, storage.ErrContentRejected
 	}
-	settings, err := frozenMemorySettings(input)
-	if err != nil {
-		return storage.AgentMemoryRun{}, storage.ErrContentRejected
+	targetAppID := applicationID
+	var delegatedFrom int64
+	attended := origin == string(executiondomain.TriggerOriginManual) && !continuation
+	var settings agentmemory.Settings
+
+	if target.ApplicationID == 0 {
+		settings, err = frozenMemorySettings(input)
+		if err != nil {
+			return storage.AgentMemoryRun{}, storage.ErrContentRejected
+		}
+		settings = s.capAutoWrite(ctx, projectID, applicationID, settings)
+	} else {
+		if err := validateNestedMemoryTargetActor(applicationID, hasActor, target); err != nil {
+			return storage.AgentMemoryRun{}, err
+		}
+		decodedInput, decodeErr := decodeAgentMemoryInput(input)
+		if decodeErr != nil {
+			return storage.AgentMemoryRun{}, storage.ErrContentRejected
+		}
+		nestedMeta, ancestorChain, nestedErr := s.authorizeNestedMemoryTarget(ctx, projectID, actorID, applicationID, decodedInput, target)
+		if nestedErr != nil {
+			return storage.AgentMemoryRun{}, nestedErr
+		}
+		settings, err = metaMemorySettings(nestedMeta)
+		if err != nil {
+			return storage.AgentMemoryRun{}, storage.ErrContentRejected
+		}
+		settings = s.capAutoWriteForAgents(ctx, projectID, ancestorChain, settings)
+		targetAppID = target.ApplicationID
+		delegatedFrom = applicationID
+		// D3(a): a nested saved agent is invoked by a parent agent or
+		// pipeline, never directly attended by a human, so auto_attended
+		// writes land in pending review.
+		attended = false
 	}
-	settings = s.capAutoWrite(ctx, projectID, applicationID, settings)
+
 	run := storage.AgentMemoryRun{
-		ProjectID: projectID, ApplicationID: applicationID, ActorID: actorID,
+		ProjectID: projectID, ApplicationID: targetAppID, DelegatedFromApplicationID: delegatedFrom, ActorID: actorID,
 		ConversationUUID: conversation.String(), MessageID: message, ExecutionID: executionID,
-		Settings: settings, Attended: origin == string(executiondomain.TriggerOriginManual) && !continuation,
+		Settings: settings, Attended: attended,
 		PersonalProject: personal, Tainted: tainted,
 	}
 	run.Present, err = s.conversationPeople(ctx, projectID, run.ConversationUUID)
@@ -157,6 +209,390 @@ func (s *AgentMemory) ResolveAgentMemoryRun(ctx context.Context, projectID int64
 	return run, nil
 }
 
+type nestedMemoryVersionNode struct {
+	ApplicationID int64
+	VersionID     int64
+	AgentType     string
+	Meta          json.RawMessage
+	Tools         json.RawMessage
+}
+
+type nestedMemoryTraversalDeps struct {
+	readBatch  func(ctx context.Context, projectID int64, pairs [][2]int64) (map[[2]int64]nestedMemoryVersionNode, error)
+	retiredIDs func(ctx context.Context, projectID int64, appIDs []int64) (map[int64]bool, error)
+	hiddenIDs  func(ctx context.Context, projectID, actorID int64, appIDs []int64) (map[int64]bool, error)
+}
+
+// authorizeNestedMemoryTarget proves server-side that target is reachable from
+// the claimed run's frozen root input inside projectID within the delegation
+// depth bound, is an `agent` (not a pipeline), has no retired or actor-hidden
+// hop anywhere on the traversal path, and returns target's meta plus the full
+// ancestor chain (root + intermediate hops + target) for risk-tier capping
+// (FU-353 D2(a1), FU-353-02, FU-353-03, FU-353-06).
+func (s *AgentMemory) authorizeNestedMemoryTarget(
+	ctx context.Context,
+	projectID int64,
+	actorID int64,
+	rootApplicationID int64,
+	input *runtimev1.AgentExecutionInputV1,
+	target storage.AgentMemoryTarget,
+) (json.RawMessage, []int64, error) {
+	if projectID <= 0 || actorID <= 0 || target.ApplicationID <= 0 || target.VersionID <= 0 {
+		return nil, nil, storage.ErrContentUnauthorized
+	}
+	delegationSettings, err := platformconfig.LoadDelegationSettings(ctx, s.pool)
+	if err != nil {
+		return nil, nil, fmt.Errorf("agent memory: read delegation depth: %w", err)
+	}
+	maxDepth := delegationSettings.MaxDepth
+	if maxDepth < platformconfig.MinDelegationMaxDepth {
+		maxDepth = platformconfig.DefaultDelegationMaxDepth
+	}
+	if maxDepth > platformconfig.MaxDelegationMaxDepth {
+		maxDepth = platformconfig.MaxDelegationMaxDepth
+	}
+	sources, err := NewWorkerEgressSources(s.pool)
+	if err != nil {
+		return nil, nil, fmt.Errorf("agent memory: visibility reader: %w", err)
+	}
+	deps := nestedMemoryTraversalDeps{
+		readBatch: s.readNestedMemoryVersionsBatch,
+		retiredIDs: func(ctx context.Context, projectID int64, appIDs []int64) (map[int64]bool, error) {
+			retired, err := retiredAgents(ctx, s.pool, projectID, appIDs)
+			if err != nil && undefinedTable(err) {
+				return nil, nil
+			}
+			return retired, err
+		},
+		hiddenIDs: func(ctx context.Context, projectID, actorID int64, appIDs []int64) (map[int64]bool, error) {
+			hidden, err := sources.HiddenApplications(ctx, projectID, actorID, appIDs)
+			if err != nil {
+				return nil, err
+			}
+			if len(hidden) == 0 {
+				return nil, nil
+			}
+			out := make(map[int64]bool, len(hidden))
+			for _, id := range hidden {
+				out[id] = true
+			}
+			return out, nil
+		},
+	}
+	return resolveReachableNestedVersion(ctx, deps, projectID, actorID, rootApplicationID, input, target, maxDepth)
+}
+
+type nestedBFSItem struct {
+	pair      [2]int64
+	ancestors []int64
+}
+
+// isDirectAgentMemoryTargetType admits both the canonical runtime spelling
+// ("agent") and the stored DB direct-agent spelling ("openai", normalized
+// to "agent" at runtime freeze in agentexecution.normalizeCurrentAgentTypeField),
+// while continuing to refuse "pipeline", "react", "dial", and empty/unknown types.
+func isDirectAgentMemoryTargetType(agentType string) bool {
+	return agentType == "agent" || agentType == "openai"
+}
+
+// resolveReachableNestedVersion performs a level-batched, bounded, cycle-safe
+// BFS from the frozen root tools to prove (target.ApplicationID, target.VersionID)
+// is reachable within projectID at depth <= maxDepth with no retired or
+// actor-hidden intermediate hop, and that target is a direct agent ("agent" or
+// stored "openai").
+func resolveReachableNestedVersion(
+	ctx context.Context,
+	deps nestedMemoryTraversalDeps,
+	projectID int64,
+	actorID int64,
+	rootApplicationID int64,
+	input *runtimev1.AgentExecutionInputV1,
+	target storage.AgentMemoryTarget,
+	maxDepth int,
+) (json.RawMessage, []int64, error) {
+	if deps.readBatch == nil {
+		return nil, nil, storage.ErrContentUnauthorized
+	}
+	rootTools, err := frozenInputToolsRaw(input)
+	if err != nil {
+		return nil, nil, storage.ErrContentUnauthorized
+	}
+	var rootAncestors []int64
+	if rootApplicationID > 0 {
+		rootAncestors = []int64{rootApplicationID}
+	}
+	rootChildren := nestedApplicationChildren(rootTools, projectID)
+	frontier := make([]nestedBFSItem, 0, len(rootChildren))
+	for _, child := range rootChildren {
+		frontier = append(frontier, nestedBFSItem{pair: child, ancestors: rootAncestors})
+	}
+	seen := map[[2]int64]bool{}
+	for depth := 1; depth <= maxDepth && len(frontier) > 0; depth++ {
+		var level []nestedBFSItem
+		appIDSet := map[int64]bool{}
+		for _, item := range frontier {
+			if seen[item.pair] {
+				continue
+			}
+			seen[item.pair] = true
+			if len(seen) > maxNestedAgentMemoryVersions {
+				return nil, nil, storage.ErrContentUnauthorized
+			}
+			level = append(level, item)
+			appIDSet[item.pair[0]] = true
+		}
+		if len(level) == 0 {
+			break
+		}
+		appIDs := make([]int64, 0, len(appIDSet))
+		for id := range appIDSet {
+			appIDs = append(appIDs, id)
+		}
+		slices.Sort(appIDs)
+		var retired map[int64]bool
+		if deps.retiredIDs != nil {
+			retired, err = deps.retiredIDs(ctx, projectID, appIDs)
+			if err != nil {
+				return nil, nil, fmt.Errorf("agent memory: read nested lifecycle: %w", err)
+			}
+		}
+		var hidden map[int64]bool
+		if deps.hiddenIDs != nil && actorID > 0 {
+			hidden, err = deps.hiddenIDs(ctx, projectID, actorID, appIDs)
+			if err != nil {
+				return nil, nil, fmt.Errorf("agent memory: check nested folder visibility: %w", err)
+			}
+		}
+		allowedLevel := make([]nestedBFSItem, 0, len(level))
+		batchPairs := make([][2]int64, 0, len(level))
+		for _, item := range level {
+			if retired[item.pair[0]] || hidden[item.pair[0]] {
+				continue
+			}
+			allowedLevel = append(allowedLevel, item)
+			batchPairs = append(batchPairs, item.pair)
+		}
+		if len(allowedLevel) == 0 {
+			break
+		}
+		nodes, err := deps.readBatch(ctx, projectID, batchPairs)
+		if err != nil {
+			return nil, nil, fmt.Errorf("agent memory: read nested versions: %w", err)
+		}
+		var next []nestedBFSItem
+		for _, item := range allowedLevel {
+			node, ok := nodes[item.pair]
+			if !ok {
+				continue
+			}
+			chain := make([]int64, len(item.ancestors)+1)
+			copy(chain, item.ancestors)
+			chain[len(item.ancestors)] = node.ApplicationID
+			if node.ApplicationID == target.ApplicationID && node.VersionID == target.VersionID {
+				// FU-353-03: match Worker binding (assembly.rs after
+				// normalizeCurrentAgentTypeField) — only saved direct agents
+				// ("agent" or stored "openai") hold agent_memory.
+				if !isDirectAgentMemoryTargetType(node.AgentType) {
+					return nil, nil, storage.ErrContentUnauthorized
+				}
+				return node.Meta, chain, nil
+			}
+			if depth < maxDepth && len(node.Tools) > 0 {
+				for _, child := range nestedApplicationChildren(node.Tools, projectID) {
+					next = append(next, nestedBFSItem{pair: child, ancestors: chain})
+				}
+			}
+		}
+		frontier = next
+	}
+	return nil, nil, storage.ErrContentUnauthorized
+}
+
+// readNestedMemoryVersionsBatch reads agent_type, meta, and child application
+// tools for all (application_id, version_id) pairs of one BFS level in a
+// single tenant-scoped query (FU-353-06).
+func (s *AgentMemory) readNestedMemoryVersionsBatch(
+	ctx context.Context,
+	projectID int64,
+	pairs [][2]int64,
+) (map[[2]int64]nestedMemoryVersionNode, error) {
+	if len(pairs) == 0 {
+		return nil, nil
+	}
+	schema, err := tenantschema.QuoteInt(projectID)
+	if err != nil {
+		return nil, err
+	}
+	appIDs := make([]int32, 0, len(pairs))
+	verIDs := make([]int32, 0, len(pairs))
+	for _, pair := range pairs {
+		appKey, okApp := currentAgentDatabaseID(pair[0])
+		verKey, okVer := currentAgentDatabaseID(pair[1])
+		if !okApp || !okVer {
+			continue
+		}
+		appIDs = append(appIDs, appKey)
+		verIDs = append(verIDs, verKey)
+	}
+	if len(appIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
+SELECT av.application_id::bigint,
+       av.id::bigint,
+       COALESCE(av.agent_type, ''),
+       COALESCE(NULLIF(av.meta::jsonb, 'null'::jsonb), '{}'::jsonb)::text,
+       COALESCE((
+           SELECT jsonb_agg(
+               jsonb_build_object(
+                   'type', tool.type,
+                   'settings', tool.settings
+               )
+               ORDER BY m.id
+           )
+           FROM %[1]s.entity_tool_mapping AS m
+           JOIN %[1]s.elitea_tools AS tool ON tool.id = m.tool_id
+           WHERE m.entity_version_id = av.id
+             AND m.entity_id = av.application_id
+             AND m.entity_type = 'agent'
+             AND tool.type = 'application'
+       ), '[]'::jsonb)::text
+FROM %[1]s.application_versions AS av
+JOIN unnest($1::integer[], $2::integer[]) AS req(application_id, version_id)
+  ON av.application_id = req.application_id
+ AND av.id = req.version_id`, schema), appIDs, verIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[[2]int64]nestedMemoryVersionNode, len(appIDs))
+	for rows.Next() {
+		var (
+			node           nestedMemoryVersionNode
+			metaText       string
+			childToolsText string
+		)
+		if err := rows.Scan(&node.ApplicationID, &node.VersionID, &node.AgentType, &metaText, &childToolsText); err != nil {
+			return nil, err
+		}
+		node.Meta = json.RawMessage(metaText)
+		node.Tools = json.RawMessage(childToolsText)
+		out[[2]int64{node.ApplicationID, node.VersionID}] = node
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// nestedApplicationChildren extracts same-project (application_id, version_id)
+// pairs from a frozen tools array. Checks BOTH top-level and settings
+// `project_id` with canonical positive integer parsing matching Worker
+// (snapshot.rs) so floats, leading zeros, whitespace, strings, non-positive
+// values, or mismatched project_id fail closed (FU-353-01).
+func nestedApplicationChildren(rawTools json.RawMessage, projectID int64) [][2]int64 {
+	if len(rawTools) == 0 {
+		return nil
+	}
+	decoder := json.NewDecoder(bytes.NewReader(rawTools))
+	decoder.UseNumber()
+	var entries []map[string]any
+	if err := decoder.Decode(&entries); err != nil {
+		return nil
+	}
+	var out [][2]int64
+	for _, entry := range entries {
+		toolType, _ := entry["type"].(string)
+		if toolType != "application" {
+			continue
+		}
+		settings, _ := entry["settings"].(map[string]any)
+		if settings == nil {
+			continue
+		}
+		if rawTopProject, hasTop := entry["project_id"]; hasTop && rawTopProject != nil {
+			topProject, ok := canonicalPositiveJSONInt64(rawTopProject)
+			if !ok || topProject != projectID {
+				continue
+			}
+		}
+		if rawSettingsProject, hasSettings := settings["project_id"]; hasSettings && rawSettingsProject != nil {
+			settingsProject, ok := canonicalPositiveJSONInt64(rawSettingsProject)
+			if !ok || settingsProject != projectID {
+				continue
+			}
+		}
+		appID, okApp := canonicalPositiveJSONInt64(settings["application_id"])
+		verID, okVer := canonicalPositiveJSONInt64(settings["application_version_id"])
+		if !okApp || !okVer || appID > math.MaxInt32 || verID > math.MaxInt32 {
+			continue
+		}
+		out = append(out, [2]int64{appID, verID})
+	}
+	return out
+}
+
+// canonicalPositiveJSONInt64 accepts only canonical base-10 positive JSON
+// integers (`^[1-9][0-9]{0,18}$`), matching Rust's `Value::as_u64` positive
+// integer check (snapshot.rs) and rejecting floats, leading zeros, whitespace,
+// strings, and non-positive values (FU-353-01).
+func canonicalPositiveJSONInt64(raw any) (int64, bool) {
+	num, ok := raw.(json.Number)
+	if !ok {
+		return 0, false
+	}
+	s := num.String()
+	if len(s) == 0 || len(s) > 19 || s[0] < '1' || s[0] > '9' {
+		return 0, false
+	}
+	for i := 1; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return 0, false
+		}
+	}
+	parsed, err := strconv.ParseInt(s, 10, 64)
+	return parsed, err == nil && parsed > 0
+}
+
+// validateNestedMemoryTargetActor enforces fail-closed preconditions before
+// nested target traversal: explicit self-targeting is refused (FU-353-04) and
+// a positive numeric actor id is required for folder visibility checks
+// (FU-353-07).
+func validateNestedMemoryTargetActor(rootApplicationID int64, hasActor bool, target storage.AgentMemoryTarget) error {
+	if target.ApplicationID <= 0 || target.VersionID <= 0 {
+		return storage.ErrContentUnauthorized
+	}
+	if rootApplicationID > 0 && target.ApplicationID == rootApplicationID {
+		return storage.ErrContentUnauthorized
+	}
+	if !hasActor {
+		return storage.ErrContentUnauthorized
+	}
+	return nil
+}
+
+// parseStrictAgentMemoryActorID parses j.actor_id strictly: empty string is
+// treated as absent (hasActor=false), while any non-empty malformed or
+// non-positive value fails closed (FU-353-07).
+func parseStrictAgentMemoryActorID(raw string) (int64, bool, error) {
+	if raw == "" {
+		return 0, false, nil
+	}
+	if len(raw) > 19 || raw[0] < '1' || raw[0] > '9' {
+		return 0, false, errors.New("agent memory: malformed actor id")
+	}
+	for i := 1; i < len(raw); i++ {
+		if raw[i] < '0' || raw[i] > '9' {
+			return 0, false, errors.New("agent memory: malformed actor id")
+		}
+	}
+	parsed, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || parsed <= 0 {
+		return 0, false, errors.New("agent memory: malformed actor id")
+	}
+	return parsed, true, nil
+}
+
 // capAutoWrite holds the memory auto limit at run time (ADR-0050 decision
 // 1b, issue 1660): the save-time 422 is the early error, but a version can
 // reach the store with auto by other routes (import, fork, publish) and an
@@ -164,10 +600,18 @@ func (s *AgentMemory) ResolveAgentMemoryRun(ctx context.Context, projectID int64
 // limit runs as auto_attended, the default. Not being able to read the
 // limit or the tier downgrades too: never an upgrade by failure.
 func (s *AgentMemory) capAutoWrite(ctx context.Context, projectID, applicationID int64, settings agentmemory.Settings) agentmemory.Settings {
+	return s.capAutoWriteForAgents(ctx, projectID, []int64{applicationID}, settings)
+}
+
+// capAutoWriteForAgents applies the memory auto tier limit against the highest
+// risk tier across every positive application id in applicationIDs (FU-353
+// D3(a): max(root_tier, target_tier) prevents a high-risk caller from
+// laundering auto-writes through a low-risk nested agent).
+func (s *AgentMemory) capAutoWriteForAgents(ctx context.Context, projectID int64, applicationIDs []int64, settings agentmemory.Settings) agentmemory.Settings {
 	if settings.Write != agentmemory.WriteAuto {
 		return settings
 	}
-	downgrade := func(reason string, err error) agentmemory.Settings {
+	downgrade := func(reason string, applicationID int64, err error) agentmemory.Settings {
 		slog.WarnContext(ctx, "agent memory: write auto runs as auto_attended: "+reason,
 			"project_id", projectID, "application_id", applicationID, "error", err)
 		settings.Write = agentmemory.WriteAutoAttended
@@ -175,25 +619,34 @@ func (s *AgentMemory) capAutoWrite(ctx context.Context, projectID, applicationID
 	}
 	limit, err := platformconfig.LoadMemoryAutoMaxTier(ctx, s.pool)
 	if err != nil {
-		return downgrade("the limit is not readable", err)
+		return downgrade("the limit is not readable", 0, err)
 	}
 	sources, err := NewWorkerEgressSources(s.pool)
 	if err != nil {
-		return downgrade("the tier is not readable", err)
+		return downgrade("the tier is not readable", 0, err)
 	}
-	stored, err := sources.AgentRiskTier(ctx, projectID, applicationID)
-	if err != nil {
-		return downgrade("the tier is not readable", err)
-	}
-	tier := agentlifecycle.TierLow
-	if stored != "" {
-		tier = agentlifecycle.Tier(stored)
-		if !tier.Valid() {
-			return downgrade("the tier is not a tier", fmt.Errorf("risk tier %q", stored))
+	highest := agentlifecycle.TierLow
+	for _, applicationID := range applicationIDs {
+		if applicationID <= 0 {
+			continue
+		}
+		stored, err := sources.AgentRiskTier(ctx, projectID, applicationID)
+		if err != nil {
+			return downgrade("the tier is not readable", applicationID, err)
+		}
+		tier := agentlifecycle.TierLow
+		if stored != "" {
+			tier = agentlifecycle.Tier(stored)
+			if !tier.Valid() {
+				return downgrade("the tier is not a tier", applicationID, fmt.Errorf("risk tier %q", stored))
+			}
+		}
+		if tier.Above(highest) {
+			highest = tier
 		}
 	}
-	if tier.Above(limit) {
-		return downgrade("the agent's tier is above the limit", nil)
+	if highest.Above(limit) {
+		return downgrade("the agent's tier is above the limit", 0, nil)
 	}
 	return settings
 }
@@ -229,26 +682,77 @@ func lockAgent(ctx context.Context, tx pgx.Tx, projectID, applicationID int64) e
 	return err
 }
 
+func decodeAgentMemoryInput(encoded []byte) (*runtimev1.AgentExecutionInputV1, error) {
+	var input runtimev1.AgentExecutionInputV1
+	if len(encoded) == 0 || len(encoded) > executiondomain.MaxAgentExecutionInputBytes || proto.Unmarshal(encoded, &input) != nil {
+		return nil, errors.New("agent memory: the frozen input is not readable")
+	}
+	return &input, nil
+}
+
 // frozenMemorySettings reads the memory block of the version the run
 // executes, from its frozen input: what the run was admitted with, not the
 // version as it is now.
 func frozenMemorySettings(encoded []byte) (agentmemory.Settings, error) {
-	var input runtimev1.AgentExecutionInputV1
-	if len(encoded) == 0 || len(encoded) > executiondomain.MaxAgentExecutionInputBytes || proto.Unmarshal(encoded, &input) != nil {
-		return agentmemory.Settings{}, errors.New("agent memory: the frozen input is not readable")
+	input, err := decodeAgentMemoryInput(encoded)
+	if err != nil {
+		return agentmemory.Settings{}, err
 	}
+	return frozenInputMemorySettings(input)
+}
+
+func frozenInputMemorySettings(input *runtimev1.AgentExecutionInputV1) (agentmemory.Settings, error) {
 	if len(input.Application) == 0 {
 		return agentmemory.Off, nil
 	}
 	var application struct {
-		VersionDetails struct {
-			Meta map[string]any `json:"meta"`
-		} `json:"version_details"`
+		VersionDetails json.RawMessage `json:"version_details"`
 	}
 	if err := json.Unmarshal(input.Application, &application); err != nil {
 		return agentmemory.Settings{}, err
 	}
-	return agentmemory.Parse(application.VersionDetails.Meta[agentmemory.MetaKey])
+	return versionDetailsMemorySettings(application.VersionDetails)
+}
+
+func versionDetailsMemorySettings(raw json.RawMessage) (agentmemory.Settings, error) {
+	if len(raw) == 0 {
+		return agentmemory.Off, nil
+	}
+	var details struct {
+		Meta json.RawMessage `json:"meta"`
+	}
+	if err := json.Unmarshal(raw, &details); err != nil {
+		return agentmemory.Settings{}, err
+	}
+	return metaMemorySettings(details.Meta)
+}
+
+func metaMemorySettings(rawMeta json.RawMessage) (agentmemory.Settings, error) {
+	if len(rawMeta) == 0 {
+		return agentmemory.Off, nil
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(rawMeta, &meta); err != nil {
+		return agentmemory.Settings{}, err
+	}
+	return agentmemory.Parse(meta[agentmemory.MetaKey])
+}
+
+func frozenInputToolsRaw(input *runtimev1.AgentExecutionInputV1) (json.RawMessage, error) {
+	if len(input.Application) > 0 {
+		var application struct {
+			VersionDetails *struct {
+				Tools json.RawMessage `json:"tools"`
+			} `json:"version_details"`
+		}
+		if err := json.Unmarshal(input.Application, &application); err != nil {
+			return nil, err
+		}
+		if application.VersionDetails != nil {
+			return application.VersionDetails.Tools, nil
+		}
+	}
+	return input.Tools, nil
 }
 
 // conversationPeople answers the people in a conversation with their names.
@@ -325,7 +829,7 @@ RETURNING id`, schema),
 				return err
 			}
 		}
-		return s.append(ctx, tx, run.ProjectID, "agent.memory.remembered", 0, run.ApplicationID, id, string(write.Status), run.ExecutionID)
+		return s.appendDelegated(ctx, tx, run.ProjectID, "agent.memory.remembered", 0, run.ApplicationID, id, run.DelegatedFromApplicationID, string(write.Status), run.ExecutionID)
 	})
 	if err != nil {
 		if errors.Is(err, storage.ErrAgentMemorySubjectOptedOut) || errors.Is(err, storage.ErrContentRejected) {
@@ -422,7 +926,7 @@ WHERE id = $1 AND application_id = $2 AND kind <> 'cursor'
 		if !forgotten {
 			return nil
 		}
-		return s.append(ctx, tx, run.ProjectID, "agent.memory.deleted", 0, run.ApplicationID, entryID, "agent", run.ExecutionID)
+		return s.appendDelegated(ctx, tx, run.ProjectID, "agent.memory.deleted", 0, run.ApplicationID, entryID, run.DelegatedFromApplicationID, "agent", run.ExecutionID)
 	})
 	if err != nil {
 		return false, fmt.Errorf("agent memory: forget: %w", err)
@@ -430,8 +934,18 @@ WHERE id = $1 AND application_id = $2 AND kind <> 'cursor'
 	return forgotten, nil
 }
 
-// append writes one audit event. actorID 0 is the agent.
-func (s *AgentMemory) append(ctx context.Context, tx pgx.Tx, projectID int64, action string, actorID, applicationID, entryID int64, reason, executionID string) error {
+func delegatedReasons(base string, delegatedFrom int64) []string {
+	reasons := make([]string, 0, 2)
+	if base != "" {
+		reasons = append(reasons, base)
+	}
+	if delegatedFrom > 0 {
+		reasons = append(reasons, "delegated_from:"+strconv.FormatInt(delegatedFrom, 10))
+	}
+	return reasons
+}
+
+func buildAgentMemoryAuditEvent(projectID int64, action string, actorID, applicationID, entryID, delegatedFrom int64, reason, executionID string) securityaudit.SecurityEvent {
 	principal := "agent:" + strconv.FormatInt(applicationID, 10)
 	if actorID > 0 {
 		principal = "user:" + strconv.FormatInt(actorID, 10)
@@ -440,15 +954,25 @@ func (s *AgentMemory) append(ctx context.Context, tx pgx.Tx, projectID int64, ac
 	if entryID > 0 {
 		resource += ":" + strconv.FormatInt(entryID, 10)
 	}
-	reasons := []string{}
-	if reason != "" {
-		reasons = append(reasons, reason)
+	var actorChain []string
+	if delegatedFrom > 0 {
+		actorChain = []string{"agent:" + strconv.FormatInt(delegatedFrom, 10)}
 	}
-	event := securityaudit.SecurityEvent{
+	return securityaudit.SecurityEvent{
 		Type: securityaudit.TypeAgentMemoryChanged, TenantProjectID: projectID, Action: action,
-		Reasons: reasons, PrincipalRef: principal, ResourceType: "agent_memory_entry", ResourceID: resource,
+		Reasons: delegatedReasons(reason, delegatedFrom), PrincipalRef: principal, ActorChain: actorChain,
+		ResourceType: "agent_memory_entry", ResourceID: resource,
 		ExecutionID: executionID, Time: time.Now().UTC(),
 	}
+}
+
+// append writes one audit event. actorID 0 is the agent.
+func (s *AgentMemory) append(ctx context.Context, tx pgx.Tx, projectID int64, action string, actorID, applicationID, entryID int64, reason, executionID string) error {
+	return s.appendDelegated(ctx, tx, projectID, action, actorID, applicationID, entryID, 0, reason, executionID)
+}
+
+func (s *AgentMemory) appendDelegated(ctx context.Context, tx pgx.Tx, projectID int64, action string, actorID, applicationID, entryID, delegatedFrom int64, reason, executionID string) error {
+	event := buildAgentMemoryAuditEvent(projectID, action, actorID, applicationID, entryID, delegatedFrom, reason, executionID)
 	if err := s.audit.Append(ctx, tx, event); err != nil {
 		return fmt.Errorf("agent memory: append the audit event %s: %w", action, err)
 	}

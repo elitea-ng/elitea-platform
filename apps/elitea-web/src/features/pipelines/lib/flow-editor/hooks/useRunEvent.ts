@@ -99,6 +99,7 @@ export function useRunEvent(setFlowNodes: SetFlowNodes, yamlJsonObject: YamlPipe
     terminal.data.status = status;
     terminal.data.recoveryPaused = false;
     if (status === PipelineStatus.Error && typeof event.content === 'string') terminal.data.error = event.content;
+    if (status === PipelineStatus.Error && typeof event.code === 'string' && event.code !== '') terminal.data.failureCode = event.code;
     terminal.data.timeline = terminal.data.timeline.map(step =>
       step.status === PipelineStatus.InProgress || step.status === PipelineStatus.Interrupt ? { ...step, status } : step);
     setPipelineRunNodes(prev => prev.map(node => node.id !== terminal.id ? node

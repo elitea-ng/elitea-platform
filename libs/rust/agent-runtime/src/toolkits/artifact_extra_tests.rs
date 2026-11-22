@@ -291,11 +291,14 @@ struct Rig {
     bucket: Arc<Bucket>,
 }
 
-async fn rig_with(office: Option<Arc<Buckets>>) -> Rig {
+async fn rig_with_authority(office: Option<Arc<Buckets>>, pinned: bool) -> Rig {
     let bucket = Arc::new(Bucket::default());
     let mut authority = ArtifactToolAuthority::new(bucket.clone());
     if let Some(office) = office {
         authority = authority.with_office(office as Arc<dyn OfficeToolHost>);
+    }
+    if pinned {
+        authority = authority.with_pinned_bucket();
     }
     let settings = json!({"bucket": "docs", "selected_tools": []});
     let config =
@@ -305,6 +308,10 @@ async fn rig_with(office: Option<Arc<Buckets>>) -> Rig {
     let context: Arc<dyn ReadonlyContext> = Arc::new(SimpleToolContext::new("artifact-extra"));
     let tools = toolset.tools(context).await.expect("tools");
     Rig { tools, bucket }
+}
+
+async fn rig_with(office: Option<Arc<Buckets>>) -> Rig {
+    rig_with_authority(office, false).await
 }
 
 async fn rig() -> Rig {
@@ -1273,4 +1280,166 @@ async fn artifact_integer_arguments_accept_integer_like_values() {
             .await;
         assert!(says.contains("whole number of at least 1"), "{says}");
     }
+}
+
+#[tokio::test]
+async fn pinned_authority_allows_configured_bucket_and_refuses_core_cross_bucket_overrides() {
+    let rig = rig_with_authority(None, true).await;
+    rig.bucket.put("docs", "ok.txt", "hello world\n");
+    rig.bucket.put("other", "secret.txt", "top secret\n");
+
+    let listed = rig.call("list_files", json!({})).await;
+    assert_eq!(listed["bucket"], "docs");
+    assert_eq!(listed["rows"][0]["name"], "ok.txt");
+    let read_ok = rig
+        .says("read_file", json!({"filepath": "/docs/ok.txt"}))
+        .await;
+    assert!(read_ok.contains("hello world"), "{read_ok}");
+
+    let calls_before = *rig.bucket.calls.lock().expect("calls");
+    let writes_before = rig.bucket.writes().len();
+
+    for (tool, args) in [
+        ("list_files", json!({"bucket_name": "other"})),
+        (
+            "read_file",
+            json!({"filename": "secret.txt", "bucket_name": "other"}),
+        ),
+        ("read_file", json!({"filepath": "/other/secret.txt"})),
+        (
+            "create_file",
+            json!({"filename": "pwn.txt", "filedata": "x", "bucket_name": "other"}),
+        ),
+        (
+            "create_file",
+            json!({"filename": "copy.txt", "filepath": "/other/secret.txt"}),
+        ),
+        (
+            "delete_file",
+            json!({"filename": "secret.txt", "bucket_name": "other"}),
+        ),
+    ] {
+        let refusal = rig.says(tool, args).await;
+        assert!(
+            refusal.contains("restricted to its configured bucket 'docs'"),
+            "{tool}: {refusal}"
+        );
+    }
+
+    assert_eq!(*rig.bucket.calls.lock().expect("calls"), calls_before);
+    assert_eq!(rig.bucket.writes().len(), writes_before);
+    assert_eq!(
+        rig.bucket.get("other", "secret.txt").as_deref(),
+        Some("top secret\n")
+    );
+}
+
+#[tokio::test]
+async fn pinned_authority_refuses_extra_cross_bucket_overrides_and_bucket_creation() {
+    let office = Arc::new(Buckets::default());
+    let rig = rig_with_authority(Some(office.clone()), true).await;
+    rig.bucket.put("docs", "ok.txt", "hello world\n");
+    rig.bucket.put("other", "secret.txt", "top secret\n");
+
+    let multi_ok = rig
+        .call(
+            "read_multiple_files",
+            json!({"file_paths": ["/docs/ok.txt"]}),
+        )
+        .await;
+    assert_eq!(multi_ok["/docs/ok.txt"], "hello world\n");
+    let grep_ok = rig
+        .says(
+            "grep_file",
+            json!({"file_path": "ok.txt", "pattern": "hello"}),
+        )
+        .await;
+    assert!(grep_ok.contains("hello world"), "{grep_ok}");
+    let meta_ok_text = rig
+        .says("get_file_metadata", json!({"filepath": "/docs/ok.txt"}))
+        .await;
+    let meta_ok: Value = serde_json::from_str(&meta_ok_text).expect("JSON text");
+    assert_eq!(meta_ok["bucket"], "docs");
+
+    let calls_before = *rig.bucket.calls.lock().expect("calls");
+    let writes_before = rig.bucket.writes().len();
+
+    for (tool, args) in [
+        (
+            "read_multiple_files",
+            json!({"file_paths": ["secret.txt"], "bucket_name": "other"}),
+        ),
+        (
+            "grep_file",
+            json!({"file_path": "secret.txt", "pattern": "secret", "bucket_name": "other"}),
+        ),
+        (
+            "edit_file",
+            json!({
+                "file_path": "secret.txt",
+                "file_query": edit("top secret", "pwned"),
+                "bucket_name": "other"
+            }),
+        ),
+        (
+            "append_data",
+            json!({"filename": "secret.txt", "filedata": "x", "bucket_name": "other"}),
+        ),
+    ] {
+        let refusal = rig.says(tool, args).await;
+        assert!(
+            refusal.contains("restricted to its configured bucket 'docs'"),
+            "{tool}: {refusal}"
+        );
+    }
+
+    let multi_cross_entry = rig
+        .call(
+            "read_multiple_files",
+            json!({"file_paths": ["/other/secret.txt"]}),
+        )
+        .await;
+    assert!(
+        multi_cross_entry["/other/secret.txt"]
+            .as_str()
+            .is_some_and(|s| s.contains("restricted to its configured bucket 'docs'")),
+        "{multi_cross_entry}"
+    );
+
+    for args in [
+        json!({"filename": "secret.txt", "bucket_name": "other"}),
+        json!({"filepath": "/other/secret.txt"}),
+    ] {
+        let meta_text = rig.says("get_file_metadata", args).await;
+        let meta_cross: Value = serde_json::from_str(&meta_text).expect("JSON text");
+        assert_eq!(meta_cross["__result_status__"], "error", "{meta_text}");
+        assert!(
+            meta_cross["message"]
+                .as_str()
+                .is_some_and(|s| s.contains("restricted to its configured bucket 'docs'")),
+            "{meta_text}"
+        );
+    }
+
+    let new_bucket = rig
+        .says("create_new_bucket", json!({"bucket_name": "exfil"}))
+        .await;
+    assert!(
+        new_bucket.contains("cannot create new buckets"),
+        "{new_bucket}"
+    );
+
+    assert_eq!(*rig.bucket.calls.lock().expect("calls"), calls_before);
+    assert_eq!(rig.bucket.writes().len(), writes_before);
+    assert!(office.created.lock().expect("created").is_empty());
+}
+
+#[tokio::test]
+async fn unpinned_authority_still_honours_explicit_bucket_overrides() {
+    let rig = rig().await;
+    rig.bucket.put("other", "secret.txt", "root readable\n");
+    let read = rig
+        .says("read_file", json!({"filepath": "/other/secret.txt"}))
+        .await;
+    assert!(read.contains("root readable"), "{read}");
 }

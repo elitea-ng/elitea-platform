@@ -62,7 +62,7 @@ func projectDelegationNotice(ctx context.Context, tx sqlExecutor, projectID int6
 		return nil
 	}
 	notice, ok := delegationnotice.Sanitize(raw)
-	if !ok {
+	if !ok || (event.Type == delegationnotice.EventRefused) != (notice.Kind == "refused") {
 		return nil
 	}
 	projectDatabaseID, valid := currentAgentDatabaseID(projectID)

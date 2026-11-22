@@ -115,6 +115,9 @@ pub(crate) mod resume;
 use elitea_agent_runtime::graph::router;
 #[cfg(test)]
 mod node_admission_parity_tests;
+#[cfg(feature = "node-settings-bench")]
+#[doc(hidden)]
+pub mod node_settings_bench;
 #[cfg(test)]
 mod pipeline_pg_test_support;
 #[cfg(test)]
@@ -132,6 +135,7 @@ mod split_out;
 #[cfg(test)]
 mod split_out_tests;
 use elitea_agent_runtime::graph::state_modifier;
+pub(crate) mod state_modifier_trace;
 #[cfg(test)]
 mod state_reducer_compiler_tests;
 #[cfg(test)]
@@ -153,6 +157,8 @@ pub(crate) use agent::{
     PIPELINE_COMPLETED_METADATA_VALUE, PIPELINE_REUSED_RESULT_METADATA_KEY,
     pipeline_completed_event, pipeline_result_event,
 };
+#[cfg(test)]
+pub(crate) use application::APPLICATION_VISIT_STATE_KEY;
 pub(crate) use application::{
     ApplicationExecutionError, PIPELINE_APPLICATION_HITL_SCHEMA, PipelineApplicationResolver,
     PipelineApplicationSelection, ResolvedApplicationParticipant,

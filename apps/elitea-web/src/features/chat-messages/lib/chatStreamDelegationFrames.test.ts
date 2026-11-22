@@ -11,6 +11,7 @@ import { socketMessageSchema } from '@/shared/api/socket/messages';
 
 import { applyChatStreamFrame, type ChatStreamContext } from './chatStreamReducer';
 import { resetTurnForReplay } from './chatStreamReattach';
+import { recordStreamFailure } from './chatStreamSettle';
 import { HANDLED_STREAM_TYPES } from './chatStreamFrame';
 import { convertMessagesToChatHistory, type ChatMessage } from './convertMessagesToChatHistory';
 
@@ -69,6 +70,141 @@ describe('delegation notices on the live stream', () => {
     expect(replayed[0]?.delegationNotices).toBeUndefined();
     replayed = applyChatStreamFrame(replayed, frame('delegation_refused', refused), CONTEXT);
     expect(replayed[0]?.delegationNotices).toEqual(seeded[0]?.delegationNotices);
+  });
+
+  it.each([
+    [
+      'Agent node',
+      {
+        id: 'pipeline_node:delegate',
+        kind: 'refused',
+        reason: 'no_grant',
+        code: 'DELEGATION_GRANT_MISSING',
+        edge: { caller_id: 174, caller_name: 'P0r refusal', callee_id: 171, callee_name: 'delegate', kind: 'pipeline_node' },
+        missing: [{ kind: 'toolkit', name: 'c1mockmcp' }],
+        can_review: true,
+      },
+    ],
+    [
+      'saved-pipeline node (#2235)',
+      {
+        id: 'pipeline_node:child_pipe',
+        kind: 'refused',
+        reason: 'no_grant',
+        code: 'DELEGATION_GRANT_MISSING',
+        edge: { caller_id: 174, caller_name: 'P0r refusal', callee_id: 172, callee_name: 'child_pipe', kind: 'pipeline_node' },
+        missing: [{ kind: 'toolkit', name: 'c1mockmcp' }],
+        can_review: true,
+      },
+    ],
+  ])('FU-360: assembly-time delegation_refused for a %s creates the answer live before execution.failed and matches reload', (_label, nodeNotice) => {
+    const question: ChatMessage = {
+      id: 'q-1',
+      questionId: 'q-1',
+      role: 'user',
+      name: 'Alice',
+      content: 'run pipeline',
+      createdAt: '2026-11-10T00:00:00.000Z',
+    };
+    const liveFrame = {
+      type: 'delegation_refused',
+      message_id: MESSAGE_ID,
+      question_id: 'q-1',
+      execution_generation: 'q-1',
+      response_metadata: { delegation_v1: nodeNotice },
+    } as const;
+    const afterNotice = applyChatStreamFrame([question], liveFrame, CONTEXT);
+    expect(afterNotice).toHaveLength(2);
+    expect(afterNotice[1]?.id).toBe(MESSAGE_ID);
+    expect(afterNotice[1]?.delegationNotices).toHaveLength(1);
+
+    const settled = recordStreamFailure(afterNotice, 'Execution authorization failed.', CONTEXT, 'q-1', MESSAGE_ID, 'AUTHORIZATION_FAILED');
+    expect(settled).toHaveLength(2);
+    expect(settled[1]?.isStreaming).toBe(false);
+    expect(settled[1]?.failureCode).toBe('AUTHORIZATION_FAILED');
+    expect(settled[1]?.delegationNotices).toHaveLength(1);
+
+    const reloaded = convertMessagesToChatHistory(
+      [
+        {
+          id: '4',
+          uuid: MESSAGE_ID,
+          role: 'assistant',
+          content: '',
+          created_at: '2026-11-10 10:00:05',
+          is_streaming: false,
+          meta: {
+            delegation_notices_v1: [nodeNotice],
+            is_error: true,
+            error: 'Execution authorization failed.',
+            error_code: 'AUTHORIZATION_FAILED',
+          },
+        } as unknown as MessageGroupWire,
+      ],
+      [],
+    );
+    expect(settled[1]?.delegationNotices).toEqual(reloaded[0]?.delegationNotices);
+  });
+
+  it('does not create an assistant message for a malformed delegation_refused frame before agent_start', () => {
+    const question: ChatMessage = {
+      id: 'q-1',
+      role: 'user',
+      name: 'Alice',
+      content: 'hi',
+      createdAt: '2026-11-10T00:00:00.000Z',
+    };
+    const history = [question];
+    expect(applyChatStreamFrame(history, frame('delegation_refused', { id: 'broken' }), CONTEXT)).toBe(history);
+  });
+
+  it('SEC-FU359-03: rejects mismatched frame type vs notice kind and scopes pre-agent_start creation to pipeline_node refusals', () => {
+    const historyWithPending = [pending];
+    expect(applyChatStreamFrame(historyWithPending, frame('delegation_refused', narrowed), CONTEXT)).toBe(historyWithPending);
+    expect(applyChatStreamFrame(historyWithPending, frame('delegation_narrowed', refused), CONTEXT)).toBe(historyWithPending);
+
+    const question: ChatMessage = {
+      id: 'q-1',
+      role: 'user',
+      name: 'Alice',
+      content: 'hi',
+      createdAt: '2026-11-10T00:00:00.000Z',
+    };
+    const beforeStart = [question];
+    // Non-pipeline_node refusals and narrowed notices do not create a new answer before agent_start.
+    expect(applyChatStreamFrame(beforeStart, frame('delegation_refused', refused), CONTEXT)).toBe(beforeStart);
+    expect(applyChatStreamFrame(beforeStart, frame('delegation_narrowed', narrowed), CONTEXT)).toBe(beforeStart);
+  });
+
+  it('SEC-FU359-02: clears prior-generation delegationNotices and failure codes on a new agent_start while keeping same-generation notices', () => {
+    const priorFailed: ChatMessage = {
+      ...pending,
+      isStreaming: false,
+      isLoading: false,
+      executionGeneration: 'gen-1',
+      exception: 'Execution authorization failed.',
+      failureCode: 'AUTHORIZATION_FAILED',
+      failureCap: 'max_tool_calls',
+      delegationNotices: applyChatStreamFrame([pending], frame('delegation_refused', refused), CONTEXT)[0]?.delegationNotices,
+    };
+    const nextGen = applyChatStreamFrame(
+      [priorFailed],
+      { type: 'agent_start', message_id: MESSAGE_ID, execution_generation: 'gen-2' },
+      CONTEXT,
+    );
+    expect(nextGen[0]?.delegationNotices).toBeUndefined();
+    expect(nextGen[0]?.failureCode).toBeUndefined();
+    expect(nextGen[0]?.failureCap).toBeUndefined();
+    expect(nextGen[0]?.exception).toBeUndefined();
+
+    // Same-generation agent_start preserves same-generation notices.
+    const sameGen = applyChatStreamFrame(
+      [priorFailed],
+      { type: 'agent_start', message_id: MESSAGE_ID, execution_generation: 'gen-1' },
+      CONTEXT,
+    );
+    expect(sameGen[0]?.delegationNotices).toHaveLength(1);
+    expect(sameGen[0]?.failureCode).toBeUndefined();
   });
 });
 

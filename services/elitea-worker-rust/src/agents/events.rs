@@ -1499,7 +1499,11 @@ impl AgentEventProjector {
         if has_descendant_checkpoint {
             return Err(AgentEventProjectionError::invalid_state());
         }
-        if pipeline_node_name(event)?.is_some() {
+        if pipeline_node_name(event)?.is_some()
+            && !event
+                .provider_metadata
+                .contains_key(super::graph::state_modifier_trace::TRANSITIONAL_EDGE_METADATA_KEY)
+        {
             self.saw_pipeline_node_events = true;
         }
         if self
@@ -1567,6 +1571,11 @@ impl AgentEventProjector {
             .map_err(|_| AgentEventProjectionError::invalid_state())?
         {
             self.project_code_trace(event, &trace)?
+        } else if let Some(edge) =
+            super::graph::state_modifier_trace::TransitionalEdgeEvent::from_event(event)
+                .map_err(|_| AgentEventProjectionError::invalid_state())?
+        {
+            self.project_transitional_edge(event, &edge)?
         } else if let Some(status) = super::context_status::ModelContextStatus::from_event(event)
             .map_err(|_| AgentEventProjectionError::invalid_state())?
         {
@@ -1575,6 +1584,37 @@ impl AgentEventProjector {
             self.project_ordinary_event(event)?
         };
         self.bind_invocation_id(event);
+        Ok(batch)
+    }
+
+    fn project_transitional_edge(
+        &self,
+        event: &Event,
+        edge: &super::graph::state_modifier_trace::TransitionalEdgeEvent,
+    ) -> Result<ProjectedAgentEventBatch, AgentEventProjectionError> {
+        if !matches!(
+            self.state,
+            ProjectionState::Started | ProjectionState::Active(_) | ProjectionState::Complete(_)
+        ) || pipeline_node_name(event)? != Some(edge.node_id.as_str())
+        {
+            return Err(AgentEventProjectionError::invalid_state());
+        }
+        let mut batch = ProjectedAgentEventBatch::new();
+        batch.push(self.event(
+            "agent_on_transitional_edge",
+            &Value::Null,
+            None,
+            &json!({
+                "name": "on_transitional_edge",
+                "metadata": {
+                    "langgraph_node": edge.node_id,
+                    "original_name": edge.node_id,
+                },
+                "next_step": edge.next_step,
+                "state": edge.state,
+            }),
+            event.timestamp,
+        )?)?;
         Ok(batch)
     }
 

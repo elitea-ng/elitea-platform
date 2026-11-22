@@ -90,6 +90,7 @@ export interface PushWorkerScope {
 const TEXT = {
   completed: { title: 'Run finished', body: 'A run is done.' },
   failed: { title: 'Run failed', body: 'A run stopped with an error.' },
+  refused: { title: 'Run refused', body: 'A run was refused by policy or permissions.' },
   waiting: { title: 'Run needs you', body: 'A run waits for your answer.' },
   limit_reached: { title: 'Run stopped at its limit', body: 'A run reached its chain limit.' },
 } as const satisfies Record<string, NoticeText>;
@@ -111,7 +112,11 @@ function readPayload(event: PushEventLike): PushPayload {
 
 function noticeText(payload: PushPayload, product: string): NoticeText {
   if (payload.type === 'agent_approval_required') return TEXT.waiting;
-  if (payload.type === 'run_finished') return TEXT[payload.outcome as keyof typeof TEXT] ?? TEXT.completed;
+  if (payload.type === 'run_finished') {
+    return typeof payload.outcome === 'string' && Object.hasOwn(TEXT, payload.outcome)
+      ? TEXT[payload.outcome as keyof typeof TEXT]
+      : TEXT.completed;
+  }
   return { title: product, body: FALLBACK_BODY };
 }
 

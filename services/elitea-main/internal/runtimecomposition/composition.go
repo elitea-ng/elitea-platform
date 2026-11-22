@@ -918,6 +918,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, fmt.Errorf("construct nested application version reader: %w", nestedErr)
 		}
 		agentAdmissions.WithNestedMemoryToolkits(admissionNestedVersions)
+		agentAdmissions.WithHiddenMemoryToolkits(egressSources)
 		// A retired agent, or one nesting a retired agent, is refused
 		// (ADR-0050 decision 5g, #1616).
 		admissionWorkforce, workforceErr := repos.ComposeAgentWorkforce(dependencies.AdmissionPool, nil)

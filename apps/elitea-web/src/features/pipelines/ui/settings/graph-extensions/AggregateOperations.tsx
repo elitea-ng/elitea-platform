@@ -1,9 +1,9 @@
 import type { ReactNode } from 'react';
-import Button from '@mui/material/Button';
-import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import Stack from '@mui/material/Stack';
 import { t } from '@/shared/i18n';
+import { BaseBtn } from '@/shared/ui/BaseBtn';
+import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import { extensionRecord, extensionValues, extensionText } from '../../../lib/graphExtensions.helpers';
 import { AGGREGATE_OPERATIONS, type ExtensionRecord } from '../../../lib/graphExtensions.types';
 import { ExtensionChoice, ExtensionField } from './ExtensionFields';
@@ -53,9 +53,9 @@ function AggregateOperationRow({ row, index, disabled, change, remove }: Aggrega
     {operation === 'collect_rows' && <SplitRetentionFields value={row['retain']} defaultMode="all" choices={['all', 'only', 'except']} disabled={disabled}
       change={(retain) => change({ ...row, retain })} />}
     {operation === 'collect' && <FormControlLabel label={t('pipelines.graphExtensions.mergeLists', 'Flatten collected lists {{index}}', numbered)}
-      control={<BaseCheckbox className="nodrag nopan" disabled={disabled} checked={row['merge_lists'] === true}
+      control={<BaseCheckbox className="nodrag nopan nowheel" disabled={disabled} checked={row['merge_lists'] === true}
         onChange={(_, merge_lists) => change({ ...row, merge_lists })} />} />}
-    <Button disabled={disabled} onClick={remove}>{t('pipelines.graphExtensions.removeOperation', 'Remove operation {{index}}', numbered)}</Button>
+    <BaseBtn variant="text" size="small" className="nodrag nopan nowheel" disabled={disabled} onClick={remove}>{t('pipelines.graphExtensions.removeOperation', 'Remove operation {{index}}', numbered)}</BaseBtn>
   </Stack>;
 }
 export function AggregateOperations({ value, disabled, change }: AggregateOperationsProps): ReactNode {
@@ -65,8 +65,8 @@ export function AggregateOperations({ value, disabled, change }: AggregateOperat
     {rows.map((row, index) => <AggregateOperationRow key={index} row={row} index={index} disabled={disabled}
       change={(next) => change(original.map((entry, ordinal) => ordinal === index ? next : entry))}
       remove={() => change(original.filter((_, ordinal) => ordinal !== index))} />)}
-    <Button disabled={disabled || rows.length >= 64} onClick={() => change([...original, { operation: 'count_rows', output: '' }])}>
+    <BaseBtn variant="secondary" size="small" className="nodrag nopan nowheel" disabled={disabled || rows.length >= 64} onClick={() => change([...original, { operation: 'count_rows', output: '' }])}>
       {t('pipelines.graphExtensions.addOperation', 'Add operation')}
-    </Button>
+    </BaseBtn>
   </Stack>;
 }

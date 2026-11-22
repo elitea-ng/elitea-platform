@@ -131,3 +131,88 @@ func TestRunToolkitTypesIncludeSubAgents(t *testing.T) {
 		t.Fatalf("no toolkits = %v, %v; want an empty, non-nil list", empty, err)
 	}
 }
+
+type stubHiddenMemoryToolkits struct {
+	hidden     []int64
+	hiddenApps []int64
+	err        error
+	appErr     error
+}
+
+func (s stubHiddenMemoryToolkits) HiddenToolkits(_ context.Context, _, _ int64, _ []int64) ([]int64, error) {
+	return s.hidden, s.err
+}
+
+func (s stubHiddenMemoryToolkits) HiddenApplications(_ context.Context, _, _ int64, _ []int64) ([]int64, error) {
+	return s.hiddenApps, s.appErr
+}
+
+// FU-353 defense-in-depth + FU-353-07: memory toolkits hidden from the acting
+// user and memory toolkits reachable only through folder-hidden intermediate
+// sub-agents are excluded from execution_jobs.memory_toolkit_ids; filter read
+// failures and malformed non-numeric actor IDs fail admission closed.
+func TestRunMemoryToolkitsExcludePrincipalHiddenToolkits(t *testing.T) {
+	t.Parallel()
+	nested := nestedTools{
+		{31, 41}: `[{"id":5,"type":"memory","settings":{}},{"id":6,"type":"memory","settings":{}},{"type":"application","settings":{"application_id":32,"application_version_id":42}}]`,
+		{32, 42}: `[{"id":7,"type":"memory","settings":{}}]`,
+	}
+	request := SubmitRequest{
+		Identity:     executionapp.AdmissionIdentity{ResourceProjectID: "7", ActorID: "42"},
+		CapabilityID: executiondomain.AgentApplicationCapability,
+		Input: &runtimev1.AgentExecutionInputV1{Application: []byte(`{"version_details":{"tools":[
+		    {"id":9,"type":"memory","settings":{}},
+		    {"id":40,"type":"application","settings":{"application_id":31,"application_version_id":41}}]}}`)},
+	}
+
+	// Hidden nested toolkit 5 and hidden root toolkit 9 are stripped; visible 6 and 7 remain.
+	service := (&AdmissionService{}).
+		WithNestedMemoryToolkits(nested).
+		WithHiddenMemoryToolkits(stubHiddenMemoryToolkits{hidden: []int64{5, 9}})
+	got, _, err := service.runToolkitSet(context.Background(), request)
+	if err != nil || !slices.Equal(got, []int64{6, 7}) {
+		t.Fatalf("filtered nested = %v, %v; want [6 7]", got, err)
+	}
+
+	// FU353-07: hidden intermediate sub-agent 31 skips both 31's own toolkits
+	// (5, 6) and its grandchild 32's toolkit (7); only root toolkit 9 remains.
+	hiddenMid := (&AdmissionService{}).
+		WithNestedMemoryToolkits(nested).
+		WithHiddenMemoryToolkits(stubHiddenMemoryToolkits{hiddenApps: []int64{31}})
+	got, _, err = hiddenMid.runToolkitSet(context.Background(), request)
+	if err != nil || !slices.Equal(got, []int64{9}) {
+		t.Fatalf("FU353-07 hidden intermediate sub-agent = %v, %v; want [9]", got, err)
+	}
+
+	// FU353-07: malformed non-numeric ActorID fails admission closed.
+	badActor := request
+	badActor.Identity.ActorID = "svc-non-numeric"
+	if _, _, err := service.runToolkitSet(context.Background(), badActor); !errors.Is(err, ErrInvalidAgentAdmission) {
+		t.Fatalf("FU353-07 malformed actor: want ErrInvalidAgentAdmission, got %v", err)
+	}
+
+	// Root-only path also strips hidden toolkits and keeps non-nil empty slice.
+	rootOnly := SubmitRequest{
+		Identity:     executionapp.AdmissionIdentity{ResourceProjectID: "7", ActorID: "42"},
+		CapabilityID: executiondomain.AgentApplicationCapability,
+		Input:        &runtimev1.AgentExecutionInputV1{Application: []byte(`{"version_details":{"tools":[{"id":9,"type":"memory","settings":{}}]}}`)},
+	}
+	got, _, err = (&AdmissionService{}).WithHiddenMemoryToolkits(stubHiddenMemoryToolkits{hidden: []int64{9}}).runToolkitSet(context.Background(), rootOnly)
+	if err != nil || got == nil || len(got) != 0 {
+		t.Fatalf("all hidden root = %v, %v; want non-nil empty slice", got, err)
+	}
+
+	// Filter error fails admission closed (both toolkit filter and hidden-app filter).
+	failing := (&AdmissionService{}).
+		WithNestedMemoryToolkits(nested).
+		WithHiddenMemoryToolkits(stubHiddenMemoryToolkits{err: errors.New("folder access unavailable")})
+	if _, _, err := failing.runToolkitSet(context.Background(), request); err == nil {
+		t.Fatal("toolkit filter error did not fail admission closed")
+	}
+	failingApps := (&AdmissionService{}).
+		WithNestedMemoryToolkits(nested).
+		WithHiddenMemoryToolkits(stubHiddenMemoryToolkits{appErr: errors.New("folder access unavailable")})
+	if _, _, err := failingApps.runToolkitSet(context.Background(), request); err == nil {
+		t.Fatal("hidden-app filter error did not fail admission closed")
+	}
+}

@@ -3,6 +3,7 @@ package indexing
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"time"
 )
@@ -192,6 +193,12 @@ func (t *RegistryIndexMetaTerminalizer) Terminalize(
 	}
 	binding, err := t.bindings.LoadCurrentIndexMetaTerminalBinding(ctx, request.ExecutionID, request.Generation)
 	if err != nil {
+		// Invalid admission evidence never heals by retrying: keep the cause, so
+		// the reconciler quarantines the effect instead of requeueing it as a
+		// dependency outage forever.
+		if ctx.Err() == nil && errors.Is(err, ErrCurrentIndexMetaInitializationInvalid) {
+			return fmt.Errorf("load terminal admission evidence: %w", err)
+		}
 		return currentIndexMetaInitializationError(ctx, err)
 	}
 	if err := binding.Validate(); err != nil ||

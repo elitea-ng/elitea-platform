@@ -816,3 +816,56 @@ async fn concurrent_loads_of_one_file_read_and_hold_it_once() {
     assert_eq!(read_count(&source), 1);
     assert_eq!(library.ids().len(), 1);
 }
+
+/// FU-353-05: reading or searching an attachment records untrusted-read taint
+/// on the run's shared `UntrustedReads` tracker; errors and `list_attachments`
+/// do not spuriously taint.
+#[tokio::test(flavor = "current_thread")]
+async fn read_and_search_record_untrusted_taint_while_errors_do_not() {
+    let source = FakeSource::new(vec![("conv/note.txt", "alpha beta gamma")]);
+    let library = sourced(Arc::clone(&source), &[]);
+    let untrusted = Arc::new(elitea_agent_runtime::untrusted::UntrustedReads::default());
+    library.attach_untrusted(Arc::clone(&untrusted));
+
+    // list_attachments and missing-file read do not taint.
+    let _ = tool_named(&library, "list_attachments")
+        .await
+        .execute(ctx(), json!({}))
+        .await
+        .expect("list");
+    let missing = tool_named(&library, "read_attachment")
+        .await
+        .execute(ctx(), json!({"name": "missing.txt"}))
+        .await
+        .expect("missing");
+    assert_eq!(missing["error"], "attachment_not_found");
+    assert!(!untrusted.has_read());
+
+    // read_attachment taints.
+    let read = tool_named(&library, "read_attachment")
+        .await
+        .execute(ctx(), json!({"name": "note.txt"}))
+        .await
+        .expect("read");
+    assert!(read["content"].as_str().is_some());
+    assert!(untrusted.has_read());
+
+    // search_attachment also taints a fresh tracker.
+    let library2 = sourced(Arc::clone(&source), &[]);
+    let untrusted2 = Arc::new(elitea_agent_runtime::untrusted::UntrustedReads::default());
+    library2.attach_untrusted(Arc::clone(&untrusted2));
+    let invalid = tool_named(&library2, "search_attachment")
+        .await
+        .execute(ctx(), json!({"query": ""}))
+        .await
+        .expect("invalid search");
+    assert_eq!(invalid["error"], "invalid_query");
+    assert!(!untrusted2.has_read());
+    let found = tool_named(&library2, "search_attachment")
+        .await
+        .execute(ctx(), json!({"query": "alpha"}))
+        .await
+        .expect("search");
+    assert_eq!(found["results"].as_array().expect("results").len(), 1);
+    assert!(untrusted2.has_read());
+}

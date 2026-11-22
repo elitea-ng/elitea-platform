@@ -434,6 +434,9 @@ export async function ensureChatPanelExpanded(page: Page): Promise<void> {
   await expect(collapse).toBeVisible({ timeout: 10_000 });
 }
 
+/** Every node on the canvas except END, which the editor places itself. */
+const AUTHORED_NODES = '.react-flow__node:not([data-id="END"])';
+
 /**
  * Add one node of `label` through the editor's own Add-node menu (no store pokes), and settle on the canvas holding it.
  *
@@ -454,13 +457,18 @@ export async function ensureChatPanelExpanded(page: Page): Promise<void> {
  * more than the settled canvas held before.
  */
 export async function addNodeThroughMenu(page: Page, label: string): Promise<void> {
-  const nodes = page.locator('.react-flow__node');
+  // END is not counted: an empty canvas (#2719) hides it until the first node
+  // is added, so it would appear together with that node and read as two.
+  const nodes = page.locator(AUTHORED_NODES);
   const before = await settledNodeCount(page);
   const menu = page.locator('#pipeline-add-node-menu');
   const paper = menu.locator('.MuiMenu-paper');
   await expect(async () => {
     if ((await nodes.count()) > before) return;
-    if ((await menu.count()) === 0) await page.getByRole('button', { name: 'Add node' }).click({ timeout: 5_000 });
+    // By test id: a role name of 'Add node' also matches the empty canvas's
+    // own "Add Node" button (role names match case-insensitively), which
+    // opens the same menu from a different anchor.
+    if ((await menu.count()) === 0) await page.getByTestId('pipeline-add-node-button').click({ timeout: 5_000 });
     await expect(paper, 'the Add-node menu must finish growing in before an item is clicked').toHaveCSS('transform', 'none', { timeout: 5_000 });
     await paper.getByRole('menuitem', { name: label, exact: true }).click({ timeout: 5_000 });
     await expect(nodes).toHaveCount(before + 1, { timeout: 3_000 });
@@ -475,8 +483,13 @@ export async function addNodeThroughMenu(page: Page, label: string): Promise<voi
  * "one node more" would be measured against too few.
  */
 async function settledNodeCount(page: Page): Promise<number> {
-  const nodes = page.locator('.react-flow__node');
-  await expect(page.locator('.react-flow__node[data-id="END"]'), 'the canvas must draw its END node').toBeVisible();
+  const nodes = page.locator(AUTHORED_NODES);
+  // A drawn canvas shows either its END node or, for a document with no node
+  // yet, the empty state (#2719), which hides END until the first node lands.
+  await expect(
+    page.locator('.react-flow__node[data-id="END"]').or(page.getByTestId('pipeline-empty-state')),
+    'the canvas must draw its END node or its empty state',
+  ).toBeVisible();
   let previous = -1;
   await expect
     .poll(

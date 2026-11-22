@@ -124,3 +124,59 @@ func TestEventHandlerServesADelegationNoticeUnstampedWithoutAReviewer(t *testing
 		t.Fatalf("stamped without a reviewer: %s", response.Body.String())
 	}
 }
+
+// FU-360: an assembly-time pipeline_node delegation_refused event (for both an
+// Agent node and a #2235 saved-pipeline node) reaches the SSE stream stamped
+// with can_review and the calling pipeline's name BEFORE execution.failed.
+func TestEventHandlerStreamsAssemblyPipelineNodeRefusalBeforeExecutionFailed(t *testing.T) {
+	const (
+		agentNodeFrame = `{"type":"delegation_refused","stream_id":"s","message_id":"m","execution_generation":"g1","response_metadata":{"delegation_v1":{"id":"pipeline_node:delegate","kind":"refused","reason":"no_grant","code":"DELEGATION_GRANT_MISSING","edge":{"caller_id":174,"callee_id":171,"callee_name":"delegate","kind":"pipeline_node"},"missing":[{"kind":"toolkit","name":"c1mockmcp"}]}}}`
+		failedFrame    = `{"code":"AUTHORIZATION_FAILED","safe_message":"Execution authorization failed.","retryable":false}`
+	)
+	repository := &eventRepositoryStub{events: map[uint64][]DurableEvent{
+		0: {
+			{Cursor: 1, Type: nodeEventType, Data: json.RawMessage(agentNodeFrame)},
+			{Cursor: 2, Type: "execution.failed", Data: json.RawMessage(failedFrame)},
+		},
+	}}
+	reviewer := &reviewerStub{review: delegationnotice.Review{CanReview: true, CallerName: "P0r refusal"}}
+	handler, err := NewEventHandler(&eventAuthorizerStub{}, repository, &replayWaiterStub{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.WithDelegationReviewer(reviewer)
+	response := newStreamingRecorder()
+	handler.Stream(response, delegationRequest())
+
+	var events []string
+	var stampedNotice map[string]any
+	for _, line := range strings.Split(response.Body.String(), "\n") {
+		if ev, ok := strings.CutPrefix(line, "event: "); ok {
+			events = append(events, ev)
+		}
+		if data, ok := strings.CutPrefix(line, "data: "); ok && strings.Contains(data, "delegation_v1") {
+			var frame struct {
+				ResponseMetadata struct {
+					Notice map[string]any `json:"delegation_v1"`
+				} `json:"response_metadata"`
+			}
+			if err := json.Unmarshal([]byte(data), &frame); err != nil {
+				t.Fatalf("decode frame: %v", err)
+			}
+			stampedNotice = frame.ResponseMetadata.Notice
+		}
+	}
+	if len(events) != 2 || events[0] != nodeEventType || events[1] != "execution.failed" {
+		t.Fatalf("events = %v, want [%s execution.failed]", events, nodeEventType)
+	}
+	if stampedNotice == nil || stampedNotice["can_review"] != true {
+		t.Fatalf("stamped notice = %+v, want can_review=true", stampedNotice)
+	}
+	edge, _ := stampedNotice["edge"].(map[string]any)
+	if edge["caller_name"] != "P0r refusal" || edge["kind"] != "pipeline_node" {
+		t.Fatalf("edge = %+v, want caller_name='P0r refusal' and kind='pipeline_node'", edge)
+	}
+	if len(reviewer.asked) != 1 || reviewer.asked[0] != [3]int64{11, 7, 174} {
+		t.Fatalf("asked = %v, want [[11 7 174]]", reviewer.asked)
+	}
+}

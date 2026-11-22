@@ -35,6 +35,7 @@ import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { t } from '@/shared/i18n';
+import { isTypedRefusalCode } from '@/shared/lib/runtimeFailure';
 import { ErrorIcon } from '@/shared/ui/icons/error-icon';
 import { FailIcon } from '@/shared/ui/icons/fail-icon';
 import { StopIcon } from '@/shared/ui/icons/stop-icon';
@@ -65,7 +66,9 @@ export interface RunStateNodeProps {
 export const RunStateNode = memo(function RunStateNode(props: RunStateNodeProps): ReactNode {
   const { avoidTooltip, data, id, deleteRunNode, onStopRun, yamlJsonObject, editorHeight, editorWidth, selected } = props;
 
-  const styles = runNodeStyles(data.status, Boolean(selected));
+  const failureCode = typeof data['failureCode'] === 'string' ? data['failureCode'] : undefined;
+  const isRefusal = data.status === FlowEditorConstants.PipelineStatus.Error && isTypedRefusalCode(failureCode);
+  const styles = runNodeStyles(data.status, Boolean(selected), isRefusal);
 
   const [isOpened, setIsOpened] = useState(false);
   const runInProgress = data.status === FlowEditorConstants.PipelineStatus.InProgress;
@@ -95,7 +98,13 @@ export const RunStateNode = memo(function RunStateNode(props: RunStateNodeProps)
     <>
       <Box sx={styles.wrapper}>
         <Tooltip
-          title={avoidTooltip ? '' : t('pipelines.flowEditor.runStateNode.runIsStatus', 'Run is {{status}}', { status: data.status.toLowerCase() })}
+          title={
+            avoidTooltip
+              ? ''
+              : isRefusal
+                ? t('pipelines.flowEditor.runStateNode.runWasRefused', 'Run was refused')
+                : t('pipelines.flowEditor.runStateNode.runIsStatus', 'Run is {{status}}', { status: data.status.toLowerCase() })
+          }
           placement="bottom"
         >
           <Box sx={styles.statusIcon}>
@@ -194,8 +203,9 @@ function negativeButtonSvgStyle(status: string, theme: Theme): Record<string, un
   };
 }
 
-function runNodeStyles(status: string, selected: boolean): RunNodeStyles {
+function runNodeStyles(status: string, selected: boolean, isRefusal: boolean): RunNodeStyles {
   const iconColor = (theme: Theme): string => {
+    if (isRefusal) return theme.vars.palette.status.onModeration;
     switch (status) {
       case FlowEditorConstants.PipelineStatus.Completed:
         return theme.vars.palette.status.published;

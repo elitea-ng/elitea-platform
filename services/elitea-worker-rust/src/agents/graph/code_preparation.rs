@@ -666,6 +666,7 @@ mod tests {
             original: None,
             debug: None,
             workspace: None,
+            timeout_ms: None,
         };
         let (language, source) = native_acquisition(&invocation).unwrap();
         assert_eq!(language, crate::sandbox::request::Language::Rust);

@@ -32,4 +32,110 @@ describe('the answer', () => {
     expect(screen.getByTestId('delegation-notices')).toHaveTextContent('Agent1 could not use git from Agent2. This delegation is not approved.');
     expect(screen.getByRole('link', { name: 'Review delegation' })).toBeInTheDocument();
   });
+
+  it('suppresses the redundant generic authorization error banner when a refused delegation notice explains the refusal', () => {
+    const pipelineNodeNotice = parseDelegationNotice({
+      id: 'pipeline_node:delegate',
+      kind: 'refused',
+      reason: 'no_grant',
+      code: 'DELEGATION_GRANT_MISSING',
+      edge: { caller_id: 174, caller_name: 'P0r refusal', callee_id: 171, callee_name: 'delegate', kind: 'pipeline_node' },
+      missing: [{ kind: 'toolkit', name: 'c1mockmcp' }],
+      can_review: true,
+    });
+    const answer: ChatMessage = {
+      id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+      role: 'assistant',
+      name: 'P0r refusal',
+      content: '',
+      createdAt: '',
+      exception: 'Execution authorization failed.',
+      failureCode: 'AUTHORIZATION_FAILED',
+      ...(pipelineNodeNotice === undefined ? {} : { delegationNotices: [pipelineNodeNotice] }),
+    };
+    renderWithTheme(<ApplicationAnswer answer={answer} messageId={answer.id} />);
+    expect(screen.getByTestId('delegation-notices')).toHaveTextContent('delegate could not use c1mockmcp from P0r refusal. This delegation is not approved.');
+    expect(screen.getByRole('link', { name: 'Review delegation' })).toHaveAttribute('href', '/pipelines/all/174');
+    expect(screen.queryByTestId('error-trace')).not.toBeInTheDocument();
+    expect(screen.getByTestId('failure-reference')).toHaveTextContent('Error code: AUTHORIZATION_FAILED');
+  });
+
+  it.each(['agent_tool', 'pipeline_child', 'sub_agent'] as const)(
+    'SEC-FU359-01: keeps ErrorTrace visible for AUTHORIZATION_FAILED when the notice is a non-fatal %s refusal',
+    (edgeKind) => {
+      const nonFatalNotice = parseDelegationNotice({
+        id: 'call-1',
+        kind: 'refused',
+        reason: 'no_grant',
+        code: 'DELEGATION_GRANT_MISSING',
+        edge: { caller_id: 2, caller_name: 'Agent2', callee_id: 1, callee_name: 'Agent1', kind: edgeKind },
+        missing: [{ kind: 'toolkit', name: 'git' }],
+        can_review: true,
+      });
+      const answer: ChatMessage = {
+        id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+        role: 'assistant',
+        name: 'Agent2',
+        content: '',
+        createdAt: '',
+        exception: 'Execution authorization failed.',
+        failureCode: 'AUTHORIZATION_FAILED',
+        ...(nonFatalNotice === undefined ? {} : { delegationNotices: [nonFatalNotice] }),
+      };
+      renderWithTheme(<ApplicationAnswer answer={answer} messageId={answer.id} />);
+      expect(screen.getByTestId('delegation-notices')).toBeInTheDocument();
+      expect(screen.getByTestId('error-trace')).toHaveAttribute('data-outcome', 'refusal');
+    },
+  );
+
+  it('SEC-FU359-01: keeps ErrorTrace visible when a distinct non-generic authorization reason is present', () => {
+    const pipelineNodeNotice = parseDelegationNotice({
+      id: 'pipeline_node:delegate',
+      kind: 'refused',
+      reason: 'no_grant',
+      code: 'DELEGATION_GRANT_MISSING',
+      edge: { caller_id: 174, caller_name: 'P0r refusal', callee_id: 171, callee_name: 'delegate', kind: 'pipeline_node' },
+      missing: [{ kind: 'toolkit', name: 'c1mockmcp' }],
+      can_review: true,
+    });
+    const answer: ChatMessage = {
+      id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+      role: 'assistant',
+      name: 'P0r refusal',
+      content: '',
+      createdAt: '',
+      exception: 'Code node authorization failed.',
+      failureCode: 'AUTHORIZATION_FAILED',
+      ...(pipelineNodeNotice === undefined ? {} : { delegationNotices: [pipelineNodeNotice] }),
+    };
+    renderWithTheme(<ApplicationAnswer answer={answer} messageId={answer.id} />);
+    expect(screen.getByTestId('error-trace')).toHaveTextContent('Code node authorization failed.');
+  });
+
+  it('shows a refusal banner (not a generic red error) for a typed refusal without a delegation notice, and keeps real errors red', () => {
+    const refusal: ChatMessage = {
+      id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+      role: 'assistant',
+      name: 'Agent',
+      content: '',
+      createdAt: '',
+      exception: 'Configuration type is not supported.',
+      failureCode: 'UNSUPPORTED_CAPABILITY',
+    };
+    const { rerender } = renderWithTheme(<ApplicationAnswer answer={refusal} messageId={refusal.id} />);
+    const refusalBanner = screen.getByTestId('error-trace');
+    expect(refusalBanner).toHaveAttribute('data-outcome', 'refusal');
+    expect(refusalBanner).toHaveTextContent('Request refused');
+    expect(refusalBanner).toHaveTextContent('Configuration type is not supported.');
+
+    const runtimeError: ChatMessage = {
+      ...refusal,
+      exception: 'The runtime operation failed.',
+      failureCode: 'INTERNAL',
+    };
+    rerender(<ApplicationAnswer answer={runtimeError} messageId={runtimeError.id} />);
+    const errorBanner = screen.getByTestId('error-trace');
+    expect(errorBanner).toHaveAttribute('data-outcome', 'error');
+    expect(errorBanner).toHaveTextContent('The runtime operation failed.');
+  });
 });

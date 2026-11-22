@@ -106,3 +106,127 @@ func TestASavedSectionKeepsItsValuesAndGainsTheGrants(t *testing.T) {
 		t.Fatalf("policy = %v err = %v", policy, err)
 	}
 }
+
+// FU-359: both a pipeline root and an ordinary agent root whose grants are all
+// still pending (0 consumable grants) still carry root_application_id and
+// grants_enforced, with default unsaved settings or saved settings + principal
+// bound, so a refusal notice names caller_id for Review delegation.
+func TestPendingOnlyGrantsPopulateRootApplicationIDForPipelineAndOrdinaryRoots(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		application string
+		wantRootID  uint64
+		settings    platformconfig.DelegationSettings
+		withBound   bool
+	}{
+		{
+			name:        "pipeline root with default settings",
+			application: `{"id":174,"version_id":1,"version_details":{"agent_type":"pipeline","tools":[]}}`,
+			wantRootID:  174,
+			settings:    platformconfig.DefaultDelegationSettings(),
+		},
+		{
+			name:        "pipeline root with saved settings and principal bound",
+			application: `{"id":174,"version_id":1,"version_details":{"agent_type":"pipeline","tools":[]}}`,
+			wantRootID:  174,
+			settings:    boundedSettings(),
+			withBound:   true,
+		},
+		{
+			name:        "ordinary root with default settings",
+			application: `{"id":175,"version_id":2,"version_details":{"agent_type":"agent","tools":[]}}`,
+			wantRootID:  175,
+			settings:    platformconfig.DefaultDelegationSettings(),
+		},
+		{
+			name:        "ordinary root with saved settings and principal bound",
+			application: `{"id":175,"version_id":2,"version_details":{"agent_type":"agent","tools":[]}}`,
+			wantRootID:  175,
+			settings:    boundedSettings(),
+			withBound:   true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			source := &grantSourceStub{byCaller: map[int64][]dg.Grant{}}
+			r, _ := resolver(t, tc.settings, agentInput(t, tc.application), nil)
+			if tc.withBound {
+				r.WithPrincipalBound(&principalStub{
+					principal: Principal{UserID: 7},
+					reachable: []int64{100},
+				})
+			}
+			r.WithGrants(source, true)
+			policy, err := r.WorkerDelegationPolicy(context.Background(), agentCommand())
+			if err != nil || policy == nil {
+				t.Fatalf("policy = %v err = %v", policy, err)
+			}
+			if !policy.GetGrantsEnforced() || policy.GetRootApplicationId() != tc.wantRootID || len(policy.GetGrants()) != 0 {
+				t.Fatalf("got enforced=%v root=%d grants=%d; want true, %d, 0",
+					policy.GetGrantsEnforced(), policy.GetRootApplicationId(), len(policy.GetGrants()), tc.wantRootID)
+			}
+			if source.calls != 1 {
+				t.Fatalf("grant reads = %d, want 1", source.calls)
+			}
+			if tc.withBound && (policy.GetPrincipalBound() == nil || !policy.GetPrincipalBound().GetBounded()) {
+				t.Fatalf("principal bound lost: %+v", policy.GetPrincipalBound())
+			}
+		})
+	}
+}
+
+// Negative cases: switch off (even with saved settings), non-positive root id,
+// or invalid project id must not stamp root_application_id or grants_enforced.
+func TestGrantsEnforcementNegativeCasesDoNotPopulateRootApplicationID(t *testing.T) {
+	t.Parallel()
+	t.Run("switch off with saved settings", func(t *testing.T) {
+		t.Parallel()
+		source := &grantSourceStub{byCaller: map[int64][]dg.Grant{}}
+		r, _ := resolver(t, savedDefaults(), agentInput(t, `{"id":174,"version_details":{"agent_type":"pipeline"}}`), nil)
+		r.WithGrants(source, false)
+		policy, err := r.WorkerDelegationPolicy(context.Background(), agentCommand())
+		if err != nil || policy == nil {
+			t.Fatalf("policy = %v err = %v", policy, err)
+		}
+		if policy.GetGrantsEnforced() || policy.GetRootApplicationId() != 0 || source.calls != 0 {
+			t.Fatalf("switch off must leave root/enforced unset: enforced=%v root=%d reads=%d",
+				policy.GetGrantsEnforced(), policy.GetRootApplicationId(), source.calls)
+		}
+	})
+
+	for _, raw := range []string{`{"id":0}`, `{"id":-5}`, `{"version_details":{"agent_type":"pipeline"}}`} {
+		t.Run("invalid root "+raw, func(t *testing.T) {
+			t.Parallel()
+			source := &grantSourceStub{byCaller: map[int64][]dg.Grant{}}
+			r, _ := resolver(t, savedDefaults(), agentInput(t, raw), nil)
+			r.WithGrants(source, true)
+			policy, err := r.WorkerDelegationPolicy(context.Background(), agentCommand())
+			if err != nil || policy == nil {
+				t.Fatalf("policy = %v err = %v", policy, err)
+			}
+			if policy.GetGrantsEnforced() || policy.GetRootApplicationId() != 0 || source.calls != 0 {
+				t.Fatalf("invalid root must not stamp grants: enforced=%v root=%d reads=%d",
+					policy.GetGrantsEnforced(), policy.GetRootApplicationId(), source.calls)
+			}
+		})
+	}
+
+	t.Run("invalid project id", func(t *testing.T) {
+		t.Parallel()
+		source := &grantSourceStub{byCaller: map[int64][]dg.Grant{}}
+		r, _ := resolver(t, savedDefaults(), agentInput(t, `{"id":174}`), nil)
+		r.WithGrants(source, true)
+		cmd := agentCommand()
+		cmd.ResourceProjectId = "not-a-number"
+		policy, err := r.WorkerDelegationPolicy(context.Background(), cmd)
+		if err != nil || policy == nil {
+			t.Fatalf("policy = %v err = %v", policy, err)
+		}
+		if policy.GetGrantsEnforced() || policy.GetRootApplicationId() != 0 || source.calls != 0 {
+			t.Fatalf("invalid project must not stamp grants: enforced=%v root=%d reads=%d",
+				policy.GetGrantsEnforced(), policy.GetRootApplicationId(), source.calls)
+		}
+	})
+}

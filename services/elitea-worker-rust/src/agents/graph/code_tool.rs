@@ -193,6 +193,7 @@ impl SandboxAnalysisRunner {
             original: None,
             debug: None,
             workspace: None,
+            timeout_ms: None,
         };
         match self.runtime.execute_tool(invocation).await {
             Ok(receipt) => result_of(&receipt),

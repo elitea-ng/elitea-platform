@@ -383,6 +383,16 @@ pub(crate) trait PipelineApplicationResolver: Send + Sync {
         None
     }
 
+    /// FU-358: the same frozen resolver whose nested saved-pipeline subgraphs
+    /// inside a non-member agent's pipeline-tool call journal their effectful
+    /// direct nodes through that call's claim-fenced journal factory.
+    fn for_pipeline_tool_journals(
+        &self,
+        _journals: Arc<dyn super::node_recovery_runtime::NodeRecoveryFactory>,
+    ) -> Option<Arc<dyn PipelineApplicationResolver>> {
+        None
+    }
+
     /// FU-291: the same frozen resolver whose saved Agents, run by one fan-out
     /// member, call their saved pipeline tools on nested threads that
     /// member's own family admits. `None` keeps this resolver.

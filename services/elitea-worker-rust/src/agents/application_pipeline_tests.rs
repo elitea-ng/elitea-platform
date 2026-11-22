@@ -344,6 +344,7 @@ fn harness_with_definition(
             conversation_thread_id: CONVERSATION_THREAD.to_owned(),
             event_sender: Some(sender),
             resume: Some(resume.clone()),
+            tool_journals: None,
         },
         definition_sha256,
     );
@@ -2336,5 +2337,401 @@ mod durable_member_calls {
             );
         });
         elitea_faults::logtest::child_ran();
+    }
+}
+
+/// FU-358: lending a claim-fenced node-recovery journal to a non-member
+/// agent's saved pipeline tool.
+mod non_member_tool_journals {
+    use super::*;
+    use crate::agents::graph::node_recovery::NodeRecoveryPolicy;
+    use crate::agents::graph::node_recovery_runtime::{
+        NodeAttemptActivation, NodeAttemptJournal, NodeRecoveryFactory,
+        PipelineToolJournalAuthority, recovery_error,
+    };
+    use crate::agents::graph::{
+        DirectToolExecutionError, DirectToolSelection, ParallelCheckpointAppender,
+        PipelineDirectToolResolver, ResolvedDirectTool,
+    };
+    use crate::state::{StateWriterLease, StateWriterLeaseLost};
+    use adk_rust::graph::{Checkpoint, Checkpointer, GraphError, MemoryCheckpointer};
+    use std::collections::BTreeSet;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    const EFFECTFUL_DIRECT_PIPELINE: &str = r"
+state:
+  input:
+    type: str
+  messages:
+    type: list
+  answer:
+    type: dict
+entry_point: echo
+nodes:
+  - id: echo
+    type: mcp
+    toolkit_name: demo
+    tool: echo_write
+    input_mapping:
+      text: {type: variable, value: input}
+    output: [answer]
+    transition: END
+";
+
+    type ObservedVisits = Arc<Mutex<Vec<(String, [u8; 32])>>>;
+    type ObservedCalls = Arc<Mutex<Vec<(String, BTreeSet<String>)>>>;
+
+    struct SharedStore(MemoryCheckpointer);
+
+    #[async_trait::async_trait]
+    impl Checkpointer for SharedStore {
+        async fn save(&self, checkpoint: &Checkpoint) -> Result<String, GraphError> {
+            self.0.save(checkpoint).await
+        }
+        async fn load(&self, thread_id: &str) -> Result<Option<Checkpoint>, GraphError> {
+            self.0.load(thread_id).await
+        }
+        async fn load_by_id(&self, checkpoint_id: &str) -> Result<Option<Checkpoint>, GraphError> {
+            self.0.load_by_id(checkpoint_id).await
+        }
+        async fn list(&self, thread_id: &str) -> Result<Vec<Checkpoint>, GraphError> {
+            self.0.list(thread_id).await
+        }
+        async fn delete(&self, thread_id: &str) -> Result<(), GraphError> {
+            self.0.delete(thread_id).await
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ParallelCheckpointAppender for SharedStore {
+        async fn append_after(
+            &self,
+            _: Option<&Checkpoint>,
+            candidate: &Checkpoint,
+        ) -> Result<String, GraphError> {
+            self.0.save(candidate).await
+        }
+    }
+
+    struct ToggleLease(AtomicBool);
+
+    impl StateWriterLease for ToggleLease {
+        fn ensure_current(&self) -> Result<(), StateWriterLeaseLost> {
+            if self.0.load(Ordering::SeqCst) {
+                Ok(())
+            } else {
+                Err(StateWriterLeaseLost)
+            }
+        }
+    }
+
+    struct CallScopedFactory {
+        store: Arc<SharedStore>,
+        lease: Arc<ToggleLease>,
+        admitted: BTreeSet<String>,
+        observed_visits: ObservedVisits,
+    }
+
+    #[async_trait::async_trait]
+    impl NodeRecoveryFactory for CallScopedFactory {
+        async fn open(
+            &self,
+            activation: &NodeAttemptActivation,
+            policy: &NodeRecoveryPolicy,
+        ) -> Result<NodeAttemptJournal, GraphError> {
+            if !self.admitted.contains(&activation.root_thread_id) {
+                return Err(recovery_error("pipeline.node_recovery.invalid_scope"));
+            }
+            let Some(visit) = activation.visit else {
+                return Err(recovery_error("pipeline.node_recovery.unscoped_child"));
+            };
+            self.lease
+                .ensure_current()
+                .map_err(|_| recovery_error("pipeline.node_recovery.writer_not_current"))?;
+            self.observed_visits
+                .lock()
+                .expect("visits")
+                .push((activation.root_thread_id.clone(), visit));
+            let mut key = ring::digest::Context::new(&ring::digest::SHA256);
+            key.update(activation.root_thread_id.as_bytes());
+            key.update(activation.node_id.as_bytes());
+            key.update(&activation.step.to_be_bytes());
+            key.update(&visit);
+            let mut activation_id = [0_u8; 32];
+            activation_id.copy_from_slice(key.finish().as_ref());
+            let journal_thread = format!(
+                "n1:{:02x}{:02x}{:02x}{:02x}",
+                activation_id[0], activation_id[1], activation_id[2], activation_id[3]
+            );
+            Ok(NodeAttemptJournal::bound(
+                self.store.clone(),
+                self.lease.clone(),
+                journal_thread,
+                activation_id,
+                policy.clone(),
+            ))
+        }
+    }
+
+    struct StubJournalAuthority {
+        store: Arc<SharedStore>,
+        lease: Arc<ToggleLease>,
+        observed_calls: ObservedCalls,
+        observed_visits: ObservedVisits,
+        refuse_call: bool,
+    }
+
+    impl StubJournalAuthority {
+        fn new(current: bool) -> Arc<Self> {
+            Arc::new(Self {
+                store: Arc::new(SharedStore(MemoryCheckpointer::new())),
+                lease: Arc::new(ToggleLease(AtomicBool::new(current))),
+                observed_calls: Arc::new(Mutex::new(Vec::new())),
+                observed_visits: Arc::new(Mutex::new(Vec::new())),
+                refuse_call: false,
+            })
+        }
+    }
+
+    impl PipelineToolJournalAuthority for StubJournalAuthority {
+        fn for_pipeline_tool_call(
+            &self,
+            call_thread: String,
+            admitted_descendants: BTreeSet<String>,
+        ) -> Result<Arc<dyn NodeRecoveryFactory>, GraphError> {
+            self.observed_calls
+                .lock()
+                .expect("calls")
+                .push((call_thread.clone(), admitted_descendants.clone()));
+            if self.refuse_call {
+                return Err(recovery_error("pipeline.node_recovery.invalid_scope"));
+            }
+            let mut admitted = BTreeSet::new();
+            for path in admitted_descendants {
+                admitted.insert(format!("{call_thread}/{path}"));
+            }
+            admitted.insert(call_thread);
+            Ok(Arc::new(CallScopedFactory {
+                store: Arc::clone(&self.store),
+                lease: Arc::clone(&self.lease),
+                admitted,
+                observed_visits: Arc::clone(&self.observed_visits),
+            }))
+        }
+    }
+
+    struct EffectEchoTool {
+        calls: Arc<AtomicUsize>,
+        lose_lease_mid_call: Option<Arc<ToggleLease>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Tool for EffectEchoTool {
+        fn name(&self) -> &'static str {
+            "echo_write"
+        }
+        fn description(&self) -> &'static str {
+            "effectful echo fixture"
+        }
+        fn is_read_only(&self) -> bool {
+            false
+        }
+        async fn execute(&self, _: Arc<dyn ToolContext>, args: Value) -> adk_rust::Result<Value> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if let Some(lease) = &self.lose_lease_mid_call {
+                // Simulate a crash/lease loss after the external effect started
+                // so the journal retains `Running` without `Completed`.
+                lease.0.store(false, Ordering::SeqCst);
+            }
+            Ok(json!({ "echoed": args["text"] }))
+        }
+    }
+
+    struct DirectResolver {
+        tool: Arc<dyn Tool>,
+    }
+
+    impl PipelineDirectToolResolver for DirectResolver {
+        fn resolve(
+            &self,
+            _: &DirectToolSelection,
+        ) -> Result<ResolvedDirectTool, DirectToolExecutionError> {
+            Ok(ResolvedDirectTool::new(Arc::clone(&self.tool), None))
+        }
+    }
+
+    fn build_tool(
+        calls: Arc<AtomicUsize>,
+        authority: Option<Arc<dyn PipelineToolJournalAuthority>>,
+        lose_lease_mid_call: Option<Arc<ToggleLease>>,
+    ) -> ApplicationPipelineTool {
+        let definition = PipelineDefinition::from_yaml(EFFECTFUL_DIRECT_PIPELINE).expect("yaml");
+        let (node_sender, node_receiver) = pipeline_node_event_channel();
+        let (tx, _rx) = mpsc::channel(16);
+        let runtimes = PipelineNodeRuntimes::new(
+            None,
+            Some(Arc::new(DirectResolver {
+                tool: Arc::new(EffectEchoTool {
+                    calls,
+                    lose_lease_mid_call,
+                }),
+            })),
+            None,
+        )
+        .with_events(node_sender);
+        ApplicationPipelineTool::new(
+            TOOL_NAME.to_owned(),
+            pipeline_tool_description("fu_echo", None),
+            definition,
+            runtimes,
+            node_receiver,
+            super::super::application_pipeline::PipelineToolParentBinding {
+                conversation_thread_id: CONVERSATION_THREAD.to_owned(),
+                event_sender: Some(tx),
+                resume: Some(ApplicationResumeCoordinator::default()),
+                tool_journals: authority,
+            },
+            Some([7; 32]),
+        )
+    }
+
+    #[tokio::test]
+    async fn non_member_pipeline_tool_with_effectful_direct_node_runs_once_with_lent_journal() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let authority = StubJournalAuthority::new(true);
+        let tool = build_tool(Arc::clone(&calls), Some(authority.clone()), None);
+
+        let result = tool
+            .execute(context(), json!({"task": "hello fu358"}))
+            .await
+            .expect("effectful direct node succeeds with lent journal");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(
+            result["response"]
+                .as_str()
+                .is_some_and(|text| text.contains("hello fu358")),
+            "{result}"
+        );
+        let observed = authority.observed_calls.lock().expect("calls");
+        assert_eq!(observed.len(), 1);
+        assert_eq!(observed[0].0, format!("{CONVERSATION_THREAD}/{CALL_ID}"));
+        assert!(observed[0].1.is_empty());
+    }
+
+    #[tokio::test]
+    async fn non_member_pipeline_tool_without_lent_journal_still_refuses_effectful_direct_node() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let tool = build_tool(Arc::clone(&calls), None, None);
+
+        let report = tool
+            .execute(context(), json!({"task": "hello"}))
+            .await
+            .expect("child failure report");
+        assert_eq!(
+            report["failure"]["code"].as_str(),
+            Some("PIPELINE_TOOL_UNAVAILABLE"),
+            "{report}"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn non_member_pipeline_tool_reentry_after_started_never_repeats_effectful_direct_node() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let authority = StubJournalAuthority::new(true);
+        // First call appends `Started`, invokes the tool once, then loses the
+        // lease before `Completed` is written — matching an in-flight crash.
+        let tool_1 = build_tool(
+            Arc::clone(&calls),
+            Some(authority.clone()),
+            Some(Arc::clone(&authority.lease)),
+        );
+        let first = tool_1
+            .execute(context(), json!({"task": "once only"}))
+            .await
+            .expect("first failure report");
+        assert_eq!(
+            first["failure"]["code"].as_str(),
+            Some("PIPELINE_TOOL_FAILED"),
+            "{first}"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        // Replacement claim restores lease currency and re-enters the exact
+        // same call: the journal holds `Running` (Started), so it refuses
+        // without calling the external tool a second time.
+        authority.lease.0.store(true, Ordering::SeqCst);
+        let tool_2 = build_tool(Arc::clone(&calls), Some(authority.clone()), None);
+        let second = tool_2
+            .execute(context(), json!({"task": "once only"}))
+            .await
+            .expect("re-entry refusal report");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "external effect must never repeat"
+        );
+        assert_eq!(
+            second["failure"]["code"].as_str(),
+            Some("RECOVERY_REFUSED"),
+            "{second}"
+        );
+    }
+
+    #[tokio::test]
+    async fn non_member_pipeline_tool_refuses_when_lent_journal_writer_is_superseded() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let authority = StubJournalAuthority::new(false);
+        let tool = build_tool(Arc::clone(&calls), Some(authority), None);
+
+        let report = tool
+            .execute(context(), json!({"task": "stale"}))
+            .await
+            .expect("superseded writer failure report");
+        assert_eq!(
+            report["failure"]["code"].as_str(),
+            Some("PIPELINE_TOOL_FAILED"),
+            "{report}"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn non_member_pipeline_tool_isolates_calls_and_refuses_denied_scope() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let authority = StubJournalAuthority::new(true);
+        let tool = build_tool(Arc::clone(&calls), Some(authority.clone()), None);
+
+        let ctx_1: Arc<dyn ToolContext> =
+            Arc::new(FixtureToolContext::for_call(INVOCATION_ID, "call-alpha"));
+        let ctx_2: Arc<dyn ToolContext> =
+            Arc::new(FixtureToolContext::for_call(INVOCATION_ID, "call-beta"));
+        assert!(tool.execute(ctx_1, json!({"task": "one"})).await.is_ok());
+        assert!(tool.execute(ctx_2, json!({"task": "two"})).await.is_ok());
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        {
+            let visits = authority.observed_visits.lock().expect("visits");
+            assert_eq!(visits.len(), 2);
+            assert_ne!(visits[0].0, visits[1].0);
+            assert_ne!(visits[0].1, visits[1].1);
+        }
+
+        let mut denied = StubJournalAuthority {
+            store: Arc::new(SharedStore(MemoryCheckpointer::new())),
+            lease: Arc::new(ToggleLease(AtomicBool::new(true))),
+            observed_calls: Arc::new(Mutex::new(Vec::new())),
+            observed_visits: Arc::new(Mutex::new(Vec::new())),
+            refuse_call: true,
+        };
+        denied.refuse_call = true;
+        let refused_tool = build_tool(Arc::clone(&calls), Some(Arc::new(denied)), None);
+        assert!(
+            refused_tool
+                .execute(context(), json!({"task": "denied"}))
+                .await
+                .is_err()
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 }

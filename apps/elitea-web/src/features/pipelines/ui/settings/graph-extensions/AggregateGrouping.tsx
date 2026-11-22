@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
-import Button from '@mui/material/Button';
 import Stack from '@mui/material/Stack';
 import { t } from '@/shared/i18n';
+import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { extensionRecord, extensionValues, extensionText } from '../../../lib/graphExtensions.helpers';
 import { ExtensionChoice, ExtensionField } from './ExtensionFields';
 
@@ -25,12 +25,12 @@ export function AggregateGrouping({ value, disabled, change }: AggregateGrouping
       <ExtensionChoice label={t('pipelines.graphExtensions.groupMissing', 'Missing group field {{index}}', { index: index + 1 })}
         value={extensionText(row['missing']) || 'error'} choices={['error', 'null']} disabled={disabled}
         change={(next) => update(index, 'missing', next)} />
-      <Button disabled={disabled} onClick={() => change(original.filter((_, ordinal) => ordinal !== index))}>
+      <BaseBtn variant="text" size="small" className="nodrag nopan nowheel" disabled={disabled} onClick={() => change(original.filter((_, ordinal) => ordinal !== index))}>
         {t('pipelines.graphExtensions.removeGroup', 'Remove group field {{index}}', { index: index + 1 })}
-      </Button>
+      </BaseBtn>
     </Stack>)}
-    <Button disabled={disabled || rows.length >= 64} onClick={() => change([...original, { path: '', output: '', missing: 'error' }])}>
+    <BaseBtn variant="secondary" size="small" className="nodrag nopan nowheel" disabled={disabled || rows.length >= 64} onClick={() => change([...original, { path: '', output: '', missing: 'error' }])}>
       {t('pipelines.graphExtensions.addGroup', 'Add group field')}
-    </Button>
+    </BaseBtn>
   </Stack>;
 }

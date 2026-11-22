@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"math"
 	"strconv"
 	"strings"
 
@@ -56,17 +57,50 @@ type RuntimeAgentMemoryRememberRequest struct {
 	// FromToolOutput: the run read tool or document output before this
 	// write. It can only make the write pending.
 	FromToolOutput bool `json:"from_tool_output"`
+	// TargetApplicationID and TargetVersionID optionally address a nested
+	// saved agent reached from the claimed execution (FU-353). Both must be
+	// omitted (0) for a root call, or both positive for a nested call. Main
+	// proves composition reachability and principal visibility server-side.
+	TargetApplicationID int64 `json:"target_application_id,omitempty"`
+	TargetVersionID     int64 `json:"target_version_id,omitempty"`
 }
 
 // RuntimeAgentMemoryRecallRequest is the recall tool's body.
 type RuntimeAgentMemoryRecallRequest struct {
-	Query string `json:"query"`
-	Limit int    `json:"limit"`
+	Query               string `json:"query"`
+	Limit               int    `json:"limit"`
+	TargetApplicationID int64  `json:"target_application_id,omitempty"`
+	TargetVersionID     int64  `json:"target_version_id,omitempty"`
 }
 
 // RuntimeAgentMemoryForgetRequest is the forget tool's body.
 type RuntimeAgentMemoryForgetRequest struct {
-	EntryID string `json:"entry_id"`
+	EntryID             string `json:"entry_id"`
+	TargetApplicationID int64  `json:"target_application_id,omitempty"`
+	TargetVersionID     int64  `json:"target_version_id,omitempty"`
+}
+
+// AgentMemoryTarget names a nested saved agent reached from the claimed run.
+// Zero values target the claimed run's own root application.
+type AgentMemoryTarget struct {
+	ApplicationID int64
+	VersionID     int64
+}
+
+// parseAgentMemoryTarget enforces that either both target ids are omitted
+// (root call) or both are positive 32-bit application/version ids (nested).
+func parseAgentMemoryTarget(applicationID, versionID int64) (AgentMemoryTarget, error) {
+	if applicationID == 0 && versionID == 0 {
+		return AgentMemoryTarget{}, nil
+	}
+	if applicationID <= 0 || applicationID > math.MaxInt32 ||
+		versionID <= 0 || versionID > math.MaxInt32 {
+		return AgentMemoryTarget{}, ErrContentRejected
+	}
+	return AgentMemoryTarget{
+		ApplicationID: applicationID,
+		VersionID:     versionID,
+	}, nil
 }
 
 // RuntimeAgentMemoryRemembered is the remember response. Its fields are the
@@ -105,7 +139,11 @@ type RuntimeAgentMemoryForgotten struct {
 type AgentMemoryRun struct {
 	ProjectID     int64
 	ApplicationID int64
-	ActorID       int64
+	// DelegatedFromApplicationID is non-zero when this call targets a nested
+	// saved agent reached from a root application (FU-353); recorded in the
+	// security audit event's reasons for provenance.
+	DelegatedFromApplicationID int64
+	ActorID                    int64
 	// ConversationUUID and MessageID are the provenance of a write: the
 	// conversation and the response message of the run.
 	ConversationUUID string
@@ -136,7 +174,7 @@ var ErrAgentMemorySubjectOptedOut = errors.New("the person opted out of this age
 
 // AgentMemorySink is the tenant side (repos.AgentMemory).
 type AgentMemorySink interface {
-	ResolveAgentMemoryRun(ctx context.Context, projectID int64, executionID string, generation uint64) (AgentMemoryRun, error)
+	ResolveAgentMemoryRun(ctx context.Context, projectID int64, executionID string, generation uint64, target AgentMemoryTarget) (AgentMemoryRun, error)
 	InsertAgentMemory(ctx context.Context, run AgentMemoryRun, write AgentMemoryWrite) (int64, error)
 	ActiveAgentMemory(ctx context.Context, projectID, applicationID int64) ([]agentmemory.Candidate, error)
 	// ForgetAgentMemory deletes one entry of the run's agent, unless it is
@@ -158,7 +196,7 @@ func NewRuntimeAgentMemoryService(authorizer AgentRuntimeContextAuthorizer, sink
 	return &RuntimeAgentMemoryService{authorizer: authorizer, sink: sink}, nil
 }
 
-func (service *RuntimeAgentMemoryService) run(ctx context.Context, claim ContentClaim) (AgentMemoryRun, error) {
+func (service *RuntimeAgentMemoryService) run(ctx context.Context, claim ContentClaim, target AgentMemoryTarget) (AgentMemoryRun, error) {
 	if service == nil || service.authorizer == nil || service.sink == nil {
 		return AgentMemoryRun{}, runtimeContextUnavailable(runtimeContextStageAgentMemoryRun)
 	}
@@ -167,7 +205,7 @@ func (service *RuntimeAgentMemoryService) run(ctx context.Context, claim Content
 	if err != nil {
 		return AgentMemoryRun{}, err
 	}
-	run, err := service.sink.ResolveAgentMemoryRun(ctx, authorization.ResourceProjectID, claim.ExecutionID, claim.Generation)
+	run, err := service.sink.ResolveAgentMemoryRun(ctx, authorization.ResourceProjectID, claim.ExecutionID, claim.Generation, target)
 	if err != nil {
 		if contextErr := ctx.Err(); contextErr != nil {
 			return AgentMemoryRun{}, contextErr
@@ -177,9 +215,11 @@ func (service *RuntimeAgentMemoryService) run(ctx context.Context, claim Content
 		}
 		return AgentMemoryRun{}, runtimeContextUnavailable(runtimeContextStageAgentMemoryRun)
 	}
-	// The run the sink read must be the one the claim authorized.
+	// The run the sink read must be the one the claim authorized, and for a
+	// nested target must resolve strictly to the requested application.
 	if run.ProjectID != authorization.ResourceProjectID ||
-		(authorization.ConversationID != "" && run.ConversationUUID != authorization.ConversationID) {
+		(authorization.ConversationID != "" && run.ConversationUUID != authorization.ConversationID) ||
+		(target.ApplicationID > 0 && run.ApplicationID != target.ApplicationID) {
 		return AgentMemoryRun{}, ErrContentUnauthorized
 	}
 	// No agent (an ad hoc chat) or memory off: there is no memory to reach.
@@ -189,8 +229,12 @@ func (service *RuntimeAgentMemoryService) run(ctx context.Context, claim Content
 	return run, nil
 }
 
-// Remember stores one entry for the claimed run's agent.
+// Remember stores one entry for the claimed run's agent (or a proven nested agent).
 func (service *RuntimeAgentMemoryService) Remember(ctx context.Context, claim ContentClaim, request RuntimeAgentMemoryRememberRequest) (RuntimeAgentMemoryRemembered, error) {
+	target, err := parseAgentMemoryTarget(request.TargetApplicationID, request.TargetVersionID)
+	if err != nil {
+		return RuntimeAgentMemoryRemembered{}, err
+	}
 	kind := agentmemory.Kind(request.Kind)
 	if !kind.AgentWritable() {
 		return RuntimeAgentMemoryRemembered{}, ErrContentRejected
@@ -199,7 +243,7 @@ func (service *RuntimeAgentMemoryService) Remember(ctx context.Context, claim Co
 	if err != nil {
 		return RuntimeAgentMemoryRemembered{}, ErrContentRejected
 	}
-	run, err := service.run(ctx, claim)
+	run, err := service.run(ctx, claim, target)
 	if err != nil {
 		return RuntimeAgentMemoryRemembered{}, err
 	}
@@ -244,10 +288,14 @@ func (service *RuntimeAgentMemoryService) Remember(ctx context.Context, claim Co
 // Recall answers the run's agent's active entries that match the query,
 // under the same presence rule and budgets as the recall at turn start.
 func (service *RuntimeAgentMemoryService) Recall(ctx context.Context, claim ContentClaim, request RuntimeAgentMemoryRecallRequest) (RuntimeAgentMemoryRecalled, error) {
+	target, err := parseAgentMemoryTarget(request.TargetApplicationID, request.TargetVersionID)
+	if err != nil {
+		return RuntimeAgentMemoryRecalled{}, err
+	}
 	if len(request.Query) > maxRuntimeAgentMemoryQueryBytes || request.Limit < 0 || request.Limit > agentmemory.MaxRecallEntries {
 		return RuntimeAgentMemoryRecalled{}, ErrContentRejected
 	}
-	run, err := service.run(ctx, claim)
+	run, err := service.run(ctx, claim, target)
 	if err != nil {
 		return RuntimeAgentMemoryRecalled{}, err
 	}
@@ -291,11 +339,15 @@ func (service *RuntimeAgentMemoryService) Recall(ctx context.Context, claim Cont
 // Forget deletes one entry of the run's agent. Off mode never writes, and
 // forgetting is a write.
 func (service *RuntimeAgentMemoryService) Forget(ctx context.Context, claim ContentClaim, request RuntimeAgentMemoryForgetRequest) (RuntimeAgentMemoryForgotten, error) {
+	target, err := parseAgentMemoryTarget(request.TargetApplicationID, request.TargetVersionID)
+	if err != nil {
+		return RuntimeAgentMemoryForgotten{}, err
+	}
 	entryID, err := strconv.ParseInt(request.EntryID, 10, 64)
 	if err != nil || entryID <= 0 {
 		return RuntimeAgentMemoryForgotten{}, ErrContentRejected
 	}
-	run, err := service.run(ctx, claim)
+	run, err := service.run(ctx, claim, target)
 	if err != nil {
 		return RuntimeAgentMemoryForgotten{}, err
 	}

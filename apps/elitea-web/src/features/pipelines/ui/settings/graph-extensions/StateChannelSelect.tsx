@@ -1,7 +1,9 @@
 import type { ReactNode } from 'react';
 import { useContext } from 'react';
-import TextField from '@mui/material/TextField';
+import Box from '@mui/material/Box';
+import FormHelperText from '@mui/material/FormHelperText';
 import { t } from '@/shared/i18n';
+import { SingleSelect, type SingleSelectOption } from '@/shared/ui/SingleSelect';
 import { FlowEditorContext } from '../../../lib/flow-editor/flowEditorContext';
 import { channelDefaultPreview, declaredChannelType, orderedDeclaredChannels } from '../../../lib/graphExtensions.helpers';
 import { BUILTIN_STATE_KEYS } from '../../../lib/graphAdmission.nodeReads';
@@ -26,11 +28,13 @@ export function StateChannelSelect({ label, value, types, disabled, change, excl
   const help = preview
     ? t('pipelines.graphExtensions.statePreview', 'Authored default: {{preview}}. Nested shape remains unknown.', { preview })
     : t('pipelines.graphExtensions.unknownShape', 'Nested values can have unknown shapes. Declare the root type in State.');
-  return <TextField className="nodrag nopan nowheel" select label={label} value={value} disabled={disabled}
-    onChange={(event) => change(event.target.value)} helperText={help} size="small" fullWidth
-    slotProps={{ select: { native: true } }}>
-    <option value="">{t('pipelines.graphExtensions.selectChannel', 'Select a state variable')}</option>
-    {!channels.includes(value) && value !== '' && <option value={value}>{value}</option>}
-    {channels.map((key) => <option key={key} value={key}>{key}</option>)}
-  </TextField>;
+  const options: SingleSelectOption[] = [
+    { value: '', label: t('pipelines.graphExtensions.selectChannel', 'Select a state variable') },
+    ...(!channels.includes(value) && value !== '' ? [{ value, label: value }] : []),
+    ...channels.map((key) => ({ value: key, label: key })),
+  ];
+  return <Box className="nodrag nopan nowheel">
+    <SingleSelect label={label} value={value} disabled={disabled} options={options} onChange={change} />
+    <FormHelperText>{help}</FormHelperText>
+  </Box>;
 }

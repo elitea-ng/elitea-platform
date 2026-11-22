@@ -536,7 +536,15 @@ impl OrdinaryNoToolProfile {
             },
             // A nested agent's answer goes to its parent, not to the chat.
             citations: elitea_agent_runtime::grounding::CitationMode::Off,
-            agent_memory: None,
+            // FU-353 D2(a1) / D5(a): nested saved agents bind recall/remember/forget
+            // tools from their own `meta.memory` (no start-of-turn prompt recall).
+            agent_memory: if expected_agent_type == "agent" {
+                super::agent_memory_tools::AgentMemoryBinding::from_meta(
+                    version.get("meta").and_then(Value::as_object),
+                )
+            } else {
+                None
+            },
             unattended: None,
             floor: None,
             tool_envelope: None,

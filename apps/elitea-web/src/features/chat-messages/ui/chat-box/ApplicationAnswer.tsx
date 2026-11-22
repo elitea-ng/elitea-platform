@@ -55,12 +55,12 @@ import { BudgetUsageLink } from '../error-trace/BudgetUsageLink';
 import { CapOverrideAction } from '../error-trace/CapOverrideAction';
 import { FailureReference } from '../error-trace/FailureReference';
 import { ContinuationError } from '../error-trace/ContinuationError';
-
 import { PersistedMessageTrace } from './PersistedMessageTrace';
 import { CloudSubAgents } from './CloudSubAgents';
 import { AnswerContent } from './AnswerContent';
 import { AnswerGuardrails } from './AnswerGuardrails';
 import { readAnswerItems } from './AnswerMessageItems';
+import { delegationRefusalExplainsFailure } from '@/shared/lib/runtimeFailure';
 
 import { GoalCheckNotice, RunBriefCard } from '@/entities/run-brief';
 import { t } from '@/shared/i18n';
@@ -327,7 +327,7 @@ export function ApplicationAnswer({
             <>
               {renderedContent}
               <AnswerGuardrails answer={answer} projectId={feedbackProjectId} settled={!isProcessing}>
-                {!!exception && <ErrorTrace error={exception} />}
+                {!!exception && !delegationRefusalExplainsFailure(answer.failureCode, answer.delegationNotices, exception) && <ErrorTrace error={exception} failureCode={answer.failureCode} />}
               </AnswerGuardrails>
               {!!exception && <BudgetUsageLink code={answer.failureCode} />}
               {!!exception && <CapOverrideAction projectId={feedbackProjectId} messageId={messageId} code={answer.failureCode} cap={answer.failureCap} />}

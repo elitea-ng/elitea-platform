@@ -32,7 +32,7 @@ describe('SplitOut and Aggregate are admitted by default', () => {
     const user = userEvent.setup();
     renderWithTheme(<AddNodeMenu onAddNode={vi.fn()} />);
     await user.click(screen.getByRole('button', { name: 'Add node' }));
-    const entries = within(await screen.findByRole('menu')).getAllByRole('menuitem').map((item) => item.textContent);
+    const entries = within(await screen.findByRole('menu')).getAllByRole('menuitem').map((item) => item.getAttribute('aria-label'));
     expect(entries).toHaveLength(14);
     expect(entries).toContain('SplitOut');
     expect(entries).toContain('Aggregate');
