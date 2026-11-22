@@ -180,6 +180,7 @@ ORDER BY claimed.index_meta_terminal_occurred_at,
 	defer rows.Close()
 
 	claims := make([]indexingapp.CurrentIndexMetaTerminalClaim, 0, limit)
+	var rejected indexingapp.CurrentIndexMetaTerminalRejections
 	for rows.Next() {
 		var claim indexingapp.CurrentIndexMetaTerminalClaim
 		var generation int64
@@ -193,7 +194,10 @@ ORDER BY claimed.index_meta_terminal_occurred_at,
 			return nil, fmt.Errorf("scan pending current index metadata terminal effect: %w", err)
 		}
 		if generation <= 0 {
-			return nil, indexingapp.ErrCurrentIndexMetaInitializationInvalid
+			return nil, fmt.Errorf(
+				"pending current index metadata terminal %q has generation %d: %w",
+				claim.ExecutionID, generation, indexingapp.ErrCurrentIndexMetaInitializationInvalid,
+			)
 		}
 		claim.Generation = uint64(generation)
 		claim.State = indexingapp.CurrentIndexMetaTerminalState(state)
@@ -205,19 +209,46 @@ ORDER BY claimed.index_meta_terminal_occurred_at,
 		return nil, fmt.Errorf("iterate pending current index metadata terminal effects: %w", err)
 	}
 	rows.Close()
-	for index := range claims {
-		if claims[index].State == indexingapp.CurrentIndexMetaFailed {
-			safeError, err := r.loadCurrentIndexMetaTerminalSafeError(ctx, claims[index])
+	valid := make([]indexingapp.CurrentIndexMetaTerminalClaim, 0, len(claims))
+	for _, claim := range claims {
+		if claim.State == indexingapp.CurrentIndexMetaFailed {
+			safeError, err := r.loadCurrentIndexMetaTerminalSafeError(ctx, claim)
 			if err != nil {
-				return nil, err
+				if !errors.Is(err, indexingapp.ErrCurrentIndexMetaInitializationInvalid) {
+					return nil, fmt.Errorf(
+						"load safe error of current index metadata terminal %q generation %d: %w",
+						claim.ExecutionID, claim.Generation, err,
+					)
+				}
+				rejected = append(rejected, terminalRejection(claim, err))
+				continue
 			}
-			claims[index].SafeError = safeError
+			claim.SafeError = safeError
 		}
-		if err := claims[index].Validate(); err != nil {
-			return nil, err
+		if err := claim.Validate(); err != nil {
+			rejected = append(rejected, terminalRejection(claim, err))
+			continue
 		}
+		valid = append(valid, claim)
 	}
-	return claims, nil
+	if len(rejected) != 0 {
+		return valid, rejected
+	}
+	return valid, nil
+}
+
+func terminalRejection(
+	claim indexingapp.CurrentIndexMetaTerminalClaim,
+	cause error,
+) indexingapp.CurrentIndexMetaTerminalRejection {
+	return indexingapp.CurrentIndexMetaTerminalRejection{
+		CurrentIndexMetaTerminalClaimRef: indexingapp.CurrentIndexMetaTerminalClaimRef{
+			ExecutionID: claim.ExecutionID,
+			Generation:  claim.Generation,
+			ClaimToken:  claim.ClaimToken,
+		},
+		Cause: cause,
+	}
 }
 
 func (r *CurrentIndexMetaTerminalBindingsRepository) loadCurrentIndexMetaTerminalSafeError(
@@ -262,7 +293,12 @@ LIMIT 1`,
 		claim.OccurredAt.UTC(),
 	).Scan(&payloadType, &payloadBytes, &retirementCode)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", indexingapp.ErrCurrentIndexMetaConflict
+		// No failure record carries the terminal time: the intent can never be
+		// completed, so it is rejected rather than retried as a conflict.
+		return "", fmt.Errorf(
+			"%w: no failure record matches the terminal time",
+			indexingapp.ErrCurrentIndexMetaInitializationInvalid,
+		)
 	}
 	if err != nil {
 		return "", fmt.Errorf("load current index metadata terminal safe error: %w", err)
@@ -453,7 +489,87 @@ WHERE execution_id = $1
 	return nil
 }
 
+// RejectTerminalEffect records why a claimed terminal effect could not be
+// applied and gives up its lease. Below maxAttempts claims it backs the effect
+// off like ReleaseTerminalEffect; at maxAttempts it moves the effect to
+// QUARANTINED, which no claim selects again, and keeps the error code so an
+// operator can find it. It takes only the claim's address, because the rest of
+// a rejected claim is what failed validation. It reports whether the effect
+// was quarantined.
+func (r *CurrentIndexMetaTerminalBindingsRepository) RejectTerminalEffect(
+	ctx context.Context,
+	ref indexingapp.CurrentIndexMetaTerminalClaimRef,
+	errorCode string,
+	maxAttempts int,
+) (bool, error) {
+	if r == nil || r.store == nil || ctx == nil || ref.ExecutionID == "" ||
+		ref.Generation == 0 || ref.Generation > math.MaxInt64 ||
+		!validTerminalClaimToken(ref.ClaimToken) || !validTerminalErrorCode(errorCode) ||
+		maxAttempts <= 0 || maxAttempts > math.MaxInt32 {
+		return false, indexingapp.ErrCurrentIndexMetaInitializationInvalid
+	}
+	var status string
+	err := r.store.QueryRow(ctx, `
+UPDATE elitea_runtime.index_ingest_jobs
+SET index_meta_terminal_status = CASE
+        WHEN index_meta_terminal_attempt_count >= $5 THEN 'QUARANTINED'
+        ELSE 'PENDING'
+    END,
+    index_meta_terminal_claim_token = NULL,
+    index_meta_terminal_claim_expires_at = NULL,
+    index_meta_terminal_next_attempt_at = CASE
+        WHEN index_meta_terminal_attempt_count >= $5 THEN NULL
+        ELSE clock_timestamp()
+            + (
+                LEAST(
+                    30,
+                    (1::bigint << LEAST(index_meta_terminal_attempt_count, 5))
+                ) * interval '1 second'
+            )
+    END,
+    index_meta_terminal_last_error_code = $4,
+    index_meta_terminalized_at = CASE
+        WHEN index_meta_terminal_attempt_count >= $5 THEN clock_timestamp()
+        ELSE NULL
+    END
+WHERE execution_id = $1
+  AND generation = $2
+  AND capability_id = 'index.ingest.v1'
+  AND index_meta_terminal_status = 'PENDING'
+  AND index_meta_terminal_claim_token = $3
+RETURNING index_meta_terminal_status`,
+		ref.ExecutionID,
+		int64(ref.Generation),
+		ref.ClaimToken,
+		errorCode,
+		int32(maxAttempts),
+	).Scan(&status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, indexingapp.ErrCurrentIndexMetaConflict
+	}
+	if err != nil {
+		return false, fmt.Errorf("reject current index metadata terminal effect: %w", err)
+	}
+	return status == terminalStatusQuarantined, nil
+}
+
+const terminalStatusQuarantined = "QUARANTINED"
+
+// terminalSafeError is the failure message a terminal effect carries, bounded
+// to what the terminal path accepts (indexing.BoundCurrentIndexMetaSafeError).
 func terminalSafeError(payloadType string, payloadBytes []byte, retirementCode string) string {
+	bounded := indexingapp.BoundCurrentIndexMetaSafeError(
+		unboundedTerminalSafeError(payloadType, payloadBytes, retirementCode),
+	)
+	if bounded == "" {
+		return terminalSafeErrorFallback
+	}
+	return bounded
+}
+
+const terminalSafeErrorFallback = "Indexing failed before completion."
+
+func unboundedTerminalSafeError(payloadType string, payloadBytes []byte, retirementCode string) string {
 	if retirementCode == "DEADLINE_EXCEEDED" {
 		// A refused command (shared 0197) carries its refusal message here.
 		if len(payloadBytes) != 0 {
@@ -477,7 +593,7 @@ func terminalSafeError(payloadType string, payloadBytes []byte, retirementCode s
 			return result.GetResultSummary().GetMessage()
 		}
 	}
-	return "Indexing failed before completion."
+	return terminalSafeErrorFallback
 }
 
 func validTerminalClaimToken(value string) bool {

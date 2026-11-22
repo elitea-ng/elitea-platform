@@ -145,4 +145,66 @@ WHERE execution_id = $1 AND generation = $2`,
 		reclaimed[0].ClaimToken != "replica-after-crash" {
 		t.Fatalf("reclaimed=%+v", reclaimed)
 	}
+
+	// An invalid effect backs off below the attempt limit and is quarantined
+	// at it, within the migrated CHECK constraints (shared 0259).
+	ref := indexingapp.CurrentIndexMetaTerminalClaimRef{
+		ExecutionID: admitted.ExecutionID,
+		Generation:  admitted.Generation,
+		ClaimToken:  "replica-after-crash",
+	}
+	quarantined, err := repository.RejectTerminalEffect(context.Background(), ref, "INVALID_TERMINAL_EFFECT", 3)
+	if err != nil || quarantined {
+		t.Fatalf("first rejection: quarantined=%v err=%v", quarantined, err)
+	}
+	var status, code string
+	var backedOff bool
+	if err := pool.QueryRow(context.Background(), `
+SELECT index_meta_terminal_status,
+       index_meta_terminal_last_error_code,
+       index_meta_terminal_next_attempt_at > clock_timestamp()
+FROM elitea_runtime.index_ingest_jobs
+WHERE execution_id = $1 AND generation = $2`,
+		admitted.ExecutionID, int64(admitted.Generation),
+	).Scan(&status, &code, &backedOff); err != nil {
+		t.Fatal(err)
+	}
+	if status != "PENDING" || code != "INVALID_TERMINAL_EFFECT" || !backedOff {
+		t.Fatalf("after backoff: status=%s code=%s backedOff=%v", status, code, backedOff)
+	}
+	if _, err := pool.Exec(context.Background(), `
+UPDATE elitea_runtime.index_ingest_jobs
+SET index_meta_terminal_next_attempt_at = clock_timestamp() - interval '1 second'
+WHERE execution_id = $1 AND generation = $2`,
+		admitted.ExecutionID, int64(admitted.Generation),
+	); err != nil {
+		t.Fatal(err)
+	}
+	third, err := repository.ClaimPendingTerminalEffects(context.Background(), "replica-third", 1, time.Minute)
+	if err != nil || len(third) != 1 {
+		t.Fatalf("third claim=%+v err=%v", third, err)
+	}
+	ref.ClaimToken = "replica-third"
+	quarantined, err = repository.RejectTerminalEffect(context.Background(), ref, "INVALID_TERMINAL_EFFECT", 3)
+	if err != nil || !quarantined {
+		t.Fatalf("rejection at the limit: quarantined=%v err=%v", quarantined, err)
+	}
+	var terminalized bool
+	if err := pool.QueryRow(context.Background(), `
+SELECT index_meta_terminal_status,
+       index_meta_terminal_last_error_code,
+       index_meta_terminalized_at IS NOT NULL
+FROM elitea_runtime.index_ingest_jobs
+WHERE execution_id = $1 AND generation = $2`,
+		admitted.ExecutionID, int64(admitted.Generation),
+	).Scan(&status, &code, &terminalized); err != nil {
+		t.Fatal(err)
+	}
+	if status != "QUARANTINED" || code != "INVALID_TERMINAL_EFFECT" || !terminalized {
+		t.Fatalf("after quarantine: status=%s code=%s terminalized=%v", status, code, terminalized)
+	}
+	after, err := repository.ClaimPendingTerminalEffects(context.Background(), "replica-after", 1, time.Minute)
+	if err != nil || len(after) != 0 {
+		t.Fatalf("a quarantined effect was claimed again: %+v err=%v", after, err)
+	}
 }
