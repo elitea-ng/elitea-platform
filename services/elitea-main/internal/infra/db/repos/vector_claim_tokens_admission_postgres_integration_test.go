@@ -67,6 +67,11 @@ func admitAndClaimAgentRun(t *testing.T, pool *pgxpool.Pool, suffix, capability 
 		t.Fatal(err)
 	}
 	service.WithNestedMemoryToolkits(nested)
+	egressSources, err := NewWorkerEgressSources(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.WithHiddenMemoryToolkits(egressSources)
 	outcome, err := service.Submit(ctx, agentexecutionapp.SubmitRequest{
 		Identity: executionapp.AdmissionIdentity{
 			TenantID: "1", ResourceProjectID: "1", ProjectionProjectID: "1", ActorID: "42",
@@ -255,6 +260,65 @@ VALUES ($1, 31, 41, 'agent', '[]'::jsonb)`, id); err != nil {
 	facts, err := store.Facts(ctx, sha256.Sum256([]byte("bearer-nested")), MemoryIntentNone)
 	if err != nil || !slices.Equal(facts.MemoryToolkits, []int64{memoryToolkit}) {
 		t.Fatalf("token memory toolkits = %v, %v", facts.MemoryToolkits, err)
+	}
+}
+
+// FU-353 defense-in-depth: a nested agent's memory toolkit hidden from the
+// acting user by folder_access_overrides is excluded from execution_jobs and
+// from the minted vector claim token.
+func TestPostgresHiddenNestedMemoryToolkitExcludedFromVectorToken(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	seedCurrentAgentContinuationSchema(t, pool)
+	var hiddenToolkit, visibleToolkit int64
+	for _, spec := range []struct {
+		name string
+		dst  *int64
+	}{
+		{"b-hidden-mem", &hiddenToolkit},
+		{"b-visible-mem", &visibleToolkit},
+	} {
+		if err := pool.QueryRow(ctx, `
+INSERT INTO p_1.elitea_tools (type, name, description, settings, author_id, meta, created_at)
+VALUES ('memory', $1, '', '{}'::jsonb, 1, '{}'::jsonb, now() AT TIME ZONE 'UTC') RETURNING id`, spec.name).Scan(spec.dst); err != nil {
+			t.Fatalf("seed toolkit %s: %v", spec.name, err)
+		}
+		if _, err := pool.Exec(ctx, `
+INSERT INTO p_1.entity_tool_mapping (tool_id, entity_id, entity_version_id, entity_type, selected_tools)
+VALUES ($1, 31, 41, 'agent', '[]'::jsonb)`, *spec.dst); err != nil {
+			t.Fatalf("attach toolkit %s: %v", spec.name, err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `
+CREATE TABLE IF NOT EXISTS p_1.entity_folders (id INTEGER PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS p_1.social_folder_items (folder_id INTEGER NOT NULL, entity TEXT NOT NULL, entity_id INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS p_1.folder_access_overrides (folder_id INTEGER NOT NULL, user_id INTEGER NOT NULL, access_level TEXT NOT NULL);
+INSERT INTO p_1.entity_folders (id) VALUES (77) ON CONFLICT DO NOTHING;
+INSERT INTO p_1.social_folder_items (folder_id, entity, entity_id) VALUES (77, 'toolkit', $1);
+INSERT INTO p_1.folder_access_overrides (folder_id, user_id, access_level) VALUES (77, 42, 'no_access');`, hiddenToolkit); err != nil {
+		t.Fatalf("seed folder override: %v", err)
+	}
+	parent := `{"id":7,"version_id":9,"version_details":{"tools":[
+	    {"id":40,"type":"application","toolkit_name":"b","name":"b","settings":{"application_id":31,"application_version_id":41}}
+	]}}`
+	execution, fence := admitAgentRun(t, pool, "nested-hidden", executiondomain.AgentApplicationCapability, memoryAgentInput(parent, `[]`))
+	var stored []int64
+	if err := pool.QueryRow(ctx, `SELECT memory_toolkit_ids FROM elitea_runtime.execution_jobs WHERE execution_id = $1`, execution).Scan(&stored); err != nil ||
+		!slices.Equal(stored, []int64{visibleToolkit}) {
+		t.Fatalf("admitted memory toolkits = %v, %v; want [%d]", stored, err, visibleToolkit)
+	}
+	store := NewVectorClaimTokens(pool)
+	if _, err := store.Mint(ctx, VectorClaimTokenMint{
+		Fence: fence, TokenSHA256: sha256.Sum256([]byte("bearer-nested-hidden")),
+		Capabilities: vectorClaimCapabilities, Sources: []string{"toolkit_index"},
+		MemorySource: "memory", MaxLifetime: 6 * time.Hour,
+	}); err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+	facts, err := store.Facts(ctx, sha256.Sum256([]byte("bearer-nested-hidden")), MemoryIntentNone)
+	if err != nil || !slices.Equal(facts.MemoryToolkits, []int64{visibleToolkit}) {
+		t.Fatalf("token memory toolkits = %v, %v; want [%d]", facts.MemoryToolkits, err, visibleToolkit)
 	}
 }
 

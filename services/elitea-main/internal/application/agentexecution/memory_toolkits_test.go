@@ -131,3 +131,57 @@ func TestRunToolkitTypesIncludeSubAgents(t *testing.T) {
 		t.Fatalf("no toolkits = %v, %v; want an empty, non-nil list", empty, err)
 	}
 }
+
+type stubHiddenMemoryToolkits struct {
+	hidden []int64
+	err    error
+}
+
+func (s stubHiddenMemoryToolkits) HiddenToolkits(_ context.Context, _, _ int64, _ []int64) ([]int64, error) {
+	return s.hidden, s.err
+}
+
+// FU-353 defense-in-depth: memory toolkits hidden from the acting user by
+// project folder access are stripped from execution_jobs.memory_toolkit_ids
+// (both root and nested), and a filter read failure fails admission closed.
+func TestRunMemoryToolkitsExcludePrincipalHiddenToolkits(t *testing.T) {
+	t.Parallel()
+	nested := nestedTools{
+		{31, 41}: `[{"id":5,"type":"memory","settings":{}},{"id":6,"type":"memory","settings":{}}]`,
+	}
+	request := SubmitRequest{
+		Identity:     executionapp.AdmissionIdentity{ResourceProjectID: "7", ActorID: "42"},
+		CapabilityID: executiondomain.AgentApplicationCapability,
+		Input: &runtimev1.AgentExecutionInputV1{Application: []byte(`{"version_details":{"tools":[
+		    {"id":9,"type":"memory","settings":{}},
+		    {"id":40,"type":"application","settings":{"application_id":31,"application_version_id":41}}]}}`)},
+	}
+
+	// Hidden nested toolkit 5 and hidden root toolkit 9 are stripped; visible 6 remains.
+	service := (&AdmissionService{}).
+		WithNestedMemoryToolkits(nested).
+		WithHiddenMemoryToolkits(stubHiddenMemoryToolkits{hidden: []int64{5, 9}})
+	got, _, err := service.runToolkitSet(context.Background(), request)
+	if err != nil || !slices.Equal(got, []int64{6}) {
+		t.Fatalf("filtered nested = %v, %v; want [6]", got, err)
+	}
+
+	// Root-only path also strips hidden toolkits and keeps non-nil empty slice.
+	rootOnly := SubmitRequest{
+		Identity:     executionapp.AdmissionIdentity{ResourceProjectID: "7", ActorID: "42"},
+		CapabilityID: executiondomain.AgentApplicationCapability,
+		Input:        &runtimev1.AgentExecutionInputV1{Application: []byte(`{"version_details":{"tools":[{"id":9,"type":"memory","settings":{}}]}}`)},
+	}
+	got, _, err = (&AdmissionService{}).WithHiddenMemoryToolkits(stubHiddenMemoryToolkits{hidden: []int64{9}}).runToolkitSet(context.Background(), rootOnly)
+	if err != nil || got == nil || len(got) != 0 {
+		t.Fatalf("all hidden root = %v, %v; want non-nil empty slice", got, err)
+	}
+
+	// Filter error fails admission closed.
+	failing := (&AdmissionService{}).
+		WithNestedMemoryToolkits(nested).
+		WithHiddenMemoryToolkits(stubHiddenMemoryToolkits{err: errors.New("folder access unavailable")})
+	if _, _, err := failing.runToolkitSet(context.Background(), request); err == nil {
+		t.Fatal("filter error did not fail admission closed")
+	}
+}

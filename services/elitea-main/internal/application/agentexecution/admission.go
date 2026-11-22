@@ -226,6 +226,9 @@ type AdmissionService struct {
 	newID   executionapp.IDGenerator
 	// nested reads sub-agents' frozen toolkits (WithNestedMemoryToolkits).
 	nested NestedApplicationTools
+	// hiddenToolkits filters memory_toolkit_ids against project folder access
+	// overrides for the acting user (WithHiddenMemoryToolkits, FU-353).
+	hiddenToolkits HiddenMemoryToolkits
 	// retired refuses a run of a retired agent, or of one that nests a
 	// retired agent (WithRetiredAgents, ADR-0050 decision 5g).
 	retired RetiredAgents
@@ -555,6 +558,21 @@ func (s *AdmissionService) WithNestedMemoryToolkits(tools NestedApplicationTools
 	return s
 }
 
+// HiddenMemoryToolkits answers which of toolkitIDs project folder access hides
+// from userID (repos.WorkerEgressSources.HiddenToolkits).
+type HiddenMemoryToolkits interface {
+	HiddenToolkits(ctx context.Context, projectID, userID int64, toolkitIDs []int64) ([]int64, error)
+}
+
+// WithHiddenMemoryToolkits strips memory toolkits hidden from the acting user
+// before writing execution_jobs.memory_toolkit_ids (FU-353 defense-in-depth).
+func (s *AdmissionService) WithHiddenMemoryToolkits(filter HiddenMemoryToolkits) *AdmissionService {
+	if s != nil && filter != nil {
+		s.hiddenToolkits = filter
+	}
+	return s
+}
+
 // RetiredAgents answers which of a project's agents are retired (or
 // deleted): repos.AgentWorkforce.
 type RetiredAgents interface {
@@ -651,7 +669,11 @@ func (s *AdmissionService) runToolkitSet(ctx context.Context, request SubmitRequ
 		if err := s.checkRetired(ctx, request, childApplications(children)); err != nil {
 			return nil, nil, err
 		}
-		return ids, finishToolkitTypes(types), nil
+		filtered, err := s.filterHiddenMemoryToolkits(ctx, request, ids)
+		if err != nil {
+			return nil, nil, err
+		}
+		return filtered, finishToolkitTypes(types), nil
 	}
 	project, err := strconv.ParseInt(request.Identity.ResourceProjectID, 10, 64)
 	if err != nil || project <= 0 {
@@ -695,7 +717,46 @@ func (s *AdmissionService) runToolkitSet(ctx context.Context, request SubmitRequ
 		return nil, nil, err
 	}
 	slices.Sort(ids)
-	return slices.Compact(ids), finishToolkitTypes(types), nil
+	ids = slices.Compact(ids)
+	filtered, err := s.filterHiddenMemoryToolkits(ctx, request, ids)
+	if err != nil {
+		return nil, nil, err
+	}
+	return filtered, finishToolkitTypes(types), nil
+}
+
+// filterHiddenMemoryToolkits removes any memory toolkit hidden from the acting
+// user by project folder access rules. Fails closed on read errors.
+func (s *AdmissionService) filterHiddenMemoryToolkits(ctx context.Context, request SubmitRequest, ids []int64) ([]int64, error) {
+	if s.hiddenToolkits == nil || len(ids) == 0 {
+		return ids, nil
+	}
+	project, err := strconv.ParseInt(request.Identity.ResourceProjectID, 10, 64)
+	if err != nil || project <= 0 {
+		return nil, ErrInvalidAgentAdmission
+	}
+	actor, err := strconv.ParseInt(request.Identity.ActorID, 10, 64)
+	if err != nil || actor <= 0 {
+		return ids, nil
+	}
+	hidden, err := s.hiddenToolkits.HiddenToolkits(ctx, project, actor, ids)
+	if err != nil {
+		return nil, fmt.Errorf("filter hidden memory toolkits for actor: %w", err)
+	}
+	if len(hidden) == 0 {
+		return ids, nil
+	}
+	drop := make(map[int64]bool, len(hidden))
+	for _, id := range hidden {
+		drop[id] = true
+	}
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if !drop[id] {
+			out = append(out, id)
+		}
+	}
+	return out, nil
 }
 
 // childApplications is the application ids of sub-agent references.
