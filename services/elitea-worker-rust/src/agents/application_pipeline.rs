@@ -1280,6 +1280,11 @@ pub(super) struct ApplicationPipelineTool {
     /// them), when Main served one. A fan-out member's nested thread stamps it
     /// at its first admission and is re-entered only under the same digest.
     definition_sha256: Option<[u8; 32]>,
+    /// FU-358: lends a claim-fenced node-recovery journal scoped to one
+    /// non-member call of this saved pipeline tool, so effectful direct
+    /// toolkit/MCP nodes journal under the run's current claim and lease.
+    tool_journals:
+        Option<Arc<dyn super::graph::node_recovery_runtime::PipelineToolJournalAuthority>>,
 }
 
 /// What one pipeline child needs from the parent that calls it.
@@ -1289,6 +1294,8 @@ pub(super) struct PipelineToolParentBinding {
     pub(super) conversation_thread_id: String,
     pub(super) event_sender: Option<ApplicationEventSender>,
     pub(super) resume: Option<ApplicationResumeCoordinator>,
+    pub(super) tool_journals:
+        Option<Arc<dyn super::graph::node_recovery_runtime::PipelineToolJournalAuthority>>,
 }
 
 impl ApplicationPipelineTool {
@@ -1311,6 +1318,7 @@ impl ApplicationPipelineTool {
             event_sender: parent.event_sender,
             resume: parent.resume,
             definition_sha256,
+            tool_journals: parent.tool_journals,
         }
     }
 }
@@ -1867,13 +1875,33 @@ impl ApplicationPipelineTool {
                     .map_err(|_| tool_input_error())?;
             }
         }
+        // FU-358: lend a claim-fenced, call-scoped node-recovery journal so
+        // effectful direct toolkit/MCP nodes inside this non-member pipeline
+        // tool journal under the run's current claim and visit before dispatch.
+        let runtimes = match &self.tool_journals {
+            Some(authority) => {
+                let descendants = self
+                    .runtimes
+                    .checkpoint_catalog()
+                    .map(|catalog| catalog.descendants.keys().cloned().collect())
+                    .unwrap_or_default();
+                let journals = authority
+                    .for_pipeline_tool_call(thread_id.clone(), descendants)
+                    .map_err(|_| child_execution_error())?;
+                let visit = super::graph::tool_pipeline_threads::tool_pipeline_visit(&thread_id);
+                self.runtimes
+                    .clone()
+                    .with_pipeline_tool_journals(journals, visit)
+            }
+            None => self.runtimes.clone(),
+        };
         let graph = self
             .definition
             .compile_with_runtime(
                 &self.name,
                 Arc::clone(&checkpointer),
                 pipeline_resume,
-                &self.runtimes,
+                &runtimes,
             )
             .map_err(|_| child_execution_error())?;
         let agent: Arc<dyn Agent> = Arc::new(EliteaGraphAgent::new(graph).with_static_interrupts(

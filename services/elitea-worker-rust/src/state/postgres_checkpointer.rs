@@ -23,8 +23,11 @@ mod application_children;
 mod child_batch;
 mod fanout_children;
 mod node_attempts;
+pub(in crate::state) use node_attempts::session_pipeline_tool_journals;
 #[cfg(test)]
-pub(in crate::state) use node_attempts::journal_activation_id;
+pub(in crate::state) use node_attempts::{
+    journal_activation_id, pipeline_tool_journal_activation_id,
+};
 mod parallel_append;
 mod parallel_children;
 /// The child-id derivation, for the test that a Map child on the shared
@@ -397,6 +400,16 @@ impl CheckpointScope {
     }
 }
 
+/// Optional root-claim fence checked before activating or mutating a
+/// pipeline-tool node-attempt journal (FU-358). Lock order is always root
+/// writer (`FOR SHARE`) first, then the journal's own `n1:` writer row.
+#[derive(Clone)]
+pub(super) enum JournalRootFence {
+    None,
+    CheckpointRoot(String),
+    SessionRoot(super::postgres_session::SessionWriterKey),
+}
+
 /// ADK-Rust 2.0.0 [`Checkpointer`] backed by Elitea's `PostgreSQL` runtime schema.
 ///
 /// One instance is activated for exactly one tenant/project/thread and one
@@ -414,6 +427,9 @@ pub struct PostgresCheckpointer {
     state_writer_lease: Arc<dyn StateWriterLease>,
     // Every thread opened below this one is fenced by the run's root writer.
     run_root_thread_id: String,
+    // Re-checked on every journal read/write when this handle backs a
+    // pipeline-tool node-attempt journal (FU-358).
+    root_fence: JournalRootFence,
     // Shared by a root writer and every child it activates.
     io: Arc<CheckpointIoCounters>,
 }
@@ -439,7 +455,8 @@ impl PostgresCheckpointer {
                 authority,
                 limits,
                 state_writer_lease,
-                None,
+                JournalRootFence::None,
+                JournalRootFence::None,
                 &writer_io,
             )
             .await
@@ -468,7 +485,8 @@ impl PostgresCheckpointer {
                 authority,
                 limits,
                 state_writer_lease,
-                Some(&root_thread_id),
+                JournalRootFence::CheckpointRoot(root_thread_id),
+                JournalRootFence::None,
                 &writer_io,
             )
             .await
@@ -476,23 +494,45 @@ impl PostgresCheckpointer {
         .await
     }
 
-    async fn activate_fenced(
+    /// Activate a pipeline-tool node-attempt journal fenced by the run's own
+    /// root writer row (either `agent_graph_checkpoint_writers` on a pipeline
+    /// root or `agent_session_writers` on an ordinary chat root; FU-358). The
+    /// returned handle retains `fence` and re-verifies it on every journal
+    /// read/write so a root takeover fences even an already-opened journal.
+    pub(super) async fn activate_pipeline_tool_journal(
         pool: PgPool,
         authority: CheckpointWriterAuthority,
+        fence: JournalRootFence,
         limits: CheckpointLimits,
         state_writer_lease: Arc<dyn StateWriterLease>,
-        root_thread_id: Option<&str>,
         io: &Arc<CheckpointIoCounters>,
     ) -> Result<Self, PostgresCheckpointError> {
-        authority.validate()?;
-        let limits = limits.validate()?;
-        state_writer_lease
-            .ensure_current()
-            .map_err(|_| PostgresCheckpointError::WriterNotCurrent)?;
-        let mut transaction = begin_transaction(&pool).await?;
-        if let Some(root_thread_id) = root_thread_id {
-            let root_writer = sqlx::query_scalar::<_, String>(
-                r"
+        let writer_io = Arc::clone(io);
+        persist_driven("activate", Arc::clone(io), async move {
+            Self::activate_fenced(
+                pool,
+                authority,
+                limits,
+                state_writer_lease,
+                fence.clone(),
+                fence,
+                &writer_io,
+            )
+            .await
+        })
+        .await
+    }
+
+    async fn verify_root_fence(
+        transaction: &mut Transaction<'_, Postgres>,
+        authority: &CheckpointWriterAuthority,
+        fence: &JournalRootFence,
+    ) -> Result<(), PostgresCheckpointError> {
+        match fence {
+            JournalRootFence::None => Ok(()),
+            JournalRootFence::CheckpointRoot(root_thread_id) => {
+                let root_writer = sqlx::query_scalar::<_, String>(
+                    r"
 SELECT writer_claim_id
 FROM elitea_runtime.agent_graph_checkpoint_writers
 WHERE tenant_id = $1
@@ -503,23 +543,80 @@ WHERE tenant_id = $1
   AND definition_digest = $6
   AND thread_id = $7
 FOR SHARE
-                ",
-            )
-            .bind(&authority.tenant_id)
-            .bind(authority.resource_project_id)
-            .bind(authority.projection_project_id)
-            .bind(authority.capability_id)
-            .bind(CHECKPOINT_FAMILY)
-            .bind(authority.definition_digest.as_slice())
-            .bind(root_thread_id)
-            .fetch_optional(&mut *transaction)
-            .await
-            .map_err(storage_error)?;
-            note_round_trip();
-            if root_writer.as_deref() != Some(authority.claim_id.as_str()) {
-                return Err(PostgresCheckpointError::WriterNotCurrent);
+                    ",
+                )
+                .bind(&authority.tenant_id)
+                .bind(authority.resource_project_id)
+                .bind(authority.projection_project_id)
+                .bind(authority.capability_id)
+                .bind(CHECKPOINT_FAMILY)
+                .bind(authority.definition_digest.as_slice())
+                .bind(root_thread_id)
+                .fetch_optional(&mut **transaction)
+                .await
+                .map_err(storage_error)?;
+                note_round_trip();
+                if root_writer.as_deref() != Some(authority.claim_id.as_str()) {
+                    return Err(PostgresCheckpointError::WriterNotCurrent);
+                }
+                Ok(())
+            }
+            JournalRootFence::SessionRoot(key) => {
+                let root_writer = sqlx::query_scalar::<_, String>(
+                    r"
+SELECT writer_claim_id
+FROM elitea_runtime.agent_session_writers
+WHERE tenant_id = $1
+  AND resource_project_id = $2
+  AND projection_project_id = $3
+  AND capability_id = $4
+  AND session_family = $5
+  AND definition_digest = $6
+  AND thread_id = $7
+  AND app_name = $8
+  AND user_id = $9
+  AND session_id = $10
+FOR SHARE
+                    ",
+                )
+                .bind(&key.tenant_id)
+                .bind(key.resource_project_id)
+                .bind(key.projection_project_id)
+                .bind(key.capability_id)
+                .bind(key.session_family)
+                .bind(key.definition_digest.as_slice())
+                .bind(&key.thread_id)
+                .bind(&key.app_name)
+                .bind(&key.user_id)
+                .bind(&key.session_id)
+                .fetch_optional(&mut **transaction)
+                .await
+                .map_err(storage_error)?;
+                note_round_trip();
+                if root_writer.as_deref() != Some(authority.claim_id.as_str()) {
+                    return Err(PostgresCheckpointError::WriterNotCurrent);
+                }
+                Ok(())
             }
         }
+    }
+
+    async fn activate_fenced(
+        pool: PgPool,
+        authority: CheckpointWriterAuthority,
+        limits: CheckpointLimits,
+        state_writer_lease: Arc<dyn StateWriterLease>,
+        activation_fence: JournalRootFence,
+        retained_fence: JournalRootFence,
+        io: &Arc<CheckpointIoCounters>,
+    ) -> Result<Self, PostgresCheckpointError> {
+        authority.validate()?;
+        let limits = limits.validate()?;
+        state_writer_lease
+            .ensure_current()
+            .map_err(|_| PostgresCheckpointError::WriterNotCurrent)?;
+        let mut transaction = begin_transaction(&pool).await?;
+        Self::verify_root_fence(&mut transaction, &authority, &activation_fence).await?;
         let activated = sqlx::query_scalar::<_, String>(
             r"
 INSERT INTO elitea_runtime.agent_graph_checkpoint_writers AS writer (
@@ -571,14 +668,18 @@ RETURNING writer_claim_id
             .map_err(|_| PostgresCheckpointError::WriterNotCurrent)?;
         transaction.commit().await.map_err(storage_error)?;
         note_round_trip();
-        let run_root_thread_id =
-            root_thread_id.map_or_else(|| authority.thread_id.clone(), ToOwned::to_owned);
+        let run_root_thread_id = match &activation_fence {
+            JournalRootFence::CheckpointRoot(root) => root.clone(),
+            JournalRootFence::SessionRoot(key) => key.thread_id.clone(),
+            JournalRootFence::None => authority.thread_id.clone(),
+        };
         Ok(Self {
             pool,
             scope: CheckpointScope { authority },
             limits,
             state_writer_lease,
             run_root_thread_id,
+            root_fence: retained_fence,
             io: Arc::clone(io),
         })
     }
@@ -1148,6 +1249,7 @@ WHERE checkpoint.tenant_id = $1
         self.state_writer_lease
             .ensure_current()
             .map_err(|_| PostgresCheckpointError::WriterNotCurrent)?;
+        Self::verify_root_fence(transaction, &self.scope.authority, &self.root_fence).await?;
         let writer_query = match lock {
             WriterLock::Shared => CURRENT_WRITER_SHARED_SQL,
             WriterLock::Exclusive => CURRENT_WRITER_EXCLUSIVE_SQL,
@@ -1316,6 +1418,7 @@ impl PostgresCheckpointer {
             limits: self.limits,
             state_writer_lease: Arc::clone(&self.state_writer_lease),
             run_root_thread_id: self.run_root_thread_id.clone(),
+            root_fence: self.root_fence.clone(),
             io: Arc::clone(&self.io),
         })
     }

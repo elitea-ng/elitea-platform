@@ -88,6 +88,47 @@ impl NativePipelineApplicationResolver {
         }
     }
 
+    /// FU-358: bind a non-member pipeline-tool call's claim-fenced journal
+    /// factory onto every nested saved pipeline subgraph beneath the tool,
+    /// recursively. Saved-agent participants keep their own `tool_journals`
+    /// authority so each nested tool call gets its own isolated call scope.
+    pub(super) fn rebind_pipeline_tool_journals(
+        &self,
+        journals: &Arc<dyn crate::agents::graph::node_recovery_runtime::NodeRecoveryFactory>,
+    ) -> Self {
+        let rebind = |participant: &NativePipelineApplicationParticipant| match participant {
+            NativePipelineApplicationParticipant::Pipeline {
+                definition,
+                runtimes,
+                events,
+                display_name,
+            } => NativePipelineApplicationParticipant::Pipeline {
+                definition: definition.clone(),
+                runtimes: runtimes
+                    .clone()
+                    .with_nested_pipeline_tool_journals(journals),
+                events: events.clone(),
+                display_name: display_name.clone(),
+            },
+            other => other.clone(),
+        };
+        Self {
+            call_owners: self.call_owners.clone(),
+            nodes: self
+                .nodes
+                .iter()
+                .map(|(node, (alias, participant))| {
+                    (node.clone(), (alias.clone(), rebind(participant)))
+                })
+                .collect(),
+            participants: self
+                .participants
+                .iter()
+                .map(|(alias, participant)| (alias.clone(), rebind(participant)))
+                .collect(),
+        }
+    }
+
     /// FU-291: the same participants, the member's own Agents running their
     /// pipeline tools on nested threads this member family admits.
     pub(super) fn rebind_tool_pipelines(

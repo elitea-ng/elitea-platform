@@ -1,17 +1,34 @@
 //! Node journals retain the existing exact execution and current writer fence.
 
-use std::sync::Arc;
+use std::collections::BTreeSet;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ring::digest;
+use sqlx::PgPool;
 
-use super::PostgresCheckpointer;
+use super::application_children::{ApplicationCheckpointers, admitted_application_paths};
+use super::{
+    CheckpointIoCounters, CheckpointLimits, CheckpointWriterAuthority, JournalRootFence,
+    MAX_THREAD_BYTES, PostgresCheckpointer,
+};
 use crate::agents::graph::node_recovery::NodeRecoveryPolicy;
 use crate::agents::graph::node_recovery_runtime::{
-    NodeAttemptActivation, NodeAttemptJournal, NodeRecoveryFactory, recovery_error,
+    NodeAttemptActivation, NodeAttemptJournal, NodeRecoveryFactory, PipelineToolJournalAuthority,
+    recovery_error,
 };
+use crate::state::StateWriterLease;
+use crate::state::postgres_session::PostgresSessionService;
+
+/// Maximum distinct effectful direct-tool node journals one non-member
+/// pipeline-tool call may open (FU-358). Re-opening an already-opened journal
+/// does not consume a new slot.
+pub(crate) const MAX_PIPELINE_TOOL_JOURNALS_PER_CALL: usize = 64;
+
+const ROOT_JOURNAL_DOMAIN: &[u8] = b"elitea.pipeline.node-attempt-journal.v1\0";
+const PIPELINE_TOOL_JOURNAL_DOMAIN: &[u8] = b"elitea.pipeline.tool-node-attempt-journal.v1\0";
 
 #[async_trait]
 impl NodeRecoveryFactory for PostgresCheckpointer {
@@ -60,12 +77,34 @@ impl NodeRecoveryFactory for PostgresCheckpointer {
 /// it was before saved children got journals (pinned by a test); a saved
 /// child's also binds its visit (FU-248).
 pub(in crate::state) fn journal_activation_id(
-    authority: &super::CheckpointWriterAuthority,
+    authority: &CheckpointWriterAuthority,
+    activation: &NodeAttemptActivation,
+    policy: &NodeRecoveryPolicy,
+) -> Result<[u8; 32], adk_rust::graph::GraphError> {
+    activation_id_for_domain(ROOT_JOURNAL_DOMAIN, authority, activation, policy)
+}
+
+/// Domain-separated journal identity for an effectful direct node inside a
+/// saved pipeline called as a tool of a non-member agent (FU-358). Separate
+/// from [`journal_activation_id`] so a tool-call thread can never collide with
+/// any run-root or subgraph node journal even if a model reuses a node id as a
+/// call id.
+pub(in crate::state) fn pipeline_tool_journal_activation_id(
+    authority: &CheckpointWriterAuthority,
+    activation: &NodeAttemptActivation,
+    policy: &NodeRecoveryPolicy,
+) -> Result<[u8; 32], adk_rust::graph::GraphError> {
+    activation_id_for_domain(PIPELINE_TOOL_JOURNAL_DOMAIN, authority, activation, policy)
+}
+
+fn activation_id_for_domain(
+    domain: &[u8],
+    authority: &CheckpointWriterAuthority,
     activation: &NodeAttemptActivation,
     policy: &NodeRecoveryPolicy,
 ) -> Result<[u8; 32], adk_rust::graph::GraphError> {
     let mut hash = digest::Context::new(&digest::SHA256);
-    hash.update(b"elitea.pipeline.node-attempt-journal.v1\0");
+    hash.update(domain);
     let encoded_policy = serde_json::to_vec(policy)
         .map_err(|_| recovery_error("pipeline.node_recovery.invalid_policy"))?;
     for field in [
@@ -97,4 +136,252 @@ pub(in crate::state) fn journal_activation_id(
     let mut activation_id = [0; 32];
     activation_id.copy_from_slice(hash.finish().as_ref());
     Ok(activation_id)
+}
+
+/// Validate and expand the exact thread set admitted for one non-member
+/// pipeline-tool call: strictly beneath `owner_thread/`, never `owner_thread`
+/// itself, bounded by length and path rules.
+fn validate_pipeline_tool_call_threads(
+    owner_thread: &str,
+    call_thread: String,
+    admitted_descendants: BTreeSet<String>,
+) -> Result<BTreeSet<String>, adk_rust::graph::GraphError> {
+    let invalid = || recovery_error("pipeline.node_recovery.invalid_scope");
+    if owner_thread.is_empty()
+        || call_thread.is_empty()
+        || call_thread.len() > MAX_THREAD_BYTES
+        || call_thread.chars().any(char::is_control)
+    {
+        return Err(invalid());
+    }
+    let Some(suffix) = call_thread
+        .strip_prefix(owner_thread)
+        .and_then(|rest| rest.strip_prefix('/'))
+    else {
+        return Err(invalid());
+    };
+    if suffix.is_empty()
+        || suffix
+            .split('/')
+            .any(|segment| segment.is_empty() || matches!(segment, "." | ".."))
+    {
+        return Err(invalid());
+    }
+    let descendant_paths = admitted_descendants.into_iter().collect::<Vec<_>>();
+    let validated_descendants =
+        admitted_application_paths(&descendant_paths).map_err(|_| invalid())?;
+    let mut threads = BTreeSet::new();
+    for path in validated_descendants {
+        let descendant = format!("{call_thread}/{path}");
+        if descendant.len() > MAX_THREAD_BYTES || descendant.chars().any(char::is_control) {
+            return Err(invalid());
+        }
+        threads.insert(descendant);
+    }
+    threads.insert(call_thread);
+    Ok(threads)
+}
+
+/// Claim-fenced [`NodeRecoveryFactory`] scoped to one non-member agent's
+/// pipeline-tool call (FU-358).
+struct PipelineToolJournalFactory {
+    pool: PgPool,
+    authority: CheckpointWriterAuthority,
+    limits: CheckpointLimits,
+    state_writer_lease: Arc<dyn StateWriterLease>,
+    root_fence: JournalRootFence,
+    io: Arc<CheckpointIoCounters>,
+    admitted_threads: BTreeSet<String>,
+    opened_journals: Mutex<BTreeSet<String>>,
+}
+
+#[async_trait]
+impl NodeRecoveryFactory for PipelineToolJournalFactory {
+    async fn open(
+        &self,
+        activation: &NodeAttemptActivation,
+        policy: &NodeRecoveryPolicy,
+    ) -> Result<NodeAttemptJournal, adk_rust::graph::GraphError> {
+        if !self.admitted_threads.contains(&activation.root_thread_id) {
+            return Err(recovery_error("pipeline.node_recovery.invalid_scope"));
+        }
+        if activation.visit.is_none() {
+            return Err(recovery_error("pipeline.node_recovery.unscoped_child"));
+        }
+        self.state_writer_lease
+            .ensure_current()
+            .map_err(|_| recovery_error("pipeline.node_recovery.writer_not_current"))?;
+        let activation_id =
+            pipeline_tool_journal_activation_id(&self.authority, activation, policy)?;
+        let thread_id = format!("n1:{}", URL_SAFE_NO_PAD.encode(activation_id));
+        {
+            let opened = self
+                .opened_journals
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !opened.contains(&thread_id) && opened.len() >= MAX_PIPELINE_TOOL_JOURNALS_PER_CALL {
+                return Err(recovery_error("pipeline.node_recovery.journal_limit"));
+            }
+        }
+        let child = PostgresCheckpointer::activate_pipeline_tool_journal(
+            self.pool.clone(),
+            self.authority.for_thread(thread_id.clone())?,
+            self.root_fence.clone(),
+            self.limits,
+            Arc::clone(&self.state_writer_lease),
+            &self.io,
+        )
+        .await?;
+        {
+            let mut opened = self
+                .opened_journals
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !opened.contains(&thread_id) {
+                if opened.len() >= MAX_PIPELINE_TOOL_JOURNALS_PER_CALL {
+                    return Err(recovery_error("pipeline.node_recovery.journal_limit"));
+                }
+                opened.insert(thread_id.clone());
+            }
+        }
+        Ok(NodeAttemptJournal::bound(
+            Arc::new(child),
+            Arc::clone(&self.state_writer_lease),
+            thread_id,
+            activation_id,
+            policy.clone(),
+        ))
+    }
+}
+
+impl PipelineToolJournalAuthority for ApplicationCheckpointers {
+    fn for_pipeline_tool_call(
+        &self,
+        call_thread: String,
+        admitted_descendants: BTreeSet<String>,
+    ) -> Result<Arc<dyn NodeRecoveryFactory>, adk_rust::graph::GraphError> {
+        let root = self.root_writer()?;
+        let owner_thread = &root.scope.authority.thread_id;
+        let admitted_threads =
+            validate_pipeline_tool_call_threads(owner_thread, call_thread, admitted_descendants)?;
+        let authority = root.scope.authority.for_thread(owner_thread.clone())?;
+        Ok(Arc::new(PipelineToolJournalFactory {
+            pool: root.pool.clone(),
+            authority,
+            limits: root.limits,
+            state_writer_lease: Arc::clone(&root.state_writer_lease),
+            root_fence: JournalRootFence::CheckpointRoot(root.run_root_thread_id.clone()),
+            io: Arc::clone(&root.io),
+            admitted_threads,
+            opened_journals: Mutex::default(),
+        }))
+    }
+}
+
+struct SessionPipelineToolJournalAuthority {
+    session: Arc<PostgresSessionService>,
+    limits: CheckpointLimits,
+    io: Arc<CheckpointIoCounters>,
+}
+
+impl PipelineToolJournalAuthority for SessionPipelineToolJournalAuthority {
+    fn for_pipeline_tool_call(
+        &self,
+        call_thread: String,
+        admitted_descendants: BTreeSet<String>,
+    ) -> Result<Arc<dyn NodeRecoveryFactory>, adk_rust::graph::GraphError> {
+        let (pool, authority, session_key, state_writer_lease) =
+            self.session.checkpoint_journal_binding()?;
+        let admitted_threads = validate_pipeline_tool_call_threads(
+            &session_key.thread_id,
+            call_thread,
+            admitted_descendants,
+        )?;
+        Ok(Arc::new(PipelineToolJournalFactory {
+            pool,
+            authority,
+            limits: self.limits,
+            state_writer_lease,
+            root_fence: JournalRootFence::SessionRoot(session_key),
+            io: Arc::clone(&self.io),
+            admitted_threads,
+            opened_journals: Mutex::default(),
+        }))
+    }
+}
+
+pub(in crate::state) fn session_pipeline_tool_journals(
+    session: Arc<PostgresSessionService>,
+    limits: CheckpointLimits,
+) -> Arc<dyn PipelineToolJournalAuthority> {
+    Arc::new(SessionPipelineToolJournalAuthority {
+        session,
+        limits,
+        io: Arc::new(CheckpointIoCounters::default()),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_pipeline_tool_call_threads_enforces_owner_prefix_traversal_and_bounds() {
+        let valid = validate_pipeline_tool_call_threads(
+            "thread-1",
+            "thread-1/call-1".to_owned(),
+            BTreeSet::from(["sub".to_owned(), "sub/inner".to_owned()]),
+        )
+        .expect("admits call thread and valid subgraph descendants");
+        assert_eq!(
+            valid,
+            BTreeSet::from([
+                "thread-1/call-1".to_owned(),
+                "thread-1/call-1/sub".to_owned(),
+                "thread-1/call-1/sub/inner".to_owned(),
+            ])
+        );
+
+        // Must never admit the owner root itself, foreign threads, traversal,
+        // empty segments, control characters, or over-length threads.
+        for bad_thread in [
+            "thread-1".to_owned(),
+            "thread-1/".to_owned(),
+            "thread-2/call-1".to_owned(),
+            "thread-10/call-1".to_owned(),
+            "thread-1/..".to_owned(),
+            "thread-1/a/../b".to_owned(),
+            "thread-1/a//b".to_owned(),
+            "thread-1/call\n1".to_owned(),
+            format!("thread-1/{}", "a".repeat(MAX_THREAD_BYTES)),
+        ] {
+            assert!(
+                validate_pipeline_tool_call_threads(
+                    "thread-1",
+                    bad_thread.clone(),
+                    BTreeSet::new()
+                )
+                .is_err(),
+                "must refuse invalid call thread {bad_thread:?}"
+            );
+        }
+
+        // Invalid descendants (traversal, missing ancestor, > 128 bound) fail closed.
+        for bad_descendants in [
+            BTreeSet::from(["../escape".to_owned()]),
+            BTreeSet::from(["sub/inner".to_owned()]), // missing ancestor "sub"
+            (0..=128)
+                .map(|index| format!("node_{index}"))
+                .collect::<BTreeSet<_>>(),
+        ] {
+            assert!(
+                validate_pipeline_tool_call_threads(
+                    "thread-1",
+                    "thread-1/call-1".to_owned(),
+                    bad_descendants
+                )
+                .is_err()
+            );
+        }
+    }
 }

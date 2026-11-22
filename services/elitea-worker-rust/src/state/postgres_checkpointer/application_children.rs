@@ -146,7 +146,9 @@ impl PostgresCheckpointer {
     }
 }
 
-fn admitted_application_paths(paths: &[String]) -> Result<BTreeSet<&str>, PostgresCheckpointError> {
+pub(super) fn admitted_application_paths(
+    paths: &[String],
+) -> Result<BTreeSet<&str>, PostgresCheckpointError> {
     let mut admitted = BTreeSet::new();
     if paths.len() > 128 {
         return Err(PostgresCheckpointError::InvalidScope(
@@ -186,6 +188,11 @@ fn admitted_application_paths(paths: &[String]) -> Result<BTreeSet<&str>, Postgr
 }
 
 impl ApplicationCheckpointers {
+    /// The family's own root writer (the run root for a root pipeline).
+    pub(super) fn root_writer(&self) -> Result<&PostgresCheckpointer, GraphError> {
+        self.for_thread(&self.root_thread)
+    }
+
     /// `writers` holds the family's root first (`application_family`).
     fn assemble(
         writers: impl IntoIterator<Item = PostgresCheckpointer>,
