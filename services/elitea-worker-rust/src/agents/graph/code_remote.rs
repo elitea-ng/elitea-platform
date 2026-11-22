@@ -1143,7 +1143,7 @@ mod authority_tests;
 #[path = "code_slots_tests.rs"]
 mod slots_tests;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sandbox-supervisor"))]
 impl CodeRuntimeFactory {
     /// The Code slots of `target`'s normalised Supervisor (W3-1 tests).
     pub(in crate::agents) fn code_slots_for_tests(&self, target: &str) -> Option<CodeSlots> {

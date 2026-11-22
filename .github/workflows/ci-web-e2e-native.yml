@@ -32,7 +32,7 @@ name: CI — Web E2E (native)
 # over deploy/native/standalone-full.mjs (the standalone-full compose file
 # plus the Rust agent overlay), from both build jobs' artifacts:
 # `native-build` (the Go binaries and web bundles) and `native-build-rust`
-# (the five Rust services and the gateway, built on the pool: never lifted
+# (the five Rust services and the gateway in two parallel legs, built on the pool: never lifted
 # from an image, whose glibc is not the pool's). ci-web-e2e.yml's compose
 # versions stand down on exactly the pull requests these run on, as the e2e
 # legs do; leg 1of3 of chat-stream-rust and the single-job lanes stay as the
@@ -373,7 +373,7 @@ jobs:
         run: echo "::notice::${{ matrix.leg }} skipped - nothing this pull request changes can reach WebKit; the nightly run on main runs it"
 
   native-build-rust:
-    name: E2E native build (Rust and the gateway)
+    name: E2E native build (Rust, ${{ matrix.leg }})
     # No job-level if, as native-build: a skipped job reads as missing.
     env:
       NATIVE: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'true' || 'false' }}
@@ -385,14 +385,33 @@ jobs:
     # rust-cache: check-cache-budget.mjs plans 7.71 of its 8 GiB, so a
     # release target directory (~1.3 GiB) has no room to be written, and the
     # one Rust entry there is (ci-rust.yml's worker-rust-test) caches the
-    # `--all-features` test profile, whose artefacts a release build never
-    # reuses. One shared CARGO_TARGET_DIR compiles a dependency the five share
-    # once (scripts/e2e/build-native-rust.sh), and the script drops the
-    # profile's LTO, codegen-units 1 and opt-level 3 (release semantics kept;
-    # the compose image smoke runs the shipped profile).
+    # supervisor's test profile, whose artefacts a release build never
+    # reuses. The script drops the profile's LTO, codegen-units 1 and
+    # opt-level 3 (release semantics kept; the compose image smoke runs the
+    # shipped profile).
+    #
+    # TWO LEGS, one pod each: in one job the five ran one after another for
+    # 33 min (PR #2740's run: 3 of cargo fetching git crates, 12 of worker,
+    # 2 of vector, 5 of doc-extractor, 3 of DeepWiki, 6 of Inventory, 1.5 of
+    # gateway), the pull request's critical path. Each leg keeps one
+    # CARGO_TARGET_DIR for the workspaces that share most of a dependency
+    # graph: the worker with vector (251 of vector's 317 locked packages)
+    # and the gateway; the engines with Inventory first (it holds 447 of the
+    # doc-extractor's 454 and 437 of the DeepWiki engine's 446).
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - leg: worker
+            services: elitea-worker-rust elitea-vector elitea-llm-gateway
+          - leg: engines
+            services: elitea-inventory-engine elitea-doc-extractor elitea-deepwiki-engine
     timeout-minutes: 60
+    # One output per leg: a leg sets only its own (the runner keeps no
+    # empty output), so neither overwrites the other's.
     outputs:
-      sha256: ${{ steps.pack.outputs.sha256 }}
+      sha256-worker: ${{ steps.pack.outputs.sha256-worker }}
+      sha256-engines: ${{ steps.pack.outputs.sha256-engines }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -423,36 +442,42 @@ jobs:
           if [ "$STACK" = true ] || [ "$HANDOFF" = true ]; then echo "build=true"; else echo "build=false"; fi >> "$GITHUB_OUTPUT"
       - name: Assert the pinned toolchain in each workspace
         if: steps.gate.outputs.build == 'true'
+        env:
+          SERVICES: ${{ matrix.services }}
         run: |
           set -euo pipefail
-          for crate in elitea-worker-rust elitea-vector elitea-doc-extractor elitea-deepwiki-engine elitea-inventory-engine; do
+          for crate in $SERVICES; do
+            [ "$crate" = elitea-llm-gateway ] && continue
             (cd "services/${crate}" && bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh")
           done
       - uses: actions/setup-go@v7
-        if: steps.gate.outputs.build == 'true'
+        if: steps.gate.outputs.build == 'true' && contains(matrix.services, 'elitea-llm-gateway')
         with:
           # The gateway is outside go.work, on its own Go.
           cache: false
           go-version-file: services/elitea-llm-gateway/go.mod
-      - name: Build the Rust services and the gateway on the pool
+      - name: Build this leg's services on the pool
         if: steps.gate.outputs.build == 'true'
         env:
           NATIVE_RUST_TARGET_DIR: ${{ runner.temp }}/native-rust-target
+          NATIVE_RUST_SERVICES: ${{ matrix.services }}
         run: bash scripts/e2e/build-native-rust.sh "$RUNNER_TEMP/native-rust-bin"
       - id: pack
         name: Pack them (upload-artifact keeps no exec bits)
         if: steps.gate.outputs.build == 'true'
         working-directory: ${{ runner.temp }}
+        env:
+          LEG: ${{ matrix.leg }}
         run: |
           set -euo pipefail
-          tar --zstd -cf native-rust-bin.tar.zst -C native-rust-bin .
-          echo "sha256=$(sha256sum native-rust-bin.tar.zst | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          tar --zstd -cf "native-rust-bin-${LEG}.tar.zst" -C native-rust-bin .
+          echo "sha256-${LEG}=$(sha256sum "native-rust-bin-${LEG}.tar.zst" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
       - name: Upload the build directory
         if: steps.gate.outputs.build == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: native-e2e-rust-bin
-          path: ${{ runner.temp }}/native-rust-bin.tar.zst
+          name: native-e2e-rust-bin-${{ matrix.leg }}
+          path: ${{ runner.temp }}/native-rust-bin-${{ matrix.leg }}.tar.zst
           overwrite: true
           if-no-files-found: error
           retention-days: 3
@@ -584,26 +609,30 @@ jobs:
         with:
           name: native-e2e-bin
           path: ${{ runner.temp }}
-      - name: Download the Rust and gateway build directory
+      - name: Download the Rust and gateway build directories (both legs)
         if: ${{ env.RUN_LEG == 'true' }}
         uses: actions/download-artifact@v8
         with:
-          name: native-e2e-rust-bin
+          pattern: native-e2e-rust-bin-*
+          merge-multiple: true
           path: ${{ runner.temp }}
       - name: Unpack both into one build directory (by their sha256)
         if: ${{ env.RUN_LEG == 'true' }}
         working-directory: ${{ runner.temp }}
         env:
           SHA256: ${{ needs.native-build.outputs.sha256 }}
-          RUST_SHA256: ${{ needs.native-build-rust.outputs.sha256 }}
+          RUST_WORKER_SHA256: ${{ needs.native-build-rust.outputs.sha256-worker }}
+          RUST_ENGINES_SHA256: ${{ needs.native-build-rust.outputs.sha256-engines }}
         run: |
           set -euo pipefail
           echo "${SHA256}  native-bin.tar.zst" | sha256sum -c -
-          echo "${RUST_SHA256}  native-rust-bin.tar.zst" | sha256sum -c -
+          echo "${RUST_WORKER_SHA256}  native-rust-bin-worker.tar.zst" | sha256sum -c -
+          echo "${RUST_ENGINES_SHA256}  native-rust-bin-engines.tar.zst" | sha256sum -c -
           mkdir -p native-bin
           tar --zstd -xf native-bin.tar.zst -C native-bin
-          tar --zstd -xf native-rust-bin.tar.zst -C native-bin
-          rm native-bin.tar.zst native-rust-bin.tar.zst
+          tar --zstd -xf native-rust-bin-worker.tar.zst -C native-bin
+          tar --zstd -xf native-rust-bin-engines.tar.zst -C native-bin
+          rm native-bin.tar.zst native-rust-bin-worker.tar.zst native-rust-bin-engines.tar.zst
       - name: The handoff lane's host (stub web bundle, pinned toolchain, brand overlay)
         if: ${{ env.RUN_LEG == 'true' && matrix.kind == 'handoff' }}
         # The Tauri build libraries are in the pool's image (no apt here).

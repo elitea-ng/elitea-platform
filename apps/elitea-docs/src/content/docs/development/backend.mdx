@@ -99,10 +99,11 @@ The agent worker is the native Rust runtime:
 
 ```bash
 cd services/elitea-worker-rust
-cargo test --locked --all-targets --all-features
+cargo test --locked --all-targets --features sandbox-supervisor
+cargo test --locked --lib
 ```
 
-The toolchain is pinned in `rust-toolchain.toml`; `rustup` picks it up automatically inside the directory. `ci-rust.yml` runs the same command, plus `cargo build --locked --release`.
+The toolchain is pinned in `rust-toolchain.toml`; `rustup` picks it up automatically inside the directory. `ci-rust.yml` runs the same two commands: the supervisor image's feature set, then the worker image's (no features). Never use `--all-features` on the worker. It adds bench-only features that no image builds and hides what only the default build compiles; `scripts/ci/check-worker-feature-sets.mjs` refuses it in CI.
 
 ## Add a new service
 

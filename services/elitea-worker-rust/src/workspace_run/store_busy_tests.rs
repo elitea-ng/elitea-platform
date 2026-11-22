@@ -20,7 +20,6 @@ const QUICK: BusyRetry = BusyRetry {
 /// Over a real gRPC channel: Main answers ABORTED `thread_busy`, then the
 /// same publish applies. The store sees two identical requests and the
 /// ref moves once.
-#[cfg(feature = "sandbox-supervisor")]
 #[tokio::test]
 #[allow(clippy::too_many_lines, reason = "a whole in-process gRPC service")]
 async fn the_grpc_store_resends_a_busy_publish_and_it_applies_once() {

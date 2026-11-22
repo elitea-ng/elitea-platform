@@ -103,7 +103,9 @@ try:
     env["ELITEA_TEST_DATABASE_URL"] = (
         f"postgresql://postgres:{password}@{endpoint}/postgres"
     )
-    # Build exactly what ci-rust.yml builds: --all-features, from the worker's
+    # Build exactly what ci-rust.yml builds: the supervisor image's feature
+    # set (--features sandbox-supervisor; never --all-features, which
+    # scripts/ci/check-worker-feature-sets.mjs refuses), from the worker's
     # own directory, on the worker's own pinned toolchain. rustup picks the
     # compiler from the rust-toolchain.toml nearest the CURRENT directory, so
     # running cargo from the repository root with --manifest-path once used
@@ -114,7 +116,7 @@ try:
     worker = root / "services/elitea-worker-rust"
     env["RUSTUP_TOOLCHAIN"] = pinned_toolchain(worker / "rust-toolchain.toml")
     result = subprocess.run(
-        ["cargo", "test", "--locked", "--offline", "--all-features",
+        ["cargo", "test", "--locked", "--offline", "--features", "sandbox-supervisor",
          "--lib", args.test_filter,
          "--", "--ignored", "--nocapture"],
         cwd=worker, env=env, timeout=600,

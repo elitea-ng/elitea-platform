@@ -333,6 +333,25 @@ jobs:
           node --test scripts/ci/check-runner-routing.test.mjs scripts/ci/eng-runner-hook.test.mjs
           node scripts/ci/check-runner-routing.mjs
 
+      # The worker is linted and tested with exactly the feature sets its
+      # images build (none, and `sandbox-supervisor`), never `--all-features`:
+      # that hid the default build's dead code (docs/contributing/ci.md, Rust).
+      # The suite's count is pinned: a suite that collects nothing exits 0.
+      - name: The worker is linted and tested with its images' feature sets
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          expected="$(grep -c '^test(' scripts/ci/check-worker-feature-sets.test.mjs)"
+          status=0
+          output="$(node --test --test-reporter=tap scripts/ci/check-worker-feature-sets.test.mjs 2>&1)" || status=$?
+          printf '%s\n' "${output}"
+          ran="$(printf '%s\n' "${output}" | sed -n 's/^# pass \([0-9][0-9]*\)$/\1/p')"
+          if [ "${status}" -ne 0 ] || [ -z "${ran}" ] || [ "${ran}" -ne "${expected}" ]; then
+            echo "::error::check-worker-feature-sets.test.mjs holds ${expected} scenario(s); node --test passed ${ran:-none} (exit ${status})"
+            exit 1
+          fi
+          node scripts/ci/check-worker-feature-sets.mjs
+
       # The supervisor that runs a compose stack as processes on the pool
       # (scripts/e2e/native-stack.mjs; the native E2E legs). Its tests start
       # tiny fake services (node one-liners, sleep) on 127.0.0.1 and check the

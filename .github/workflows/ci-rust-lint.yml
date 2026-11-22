@@ -6,8 +6,12 @@ name: CI — Rust lint
 # a pull request after the build had spent its runner, and the same Clippy of
 # libs/rust ran again in each workflow that links it. Now one leg per Cargo
 # workspace fails in minutes, and the test chains (heavy tier) start only when
-# this has passed. The legs lint exactly what the test jobs linted before
-# (`--locked --all-targets --all-features -D warnings`); the desktop and the
+# this has passed. The legs lint `--locked --all-targets -D warnings` with each
+# leg's `features`: `--all-features` for every workspace but the worker, and for
+# the worker the two sets its images build, one leg each (no features: the
+# worker image; `sandbox-supervisor`: the supervisor image). `--all-features`
+# on the worker adds its bench-only features and hid the default build's dead
+# code; scripts/ci/check-worker-feature-sets.mjs refuses it. The desktop and the
 # platform-specific crates keep their own Clippy (windows, macOS) in
 # ci-desktop.yml, ci-desktop-control.yml and ci-browser-session.yml, and the
 # shared-crate `-p` runs whose point is feature unification stay in
@@ -45,24 +49,37 @@ jobs:
           - name: shared crates
             dir: libs/rust
             doc: --workspace
+            features: --all-features
+          # The worker image: `cargo auditable build` with no feature flag.
           - name: worker
             dir: services/elitea-worker-rust
             doc: --
+            features: ""
+          # The supervisor image: `--features sandbox-supervisor`.
+          - name: worker, sandbox supervisor
+            dir: services/elitea-worker-rust
+            doc: --
+            features: --features sandbox-supervisor
           - name: code runner
             dir: services/elitea-code-runner
             jobs: "1"
+            features: --all-features
           - name: deepwiki engine
             dir: services/elitea-deepwiki-engine
             doc: --
+            features: --all-features
           - name: inventory engine
             dir: services/elitea-inventory-engine
             doc: --
+            features: --all-features
           - name: vector
             dir: services/elitea-vector
             doc: --
+            features: --all-features
           - name: doc extractor
             dir: services/elitea-doc-extractor
             doc: --
+            features: --all-features
     defaults:
       run:
         working-directory: ${{ matrix.dir }}
@@ -102,7 +119,12 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run Clippy
-        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+        env:
+          FEATURES: ${{ matrix.features }}
+        run: |
+          # Unquoted on purpose: "" is no argument, `--features X` is two.
+          # shellcheck disable=SC2086
+          cargo clippy --locked --all-targets ${FEATURES} -- -D warnings
 
       # rustdoc, deny warnings: the `cargo doc` each test workflow used to run in
       # its heavy job, here beside Clippy so a broken doc link fails in minutes.
@@ -113,10 +135,12 @@ jobs:
         env:
           RUSTDOCFLAGS: "-D warnings"
           DOC_ARGS: ${{ matrix.doc }}
+          FEATURES: ${{ matrix.features }}
         run: |
           args=()
           [ "$DOC_ARGS" = -- ] || args+=("$DOC_ARGS")
-          cargo doc --locked --no-deps --all-features "${args[@]}"
+          # shellcheck disable=SC2086
+          cargo doc --locked --no-deps ${FEATURES} "${args[@]}"
 
       # The workspace run above uses --all-features, which turns on
       # `test-support`, and that switches off the agent runtime's

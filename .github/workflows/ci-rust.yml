@@ -142,8 +142,9 @@ jobs:
       # dependency artefacts in target/, none of which are incremental state —
       # and it deliberately does not cache the workspace crates themselves.
       #
-      # `test` and `workspace-run-docker` build the same `--all-features` test
-      # profile: measured 2026-10-20 each saved an entry of exactly
+      # `test` and `workspace-run-docker` build the same `--features
+      # sandbox-supervisor` test profile (it was `--all-features`, whose extra
+      # features are bench-only and change no dependency): measured 2026-10-20 each saved an entry of exactly
       # 1292.66 MB, two copies of one directory. They share one key now,
       # and only `test` saves it.
       - name: Cache cargo registry and build artefacts
@@ -208,7 +209,13 @@ jobs:
           fi
           echo "ELITEA_TEST_NATS_SECURE_ENV=$env_file" >> "$GITHUB_ENV"
 
-      - name: Run all targets and features
+      # The supervisor image's feature set (`--features sandbox-supervisor`,
+      # services/elitea-worker-rust/Containerfile), a superset of the worker
+      # image's code. Never `--all-features`: that adds the bench-only features
+      # no image builds (scripts/ci/check-worker-feature-sets.mjs). The two
+      # benches need those features, so --all-targets skips them; they are
+      # never a gate.
+      - name: Run all targets (the supervisor's feature set)
         # About 15 min. A test that hangs ran this step into the job's
         # timeout twice, and a cancelled job keeps no log; failing the step
         # first keeps libtest's "has been running for over 60 seconds" line,
@@ -219,7 +226,19 @@ jobs:
           ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS: "1"
           ELITEA_TEST_DATABASE_GUARD: "disposable-pg18"
           ELITEA_REQUIRE_NATS_SECURE_TEST: "1"
-        run: cargo test --locked --all-targets --all-features
+        run: cargo test --locked --all-targets --features sandbox-supervisor
+
+      # The worker image's own feature set (none): the code every deployment
+      # runs, compiled as it ships. 96 `sandbox-supervisor` gates change what
+      # the lib holds, and dead test helpers in that build passed CI for as long
+      # as only `--all-features` was tested. Lib tests only, and no database:
+      # the PostgreSQL, NATS and Docker cases ran above or run below under the
+      # supervisor's set. On a warm cache this rebuilds the dependencies whose
+      # features differ (tower, hyper-rustls, jiff and what links them) and the
+      # worker; the nightly run on main saves both builds in this job's cache.
+      - name: Lib tests on the worker image's feature set (default)
+        timeout-minutes: 20
+        run: cargo test --locked --lib
 
       - name: Show the NATS test server log on failure
         if: failure()
@@ -229,7 +248,7 @@ jobs:
       - name: Verify sandbox phase deadlines with PostgreSQL
         env:
           ELITEA_TEST_DATABASE_URL: "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
-        run: cargo test --locked --lib --all-features sandbox::docker_supervisor::deadline_tests -- --ignored
+        run: cargo test --locked --lib --features sandbox-supervisor sandbox::docker_supervisor::deadline_tests -- --ignored
 
       - name: Verify Python preparation and final hydration with PostgreSQL
         env:
@@ -248,8 +267,8 @@ jobs:
             -CA "$ELITEA_TEST_BUNDLE_TLS/ca.pem" -CAkey "$ELITEA_TEST_BUNDLE_TLS/ca.key" -CAcreateserial \
             -extfile "$ELITEA_TEST_BUNDLE_TLS/client.ext" -out "$ELITEA_TEST_BUNDLE_TLS/client.pem"
           cat "$ELITEA_TEST_BUNDLE_TLS/client.pem" "$ELITEA_TEST_BUNDLE_TLS/client.key" > "$ELITEA_TEST_BUNDLE_TLS/client-combined.pem"
-          cargo test --locked --lib --all-features sandbox::docker_supervisor::preparation::tests -- --ignored
-          cargo test --locked --lib --all-features sandbox::docker_supervisor::hydration::deadline_tests -- --ignored
+          cargo test --locked --lib --features sandbox-supervisor sandbox::docker_supervisor::preparation::tests -- --ignored
+          cargo test --locked --lib --features sandbox-supervisor sandbox::docker_supervisor::hydration::deadline_tests -- --ignored
 
       # The Code owner-recovery fixtures (ledger_code_recovery_tests.rs,
       # docker_code_recovery_cleanup_tests.rs) create no schema of their own:
@@ -280,7 +299,7 @@ jobs:
           ELITEA_CODE_OWNER_TEST_DATABASE_URL: "postgres://postgres:postgres@localhost:5432/agentstate_code_owner?sslmode=disable"
           ELITEA_TEST_WORKSPACE_POSTGRES_REQUIRED: "1"
         run: |
-          cargo test --locked --lib --all-features -- --ignored --skip sandbox_supervisor_ \
+          cargo test --locked --lib --features sandbox-supervisor -- --ignored --skip sandbox_supervisor_ \
             agents::graph::node_recovery_runtime::tests::code_owner_tests:: \
             sandbox::ledger::code_recovery::tests:: \
             sandbox::docker_supervisor::code_recovery_cleanup::tests:: \
@@ -317,7 +336,7 @@ jobs:
       # (--pull=never; the service above already pulled the image), generates
       # the TLS bundle for the mTLS case, and removes everything on exit. It
       # runs cargo from services/elitea-worker-rust, so it reuses this job's
-      # --all-features lib build under the pinned toolchain.
+      # `--features sandbox-supervisor` lib build under the pinned toolchain.
       - name: Verify sandbox supervisor recovery, submission and mTLS with Docker
         working-directory: .
         run: |
@@ -326,7 +345,7 @@ jobs:
           verification="$(docker image inspect --format '{{.Id}}' elitea-code-runner:ci-verification)"
           deno="$(docker image inspect --format '{{.Id}}' elitea-code-runner:ci-default)"
           # The lib test binary the steps above built (fresh: this compiles nothing).
-          expected="$(cd services/elitea-worker-rust && cargo test --locked --lib --all-features --no-run --message-format=json 2>/dev/null \
+          expected="$(cd services/elitea-worker-rust && cargo test --locked --lib --features sandbox-supervisor --no-run --message-format=json 2>/dev/null \
             | python3 -c 'import json,sys; print(next(m["executable"] for m in map(json.loads, sys.stdin) if m.get("reason") == "compiler-artifact" and m.get("executable") and m["target"]["kind"] == ["lib"]))')"
           echo "the job's lib test binary: ${expected##*/}"
           # Each helper run must reuse that binary and compile NOTHING: a
@@ -371,9 +390,9 @@ jobs:
           deno="$(docker image inspect --format '{{.Id}}' elitea-code-runner:ci-default)"
           rust="$(docker image inspect --format '{{.Id}}' elitea-code-runner:ci-rust)"
           ELITEA_CODE_RUNNER_TEST_IMAGE="$verification" \
-            cargo test --locked --lib --all-features sandbox::dependency_runtime_docker_tests:: -- --ignored
+            cargo test --locked --lib --features sandbox-supervisor sandbox::dependency_runtime_docker_tests:: -- --ignored
           ELITEA_TEST_DOCKER_DENO_IMAGE="$deno" ELITEA_TEST_DOCKER_RUST_IMAGE="$rust" \
-            cargo test --locked --lib --all-features sandbox::kubernetes::live_tests::live_docker_ -- --ignored
+            cargo test --locked --lib --features sandbox-supervisor sandbox::kubernetes::live_tests::live_docker_ -- --ignored
 
       # Every #[ignore] test is either selected by a `-- --ignored` invocation
       # in this file or allowlisted with where it runs instead. Six sandbox
@@ -390,7 +409,7 @@ jobs:
           set -euo pipefail
           # 2>&1: cargo's `Running <target>` headers go to stderr, and the
           # checker needs them to tell which target each test belongs to.
-          cargo test --locked --all-features --lib --bins --tests -- --list --ignored \
+          cargo test --locked --features sandbox-supervisor --lib --bins --tests -- --list --ignored \
             > "${RUNNER_TEMP}/worker-ignored-tests.txt" 2>&1
           node ../../scripts/ci/check-worker-ignored-tests.mjs \
             --list "${RUNNER_TEMP}/worker-ignored-tests.txt" \
@@ -465,7 +484,7 @@ jobs:
             || echo "::warning::could not remove every preinstalled toolchain; continuing"
           df -h / | tail -1
 
-      # The `test` job's entry (same `--all-features` test profile), restored
+      # The `test` job's entry (same `--features sandbox-supervisor` test profile), restored
       # and never saved here: two jobs saving one key would race to reserve it.
       - name: Cache cargo registry and build artefacts
         uses: Swatinem/rust-cache@v2
@@ -540,7 +559,7 @@ jobs:
       - name: Run the Docker workspace-run proofs
         env:
           ELITEA_REQUIRE_WORKSPACE_DOCKER_TESTS: "1"
-        run: cargo test --locked --lib --all-features sandbox::workspace_run_docker_tests -- --ignored --test-threads=1
+        run: cargo test --locked --lib --features sandbox-supervisor sandbox::workspace_run_docker_tests -- --ignored --test-threads=1
 
       - name: The proxy refused the off-allowlist host and the fronted tunnel
         if: always()

@@ -29,7 +29,12 @@
 # once. The gateway is outside go.work and needs its own Go
 # (services/elitea-llm-gateway/go.mod): the caller puts that go on PATH.
 #
-# Used by ci-web-e2e-native.yml's `native-build-rust` job; runnable locally.
+# NATIVE_RUST_SERVICES (space-separated, default: all six) builds a subset.
+# ci-web-e2e-native.yml's `native-build-rust` job builds two in parallel, one
+# pod each, grouped by the dependencies they share: the worker with vector and
+# the gateway, and the three engines (Inventory first: the doc-extractor's and
+# the DeepWiki engine's graphs are almost all inside its own). One cold job
+# of all five was 33 min, the pull request's critical path. Runnable locally.
 set -euo pipefail
 
 out="${1:?usage: build-native-rust.sh <out-dir>}"
@@ -49,7 +54,21 @@ if [ "${NATIVE_RUST_FULL_RELEASE:-0}" != 1 ]; then
     CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 CARGO_PROFILE_RELEASE_DEBUG=false
 fi
 
-CRATES=(elitea-worker-rust elitea-vector elitea-doc-extractor elitea-deepwiki-engine elitea-inventory-engine)
+ALL_CRATES=(elitea-worker-rust elitea-vector elitea-doc-extractor elitea-deepwiki-engine elitea-inventory-engine)
+read -r -a SERVICES <<< "${NATIVE_RUST_SERVICES:-${ALL_CRATES[*]} elitea-llm-gateway}"
+CRATES=()
+GATEWAY=false
+for service in "${SERVICES[@]}"; do
+  case " ${ALL_CRATES[*]} " in
+    *" ${service} "*) CRATES+=("$service") ;;
+    *) if [ "$service" = elitea-llm-gateway ]; then GATEWAY=true; else
+         echo "ERROR: NATIVE_RUST_SERVICES names ${service}, which is not one of: ${ALL_CRATES[*]} elitea-llm-gateway" >&2
+         exit 2
+       fi ;;
+  esac
+done
+[ "${#SERVICES[@]}" -gt 0 ] || { echo "ERROR: NATIVE_RUST_SERVICES is empty" >&2; exit 2; }
+
 for crate in "${CRATES[@]}"; do
   echo "→ ${crate}"
   (
@@ -64,19 +83,21 @@ for crate in "${CRATES[@]}"; do
   install -m 0755 "${CARGO_TARGET_DIR}/release/${crate}" "$out/${crate}"
 done
 
-echo "→ elitea-llm-gateway (GOWORK=off, $(go version))"
-(
-  cd "$REPO_ROOT/services/elitea-llm-gateway"
-  export CGO_ENABLED=0 GOWORK=off
-  for attempt in 1 2 3 4 5; do
-    go mod download && break
-    [ "$attempt" = 5 ] && { echo "go mod download failed after 5 attempts" >&2; exit 1; }
-    sleep $((attempt * 5))
-  done
-  go build -trimpath -ldflags="-s -w" -o "$out/elitea-llm-gateway" ./cmd/elitea-llm-gateway
-)
+if [ "$GATEWAY" = true ]; then
+  echo "→ elitea-llm-gateway (GOWORK=off, $(go version))"
+  (
+    cd "$REPO_ROOT/services/elitea-llm-gateway"
+    export CGO_ENABLED=0 GOWORK=off
+    for attempt in 1 2 3 4 5; do
+      go mod download && break
+      [ "$attempt" = 5 ] && { echo "go mod download failed after 5 attempts" >&2; exit 1; }
+      sleep $((attempt * 5))
+    done
+    go build -trimpath -ldflags="-s -w" -o "$out/elitea-llm-gateway" ./cmd/elitea-llm-gateway
+  )
+fi
 
-for f in "${CRATES[@]}" elitea-llm-gateway; do
+for f in "${SERVICES[@]}"; do
   [ -x "$out/$f" ] || { echo "ERROR: $out/$f was not built" >&2; exit 1; }
 done
 echo "✓ native Rust and gateway build directory: $out"
