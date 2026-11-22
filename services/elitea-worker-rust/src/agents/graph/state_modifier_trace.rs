@@ -312,9 +312,17 @@ fn sanitize_value(
             let mut out = Map::with_capacity(map.len());
             for (k, v) in map {
                 if is_omitted_state_key(k) {
+                    if *nodes_left == 0 {
+                        return None;
+                    }
+                    *nodes_left -= 1;
                     continue;
                 }
                 if is_sensitive_key(k) {
+                    if *nodes_left == 0 {
+                        return None;
+                    }
+                    *nodes_left -= 1;
                     out.insert(k.clone(), Value::String(REDACTED.to_owned()));
                 } else {
                     out.insert(
@@ -635,5 +643,24 @@ mod tests {
             .expect("node_errors array preserved");
         assert_ne!(kept.len(), 0);
         assert_eq!(kept.last().unwrap()["node"], json!("step_63"));
+    }
+
+    #[test]
+    fn short_circuits_nested_objects_of_sensitive_and_omitted_keys_past_node_budget() {
+        let mut items = Vec::with_capacity(64);
+        for i in 0..64 {
+            let mut obj = Map::with_capacity(64);
+            for j in 0..32 {
+                obj.insert(format!("secret_{i}_{j}"), json!("hidden"));
+                obj.insert(format!("__elitea_internal_{i}_{j}"), json!("omitted"));
+            }
+            items.push(Value::Object(obj));
+        }
+        let mut state = State::new();
+        state.insert("nested_many".into(), Value::Array(items));
+
+        let bounded = sanitize_and_bound_state(&state, &HashMap::new());
+        assert_eq!(bounded["_truncated"], json!(true));
+        assert!(!bounded.contains_key("nested_many"));
     }
 }

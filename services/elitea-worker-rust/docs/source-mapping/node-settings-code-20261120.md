@@ -157,13 +157,13 @@ Added to [`services/elitea-worker-rust/docs/recovery-guarantees.md`](../recovery
 
 | Test | Suite | Outcome |
 |---|---|---|
-| `postgres_node_settings_survive_process_replacement` | Worker (`node_settings_pg_tests`) | PASS (1/1, 2.42s) |
-| `kill_after_started_before_receipt_reconciles_without_extra_try` | Worker (`node_settings_code_pg_tests`) | PASS |
-| `kill_mid_wait_retry_at_resumes_remainder_and_fences_zombie` | Worker (`node_settings_code_pg_tests`) | PASS |
-| `crash_between_journal_failure_and_checkpoint_matches_live_and_refuses_deadline_insufficient` | Worker (`node_settings_code_pg_tests`) | PASS |
-| `c1_platform_client_timeout_reconciles_with_zero_redispatches` | Worker (`node_settings_code_pg_tests`) | PASS |
-| `execute_once_code_across_router_loop_and_replacement_dispatches_once` | Worker (`node_settings_code_pg_tests`) | PASS |
-| `fu348_saved_child_deterministic_continue_and_code_retry_resume_at_claim_plus_one` | Worker (`node_settings_code_pg_tests`) | PASS (6/6 total in 9.47s) |
+| `postgres_node_settings_survive_process_replacement` | Worker (`node_settings_pg_tests`) | PASS (1/1, 1.55s) |
+| `real_pg_code_kill_after_started_before_receipt_zero_extra_tries` | Worker (`node_settings_code_pg_tests`) | PASS |
+| `real_pg_code_kill_mid_wait_resumes_same_try_fences_zombie_and_races_cleanly` | Worker (`node_settings_code_pg_tests`) | PASS |
+| `real_pg_code_kill_between_failure_append_and_checkpoint_live_restore_byte_identical` | Worker (`node_settings_code_pg_tests`) | PASS |
+| `real_pg_c1_platform_client_timeout_with_retry_on_fail_reconciles_zero_redispatch` | Worker (`node_settings_code_pg_tests`) | PASS |
+| `real_pg_code_execute_once_runs_one_job_across_three_visit_loop_and_replacement` | Worker (`node_settings_code_pg_tests`) | PASS |
+| `real_pg_fu348_saved_child_deterministic_settled_failure_and_code_retry_resuming_at_claim_plus_1` | Worker (`node_settings_code_pg_tests`) | PASS |
 | `real_pg_sec_5b1b_01_retry_then_succeed_keeps_failure_detail_empty` | Worker (`node_settings_code_pg_tests`) | PASS |
 | `real_pg_sec_5b1b_01_continued_failure_keeps_failure_detail_empty` | Worker (`node_settings_code_pg_tests`) | PASS |
 | `real_pg_sec_5b1b_01_error_output_failure_keeps_failure_detail_empty` | Worker (`node_settings_code_pg_tests`) | PASS |
