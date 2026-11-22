@@ -217,6 +217,10 @@ async fn build(
             policy: &policy,
             connector: &connector,
             mcp_tokens: &Map::new(),
+            artifacts: None,
+            index_tools: crate::toolkits::IndexToolSupport::Withheld(
+                crate::toolkits::IndexToolsWithheld::NotServedOnThisPath,
+            ),
         },
         &errors(),
     )
@@ -431,4 +435,296 @@ async fn a_legacy_nested_build_never_redeems() {
         sessions.iter().all(|(_, token)| token.is_none()),
         "{sessions:?}"
     );
+}
+
+#[derive(Default)]
+struct StubPlatformWriter {
+    reads: Mutex<Vec<(String, String)>>,
+}
+
+#[async_trait]
+impl elitea_agent_runtime::host::PlatformWriter for StubPlatformWriter {
+    async fn list_artifacts(
+        &self,
+        request: &elitea_agent_runtime::platform::ArtifactListRequest,
+    ) -> Result<
+        elitea_agent_runtime::platform::ArtifactListOutcome,
+        elitea_agent_runtime::host::HostError,
+    > {
+        Ok(elitea_agent_runtime::platform::ArtifactListOutcome {
+            bucket: request.bucket.clone(),
+            files: Vec::new(),
+            truncated: false,
+        })
+    }
+
+    async fn read_artifact(
+        &self,
+        request: &elitea_agent_runtime::platform::ArtifactReadRequest,
+    ) -> Result<
+        elitea_agent_runtime::platform::ArtifactReadOutcome,
+        elitea_agent_runtime::host::HostError,
+    > {
+        self.reads
+            .lock()
+            .expect("reads")
+            .push((request.bucket.clone(), request.name.clone()));
+        Ok(elitea_agent_runtime::platform::ArtifactReadOutcome {
+            name: request.name.clone(),
+            media_type: "text/plain".to_owned(),
+            byte_length: 2,
+            char_length: 2,
+            total_lines: 1,
+            max_chars: 200_000,
+            over_limit: false,
+            content: "ok".to_owned(),
+        })
+    }
+
+    async fn write_artifact(
+        &self,
+        _request: &elitea_agent_runtime::platform::ArtifactWriteRequest,
+    ) -> Result<
+        elitea_agent_runtime::platform::ArtifactWriteOutcome,
+        elitea_agent_runtime::host::HostError,
+    > {
+        Err(elitea_agent_runtime::host::HostError::new(
+            elitea_agent_runtime::host::HostErrorCode::InvalidConfiguration,
+            "unused",
+        ))
+    }
+
+    async fn delete_artifact(
+        &self,
+        _request: &elitea_agent_runtime::platform::ArtifactDeleteRequest,
+    ) -> Result<
+        elitea_agent_runtime::platform::ArtifactDeleteOutcome,
+        elitea_agent_runtime::host::HostError,
+    > {
+        Err(elitea_agent_runtime::host::HostError::new(
+            elitea_agent_runtime::host::HostErrorCode::InvalidConfiguration,
+            "unused",
+        ))
+    }
+
+    async fn write_skill(
+        &self,
+        _request: &elitea_agent_runtime::platform::SkillWriteRequest,
+    ) -> Result<
+        elitea_agent_runtime::platform::SkillWriteOutcome,
+        elitea_agent_runtime::host::HostError,
+    > {
+        Err(elitea_agent_runtime::host::HostError::new(
+            elitea_agent_runtime::host::HostErrorCode::InvalidConfiguration,
+            "unused",
+        ))
+    }
+
+    async fn write_project_context(
+        &self,
+        _request: &elitea_agent_runtime::platform::ProjectContextWriteRequest,
+    ) -> Result<
+        elitea_agent_runtime::platform::ProjectContextWriteOutcome,
+        elitea_agent_runtime::host::HostError,
+    > {
+        Err(elitea_agent_runtime::host::HostError::new(
+            elitea_agent_runtime::host::HostErrorCode::InvalidConfiguration,
+            "unused",
+        ))
+    }
+}
+
+#[derive(Default)]
+struct StubMemoryHost {
+    calls: Mutex<Vec<String>>,
+}
+
+#[async_trait]
+impl elitea_agent_runtime::toolkits::IndexToolHost for StubMemoryHost {
+    async fn call(
+        &self,
+        _call: elitea_agent_runtime::toolkits::IndexToolCall<'_>,
+    ) -> Result<Value, elitea_agent_runtime::toolkits::IndexToolFailure> {
+        Ok(json!("unused"))
+    }
+
+    fn serves_memory(&self) -> bool {
+        true
+    }
+
+    async fn memory(
+        &self,
+        call: elitea_agent_runtime::toolkits::MemoryToolCall<'_>,
+    ) -> Result<Value, elitea_agent_runtime::toolkits::IndexToolFailure> {
+        self.calls
+            .lock()
+            .expect("calls")
+            .push(format!("{}:{}", call.toolkit_id, call.namespace));
+        Ok(json!("stored"))
+    }
+}
+
+/// FU-353 D4(a) / D6(a): nested `artifact` toolkit materializes under a pinned
+/// authority on both legacy and governed runs, allows its configured bucket,
+/// and refuses cross-bucket overrides without touching `PlatformWriter`.
+#[tokio::test]
+async fn nested_artifact_toolkit_materializes_pinned_and_refuses_cross_bucket() {
+    let broker = Arc::new(Broker::default());
+    let platform = platform(&broker);
+    let authority = Arc::new(test_runtime_context_authority().governed_for_test(DIGEST));
+    let path = ApplicationMaterializationPath::default()
+        .with_governed(governed_client(&platform, &authority));
+    let writer = Arc::new(StubPlatformWriter::default());
+    let pinned = crate::toolkits::ArtifactToolAuthority::new(writer.clone()).with_pinned_bucket();
+    let version = json!({
+        "tools": [{
+            "id": 50,
+            "type": "artifact",
+            "toolkit_name": "docs_kit",
+            "settings": {
+                "bucket": "docs",
+                "selected_tools": ["list_files", "read_file"]
+            }
+        }]
+    });
+    let policy =
+        Arc::new(ToolAdmissionPolicy::new(&[], &BTreeMap::new()).expect("tool admission policy"));
+    let snapshot = FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
+        .expect("snapshot")
+        .apply_policy(policy.as_ref());
+    let servers = Arc::new(Servers::default());
+    let connector: Arc<dyn McpConnector> = Arc::new(Connector(servers));
+    let built = materialize_nested_toolsets(
+        &snapshot,
+        NestedToolsetInputs {
+            authority: &authority,
+            governed: path.governed(),
+            policy: &policy,
+            connector: &connector,
+            mcp_tokens: &Map::new(),
+            artifacts: Some(&pinned),
+            index_tools: crate::toolkits::IndexToolSupport::Withheld(
+                crate::toolkits::IndexToolsWithheld::NotRequested,
+            ),
+        },
+        &errors(),
+    )
+    .await
+    .expect("nested artifact build");
+    assert_eq!(built.configured.len(), 1);
+    let context: Arc<dyn ToolContext> =
+        Arc::new(SimpleToolContext::new("nested").with_function_call_id("call-art"));
+    let readonly: Arc<dyn ReadonlyContext> = context.clone();
+    let tools = built.configured[0].tools(readonly).await.expect("tools");
+    let read_file = tools
+        .into_iter()
+        .find(|tool| tool.name() == "read_file")
+        .expect("read_file tool");
+    let ok = read_file
+        .execute(context.clone(), json!({"filepath": "/docs/note.txt"}))
+        .await
+        .expect("ok read");
+    assert!(ok.as_str().is_some_and(|s| s.contains("ok")), "{ok}");
+    let refused = read_file
+        .execute(context, json!({"filepath": "/other/secret.txt"}))
+        .await
+        .expect("refused read");
+    assert!(
+        refused
+            .as_str()
+            .is_some_and(|s| s.contains("restricted to its configured bucket 'docs'")),
+        "{refused}"
+    );
+    assert_eq!(
+        *writer.reads.lock().expect("reads"),
+        vec![("docs".to_owned(), "note.txt".to_owned())]
+    );
+}
+
+/// FU-353 D6(a): nested `memory` toolkit materializes when claim-bound index
+/// support is lent (on governed and legacy runs) and fails closed when withheld.
+#[tokio::test]
+async fn nested_memory_toolkit_materializes_when_lent_and_withholds_when_absent() {
+    let broker = Arc::new(Broker::default());
+    let platform = platform(&broker);
+    let authority = Arc::new(test_runtime_context_authority().governed_for_test(DIGEST));
+    let path = ApplicationMaterializationPath::default()
+        .with_governed(governed_client(&platform, &authority));
+    let version = json!({
+        "tools": [{
+            "id": 51,
+            "type": "memory",
+            "toolkit_name": "notes_mem",
+            "settings": {
+                "namespace": "notes",
+                "selected_tools": ["manage_memory", "search_memory"]
+            }
+        }]
+    });
+    let policy =
+        Arc::new(ToolAdmissionPolicy::new(&[], &BTreeMap::new()).expect("tool admission policy"));
+    let snapshot = FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
+        .expect("snapshot")
+        .apply_policy(policy.as_ref());
+    let servers = Arc::new(Servers::default());
+    let connector: Arc<dyn McpConnector> = Arc::new(Connector(servers));
+
+    let host = Arc::new(StubMemoryHost::default());
+    let index_auth = crate::toolkits::IndexToolAuthority::new(host.clone());
+    let built = materialize_nested_toolsets(
+        &snapshot,
+        NestedToolsetInputs {
+            authority: &authority,
+            governed: path.governed(),
+            policy: &policy,
+            connector: &connector,
+            mcp_tokens: &Map::new(),
+            artifacts: None,
+            index_tools: crate::toolkits::IndexToolSupport::Lent(&index_auth),
+        },
+        &errors(),
+    )
+    .await
+    .expect("nested memory build");
+    assert_eq!(built.configured.len(), 1);
+    let context: Arc<dyn ToolContext> =
+        Arc::new(SimpleToolContext::new("nested").with_function_call_id("call-mem"));
+    let readonly: Arc<dyn ReadonlyContext> = context.clone();
+    let tools = built.configured[0].tools(readonly).await.expect("tools");
+    let store = tools
+        .into_iter()
+        .find(|tool| tool.name() == "manage_memory")
+        .expect("manage_memory tool");
+    let res = store
+        .execute(
+            context,
+            json!({"action": "create", "content": "remember this"}),
+        )
+        .await
+        .expect("manage_memory");
+    assert_eq!(res, json!("stored"));
+    assert_eq!(
+        *host.calls.lock().expect("calls"),
+        vec!["51:notes".to_owned()]
+    );
+
+    // Without a vector token, the nested memory toolkit is withheld cleanly.
+    let withheld = materialize_nested_toolsets(
+        &snapshot,
+        NestedToolsetInputs {
+            authority: &authority,
+            governed: path.governed(),
+            policy: &policy,
+            connector: &connector,
+            mcp_tokens: &Map::new(),
+            artifacts: None,
+            index_tools: crate::toolkits::IndexToolSupport::Withheld(
+                crate::toolkits::IndexToolsWithheld::NoVectorToken,
+            ),
+        },
+        &errors(),
+    )
+    .await
+    .expect("withheld build");
+    assert!(withheld.configured.is_empty());
 }

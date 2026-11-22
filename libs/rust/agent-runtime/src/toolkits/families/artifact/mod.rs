@@ -53,6 +53,11 @@ pub struct ArtifactToolAuthority {
     office: Option<SharedOfficeToolHost>,
     web: Option<WebToolHost>,
     browser: Option<BrowserToolHost>,
+    /// FU-353 D4(a): when true (delegated/nested saved-agent or saved-pipeline
+    /// paths), every artifact tool pins its bucket strictly to the toolkit's
+    /// configured bucket and refuses cross-bucket `bucket_name`/`filepath`
+    /// overrides or new bucket creation.
+    pin_configured_bucket: bool,
 }
 
 impl ArtifactToolAuthority {
@@ -63,7 +68,23 @@ impl ArtifactToolAuthority {
             office: None,
             web: None,
             browser: None,
+            pin_configured_bucket: false,
         }
+    }
+
+    /// Restrict this authority so every artifact tool may access only the
+    /// toolkit's configured bucket (FU-353 D4(a)).
+    #[must_use]
+    pub const fn with_pinned_bucket(mut self) -> Self {
+        self.pin_configured_bucket = true;
+        self
+    }
+
+    /// Whether bucket overrides outside the toolkit's configured bucket are
+    /// refused.
+    #[must_use]
+    pub const fn is_bucket_pinned(&self) -> bool {
+        self.pin_configured_bucket
     }
 
     /// This authority with the web capability (#1238): the claim's meter and

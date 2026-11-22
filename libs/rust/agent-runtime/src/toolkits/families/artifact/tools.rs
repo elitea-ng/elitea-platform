@@ -286,6 +286,21 @@ pub(super) fn target_bucket(arguments: &Value, configured: &str) -> String {
     optional_string(arguments, "bucket_name").unwrap_or_else(|| configured.to_owned())
 }
 
+/// FU-353 D4(a): on a delegated/pinned authority, refuse any bucket override
+/// (`bucket_name` or `filepath` prefix) outside the toolkit's configured bucket.
+pub(super) fn check_bucket_scope(
+    authority: &ArtifactToolAuthority,
+    configured: &str,
+    requested: &str,
+) -> Result<(), String> {
+    if authority.is_bucket_pinned() && requested != configured {
+        return Err(format!(
+            "This delegated artifact toolkit is restricted to its configured bucket '{configured}' and cannot access another bucket."
+        ));
+    }
+    Ok(())
+}
+
 /// Strips the leading slash a model tends to add. Returns the key main
 /// addresses.
 ///
@@ -481,8 +496,12 @@ impl Tool for ListFilesTool {
                 "Could not list the files: the folder name is too long.".to_owned(),
             ));
         }
+        let bucket = target_bucket(&arguments, &self.bucket);
+        if let Err(refusal) = check_bucket_scope(&self.authority, &self.bucket, &bucket) {
+            return Ok(Value::String(refusal));
+        }
         let request = ArtifactListRequest {
-            bucket: target_bucket(&arguments, &self.bucket),
+            bucket,
             prefix: normalized_key(&folder),
             recursive: optional_bool(&arguments, "recursive").unwrap_or(false),
             limit: DEFAULT_LIST_LIMIT,
@@ -605,6 +624,9 @@ impl Tool for ReadFileTool {
             },
         };
         let (bucket, name) = target;
+        if let Err(refusal) = check_bucket_scope(&self.authority, &self.bucket, &bucket) {
+            return Ok(Value::String(refusal));
+        }
         if name.len() > MAX_FILENAME_BYTES {
             return Ok(Value::String(
                 "Could not read the file: the file name is too long.".to_owned(),
@@ -735,8 +757,12 @@ impl Tool for CreateFileTool {
                  characters this platform accepts in one write. Write less."
             )));
         }
+        let bucket = target_bucket(&arguments, &self.bucket);
+        if let Err(refusal) = check_bucket_scope(&self.authority, &self.bucket, &bucket) {
+            return Ok(Value::String(refusal));
+        }
         let request = ArtifactWriteRequest {
-            bucket: target_bucket(&arguments, &self.bucket),
+            bucket,
             name: normalized_key(&filename),
             content: filedata.to_owned(),
         };
@@ -774,6 +800,7 @@ impl CreateFileTool {
                     .to_owned(),
             );
         };
+        check_bucket_scope(&self.authority, &self.bucket, &bucket)?;
         match self
             .authority
             .writer()
@@ -836,8 +863,12 @@ impl Tool for DeleteFileTool {
                 "Could not delete the file: a non-empty filename is required.".to_owned(),
             ));
         };
+        let bucket = target_bucket(&arguments, &self.bucket);
+        if let Err(refusal) = check_bucket_scope(&self.authority, &self.bucket, &bucket) {
+            return Ok(Value::String(refusal));
+        }
         let request = ArtifactDeleteRequest {
-            bucket: target_bucket(&arguments, &self.bucket),
+            bucket,
             name: normalized_key(&filename),
         };
         match self.authority.writer().delete_artifact(&request).await {

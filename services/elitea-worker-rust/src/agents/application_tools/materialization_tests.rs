@@ -295,6 +295,7 @@ impl Fixture {
             THREAD.to_owned(),
             ApplicationMaterializationPath::default(),
             None,
+            crate::agents::pipeline::NestedPipelineCapabilities::default(),
         )
         .await
         .unwrap()

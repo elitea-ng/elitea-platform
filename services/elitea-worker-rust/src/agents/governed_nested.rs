@@ -33,7 +33,7 @@ use serde_json::{Map, Value};
 use super::runtime::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
 use crate::protocol::control::ClaimBoundRuntimeContextAuthority;
 use crate::toolkits::{
-    AdmittedToolSnapshot, DelegatedAuthorizationCatalog, IndexToolSupport, IndexToolsWithheld,
+    AdmittedToolSnapshot, ArtifactToolAuthority, DelegatedAuthorizationCatalog, IndexToolSupport,
     McpConnector, McpMaterializationError, ToolAdmissionPolicy, ToolsetMaterializationError,
     materialize_configured_toolsets_with_authorities_governed, materialize_governed_mcp_toolsets,
     materialize_mcp_toolsets_with_tokens_and_authorization,
@@ -60,6 +60,12 @@ pub(in crate::agents) struct NestedToolsetInputs<'a> {
     pub(in crate::agents) policy: &'a Arc<ToolAdmissionPolicy>,
     pub(in crate::agents) connector: &'a Arc<dyn McpConnector>,
     pub(in crate::agents) mcp_tokens: &'a Map<String, Value>,
+    /// FU-353 D4(a) / D6(a): plain pinned claim-bound artifact authority (no
+    /// Office/Web/Browser hosts) for delegated `artifact` toolkits.
+    pub(in crate::agents) artifacts: Option<&'a ArtifactToolAuthority>,
+    /// FU-353 D6(a): claim-bound index/memory toolkit support (vector token +
+    /// redeemed context) for delegated `memory` / index toolkits.
+    pub(in crate::agents) index_tools: IndexToolSupport<'a>,
 }
 
 /// Build the configured toolkits and MCP connections of `frozen`, governed
@@ -81,8 +87,8 @@ pub(in crate::agents) async fn materialize_nested_toolsets(
             frozen,
             inputs.policy,
             inputs.mcp_tokens,
-            None,
-            IndexToolSupport::Withheld(IndexToolsWithheld::NotServedOnThisPath),
+            inputs.artifacts,
+            inputs.index_tools,
             governed,
         )
         .await

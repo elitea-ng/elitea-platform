@@ -393,6 +393,34 @@ WHERE t.token_sha256 = $1
 	if !slices.Contains(sources, "memory") {
 		return facts, nil
 	}
+	// FU-353-07: re-evaluate live project folder visibility at introspection
+	// time so mid-run no_access revocation strips hidden memory toolkits
+	// immediately instead of relying only on admission-time filtering.
+	if len(memoryToolkits) > 0 {
+		sourcesRepo, srcErr := NewWorkerEgressSources(s.pool)
+		if srcErr != nil {
+			slog.WarnContext(ctx, "vector claim token: could not build visibility reader; memory toolkits withheld", "err", srcErr)
+			memoryToolkits = nil
+		} else {
+			hidden, hideErr := sourcesRepo.HiddenToolkits(ctx, int64(project), actorID, memoryToolkits)
+			if hideErr != nil {
+				slog.WarnContext(ctx, "vector claim token: could not read live hidden memory toolkits; memory toolkits withheld", "err", hideErr)
+				memoryToolkits = nil
+			} else if len(hidden) > 0 {
+				drop := make(map[int64]bool, len(hidden))
+				for _, id := range hidden {
+					drop[id] = true
+				}
+				visible := make([]int64, 0, len(memoryToolkits))
+				for _, id := range memoryToolkits {
+					if !drop[id] {
+						visible = append(visible, id)
+					}
+				}
+				memoryToolkits = visible
+			}
+		}
+	}
 	facts.MemoryToolkits = memoryToolkits
 	switch intent {
 	case MemoryIntentPersonalRead, MemoryIntentPersonalWrite:

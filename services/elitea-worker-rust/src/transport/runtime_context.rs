@@ -2003,6 +2003,12 @@ pub(crate) struct AgentMemoryRememberRequest {
     /// The run read tool or document output before this write: Main may
     /// only make the write pending for it, never active.
     pub(crate) from_tool_output: bool,
+    /// FU-353: omitted on root calls (strict version-skew compatibility with
+    /// older Main's `DisallowUnknownFields`); both set on nested agent calls.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) target_application_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) target_version_id: Option<u64>,
 }
 
 /// The recall tool's request.
@@ -2010,12 +2016,23 @@ pub(crate) struct AgentMemoryRememberRequest {
 pub(crate) struct AgentMemoryRecallRequest {
     pub(crate) query: String,
     pub(crate) limit: u32,
+    /// FU-353: omitted on root calls; both set on nested agent calls.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) target_application_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) target_version_id: Option<u64>,
 }
 
 /// The forget tool's request.
 #[derive(Clone, Debug, serde::Serialize)]
+#[allow(clippy::struct_field_names)] // Wire JSON field names match Main's RuntimeAgentMemoryForgetRequest.
 pub(crate) struct AgentMemoryForgetRequest {
     pub(crate) entry_id: String,
+    /// FU-353: omitted on root calls; both set on nested agent calls.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) target_application_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) target_version_id: Option<u64>,
 }
 
 /// The `hand_floor` tool's request (`RuntimeHandFloorRequest` in Main).

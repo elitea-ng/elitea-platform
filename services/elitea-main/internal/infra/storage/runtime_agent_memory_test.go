@@ -1,8 +1,11 @@
 package storage
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -11,14 +14,20 @@ import (
 
 // fakeAgentMemorySink records writes and answers with a fixed run.
 type fakeAgentMemorySink struct {
-	run       AgentMemoryRun
-	writes    []AgentMemoryWrite
-	active    []agentmemory.Candidate
-	insertErr error
-	forgotten []int64
+	run        AgentMemoryRun
+	writes     []AgentMemoryWrite
+	active     []agentmemory.Candidate
+	insertErr  error
+	resolveErr error
+	forgotten  []int64
+	lastTarget AgentMemoryTarget
 }
 
-func (f *fakeAgentMemorySink) ResolveAgentMemoryRun(context.Context, int64, string, uint64) (AgentMemoryRun, error) {
+func (f *fakeAgentMemorySink) ResolveAgentMemoryRun(_ context.Context, _ int64, _ string, _ uint64, target AgentMemoryTarget) (AgentMemoryRun, error) {
+	f.lastTarget = target
+	if f.resolveErr != nil {
+		return AgentMemoryRun{}, f.resolveErr
+	}
 	return f.run, nil
 }
 
@@ -170,5 +179,89 @@ func TestRuntimeAgentMemoryForgetNeedsWrites(t *testing.T) {
 	}
 	if _, err := agentMemoryService(t, sink, "c-1").Forget(context.Background(), ContentClaim{}, RuntimeAgentMemoryForgetRequest{EntryID: "x"}); !errors.Is(err, ErrContentRejected) {
 		t.Fatalf("bad id: %v", err)
+	}
+}
+
+func TestRuntimeAgentMemoryNestedTargetValidationAndSkew(t *testing.T) {
+	ctx := context.Background()
+	claim := ContentClaim{ExecutionID: "e-1", Generation: 1}
+
+	badTargets := []struct {
+		name string
+		app  int64
+		ver  int64
+	}{
+		{"only app id", 42, 0},
+		{"only version id", 0, 9},
+		{"negative app id", -1, 9},
+		{"negative version id", 42, -1},
+		{"overflow app id", math.MaxInt32 + 1, 9},
+		{"overflow version id", 42, math.MaxInt32 + 1},
+	}
+	for _, tc := range badTargets {
+		sink := &fakeAgentMemorySink{run: attendedRun()}
+		svc := agentMemoryService(t, sink, "c-1")
+		if _, err := svc.Remember(ctx, claim, RuntimeAgentMemoryRememberRequest{
+			Kind: "fact", Content: "note", TargetApplicationID: tc.app, TargetVersionID: tc.ver,
+		}); !errors.Is(err, ErrContentRejected) {
+			t.Fatalf("remember %s: want ErrContentRejected, got %v", tc.name, err)
+		}
+		if _, err := svc.Recall(ctx, claim, RuntimeAgentMemoryRecallRequest{
+			Query: "q", TargetApplicationID: tc.app, TargetVersionID: tc.ver,
+		}); !errors.Is(err, ErrContentRejected) {
+			t.Fatalf("recall %s: want ErrContentRejected, got %v", tc.name, err)
+		}
+		if _, err := svc.Forget(ctx, claim, RuntimeAgentMemoryForgetRequest{
+			EntryID: "5", TargetApplicationID: tc.app, TargetVersionID: tc.ver,
+		}); !errors.Is(err, ErrContentRejected) {
+			t.Fatalf("forget %s: want ErrContentRejected, got %v", tc.name, err)
+		}
+	}
+
+	// Valid nested target passes to sink and fails closed if sink returns another app.
+	mismatched := attendedRun()
+	mismatched.ApplicationID = 11 // root, not requested 42
+	sink := &fakeAgentMemorySink{run: mismatched}
+	if _, err := agentMemoryService(t, sink, "c-1").Recall(ctx, claim, RuntimeAgentMemoryRecallRequest{
+		Query: "q", TargetApplicationID: 42, TargetVersionID: 9,
+	}); !errors.Is(err, ErrContentUnauthorized) {
+		t.Fatalf("mismatched sink app id: want ErrContentUnauthorized, got %v", err)
+	}
+	if sink.lastTarget != (AgentMemoryTarget{ApplicationID: 42, VersionID: 9}) {
+		t.Fatalf("lastTarget = %+v, want {42 9}", sink.lastTarget)
+	}
+
+	// Matching nested target succeeds; unattended nested write lands pending (D3).
+	nestedRun := attendedRun()
+	nestedRun.ApplicationID = 42
+	nestedRun.DelegatedFromApplicationID = 11
+	nestedRun.Attended = false
+	sink = &fakeAgentMemorySink{run: nestedRun}
+	got, err := agentMemoryService(t, sink, "c-1").Remember(ctx, claim, RuntimeAgentMemoryRememberRequest{
+		Kind: "fact", Content: "nested note", TargetApplicationID: 42, TargetVersionID: 9,
+	})
+	if err != nil || got.Status != string(agentmemory.StatusPending) {
+		t.Fatalf("nested remember: got %+v, err %v", got, err)
+	}
+
+	// Strict JSON decoding (version-skew contract with content_server.go DisallowUnknownFields):
+	// old worker omits target fields (valid), new worker sends target fields (valid),
+	// unknown extra field fails closed.
+	for _, body := range []string{
+		`{"kind":"fact","content":"root note","about_user":false,"from_tool_output":false}`,
+		`{"kind":"fact","content":"nested note","about_user":false,"from_tool_output":false,"target_application_id":42,"target_version_id":9}`,
+	} {
+		var req RuntimeAgentMemoryRememberRequest
+		dec := json.NewDecoder(bytes.NewReader([]byte(body)))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil {
+			t.Fatalf("strict decode %s: %v", body, err)
+		}
+	}
+	var unknown RuntimeAgentMemoryRememberRequest
+	dec := json.NewDecoder(bytes.NewReader([]byte(`{"kind":"fact","content":"x","unexpected":1}`)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&unknown); err == nil {
+		t.Fatal("strict decode accepted unknown field")
 	}
 }

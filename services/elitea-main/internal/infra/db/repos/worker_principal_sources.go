@@ -226,8 +226,23 @@ func (s *WorkerEgressSources) HiddenToolkitsForUser(ctx context.Context, project
 	return s.hiddenToolkits(ctx, projectID, userID, nil)
 }
 
+// HiddenApplications answers which of applicationIDs project folder access
+// hides from userID (no_access override on 'agent', 'pipeline', or
+// 'application' entities, FU-353). Shares the exact 3-state folder access
+// probe as HiddenToolkits.
+func (s *WorkerEgressSources) HiddenApplications(ctx context.Context, projectID, userID int64, applicationIDs []int64) ([]int64, error) {
+	if userID <= 0 || len(applicationIDs) == 0 {
+		return nil, nil
+	}
+	return s.hiddenEntities(ctx, projectID, userID, applicationIDs, []string{"agent", "pipeline", "application"})
+}
+
 // hiddenToolkits reads the hidden toolkits; nil toolkitIDs means every toolkit.
 func (s *WorkerEgressSources) hiddenToolkits(ctx context.Context, projectID, userID int64, toolkitIDs []int64) ([]int64, error) {
+	return s.hiddenEntities(ctx, projectID, userID, toolkitIDs, []string{"toolkit", "mcp"})
+}
+
+func (s *WorkerEgressSources) hiddenEntities(ctx context.Context, projectID, userID int64, entityIDs []int64, entities []string) ([]int64, error) {
 	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
 	if err != nil {
 		return nil, err
@@ -255,24 +270,24 @@ END::integer`, name+".entity_folders", name+".social_folder_items", name+".folde
 SELECT DISTINCT item.entity_id::bigint
 FROM %[1]s.social_folder_items AS item
 JOIN %[1]s.folder_access_overrides AS access ON access.folder_id = item.folder_id
-WHERE item.entity IN ('toolkit', 'mcp')
+WHERE item.entity = ANY($3::text[])
   AND ($1::bigint[] IS NULL OR item.entity_id = ANY($1::bigint[]))
   AND access.user_id = $2
-  AND access.access_level = 'no_access'`, schema), toolkitIDs, userID)
+  AND access.access_level = 'no_access'`, schema), entityIDs, userID, entities)
 	if err != nil {
-		return nil, fmt.Errorf("worker delegation: read the hidden toolkits: %w", err)
+		return nil, fmt.Errorf("worker delegation: read the hidden entities: %w", err)
 	}
 	defer rows.Close()
 	var hidden []int64
 	for rows.Next() {
 		var id int64
 		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("worker delegation: read a hidden toolkit: %w", err)
+			return nil, fmt.Errorf("worker delegation: read a hidden entity: %w", err)
 		}
 		hidden = append(hidden, id)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("worker delegation: read the hidden toolkits: %w", err)
+		return nil, fmt.Errorf("worker delegation: read the hidden entities: %w", err)
 	}
 	return hidden, nil
 }
