@@ -69,7 +69,6 @@ impl JiraClientError {
         self.code
     }
 
-    #[cfg(test)]
     #[must_use]
     pub(crate) const fn retryable(&self) -> bool {
         self.retryable
@@ -429,6 +428,23 @@ impl JiraTransport for ReqwestJiraTransport {
             location,
         })
     }
+}
+
+/// Which REST root a bulk read goes to.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::toolkits) enum JiraRoot {
+    /// `/rest/api/{2,3}`.
+    Api,
+    /// `/rest/agile/1.0` (boards and sprints).
+    Agile,
+}
+
+/// The answer of one bulk read ([`JiraClient::read`]).
+pub(in crate::toolkits) enum JiraRead {
+    /// 2xx, with the parsed JSON body (`Null` when empty).
+    Accepted(Value),
+    /// A 4xx Jira refusal, as its bounded, control-free sentence.
+    Refused(String),
 }
 
 /// What one provider call came back as.
@@ -1394,6 +1410,76 @@ impl JiraClient {
                 status.canonical_reason().unwrap_or_default()
             ),
             effect,
+        )
+    }
+
+    /// The REST version this toolkit resolved (`config.api_version()`).
+    pub(in crate::toolkits) const fn rest_version(&self) -> JiraApiVersion {
+        self.config.api_version()
+    }
+
+    /// The credential check every operation starts with, for a reader that
+    /// does not go through [`JiraApi`] (`analyse_jira`): `Ok(None)` when the
+    /// credential works, the SDK's sentence when Jira refused it.
+    pub(in crate::toolkits) async fn check_access(
+        &self,
+    ) -> Result<Option<String>, JiraClientError> {
+        self.ensure_authenticated().await
+    }
+
+    /// One bounded GET for a bulk reader (`analyse_jira`): the path segments
+    /// are checked and percent-encoded, the query pairs appended, and a 4xx
+    /// Jira refusal comes back as its sentence rather than as an error.
+    pub(in crate::toolkits) async fn read(
+        &self,
+        root: JiraRoot,
+        segments: &[&str],
+        query: &[(&str, &str)],
+    ) -> Result<JiraRead, JiraClientError> {
+        for segment in segments {
+            validate_identifier(segment)?;
+        }
+        let mut url = match root {
+            JiraRoot::Api => self.api_url(self.version(), segments)?,
+            JiraRoot::Agile => {
+                let mut url = self.config.base_url().clone();
+                {
+                    let mut path = url
+                        .path_segments_mut()
+                        .map_err(|()| invalid_configuration())?;
+                    path.pop_if_empty();
+                    path.extend(["rest", "agile", "1.0"]);
+                    path.extend(segments);
+                }
+                url
+            }
+        };
+        if !query.is_empty() {
+            let mut pairs = url.query_pairs_mut();
+            for (name, value) in query {
+                pairs.append_pair(name, value);
+            }
+        }
+        Ok(match self.send(Method::GET, url, None, false).await? {
+            Reply::Accepted(value) => JiraRead::Accepted(value),
+            Reply::Refused(message) => JiraRead::Refused(message),
+        })
+    }
+
+    /// Jira Cloud's approximate issue count of a JQL query (`POST
+    /// search/approximate-count`, a read), or `None` when this Jira has no
+    /// such endpoint or refused the query.
+    pub(in crate::toolkits) async fn approximate_count(
+        &self,
+        jql: &str,
+    ) -> Result<Option<u64>, JiraClientError> {
+        let url = self.api_url(self.version(), &["search", "approximate-count"])?;
+        let body = json!({ "jql": jql });
+        Ok(
+            match self.send(Method::POST, url, Some(&body), false).await? {
+                Reply::Accepted(value) => value.get("count").and_then(Value::as_u64),
+                Reply::Refused(_) => None,
+            },
         )
     }
 

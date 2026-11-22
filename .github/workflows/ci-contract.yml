@@ -28,10 +28,14 @@ jobs:
   #    the agent-execution protocol contract. ──
   compile:
     name: Compile & Run
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
+    # eng-runner has no container engine. There every image below is empty, so
+    # GitHub creates no service, and .github/actions/native-services runs the
+    # same servers as processes at the same ports and credentials
+    # (scripts/ci/check-runner-routing.mjs poolEmptyImage; it checks the two agree).
     services:
       postgres:
-        image: postgres:18-trixie
+        image: ${{ !(vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'postgres:18-trixie' || '' }}
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -45,6 +49,18 @@ jobs:
           --health-retries=5
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume, and node for Azurite. Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          node: "true"
+      # eng-runner: the services block's PostgreSQL and the storage-test emulators
+      # as processes (in place of the compose steps below).
+      # Does nothing on a hosted runner, where the services block runs them.
+      - name: Start the services as processes (eng-runner)
+        uses: ./.github/actions/native-services
+        with:
+          postgres: "true"
+          storage: "true"
 
       - uses: actions/setup-go@v7
         with:
@@ -71,6 +87,7 @@ jobs:
       # deploy/docker-compose.storage-test.yml for why each healthcheck is
       # more involved than a bare wget.
       - name: Start storage emulators
+        if: runner.environment == 'github-hosted'
         run: docker compose -f deploy/docker-compose.storage-test.yml up -d --wait
 
       - name: Run contract tests
@@ -86,5 +103,11 @@ jobs:
           go test -v -count=1 -timeout=180s ./tests/contract/
 
       - name: Stop storage emulators
-        if: always()
+        if: runner.environment == 'github-hosted' && always()
         run: docker compose -f deploy/docker-compose.storage-test.yml down -v
+
+      # eng-runner: the logs of the services native-services started, when
+      # anything in the job failed. Does nothing on a hosted runner.
+      - name: Upload the service logs (eng-runner)
+        if: failure()
+        uses: ./.github/actions/native-services-logs

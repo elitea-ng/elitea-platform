@@ -2558,9 +2558,12 @@ export async function readAttachedToolkits(
  * The mock's host address. `deploy/docker-compose.standalone-full.yml`
  * publishes `STANDALONE_MOCK_PORT` for exactly this, and
  * `e2e/streaming/index.streaming.spec.ts` already reads the model journal the
- * same way.
+ * same way. STANDALONE_MOCK_ORIGIN replaces the whole origin: the native stack
+ * publishes nothing on localhost, and its llm-mock is `http://llm-mock:8090`
+ * (the pod's name map; ci-web-e2e-native.yml sets it).
  */
-const MOCK_HOST = `http://localhost:${process.env['STANDALONE_MOCK_PORT'] ?? '8090'}`;
+const MOCK_HOST =
+  process.env['STANDALONE_MOCK_ORIGIN'] || `http://localhost:${process.env['STANDALONE_MOCK_PORT'] ?? '8090'}`;
 
 /**
  * The `[[mock:call_tool …]]` contract, restated.

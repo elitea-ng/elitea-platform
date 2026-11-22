@@ -10,7 +10,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 
 import {
-  extractInformationFromCredentialError,
   SchemaField,
   useAvailableConfigurationsType,
   useConfigurationDetail,
@@ -23,6 +22,10 @@ import { t } from '@/shared/i18n';
 import type { ConfigSchemaNode, ConfigurationTypeDescriptor } from '@/features/credentials';
 
 import { credentialRequiredFields } from './CredentialFormSection';
+import { performSave } from './credentialSave';
+import type { SaveOutcome } from './credentialSave';
+import { microsoftTokenReader } from './microsoftCredentialToken';
+import { useSaveForSignIn, useSaveTarget } from './useSaveTarget';
 import { useCredentialConnectionTest } from './useCredentialConnectionTest';
 import { useCredentialDeleteGuard } from './useCredentialDeleteGuard';
 import { useTypeSections } from './useTypeSections';
@@ -70,93 +73,6 @@ export interface CredentialFormControllerProps {
 function findTypeDescriptor(list: readonly ConfigurationTypeDescriptor[] | undefined, type: string | undefined): ConfigurationTypeDescriptor | undefined {
   if (!type) return undefined;
   return list?.find((item) => item.type === type);
-}
-
-/**
- * `useCreateCredential.jsx`'s title fallback: `settings.elitea_title ||
- * \`${type}_${timestamp}\`` — same for update (`updated_configurartion_...`,
- * baseline's own typo not reproduced here since this port shares one title
- * builder for both paths; the value is a fallback default a user virtually
- * always overrides).
- *
- * `label` is a SECOND fallback this port adds ahead of the generated
- * timestamp, for the one case baseline's own `settings?.elitea_title`
- * genuinely has none to read: creating a brand-new credential, where no
- * stable key exists yet and the generic ToolBase form (out of this port's
- * scope, see `CredentialForm.tsx`'s disclosed-scope note) would otherwise
- * have slugified whatever the user just typed as the starting key. On
- * *edit*, `eliteaTitle` is seeded from the server and is basically never
- * empty in practice, so this fallback essentially never fires there —
- * `label` is deliberately still second (never first): a stable
- * non-empty `eliteaTitle` always wins, so an edit-save can never let a
- * rename creep into the lookup key other domains resolve this credential
- * by (finding A7-pages/1 — see `performSave`'s own `eliteaTitle` doc
- * comment).
- */
-function buildTitle(eliteaTitle: string | undefined, label: string, type: string): string {
-  if (eliteaTitle && eliteaTitle.trim() !== '') return eliteaTitle;
-  if (label && label.trim() !== '') return label;
-  return `${type}_${new Date().toISOString().slice(0, 19).replace(/[:-]/g, '')}`;
-}
-
-/** Maps a thrown `EliteaApiError` (see `shared/api/generated/mutator.ts`) onto the `{data:{message,field}}` shape `extractInformationFromCredentialError` expects. `unknown` in, since a caught value is never narrowed by TypeScript. */
-function toCredentialApiError(error: unknown): { readonly data?: { readonly message?: unknown; readonly field?: unknown } } {
-  if (typeof error !== 'object' || error === null || !('failure' in error)) return {};
-  const failure = (error as { failure?: unknown }).failure;
-  if (typeof failure !== 'object' || failure === null || !('body' in failure)) return {};
-  const body = (failure as { body?: unknown }).body;
-  if (typeof body !== 'object' || body === null) return {};
-  const record = body as Record<string, unknown>;
-  return { data: { message: record['error'] ?? record['message'], field: record['field'] } };
-}
-
-type SaveOutcome =
-  | { readonly status: 'ok'; readonly id?: string }
-  | { readonly status: 'fieldErrors'; readonly errors: Readonly<Record<string, string>> }
-  | { readonly status: 'genericError' };
-
-interface PerformSaveParams {
-  readonly mode: CredentialFormMode;
-  readonly projectId: string;
-  readonly type: string;
-  /** The freely-editable display name — always submitted as `label`, unmodified, exactly as typed (`hooks/credentials/useUpdateCredential.jsx`'s `getRequestBody`: `label: settings.label || ''`). */
-  readonly label: string;
-  /**
-   * The internally-stable lookup key other domains resolve this credential
-   * by. `undefined` on create (none exists yet — `buildTitle` derives one
-   * from `label`, matching `hooks/credentials/useCreateCredential.jsx`'s
-   * `settings?.elitea_title || \`${toolType}_${timestamp}\`` with no prior
-   * value to fall back to). On edit this is the value loaded from the
-   * server (seeded once by `useFormSeeding`, never re-derived from
-   * `label`) — submitted as-is, matching `useUpdateCredential.jsx`'s own
-   * `settings?.elitea_title || fallback-generated` (never `settings.label`).
-   */
-  readonly eliteaTitle: string | undefined;
-  readonly shared: boolean;
-  readonly data: Readonly<Record<string, unknown>>;
-  readonly schemaProperties: Readonly<Record<string, ConfigSchemaNode>>;
-  readonly createConfiguration: ReturnType<typeof useCreateConfiguration>;
-  readonly updateConfiguration: ReturnType<typeof useUpdateConfiguration>;
-}
-
-/** The create-vs-update dispatch + error-mapping, isolated from the hook so its own complexity is measured separately (§3.5). */
-async function performSave(params: PerformSaveParams): Promise<SaveOutcome> {
-  const { mode, projectId, type, label, eliteaTitle, shared, data, schemaProperties, createConfiguration, updateConfiguration } = params;
-  const body = { elitea_title: buildTitle(eliteaTitle, label, type), label, data, shared };
-  try {
-    // Captured on both branches (not just create): an edit-save's response
-    // carries the same row's id, and the caller (`save` below) treats the two
-    // uniformly — see `onSaved`'s doc comment on why the edit route also
-    // wants this to reveal the row's section on return.
-    const saved = mode.kind === 'edit' && mode.configId
-      ? await updateConfiguration.mutateAsync({ projectId, configId: mode.configId, body })
-      : await createConfiguration.mutateAsync({ projectId, body: { ...body, type } });
-    return { status: 'ok', ...(saved.id !== undefined ? { id: String(saved.id) } : {}) };
-  } catch (error) {
-    const { newErrors } = extractInformationFromCredentialError({ error: toCredentialApiError(error), schemaProperties, settings: data });
-    if (Object.keys(newErrors).length > 0) return { status: 'fieldErrors', errors: newErrors };
-    return { status: 'genericError' };
-  }
 }
 
 /** The saved row's id, or `undefined` on the create screen. A named function rather than an inline ternary in the hook body, for the same §3.5 complexity reason as `canSubmit` below. */
@@ -258,6 +174,9 @@ export function useCredentialFormController(props: CredentialFormControllerProps
    * deriving straight from the prop means there is nothing to resynchronise.
    */
   const effectiveType = mode.kind === 'edit' ? detail.data?.type : mode.credentialType;
+  const target = useSaveTarget(mode, detail.data);
+  const { saveMode, credentialUuid } = target;
+  const delegatedToken = useMemo(() => microsoftTokenReader(effectiveType, credentialUuid), [effectiveType, credentialUuid]);
   const typeDescriptor = findTypeDescriptor(availableTypes.data, effectiveType);
   // The wire schema nests the actual configurable fields one level down, at
   // `config_schema.properties.data.properties.<field>` — the top-level
@@ -298,7 +217,8 @@ export function useCredentialFormController(props: CredentialFormControllerProps
   // Collapses 4 separate `save` dependencies into 1 — keeps the `useCallback`
   // dependency array within the §3.5 budget (≤8 entries) without losing memoization correctness (this object is
   // itself re-derived only when one of the four fields actually changes).
-  const formValues = useMemo(() => ({ name, eliteaTitle, shared, data }), [name, eliteaTitle, shared, data]);
+  // A credential the sign-in created keeps the title that create wrote, whatever the name box says now.
+  const formValues = useMemo(() => ({ name, eliteaTitle: eliteaTitle ?? target.createdTitle, shared, data }), [name, eliteaTitle, target.createdTitle, shared, data]);
 
   /**
    * Reports the pick upward and nothing else — the caller owns the URL, and
@@ -327,6 +247,7 @@ export function useCredentialFormController(props: CredentialFormControllerProps
     configType: effectiveType,
     data,
     schemaProperties,
+    delegatedToken,
   });
   const { noteFieldChanged } = connectionTest;
 
@@ -335,12 +256,13 @@ export function useCredentialFormController(props: CredentialFormControllerProps
     setData((prev) => ({ ...prev, [fieldKey]: value }));
   }, [noteFieldChanged]);
 
-  const save = useCallback(() => {
-    if (!effectiveType) return;
+  /** One save for the Save button and for the sign-in: applies the server's field errors itself, and returns the outcome. */
+  const runSave = useCallback(async (): Promise<SaveOutcome | undefined> => {
+    if (!effectiveType) return undefined;
     setApiError('');
     setFieldErrors({});
-    void performSave({
-      mode,
+    const outcome = await performSave({
+      mode: saveMode,
       projectId: context.projectId,
       type: effectiveType,
       label: formValues.name,
@@ -350,16 +272,19 @@ export function useCredentialFormController(props: CredentialFormControllerProps
       schemaProperties,
       createConfiguration,
       updateConfiguration,
-    }).then((outcome) => {
-      if (outcome.status === 'ok') {
-        onSaved(outcome.id);
-      } else if (outcome.status === 'fieldErrors') {
-        setFieldErrors(outcome.errors);
-      } else {
-        setApiError(t('credentials.form.saveFailed', 'Failed to save credential'));
-      }
     });
-  }, [effectiveType, mode, context.projectId, formValues, schemaProperties, createConfiguration, updateConfiguration, onSaved]);
+    if (outcome.status === 'fieldErrors') setFieldErrors(outcome.errors);
+    if (outcome.status === 'genericError') setApiError(t('credentials.form.saveFailed', 'Failed to save credential'));
+    return outcome;
+  }, [effectiveType, saveMode, context.projectId, formValues, schemaProperties, createConfiguration, updateConfiguration]);
+
+  const save = useCallback(() => {
+    void runSave().then((outcome) => {
+      if (outcome?.status === 'ok') onSaved(outcome.id);
+    });
+  }, [runSave, onSaved]);
+
+  const saveForSignIn = useSaveForSignIn(runSave, target, mode);
 
   const remove = useCallback(() => {
     if (!mode.configId) return;
@@ -385,6 +310,10 @@ export function useCredentialFormController(props: CredentialFormControllerProps
     testResult: connectionTest.testResult,
     testMessage: connectionTest.testMessage,
     testDurationMs: connectionTest.testDurationMs,
+    signInRefused: connectionTest.signInRefused,
+    resetTest: connectionTest.resetResult,
+    credentialUuid,
+    saveForSignIn,
     missingForTest: connectionTest.missingForTest,
     isSaving,
     isTesting: connectionTest.isTesting,

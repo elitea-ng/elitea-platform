@@ -98,6 +98,11 @@
       "search_documents": "read",
       "search_records": "read"
     },
+    "analyse_jira": {
+      "get_jira_fields_overview": "read",
+      "get_jira_statuses": "read",
+      "get_number_off_all_issues": "read"
+    },
     "artifact": {
       "delete_file": "delete",
       "get_file_metadata": "read",
@@ -233,6 +238,7 @@
       "get_me": "read",
       "get_pull_request": "read",
       "get_workflow_logs": "read",
+      "get_workflow_runs": "read",
       "get_workflow_status": "read",
       "grep_file": "read",
       "list_branches_in_repo": "read",

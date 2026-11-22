@@ -22,6 +22,7 @@ import '@testing-library/jest-dom/vitest';
 import { installWebStorageShim } from '@/shared/lib/webstorage.testshim';
 
 import { handlers } from './msw/handlers/index';
+import { testTimeout } from './timeouts';
 
 // `findBy*`/`waitFor` give up after 1 s by default. CI runs this suite in five
 // shards on 4-vCPU runners with V8 coverage on, which makes a render several
@@ -31,7 +32,10 @@ import { handlers } from './msw/handlers/index';
 // generous ceiling here keeps that out of individual tests: a passing wait
 // still returns as soon as its assertion holds, and only a genuinely failing
 // one takes longer to report.
-configure({ asyncUtilTimeout: 5_000 });
+// [#coverage-pool] Scaled with the test budgets (see ./timeouts.ts): under
+// coverage the config multiplies `testTimeout` by the same factor, so the
+// wait ceiling keeps its ratio to the budget instead of shrinking against it.
+configure({ asyncUtilTimeout: testTimeout(5_000) });
 
 const shimmedStorages = installWebStorageShim();
 

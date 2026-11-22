@@ -18,6 +18,7 @@ import { usePipelineYamlStore } from '../model/pipelineYamlStore';
 import { dumpYaml } from '../lib/dumpYaml.helpers';
 import { EditorPanel } from './EditorPanel';
 import type { EditorPanelHandle } from './EditorPanel';
+import { testTimeout } from '@/test/timeouts';
 
 /**
  * A local, narrower stand-in for `shared/ui/lib/field/codeMirrorTestPolyfills`'s
@@ -236,7 +237,7 @@ describe('EditorPanel', () => {
     expect(await screen.findByText('Failed to load the flow editor', {}, { timeout: 20000 })).toBeInTheDocument();
     // Named by its visible text; the tooltip describes it (WCAG 2.5.3).
     expect(screen.getByRole('button', { name: 'Reload the page' })).toHaveAccessibleDescription('Reload page');
-  }, 30000);
+  }, testTimeout(30000));
 
   it('the error-boundary reload button calls window.location.reload', async () => {
     const reloadSpy = vi.fn();
@@ -248,7 +249,7 @@ describe('EditorPanel', () => {
     expect(reloadSpy).toHaveBeenCalledTimes(1);
 
     vi.unstubAllGlobals();
-  }, 10000);
+  }, testTimeout(10000));
 
   it('exposes onRcvAgentEvent/deleteAllRunNodes/fitView/onStopRun/hasRunsInProgress on the imperative ref, and none of them throw even though the flow pane failed to load', async () => {
     const ref = createRef<EditorPanelHandle>();
@@ -274,7 +275,7 @@ describe('EditorPanel', () => {
     });
     expect(await screen.findByRole('button', { name: 'Add node' })).toBeInTheDocument();
     expect(await screen.findByText('Failed to load the flow editor', {}, { timeout: 5000 })).toBeInTheDocument();
-  }, 10000);
+  }, testTimeout(10000));
 
   it('typing in the YAML editor commits the raw code to the store (onChangeCode)', async () => {
     const user = userEvent.setup();

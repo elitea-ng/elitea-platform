@@ -30,13 +30,14 @@ import { server } from '@/test/setup';
 
 import { Users } from './Users';
 import { renderSettingsRoute } from './__tests__/testRouter';
+import { testTimeout } from '@/test/timeouts';
 
 // The bulk-invite test mounts the real page with msw and drives a multi-row
 // batch through the dialog; on the coverage-instrumented CI runner that ran
 // past vitest's 5 s default (unit shard 2 on c6b757a2). Same treatment as
 // EditPipeline.test.tsx: wider async waits and a wider per-test limit.
-configure({ asyncUtilTimeout: 5_000 });
-vi.setConfig({ testTimeout: 30_000 });
+configure({ asyncUtilTimeout: testTimeout(5_000) });
+vi.setConfig({ testTimeout: testTimeout(30_000) });
 
 /** Measured members body: `{"rows":[…],"total":2}`. */
 const MEMBERS_BODY = {

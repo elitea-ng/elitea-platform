@@ -1,0 +1,127 @@
+package admin
+
+// The super_admin gate on identity trust (issue 2558, ADR-0059 R3B-1).
+//
+// # Why these writes are global-administrator writes
+//
+// Two admin surfaces decide who a person IS, not what they may do:
+//
+//   - an identity provider's trust fields (identityproviders.TrustChanges):
+//     whoever repoints the issuer, the metadata or the signing certificates at
+//     an identity provider they control can assert the subject of any account,
+//     a super_admin's included, and sign in as it;
+//   - a SCIM client: its holder pushes any user, itself included, into any
+//     bound group, and so into the role that group grants.
+//
+// Both are therefore equal to `super_admin`. Their route gates
+// (`runtime.plugins`, `admin.auth.users`) are held by `admin` too, so the
+// handler checks the caller's own administration set, read from the database
+// for each request (rolepolicy.ResolveCaller), for
+// rolepolicy.SuperAdminPermission. It fails closed: a caller that cannot be
+// read is refused with rolepolicy.CodeCallerUnresolved.
+//
+// # The refusal, and the audit rows
+//
+// The conventions are rolepolicy's (#2555): a 403 whose JSON carries `error`
+// and a stable `code`, and an annotation on the audit row the request
+// middleware writes for every admin write and every refusal (event type
+// `api`), so the row names the domain action rather than only the route. A
+// change that passes the gate is annotated too, with its own action.
+
+import (
+	"encoding/json"
+	"log/slog"
+	"net/http"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
+)
+
+// The refusal codes. Clients key their message on these, so they are stable.
+const (
+	// CodeIdentityTrustSuperAdminRequired: the save creates an identity
+	// provider or changes one of its trust fields, and the caller is not a
+	// super_admin.
+	CodeIdentityTrustSuperAdminRequired = "identity_provider_trust_super_admin_required"
+	// CodeIdentityRebindSuperAdminRequired: the caller is not a super_admin
+	// and asked to re-bind accounts to an identity provider.
+	CodeIdentityRebindSuperAdminRequired = "identity_binding_super_admin_required"
+	// CodeSCIMClientSuperAdminRequired: the caller is not a super_admin and
+	// asked to create, rotate or delete a SCIM client.
+	CodeSCIMClientSuperAdminRequired = "scim_client_super_admin_required"
+)
+
+// The audit actions of these writes.
+const (
+	AuditIdentityTrustRefused  = "identity_provider.trust_change_refused"
+	AuditIdentityTrustChanged  = "identity_provider.trust_changed"
+	AuditIdentityRebindRefused = "identity_binding.rebind_refused"
+	AuditIdentityRebound       = "identity_binding.rebound"
+	AuditSCIMClientRefused     = "scim_client.change_refused"
+	AuditSCIMClientCreated     = "scim_client.created"
+	AuditSCIMClientRotated     = "scim_client.rotated"
+	AuditSCIMClientDeleted     = "scim_client.deleted"
+)
+
+// trustGate describes one gated write.
+type trustGate struct {
+	code          string
+	message       string
+	refusedAction string
+	entityType    string
+	entityName    string
+	// fields are the trust fields the write changes, for the refusal body and
+	// the log line. Empty for a write that is gated as a whole.
+	fields []string
+}
+
+// requireSuperAdmin answers 403 and returns false unless the caller holds
+// rolepolicy.SuperAdminPermission.
+func (h *Handler) requireSuperAdmin(w http.ResponseWriter, r *http.Request, gate trustGate) bool {
+	caller, refusal := rolepolicy.ResolveCaller(r, h.resolver)
+	if refusal != nil {
+		refusal.Message = "your own permissions could not be read, so the change was refused"
+		writeTrustRefusal(w, r, gate, refusal)
+		return false
+	}
+	if caller.SuperAdmin {
+		return true
+	}
+	writeTrustRefusal(w, r, gate, &rolepolicy.Refusal{Code: gate.code, Message: gate.message})
+	return false
+}
+
+// writeTrustRefusal is rolepolicy.Write with this surface's audit action and
+// entity.
+func writeTrustRefusal(w http.ResponseWriter, r *http.Request, gate trustGate, refusal *rolepolicy.Refusal) {
+	audit.Annotate(r.Context(), audit.Annotation{
+		Action:     gate.refusedAction,
+		EntityType: gate.entityType,
+		EntityName: gate.entityName,
+	})
+	slog.WarnContext(r.Context(), "identity trust change refused: super_admin required",
+		"code", refusal.Code, "entity_type", gate.entityType, "entity", gate.entityName,
+		"fields", gate.fields, "method", r.Method, "path", r.URL.Path)
+
+	body := refusal.Body()
+	if len(gate.fields) > 0 {
+		body["fields"] = gate.fields
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusForbidden)
+	_ = json.NewEncoder(w).Encode(body)
+}
+
+// annotateTrustChange names an allowed change on the request's audit row, and
+// logs it at warning level: a trust change is rare and always worth reading.
+func annotateTrustChange(r *http.Request, action, entityType, entityName string, entityID *int64, fields []string) {
+	audit.Annotate(r.Context(), audit.Annotation{
+		Action:     action,
+		EntityType: entityType,
+		EntityID:   entityID,
+		EntityName: entityName,
+	})
+	slog.WarnContext(r.Context(), "identity trust changed by a super_admin",
+		"action", action, "entity_type", entityType, "entity", entityName, "fields", fields)
+}

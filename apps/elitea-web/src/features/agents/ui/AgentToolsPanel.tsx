@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useNavigate, useSearch } from '@tanstack/react-router';
 
@@ -180,8 +180,15 @@ export function AgentToolsPanel({ entity, versionTools, dirty, internalTools, on
 
   // The grants of this agent's edges, read only while it holds an agent or pipeline (ADR-0044 amendment 1).
   const holdsApplications = mirror.tools.some((tool) => tool.type === 'application');
-  const grants = useAgentDelegationGrants(projectId, entity.applicationId, holdsApplications);
+  const { grants, settled } = useAgentDelegationGrants(projectId, entity.applicationId, holdsApplications);
   const { reviewCalleeId, clearReview } = useDelegationDeepLink();
+  // A link naming a callee with no grant row (an edge made before grants existed) must not wait in the URL: a grant
+  // that appears later (an attach, a refetch) would open its dialog unprompted (#2236). Drop it once the tools and the
+  // grants have loaded with no match.
+  const unmatchedLink = reviewCalleeId !== undefined && versionTools !== undefined && settled && !grants.some((grant) => grant.callee_application_id === reviewCalleeId);
+  useEffect(() => {
+    if (unmatchedLink) clearReview();
+  }, [unmatchedLink, clearReview]);
   // Only the first row of the named callee opens (the same agent can be attached twice).
   const reviewTool = useMemo(
     () => (reviewCalleeId === undefined ? undefined : mirror.tools.find((tool) => tool.type === 'application' && Number(tool.settings?.application_id) === reviewCalleeId)),

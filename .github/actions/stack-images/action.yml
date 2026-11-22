@@ -1,11 +1,11 @@
 name: Stack images for a journey lane
 description: >-
   Puts every image the lane's compose files would build into the local store,
-  asserted: pulled by digest from ci-web-e2e.yml's build-once jobs when they
-  ran (pull-stack-images), or built in the job when they were skipped — a
-  fork's or Dependabot's pull request, whose token cannot push packages
-  (build-stack-images, load mode, reading the public registry cache and
-  writing nothing).
+  asserted: pulled by digest from ci-build-once.yml's jobs when they ran
+  (pull-stack-images), or built in the job when nothing was built — a fork's
+  or Dependabot's pull request, whose token cannot push packages, or a
+  workflow's own scheduled run (build-stack-images, load mode, reading the
+  public registry cache and writing nothing).
 #
 # One step per lane instead of a pull step and a build step with mirrored
 # `if:`s that could drift apart. The caller states which case it is in with
@@ -43,10 +43,13 @@ runs:
       with:
         compose-files: ${{ inputs.compose-files }}
         digests-pattern: ${{ inputs.digests-pattern }}
-    - name: Build the stack images in this job (fork or Dependabot pull request)
+    - name: Build the stack images in this job (nothing was built for this run)
       if: inputs.built != 'true'
       uses: ./.github/actions/build-stack-images
       with:
+        # Never a writer: the build-once jobs are the one writer of the layer
+        # cache and the mounts, and a scheduled caller (governed) runs on main.
+        cache-write: "false"
         compose-files: ${{ inputs.compose-files }}
         cache-hcl: ${{ inputs.cache-hcl }}
         targets: ${{ inputs.targets }}

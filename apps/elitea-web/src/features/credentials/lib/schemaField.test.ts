@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  checkboxOptionsOf,
   classifySchemaField,
   configurationSectionsOf,
   initialDataForSchema,
@@ -283,5 +284,46 @@ describe('initialDataForSchema', () => {
       name: '',
       supports_vision: true,
     });
+  });
+});
+
+/** The Microsoft credentials' own widgets (ADR-0057): the Default app picker and the scope tick boxes. */
+describe('Microsoft credential widgets', () => {
+  const APP = { anyOf: [{ type: 'string' }, { type: 'null' }], default: null, title: 'App', ui_component: 'oauth_app_select' };
+  const SCOPES = {
+    anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'null' }],
+    default: ['Mail.Read'],
+    ui_component: 'checkbox_list',
+    checkbox_options: [
+      { value: 'Mail.Read', label: 'Mail.Read', description: 'Read mail' },
+      { value: 'Mail.Send' },
+      { value: '' },
+      'not an object',
+    ],
+  };
+
+  it('classifies the Default app field and the scope list by their ui_component', () => {
+    expect(classifySchemaField('oauth_app_id', APP)).toBe('oauthApp');
+    expect(classifySchemaField('scopes', SCOPES)).toBe('checkboxList');
+  });
+
+  it('reads the tick boxes, dropping an entry without a value and defaulting the label and the help', () => {
+    expect(checkboxOptionsOf(SCOPES)).toEqual([
+      { value: 'Mail.Read', label: 'Mail.Read', description: 'Read mail' },
+      { value: 'Mail.Send', label: 'Mail.Send', description: '' },
+    ]);
+  });
+
+  it('is not a checkbox list without options, or without the ui_component', () => {
+    expect(checkboxOptionsOf({ ui_component: 'checkbox_list' })).toBeUndefined();
+    expect(checkboxOptionsOf({ ui_component: 'checkbox_list', checkbox_options: [] })).toBeUndefined();
+    expect(checkboxOptionsOf({ checkbox_options: [{ value: 'a' }] })).toBeUndefined();
+    // Free-text scopes (Microsoft Graph) stay a plain field.
+    expect(classifySchemaField('scopes', { anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'null' }], default: ['User.Read'] })).toBe('string');
+  });
+
+  it('seeds the scope default as the list, and the Default app as nothing chosen', () => {
+    expect(initialValueForSchemaField('scopes', SCOPES)).toEqual(['Mail.Read']);
+    expect(initialValueForSchemaField('oauth_app_id', APP)).toBeNull();
   });
 });

@@ -93,11 +93,36 @@ test("patterns: ** crosses directories, * does not, ! excludes, last match wins"
   assert.ok(reaches(["anything"], null));
 });
 
+test("computeRun: an `unless` job does not run where the job it names does", () => {
+  const t = { always: ["scripts/ci/tier-paths.json"], jobs: { go: { tier: "fast", paths: ["svc/**"] }, contract: { tier: "fast", paths: ["svc/tests/contract/**", "contract.yml"], unless: "go" } } };
+  assert.deepEqual(computeRun(t, ["svc/tests/contract/a_test.go"]), { go: true, contract: false });
+  assert.deepEqual(computeRun(t, ["contract.yml"]), { go: false, contract: true });
+  assert.deepEqual(computeRun(t, [], { everything: true }), { go: true, contract: false });
+  assert.throws(() => computeRun({ always: [], jobs: { c: { tier: "fast", paths: ["x"], unless: "nope" } } }, ["x"]), /unless names nope/);
+});
+
 test("computeRun: a change reaches only the jobs whose paths it matches; the tiering files reach all", () => {
   const t = { always: ["scripts/ci/tier-paths.json"], jobs: tiers.jobs };
   assert.deepEqual(computeRun(t, ["a/x.go"]), { a: true, b: true, h: false, g: false });
   assert.deepEqual(computeRun(t, ["scripts/ci/tier-paths.json"]), { a: true, b: true, h: true, g: true });
   assert.deepEqual(computeRun(t, [], { everything: true }), { a: true, b: true, h: true, g: true });
+});
+
+test("computeRun: a union entry runs exactly when one of its members does", () => {
+  const t = { always: ["scripts/ci/tier-paths.json"], jobs: { ...tiers.jobs, u: { tier: "heavy", union: ["h", "g"] } } };
+  assert.equal(computeRun(t, ["a/x.go"]).u, false);
+  assert.equal(computeRun(t, ["g/x.rs"]).u, true);
+  assert.equal(computeRun(t, ["scripts/ci/tier-paths.json"]).u, true);
+  assert.throws(() => computeRun({ always: [], jobs: { u: { tier: "heavy", union: ["nope"] } } }, []), /union names nope/);
+});
+
+test("the real tier file: ci-build-once runs for a Rust-only change, a chart change and a stack change, not for docs", () => {
+  const real = JSON.parse(fs.readFileSync(TIERS_FILE, "utf8"));
+  assert.equal(computeRun(real, ["services/elitea-vector/src/main.rs"])["ci-build-once"], true);
+  assert.equal(computeRun(real, ["libs/rust/agent-runtime/src/lib.rs"])["ci-build-once"], true);
+  assert.equal(computeRun(real, ["deploy/helm/elitea/values.yaml"])["ci-build-once"], true);
+  assert.equal(computeRun(real, ["services/elitea-main/cmd/elitea-main/main.go"])["ci-build-once"], true);
+  assert.equal(computeRun(real, ["apps/elitea-docs/src/content/docs/index.mdx"])["ci-build-once"], false);
 });
 
 test("the real tier file: a docs-only change reaches the docs job and not the Rust chains", () => {

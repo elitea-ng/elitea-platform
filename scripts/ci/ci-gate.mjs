@@ -13,9 +13,10 @@
 //                       gate names it and fails, so a check list that went green
 //                       by absence cannot reach a required check.
 //
-// `final` also fails while the pull request is a draft: the heavy tier has not
-// run, so the pull request has no verdict yet. That is the message an agent
-// reads before it marks a draft ready (AGENTS.md).
+// On a draft the ci-gate job does not run at all (ci.yml skips it, grey not red;
+// check-tiering.mjs holds that), and fast-gate is the draft's signal. `final`
+// still fails if it is ever evaluated for a draft: the heavy tier has not run,
+// so a draft has no verdict, and a skipped gate must not become a passing one.
 
 import fs from "node:fs";
 import path from "node:path";

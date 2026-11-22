@@ -402,6 +402,24 @@ function unconfiguredLiveToolkitSpecs(): RegExp[] {
   return ignored;
 }
 
+/**
+ * E2E_TIMEOUT_SCALE multiplies the per-test timeout (Playwright's 30 s
+ * default, and so test.slow()'s 90 s). It is 1 unless a lane sets it, and a
+ * lane that sets it says why in its workflow: today only the native legs
+ * (ci-web-e2e-native.yml), whose runner is a CPU-quota'd slice of a shared
+ * node. Expect and action timeouts written in a spec are not scaled. A value
+ * outside 1..3 is a mistake, not a tuning, and fails the run.
+ */
+const E2E_TIMEOUT_SCALE = (() => {
+  const raw = process.env['E2E_TIMEOUT_SCALE'];
+  if (raw === undefined || raw === '') return 1;
+  const scale = Number(raw);
+  if (!Number.isFinite(scale) || scale < 1 || scale > 3) {
+    throw new Error(`E2E_TIMEOUT_SCALE=${raw}: want a number from 1 to 3`);
+  }
+  return scale;
+})();
+
 const CHROMIUM_LAUNCH_OPTIONS = {
   args: ['--disable-web-security', '--allow-insecure-localhost', '--no-sandbox'],
 };
@@ -409,6 +427,7 @@ const CHROMIUM_LAUNCH_OPTIONS = {
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: true,
+  timeout: Math.round(30_000 * E2E_TIMEOUT_SCALE),
   forbidOnly: !!process.env['CI'],
   retries: process.env['CI'] ? 2 : 0,
   workers: process.env['CI'] ? 4 : undefined,

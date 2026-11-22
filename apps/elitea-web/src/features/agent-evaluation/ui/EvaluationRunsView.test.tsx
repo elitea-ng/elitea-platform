@@ -9,6 +9,7 @@ import { server } from '@/test/setup';
 
 import { renderWithEvaluationProviders } from '../__tests__/testUtils';
 import { EvaluationRunsView } from './EvaluationRunsView';
+import { testTimeout } from '@/test/timeouts';
 
 const BASE = '/api/v2';
 
@@ -505,5 +506,5 @@ describe('EvaluationRunsView', () => {
     }
     expect(screen.getByTestId('run-start-error')).toHaveTextContent('at most 5 dimensions');
     expect(screen.getByTestId('run-start')).toBeDisabled();
-  }, 20_000);
+  }, testTimeout(20_000));
 });

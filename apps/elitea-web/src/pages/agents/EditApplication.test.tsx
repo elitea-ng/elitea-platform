@@ -15,6 +15,7 @@ import { NavBlockerDialog, useNavBlockerStore } from '@/widgets/app-shell';
 
 import { EditApplication } from './EditApplication';
 import { renderAgentsRoute } from './__tests__/testRouter';
+import { testTimeout } from '@/test/timeouts';
 
 // Under CI's coverage shards this file runs ~5x slower than locally (241 s for
 // 36 tests on 2026-11-06, 313 s on 2026-11-11, single tests up to 24 s), and the
@@ -22,7 +23,7 @@ import { renderAgentsRoute } from './__tests__/testRouter';
 // has; no test sets a lower one. Element queries wait up to 15 s (below): a 5 s
 // first paint wait missed the toolbar's buttons on 2026-11-11 while the page was
 // still fetching, so the wait, not the page, failed.
-vi.setConfig({ testTimeout: 30_000 });
+vi.setConfig({ testTimeout: testTimeout(30_000) });
 
 /**
  * The agent's name is the shell's crumb (`Agents ▸ My Agent`), not a heading
@@ -65,8 +66,8 @@ installCodeMirrorTestPolyfills();
  * says so — `pages/pipelines/EditPipeline.test.tsx:21-30`. Same remedy, same
  * numbers, so the two composition-root suites cannot drift apart.
  */
-configure({ asyncUtilTimeout: 15_000 });
-vi.setConfig({ testTimeout: 30_000 });
+configure({ asyncUtilTimeout: testTimeout(15_000) });
+vi.setConfig({ testTimeout: testTimeout(30_000) });
 
 const globals = globalThis as unknown as Record<string, unknown>;
 
@@ -405,7 +406,7 @@ describe('EditApplication', () => {
     await viewer.findByTestId('version-selector-trigger', {}, { timeout: 15_000 });
     expect(viewer.queryByRole('button', { name: /save as version/i })).not.toBeInTheDocument();
     // Two mounts of up to 15s each equalled the 30s test budget: under the sharded coverage run it timed out.
-  }, 60_000);
+  }, testTimeout(60_000));
 
   it('clicking Cancel does not throw and keeps the page mounted', async () => {
     server.use(getGetApplicationMockHandler(detail()));
@@ -668,7 +669,7 @@ describe('EditApplication', () => {
     // `features/agents/ui/AgentVersionControls.test.tsx`.
     await userEvent.click(screen.getByTestId('version-selector-trigger'));
     expect(screen.getByTestId('agent-version-delete')).toBeVisible();
-  }, 60_000);
+  }, testTimeout(60_000));
   // ^ A scoped budget (see the rename test): under coverage this page's first
   // render alone took most of the file's 30s default on a loaded runner (PR 2066
   // CI, shard 5/5: the whole file ran 306s), so the 15s query plus the menu click

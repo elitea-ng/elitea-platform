@@ -23,14 +23,15 @@ description: >-
 #
 # ── Two modes ───────────────────────────────────────────────────────────────
 #
-# PUSH (ci-web-e2e.yml's build-once jobs): build the named targets once per
+# PUSH (ci-build-once.yml's jobs): build the named targets once per
 # commit and push each to `<push-prefix><image>:<push-tag>`; the digests go to
-# `digests-file` and every journey lane pulls them by digest through
-# .github/actions/pull-stack-images instead of building the stack itself.
+# `digests-file` and every consumer (the journey lanes, governed) pulls them
+# by digest through .github/actions/pull-stack-images instead of building the
+# stack itself.
 #
 # LOAD (the default; a fork pull request's lanes, which cannot write packages,
-# and the workflows outside ci-web-e2e.yml): build into the runner's image
-# store, as before.
+# and a consumer's run with nothing built for it): build into the runner's
+# image store, as before.
 #
 # ── What it does NOT change ─────────────────────────────────────────────────
 #

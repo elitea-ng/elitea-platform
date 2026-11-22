@@ -15,10 +15,10 @@ func (f fakePermissions) HasProjectPermission(_ context.Context, _, _ int64, per
 }
 
 type fakeVisibility struct {
-	hidden     []int64
-	references []string
-	err        error
-	reads      int
+	hidden []int64
+	uses   []ToolkitCredential
+	err    error
+	reads  int
 }
 
 func (f *fakeVisibility) HiddenToolkitsForUser(context.Context, int64, int64) ([]int64, error) {
@@ -26,14 +26,14 @@ func (f *fakeVisibility) HiddenToolkitsForUser(context.Context, int64, int64) ([
 	return f.hidden, f.err
 }
 
-func (f *fakeVisibility) UsableCredentialReferencesInProject(context.Context, int64) ([]string, error) {
+func (f *fakeVisibility) UsableCredentialsInProject(context.Context, int64) ([]ToolkitCredential, error) {
 	f.reads++
-	return f.references, f.err
+	return f.uses, f.err
 }
 
 func accessOf(t *testing.T, permissions fakePermissions, visibility *fakeVisibility, governed bool) interface {
 	HoldsToolkit(string) bool
-	HoldsCredential(string) bool
+	HoldsCredential(string, string) bool
 } {
 	t.Helper()
 	options := []DelegationAccessOption{}
@@ -85,34 +85,41 @@ func TestDelegationAccessIsPerCredential(t *testing.T) {
 	both := fakePermissions{DelegationToolkitPermission: true, credentialgrant.PermissionUse: true}
 
 	// Outside the governed profile the credential permission decides.
-	open := accessOf(t, both, &fakeVisibility{references: []string{"ref-a"}}, false)
-	if !open.HoldsCredential("ref-a") || !open.HoldsCredential("ref-b") {
+	open := accessOf(t, both, &fakeVisibility{uses: []ToolkitCredential{{ToolkitID: 7, Reference: "ref-a"}}}, false)
+	if !open.HoldsCredential("toolkit:7", "ref-a") || !open.HoldsCredential("toolkit:7", "ref-b") {
 		t.Error("ungoverned: the credential permission alone decides")
 	}
 
 	// Under it a reference no active use grant covers is not held, even with the
 	// permission: nobody can stand behind a reference that can never be used.
-	governed := accessOf(t, both, &fakeVisibility{references: []string{"ref-a", "0192F5E2-7C3A"}}, true)
-	if !governed.HoldsCredential("ref-a") {
+	governed := accessOf(t, both, &fakeVisibility{uses: []ToolkitCredential{{ToolkitID: 7, Reference: "ref-a"}, {ToolkitID: 8, Reference: "0192F5E2-7C3A"}}}, true)
+	if !governed.HoldsCredential("toolkit:7", "ref-a") {
 		t.Error("governed: a covered reference must be held")
 	}
-	if !governed.HoldsCredential("0192f5e2-7c3a") || !governed.HoldsCredential("0192F5E2-7C3A") {
+	if !governed.HoldsCredential("toolkit:8", "0192f5e2-7c3a") || !governed.HoldsCredential("toolkit:8", "0192F5E2-7C3A") {
 		t.Error("governed: references compare in lower case, whatever case either side spells them")
 	}
-	if governed.HoldsCredential("ref-b") {
+	if governed.HoldsCredential("toolkit:7", "ref-b") {
 		t.Error("governed: a reference with no use grant must not be held")
+	}
+	// #2215: the grant that covers a reference for toolkit 7 does not cover it for toolkit 8, or for a malformed key.
+	if governed.HoldsCredential("toolkit:8", "ref-a") || governed.HoldsCredential("toolkit:x", "ref-a") || governed.HoldsCredential("toolkit:", "ref-a") {
+		t.Error("governed: a reference is held per toolkit, not project-wide")
+	}
+	if !governed.HoldsCredential("builtin:calculator", "ref-a") {
+		t.Error("governed: a toolkit key with no id falls back to the project's covered references")
 	}
 
 	// And the permission is still required.
-	denied := accessOf(t, fakePermissions{DelegationToolkitPermission: true}, &fakeVisibility{references: []string{"ref-a"}}, true)
-	if denied.HoldsCredential("ref-a") {
+	denied := accessOf(t, fakePermissions{DelegationToolkitPermission: true}, &fakeVisibility{uses: []ToolkitCredential{{ToolkitID: 7, Reference: "ref-a"}}}, true)
+	if denied.HoldsCredential("toolkit:7", "ref-a") {
 		t.Error("no credential permission: nothing is held")
 	}
 }
 
 func TestDelegationAccessWithoutVisibilityIsTheTwoPermissions(t *testing.T) {
 	access := accessOf(t, fakePermissions{DelegationToolkitPermission: true, credentialgrant.PermissionUse: true}, nil, true)
-	if !access.HoldsToolkit("toolkit:8") || !access.HoldsCredential("ref-z") {
+	if !access.HoldsToolkit("toolkit:8") || !access.HoldsCredential("toolkit:8", "ref-z") {
 		t.Error("with no visibility reader the permissions decide")
 	}
 }

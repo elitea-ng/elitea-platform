@@ -8,6 +8,7 @@ import type { ConfigSchemaNode, ConfigSchemaSection, ConfigSchemaSubsection } fr
 import { RadioButtonGroup } from '@/shared/ui/RadioButtonGroup';
 
 import { CredentialSchemaField } from './CredentialFormFields';
+import { hasValue, useOfferedSubsections } from './MicrosoftCredentialFields';
 
 const ANONYMOUS_OPTION = 'none';
 const EMPTY_SUBSECTIONS: readonly ConfigSchemaSubsection[] = [];
@@ -23,22 +24,27 @@ export interface CredentialFormSectionProps {
   readonly projectId: string;
   /** #925/ELITEA-1069,1074: threaded to `CredentialSchemaField`'s secret-kind fields — see that prop's own doc comment. A section's auth subsections (e.g. GitHub's Token/Basic/App radio group) render THIS component's own `CredentialSchemaField` calls, a second call site `CredentialForm.tsx`'s direct property loop does not cover. */
   readonly isTeamProject?: boolean;
+  /** The credential type: a Microsoft section asks the Default app registry which apps serve it. */
+  readonly credentialType?: string;
   readonly onChange: (fieldKey: string, value: unknown) => void;
-}
-
-function hasValue(value: unknown): boolean {
-  return value !== null && value !== undefined && value !== '';
 }
 
 function fieldsOf(subsection: ConfigSchemaSubsection | undefined): readonly string[] {
   return subsection?.fields ?? [];
 }
 
-function inferSelection(subsections: readonly ConfigSchemaSubsection[], data: Readonly<Record<string, unknown>>): string | undefined {
+const NO_FIELDS: ReadonlySet<string> = new Set();
+
+/** The subsection the stored values point at: the one with the most filled fields. `ignored` fields are not evidence of a choice. */
+function inferSelection(
+  subsections: readonly ConfigSchemaSubsection[],
+  data: Readonly<Record<string, unknown>>,
+  ignored: ReadonlySet<string> = NO_FIELDS,
+): string | undefined {
   let selected: ConfigSchemaSubsection | undefined;
   let selectedCount = 0;
   for (const subsection of subsections) {
-    const count = fieldsOf(subsection).filter((field) => hasValue(data[field])).length;
+    const count = fieldsOf(subsection).filter((field) => !ignored.has(field) && hasValue(data[field])).length;
     if (count > selectedCount) {
       selected = subsection;
       selectedCount = count;
@@ -151,8 +157,9 @@ function initialOption(
   section: ConfigSchemaSection,
   subsections: readonly ConfigSchemaSubsection[],
   data: Readonly<Record<string, unknown>>,
+  ignored: ReadonlySet<string>,
 ): string {
-  const inferred = inferSelection(subsections, data);
+  const inferred = inferSelection(subsections, data, ignored);
   if (inferred) return inferred;
   if (sectionKey === 'auth' && section.required !== true) return ANONYMOUS_OPTION;
   return subsections[0]?.name ?? ANONYMOUS_OPTION;
@@ -171,10 +178,17 @@ export function CredentialFormSection({
   fieldErrors,
   projectId,
   isTeamProject,
+  credentialType,
   onChange,
 }: CredentialFormSectionProps): ReactNode {
-  const subsections = section.subsections ?? EMPTY_SUBSECTIONS;
-  const inferredOption = useMemo(() => initialOption(sectionKey, section, subsections, data), [sectionKey, section, subsections, data]);
+  const { subsections, appIds, ignored } = useOfferedSubsections({
+    subsections: section.subsections ?? EMPTY_SUBSECTIONS,
+    schemaProperties,
+    data,
+    credentialType,
+    projectId,
+  });
+  const inferredOption = useMemo(() => initialOption(sectionKey, section, subsections, data, ignored), [sectionKey, section, subsections, data, ignored]);
   const [selectedOption, setSelectedOption] = useState(inferredOption);
   const didSelectOption = useRef(false);
   const cachedValues = useRef<Record<string, Record<string, unknown>>>({});
@@ -188,6 +202,13 @@ export function CredentialFormSection({
     [selectedOption, subsections],
   );
   const selectedFields = fieldsOf(selectedSubsection);
+
+  // Default app mode with no app chosen yet: pick the first one on offer.
+  const appField = selectedFields.find((field) => schemaProperties[field]?.['ui_component'] === 'oauth_app_select');
+  const firstApp = appIds[0];
+  useEffect(() => {
+    if (appField !== undefined && firstApp !== undefined && !hasValue(data[appField])) onChange(appField, firstApp);
+  }, [appField, firstApp, data, onChange]);
 
   const options = useMemo(() => {
     const items = subsections.map((subsection) => ({ value: subsection.name, label: subsection.name }));
@@ -243,6 +264,7 @@ export function CredentialFormSection({
             required={required}
             projectId={projectId}
             {...(isTeamProject === undefined ? {} : { isTeamProject })}
+            {...(credentialType === undefined ? {} : { credentialType })}
             onChange={onChange}
           />
         );

@@ -32,6 +32,7 @@ import { SchemaField, useConfigurationsList } from '@/features/credentials';
 import type { ConfigSchemaNode } from '@/features/credentials';
 
 import { buildConfigurationReference, configurationReferenceTitle, toConfigurationReference } from './configurationReference';
+import { CheckboxListField, MicrosoftAppField } from './MicrosoftCredentialFields';
 
 export interface CredentialSchemaFieldProps {
   readonly fieldKey: string;
@@ -43,6 +44,8 @@ export interface CredentialSchemaFieldProps {
   readonly projectId: string;
   /** #925/ELITEA-1069,1074: scopes the secret field's "Create new secret" wording. Undefined when the caller has no notion of project scope (kept generic). */
   readonly isTeamProject?: boolean;
+  /** The credential type, for the Microsoft Default app picker (it asks the registry which apps serve the type). */
+  readonly credentialType?: string;
   readonly onChange: (fieldKey: string, value: unknown) => void;
 }
 
@@ -247,7 +250,8 @@ function schemaMaxLengthOf(property: ConfigSchemaNode | undefined): number | und
 
 function renderStringField({ fieldKey, property, value, error, onChange }: CredentialSchemaFieldProps, meta: CommonMeta): ReactNode {
   const enumValues = enumOptionsOf(property);
-  const text = typeof value === 'string' ? value : '';
+  // A list-valued field with no tick boxes (Microsoft Graph's free-text scopes) reads as its words.
+  const text = typeof value === 'string' ? value : Array.isArray(value) ? value.join(', ') : '';
   // A bounded text field (the llm_model `description`, 40 characters) gets
   // the input limit, which also stops a paste at the limit, and a
   // "N characters left" counter under it.
@@ -285,6 +289,33 @@ export function CredentialSchemaField(props: CredentialSchemaFieldProps): ReactN
         key={props.fieldKey}
         field={props}
         label={meta.label}
+      />
+    );
+  if (kind === 'oauthApp')
+    return (
+      <MicrosoftAppField
+        key={props.fieldKey}
+        label={meta.label}
+        required={props.required}
+        credentialType={props.credentialType}
+        projectId={props.projectId}
+        value={props.value}
+        onChange={(appId) => {
+          props.onChange(props.fieldKey, appId);
+        }}
+      />
+    );
+  if (kind === 'checkboxList')
+    return (
+      <CheckboxListField
+        key={props.fieldKey}
+        label={meta.label}
+        property={props.property}
+        value={props.value}
+        error={props.error}
+        onChange={(scopes) => {
+          props.onChange(props.fieldKey, scopes);
+        }}
       />
     );
   if (kind === 'configuration')

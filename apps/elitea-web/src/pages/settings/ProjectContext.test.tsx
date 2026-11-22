@@ -32,9 +32,10 @@ import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 import { server } from '@/test/setup';
 
 import { ProjectContext } from './ProjectContext';
+import { testTimeout } from '@/test/timeouts';
 
-configure({ asyncUtilTimeout: 5_000 });
-vi.setConfig({ testTimeout: 30_000 });
+configure({ asyncUtilTimeout: testTimeout(5_000) });
+vi.setConfig({ testTimeout: testTimeout(30_000) });
 
 const BASE = '/api/v2';
 const CONTEXT_PATH = `${BASE}/elitea_core/project_context/prompt_lib/:projectId/project-context`;

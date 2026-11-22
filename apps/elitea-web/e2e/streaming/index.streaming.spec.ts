@@ -84,9 +84,13 @@ import { BASE_URL } from '../../playwright.config';
 /**
  * The mock provider's request journal. Published by
  * `deploy/docker-compose.standalone-full.yml`; the port is overridable there
- * and here so two stacks can coexist.
+ * and here so two stacks can coexist. STANDALONE_MOCK_ORIGIN replaces the
+ * whole origin on the native stack, which publishes nothing on localhost
+ * (e2e/fixtures/api.ts MOCK_HOST).
  */
-const MOCK_JOURNAL_URL = `http://localhost:${process.env.STANDALONE_MOCK_PORT ?? '8090'}/__journal`;
+const MOCK_JOURNAL_URL = `${
+  process.env.STANDALONE_MOCK_ORIGIN || `http://localhost:${process.env.STANDALONE_MOCK_PORT ?? '8090'}`
+}/__journal`;
 
 /** One recorded upstream request. See `deploy/mock-llm/server.py`. */
 type JournalEntry = {

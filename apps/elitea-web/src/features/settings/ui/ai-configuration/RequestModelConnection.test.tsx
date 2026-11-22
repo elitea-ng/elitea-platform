@@ -35,6 +35,7 @@ import {
   RequestModelConnection,
   buildModelConnectionEntityId,
 } from './RequestModelConnection';
+import { testTimeout } from '@/test/timeouts';
 
 const BASE = '/api/v2';
 const PROJECT_ID = '1';
@@ -126,7 +127,7 @@ describe('buildModelConnectionEntityId', () => {
    removes the per-keystroke await (measured: tests 2.26s -> 1.97s locally),
    and this raises the ceiling to something the work fits under on a loaded
    runner. Neither weakens an assertion. */
-vi.setConfig({ testTimeout: 20_000 });
+vi.setConfig({ testTimeout: testTimeout(20_000) });
 
 describe('RequestModelConnection', () => {
   it('files a provider request on the catalogue create route, with only the two fields a requester owns', async () => {

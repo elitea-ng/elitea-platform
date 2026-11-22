@@ -33,17 +33,18 @@ import { createFakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
 import { clearNamespace } from '@/shared/lib/storage';
 import { server } from '@/test/setup';
 import { AppIpcProvider, DesktopFrame, useDesktopLayout } from '@/widgets/desktop-shell';
+import { testTimeout } from '@/test/timeouts';
 
 const BASE = '/api/v2';
 const globals = globalThis as unknown as Record<string, unknown>;
 const APP: Workspace = { id: 'w1', path: '/Users/me/code/app', name: 'app', project_id: 42, is_git: true };
 const CONVERSATION = { id: '72', name: 'quick overview', participants: [{ id: 7, entity_name: 'user', entity_meta: { id: 3 }, meta: { name: 'Me' } }] };
 
-vi.setConfig({ testTimeout: 30_000 });
+vi.setConfig({ testTimeout: testTimeout(30_000) });
 let asyncUtilTimeout = 1000;
 beforeAll(() => {
   asyncUtilTimeout = getConfig().asyncUtilTimeout;
-  configure({ asyncUtilTimeout: 10_000 });
+  configure({ asyncUtilTimeout: testTimeout(10_000) });
 });
 afterAll(() => configure({ asyncUtilTimeout }));
 

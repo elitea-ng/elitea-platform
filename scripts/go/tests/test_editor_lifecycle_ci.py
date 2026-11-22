@@ -89,7 +89,10 @@ class EditorLifecycleGateTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/ci-go.yml").read_text()
         job = workflow.split("  editor-lifecycle:\n", 1)[1].split("  integration:\n", 1)[0]
         for text in (
-            "image: postgres:18", "POSTGRES_DB: elitea_it_editor_lifecycle_20261002",
+            # The image is empty on eng-runner (check-runner-routing.mjs poolEmptyImage),
+            # where native-services starts the same PostgreSQL 18 on the same port.
+            "&& 'postgres:18' || '' }}", "POSTGRES_DB: elitea_it_editor_lifecycle_20261002",
+            'postgres-port: "15444"', "postgres-db: elitea_it_editor_lifecycle_20261002",
             "127.0.0.1:15444:5432", "timeout-minutes: 10", 'ELITEA_REQUIRE_EDITOR_POSTGRES_TEST: "true"',
             "@127.0.0.1:15444/elitea_it_editor_lifecycle_20261002?sslmode=disable",
             "bash scripts/go/editor-lifecycle-postgres.sh",

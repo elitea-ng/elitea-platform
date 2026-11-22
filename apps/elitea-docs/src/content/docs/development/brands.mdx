@@ -184,9 +184,9 @@ CI builds every client for `brand/sample` and fails when the output still shows 
 |---|---|---|
 | Web | CI — Web › Build › Sample-brand output scan | the app and the desktop bundle (`vite build`, and `--mode desktop`) |
 | Mobile | CI — Mobile app › Sample-brand output scan | the `expo export` bundle (Hermes bytecode, read through its strings) and the resolved `expo config` |
-| Desktop | CI — Desktop › Host › Sample-brand output scan | the host binary (a debug build, read through its strings) and `tauri.brand.json` |
+| Desktop | Desktop — package for device management › macOS › Sample-brand output scan (the pull-request dry run, built for brand/sample) | the packaged host binary (a debug build, read through its strings) and `tauri.brand.json` |
 
-A finding is a product word a person reads (`Elitea`, `ELITEA`, `EPAM`, `Epam`), `epam` in any form, or an ELITEA identifier from `brand/elitea/brand.json` (bundle ids, app group, schemes, domains, support address). Names in code are not findings: `EliteaAssistant`, `X-Elitea-*` header names, lower-case API paths and CSS classes. NOTICE and licence files are skipped.
+A finding is a product word a person reads (`Elitea`, `ELITEA`, `EPAM`, `Epam`), `epam` in any form, or an ELITEA identifier from `brand/elitea/brand.json` (bundle ids, app group, schemes, domains, support address). Names in code are not findings: `EliteaAssistant`, `X-Elitea-*` header names, lower-case API paths and CSS classes. NOTICE and licence files are skipped. Hashes are not text: the 8-character content hash in an asset name and the base64 body of a CSP source hash (`'sha256-…'`) are skipped. In a binary, `epam` counts only in a natural case (`epam`, `EPAM`, `Epam`) inside a printable string of at least 8 characters, because a packaged host carries compressed assets whose random bytes otherwise match a four-letter term about once per scan.
 
 When a step fails, read the name from the brand instead:
 

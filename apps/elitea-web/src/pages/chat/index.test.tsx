@@ -37,6 +37,7 @@ import { installTestEventSource } from '@/shared/api/sse/testing';
 import { server } from '@/test/setup';
 
 import ChatPage, { findActiveParticipantById } from './index';
+import { testTimeout } from '@/test/timeouts';
 
 /*
  * The conversation-detail request is the observable proof that the page
@@ -935,7 +936,7 @@ describe('ChatPage fresh-chat participant reload', () => {
       if (originalSelection === null) localStorage.removeItem(key);
       else localStorage.setItem(key, originalSelection);
     }
-  }, 15000);
+  }, testTimeout(15000));
 });
 
 /**

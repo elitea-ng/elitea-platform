@@ -1,0 +1,8 @@
+{
+  "name": "native-services-azurite",
+  "private": true,
+  "description": "Azurite for the storage emulators of .github/actions/native-services on eng-runner (the image ships no Node). Locked; installed with npm ci.",
+  "dependencies": {
+    "azurite": "3.38.0"
+  }
+}

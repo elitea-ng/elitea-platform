@@ -11,7 +11,7 @@ A Microsoft credential (Outlook, Teams, Microsoft Graph, Dataverse, SharePoint) 
 **Nothing is turned on by default.** While no app is registered, a credential form offers only Custom app, and nothing on this page is a prerequisite for it. To turn Default apps on later you do the Entra side below and then register one app, with no release, migration or feature flag.
 
 <Note>
-This release ships the registry and everything an Entra administrator needs to prepare. The sign-in window for Microsoft credentials, and the credential types themselves, arrive in the following releases of the same programme; an app registered now is ready for them. Until then the credential forms offer only what they offered before.
+The credential form signs people in on the web: see [Microsoft sign-in](/integrations/third-party-integrations/microsoft-sign-in). The desktop app's system-browser sign-in and the mobile app's sign-in arrive in a following release of the same programme, and so do the toolkits that use these credentials.
 </Note>
 
 The section is **Configuration › Microsoft apps** in the admin console and needs the `configuration.microsoft_apps` permission, which `super_admin` and `admin` hold. The mobile app has no admin portal: manage apps in the web console, or the desktop app, which shows the same console. People sign in on web, desktop and mobile with one flow and the same redirect URI.
@@ -138,4 +138,6 @@ microsoftOAuthApps:
 
 ## What people see
 
-In a credential form for a type the app serves, an **App** field offers **Custom app** and the apps that are active and available to the project. With no registered app the field does not appear.
+In a credential form for a type the app serves, a **Default app** choice lists the apps that are active and available to the project, next to **Custom app** (unless you turned it off). With no registered app there is no choice to make: the form shows only Custom app. A person signs in from the same form with **Save and sign in with Microsoft**, sees which account and tenant they signed in as and when the sign-in ends, and can **Sign in again** or **Sign out**; see [Microsoft sign-in](/integrations/third-party-integrations/microsoft-sign-in). A person who cannot update credentials in the project sees **Login managed by a project admin**.
+
+An Entra consent or Conditional Access prompt shows in the Microsoft window, not in Elitea. If a sign-in fails there, the credential form shows a message that says whether the account belongs to another tenant than a single-tenant app expects, lacks a permission, or cancelled.

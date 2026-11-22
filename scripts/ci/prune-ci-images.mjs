@@ -17,7 +17,7 @@
 // versions. A package that does not exist yet (a cache main has not written)
 // is skipped.
 //
-// ci-web-e2e.yml pushes every stack image it builds to `ci-<image>:<sha>` (one
+// ci-build-once.yml pushes every stack image it builds to `ci-<image>:<sha>` (one
 // version per commit) and, on a run on main, the layer cache to
 // `ci-cache-<image>:linux-amd64` (the tag moves; every move strands the previous
 // manifest as an untagged version); publish.yml does the same with

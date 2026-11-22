@@ -37,19 +37,26 @@ env:
 
 jobs:
   shared-crates:
-    name: Shared crates — rustdoc and tests
-    runs-on: ubuntu-latest
+    name: Shared crates — tests
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
     # 22 min measured cold for the first step alone (no cache under this
     # key yet); the agent-runtime steps reuse its build.
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
+      # eng-runner: caches and TMPDIR on the work volume, and rustup (none in
+      # its image). Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          rust: "true"
 
       - name: Assert the pinned toolchain
         working-directory: libs/rust
         run: bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
 
       - name: Free runner disk for the all-features build
+        # Hosted only: the pool builds on its 80 GiB work volume, and has no sudo.
+        if: runner.environment == 'github-hosted'
         # The all-features build of the workspace on top of main's restored
         # target/ ran the runner out of disk (ENOSPC in xberg-native-pdf,
         # PR #1561: a dependency refresh rebuilds most of the graph beside
@@ -66,15 +73,11 @@ jobs:
       # registry-only entry is 0.3-0.6 GiB of the 10 GB cap and saves about the
       # time cargo takes to fetch the crates. The budget goes to target caches.
 
-      # Formatting and Clippy (the workspace, and the two production feature
-      # sets of the agent runtime) run in ci-rust-lint.yml, in the fast tier.
-      - name: Shared crates — rustdoc, tests
+      # Formatting, Clippy and rustdoc (the workspace, and the two production
+      # feature sets of the agent runtime) run in ci-rust-lint.yml, in the fast tier.
+      - name: Shared crates — tests
         working-directory: libs/rust
-        env:
-          RUSTDOCFLAGS: "-D warnings"
-        run: |
-          cargo doc --locked --workspace --no-deps --all-features
-          cargo test --locked --workspace --all-targets --all-features
+        run: cargo test --locked --workspace --all-targets --all-features
 
       # The workspace run above links serde_json `preserve_order` (other
       # members enable it), which is how a desktop binary would link the
