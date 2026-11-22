@@ -36,12 +36,15 @@ const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 export function dmgSettings(brand, version) {
   if (!VERSION.test(String(version ?? ''))) throw new Error(`dmg settings: "${version}" is not X.Y.Z or X.Y.Z-pre`);
   const m = brand.manifest;
-  const own = brand.has('assets/macos/dmg-background.png') && brand.has('assets/macos/dmg-background@2x.png');
+  const has = ['assets/macos/dmg-background.png', 'assets/macos/dmg-background@2x.png'].map((p) => brand.has(p));
+  // One alone is a mistake brand-check reports; never drop the brand's artwork in silence.
+  if (has[0] !== has[1]) throw new Error(`dmg settings: ${brand.id} ships one of assets/macos/dmg-background.png and dmg-background@2x.png; it needs both, or neither`);
+  const own = has[0];
   return {
     volumeName: `${m.shortName} ${version}`,
     app: `${m.shortName}.app`,
     background: own ? 'brand' : 'hue',
-    window: { width: DMG_LAYOUT.width, height: DMG_LAYOUT.height },
+    window: { width: DMG_LAYOUT.width, height: DMG_LAYOUT.height, titleBar: DMG_LAYOUT.titleBar },
     iconSize: DMG_LAYOUT.iconSize,
     textSize: DMG_LAYOUT.textSize,
     appPosition: { ...DMG_LAYOUT.app },

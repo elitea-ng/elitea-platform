@@ -30,6 +30,8 @@ export const DMG_LAYOUT = Object.freeze({
   height: 400,
   iconSize: 128,
   textSize: 13,
+  // The window's frame is taller than the picture by its title bar.
+  titleBar: 28,
   app: Object.freeze({ x: 170, y: 185 }),
   applications: Object.freeze({ x: 490, y: 185 }),
 });

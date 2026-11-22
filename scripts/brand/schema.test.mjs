@@ -93,6 +93,9 @@ test('names and publisher', () => {
   assert.ok(hasError(validManifest({ productName: '' }), 'productName'));
   assert.ok(hasError(validManifest({ productName: ' Acme' }), 'productName'));
   assert.ok(hasError(validManifest({ shortName: 'x'.repeat(21) }), 'shortName'));
+  // The app bundle and the disk image volume take their name from it.
+  for (const bad of ['Acme/AI', 'Acme:AI', 'Acme "AI"', 'Acme\\AI']) assert.ok(hasError(validManifest({ shortName: bad }), 'shortName'), bad);
+  assert.ok(!hasError(validManifest({ shortName: "Acme & O'Brien" }), 'shortName'));
   assert.ok(hasError(validManifest({ publisher: undefined }), 'publisher'));
 });
 

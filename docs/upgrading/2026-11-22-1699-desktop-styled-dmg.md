@@ -13,8 +13,11 @@
     and checks its layout.
   - **A brand can ship its own background**: `assets/macos/dmg-background.png` (660x400, opaque) and
     `assets/macos/dmg-background@2x.png` (1320x800), drawn around the fixed layout (`scripts/brand/dmg.mjs`).
-    Both are optional; brand-check checks their size when present. Without them the build draws one from the brand's
-    hue.
+    Both are optional, but come as a pair: brand-check checks their size and alpha, and fails a brand that ships only
+    one. Without them the build draws one from the brand's hue.
+  - **`shortName` may no longer hold `/`, `:`, `"` or `\`**: it names the app bundle and the disk image volume, which
+    Finder's AppleScript addresses by name. brand-check fails a manifest that does.
+  - The signed macOS job's timeout is 150 minutes (it was 90): it now waits for three notarisations.
   - The keychain code `macos-pkg.sh` used is shared with the new `macos-dmg.sh` (`macos-keychain.sh`); the `.pkg` is
     signed as before.
 - **Who is affected.**
@@ -23,7 +26,7 @@
   - Anything that fetched the `.app.zip` from a release by name (a script, an MDM's URL): there is no such file from
     this release on.
   - Brand repositories: from a release with this change, their macOS job builds the `.dmg` too, and the template's
-    keep step keeps it.
+    keep step keeps it. A brand whose `shortName` holds one of the refused characters fails brand-check.
 - **What to do.**
   - Nothing for a running deployment.
   - Point a script or an MDM that downloaded the `.app.zip` at the `.pkg` (for silent installs) or the `.dmg`.

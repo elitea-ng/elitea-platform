@@ -139,6 +139,11 @@ export function checkBrand(dir, { reference = null } = {}) {
     errors.push(...checkAsset(spec, buf));
     hashes.set(spec.path, sha256(buf));
   }
+  // The disk image background comes as a pair or not at all: one alone would be
+  // dropped for a background drawn from the hue.
+  const dmgPair = ['macos/dmg-background.png', 'macos/dmg-background@2x.png'];
+  const dmgHave = dmgPair.filter((p) => existsSync(join(brand.assetsDir, p)));
+  if (dmgHave.length === 1) errors.push(`assets/${dmgPair.find((p) => !dmgHave.includes(p))}: missing; the disk image background needs both ${dmgPair.join(' and ')}, or neither`);
   const iconDoc = join(brand.assetsDir, 'ios/app.icon');
   if (existsSync(join(iconDoc, 'icon.json'))) {
     let doc = {};

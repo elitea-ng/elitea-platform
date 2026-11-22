@@ -126,6 +126,8 @@ test('the disk image background is optional, but a wrong size or alpha fails', (
   unlinkSync(join(dir, 'assets/macos/dmg-background@2x.png'));
   assert.ok(!errorsOf(dir).some((e) => e.includes('dmg-background')), 'a brand without one passes (one is drawn from its hue)');
   writeFileSync(join(dir, 'assets/macos/dmg-background.png'), solidPng(400, '#0E7490'));
+  assert.ok(errorsOf(dir).some((e) => e.startsWith('assets/macos/dmg-background@2x.png: missing; the disk image background needs both')), 'one alone fails');
+  writeFileSync(join(dir, 'assets/macos/dmg-background.png'), solidPng(400, '#0E7490'));
   writeFileSync(join(dir, 'assets/macos/dmg-background@2x.png'), solidPng(800, '#0E7490', { alpha: true }));
   const errs = errorsOf(dir);
   assert.ok(errs.some((e) => e.startsWith('assets/macos/dmg-background.png: is 400x400, must be 660x400')), errs.join('\n'));

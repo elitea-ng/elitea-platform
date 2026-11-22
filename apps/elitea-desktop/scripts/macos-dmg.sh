@@ -72,7 +72,11 @@ mkdir -p "$stage/.background"
 ditto "$app" "$stage/$app_name"
 ln -s /Applications "$stage/Applications"
 # One TIFF holding the 1x and @2x pictures: Finder picks the one for the display.
-tiffutil -cathidpicheck "$inputs/background.png" "$inputs/background@2x.png" -out "$stage/.background/background.tiff" >/dev/null 2>&1
+# Its own "images written" line is noise; its error is not (a picture it cannot read).
+if ! tiffutil -cathidpicheck "$inputs/background.png" "$inputs/background@2x.png" -out "$stage/.background/background.tiff" > "$work/tiffutil.log" 2>&1; then
+  cat "$work/tiffutil.log" >&2
+  echo "::error::tiffutil could not merge the brand's background.png and background@2x.png (660x400 and 1320x800 PNGs)" >&2; exit 1
+fi
 
 # A writable image with room for Finder's .DS_Store; HFS+, whose aliases Finder resolves
 # for the background picture.
@@ -80,15 +84,18 @@ megabytes=$(( $(du -sm "$stage" | cut -f1) + 32 ))
 hdiutil create -quiet -srcfolder "$stage" -volname "$vol" -fs HFS+ -fsargs "-c c=64,a=16,e=16" \
   -format UDRW -size "${megabytes}m" "$work/rw.dmg"
 attach_out="$(hdiutil attach -readwrite -noverify -noautoopen "$work/rw.dmg")"
-device="$(printf '%s\n' "$attach_out" | awk -F'\t' '/Apple_HFS/ { gsub(/[[:space:]]+$/, "", $1); print $1; exit }')"
+# The whole disk (/dev/diskN, the first line), not the HFS slice: detaching it
+# detaches the image, so `hdiutil convert` below never meets a busy file.
+device="$(printf '%s\n' "$attach_out" | awk 'NR == 1 { print $1; exit }')"
 mount="$(printf '%s\n' "$attach_out" | awk -F'\t' '/Apple_HFS/ { print $NF; exit }')"
+case "$device" in /dev/disk[0-9]*) ;; *) device="";; esac
 [ -n "$device" ] && [ -d "$mount" ] || { echo "::error::the writable image did not mount: $attach_out" >&2; exit 1; }
 [ "$mount" = "/Volumes/$vol" ] || { echo "::error::the image mounted at $mount, not /Volumes/$vol" >&2; exit 1; }
 
 width="$(setting window.width)"
 height="$(setting window.height)"
 # The window's bounds are its frame: the title bar sits above the picture.
-titlebar=28
+titlebar="$(setting window.titleBar)"
 left=200
 top=120
 script="$work/layout.applescript"
@@ -126,13 +133,21 @@ APPLESCRIPT
 
 styled=false
 for attempt in 1 2 3; do
+  # A fresh .DS_Store per attempt: a file a failed attempt left must not pass the wait below.
+  rm -f "$mount/.DS_Store"
   if osascript "$script" "$vol" "$app_name" "$left" "$top" "$((left + width))" "$((top + height + titlebar))" \
       "$(setting iconSize)" "$(setting textSize)" \
       "$(setting appPosition.x)" "$(setting appPosition.y)" \
       "$(setting applicationsPosition.x)" "$(setting applicationsPosition.y)"; then
-    # Finder writes the .DS_Store on its own time after the window closes.
-    for _ in $(seq 1 30); do
-      [ -f "$mount/.DS_Store" ] && break
+    # Finder writes the .DS_Store on its own time after the window closes, and may
+    # write it more than once: wait until it exists and has stopped changing.
+    last=""
+    for _ in $(seq 1 60); do
+      if [ -f "$mount/.DS_Store" ]; then
+        now="$(stat -f '%z %m' "$mount/.DS_Store")"
+        [ "$now" = "$last" ] && break
+        last="$now"
+      fi
       sleep 1
     done
     # The volume's icon: .VolumeIcon.icns at the root with the custom-icon flag on it.
@@ -141,7 +156,9 @@ for attempt in 1 2 3; do
     cp "$inputs/volume.icns" "$mount/.VolumeIcon.icns"
     SetFile -a C "$mount"
     sync
-    if node "$here/dmg-verify.mjs" "$mount" "$settings"; then
+    if [ "$(GetFileInfo -aC "$mount")" != 1 ]; then
+      echo "::warning::the volume's custom-icon flag did not stick"
+    elif node "$here/dmg-verify.mjs" "$mount" "$settings"; then
       styled=true
       break
     fi

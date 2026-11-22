@@ -49,7 +49,7 @@ The folder name is the brand id. Any other file at the top fails the check (OS f
 | --- | --- | --- |
 | `formatVersion` | `1` | `1` |
 | `id` | 2 to 32 characters: a lowercase letter, then letters, digits or `-`; equals the folder name | `elitea` |
-| `productName`, `shortName` | Up to 40 and 20 characters | `Elitea AI`, `Elitea` |
+| `productName`, `shortName` | Up to 40 and 20 characters; `shortName` without `/`, `:`, `"` or `\` (it names the app bundle and the disk image volume) | `Elitea AI`, `Elitea` |
 | `publisher` | The publisher's legal name (bundle copyright, installers) | `EPAM Systems` |
 | `mobile.bundleId` | iOS bundle id and Android package: reverse-DNS, three or more labels, each a lowercase letter then letters or digits, no Java keyword. **Permanent** | `ai.elitea.app` |
 | `mobile.connectSchemes` | Custom URI schemes for connect links; not `http`, `https` or another well-known scheme | `["elitea"]` |
@@ -165,7 +165,7 @@ The macOS release carries a styled disk image next to the `.pkg`. Opening it sho
 - `assets/macos/dmg-background.png`, 660x400 pixels, opaque, and `assets/macos/dmg-background@2x.png`, 1320x800, for Retina displays. The build merges the two into one TIFF; Finder shows the one that fits the display.
 - Leave room for the two icons and their labels at those positions, and draw the hint between them (an arrow, say). No text is needed: the labels are Finder's.
 - The background is a still picture, but Finder writes the icon labels black in light mode and white in dark mode. Keep the canvas mid-tone, so both read: `brand/elitea` and `brand/sample` keep every pixel between relative luminance 0.17 and 0.20, where black and white text both keep a contrast of 4.2:1 or more.
-- Without the two files, the build draws a background from `brand.hue` (a wash from the hue to slate, with the arrow). `brand-check` checks the size and the alpha of the files when they are there.
+- Ship both files or neither. Without them, the build draws a background from `brand.hue` (a wash from the hue to slate, with the arrow). `brand-check` checks their size and alpha, and fails a brand that ships only one.
 
 `node scripts/brand/dmg.mjs brand/<id> --from #rrggbb --to #rrggbb` writes the two files from two colours, as the built-in brands do: `brand/elitea` from the tokens' indigo to violet (`libs/ts/client-core/src/brand/tokens.json`, checked by `scripts/brand/elitea-sync.test.mjs`), `brand/sample` from its two placeholder colours (`placeholder-assets.mjs`).
 

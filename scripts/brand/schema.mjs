@@ -221,6 +221,9 @@ export function validateManifest(m) {
 
   if (!isText(m.productName, 40)) fail('productName', 'must be 1 to 40 characters, no surrounding spaces');
   if (!isText(m.shortName, 20)) fail('shortName', 'must be 1 to 20 characters, no surrounding spaces');
+  // It names the app bundle (`<shortName>.app`) and the disk image's volume, which
+  // Finder's AppleScript addresses by name: no path separator, colon, quote or backslash.
+  else if (/[/:"\\]/.test(m.shortName)) fail('shortName', 'must not hold "/", ":", "\\"" or "\\\\": it names the app bundle and the disk image volume');
   if (!isText(m.publisher, 120)) fail('publisher', 'must be the publisher\'s legal name, 1 to 120 characters');
 
   // mobile

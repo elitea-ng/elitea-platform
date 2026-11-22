@@ -226,11 +226,15 @@ runs:
         APPLE_CERTIFICATE_PASSWORD: ${{ steps.plan.outputs.sign == 'true' && inputs.apple-certificate-password || '' }}
         APPLE_API_KEY: ${{ steps.plan.outputs.sign == 'true' && inputs.apple-api-key || '' }}
         APPLE_API_ISSUER: ${{ steps.plan.outputs.sign == 'true' && inputs.apple-api-issuer || '' }}
+        # The full release version (a nightly keeps its `-nightly.…`; tauri.conf.json
+        # holds X.Y.Z alone), so two nightlies never share a volume name.
+        VERSION: ${{ inputs.version }}
       run: |
         set -euo pipefail
+        version="${VERSION:-$DESKTOP_VERSION}"
         inputs="$RUNNER_TEMP/dmg-inputs"
-        node scripts/dmg-settings.mjs "$inputs" "$DESKTOP_VERSION"
-        dmg="$RUNNER_TEMP/out/${DESKTOP_APP%.app}-${DESKTOP_VERSION}-arm64.dmg"
+        node scripts/dmg-settings.mjs "$inputs" "$version"
+        dmg="$RUNNER_TEMP/out/${DESKTOP_APP%.app}-${version}-arm64.dmg"
         bash scripts/macos-dmg.sh "${DESKTOP_BUNDLE}/${DESKTOP_APP}" "$inputs" "$dmg"
         {
           echo "path=$dmg"
@@ -252,6 +256,8 @@ runs:
         hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "$mnt" "$DMG" >/dev/null
         status=0
         node "$ELITEA_ROOT/apps/elitea-desktop/scripts/dmg-verify.mjs" "$mnt" "$SETTINGS" || status=$?
+        # The volume shows its .VolumeIcon.icns only with the custom-icon flag on its root.
+        if [ "$(GetFileInfo -aC "$mnt")" != 1 ]; then echo "dmg layout: the volume's custom-icon flag is off"; status=1; fi
         ls -la "$mnt"
         hdiutil detach "$mnt" -quiet || hdiutil detach "$mnt" -force -quiet
         [ "$status" -eq 0 ] || { echo "::error::$(basename "$DMG") is not laid out as the brand's settings say"; exit 1; }

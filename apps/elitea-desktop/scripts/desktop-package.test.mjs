@@ -197,7 +197,8 @@ test('macOS ships a styled, signed .dmg and the .pkg; the zipped app is gone', (
   for (const keep of [macos, template]) assert.match(keep, /package-dir \}\}\/\*\.dmg/);
   // The action builds the image from the brand's settings, signs it with the Application identity,
   // and proves the finished image: its layout mounted read-only, then Gatekeeper and the ticket.
-  assert.match(action, /node scripts\/dmg-settings\.mjs "\$inputs" "\$DESKTOP_VERSION"/);
+  // The full release version names the volume (a nightly keeps its suffix).
+  assert.match(action, /version="\$\{VERSION:-\$DESKTOP_VERSION\}"\n {8}inputs="\$RUNNER_TEMP\/dmg-inputs"\n {8}node scripts\/dmg-settings\.mjs "\$inputs" "\$version"/);
   assert.match(action, /bash scripts\/macos-dmg\.sh "\$\{DESKTOP_BUNDLE\}\/\$\{DESKTOP_APP\}" "\$inputs" "\$dmg"/);
   assert.match(action, /DMG_SIGNING_IDENTITY: \$\{\{ steps\.plan\.outputs\.sign == 'true' && inputs\.apple-signing-identity \|\| '' \}\}/);
   assert.match(action, /hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "\$mnt" "\$DMG"/);
