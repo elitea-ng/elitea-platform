@@ -61,6 +61,11 @@ async function offLadder(page: Page): Promise<Offender[]> {
         if (style.visibility === 'hidden' || style.display === 'none' || Number(style.opacity) === 0) continue;
         const box = element.getBoundingClientRect();
         if (box.width === 0 || box.height === 0) continue;
+        // Screen-reader-only text (MUI `visuallyHidden`: a 1px clipped box) is
+        // never painted, so it has no size to hold to the ladder. It inherits
+        // whatever its host has, e.g. a button's 13.33px UA default for the
+        // chat rail's "Finished" glyph label.
+        if (box.width <= 1 && box.height <= 1 && style.overflow === 'hidden') continue;
         const size = Math.round(Number.parseFloat(style.fontSize) * 100) / 100;
         if (!ladder.includes(size)) {
           out.push({

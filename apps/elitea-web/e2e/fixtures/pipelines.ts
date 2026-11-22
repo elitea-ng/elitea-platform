@@ -440,7 +440,7 @@ const AUTHORED_NODES = '.react-flow__node:not([data-id="END"])';
 /**
  * Add one node of `label` through the editor's own Add-node menu (no store pokes), and settle on the canvas holding it.
  *
- * The menu is a MUI `Menu` whose paper grows in: a CSS transition from `scale(0.75, 0.5625)`, anchored top right, with
+ * The palette is a MUI `Popover` whose paper grows in: a CSS transition from `scale(0.75, 0.5625)`, anchored top right, with
  * opacity from 0. Playwright's "stable" check can pass on the first frames, before the transition has started, and a
  * click is two input events. On a CPU-starved runner the item moves between them: the `mousedown` lands on it (it takes
  * focus) and the `mouseup` lands elsewhere, so no `click` fires. The menu then stays open with the item focused and no
@@ -461,16 +461,17 @@ export async function addNodeThroughMenu(page: Page, label: string): Promise<voi
   // is added, so it would appear together with that node and read as two.
   const nodes = page.locator(AUTHORED_NODES);
   const before = await settledNodeCount(page);
+  // The palette is a Popover whose paper carries the id itself (#2719); it
+  // was a Menu with the id on a wrapper and a `.MuiMenu-paper` child before.
   const menu = page.locator('#pipeline-add-node-menu');
-  const paper = menu.locator('.MuiMenu-paper');
   await expect(async () => {
     if ((await nodes.count()) > before) return;
     // By test id: a role name of 'Add node' also matches the empty canvas's
     // own "Add Node" button (role names match case-insensitively), which
     // opens the same menu from a different anchor.
     if ((await menu.count()) === 0) await page.getByTestId('pipeline-add-node-button').click({ timeout: 5_000 });
-    await expect(paper, 'the Add-node menu must finish growing in before an item is clicked').toHaveCSS('transform', 'none', { timeout: 5_000 });
-    await paper.getByRole('menuitem', { name: label, exact: true }).click({ timeout: 5_000 });
+    await expect(menu, 'the Add-node menu must finish growing in before an item is clicked').toHaveCSS('transform', 'none', { timeout: 5_000 });
+    await menu.getByRole('menuitem', { name: label, exact: true }).click({ timeout: 5_000 });
     await expect(nodes).toHaveCount(before + 1, { timeout: 3_000 });
   }, `the ${label} item of the Add-node menu must add a node`).toPass({ timeout: 30_000 });
   await expect(menu, `the ${label} item must close the Add-node menu`).toHaveCount(0);
