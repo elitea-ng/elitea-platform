@@ -325,4 +325,25 @@ describe('ConfigurationTab', () => {
       expect(setFieldValue).toHaveBeenCalledWith('version_details.tools', [{ ...mcpTool, online: true }]),
     );
   });
+
+  it('stacks panels cleanly without overlap below 1200px while keeping desktop >= 1200px layout intact', async () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, writable: true, value: 960 });
+    renderConfigurationTab();
+    const configPane = await screen.findByTestId('pipeline-config-tab');
+    const mainRow = configPane.parentElement as HTMLElement;
+    const splitBox = mainRow.children[1] as HTMLElement;
+    const editorBox = splitBox.children[0] as HTMLElement;
+    const chatBox = splitBox.children[1] as HTMLElement;
+
+    expect(getComputedStyle(mainRow).flexDirection).toBe('column');
+    expect(getComputedStyle(mainRow).overflow).toBe('scroll');
+    expect(getComputedStyle(configPane).minWidth).toBe('100%');
+    expect(getComputedStyle(configPane).overflowY).toBe('visible');
+    expect(getComputedStyle(configPane).flexShrink).toBe('0');
+    expect(getComputedStyle(splitBox).flexDirection).toBe('column');
+    expect(getComputedStyle(editorBox).maxWidth).toBe('100%');
+    expect(getComputedStyle(editorBox).minWidth).toBe('100%');
+    expect(getComputedStyle(chatBox).height).toBe('auto');
+    expect(getComputedStyle(screen.getByTestId('pipeline-chat-content')).overflowY).toBe('visible');
+  });
 });

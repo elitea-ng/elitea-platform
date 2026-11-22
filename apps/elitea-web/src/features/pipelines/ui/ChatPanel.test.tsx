@@ -236,4 +236,14 @@ describe('ChatPanel', () => {
     ref.current?.stopRun();
     expect(stopAll).toHaveBeenCalled();
   });
+
+  it('uses auto height and visible overflow on narrow viewports (< 1200px) so stacked panels never overlap', async () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, writable: true, value: 900 });
+    renderChatPanel();
+    const content = await screen.findByTestId('pipeline-chat-content');
+    const container = content.parentElement as HTMLElement;
+    expect(getComputedStyle(container).minWidth).toBe('100%');
+    expect(getComputedStyle(container).height).toBe('auto');
+    expect(getComputedStyle(content).overflowY).toBe('visible');
+  });
 });
