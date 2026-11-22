@@ -7309,5 +7309,12 @@
   "pipelines.nodeConfigPanel.flowView": "Flow view",
   "pipelines.nodeConfigPanel.makeEntrypoint": "Make Entrypoint",
   "pipelines.nodeConfigPanel.viewMode": "Node configuration view mode",
-  "pipelines.nodeConfigPanel.yamlView": "YAML view"
+  "pipelines.nodeConfigPanel.yamlView": "YAML view",
+  "pipelines.flowEditor.state.collapseGroup": "Collapse {{groupLabel}} ({{count}} steps)",
+  "pipelines.flowEditor.state.expandAllSteps": "Expand all steps",
+  "pipelines.flowEditor.state.expandGroup": "Expand {{groupLabel}} ({{count}} steps)",
+  "pipelines.flowEditor.state.supportRefLabel": "Support ref: {{ref}}",
+  "pipelines.flowEditor.state.timelineGroupStepCount": "{{count}} steps",
+  "pipelines.flowEditor.state.timelineGroupStepCountInGroup": "{{count}} steps in {{groupLabel}}",
+  "pipelines.flowEditor.state.timelineRegionLabel": "Pipeline timeline steps"
 }
