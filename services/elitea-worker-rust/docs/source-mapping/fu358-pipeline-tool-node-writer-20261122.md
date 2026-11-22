@@ -91,9 +91,16 @@ All run against `services/elitea-worker-rust` with `--offline --locked --all-fea
 
 ## Fixtures and real-browser evidence
 
-- Fixtures: synthetic pipeline YAML definitions, fake Main claim authority, and fake model gateway against real PostgreSQL 18 (`IsolatedPostgres`).
-- Real-browser evidence: pending (no Docker image build or disposable stack run in this branch; deferred to PR / stack verification pass on shape 888 and 889).
+- Fixtures (unit/PG): synthetic pipeline YAML definitions, fake Main claim authority, and fake model gateway against real PostgreSQL 18 (`IsolatedPostgres`).
+- **Live browser + PostgreSQL stack proof (`fuwave`, `production-profile` real-model stack):**
+  - **Stack & images:** Disposable stack `fuwave` at `http://fuwave.localhost:18460/app/` (`--port-base 18460`, dump `product-real-models-main-ce2756fad.dump`, `verify-profile`: `50 passed, 0 failed`), torn down cleanly (`--volumes`, `0` remaining containers). Verified images (`binary-check` PASS): Main `ghcr.io/elitea-ng/elitea-main:fuwave-eeac76f35` (`id=942944df2a6defde2fb9010f5cd6a4b5e82e080e80c5bcd292a327d2c535afd8`), Worker `ghcr.io/elitea-ng/elitea-worker-rust:fuwave-0ab69f837` (`id=944ab3ed166905592c9767ed410833be6a55855292401ad1d7eac1607fc24e69`, `elitea.pipeline.tool-node-attempt-journal.v1` count=`1`), Web `ghcr.io/elitea-ng/elitea-web:fuwave-0ab69f837` (`id=3a1a0b88c3c63a52c749ff8520f9b6ab8d5134b27fcc2a5a189120259495009b`).
+  - **Fixture provenance:** All `p_2` fixtures created via Main's authenticated HTTP API (zero direct DB fixture writes); zero response mocks and full `page.reload()` on every case.
+  - **Case B1 (shape 889, ordinary agent -> pipeline tool: `fuwave_s_echoer` id `173` -> `fuwave_p1_echo` id `172` -> mock MCP `echo`, `chat/888`):** Completed live and post-reload with `"Echo exactly: FU358_SHAPE889_OK"`, `error-trace=0`, `delegation-notices=0`.
+  - **Case B2 (shape 888, pipeline root -> Agent node -> pipeline tool: `fuwave_p0_shape888` id `174` -> `fuwave_s_echoer` id `173` -> `fuwave_p1_echo` id `172`, `chat/893`):** Completed live and post-reload with `"Echo exactly: FU358_SHAPE888_OK"`, `error-trace=0`, `delegation-notices=0` (with approved `pipeline_node` grant `16` on `174 -> 173` and `agent_tool` grant `10` on `173 -> 172`).
+  - **Case D (narrow viewport `900x800` at `/app/pipelines/all/174?name=fuwave_p0_shape888`):** Verified `overlaps: []` across breadcrumbs, title, version selector, and header actions.
+  - **AgentState PostgreSQL journal proof:** `elitea_runtime.agent_graph_checkpoints` recorded `6` distinct `n1:` journal threads (`2` checkpoints each) and `6` writer rows across `6` threads in `elitea_runtime.agent_graph_checkpoint_writers`, including `n1:UTFfTwNAC7DdUY7WUjWp7hWmVtPd7k_cL5rakjEB3SM` (`2026-11-22 14:53:31 UTC`) written by Case B2 (`chat/893`). (In-flight process kill/reclaim across two Worker processes is proven in `pipeline_tool_node_writer_pg_tests.rs`.)
 
 ## Follow-ups
 
 - Resuming an in-flight saved pipeline tool of a root Agent node on its own durable nested thread (R instead of F) remains tracked under **FU-323b**.
+- **Pre-existing Main `closureGrants` bug caught in rehearsal (`chat/889`):** `services/elitea-main/internal/application/workerdelegation/grants.go:56-82` (`closureGrants`) only BFS-walks `delegation_grants` rows, so a 3-hop delegation chain whose intermediate agent holds no direct non-application toolkits (`174 -> 173` has no grant row, while `173 -> 172` holds approved grant `10`) stops at `174` and omits downstream grant `10`; fix in a dedicated Main follow-up PR.
