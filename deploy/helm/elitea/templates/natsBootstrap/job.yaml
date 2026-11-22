@@ -1,4 +1,5 @@
 {{- if .Values.natsBootstrap.enabled }}
+{{- $create := .Values.natsBootstrap.tls.certificate.create }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -42,6 +43,70 @@ spec:
       # failed pod behind that reads as a failed deploy. The script is
       # idempotent, and backoffLimit counts these restarts.
       restartPolicy: OnFailure
+      {{- if $create }}
+      # The issuer (issuer.yaml, files/nats-bootstrap-issue.sh). Its token is
+      # mounted into the init container alone: the bootstrap container, which
+      # NATS admits, holds none.
+      serviceAccountName: {{ include "nats-bootstrap.fullname" . }}-issuer
+      automountServiceAccountToken: false
+      initContainers:
+        # Creates each account's Certificate, owned by this Job, waits until
+        # cert-manager reports it Ready, and copies the certificate into the
+        # in-memory nats-client-tls volume. Argo CD does not track these
+        # Certificates, so a moment of Ready=False while cert-manager issues
+        # cannot fail the sync.
+        - name: issue
+          image: "{{ .Values.natsBootstrap.image.repository }}:{{ .Values.natsBootstrap.image.tag }}"
+          imagePullPolicy: {{ .Values.natsBootstrap.image.pullPolicy }}
+          command: ["/bin/sh", "/scripts/issue.sh"]
+          env:
+            - name: ACCOUNTS
+              value: {{ join " " .Values.natsBootstrap.accounts | quote }}
+            - name: CERT_DIR
+              value: /scripts
+            - name: OUT_DIR
+              value: /out
+            - name: WORK_DIR
+              value: /work
+            - name: TOKEN_DIR
+              value: /var/run/secrets/nats-bootstrap-issuer
+            - name: ISSUE_WAIT
+              value: {{ include "nats-bootstrap.int" (list "tls.certificate.issueWait" .Values.natsBootstrap.tls.certificate.issueWait) }}
+            - name: JOB_NAME
+              value: {{ include "nats-bootstrap.fullname" . }}
+            - name: JOB_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['batch.kubernetes.io/controller-uid']
+            - name: JOB_UID_LEGACY
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['controller-uid']
+          securityContext:
+            runAsNonRoot: true
+            # The nats user of the nats-box image.
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+            - name: nats-client-tls
+              mountPath: /out
+            - name: issue-work
+              mountPath: /work
+            - name: issuer-token
+              mountPath: /var/run/secrets/nats-bootstrap-issuer
+              readOnly: true
+          resources:
+            {{- toYaml .Values.natsBootstrap.resources | nindent 12 }}
+      {{- end }}
       containers:
         - name: nats-bootstrap
           image: "{{ .Values.natsBootstrap.image.repository }}:{{ .Values.natsBootstrap.image.tag }}"
@@ -106,10 +171,18 @@ spec:
           volumeMounts:
             - name: scripts
               mountPath: /scripts
+            {{- if $create }}
+            # <mountPath>/<account>/{ca.crt,tls.crt,tls.key}, written by the
+            # issue init container.
+            - name: nats-client-tls
+              mountPath: {{ trimSuffix "/" .Values.natsBootstrap.tls.mountPath }}
+              readOnly: true
+            {{- else }}
             {{- range $acct := .Values.natsBootstrap.accounts }}
             - name: nats-client-tls-{{ $acct }}
               mountPath: {{ printf "%s/%s" (trimSuffix "/" $.Values.natsBootstrap.tls.mountPath) $acct }}
               readOnly: true
+            {{- end }}
             {{- end }}
           resources:
             {{- toYaml .Values.natsBootstrap.resources | nindent 12 }}
@@ -118,12 +191,41 @@ spec:
           configMap:
             name: {{ include "nats-bootstrap.fullname" . }}
             defaultMode: 0755
-        # Each account's bootstrap certificate (templates/certificate.yaml).
-        # The pod waits in ContainerCreating until cert-manager has written
-        # every Secret.
+        {{- if $create }}
+        # The bootstrap identities, in memory, for the life of the pod.
+        - name: nats-client-tls
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        - name: issue-work
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        # The issuer's token: it expires in 10 minutes (the shortest the API
+        # server allows), and only the init container mounts it.
+        - name: issuer-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef:
+                        fieldPath: metadata.namespace
+        {{- else }}
+        # Each account's certificate Secret (natsBootstrap.tls.secretNames).
+        # The pod waits in ContainerCreating until every Secret exists.
         {{- range $acct := .Values.natsBootstrap.accounts }}
         - name: nats-client-tls-{{ $acct }}
           secret:
             secretName: {{ include "nats-bootstrap.secretName" (dict "account" $acct "ctx" $) }}
+        {{- end }}
         {{- end }}
 {{- end }}

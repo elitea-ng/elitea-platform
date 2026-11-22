@@ -15,4 +15,13 @@ metadata:
 data:
   bootstrap.sh: |-
 {{ .Files.Get "files/nats-bootstrap.sh" | indent 4 }}
+  {{- if .Values.natsBootstrap.tls.certificate.create }}
+  # The Job's init container (issuer.yaml, job.yaml) creates these
+  # Certificates; the chart never applies them itself.
+  issue.sh: |-
+{{ .Files.Get "files/nats-bootstrap-issue.sh" | indent 4 }}
+  {{- range $acct := .Values.natsBootstrap.accounts }}
+  certificate-{{ $acct }}.json: {{ include "nats-bootstrap.certificate" (dict "account" $acct "ctx" $) | fromYaml | toJson | quote }}
+  {{- end }}
+  {{- end }}
 {{- end }}

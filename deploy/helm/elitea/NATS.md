@@ -65,16 +65,23 @@ posture is compose's (`deploy/docker-compose.yml`), and
     chart (`natsClient.tls.*`, `templates/natsClient.yaml`), mounted at
     `/etc/elitea/nats-client`, read via `<PREFIX>_NATS_TLS_{CA,CERT,KEY}_FILE`
     (`ELITEA_EVENTS_` for main, `GATEWAY_` for gateway and scheduler).
-  * `elitea-nats-bootstrap-{main,gateway,runtime,worker}`: issued by
-    `templates/natsBootstrap/certificate.yaml`, one per account, and only for the length
-    of an install: the Certificates are hooks in the Job's phase, ordered
-    before it and deleted with it, and each lives one hour. Nothing renews
-    them, so the identities that may create streams and consumers stop
-    working an hour after each install (the Secrets cert-manager leaves
-    behind hold the expired certificate; run cert-manager with
-    `--enable-certificate-owner-ref` to have them removed too). They may
-    create and update their account's assets and nothing else — no identity
-    may delete or purge a stream.
+  * `elitea-nats-bootstrap-{main,gateway,runtime,worker}`: one per account,
+    and only for the length of an install. The bootstrap Job's init container
+    creates the Certificates (`templates/natsBootstrap/issuer.yaml`,
+    `files/nats-bootstrap-issue.sh`), owned by the Job, waits until each is
+    Ready and hands the certificates to the bootstrap container in memory.
+    The garbage collector deletes the Certificates with the Job, and each
+    lives one hour. Nothing renews them, so the identities that may create
+    streams and consumers stop working an hour after each install (the
+    Secrets cert-manager leaves behind hold the expired certificate; run
+    cert-manager with `--enable-certificate-owner-ref` to have them removed
+    too, and each run deletes them before it issues). They may create and
+    update their account's assets and nothing else — no identity may delete
+    or purge a stream.
+    The chart does not render these Certificates as hooks: Argo CD's health
+    check reads the `Ready=False` that a new Certificate can carry for a
+    moment before cert-manager sets `Issuing=True` as `Degraded`, and failed
+    the sync on it.
   * The clients (`libs/go/natsconn`) re-read the files on every TLS handshake,
     so a cert-manager renewal is presented on the next reconnect. TLS 1.3 only.
 * **URLs carry no credential**: `tls://elitea-nats.<ns>.svc.cluster.local:4222`
@@ -114,6 +121,23 @@ What narrows them:
   cluster operators only — not to workloads or to every namespace member.
   An admin role that already holds those verbs everywhere holds every NATS
   identity.
+  The chart's one workload exception is the bootstrap Job's issuer
+  (`elitea-nats-bootstrap-issuer`, `templates/natsBootstrap/issuer.yaml`). For as
+  long as an install or sync runs, its Role may create Certificates. RBAC
+  cannot limit that by name, so the Role covers any Certificate in the
+  namespace. The ServiceAccount, Role and RoleBinding are hooks deleted when
+  the phase ends. Only the Job's init container mounts the token, which
+  expires in 10 minutes. The bootstrap container, which NATS admits, holds no
+  token.
+* **The bootstrap issuer's admission policy**
+  (`natsBootstrap.tls.certificate.admissionPolicy`,
+  `templates/natsBootstrap/issuer-policy.yaml`). It is a
+  ValidatingAdmissionPolicy, Kubernetes 1.30+. For that ServiceAccount alone,
+  it denies every Certificate except the four bootstrap identities exactly as
+  rendered: name, Secret, common name, URI SAN, issuer, duration and `client
+  auth`, with no other SAN and no CA. That leaves the issuer only what the
+  chart renders. It is cluster-scoped, so it is off by default: `true` or
+  `auto` turns it on where the deployer may create cluster-scoped objects.
 * **approver-policy** (`nats.security.approverPolicy`, `templates/nats/approver-policy.yaml`).
   With [cert-manager approver-policy](https://cert-manager.io/docs/policy/approval/approver-policy/)
   installed and cert-manager's built-in approver disabled
