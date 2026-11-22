@@ -53,7 +53,7 @@ function EditableMapSettings(): ReactNode {
 
 const owner = () => currentExtensionDocument().nodes?.find((node) => node.id === 'extension');
 const optionsOf = async (user: ReturnType<typeof userEvent.setup>, screen: ReturnType<typeof renderExtensionCard>, label: string) => {
-  await user.click(screen.getByRole('combobox', { name: label }));
+  await user.click(await screen.findByRole('combobox', { name: label }));
   const listbox = await screen.findByRole('listbox');
   const values = within(listbox).getAllByRole('option').map((option) => option.textContent);
   return { listbox, values };
@@ -79,19 +79,21 @@ describe('Map On Error and Join', () => {
   it('moves a v1 document to v2 without changing its meaning', async () => {
     const screen = renderExtensionCard(EditableMapSettings, mapYaml('    reduction: ordered_collection\n'));
     const user = userEvent.setup();
-    expect(await screen.findByLabelText('Reduction')).toHaveValue('ordered_collection');
+    expect(await screen.findByRole('combobox', { name: 'Reduction' })).toHaveTextContent('ordered_collection');
     expect(screen.getByRole('combobox', { name: 'On Error' })).toHaveTextContent('stop');
     const join = await optionsOf(user, screen, 'Join');
     await user.click(within(join.listbox).getByRole('option', { name: 'keyed' }));
     expect(owner()).not.toHaveProperty('reduction');
     expect(owner()).toMatchObject({ on_error: 'stop', join: 'keyed' });
-    expect(screen.queryByLabelText('Reduction')).toBeNull();
+    expect(screen.queryByRole('combobox', { name: 'Reduction' })).toBeNull();
   });
 
-  it('lists an LLM node as a worker', async () => {
+  it('lists an LLM node as a worker and renders None instead of a raw i18n key for the empty choice (FU-286)', async () => {
     const screen = renderExtensionCard(EditableMapSettings, mapYaml(''));
-    const worker = await screen.findByLabelText('Owned worker');
-    expect([...(worker as HTMLSelectElement).options].map((option) => option.value)).toEqual(['', 'worker', 'drafter']);
+    const user = userEvent.setup();
+    const worker = await optionsOf(user, screen, 'Owned worker');
+    expect(worker.values).toEqual(['None', 'worker', 'drafter']);
+    expect(worker.values).not.toContain('pipelines.graphExtensions.values.');
   });
 });
 
@@ -100,6 +102,6 @@ describe('Map settings read a YAML null key as absent, as admission and the Work
     const screen = renderExtensionCard(EditableMapSettings, mapYaml('    reduction: null\n    join: null\n'));
     expect(await screen.findByRole('combobox', { name: 'On Error' })).toHaveTextContent('continue');
     expect(screen.getByRole('combobox', { name: 'Join' })).toHaveTextContent('append');
-    expect(screen.queryByLabelText('Reduction')).toBeNull();
+    expect(screen.queryByRole('combobox', { name: 'Reduction' })).toBeNull();
   });
 });

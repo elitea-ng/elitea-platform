@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
-import Button from '@mui/material/Button';
 import Stack from '@mui/material/Stack';
 import { t } from '@/shared/i18n';
+import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { extensionRecord, extensionValues, extensionStrings, extensionText, patchExtensionRecord } from '../../../lib/graphExtensions.helpers';
 import type { ExtensionRecord } from '../../../lib/graphExtensions.types';
 import { ExtensionChoice, ExtensionField } from './ExtensionFields';
@@ -41,13 +41,13 @@ export function SplitRetentionFields({ value, defaultMode, disabled, change, cho
       <ExtensionChoice label={t('pipelines.graphExtensions.retainMissing', 'Missing retained field {{index}}', { index: index + 1 })}
         value={extensionText(row['missing']) || 'error'} disabled={disabled} choices={['error', 'null', 'skip']}
         change={(missing) => change({ ...retain, fields: original.map((entry, ordinal) => ordinal === index ? { ...extensionRecord(entry), missing } : entry) })} />
-      <Button disabled={disabled} onClick={() => change({ ...retain, fields: original.filter((_, ordinal) => ordinal !== index) })}>
+      <BaseBtn variant="text" size="small" className="nodrag nopan nowheel" disabled={disabled} onClick={() => change({ ...retain, fields: original.filter((_, ordinal) => ordinal !== index) })}>
         {t('pipelines.graphExtensions.removeRetainedField', 'Remove retained field {{index}}', { index: index + 1 })}
-      </Button>
+      </BaseBtn>
     </Stack>)}
-    {mode === 'only' && <Button disabled={disabled || rows.length >= 64}
+    {mode === 'only' && <BaseBtn variant="secondary" size="small" className="nodrag nopan nowheel" disabled={disabled || rows.length >= 64}
       onClick={() => change({ ...retain, fields: [...original, { path: '', output: '', missing: 'error' }] })}>
       {t('pipelines.graphExtensions.addRetainedField', 'Add retained field')}
-    </Button>}
+    </BaseBtn>}
   </Stack>;
 }
