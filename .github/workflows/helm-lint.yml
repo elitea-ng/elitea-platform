@@ -454,6 +454,14 @@ jobs:
             || python3 -m pip install --quiet --disable-pip-version-check pyyaml
           bash deploy/helm/tests/render-nats-security.sh
 
+      # The bootstrap Job's init container against a fake API that behaves
+      # like cert-manager (#2911): it waits through a new Certificate's
+      # transient Ready=False, and deletes a leftover Certificate before its
+      # Secret.
+      - name: NATS bootstrap issuer — waits through Ready=False, Certificate before Secret
+        if: ${{ !cancelled() }}
+        run: bash deploy/helm/tests/nats-bootstrap-issue.sh
+
       # NATS bundled (owner decision): the elitea chart with nats.enabled on
       # (the default) and off (bring your own NATS), Chart.lock agreeing with
       # Chart.yaml and every dependency resolving, and the chart rendering

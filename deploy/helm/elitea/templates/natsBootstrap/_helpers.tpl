@@ -22,16 +22,68 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
 {{/*
-nats-bootstrap.cleanupLabels — the stale-Secret cleanup's labels (cleanup.yaml).
-Not nats-bootstrap: the NATS NetworkPolicy admits that label to 4222, and the
-cleanup pod talks only to the Kubernetes API.
+nats-bootstrap.issuerLabels — the labels of the issuer's ServiceAccount, Role
+and RoleBinding (issuer.yaml). No pod carries them: the issuer is the bootstrap
+Job's init container (job.yaml).
 */}}
-{{- define "nats-bootstrap.cleanupLabels" -}}
+{{- define "nats-bootstrap.issuerLabels" -}}
 helm.sh/chart: {{ include "nats-bootstrap.name" . }}-{{ .Chart.Version }}
-app.kubernetes.io/name: nats-bootstrap-cleanup
+app.kubernetes.io/name: nats-bootstrap-issuer
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
+
+{{/*
+nats-bootstrap.certificateName — one account's bootstrap Certificate. Called
+as (dict "account" <account> "ctx" $).
+*/}}
+{{- define "nats-bootstrap.certificateName" -}}
+{{- printf "%s-%s-nats-client" (include "nats-bootstrap.fullname" .ctx) .account -}}
+{{- end }}
+
+{{/*
+nats-bootstrap.certificate — the account's bootstrap identity (#1076): a client
+certificate from the NATS CA whose URI SAN the server maps to the one user in
+that account that may create streams and consumers. Called as
+(dict "account" <account> "ctx" $).
+
+The chart does not apply it. It is rendered as JSON into the bootstrap
+ConfigMap, and the Job's init container creates it, owned by the Job.
+files/nats-bootstrap-issue.sh says why: Argo CD failed the sync on a hook
+Certificate that was briefly Ready=False while cert-manager issued it. It
+lives as long as the Job, and the certificate itself one hour
+(natsBootstrap.tls.certificate.duration).
+*/}}
+{{- define "nats-bootstrap.certificate" -}}
+{{- $ := .ctx -}}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "nats-bootstrap.certificateName" . }}
+  # Not nats-bootstrap.labels: app.kubernetes.io/instance is the label Argo
+  # CD's label tracking reads, and an object it tracks but did not render is
+  # one it reports OutOfSync and may prune in the middle of the run. Neither
+  # Helm nor Argo CD manages it; the Job does.
+  labels:
+    app.kubernetes.io/name: nats-bootstrap
+    app.kubernetes.io/component: bootstrap-identity
+    app.kubernetes.io/managed-by: {{ include "nats-bootstrap.fullname" $ }}
+spec:
+  secretName: {{ include "nats-bootstrap.secretName" . }}
+  duration: {{ $.Values.natsBootstrap.tls.certificate.duration }}
+  renewBefore: {{ $.Values.natsBootstrap.tls.certificate.renewBefore }}
+  isCA: false
+  usages:
+    - client auth
+  commonName: elitea-nats-bootstrap-{{ .account }}
+  uris:
+    - spiffe://{{ include "nats-bootstrap.trustDomain" $ }}/nats/elitea-nats-bootstrap-{{ .account }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    {{- include "nats-bootstrap.issuerRef" $ | nindent 4 }}
 {{- end }}
 
 {{/*
@@ -61,8 +113,8 @@ group: cert-manager.io
 
 {{/*
 nats-bootstrap.secretName — the Secret holding one account's bootstrap
-certificate: natsBootstrap.tls.secretNames.<account>, or the one
-certificate.yaml writes.
+certificate: natsBootstrap.tls.secretNames.<account>, or the one the Job's
+own Certificate (nats-bootstrap.certificate) writes.
 */}}
 {{- define "nats-bootstrap.secretName" -}}
 {{- $names := .ctx.Values.natsBootstrap.tls.secretNames | default dict -}}

@@ -1,0 +1,124 @@
+{{- if and .Values.natsBootstrap.enabled .Values.natsBootstrap.tls.certificate.create }}
+{{- /*
+The bootstrap identities' issuer: the identity of the bootstrap Job's init
+container, which creates one cert-manager Certificate per account, owned by
+the Job, waits until each is Ready and hands the certificates to the bootstrap
+container (files/nats-bootstrap-issue.sh).
+
+Why the chart no longer renders those Certificates as hooks: Argo CD gates a
+hook on its health, and its built-in Certificate health check returns Degraded
+for Ready=False before it looks at anything else but Issuing=True.
+cert-manager's readiness and issuing controllers are separate, so a brand-new
+Certificate can carry Ready=False (reason DoesNotExist) for a moment before
+Issuing=True. Argo CD failed the hook, and the sync, on that moment, although
+the certificate was issued within a second. The annotation
+argocd.argoproj.io/ignore-healthcheck does not help: Argo CD reads it only
+when it adds up the Application's health, not when it decides a hook's result.
+Created by the Job, a Certificate is not a resource Argo CD tracks, and
+nothing gates on its health: the script waits for Ready=True and ignores every
+state before it.
+
+The rest is the lifecycle the hooks had:
+  * short-lived: the Certificates' ownerReference names the Job, so the
+    garbage collector deletes them with it (Helm and Argo CD both delete the
+    Job once it succeeds, and before the next run), and nothing renews them;
+  * every run starts from the state of a first install (#1370): the script
+    deletes a Certificate this Job does not own and waits until it is gone,
+    THEN deletes its Secret, and only then creates the new one. A live
+    Certificate would write a deleted Secret straight back;
+  * Helm: these are post-install/post-upgrade hooks at weight -30, so they
+    exist before the Job (weight 0), and Helm deletes them when the phase
+    ends. Argo CD: Sync hooks in wave -11, before the Job's wave -10 (the NATS
+    CA Issuer that signs the Certificates is in wave -10 too, and the script
+    waits for it), deleted once the sync ends.
+
+Least privilege: the Role may get and delete only the bootstrap Certificates
+and Secrets, by name. `create` cannot be limited by name in Kubernetes RBAC,
+so it covers any Certificate in the namespace. Only the init container holds
+the token: the pod does not automount one, the init container mounts a
+projected token that expires in 10 minutes, and the bootstrap container,
+which is admitted to NATS, has none. Everything here is deleted when the hook
+phase ends.
+*/ -}}
+{{- $name := printf "%s-issuer" (include "nats-bootstrap.fullname" .) }}
+{{- $secrets := list }}
+{{- $certs := list }}
+{{- range $acct := .Values.natsBootstrap.accounts }}
+{{- $secrets = append $secrets (include "nats-bootstrap.secretName" (dict "account" $acct "ctx" $)) }}
+{{- $certs = append $certs (include "nats-bootstrap.certificateName" (dict "account" $acct "ctx" $)) }}
+{{- end }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "nats-bootstrap.issuerLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-30"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/sync-wave: "-11"
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded,HookFailed
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "nats-bootstrap.issuerLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-30"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/sync-wave: "-11"
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded,HookFailed
+rules:
+  # Read (for Ready) and delete (a leftover of an earlier run) only the
+  # bootstrap Certificates, by name.
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificates"]
+    resourceNames:
+      {{- range $c := $certs }}
+      - {{ $c | quote }}
+      {{- end }}
+    verbs: ["get", "delete"]
+  # RBAC cannot scope create by name.
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificates"]
+    verbs: ["create"]
+  # Read (to hand over) and delete (stale, #1370) only the bootstrap Secrets,
+  # by name. No list, no watch, and no other Secret.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      {{- range $s := $secrets }}
+      - {{ $s | quote }}
+      {{- end }}
+    verbs: ["get", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "nats-bootstrap.issuerLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-30"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/sync-wave: "-11"
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded,HookFailed
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

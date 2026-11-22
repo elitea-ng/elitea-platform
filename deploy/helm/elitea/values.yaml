@@ -1654,11 +1654,13 @@ natsBootstrap:
     - worker
 
   tls:
-    # Each account's certificate Secret (tls.crt, tls.key, ca.crt) is mounted at
-    # <mountPath>/<account>. With certificate.create the Secret is
-    # elitea-nats-bootstrap-<account>-nats-client-tls, written by
-    # templates/natsBootstrap/certificate.yaml;
-    # otherwise name an existing Secret per account in secretNames.
+    # Each account's certificate (tls.crt, tls.key, ca.crt) is at
+    # <mountPath>/<account> in the bootstrap container. With certificate.create
+    # the Job's init container creates the Certificate, whose Secret is
+    # elitea-nats-bootstrap-<account>-nats-client-tls, and copies it there
+    # (templates/natsBootstrap/issuer.yaml says why);
+    # otherwise name an existing Secret per account in secretNames, and the
+    # Secrets are mounted there as they are.
     mountPath: /etc/nats-client
     secretNames: {}
     #   main: my-bootstrap-main-tls
@@ -1676,8 +1678,8 @@ natsBootstrap:
       trustDomain: ""
       # Short-lived on purpose: the bootstrap identities may create streams and
       # consumers, and they are needed only while the hook Job runs. The
-      # Certificates are hooks deleted with the Job
-      # (templates/natsBootstrap/certificate.yaml),
+      # Certificates are owned by the Job and deleted with it
+      # (templates/natsBootstrap/issuer.yaml),
       # so nothing renews them; an hour covers the Job's own deadline.
       duration: 1h
       renewBefore: 15m

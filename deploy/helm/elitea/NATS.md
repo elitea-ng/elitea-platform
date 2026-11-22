@@ -65,16 +65,23 @@ posture is compose's (`deploy/docker-compose.yml`), and
     chart (`natsClient.tls.*`, `templates/natsClient.yaml`), mounted at
     `/etc/elitea/nats-client`, read via `<PREFIX>_NATS_TLS_{CA,CERT,KEY}_FILE`
     (`ELITEA_EVENTS_` for main, `GATEWAY_` for gateway and scheduler).
-  * `elitea-nats-bootstrap-{main,gateway,runtime,worker}`: issued by
-    `templates/natsBootstrap/certificate.yaml`, one per account, and only for the length
-    of an install: the Certificates are hooks in the Job's phase, ordered
-    before it and deleted with it, and each lives one hour. Nothing renews
-    them, so the identities that may create streams and consumers stop
-    working an hour after each install (the Secrets cert-manager leaves
-    behind hold the expired certificate; run cert-manager with
-    `--enable-certificate-owner-ref` to have them removed too). They may
-    create and update their account's assets and nothing else — no identity
-    may delete or purge a stream.
+  * `elitea-nats-bootstrap-{main,gateway,runtime,worker}`: one per account,
+    and only for the length of an install. The bootstrap Job's init container
+    creates the Certificates (`templates/natsBootstrap/issuer.yaml`,
+    `files/nats-bootstrap-issue.sh`), owned by the Job, waits until each is
+    Ready and hands the certificates to the bootstrap container in memory.
+    The garbage collector deletes the Certificates with the Job, and each
+    lives one hour. Nothing renews them, so the identities that may create
+    streams and consumers stop working an hour after each install (the
+    Secrets cert-manager leaves behind hold the expired certificate; run
+    cert-manager with `--enable-certificate-owner-ref` to have them removed
+    too, and each run deletes them before it issues). They may create and
+    update their account's assets and nothing else — no identity may delete
+    or purge a stream.
+    The chart does not render these Certificates as hooks: Argo CD's health
+    check reads the `Ready=False` that a new Certificate can carry for a
+    moment before cert-manager sets `Issuing=True` as `Degraded`, and failed
+    the sync on it.
   * The clients (`libs/go/natsconn`) re-read the files on every TLS handshake,
     so a cert-manager renewal is presented on the next reconnect. TLS 1.3 only.
 * **URLs carry no credential**: `tls://elitea-nats.<ns>.svc.cluster.local:4222`
