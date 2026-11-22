@@ -39,7 +39,8 @@ export function msixPublisher(publisherName, subject) {
   const name = String(publisherName ?? '').trim();
   if (!name) throw new Error('MSIX: the brand has no publisher');
   // A distinguished-name value with a special character is quoted.
-  const cn = /[,+="<>#;\\]/.test(name) ? `"${name.replaceAll('"', '\\"')}"` : name;
+  // Inside the quotes a backslash escapes, so it is escaped first, then each quote.
+  const cn = /[,+="<>#;\\]/.test(name) ? `"${name.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"` : name;
   return `CN=${cn}, ${UNSIGNED_PUBLISHER_OID}`;
 }
 

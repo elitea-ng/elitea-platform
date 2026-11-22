@@ -16,8 +16,8 @@ name: Desktop — package for device management
 #             notarised .app zipped (`ditto -c -k --keepParent`).
 #   Windows   UNSIGNED until a Windows signer's secrets exist (`require_signed_windows`
 #             is false), named `-unsigned`. Once a signer's full set is set, the same
-#             run signs. The unsigned MSIX installs only with Developer Mode on
-#             (`Add-AppxPackage -AllowUnsigned`); the MSI shows a SmartScreen warning.
+#             run signs. The unsigned MSIX installs only on a recent Windows 11
+#             (Developer Mode, `Add-AppxPackage -AllowUnsigned`); the MSI shows a SmartScreen warning.
 #
 # SECRETS BY FIXED NAME (scripts/desktop-package.mjs `SECRETS`, the list W5
 # publishes). All of a platform's secrets: sign and verify. None: an unsigned build
@@ -304,6 +304,11 @@ jobs:
           azure-signing-profile: ${{ secrets.AZURE_SIGNING_PROFILE }}
           windows-certificate: ${{ secrets.WINDOWS_CERTIFICATE }}
           windows-certificate-password: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+
+      # Said, not silent: a kept unsigned package must not pass for a signed one.
+      - name: Say a kept Windows package is unsigned
+        if: github.event_name == 'workflow_dispatch' && inputs.keep_artifacts && steps.package.outputs.signed != 'true'
+        run: echo "::warning::the kept .msi and .msix are UNSIGNED (no Windows signer's secrets); SmartScreen warns on the MSI and the MSIX needs Developer Mode"
 
       - name: Keep the packages (by hand only)
         if: github.event_name == 'workflow_dispatch' && inputs.keep_artifacts

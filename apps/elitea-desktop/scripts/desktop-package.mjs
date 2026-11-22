@@ -135,9 +135,22 @@ const BRAND = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const ASSET = /^(?<brand>[A-Za-z0-9][A-Za-z0-9._-]*?)-(?<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)-(?<os>macos|windows)-(?<arch>arm64|x64)(?<unsigned>-unsigned)?\.(?<ext>pkg|app\.zip|msix|msi)$/;
 
 /**
+ * The brand as a file-name word: accents dropped (`Café` → `Cafe`), every run of other
+ * characters (spaces, `&`, `'`, `/`) one `-`, no `-` at either end. A brand's shortName is
+ * free text (scripts/brand/schema.mjs); its asset names must not fail a release.
+ */
+export function brandSlug(brand) {
+  return String(brand ?? '')
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/^[-._]+|[-._]+$/g, '');
+}
+
+/**
  * A release asset's file name: `<Brand>-<version>-<os>-<arch>[-unsigned].<ext>`, e.g.
  * `Elitea-7.8.0-macos-arm64.pkg` or `Elitea-7.8.0-windows-x64-unsigned.msi`. The brand
- * is the app's product name (the brand manifest's shortName) with spaces as `-`; the
+ * is the app's product name (the brand manifest's shortName) as brandSlug makes it; the
  * version is the full release version (a nightly keeps its `-nightly.…`). An unsigned
  * file says so in its name.
  */
@@ -145,8 +158,8 @@ export function assetName({ os, ext, brand, version, signed }) {
   const kind = ASSET_KINDS[os];
   if (!kind) throw new Error(`asset name: unknown platform "${os}" (macos or windows)`);
   if (!kind.exts.includes(ext)) throw new Error(`asset name: ${os} has no .${ext} asset (${kind.exts.join(', ')})`);
-  const b = String(brand ?? '').trim().replace(/\s+/g, '-');
-  if (!BRAND.test(b)) throw new Error(`asset name: brand "${brand}" is not a file-name word (A-Z a-z 0-9 . _ -)`);
+  const b = brandSlug(brand);
+  if (!BRAND.test(b)) throw new Error(`asset name: brand "${brand}" has no letter or digit for a file name`);
   if (!VERSION.test(String(version ?? ''))) throw new Error(`asset name: "${version}" is not X.Y.Z or X.Y.Z-pre`);
   if (typeof signed !== 'boolean') throw new Error('asset name: signed must be true or false');
   return `${b}-${version}-${os}-${kind.arch}${signed ? '' : '-unsigned'}.${ext}`;
@@ -197,8 +210,9 @@ export function sha256sums(dir, names) {
   return names.map((n) => `${createHash('sha256').update(readFileSync(join(dir, n))).digest('hex')}  ${n}\n`).join('');
 }
 
-/** The first line of the notes section: a re-run replaces the section, never adds a second. */
+/** The notes section's first and last lines: a re-run replaces what lies between, nothing else. */
 export const NOTES_MARKER = '<!-- desktop-downloads -->';
+export const NOTES_END = '<!-- /desktop-downloads -->';
 
 /** The release notes' "Desktop downloads" section for the assets checkReleaseAssets returned. */
 export function releaseNotesSection(assets) {
@@ -219,20 +233,31 @@ export function releaseNotesSection(assets) {
     } else {
       const parts = [];
       if (msi) parts.push(`${code(msi)}: Windows SmartScreen says it protected your PC from an unrecognized app; choose **More info**, then **Run anyway**.`);
-      if (msix) parts.push(`${code(msix)} installs only with Developer Mode on (Settings › System › For developers), from PowerShell: \`Add-AppxPackage -Path <file> -AllowUnsigned\`. Use the MSI unless you need the MSIX.`);
+      // Unsigned MSIX installs need a recent Windows 11 (Add-AppxPackage -AllowUnsigned), not the MSI's floor.
+      if (msix) parts.push(`${code(msix)} is for testing: it installs only on a recent Windows 11 with Developer Mode on (Settings › System › For developers), from PowerShell: \`Add-AppxPackage -Path <file> -AllowUnsigned\`. Use the MSI.`);
       lines.push(`- **Windows 10 2004 or later, x64. Unsigned** until a Windows code-signing certificate is set up. ${parts.join(' ')}`);
     }
   }
   lines.push(`- \`${CHECKSUMS}\` holds each file's SHA-256: \`shasum -a 256 -c ${CHECKSUMS}\` on macOS, \`Get-FileHash <file>\` in PowerShell.`);
+  lines.push(NOTES_END);
   return `${lines.join('\n')}\n`;
 }
 
-/** Release notes `body` with the section appended, or replacing the one a run before added. */
+/**
+ * Release notes `body` with the section appended, or put in place of the one a run before
+ * added (between NOTES_MARKER and NOTES_END): whatever follows it stays.
+ */
 export function withNotesSection(body, section) {
   const text = String(body ?? '');
   const at = text.indexOf(NOTES_MARKER);
-  const kept = (at >= 0 ? text.slice(0, at) : text).replace(/\s+$/, '');
-  return `${kept ? `${kept}\n\n` : ''}${section}`;
+  if (at < 0) {
+    const kept = text.replace(/\s+$/, '');
+    return `${kept ? `${kept}\n\n` : ''}${section}`;
+  }
+  const end = text.indexOf(NOTES_END, at);
+  // No end marker: a section from before the end marker existed; it ran to the end.
+  const after = end < 0 ? '' : text.slice(end + NOTES_END.length).replace(/^\n/, '');
+  return `${text.slice(0, at)}${section}${after}`;
 }
 
 function planCli(platform, flags) {

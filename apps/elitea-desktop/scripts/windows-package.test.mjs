@@ -14,6 +14,7 @@ test('an unsigned MSIX carries the unsigned-publisher OID; a signed one the cert
   assert.equal(msixPublisher('EPAM Systems', undefined), `CN=EPAM Systems, ${UNSIGNED_PUBLISHER_OID}`);
   // A distinguished-name special character is quoted.
   assert.equal(msixPublisher('Acme, Inc.', ' '), `CN="Acme, Inc.", ${UNSIGNED_PUBLISHER_OID}`);
+  assert.equal(msixPublisher('Acme\\Corp "X"'), `CN="Acme\\\\Corp \\"X\\"", ${UNSIGNED_PUBLISHER_OID}`);
   assert.equal(msixPublisher('EPAM Systems', ' CN=EPAM Systems, O=EPAM Systems, C=US '), 'CN=EPAM Systems, O=EPAM Systems, C=US');
   assert.throws(() => msixPublisher('', ''), /no publisher/);
   const xml = appxManifest({ identifier: 'ai.elitea.desktop', displayName: 'Elitea', publisherDisplayName: 'EPAM Systems', publisher: msixPublisher('EPAM Systems'), version: '7.8.0', executable: 'elitea-desktop.exe' });

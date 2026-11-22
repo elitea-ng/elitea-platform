@@ -16,7 +16,7 @@
     `require_signed_windows` (default `false`), and `upload_release_assets` (default `false`) is new. `publish.yml`
     passes `true`, `false` and `true`.
   - **An unsigned MSIX's Publisher carries the unsigned-publisher OID**
-    (`OID.2.25.311729368913984317654407730594956997722=1`), so Windows can install it with Developer Mode on through
+    (`OID.2.25.311729368913984317654407730594956997722=1`), so a recent Windows 11 can install it with Developer Mode on through
     `Add-AppxPackage -AllowUnsigned`. A signed MSIX's Publisher is the certificate subject (`WINDOWS_PUBLISHER`), as
     before.
   - A failed desktop build never deletes a release: rollback does not wait on it. The new `desktop-assets` job attaches

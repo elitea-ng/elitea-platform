@@ -79,7 +79,7 @@ Intel Macs are not supported. The macOS package is built for Apple silicon only,
 The Windows packages carry no code signature until a Windows signer (Azure Artifact Signing or a code-signing certificate) is configured for the release. Once it is, the same files are built signed, and their names lose `-unsigned`. Until then:
 
 - **The MSI** installs, but Windows SmartScreen first says that it protected your PC from an unrecognized app. Choose **More info**, then **Run anyway**. Some browsers also flag the download; keep it. Intune and SCCM install an unsigned MSI silently, with no prompt. If a policy refuses unsigned installers on your PCs (AppLocker, WDAC, Smart App Control), wait for the signed build or allow the file by its hash from `SHA256SUMS`.
-- **The MSIX** does not install by double-click. It installs only with Developer Mode on (Settings › System › For developers), from PowerShell: `Add-AppxPackage -Path <file> -AllowUnsigned`, on a Windows version that supports unsigned packages. The Microsoft Store and Intune do not take it. Use the MSI unless you are testing the MSIX.
+- **The MSIX** does not install by double-click. It installs only on a recent Windows 11 with Developer Mode on (Settings › System › For developers), from PowerShell: `Add-AppxPackage -Path <file> -AllowUnsigned`. The Microsoft Store and Intune do not take it. Use the MSI unless you are testing the MSIX.
 
 The desktop host builds and passes its tests on Windows. On Windows, local commands that need a sandbox are refused: see **Local work on Windows** in [Features and configuration](/admin/features-and-configuration).
 

@@ -1360,8 +1360,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      # The release tag, as `desktop` built it: the names are checked by the code
+      # that made them, also when this job is re-run after main moved on.
       - uses: actions/checkout@v7
         with:
+          ref: ${{ needs.release.outputs.new_release_git_tag }}
           sparse-checkout: |
             apps/elitea-desktop/scripts
             .github/actions/eng-runner-env
@@ -1387,6 +1390,12 @@ jobs:
           DESKTOP_RESULT: ${{ needs.desktop.result }}
         run: |
           set -euo pipefail
+          # Rollback (an image or chart failure) may have deleted the release while
+          # the desktop built: nothing to attach to, and not this job's failure.
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json tagName >/dev/null; then
+            echo "::warning::release ${TAG} no longer exists (rolled back or deleted); no desktop package attached"
+            exit 0
+          fi
           dir="$RUNNER_TEMP/desktop"
           mkdir -p "$dir"
           if [ -z "$(ls -A "$dir")" ]; then

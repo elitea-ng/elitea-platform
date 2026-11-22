@@ -413,7 +413,7 @@ release and for device management:
   unsigned until a Windows signer's secrets are set; then the same job signs and
   verifies them. An unsigned MSIX's `Publisher` carries the unsigned-publisher OID
   (`scripts/windows-package.mjs` `msixPublisher`), so it installs with Developer
-  Mode on through `Add-AppxPackage -AllowUnsigned`. A pull request that changes the
+  Mode on through `Add-AppxPackage -AllowUnsigned` (a recent Windows 11). A pull request that changes the
   app builds both in full, unsigned.
 
 `scripts/desktop-package.mjs` decides, for each platform, whether the workflow signs:
@@ -437,7 +437,7 @@ decision 10). The stable release and the nightly pre-release carry, named
 | `Elitea-<version>-macos-arm64.pkg` | the signed, notarised installer package (device management, or a double-click) |
 | `Elitea-<version>-macos-arm64.app.zip` | the notarised, stapled app, zipped with `ditto -c -k --keepParent` |
 | `Elitea-<version>-windows-x64-unsigned.msi` | the MSI (SmartScreen warns: **More info** › **Run anyway**) |
-| `Elitea-<version>-windows-x64-unsigned.msix` | the MSIX (Developer Mode and `Add-AppxPackage -AllowUnsigned` only) |
+| `Elitea-<version>-windows-x64-unsigned.msix` | the MSIX (testing only: a recent Windows 11, Developer Mode and `Add-AppxPackage -AllowUnsigned`) |
 | `SHA256SUMS` | the SHA-256 of each file above |
 
 `publish.yml`'s `desktop-assets` job attaches them with `gh release upload --clobber`

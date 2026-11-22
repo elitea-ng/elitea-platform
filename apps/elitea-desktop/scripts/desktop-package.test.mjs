@@ -15,8 +15,10 @@ import { fileURLToPath } from 'node:url';
 
 import {
   assetName,
+  brandSlug,
   CHECKSUMS,
   checkReleaseAssets,
+  NOTES_END,
   NOTES_MARKER,
   parseAssetName,
   plan,
@@ -196,7 +198,12 @@ test('asset names: <Brand>-<version>-<os>-<arch>[-unsigned].<ext>', () => {
   assert.throws(() => name('linux', 'deb', false), /unknown platform/);
   assert.throws(() => name('macos', 'msi', true), /macos has no \.msi asset/);
   assert.throws(() => name('macos', 'pkg', true, '7.8'), /not X\.Y\.Z/);
-  assert.throws(() => name('macos', 'pkg', true, '7.8.0', 'A/B'), /not a file-name word/);
+  // Any shortName yields a file name: accents dropped, other characters one `-`.
+  assert.equal(brandSlug('Café Bot'), 'Cafe-Bot');
+  assert.equal(brandSlug("Acme & O'Brien / Co."), 'Acme-O-Brien-Co');
+  assert.equal(name('windows', 'msi', false, '1.0.0', 'Café Bot'), 'Cafe-Bot-1.0.0-windows-x64-unsigned.msi');
+  assert.ok(parseAssetName(name('macos', 'pkg', true, '1.0.0', 'Acme & Co')));
+  assert.throws(() => name('macos', 'pkg', true, '7.8.0', '***'), /no letter or digit/);
   assert.throws(() => assetName({ os: 'macos', ext: 'pkg', brand: 'E', version: '1.0.0', signed: 'true' }), /signed must be/);
 });
 
@@ -248,7 +255,7 @@ test('the notes section: macOS signed and notarised, Windows unsigned with the w
   assert.match(section, /Intel Macs are not supported/);
   assert.match(section, /Windows 10 2004 or later, x64\. Unsigned\*\*/);
   assert.match(section, /SmartScreen .*\*\*More info\*\*, then \*\*Run anyway\*\*/);
-  assert.match(section, /Developer Mode .*Add-AppxPackage -Path <file> -AllowUnsigned/);
+  assert.match(section, /recent Windows 11 with Developer Mode on .*Add-AppxPackage -Path <file> -AllowUnsigned/);
   assert.match(section, /`SHA256SUMS` holds each file's SHA-256: `shasum -a 256 -c SHA256SUMS`/);
   // Signed Windows: no warning to click through.
   const signed = releaseNotesSection(checkReleaseAssets(['Elitea-7.8.0-windows-x64.msi', 'Elitea-7.8.0-windows-x64.msix']));
@@ -266,6 +273,12 @@ test('the notes section is appended once: a re-run replaces it', () => {
   const fewer = releaseNotesSection(checkReleaseAssets(RELEASE.slice(0, 2)));
   assert.equal(withNotesSection(once, fewer), `## Features\n\n* thing\n\n${fewer}`);
   assert.equal(withNotesSection('', section), section);
+  assert.ok(section.trimEnd().endsWith(NOTES_END));
+  // What follows the section (a hand edit, a later section) survives a re-run.
+  const edited = `${once}\n## Known issues\n\n* one\n`;
+  assert.equal(withNotesSection(edited, fewer), `## Features\n\n* thing\n\n${fewer}\n## Known issues\n\n* one\n`);
+  // A section without its end marker ran to the end of the body.
+  assert.equal(withNotesSection(`a\n\n${NOTES_MARKER}\nold\n`, section), `a\n\n${section}`);
 });
 
 test('the release-assets CLI checks the folder, writes SHA256SUMS and the section', () => {
