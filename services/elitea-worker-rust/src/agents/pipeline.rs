@@ -99,11 +99,15 @@ struct SavedPipelineParticipantReference<'a> {
 }
 
 /// FU-353: claim-bound capabilities lent into a saved pipeline child (pinned
-/// artifact authority + index/memory toolkit support).
+/// artifact authority, index/memory toolkit support, caller attachment ceiling,
+/// and target-scoped agent memory authority).
 #[derive(Clone)]
 pub(super) struct NestedPipelineCapabilities {
     pub(super) artifacts: Option<ArtifactToolAuthority>,
     pub(super) index_tools: Result<IndexToolAuthority, IndexToolsWithheld>,
+    pub(super) attachment_library: Option<Arc<super::attachment_tools::AttachmentLibrary>>,
+    pub(super) caller_attachments_enabled: bool,
+    pub(super) agent_memory: Option<super::agent_memory_tools::AgentMemoryAuthority>,
 }
 
 impl Default for NestedPipelineCapabilities {
@@ -111,6 +115,9 @@ impl Default for NestedPipelineCapabilities {
         Self {
             artifacts: None,
             index_tools: Err(IndexToolsWithheld::NotServedOnThisPath),
+            attachment_library: None,
+            caller_attachments_enabled: false,
+            agent_memory: None,
         }
     }
 }
@@ -135,6 +142,11 @@ struct PipelineApplicationRuntime<'a> {
     /// FU-353 D6(a): claim-bound index/memory toolkit authority lent to nested
     /// agents and nested saved pipelines.
     index_tools: Result<IndexToolAuthority, IndexToolsWithheld>,
+    /// FU-353 D1(a): conversation attachment library + monotonic caller ceiling.
+    attachment_library: Option<Arc<super::attachment_tools::AttachmentLibrary>>,
+    caller_attachments_enabled: bool,
+    /// FU-353 D2(a1): claim-bound agent memory authority (re-targeted per child).
+    agent_memory: Option<super::agent_memory_tools::AgentMemoryAuthority>,
     /// The run's fenced node journals, lent to every saved child pipeline so its
     /// effectful direct nodes run behind a journal too (FU-248). `None` where
     /// the run has no root journal owner (a pipeline served as an agent's tool).
@@ -160,6 +172,11 @@ impl<'a> PipelineApplicationRuntime<'a> {
         .with_code(self.code.clone())
         .with_artifacts(self.nested_artifacts.clone())
         .with_index_tools(self.index_tools.clone())
+        .with_attachments(
+            self.attachment_library.clone(),
+            self.caller_attachments_enabled,
+        )
+        .with_agent_memory(self.agent_memory.clone())
         .with_materialization(materialization)
     }
 }
@@ -653,6 +670,7 @@ impl PipelineNativeAgentAssembler {
         conversation_id: String,
         node_recovery: Option<Arc<dyn super::graph::node_recovery_runtime::NodeRecoveryFactory>>,
         root_reentry: Option<Arc<scoped_runtime::RootAgentReentry>>,
+        nested_attachment_library: Option<Arc<super::attachment_tools::AttachmentLibrary>>,
     ) -> Result<PipelineRuntimeBindings, NativeAgentAssemblyError> {
         let has_llm_nodes = profile.definition().has_llm_nodes();
         let has_direct_tool_nodes = profile.definition().has_direct_tool_nodes();
@@ -886,6 +904,14 @@ impl PipelineNativeAgentAssembler {
             )))
             .with_pinned_bucket()
         });
+        let caller_attachments_enabled = profile.shell().internal_tools().attachments_enabled();
+        let nested_agent_memory = self.platform.as_ref().map(|platform| {
+            super::agent_memory_tools::AgentMemoryAuthority::new(
+                Arc::clone(platform),
+                Arc::clone(runtime_context),
+                Arc::clone(tool_policy.content_controls().untrusted()),
+            )
+        });
         let application_runtime = context
             .clone()
             .zip(model_facade.clone())
@@ -906,6 +932,9 @@ impl PipelineNativeAgentAssembler {
                     materialization: materialization.clone(),
                     nested_artifacts: nested_artifacts.clone(),
                     index_tools: index_tools.clone(),
+                    attachment_library: nested_attachment_library.clone(),
+                    caller_attachments_enabled,
+                    agent_memory: nested_agent_memory.clone(),
                     node_recovery: node_recovery.clone(),
                     root_reentry: root_reentry.clone(),
                 },
@@ -1450,6 +1479,16 @@ impl PipelineNativeAgentAssembler {
             }
             let context_view =
                 pipeline_context_view(assembly.request(), recovery || node_recovery.is_some())?;
+            // FU-353 D1(a): capture the turn's attachments before content
+            // resolution so nested Agent nodes with `attachments` enabled can
+            // list/read/search conversation attachments when this pipeline's
+            // own shell permits `attachments`.
+            let current_attachments = super::attachments::pending_attachment_reads(
+                &assembly.request().payload.input_attachments,
+            );
+            let attachment_read_tokens =
+                super::attachment_context::AttachmentBudget::for_request(assembly.request())
+                    .tool_read_tokens();
             // #606, the pipeline twin of the ordinary path's read. `platform`
             // is optional here only because the injected-state test constructor
             // has none; a stored pipeline that runs for real always does, and a
@@ -1471,6 +1510,27 @@ impl PipelineNativeAgentAssembler {
                 admitted.into_parts();
             // Shared, never duplicated: the artifact family keeps it past assembly.
             let runtime_context = Arc::new(runtime_context);
+            let nested_attachment_library = if profile.definition().has_application_nodes()
+                && profile.shell().internal_tools().attachments_enabled()
+            {
+                self.platform.as_ref().map(|platform| {
+                    let library = Arc::new(super::attachment_tools::AttachmentLibrary::new(
+                        Vec::new(),
+                        attachment_read_tokens,
+                    ));
+                    library.attach_source(
+                        Arc::new(super::attachments::ClaimAttachmentSource::new(
+                            Arc::clone(platform),
+                            Arc::clone(&runtime_context),
+                            current_attachments.clone(),
+                        )),
+                        &current_attachments,
+                    );
+                    library
+                })
+            } else {
+                None
+            };
             // Resolve the complete frozen tree before credentials or executable runtimes.
             let composition = if profile.definition().has_application_nodes() {
                 let platform = self
@@ -1609,6 +1669,7 @@ impl PipelineNativeAgentAssembler {
                     plan.conversation_id().to_owned(),
                     state.node_recovery_authority(),
                     root_reentry,
+                    nested_attachment_library,
                 )
                 .await?;
             node_runtimes.nodes = node_runtimes.nodes.with_context_view(context_view);
@@ -2364,6 +2425,9 @@ pub(super) async fn materialize_saved_pipeline_tool(
             .artifacts
             .map(ArtifactToolAuthority::with_pinned_bucket),
         index_tools: capabilities.index_tools,
+        attachment_library: capabilities.attachment_library,
+        caller_attachments_enabled: capabilities.caller_attachments_enabled,
+        agent_memory: capabilities.agent_memory,
         node_recovery: None,
         root_reentry: None,
     };
@@ -2775,6 +2839,14 @@ fn bind_admitted_saved_pipeline<'a>(
             .materialization
             .clone()
             .with_delegation(delegation.scope);
+        // FU-353 D1(a): monotonic narrowing for nested attachments across
+        // saved pipeline hops.
+        runtime.caller_attachments_enabled = runtime.caller_attachments_enabled
+            && admitted
+                .profile
+                .shell()
+                .internal_tools()
+                .attachments_enabled();
         let runtime = &runtime;
         let mut scopes = scoped_applications::PipelineApplicationScopeRegistry::default();
         scopes.register_scope(

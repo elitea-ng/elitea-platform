@@ -2993,6 +2993,11 @@ pub(crate) struct ApplicationToolDependencies<'a> {
     /// FU-353 D6(a): claim-bound index/memory toolkit authority lent to nested
     /// agents and nested saved pipelines.
     index_tools: Result<IndexToolAuthority, IndexToolsWithheld>,
+    /// FU-353 D1(a): conversation attachment library + monotonic caller ceiling.
+    attachment_library: Option<Arc<super::attachment_tools::AttachmentLibrary>>,
+    caller_attachments_enabled: bool,
+    /// FU-353 D2(a1): claim-bound agent memory authority (re-targeted per child).
+    agent_memory: Option<super::agent_memory_tools::AgentMemoryAuthority>,
     materialization: ApplicationMaterializationPath,
 }
 
@@ -3016,6 +3021,9 @@ impl<'a> ApplicationToolDependencies<'a> {
             conversation_thread_id: None,
             artifacts: None,
             index_tools: Err(IndexToolsWithheld::NotServedOnThisPath),
+            attachment_library: None,
+            caller_attachments_enabled: false,
+            agent_memory: None,
             materialization: ApplicationMaterializationPath::default(),
         }
     }
@@ -3045,10 +3053,37 @@ impl<'a> ApplicationToolDependencies<'a> {
         self
     }
 
+    /// FU-353 D1(a): lend the conversation attachment library under the
+    /// caller's monotonic `attachments` ceiling.
+    #[must_use]
+    pub(super) fn with_attachments(
+        mut self,
+        library: Option<Arc<super::attachment_tools::AttachmentLibrary>>,
+        caller_enabled: bool,
+    ) -> Self {
+        self.attachment_library = if caller_enabled { library } else { None };
+        self.caller_attachments_enabled = caller_enabled;
+        self
+    }
+
+    /// FU-353 D2(a1): lend the claim-bound agent memory authority (re-targeted
+    /// per nested saved agent version).
+    #[must_use]
+    pub(super) fn with_agent_memory(
+        mut self,
+        agent_memory: Option<super::agent_memory_tools::AgentMemoryAuthority>,
+    ) -> Self {
+        self.agent_memory = agent_memory;
+        self
+    }
+
     fn pipeline_capabilities(&self) -> NestedPipelineCapabilities {
         NestedPipelineCapabilities {
             artifacts: self.artifacts.clone(),
             index_tools: self.index_tools.clone(),
+            attachment_library: self.attachment_library.clone(),
+            caller_attachments_enabled: self.caller_attachments_enabled,
+            agent_memory: self.agent_memory.clone(),
         }
     }
 
@@ -3523,6 +3558,9 @@ pub(crate) async fn materialize_application_tools(
         conversation_thread_id: dependencies.conversation_thread_id,
         artifacts: dependencies.artifacts,
         index_tools: dependencies.index_tools,
+        attachment_library: dependencies.attachment_library,
+        caller_attachments_enabled: dependencies.caller_attachments_enabled,
+        agent_memory: dependencies.agent_memory,
         materialization: dependencies.materialization,
         skipped: Vec::new(),
     };
@@ -3584,10 +3622,10 @@ struct ApplicationAssemblyState<'a> {
     policy: Arc<ToolAdmissionPolicy>,
     mcp_connector: Arc<dyn McpConnector>,
     mcp_tokens: &'a Map<String, Value>,
-    /// Built children by identity and by the caller's delegation scope: one
-    /// child called from two callers with different grants is narrowed for
-    /// each (ADR-0044 decision 3).
-    applications: HashMap<(ApplicationIdentity, String), AssembledApplication>,
+    /// Built children by identity, caller delegation scope, and caller
+    /// attachments ceiling (FU-353 D1(a)): one child called from two callers
+    /// with different grants or attachment ceilings is narrowed for each.
+    applications: HashMap<(ApplicationIdentity, String, bool), AssembledApplication>,
     resolving: HashSet<ApplicationIdentity>,
     hops: usize,
     event_sender: Option<ApplicationEventSender>,
@@ -3597,6 +3635,9 @@ struct ApplicationAssemblyState<'a> {
     conversation_thread_id: Option<String>,
     artifacts: Option<ArtifactToolAuthority>,
     index_tools: Result<IndexToolAuthority, IndexToolsWithheld>,
+    attachment_library: Option<Arc<super::attachment_tools::AttachmentLibrary>>,
+    caller_attachments_enabled: bool,
+    agent_memory: Option<super::agent_memory_tools::AgentMemoryAuthority>,
     materialization: ApplicationMaterializationPath,
     /// Nested pipeline attachments this Worker could not build, named on the
     /// root's skipped notice (#990).
@@ -3642,7 +3683,11 @@ impl ApplicationAssemblyState<'_> {
                     return Err(invalid_configuration());
                 }
                 let next_path = self.materialization.enter_agent(identity)?;
-                let cache_key = (identity, self.materialization.delegation().cache_key());
+                let cache_key = (
+                    identity,
+                    self.materialization.delegation().cache_key(),
+                    self.caller_attachments_enabled,
+                );
                 if let Some(application) = self.applications.get(&cache_key) {
                     tracing::Span::current().record("cache_hit", true);
                     return Ok(application.clone());
@@ -3715,6 +3760,24 @@ impl ApplicationAssemblyState<'_> {
         // so nothing the user asked for is lost — the write happens one level
         // up, where it was authorized.
         toolsets.extend(internal_tools.toolsets(None));
+        // FU-353 D1(a): nested attachments require BOTH caller ceiling AND the
+        // child's own `"attachments"` toggle.
+        let child_attachments_enabled =
+            self.caller_attachments_enabled && internal_tools.attachments_enabled();
+        if child_attachments_enabled && let Some(library) = self.attachment_library.as_ref() {
+            toolsets.push(library.toolset());
+        }
+        // FU-353 D2(a1) / D5(a): nested saved agents bind recall/remember/forget
+        // tools targeting their own `(application_id, version_id)` with an
+        // isolated `RecalledEntries` recorder.
+        if let (Some(binding), Some(base_memory)) =
+            (profile.agent_memory(), self.agent_memory.as_ref())
+        {
+            toolsets.push(super::agent_memory_tools::toolset(
+                binding,
+                &base_memory.for_nested_target(reference.identity.0, reference.identity.1),
+            ));
+        }
         let has_non_application_tools = !toolsets.is_empty();
         let nested_references = application_references(&frozen, None)?;
         let parallel_applications = !nested_references.is_empty()
@@ -3723,19 +3786,32 @@ impl ApplicationAssemblyState<'_> {
                 .all(|reference| reference.kind() == FrozenToolKind::Application)
             && sensitive_tools.is_empty()
             && delegated_authorization.is_empty()
-            && internal_tools.is_empty();
-        let pipeline_children = self
-            .materialize_nested_pipeline_children(&frozen, &profile)
-            .await?;
-        let mut reserved_toolsets = BTreeSet::from([ASK_USER_TOOLSET_NAME.to_owned()]);
-        let (nested_toolset, child_tools) = self
-            .build_nested_toolset(
+            && internal_tools.is_empty()
+            && profile.agent_memory().is_none();
+        let parent_attachments_enabled = std::mem::replace(
+            &mut self.caller_attachments_enabled,
+            child_attachments_enabled,
+        );
+        let children_result = async {
+            let pipeline_children = self
+                .materialize_nested_pipeline_children(&frozen, &profile)
+                .await?;
+            self.build_nested_toolset(
                 nested_references,
                 pipeline_children,
                 reference.identity,
                 tier,
             )
-            .await?;
+            .await
+        }
+        .await;
+        self.caller_attachments_enabled = parent_attachments_enabled;
+        let (nested_toolset, child_tools) = children_result?;
+        let mut reserved_toolsets = BTreeSet::from([
+            ASK_USER_TOOLSET_NAME.to_owned(),
+            super::attachment_tools::TOOLSET_NAME.to_owned(),
+            super::agent_memory_tools::TOOLSET_NAME.to_owned(),
+        ]);
         if let Some(nested_toolset) = nested_toolset {
             reserved_toolsets.insert(nested_toolset.name().to_owned());
             toolsets.push(nested_toolset);
@@ -3872,6 +3948,13 @@ impl ApplicationAssemblyState<'_> {
             conversation_thread_id: self.conversation_thread_id.clone(),
             artifacts: self.artifacts.clone(),
             index_tools: self.index_tools.clone(),
+            attachment_library: if self.caller_attachments_enabled {
+                self.attachment_library.clone()
+            } else {
+                None
+            },
+            caller_attachments_enabled: self.caller_attachments_enabled,
+            agent_memory: self.agent_memory.clone(),
             materialization: self.materialization.clone(),
         };
         let built = materialize_pipeline_children(

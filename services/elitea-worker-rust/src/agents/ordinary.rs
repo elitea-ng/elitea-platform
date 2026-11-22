@@ -404,6 +404,28 @@ impl OrdinaryNativeAgentAssembler {
         } else {
             attachment_library
         };
+        // FU-353 D1(a): nested attachments are gated by the caller ceiling:
+        // saved roots require `attachments_enabled()`; ad-hoc roots inherit
+        // from the conversation without mutating the root's own toolset.
+        let nested_attachment_library = if profile.internal_tools().attachments_enabled() {
+            attachment_library.clone()
+        } else if profile.kind() == super::request::AgentExecutionKind::Adhoc {
+            let library = Arc::new(super::attachment_tools::AttachmentLibrary::new(
+                Vec::new(),
+                attachment_read_tokens,
+            ));
+            library.attach_source(
+                Arc::new(super::attachments::ClaimAttachmentSource::new(
+                    Arc::clone(&self.platform),
+                    Arc::clone(&runtime_context),
+                    current_attachments.clone(),
+                )),
+                &current_attachments,
+            );
+            Some(library)
+        } else {
+            None
+        };
         // ADR-0044 decision 3: a sub-agent is a delegation one level below
         // this run's root.
         let delegation_root = super::application_tools::root_delegation_scope(
@@ -465,6 +487,7 @@ impl OrdinaryNativeAgentAssembler {
                 plan.conversation_id().to_owned(),
                 code_runtime,
                 attachment_library,
+                nested_attachment_library,
                 browser_host.as_ref(),
                 &recalled,
             )
@@ -688,6 +711,7 @@ impl OrdinaryNativeAgentAssembler {
         conversation_id: String,
         code: Option<Arc<dyn super::graph::CodeSandboxRuntime>>,
         attachment_library: Option<Arc<super::attachment_tools::AttachmentLibrary>>,
+        nested_attachment_library: Option<Arc<super::attachment_tools::AttachmentLibrary>>,
         browser_host: Option<&elitea_agent_runtime::toolkits::BrowserToolHost>,
         recalled: &Arc<super::agent_memory_tools::RecalledEntries>,
     ) -> Result<(OrdinaryRuntimeBindings, NativeToolExecutionMode), NativeAgentAssemblyError> {
@@ -909,6 +933,13 @@ impl OrdinaryNativeAgentAssembler {
         // pipeline whose own build fails is added below from the materializer's
         // own outcome (#990 review 4), because only the build knows that.
         let mut skipped_applications = skipped_application_children(tool_snapshot, None, true);
+        let caller_attachments_enabled = profile.internal_tools().attachments_enabled()
+            || profile.kind() == super::request::AgentExecutionKind::Adhoc;
+        let nested_agent_memory = Some(super::agent_memory_tools::AgentMemoryAuthority::new(
+            Arc::clone(&self.platform),
+            Arc::clone(runtime_context),
+            Arc::clone(tool_policy.content_controls().untrusted()),
+        ));
         let (materialized, skipped_pipelines) = materialize_application_toolset(
             tool_snapshot,
             self.platform.as_ref(),
@@ -926,6 +957,8 @@ impl OrdinaryNativeAgentAssembler {
             .with_code(code)
             .with_artifacts(Some(nested_artifact_authority))
             .with_index_tools(index_authority)
+            .with_attachments(nested_attachment_library, caller_attachments_enabled)
+            .with_agent_memory(nested_agent_memory)
             .with_delegation(super::application_tools::root_delegation_scope(
                 runtime_context,
                 profile.kind(),

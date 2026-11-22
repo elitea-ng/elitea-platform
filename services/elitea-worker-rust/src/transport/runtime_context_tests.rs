@@ -847,6 +847,8 @@ async fn agent_memory_calls_carry_the_entry_under_the_claim() {
                 content: "The repo uses pnpm.".to_owned(),
                 about_user: false,
                 from_tool_output: true,
+                target_application_id: None,
+                target_version_id: None,
             },
         )
         .await
@@ -860,6 +862,10 @@ async fn agent_memory_calls_carry_the_entry_under_the_claim() {
         let request: serde_json::Value = serde_json::from_slice(&captured[0].body).unwrap();
         assert_eq!(request["content"], "The repo uses pnpm.");
         assert_eq!(request["from_tool_output"], true);
+        // FU-353 version skew: root calls omit target fields so older Main's
+        // DisallowUnknownFields decoder accepts them unchanged.
+        assert!(request.get("target_application_id").is_none());
+        assert!(request.get("target_version_id").is_none());
     }
 
     let raw = serde_json::json!({
@@ -868,18 +874,26 @@ async fn agent_memory_calls_carry_the_entry_under_the_claim() {
         "entries": [{"entry_id": "42", "kind": "fact", "content": "The repo uses pnpm.", "pinned": false}],
     })
     .to_string();
-    let (client, _captured) = fake_client(ok(&raw), Duration::from_secs(1), 32 * 1_024);
+    let (client, captured) = fake_client(ok(&raw), Duration::from_secs(1), 32 * 1_024);
     let recalled = client
         .recall_agent_memory(
             &test_runtime_context_authority(),
             &AgentMemoryRecallRequest {
                 query: "pnpm".to_owned(),
                 limit: 0,
+                target_application_id: None,
+                target_version_id: None,
             },
         )
         .await
         .expect("claim-bound recall");
     assert_eq!(recalled.entries.len(), 1);
+    {
+        let captured = captured.lock().expect("captured call");
+        let request: serde_json::Value = serde_json::from_slice(&captured[0].body).unwrap();
+        assert!(request.get("target_application_id").is_none());
+        assert!(request.get("target_version_id").is_none());
+    }
 
     let raw = serde_json::json!({
         "schema_version": "elitea.runtime.agent-memory-forget.v1",
@@ -887,17 +901,87 @@ async fn agent_memory_calls_carry_the_entry_under_the_claim() {
         "forgotten": true,
     })
     .to_string();
-    let (client, _captured) = fake_client(ok(&raw), Duration::from_secs(1), 32 * 1_024);
+    let (client, captured) = fake_client(ok(&raw), Duration::from_secs(1), 32 * 1_024);
     let forgotten = client
         .forget_agent_memory(
             &test_runtime_context_authority(),
             &AgentMemoryForgetRequest {
                 entry_id: "42".to_owned(),
+                target_application_id: None,
+                target_version_id: None,
             },
         )
         .await
         .expect("claim-bound forget");
     assert!(forgotten.forgotten);
+    {
+        let captured = captured.lock().expect("captured call");
+        let request: serde_json::Value = serde_json::from_slice(&captured[0].body).unwrap();
+        assert!(request.get("target_application_id").is_none());
+        assert!(request.get("target_version_id").is_none());
+    }
+}
+
+/// FU-353 version skew: nested calls serialize both `target_application_id`
+/// and `target_version_id`, and an older Main rejecting unknown fields with
+/// `InvalidArgument` fails terminally without falling back to root.
+#[tokio::test(flavor = "current_thread")]
+async fn nested_agent_memory_requests_carry_target_and_handle_old_main_skew() {
+    let raw = serde_json::json!({
+        "schema_version": "elitea.runtime.agent-memory-remember.v1",
+        "project_id": 17,
+        "entry_id": "99",
+        "status": "pending",
+    })
+    .to_string();
+    let (client, captured) = fake_client(ok(&raw), Duration::from_secs(1), 32 * 1_024);
+    let _ = client
+        .remember_agent_memory(
+            &test_runtime_context_authority(),
+            &AgentMemoryRememberRequest {
+                kind: "fact".to_owned(),
+                content: "Nested note.".to_owned(),
+                about_user: false,
+                from_tool_output: false,
+                target_application_id: Some(77),
+                target_version_id: Some(88),
+            },
+        )
+        .await
+        .expect("nested remember");
+    {
+        let captured = captured.lock().expect("captured");
+        let body: serde_json::Value = serde_json::from_slice(&captured[0].body).unwrap();
+        assert_eq!(body["target_application_id"], 77);
+        assert_eq!(body["target_version_id"], 88);
+    }
+
+    // Old Main with DisallowUnknownFields answers InvalidArgument; client
+    // returns terminal dependency_unavailable (mapped to memory_unavailable by
+    // agent_memory_tools::failure) with exactly 1 RPC call and no fallback.
+    let (old_main, captured) = fake_client(
+        Err(Status::invalid_argument(
+            "json: unknown field \"target_application_id\"",
+        )),
+        Duration::from_secs(1),
+        32 * 1_024,
+    );
+    let Err(error) = old_main
+        .recall_agent_memory(
+            &test_runtime_context_authority(),
+            &AgentMemoryRecallRequest {
+                query: "note".to_owned(),
+                limit: 5,
+                target_application_id: Some(77),
+                target_version_id: Some(88),
+            },
+        )
+        .await
+    else {
+        panic!("older Main unknown-field rejection must fail closed");
+    };
+    assert_eq!(error.code(), "runtime_context.dependency_unavailable");
+    assert_eq!(captured.lock().expect("captured").len(), 1);
 }
 
 /// An answer for another project, or of another schema, is refused; Main's
@@ -906,6 +990,8 @@ async fn agent_memory_calls_carry_the_entry_under_the_claim() {
 async fn agent_memory_answers_are_checked_and_refusals_are_terminal() {
     let request = AgentMemoryForgetRequest {
         entry_id: "42".to_owned(),
+        target_application_id: None,
+        target_version_id: None,
     };
     for raw in [
         serde_json::json!({"schema_version": "elitea.runtime.agent-memory-forget.v1", "project_id": 18, "forgotten": true}),

@@ -252,6 +252,9 @@ pub(crate) struct AgentMemoryAuthority {
     authority: Arc<ClaimBoundRuntimeContextAuthority>,
     untrusted: Arc<UntrustedReads>,
     recalled: Arc<RecalledEntries>,
+    /// FU-353 D2(a1): when set, every memory call targets this nested saved
+    /// agent `(application_id, version_id)` rather than the claim's root agent.
+    nested_target: Option<(u64, u64)>,
 }
 
 impl AgentMemoryAuthority {
@@ -266,6 +269,7 @@ impl AgentMemoryAuthority {
             authority,
             untrusted,
             recalled: Arc::new(RecalledEntries::default()),
+            nested_target: None,
         }
     }
 
@@ -274,6 +278,20 @@ impl AgentMemoryAuthority {
     pub(crate) fn with_recalled(mut self, recalled: Arc<RecalledEntries>) -> Self {
         self.recalled = recalled;
         self
+    }
+
+    /// FU-353 D2(a1)/D5(a): target one nested saved agent version with a fresh
+    /// isolated [`RecalledEntries`] recorder while sharing the run's
+    /// [`UntrustedReads`] taint tracker.
+    #[must_use]
+    pub(crate) fn for_nested_target(&self, application_id: u64, version_id: u64) -> Self {
+        Self {
+            platform: Arc::clone(&self.platform),
+            authority: Arc::clone(&self.authority),
+            untrusted: Arc::clone(&self.untrusted),
+            recalled: Arc::new(RecalledEntries::default()),
+            nested_target: Some((application_id, version_id)),
+        }
     }
 }
 
@@ -402,6 +420,14 @@ impl Tool for RememberTool {
             content: content.to_owned(),
             about_user,
             from_tool_output: self.authority.untrusted.has_read(),
+            target_application_id: self
+                .authority
+                .nested_target
+                .map(|(application_id, _)| application_id),
+            target_version_id: self
+                .authority
+                .nested_target
+                .map(|(_, version_id)| version_id),
         };
         match self
             .authority
@@ -471,6 +497,14 @@ impl Tool for RecallTool {
         let request = AgentMemoryRecallRequest {
             query: query.to_owned(),
             limit: u32::try_from(limit).unwrap_or(0),
+            target_application_id: self
+                .authority
+                .nested_target
+                .map(|(application_id, _)| application_id),
+            target_version_id: self
+                .authority
+                .nested_target
+                .map(|(_, version_id)| version_id),
         };
         match self
             .authority
@@ -563,6 +597,14 @@ impl Tool for ForgetTool {
         };
         let request = AgentMemoryForgetRequest {
             entry_id: entry_id.to_owned(),
+            target_application_id: self
+                .authority
+                .nested_target
+                .map(|(application_id, _)| application_id),
+            target_version_id: self
+                .authority
+                .nested_target
+                .map(|(_, version_id)| version_id),
         };
         match self
             .authority
@@ -718,5 +760,53 @@ mod tests {
                 "{unreadable}"
             );
         }
+    }
+
+    /// FU-353 D2(a1)/D5(a): `for_nested_target` sets the target identity,
+    /// isolates `RecalledEntries` from the parent turn's recorder, and shares
+    /// the run's `UntrustedReads` taint tracker.
+    #[test]
+    fn for_nested_target_isolates_recalled_entries_and_shares_untrusted_taint() {
+        struct UnusedContent;
+        #[tonic::async_trait]
+        impl crate::transport::input_content::content_fake::ContentFake for UnusedContent {}
+
+        let config = crate::transport::runtime_context::RuntimeContextConfig {
+            origin: "https://content.internal".to_owned(),
+            deadline: std::time::Duration::from_secs(1),
+            max_response_bytes: 32 * 1_024,
+            max_application_response_bytes: 1_024 * 1_024,
+            max_attachment_response_bytes: 1_024 * 1_024,
+            max_artifact_response_bytes: 2 * 1_024 * 1_024,
+        };
+        let platform = Arc::new(PlatformClient::new(Arc::new(
+            crate::transport::runtime_context::RuntimeContextClient::with_rpc(
+                UnusedContent,
+                config,
+            )
+            .expect("client"),
+        )));
+        let authority = Arc::new(crate::protocol::control::test_runtime_context_authority());
+        let untrusted = Arc::new(UntrustedReads::default());
+        let root_recalled = Arc::new(RecalledEntries::seeded(
+            &[crate::agents::request::RecalledMemoryEntry {
+                entry_id: "7".to_owned(),
+                content: "root secret".to_owned(),
+            }],
+            Some("r00ttag123"),
+        ));
+        let root = AgentMemoryAuthority::new(platform, authority, Arc::clone(&untrusted))
+            .with_recalled(Arc::clone(&root_recalled));
+        let nested = root.for_nested_target(30, 40);
+        assert_eq!(nested.nested_target, Some((30, 40)));
+        // Child cannot cite root's N·TAG, and child recalls never pollute root.
+        assert_eq!(nested.recalled.cited("7·r00ttag123"), None);
+        assert_eq!(nested.recalled.forget_target("7·r00ttag123"), None);
+        nested.recalled.record_for_test("99", "child note");
+        assert_eq!(root_recalled.content("99"), None);
+        // Untrusted read taint is shared across parent and nested agents.
+        assert!(!nested.untrusted.has_read());
+        untrusted.record_read();
+        assert!(nested.untrusted.has_read());
     }
 }
