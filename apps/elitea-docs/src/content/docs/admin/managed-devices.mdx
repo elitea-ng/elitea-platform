@@ -65,14 +65,26 @@ Every Elitea release, and every nightly pre-release, carries the desktop package
 
 | Platform | Asset | Signed |
 |---|---|---|
-| macOS 12 or later, Apple silicon (M1 or later) only | `Elitea-<version>-macos-arm64.pkg`: the installer package, for the MDM or a double-click | Yes. The package with Developer ID Installer, the app inside with Developer ID Application. Both notarised and stapled. |
-| macOS 12 or later, Apple silicon only | `Elitea-<version>-macos-arm64.app.zip`: the app itself. Unzip it and move it to Applications. | Yes, notarised and stapled |
+| macOS 12 or later, Apple silicon (M1 or later) only | `Elitea-<version>-macos-arm64.dmg`: the disk image people download. Open it and drag the app to Applications. | Yes. The disk image and the app inside with Developer ID Application, both notarised and stapled. |
+| macOS 12 or later, Apple silicon only | `Elitea-<version>-macos-arm64.pkg`: the installer package, for the MDM | Yes. The package with Developer ID Installer, the app inside with Developer ID Application. Both notarised and stapled. |
 | Windows 10 2004 or later, x64 | `Elitea-<version>-windows-x64-unsigned.msi`: for Intune, SCCM or `msiexec /i <file> /qn` | **No**, until a Windows code-signing certificate is set up |
 | Windows 10 2004 or later, x64 | `Elitea-<version>-windows-x64-unsigned.msix` | **No**: see below |
 
 `SHA256SUMS` lists the SHA-256 of each file. Check a download before you deploy it: `shasum -a 256 -c SHA256SUMS` on macOS (files you did not download show as missing), or compare `Get-FileHash <file>` in PowerShell with its line. The release notes' **Desktop downloads** section says the same per release.
 
-Intel Macs are not supported. The macOS package is built for Apple silicon only, and the installer refuses to install it on an Intel Mac. Scope the MDM assignment to Apple silicon computers: in Jamf, a smart group on **Architecture Type** `arm64`; in Intune, a filter on the device's processor architecture.
+Intel Macs are not supported. The macOS app is built for Apple silicon only, and the installer package refuses to install on an Intel Mac. Scope the MDM assignment to Apple silicon computers: in Jamf, a smart group on **Architecture Type** `arm64`; in Intune, a filter on the device's processor architecture.
+
+### Install on a Mac yourself
+
+1. Download `Elitea-<version>-macos-arm64.dmg` from the release and open it. A window opens with the app on the left and the **Applications** folder on the right.
+2. Drag the app onto **Applications**.
+3. Eject the disk image (the eject button next to it in the Finder sidebar), then open the app from Applications or Launchpad.
+
+The disk image is signed and notarised, and the ticket is stapled to it, so it opens without a Gatekeeper warning, also offline. To check a download yourself: `spctl -a -t open --context context:primary-signature -v <file>.dmg` says `accepted`, and `xcrun stapler validate <file>.dmg` says `The validate action worked!`.
+
+For more than a handful of Macs, deploy the `.pkg` through the MDM instead ([macOS](#macos) below): it installs silently, with no window and no drag.
+
+Earlier releases shipped the app zipped (`.app.zip`) next to the `.pkg`; the disk image replaced it.
 
 ### Windows packages are unsigned for now
 

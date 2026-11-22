@@ -25,7 +25,11 @@ secrets and how to ask for a new manifest field, is in the ELITEA docs:
 2. Fill in `brand.json`: the names, the ids, the URLs, the hue.
 3. Add `assets/`. To start from placeholders, run
    `node elitea/scripts/brand/placeholder-assets.mjs brand/<id>` on a checkout of
-   the pinned release.
+   the pinned release. The macOS disk image's window background is
+   `assets/macos/dmg-background.png` (660x400) and `dmg-background@2x.png`
+   (1320x800), drawn around the fixed layout (app left, Applications right);
+   `node elitea/scripts/brand/dmg.mjs brand/<id> --from '#rrggbb' --to '#rrggbb'`
+   draws one from two colours. Without them the build draws one from your hue.
 4. Check it: `node elitea/scripts/brand-check.mjs brand/<id>`.
 5. Open a pull request. `build.yml` builds every platform unsigned.
 6. Add the signing secrets, then run **Build the brand** by hand.

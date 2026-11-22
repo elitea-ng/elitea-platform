@@ -63,7 +63,8 @@ export function checkAsset(spec, buf) {
   if (spec.kind === 'png') {
     const info = pngInfo(buf);
     if (!info) return [`${where}: not a PNG`];
-    if (info.width !== spec.size || info.height !== spec.size) out.push(`${where}: is ${info.width}x${info.height}, must be ${spec.size}x${spec.size} (${spec.use})`);
+    const [w, h] = [spec.width ?? spec.size, spec.height ?? spec.size];
+    if (info.width !== w || info.height !== h) out.push(`${where}: is ${info.width}x${info.height}, must be ${w}x${h} (${spec.use})`);
     if (spec.alpha === true && !info.alpha) out.push(`${where}: needs an alpha channel (${spec.use})`);
     if (spec.alpha === false && info.alpha) out.push(`${where}: must be opaque, with no alpha channel (${spec.use})`);
   } else if (spec.kind === 'ico' || spec.kind === 'icns') {

@@ -9,7 +9,9 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
+import { dmgBackgroundAssets } from './dmg.mjs';
 import { BRANDS_DIR, loadBrandFrom, REPO_ROOT } from './load.mjs';
+import { decodedPngs } from './raster.mjs';
 
 const brand = loadBrandFrom(join(BRANDS_DIR, 'elitea'));
 const repo = (p) => readFileSync(join(REPO_ROOT, p));
@@ -46,4 +48,13 @@ test('brand/elitea names and hue match the web default pack and client-core', ()
   // from the served pack, a brand's from its generated default pack.
   const links = repo('apps/elitea-web/src/shared/brand/brandLinks.ts').toString();
   assert.doesNotMatch(links, new RegExp(lit(brand.manifest.supportEmail)));
+});
+
+test("brand/elitea's disk image backgrounds are drawn from the brand tokens (indigo to violet)", () => {
+  const tokens = JSON.parse(repo('libs/ts/client-core/src/brand/tokens.json'));
+  const expected = dmgBackgroundAssets({ from: tokens.palette.indigo.value, to: tokens.palette.violet.value });
+  for (const [path, bytes] of expected) {
+    // Pixels, not bytes: deflate output varies with node's zlib build.
+    assert.ok(decodedPngs(asset(path)).equals(decodedPngs(bytes)), `assets/${path} differs: node scripts/brand/dmg.mjs brand/elitea --from ${tokens.palette.indigo.value} --to ${tokens.palette.violet.value}`);
+  }
 });

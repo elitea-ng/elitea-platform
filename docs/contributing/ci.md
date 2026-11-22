@@ -136,8 +136,8 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
   another home layout would extract them to the wrong directory.
 - **Desktop packages.** `desktop-package` (heavy tier) runs on a pull request only when `apps/elitea-desktop/**`,
   `libs/rust/vendor/agent-desktop/**`, the Rust toolchain pin, `desktop-package.yml`, the two packaging actions, the brands
-  (`brand/**`, `scripts/brand/**`) or the brand output scan change. The macOS run is an unsigned debug dry run of brand/sample, and
-  it is the desktop lane of the brand output scan (the macOS host job in `ci-desktop.yml` no longer builds a second binary
+  (`brand/**`, `scripts/brand/**`) or the brand output scan change. The macOS run is an unsigned debug dry run of brand/sample (the app, the
+  `.pkg` and the styled `.dmg`, whose Finder layout is read back and checked on the mounted image), and it is the desktop lane of the brand output scan (the macOS host job in `ci-desktop.yml` no longer builds a second binary
   for it; `ci-local-tools-macos.yml` runs the local-index tests that job used to). The Windows run builds the ELITEA MSI and
   MSIX in full, unsigned (`tauri build` in the release profile, the sidecar, makeappx). Both stage the release asset names.
   `publish.yml` (the nightly pre-release on main, and every release) runs the release build, macOS signed and verified,

@@ -117,11 +117,12 @@ export function plan(platform, env, { requireSigned = false, dryRun = false } = 
 /**
  * What a release carries per platform (owner decision 2026-11-22, amending ADR-0052
  * decision 10): the architecture each platform is built for and its file kinds.
- * macOS: the signed .pkg (device management) and the notarised .app, zipped with
- * `ditto -c -k --keepParent` (a direct download). Windows: the MSI and the MSIX.
+ * macOS: the styled, notarised .dmg (the direct download: drag the app to
+ * Applications; owner decision 2026-11-22, in place of a zipped .app) and the signed
+ * .pkg (device management). Windows: the MSI and the MSIX.
  */
 export const ASSET_KINDS = Object.freeze({
-  macos: Object.freeze({ arch: 'arm64', exts: Object.freeze(['pkg', 'app.zip']) }),
+  macos: Object.freeze({ arch: 'arm64', exts: Object.freeze(['dmg', 'pkg']) }),
   windows: Object.freeze({ arch: 'x64', exts: Object.freeze(['msi', 'msix']) }),
 });
 
@@ -132,7 +133,7 @@ const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 const BRAND = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 // The brand is lazy and the version starts with a digit: `Acme-2-1.0.0-…` reads as brand
 // `Acme-2`, the only reading whose version is X.Y.Z.
-const ASSET = /^(?<brand>[A-Za-z0-9][A-Za-z0-9._-]*?)-(?<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)-(?<os>macos|windows)-(?<arch>arm64|x64)(?<unsigned>-unsigned)?\.(?<ext>pkg|app\.zip|msix|msi)$/;
+const ASSET = /^(?<brand>[A-Za-z0-9][A-Za-z0-9._-]*?)-(?<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)-(?<os>macos|windows)-(?<arch>arm64|x64)(?<unsigned>-unsigned)?\.(?<ext>dmg|pkg|msix|msi)$/;
 
 /**
  * The brand as a file-name word: accents dropped (`Café` → `Cafe`), every run of other
@@ -219,10 +220,10 @@ export function releaseNotesSection(assets) {
   const by = (os, ext) => assets.find((a) => a.os === os && a.ext === ext);
   const code = (a) => `\`${a.name}\``;
   const lines = [NOTES_MARKER, '## Desktop downloads', ''];
+  const dmg = by('macos', 'dmg');
   const pkg = by('macos', 'pkg');
-  const zip = by('macos', 'app.zip');
-  if (pkg || zip) {
-    const files = [pkg && `${code(pkg)} (installs into Applications; the package for device management)`, zip && `${code(zip)} (unzip, then move the app to Applications)`];
+  if (dmg || pkg) {
+    const files = [dmg && `${code(dmg)} (open it, then drag the app to Applications)`, pkg && `${code(pkg)} (installs into Applications; the package for device management)`];
     lines.push(`- **macOS 12 or later, Apple silicon (M1 or later) only. Signed and notarised.** ${files.filter(Boolean).join(', or ')}. Intel Macs are not supported.`);
   }
   const windows = [by('windows', 'msi'), by('windows', 'msix')].filter(Boolean);

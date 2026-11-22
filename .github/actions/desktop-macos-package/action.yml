@@ -1,7 +1,8 @@
 name: Desktop macOS package
 description: >-
-  The Apple silicon (arm64) desktop app and its silent .pkg for device management
-  (ADR-0052 W2b), signed with the brand owner's Developer ID, notarised and stapled,
+  The Apple silicon (arm64) desktop app, its silent .pkg for device management
+  (ADR-0052 W2b) and its styled .dmg for a direct download (owner decision
+  2026-11-22), signed with the brand owner's Developer ID, notarised and stapled,
   or an unsigned dry run when no signing secret is set. Intel Macs are not supported
   (owner decision, 2026-11-20): the package refuses to install on one. Used by this
   repository's desktop-package.yml and, from a checkout of a release tag, by brand
@@ -44,8 +45,14 @@ outputs:
     description: "`true` when the app and the package are signed and notarised."
     value: ${{ steps.plan.outputs.sign }}
   package-dir:
-    description: The folder holding the .pkg.
+    description: The folder holding the .pkg and the .dmg.
     value: ${{ steps.paths.outputs.out }}
+  dmg:
+    description: The styled disk image's path.
+    value: ${{ steps.dmg.outputs.path }}
+  dmg-settings:
+    description: The disk image's settings.json (volume name, layout), from the brand.
+    value: ${{ steps.dmg.outputs.settings }}
 
 runs:
   using: composite
@@ -202,6 +209,54 @@ runs:
       run: |
         bash scripts/macos-pkg.sh "${DESKTOP_BUNDLE}/${DESKTOP_APP}" "$DESKTOP_ID" "$DESKTOP_VERSION" "$RUNNER_TEMP/out"
 
+    # The direct download (owner decision 2026-11-22): a styled disk image, the app on
+    # the left and an Applications alias on the right over the brand's background, the
+    # volume named `<Brand> <version>` with the brand's icon. Every brand input comes
+    # from scripts/dmg-settings.mjs (ELITEA_BRAND); scripts/macos-dmg.sh lays the
+    # window out through Finder, checks the .DS_Store it wrote (dmg-verify.mjs) and,
+    # signed, codesigns the image with the Developer ID Application identity,
+    # notarises and staples it.
+    - name: Build the disk image
+      id: dmg
+      shell: bash
+      working-directory: ${{ inputs.root }}/apps/elitea-desktop
+      env:
+        DMG_SIGNING_IDENTITY: ${{ steps.plan.outputs.sign == 'true' && inputs.apple-signing-identity || '' }}
+        APPLE_CERTIFICATE: ${{ steps.plan.outputs.sign == 'true' && inputs.apple-certificate || '' }}
+        APPLE_CERTIFICATE_PASSWORD: ${{ steps.plan.outputs.sign == 'true' && inputs.apple-certificate-password || '' }}
+        APPLE_API_KEY: ${{ steps.plan.outputs.sign == 'true' && inputs.apple-api-key || '' }}
+        APPLE_API_ISSUER: ${{ steps.plan.outputs.sign == 'true' && inputs.apple-api-issuer || '' }}
+      run: |
+        set -euo pipefail
+        inputs="$RUNNER_TEMP/dmg-inputs"
+        node scripts/dmg-settings.mjs "$inputs" "$DESKTOP_VERSION"
+        dmg="$RUNNER_TEMP/out/${DESKTOP_APP%.app}-${DESKTOP_VERSION}-arm64.dmg"
+        bash scripts/macos-dmg.sh "${DESKTOP_BUNDLE}/${DESKTOP_APP}" "$inputs" "$dmg"
+        {
+          echo "path=$dmg"
+          echo "settings=$inputs/settings.json"
+        } >> "$GITHUB_OUTPUT"
+
+    # Proven on the finished, compressed image, not only on the writable one it was
+    # styled in: mounted read-only, the layout files and records are all there.
+    - name: The disk image is styled
+      shell: bash
+      env:
+        DMG: ${{ steps.dmg.outputs.path }}
+        SETTINGS: ${{ steps.dmg.outputs.settings }}
+      run: |
+        set -euo pipefail
+        hdiutil verify -quiet "$DMG"
+        mnt="$RUNNER_TEMP/dmg-mount"
+        rm -rf "$mnt" && mkdir -p "$mnt"
+        hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "$mnt" "$DMG" >/dev/null
+        status=0
+        node "$ELITEA_ROOT/apps/elitea-desktop/scripts/dmg-verify.mjs" "$mnt" "$SETTINGS" || status=$?
+        ls -la "$mnt"
+        hdiutil detach "$mnt" -quiet || hdiutil detach "$mnt" -force -quiet
+        [ "$status" -eq 0 ] || { echo "::error::$(basename "$DMG") is not laid out as the brand's settings say"; exit 1; }
+        echo "$(basename "$DMG"): \"$(node -p 'require(process.argv[1]).volumeName' "$SETTINGS")\", $(du -h "$DMG" | cut -f1)"
+
     # The installer refuses an Intel Mac: the product's distribution names arm64
     # as its only host architecture (scripts/macos-pkg.sh).
     - name: The package installs on Apple silicon only
@@ -218,9 +273,9 @@ runs:
         fi
         echo "$(basename "$pkg"): hostArchitectures=arm64"
 
-    # Proven, not assumed: Gatekeeper accepts the app and the package, and both
-    # carry a stapled ticket.
-    - name: The app and the package are signed, notarised and stapled
+    # Proven, not assumed: Gatekeeper accepts the app, the package and the disk
+    # image, and each carries a stapled ticket.
+    - name: The app, the package and the disk image are signed, notarised and stapled
       if: steps.plan.outputs.sign == 'true'
       shell: bash
       run: |
@@ -237,6 +292,10 @@ runs:
         fi
         spctl -a -vv --type install "$pkg"
         xcrun stapler validate "$pkg"
+        dmg="$(ls "$RUNNER_TEMP"/out/*.dmg)"
+        codesign --verify --strict --verbose=2 "$dmg"
+        spctl -a -t open --context context:primary-signature -v "$dmg"
+        xcrun stapler validate "$dmg"
 
     - name: The unsigned package is well formed
       if: steps.plan.outputs.sign != 'true'
@@ -251,7 +310,7 @@ runs:
         if grep -q '/\._' "$RUNNER_TEMP/payload.txt"; then
           echo "::error::the package payload carries AppleDouble ._ files"; exit 1
         fi
-        echo "::notice::unsigned dry run ($DESKTOP_PROFILE build): $(basename "$pkg") built; signing and notarisation skipped"
+        echo "::notice::unsigned dry run ($DESKTOP_PROFILE build): $(basename "$pkg") and $(basename "$(ls "$RUNNER_TEMP"/out/*.dmg)") built; signing and notarisation skipped"
 
     - name: Remove the notarisation key
       if: always()

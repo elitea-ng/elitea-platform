@@ -21,11 +21,11 @@ The template is the private template repository `elitea-ng/elitea-brand-template
 1. Create a repository from the template (GitHub › `elitea-ng/elitea-brand-template` › Use this template), or copy `docs/brand-template/` into a new one.
 2. Rename `brand/acme` to your brand id, and set `BRAND_DIR` in `build.yml` to `brand/<id>`. The folder name must equal the manifest's `id`.
 3. Fill in `brand.json`: the names, the ids, the URLs, the hue, and your EAS project (`eas.projectId`, `eas.owner`). See the field table in [Brands](/development/brands#brandjson).
-4. Add `assets/`. To start from placeholders, check out the pinned release next to the brand (`git clone --depth 1 --branch <tag> https://github.com/elitea-ng/elitea-platform elitea`) and run `node elitea/scripts/brand/placeholder-assets.mjs brand/<id> --fg '#rrggbb' --bg '#rrggbb'`.
+4. Add `assets/`. To start from placeholders, check out the pinned release next to the brand (`git clone --depth 1 --branch <tag> https://github.com/elitea-ng/elitea-platform elitea`) and run `node elitea/scripts/brand/placeholder-assets.mjs brand/<id> --fg '#rrggbb' --bg '#rrggbb'`. That set includes the macOS disk image's background (`assets/macos/dmg-background.png` and `@2x`): replace it with your own, drawn around the fixed layout, or delete both files to get one drawn from your hue (see [The disk image](/development/brands#the-disk-image)).
 5. Check it: `node elitea/scripts/brand-check.mjs brand/<id>`. Fix each line it reports.
 6. Replace `NOTICE` (see [NOTICE](#notice)).
 7. Open a pull request. `build.yml` checks out the pinned release, checks that it can build brand repositories, runs brand-check, and builds every platform **unsigned**. A pull request never signs and keeps no artifacts.
-8. Add the [signing secrets](#signing-secrets), then run **Build the brand** by hand (Actions › Build the brand › Run workflow). Choose the platforms. Set **keep_artifacts** to keep the desktop packages and the mobile bundles for 7 days.
+8. Add the [signing secrets](#signing-secrets), then run **Build the brand** by hand (Actions › Build the brand › Run workflow). Choose the platforms. Set **keep_artifacts** to keep the desktop packages (the macOS `.dmg` and `.pkg`, the Windows `.msi` and `.msix`) and the mobile bundles for 7 days.
 
 `upstream.json` must name a release tag, never a branch. The first release that can build brand repositories is v7.6.0; `scripts/check-release.mjs` refuses an older one.
 
@@ -66,7 +66,7 @@ Open an issue in `elitea-ng/elitea-platform` that asks for a manifest field. Say
 | --- | --- |
 | `APPLE_CERTIFICATE` | The Developer ID Application and Developer ID Installer certificates, as one base64 `.p12` |
 | `APPLE_CERTIFICATE_PASSWORD` | The `.p12` password |
-| `APPLE_SIGNING_IDENTITY` | The Developer ID Application identity, `Developer ID Application: <Name> (<TEAM>)` |
+| `APPLE_SIGNING_IDENTITY` | The Developer ID Application identity, `Developer ID Application: <Name> (<TEAM>)`, for the app and the `.dmg` |
 | `APPLE_INSTALLER_SIGNING_IDENTITY` | The Developer ID Installer identity, for the `.pkg` |
 | `APPLE_API_KEY` | The App Store Connect API key id, for notarisation |
 | `APPLE_API_ISSUER` | The API key's issuer id |
