@@ -75,6 +75,9 @@ impl NodeRecoveryRequiredReceipt {
                     // Platform-owned and effect-free by construction: it never
                     // asks an operator, and Main's receipt contract omits it.
                     | NodeFailureClass::RuntimeLost
+                    // Pre-dispatch deadline refusal (FU-309): never asks an
+                    // operator, and Main's receipt contract omits it.
+                    | NodeFailureClass::DeadlineInsufficient
             )
         {
             return false;

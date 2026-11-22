@@ -91,6 +91,7 @@ fn invocation() -> CodeInvocation<'static> {
         original: None,
         debug: None,
         workspace: None,
+        timeout_ms: None,
     }
 }
 
