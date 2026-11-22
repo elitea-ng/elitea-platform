@@ -60,6 +60,9 @@ fn terminal_failure_code(
         | NodeFailureClass::AuthorizationDenied
         | NodeFailureClass::SensitiveRejected => Some("pipeline.code_authorization_failed"),
         NodeFailureClass::Cancelled if preparation.is_none() => Some("pipeline.code_cancelled"),
+        NodeFailureClass::DeadlineInsufficient => {
+            Some(crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE)
+        }
         NodeFailureClass::DependencyUnavailable
         | NodeFailureClass::RateLimited
         | NodeFailureClass::AttemptTimeout
@@ -78,16 +81,16 @@ fn terminal_failure_code(
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CodeAttemptFailure {
     pub(crate) phase: CodeAttemptPhase,
     pub(crate) failure: NodeFailure,
     // Owning call detail; generic graph recovery still uses the whole dispatch.
     pub(crate) platform_call_effect: Option<[u8; 32]>,
     pub(crate) preparation: Option<CodePreparationFailure>,
-    /// W3-1: refused before dispatch by deadline admission. The class stays
-    /// a persisted, non-retryable one; this selects the registered terminal.
-    pub(crate) deadline_insufficient: bool,
+    /// Bounded diagnostic output held only in memory until a claim-fenced,
+    /// non-continued terminal stop commits (SEC-5B1B-01 / #2240).
+    pub(crate) failure_detail: Option<String>,
 }
 
 impl CodeAttemptFailure {
@@ -101,20 +104,12 @@ impl CodeAttemptFailure {
             failure: NodeFailure { class, replay },
             platform_call_effect: None,
             preparation: None,
-            deadline_insufficient: false,
+            failure_detail: None,
         }
-    }
-    pub(crate) const fn with_deadline_insufficient(mut self) -> Self {
-        self.deadline_insufficient = true;
-        self
     }
     /// The registered upstream code the node reports for this failure.
-    fn terminal_code(self) -> Option<&'static str> {
-        if self.deadline_insufficient {
-            Some(crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE)
-        } else {
-            terminal_failure_code(self.failure.class, self.preparation)
-        }
+    fn terminal_code(&self) -> Option<&'static str> {
+        terminal_failure_code(self.failure.class, self.preparation)
     }
     pub(crate) fn with_preparation_failure(mut self, failure: CodePreparationFailure) -> Self {
         self.preparation = Some(failure);
@@ -122,6 +117,10 @@ impl CodeAttemptFailure {
     }
     pub(crate) fn with_platform_call_effect(mut self, effect: Option<[u8; 32]>) -> Self {
         self.platform_call_effect = effect;
+        self
+    }
+    pub(crate) fn with_failure_detail(mut self, detail: Option<&str>) -> Self {
+        self.failure_detail = detail.and_then(crate::protocol::terminal_detail::bounded);
         self
     }
 }
@@ -139,6 +138,7 @@ pub(in crate::agents) struct CodeInvocation<'a> {
     pub(super) original: Option<super::code_workspace::CodeOriginalDeclaration>,
     pub(super) debug: Option<super::code_debug::CodeDebugSelection>,
     pub(super) workspace: Option<super::code_workspace::CodeWorkspaceInvocation>,
+    pub(super) timeout_ms: Option<u64>,
 }
 
 /// Why a tool's sandbox run produced no receipt, as a value: what the
@@ -199,6 +199,21 @@ pub(in crate::agents) trait CodeSandboxRuntime: Send + Sync {
     {
         Ok(())
     }
+
+    /// Remaining run-deadline budget and required attempt window (in ms) for
+    /// retry clamping (`record_failure_within`, PLAN §3.3).
+    fn retry_deadline_budget(
+        &self,
+        _language: CodeLanguage,
+        _platform_client: bool,
+        _timeout_ms: Option<u64>,
+    ) -> Option<(u64, u64)> {
+        None
+    }
+
+    /// Persist bounded failure detail strictly for a claim-fenced,
+    /// non-continued terminal stop (SEC-5B1B-01 / #2240).
+    async fn record_terminal_failure_detail(&self, _detail: Option<&str>) {}
 
     /// Bind only the actual Main registered saved family at the compiler seam.
     /// Default runtimes cannot acquire scoped authority from a child definition.
@@ -261,6 +276,9 @@ pub(super) struct CodeNode {
     /// W3-2 (N1): a fan-out member reads the registered code its Code node
     /// failed with, so the member failure names it.
     failure_code: Option<CodeFailureSlot>,
+    /// 5b-1 PR B: optional per-node `settings.timeout_ms` (clamped at the
+    /// sandbox profile's `timeout_seconds` ceiling).
+    timeout_ms: Option<u64>,
 }
 
 /// The registered failure code a Code node reported, for its fan-out member.
@@ -283,7 +301,13 @@ impl CodeNode {
             runtime,
             events: None,
             failure_code: None,
+            timeout_ms: None,
         })
+    }
+
+    pub(super) fn with_timeout_ms(mut self, timeout_ms: Option<u64>) -> Self {
+        self.timeout_ms = timeout_ms;
+        self
     }
 
     /// W3-2 (N1): record the registered failure code into `slot` as well.
@@ -415,6 +439,7 @@ impl CodeNode {
                     .definition
                     .workspace_selection(context)
                     .map_err(code_error)?,
+                timeout_ms: self.timeout_ms,
             })
             .await
             .map_err(|(error, code)| {
@@ -466,6 +491,7 @@ impl NodeAttemptBody for CodeNode {
                 replay: ReplaySafety::NoExternalEffect,
             },
             terminal_code: terminal_failure_code(class, None),
+            failure_detail: None,
         };
         if !authority.matches(
             self.definition.id(),
@@ -521,13 +547,18 @@ impl NodeAttemptBody for CodeNode {
                         .definition
                         .workspace_selection(context)
                         .map_err(|_| reject(NodeFailureClass::InvalidConfiguration))?,
+                    timeout_ms: self.timeout_ms,
                 },
                 authority,
             )
             .await
-            .map_err(|failure| NodeAttemptReportedFailure {
-                failure: failure.failure,
-                terminal_code: failure.terminal_code(),
+            .map_err(|failure| {
+                let terminal_code = failure.terminal_code();
+                NodeAttemptReportedFailure {
+                    failure: failure.failure,
+                    terminal_code,
+                    failure_detail: failure.failure_detail,
+                }
             })?;
         let updates = project_code_receipt(
             &receipt,
@@ -543,6 +574,7 @@ impl NodeAttemptBody for CodeNode {
                 },
             },
             terminal_code: terminal_failure_code(NodeFailureClass::InvalidResult, None),
+            failure_detail: None,
         })?;
         let mut output = NodeOutput::new();
         for (key, value) in updates {
@@ -592,6 +624,18 @@ impl NodeAttemptBody for CodeNode {
             }
         }
         Ok(())
+    }
+
+    async fn record_terminal_failure_detail(&self, detail: Option<&str>) {
+        self.runtime.record_terminal_failure_detail(detail).await;
+    }
+
+    fn retry_deadline_budget(&self) -> Option<(u64, u64)> {
+        self.runtime.retry_deadline_budget(
+            self.definition.language(),
+            self.definition.platform_client(),
+            self.timeout_ms,
+        )
     }
 }
 
@@ -719,6 +763,10 @@ mod tests {
                 Some(CodePreparationFailure::Failed)
             ),
             None
+        );
+        assert_eq!(
+            terminal_failure_code(NodeFailureClass::DeadlineInsufficient, None),
+            Some(crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE)
         );
         for class in [
             NodeFailureClass::AttemptTimeout,

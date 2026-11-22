@@ -9,7 +9,7 @@
 //! It performs no I/O and names no data: refusals and entries carry fixed
 //! catalog text only.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ring::digest;
 use serde::{Deserialize, Serialize};
@@ -17,7 +17,10 @@ use serde_json::{Map, Value, json};
 
 use super::fanout::plan::{safe_message, support_ref_for, valid_code};
 use super::fanout_budget::MAX_JOIN_ERROR_ENTRY_BYTES;
-use super::node_recovery::MAX_NODE_ATTEMPTS;
+use super::node_recovery::{
+    MAX_BACKOFF_MS, MAX_ELAPSED_MS, MAX_NODE_ATTEMPTS, NodeBackoff, NodeRecoveryError,
+    NodeRecoveryPolicy, RetryCondition,
+};
 use super::yaml::valid_graph_id;
 
 /// The node key that holds the block.
@@ -31,6 +34,8 @@ pub const EXECUTED_ONCE_KEY: &str = "__elitea_executed_once_v1";
 pub const MIN_NODE_TRIES: u16 = 2;
 /// Most total tries, the first one included.
 pub const MAX_NODE_TRIES: u16 = 5;
+/// Total tries when `retry_on_fail` is set without `max_tries`.
+pub const DEFAULT_NODE_TRIES: u16 = 3;
 /// Shortest wait between two tries (n8n allows 0; unspaced retries amplify
 /// an outage, FU-302).
 pub const MIN_WAIT_BETWEEN_TRIES_MS: u64 = 100;
@@ -54,8 +59,9 @@ pub const MAX_EXECUTED_ONCE_NODES: usize = 128;
 
 const _: () = assert!(MAX_NODE_TRIES as usize <= MAX_NODE_ATTEMPTS as usize);
 const _: () = assert!(MIN_NODE_TRIES >= 2 && MIN_NODE_TRIES <= MAX_NODE_TRIES);
+const _: () = assert!(DEFAULT_NODE_TRIES >= MIN_NODE_TRIES && DEFAULT_NODE_TRIES <= MAX_NODE_TRIES);
 const _: () = assert!(MAX_NODE_ERROR_OBJECT_BYTES == MAX_JOIN_ERROR_ENTRY_BYTES);
-const _: () = assert!(MAX_WAIT_BETWEEN_TRIES_MS == 300_000);
+const _: () = assert!(MAX_WAIT_BETWEEN_TRIES_MS == MAX_BACKOFF_MS);
 const _: () = assert!(MAX_NODE_TIMEOUT_MS < 3_600_000);
 
 const DIGEST_DOMAIN: &[u8] = b"elitea.pipeline.node-settings.v1\0";
@@ -321,8 +327,11 @@ impl DeterministicFamily {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SettingsFamily {
     Deterministic(DeterministicFamily),
-    /// A node type whose slice has not wired settings yet (5b-1 PR B and
-    /// 5b-2..5b-5): the whole block is refused.
+    /// Code sandbox node (5b-1 PR B): journaled retries, on-error,
+    /// always-output, run-once and per-node timeout.
+    Code,
+    /// A node type whose slice has not wired settings yet (5b-2..5b-5):
+    /// the whole block is refused.
     NotYet,
     /// HITL and Printer pause the run: no settings, ever.
     Pause,
@@ -336,6 +345,7 @@ impl SettingsFamily {
             "router" => Self::Deterministic(DeterministicFamily::Router),
             "split_out" => Self::Deterministic(DeterministicFamily::SplitOut),
             "aggregate" => Self::Deterministic(DeterministicFamily::Aggregate),
+            "code" => Self::Code,
             "hitl" | "printer" => Self::Pause,
             _ => Self::NotYet,
         }
@@ -350,6 +360,16 @@ impl SettingsFamily {
                 "error_transition",
                 "always_output_data",
                 "execute_once",
+            ],
+            Self::Code => &[
+                "retry_on_fail",
+                "max_tries",
+                "wait_between_tries_ms",
+                "on_error",
+                "error_transition",
+                "always_output_data",
+                "execute_once",
+                "timeout_ms",
             ],
             Self::NotYet | Self::Pause => &[],
         }
@@ -426,12 +446,72 @@ impl NodeSettings {
         !matches!(self.on_error, OnNodeError::Stop)
     }
 
+    /// Total tries (`1` when `retry_on_fail` is false; `2..=5`, default `3`,
+    /// when `retry_on_fail` is true).
+    #[must_use]
+    pub const fn effective_max_tries(&self) -> u16 {
+        if self.retry_on_fail {
+            match self.max_tries {
+                Some(tries) => tries,
+                None => DEFAULT_NODE_TRIES,
+            }
+        } else {
+            1
+        }
+    }
+
+    /// Fixed wait between tries when `retry_on_fail` is true.
+    #[must_use]
+    pub const fn effective_wait_ms(&self) -> Option<u64> {
+        if self.retry_on_fail {
+            Some(match self.wait_between_tries_ms {
+                Some(wait) => wait,
+                None => DEFAULT_WAIT_BETWEEN_TRIES_MS,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Compile this block's retry settings into the shared `NodeRecoveryPolicy`
+    /// (5b-1 PR B, PLAN §3.1, C2).
+    ///
+    /// `on_error`, `error_transition`, `always_output_data`, `execute_once` and
+    /// `timeout_ms` stay out of `NodeRecoveryPolicy` so `journal_activation_id`
+    /// stays byte-identical for `recovery:` pipelines. `retry_on` enables all
+    /// four `RetryCondition`s — the exact set an explicit `recovery:` policy
+    /// may admit — and never widens what `plan_after_failure` retries.
+    pub fn to_recovery_policy(&self) -> Result<NodeRecoveryPolicy, NodeRecoveryError> {
+        if !self.retry_on_fail {
+            return Ok(NodeRecoveryPolicy::default());
+        }
+        let wait = self
+            .wait_between_tries_ms
+            .unwrap_or(DEFAULT_WAIT_BETWEEN_TRIES_MS);
+        NodeRecoveryPolicy::admit(
+            self.effective_max_tries(),
+            BTreeSet::from([
+                RetryCondition::DependencyUnavailable,
+                RetryCondition::RateLimited,
+                RetryCondition::AttemptTimeout,
+                RetryCondition::WorkerInterrupted,
+            ]),
+            Some(NodeBackoff {
+                initial_ms: wait,
+                maximum_ms: wait,
+                multiplier: 1,
+            }),
+            Some(MAX_ELAPSED_MS),
+            None,
+        )
+    }
+
     /// The per-family admission of a parsed block (the contract table).
     pub fn check_family(&self, family: SettingsFamily) -> Result<(), NodeSettingsRefusal> {
         match family {
             SettingsFamily::NotYet => return Err(NodeSettingsRefusal::FamilyNotYet),
             SettingsFamily::Pause => return Err(NodeSettingsRefusal::FamilyPause),
-            SettingsFamily::Deterministic(_) => {}
+            SettingsFamily::Deterministic(_) | SettingsFamily::Code => {}
         }
         let admitted = family.admitted_keys();
         if self.retry_on_fail && !admitted.contains(&"retry_on_fail") {

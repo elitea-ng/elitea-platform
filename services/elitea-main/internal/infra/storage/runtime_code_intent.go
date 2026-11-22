@@ -168,6 +168,10 @@ func matchCodePreparedSemantics(declaration SavedCodeDeclaration, job CodePrepar
 	if job.Language != declaration.Language {
 		return CodePreparedMetadata{}, code.ErrRejected
 	}
+	// SEC-5B1B-05: enforce saved `settings.timeout_ms` upper bound in Main.
+	if declaration.SettingsTimeoutSeconds > 0 && job.TimeoutSeconds > declaration.SettingsTimeoutSeconds {
+		return CodePreparedMetadata{}, code.ErrRejected
+	}
 	// Input membership is admitted against the exact owning graph policy by the
 	// visit transaction. Final preparation preserves its retained input digest.
 	var source struct {

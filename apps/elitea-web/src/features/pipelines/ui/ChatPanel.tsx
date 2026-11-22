@@ -90,24 +90,36 @@ export interface ChatPanelHandle {
 const chatContainerSx = (isSmallWindow: boolean, collapsed: boolean, display: string | undefined): SxProps<Theme> => ({
   minWidth: isSmallWindow ? '100%' : collapsed ? '1.75rem' : '20rem',
   width: isSmallWindow ? '100%' : collapsed ? '1.75rem' : '20rem',
+  flex: isSmallWindow ? '0 0 auto' : undefined,
   flexShrink: 0,
   maxWidth: '100%',
   position: 'relative',
-  height: '100%',
+  height: isSmallWindow ? 'auto' : '100%',
   display: display ?? 'flex',
   flexDirection: 'row',
   boxSizing: 'border-box',
   gap: '0.75rem',
 });
 const collapseButtonSx: SxProps<Theme> = { padding: '0', marginLeft: '0', position: 'absolute', top: '0.25rem', left: '0', zIndex: 100 };
-const chatContentSx: SxProps<Theme> = { display: 'flex', flexDirection: 'column', height: '100%', width: '100%', maxWidth: '100%', flex: 1, minHeight: 0, overflowY: 'auto', gap: '0.75rem', boxSizing: 'border-box' };
-const topBarSx = (collapsed: boolean): SxProps<Theme> => ({
+const chatContentSx = (isSmallWindow: boolean): SxProps<Theme> => ({
+  display: 'flex',
+  flexDirection: 'column',
+  height: isSmallWindow ? 'auto' : '100%',
+  width: '100%',
+  maxWidth: '100%',
+  flex: 1,
+  minHeight: 0,
+  overflowY: isSmallWindow ? 'visible' : 'auto',
+  gap: '0.75rem',
+  boxSizing: 'border-box',
+});
+const topBarSx = (isSmallWindow: boolean, collapsed: boolean): SxProps<Theme> => ({
   display: !collapsed ? 'flex' : 'none',
   alignItems: 'center',
   justifyContent: 'space-between',
   gap: '0.5rem',
   width: '100%',
-  paddingLeft: '2.25rem',
+  paddingLeft: isSmallWindow ? '0' : '2.25rem',
 });
 const clearButtonContainerSx = (isSmallWindow: boolean, hasActiveConversationId: boolean): SxProps<Theme> => ({
   display: 'flex',
@@ -192,8 +204,8 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function Ch
           {collapsed ? <KeyboardDoubleArrowLeftIcon fontSize="small" /> : <KeyboardDoubleArrowRightIcon fontSize="small" />}
         </IconButton>
       )}
-      <Box data-testid="pipeline-chat-content" sx={chatContentSx}>
-        <Box sx={topBarSx(collapsed)}>
+      <Box data-testid="pipeline-chat-content" sx={chatContentSx(isSmallWindow)}>
+        <Box sx={topBarSx(isSmallWindow, collapsed)}>
           {contextBudgetSlotProps && renderContextBudget?.(contextBudgetSlotProps)}
           <Box sx={clearButtonContainerSx(isSmallWindow, activeConversation?.id !== undefined)}>
             {renderClearChatButton?.({ disabled: shouldDisableClear, onClear })}

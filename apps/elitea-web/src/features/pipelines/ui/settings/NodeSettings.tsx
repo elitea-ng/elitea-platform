@@ -1,9 +1,9 @@
 /**
  * The per-node "Settings" section (5b-1, PLAN §3.9): On error, Always output
- * data and Run once per execution, for the node types the contract admits
- * (`pipeline-node-settings-v1.json` `families`). Built only from existing
- * controls: `BaseSwitch` rows as `CommonInterruptSettings`, `SingleSelect` as
- * `MapSettings`. A setting returned to its default leaves no `settings:` key.
+ * data and Run once per execution, plus Retry on fail, Max tries, Wait between
+ * tries (ms) and Timeout (ms) for families whose contract admits them (Code).
+ * Built only from existing controls: `BaseSwitch` rows, `SingleSelect`, and
+ * `TextField`. A setting returned to its default leaves no `settings:` key.
  * Refusals are shown by `NodeAdmissionIssues` from `nodeSettings.helpers.ts`.
  */
 import type { ReactNode } from 'react';
@@ -14,6 +14,7 @@ import Button from '@mui/material/Button';
 import Collapse from '@mui/material/Collapse';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import type { SxProps, Theme } from '@mui/material/styles';
+import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
@@ -23,7 +24,15 @@ import { SingleSelect } from '@/shared/ui/SingleSelect';
 import { FlowEditorContext } from '../../lib/flow-editor/flowEditorContext';
 import * as FlowEditorHelpers from '../../lib/flow-editor/helpers/flowEditor.helpers';
 import { ERROR_OUTPUT_HANDLE } from '../../lib/flow-editor/helpers/nodeErrorRoute.helpers';
-import { NODE_ON_ERROR, NODE_SETTINGS_KEY, NodeSettingsFamilies, readNodeSettings, writeNodeSettings } from '../../lib/nodeSettings.helpers';
+import {
+  NODE_ON_ERROR,
+  NODE_SETTINGS_KEY,
+  NodeSettingsLimits,
+  nodeSettingsFamilyKeys,
+  type NodeSettings as ParsedNodeSettings,
+  readNodeSettings,
+  writeNodeSettings,
+} from '../../lib/nodeSettings.helpers';
 
 export interface NodeSettingsProps {
   readonly id: string;
@@ -61,6 +70,101 @@ function SettingSwitch({ label, checked, disabled, onChange }: {
   );
 }
 
+function parseOptionalInteger(raw: string): number | undefined {
+  const trimmed = raw.trim();
+  if (trimmed === '') return undefined;
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
+interface SettingNumberFieldProps {
+  readonly label: string;
+  readonly value: number | undefined;
+  readonly min: number;
+  readonly max: number;
+  readonly placeholder?: string;
+  readonly helperText: string;
+  readonly disabled: boolean;
+  readonly onChange: (value: number | undefined) => void;
+}
+
+function SettingNumberField({ label, value, min, max, placeholder, helperText, disabled, onChange }: SettingNumberFieldProps): ReactNode {
+  return (
+    <TextField
+      className="nodrag nopan nowheel"
+      type="number"
+      size="small"
+      fullWidth
+      label={label}
+      value={value === undefined ? '' : String(value)}
+      placeholder={placeholder}
+      helperText={helperText}
+      disabled={disabled}
+      slotProps={{ htmlInput: { min, max, step: 1 } }}
+      onChange={(event) => onChange(parseOptionalInteger(event.target.value))}
+    />
+  );
+}
+
+interface ExecutionTimingControlsProps {
+  readonly settings: ParsedNodeSettings;
+  readonly supportsRetry: boolean;
+  readonly supportsTimeout: boolean;
+  readonly disabled: boolean;
+  readonly onChange: (key: string, value: unknown) => void;
+}
+
+function ExecutionTimingControls({ settings, supportsRetry, supportsTimeout, disabled, onChange }: ExecutionTimingControlsProps): ReactNode {
+  if (!supportsRetry && !supportsTimeout) return null;
+  return (
+    <>
+      {supportsRetry && (
+        <SettingSwitch
+          label={t('pipelines.nodeSettings.retryOnFail', 'Retry on fail')}
+          checked={settings.retry_on_fail}
+          disabled={disabled}
+          onChange={(checked) => onChange('retry_on_fail', checked)}
+        />
+      )}
+      {supportsRetry && settings.retry_on_fail && (
+        <Box sx={columnSx}>
+          <SettingNumberField
+            label={t('pipelines.nodeSettings.maxTries', 'Max tries')}
+            value={settings.max_tries}
+            min={NodeSettingsLimits.min_node_tries}
+            max={NodeSettingsLimits.max_node_tries}
+            placeholder="3"
+            helperText={t('pipelines.nodeSettings.maxTriesHelp', '2 to 5 (default 3)')}
+            disabled={disabled}
+            onChange={(value) => onChange('max_tries', value)}
+          />
+          <SettingNumberField
+            label={t('pipelines.nodeSettings.waitBetweenTriesMs', 'Wait between tries (ms)')}
+            value={settings.wait_between_tries_ms}
+            min={NodeSettingsLimits.min_wait_between_tries_ms}
+            max={NodeSettingsLimits.max_wait_between_tries_ms}
+            placeholder={String(NodeSettingsLimits.default_wait_between_tries_ms)}
+            helperText={t('pipelines.nodeSettings.waitBetweenTriesMsHelp', '100 to 300000 ms (default 1000)')}
+            disabled={disabled}
+            onChange={(value) => onChange('wait_between_tries_ms', value)}
+          />
+        </Box>
+      )}
+      {supportsTimeout && (
+        <SettingNumberField
+          label={t('pipelines.nodeSettings.timeoutMs', 'Timeout (ms)')}
+          value={settings.timeout_ms}
+          min={NodeSettingsLimits.min_node_timeout_ms}
+          max={NodeSettingsLimits.max_node_timeout_ms}
+          helperText={t('pipelines.nodeSettings.timeoutMsHelp', '1000 to 900000 ms (clamped to sandbox profile limit)')}
+          disabled={disabled}
+          onChange={(value) => onChange('timeout_ms', value)}
+        />
+      )}
+    </>
+  );
+}
+
 const onErrorLabel = (value: string): string => {
   switch (value) {
     case 'continue':
@@ -76,8 +180,11 @@ export function NodeSettings({ id, type, disabled }: NodeSettingsProps): ReactNo
   const context = useContext(FlowEditorContext);
   const [open, setOpen] = useState(false);
   const node = context?.yamlJsonObject.nodes?.find((entry) => entry.id === id);
-  if (!context || !node || NodeSettingsFamilies[type] === undefined) return null;
+  const allowedKeys = nodeSettingsFamilyKeys(type);
+  if (!context || !node || allowedKeys === undefined) return null;
   const settings = readNodeSettings(node);
+  const supportsRetry = allowedKeys.includes('retry_on_fail');
+  const supportsTimeout = allowedKeys.includes('timeout_ms');
   const change = (key: string, value: unknown): void => {
     const next = writeNodeSettings(node[NODE_SETTINGS_KEY] as Readonly<Record<string, unknown>> | undefined, { [key]: value });
     FlowEditorHelpers.batchUpdateYamlNode(id, { [NODE_SETTINGS_KEY]: next }, context.yamlJsonObject, context.setYamlJsonObject);
@@ -114,6 +221,13 @@ export function NodeSettings({ id, type, disabled }: NodeSettingsProps): ReactNo
               onChange={(checked) => change('execute_once', checked)}
             />
           </Box>
+          <ExecutionTimingControls
+            settings={settings}
+            supportsRetry={supportsRetry}
+            supportsTimeout={supportsTimeout}
+            disabled={disabled}
+            onChange={change}
+          />
         </Box>
       </Collapse>
     </Box>

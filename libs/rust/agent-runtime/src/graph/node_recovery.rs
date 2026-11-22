@@ -22,8 +22,8 @@ pub const MAX_RUNTIME_LOST_RETRIES: u16 = 2;
 pub const RUNTIME_LOST_RETRY_WINDOW_MS: u64 = 900_000;
 /// Wait before re-running a lost runtime, times the number of re-runs so far.
 pub const RUNTIME_LOST_RETRY_DELAY_MS: u64 = 1_000;
-const MAX_BACKOFF_MS: u64 = 300_000;
-const MAX_ELAPSED_MS: u64 = 3_600_000;
+pub const MAX_BACKOFF_MS: u64 = 300_000;
+pub const MAX_ELAPSED_MS: u64 = 3_600_000;
 const MAX_OPERATOR_ACTIONS: usize = 16;
 
 /// Safe categories contain no provider messages or business payloads.
@@ -48,10 +48,15 @@ pub enum NodeFailureClass {
     /// eviction, a platform kill), proven by the supervisor and not by user
     /// code. Only the platform retry allowance re-runs it; YAML cannot name it.
     RuntimeLost,
+    /// Refused before dispatch because the run's remaining time is shorter
+    /// than the attempt's required window (W3-1 / FU-309). Never retried,
+    /// never routed, and never continued by node settings (C1 / D6 / D7).
+    DeadlineInsufficient,
 }
 
 impl NodeFailureClass {
-    const fn retry_condition(self) -> Option<RetryCondition> {
+    #[must_use]
+    pub const fn retry_condition(self) -> Option<RetryCondition> {
         match self {
             Self::DependencyUnavailable => Some(RetryCondition::DependencyUnavailable),
             Self::RateLimited => Some(RetryCondition::RateLimited),
@@ -67,19 +72,27 @@ impl NodeFailureClass {
             | Self::Cancelled
             | Self::LeaseLost
             | Self::Unknown
-            | Self::RuntimeLost => None,
+            | Self::RuntimeLost
+            | Self::DeadlineInsufficient => None,
         }
     }
 
-    const fn denial(self) -> bool {
+    #[must_use]
+    pub const fn denial(self) -> bool {
         matches!(
             self,
             Self::AuthenticationDenied | Self::AuthorizationDenied | Self::SensitiveRejected
         )
     }
 
-    const fn control_stop(self) -> bool {
+    #[must_use]
+    pub const fn control_stop(self) -> bool {
         matches!(self, Self::Cancelled | Self::LeaseLost)
+    }
+
+    #[must_use]
+    pub const fn deadline(self) -> bool {
+        matches!(self, Self::DeadlineInsufficient)
     }
 }
 
@@ -177,6 +190,7 @@ impl NodeErrorRoute {
             || contract.reexecutes_failed_operation
             || classes.iter().any(|class| class.control_stop())
             || classes.contains(&NodeFailureClass::RuntimeLost)
+            || classes.contains(&NodeFailureClass::DeadlineInsufficient)
             || (classes.iter().any(|class| class.denial()) && !contract.explicitly_handles_denial)
         {
             return Err(NodeRecoveryError::InvalidErrorRoute);
@@ -814,9 +828,46 @@ impl NodeAttemptLedger {
         failure: NodeFailure,
         now_ms: u64,
     ) -> Result<Self, NodeRecoveryError> {
+        self.record_failure_inner(failure, now_ms, None)
+    }
+
+    /// Persist a failure clamped against the run's execution deadline (5b-1,
+    /// PLAN §3.3). A `RetryAt` whose `not_before_ms + required_ms` exceeds
+    /// `run_deadline_ms` becomes a persisted `Stop(ElapsedLimit)` so the run
+    /// never waits for a retry that deadline admission would immediately refuse.
+    /// An exact fit (`not_before_ms + required_ms == run_deadline_ms`) is
+    /// admitted; +1 ms stops with no wait.
+    pub fn record_failure_within(
+        &self,
+        failure: NodeFailure,
+        now_ms: u64,
+        run_deadline_ms: u64,
+        required_ms: u64,
+    ) -> Result<Self, NodeRecoveryError> {
+        self.record_failure_inner(failure, now_ms, Some((run_deadline_ms, required_ms)))
+    }
+
+    fn record_failure_inner(
+        &self,
+        failure: NodeFailure,
+        now_ms: u64,
+        run_window: Option<(u64, u64)>,
+    ) -> Result<Self, NodeRecoveryError> {
         self.require_running(now_ms)?;
         self.require_stable_effect(failure)?;
-        let decision = self.plan(&self.policy, failure, now_ms)?;
+        let planned = self.plan(&self.policy, failure, now_ms)?;
+        let (decision, clamped) = match (planned, run_window) {
+            (
+                RecoveryDecision::RetryAt { not_before_ms, .. },
+                Some((run_deadline_ms, required_ms)),
+            ) if not_before_ms
+                .checked_add(required_ms)
+                .is_none_or(|finish| finish > run_deadline_ms) =>
+            {
+                (RecoveryDecision::Stop(StopReason::ElapsedLimit), true)
+            }
+            (decision, _) => (decision, false),
+        };
         let mut next = self.next_revision()?;
         let record = next
             .history
@@ -825,8 +876,17 @@ impl NodeAttemptLedger {
         record.finished_ms = Some(now_ms);
         record.outcome = AttemptOutcome::Failed { failure, decision };
         next.phase = NodeAttemptPhase::Failed(decision);
-        next.events
-            .push(codec::NodeRecoveryEvent::Failure { failure, now_ms });
+        next.events.push(match (clamped, run_window) {
+            (true, Some((run_deadline_ms, required_ms))) => {
+                codec::NodeRecoveryEvent::FailureWithin {
+                    failure,
+                    now_ms,
+                    run_deadline_ms,
+                    required_ms,
+                }
+            }
+            _ => codec::NodeRecoveryEvent::Failure { failure, now_ms },
+        });
         Ok(next)
     }
 
@@ -927,6 +987,12 @@ impl NodeAttemptLedger {
             || request.expected_revision != self.revision
         {
             return Err(NodeRecoveryError::StaleOperatorRequest);
+        }
+        if matches!(
+            self.phase,
+            NodeAttemptPhase::Failed(RecoveryDecision::Stop(StopReason::ElapsedLimit))
+        ) {
+            return Err(NodeRecoveryError::OperatorRetryDenied);
         }
         if !matches!(
             self.phase,
