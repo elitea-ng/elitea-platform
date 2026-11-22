@@ -10,8 +10,8 @@ describe('the fixed Parallel card', () => {
   it('renders all stored settings and exact result identities with editable controls, leaving YAML unchanged until an edit', async () => {
     const screen = renderExtensionCard(ParallelNode, parallelYaml);
     expect(await screen.findByLabelText('Branch 1 result key')).toHaveValue('stable_left');
-    expect(screen.getByLabelText('Branch 2 Agent, LLM or Code node')).toHaveValue('Agent_right');
-    expect(screen.getByLabelText('Ordered list output')).toHaveValue('10');
+    expect(screen.getByRole('combobox', { name: 'Branch 2 Agent, LLM or Code node' })).toHaveTextContent('Agent_right');
+    expect(screen.getByRole('combobox', { name: 'Ordered list output' })).toHaveTextContent('10');
     expect(screen.queryByText(/authoring is not enabled/u)).toBeNull();
     for (const field of screen.getAllByRole('textbox')) expect(field).toBeEnabled();
     expect(screen.getByLabelText('Maximum concurrent branches')).toBeEnabled();
@@ -22,7 +22,7 @@ describe('the fixed Parallel card', () => {
   it('shows field-specific refusal for foreign Map configuration while retaining original data', async () => {
     const yaml = parallelYaml.replace('    wait: all', '    wait: any\n    reduction: ordered_collection\n    input_mapping: {task: {type: fixed, value: foreign}}');
     const screen = renderExtensionCard(ParallelNode, yaml);
-    await screen.findByLabelText('Wait policy');
+    await screen.findByRole('combobox', { name: 'Wait policy' });
     expect(screen.getAllByText(/wait: Select all/u).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/reduction: This field/u).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/input_mapping: This field/u).length).toBeGreaterThan(0);
