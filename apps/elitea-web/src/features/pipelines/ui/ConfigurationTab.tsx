@@ -286,10 +286,7 @@ export function ConfigurationTab(props: ConfigurationTabProps): ReactNode {
   if (isError) {
     return (
       <Box sx={styles.errorContainer}>
-        <Typography
-          variant="labelMedium"
-          color="text.secondary"
-        >
+        <Typography variant="labelMedium" color="text.secondary">
           {t('features.pipelines.configurationTab.loadError', 'Failed to load data! Please try refreshing the page.')}
         </Typography>
       </Box>
@@ -364,15 +361,29 @@ interface ConfigurationTabStyles {
   readonly editorPanel: SxProps<Theme>;
 }
 
+function editorPanelStyles(isSmallWindow: boolean, isChatPaneCollapsed: boolean): SxProps<Theme> {
+  if (isSmallWindow) return { minWidth: '100%', minHeight: '32rem', flex: '0 0 auto', maxWidth: '100%', marginRight: '0rem' };
+  return {
+    minHeight: '100%',
+    maxWidth: `calc(100% - ${isChatPaneCollapsed ? '1.75rem' : '21.5625rem'})`,
+    marginRight: isChatPaneCollapsed ? '1.5rem' : '0rem',
+  };
+}
+
+function splitContainerStyles(isSmallWindow: boolean, isGeneralPaneCollapsed: boolean): SxProps<Theme> {
+  if (isSmallWindow) {
+    return { flex: '0 0 auto', height: 'auto', width: '100%', display: 'flex', flexDirection: 'column', maxWidth: '100%', gap: '0.75rem' };
+  }
+  const maxWidth = isGeneralPaneCollapsed ? 'calc(100% - 3.75rem)' : 'calc(100% - 21.875rem)';
+  return { flex: 1, height: '100%', display: 'flex', flexDirection: 'row', maxWidth, gap: '0.625rem' };
+}
+
 function configurationTabStyles(isSmallWindow: boolean, isChatPaneCollapsed: boolean, isGeneralPaneCollapsed: boolean): ConfigurationTabStyles {
-  const maxWidthOfEditorPane = isGeneralPaneCollapsed ? 'calc(100% - 3.75rem)' : 'calc(100% - 21.875rem)';
   return {
     errorContainer: { display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', width: '100%' },
     spinnerContainer: { height: '100%', width: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center' },
     mainContainer: {
-      // The page body's height: a viewport-derived one overflowed the shell's body.
       height: '100%',
-      // Wide: columns scroll on their own so the canvas stays pinned.
       overflow: mainOverflow(isSmallWindow),
       padding: '0.75rem 1.5rem 1.5rem',
       gap: '2rem',
@@ -381,19 +392,7 @@ function configurationTabStyles(isSmallWindow: boolean, isChatPaneCollapsed: boo
       width: '100%',
       flexDirection: isSmallWindow ? 'column' : 'row',
     },
-    splitContainer: {
-      flex: 1,
-      height: isSmallWindow ? 'max-content' : '100%',
-      display: 'flex',
-      flexDirection: isSmallWindow ? 'column' : 'row',
-      maxWidth: isSmallWindow ? '100%' : maxWidthOfEditorPane,
-      gap: isSmallWindow ? '0.75rem' : '0.625rem',
-    },
-    editorPanel: {
-      minWidth: isSmallWindow ? '100%' : undefined,
-      minHeight: isSmallWindow ? undefined : '100%',
-      maxWidth: `calc(100% - ${isChatPaneCollapsed ? '1.75rem' : '21.5625rem'})`,
-      marginRight: !isSmallWindow && isChatPaneCollapsed ? '1.5rem' : '0rem',
-    },
+    splitContainer: splitContainerStyles(isSmallWindow, isGeneralPaneCollapsed),
+    editorPanel: editorPanelStyles(isSmallWindow, isChatPaneCollapsed),
   };
 }

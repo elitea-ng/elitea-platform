@@ -142,3 +142,47 @@ func TestNodeSettingsLeaveDocumentsWithoutBlocksAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// SEC-5B1B-03: settings.error_transition must never target a dedicated failure_handler node.
+func TestNodeSettingsRefusesErrorTransitionToFailureHandler(t *testing.T) {
+	doc := `state:
+  out: str
+  err_ctx: dict
+  handled: str
+entry_point: a
+nodes:
+  - id: a
+    type: state_modifier
+    template: x
+    output: [out]
+    settings: {on_error: error_output, error_transition: dedicated}
+    transition: producer
+  - id: producer
+    type: code
+    language: python
+    code: 'return 1'
+    input: []
+    output: [out]
+    recovery:
+      max_attempts: 1
+      on_failure:
+        route: dedicated
+        error_input: err_ctx
+        classes: [invalid_result]
+    transition: END
+  - id: dedicated
+    type: code
+    language: python
+    code: 'return "ok"'
+    input: [err_ctx]
+    output: [handled]
+    failure_handler:
+      error_input: err_ctx
+    transition: END
+`
+	api := pipelinelimits.Refusal(pipelinelimits.Check(doc))
+	want := "Node a: " + pipelinelimits.NodeSettingsRefusalTexts["error_transition_target"]
+	if api == nil || api.Code != pipelinelimits.CodeNodeSettingsInvalid || api.Message != want {
+		t.Fatalf("got %v, want %q", api, want)
+	}
+}

@@ -132,6 +132,8 @@ export function ShellTopBar({ sidePanel }: { readonly sidePanel: WebSidePanelHos
 const barSx: SxProps<Theme> = (theme: Theme) => ({
   flexShrink: 0,
   height: '2.75rem',
+  minWidth: 0,
+  overflow: 'hidden',
   boxSizing: 'border-box',
   display: 'flex',
   alignItems: 'center',
@@ -140,13 +142,13 @@ const barSx: SxProps<Theme> = (theme: Theme) => ({
   borderBottom: `1px solid ${theme.vars.palette.divider}`,
 });
 
-const crumbsSx: SxProps<Theme> = { flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 0.75 };
+const crumbsSx: SxProps<Theme> = { flex: 1, minWidth: 0, overflow: 'hidden', display: 'flex', alignItems: 'center', gap: 0.75 };
 
 const crumbSlotSx =
   (last: boolean): SxProps<Theme> =>
-  () => ({ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: last ? 0 : undefined, flexShrink: last ? 1 : 0 });
+  () => ({ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: last ? 0 : undefined, overflow: last ? 'hidden' : undefined, flexShrink: last ? 1 : 0 });
 
-const oneLine = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } as const;
+const oneLine = { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } as const;
 
 const currentSx: SxProps<Theme> = (theme: Theme) => ({ ...oneLine, margin: 0, color: theme.vars.palette.text.secondary });
 

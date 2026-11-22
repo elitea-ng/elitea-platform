@@ -238,6 +238,83 @@ func TestOriginalCodeDispatchAdmitsBoundedLostRuntimeRerunsOfADefaultPolicyNode(
 	}
 }
 
+func TestOriginalCodeDispatchSettingsRetryOnFailBoundsAndPlatformClient(t *testing.T) {
+	activation := strings.Repeat("1", 64)
+	legacy := strings.Repeat("a", 64)
+
+	// 1. Non-platform-client with settings.retry_on_fail + max_tries = 3:
+	// ordinal identity required from try 1 through max_tries + MaxRuntimeLostRetries (5); 6 refused.
+	retry := storage.SavedCodeDeclaration{
+		Settings:            json.RawMessage(`{"retry_on_fail":true,"max_tries":3}`),
+		SettingsRetryOnFail: true,
+		SettingsMaxTries:    3,
+	}
+	if matchOriginalCodeDispatch(retry, activation, 0, code.DispatchActivation(activation, 0)) == nil {
+		t.Fatal("attempt 0 admitted")
+	}
+	if matchOriginalCodeDispatch(retry, activation, 1, legacy) == nil {
+		t.Fatal("legacy non-ordinal identity admitted on try 1 for settings.retry_on_fail")
+	}
+	for attempt := uint16(1); attempt <= 3+MaxRuntimeLostRetries; attempt++ {
+		if matchOriginalCodeDispatch(retry, activation, attempt, code.DispatchActivation(activation, attempt)) != nil {
+			t.Fatalf("attempt %d refused for settings.retry_on_fail", attempt)
+		}
+		if matchOriginalCodeDispatch(retry, activation, attempt, code.DispatchActivation(activation, attempt+1)) == nil {
+			t.Fatalf("mismatched ordinal admitted on attempt %d", attempt)
+		}
+	}
+	if matchOriginalCodeDispatch(retry, activation, 3+MaxRuntimeLostRetries+1, code.DispatchActivation(activation, 3+MaxRuntimeLostRetries+1)) == nil {
+		t.Fatal("attempt past max_tries + MaxRuntimeLostRetries admitted")
+	}
+
+	// 2. Platform-client with settings.retry_on_fail + max_tries = 4:
+	// ordinal tries 1..=4 admitted; try 5 refused (no extra lost-runtime retries on platform client).
+	brokerRetry := storage.SavedCodeDeclaration{
+		PlatformClient:      true,
+		Settings:            json.RawMessage(`{"retry_on_fail":true,"max_tries":4}`),
+		SettingsRetryOnFail: true,
+		SettingsMaxTries:    4,
+	}
+	if matchOriginalCodeDispatch(brokerRetry, activation, 1, legacy) == nil {
+		t.Fatal("legacy identity admitted on try 1 for platform-client settings.retry_on_fail")
+	}
+	for attempt := uint16(1); attempt <= 4; attempt++ {
+		if matchOriginalCodeDispatch(brokerRetry, activation, attempt, code.DispatchActivation(activation, attempt)) != nil {
+			t.Fatalf("platform-client settings retry attempt %d refused", attempt)
+		}
+	}
+	if matchOriginalCodeDispatch(brokerRetry, activation, 5, code.DispatchActivation(activation, 5)) == nil {
+		t.Fatal("platform-client settings retry exceeded max_tries")
+	}
+
+	// 3. Settings without retry_on_fail (e.g. on_error: continue) preserves legacy try 1
+	// and bounded lost-runtime re-runs for non-platform-client only.
+	continueOnly := storage.SavedCodeDeclaration{
+		Settings: json.RawMessage(`{"on_error":"continue"}`),
+	}
+	if matchOriginalCodeDispatch(continueOnly, activation, 1, legacy) != nil {
+		t.Fatal("legacy try 1 refused for settings without retry_on_fail")
+	}
+	if matchOriginalCodeDispatch(continueOnly, activation, 2, code.DispatchActivation(activation, 2)) != nil {
+		t.Fatal("bounded lost-runtime re-run refused for settings without retry_on_fail")
+	}
+	if matchOriginalCodeDispatch(continueOnly, activation, 2+MaxRuntimeLostRetries, code.DispatchActivation(activation, 2+MaxRuntimeLostRetries)) == nil {
+		t.Fatal("continue-only settings exceeded lost-runtime allowance")
+	}
+
+	// 4. Out-of-bounds SettingsMaxTries or simultaneous Recovery+SettingsRetryOnFail fail closed.
+	for _, invalid := range []storage.SavedCodeDeclaration{
+		{SettingsRetryOnFail: true, SettingsMaxTries: 0},
+		{SettingsRetryOnFail: true, SettingsMaxTries: 1},
+		{SettingsRetryOnFail: true, SettingsMaxTries: 6},
+		{Recovery: json.RawMessage(`{"max_attempts":2}`), SettingsRetryOnFail: true, SettingsMaxTries: 3},
+	} {
+		if matchOriginalCodeDispatch(invalid, activation, 1, code.DispatchActivation(activation, 1)) == nil {
+			t.Fatalf("invalid declaration admitted: %+v", invalid)
+		}
+	}
+}
+
 // The allowance is one value across the Worker and Main.
 func TestRuntimeLostRetryAllowanceMatchesTheSharedPolicy(t *testing.T) {
 	raw, err := os.ReadFile("../../../../../../testdata/proto/runtime/v1/code_runtime_lost_retry_policy.json")

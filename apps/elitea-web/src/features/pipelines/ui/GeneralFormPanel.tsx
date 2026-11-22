@@ -62,7 +62,7 @@ export interface GeneralFormPanelProps {
 }
 
 const containerSx = (isSmallWindow: boolean, collapsed: boolean): SxProps<Theme> => ({
-  flex: 3,
+  flex: isSmallWindow ? '0 0 auto' : 3,
   maxWidth: isSmallWindow ? '100%' : collapsed ? '1.75rem' : '20rem',
   minWidth: isSmallWindow ? '100%' : collapsed ? '1.75rem' : '20rem',
   height: !isSmallWindow ? '100%' : 'auto',
