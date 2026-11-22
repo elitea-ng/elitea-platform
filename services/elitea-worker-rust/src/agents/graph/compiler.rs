@@ -529,6 +529,44 @@ impl PipelineNodeRuntimes {
         self
     }
 
+    /// FU-358: a non-member agent's saved pipeline tool journals its direct
+    /// tool nodes — and any saved pipeline subgraph beneath it — through this
+    /// call's claim-fenced journal factory, under `visit`.
+    pub(crate) fn with_pipeline_tool_journals(
+        mut self,
+        journals: Arc<dyn super::node_recovery_runtime::NodeRecoveryFactory>,
+        visit: String,
+    ) -> Self {
+        self.direct_tool_recovery = Some(Arc::clone(&journals));
+        self.tool_visit = Some(Arc::new(visit));
+        if let Some(rebound) = self
+            .application
+            .as_ref()
+            .and_then(|application| application.for_pipeline_tool_journals(journals))
+        {
+            self.application = Some(rebound);
+        }
+        self
+    }
+
+    /// FU-358: bind a call-scoped journal factory onto a saved child pipeline
+    /// (subgraph) beneath a pipeline tool, recursively. Each subgraph stamps
+    /// its own visit from its `ApplicationNode` activation.
+    pub(crate) fn with_nested_pipeline_tool_journals(
+        mut self,
+        journals: &Arc<dyn super::node_recovery_runtime::NodeRecoveryFactory>,
+    ) -> Self {
+        self.direct_tool_recovery = Some(Arc::clone(journals));
+        if let Some(rebound) = self
+            .application
+            .as_ref()
+            .and_then(|application| application.for_pipeline_tool_journals(Arc::clone(journals)))
+        {
+            self.application = Some(rebound);
+        }
+        self
+    }
+
     /// FU-291 D2 in a durable nested pipeline: its LLM nodes resume their own
     /// model step and replay a read-only call batch, as an inline fan-out LLM
     /// branch does; a tool past its boundary is refused typed. Its events
@@ -1809,7 +1847,7 @@ impl PipelineDefinition {
                 .edge(FINISHED_TURN_NODE, END),
         );
         if let Some(resume) = resume {
-            let resume_state = resume.into_state();
+            let resume_state = resume_state_with_visit(resume, runtimes.tool_visit.as_deref());
             builder = builder
                 .input_mapper(move |context| invocation_state(context, None, Some(&resume_state)));
         } else {
@@ -3100,6 +3138,16 @@ fn yaml_names(value: &serde_yaml_ng::Value, needle: &str) -> bool {
         | serde_yaml_ng::Value::Bool(_)
         | serde_yaml_ng::Value::Number(_) => false,
     }
+}
+
+fn resume_state_with_visit(resume: PipelineResume, tool_visit: Option<&String>) -> State {
+    let mut resume_state = resume.into_state();
+    if let Some(visit) = tool_visit {
+        resume_state
+            .entry(APPLICATION_VISIT_STATE_KEY.to_owned())
+            .or_insert_with(|| serde_json::Value::String(visit.clone()));
+    }
+    resume_state
 }
 
 fn invocation_state(

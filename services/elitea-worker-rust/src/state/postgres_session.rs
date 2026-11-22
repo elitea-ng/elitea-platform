@@ -529,7 +529,100 @@ impl fmt::Debug for PostgresSessionService {
     }
 }
 
+/// Primary key of the active root row in `elitea_runtime.agent_session_writers`,
+/// used to fence ordinary-agent pipeline-tool node journals against the run's
+/// session claim (FU-358). Holds no secrets or fence tokens.
+#[derive(Clone)]
+pub(in crate::state) struct SessionWriterKey {
+    pub(in crate::state) tenant_id: String,
+    pub(in crate::state) resource_project_id: i32,
+    pub(in crate::state) projection_project_id: i32,
+    pub(in crate::state) capability_id: &'static str,
+    pub(in crate::state) session_family: &'static str,
+    pub(in crate::state) definition_digest: [u8; 32],
+    pub(in crate::state) thread_id: String,
+    pub(in crate::state) app_name: String,
+    pub(in crate::state) user_id: String,
+    pub(in crate::state) session_id: String,
+}
+
 impl PostgresSessionService {
+    /// Derive the claim-fenced checkpoint binding anchored to this root session
+    /// writer row so a non-member agent's pipeline-tool direct nodes journal
+    /// under the exact same claim and live lease (FU-358).
+    pub(in crate::state) fn checkpoint_journal_binding(
+        &self,
+    ) -> Result<
+        (
+            PgPool,
+            super::CheckpointWriterAuthority,
+            SessionWriterKey,
+            Arc<dyn StateWriterLease>,
+        ),
+        super::PostgresCheckpointError,
+    > {
+        let root = self.parent.as_deref().unwrap_or(self);
+        let auth = &root.authority;
+        let generation = u64::try_from(auth.generation).map_err(|_| {
+            super::PostgresCheckpointError::InvalidScope("the session generation is outside u64")
+        })?;
+        let claim_attempt = u64::try_from(auth.claim_attempt).map_err(|_| {
+            super::PostgresCheckpointError::InvalidScope("the session claim attempt is outside u64")
+        })?;
+        let lease_epoch = u64::try_from(auth.lease_epoch).map_err(|_| {
+            super::PostgresCheckpointError::InvalidScope("the session lease epoch is outside u64")
+        })?;
+        let mut fence_token = [0_u8; 32];
+        fence_token.copy_from_slice(auth.fence_token.as_slice());
+        let checkpoint_authority = super::CheckpointWriterAuthority::new(
+            auth.tenant_id.clone(),
+            auth.resource_project_id,
+            auth.projection_project_id,
+            auth.capability_id,
+            auth.definition_digest,
+            auth.thread_id.clone(),
+            auth.execution_id.clone(),
+            generation,
+            auth.claim_id.clone(),
+            claim_attempt,
+            lease_epoch,
+            auth.claim_started_at.timestamp_micros(),
+            auth.workload_session_id.clone(),
+            auth.producer_id.clone(),
+            fence_token,
+        )?;
+        let key = SessionWriterKey {
+            tenant_id: auth.tenant_id.clone(),
+            resource_project_id: auth.resource_project_id,
+            projection_project_id: auth.projection_project_id,
+            capability_id: auth.capability_id,
+            session_family: SESSION_FAMILY,
+            definition_digest: auth.definition_digest,
+            thread_id: auth.thread_id.clone(),
+            app_name: auth.app_name.clone(),
+            user_id: auth.user_id.clone(),
+            session_id: auth.session_id.clone(),
+        };
+        Ok((
+            root.pool.clone(),
+            checkpoint_authority,
+            key,
+            Arc::clone(&root.state_writer_lease),
+        ))
+    }
+
+    /// Lend a claim-fenced journal authority for saved-pipeline tools invoked
+    /// by this ordinary agent turn (FU-358).
+    pub(crate) fn pipeline_tool_journals(
+        self: &Arc<Self>,
+        checkpoint_limits: super::CheckpointLimits,
+    ) -> Arc<dyn crate::agents::graph::node_recovery_runtime::PipelineToolJournalAuthority> {
+        super::postgres_checkpointer::session_pipeline_tool_journals(
+            Arc::clone(self),
+            checkpoint_limits,
+        )
+    }
+
     /// This writer, owned: what a [`Self::driven`] transaction runs on.
     fn owned(&self) -> Self {
         Self {

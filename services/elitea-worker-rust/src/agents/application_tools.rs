@@ -2987,6 +2987,10 @@ pub(crate) struct ApplicationToolDependencies<'a> {
     /// pipeline children — the pipeline PARENT is exactly that caller, because
     /// it owns its pipeline participants itself through its graph.
     conversation_thread_id: Option<String>,
+    /// FU-358: lends a claim-fenced node-recovery journal scoped to one
+    /// non-member call of any saved pipeline offered as an agent's tool.
+    pipeline_tool_journals:
+        Option<Arc<dyn super::graph::node_recovery_runtime::PipelineToolJournalAuthority>>,
     /// FU-353 D4(a)/D6(a): plain pinned claim-bound artifact authority (no
     /// Office/Web/Browser hosts) for delegated `artifact` toolkits.
     artifacts: Option<ArtifactToolAuthority>,
@@ -3019,6 +3023,7 @@ impl<'a> ApplicationToolDependencies<'a> {
             resume: None,
             model_scopes: None,
             conversation_thread_id: None,
+            pipeline_tool_journals: None,
             artifacts: None,
             index_tools: Err(IndexToolsWithheld::NotServedOnThisPath),
             attachment_library: None,
@@ -3026,6 +3031,16 @@ impl<'a> ApplicationToolDependencies<'a> {
             agent_memory: None,
             materialization: ApplicationMaterializationPath::default(),
         }
+    }
+
+    pub(super) fn with_pipeline_tool_journals(
+        mut self,
+        journals: Option<
+            Arc<dyn super::graph::node_recovery_runtime::PipelineToolJournalAuthority>,
+        >,
+    ) -> Self {
+        self.pipeline_tool_journals = journals;
+        self
     }
 
     pub(super) fn with_code(
@@ -3428,6 +3443,7 @@ async fn materialize_pipeline_children(
             dependencies.code.clone(),
             conversation_thread_id.clone(),
             dependencies.materialization.clone(),
+            dependencies.pipeline_tool_journals.clone(),
             dependencies.pipeline_capabilities(),
         )
         .await;
@@ -3488,6 +3504,7 @@ async fn materialize_pipeline_children(
                 conversation_thread_id: conversation_thread_id.clone(),
                 event_sender: dependencies.event_sender.clone(),
                 resume: dependencies.resume.clone(),
+                tool_journals: dependencies.pipeline_tool_journals.clone(),
             },
             definition_sha256,
         ));
@@ -3556,6 +3573,7 @@ pub(crate) async fn materialize_application_tools(
         model_scopes: dependencies.model_scopes,
         code: dependencies.code,
         conversation_thread_id: dependencies.conversation_thread_id,
+        pipeline_tool_journals: dependencies.pipeline_tool_journals,
         artifacts: dependencies.artifacts,
         index_tools: dependencies.index_tools,
         attachment_library: dependencies.attachment_library,
@@ -3633,6 +3651,8 @@ struct ApplicationAssemblyState<'a> {
     model_scopes: Option<ModelScopeSessions>,
     code: Option<Arc<dyn super::graph::CodeSandboxRuntime>>,
     conversation_thread_id: Option<String>,
+    pipeline_tool_journals:
+        Option<Arc<dyn super::graph::node_recovery_runtime::PipelineToolJournalAuthority>>,
     artifacts: Option<ArtifactToolAuthority>,
     index_tools: Result<IndexToolAuthority, IndexToolsWithheld>,
     attachment_library: Option<Arc<super::attachment_tools::AttachmentLibrary>>,
@@ -3946,6 +3966,7 @@ impl ApplicationAssemblyState<'_> {
             resume: self.resume.clone(),
             model_scopes: self.model_scopes.clone(),
             conversation_thread_id: self.conversation_thread_id.clone(),
+            pipeline_tool_journals: self.pipeline_tool_journals.clone(),
             artifacts: self.artifacts.clone(),
             index_tools: self.index_tools.clone(),
             attachment_library: if self.caller_attachments_enabled {

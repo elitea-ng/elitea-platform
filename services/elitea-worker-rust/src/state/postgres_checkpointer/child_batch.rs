@@ -153,6 +153,7 @@ RETURNING thread_id
                 limits: self.limits,
                 state_writer_lease: Arc::clone(&self.state_writer_lease),
                 run_root_thread_id: self.run_root_thread_id.clone(),
+                root_fence: super::JournalRootFence::None,
                 io: Arc::clone(&self.io),
             })
             .collect())
