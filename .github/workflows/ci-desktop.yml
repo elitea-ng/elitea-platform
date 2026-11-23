@@ -79,6 +79,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Before rust-cache: its key hashes `rustc -vV`, so the pinned toolchain
+      # must be the one installed when it computes the key (as in
+      # desktop-package.yml, the reader of this entry).
+      - name: Assert the pinned toolchain
+        working-directory: apps/elitea-desktop/src-tauri
+        run: bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
+
       # Read everywhere, write on main only: this workflow's nightly is the one
       # writer. The entry keeps the dev-profile target (registry, git and the
       # compiled dependencies), so Clippy, the tests, the WebKit run and the
@@ -141,10 +148,17 @@ jobs:
   # it happened (scripts/ci/runner-acquired.mjs: no runner, no step, and that
   # annotation). A job that ran and failed, timed out, or was cancelled by a
   # newer push is not "never acquired", and gets no second attempt.
+  #
+  # `always()`, not `!cancelled()`, on this job and the two below: GitHub ends
+  # the never-acquired job as CANCELLED, and whether `cancelled()` then reads
+  # true for the run is not documented. Run cancellation (a newer push) is
+  # told apart by the probe instead: that job's annotation is "Canceling since
+  # a higher priority waiting request ... exists", so `not-acquired` is false
+  # and no second attempt starts.
   host-runner:
     name: Was the macOS host job ever given a runner?
     needs: [desktop]
-    if: ${{ !cancelled() && (needs.desktop.result == 'failure' || needs.desktop.result == 'cancelled') }}
+    if: ${{ always() && (needs.desktop.result == 'failure' || needs.desktop.result == 'cancelled') }}
     runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
     timeout-minutes: 5
     permissions:
@@ -182,13 +196,16 @@ jobs:
   desktop-second-attempt:
     name: Host (fmt, clippy, tests) + desktop web build — second attempt (the first got no runner)
     needs: [host-runner]
-    if: ${{ !cancelled() && needs.host-runner.outputs.not-acquired == 'true' }}
+    if: ${{ always() && needs.host-runner.outputs.not-acquired == 'true' }}
     runs-on: macos-latest
     timeout-minutes: 60
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
       - uses: actions/checkout@v7
+      - name: Assert the pinned toolchain
+        working-directory: apps/elitea-desktop/src-tauri
+        run: bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
       - name: Restore the cargo registry and build artefacts (the first attempt's entry)
         uses: Swatinem/rust-cache@v2
         with:
@@ -208,11 +225,12 @@ jobs:
   # GitHub never acquired leaves the workflow's own result failed even when its
   # second attempt passed, so the gate reads this instead: `pass` only when
   # every job passed, or the macOS host was never acquired and its second
-  # attempt ran and passed. Never `pass` for a job that did not run.
+  # attempt ran and passed. Never `pass` for a job that did not run. `needs`
+  # lists every other job of this workflow (runner-acquired.test.mjs holds it).
   verdict:
     name: Desktop verdict
     needs: [desktop, host-runner, desktop-second-attempt, pane-drivers, windows-host]
-    if: ${{ !cancelled() }}
+    if: ${{ always() }}
     runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
     timeout-minutes: 5
     outputs:

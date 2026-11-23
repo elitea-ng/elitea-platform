@@ -5,9 +5,10 @@ description: >-
   acquired a runner for the first (`desktop-second-attempt`). The desktop web
   bundle, the brand overlay, then the host's Rust format, Clippy and tests, the
   serde_json guard and the document sidecar. The job keeps the steps a
-  composite action cannot hold: the checkout, the rust-cache step (one writer
-  per key: only the first attempt saves) and the WebKit run (a per-step
-  timeout).
+  composite action cannot hold or must run first: the checkout, the toolchain
+  assert (before rust-cache, which keys on `rustc -vV`), the rust-cache step
+  (one writer per key: only the first attempt saves) and the WebKit run (a
+  per-step timeout).
 runs:
   using: composite
   steps:
@@ -26,6 +27,12 @@ runs:
     - name: Install web (locked)
       shell: bash
       working-directory: apps/elitea-web
+      # .github/actions/npm-cache sets these on Linux; macOS fetches cold, so
+      # it needs the same patience with the registry (as the Windows jobs).
+      env:
+        NPM_CONFIG_FETCH_RETRIES: "6"
+        NPM_CONFIG_FETCH_RETRY_MINTIMEOUT: "20000"
+        NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: "120000"
       run: npm ci
 
     - name: Build the desktop web bundle
@@ -43,11 +50,6 @@ runs:
       run: |
         npm run test:scripts
         node scripts/tauri-brand.mjs --github-env
-
-    - name: Assert the pinned toolchain
-      shell: bash
-      working-directory: apps/elitea-desktop/src-tauri
-      run: bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
 
     - name: Check formatting
       shell: bash

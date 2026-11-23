@@ -6,7 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { findJob, main, neverAcquired, probe, verdict } from "./runner-acquired.mjs";
+import { loadYaml } from "./ci-compat.mjs";
+import { FIRST, PROBE, SECOND, findJob, main, neverAcquired, probe, verdict } from "./runner-acquired.mjs";
 
 const NAME = "Host (fmt, clippy, tests) + desktop web build";
 // The shape of job 138021821938 (PR #2980, run 45264812475), as the API returned it.
@@ -92,6 +93,22 @@ test("verdict: fail for a real failure, a second attempt that did not pass, or a
   assert.equal(verdict(n({ "pane-drivers": { result: "failure" } })).verdict, "fail");
   assert.equal(verdict(n({ "windows-host": { result: "skipped" } })).verdict, "fail");
   assert.equal(verdict(n({ desktop: undefined })).verdict, "fail");
+});
+
+test("ci-desktop.yml is wired to this script: the probed name, the job ids, and every job in the verdict's needs", () => {
+  const file = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "..", ".github", "workflows", "ci-desktop.yml");
+  const jobs = loadYaml(fs.readFileSync(file, "utf8")).jobs;
+  // A renamed host job would make the probe throw, and the second attempt would never start.
+  const probeStep = jobs[PROBE].steps.find((s) => s.id === "probe");
+  assert.equal(probeStep.env.JOB_NAME, jobs[FIRST].name);
+  assert.deepEqual([].concat(jobs[SECOND].needs), [PROBE]);
+  assert.match(jobs[SECOND].if, /needs\.host-runner\.outputs\.not-acquired == 'true'/);
+  // A job left out of the verdict's needs would be ignored by a `pass`.
+  const others = Object.keys(jobs).filter((id) => id !== "verdict").sort();
+  assert.deepEqual([...jobs.verdict.needs].sort(), others);
+  // The second attempt never writes the cache key the first one owns.
+  const cache = jobs[SECOND].steps.find((s) => String(s.uses).startsWith("Swatinem/rust-cache"));
+  assert.equal(cache.with["save-if"], false);
 });
 
 test("main writes the output line for the step", async () => {
