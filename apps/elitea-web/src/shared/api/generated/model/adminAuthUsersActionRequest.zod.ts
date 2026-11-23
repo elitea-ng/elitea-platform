@@ -78,7 +78,7 @@ export const AdminAuthUsersActionRequest = zod
       ),
   })
   .describe(
-    "NOTE(W2): internal/api/v2/admin/users.go:224-238. Which fields an action reads is stated on each field.\n",
+    "NOTE(W2): internal/api/v2/admin/users.go:247-261. Which fields an action reads is stated on each field.\n",
   );
 
 export type AdminAuthUsersActionRequest = zod.input<

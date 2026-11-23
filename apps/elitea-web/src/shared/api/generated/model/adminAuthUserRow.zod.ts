@@ -75,7 +75,7 @@ export const AdminAuthUserRow = zod
       ),
   })
   .describe(
-    "NOTE(W2): internal/api/v2/admin/users.go:189-202 — one account of the deployment.\n",
+    "NOTE(W2): internal/api/v2/admin/users.go:215-229 — one account of the deployment.\n",
   );
 
 export type AdminAuthUserRow = zod.input<typeof AdminAuthUserRow>;

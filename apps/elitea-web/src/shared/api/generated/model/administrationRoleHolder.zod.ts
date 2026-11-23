@@ -55,7 +55,7 @@ export const AdministrationRoleHolder = zod
         "Every administration role the account holds, by name. Never empty.",
       ),
   })
-  .describe("NOTE(W2): internal/api/v2/admin/access_read.go:44-50.\n");
+  .describe("NOTE(W2): internal/api/v2/admin/access_read.go:43-49.\n");
 
 export type AdministrationRoleHolder = zod.input<
   typeof AdministrationRoleHolder

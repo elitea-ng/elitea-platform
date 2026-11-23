@@ -58,7 +58,7 @@ export const AdminAuthUsersPage = zod
         "Over every account, unfiltered; it labels the page's two tabs.",
       ),
   })
-  .describe("NOTE(W2): internal/api/v2/admin/users.go:209-216.\n");
+  .describe("NOTE(W2): internal/api/v2/admin/users.go:235-242.\n");
 
 export type AdminAuthUsersPage = zod.input<typeof AdminAuthUsersPage>;
 export type AdminAuthUsersPageOutput = zod.output<typeof AdminAuthUsersPage>;

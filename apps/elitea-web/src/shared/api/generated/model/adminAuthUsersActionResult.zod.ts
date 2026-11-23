@@ -64,7 +64,7 @@ export const AdminAuthUsersActionResult = zod
       ),
   })
   .describe(
-    "NOTE(W2): internal/api/v2/admin/users.go:348 (delete) and users.go:465-467 (set_admin_role).\n",
+    "NOTE(W2): internal/api/v2/admin/users.go:370 (delete) and users.go:516-518 (set_admin_role).\n",
   );
 
 export type AdminAuthUsersActionResult = zod.input<

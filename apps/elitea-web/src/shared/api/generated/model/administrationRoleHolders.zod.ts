@@ -48,7 +48,7 @@ export const AdministrationRoleHolders = zod
     total: zod.int(),
     rows: zod.array(AdministrationRoleHolder),
   })
-  .describe("NOTE(W2): internal/api/v2/admin/access_read.go:64.\n");
+  .describe("NOTE(W2): internal/api/v2/admin/access_read.go:63.\n");
 
 export type AdministrationRoleHolders = zod.input<
   typeof AdministrationRoleHolders

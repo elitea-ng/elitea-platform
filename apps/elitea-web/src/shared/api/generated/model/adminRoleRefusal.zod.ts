@@ -69,7 +69,7 @@ export const AdminRoleRefusal = zod
       .describe("The project of a `role_self_escalation` refusal."),
   })
   .describe(
-    "NOTE(W2): internal/adminaccess/refusal.go:30-47 — a role change refused by a role rule (403). `error` is the message every admin client already shows; a client keys a translated message on `code`.\n",
+    "NOTE(W2): internal/adminaccess/refusal.go:13-47 — a role change refused by a role rule (403). `error` is the message every admin client already shows; a client keys a translated message on `code`.\n",
   );
 
 export type AdminRoleRefusal = zod.input<typeof AdminRoleRefusal>;

@@ -72,7 +72,7 @@ export const AdministrationRoleGrant = zod
       .describe("A reference within the source, such as a SCIM binding id."),
   })
   .describe(
-    "NOTE(W2): internal/api/v2/admin/access_read.go:119-134 — one row of elitea_auth.admin_role_grants (shared 0260).\n",
+    "NOTE(W2): internal/api/v2/admin/access_read.go:120-135 — one row of elitea_auth.admin_role_grants (shared 0260).\n",
   );
 
 export type AdministrationRoleGrant = zod.input<typeof AdministrationRoleGrant>;

@@ -50,7 +50,7 @@ export const AdministrationRoleHistory = zod
       .describe("The rows that match the filter, over every page."),
     rows: zod.array(AdministrationRoleGrant),
   })
-  .describe("NOTE(W2): internal/api/v2/admin/access_read.go:228.\n");
+  .describe("NOTE(W2): internal/api/v2/admin/access_read.go:224.\n");
 
 export type AdministrationRoleHistory = zod.input<
   typeof AdministrationRoleHistory
