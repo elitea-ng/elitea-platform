@@ -130,16 +130,28 @@ func (c Composed) Options() (Options, error) {
 	for _, method := range []string{http.MethodGet, http.MethodPut} {
 		route := Route{Method: method, Pattern: ConfigurationValues}.String()
 		for _, section := range sections {
-			opts.Variants[route] = append(opts.Variants[route],
-				Variant{Name: "section " + section, Params: map[string]string{"plugin": section}})
+			opts.Variants[route] = append(opts.Variants[route], section.Variant())
 		}
 	}
 	return opts, nil
 }
 
-// ConfigurationSections answers the ids of the Configuration sections the
-// router's schema route lists, read with every registered name granted.
-func (c Composed) ConfigurationSections() ([]string, error) {
+// Section is one Configuration section of the router's schema list.
+type Section struct {
+	ID string `json:"id"`
+	// RequiredPermission is the section's own permission, which the value
+	// handler checks after the route gate; "" for none.
+	RequiredPermission string `json:"required_permission"`
+}
+
+// Variant answers the variant that drives the value routes for this section.
+func (s Section) Variant() Variant {
+	return Variant{Name: "section " + s.ID, Params: map[string]string{"plugin": s.ID}}
+}
+
+// ConfigurationSections answers the Configuration sections the router's
+// schema route lists, read with every registered name granted.
+func (c Composed) ConfigurationSections() ([]Section, error) {
 	rec := &recorder{grant: func(int) []string { return adminaccess.Names() }}
 	path := strings.ReplaceAll(ConfigurationSchemas, "{mode}", auth.PermissionModeAdministration)
 	req := httptest.NewRequestWithContext(
@@ -151,23 +163,21 @@ func (c Composed) ConfigurationSections() ([]string, error) {
 		return nil, fmt.Errorf("GET %s answered %d: %s", path, w.Code, truncate(w.Body.String()))
 	}
 	var schemas struct {
-		Sections []struct {
-			ID string `json:"id"`
-		} `json:"sections"`
+		Sections []Section `json:"sections"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &schemas); err != nil {
 		return nil, fmt.Errorf("GET %s: %w", path, err)
 	}
-	var ids []string
+	var sections []Section
 	for _, section := range schemas.Sections {
 		if section.ID != "" {
-			ids = append(ids, section.ID)
+			sections = append(sections, section)
 		}
 	}
-	if len(ids) == 0 {
+	if len(sections) == 0 {
 		return nil, fmt.Errorf("GET %s listed no section", path)
 	}
-	return ids, nil
+	return sections, nil
 }
 
 func authenticate(r *http.Request) { r.Header.Set("Authorization", "Bearer "+Token) }

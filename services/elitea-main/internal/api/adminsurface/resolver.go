@@ -29,9 +29,11 @@ type Call struct {
 	// Caller is the function that asked, e.g.
 	// ".../internal/api/v2/admin.(*Handler).hasAdministrationPermission".
 	Caller string
-	// Gate is true when the caller is a route gate of internal/api/middleware
-	// (RequireCentralPermissions and its siblings), false when the check is in
-	// a handler or another middleware.
+	// Gate is true when the caller is in internal/api/middleware, in front of
+	// the handler (RequireCentralPermissions and its siblings, the maintenance
+	// window), false when the check is in a handler. The in-handler helpers of
+	// that package (HoldsPermissionIn, HoldsResolvedPermission) name the
+	// handler that called them instead.
 	Gate bool
 }
 
@@ -122,7 +124,10 @@ func caller() (string, bool) {
 		switch {
 		case strings.HasPrefix(name, thisPackage):
 		case strings.HasPrefix(name, middlewarePackage+"Holds"):
-		case strings.HasPrefix(name, middlewarePackage+"Require"):
+		case strings.HasPrefix(name, middlewarePackage):
+			// Every other function of the middleware package runs in front of
+			// the handler: the Require* gates, and middleware such as the
+			// maintenance window that decides for the whole API.
 			return trimClosure(name), true
 		default:
 			return trimClosure(name), false

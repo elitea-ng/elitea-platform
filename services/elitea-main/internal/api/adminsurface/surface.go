@@ -7,33 +7,65 @@ import (
 )
 
 // IsAdministrationRoute reports whether a route sits under a known
-// administration prefix: it is under /api/v2/admin, one of its literal
-// segments is `administration`, or it has a `{mode}` segment (Drive sends
-// `administration` there). A route of this shape that Drive could not reach
-// must not read as a route outside the surface.
+// administration prefix: it is /api/v2/admin or below it, one of its literal
+// segments is `administration`, or it has a `{mode}` segment, with or without
+// a pattern (Drive sends `administration` there). A route of this shape that
+// Drive could not place in the surface must not read as a route outside it.
+//
+// A mode carried in the query or the body is not a path shape and is not
+// recognised; such a route is driven with a Variant.
 func IsAdministrationRoute(r Route) bool {
-	if strings.HasPrefix(r.Pattern, "/api/v2/admin/") {
+	if r.Pattern == "/api/v2/admin" || strings.HasPrefix(r.Pattern, "/api/v2/admin/") {
 		return true
 	}
 	for _, segment := range strings.Split(r.Pattern, "/") {
-		if segment == "administration" || segment == "{mode}" {
+		if segment == "administration" || placeholderName(segment) == "mode" {
 			return true
 		}
 	}
 	return false
 }
 
+// claimsAdministration reports whether a route's literal path names the
+// administration plane: /api/v2/admin or below it, or a literal
+// `administration` segment. Such a route that decides in another mode only is
+// reported. A `{mode}` route is not: its twins in the other modes decide in
+// the default mode by design (the Configuration and skill twins).
+func claimsAdministration(r Route) bool {
+	if r.Pattern == "/api/v2/admin" || strings.HasPrefix(r.Pattern, "/api/v2/admin/") {
+		return true
+	}
+	return slices.Contains(strings.Split(r.Pattern, "/"), "administration")
+}
+
+// placeholderName answers the name of a `{name}` or `{name:pattern}` segment,
+// or "" for a literal one.
+func placeholderName(segment string) string {
+	if m := placeholder.FindStringSubmatch(segment); m != nil && m[0] == segment {
+		return m[1]
+	}
+	return ""
+}
+
 // UnreachedFailures answers one message per route under a known
-// administration prefix that Drive could not reach, and per entry of declared
-// that is stale. declared maps Route.String() to the reason a route of that
-// shape is known to make no permission decision (a deliberately open route).
-// An entry is stale when its route was reached, or is not mounted at all.
+// administration prefix that Drive could not place in the surface (no
+// decision at all, or decisions in other modes only), per route that timed out
+// or answered unstably wherever it is mounted, and per entry of declared that
+// is stale. declared maps Route.String() to the reason a route of that shape
+// makes no administration decision on purpose (a deliberately open route, a
+// project-scoped gate). An entry is stale when its route was placed in the
+// surface, or is not mounted at all.
 func (res Result) UnreachedFailures(declared map[string]string) []string {
 	var failures []string
 	unreached := map[string]bool{}
 	for _, u := range res.Unreached {
 		unreached[u.String()] = true
-		if u.Unstable {
+		switch {
+		case u.TimedOut:
+			failures = append(failures, fmt.Sprintf(
+				"%s (variant %q) did not answer within the timeout; a timed-out answer is no evidence", u, u.Variant))
+			continue
+		case u.Unstable:
 			failures = append(failures, fmt.Sprintf(
 				"%s (variant %q) answers the same request differently; the probe cannot read it", u, u.Variant))
 			continue
@@ -44,16 +76,20 @@ func (res Result) UnreachedFailures(declared map[string]string) []string {
 		if _, ok := declared[u.String()]; ok {
 			continue
 		}
+		decided := "made no permission decision"
+		if len(u.Modes) > 0 {
+			decided = fmt.Sprintf("decided only in the %s mode(s), never in administration", strings.Join(u.Modes, ", "))
+		}
 		failures = append(failures, fmt.Sprintf(
-			"%s (variant %q) is under an administration prefix but made no permission decision: it answered %d %s. "+
+			"%s (variant %q) is under an administration prefix but %s: it answered %d %s. "+
 				"Give the route what it needs to reach its decision (a variant, a nil-safe store), "+
 				"or declare why it makes none",
-			u, u.Variant, u.Status, u.Answer))
+			u, u.Variant, decided, u.Status, u.Answer))
 	}
 	for route := range declared {
 		if !unreached[route] {
 			failures = append(failures, fmt.Sprintf(
-				"%s is declared as making no permission decision, but it was reached or is not mounted; remove the entry", route))
+				"%s is declared as making no administration decision, but it made one or is not mounted; remove the entry", route))
 		}
 	}
 	slices.Sort(failures)

@@ -26,10 +26,20 @@ import (
 )
 
 // declaredWithoutDecision are routes under an administration prefix that make
-// no permission decision on purpose. Each needs a reason a reader can check
-// against the router; an entry added to silence the test hides a route from
-// the surface.
+// no administration decision on purpose: no decision at all, or a
+// project-scoped gate in the default mode. Each needs a reason a reader can
+// check against the router; an entry added to silence the test hides a route
+// from the surface.
 var declaredWithoutDecision = map[string]string{
+	"GET /api/v2/admin/moderation_status/{mode}/{projectID}/{entityID}": "a project's own moderation " +
+		"requests, gated on admin.moderation.view in the DEFAULT mode against {projectID}; the central " +
+		"queue is GET /moderation_statuses/administration",
+	"POST /api/v2/admin/moderation_status/{mode}/{projectID}/{entityID}": "a project member files a " +
+		"moderation request; admin.moderation.create in the DEFAULT mode against {projectID}",
+	"DELETE /api/v2/admin/moderation_status/{mode}/{projectID}/{entityID}": "a project member withdraws " +
+		"their own request (#544); admin.moderation.create in the DEFAULT mode, rows scoped to the caller",
+	"DELETE /api/v2/admin/users/{mode}/{projectID}": "removes a member from one project; " +
+		"configuration.users.users.delete in the DEFAULT mode against {projectID}",
 	"GET /api/v2/admin/system_info/prompt_lib": "the Help Center's version lookup; " +
 		"open to every signed-in user like the legacy PromptLibAPI (router.go, /admin block)",
 	"GET /api/v2/admin/plugin_config_values/prompt_lib/resources": "the Help Center's one public " +
@@ -57,28 +67,40 @@ var invisibleChecks = map[string]string{
 		"literal, and its one literal (admin.auth.users.super_admin) is seen on the SCIM client routes",
 }
 
-var composedSurface = sync.OnceValues(func() (adminsurface.Result, error) {
+type drivenSurface struct {
+	result   adminsurface.Result
+	sections []adminsurface.Section
+}
+
+var composedSurface = sync.OnceValues(func() (drivenSurface, error) {
 	composed, err := adminsurface.ComposedRouter()
 	if err != nil {
-		return adminsurface.Result{}, err
+		return drivenSurface{}, err
+	}
+	sections, err := composed.ConfigurationSections()
+	if err != nil {
+		return drivenSurface{}, err
 	}
 	opts, err := composed.Options()
 	if err != nil {
-		return adminsurface.Result{}, err
+		return drivenSurface{}, err
 	}
-	return adminsurface.Drive(composed.Handler, composed.Resolver, composed.Routes, opts), nil
+	return drivenSurface{
+		result:   adminsurface.Drive(composed.Handler, composed.Resolver, composed.Routes, opts),
+		sections: sections,
+	}, nil
 })
 
-func drivenComposedSurface(t *testing.T) adminsurface.Result {
+func drivenComposedSurface(t *testing.T) drivenSurface {
 	t.Helper()
-	result, err := composedSurface()
+	driven, err := composedSurface()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Driven < 500 {
-		t.Fatalf("drove %d (route, variant) pairs; the composed router mounts more than 500 routes", result.Driven)
+	if driven.result.Driven < 500 {
+		t.Fatalf("drove %d (route, variant) pairs; the composed router mounts more than 500 routes", driven.result.Driven)
 	}
-	return result
+	return driven
 }
 
 // unregisteredFixturePermission is a name internal/adminaccess does not
@@ -110,8 +132,10 @@ func fixtureRouter(resolver *adminsurface.Resolver) (http.Handler, []adminsurfac
 			next.ServeHTTP(w, r.WithContext(auth.ContextWithUser(r.Context(), adminsurface.Principal())))
 		})
 	})
-	// A route gate under /admin.
+	// A route gate under /admin, and one built by another gate constructor.
 	r.With(central(adminaccess.RuntimePlugins)).Get("/api/v2/admin/gated", ok)
+	r.With(apimw.RequireResolvedMembershipPermissions(resolver, auth.PermissionModeAdministration,
+		adminaccess.AdminAuthUsers)).Get("/api/v2/admin/membership_gated", ok)
 	// An in-handler check on a route outside /admin, behind a gate that is not
 	// in the administration mode.
 	r.With(apimw.RequireResolvedPermissions(resolver, auth.PermissionModeDefault, "models.fixture.view")).
@@ -119,10 +143,13 @@ func fixtureRouter(resolver *adminsurface.Resolver) (http.Handler, []adminsurfac
 	// A check, gate and in-handler, that names a permission outside the registry.
 	r.With(central(unregisteredFixturePermission)).Get("/api/v2/admin/unregistered_gate", ok)
 	r.Get("/api/v2/tracing/unregistered_check", inHandler(unregisteredFixturePermission))
-	// A route under /admin that answers before any decision.
+	// A route under /admin that answers before any decision, and one that
+	// decides in the default mode only.
 	r.Get("/api/v2/admin/unreached", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	})
+	r.With(apimw.RequireResolvedPermissions(resolver, auth.PermissionModeDefault, "models.fixture.view")).
+		Get("/api/v2/admin/default_gated/{projectID}", ok)
 
 	var routes []adminsurface.Route
 	_ = chi.Walk(r, func(method, pattern string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
@@ -161,10 +188,15 @@ func TestAdministrationSurfaceNamesOnlyRegisteredPermissions(t *testing.T) {
 				"want an in-handler any_of check for %q under /elitea_core",
 				check, budget[0].Prefix, adminaccess.ConfigurationGovernance)
 		}
-		gated := result.Find(http.MethodGet, "/api/v2/admin/gated")
-		if len(gated) != 1 || len(gated[0].Checks) != 1 || !gated[0].Checks[0].Gate ||
-			!slices.Equal(gated[0].Checks[0].Permissions, []string{adminaccess.RuntimePlugins}) {
-			t.Errorf("the route gate under /admin: got %+v, want a gate check for %q", gated, adminaccess.RuntimePlugins)
+		for route, permission := range map[string]string{
+			"/api/v2/admin/gated":            adminaccess.RuntimePlugins,
+			"/api/v2/admin/membership_gated": adminaccess.AdminAuthUsers,
+		} {
+			gated := result.Find(http.MethodGet, route)
+			if len(gated) != 1 || len(gated[0].Checks) != 1 || !gated[0].Checks[0].Gate ||
+				!slices.Equal(gated[0].Checks[0].Permissions, []string{permission}) {
+				t.Errorf("the route gate on %s: got %+v, want a gate check for %q", route, gated, permission)
+			}
 		}
 
 		failures := result.RegistryFailures(adminaccess.Names(), nil)
@@ -181,7 +213,7 @@ func TestAdministrationSurfaceNamesOnlyRegisteredPermissions(t *testing.T) {
 
 	t.Run("composed router", func(t *testing.T) {
 		t.Parallel()
-		result := drivenComposedSurface(t)
+		result := drivenComposedSurface(t).result
 		for _, failure := range result.RegistryFailures(adminaccess.Names(), invisibleChecks) {
 			t.Error(failure)
 		}
@@ -190,7 +222,8 @@ func TestAdministrationSurfaceNamesOnlyRegisteredPermissions(t *testing.T) {
 
 func TestAdministrationSurfaceSpansEveryMount(t *testing.T) {
 	t.Parallel()
-	result := drivenComposedSurface(t)
+	driven := drivenComposedSurface(t)
+	result := driven.result
 
 	prefixes := map[string]int{}
 	for _, entry := range result.Surface {
@@ -213,29 +246,34 @@ func TestAdministrationSurfaceSpansEveryMount(t *testing.T) {
 			t.Errorf("%s is not in the surface", route)
 		}
 	}
-	for _, method := range []string{http.MethodGet, http.MethodPut} {
-		sectionPermissions := map[string]bool{}
-		for _, entry := range result.Find(method, adminsurface.ConfigurationValues) {
-			for _, check := range entry.Checks {
-				if !check.Gate && strings.HasSuffix(check.Caller, ".hasAdministrationPermission") {
-					for _, name := range check.Permissions {
-						sectionPermissions[name] = true
+	declaring := 0
+	for _, section := range driven.sections {
+		if section.RequiredPermission == "" {
+			continue
+		}
+		declaring++
+		for _, method := range []string{http.MethodGet, http.MethodPut} {
+			var named []string
+			for _, entry := range result.Find(method, adminsurface.ConfigurationValues) {
+				if entry.Variant != section.Variant().Name {
+					continue
+				}
+				for _, check := range entry.Checks {
+					if !check.Gate && strings.HasSuffix(check.Caller, ".hasAdministrationPermission") {
+						named = append(named, check.Permissions...)
 					}
 				}
 			}
-		}
-		// Today's sections declare configuration.governance, .branding,
-		// .native_clients, .service_descriptors, .microsoft_apps and
-		// runtime.plugins.
-		if len(sectionPermissions) < 3 {
-			t.Errorf("%s %s: the in-handler section check named %v; want the permissions of at least three sections",
-				method, adminsurface.ConfigurationValues, sectionPermissions)
-		}
-		for _, name := range []string{adminaccess.ConfigurationGovernance, adminaccess.ConfigurationBranding} {
-			if !sectionPermissions[name] {
-				t.Errorf("%s %s: no in-handler section check names %q", method, adminsurface.ConfigurationValues, name)
+			if !slices.Equal(named, []string{section.RequiredPermission}) {
+				t.Errorf("%s %s, section %s: the in-handler section check named %v; want [%s]",
+					method, adminsurface.ConfigurationValues, section.ID, named, section.RequiredPermission)
 			}
 		}
+	}
+	// 17 of today's sections declare one; the floor only guards the schema
+	// read itself.
+	if declaring < 3 {
+		t.Errorf("%d Configuration sections declare a required_permission; the schema read found too few", declaring)
 	}
 
 	// Project create and delete.
@@ -255,12 +293,18 @@ func TestAdministrationSurfaceFailsOnAnUnreachedRoute(t *testing.T) {
 	t.Run("fixtures", func(t *testing.T) {
 		t.Parallel()
 		failures := driveFixtures(t).UnreachedFailures(nil)
-		if len(failures) != 1 || !strings.HasPrefix(failures[0], "GET /api/v2/admin/unreached ") {
-			t.Fatalf("got %q, want one failure naming GET /api/v2/admin/unreached", failures)
+		if len(failures) != 2 ||
+			!strings.HasPrefix(failures[0], "GET /api/v2/admin/default_gated/{projectID} ") ||
+			!strings.Contains(failures[0], "decided only in the default mode") ||
+			!strings.HasPrefix(failures[1], "GET /api/v2/admin/unreached ") ||
+			!strings.Contains(failures[1], "made no permission decision") {
+			t.Fatalf("got %q, want one failure naming GET /api/v2/admin/default_gated/{projectID} "+
+				"(default mode only) and one naming GET /api/v2/admin/unreached (no decision)", failures)
 		}
 		stale := driveFixtures(t).UnreachedFailures(map[string]string{
-			"GET /api/v2/admin/unreached": "fixture",
-			"GET /api/v2/admin/gated":     "reached, so the entry is stale",
+			"GET /api/v2/admin/unreached":                 "fixture",
+			"GET /api/v2/admin/default_gated/{projectID}": "fixture",
+			"GET /api/v2/admin/gated":                     "reached, so the entry is stale",
 		})
 		if len(stale) != 1 || !strings.HasPrefix(stale[0], "GET /api/v2/admin/gated ") {
 			t.Fatalf("got %q, want one failure naming the stale entry GET /api/v2/admin/gated", stale)
@@ -269,7 +313,7 @@ func TestAdministrationSurfaceFailsOnAnUnreachedRoute(t *testing.T) {
 
 	t.Run("composed router", func(t *testing.T) {
 		t.Parallel()
-		for _, failure := range drivenComposedSurface(t).UnreachedFailures(declaredWithoutDecision) {
+		for _, failure := range drivenComposedSurface(t).result.UnreachedFailures(declaredWithoutDecision) {
 			t.Error(failure)
 		}
 	})

@@ -41,6 +41,10 @@ const (
 	// permission outside the registry, or its effect cannot be seen in this
 	// router.
 	KindInvisible Kind = "invisible"
+	// KindTimedOut: a probe request did not answer within Options.Timeout.
+	// Drive reports the route as Unreached with TimedOut set instead of
+	// keeping a check it could not read.
+	KindTimedOut Kind = "timed_out"
 )
 
 // Check is one administration-mode resolution of a route and what it asked.
@@ -80,17 +84,23 @@ type Variant struct {
 	Params map[string]string
 }
 
-// Unreached is a route that made no permission resolution at all, with the
-// status it answered instead.
+// Unreached is a route Drive could not place in the surface, with the status
+// it answered:
 //
-// Unstable is set instead when the route answered the same request in two
-// different ways: it was reached, but nothing probing learns can be trusted.
+//   - Modes empty: it made no permission resolution at all.
+//   - Modes set (recorded only for an IsAdministrationRoute route): it
+//     resolved only those modes, never the administration mode.
+//   - Unstable: it answered the same request in two different ways, so nothing
+//     probing learns can be trusted.
+//   - TimedOut: a request did not answer within Options.Timeout.
 type Unreached struct {
 	Route
 	Variant  string
 	Status   int
 	Answer   string
+	Modes    []string
 	Unstable bool
+	TimedOut bool
 }
 
 // Result is what Drive found.
@@ -124,7 +134,10 @@ type Options struct {
 	Params map[string]string
 	// Authenticate adds the synthetic principal's credential to a request.
 	Authenticate func(*http.Request)
-	// Timeout bounds one request. Zero means two seconds.
+	// Timeout bounds one request. Zero means ten seconds, far above the
+	// milliseconds a request of the composed router takes, so that only a
+	// handler that waits on something never comes back reaches it. A request
+	// that does is reported, never compared.
 	Timeout time.Duration
 }
 
@@ -132,7 +145,7 @@ type Options struct {
 // handler must answer its resolutions through resolver.
 func Drive(handler http.Handler, resolver *Resolver, routes []Route, opts Options) Result {
 	if opts.Timeout == 0 {
-		opts.Timeout = 2 * time.Second
+		opts.Timeout = 10 * time.Second
 	}
 	d := driver{handler: handler, opts: opts}
 
@@ -225,6 +238,14 @@ type outcome struct {
 	calls  []Call
 }
 
+// The statuses of a request that did not answer normally.
+const (
+	statusTimedOut = -1
+	statusPanicked = -2
+)
+
+func (o outcome) timedOut() bool { return o.status == statusTimedOut }
+
 func (o outcome) admin() []Call {
 	var out []Call
 	for _, c := range o.calls {
@@ -243,6 +264,9 @@ func (d driver) drive(route Route, variant Variant) (*Entry, *Unreached) {
 	all := d.opts.Registry
 	everything := func(int) []string { return all }
 	full := d.run(route, variant, everything)
+	if full.timedOut() {
+		return nil, &Unreached{Route: route, Variant: variant.Name, Status: full.status, TimedOut: true}
+	}
 	if len(full.calls) == 0 {
 		return nil, &Unreached{Route: route, Variant: variant.Name, Status: full.status, Answer: truncate(full.body)}
 	}
@@ -250,6 +274,13 @@ func (d driver) drive(route Route, variant Variant) (*Entry, *Unreached) {
 	if len(adminCalls) == 0 {
 		// The pass that grants nothing can only stop earlier; it never
 		// resolves the administration mode where granting everything does not.
+		// A route whose path names the administration plane and that decides
+		// in another mode only is reported, so that a wrong gate cannot read
+		// as "outside".
+		if claimsAdministration(route) {
+			return nil, &Unreached{Route: route, Variant: variant.Name, Status: full.status,
+				Answer: truncate(full.body), Modes: modes(full.calls)}
+		}
 		return nil, nil
 	}
 	// The answer must not change between two identical requests, or no probe
@@ -258,7 +289,11 @@ func (d driver) drive(route Route, variant Variant) (*Entry, *Unreached) {
 	if again := d.run(route, variant, everything); !again.equal(full) {
 		d.ignoreBody = true
 		full = d.run(route, variant, everything)
-		if again := d.run(route, variant, everything); !again.equal(full) {
+		again = d.run(route, variant, everything)
+		if full.timedOut() || again.timedOut() {
+			return nil, &Unreached{Route: route, Variant: variant.Name, Status: statusTimedOut, TimedOut: true}
+		}
+		if !again.equal(full) {
 			return nil, &Unreached{Route: route, Variant: variant.Name, Status: full.status, Unstable: true,
 				Answer: "answers differently to the same request, so no probe can be read"}
 		}
@@ -266,23 +301,52 @@ func (d driver) drive(route Route, variant Variant) (*Entry, *Unreached) {
 
 	entry := &Entry{Route: route, Prefix: mountPrefix(route.Pattern), Variant: variant.Name, Body: variant.Body}
 	for i, call := range adminCalls {
-		entry.Checks = append(entry.Checks, d.probe(route, variant, full, i, call))
+		check := d.probe(route, variant, full, i, call)
+		if check.Kind == KindTimedOut {
+			return nil, &Unreached{Route: route, Variant: variant.Name, Status: statusTimedOut, TimedOut: true}
+		}
+		entry.Checks = append(entry.Checks, check)
 	}
 	return entry, nil
 }
 
-// probe learns what the i-th administration-mode resolution asks for.
-func (d driver) probe(route Route, variant Variant, full outcome, i int, call Call) Check {
+func modes(calls []Call) []string {
+	var out []string
+	for _, c := range calls {
+		if !slices.Contains(out, c.Mode) {
+			out = append(out, c.Mode)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// probe learns what the i-th administration-mode resolution asks for. A probe
+// request that times out ends it with KindTimedOut: its answer is no evidence.
+func (d driver) probe(route Route, variant Variant, full outcome, i int, call Call) (check Check) {
 	all := d.opts.Registry
+	type timedOut struct{}
+	defer func() {
+		if p := recover(); p != nil {
+			if _, ok := p.(timedOut); !ok {
+				panic(p)
+			}
+			check.Kind, check.Permissions = KindTimedOut, nil
+		}
+	}()
 	at := func(probe []string) outcome {
-		return d.run(route, variant, func(n int) []string {
+		out := d.run(route, variant, func(n int) []string {
 			if n == i {
 				return probe
 			}
 			return all
 		})
+		if out.timedOut() {
+			panic(timedOut{})
+		}
+		return out
 	}
-	check := Check{Index: i, Caller: call.Caller, Gate: call.Gate}
+	check = Check{Index: i, Caller: call.Caller, Gate: call.Gate}
 
 	// Granting nothing must change the outcome, or no name can be said to
 	// satisfy the check: a check that only an unregistered name passes answers
@@ -346,11 +410,18 @@ func (d driver) run(route Route, variant Variant, grant func(int) []string) outc
 	select {
 	case panicked = <-done:
 	case <-time.After(d.opts.Timeout + time.Second):
-		return outcome{status: -1, body: "no answer within the timeout", calls: rec.snapshot()}
+		return outcome{status: statusTimedOut, calls: rec.snapshot()}
+	}
+	// A handler that gave up on the deadline answered for the deadline, not
+	// for the grant: that answer is no evidence either.
+	if ctx.Err() != nil {
+		return outcome{status: statusTimedOut, calls: rec.snapshot()}
 	}
 	out := outcome{status: w.Code, body: w.Body.String(), calls: rec.snapshot()}
 	if panicked != "" {
-		out.status, out.body = -2, firstLine(panicked)
+		// A panic the router did not recover is an answer like any other:
+		// the stability check in drive catches one that is not repeatable.
+		out.status, out.body = statusPanicked, firstLine(panicked)
 	}
 	if d.ignoreBody {
 		out.body = ""

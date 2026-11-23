@@ -327,10 +327,12 @@ type RouterConfig struct {
 	// EVERY route: the gates, the sub-routers and the handlers that resolve a
 	// permission themselves. It exists for the administration surface helper
 	// (internal/api/adminsurface), which drives every mounted route with a
-	// recording resolver. Production leaves it unset;
-	// cmd/elitea-main's TestBinaryDoesNotLinkTheRecordingResolver holds that
-	// the recording resolver never links into the binary. The two narrower
-	// overrides above still win for their routes.
+	// recording resolver. Production leaves it unset. Two tests in
+	// cmd/elitea-main hold that: TestBinaryDoesNotLinkTheRecordingResolver
+	// (no binary links the helper) and
+	// TestNoProductionCodeOverridesThePermissionResolver (no non-test code
+	// sets this field). The two narrower overrides above still win for their
+	// routes.
 	PermissionResolver RouterPermissionResolver
 	// ArtifactHandler overrides newArtifactHandler's Pool/ObjectStore-backed
 	// construction (S11) — newArtifactHandler always builds real
@@ -1496,6 +1498,7 @@ func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 func mountMCPServerRoutes(
 	r chi.Router,
 	pool *pgxpool.Pool,
+	permissions platformauth.PermissionResolver,
 	authenticate func(http.Handler) http.Handler,
 	agentStart v2mcp.AgentStartUseCase,
 	toolkitExecute v2mcp.ToolkitExecuteReadUseCase,
@@ -1526,7 +1529,9 @@ func mountMCPServerRoutes(
 	}
 	handler := v2mcp.NewHandlerWithToolkitRuns(
 		pool, resolver, agentStart, toolkitRun,
-		legacyrbac.NewPostgresResolver(pool),
+		// The router's one resolver, so RouterConfig.PermissionResolver
+		// reaches this mount like every other.
+		permissions,
 		v2mcp.WithInternalChatTools(conversationHandler, folderHandler),
 		v2mcp.WithInternalChatRuntime(conversationHandler, typedConfigurations),
 		v2mcp.WithInternalToolkitHandler(toolkitHandler),
@@ -2392,7 +2397,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		}
 	}
 	mountMCPServerRoutes(
-		r, cfg.Pool, authenticate, cfg.MCPAgentStart, cfg.MCPToolkitExecute,
+		r, cfg.Pool, permissionResolver, authenticate, cfg.MCPAgentStart, cfg.MCPToolkitExecute,
 		toolkitHandler, configurationsHandler, coreHandler, prebuiltMCPVault, cfg.CurrentNotificationStore,
 		cfg.ToolkitArgumentSchemas, cfg.MCPToolkitRun, personalProjects,
 		cfg.InternalConfigurationTools, draftHandler, cfg.ToolkitDiscovery, convHandler, folderHandler,

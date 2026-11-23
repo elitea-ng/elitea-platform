@@ -45,10 +45,13 @@
 //
 // Many handlers have no store in the composed test router and answer 503
 // before they resolve anything. Drive records a route that made no
-// permission resolution at all as Unreached, with the status it answered. A
-// test must fail on an unreached route under a known administration prefix,
-// so that a route the helper could not reach never reads as a route outside
-// the surface.
+// permission resolution at all as Unreached, with the status it answered, and
+// so too a route whose path names the administration plane (/api/v2/admin, an
+// `administration` segment) but that resolved other modes only. A test must
+// fail on such a route unless it is declared with a reason, so that a route
+// the helper could not reach, or a wrong gate, never reads as a route outside
+// the surface. A request that times out, or a route that answers the same
+// request two ways, is reported too: neither answer is evidence.
 //
 // # What Drive cannot see
 //
