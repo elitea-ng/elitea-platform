@@ -11,6 +11,7 @@ import {
   NAME_FIELD_WIDTH_NARROW,
 } from '../constants/stateDrawer.constants';
 import {
+  DefaultState,
   LegacyIntType,
   STATE_INPUT,
   STATE_MESSAGES,
@@ -105,6 +106,16 @@ export const getValueByType = (name: string, type: string, value: unknown): unkn
     default:
       return value;
   }
+};
+
+export const isDefaultVariableEnabled = (
+  states: Readonly<Record<string, unknown>> | undefined,
+  name: string,
+): boolean => {
+  if (!states) {
+    return Object.hasOwn(DefaultState, name);
+  }
+  return Boolean(states[name]);
 };
 
 export const getMessagesFromState = (

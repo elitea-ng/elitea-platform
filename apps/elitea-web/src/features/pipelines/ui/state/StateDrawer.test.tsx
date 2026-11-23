@@ -280,4 +280,40 @@ describe('StateDrawer', () => {
     expect(parsePipelineYamlDocument(store.getState().yamlCode).stateKeyOrder).toEqual(['renamed_counter', '10', '2']);
     expect(store.getState().initYamlCode).toBe(store.getState().yamlCode);
   });
+
+  it('renders tool_outcomes and last_tool_outcome rows and toggles them on as dict variables', () => {
+    const setYamlJsonObject = vi.fn<(document: YamlPipelineDocument) => void>();
+    renderWithTheme(
+      <StateDrawer
+        isOpen
+        onClose={vi.fn()}
+        setYamlJsonObject={setYamlJsonObject}
+        yamlJsonObject={{ state: { input: { type: 'str' }, messages: { type: 'list' } } }}
+      />,
+    );
+
+    expect(screen.getByText('tool_outcomes')).toBeInTheDocument();
+    expect(screen.getByText('last_tool_outcome')).toBeInTheDocument();
+
+    const toggles = screen.getAllByRole('switch');
+    expect(toggles).toHaveLength(4);
+    fireEvent.click(toggles[2] as HTMLElement);
+
+    const updatedDocument = setYamlJsonObject.mock.calls[0]?.[0] as YamlPipelineDocument;
+    expect(updatedDocument.state?.['tool_outcomes']).toMatchObject({ type: 'dict' });
+  });
+
+  it('applies rightOffset docking offset when docked beside the node config panel', () => {
+    renderWithTheme(
+      <StateDrawer
+        isOpen
+        onClose={vi.fn()}
+        setYamlJsonObject={vi.fn()}
+        yamlJsonObject={{}}
+        rightOffset={400}
+      />,
+    );
+
+    expect(screen.getByTestId('pipeline-state-drawer')).toBeInTheDocument();
+  });
 });

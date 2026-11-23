@@ -7326,5 +7326,10 @@
   "runtimeFailure.refusal.policyFallback": "This run was refused by a platform or budget policy.",
   "runtimeFailure.refusal.policyTitle": "Request refused by policy",
   "runtimeFailure.refusal.validationFallback": "This run was refused because the request or configuration could not be accepted.",
-  "runtimeFailure.refusal.validationTitle": "Request refused"
+  "runtimeFailure.refusal.validationTitle": "Request refused",
+  "features.pipelines.editorPanel.mode.flow": "Flow",
+  "features.pipelines.editorPanel.mode.yaml": "YAML",
+  "features.pipelines.yamlEditor.copyYaml": "Copy YAML",
+  "features.pipelines.yamlEditor.fullScreenTitle": "YAML",
+  "features.pipelines.yamlEditor.fullScreenView": "Full screen view"
 }

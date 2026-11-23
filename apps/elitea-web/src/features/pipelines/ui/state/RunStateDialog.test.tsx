@@ -221,4 +221,54 @@ describe('RunStateDialog', () => {
     // "Before" shows the agent step's value; "After" does not borrow it as a final value.
     expect(screen.getAllByText('"an interim answer"')).toHaveLength(1);
   });
+
+  it('renders grouped timeline steps with Expand all control and surfaces 5b-1 continued node_errors safely', () => {
+    renderWithTheme(
+      <RunStateDialog
+        data={baseData({
+          status: 'Completed',
+          groupedTimeline: [
+            {
+              id: 'agent_call',
+              status: 'Completed',
+              created_at: '2024-01-01T00:00:00.000Z',
+              group_id: 'application:call-1',
+              scope_id: 'application:call-1',
+              group_label: 'Research Agent',
+              state: {
+                node_errors: [
+                  {
+                    node: 'agent_call',
+                    handled: 'continue',
+                    input_step: 1,
+                    error: { support_ref: 'ERR-42', message: 'Transient upstream error' },
+                  },
+                ],
+              },
+            },
+            {
+              id: 'nested_llm',
+              status: 'Completed',
+              created_at: '2024-01-01T00:00:02.000Z',
+              group_id: 'application:call-1',
+              scope_id: 'application:call-1',
+              group_label: 'Research Agent',
+              is_nested: true,
+              state: { answer: 'nested value' },
+            },
+          ],
+        })}
+        state={{ answer: { type: 'str' } }}
+        open
+        onClose={vi.fn()}
+        onStop={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId('pipeline-run-details-panel')).toBeInTheDocument();
+    expect(screen.getByTestId('pipeline-run-details-timeline-expand-all')).toBeInTheDocument();
+    expect(screen.getByText(/Failed · continued/)).toBeInTheDocument();
+    expect(screen.getByText(/ERR-42/)).toBeInTheDocument();
+  });
 });

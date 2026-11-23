@@ -264,16 +264,6 @@ export const contentContainerSx: SxProps<Theme> = (theme: Theme) => ({
   gap: theme.spacing(0.5),
 });
 
-export const timelineHeaderSx: SxProps<Theme> = (theme: Theme) => ({
-  display: 'flex',
-  width: '100%',
-  height: '2.25rem',
-  justifyContent: 'space-between',
-  padding: `${theme.spacing(1.5)} ${theme.spacing(3)} 0 ${theme.spacing(3)}`,
-});
-
-export const timelineStepSx: SxProps<Theme> = { display: 'flex', gap: '.25rem', alignItems: 'center' };
-
 export const statusIndicatorSx: SxProps<Theme> = {
   display: 'flex',
   gap: '.25rem',
@@ -301,16 +291,6 @@ export const iconErrorSx: SxProps<Theme> = (theme: Theme) => ({
 export const textErrorSx: SxProps<Theme> = (theme: Theme) => ({ color: theme.vars.palette.status.rejected });
 
 export const textPublishedSx: SxProps<Theme> = (theme: Theme) => ({ color: theme.vars.palette.status.published });
-
-export const stepperSx: SxProps<Theme> = (theme: Theme) => ({
-  padding: `${theme.spacing(2)} ${theme.spacing(3)} ${theme.spacing(3.5)} ${theme.spacing(3)}`,
-  borderBottom: `.0625rem solid ${theme.vars.palette.border.flowNode}`,
-  height: '3.375rem',
-});
-
-export const stepSx: SxProps<Theme> = { padding: 0, position: 'relative' };
-
-export const stepLabelSx: SxProps<Theme> = { position: 'absolute', left: '-0.5rem', bottom: '-1.25rem', width: '12.5rem' };
 
 export const statesHeaderSx: SxProps<Theme> = (theme: Theme) => ({
   padding: `0 ${theme.spacing(3)} ${theme.spacing(1.5)} ${theme.spacing(3)}`,

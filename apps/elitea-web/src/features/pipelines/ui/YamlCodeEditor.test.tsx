@@ -150,4 +150,27 @@ describe('YamlCodeEditor', () => {
       expect(container.querySelector('.error_yaml_code')).not.toBeNull();
     });
   });
+
+  it('renders Copy YAML and Full screen view actions and opens/closes the full-screen modal', async () => {
+    const user = userEvent.setup();
+    const onFullScreenChange = vi.fn();
+    const { getByTestId, queryByTestId } = renderWithTheme(
+      <YamlCodeEditor
+        code="nodes: []"
+        onChangeCode={vi.fn()}
+        onFullScreenChange={onFullScreenChange}
+      />,
+    );
+
+    expect(getByTestId('pipeline-yaml-copy-button')).toBeInTheDocument();
+    expect(queryByTestId('pipeline-yaml-full-screen-modal')).not.toBeInTheDocument();
+
+    await user.click(getByTestId('pipeline-yaml-full-screen-button'));
+    expect(getByTestId('pipeline-yaml-full-screen-modal')).toBeInTheDocument();
+    expect(onFullScreenChange).toHaveBeenCalledWith(true);
+
+    await user.click(getByTestId('pipeline-yaml-full-screen-close-button'));
+    expect(queryByTestId('pipeline-yaml-full-screen-modal')).not.toBeInTheDocument();
+    expect(onFullScreenChange).toHaveBeenCalledWith(false);
+  });
 });

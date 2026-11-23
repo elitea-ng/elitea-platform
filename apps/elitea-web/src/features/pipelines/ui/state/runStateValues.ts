@@ -33,7 +33,7 @@ export function isRunFinished(status: string | undefined): boolean {
 }
 
 export interface RunStateStep {
-  readonly state?: Readonly<Record<string, unknown>>;
+  readonly state?: Readonly<Record<string, unknown>> | undefined;
 }
 
 export interface StepStateValues {

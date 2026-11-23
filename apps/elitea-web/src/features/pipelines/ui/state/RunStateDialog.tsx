@@ -38,22 +38,20 @@
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import { format } from 'date-fns';
-
 import Box from '@mui/material/Box';
 import Dialog from '@mui/material/Dialog';
 import DialogContent from '@mui/material/DialogContent';
-import Step from '@mui/material/Step';
-import Stepper from '@mui/material/Stepper';
 import Typography from '@mui/material/Typography';
 
 import { FlowEditorConstants } from '../../lib/flow-editor/constants';
+import type { GroupedTimelineStep } from '../../lib/run-state-timeline';
 import { BasicAccordion, type AccordionItem } from '@/shared/ui/BasicAccordion';
 import { t } from '@/shared/i18n';
 
-import { ProcessConnector, ProcessStepIcon, RunStatus, StateItemView, StateValueModal } from './RunStateDialog.parts';
-import { HeaderActions, StatusIndicatorRow } from './RunStateDialog.status';
-import { continuedFailureSteps, isRunFinished, stepStateValues } from './runStateValues';
+import { TimeLine } from '../run-state-timeline';
+import { RunStatus, StateItemView, StateValueModal } from './RunStateDialog.parts';
+import { HeaderActions } from './RunStateDialog.status';
+import { isRunFinished, stepStateValues, type StepStateValues } from './runStateValues';
 import {
   contentContainerSx,
   dialogContentSx,
@@ -63,11 +61,6 @@ import {
   mainContainerSx,
   statesContainerSx,
   statesHeaderSx,
-  stepLabelSx,
-  stepperSx,
-  stepSx,
-  timelineHeaderSx,
-  timelineStepSx,
   accordionSx as accordionItemSx,
   accordionSummarySx,
   accordionDetailsSx,
@@ -80,15 +73,55 @@ export interface RunStateDialogData {
   readonly [key: string]: unknown;
 }
 
-interface RunStateTimelineStep {
-  readonly id?: string;
-  readonly status?: string;
-  readonly created_at: number | string;
-  readonly state?: Readonly<Record<string, unknown>>;
+function timelineOf(data: RunStateDialogData): readonly GroupedTimelineStep[] {
+  return (data['timeline'] as readonly GroupedTimelineStep[] | undefined) ?? [];
 }
 
-function timelineOf(data: RunStateDialogData): readonly RunStateTimelineStep[] {
-  return (data['timeline'] as readonly RunStateTimelineStep[] | undefined) ?? [];
+function groupedTimelineOf(data: RunStateDialogData): readonly GroupedTimelineStep[] | undefined {
+  const grouped = data['groupedTimeline'] as readonly GroupedTimelineStep[] | undefined;
+  return grouped && grouped.length > 0 ? grouped : undefined;
+}
+
+function lastOuterStepIndex(steps: readonly GroupedTimelineStep[]): number {
+  for (let index = steps.length - 1; index >= 0; index -= 1) {
+    if (!steps[index]?.is_nested) return index;
+  }
+  return steps.length - 1;
+}
+
+function previousScopedStep(
+  steps: readonly GroupedTimelineStep[],
+  selectedStep: number,
+  currentStep: GroupedTimelineStep | undefined,
+): GroupedTimelineStep | undefined {
+  for (let index = selectedStep - 1; index >= 0; index -= 1) {
+    const candidate = steps[index];
+    if (!candidate) continue;
+    if (currentStep?.is_nested) {
+      if (candidate.is_nested && candidate.scope_id === currentStep.scope_id) return candidate;
+    } else if (!candidate.is_nested) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+function resolveStepValues(
+  steps: readonly GroupedTimelineStep[],
+  selectedStep: number,
+  variable: string,
+  runFinished: boolean,
+): StepStateValues {
+  const currentStep = steps[selectedStep];
+  if (currentStep?.is_nested) {
+    const prev = previousScopedStep(steps, selectedStep, currentStep);
+    return {
+      before: prev ? prev.state?.[variable] : '',
+      after: currentStep.state?.[variable],
+      isFinal: false,
+    };
+  }
+  return stepStateValues(steps, selectedStep, variable, runFinished);
 }
 
 /** @public */
@@ -115,8 +148,9 @@ export function RunStateDialog(props: RunStateDialogProps): ReactNode {
   const [showValueModal, setShowValueModal] = useState(false);
   const [selectedState, setSelectedState] = useState<SelectedStateValue | undefined>(undefined);
 
-  const timeline = timelineOf(data);
-  const continued = continuedFailureSteps(timeline);
+  const outerSteps = timelineOf(data);
+  const steps = groupedTimelineOf(data) ?? outerSteps;
+  const lastOuterIndex = lastOuterStepIndex(steps);
   const variables = useMemo(() => Object.keys(state ?? { input: '', messages: [] }), [state]);
 
   const onSelect = useCallback((index: number) => setSelectedStep(index), []);
@@ -129,11 +163,10 @@ export function RunStateDialog(props: RunStateDialogProps): ReactNode {
   const onCloseValueModal = useCallback(() => setShowValueModal(false), []);
 
   useEffect(() => {
-    if (data.status === FlowEditorConstants.PipelineStatus.InProgress && timeline.length) {
-      setSelectedStep(timeline.length - 1);
+    if (data.status === FlowEditorConstants.PipelineStatus.InProgress && lastOuterIndex >= 0) {
+      setSelectedStep(lastOuterIndex);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [timeline.length]);
+  }, [data.status, lastOuterIndex]);
 
   const handleKeyDown = (event: ReactKeyboardEvent): void => {
     if (event.key === 'Escape') {
@@ -142,18 +175,7 @@ export function RunStateDialog(props: RunStateDialogProps): ReactNode {
     }
   };
 
-  const isError = data.status === FlowEditorConstants.PipelineStatus.Error;
   const runFinished = isRunFinished(data.status);
-  const lastStep = timeline[timeline.length - 1];
-  const timelineStepLabel =
-    data.status === FlowEditorConstants.PipelineStatus.InProgress
-      ? (timeline[timeline.length - 2]?.id ?? t('pipelines.flowEditor.state.start', 'Start'))
-      : timeline[selectedStep]?.id;
-
-  const showStatusIndicator =
-    data.status === FlowEditorConstants.PipelineStatus.InProgress ||
-    data.status === FlowEditorConstants.PipelineStatus.Error ||
-    data.status === FlowEditorConstants.PipelineStatus.Interrupt;
 
   return (
     <>
@@ -163,12 +185,16 @@ export function RunStateDialog(props: RunStateDialogProps): ReactNode {
         onKeyDown={handleKeyDown}
         slotProps={{ paper: { sx: dialogPaperSx(editorWidth, editorHeight) } }}
       >
-        <DialogContent sx={dialogContentSx}>
+        <DialogContent
+          sx={dialogContentSx}
+          data-testid="pipeline-run-details-panel"
+        >
           <Box sx={mainContainerSx}>
             <Box sx={headerSx}>
               <Typography
                 variant="labelMedium"
                 color="text.secondary"
+                data-testid="pipeline-run-details-header"
               >
                 {data.label}
               </Typography>
@@ -184,67 +210,14 @@ export function RunStateDialog(props: RunStateDialogProps): ReactNode {
               </Box>
             </Box>
             <Box sx={contentContainerSx}>
-              <Box sx={timelineHeaderSx}>
-                <Box sx={timelineStepSx}>
-                  <Typography
-                    variant="subtitle"
-                    color="text.primary"
-                  >
-                    {t('pipelines.flowEditor.state.timelineStep', 'Timeline step:')}
-                  </Typography>
-                  <Typography
-                    variant="bodyMedium"
-                    color="text.secondary"
-                  >
-                    {timelineStepLabel}
-                  </Typography>
-                </Box>
-                <StatusIndicatorRow
-                  visible={showStatusIndicator}
-                  lastStep={lastStep}
-                />
-              </Box>
-              <Stepper
-                sx={stepperSx}
-                activeStep={timeline.findIndex((step) => step.status === FlowEditorConstants.PipelineStatus.InProgress)}
-                connector={<ProcessConnector isError={isError} />}
-              >
-                {timeline.map((step, index) => (
-                  // Keyed by position, matching the baseline
-                  // (`RunStateDialog.jsx:380`, `key={index}`) exactly — NOT
-                  // `step.id`. A pipeline node re-executing (e.g. inside a
-                  // loop) produces multiple timeline entries with the same
-                  // `id`; keying by `id` collides React's list reconciliation
-                  // (duplicate keys), corrupting which entry's highlight/
-                  // tooltip/DOM node is shown. `timeline` is append-only and
-                  // rendered in that same fixed order, so the array index is
-                  // a stable per-entry identity here.
-                  <Step
-                    key={index}
-                    sx={stepSx}
-                  >
-                    <ProcessStepIcon
-                      onSelect={onSelect}
-                      index={index}
-                      tooltip={continued.has(index)
-                        ? `${step.id ?? ''} · ${t('pipelines.flowEditor.state.failedContinued', 'Failed · continued')}`
-                        : (step.id ?? '')}
-                      active={index === selectedStep}
-                      isError={isError || continued.has(index)}
-                    />
-                    <Typography
-                      sx={stepLabelSx}
-                      variant="bodySmall"
-                    >
-                      {formatStepTime(step.created_at)}
-                    </Typography>
-                  </Step>
-                ))}
-                <ProcessConnector
-                  isError={isError}
-                  visible={timeline.length < 2}
-                />
-              </Stepper>
+              <TimeLine
+                key={data.label}
+                steps={steps}
+                outerSteps={outerSteps}
+                status={data.status}
+                selectedStep={selectedStep}
+                onSelect={onSelect}
+              />
               <Box sx={statesHeaderSx}>
                 <Typography
                   variant="subtitle"
@@ -257,7 +230,7 @@ export function RunStateDialog(props: RunStateDialogProps): ReactNode {
                 {variables.map((variable, index) => {
                   // #6883: the last step of a finished (terminal) run shows the run's
                   // final state — see `runStateValues.ts`.
-                  const values = stepStateValues(timeline, selectedStep, variable, runFinished);
+                  const values = resolveStepValues(steps, selectedStep, variable, runFinished);
                   const items: readonly AccordionItem[] = [
                     {
                       title: variable,
@@ -299,9 +272,4 @@ export function RunStateDialog(props: RunStateDialogProps): ReactNode {
       />
     </>
   );
-}
-
-/** Ported verbatim: `format(new Date(step.created_at), 'HH:mm:ss')` (baseline, `date-fns` — already a real dependency of this app, confirmed via `package.json` and used elsewhere, e.g. `features/notifications/ui/NotificationListItem.tsx`). */
-function formatStepTime(createdAt: number | string): string {
-  return format(new Date(createdAt), 'HH:mm:ss');
 }

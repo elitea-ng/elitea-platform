@@ -29,7 +29,6 @@ import DialogContent from '@mui/material/DialogContent';
 import DialogTitle from '@mui/material/DialogTitle';
 import IconButton from '@mui/material/IconButton';
 import type { SxProps, Theme } from '@mui/material/styles';
-import StepConnector from '@mui/material/StepConnector';
 import Typography from '@mui/material/Typography';
 import Tooltip from '@mui/material/Tooltip';
 
@@ -37,7 +36,6 @@ import { t } from '@/shared/i18n';
 
 import {
   iconInactiveSx,
-  processConnectorSx,
   processStepIconInnerSx,
   processStepIconOuterSx,
   progressBoxSx,
@@ -49,16 +47,6 @@ import {
   stateItemViewSectionSx,
   stateItemViewValueBoxSx,
 } from './RunStateDialog.styles';
-
-export interface ProcessConnectorProps {
-  readonly isError: boolean;
-  /** The baseline's own trailing "fewer than 2 steps" connector override (`display: 'none'` when `false`). */
-  readonly visible?: boolean;
-}
-
-export function ProcessConnector({ isError, visible = true }: ProcessConnectorProps): ReactNode {
-  return <StepConnector sx={processConnectorSx(isError, visible)} />;
-}
 
 interface StateItemViewHeaderProps {
   readonly title: string;
