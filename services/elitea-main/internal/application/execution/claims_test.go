@@ -412,3 +412,46 @@ func TestClaimRenewRejectsRepositoryFenceRotation(t *testing.T) {
 		t.Fatalf("renewal accepted a replacement epoch that the wire response cannot carry: %v", err)
 	}
 }
+
+func TestClaimServiceMergesAndValidatesWorkerCapabilities(t *testing.T) {
+	now := time.Date(2026, time.July, 16, 12, 0, 0, 0, time.UTC)
+	repository := &memoryClaimRepository{now: func() time.Time { return now }}
+	service, err := NewClaimService(repository, func() time.Time { return now }, 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := ClaimRequest{
+		CommandID:            "command-1",
+		OutboxID:             "outbox-1",
+		ExecutionID:          "execution-1",
+		Generation:           1,
+		CapabilityID:         executiondomain.AgentApplicationCapability,
+		SignedEnvelopeDigest: runtimedomain.SHA256([]byte("signed-envelope")),
+		WorkloadIdentity:     "spiffe://elitea.test/workload/worker-1",
+		WorkloadSessionID:    "workload-1",
+		ProducerID:           "worker-1",
+	}
+
+	malformed := base
+	malformed.WorkerCapabilities = []string{"BadCap"}
+	if _, err := service.Claim(context.Background(), malformed); !errors.Is(err, ErrInvalidClaim) {
+		t.Fatalf("malformed capability: err = %v, want ErrInvalidClaim", err)
+	}
+
+	conflict := base
+	conflict.NodeRecovery = true
+	conflict.WorkerCapabilities = []string{runtimedomain.CapabilityAgentModelCheckpointRecovery}
+	if _, err := service.Claim(context.Background(), conflict); !errors.Is(err, ErrInvalidClaim) {
+		t.Fatalf("conflicting recovery capabilities: err = %v, want ErrInvalidClaim", err)
+	}
+
+	valid := base
+	valid.WorkerCapabilities = []string{
+		runtimedomain.CapabilityIdleCompaction,
+		runtimedomain.CapabilityFanoutInterruptDecisions,
+		runtimedomain.CapabilityFanoutDelegatedCredentials,
+	}
+	if _, err := service.Claim(context.Background(), valid); err != nil {
+		t.Fatalf("valid worker capabilities rejected: %v", err)
+	}
+}

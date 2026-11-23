@@ -53,6 +53,7 @@ authorization, failure behavior, and recovery boundary.
 Detailed ledgers:
 
 - [Frozen Cargo lookup](code-frozen-cargo-lookup-20261007.md) records lookup before acquisition, authority boundaries, generated contracts, and pending deployed cache acceptance.
+- [Protocol capability negotiation and 3-hop delegation grant closure 2026-11-23](protocol-capabilities-and-closure-grants-20261123.md) adds bounded domain-named two-way capability negotiation on `ClaimCommandRequestV1`/`ClaimReceiptV1` with zero-deployment-order compatibility and fixes `workerdelegation.Resolver.closureGrants` to walk reachable saved-application/pipeline graph edges across ungranted intermediate hops.
 
 - [Deployed Code on NATS](code-nats-deployed-acceptance-20261007.md) records current image boundaries, browser cases, retained failures, and open completion requirements.
 

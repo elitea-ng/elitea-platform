@@ -26,15 +26,26 @@ impl<R: crate::transport::ControlRpc> super::AgentControlClient<R> {
         )?;
         request.agent_model_checkpoint_recovery = true;
         request.fanout_interrupt_decisions = false;
-        let response = self.control.claim_command(request).await?;
-        parse_checkpoint_claim_decision(
+        super::super::capabilities::sync_worker_capabilities(&mut request);
+        let response = self.send_claim_command(request).await?;
+        let decision = parse_checkpoint_claim_decision(
             verified,
             response,
             &self.workload_session_id,
             &self.producer_id,
             now_unix_millis,
-        )
-        .map_err(Into::into)
+        )?;
+        match &decision {
+            CheckpointClaimDecision::Inspect(inspection) => {
+                self.check_required_server_capabilities(&inspection.claim)?;
+            }
+            CheckpointClaimDecision::Ordinary(ordinary) => {
+                if let super::AgentClaimDecision::Accepted(claim) = ordinary.as_ref() {
+                    self.check_required_server_capabilities(claim)?;
+                }
+            }
+        }
+        Ok(decision)
     }
 }
 

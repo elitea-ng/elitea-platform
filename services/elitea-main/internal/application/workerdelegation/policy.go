@@ -55,9 +55,10 @@ type Resolver struct {
 	// principal computes the run principal's bound; nil, or the section's
 	// principal_bound switch off, sends none (ADR-0044 Amendment 1).
 	principal PrincipalReader
-	// grants and grantsEnforced are the delegation grants a run carries
+	// grants, edges and grantsEnforced are the delegation grants a run carries
 	// (grants.go). Off by default.
 	grants         GrantSource
+	edges          CompositionEdgeSource
 	grantsEnforced bool
 }
 

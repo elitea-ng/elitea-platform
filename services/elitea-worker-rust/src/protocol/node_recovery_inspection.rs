@@ -30,39 +30,44 @@ impl<R: crate::transport::ControlRpc> AgentControlClient<R> {
         request.node_recovery = true;
         request.agent_model_checkpoint_recovery = false;
         request.fanout_interrupt_decisions = false;
-        let response = self.control.claim_command(request).await?;
+        super::super::capabilities::sync_worker_capabilities(&mut request);
+        let response = self.send_claim_command(request).await?;
         match response.receipt.as_ref().map(|r| r.disposition) {
             Some(value) if value == ClaimDispositionV1::RecoverNodeVisit as i32 => {
-                NodeRecoveryInspection::parse(
+                let claim = NodeRecoveryInspection::parse(
                     verified,
                     response,
                     &self.workload_session_id,
                     &self.producer_id,
                     now_ms,
-                )
-                .map(|claim| NodeRecoveryClaimDecision::Recover(Box::new(claim)))
-                .map_err(Into::into)
+                )?;
+                self.check_required_server_capabilities(&claim.claim)?;
+                Ok(NodeRecoveryClaimDecision::Recover(Box::new(claim)))
             }
             Some(value) if value == ClaimDispositionV1::RecoverAgentModelCheckpoint as i32 => {
-                super::ModelCheckpointInspection::parse(
+                let claim = super::ModelCheckpointInspection::parse(
                     verified,
                     response,
                     &self.workload_session_id,
                     &self.producer_id,
                     now_ms,
-                )
-                .map(|claim| NodeRecoveryClaimDecision::ModelInspection(Box::new(claim)))
-                .map_err(Into::into)
+                )?;
+                self.check_required_server_capabilities(&claim.claim)?;
+                Ok(NodeRecoveryClaimDecision::ModelInspection(Box::new(claim)))
             }
-            _ => super::parse_agent_claim_decision(
-                verified,
-                response,
-                &self.workload_session_id,
-                &self.producer_id,
-                now_ms,
-            )
-            .map(|claim| NodeRecoveryClaimDecision::Ordinary(Box::new(claim)))
-            .map_err(Into::into),
+            _ => {
+                let decision = super::parse_agent_claim_decision(
+                    verified,
+                    response,
+                    &self.workload_session_id,
+                    &self.producer_id,
+                    now_ms,
+                )?;
+                if let AgentClaimDecision::Accepted(ref claim) = decision {
+                    self.check_required_server_capabilities(claim)?;
+                }
+                Ok(NodeRecoveryClaimDecision::Ordinary(Box::new(decision)))
+            }
         }
     }
 }
@@ -254,6 +259,7 @@ impl NodeRecoveryControlAuthority {
                 .as_ref()
                 .map(super::super::vector_token::VectorClaimToken::duplicate),
             toolkit_typed_refusals: claim.toolkit_typed_refusals,
+            server_capabilities: claim.server_capabilities.clone(),
             paused_writer: claim.paused_writer.clone(),
             governed: claim.governed.clone(),
             delegation: claim.delegation.clone(),
