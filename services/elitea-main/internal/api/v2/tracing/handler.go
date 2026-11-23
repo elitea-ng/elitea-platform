@@ -30,10 +30,11 @@
 // and adding one would need a new seeded migration (the admin-rbac-seeding
 // pattern .../migrations/shared/0062_budgets_quota_statistics.sql follows)
 // for a surface with no data-exposure risk. The `status/administration` read
-// reuses the already-seeded "runtime.plugins" central permission — the same
-// gate router.go applies to the other admin runtime/plugin status reads
-// (system_info.py, plugin_config_*.py, maintenance.py, runtime_*.py) — rather
-// than seeding the legacy "models.admin.tracing.view" permission fresh.
+// accepts "platform.operations.view" (ADR-0059 R0.4a, shared 0261) or the
+// already-seeded "runtime.plugins" central permission — the same pair
+// router.go applies to the other operations reads (system information,
+// background jobs) — rather than seeding the legacy
+// "models.admin.tracing.view" permission fresh.
 package tracing
 
 import (
@@ -119,8 +120,8 @@ func NewHandler(pool *pgxpool.Pool, cfg Config, tracer func() trace.Tracer) *Han
 // Routes mounts collect/otlp (project-access gated, legacy DEFAULT mode) and
 // status (both prompt_lib and administration modes). requireAdminStatus is
 // injected by router.go so this package does not need its own
-// PermissionResolver wiring — see the "runtime.plugins" note in the package
-// doc comment.
+// PermissionResolver wiring — see the "platform.operations.view" note in the
+// package doc comment.
 func (h *Handler) Routes(requireAdminStatus func(http.Handler) http.Handler) chi.Router {
 	r := chi.NewRouter()
 
