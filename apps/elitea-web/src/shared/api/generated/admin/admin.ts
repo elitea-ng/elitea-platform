@@ -54,6 +54,10 @@ import type {
 } from "@tanstack/react-query";
 
 import type {
+  AdminAuthUsersActionRequest,
+  AdminAuthUsersActionResult,
+  AdminAuthUsersPage,
+  AdminRoleRefusal,
   AgentIdentityBinding,
   AgentIdentityBindingCreate,
   AgentIdentityBindingListResponse,
@@ -119,6 +123,7 @@ import type {
   LegalHoldListResponse,
   LegalHoldRelease,
   ListAdminAgentRegistryParams,
+  ListAdminAuthUsersParams,
   ListAdminConnectorRequestsParams,
   ListAdminPermissionTrimmingParams,
   ListAdminPublishedAgentsParams,
@@ -2816,6 +2821,565 @@ export function useUserDelete<
   return withQueryKey(query, queryOptions.queryKey);
 }
 
+export type listAdminAuthUsersResponse200 = {
+  data: AdminAuthUsersPage;
+  status: 200;
+};
+
+export type listAdminAuthUsersResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listAdminAuthUsersResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listAdminAuthUsersResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type listAdminAuthUsersResponseSuccess =
+  listAdminAuthUsersResponse200 & {
+    headers: Headers;
+  };
+export type listAdminAuthUsersResponseError = (
+  | listAdminAuthUsersResponse401
+  | listAdminAuthUsersResponse403
+  | listAdminAuthUsersResponse500
+) & {
+  headers: Headers;
+};
+
+export type listAdminAuthUsersResponse =
+  listAdminAuthUsersResponseSuccess | listAdminAuthUsersResponseError;
+
+export const getListAdminAuthUsersUrl = (
+  mode: string,
+  params?: ListAdminAuthUsersParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/admin/auth_users/${mode}?${stringifiedParams}`
+    : `/admin/auth_users/${mode}`;
+};
+
+/**
+ * One page of `auth_core__user`, with every administration role each
+ * account holds. Gated on `admin.auth.users`: the rows carry every
+ * user's e-mail address. `counts` is computed over ALL users, unfiltered,
+ * because it labels the page's two tabs.
+ *
+ * `admin_roles` lists every administration role of the account: the four
+ * legacy names first (highest first), then every other role by name.
+ * `admin_role` is the highest of the four legacy names the account holds
+ * (null when it holds none of them); it is kept for one release beside
+ * `admin_roles` (ADR-0059 R0.8b) and is then removed (R0.13).
+ * @summary List every user account of the deployment
+ */
+export const listAdminAuthUsers = async (
+  mode: string,
+  params?: ListAdminAuthUsersParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listAdminAuthUsersResponse> => {
+  return eliteaFetch<listAdminAuthUsersResponse>(
+    getListAdminAuthUsersUrl(mode, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListAdminAuthUsersQueryKey = (
+  mode: string,
+  params?: ListAdminAuthUsersParams,
+) => {
+  return [`/admin/auth_users/${mode}`, ...(params ? [params] : [])] as const;
+};
+
+export const getListAdminAuthUsersQueryOptions = <
+  TData = Awaited<ReturnType<typeof listAdminAuthUsers>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  mode: string,
+  params?: ListAdminAuthUsersParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAdminAuthUsers>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListAdminAuthUsersQueryKey(mode, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listAdminAuthUsers>>
+  > = ({ signal }) =>
+    listAdminAuthUsers(mode, params, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: mode !== null && mode !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listAdminAuthUsers>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListAdminAuthUsersQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listAdminAuthUsers>>
+>;
+export type ListAdminAuthUsersQueryError =
+  N401Response | N403Response | N500Response;
+
+export function useListAdminAuthUsers<
+  TData = Awaited<ReturnType<typeof listAdminAuthUsers>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  mode: string,
+  params: undefined | ListAdminAuthUsersParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAdminAuthUsers>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAdminAuthUsers>>,
+          TError,
+          Awaited<ReturnType<typeof listAdminAuthUsers>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListAdminAuthUsers<
+  TData = Awaited<ReturnType<typeof listAdminAuthUsers>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  mode: string,
+  params?: ListAdminAuthUsersParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAdminAuthUsers>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAdminAuthUsers>>,
+          TError,
+          Awaited<ReturnType<typeof listAdminAuthUsers>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListAdminAuthUsers<
+  TData = Awaited<ReturnType<typeof listAdminAuthUsers>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  mode: string,
+  params?: ListAdminAuthUsersParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAdminAuthUsers>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List every user account of the deployment
+ */
+
+export function useListAdminAuthUsers<
+  TData = Awaited<ReturnType<typeof listAdminAuthUsers>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  mode: string,
+  params?: ListAdminAuthUsersParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAdminAuthUsers>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListAdminAuthUsersQueryOptions(mode, params, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type adminAuthUsersActionResponse200 = {
+  data: AdminAuthUsersActionResult;
+  status: 200;
+};
+
+export type adminAuthUsersActionResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type adminAuthUsersActionResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type adminAuthUsersActionResponse403 = {
+  data: AdminRoleRefusal;
+  status: 403;
+};
+
+export type adminAuthUsersActionResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type adminAuthUsersActionResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type adminAuthUsersActionResponseSuccess =
+  adminAuthUsersActionResponse200 & {
+    headers: Headers;
+  };
+export type adminAuthUsersActionResponseError = (
+  | adminAuthUsersActionResponse400
+  | adminAuthUsersActionResponse401
+  | adminAuthUsersActionResponse403
+  | adminAuthUsersActionResponse404
+  | adminAuthUsersActionResponse500
+) & {
+  headers: Headers;
+};
+
+export type adminAuthUsersActionResponse =
+  adminAuthUsersActionResponseSuccess | adminAuthUsersActionResponseError;
+
+export const getAdminAuthUsersActionUrl = (mode: string) => {
+  return `/admin/auth_users/${mode}`;
+};
+
+/**
+ * One endpoint for every write of the Users page, discriminated by
+ * `action`. An unknown action is a 400, never a silent `{"ok": true}`.
+ *
+ * - `delete`: removes the accounts in `users` outright, in one
+ *   transaction.
+ * - `set_admin_role`: sets the administration roles of `user_id`. Send
+ *   EITHER `role_names`, the set the user holds afterwards (`[]` for
+ *   none), OR the single form `role_name`, which replaces every role
+ *   with that one role (null for none) and is kept for existing
+ *   automation. A request with both is a 400. Any role defined in the
+ *   `administration` mode is accepted; one that is not is a 400 that
+ *   names it.
+ *
+ * The write applies the difference between the roles the user holds and
+ * the set: a role in both is not touched, and each role given or taken
+ * writes one grant history row. Every rule applies to EACH role given
+ * or taken, and one role that fails refuses the whole request with
+ * nothing written: the caller holds every permission of the role
+ * (`role_permission_not_held`); `super_admin` needs
+ * `admin.auth.users.super_admin` (`role_super_admin_required`); a role
+ * marked unassignable is given to nobody (`role_set_locked`); a caller
+ * who is not a global administrator changes none of its own roles
+ * (`role_self_assignment`). The refusal names the role that failed.
+ * @summary Delete users, or set a user's administration roles
+ */
+export const adminAuthUsersAction = async (
+  mode: string,
+  adminAuthUsersActionRequest: AdminAuthUsersActionRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<adminAuthUsersActionResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<adminAuthUsersActionResponse>(
+    getAdminAuthUsersActionUrl(mode),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(adminAuthUsersActionRequest),
+    },
+  );
+};
+
+export const getAdminAuthUsersActionQueryKey = (
+  mode: string,
+  adminAuthUsersActionRequest?: AdminAuthUsersActionRequest,
+) => {
+  return [
+    "POST",
+    `/admin/auth_users/${mode}`,
+    adminAuthUsersActionRequest,
+  ] as const;
+};
+
+export const getAdminAuthUsersActionQueryOptions = <
+  TData = Awaited<ReturnType<typeof adminAuthUsersAction>>,
+  TError =
+    | N400Response
+    | N401Response
+    | AdminRoleRefusal
+    | N404Response
+    | N500Response,
+>(
+  mode: string,
+  adminAuthUsersActionRequest: AdminAuthUsersActionRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof adminAuthUsersAction>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getAdminAuthUsersActionQueryKey(mode, adminAuthUsersActionRequest);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof adminAuthUsersAction>>
+  > = ({ signal }) =>
+    adminAuthUsersAction(mode, adminAuthUsersActionRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: mode !== null && mode !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof adminAuthUsersAction>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type AdminAuthUsersActionQueryResult = NonNullable<
+  Awaited<ReturnType<typeof adminAuthUsersAction>>
+>;
+export type AdminAuthUsersActionQueryError =
+  N400Response | N401Response | AdminRoleRefusal | N404Response | N500Response;
+
+export function useAdminAuthUsersAction<
+  TData = Awaited<ReturnType<typeof adminAuthUsersAction>>,
+  TError =
+    | N400Response
+    | N401Response
+    | AdminRoleRefusal
+    | N404Response
+    | N500Response,
+>(
+  mode: string,
+  adminAuthUsersActionRequest: AdminAuthUsersActionRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof adminAuthUsersAction>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof adminAuthUsersAction>>,
+          TError,
+          Awaited<ReturnType<typeof adminAuthUsersAction>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useAdminAuthUsersAction<
+  TData = Awaited<ReturnType<typeof adminAuthUsersAction>>,
+  TError =
+    | N400Response
+    | N401Response
+    | AdminRoleRefusal
+    | N404Response
+    | N500Response,
+>(
+  mode: string,
+  adminAuthUsersActionRequest: AdminAuthUsersActionRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof adminAuthUsersAction>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof adminAuthUsersAction>>,
+          TError,
+          Awaited<ReturnType<typeof adminAuthUsersAction>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useAdminAuthUsersAction<
+  TData = Awaited<ReturnType<typeof adminAuthUsersAction>>,
+  TError =
+    | N400Response
+    | N401Response
+    | AdminRoleRefusal
+    | N404Response
+    | N500Response,
+>(
+  mode: string,
+  adminAuthUsersActionRequest: AdminAuthUsersActionRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof adminAuthUsersAction>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Delete users, or set a user's administration roles
+ */
+
+export function useAdminAuthUsersAction<
+  TData = Awaited<ReturnType<typeof adminAuthUsersAction>>,
+  TError =
+    | N400Response
+    | N401Response
+    | AdminRoleRefusal
+    | N404Response
+    | N500Response,
+>(
+  mode: string,
+  adminAuthUsersActionRequest: AdminAuthUsersActionRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof adminAuthUsersAction>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getAdminAuthUsersActionQueryOptions(
+    mode,
+    adminAuthUsersActionRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
 export type listUserModeRolesResponse200 = {
   data: ModeRoleListing;
   status: 200;
@@ -3030,7 +3594,7 @@ export type assignUserModeRoleResponse401 = {
 };
 
 export type assignUserModeRoleResponse403 = {
-  data: ErrorResponse;
+  data: AdminRoleRefusal;
   status: 403;
 };
 
@@ -3066,20 +3630,25 @@ export const getAssignUserModeRoleUrl = () => {
 };
 
 /**
- * SINGLE-ROLE-PER-MODE: every assignment the user holds in that mode is
- * dropped before the new one is written, in one transaction — the rule
- * auth_core's assign_user_to_role enforces. A role the deployment does
- * not define in that mode is a 400 and leaves the user's current role
- * alone, rather than revoking it and granting nothing.
+ * ADDS one role and keeps every other role the user holds in the mode
+ * (ADR-0059 R0.8b): a person holds several administration roles. Until
+ * then this route was single-role-per-mode, as the legacy runtime's
+ * assign_user_to_role, and assigning a second role took the first.
+ * Assigning a role the user holds changes nothing and writes no
+ * history. A role the deployment does not define in that mode is a 400.
+ * To take a role, DELETE it; to set the whole set at once, use
+ * `set_admin_role` on /admin/auth_users/administration.
  *
- * Granting or revoking `super_admin` additionally requires the caller to
- * hold `admin.auth.users.super_admin`: this endpoint writes the same
- * table /admin/auth_users does, so without the guard it would be a
- * second, unguarded route to the platform's highest role.
+ * The role rules of /admin/auth_users apply: the caller holds every
+ * permission of the role (`role_permission_not_held`); granting
+ * `super_admin` requires `admin.auth.users.super_admin`; a role marked
+ * unassignable is given to nobody; a caller who is not a global
+ * administrator changes none of its own roles. Each grant writes one
+ * grant history row.
  *
  * `default` mode is refused. Default-mode roles are project membership,
  * which has no meaning without a project id.
- * @summary Assign a user to a role in a mode
+ * @summary Give a user one more role in a mode
  */
 export const assignUserModeRole = async (
   modeRoleAssignRequest: ModeRoleAssignRequest,
@@ -3130,7 +3699,11 @@ export const getAssignUserModeRoleQueryKey = (
 export const getAssignUserModeRoleQueryOptions = <
   TData = Awaited<ReturnType<typeof assignUserModeRole>>,
   TError =
-    N400Response | N401Response | ErrorResponse | N404Response | N500Response,
+    | N400Response
+    | N401Response
+    | AdminRoleRefusal
+    | N404Response
+    | N500Response,
 >(
   modeRoleAssignRequest: ModeRoleAssignRequest,
   options?: {
@@ -3166,12 +3739,16 @@ export type AssignUserModeRoleQueryResult = NonNullable<
   Awaited<ReturnType<typeof assignUserModeRole>>
 >;
 export type AssignUserModeRoleQueryError =
-  N400Response | N401Response | ErrorResponse | N404Response | N500Response;
+  N400Response | N401Response | AdminRoleRefusal | N404Response | N500Response;
 
 export function useAssignUserModeRole<
   TData = Awaited<ReturnType<typeof assignUserModeRole>>,
   TError =
-    N400Response | N401Response | ErrorResponse | N404Response | N500Response,
+    | N400Response
+    | N401Response
+    | AdminRoleRefusal
+    | N404Response
+    | N500Response,
 >(
   modeRoleAssignRequest: ModeRoleAssignRequest,
   options: {
@@ -3199,7 +3776,11 @@ export function useAssignUserModeRole<
 export function useAssignUserModeRole<
   TData = Awaited<ReturnType<typeof assignUserModeRole>>,
   TError =
-    N400Response | N401Response | ErrorResponse | N404Response | N500Response,
+    | N400Response
+    | N401Response
+    | AdminRoleRefusal
+    | N404Response
+    | N500Response,
 >(
   modeRoleAssignRequest: ModeRoleAssignRequest,
   options?: {
@@ -3227,7 +3808,11 @@ export function useAssignUserModeRole<
 export function useAssignUserModeRole<
   TData = Awaited<ReturnType<typeof assignUserModeRole>>,
   TError =
-    N400Response | N401Response | ErrorResponse | N404Response | N500Response,
+    | N400Response
+    | N401Response
+    | AdminRoleRefusal
+    | N404Response
+    | N500Response,
 >(
   modeRoleAssignRequest: ModeRoleAssignRequest,
   options?: {
@@ -3245,13 +3830,17 @@ export function useAssignUserModeRole<
   queryKey: DataTag<QueryKey, TData, TError>;
 };
 /**
- * @summary Assign a user to a role in a mode
+ * @summary Give a user one more role in a mode
  */
 
 export function useAssignUserModeRole<
   TData = Awaited<ReturnType<typeof assignUserModeRole>>,
   TError =
-    N400Response | N401Response | ErrorResponse | N404Response | N500Response,
+    | N400Response
+    | N401Response
+    | AdminRoleRefusal
+    | N404Response
+    | N500Response,
 >(
   modeRoleAssignRequest: ModeRoleAssignRequest,
   options?: {

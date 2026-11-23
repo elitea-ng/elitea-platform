@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -74,7 +75,7 @@ type Change struct {
 }
 
 // Record writes one history row. It is the only INSERT into
-// elitea_auth.admin_role_grants; Grant, Revoke and Set call it after the
+// elitea_auth.admin_role_grants; Grant and Revoke call it after the
 // assignment change they record.
 func Record(ctx context.Context, q Querier, change Change, origin Origin) error {
 	if change.Action != ActionGranted && change.Action != ActionRevoked {
@@ -137,20 +138,29 @@ WHERE role.id = assignment.role_id
 	return true, Record(ctx, q, Change{UserID: userID, RoleName: role, RoleMode: mode, Action: ActionRevoked}, origin)
 }
 
-// Set makes `role` the user's only role in `mode` ("" for none): it takes
-// every other role of the mode and gives `role` when the user does not hold
-// it yet. It returns the changes it wrote, none when the user already holds
-// exactly that role. ErrRoleNotFound leaves the caller to roll back.
-func Set(ctx context.Context, q Querier, userID int64, mode, role string, origin Origin) ([]Change, error) {
+// Replace makes `roles` the user's set in `mode` (ADR-0059 R0.8b, issue
+// 2574); an empty set takes every role of the mode. It takes each held role
+// of the mode that is not in `roles`, then gives each role of `roles` that the
+// user does not hold yet. A role in both is not touched: no history row, and
+// its assignment row keeps its id. It returns the changes it wrote,
+// revocations first, each in name order; none when the user already holds
+// exactly `roles`. ErrRoleNotFound leaves the caller to roll back.
+func Replace(ctx context.Context, q Querier, userID int64, mode string, roles []string, origin Origin) ([]Change, error) {
 	held, err := heldRoles(ctx, q, userID, mode)
 	if err != nil {
 		return nil, err
 	}
+	wanted := make(map[string]bool, len(roles))
+	for _, role := range roles {
+		if role != "" {
+			wanted[role] = true
+		}
+	}
+	holds := make(map[string]bool, len(held))
 	var changes []Change
-	alreadyHeld := false
 	for _, name := range held {
-		if name == role {
-			alreadyHeld = true
+		holds[name] = true
+		if wanted[name] {
 			continue
 		}
 		removed, err := Revoke(ctx, q, userID, mode, name, origin)
@@ -161,15 +171,21 @@ func Set(ctx context.Context, q Querier, userID int64, mode, role string, origin
 			changes = append(changes, Change{UserID: userID, RoleName: name, RoleMode: mode, Action: ActionRevoked})
 		}
 	}
-	if role == "" || alreadyHeld {
-		return changes, nil
+	given := make([]string, 0, len(wanted))
+	for name := range wanted {
+		if !holds[name] {
+			given = append(given, name)
+		}
 	}
-	granted, err := Grant(ctx, q, userID, mode, role, origin)
-	if err != nil {
-		return nil, err
-	}
-	if granted {
-		changes = append(changes, Change{UserID: userID, RoleName: role, RoleMode: mode, Action: ActionGranted})
+	slices.Sort(given)
+	for _, name := range given {
+		granted, err := Grant(ctx, q, userID, mode, name, origin)
+		if err != nil {
+			return nil, err
+		}
+		if granted {
+			changes = append(changes, Change{UserID: userID, RoleName: name, RoleMode: mode, Action: ActionGranted})
+		}
 	}
 	return changes, nil
 }

@@ -43,7 +43,12 @@
 
 export * from "./addConversationParticipantsBody.zod";
 export * from "./addConversationParticipantsHeaders.zod";
+export * from "./adminAuthUserRow.zod";
+export * from "./adminAuthUsersActionRequest.zod";
+export * from "./adminAuthUsersActionResult.zod";
+export * from "./adminAuthUsersPage.zod";
 export * from "./adminMessageResponse.zod";
+export * from "./adminRoleRefusal.zod";
 export * from "./adminSecretCreateRequest.zod";
 export * from "./adminSecretListItem.zod";
 export * from "./adminSecretUpdateRequest.zod";
@@ -577,6 +582,7 @@ export * from "./legalHoldCreate.zod";
 export * from "./legalHoldListResponse.zod";
 export * from "./legalHoldRelease.zod";
 export * from "./listAdminAgentRegistryParams.zod";
+export * from "./listAdminAuthUsersParams.zod";
 export * from "./listAdminConnectorRequestsParams.zod";
 export * from "./listAdminPermissionTrimmingParams.zod";
 export * from "./listAdminPublishedAgentsParams.zod";

@@ -19,6 +19,10 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 
+import {
+  getAdminAuthUsersActionResponseMock,
+  getListAdminAuthUsersResponseMock,
+} from '@/shared/api/generated/admin/admin.msw';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { server } from '@/test/setup';
 
@@ -26,33 +30,13 @@ import { AdminUsers } from './Users';
 import { renderAdminRoute } from './__tests__/testRouter';
 
 /**
- * Measured against the Go handler: rows carry `suspended` (boolean) and
- * `admin_role` (string or null); `counts` is unfiltered and labels the tabs.
+ * The contract's own examples (v2.yaml `listAdminAuthUsers` and
+ * `adminAuthUsersAction`, ADR-0059 R0.8b): rows carry `suspended` (boolean),
+ * the single `admin_role` (string or null) and every role in `admin_roles`;
+ * `counts` is unfiltered and labels the tabs.
  */
-const USERS_BODY = {
-  rows: [
-    {
-      id: 11,
-      name: 'Ada Admin',
-      email: 'ada@example.com',
-      last_login: '2026-08-01T10:00:00',
-      suspended: false,
-      is_admin: true,
-      admin_role: 'admin',
-    },
-    {
-      id: 12,
-      name: 'Bo Blocked',
-      email: 'bo@example.com',
-      last_login: null,
-      suspended: true,
-      is_admin: false,
-      admin_role: null,
-    },
-  ],
-  total: 2,
-  counts: { platform: 2, system: 1 },
-};
+const USERS_BODY = getListAdminAuthUsersResponseMock();
+const ACTION_BODY = getAdminAuthUsersActionResponseMock();
 
 interface RecordedRequest {
   readonly method: string;
@@ -71,7 +55,7 @@ function useAdminUserHandlers(): void {
     }),
     http.post('*/admin/auth_users/administration', async ({ request }) => {
       recorded.push({ method: 'POST', url: request.url, body: await request.json() });
-      return HttpResponse.json({ ok: true });
+      return HttpResponse.json(ACTION_BODY);
     }),
     http.put('*/admin/user_suspend/administration/*', async ({ request }) => {
       recorded.push({ method: 'PUT', url: request.url, body: await request.json() });
