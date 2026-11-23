@@ -19,7 +19,7 @@
 ## 2. Verification & Observed Results
 
 - **Targeted Vitest (`--maxWorkers=2`, 9 files):** `9 passed (9)`, `132 passed (132)` (`pipelineNumericNodeIds.integration.test.tsx`, `FlowEditor.test.tsx`, `FlowEditorCanvasControls.test.tsx`, `EditorPanel.test.tsx`, `YamlCodeEditor.test.tsx`, `StateDrawer.test.tsx`, `StateVariableList.test.tsx`, `RunStateDialog.test.tsx`, `useFlowEditorNodeOperations.test.ts`).
-- **Full pipelines Vitest (`--maxWorkers=2`, `src/features/pipelines/`):** 269/271 files passed on initial full run (`2,959 passed`, `1 expected fail`), with the 2 remaining assertion updates (`pipelineNumericNodeIds.integration.test.tsx` `'YAML'` label and `FlowEditor.test.tsx` `mockClear()`) verified green in the 9-file rerun above (`132/132`).
+- **Full pipelines Vitest (`--maxWorkers=2`, `src/features/pipelines/`):** `271 passed (271)` test files, `2,961 passed | 1 expected fail (2,962)` (`0` unexpected failures; the 1 expected fail is the pre-existing `DataTypeValueField.test.tsx:146` `it.fails` for issue #1930).
 - **TypeScript (`npm run typecheck`):** `tsc --noEmit` passed (0 errors).
 - **Lint (`npm run lint -- --deny-warnings`):** `oxlint` passed (`0 warnings, 0 errors` across 6,631 files).
 - **Theme gate (`npm run theme-gate`):** PASS (all 9 checks + brand pack contract).
