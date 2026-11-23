@@ -1,0 +1,20 @@
+# elitea-scheduler's internal listeners: the reviewed allowlist (ADR-0059
+# decision 7, "Internal paths"; story R1.8). internal_listener_surface_test.go
+# compares it with the listener sites and HTTP routes of the module's source,
+# both ways. The format and the meaning of each field are in
+# internal_listener_checks_test.go.
+#
+# The scheduler serves no gRPC and writes no administration data through a
+# listener: it reads policy from PostgreSQL. An "admin" line here would have
+# to be listed in docs/ARCHITECTURE.md.
+
+# --- health port (HTTP_ADDR, :8081): probes and metrics -------------------------
+# The patterns name no method, so every method reaches them; each handler only
+# reads.
+http | cmd/elitea-scheduler/main.go:newHealthMux | /healthz | read | none | kubelet probe (no credential)
+http | cmd/elitea-scheduler/main.go:newHealthMux | /readyz/budget-writeback | read | none | kubelet probe (no credential)
+http | cmd/elitea-scheduler/main.go:newHealthMux | /metrics | read | none | metrics scraper (no credential)
+
+# --- listener sites --------------------------------------------------------------
+site | cmd/elitea-scheduler/main.go:main | http.Server | 1
+site | cmd/elitea-scheduler/main.go:newHealthMux | http.NewServeMux | 1

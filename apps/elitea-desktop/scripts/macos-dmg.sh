@@ -177,23 +177,30 @@ if [ "$styled" != true ]; then
   echo "::error::Finder did not apply the disk image layout in 3 attempts" >&2; exit 1
 fi
 
-# Nothing Finder or Spotlight left behind travels; the content is read-only to others.
-rm -rf "$mount/.fseventsd" "$mount/.Trashes" "$mount/.Spotlight-V100"
-chmod -Rf go-w "$mount" || true
 sync
 detach "$device"
 device=""
 
-# Finder may write the volume's .DS_Store once more as it lets go of it: read the
-# sealed image back, read-only and out of Finder's sight, before it is converted
-# and signed (the action checks the finished .dmg the same way).
+# Finder may write the volume's .DS_Store once more as it lets go of it, and that
+# write can put a bar back (a runner saw ShowPathbar return after the record had been
+# read back). So the window record is rewritten a last time, and the whole layout
+# read back, on a mount Finder never sees (-nobrowse) and never lets go of, before
+# the image is converted and signed (the action checks the finished .dmg the same way).
 check="$work/check"
 mkdir -p "$check"
-check_out="$(hdiutil attach -readonly -nobrowse -noautoopen -noverify -mountpoint "$check" "$work/rw.dmg")"
+check_out="$(hdiutil attach -readwrite -nobrowse -noautoopen -noverify -mountpoint "$check" "$work/rw.dmg")"
 device="$(printf '%s\n' "$check_out" | awk 'NR == 1 { print $1; exit }')"
 case "$device" in /dev/disk[0-9]*) ;; *) device="";; esac
+[ -n "$device" ] && [ -f "$check/.DS_Store" ] || { echo "::error::the image did not mount out of Finder's sight: $check_out" >&2; exit 1; }
+if ! node "$here/ds-store.mjs" hide-chrome "$check/.DS_Store"; then
+  echo "::error::the window settings could not be rewritten once Finder let go of the volume" >&2; exit 1
+fi
+# Nothing Finder or Spotlight left behind travels; the content is read-only to others.
+rm -rf "$check/.fseventsd" "$check/.Trashes" "$check/.Spotlight-V100"
+chmod -Rf go-w "$check" || true
+sync
 if ! node "$here/dmg-verify.mjs" "$check" "$settings"; then
-  echo "::error::the layout changed as the image was detached (Finder rewrote the .DS_Store)" >&2; exit 1
+  echo "::error::the layout did not survive the image's detach" >&2; exit 1
 fi
 detach "$device"
 device=""

@@ -189,6 +189,12 @@ func newAuthorizedGRPCServer(tlsConfig *tls.Config, policy GRPCServerPolicy, ser
 // Addr is the configured listen address.
 func (s *PlatformServer) Addr() string { return s.address }
 
+// ServiceInfo is every service and method the listener serves, as
+// grpc.Server.GetServiceInfo reports it, grpc.health.v1 included. The
+// internal-listener surface test (ADR-0059 R1.8) compares it with the
+// reviewed allowlist.
+func (s *PlatformServer) ServiceInfo() map[string]grpc.ServiceInfo { return s.server.GetServiceInfo() }
+
 // ListenAndServe binds the address and serves until Shutdown. After
 // Shutdown it returns grpc.ErrServerStopped or nil.
 func (s *PlatformServer) ListenAndServe() error {

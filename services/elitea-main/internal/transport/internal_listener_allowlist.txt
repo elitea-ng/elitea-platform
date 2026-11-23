@@ -1,0 +1,176 @@
+# elitea-main's internal listeners: the reviewed allowlist (ADR-0059 decision 7,
+# "Internal paths"; story R1.8). internal_listener_surface_test.go compares it
+# with the methods the composed listeners serve and with the listener and
+# registration sites of the module's source, both ways. The format and the
+# meaning of each field are in internal_listener_checks_test.go.
+#
+# Administration data (provider, policy, identity and role data) is written
+# through elitea-main's HTTP API only. An entry that can change it ("admin")
+# must run Main's public route in process ("main-route"), and is listed in
+# docs/ARCHITECTURE.md ("Internal listeners and administration data") with the
+# caller identity it requires. Reviewing a new line means answering: what does
+# it write, what decides it, who may call it. Those answers are declared here
+# by the reviewer; the test cannot prove them, only that every method, route,
+# listener and registration has been answered for.
+
+# --- platform listener (ELITEA_RUNTIME_PLATFORM_ADDRESS, :9446) ---------------
+# Each service runs the public handler's own route in process with the
+# caller's bearer (internal/transport/platformcall): the same authentication,
+# project-access and permission checks an external caller passes.
+grpc | platform | /elitea.llm.v1.ModelService/ChatCompletions | write | main-route | ELITEA_MODEL_SERVICE_CLIENTS
+grpc | platform | /elitea.llm.v1.ModelService/Messages | write | main-route | ELITEA_MODEL_SERVICE_CLIENTS
+grpc | platform | /elitea.llm.v1.ModelService/Embeddings | write | main-route | ELITEA_MODEL_SERVICE_CLIENTS
+grpc | platform | /elitea.llm.v1.ModelService/ImageGenerate | write | main-route | ELITEA_MODEL_SERVICE_CLIENTS
+grpc | platform | /elitea.llm.v1.ModelService/ImageEdit | write | main-route | ELITEA_MODEL_SERVICE_CLIENTS
+grpc | platform | /elitea.llm.v1.ModelService/MeteredAdmit | write | main-route | ELITEA_MODEL_SERVICE_CLIENTS
+grpc | platform | /elitea.llm.v1.ModelService/MeteredSettle | write | main-route | ELITEA_MODEL_SERVICE_CLIENTS
+grpc | platform | /elitea.runtime.v1.ArtifactObjectService/ListBuckets | read | main-route | ELITEA_ARTIFACT_SERVICE_CLIENTS
+grpc | platform | /elitea.runtime.v1.ArtifactObjectService/CreateBucket | write | main-route | ELITEA_ARTIFACT_SERVICE_CLIENTS
+grpc | platform | /elitea.runtime.v1.ArtifactObjectService/ListObjects | read | main-route | ELITEA_ARTIFACT_SERVICE_CLIENTS
+grpc | platform | /elitea.runtime.v1.ArtifactObjectService/Stat | read | main-route | ELITEA_ARTIFACT_SERVICE_CLIENTS
+grpc | platform | /elitea.runtime.v1.ArtifactObjectService/GetObject | read | main-route | ELITEA_ARTIFACT_SERVICE_CLIENTS
+grpc | platform | /elitea.runtime.v1.ArtifactObjectService/PutObject | write | main-route | ELITEA_ARTIFACT_SERVICE_CLIENTS
+grpc | platform | /elitea.runtime.v1.ArtifactObjectService/Delete | write | main-route | ELITEA_ARTIFACT_SERVICE_CLIENTS
+grpc | platform | /elitea.runtime.v1.ArtifactObjectService/DeleteBatch | write | main-route | ELITEA_ARTIFACT_SERVICE_CLIENTS
+grpc | platform | /elitea.runtime.v1.InternalToolService/ListTools | read | main-route | ELITEA_INTERNAL_TOOL_SERVICE_CLIENTS
+# CallTool runs /app/{project}/mcp: the platform MCP tools include the
+# project's configurations and secrets (provider credentials). The route's
+# project-mode checks decide for the bearer's own principal.
+grpc | platform | /elitea.runtime.v1.InternalToolService/CallTool | admin | main-route | ELITEA_INTERNAL_TOOL_SERVICE_CLIENTS
+grpc | platform | /elitea.runtime.v1.InternalToolService/InvokeToolkit | write | main-route | ELITEA_INTERNAL_TOOL_SERVICE_CLIENTS
+grpc | platform | /elitea.vector.v1.TokenIntrospectionService/IntrospectToken | read | workload | ELITEA_VECTOR_INTROSPECTION_CLIENTS
+grpc | platform | /grpc.health.v1.Health/Check | read | workload | any peer with a runtime-CA certificate
+grpc | platform | /grpc.health.v1.Health/List | read | workload | any peer with a runtime-CA certificate
+grpc | platform | /grpc.health.v1.Health/Watch | read | workload | any peer with a runtime-CA certificate
+
+# --- control listener (ELITEA_RUNTIME_CONTROL_ADDRESS) -------------------------
+# The worker's run lifecycle. Every call authenticates its workload session and
+# binds the execution claim and fence Main issued to the peer.
+grpc | control | /elitea.runtime.v1.RuntimeControlService/AuthorizeSandboxJob | read | claim | runtime worker workload session
+grpc | control | /elitea.runtime.v1.RuntimeControlService/AuthorizeRustCompiledSnapshot | read | claim | runtime worker workload session
+grpc | control | /elitea.runtime.v1.RuntimeControlService/ClaimCommand | write | claim | runtime worker workload session
+grpc | control | /elitea.runtime.v1.RuntimeControlService/BeginExecution | write | claim | runtime worker workload session
+grpc | control | /elitea.runtime.v1.RuntimeControlService/AuthorizeInvocation | read | claim | runtime worker workload session
+grpc | control | /elitea.runtime.v1.RuntimeControlService/AuthorizeAgentModelCheckpoint | read | claim | runtime worker workload session
+grpc | control | /elitea.runtime.v1.RuntimeControlService/RenewLease | write | claim | runtime worker workload session
+grpc | control | /elitea.runtime.v1.RuntimeControlService/ObserveDesiredState | read | claim | runtime worker workload session
+grpc | control | /elitea.runtime.v1.RuntimeControlService/PrepareSettlement | write | claim | runtime worker workload session
+grpc | control | /elitea.runtime.v1.RuntimeControlService/RemoveIndex | write | claim | runtime worker workload session
+grpc | control | /elitea.runtime.v1.RuntimeControlService/ClaimSteeringMessages | write | claim | runtime worker workload session
+grpc | control | /elitea.runtime.v1.RuntimeControlService/ReportEgressSummary | write | claim | runtime worker workload session
+grpc | control | /elitea.runtime.v1.RuntimeControlService/ReportRunSteps | write | claim | runtime worker workload session
+# Mints a short-lived assertion for the claimed run's principal; it changes no
+# identity record.
+grpc | control | /elitea.runtime.v1.RuntimeControlService/MintDelegationAssertion | write | claim | runtime worker workload session
+grpc | control | /elitea.runtime.v1.RuntimeControlService/ReportBrowserSession | write | claim | runtime worker workload session
+grpc | control | /elitea.runtime.v1.RuntimeControlService/ReportEphemeralAgents | write | claim | runtime worker workload session
+grpc | control | /elitea.runtime.v1.WorkspaceStoreService/WorkspaceFetchPlan | read | claim | cloud executor workload session
+grpc | control | /elitea.runtime.v1.WorkspaceStoreService/WorkspaceUpload | write | claim | cloud executor workload session
+grpc | control | /elitea.runtime.v1.WorkspaceStoreService/WorkspacePublish | write | claim | cloud executor workload session
+grpc | control | /elitea.runtime.v1.WorkspaceStoreService/WorkspaceEnvSecret | read | claim | cloud executor workload session
+grpc | control | /elitea.runtime.v1.WorkspaceStoreService/WorkspaceRecordEvent | write | claim | cloud executor workload session
+grpc | control | /elitea.runtime.v1.WorkspaceStoreService/WorkspaceRecordChanges | write | claim | cloud executor workload session
+grpc | control | /elitea.runtime.v1.WorkspaceStoreService/WorkspaceForgeCredential | write | claim | cloud executor workload session
+grpc | control | /elitea.runtime.v1.EgressAuditService/ReportRunSummary | write | workload | ELITEA_EGRESS_AUDIT_CLIENTS
+grpc | control | /elitea.vector.v1.TokenIntrospectionService/IntrospectToken | read | workload | ELITEA_VECTOR_INTROSPECTION_CLIENTS
+
+# --- output listener (ELITEA_RUNTIME_OUTPUT_ADDRESS) ---------------------------
+grpc | output | /elitea.runtime.v1.ExecutionOutputService/Publish | write | claim | runtime worker workload session
+
+# --- content listener (ELITEA_RUNTIME_CONTENT_ADDRESS) -------------------------
+# Every RPC binds its own authority: an execution claim and fence in metadata,
+# or a signed sandbox grant naming the exact peer. The project and the person
+# come from the claim; a permission a call needs is resolved in the default
+# (project) mode for that person, never the administration mode.
+grpc | content | /elitea.runtime.v1.RuntimeContentService/GetInput | read | claim | runtime worker execution claim
+grpc | content | /elitea.runtime.v1.RuntimeContentService/GetEliteaClientToken | write | claim | runtime worker execution claim
+grpc | content | /elitea.runtime.v1.RuntimeContentService/RedeemCredential | read | claim | runtime worker execution claim
+grpc | content | /elitea.runtime.v1.RuntimeContentService/GetApplicationVersion | read | claim | runtime worker execution claim
+grpc | content | /elitea.runtime.v1.RuntimeContentService/GetAttachmentObject | read | claim | runtime worker execution claim
+grpc | content | /elitea.runtime.v1.RuntimeContentService/ExecuteHTTPAction | write | claim | runtime worker execution claim
+grpc | content | /elitea.runtime.v1.RuntimeContentService/WriteSkill | write | claim | runtime worker execution claim
+grpc | content | /elitea.runtime.v1.RuntimeContentService/WriteProjectContext | write | claim | runtime worker execution claim
+grpc | content | /elitea.runtime.v1.RuntimeContentService/RememberAgentMemory | write | claim | runtime worker execution claim
+grpc | content | /elitea.runtime.v1.RuntimeContentService/RecallAgentMemory | read | claim | runtime worker execution claim
+grpc | content | /elitea.runtime.v1.RuntimeContentService/ForgetAgentMemory | write | claim | runtime worker execution claim
+grpc | content | /elitea.runtime.v1.RuntimeContentService/HandFloor | write | claim | runtime worker execution claim
+grpc | content | /elitea.runtime.v1.RuntimeContentService/ProposeAgent | write | claim | runtime worker execution claim
+grpc | content | /elitea.runtime.v1.RuntimeContentService/ProposeDismissal | write | claim | runtime worker execution claim
+grpc | content | /elitea.runtime.v1.RuntimeContentService/MarketplaceWorkforce | write | claim | runtime worker execution claim
+grpc | content | /elitea.runtime.v1.RuntimeContentService/ListArtifacts | read | claim | runtime worker execution claim
+grpc | content | /elitea.runtime.v1.RuntimeContentService/ReadArtifact | read | claim | runtime worker execution claim
+grpc | content | /elitea.runtime.v1.RuntimeContentService/WriteArtifact | write | claim | runtime worker execution claim
+grpc | content | /elitea.runtime.v1.RuntimeContentService/DeleteArtifact | write | claim | runtime worker execution claim
+grpc | content | /elitea.runtime.v1.RuntimeContentService/ResolveCodeWorkspace | read | claim | runtime worker execution claim
+grpc | content | /elitea.runtime.v1.RuntimeContentService/AdmitCodeDebug | write | claim | runtime worker execution claim
+grpc | content | /elitea.runtime.v1.RuntimeContentService/CommitCodeDebug | write | claim | runtime worker execution claim
+grpc | content | /elitea.runtime.v1.RuntimeContentService/StepCodePlatform | write | claim | runtime worker execution claim
+grpc | content | /elitea.runtime.v1.RuntimeContentService/ReadCodePlatformEffects | read | claim | runtime worker execution claim
+grpc | content | /elitea.runtime.v1.RuntimeContentService/PollNodeRecovery | read | claim | runtime worker execution claim
+grpc | content | /elitea.runtime.v1.RuntimeContentService/AcknowledgeNodeRecovery | write | claim | runtime worker execution claim
+grpc | content | /elitea.runtime.v1.RuntimeContentService/ReadNodeRecoveryResult | read | claim | runtime worker execution claim
+grpc | content | /elitea.runtime.v1.RuntimeContentService/FetchExecutionInterrupts | read | claim | runtime worker execution claim
+grpc | content | /elitea.runtime.v1.RuntimeContentService/AcknowledgeExecutionInterrupt | write | claim | runtime worker execution claim
+grpc | content | /elitea.runtime.v1.RuntimeContentService/RegisterCodeVisit | write | claim | runtime worker execution claim
+grpc | content | /elitea.runtime.v1.RuntimeContentService/RegisterCodeIntent | write | claim | runtime worker execution claim
+grpc | content | /elitea.runtime.v1.RuntimeContentService/PutToolkitDiscoveryResult | write | claim | runtime worker execution claim
+grpc | content | /elitea.runtime.v1.RuntimeContentService/GetToolkitDiscoveryResult | read | claim | runtime worker execution claim
+grpc | content | /elitea.runtime.v1.RuntimeContentService/ReadSandboxWorkspaceManifest | read | claim | sandbox supervisor signed sandbox grant
+grpc | content | /elitea.runtime.v1.RuntimeContentService/ReadSandboxWorkspaceFile | read | claim | sandbox supervisor signed sandbox grant
+grpc | content | /elitea.runtime.v1.RuntimeContentService/GetSandboxBundle | read | claim | sandbox supervisor signed sandbox grant
+grpc | content | /elitea.runtime.v1.RuntimeContentService/PublishSandboxBundle | write | claim | sandbox supervisor signed sandbox grant
+grpc | content | /elitea.runtime.v1.RuntimeContentService/FetchSandboxBundleFile | read | claim | sandbox supervisor signed sandbox grant
+grpc | content | /elitea.runtime.v1.RuntimeContentService/UploadSandboxBundleFile | write | claim | sandbox supervisor signed sandbox grant
+grpc | content | /elitea.runtime.v1.RuntimeContentService/GetCompiledSnapshot | read | claim | sandbox supervisor signed sandbox grant
+grpc | content | /elitea.runtime.v1.RuntimeContentService/PublishCompiledSnapshot | write | claim | sandbox supervisor signed sandbox grant
+grpc | content | /elitea.runtime.v1.RuntimeContentService/FetchCompiledSnapshotFile | read | claim | sandbox supervisor signed sandbox grant
+grpc | content | /elitea.runtime.v1.RuntimeContentService/UploadCompiledSnapshotFile | write | claim | sandbox supervisor signed sandbox grant
+grpc | content | /grpc.health.v1.Health/Check | read | workload | any peer with a runtime-CA certificate
+grpc | content | /grpc.health.v1.Health/List | read | workload | any peer with a runtime-CA certificate
+grpc | content | /grpc.health.v1.Health/Watch | read | workload | any peer with a runtime-CA certificate
+
+# --- internal HTTP routes --------------------------------------------------------
+# Plain-HTTP metrics listeners (ELITEA_AUDIT_EXPORT_METRICS_ADDR): read-only scrapes.
+http | cmd/elitea-main/audit_export.go:serveSafetyMetrics | GET /metrics | read | none | metrics scraper (no credential)
+http | internal/auditexport/config.go:Service.Run | GET /metrics | read | none | metrics scraper (no credential)
+
+# --- listener and registration sites ---------------------------------------------
+# The public HTTP API (:8080): every route passes Main's authentication and
+# permission middleware. It is the one place administration data is written.
+site | cmd/elitea-main/http_server.go:newHTTPServer | http.Server | 1
+site | cmd/elitea-main/audit_export.go:serveSafetyMetrics | http.NewServeMux | 1
+site | cmd/elitea-main/audit_export.go:serveSafetyMetrics | http.Server | 1
+site | internal/auditexport/config.go:Service.Run | http.NewServeMux | 1
+site | internal/auditexport/config.go:Service.Run | http.Server | 1
+site | internal/transport/runtimegrpc/platform_server.go:NewPlatformServer | net.Listen | 1
+site | internal/transport/runtimegrpc/private_servers.go:NewPrivateServerSet | net.Listen | 1
+site | internal/transport/runtimegrpc/platform_server.go:newAuthorizedGRPCServer | grpc.NewServer | 1
+site | internal/transport/runtimegrpc/platform_server.go:newAuthorizedGRPCServer | RegisterHealthServer | 1
+site | internal/transport/runtimegrpc/private_servers.go:newPrivateServerSet | grpc.NewServer | 2
+site | internal/transport/runtimegrpc/private_servers.go:newPrivateServerSet | RegisterRuntimeControlServiceServer | 1
+site | internal/transport/runtimegrpc/private_servers.go:newPrivateServerSet | RegisterTokenIntrospectionServiceServer | 1
+site | internal/transport/runtimegrpc/private_servers.go:newPrivateServerSet | RegisterWorkspaceStoreServiceServer | 1
+site | internal/transport/runtimegrpc/private_servers.go:newPrivateServerSet | RegisterEgressAuditServiceServer | 1
+site | internal/transport/runtimegrpc/private_servers.go:newPrivateServerSet | RegisterExecutionOutputServiceServer | 1
+site | internal/transport/modelgrpc/server.go:Server.PlatformService | RegisterModelServiceServer | 1
+site | internal/transport/artifactgrpc/server.go:Server.PlatformService | RegisterArtifactObjectServiceServer | 1
+site | internal/transport/internaltoolgrpc/server.go:Server.PlatformService | RegisterInternalToolServiceServer | 1
+site | internal/transport/runtimegrpc/vectorintrospection/server.go:Server.PlatformService | RegisterTokenIntrospectionServiceServer | 1
+site | internal/infra/storage/content_server.go:ContentServer.Register | RegisterRuntimeContentServiceServer | 1
+
+# --- helper directories the source scan skips --------------------------------------
+# Test-helper packages: they serve fakes to tests only and no binary links them.
+helper | internal/llmproxy/llmproxytest | a fake elitea.gateway.v1 GatewayService for elitea-main's tests
+helper | internal/llmproxy/gatewaytest | builds on llmproxytest for elitea-main's tests
+helper | internal/providerhost/proxy/providertest | a fake elitea.subapp.v1 ProviderService for elitea-main's tests
+
+# --- files that may name the administration permission mode --------------------------
+# The administration-mode scan reads internal/transport, the package of every
+# registered implementation and every package of the module they import. These
+# files, reached through that closure, name the mode for a reason reviewed here;
+# none is an internal handler resolving it for a principal built from a claim.
+mode | internal/auth/permissions.go | defines the constant
+mode | internal/infra/legacyrbac/postgres.go | the permission resolver itself (R1.2a, #2506, adds its zero-credential rule)
+mode | internal/api/middleware/maintenance.go | public-route middleware: resolves for the request's authenticated principal, only on the public HTTP API
+mode | internal/application/identity/provision.go | enrollment carries the configured initial administration role of a new user; it resolves nothing
+mode | internal/infra/identityrepo/postgres.go | enrollment applies that initial administration role; it resolves nothing

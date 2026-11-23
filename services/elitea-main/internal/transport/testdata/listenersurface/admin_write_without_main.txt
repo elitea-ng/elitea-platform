@@ -1,0 +1,3 @@
+# Fixture: an administration write decided by the caller's workload identity
+# alone, which the surface check must refuse.
+grpc | platform | /fixture.admin.v1.AdminService/SetProviderPolicy | admin | workload | dns:fixture-caller
