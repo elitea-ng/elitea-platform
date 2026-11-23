@@ -50,7 +50,7 @@ function loadErrorMessage(error: unknown): string {
   if (configFailureStatus(error) === 403) {
     return t(
       "pages.admin.scimClients.error.forbidden",
-      "You need the admin.auth.users permission to manage SCIM clients.",
+      "You need the identity.sso.view or admin.auth.users permission to see SCIM clients.",
     );
   }
   return (
