@@ -116,6 +116,23 @@ export function parseMcpHeadersYaml(source: string): Record<string, string> {
 }
 
 /**
+ * Where the dialog shows a refusal: a local check wins and goes in the banner;
+ * a server refusal that names `client_secret` (a save that moves the server to
+ * another origin asks for the secret again, issue 2944) goes on the secret
+ * control until the operator acts on it; any other refusal goes in the banner.
+ */
+export function placeServerError(
+  localError: string,
+  serverError: string | undefined,
+  serverErrorField: string | undefined,
+  secretEdited: boolean,
+): { readonly banner: string | undefined; readonly secret: string | undefined } {
+  if (localError !== '') return { banner: localError, secret: undefined };
+  if (serverErrorField !== 'client_secret') return { banner: serverError, secret: undefined };
+  return { banner: undefined, secret: secretEdited ? undefined : serverError };
+}
+
+/**
  * Turns the two secret controls into the tri-state the server reads.
  *
  * `undefined` ⇒ omit the field, leaving the sealed secret alone. `''` ⇒ clear
