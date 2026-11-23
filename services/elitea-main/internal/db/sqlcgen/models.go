@@ -368,6 +368,19 @@ type Configuration struct {
 	UpdatedAt   pgtype.Timestamp `db:"updated_at" json:"updated_at"`
 }
 
+type EliteaAuthAdminRoleGrant struct {
+	ID          int64              `db:"id" json:"id"`
+	UserID      int32              `db:"user_id" json:"user_id"`
+	RoleName    string             `db:"role_name" json:"role_name"`
+	RoleMode    string             `db:"role_mode" json:"role_mode"`
+	Action      string             `db:"action" json:"action"`
+	ActorUserID *int32             `db:"actor_user_id" json:"actor_user_id"`
+	OccurredAt  pgtype.Timestamptz `db:"occurred_at" json:"occurred_at"`
+	Reason      *string            `db:"reason" json:"reason"`
+	Source      string             `db:"source" json:"source"`
+	SourceRef   *string            `db:"source_ref" json:"source_ref"`
+}
+
 type EliteaAuthMcpOauthClient struct {
 	ID                   string             `db:"id" json:"id"`
 	ProjectID            int32              `db:"project_id" json:"project_id"`

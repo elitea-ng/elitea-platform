@@ -38,6 +38,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess/rolegrants"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/nativeauth"
@@ -384,8 +385,8 @@ func (h *Handler) setAdminRole(w http.ResponseWriter, r *http.Request, body auth
 	defer func() { _ = transaction.Rollback(ctx) }()
 
 	// The subset rule (issue 2488): the caller holds every permission of the
-	// role given AND of every administration role taken away. The DELETE
-	// below drops all of the target's administration roles, custom ones
+	// role given AND of every administration role taken away. The write
+	// below takes every other administration role of the target, custom ones
 	// included, so all of them count. It is checked under the role-writes
 	// lock, inside this transaction, so no concurrent write outdates it.
 	if refusal, err := h.checkCentralAssignment(
@@ -398,37 +399,23 @@ func (h *Handler) setAdminRole(w http.ResponseWriter, r *http.Request, body auth
 		return
 	}
 
-	// Single-role-per-mode, exactly as `assign_user_to_role` enforces it: drop
-	// every administration-mode assignment first, then add the new one (if any).
-	if _, err := transaction.Exec(ctx, `
-DELETE FROM public.auth_core__user_role assignment
-USING public.auth_core__role role
-WHERE role.id = assignment.role_id
-  AND role.mode = 'administration'
-  AND assignment.user_id = $1`, targetID); err != nil {
-		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to update role")
-		return
-	}
-
-	if roleName != "" {
-		tag, err := transaction.Exec(ctx, `
-INSERT INTO public.auth_core__user_role (user_id, role_id)
-SELECT $1, role.id
-FROM public.auth_core__role role
-WHERE role.name = $2 AND role.mode = 'administration'
-ON CONFLICT (user_id, role_id) DO NOTHING`, targetID, roleName)
-		if err != nil {
-			apierr.WriteStatus(w, http.StatusInternalServerError, "failed to update role")
-			return
-		}
+	// Single-role-per-mode, exactly as `assign_user_to_role` enforces it, as a
+	// difference (issue 2499): every other administration role is taken, the
+	// new one (if any) is given, and each change writes one history row in
+	// this transaction. A role the user already holds is left untouched.
+	if _, err := rolegrants.Set(
+		ctx, transaction, int64(targetID), auth.PermissionModeAdministration, roleName, grantOrigin(r, caller),
+	); err != nil {
 		// No matching administration role row means the deployment does not
-		// define that role. Reporting success here would revoke the user's role
-		// and grant nothing — the silent-data-loss shape this endpoint exists to
-		// avoid — so the transaction is rolled back instead.
-		if tag.RowsAffected() == 0 {
+		// define that role. Reporting success here would revoke the user's
+		// role and grant nothing, the silent-data-loss shape this endpoint
+		// exists to avoid, so the transaction is rolled back instead.
+		if errors.Is(err, rolegrants.ErrRoleNotFound) {
 			apierr.WriteStatus(w, http.StatusBadRequest, "administration role not found")
 			return
 		}
+		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to update role")
+		return
 	}
 
 	if err := transaction.Commit(ctx); err != nil {

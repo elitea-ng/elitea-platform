@@ -70,3 +70,19 @@ The server refuses a change that breaks a rule with `403` and a `code`: `role_pe
 <Note>
 An account that holds only the `admin` role cannot change the permissions of the `admin` role. A super admin can. The accounts in `identity.initial_global_admins` (`ELITEA_INITIAL_GLOBAL_ADMINS`) get `super_admin` on their first sign-in.
 </Note>
+
+## Role changes are recorded
+
+Every change to a central role assignment is recorded. A grant or a removal writes one record with the account, the role name and mode, what happened (`granted` or `revoked`), who did it, when, and the source of the change. Records cannot be edited or deleted. A record keeps the role name, so it stays readable after a custom role is deleted.
+
+The source says how the change was made:
+
+| Source | Meaning |
+|---|---|
+| `console` | An administrator signed in through the browser, on the Users page or under `/admin/modes`. |
+| `api` | A caller with an access token, on the same routes. |
+| `bootstrap` | The first sign-in of an account in `identity.initial_global_admins`. There is no actor. |
+| `migration` | An upgrade step. There is no actor. |
+| `operator`, `review`, `scim` | Reserved for the operator command, a confirmed provisional grant and a SCIM binding to an administration role. |
+
+Replacing an account's role writes two records: the old role `revoked` and the new one `granted`. Assigning a role that the account already holds writes nothing and changes nothing. A refused change writes nothing either. Records start at the upgrade that added them: assignments made before it have none.

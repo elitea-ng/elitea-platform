@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess/rolegrants"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/identity"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 )
@@ -100,7 +101,7 @@ func (r *PostgresRepository) Provision(
 	// privilege order: project reconciliation observes only roles that existed
 	// before this login. A newly configured initial admin receives additional
 	// project-admin roles on a later login.
-	if err := applyInitialAdministrationRole(ctx, queries, user.ID, command); err != nil {
+	if err := applyInitialAdministrationRole(ctx, tx, user.ID, command); err != nil {
 		return identity.ProvisionResult{}, err
 	}
 	// The credential the agent runtime signs this person's calls with.
@@ -221,12 +222,12 @@ func resolveProvisioningUserByEmail(
 
 func applyInitialAdministrationRole(
 	ctx context.Context,
-	queries *sqlcgen.Queries,
+	db sqlcgen.DBTX,
 	userID int32,
 	command identity.ProvisionCommand,
 ) error {
 	return ApplyInitialAdministrationRole(
-		ctx, queries, userID,
+		ctx, db, userID,
 		command.InitialAdministrationMode, command.InitialAdministrationRole,
 	)
 }
@@ -242,9 +243,13 @@ func applyInitialAdministrationRole(
 // The grant is idempotent and one-shot per user: a user who ALREADY holds any
 // role in the administration mode is left exactly as the operator left them, so
 // a demotion is never silently undone by the next login.
+//
+// The grant goes through rolegrants, so it writes one history row with source
+// `bootstrap` and no actor (issue 2499) in the same transaction. `db` is that
+// transaction; `queries` is bound to it.
 func ApplyInitialAdministrationRole(
 	ctx context.Context,
-	queries *sqlcgen.Queries,
+	db sqlcgen.DBTX,
 	userID int32,
 	mode string,
 	role string,
@@ -252,6 +257,7 @@ func ApplyInitialAdministrationRole(
 	if mode == "" || role == "" {
 		return nil
 	}
+	queries := sqlcgen.New(db)
 	count, err := queries.CountAuthUserRolesInMode(ctx, sqlcgen.CountAuthUserRolesInModeParams{
 		UserID: userID,
 		Mode:   mode,
@@ -262,15 +268,15 @@ func ApplyInitialAdministrationRole(
 	if count != 0 {
 		return nil
 	}
-	assigned, err := queries.AssignAuthUserRoleByNameAndMode(ctx, sqlcgen.AssignAuthUserRoleByNameAndModeParams{
-		UserID:   userID,
-		RoleName: role,
-		Mode:     mode,
-	})
+	assigned, err := rolegrants.Grant(ctx, db, int64(userID), mode, role,
+		rolegrants.Origin{Source: rolegrants.SourceBootstrap})
+	if errors.Is(err, rolegrants.ErrRoleNotFound) {
+		return errors.New("identityrepo: initial administration role is unavailable")
+	}
 	if err != nil {
 		return fmt.Errorf("identityrepo: assign initial administration role: %w", err)
 	}
-	if assigned != 1 {
+	if !assigned {
 		return errors.New("identityrepo: initial administration role is unavailable")
 	}
 	return nil

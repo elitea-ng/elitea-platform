@@ -126,7 +126,7 @@ func applyFirstLoginGrants(
 
 	if matchesInitialGlobalAdmin(policy.InitialGlobalAdmins, providerRef, verifiedEmail) {
 		if err := identityrepo.ApplyInitialAdministrationRole(
-			ctx, queries, int32(userID),
+			ctx, tx, int32(userID),
 			identity.InitialAdministrationMode, identity.InitialAdministrationRole,
 		); err != nil {
 			return err
