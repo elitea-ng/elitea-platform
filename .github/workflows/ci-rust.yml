@@ -30,6 +30,15 @@ permissions:
 env:
   CARGO_INCREMENTAL: "0"
   CARGO_TERM_COLOR: always
+  # Line tables only (panics and backtraces keep file:line, no local-variable
+  # debug info): the `test` job builds the worker's dependencies for both
+  # image feature sets into the one worker-rust-test cache entry, and full
+  # debug info made that ~28% larger than one set's (measured on a local
+  # build, 2026-11-22). With line tables both sets come to about the one-set
+  # full-debug size (1.78 GiB on main), so the entry does not grow. Workflow
+  # level: rust-cache keys on CARGO_* variables, and `test` and
+  # `workspace-run-docker` share the entry.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
 jobs:
   code-runner:
@@ -86,8 +95,10 @@ jobs:
     # for the Docker tests once the ledger helper reuses this job's build (it
     # once rebuilt for 7.5 min on the runner's stable rustc; the helper step
     # now refuses any rebuild). The headroom covers the bounded wait for
-    # ci-build-once.yml's code runner images plus a build here after it.
-    timeout-minutes: 60
+    # ci-build-once.yml's code runner images plus a build here after it, and
+    # the default-set lib build (two dependency builds when a lock change
+    # invalidates the cache, so 75 rather than 60).
+    timeout-minutes: 75
     services:
       postgres:
         image: postgres:18

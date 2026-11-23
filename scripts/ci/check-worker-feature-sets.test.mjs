@@ -3,6 +3,8 @@ import test from "node:test";
 
 import { loadYaml } from "./ci-compat.mjs";
 import {
+  alwaysOn,
+  benchFeatures,
   canonical,
   cargoRuns,
   check,
@@ -151,8 +153,9 @@ test("cd is scoped to its subshell, and env prefixes and rustup run are seen thr
 
 test("arguments after -- are the binary's, not cargo's", () => {
   const [run] = cargoRuns("cargo test --lib -- --all-features --ignored", W);
-  assert.deepEqual(featureSet(run.args), { all: false, set: "" });
-  assert.deepEqual(featureSet(["--features=x", "-Fy", "--", "-F", "z"]), { all: false, set: "x,y" });
+  assert.equal(featureSet(run.args).all, false);
+  assert.equal(featureSet(run.args).set, "");
+  assert.equal(featureSet(["--features=x", "-Fy", "--", "-F", "z"]).set, "x,y");
 });
 
 test("the Python helper's argv list is read", () => {
@@ -166,4 +169,79 @@ test("the Python helper's argv list is read", () => {
 test("feature lists are compared as sets", () => {
   assert.equal(canonical(["b,a", "a"]), "a,b");
   assert.equal(canonical([]), "");
+});
+
+test("an argument it cannot expand, or --no-default-features, is refused", () => {
+  const extra = `
+      - run: cargo clippy --features "\${{ inputs.features }}"
+      - run: cargo test --lib --no-default-features
+`;
+  const errors = check(IMAGE, runsOf(workflow(extra)));
+  assert.equal(errors.length, 2, errors.join("\n"));
+  assert.ok(errors.some((e) => e.includes("cannot expand")));
+  assert.ok(errors.some((e) => e.includes("--no-default-features")));
+});
+
+test("bench features pass only on a --benches lint, and never count as an image set's lint", () => {
+  const BENCH = benchFeatures(`
+[[bench]]
+name = "graph_shaping"
+required-features = ["graph-shaping-bench"]
+
+[dev-dependencies]
+x = { features = ["not-a-bench"] }
+`);
+  assert.deepEqual([...BENCH], ["graph-shaping-bench"]);
+  const yaml = `
+jobs:
+  only:
+    defaults:
+      run:
+        working-directory: ${W}
+    steps:
+      - run: cargo clippy --benches --features graph-shaping-bench
+      - run: cargo clippy --all-targets --features graph-shaping-bench
+      - run: cargo clippy --features sandbox-supervisor
+      - run: cargo test --features sandbox-supervisor
+      - run: cargo test --lib
+`;
+  const errors = check(IMAGE, runsOf(yaml), BENCH);
+  assert.equal(errors.length, 2, errors.join("\n"));
+  assert.ok(errors.some((e) => e.includes("which no image builds")));
+  assert.ok(errors.some((e) => e.includes("cargo clippy") && e.includes("default set")));
+});
+
+test("a step an event, failure() or continue-on-error can switch off is no coverage", () => {
+  assert.equal(alwaysOn("${{ !cancelled() }}"), true);
+  assert.equal(alwaysOn("matrix.benches && always()"), true);
+  assert.equal(alwaysOn("github.event_name == 'schedule'"), false);
+  assert.equal(alwaysOn("failure()"), false);
+  const yaml = `
+jobs:
+  only:
+    defaults:
+      run:
+        working-directory: ${W}
+    steps:
+      - run: cargo clippy
+        if: github.event_name == 'schedule'
+      - run: cargo clippy --features sandbox-supervisor
+        continue-on-error: true
+      - run: cargo test --features sandbox-supervisor
+      - run: cargo test --lib
+`;
+  const errors = check(IMAGE, runsOf(yaml));
+  assert.equal(errors.length, 2, errors.join("\n"));
+  assert.ok(errors.every((e) => e.startsWith("no workflow runs cargo clippy")));
+});
+
+test("a command after a shell keyword is read, a redirection's target is not an argument", () => {
+  const runs = cargoRuns('if [ "$X" = -- ]; then\n  cargo doc --no-deps\nelse\n  cargo doc -F a > "$OUT"\nfi', W);
+  assert.deepEqual(
+    runs.map((r) => [r.subcommand, featureSet(r.args).set, featureSet(r.args).unresolved]),
+    [
+      ["doc", "", false],
+      ["doc", "a", false],
+    ],
+  );
 });

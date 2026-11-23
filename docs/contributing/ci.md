@@ -89,7 +89,11 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
   (PostgreSQL, NATS and Docker included), then `cargo test --lib` on the default set: the lib that every
   deployment runs, compiled as it ships, with no database. That step shares the job's target cache. It rebuilds
   the dependencies whose features differ between the sets (`tower`, `hyper-rustls`, `jiff` and what links them)
-  and the worker. The two benches need their bench features, so `--all-targets` skips them; they are never a gate.
+  and the worker. `ci-rust.yml` builds with `CARGO_PROFILE_DEV_DEBUG=line-tables-only`, so the cache entry that
+  now holds both sets' dependencies stays at about its one-set size. The two benches need their bench-only
+  features, so `--all-targets` skips them. `lint (worker)` lints them on their own (`cargo clippy --benches
+  --features graph-shaping-bench,node-settings-bench`), which is the one place a bench feature is allowed; that
+  run never counts as an image set's lint.
   `scripts/ci/check-worker-feature-sets.mjs` (run in `no-binaries.yml`) reads the image sets from the
   Containerfile's `cargo auditable build` lines. It fails when a workflow (or `scripts/runtime/test_sandbox_ledger.py`)
   runs `cargo build|check|clippy|doc|test` on the worker with `--all-features` or with a feature list that no

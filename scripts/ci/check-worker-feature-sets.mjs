@@ -119,25 +119,49 @@ export function shellWords(script) {
 
 const BOUNDARY = new Set([";", "&&", "||", "|", "&", "(", ")", "$("]);
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+/** Words after which the next word is still a command: shell keywords and command prefixes. */
+const TRANSPARENT = new Set(["env", "time", "exec", "command", "if", "then", "else", "elif", "do", "while", "until", "!", "{"]);
 
 /** A feature list's canonical spelling: sorted, unique, comma-joined ("" for the default set). */
 export function canonical(features) {
   return [...new Set(features.flatMap((f) => f.split(/[,\s]+/)).filter(Boolean))].sort().join(",");
 }
 
-/** The feature arguments of one cargo argv (the words after the subcommand, up to `--`). */
+const OTHER_TARGETS = new Set(["--lib", "--bins", "--bin", "--tests", "--test", "--all-targets", "--examples", "--example"]);
+
+/**
+ * The feature arguments of one cargo argv (the words after the subcommand, up to `--`): `all`
+ * (`--all-features`), `set` (the canonical `--features` list), `noDefault` (`--no-default-features`),
+ * `unresolved` (a word still holding `$`: a variable or expression this check could not expand, so the set
+ * is unknown) and `benchesOnly` (`--benches`/`--bench` and no other target selection).
+ */
 export function featureSet(args) {
   const features = [];
   let all = false;
+  let noDefault = false;
+  let unresolved = false;
+  let benches = false;
+  let otherTargets = false;
   for (let i = 0; i < args.length; i += 1) {
     const a = args[i];
     if (a === "--") break;
+    if (/>$/.test(a)) {
+      i += 1; // a redirection's target is not cargo's
+      continue;
+    }
+    if (a.includes("$")) unresolved = true;
     if (a === "--all-features") all = true;
-    else if (a === "--features" || a === "-F") features.push(args[++i] ?? "");
-    else if (a.startsWith("--features=")) features.push(a.slice("--features=".length));
+    else if (a === "--no-default-features") noDefault = true;
+    else if (a === "--features" || a === "-F") {
+      const value = args[++i] ?? "";
+      if (value.includes("$")) unresolved = true;
+      features.push(value);
+    } else if (a.startsWith("--features=")) features.push(a.slice("--features=".length));
     else if (a.startsWith("-F") && a.length > 2) features.push(a.slice(2));
+    else if (a === "--benches" || a === "--bench") benches = true;
+    else if (OTHER_TARGETS.has(a)) otherTargets = true;
   }
-  return { all, set: canonical(features) };
+  return { all, set: canonical(features), noDefault, unresolved, benchesOnly: benches && !otherTargets };
 }
 
 function manifestDir(args) {
@@ -176,7 +200,7 @@ export function cargoRuns(script, startDir) {
       continue;
     }
     if (!atStart) continue;
-    if (ASSIGNMENT.test(w) || w === "env" || w === "time" || w === "exec") continue;
+    if (ASSIGNMENT.test(w) || TRANSPARENT.has(w)) continue;
     if (w === "rustup" && words[i + 1] === "run") {
       i += 2;
       continue;
@@ -218,6 +242,17 @@ export function imageFeatureSets(containerfile) {
   return { sets, errors };
 }
 
+/** The features a `[[bench]]` of the worker's Cargo.toml requires: allowed on a `--benches` lint only. */
+export function benchFeatures(cargoToml) {
+  const features = new Set();
+  for (const section of cargoToml.split(/^\[/m)) {
+    if (!section.startsWith("[bench]]")) continue;
+    const m = section.match(/^required-features\s*=\s*\[([^\]]*)\]/m);
+    for (const f of m ? m[1].matchAll(/"([^"]+)"/g) : []) features.add(f[1]);
+  }
+  return features;
+}
+
 /** The matrix legs of a job: `include` entries (or the cartesian product of its axes), or one empty leg. */
 export function matrixLegs(job) {
   const matrix = job?.strategy?.matrix;
@@ -255,7 +290,7 @@ export function expandEnv(text, env) {
 export function legRuns(condition, leg) {
   if (condition === undefined || condition === null || condition === true) return true;
   const text = String(condition).replace(/^\$\{\{|\}\}$/g, "").trim();
-  if (text.includes("||")) return true;
+  if (text.includes("||") || text.includes("!(")) return true;
   for (const m of text.matchAll(/matrix\.([A-Za-z0-9_-]+)\s*(==|!=)\s*'([^']*)'/g)) {
     const value = leg[m[1]] === undefined ? "" : String(leg[m[1]]);
     if ((m[2] === "==") !== (value === m[3])) return false;
@@ -266,6 +301,26 @@ export function legRuns(condition, leg) {
     return text.startsWith("!") ? !truthy : truthy;
   }
   return true;
+}
+
+/**
+ * True when a condition holds on every run of a leg it does not exclude: none, or only matrix comparisons,
+ * `always()`, `success()` and `!cancelled()` joined by `&&`. Only such a step counts as an image set's lint
+ * or test: one under an event, a failure() or an input can be switched off for pull requests.
+ */
+export function alwaysOn(condition) {
+  if (condition === undefined || condition === null || condition === true) return true;
+  const text = String(condition).replace(/^\$\{\{|\}\}$/g, "").trim();
+  if (text.includes("||") || text.includes("!(")) return false;
+  return text
+    .split("&&")
+    .map((part) => part.trim())
+    .every(
+      (part) =>
+        /^matrix\.[A-Za-z0-9_-]+\s*(==|!=)\s*'[^']*'$/.test(part) ||
+        /^!?\s*matrix\.[A-Za-z0-9_-]+$/.test(part) ||
+        ["always()", "success()", "!cancelled()"].includes(part),
+    );
 }
 
 const isWorker = (dir) => dir === WORKER_DIR || dir.startsWith(`${WORKER_DIR}/`);
@@ -290,6 +345,11 @@ export function workerRuns(workflow, file) {
             where: `${file} ${jobId}${legName} step ${step.name ?? index + 1}`,
             subcommand: run.subcommand,
             ...featureSet(run.args),
+            counts:
+              alwaysOn(job?.if) &&
+              alwaysOn(step.if) &&
+              job?.["continue-on-error"] !== true &&
+              step["continue-on-error"] !== true,
           });
         }
       }
@@ -305,12 +365,21 @@ export function helperRuns(text, file) {
     const argv = [...m[1].matchAll(/"([^"]*)"/g)].map((x) => x[1]);
     const subcommand = argv.shift();
     if (!SUBCOMMANDS.has(subcommand)) continue;
-    found.push({ where: file, subcommand, ...featureSet(argv) });
+    // The helper's runs are steps of the test job, which counts the set itself.
+    found.push({ where: file, subcommand, ...featureSet(argv), counts: false });
   }
   return found;
 }
 
-export function check(imageSets, runs) {
+/** A `--benches` run's set less the bench features is an image set, and it names at least one of them. */
+function benchSet(run, imageSets, benchFeatures) {
+  if (!run.benchesOnly || !["check", "clippy"].includes(run.subcommand)) return false;
+  const names = run.set ? run.set.split(",") : [];
+  const bench = names.filter((n) => benchFeatures.has(n));
+  return bench.length > 0 && imageSets.has(canonical(names.filter((n) => !benchFeatures.has(n))));
+}
+
+export function check(imageSets, runs, benchFeatures = new Set()) {
   const errors = [];
   const label = (set) => (set === "" ? "the default set (no features)" : `--features ${set}`);
   const allowed = [...imageSets].map(label).join(" or ");
@@ -320,10 +389,20 @@ export function check(imageSets, runs) {
       errors.push(`${run.where}: cargo ${run.subcommand} --all-features on the worker; use the image's set: ${allowed}`);
       continue;
     }
+    if (run.unresolved) {
+      errors.push(`${run.where}: cargo ${run.subcommand} on the worker with an argument this check cannot expand; spell its features out (${allowed})`);
+      continue;
+    }
+    if (run.noDefault) {
+      errors.push(`${run.where}: cargo ${run.subcommand} --no-default-features on the worker; no image builds that way, drop it`);
+      continue;
+    }
+    if (benchSet(run, imageSets, benchFeatures)) continue; // the benches' own lint: never an image set's
     if (!imageSets.has(run.set)) {
       errors.push(`${run.where}: cargo ${run.subcommand} ${label(run.set)} on the worker, which no image builds; use ${allowed}`);
       continue;
     }
+    if (!run.counts) continue;
     if (LINT.has(run.subcommand)) covered.get(run.set).lint = true;
     if (TEST.has(run.subcommand)) covered.get(run.set).test = true;
   }
@@ -348,7 +427,9 @@ function main() {
   const workflowRuns = runs.length;
   for (const file of HELPERS) runs.push(...helperRuns(fs.readFileSync(path.join(ROOT, file), "utf8"), file));
   if (workflowRuns < FLOOR) errors.push(`found ${workflowRuns} worker cargo run(s) in ${WORKFLOWS}, fewer than ${FLOOR}: the scan stopped seeing them`);
-  errors.push(...check(sets, runs));
+  const benches = benchFeatures(fs.readFileSync(path.join(ROOT, `${WORKER_DIR}/Cargo.toml`), "utf8"));
+  if (benches.size === 0) errors.push(`${WORKER_DIR}/Cargo.toml: found no [[bench]] required-features`);
+  errors.push(...check(sets, runs, benches));
   if (errors.length) {
     for (const e of errors) console.error(`::error::${e}`);
     process.exit(1);

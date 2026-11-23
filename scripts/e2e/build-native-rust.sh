@@ -55,7 +55,8 @@ if [ "${NATIVE_RUST_FULL_RELEASE:-0}" != 1 ]; then
 fi
 
 ALL_CRATES=(elitea-worker-rust elitea-vector elitea-doc-extractor elitea-deepwiki-engine elitea-inventory-engine)
-read -r -a SERVICES <<< "${NATIVE_RUST_SERVICES:-${ALL_CRATES[*]} elitea-llm-gateway}"
+read -r -a SERVICES <<< "${NATIVE_RUST_SERVICES-${ALL_CRATES[*]} elitea-llm-gateway}"
+[ "${#SERVICES[@]}" -gt 0 ] || { echo "ERROR: NATIVE_RUST_SERVICES is empty" >&2; exit 2; }
 CRATES=()
 GATEWAY=false
 for service in "${SERVICES[@]}"; do
@@ -67,7 +68,6 @@ for service in "${SERVICES[@]}"; do
        fi ;;
   esac
 done
-[ "${#SERVICES[@]}" -gt 0 ] || { echo "ERROR: NATIVE_RUST_SERVICES is empty" >&2; exit 2; }
 
 for crate in "${CRATES[@]}"; do
   echo "→ ${crate}"

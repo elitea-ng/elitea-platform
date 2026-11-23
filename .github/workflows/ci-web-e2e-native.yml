@@ -625,6 +625,12 @@ jobs:
           RUST_ENGINES_SHA256: ${{ needs.native-build-rust.outputs.sha256-engines }}
         run: |
           set -euo pipefail
+          # One output per build leg: name a missing one rather than let
+          # sha256sum fail on an empty hash.
+          for leg in worker engines; do
+            var="RUST_${leg^^}_SHA256"
+            [ -n "${!var}" ] || { echo "::error::native-build-rust (${leg}) set no sha256-${leg} output"; exit 1; }
+          done
           echo "${SHA256}  native-bin.tar.zst" | sha256sum -c -
           echo "${RUST_WORKER_SHA256}  native-rust-bin-worker.tar.zst" | sha256sum -c -
           echo "${RUST_ENGINES_SHA256}  native-rust-bin-engines.tar.zst" | sha256sum -c -
