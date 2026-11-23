@@ -77,11 +77,18 @@ async function reloadMatrix(page: Page): Promise<Record<string, unknown>[]> {
   return rows;
 }
 
-/** The `editor` cell of the seeded probe row, as the SERVER reported it. */
-function editorHoldsProbe(rows: Record<string, unknown>[]): unknown {
+/**
+ * The custom administration role journey 30b writes, seeded by
+ * `scripts/e2e-stack.sh seed`. Not `editor`: the built-in roles are locked
+ * since shared 0262 (ADR-0059 R0.7), and the server refuses to edit their sets.
+ */
+const CUSTOM_ROLE = 'e2e_custom';
+
+/** The custom role's cell of the seeded probe row, as the SERVER reported it. */
+function customRoleHoldsProbe(rows: Record<string, unknown>[]): unknown {
   const row = rows.find((r) => r['name'] === SEEDED_PROBE);
   expect(row, `the matrix must list ${SEEDED_PROBE}`).toBeTruthy();
-  return row?.['editor'];
+  return row?.[CUSTOM_ROLE];
 }
 
 async function expandProbeGroup(page: Page): Promise<void> {
@@ -127,11 +134,12 @@ adminTest('J30b: granting a permission survives a reload, and revoking it takes 
   await openRoles(page);
   await expandProbeGroup(page);
 
-  const editorCell = () => page.getByRole('checkbox', { name: `editor: ${SEEDED_PROBE}` });
-  await expect(editorCell()).not.toBeChecked();
+  // The cell label humanises the role name: `e2e_custom` reads `e2e custom`.
+  const customCell = () => page.getByRole('checkbox', { name: `e2e custom: ${SEEDED_PROBE}` });
+  await expect(customCell()).not.toBeChecked();
 
   // ── grant ────────────────────────────────────────────────────────────────
-  await editorCell().click();
+  await customCell().click();
   const [saved] = await Promise.all([
     page.waitForResponse(
       (r) =>
@@ -146,13 +154,13 @@ adminTest('J30b: granting a permission survives a reload, and revoking it takes 
   await expect(page.getByText('Permissions saved.')).toBeVisible();
 
   expect(
-    editorHoldsProbe(await reloadMatrix(page)),
+    customRoleHoldsProbe(await reloadMatrix(page)),
     'the grant must survive a full reload, in the server\'s own answer',
   ).toBe(true);
-  await expect(editorCell(), 'the grant must survive a full reload').toBeChecked();
+  await expect(customCell(), 'the grant must survive a full reload').toBeChecked();
 
   // ── revoke, restoring the seeded state ───────────────────────────────────
-  await editorCell().click();
+  await customCell().click();
   const [reverted] = await Promise.all([
     page.waitForResponse(
       (r) =>
@@ -166,10 +174,10 @@ adminTest('J30b: granting a permission survives a reload, and revoking it takes 
   // A save that only ever ADDS would leave this checked. Revocation is the half
   // of the diff an operator relies on and the half nothing on screen confirms.
   expect(
-    editorHoldsProbe(await reloadMatrix(page)),
+    customRoleHoldsProbe(await reloadMatrix(page)),
     'the revoke must survive a full reload, in the server\'s own answer',
   ).not.toBe(true);
-  await expect(editorCell(), 'the revoke must survive a full reload').not.toBeChecked();
+  await expect(customCell(), 'the revoke must survive a full reload').not.toBeChecked();
   // The seeded grant on `viewer` is untouched — the write is keyed on the role.
   await expect(page.getByRole('checkbox', { name: `viewer: ${SEEDED_PROBE}` })).toBeChecked();
 });

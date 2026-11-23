@@ -53,15 +53,18 @@ import (
 // administration-mode roles — super_admin, admin, editor and viewer — and
 // `system` is not one of them.
 //
+// shared/0262 (ADR-0059 R0.7) adds the built-in project_administrator, which
+// holds both strings.
+//
 // The holders are sorted, because administrationGrantHolders sorts what it
 // reads.
 var projectListingGrants = []surfaceGrant{
 	// The member listing. coreHandler.Users answers with every member's email,
 	// name and roles for the named project.
-	{"configuration.users.users.view", []string{"admin", "editor", "super_admin"}},
+	{"configuration.users.users.view", []string{"admin", "editor", "project_administrator", "super_admin"}},
 	// The project role listing. The matrix gives this one to the viewer as
 	// well, and it is the ONLY place these two listings differ.
-	{"configuration.roles.roles.view", []string{"admin", "editor", "super_admin", "viewer"}},
+	{"configuration.roles.roles.view", []string{"admin", "editor", "project_administrator", "super_admin", "viewer"}},
 }
 
 // theOneStringTheViewerDoesNotGet names the asymmetry so a reader does not have
