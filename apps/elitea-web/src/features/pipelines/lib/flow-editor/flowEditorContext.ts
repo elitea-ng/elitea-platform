@@ -86,3 +86,11 @@ export interface NodeCardContextValue {
 }
 
 export const NodeCardContext = createContext<NodeCardContextValue | undefined>(undefined);
+
+/** Provided by `NodeConfigPanel` when rendering a node's configuration form inside the 400px side drawer. */
+export interface NodeConfigPanelContextValue {
+  readonly isEntrypoint: boolean;
+  readonly isLegacyLayout: boolean;
+}
+
+export const NodeConfigPanelContext = createContext<NodeConfigPanelContextValue | undefined>(undefined);

@@ -57,18 +57,23 @@ import { ToolTypes } from '@/entities/toolkit';
 import { t } from '@/shared/i18n';
 
 import { FlowEditorConstants } from '../../lib/flow-editor/constants';
+import { getNodeFieldInfo, NODE_FIELD_KEYS } from '../../lib/flow-editor/constants/nodeFieldInfo.constants';
 import { batchUpdateYamlNode } from '../../lib/flow-editor/helpers/flowEditor.helpers';
 import { FlowEditorContext, type FlowEditorContextValue } from '../../lib/flow-editor/flowEditorContext';
 import type { YamlInputMappingEntry } from '../../lib/flow-editor/helpers/pipelineFlow.types';
 import { useFunctionInputMapping } from '../../lib/flow-editor/hooks/useFunctionInputMapping';
 import { useGetToolkitNameFromSchema } from '../../lib/flow-editor/hooks/useGetToolkitNameFromSchema';
+import { useSelectedProjectId } from '../../lib/flow-editor/hooks/useSelectedProjectId';
 import type { FlowNode } from '../../lib/flow-editor/reactFlowTypes';
+import type { ApplicationListRow, PickerItem, PickerToolEntry } from '../../lib/tool-picker/toolPicker.types';
+import { NodeConfigSection, NodeFieldHeading } from '../node-config-drawer/NodeConfigSection';
 import { CommonInterruptSettings } from '../settings/CommonInterruptSettings';
 import { InputMapping, type InputMappingProps } from '../settings/InputMappings/InputMapping';
+import { NodeSettings } from '../settings/NodeSettings';
 import { InputSelect } from '../select/InputSelect';
 import { OutputSelect } from '../select/OutputSelect';
-import { ToolSelect } from '../select/ToolSelect';
 import type { PipelineToolEntry } from '../select/pipelineToolEntry.types';
+import { ProjectAgentPicker } from '../tool-picker/ProjectAgentPicker';
 import { CustomHandle } from './CustomHandle';
 import { NodeCard } from './BaseNode/NodeCard';
 
@@ -141,6 +146,24 @@ const EMPTY_FLOW_EDITOR_CONTEXT: FlowEditorContextValue = {
   setYamlJsonObject: () => {},
 };
 
+function AgentOrphanWarning(): ReactNode {
+  return (
+    <Box sx={agentNodeStyles.orphanWarning}>
+      <WarningAmberIcon fontSize="small" />
+      <Typography variant="bodySmall">
+        {t(
+          'pipelines.flowEditor.agentNode.orphanWarning',
+          'Agent not found — select a replacement or delete this node',
+        )}
+      </Typography>
+    </Box>
+  );
+}
+
+function resolveAgentTooltip(): string | undefined {
+  return getNodeFieldInfo(FlowEditorConstants.PipelineNodeTypes.Agent, NODE_FIELD_KEYS.agent) || undefined;
+}
+
 export const AgentNode = memo(function AgentNode(props: AgentNodeProps): ReactNode {
   const { id, data, selected, type: nodeType = FlowEditorConstants.PipelineNodeTypes.Agent, versionTools } = props;
 
@@ -172,16 +195,33 @@ export const AgentNode = memo(function AgentNode(props: AgentNodeProps): ReactNo
       versionTools: resolvedVersionTools,
     });
 
+  const projectId = useSelectedProjectId();
   const { getToolkitNameFromSchema } = useGetToolkitNameFromSchema(toolkitTypes as never);
 
-  const onSelectToolkit = useCallback(
-    (newToolkit: PipelineToolEntry | null) => {
-      const patch = newToolkit ? computeToolkitPatch(newToolkit, getToolkitNameFromSchema) : EMPTY_TOOLKIT_PATCH;
+  const onSelectAgentItem = useCallback(
+    (item: PickerItem<PickerToolEntry | ApplicationListRow>) => {
+      const matched = resolvedVersionTools.find((tool) => tool.name === item.name);
+      const patch = matched
+        ? computeToolkitPatch(matched, getToolkitNameFromSchema)
+        : { toolkit_name: undefined, tool: item.name };
       batchUpdateYamlNode(id, patch, yamlJsonObject, setYamlJsonObject);
     },
-    // baseline's own deps array (faithfully ported) -- FlowEditorContext's yamlJsonObject/setYamlJsonObject are not memoized upstream, matching this batch's established `useLLMInputMapping.ts` precedent.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [id, yamlJsonObject, setYamlJsonObject, getToolkitNameFromSchema],
+    [id, yamlJsonObject, setYamlJsonObject, getToolkitNameFromSchema, resolvedVersionTools],
+  );
+
+  const onClearAgent = useCallback(() => {
+    batchUpdateYamlNode(id, EMPTY_TOOLKIT_PATCH, yamlJsonObject, setYamlJsonObject);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, yamlJsonObject, setYamlJsonObject]);
+
+  const pickerContext = useMemo(
+    () => ({
+      attachedTools: resolvedVersionTools as readonly PickerToolEntry[],
+      projectId,
+      yamlJsonObject,
+    }),
+    [projectId, resolvedVersionTools, yamlJsonObject],
   );
 
   const selectedToolkitValue = boundTool ?? '';
@@ -195,6 +235,7 @@ export const AgentNode = memo(function AgentNode(props: AgentNodeProps): ReactNo
       type={nodeType}
       isPerforming={isPerforming}
       id={id}
+      requiredInputs={requiredInputs}
       handles={() => (
         <AgentNodeHandles
           isRunningPipeline={isRunningPipeline}
@@ -204,57 +245,65 @@ export const AgentNode = memo(function AgentNode(props: AgentNodeProps): ReactNo
         />
       )}
     >
-      {isOrphan && (
-        <Box sx={agentNodeStyles.orphanWarning}>
-          <WarningAmberIcon fontSize="small" />
-          <Typography variant="bodySmall">
-            {t(
-              'pipelines.flowEditor.agentNode.orphanWarning',
-              'Agent not found — select a replacement or delete this node',
-            )}
-          </Typography>
-        </Box>
-      )}
-      <ToolSelect
-        label={t('pipelines.flowEditor.agentNode.agentLabel', 'Agent')}
-        onSelectTool={onSelectToolkit}
-        selectedToolkit={selectedToolkitValue}
-        disabled={isFieldsDisabled}
-        filterTypes={toolkitFilter}
-        versionTools={resolvedVersionTools}
-      />
-      <InputSelect
-        id={id}
-        label={t('pipelines.flowEditor.agentNode.inputLabel', 'Input')}
-        inputFieldName="input"
-        disabled={isFieldsDisabled}
-      />
-      <OutputSelect
-        id={id}
-        label={t('pipelines.flowEditor.agentNode.outputLabel', 'Output')}
-        outputFieldName="output"
-        disabled={isFieldsDisabled}
-      />
-      {!isOrphan && (
-        <InputMapping
-          requiredInputs={requiredInputs}
-          // `useFunctionInputMapping`'s (A2d) own `Record<string, unknown>`
-          // return type erases the `YamlInputMappingEntry`-keyed shape it
-          // actually builds -- see module doc comment.
-          input_mapping={inputMappings as InputMappingProps['input_mapping']}
-          mappingInfo={mappingInfo as InputMappingProps['mappingInfo']}
-          defaultValues={defaultValues}
-          values={inputMappingValues}
-          onChangeMapping={onChangeMapping}
+      <NodeConfigSection section="basic">
+        {isOrphan ? <AgentOrphanWarning /> : null}
+        <ProjectAgentPicker
+          label={t('pipelines.flowEditor.agentNode.agentLabel', 'Agent')}
+          tooltip={resolveAgentTooltip()}
+          value={selectedToolkitValue}
+          onSelect={onSelectAgentItem}
+          onClear={onClearAgent}
+          disabled={isFieldsDisabled}
+          pickerContext={pickerContext}
+          data-testid="pipeline-agent-node-picker"
+        />
+        {!isOrphan && (
+          <InputMapping
+            requiredInputs={requiredInputs}
+            input_mapping={inputMappings as InputMappingProps['input_mapping']}
+            mappingInfo={mappingInfo as InputMappingProps['mappingInfo']}
+            defaultValues={defaultValues}
+            values={inputMappingValues}
+            onChangeMapping={onChangeMapping}
+            disabled={isFieldsDisabled}
+          />
+        )}
+      </NodeConfigSection>
+      <NodeConfigSection section="advanced" defaultExpanded={false}>
+        <NodeFieldHeading
+          label={t('pipelines.flowEditor.agentNode.inputLabel', 'Input')}
+          nodeType={FlowEditorConstants.PipelineNodeTypes.Agent}
+          fieldKey={NODE_FIELD_KEYS.input}
+        />
+        <InputSelect
+          id={id}
+          label={t('pipelines.flowEditor.agentNode.inputLabel', 'Input')}
+          inputFieldName="input"
           disabled={isFieldsDisabled}
         />
-      )}
-      <CommonInterruptSettings
-        id={id}
-        type={FlowEditorConstants.PipelineNodeTypes.Agent}
-        disabled={isFieldsDisabled}
-        showStructuredOutput={false}
-      />
+        <NodeFieldHeading
+          label={t('pipelines.flowEditor.agentNode.outputLabel', 'Output')}
+          nodeType={FlowEditorConstants.PipelineNodeTypes.Agent}
+          fieldKey={NODE_FIELD_KEYS.output}
+        />
+        <OutputSelect
+          id={id}
+          label={t('pipelines.flowEditor.agentNode.outputLabel', 'Output')}
+          outputFieldName="output"
+          disabled={isFieldsDisabled}
+        />
+        <CommonInterruptSettings
+          id={id}
+          type={FlowEditorConstants.PipelineNodeTypes.Agent}
+          disabled={isFieldsDisabled}
+          showStructuredOutput={false}
+        />
+        <NodeSettings
+          id={id}
+          type={FlowEditorConstants.PipelineNodeTypes.Agent}
+          disabled={isFieldsDisabled}
+        />
+      </NodeConfigSection>
     </NodeCard>
   );
 });

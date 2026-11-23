@@ -5,6 +5,8 @@ import { useEdges } from '@xyflow/react';
 import { FlowEditorContext } from '../../lib/flow-editor/flowEditorContext';
 import type { FlowNode } from '../../lib/flow-editor/reactFlowTypes';
 import { patchGraphExtensionNode } from '../../lib/graphExtensions.helpers';
+import { NodeConfigSection } from '../node-config-drawer/NodeConfigSection';
+import { NodeSettings } from '../settings/NodeSettings';
 import { ParallelSettings } from '../settings/parallel/ParallelSettings';
 import { CustomHandle } from './CustomHandle';
 import { NodeCard } from './BaseNode/NodeCard';
@@ -32,7 +34,12 @@ export function ParallelNode({ id, type = 'parallel', data, selected }: NodeProp
         <CustomHandle type="source" id="source" isConnectable={!disabled && !edges.some((edge) => edge.source === id && edge.target !== 'END')}
           isRunningPipeline={running} isPerforming={performing} />
       </>}>
-      <ParallelSettings node={node} disabled={disabled} change={change} remove={remove} />
+      <NodeConfigSection section="basic">
+        <ParallelSettings node={node} disabled={disabled} change={change} remove={remove} />
+      </NodeConfigSection>
+      <NodeConfigSection section="advanced" defaultExpanded={false}>
+        <NodeSettings id={id} type={type} disabled={disabled} />
+      </NodeConfigSection>
     </NodeCard>
   </FlowEditorContext.Provider>;
 }

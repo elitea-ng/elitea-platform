@@ -7326,5 +7326,13 @@
   "runtimeFailure.refusal.policyFallback": "This run was refused by a platform or budget policy.",
   "runtimeFailure.refusal.policyTitle": "Request refused by policy",
   "runtimeFailure.refusal.validationFallback": "This run was refused because the request or configuration could not be accepted.",
-  "runtimeFailure.refusal.validationTitle": "Request refused"
+  "runtimeFailure.refusal.validationTitle": "Request refused",
+  "pipelines.flowEditor.baseToolNode.inputLabel": "Input",
+  "pipelines.flowEditor.decisionNode.inputLabel": "Input",
+  "pipelines.flowEditor.llmNode.toolkitsLabel": "Toolkits",
+  "pipelines.nodeConfigPanel.deprecatedReadOnlyHint": "Deprecated nodes are refused when saving and are read-only in Flow view. Edit in YAML view or replace with a supported node.",
+  "pipelines.nodeConfigPanel.name": "Name",
+  "pipelines.nodeConfigPanel.yamlInvalid": "Invalid YAML syntax.",
+  "pipelines.nodeConfigPanel.yamlMissingIdError": "The node YAML must include a valid id.",
+  "pipelines.nodeConfigPanel.yamlSingleNodeError": "The node YAML must describe exactly one node."
 }

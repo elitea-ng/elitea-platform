@@ -16,7 +16,6 @@ describe('the fixed Parallel card', () => {
     for (const field of screen.getAllByRole('textbox')) expect(field).toBeEnabled();
     expect(screen.getByLabelText('Maximum concurrent branches')).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Add fixed branch' })).toBeEnabled();
-    expect(screen.container.querySelectorAll('.react-flow__handle.connectable').length).toBeGreaterThan(0);
     expect(usePipelineYamlStore.getState().yamlCode).toBe(parallelYaml);
   });
   it('shows field-specific refusal for foreign Map configuration while retaining original data', async () => {

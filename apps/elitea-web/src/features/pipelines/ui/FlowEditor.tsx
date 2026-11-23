@@ -51,6 +51,7 @@ import { FlowEditorProvider } from './FlowEditorProvider';
 import { flowEditorFitViewOptions } from './flowEditorFitView';
 import { FlowEditorStateToggle } from './FlowEditorStateToggle';
 import { FlowEmptyState } from './empty-state';
+import { FlowNodeConfigDrawer } from './node-config-drawer/FlowNodeConfigDrawer';
 import { RunStateNodeGroup } from './nodes/RunStateNodeGroup';
 import type { PipelineToolEntry } from './select/pipelineToolEntry.types';
 import { ConnectionDropdown } from './settings/ConnectionDropdown';
@@ -256,6 +257,25 @@ const FlowEditorImpl = forwardRef<FlowEditorHandle, FlowEditorProps>(function Fl
 
   const { nodeTypes, edgeTypes } = useFlowEditorNodeTypes({ versionTools, llmSettings });
 
+  const selectedNodeId = useMemo(() => {
+    const selected = visibleFlowNodes.filter(node => node.selected);
+    return selected.length === 1 ? (selected[0]?.id ?? null) : null;
+  }, [visibleFlowNodes]);
+
+  const handleSelectNode = useCallback(
+    (nextId: string | null) => {
+      setFlowNodes(prevNodes => prevNodes.map(node => ({ ...node, selected: nextId !== null && node.id === nextId })));
+    },
+    [setFlowNodes],
+  );
+
+  const handleCloseNodeDrawer = useCallback(() => handleSelectNode(null), [handleSelectNode]);
+
+  const versionToolNames = useMemo(
+    () => (versionTools ?? []).map(tool => tool.toolkit_name || tool.name || '').filter(Boolean),
+    [versionTools],
+  );
+
   // `RunStateNodeGroup`'s `RunStateGraphNode` (A2f) kept the baseline's own
   // node-shaped contract (`{id, data, selected?}`) — the same shape
   // `useRunEvent`'s `pipelineRunNodes` (A2d, `RunPipelineStatus`:
@@ -327,6 +347,14 @@ const FlowEditorImpl = forwardRef<FlowEditorHandle, FlowEditorProps>(function Fl
             onReLayout={onReLayoutClick}
           />
         </ReactFlow>
+        <FlowNodeConfigDrawer
+          flowNodes={visibleFlowNodes}
+          nodeTypes={nodeTypes}
+          selectedNodeId={selectedNodeId}
+          onClose={handleCloseNodeDrawer}
+          onSelectNode={handleSelectNode}
+          toolNames={versionToolNames}
+        />
       </FlowEditorProvider>
       {isEmptyPipeline && (
         <FlowEmptyState

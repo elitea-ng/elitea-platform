@@ -1,4 +1,4 @@
-import { cleanup, waitFor, type RenderResult } from '@testing-library/react';
+import { cleanup, type RenderResult } from '@testing-library/react';
 import { HttpResponse, http } from 'msw';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -8,7 +8,7 @@ import { server } from '@/test/setup';
 import { ReactFlow, ReactFlowProvider } from '@xyflow/react';
 
 import { buildFlowEditorContextValue, renderWithRouterAndProject } from '../../__tests__/testUtils';
-import { FlowEditorContext, type FlowEditorContextValue } from '../../lib/flow-editor/flowEditorContext';
+import { FlowEditorContext, NodeConfigPanelContext, type FlowEditorContextValue } from '../../lib/flow-editor/flowEditorContext';
 import type { YamlPipelineDocument } from '../../lib/flow-editor/helpers/pipelineFlow.types';
 import type { PipelineToolEntry } from '../select/pipelineToolEntry.types';
 import { ToolkitNode, type ToolkitNodeProps } from './ToolkitNode';
@@ -49,7 +49,16 @@ function renderToolkitNode(props: Partial<ToolkitNodeProps>, flowEditorOverrides
         <ReactFlow
           nodes={[{ id: 'Node1', type: 'testNode', position: { x: 0, y: 0 }, data: fullProps.data ?? {} }]}
           edges={[]}
-          nodeTypes={{ testNode: () => <ToolkitNode {...fullProps} /> }}
+          nodeTypes={{
+            testNode: () => (
+              <>
+                <ToolkitNode {...fullProps} />
+                <NodeConfigPanelContext.Provider value={{ isEntrypoint: false, isLegacyLayout: false }}>
+                  <ToolkitNode {...fullProps} />
+                </NodeConfigPanelContext.Provider>
+              </>
+            ),
+          }}
         />
       </FlowEditorContext.Provider>
     </ReactFlowProvider>,
@@ -64,15 +73,11 @@ describe('ToolkitNode', () => {
   });
 
   it("filters out an 'application' typed versionTools entry -- its label never shows as the selected toolkit", async () => {
-    // A node whose resolved toolkit identifier is an application's own
-    // name: `isToolkitFilterableTool` excludes `type === 'application'`
-    // tools, so this identifier matches nothing in ToolSelect's filtered
-    // list and SingleSelect falls back to its "None" placeholder.
     const versionTools: readonly PipelineToolEntry[] = [{ type: 'application', name: 'MyAgentApp' }];
     const yamlJsonObject: YamlPipelineDocument = { nodes: [{ id: 'Node1', tool: 'MyAgentApp' }] };
-    const { findByText, queryByText } = renderToolkitNode({ versionTools }, { yamlJsonObject });
+    const { findByText, getByTestId } = renderToolkitNode({ versionTools }, { yamlJsonObject });
     await findByText('Structured output');
-    await waitFor(() => expect(queryByText('MyAgentApp')).not.toBeInTheDocument());
+    expect(getByTestId('pipeline-toolkit-node-picker')).not.toHaveTextContent('MyAgentApp');
   });
 
   it("filters out an mcp-meta versionTools entry -- its label never shows as the selected toolkit", async () => {
@@ -80,9 +85,9 @@ describe('ToolkitNode', () => {
       { type: 'custom_mcp', toolkit_name: 'my-mcp-tool', meta: { mcp: true } },
     ];
     const yamlJsonObject: YamlPipelineDocument = { nodes: [{ id: 'Node1', toolkit_name: 'my-mcp-tool' }] };
-    const { findByText, queryByText } = renderToolkitNode({ versionTools }, { yamlJsonObject });
+    const { findByText, getByTestId } = renderToolkitNode({ versionTools }, { yamlJsonObject });
     await findByText('Structured output');
-    await waitFor(() => expect(queryByText('my-mcp-tool')).not.toBeInTheDocument());
+    expect(getByTestId('pipeline-toolkit-node-picker')).not.toHaveTextContent('my-mcp-tool');
   });
 
   it('keeps a plain (non-application, non-mcp) toolkit entry -- its label shows as the selected toolkit', async () => {

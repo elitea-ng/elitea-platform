@@ -1,16 +1,21 @@
 import type { ReactElement } from 'react';
 
-import { fireEvent, render, waitFor, type RenderResult } from '@testing-library/react';
+import { render, type RenderResult } from '@testing-library/react';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { ThemeProvider } from '@mui/material/styles';
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/shared/brand';
 
 import { ReactFlow, ReactFlowProvider } from '@xyflow/react';
 
 import { buildFlowEditorContextValue, createTestQueryClient } from '../../../__tests__/testUtils';
-import { FlowEditorContext, type FlowEditorContextValue } from '../../../lib/flow-editor/flowEditorContext';
+import {
+  FlowEditorContext,
+  NodeConfigPanelContext,
+  type FlowEditorContextValue,
+  type NodeConfigPanelContextValue,
+} from '../../../lib/flow-editor/flowEditorContext';
 import { NodeCard, type NodeCardProps } from './NodeCard';
 
 beforeAll(() => {
@@ -25,13 +30,6 @@ beforeAll(() => {
 
 const theme = buildEliteaTheme(DEFAULT_BRAND_PACK);
 
-/**
- * `NodeCard` reads `useContext(FlowEditorContext)` and (for `isEntrypoint`)
- * renders `TriggerTypeSelector`, which calls `useQueryClient()`
- * unconditionally (even with a disabled query) -- a bare `renderWithTheme`
- * throws "No QueryClient set" the moment `isEntrypoint` is exercised, so
- * every test here wraps in a real `QueryClientProvider` too.
- */
 function renderTree(ui: ReactElement): RenderResult {
   return render(
     <QueryClientProvider client={createTestQueryClient()}>
@@ -45,17 +43,25 @@ function renderTree(ui: ReactElement): RenderResult {
   );
 }
 
-function renderNodeCard(props: Partial<NodeCardProps>, flowEditorValue?: FlowEditorContextValue): RenderResult {
+function renderNodeCard(
+  props: Partial<NodeCardProps>,
+  flowEditorValue?: FlowEditorContextValue,
+  panelContext?: NodeConfigPanelContextValue,
+): RenderResult {
   const fullProps: NodeCardProps = {
     name: 'Node1',
     isEntrypoint: false,
     id: 'Node1',
-    type: 'tool',
+    type: 'llm',
     children: <div data-testid="node-card-children">child content</div>,
     ...props,
   };
 
-  const tree = (
+  const nodeEl = panelContext ? (
+    <NodeConfigPanelContext.Provider value={panelContext}>
+      <NodeCard {...fullProps} />
+    </NodeConfigPanelContext.Provider>
+  ) : (
     <ReactFlow
       nodes={[{ id: 'Node1', type: 'testNode', position: { x: 0, y: 0 }, data: {} }]}
       edges={[]}
@@ -65,198 +71,78 @@ function renderNodeCard(props: Partial<NodeCardProps>, flowEditorValue?: FlowEdi
 
   return renderTree(
     <ReactFlowProvider>
-      {flowEditorValue ? <FlowEditorContext.Provider value={flowEditorValue}>{tree}</FlowEditorContext.Provider> : tree}
+      {flowEditorValue ? <FlowEditorContext.Provider value={flowEditorValue}>{nodeEl}</FlowEditorContext.Provider> : nodeEl}
     </ReactFlowProvider>,
   );
 }
 
-/**
- * `toBeVisible()` walks every ANCESTOR's computed style, including
- * React Flow's own node wrapper -- which every node test in this slice
- * documents as staying `visibility: hidden` in jsdom because the
- * `ResizeObserver` stub above never calls back (see e.g.
- * `../SubgraphNode.test.tsx`'s own `hidden: true` note). That makes
- * `toBeVisible()` unusable here regardless of `NodeCard`'s own `isExpanded`
- * state. Reading the immediate `NodeBodyContainer` wrapper's OWN computed
- * `display` sidesteps the ancestor-visibility false negative entirely.
- */
-function bodyDisplay(getByTestId: RenderResult['getByTestId']): string {
-  const wrapper = getByTestId('node-card-children').parentElement;
-  if (!wrapper) throw new Error('node-card-children has no parent wrapper');
-  return getComputedStyle(wrapper).display;
-}
-
-describe('NodeCard', () => {
+describe('NodeCard (Wave U2 dual-mode)', () => {
   it('renders nothing without a FlowEditorContext.Provider ancestor', () => {
     const { container } = renderNodeCard({});
-    expect(container.querySelector('[data-testid="node-card-children"]')).not.toBeInTheDocument();
+    expect(container.querySelector('[data-testid="pipeline-node-v2-card-node1"]')).not.toBeInTheDocument();
   });
 
-  it('renders the header name and children once inside a FlowEditorContext.Provider', () => {
-    const flowEditorValue = buildFlowEditorContextValue();
-    const { getByText, getByTestId } = renderNodeCard({}, flowEditorValue);
-    expect(getByText('Node1')).toBeInTheDocument();
-    expect(getByTestId('node-card-children')).toBeInTheDocument();
+  it('renders compact view-only NodeCardView on the canvas without inline form children', () => {
+    const flowEditorValue = buildFlowEditorContextValue({
+      yamlJsonObject: { nodes: [{ id: 'Node1', type: 'llm' }] },
+    });
+    const { getByTestId, queryByTestId } = renderNodeCard({}, flowEditorValue);
+
+    expect(getByTestId('pipeline-node-v2-card-node1')).toBeInTheDocument();
+    expect(getByTestId('pipeline-node-v2-name')).toHaveTextContent('Node1');
+    expect(queryByTestId('node-card-children')).not.toBeInTheDocument();
   });
 
-  it('keeps the body displayed (flex) when expandAll is explicitly true', async () => {
-    const flowEditorValue = buildFlowEditorContextValue({ expandAll: true });
-    const { getByTestId } = renderNodeCard({}, flowEditorValue);
-    await waitFor(() => expect(bodyDisplay(getByTestId)).toBe('flex'));
+  it('shows Entrypoint badge on the canvas card when isEntrypoint is true', () => {
+    const flowEditorValue = buildFlowEditorContextValue({
+      yamlJsonObject: { entry_point: 'Node1', nodes: [{ id: 'Node1', type: 'llm' }] },
+    });
+    const { getByTestId } = renderNodeCard({ isEntrypoint: true }, flowEditorValue);
+
+    expect(getByTestId('pipeline-node-v2-entrypoint')).toBeInTheDocument();
   });
 
-  it('collapses the body (display none) once mounted when expandAll is not set -- the sync-to-expandAll effect always runs, including on mount', async () => {
-    const flowEditorValue = buildFlowEditorContextValue();
-    const { getByTestId } = renderNodeCard({}, flowEditorValue);
-    await waitFor(() => expect(bodyDisplay(getByTestId)).toBe('none'));
-  });
-
-  it('collapses the body (display none) once mounted when expandAll is explicitly false', async () => {
-    const flowEditorValue = buildFlowEditorContextValue({ expandAll: false });
-    const { getByTestId } = renderNodeCard({}, flowEditorValue);
-    await waitFor(() => expect(bodyDisplay(getByTestId)).toBe('none'));
-  });
-
-  it('toggles the body display when the header expand/collapse button is clicked', async () => {
-    const flowEditorValue = buildFlowEditorContextValue({ expandAll: true });
-    const { getByTestId, container } = renderNodeCard({}, flowEditorValue);
-    await waitFor(() => expect(bodyDisplay(getByTestId)).toBe('flex'));
-
-    // The expand/collapse `IconButton` (`NodeCardHeader.tsx`'s `color="tertiary"`)
-    // is the only `tertiary`-colored icon button in the header -- selected by
-    // class rather than `getByRole('button', { name: '' })` because, with
-    // `{ hidden: true }` needed for React Flow's `visibility: hidden` node
-    // wrapper (see `bodyDisplay`'s own doc comment), more than one hidden
-    // button in this tree resolves to an empty accessible name.
-    const expandButton = container.querySelector('[class*="MuiIconButton-colorTertiary"]');
-    expect(expandButton).toBeTruthy();
-    fireEvent.click(expandButton as Element);
-
-    await waitFor(() => expect(bodyDisplay(getByTestId)).toBe('none'));
-  });
-
-  it('renders no TriggerTypeSelector when isEntrypoint is false', async () => {
-    const flowEditorValue = buildFlowEditorContextValue({ expandAll: true });
-    const { queryByText, getByTestId } = renderNodeCard({ isEntrypoint: false }, flowEditorValue);
-    await waitFor(() => expect(getByTestId('node-card-children')).toBeInTheDocument());
-    expect(queryByText('Trigger')).not.toBeInTheDocument();
-  });
-
-  it('renders the TriggerTypeSelector when isEntrypoint is true', async () => {
-    const flowEditorValue = buildFlowEditorContextValue({ expandAll: true });
-    const { getByText } = renderNodeCard({ isEntrypoint: true }, flowEditorValue);
-    await waitFor(() => expect(getByText('Trigger')).toBeInTheDocument());
-  });
-
-  it('forwards toolNames/onDuplicateName to NodeCardHeader (rename onto a name conflicting with a toolName reports through onDuplicateName)', async () => {
-    const flowEditorValue = buildFlowEditorContextValue({ expandAll: true });
-    const onDuplicateName = vi.fn();
-    const { getByText, getByRole } = renderNodeCard({ toolNames: ['github'], onDuplicateName }, flowEditorValue);
-    await waitFor(() => expect(getByText('Node1')).toBeInTheDocument());
-
-    fireEvent.doubleClick(getByText('Node1'));
-    // `{ hidden: true }` -- React Flow keeps every node `visibility: hidden`
-    // in jsdom until its own `ResizeObserver` measurement fires (see
-    // `bodyDisplay`'s own doc comment above), which the default role-query
-    // accessibility filter otherwise treats as unqueryable.
-    const input = getByRole('textbox', { hidden: true });
-    fireEvent.change(input, { target: { value: 'github' } });
-    fireEvent.blur(input);
-
-    expect(onDuplicateName).toHaveBeenCalledWith(
-      'The name conflicts with an existing toolkit name "github", please input a new name!',
+  it('renders handles slot on the canvas card and exposes data-performing', () => {
+    const flowEditorValue = buildFlowEditorContextValue({
+      yamlJsonObject: { nodes: [{ id: 'Node1', type: 'llm' }] },
+    });
+    const { getByTestId } = renderNodeCard(
+      {
+        isPerforming: true,
+        handles: () => <div data-testid="custom-handle-slot" />,
+      },
+      flowEditorValue,
     );
+
+    expect(getByTestId('custom-handle-slot')).toBeInTheDocument();
+    expect(getByTestId('pipeline-node-v2-card-node1')).toHaveAttribute('data-performing', 'true');
   });
 
-  // Regression coverage for confirmed adversarial-review finding #2
-  // (`NodeCard.tsx:50`): no node component anywhere in the pipelines
-  // feature actually supplies `onDuplicateName`, which used to make a
-  // detected node-id-collision revert completely silent.
-  it('shows its own fallback Snackbar/Alert with the duplicate-name message when onDuplicateName is not supplied (regression: previously silent)', async () => {
+  it('renders form children inside NodeConfigPanelContext (panel mode)', () => {
     const flowEditorValue = buildFlowEditorContextValue({
-      expandAll: true,
-      yamlJsonObject: { nodes: [{ id: 'Node1' }, { id: 'OtherNode' }] },
+      yamlJsonObject: { nodes: [{ id: 'Node1', type: 'llm' }] },
     });
-    const { getByText, getByRole, findByText } = renderNodeCard({ id: 'Node1' }, flowEditorValue);
-    await waitFor(() => expect(getByText('Node1')).toBeInTheDocument());
+    const { getByTestId, queryByTestId } = renderNodeCard(
+      {},
+      flowEditorValue,
+      { isEntrypoint: false, isLegacyLayout: false },
+    );
 
-    fireEvent.doubleClick(getByText('Node1'));
-    const input = getByRole('textbox', { hidden: true });
-    fireEvent.change(input, { target: { value: 'OtherNode' } });
-    fireEvent.blur(input);
-
-    expect(await findByText('The name has been used by other nodes, please input a new name!')).toBeInTheDocument();
-    // The rename itself still reverts in the header's own displayed name.
-    expect(getByText('Node1')).toBeInTheDocument();
+    expect(getByTestId('node-card-children')).toBeInTheDocument();
+    expect(queryByTestId('pipeline-node-v2-card-node1')).not.toBeInTheDocument();
   });
 
-  it('does not render its own fallback Snackbar when the caller supplies onDuplicateName (no double-surfacing)', async () => {
+  it('wraps legacy layout children in a Basic accordion inside NodeConfigPanelContext', () => {
     const flowEditorValue = buildFlowEditorContextValue({
-      expandAll: true,
-      yamlJsonObject: { nodes: [{ id: 'Node1' }, { id: 'OtherNode' }] },
+      yamlJsonObject: { nodes: [{ id: 'Node1', type: 'tool' }] },
     });
-    const onDuplicateName = vi.fn();
-    const { getByText, getByRole, queryByText } = renderNodeCard({ id: 'Node1', onDuplicateName }, flowEditorValue);
-    await waitFor(() => expect(getByText('Node1')).toBeInTheDocument());
+    const { getByTestId } = renderNodeCard(
+      { type: 'tool' },
+      flowEditorValue,
+      { isEntrypoint: false, isLegacyLayout: true },
+    );
 
-    fireEvent.doubleClick(getByText('Node1'));
-    const input = getByRole('textbox', { hidden: true });
-    fireEvent.change(input, { target: { value: 'OtherNode' } });
-    fireEvent.blur(input);
-
-    expect(onDuplicateName).toHaveBeenCalledWith('The name has been used by other nodes, please input a new name!');
-    expect(queryByText('The name has been used by other nodes, please input a new name!')).not.toBeInTheDocument();
-  });
-
-  it('forwards a defined isConditionNode prop through to NodeCardHeader without throwing (NodeCardHeader itself never reads it -- forwarded for baseline parity only)', async () => {
-    const flowEditorValue = buildFlowEditorContextValue({ expandAll: true });
-    const { getByText } = renderNodeCard({ isConditionNode: true }, flowEditorValue);
-    await waitFor(() => expect(getByText('Node1')).toBeInTheDocument());
-  });
-
-  it('calls the FlowEditorContext handleDeleteNode (not a no-op) when Delete is clicked in the node-actions menu', async () => {
-    const handleDeleteNode = vi.fn();
-    const flowEditorValue = buildFlowEditorContextValue({ expandAll: true, handleDeleteNode });
-    const { getByText, container, findByText } = renderNodeCard({ id: 'Node1' }, flowEditorValue);
-    await waitFor(() => expect(getByText('Node1')).toBeInTheDocument());
-
-    // Selected by `aria-label` attribute directly, not `getByRole(...,
-    // {name})` -- React Flow's hidden node wrapper (see `bodyDisplay`'s own
-    // doc comment) makes RTL's accessible-name computation return an empty
-    // name for elements underneath it even with `{ hidden: true }`, and the
-    // header's OWN expand/collapse `IconButton` shares the same
-    // `color="tertiary"` class as this dropdown trigger.
-    const trigger = container.querySelector('[aria-label="Node actions"]') as HTMLElement;
-    expect(trigger).toBeTruthy();
-    fireEvent.click(trigger);
-    fireEvent.click(await findByText('Delete'));
-
-    expect(handleDeleteNode).toHaveBeenCalledWith('Node1');
-  });
-
-  it('disables the node-actions menu items when FlowEditorContext.disabled is explicitly true', async () => {
-    const flowEditorValue = buildFlowEditorContextValue({ expandAll: true, disabled: true, isRunningPipeline: true });
-    const { getByText, container, findByText } = renderNodeCard({ id: 'Node1' }, flowEditorValue);
-    await waitFor(() => expect(getByText('Node1')).toBeInTheDocument());
-
-    const trigger = container.querySelector('[aria-label="Node actions"]') as HTMLElement;
-    fireEvent.click(trigger);
-    const deleteItem = (await findByText('Delete')).closest('li');
-
-    expect(deleteItem?.className).toContain('Mui-disabled');
-  });
-
-  it('invokes the custom handles render prop with the current isExpanded value', async () => {
-    const flowEditorValue = buildFlowEditorContextValue({ expandAll: true });
-    const handles = vi.fn(() => <div data-testid="custom-handles" />);
-    const { getByTestId } = renderNodeCard({ handles }, flowEditorValue);
-    await waitFor(() => expect(getByTestId('custom-handles')).toBeInTheDocument());
-    expect(handles).toHaveBeenCalledWith(true);
-  });
-
-  it('renders without throwing when isPerforming is true', async () => {
-    const flowEditorValue = buildFlowEditorContextValue({ expandAll: true });
-    const { getByTestId } = renderNodeCard({ isPerforming: true }, flowEditorValue);
-    await waitFor(() => expect(getByTestId('node-card-children')).toBeInTheDocument());
+    expect(getByTestId('pipeline-node-panel-basic-section')).toBeInTheDocument();
+    expect(getByTestId('node-card-children')).toBeInTheDocument();
   });
 });

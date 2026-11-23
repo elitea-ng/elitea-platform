@@ -277,6 +277,21 @@ describe('FlowEditor', () => {
     expect(setYamlJsonObject).toHaveBeenCalled();
   });
 
+  it('mounts the 400px FlowNodeConfigDrawer when a configurable node is selected and closes it on close click', async () => {
+    const user = userEvent.setup();
+    const selectedNode = { id: 'Printer_1', type: 'printer', position: { x: 0, y: 0 }, data: { label: 'Printer_1' }, selected: true };
+    renderFlowEditor(
+      baseProps({
+        yamlJsonObject: { entry_point: 'Other', nodes: [{ id: 'Printer_1', type: 'printer' }] },
+        initialNodes: [selectedNode],
+      }),
+    );
+
+    expect(screen.getByTestId('pipeline-node-panel')).toHaveAttribute('data-node-id', 'Printer_1');
+    await user.click(screen.getByTestId('pipeline-node-panel-close'));
+    expect(screen.queryByTestId('pipeline-node-panel')).not.toBeInTheDocument();
+  });
+
   // NOT COVERABLE HERE: `useFlowEditorLayoutVersionSync`'s `onReLayout` callback (the
   // `layoutVersion` mismatch -> re-layout path) only fires once xyflow's own
   // `useNodesInitialized()` reports every node measured. jsdom has no real layout engine

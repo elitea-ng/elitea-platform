@@ -44,8 +44,10 @@ import { updateYamlNode } from '../../lib/flow-editor/helpers/flowEditor.helpers
 import type { YamlPipelineNode } from '../../lib/flow-editor/helpers/pipelineFlow.types';
 import { useNodeAiAssistantConfig } from '../../lib/flow-editor/hooks/useNodeAiAssistantConfig';
 import { usePrinterInputMapping } from '../../lib/flow-editor/hooks/usePrinterInputMapping';
+import { NodeConfigSection } from '../node-config-drawer/NodeConfigSection';
 import { NodeCard } from './BaseNode/NodeCard';
 import { CustomHandle } from './CustomHandle';
+import { NodeSettings } from '../settings/NodeSettings';
 import { SimpleLLMInputs } from '../settings/SimpleLLMInputs';
 import { t } from '@/shared/i18n';
 
@@ -150,25 +152,34 @@ export const PrinterNode = memo(function PrinterNode({ id, data, selected, llmSe
         />
       )}
     >
-      <SimpleLLMInputs
-        inputMappings={inputMappings}
-        values={yamlNode?.input_mapping ?? {}}
-        onChangeMapping={onChangeMapping as never}
-        defaultValues={defaultValues}
-        disabled={isRunningPipeline || disabled}
-        enableAIAssistant
-        modelConfig={pipelineLLMConfig as never}
-      />
-      <AIAssistantInput
-        disabled={Boolean(isRunningPipeline || disabled)}
-        label={finalMessageLabel}
-        placeholder={t('pipelines.flowEditor.printerNode.finalMessagePlaceholder', 'The message shown when the flow reaches this node')}
-        fieldName={finalMessageLabel}
-        value={finalMessageValue ?? ''}
-        fieldBinding={{ name: 'final_message', onInput: handleFinalMessageChange }}
-        language="text"
-        modelConfig={pipelineLLMConfig as never}
-      />
+      <NodeConfigSection section="basic">
+        <SimpleLLMInputs
+          inputMappings={inputMappings}
+          values={yamlNode?.input_mapping ?? {}}
+          onChangeMapping={onChangeMapping as never}
+          defaultValues={defaultValues}
+          disabled={isRunningPipeline || disabled}
+          enableAIAssistant
+          modelConfig={pipelineLLMConfig as never}
+        />
+        <AIAssistantInput
+          disabled={Boolean(isRunningPipeline || disabled)}
+          label={finalMessageLabel}
+          placeholder={t('pipelines.flowEditor.printerNode.finalMessagePlaceholder', 'The message shown when the flow reaches this node')}
+          fieldName={finalMessageLabel}
+          value={finalMessageValue ?? ''}
+          fieldBinding={{ name: 'final_message', onInput: handleFinalMessageChange }}
+          language="text"
+          modelConfig={pipelineLLMConfig as never}
+        />
+      </NodeConfigSection>
+      <NodeConfigSection section="advanced" defaultExpanded={false}>
+        <NodeSettings
+          id={id}
+          type={PipelineNodeTypes.Printer}
+          disabled={Boolean(isRunningPipeline || disabled)}
+        />
+      </NodeConfigSection>
     </NodeCard>
   );
 });

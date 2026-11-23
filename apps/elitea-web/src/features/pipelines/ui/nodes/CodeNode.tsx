@@ -25,9 +25,11 @@ import { useEdges } from '@xyflow/react';
 
 import { FlowEditorContext } from '../../lib/flow-editor/flowEditorContext';
 import { PipelineNodeTypes } from '../../lib/flow-editor/constants/flowEditor.constants';
+import { NODE_FIELD_KEYS } from '../../lib/flow-editor/constants/nodeFieldInfo.constants';
 import type { YamlPipelineNode } from '../../lib/flow-editor/helpers/pipelineFlow.types';
 import { useCodeInputMapping } from '../../lib/flow-editor/hooks/useCodeInputMapping';
 import { useNodeAiAssistantConfig } from '../../lib/flow-editor/hooks/useNodeAiAssistantConfig';
+import { NodeConfigSection, NodeFieldHeading } from '../node-config-drawer/NodeConfigSection';
 import { NodeCard } from './BaseNode/NodeCard';
 import { CustomHandle } from './CustomHandle';
 import { NodeErrorOutputHandle } from './NodeErrorOutputHandle';
@@ -141,40 +143,54 @@ export const CodeNode = memo(function CodeNode({ id, data, selected, llmSettings
         />
       )}
     >
-      <SimpleLLMInputs
-        enableAIAssistant
-        inputMappings={inputMappings}
-        values={codeValues}
-        onChangeMapping={onChangeMapping as never}
-        defaultValues={defaultValues}
-        disabled={isRunningPipeline || disabled}
-        modelConfig={pipelineLLMConfig as never}
-        codeLanguage={typeof yamlNode?.language === 'string' ? yamlNode.language : undefined}
-      />
-      <CodeLanguageSelect id={id} disabled={Boolean(isRunningPipeline || disabled)} />
-      <CodeDebugSettings id={id} disabled={Boolean(isRunningPipeline || disabled)} />
-      <InputSelect
-        id={id}
-        label={t('pipelines.flowEditor.codeNode.inputLabel', 'Input')}
-        disabled={Boolean(isRunningPipeline || disabled)}
-        inputFieldName="input"
-      />
-      <OutputSelect
-        id={id}
-        label={t('pipelines.flowEditor.codeNode.outputLabel', 'Output')}
-        outputFieldName="output"
-        disabled={Boolean(isRunningPipeline || disabled)}
-      />
-      <CommonInterruptSettings
-        id={id}
-        type={PipelineNodeTypes.Code}
-        disabled={Boolean(isRunningPipeline || disabled)}
-      />
-      <NodeSettings
-        id={id}
-        type={PipelineNodeTypes.Code}
-        disabled={Boolean(isRunningPipeline || disabled)}
-      />
+      <NodeConfigSection section="basic">
+        <SimpleLLMInputs
+          enableAIAssistant
+          inputMappings={inputMappings}
+          values={codeValues}
+          onChangeMapping={onChangeMapping as never}
+          defaultValues={defaultValues}
+          disabled={isRunningPipeline || disabled}
+          modelConfig={pipelineLLMConfig as never}
+          codeLanguage={typeof yamlNode?.language === 'string' ? yamlNode.language : undefined}
+        />
+        <CodeLanguageSelect id={id} disabled={Boolean(isRunningPipeline || disabled)} />
+        <CodeDebugSettings id={id} disabled={Boolean(isRunningPipeline || disabled)} />
+      </NodeConfigSection>
+      <NodeConfigSection section="advanced" defaultExpanded={false}>
+        <NodeFieldHeading
+          label={t('pipelines.flowEditor.codeNode.inputLabel', 'Input')}
+          nodeType={PipelineNodeTypes.Code}
+          fieldKey={NODE_FIELD_KEYS.input}
+        />
+        <InputSelect
+          id={id}
+          label={t('pipelines.flowEditor.codeNode.inputLabel', 'Input')}
+          disabled={Boolean(isRunningPipeline || disabled)}
+          inputFieldName="input"
+        />
+        <NodeFieldHeading
+          label={t('pipelines.flowEditor.codeNode.outputLabel', 'Output')}
+          nodeType={PipelineNodeTypes.Code}
+          fieldKey={NODE_FIELD_KEYS.output}
+        />
+        <OutputSelect
+          id={id}
+          label={t('pipelines.flowEditor.codeNode.outputLabel', 'Output')}
+          outputFieldName="output"
+          disabled={Boolean(isRunningPipeline || disabled)}
+        />
+        <CommonInterruptSettings
+          id={id}
+          type={PipelineNodeTypes.Code}
+          disabled={Boolean(isRunningPipeline || disabled)}
+        />
+        <NodeSettings
+          id={id}
+          type={PipelineNodeTypes.Code}
+          disabled={Boolean(isRunningPipeline || disabled)}
+        />
+      </NodeConfigSection>
     </NodeCard>
   );
 });
