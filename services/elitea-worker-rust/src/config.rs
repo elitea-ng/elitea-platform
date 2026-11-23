@@ -819,7 +819,7 @@ impl RuntimeLimits {
 pub const GOVERNED_CONTEXT_ENVIRONMENT: &str = "ELITEA_WORKER_GOVERNED_CONTEXT";
 
 /// The environment variable that permits private database egress targets for
-/// the `sql` toolkit (5e-1), in the egresslib CSV grammar (CIDR, IP[:port],
+/// the `sql` toolkit (5e-1), in the egresslib CSV grammar (CIDR, `IP[:port]`,
 /// `localhost[:port]`). Unset or blank admits public databases only; any
 /// malformed entry refuses worker startup (fail-closed).
 pub const DB_EGRESS_ALLOWLIST_ENVIRONMENT: &str = "ELITEA_DB_EGRESS_ALLOWLIST";

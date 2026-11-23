@@ -871,6 +871,44 @@ environment variables with no constructor to bypass them.
 `MySqlConnectOptions::connect_addr`. Any workspace that enables `toolkit-sql`
 without the `[patch.crates-io]` entries fails to compile.
 
+**Re-vendoring on a `sqlx` update / security fix.**
+
+1. Download the new `sqlx-postgres-<ver>.crate` and `sqlx-mysql-<ver>.crate`
+   archives from `https://static.crates.io/crates/` and record their SHA-256
+   digests and `.cargo_vcs_info.json` commit in the table above.
+2. Replace `libs/rust/vendor/sqlx-postgres/` and `libs/rust/vendor/sqlx-mysql/`
+   with the extracted archives and remove each archive's `Cargo.lock` (and
+   `.cargo-ok` if present).
+3. Re-apply the 4 small patched source files (keep every other file identical
+   to the archive):
+   - `sqlx-postgres/src/options/mod.rs`: `connect_addr: Option<IpAddr>`,
+     `connect_addr()` / `get_connect_addr()`, `PgConnectOptions::new_without_env()`,
+     and `has_ssl_{root_cert,client_cert,client_key}()`.
+   - `sqlx-postgres/src/connection/stream.rs`: dial `&addr.to_string()` when
+     `options.connect_addr` is `Some` (skipping UDS and DNS lookup) while
+     `MaybeUpgradeTls` verifies `&options.host`.
+   - `sqlx-mysql/src/options/mod.rs`: `connect_addr: Option<IpAddr>`,
+     `connect_addr()` / `get_connect_addr()`.
+   - `sqlx-mysql/src/connection/establish.rs`: dial `&addr.to_string()` when
+     `options.connect_addr` is `Some` while `tls::maybe_upgrade` verifies
+     `&options.host`.
+4. Bump the `sqlx` / `sqlx-postgres` / `sqlx-mysql` version pins consistently
+   across `libs/rust/Cargo.toml`, `libs/rust/agent-runtime/Cargo.toml`, and
+   `services/elitea-worker-rust/Cargo.toml`, and refresh `libs/rust/Cargo.lock`
+   and `services/elitea-worker-rust/Cargo.lock` (keep `Cargo.toml` and
+   `Cargo.lock` locked to the matching version so `[patch.crates-io]` stays
+   active).
+5. Verify before merging:
+   - `cargo test --locked -p elitea-agent-runtime --features toolkit-sql sql_tests`
+   - `cargo clippy --locked -p elitea-agent-runtime --features toolkit-sql --all-targets -- -D warnings`
+   - `cargo deny --manifest-path libs/rust/Cargo.toml --all-features check advisories`
+   - `cargo deny --manifest-path services/elitea-worker-rust/Cargo.toml --all-features check advisories`
+   - `node scripts/ci/check-vendor-manifest-notes.mjs origin/main HEAD` and
+     `bash scripts/ci/check-dependabot-coverage.sh`.
+6. Drop the vendored copies and `.github/dependabot.yml` ignore entries once
+   upstream `sqlx` provides separated `connect_addr` dialing and environment-free
+   PostgreSQL options.
+
 ## A vendored manifest needs its note
 
 A pull request that changes `<crate>/Cargo.toml` or `<crate>/Cargo.toml.orig`

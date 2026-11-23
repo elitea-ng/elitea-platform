@@ -55,12 +55,12 @@ Changed on purpose:
 | --- | --- |
 | Vendored `sqlx-postgres 0.9.0` (`new_without_env`, `connect_addr`, `has_ssl_*`) | `libs/rust/vendor/sqlx-postgres/src/options/mod.rs:21,83,108-126,181-185,617-635`, `src/connection/stream.rs:45-54` |
 | Vendored `sqlx-mysql 0.9.0` (`connect_addr`) | `libs/rust/vendor/sqlx-mysql/src/options/mod.rs:67,99,139-143,540-543`, `src/connection/establish.rs:18-27` |
-| Workspace patches, vendor notes, dependabot coverage | `libs/rust/Cargo.toml:67-72`, `libs/rust/Cargo.lock`, `services/elitea-worker-rust/Cargo.toml:227-230`, `services/elitea-worker-rust/Cargo.lock`, `libs/rust/vendor/README.md`, `scripts/ci/check-dependabot-coverage.sh` |
+| Workspace patches, vendor notes, dependabot coverage | `libs/rust/Cargo.toml:67-72`, `libs/rust/Cargo.lock`, `services/elitea-worker-rust/Cargo.toml:227-230`, `services/elitea-worker-rust/Cargo.lock`, `libs/rust/vendor/README.md`, `.github/dependabot.yml:212-226`, `scripts/ci/check-dependabot-coverage.sh` |
 | SQL egress-guarded dial, `EgressRefused`, `RunEgress` recording, `new_without_env`, TLS `.source()` walk | `libs/rust/agent-runtime/src/toolkits/families/sql/client.rs:260-388,750-761`, `mod.rs:1-14`, `tools.rs:86-105` |
 | Policy & egress ledger/re-exports | `libs/rust/agent-runtime/src/toolkits/policy.rs:111,356-371`, `src/toolkits/mod.rs:230-234`, `src/egress.rs:39-42,305-332` |
 | SQL guarded-dial TLS, DNS rebinding, child-process `PG*` env, ledger, and negative egress tests | `libs/rust/agent-runtime/src/toolkits/sql_tests.rs`, `libs/rust/agent-runtime/Cargo.toml:159-160` |
-| Worker `ELITEA_DB_EGRESS_ALLOWLIST` fail-closed startup & permit propagation | `services/elitea-worker-rust/src/config.rs:170-176,825-907,1336-1415`, `src/execution/production.rs:133,400-405,454`, `src/agents/sensitive_tools.rs:65`, `src/toolkits/direct_runtime.rs:114-156,323-355`, `src/bootstrap.rs:828` |
-| Helm, compose, render test, and upgrade note | `deploy/helm/elitea/values.yaml:7121-7128`, `deploy/helm/elitea/templates/worker/deployment.yaml:234-238`, `deploy/helm/tests/render-worker.sh:149-162`, `deploy/docker-compose.standalone-rust-agent.yml:67-70`, `docs/upgrading/2026-11-23-078-sql-toolkit-egress-guard.md` |
+| Worker `ELITEA_DB_EGRESS_ALLOWLIST` fail-closed startup & permit propagation | `services/elitea-worker-rust/src/config.rs:170-176,821-907,1336-1415`, `src/execution/production.rs:133,400-405,454`, `src/agents/sensitive_tools.rs:65`, `src/toolkits/direct_runtime.rs:114-156,323-355`, `src/bootstrap.rs:828` |
+| Helm, compose, native stack table, render test, and upgrade note | `deploy/helm/elitea/values.yaml:7121-7128`, `deploy/helm/elitea/templates/worker/deployment.yaml:234-238`, `deploy/helm/tests/render-worker.sh:149-162`, `deploy/docker-compose.standalone-rust-agent.yml:67-70`, `deploy/native/standalone-full.mjs:773-780`, `docs/upgrading/2026-11-23-078-sql-toolkit-egress-guard.md` |
 
 ## Tests
 
@@ -72,9 +72,9 @@ Changed on purpose:
 | `go -C libs/go/egresslib test -v ./addrcheck/...` | **8 passed, 0 failed, 0 skipped** | Shared `classify_vectors.json` parity confirmed on Go side |
 | `services/elitea-worker-rust` targeted tests (`config::tests::`, `sensitive_tools::tests::`, `execution::production::tests::`) | **55 passed, 0 failed, 0 skipped** | 34 config (incl. fail-closed allowlist tests for malformed/`*`/`*:5432`/`NotUnicode`/`NotPresent`, `SEC-5E0-03`) + 14 sensitive_tools (incl. guardrails permit preservation) + 7 production |
 | `deploy/helm/tests/render-worker.sh` (offline temp chart copy without external subchart `dependencies:`) | **14 passed, 0 failed** | Proves escaped `--set-string 'worker.dbEgressAllowlist=10.0.0.0/8\,192.168.1.5:5432'` renders `ELITEA_DB_EGRESS_ALLOWLIST=10.0.0.0/8,192.168.1.5:5432` (`SEC-5E0-01`); full chart run with downloaded subcharts executes in CI `helm-lint` |
-| `cargo clippy --offline --locked` (`elitea-egress-guard`, `elitea-agent-runtime` with and without `toolkit-sql`, `elitea-worker-rust` default) | **PASS (0 warnings, `-D warnings`)** | `cargo fmt --all -- --check` PASS on both workspaces |
+| `cargo clippy --offline --locked` & `RUSTDOCFLAGS="-D warnings" cargo doc --offline --locked --no-deps` (`elitea-egress-guard`, `elitea-agent-runtime` with and without `toolkit-sql`, `elitea-worker-rust` default and `--features sandbox-supervisor`) | **PASS (0 warnings, `-D warnings`)** | `cargo fmt --all -- --check` PASS on both workspaces |
 | `cargo deny --offline --all-features check advisories` (`libs/rust`, `services/elitea-worker-rust`) | **advisories ok** | Zero new advisories |
-| CI scripts (`check-upgrading-notes.mjs`, `check-worker-feature-sets.mjs`, `check-rust-toolchain.mjs`, `check-vendor-manifest-notes.mjs`, `check-dependabot-coverage.sh`, `helm lint deploy/helm/elitea`) | **PASS** | All green on committed `HEAD` |
+| CI scripts (`check-native-stack-parity.test.mjs` 16/16, `check-upgrading-notes.mjs`, `check-worker-feature-sets.mjs`, `check-rust-toolchain.mjs`, `check-vendor-manifest-notes.mjs`, `check-dependabot-coverage.sh`, `helm lint deploy/helm/elitea`) | **PASS** | All green on committed `HEAD` |
 | Live PostgreSQL 18 / MySQL 8 TLS container spike | **Skipped (deferred)** | Docker builds/stacks paused on host for EKG headroom. Covered in-process by real `tokio-rustls` PG/MySQL wire TLS handshakes |
 
 ## Performance
