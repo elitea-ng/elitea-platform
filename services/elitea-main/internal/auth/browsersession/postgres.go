@@ -30,12 +30,13 @@ func (s *PostgresStore) Insert(ctx context.Context, session Session) error {
 		INSERT INTO elitea_auth.browser_sessions (
 			id, user_id, email, provider, provider_session_index,
 			created_at, last_seen_at, expires_at, idle_timeout_seconds,
-			authenticated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+			authenticated_at, authentication_proven
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 		session.ID, session.UserID, session.Email, session.Provider,
 		session.ProviderSessionIndex, session.CreatedAt, session.LastSeenAt,
 		session.ExpiresAt, int32(session.IdleTimeout/time.Second),
 		authenticatedAtParameter(session.AuthenticatedAt),
+		session.AuthenticationProven && !session.AuthenticatedAt.IsZero(),
 	)
 	if err != nil {
 		return fmt.Errorf("browsersession: insert session: %w", err)
@@ -62,7 +63,7 @@ func (s *PostgresStore) Get(ctx context.Context, id string) (Session, error) {
 		SELECT id, user_id, email, provider, provider_session_index,
 		       created_at, last_seen_at, expires_at, idle_timeout_seconds, revoked_at,
 		       ref, ended_at, COALESCE(end_reason, ''),
-		       authenticated_at
+		       authenticated_at, authentication_proven
 		FROM elitea_auth.browser_sessions
 		WHERE id = $1`, id,
 	).Scan(
@@ -70,7 +71,7 @@ func (s *PostgresStore) Get(ctx context.Context, id string) (Session, error) {
 		&session.ProviderSessionIndex, &session.CreatedAt, &session.LastSeenAt,
 		&session.ExpiresAt, &idle, &session.RevokedAt,
 		&session.Ref, &session.EndedAt, &session.EndReason,
-		&authenticatedAt,
+		&authenticatedAt, &session.AuthenticationProven,
 	)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
@@ -89,6 +90,8 @@ func (s *PostgresStore) Get(ctx context.Context, id string) (Session, error) {
 	// existed before shared 0262 were backfilled from created_at.
 	if authenticatedAt != nil {
 		session.AuthenticatedAt = authenticatedAt.UTC()
+	} else {
+		session.AuthenticationProven = false
 	}
 	return session, nil
 }

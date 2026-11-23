@@ -216,7 +216,7 @@ func (h *OIDCHandler) Login(w http.ResponseWriter, r *http.Request) {
 	// The limit is bound to the SIGNED state, never read again from the
 	// callback's query: a caller who could drop it there would get an
 	// unlimited sign-in for a login the console asked to be limited.
-	stateValue := encodeOIDCStateHead(stateNonce, limit, limited) + "|" + targetTo
+	stateValue := encodeLoginHead(stateNonce, limit, limited) + "|" + targetTo
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     oidcStateCookie,
@@ -342,7 +342,7 @@ func (h *OIDCHandler) consumeState(cookieValue, queryState string) (oidcLoginSta
 		head = state[:separator]
 		login.targetTo = safeRedirectTarget(state[separator+1:])
 	}
-	login.limit, login.limited = decodeOIDCStateHead(head)
+	login.limit, login.limited = decodeLoginHead(head)
 	return login, true
 }
 
@@ -596,6 +596,9 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		// No auth_time: the provider did not say when the person last
 		// authenticated, and the sign-in time is not proof of it.
 		AuthenticationTimeUnknown: authenticatedAt.IsZero(),
+		// auth_time is the provider's statement of the authentication, so
+		// a stated one is proof (shared 0263).
+		AuthenticationProven: !authenticatedAt.IsZero(),
 	}, r) {
 		return
 	}

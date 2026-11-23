@@ -1206,7 +1206,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// behind a browser session last authenticated
 	// (browser_sessions.authenticated_at; issue 2577, ADR-0059 R1.10a). No
 	// permission.
-	require.EqualValues(t, 262, Head(shared))
+	//
+	// 263: shared/0263_recent_authentication_saml_and_form.sql,
+	// browser_sessions.authentication_proven and form_sessions.authenticated_at
+	// (issue 2594, ADR-0059 R1.10b). No permission.
+	require.EqualValues(t, 263, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

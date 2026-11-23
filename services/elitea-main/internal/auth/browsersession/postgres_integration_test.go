@@ -321,6 +321,24 @@ func TestPostgresARefreshDoesNotMoveTheAuthenticationTime(t *testing.T) {
 	if !unknownSession.AuthenticatedAt.IsZero() {
 		t.Fatalf("authenticated_at of an unknown time = %s, want zero", unknownSession.AuthenticatedAt)
 	}
+
+	// authentication_proven (shared 0263) round-trips: a proven time reads
+	// back proven, and the plain SAML sign-in above (no ForceAuthn) and an
+	// unknown time read back unproven.
+	proven, err := manager.Create(ctx, NewSession{
+		UserID: 42, Provider: ProviderSAML, AuthenticatedAt: dial.Now().Add(-time.Minute), AuthenticationProven: true,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	provenSession, err := manager.Validate(ctx, proven)
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if !provenSession.AuthenticationProven || plainSession.AuthenticationProven || unknownSession.AuthenticationProven {
+		t.Fatalf("authentication_proven: proven %v, plain %v, unknown %v; want true, false, false",
+			provenSession.AuthenticationProven, plainSession.AuthenticationProven, unknownSession.AuthenticationProven)
+	}
 }
 
 // TestPostgresARowFromBeforeTheMigrationReadsCreatedAt. A row that existed

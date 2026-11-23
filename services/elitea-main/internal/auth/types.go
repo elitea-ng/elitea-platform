@@ -106,6 +106,13 @@ type User struct {
 	// (browsersession.ProviderOIDC, ProviderSAML, ProviderForm), "" for every
 	// other credential. Set and serialised like BrowserSessionAuthenticatedAt.
 	BrowserSessionProvider string `json:"-"`
+	// BrowserSessionAuthenticationProven is TRUE when
+	// BrowserSessionAuthenticatedAt is proof of an authentication, not the
+	// moment of a sign-in that may have been silent (shared 0263, ADR-0059
+	// R1.10b): an OIDC auth_time, a SAML AuthnInstant under ForceAuthn, or a
+	// Form password entry. Set and serialised like
+	// BrowserSessionAuthenticatedAt.
+	BrowserSessionAuthenticationProven bool `json:"-"`
 }
 
 // BoundProjectRefused reports a binding whose project is no longer usable.

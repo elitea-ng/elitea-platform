@@ -429,3 +429,161 @@ func formConfigurationJSON(login string, password string, attributes any) []byte
 	}
 	return encoded
 }
+
+/* ── the password re-entry (ADR-0059 R1.10b) ────────────────────────────── */
+
+// reauthenticationFixture signs "admin" in through the real Form verifier and
+// answers the service, its store and clock, and the authenticated session.
+func reauthenticationFixture(t *testing.T) (*Service, *memorySessionStore, *testClock, *FormProvider, string) {
+	t.Helper()
+	service, sessions, _, _, _, clock := newTestService(t)
+	provider, err := newFormProvider([]byte(`{"users":[
+		{"login":"admin","password":"admin-secret","email":"admin@example.test"},
+		{"login":"other","password":"other-secret","email":"other@example.test"}
+	]}`), clock.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	begin := beginFlow(t, service, FormProviderName, browserflow.ProtocolCorrelation{})
+	completed, err := service.Complete(context.Background(), CompleteRequest{
+		SessionID: begin.SessionID, TransactionID: begin.TransactionID, Provider: FormProviderName,
+	}, provider.NewVerifier("admin", "admin-secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return service, sessions, clock, provider, completed.SessionID
+}
+
+func TestAFormSignInRecordsThePasswordEntryAsItsAuthenticationTime(t *testing.T) {
+	service, _, clock, _, sessionID := reauthenticationFixture(t)
+	signedInAt := clock.Now()
+
+	authorization, err := service.Authorize(context.Background(), sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !authorization.AuthenticatedAt.Equal(signedInAt) {
+		t.Fatalf("authenticated at = %s, want the sign-in %s", authorization.AuthenticatedAt, signedInAt)
+	}
+}
+
+// The re-entry moves the time, and only the time: the session is rotated, and
+// its user, provider attributes and authentication expiry are its own.
+func TestAPasswordReEntryMovesTheAuthenticationTimeAndRotatesTheSession(t *testing.T) {
+	service, sessions, clock, provider, sessionID := reauthenticationFixture(t)
+	before, err := sessions.Read(context.Background(), sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock.Set(clock.Now().Add(40 * time.Minute))
+
+	subject, err := service.ReauthenticationSubject(context.Background(), sessionID)
+	if err != nil || subject.Login != "admin" {
+		t.Fatalf("subject = %+v, %v; want the session's login", subject, err)
+	}
+	result, err := service.Reauthenticate(context.Background(), sessionID, subject.Login,
+		provider.NewVerifier("admin", "admin-secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SessionID == sessionID {
+		t.Fatal("a re-entry kept the session identifier")
+	}
+	if _, err := service.Authorize(context.Background(), sessionID); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("the pre-rotation identifier still authorizes: %v", err)
+	}
+	authorization, err := service.Authorize(context.Background(), result.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !authorization.AuthenticatedAt.Equal(clock.Now()) {
+		t.Fatalf("authenticated at = %s, want the re-entry %s", authorization.AuthenticatedAt, clock.Now())
+	}
+	after, err := sessions.Read(context.Background(), result.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *after.UserID != *before.UserID || !bytes.Equal(after.ProviderAttributes, before.ProviderAttributes) ||
+		!after.Expiration.Equal(*before.Expiration) {
+		t.Fatalf("a re-entry changed the session: before %+v after %+v", before, after)
+	}
+}
+
+// A wrong password, and the RIGHT password of ANOTHER Form login, leave the
+// session exactly as it was: same identifier, same authentication time.
+func TestAFailedPasswordReEntryLeavesTheSessionUntouched(t *testing.T) {
+	for name, submission := range map[string]FormSubmission{
+		"a wrong password":                  {Login: "admin", Password: "wrong"},
+		"another login's password":          {Login: "other", Password: "other-secret"},
+		"the session's login, other secret": {Login: "admin", Password: "other-secret"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			service, sessions, clock, provider, sessionID := reauthenticationFixture(t)
+			signedInAt := clock.Now()
+			clock.Set(signedInAt.Add(40 * time.Minute))
+
+			_, err := service.Reauthenticate(context.Background(), sessionID, "admin",
+				provider.NewVerifier(submission.Login, submission.Password))
+			if !errors.Is(err, ErrUnauthenticated) {
+				t.Fatalf("error = %v, want %v", err, ErrUnauthenticated)
+			}
+			if sessions.rotateCalls != 1 {
+				t.Fatalf("rotations = %d, want only the sign-in's", sessions.rotateCalls)
+			}
+			authorization, err := service.Authorize(context.Background(), sessionID)
+			if err != nil {
+				t.Fatalf("the session no longer authorizes after a failed re-entry: %v", err)
+			}
+			if !authorization.AuthenticatedAt.Equal(signedInAt) {
+				t.Fatalf("authenticated at = %s, want the unmoved %s", authorization.AuthenticatedAt, signedInAt)
+			}
+		})
+	}
+}
+
+// A prompt rendered for one login cannot re-authenticate a session of another.
+func TestAPasswordReEntryForAnotherLoginIsRefused(t *testing.T) {
+	service, _, _, provider, sessionID := reauthenticationFixture(t)
+	_, err := service.Reauthenticate(context.Background(), sessionID, "other",
+		provider.NewVerifier("other", "other-secret"))
+	if !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("error = %v, want %v", err, ErrUnauthenticated)
+	}
+}
+
+// A session with no password behind it (another provider of this graph, an
+// unauthenticated pre-login session, none) has nothing to re-enter.
+func TestOnlyAnAuthenticatedFormSessionHasAReauthenticationSubject(t *testing.T) {
+	service, sessions, _, _, _ := reauthenticationFixture(t)
+	sessions.replace("oidc-session", authenticatedSession("oidc", 42, nil))
+	sessions.replace("pre-login", incompleteSession(FormProviderName))
+	for name, id := range map[string]string{
+		"another provider's session": "oidc-session",
+		"a pre-login session":        "pre-login",
+		"no session":                 "absent-session",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := service.ReauthenticationSubject(context.Background(), id); !errors.Is(err, ErrUnauthenticated) {
+				t.Fatalf("error = %v, want %v", err, ErrUnauthenticated)
+			}
+		})
+	}
+}
+
+// A session signed in before shared 0263 has no known time until re-entry.
+func TestAFormSessionWithNoRecordedTimeHasAnUnknownAuthenticationTime(t *testing.T) {
+	service, sessions, _, _, sessionID := reauthenticationFixture(t)
+	state, err := sessions.Read(context.Background(), sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.AuthenticatedAt = nil
+	sessions.replace(sessionID, state)
+	authorization, err := service.Authorize(context.Background(), sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !authorization.AuthenticatedAt.IsZero() {
+		t.Fatalf("authenticated at = %s, want unknown", authorization.AuthenticatedAt)
+	}
+}

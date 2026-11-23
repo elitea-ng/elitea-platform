@@ -95,10 +95,16 @@ type Session struct {
 	// during the upgrade) and never satisfies a recent-authentication check.
 	// Rows that existed before 0262 were backfilled from created_at.
 	AuthenticatedAt time.Time
-	LastSeenAt      time.Time
-	ExpiresAt       time.Time
-	IdleTimeout     time.Duration
-	RevokedAt       *time.Time
+	// AuthenticationProven is TRUE when AuthenticatedAt is proof of an
+	// authentication (shared 0263, ADR-0059 R1.10b): an OIDC auth_time, or a
+	// SAML AuthnInstant under ForceAuthn. A SAML sign-in without ForceAuthn,
+	// every row written before 0263, and a row a previous-release replica
+	// writes are unproven, and the recent-authentication check refuses them.
+	AuthenticationProven bool
+	LastSeenAt           time.Time
+	ExpiresAt            time.Time
+	IdleTimeout          time.Duration
+	RevokedAt            *time.Time
 	// Ref is the session's NON-SECRET reference (shared 0200): what audit
 	// events and the runs a session started name it by. ID is the cookie
 	// value and never leaves this package's store.

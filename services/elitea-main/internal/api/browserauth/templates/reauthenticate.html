@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    {{template "head" .}}
+    <title>{{.Brand.ProductName}}: confirm your password</title>
+  </head>
+  <body class="auth-login-page" data-auth-form="form-reauthenticate">
+    <div class="auth-shell">
+      {{template "brand" .Brand}}
+      <main class="card card-signin" aria-labelledby="reauthenticate-title">
+        <div class="form-signin">
+          <h1 id="reauthenticate-title">Confirm your password</h1>
+          <p class="lede">This action needs a recent sign-in. Enter the password for {{.Login}} to continue.</p>
+          <form class="password-form" action="/auth/form/reauthenticate" method="post">
+            <input type="hidden" name="login" value="{{.Login}}" autocomplete="username">
+            <div class="field">
+              <label class="field-label" for="password">Password</label>
+              <input class="form-control" type="password" id="password" name="password" autocomplete="current-password" required autofocus>
+            </div>
+            <input type="hidden" name="target" value="{{.Target}}">
+            <input type="hidden" name="token" value="{{.Token}}">
+            <button class="sign-in-button" type="submit">Continue</button>
+            {{if .Error}}<p class="login-error" role="alert">{{template "error-icon"}}<span>Invalid password</span></p>{{end}}
+          </form>
+        </div>
+      </main>
+    </div>
+    {{template "theme-toggle"}}
+  </body>
+</html>

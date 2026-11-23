@@ -96,11 +96,15 @@ func newPostgresStore(pool *pgxpool.Pool, config Config, generate idGenerator) (
 // insertSQL creates a row under a fresh ID. An existing LIVE row is never
 // overwritten; an expired row under the same ID is absent to every read, so
 // it is replaced, exactly as an expired Redis key no longer blocked SET NX.
+//
+// authenticated_at (shared 0263) travels beside the record; see
+// sessionstate.State.AuthenticatedAt.
 const insertSQL = `
-INSERT INTO elitea_auth.form_sessions AS current (id_hash, record, expires_at)
-VALUES ($1, $2, now() + make_interval(secs => $3::double precision / 1000))
+INSERT INTO elitea_auth.form_sessions AS current (id_hash, record, expires_at, authenticated_at)
+VALUES ($1, $2, now() + make_interval(secs => $3::double precision / 1000), $4)
 ON CONFLICT (id_hash) DO UPDATE
-    SET record = EXCLUDED.record, expires_at = EXCLUDED.expires_at
+    SET record = EXCLUDED.record, expires_at = EXCLUDED.expires_at,
+        authenticated_at = EXCLUDED.authenticated_at
     WHERE current.expires_at <= now()`
 
 // Create stores state under a fresh opaque ID. Existing live rows are never
@@ -121,7 +125,8 @@ func (s *PostgresStore) Create(ctx context.Context, state sessionstate.State) (s
 		if !validSessionID(id) {
 			return "", ErrInvalidID
 		}
-		tag, err := s.pool.Exec(opCtx, insertSQL, IDHash(id), record, ttl.Milliseconds())
+		tag, err := s.pool.Exec(opCtx, insertSQL, IDHash(id), record, ttl.Milliseconds(),
+			authenticatedAtParameter(state.AuthenticatedAt))
 		if err != nil {
 			return "", storeError(ctx, "create", err)
 		}
@@ -151,6 +156,14 @@ func (s *PostgresStore) Create(ctx context.Context, state sessionstate.State) (s
 func (s *PostgresStore) Read(ctx context.Context, id string) (sessionstate.State, error) {
 	state, _, err := s.readRecord(ctx, id)
 	return state, err
+}
+
+// authenticatedAtParameter writes NULL for an unknown authentication time.
+func authenticatedAtParameter(at *time.Time) any {
+	if at == nil || at.IsZero() {
+		return nil
+	}
+	return at.UTC()
 }
 
 // Delete invalidates id. It is idempotent so repeated logout requests succeed.
@@ -205,11 +218,11 @@ func (s *PostgresStore) ConsumeForLogout(ctx context.Context, id string) (sessio
 // Rotate atomically moves the existing record and its remaining lifetime to a
 // fresh ID. The old ID is invalid after success.
 func (s *PostgresStore) Rotate(ctx context.Context, id string) (string, error) {
-	_, record, err := s.readRecord(ctx, id)
+	state, record, err := s.readRecord(ctx, id)
 	if err != nil {
 		return "", err
 	}
-	return s.rotateRecord(ctx, id, record, record, 0)
+	return s.rotateRecord(ctx, id, record, record, 0, state.AuthenticatedAt)
 }
 
 // RotateAndReplace atomically invalidates id and installs replacement under a
@@ -229,19 +242,21 @@ func (s *PostgresStore) RotateAndReplace(
 	if err != nil {
 		return "", err
 	}
-	return s.rotateRecord(ctx, id, currentRecord, replacementRecord, ttl)
+	return s.rotateRecord(ctx, id, currentRecord, replacementRecord, ttl, replacement.AuthenticatedAt)
 }
 
 // rotateRecord is the two-row compare-and-swap. In one transaction it locks
 // the old row, requires it to be live and byte-equal to what the caller read,
 // creates the new row (retrying an ID collision), and deletes the old row.
-// ttl zero keeps the old row's remaining lifetime.
+// ttl zero keeps the old row's remaining lifetime. authenticatedAt is the new
+// row's authentication time (nil: unknown).
 func (s *PostgresStore) rotateRecord(
 	ctx context.Context,
 	id string,
 	currentRecord []byte,
 	replacementRecord []byte,
 	ttl time.Duration,
+	authenticatedAt *time.Time,
 ) (newID string, err error) {
 	opCtx, cancel := context.WithTimeout(ctx, operationLimit)
 	defer cancel()
@@ -289,15 +304,17 @@ func (s *PostgresStore) rotateRecord(
 		}
 		var tag interface{ RowsAffected() int64 }
 		if ttl > 0 {
-			tag, err = tx.Exec(opCtx, insertSQL, IDHash(candidate), replacementRecord, ttl.Milliseconds())
+			tag, err = tx.Exec(opCtx, insertSQL, IDHash(candidate), replacementRecord, ttl.Milliseconds(),
+				authenticatedAtParameter(authenticatedAt))
 		} else {
 			tag, err = tx.Exec(opCtx, `
-				INSERT INTO elitea_auth.form_sessions AS current (id_hash, record, expires_at)
-				VALUES ($1, $2, $3)
+				INSERT INTO elitea_auth.form_sessions AS current (id_hash, record, expires_at, authenticated_at)
+				VALUES ($1, $2, $3, $4)
 				ON CONFLICT (id_hash) DO UPDATE
-				    SET record = EXCLUDED.record, expires_at = EXCLUDED.expires_at
+				    SET record = EXCLUDED.record, expires_at = EXCLUDED.expires_at,
+				        authenticated_at = EXCLUDED.authenticated_at
 				    WHERE current.expires_at <= now()`,
-				IDHash(candidate), replacementRecord, expiresAt)
+				IDHash(candidate), replacementRecord, expiresAt, authenticatedAtParameter(authenticatedAt))
 		}
 		if err != nil {
 			return "", storeError(ctx, "rotate", err)
@@ -356,11 +373,14 @@ func (s *PostgresStore) readRecord(ctx context.Context, id string) (sessionstate
 	}
 	opCtx, cancel := context.WithTimeout(ctx, operationLimit)
 	defer cancel()
-	var record []byte
+	var (
+		record          []byte
+		authenticatedAt *time.Time
+	)
 	err := s.pool.QueryRow(opCtx, `
-		SELECT record FROM elitea_auth.form_sessions
+		SELECT record, authenticated_at FROM elitea_auth.form_sessions
 		WHERE id_hash = $1 AND expires_at > now()`, IDHash(id),
-	).Scan(&record)
+	).Scan(&record, &authenticatedAt)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return sessionstate.State{}, nil, ErrNotFound
@@ -378,6 +398,10 @@ func (s *PostgresStore) readRecord(ctx context.Context, id string) (sessionstate
 		_, _ = s.pool.Exec(opCtx,
 			`DELETE FROM elitea_auth.form_sessions WHERE id_hash = $1 AND record = $2`, IDHash(id), record)
 		return sessionstate.State{}, nil, err
+	}
+	if authenticatedAt != nil {
+		at := authenticatedAt.UTC()
+		state.AuthenticatedAt = &at
 	}
 	return state, record, nil
 }

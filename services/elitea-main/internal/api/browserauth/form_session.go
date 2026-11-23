@@ -9,6 +9,7 @@ import (
 	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 	browserapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/browserauth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/browsersession"
 )
 
 // FormSessionAuthorizer reads one Form browser session back. The Form
@@ -65,7 +66,18 @@ func (f *FormSessions) AuthenticateFormSession(request *http.Request) (auth.User
 		// is the only safe reading of it.
 		return auth.User{}, apimw.ErrFormSessionRejected
 	}
-	return authorization.Principal, nil
+	principal := authorization.Principal
+	if authorization.Provider == browserapp.FormProviderName && !authorization.AuthenticatedAt.IsZero() {
+		// The last password entry of this Form session (sign-in or re-entry,
+		// ADR-0059 R1.10b), for apimw.RecentAuthentication. A Form session is
+		// only ever authenticated by its password, so a known time is proof.
+		// A session of another provider of this graph, or one with no known
+		// time, carries none and never satisfies the check.
+		principal.BrowserSessionProvider = browsersession.ProviderForm
+		principal.BrowserSessionAuthenticatedAt = authorization.AuthenticatedAt
+		principal.BrowserSessionAuthenticationProven = true
+	}
+	return principal, nil
 }
 
 // coherentSessionPrincipal is the shape browserapp.Service.Authorize returns:

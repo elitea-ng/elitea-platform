@@ -33,6 +33,8 @@ func forgedFreshPrincipal() auth.User {
 		BrowserSessionRef:             99,
 		BrowserSessionAuthenticatedAt: reauthNow.Add(-time.Minute),
 		BrowserSessionProvider:        browsersession.ProviderOIDC,
+		// And a proven authentication time.
+		BrowserSessionAuthenticationProven: true,
 	}
 }
 
@@ -52,6 +54,7 @@ func sessionAuthenticatedAt(authenticatedAt time.Time) browsersession.Session {
 	session := liveSession()
 	session.Ref = 42
 	session.AuthenticatedAt = authenticatedAt
+	session.AuthenticationProven = !authenticatedAt.IsZero()
 	return session
 }
 
@@ -120,20 +123,29 @@ func TestRecentAuthenticationPassesAFreshSessionAndNamesItsKind(t *testing.T) {
 	}
 }
 
-// A SAML or Form row records the sign-in, which is no proof of a fresh
-// authentication until R1.10b (ForceAuthn, the password re-entry). An OIDC
-// row whose authentication time is unknown (no auth_time) is refused too.
+// A row whose time is not proof of an authentication is refused, however
+// recent the time: a SAML sign-in without ForceAuthn (R1.10b), a row written
+// before shared 0263 (an OIDC or SAML row that 0262 stamped with its sign-in
+// time), an `elitea_session` row for the Form provider (no plane writes one
+// proven), an OIDC row with no auth_time, and a provider this file does not
+// know.
 func TestRecentAuthenticationRefusesASessionWhoseAuthenticationIsNotProven(t *testing.T) {
-	saml := sessionAuthenticatedAt(reauthNow.Add(-time.Minute))
-	saml.Provider = browsersession.ProviderSAML
-	form := sessionAuthenticatedAt(reauthNow.Add(-time.Minute))
-	form.Provider = browsersession.ProviderForm
+	unproven := func(provider string) browsersession.Session {
+		session := sessionAuthenticatedAt(reauthNow.Add(-time.Minute))
+		session.Provider = provider
+		session.AuthenticationProven = false
+		return session
+	}
 	unknown := sessionAuthenticatedAt(time.Time{})
+	unknown.AuthenticationProven = true
+	sealed := sessionAuthenticatedAt(reauthNow.Add(-time.Minute))
+	sealed.Provider = "sealed"
 	for name, session := range map[string]browsersession.Session{
-		"a SAML session":                       saml,
-		"a Form session":                       form,
+		"a SAML session without ForceAuthn":    unproven(browsersession.ProviderSAML),
+		"an OIDC row written before 0263":      unproven(browsersession.ProviderOIDC),
+		"an unproven Form row":                 unproven(browsersession.ProviderForm),
 		"an OIDC session with no auth_time":    unknown,
-		"a sealed session (a future provider)": func() browsersession.Session { s := saml; s.Provider = "sealed"; return s }(),
+		"a sealed session (a future provider)": sealed,
 	} {
 		t.Run(name, func(t *testing.T) {
 			recorder, reached := serveRecent(t, AuthConfig{
@@ -141,6 +153,28 @@ func TestRecentAuthenticationRefusesASessionWhoseAuthenticationIsNotProven(t *te
 			}, sessionRequest(t))
 			assertReauthenticationRequired(t, recorder, reached)
 		})
+	}
+}
+
+// A SAML session whose assertion answered a ForceAuthn request is proven
+// (R1.10b), and passes like an OIDC one.
+func TestRecentAuthenticationPassesAForceAuthnSAMLSession(t *testing.T) {
+	session := sessionAuthenticatedAt(reauthNow.Add(-2 * time.Minute))
+	session.Provider = browsersession.ProviderSAML
+	var seen BrowserAuthentication
+	check := RecentAuthentication{MaxAge: 15 * time.Minute, Now: func() time.Time { return reauthNow }}
+	handler := Auth(AuthConfig{
+		SessionStore: &stubSessionStore{session: session}, PrincipalValidator: &recordingPrincipals{},
+	})(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		authentication, ok := check.Check(r)
+		if !ok {
+			t.Fatal("a ForceAuthn SAML session authenticated 2 minutes ago did not satisfy a 15-minute limit")
+		}
+		seen = authentication
+	}))
+	handler.ServeHTTP(httptest.NewRecorder(), sessionRequest(t))
+	if seen.Kind != SessionKindSession || seen.Provider != browsersession.ProviderSAML {
+		t.Fatalf("authentication = %+v, want a SAML session", seen)
 	}
 }
 
