@@ -30,6 +30,8 @@ secrets and how to ask for a new manifest field, is in the ELITEA docs:
    (1320x800), drawn around the fixed layout (app left, Applications right);
    `node elitea/scripts/brand/dmg.mjs brand/<id> --from '#rrggbb' --to '#rrggbb'`
    draws one from two colours. Without them the build draws one from your hue.
+   Keep your own picture light: Finder draws the icon labels in dark text, in dark
+   mode too.
 4. Check it: `node elitea/scripts/brand-check.mjs brand/<id>`.
 5. Open a pull request. `build.yml` builds every platform unsigned.
 6. Add the signing secrets, then run **Build the brand** by hand.

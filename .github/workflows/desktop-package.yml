@@ -11,7 +11,8 @@ name: Desktop — package for device management
 # (brand/<id>/assets/macos/dmg-background{,@2x}.png, or one drawn from the brand's
 # hue), the app on the left, an Applications alias on the right and an arrow between;
 # the volume, and so the window's title, is `<Brand> <version>`, with the brand's
-# icon. scripts/macos-dmg.sh lays it out through Finder, retries, and reads the
+# icon, and no window bars. scripts/macos-dmg.sh lays it out through Finder, retries,
+# turns every window bar off (ds-store.mjs), and reads the
 # .DS_Store back (dmg-verify.mjs); the action mounts the finished image and checks it
 # again. Signed: codesigned with the Developer ID Application identity, notarised,
 # stapled, and accepted by `spctl -a -t open --context context:primary-signature`.
@@ -55,7 +56,7 @@ name: Desktop — package for device management
 #                       and every release. The full release build, macOS signed and
 #                       verified, Windows signed when a signer exists; the
 #                       packages go to the release (`upload_release_assets`).
-#   workflow_dispatch   by hand: a package to hand to device management (macOS
+#   workflow_dispatch   by hand, with the version to stamp: a package to hand to device management (macOS
 #                       signed, the .pkg and the .dmg; Windows as the release builds it).
 on:
   workflow_call:
@@ -106,6 +107,13 @@ on:
       WINDOWS_CERTIFICATE_PASSWORD: { required: false }
   workflow_dispatch:
     inputs:
+      # Required: a package handed to device management carries a real version (the
+      # .dmg's volume and window read `<Brand> <version>`, the app's bundle version
+      # too), never the development 0.1.0 an empty version stamps.
+      version:
+        description: The version to stamp (X.Y.Z or X.Y.Z-pre), e.g. the release the package is for.
+        type: string
+        required: true
       keep_artifacts:
         description: Keep the packages as workflow artifacts (7 days) for device management.
         type: boolean

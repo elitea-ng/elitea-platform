@@ -7,10 +7,15 @@
 // them gets one drawn here from its hue at package time
 // (apps/elitea-desktop/scripts/dmg-settings.mjs), so no brand ever shows another's.
 //
-// WHY MID-TONE. The background is a static picture, but Finder draws the icon
-// labels black in light mode and white in dark mode. Every pixel of the canvas sits
-// at a relative luminance between LUMINANCE.low and LUMINANCE.high, where both black
-// and white text keep a contrast of at least 4.2:1, so the labels read in both modes.
+// WHY LIGHT. Finder draws the icon labels of a window with a background picture in
+// dark text, in light AND dark mode (seen on macOS 26 and 27: dark mode, a black
+// background, and the labels still dark). So the canvas is a light, soft tint of the
+// brand: every pixel sits at a relative luminance between LUMINANCE.low and
+// LUMINANCE.high, where dark text keeps at least LABEL_CONTRAST (the label row is
+// checked from the PNG pixels in dmg.test.mjs). A mid-tone could not serve both text
+// colours: no colour gives black and white text 4.5:1 each but a grey near
+// luminance 0.18, which is what made the first labels hard to read. The arrow is the
+// brand hue made dark, at least 3:1 against the canvas (WCAG 1.4.11).
 //
 // Node's standard library only; deterministic (the same colours give the same pixels).
 
@@ -37,7 +42,13 @@ export const DMG_LAYOUT = Object.freeze({
 });
 
 /** The canvas's luminance band: black text ≥ 4.4:1 at `low`, white text ≥ 4.2:1 at `high`. */
-export const LUMINANCE = Object.freeze({ low: 0.17, high: 0.2 });
+export const LUMINANCE = Object.freeze({ low: 0.72, high: 0.9 });
+
+/** Black text on the label row keeps at least this contrast (WCAG 1.4.6 AAA is 7:1). */
+export const LABEL_CONTRAST = 7;
+
+/** The arrow's luminance: the `from` colour made dark. */
+export const ARROW_LUMINANCE = 0.1;
 
 const toLinear = (c) => {
   const s = c / 255;
@@ -84,13 +95,15 @@ function segment(px, py, ax, ay, bx, by) {
 
 /**
  * The background as a pixel function at `scale` (1 or 2): a diagonal wash from
- * `from` (top left) to `to` (bottom right), a soft lighter pool under each icon, and
- * a white arrow from the app to Applications. `from` and `to` are `#rrggbb`.
+ * `from` (top left) to `to` (bottom right), both made light, a lighter pool under each
+ * icon, and an arrow from the app to Applications in `from` made dark. `from` and
+ * `to` are `#rrggbb`.
  */
 export function dmgBackground({ from, to, scale = 1 }) {
   const { width, height, app, applications, iconSize } = DMG_LAYOUT;
   const lo = [atLuminance(from, LUMINANCE.low), atLuminance(to, LUMINANCE.low)];
   const hi = [atLuminance(from, LUMINANCE.high), atLuminance(to, LUMINANCE.high)];
+  const ink = atLuminance(from, ARROW_LUMINANCE);
   // The arrow, in points: a shaft between the icons and a chevron head.
   const gap = iconSize / 2 + 28;
   const x0 = app.x + gap;
@@ -117,16 +130,46 @@ export function dmgBackground({ from, to, scale = 1 }) {
       const high = hi[0][i] + (hi[1][i] - hi[0][i]) * t;
       return low + (high - low) * g;
     });
-    // The arrow: white at 90%, anti-aliased over one device pixel.
+    // The arrow, anti-aliased over one device pixel.
     const d = Math.min(...strokes.map((s) => segment(x, yy, ...s)));
-    const cover = Math.min(1, Math.max(0, (half - d) * scale + 0.5)) * 0.9;
-    return [...colour.map((c) => ENCODE(c + (1 - c) * cover)), 255];
+    const cover = Math.min(1, Math.max(0, (half - d) * scale + 0.5));
+    return [...colour.map((c, i) => ENCODE(c + (ink[i] - c) * cover)), 255];
   };
 }
 
 /** The background PNG (opaque) at `scale`: 660x400 at 1, 1320x800 at 2. */
 export function dmgBackgroundPng({ from, to, scale = 1 }) {
   return encodePng(DMG_LAYOUT.width * scale, DMG_LAYOUT.height * scale, dmgBackground({ from, to, scale }), { alpha: false });
+}
+
+/**
+ * Where Finder writes an icon's label, in points: a box under the icon centred on its
+ * position, wide enough for a 20-character name at the layout's text size.
+ */
+export function labelBox({ x, y }) {
+  const top = y + DMG_LAYOUT.iconSize / 2 + 4;
+  return { left: x - 80, right: x + 80, top, bottom: top + 24 };
+}
+
+const WCAG = (l1, l2) => (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+
+/**
+ * The lowest contrast of black text against any pixel of the two label boxes of a
+ * decoded background (images.mjs decodePng) drawn at `scale` (1 for 660x400, 2 for
+ * 1320x800).
+ */
+export function labelContrast(image, scale) {
+  let worst = Infinity;
+  for (const pos of [DMG_LAYOUT.app, DMG_LAYOUT.applications]) {
+    const box = labelBox(pos);
+    for (let y = box.top * scale; y < box.bottom * scale; y++) {
+      for (let x = box.left * scale; x < box.right * scale; x++) {
+        const [r, g, b] = image.pixel(x, y);
+        worst = Math.min(worst, WCAG(lum([r, g, b].map(toLinear)), 0));
+      }
+    }
+  }
+  return worst;
 }
 
 /** The two files a brand ships, keyed by their path under assets/. */

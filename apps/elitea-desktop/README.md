@@ -413,8 +413,10 @@ release and for device management:
   volume named `<Brand> <version>` with the brand's icon
   (`scripts/dmg-settings.mjs` reads them from the brand; the layout is
   `scripts/brand/dmg.mjs` `DMG_LAYOUT`). Finder lays the window out by
-  AppleScript, retried up to three times, and `scripts/dmg-verify.mjs` reads
-  the `.DS_Store` back (background alias, window, both icon positions) before
+  AppleScript, retried up to three times; `scripts/ds-store.mjs` then turns every
+  window bar off (toolbar, status bar, tab bar, path bar, sidebar), which
+  AppleScript cannot all reach, and `scripts/dmg-verify.mjs` reads
+  the `.DS_Store` back (background alias, window and its bars, both icon positions) before
   the image is sealed, and again on the finished image. The `.dmg` is codesigned
   with the Developer ID Application identity, notarised and stapled. The
   workflow verifies all three with `codesign`, `spctl -a` (`--type install` for
