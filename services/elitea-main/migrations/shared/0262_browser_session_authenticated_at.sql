@@ -1,4 +1,4 @@
--- 0261_browser_session_authenticated_at.sql — when the person behind a browser
+-- 0262_browser_session_authenticated_at.sql — when the person behind a browser
 -- session last authenticated (ADR-0059 decision 5 and "Consequences,
 -- Migrations"; story R1.10a, issue 2577).
 --

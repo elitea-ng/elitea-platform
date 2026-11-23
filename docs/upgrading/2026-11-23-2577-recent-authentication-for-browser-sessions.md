@@ -1,6 +1,6 @@
 # Browser sessions: recent authentication (#2577, ADR-0059)
 
-**What changed.** Shared migration `0261_browser_session_authenticated_at.sql`
+**What changed.** Shared migration `0262_browser_session_authenticated_at.sql`
 adds `authenticated_at timestamptz` to `elitea_auth.browser_sessions`. It
 records when the person behind a session last authenticated. The migration fills
 existing rows from `created_at`. The column can be NULL, so a replica of the

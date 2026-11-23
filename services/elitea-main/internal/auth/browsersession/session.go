@@ -88,12 +88,12 @@ type Session struct {
 	ProviderSessionIndex string
 	CreatedAt            time.Time
 	// AuthenticatedAt is when the person behind this session last
-	// authenticated (shared 0261, ADR-0059 R1.10): the OIDC auth_time when
+	// authenticated (shared 0262, ADR-0059 R1.10): the OIDC auth_time when
 	// the provider sent one, otherwise the sign-in. A refresh never moves it;
 	// only a new sign-in, which writes a new row, does. Zero is UNKNOWN (an
 	// id_token without auth_time, or a row a previous-release replica wrote
 	// during the upgrade) and never satisfies a recent-authentication check.
-	// Rows that existed before 0261 were backfilled from created_at.
+	// Rows that existed before 0262 were backfilled from created_at.
 	AuthenticatedAt time.Time
 	LastSeenAt      time.Time
 	ExpiresAt       time.Time

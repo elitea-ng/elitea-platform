@@ -323,6 +323,17 @@ type RouterConfig struct {
 	// working gate from a broken one. Production leaves this unset and keeps
 	// the Pool-backed resolver.
 	ProjectPermissionResolver platformauth.PermissionResolver
+	// PermissionResolver overrides legacyrbac.NewPostgresResolver(Pool) for
+	// EVERY route: the gates, the sub-routers and the handlers that resolve a
+	// permission themselves. It exists for the administration surface helper
+	// (internal/api/adminsurface), which drives every mounted route with a
+	// recording resolver. Production leaves it unset. Two tests in
+	// cmd/elitea-main hold that: TestBinaryDoesNotLinkTheRecordingResolver
+	// (no binary links the helper) and
+	// TestNoProductionCodeOverridesThePermissionResolver (no non-test code
+	// sets this field). The two narrower overrides above still win for their
+	// routes.
+	PermissionResolver RouterPermissionResolver
 	// ArtifactHandler overrides newArtifactHandler's Pool/ObjectStore-backed
 	// construction (S11) — newArtifactHandler always builds real
 	// Postgres-backed repositories from Pool with no injection seam, so a
@@ -1487,6 +1498,7 @@ func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 func mountMCPServerRoutes(
 	r chi.Router,
 	pool *pgxpool.Pool,
+	permissions platformauth.PermissionResolver,
 	authenticate func(http.Handler) http.Handler,
 	agentStart v2mcp.AgentStartUseCase,
 	toolkitExecute v2mcp.ToolkitExecuteReadUseCase,
@@ -1517,7 +1529,9 @@ func mountMCPServerRoutes(
 	}
 	handler := v2mcp.NewHandlerWithToolkitRuns(
 		pool, resolver, agentStart, toolkitRun,
-		legacyrbac.NewPostgresResolver(pool),
+		// The router's one resolver, so RouterConfig.PermissionResolver
+		// reaches this mount like every other.
+		permissions,
 		v2mcp.WithInternalChatTools(conversationHandler, folderHandler),
 		v2mcp.WithInternalChatRuntime(conversationHandler, typedConfigurations),
 		v2mcp.WithInternalToolkitHandler(toolkitHandler),
@@ -1785,7 +1799,12 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// API's response middleware untouched (internal/api/webedge). A no-op when
 	// WebUpstream is nil.
 	r.Use(webedge.Middleware(cfg.WebUpstream))
-	permissionResolver := legacyrbac.NewPostgresResolver(cfg.Pool)
+	// Resolved through a local so the override decides only the authorization
+	// answer, never which routes register (see coreResolver below).
+	var permissionResolver RouterPermissionResolver = legacyrbac.NewPostgresResolver(cfg.Pool)
+	if override := cfg.PermissionResolver; override != nil {
+		permissionResolver = override
+	}
 
 	// The audit-trail recorder. Built from the same pool the audit READS use,
 	// for the reason stated at newProjectProvisioner: a write path and a read
@@ -2378,7 +2397,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		}
 	}
 	mountMCPServerRoutes(
-		r, cfg.Pool, authenticate, cfg.MCPAgentStart, cfg.MCPToolkitExecute,
+		r, cfg.Pool, permissionResolver, authenticate, cfg.MCPAgentStart, cfg.MCPToolkitExecute,
 		toolkitHandler, configurationsHandler, coreHandler, prebuiltMCPVault, cfg.CurrentNotificationStore,
 		cfg.ToolkitArgumentSchemas, cfg.MCPToolkitRun, personalProjects,
 		cfg.InternalConfigurationTools, draftHandler, cfg.ToolkitDiscovery, convHandler, folderHandler,
@@ -6480,4 +6499,12 @@ func composedStore[T any](logger *slog.Logger, what string, store T, err error) 
 		return zero
 	}
 	return store
+}
+
+// RouterPermissionResolver is what the router's one shared resolver answers:
+// a permission set in one project or mode, and the union over the caller's
+// memberships. legacyrbac.PostgresResolver is the production implementation.
+type RouterPermissionResolver interface {
+	platformauth.PermissionResolver
+	platformauth.MembershipPermissionResolver
 }

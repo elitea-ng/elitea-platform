@@ -16,7 +16,7 @@ import (
 // minutes": administration scopes on tokens (R1.3a), starting an elevation
 // (R2.2) and critical actions (R4.1). This file is the one check they share.
 // It reads the authentication time the server-side browser session row
-// records (browser_sessions.authenticated_at, shared 0261), which a refresh
+// records (browser_sessions.authenticated_at, shared 0262), which a refresh
 // never moves, so a session kept alive by polling does not stay "recent".
 //
 // ONLY A SESSION WHOSE AUTHENTICATION TIME IS PROVEN SATISFIES IT. Today that

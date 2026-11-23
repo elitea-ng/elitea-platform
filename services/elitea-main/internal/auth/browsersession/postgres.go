@@ -86,7 +86,7 @@ func (s *PostgresStore) Get(ctx context.Context, id string) (Session, error) {
 	// NULL is an unknown authentication time (an id_token without auth_time,
 	// or a row a replica of the previous release wrote during the upgrade):
 	// the zero time, which no recent-authentication check accepts. Rows that
-	// existed before shared 0261 were backfilled from created_at.
+	// existed before shared 0262 were backfilled from created_at.
 	if authenticatedAt != nil {
 		session.AuthenticatedAt = authenticatedAt.UTC()
 	}
@@ -94,7 +94,7 @@ func (s *PostgresStore) Get(ctx context.Context, id string) (Session, error) {
 }
 
 func (s *PostgresStore) Touch(ctx context.Context, id string, seenAt time.Time) error {
-	// last_seen_at ONLY. authenticated_at (shared 0261) is the person's last
+	// last_seen_at ONLY. authenticated_at (shared 0262) is the person's last
 	// authentication, and a request is not one: a refresh that moved it would
 	// let a session kept alive by background polling pass every "signed in
 	// within the last 15 minutes" check forever.

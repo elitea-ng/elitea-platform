@@ -58,7 +58,7 @@ is base64url of a JSON object, which always begins `ey`.
 | `ELITEA_SESSION_REJECT_LEGACY_COOKIES` | off | Refuse the pre-0117 signed cookie. |
 | `ELITEA_SESSION_REAUTHENTICATION_MAX_AGE` | `15m` | The limit of `apimw.RecentAuthentication`, measured from `authenticated_at`. Read at the check, not stamped on the row. |
 
-`authenticated_at` (shared 0261, ADR-0059 R1.10a) is when the person last
+`authenticated_at` (shared 0262, ADR-0059 R1.10a) is when the person last
 authenticated: the OIDC `auth_time` (NULL, unknown, when the provider sends
 none), or the SAML sign-in. A touch never writes it. `apimw.RecentAuthentication`
 answers 401 `reauthentication_required` when it is older than the limit or

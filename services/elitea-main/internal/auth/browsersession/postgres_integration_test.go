@@ -324,7 +324,7 @@ func TestPostgresARefreshDoesNotMoveTheAuthenticationTime(t *testing.T) {
 }
 
 // TestPostgresARowFromBeforeTheMigrationReadsCreatedAt. A row that existed
-// before 0261 is backfilled from created_at, the only authentication time it
+// before 0262 is backfilled from created_at, the only authentication time it
 // ever knew. The corpus is already applied here, so the row is written the way
 // the previous release wrote it (without the column) and the migration's own
 // UPDATE is run against it. Before that UPDATE, such a row (one a
@@ -345,7 +345,7 @@ func TestPostgresARowFromBeforeTheMigrationReadsCreatedAt(t *testing.T) {
 		INSERT INTO elitea_auth.browser_sessions
 			(id, user_id, provider, created_at, last_seen_at, expires_at, idle_timeout_seconds)
 		VALUES ($1, 7, 'oidc', $2::timestamptz, $2::timestamptz, $2::timestamptz + interval '30 days', 3600)`, id, createdAt); err != nil {
-		t.Fatalf("insert a pre-0261 row: %v", err)
+		t.Fatalf("insert a pre-0262 row: %v", err)
 	}
 	unfilled, err := store.Get(ctx, id)
 	if err != nil {
@@ -356,20 +356,20 @@ func TestPostgresARowFromBeforeTheMigrationReadsCreatedAt(t *testing.T) {
 	}
 
 	// The migration's backfill, read from the embedded file itself so this
-	// test cannot drift from what 0261 runs.
-	migration, err := fs.ReadFile(migrations.Files, "shared/0261_browser_session_authenticated_at.sql")
+	// test cannot drift from what 0262 runs.
+	migration, err := fs.ReadFile(migrations.Files, "shared/0262_browser_session_authenticated_at.sql")
 	if err != nil {
-		t.Fatalf("read 0261: %v", err)
+		t.Fatalf("read 0262: %v", err)
 	}
 	if _, err := pool.Exec(ctx, string(migration)); err != nil {
-		t.Fatalf("re-run 0261: %v", err)
+		t.Fatalf("re-run 0262: %v", err)
 	}
 	session, err := store.Get(ctx, id)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
 	if !session.AuthenticatedAt.Equal(createdAt) {
-		t.Fatalf("authenticated_at of a pre-0261 row = %s, want created_at %s", session.AuthenticatedAt, createdAt)
+		t.Fatalf("authenticated_at of a pre-0262 row = %s, want created_at %s", session.AuthenticatedAt, createdAt)
 	}
 
 	// And the column is timestamptz, as every time in this schema.

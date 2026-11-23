@@ -97,7 +97,7 @@ type User struct {
 	BrowserSessionRef int64 `json:"-"`
 	// BrowserSessionAuthenticatedAt is when the person behind that browser
 	// session last authenticated (browser_sessions.authenticated_at, shared
-	// 0261), zero for every other credential. Set only by the browser session
+	// 0262), zero for every other credential. Set only by the browser session
 	// reader, beside BrowserSessionRef; it is what the recent-authentication
 	// helper (apimw.RecentAuthentication, ADR-0059 R1.10) reads. Never
 	// serialised: no forwarded or cached principal can claim a fresh sign-in.
