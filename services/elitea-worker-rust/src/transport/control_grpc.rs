@@ -85,6 +85,9 @@ pub enum ControlGrpcError {
     InvalidConfiguration(&'static str),
     ResourceExhausted(&'static str),
     Unavailable(&'static str),
+    /// An older Main's `StrictProtoCodec` rejected `ClaimCommandRequestV1`'s
+    /// additive `worker_capabilities` field (field 22) before handler entry.
+    UnknownFieldRejected(&'static str),
 }
 
 impl fmt::Display for ControlGrpcError {
@@ -92,7 +95,8 @@ impl fmt::Display for ControlGrpcError {
         match self {
             Self::InvalidConfiguration(message)
             | Self::ResourceExhausted(message)
-            | Self::Unavailable(message) => formatter.write_str(message),
+            | Self::Unavailable(message)
+            | Self::UnknownFieldRejected(message) => formatter.write_str(message),
         }
     }
 }
@@ -427,7 +431,7 @@ impl<R: ControlRpc> ControlGrpcClient<R> {
         let response = timeout(self.config.deadline, self.rpc.claim_command(request))
             .await
             .map_err(|_| unavailable())?
-            .map_err(|_| unavailable())?
+            .map_err(|status| map_claim_command_status(&status))?
             .into_inner();
         validate_response(&response)?;
         Ok(response)
@@ -880,6 +884,26 @@ fn validate_response<M: Message>(response: &M) -> Result<(), ControlGrpcError> {
 
 const fn unavailable() -> ControlGrpcError {
     ControlGrpcError::Unavailable("the control gRPC service is unavailable")
+}
+
+/// Classify an unambiguous pre-handler `StrictProtoCodec` rejection of
+/// `ClaimCommandRequestV1` field 22 (`worker_capabilities`) from an older Main.
+/// Generic `Unavailable`, `DeadlineExceeded`, and `Internal` statuses remain
+/// unretried [`ControlGrpcError::Unavailable`] so ambiguous mid-flight failures
+/// can never double-claim.
+fn map_claim_command_status(status: &Status) -> ControlGrpcError {
+    if status.code() == tonic::Code::Internal {
+        let msg = status.message();
+        if msg.contains("strict protobuf contract violation")
+            && msg.contains("unknown field 22")
+            && msg.contains("ClaimCommandRequestV1")
+        {
+            return ControlGrpcError::UnknownFieldRejected(
+                "the control gRPC server rejected an unknown worker capability field",
+            );
+        }
+    }
+    unavailable()
 }
 
 const fn invalid_metadata() -> ControlGrpcError {

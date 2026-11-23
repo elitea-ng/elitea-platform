@@ -220,6 +220,9 @@ func NewServer(config ServerConfig, authorizer WorkloadAuthorizer, verifier Comm
 	if err != nil {
 		return nil, errors.New("control extra server capabilities are invalid")
 	}
+	if _, err := extraServerCaps.With(builtInServerCapabilities...); err != nil {
+		return nil, errors.New("control extra server capabilities exceed capacity headroom")
+	}
 	meter := config.Meter
 	if meter == nil {
 		meter = otel.Meter("elitea-main")
@@ -272,6 +275,10 @@ func (s *Server) ClaimCommand(ctx context.Context, request *runtimev1.ClaimComma
 	}
 	if rejection := s.requiredWorkerCapabilitiesRejection(effective); rejection != nil {
 		return rejection, nil
+	}
+	serverCaps, err := s.serverCapabilitiesForClaim(command)
+	if err != nil {
+		return claimRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INTERNAL, "The claim server capabilities are unavailable.", false), nil
 	}
 
 	decision, err := s.claims.Claim(ctx, executionapp.ClaimRequest{
@@ -352,10 +359,6 @@ func (s *Server) ClaimCommand(ctx context.Context, request *runtimev1.ClaimComma
 	// when told so (an older Main would refuse them and the run would never
 	// settle).
 	receipt.ToolkitTypedRefusals = advertisesTypedToolRefusals(command)
-	serverCaps, err := s.serverCapabilitiesForClaim(command)
-	if err != nil {
-		return claimRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INTERNAL, "The claim server capabilities are unavailable.", false), nil
-	}
 	receipt.ServerCapabilities = serverCaps
 	// The paused writer the admitting transaction stored on the job (FU-269).
 	if writer := decision.PausedWriter; writer != nil {

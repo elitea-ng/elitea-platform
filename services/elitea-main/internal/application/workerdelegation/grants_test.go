@@ -529,4 +529,75 @@ func TestClosureGrantsEnforcesMaxGrantEdgesAndPropagatesEdgeErrors(t *testing.T)
 			t.Fatalf("edge error = %v, want %v", err, boom)
 		}
 	})
+
+	t.Run("mixed edge kinds across 3-hop chain and non-consumable states filtered", func(t *testing.T) {
+		t.Parallel()
+		// 10 -> 20 (ungranted agent_tool), 20 -> 30 (approved pipeline_child),
+		// 30 -> 40 (stale pipeline_node), plus non-consumable states (pending,
+		// revoked, superseded, empty), non-positive ID, and unsolicited caller
+		// 999 -> 1000 which must all be ignored.
+		hop2 := dg.Grant{
+			ID: 210, ProjectID: 17, State: dg.StateApproved,
+			Edge:     dg.Edge{CallerEntityID: 20, CalleeEntityID: 30, Kind: dg.EdgePipelineChild},
+			GrantSet: git(), Digest: git().Digest(),
+		}
+		hop3 := dg.Grant{
+			ID: 310, ProjectID: 17, State: dg.StateStale,
+			Edge:     dg.Edge{CallerEntityID: 30, CalleeEntityID: 40, Kind: dg.EdgePipelineNode},
+			GrantSet: git(), Digest: git().Digest(),
+		}
+		pending := dg.Grant{
+			ID: 211, ProjectID: 17, State: dg.StatePending,
+			Edge:     dg.Edge{CallerEntityID: 20, CalleeEntityID: 31, Kind: dg.EdgeAgentTool},
+			GrantSet: git(), Digest: git().Digest(),
+		}
+		revoked := dg.Grant{
+			ID: 212, ProjectID: 17, State: dg.StateRevoked,
+			Edge:     dg.Edge{CallerEntityID: 20, CalleeEntityID: 32, Kind: dg.EdgeAgentTool},
+			GrantSet: git(), Digest: git().Digest(),
+		}
+		superseded := dg.Grant{
+			ID: 213, ProjectID: 17, State: dg.StateSuperseded,
+			Edge:     dg.Edge{CallerEntityID: 20, CalleeEntityID: 33, Kind: dg.EdgeAgentTool},
+			GrantSet: git(), Digest: git().Digest(),
+		}
+		zeroID := dg.Grant{
+			ID: 0, ProjectID: 17, State: dg.StateApproved,
+			Edge:     dg.Edge{CallerEntityID: 20, CalleeEntityID: 34, Kind: dg.EdgeAgentTool},
+			GrantSet: git(), Digest: git().Digest(),
+		}
+		unsolicitedCaller := dg.Grant{
+			ID: 999, ProjectID: 17, State: dg.StateApproved,
+			Edge:     dg.Edge{CallerEntityID: 999, CalleeEntityID: 1000, Kind: dg.EdgeAgentTool},
+			GrantSet: git(), Digest: git().Digest(),
+		}
+		source := &graphGrantSourceStub{
+			grantSourceStub: grantSourceStub{
+				byCaller: map[int64][]dg.Grant{
+					20: {hop2, pending, revoked, superseded, zeroID, unsolicitedCaller},
+					30: {hop3},
+					31: {approved(311, 31, 41, git())}, // unreachable because pending 20->31 filtered
+					32: {approved(312, 32, 42, git())}, // unreachable because revoked 20->32 filtered
+				},
+			},
+			edgesByProject: map[int64]map[int64][]int64{
+				17: {10: {20}},
+			},
+		}
+		r, _ := resolver(t, platformconfig.DefaultDelegationSettings(), agentInput(t, `{"id":10}`), nil)
+		r.WithGrants(source, true)
+		policy, err := r.WorkerDelegationPolicy(context.Background(), agentCommand())
+		if err != nil || policy == nil {
+			t.Fatalf("policy = %v err = %v", policy, err)
+		}
+		if len(policy.GetGrants()) != 2 {
+			t.Fatalf("got %d grants (%+v), want 2", len(policy.GetGrants()), policy.GetGrants())
+		}
+		if policy.GetGrants()[0].GetGrantId() != 210 || policy.GetGrants()[0].GetEdgeKind() != string(dg.EdgePipelineChild) {
+			t.Fatalf("hop2 grant = %+v", policy.GetGrants()[0])
+		}
+		if policy.GetGrants()[1].GetGrantId() != 310 || policy.GetGrants()[1].GetEdgeKind() != string(dg.EdgePipelineNode) {
+			t.Fatalf("hop3 grant = %+v", policy.GetGrants()[1])
+		}
+	})
 }

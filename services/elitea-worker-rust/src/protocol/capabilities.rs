@@ -83,21 +83,27 @@ impl NegotiatedCapabilities {
     pub fn from_receipt(receipt: &ClaimReceiptV1) -> Result<Self, ControlSemanticError> {
         let mut parsed = Self::parse(&receipt.server_capabilities)?;
         if receipt.toolkit_typed_refusals {
-            parsed.insert_known(CAP_TOOLKIT_TYPED_REFUSALS);
+            parsed.insert_known(CAP_TOOLKIT_TYPED_REFUSALS)?;
         }
         if receipt.paused_writer.is_some() {
-            parsed.insert_known(CAP_PAUSED_WRITER);
+            parsed.insert_known(CAP_PAUSED_WRITER)?;
         }
         Ok(parsed)
     }
 
-    fn insert_known(&mut self, capability: &str) {
+    fn insert_known(&mut self, capability: &str) -> Result<(), ControlSemanticError> {
         if let Err(idx) = self
             .sorted
             .binary_search_by(|entry| entry.as_str().cmp(capability))
         {
+            if self.sorted.len() >= MAX_NEGOTIATED_CAPABILITIES {
+                return Err(ControlSemanticError::InvalidInput(
+                    "the claim capabilities exceed the maximum allowed count",
+                ));
+            }
             self.sorted.insert(idx, capability.to_owned());
         }
+        Ok(())
     }
 
     /// Report whether `capability` is supported by the peer.
@@ -219,7 +225,7 @@ mod tests {
             "a".repeat(MAX_CAPABILITY_NAME_BYTES - "runtime.".len() - ".v1".len())
         );
         assert_eq!(exact_name.len(), MAX_CAPABILITY_NAME_BYTES);
-        assert!(NegotiatedCapabilities::parse(&[exact_name.clone()]).is_ok());
+        assert!(NegotiatedCapabilities::parse(std::slice::from_ref(&exact_name)).is_ok());
         assert!(matches!(
             NegotiatedCapabilities::parse(&[format!("{exact_name}a")]),
             Err(ControlSemanticError::InvalidInput(_))
@@ -330,8 +336,16 @@ mod tests {
             .collect()
     }
 
+    #[derive(Clone)]
+    enum FirstCallBehavior {
+        Accept,
+        RejectProtocolViolation,
+        RejectStrictCodecUnknownField22,
+        FailStatus(tonic::Code, &'static str),
+    }
+
     struct NegotiationRpc {
-        reject_worker_capabilities: bool,
+        first_call: FirstCallBehavior,
         response: crate::protocol::elitea::runtime::v1::ClaimCommandResponseV1,
         seen: std::sync::Arc<std::sync::Mutex<Vec<ClaimCommandRequestV1>>>,
     }
@@ -346,19 +360,32 @@ mod tests {
             tonic::Status,
         > {
             let req = request.into_inner();
-            let reject = self.reject_worker_capabilities && !req.worker_capabilities.is_empty();
+            let has_caps = !req.worker_capabilities.is_empty();
             self.seen.lock().expect("lock").push(req);
-            if reject {
-                return Ok(tonic::Response::new(
-                    crate::protocol::elitea::runtime::v1::ClaimCommandResponseV1 {
-                        receipt: None,
-                        rejection: Some(crate::protocol::elitea::runtime::v1::RuntimeErrorV1 {
-                            code: crate::protocol::elitea::runtime::v1::RuntimeErrorCodeV1::ProtocolViolation as i32,
-                            safe_message: "The claim request is malformed.".to_owned(),
-                            retryable: false,
-                        }),
-                    },
-                ));
+            match self.first_call {
+                FirstCallBehavior::RejectProtocolViolation if has_caps => {
+                    return Ok(tonic::Response::new(
+                        crate::protocol::elitea::runtime::v1::ClaimCommandResponseV1 {
+                            receipt: None,
+                            rejection: Some(crate::protocol::elitea::runtime::v1::RuntimeErrorV1 {
+                                code: crate::protocol::elitea::runtime::v1::RuntimeErrorCodeV1::ProtocolViolation as i32,
+                                safe_message: "The claim request is malformed.".to_owned(),
+                                retryable: false,
+                            }),
+                        },
+                    ));
+                }
+                FirstCallBehavior::RejectStrictCodecUnknownField22 if has_caps => {
+                    return Err(tonic::Status::internal(
+                        "grpc: error unmarshalling request: strict protobuf contract violation: unknown field 22 in elitea.runtime.v1.ClaimCommandRequestV1",
+                    ));
+                }
+                FirstCallBehavior::FailStatus(code, message) => {
+                    return Err(tonic::Status::new(code, message));
+                }
+                FirstCallBehavior::Accept
+                | FirstCallBehavior::RejectProtocolViolation
+                | FirstCallBehavior::RejectStrictCodecUnknownField22 => {}
             }
             Ok(tonic::Response::new(self.response.clone()))
         }
@@ -415,7 +442,7 @@ mod tests {
     }
 
     fn test_client_and_command(
-        reject_worker_capabilities: bool,
+        first_call: FirstCallBehavior,
         mutate_receipt: impl FnOnce(&mut ClaimReceiptV1),
     ) -> (
         crate::protocol::control::AgentControlClient<NegotiationRpc>,
@@ -441,7 +468,7 @@ mod tests {
 
         let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let rpc = NegotiationRpc {
-            reject_worker_capabilities,
+            first_call,
             response,
             seen: seen.clone(),
         };
@@ -457,41 +484,79 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn new_worker_falls_back_once_for_old_main_preserving_legacy_booleans() {
-        let (client, seen, verified, now) = test_client_and_command(true, |receipt| {
-            receipt.toolkit_typed_refusals = true;
-            receipt.server_capabilities.clear();
-        });
-        let claim = client
-            .claim_agent(&verified, now)
-            .await
-            .expect("fallback claim succeeds");
-        assert!(claim.server_capabilities().has(CAP_TOOLKIT_TYPED_REFUSALS));
+    async fn new_worker_falls_back_once_for_old_main_strict_codec_and_protocol_violation() {
+        for behavior in [
+            FirstCallBehavior::RejectStrictCodecUnknownField22,
+            FirstCallBehavior::RejectProtocolViolation,
+        ] {
+            let (client, seen, verified, now) = test_client_and_command(behavior, |receipt| {
+                receipt.toolkit_typed_refusals = true;
+                receipt.server_capabilities.clear();
+            });
+            let claim = client
+                .claim_agent(&verified, now)
+                .await
+                .expect("fallback claim succeeds");
+            assert!(claim.server_capabilities().has(CAP_TOOLKIT_TYPED_REFUSALS));
 
-        let seen = seen.lock().expect("lock");
-        assert_eq!(
-            seen.len(),
-            2,
-            "expected initial attempt plus one legacy fallback"
-        );
-        assert!(!seen[0].worker_capabilities.is_empty());
-        assert!(seen[1].worker_capabilities.is_empty());
-        assert!(seen[1].fanout_interrupt_decisions);
-        assert!(seen[1].fanout_delegated_credentials);
-        assert!(seen[1].idle_compaction);
-        assert!(seen[1].governed_security_context_v1);
+            let seen = seen.lock().expect("lock");
+            assert_eq!(
+                seen.len(),
+                2,
+                "expected initial attempt plus one legacy fallback"
+            );
+            assert_ne!(seen[0].worker_capabilities.len(), 0);
+            assert_eq!(seen[1].worker_capabilities.len(), 0);
+            assert!(seen[1].fanout_interrupt_decisions);
+            assert!(seen[1].fanout_delegated_credentials);
+            assert!(seen[1].idle_compaction);
+            assert!(seen[1].governed_security_context_v1);
+        }
+    }
+
+    #[tokio::test]
+    async fn ambiguous_grpc_statuses_never_retry_claim_command() {
+        for (code, message) in [
+            (tonic::Code::Unavailable, "transient transport reset"),
+            (tonic::Code::DeadlineExceeded, "deadline exceeded"),
+            (tonic::Code::Internal, "database crashed"),
+            (
+                tonic::Code::Internal,
+                "strict protobuf contract violation: unknown field 99 in elitea.runtime.v1.ClaimCommandRequestV1",
+            ),
+        ] {
+            let (client, seen, verified, now) =
+                test_client_and_command(FirstCallBehavior::FailStatus(code, message), |_| {});
+            let err = client
+                .claim_agent(&verified, now)
+                .await
+                .err()
+                .expect("ambiguous status must fail without fallback");
+            assert!(matches!(
+                err,
+                crate::protocol::control::AgentControlError::Transport(
+                    crate::transport::ControlGrpcError::Unavailable(_)
+                )
+            ));
+            assert_eq!(
+                seen.lock().expect("lock").len(),
+                1,
+                "status {code:?} ({message}) must never trigger a second claim RPC"
+            );
+        }
     }
 
     #[tokio::test]
     async fn new_worker_and_new_main_negotiate_two_way_capabilities() {
-        let (client, seen, verified, now) = test_client_and_command(false, |receipt| {
-            receipt.toolkit_typed_refusals = false;
-            receipt.server_capabilities = vec![
-                CAP_NEGOTIATION.to_owned(),
-                CAP_TOOLKIT_TYPED_REFUSALS.to_owned(),
-                "runtime.future_server.v2".to_owned(),
-            ];
-        });
+        let (client, seen, verified, now) =
+            test_client_and_command(FirstCallBehavior::Accept, |receipt| {
+                receipt.toolkit_typed_refusals = false;
+                receipt.server_capabilities = vec![
+                    CAP_NEGOTIATION.to_owned(),
+                    CAP_TOOLKIT_TYPED_REFUSALS.to_owned(),
+                    "runtime.future_server.v2".to_owned(),
+                ];
+            });
         let claim = client
             .claim_agent(&verified, now)
             .await
@@ -516,11 +581,12 @@ mod tests {
 
     #[tokio::test]
     async fn missing_required_server_capability_and_malformed_caps_fail_closed() {
-        let (client, _, verified, now) = test_client_and_command(false, |receipt| {
-            receipt.server_capabilities = vec![CAP_NEGOTIATION.to_owned()];
-        });
+        let (client, _, verified, now) =
+            test_client_and_command(FirstCallBehavior::Accept, |receipt| {
+                receipt.server_capabilities = vec![CAP_NEGOTIATION.to_owned()];
+            });
         let strict_client = client
-            .with_required_server_capabilities(vec!["runtime.mandatory_security.v1".to_owned()])
+            .with_required_server_capabilities(&["runtime.mandatory_security.v1".to_owned()])
             .expect("valid required capability");
         let err = strict_client
             .claim_agent(&verified, now)
@@ -534,9 +600,10 @@ mod tests {
             )
         ));
 
-        let (bad_client, _, bad_verified, bad_now) = test_client_and_command(false, |receipt| {
-            receipt.server_capabilities = vec!["InvalidUpper".to_owned()];
-        });
+        let (bad_client, _, bad_verified, bad_now) =
+            test_client_and_command(FirstCallBehavior::Accept, |receipt| {
+                receipt.server_capabilities = vec!["InvalidUpper".to_owned()];
+            });
         let bad_err = bad_client
             .claim_agent(&bad_verified, bad_now)
             .await
@@ -544,6 +611,75 @@ mod tests {
             .expect("malformed server capabilities must fail closed");
         assert!(matches!(
             bad_err,
+            crate::protocol::control::AgentControlError::Semantic(
+                ControlSemanticError::InvalidInput(_)
+            )
+        ));
+    }
+
+    #[test]
+    fn from_receipt_enforces_max_bound_when_merging_legacy_booleans() {
+        let exact: Vec<String> = (0..MAX_NEGOTIATED_CAPABILITIES)
+            .map(|i| format!("runtime.cap_{i:02}.v1"))
+            .collect();
+        let overflow_receipt = ClaimReceiptV1 {
+            toolkit_typed_refusals: true,
+            server_capabilities: exact,
+            ..ClaimReceiptV1::default()
+        };
+        assert!(matches!(
+            NegotiatedCapabilities::from_receipt(&overflow_receipt),
+            Err(ControlSemanticError::InvalidInput(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn non_executable_receipts_reject_server_capabilities_fail_closed() {
+        let (retry_client, _, retry_verified, retry_now) =
+            test_client_and_command(FirstCallBehavior::Accept, |receipt| {
+                receipt.disposition =
+                    crate::protocol::elitea::runtime::v1::ClaimDispositionV1::RetryLaterNoack
+                        as i32;
+                receipt.fence = None;
+                receipt.lease_expires_at_unix_millis = 0;
+                receipt.input_bundle_ref = None;
+                receipt.input_bundle = None;
+                receipt.claim_handoff_watermark = 0;
+                receipt.claim_id.clear();
+                receipt.settlement_recovery = None;
+                receipt.claim_started_at_unix_micros = 0;
+                receipt.node_recovery_receipt_json.clear();
+                receipt.server_capabilities = vec![CAP_NEGOTIATION.to_owned()];
+            });
+        let err = retry_client
+            .claim_agent_delivery(&retry_verified, retry_now)
+            .await
+            .err()
+            .expect("non-authority receipt carrying server_capabilities must fail closed");
+        assert!(matches!(
+            err,
+            crate::protocol::control::AgentControlError::Semantic(
+                ControlSemanticError::InvalidInput(_)
+            )
+        ));
+
+        let (settled_client, _, settled_verified, settled_now) =
+            test_client_and_command(FirstCallBehavior::Accept, |receipt| {
+                receipt.disposition =
+                    crate::protocol::elitea::runtime::v1::ClaimDispositionV1::SettledAck as i32;
+                receipt.input_bundle_ref = None;
+                receipt.input_bundle = None;
+                receipt.claim_started_at_unix_micros = 0;
+                receipt.node_recovery_receipt_json.clear();
+                receipt.server_capabilities = vec![CAP_NEGOTIATION.to_owned()];
+            });
+        let err = settled_client
+            .claim_agent_delivery(&settled_verified, settled_now)
+            .await
+            .err()
+            .expect("recovery receipt carrying server_capabilities must fail closed");
+        assert!(matches!(
+            err,
             crate::protocol::control::AgentControlError::Semantic(
                 ControlSemanticError::InvalidInput(_)
             )

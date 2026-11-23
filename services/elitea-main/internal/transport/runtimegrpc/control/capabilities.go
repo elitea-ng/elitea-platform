@@ -5,6 +5,16 @@ import (
 	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 )
 
+// builtInServerCapabilities lists every capability serverCapabilitiesForClaim
+// may add on an executable receipt, validated at startup so ExtraServerCapabilities
+// can never overflow MaxNegotiatedCapabilities after a lease is allocated.
+var builtInServerCapabilities = []string{
+	runtimedomain.CapabilityNegotiation,
+	runtimedomain.CapabilityToolkitTypedRefusals,
+	runtimedomain.CapabilityPausedWriter,
+	runtimedomain.CapabilityGovernedSecurityContext,
+}
+
 type effectiveWorkerCapabilities struct {
 	wire                         runtimedomain.CapabilitySet
 	agentModelCheckpointRecovery bool

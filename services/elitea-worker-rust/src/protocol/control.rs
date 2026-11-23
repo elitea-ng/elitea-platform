@@ -150,7 +150,9 @@ impl AgentControlError {
             | Self::Semantic(ControlSemanticError::DependencyUnavailable(_)) => true,
             Self::Semantic(ControlSemanticError::Rejected(rejection)) => rejection.retryable(),
             Self::Transport(
-                ControlGrpcError::InvalidConfiguration(_) | ControlGrpcError::ResourceExhausted(_),
+                ControlGrpcError::InvalidConfiguration(_)
+                | ControlGrpcError::ResourceExhausted(_)
+                | ControlGrpcError::UnknownFieldRejected(_),
             )
             | Self::Semantic(
                 ControlSemanticError::InvalidInput(_)
@@ -2888,9 +2890,9 @@ impl<R> AgentControlClient<R> {
     /// capability list bounds, syntax, or uniqueness.
     pub fn with_required_server_capabilities(
         mut self,
-        required: Vec<String>,
+        required: &[String],
     ) -> Result<Self, ControlSemanticError> {
-        let parsed = super::capabilities::NegotiatedCapabilities::parse(&required)?;
+        let parsed = super::capabilities::NegotiatedCapabilities::parse(required)?;
         self.required_server_capabilities = parsed.as_slice().to_vec();
         Ok(self)
     }
@@ -2947,8 +2949,10 @@ impl<R> AgentControlClient<R> {
 impl<R: ControlRpc> AgentControlClient<R> {
     /// Send a `ClaimCommand` request carrying both legacy boolean opt-ins and
     /// `worker_capabilities`. If an older Main that predates field 22 rejects
-    /// the unknown field with `PROTOCOL_VIOLATION`, retry once without
-    /// `worker_capabilities` while keeping every legacy boolean intact.
+    /// the unknown field via `StrictProtoCodec` (`UnknownFieldRejected`) or a
+    /// pre-claim `PROTOCOL_VIOLATION`, retry once without `worker_capabilities`
+    /// while keeping every legacy boolean intact. Ambiguous transport failures
+    /// (`Unavailable`, `DeadlineExceeded`, generic `Internal`) never retry.
     pub(super) async fn send_claim_command(
         &self,
         request: ClaimCommandRequestV1,
@@ -2961,19 +2965,33 @@ impl<R: ControlRpc> AgentControlClient<R> {
         } else {
             None
         };
-        let response = self.control.claim_command(request).await?;
-        let unknown_field_rejection = response.receipt.is_none()
-            && response.rejection.as_ref().is_some_and(|rejection| {
-                rejection.code == RuntimeErrorCodeV1::ProtocolViolation as i32
-            });
-        if unknown_field_rejection && let Some(legacy_request) = fallback_request {
-            return self
-                .control
-                .claim_command(legacy_request)
-                .await
-                .map_err(Into::into);
+        match self.control.claim_command(request).await {
+            Ok(response) => {
+                let unknown_field_rejection = response.receipt.is_none()
+                    && response.rejection.as_ref().is_some_and(|rejection| {
+                        rejection.code == RuntimeErrorCodeV1::ProtocolViolation as i32
+                    });
+                if unknown_field_rejection && let Some(legacy_request) = fallback_request {
+                    return self
+                        .control
+                        .claim_command(legacy_request)
+                        .await
+                        .map_err(Into::into);
+                }
+                Ok(response)
+            }
+            Err(error @ ControlGrpcError::UnknownFieldRejected(_)) => {
+                if let Some(legacy_request) = fallback_request {
+                    return self
+                        .control
+                        .claim_command(legacy_request)
+                        .await
+                        .map_err(Into::into);
+                }
+                Err(error.into())
+            }
+            Err(error) => Err(error.into()),
         }
-        Ok(response)
     }
 
     /// Claim and validate one exact fresh agent command.
@@ -3672,7 +3690,6 @@ fn parse_claim_decision(
     }
     let receipt = exclusive_claim_receipt(response)?;
     validate_claim_identity(verified, &receipt)?;
-    let _ = super::capabilities::NegotiatedCapabilities::from_receipt(&receipt)?;
     let disposition = ClaimDispositionV1::try_from(receipt.disposition)
         .map_err(|_| ControlSemanticError::InvalidInput("the claim disposition is malformed"))?;
     validate_retirement_placement(disposition, &receipt)?;
@@ -3847,6 +3864,7 @@ fn validate_no_worker_authority_except_retirement(
         || receipt.settlement_recovery.is_some()
         || receipt.claim_started_at_unix_micros != 0
         || !receipt.node_recovery_receipt_json.is_empty()
+        || !receipt.server_capabilities.is_empty()
     {
         return Err(ControlSemanticError::InvalidInput(
             "the no-authority claim contains worker authority or business material",
@@ -3884,6 +3902,7 @@ fn validate_recovery_claim(
         || receipt.claim_handoff_watermark > i64::MAX as u64
         || receipt.claim_started_at_unix_micros != 0
         || !receipt.node_recovery_receipt_json.is_empty()
+        || !receipt.server_capabilities.is_empty()
     {
         return Err(ControlSemanticError::InvalidInput(
             "the recovery claim contains unexpected business material",
@@ -4131,8 +4150,6 @@ fn parse_input_claim_binding(
         ));
     }
     let server_capabilities = super::capabilities::NegotiatedCapabilities::from_receipt(&receipt)?;
-    let toolkit_typed_refusals =
-        server_capabilities.has(super::capabilities::CAP_TOOLKIT_TYPED_REFUSALS);
     let expected_identity = identity_from_command(verified);
     let identity = receipt.identity.ok_or(ControlSemanticError::InvalidInput(
         "the accepted claim identity is missing",
@@ -4164,14 +4181,11 @@ fn parse_input_claim_binding(
             "the claim handoff watermark exceeds the durable counter limit",
         ));
     }
-    let recovery_node = expected == ClaimDispositionV1::RecoverNodeVisit;
-    let desired_allowed = receipt.desired_state == DesiredExecutionStateV1::Running as i32
-        || (recovery_node && receipt.desired_state == DesiredExecutionStateV1::Suspended as i32);
-    if !desired_allowed || (!recovery_node && !receipt.node_recovery_receipt_json.is_empty()) {
-        return Err(ControlSemanticError::AuthorizationFailed(
-            "the accepted claim desired state is malformed",
-        ));
-    }
+    validate_accepted_claim_desired_state(
+        receipt.desired_state,
+        &receipt.node_recovery_receipt_json,
+        expected,
+    )?;
 
     let expected_reference =
         verified
@@ -4214,12 +4228,29 @@ fn parse_input_claim_binding(
         request_entry,
         arguments_entry,
         vector_token: VectorClaimToken::from_receipt(receipt.vector_token),
-        toolkit_typed_refusals,
+        toolkit_typed_refusals: server_capabilities
+            .has(super::capabilities::CAP_TOOLKIT_TYPED_REFUSALS),
         server_capabilities,
         paused_writer: receipt.paused_writer,
         governed: governed_context(verified.command())?,
         delegation: delegation_policy(verified.command())?,
     })
+}
+
+fn validate_accepted_claim_desired_state(
+    desired_state: i32,
+    node_recovery_receipt_json: &[u8],
+    expected: ClaimDispositionV1,
+) -> Result<(), ControlSemanticError> {
+    let recovery_node = expected == ClaimDispositionV1::RecoverNodeVisit;
+    let desired_allowed = desired_state == DesiredExecutionStateV1::Running as i32
+        || (recovery_node && desired_state == DesiredExecutionStateV1::Suspended as i32);
+    if !desired_allowed || (!recovery_node && !node_recovery_receipt_json.is_empty()) {
+        return Err(ControlSemanticError::AuthorizationFailed(
+            "the accepted claim desired state is malformed",
+        ));
+    }
+    Ok(())
 }
 
 /// The command's delegation policy (ADR-0044 decision 3), as claim state.

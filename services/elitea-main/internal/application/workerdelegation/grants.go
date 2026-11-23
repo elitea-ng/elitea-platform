@@ -101,9 +101,14 @@ func (r *Resolver) closureGrants(ctx context.Context, projectID, rootApplication
 	rootSeedCallees := directAttachedApplicationIDs(input, projectID)
 	emitted := map[grantDedupKey]bool{}
 	var out []*runtimev1.WorkerDelegationGrantV1
+	grantsTruncated := false
 	nodesTruncated := false
 
-	for depth := 0; depth < maxClosureDepth && len(frontier) > 0 && len(out) < MaxGrantEdges; depth++ {
+	for depth := 0; depth < maxClosureDepth && len(frontier) > 0 && !grantsTruncated; depth++ {
+		frontierSet := make(map[int64]bool, len(frontier))
+		for _, callerID := range frontier {
+			frontierSet[callerID] = true
+		}
 		grants, err := r.grants.ConsumableFromCallers(ctx, projectID, frontier)
 		if err != nil {
 			return nil, fmt.Errorf("worker delegation: read the delegation grants: %w", err)
@@ -113,11 +118,11 @@ func (r *Resolver) closureGrants(ctx context.Context, projectID, rootApplication
 			if grant.ProjectID != 0 && grant.ProjectID != projectID {
 				continue
 			}
-			if grant.Edge.CallerEntityID <= 0 || grant.Edge.CalleeEntityID <= 0 {
+			if grant.ID <= 0 || (grant.State != dg.StateApproved && grant.State != dg.StateStale) {
 				continue
 			}
-			if len(out) >= MaxGrantEdges {
-				break
+			if grant.Edge.CallerEntityID <= 0 || grant.Edge.CalleeEntityID <= 0 || !frontierSet[grant.Edge.CallerEntityID] {
+				continue
 			}
 			key := grantDedupKey{
 				id:     grant.ID,
@@ -125,13 +130,18 @@ func (r *Resolver) closureGrants(ctx context.Context, projectID, rootApplication
 				callee: grant.Edge.CalleeEntityID,
 				kind:   grant.Edge.Kind,
 			}
-			if !emitted[key] {
-				emitted[key] = true
-				out = append(out, grantMessage(grant))
+			if emitted[key] {
+				continue
 			}
+			if len(out) >= MaxGrantEdges {
+				grantsTruncated = true
+				break
+			}
+			emitted[key] = true
+			out = append(out, grantMessage(grant))
 			nextCandidates = append(nextCandidates, grant.Edge.CalleeEntityID)
 		}
-		if len(out) >= MaxGrantEdges || depth+1 >= maxClosureDepth {
+		if grantsTruncated || depth+1 >= maxClosureDepth {
 			break
 		}
 		if depth == 0 && len(rootSeedCallees) > 0 {
@@ -166,7 +176,7 @@ func (r *Resolver) closureGrants(ctx context.Context, projectID, rootApplication
 		}
 		frontier = next
 	}
-	if len(out) >= MaxGrantEdges {
+	if grantsTruncated {
 		slog.WarnContext(ctx, "worker delegation: the grants of the run's closure reach the limit; edges past it carry none",
 			"project_id", projectID, "root_application_id", rootApplicationID, "limit", MaxGrantEdges)
 	}

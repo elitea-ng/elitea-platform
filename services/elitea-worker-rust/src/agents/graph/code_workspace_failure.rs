@@ -52,9 +52,10 @@ impl CodeWorkspaceFailure {
             SandboxCallError::Invalid => NodeFailureClass::InvalidInput,
             SandboxCallError::InvalidReceipt => NodeFailureClass::InvalidResult,
             SandboxCallError::Rejected => NodeFailureClass::AuthorizationDenied,
-            SandboxCallError::Authorization(ControlGrpcError::InvalidConfiguration(_)) => {
-                NodeFailureClass::InvalidConfiguration
-            }
+            SandboxCallError::Authorization(
+                ControlGrpcError::InvalidConfiguration(_)
+                | ControlGrpcError::UnknownFieldRejected(_),
+            ) => NodeFailureClass::InvalidConfiguration,
             SandboxCallError::Authorization(ControlGrpcError::ResourceExhausted(_)) => {
                 NodeFailureClass::InvalidInput
             }

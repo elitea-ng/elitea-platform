@@ -24,6 +24,13 @@ func TestNewServerRejectsMalformedCapabilityConfig(t *testing.T) {
 			cfg.RequiredWorkerCapabilities = []string{runtimedomain.CapabilityIdleCompaction, runtimedomain.CapabilityIdleCompaction}
 		},
 		"bad extra server cap": func(cfg *ServerConfig) { cfg.ExtraServerCapabilities = []string{"single"} },
+		"extra server caps exceed built-in headroom": func(cfg *ServerConfig) {
+			extra := make([]string, runtimedomain.MaxNegotiatedCapabilities-len(builtInServerCapabilities)+1)
+			for i := range extra {
+				extra[i] = fmt.Sprintf("runtime.extra_%02d.v1", i)
+			}
+			cfg.ExtraServerCapabilities = extra
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -41,6 +48,25 @@ func TestNewServerRejectsMalformedCapabilityConfig(t *testing.T) {
 				t.Fatalf("%s: expected startup error", name)
 			}
 		})
+	}
+
+	// Exact headroom boundary (64 - len(builtInServerCapabilities) = 60 unique extras) succeeds.
+	cfg := testControlServerConfig()
+	exactExtras := make([]string, runtimedomain.MaxNegotiatedCapabilities-len(builtInServerCapabilities))
+	for i := range exactExtras {
+		exactExtras[i] = fmt.Sprintf("runtime.extra_%02d.v1", i)
+	}
+	cfg.ExtraServerCapabilities = exactExtras
+	calls := []string{}
+	if _, err := NewServer(
+		cfg,
+		workloadAuthorizerStub{calls: &calls},
+		verifierSpy{calls: &calls, verifier: newTestVerifier(t)},
+		claimControllerStub{calls: &calls, lease: validLease()},
+		inputResolverStub{calls: &calls, manifest: manifest},
+		&settlementControllerStub{calls: &calls},
+	); err != nil {
+		t.Fatalf("exact headroom extras failed startup: %v", err)
 	}
 }
 
