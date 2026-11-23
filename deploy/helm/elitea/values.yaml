@@ -1806,6 +1806,42 @@ natsBootstrap:
   # nats.networkPolicy.clients admits to 4222. Fixed: there is no nameOverride
   # here to drift from that list.
 
+  # Egress. With tls.certificate.create (the default), the Job's `issue` init
+  # container calls the Kubernetes API server (https://kubernetes.default.svc)
+  # to create and read the bootstrap Certificates and Secrets, so the pod
+  # needs egress to the API server's endpoints, as well as to DNS and NATS.
+  # A cluster with no egress NetworkPolicy needs nothing. Where a
+  # default-deny (or "no private ranges") egress policy covers the namespace,
+  # the init container fails with `curl: (7) Failed to connect to
+  # kubernetes.default.svc port 443` and `answered HTTP 000`: allow egress for
+  # pods labelled app.kubernetes.io/name=nats-bootstrap and
+  # app.kubernetes.io/instance=<release>, or turn this on
+  # (templates/natsBootstrap/networkpolicy.yaml;
+  # docs/upgrading/2026-11-22-2911-nats-bootstrap-job-needs-api-egress.md).
+  networkPolicy:
+    # Opt-in: the chart cannot know the API server's addresses.
+    enabled: false
+    apiServer:
+      # The API server's endpoint addresses, each as a /32 (or /128):
+      #   kubectl get endpointslice -n default -l kubernetes.io/service-name=kubernetes
+      # Required with enabled and tls.certificate.create.
+      cidrs: []
+      # The endpoints' port: 6443 on many clusters, 443 on others (most CNIs
+      # match after the Service's 443 is translated to the endpoint).
+      ports:
+        - 443
+        - 6443
+    # Raw NetworkPolicyEgressRule entries that replace the DNS rule. Empty:
+    # UDP/TCP 53 to pods labelled k8s-app=kube-dns in any namespace. Set it
+    # where the resolver carries other labels (OpenShift's DNS pods, a
+    # NodeLocal DNSCache address).
+    dnsEgress: []
+    # Raw NetworkPolicyEgressRule entries appended to the policy: the NATS
+    # server when the Job dials one the chart does not run (nats.enabled
+    # false, or natsBootstrap.natsUrl set; required then), or anything else
+    # the Job must reach.
+    extraEgress: []
+
   # Extra args appended to every `nats` invocation. Connection, TLS and inbox
   # flags are rendered from the values above.
   extraNatsArgs: ""

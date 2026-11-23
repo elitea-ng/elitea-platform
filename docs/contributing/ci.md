@@ -34,6 +34,12 @@ that a later push cancelled.
 - A job that failed or was cancelled fails the gate.
 - A job that should have run and did not (for example, a heavy job skipped because the fast tier failed) fails
   the gate as **missing**.
+- One exception: `ci-web-e2e` reported as skipped, when `ci-build-once` succeeded and its lane filter
+  (`scripts/ci/e2e-lane-filter.sh`) set `reaches-stack`, `reaches-model`, `reaches-handoff` and
+  `reaches-sandbox` all to `false`. A chart-only pull request reaches `ci-web-e2e` through `deploy/**` but no
+  lane in it, so every lane skips and GitHub reports the calling job as skipped. That skip is the lane
+  filter's verdict. If `ci-build-once` did not succeed, or any of those outputs is missing or `true`, the skip
+  still counts as missing.
 - On a draft, ci-gate is skipped; fast-gate green means mark it ready. A skipped gate lets nothing through: a
   draft cannot be merged, and marking it ready (`ready_for_review`, one of `CI`'s trigger types) runs the
   workflow again on the same head, where ci-gate stays pending until the heavy tier finishes and then passes or
