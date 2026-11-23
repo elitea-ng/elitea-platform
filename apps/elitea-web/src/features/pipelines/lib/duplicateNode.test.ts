@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import { PipelineNodeTypes } from './flow-editor/constants/flowEditor.constants';
+import { MAX_NODE_ID_BYTES } from './flow-editor/constants/runtimeContract.constants';
 import type { YamlPipelineNode } from './flow-editor/helpers/pipelineFlow.types';
 import type { FlowNode } from './flow-editor/reactFlowTypes';
+import { collectGraphAdmissionIssues } from './graphAdmission.helpers';
 import {
   canDuplicateNodeType,
   clearNodeConnections,
@@ -32,7 +34,19 @@ describe('duplicateNode helpers', () => {
     ).toBe('LLM_1_copy_3');
   });
 
-  it('clears transition, settings.error_transition, and type-specific outgoing routes', () => {
+  it('clamps generated copy IDs to MAX_NODE_ID_BYTES (128) while staying collision-free', () => {
+    const maxLenName = 'a'.repeat(MAX_NODE_ID_BYTES);
+    const first = getDuplicateNodeId({ name: maxLenName, existingNodeIds: [maxLenName] });
+    expect(first.length).toBeLessThanOrEqual(MAX_NODE_ID_BYTES);
+    expect(first.endsWith('_copy')).toBe(true);
+
+    const second = getDuplicateNodeId({ name: maxLenName, existingNodeIds: [maxLenName, first] });
+    expect(second.length).toBeLessThanOrEqual(MAX_NODE_ID_BYTES);
+    expect(second.endsWith('_copy_2')).toBe(true);
+    expect(second).not.toBe(first);
+  });
+
+  it('clears transition, settings.error_transition, and resets type-specific routes to compiler-admitted END defaults', () => {
     const llmNode: YamlPipelineNode = {
       id: 'LLM_1',
       type: PipelineNodeTypes.LLM,
@@ -48,34 +62,62 @@ describe('duplicateNode helpers', () => {
     (llmNode.input_mapping as Record<string, { value: string }>)['task']!.value = 'changed';
     expect((copy.input_mapping as Record<string, { value: string }>)['task']?.value).toBe('hello');
 
+    const printerCopy = clearNodeConnections({
+      id: 'Printer_1',
+      type: PipelineNodeTypes.Printer,
+      transition: 'Next_1',
+      content: 'hi',
+    });
+    expect(printerCopy.transition).toBe('END');
+
     const routerCopy = clearNodeConnections({
       id: 'Router_1',
       type: PipelineNodeTypes.Router,
+      condition: '{{ input }}',
       routes: ['A', 'B'],
-      default_output: 'END',
-    });
+      default_output: 'A',
+    } as unknown as YamlPipelineNode);
     expect(routerCopy['routes']).toEqual([]);
-    expect(routerCopy['default_output']).toBe('');
+    expect(routerCopy['default_output']).toBe('END');
+
+    const decisionCopy = clearNodeConnections({
+      id: 'Decision_1',
+      type: PipelineNodeTypes.Decision,
+      decision: { description: 'pick one' },
+      nodes: ['A', 'B'],
+      default_output: 'A',
+    });
+    expect(decisionCopy['nodes']).toEqual([]);
+    expect(decisionCopy['default_output']).toBe('END');
 
     const hitlCopy = clearNodeConnections({
       id: 'HITL_1',
       type: PipelineNodeTypes.Hitl,
+      user_message: { type: 'fixed', value: 'Approve?' },
       routes: { approve: 'A', edit: 'B', reject: 'END' },
     });
-    expect(hitlCopy['routes']).toEqual({ approve: '', edit: '', reject: '' });
+    expect(hitlCopy['routes']).toEqual({ approve: 'END', reject: 'END' });
+
+    // Admission check: duplicated Printer, Router, Decision, and HITL nodes produce zero admission issues.
+    const issues = collectGraphAdmissionIssues({
+      entry_point: 'Printer_1',
+      nodes: [printerCopy, routerCopy, decisionCopy, hitlCopy],
+    });
+    expect(issues).toEqual([]);
   });
 
-  it('offsets flow node position and assigns the new ID and label', () => {
+  it('offsets flow node position, assigns the new ID/label, and strips transient isPerforming', () => {
     const original: FlowNode = {
       id: 'Code_1',
       type: PipelineNodeTypes.Code,
       position: { x: 100, y: 200 },
-      data: { label: 'Code_1', type: PipelineNodeTypes.Code },
+      data: { label: 'Code_1', type: PipelineNodeTypes.Code, isPerforming: true },
     };
     const copy = duplicateFlowNode(original, 'Code_1_copy');
     expect(copy.id).toBe('Code_1_copy');
     expect(copy.position).toEqual({ x: 140, y: 240 });
     expect(copy.data.label).toBe('Code_1_copy');
+    expect(copy.data['isPerforming']).toBeUndefined();
     expect(copy.selected).toBe(true);
   });
 });

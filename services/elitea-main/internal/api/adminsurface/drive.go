@@ -445,6 +445,13 @@ func (d driver) path(pattern string, params map[string]string) string {
 		}
 		return "1"
 	})
+	// A "/*/" inside a pattern is a sub-router mounted at "/" (chi writes the
+	// mount's wildcard into the walked pattern); the request path has no
+	// segment there. A gate inside that sub-router is reached only on the real
+	// path, so drive that (adminaccess.RoutePattern does the same).
+	for strings.Contains(path, "/*/") {
+		path = strings.ReplaceAll(path, "/*/", "/")
+	}
 	if strings.HasSuffix(path, "*") {
 		path = strings.TrimSuffix(path, "*") + "x"
 	}

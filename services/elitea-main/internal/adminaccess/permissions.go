@@ -79,7 +79,9 @@ const (
 // super_admin and admin (identity.sso.trust.manage to super_admin alone).
 // Stories R0.3 to R0.6 wire each beside the legacy name it narrows: R0.4a
 // wired platform.email.manage, platform.operations.view and .manage, and
-// mcp.catalogue.manage, each accepted beside runtime.plugins.
+// mcp.catalogue.manage, each accepted beside runtime.plugins; R0.3 wired the
+// seven llm.* names, each accepted beside configuration.governance on the
+// /admin/gateway routes.
 const (
 	// Models and spend.
 	LLMCatalogueView    = "llm.catalogue.view"

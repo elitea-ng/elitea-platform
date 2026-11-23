@@ -323,17 +323,7 @@ func TestAdministrationSurfaceFailsOnAnUnreachedRoute(t *testing.T) {
 // Drive sees on the route do not name, each with the reason. The entry names
 // the permission the action requires; the drive's empty body stops before the
 // check that names it.
-var actionPermissionExceptions = map[string]string{
-	"PUT " + identityProvider + " " + adminaccess.OutcomeTrust:   identityTrustInHandler,
-	"PUT " + identityProvider + " " + adminaccess.OutcomeDisable: identityTrustInHandler,
-}
-
-const (
-	identityProvider       = "/api/v2/admin/identity_providers/administration/{key}"
-	identityTrustInHandler = "IdentityProviderSave asks for admin.auth.users.super_admin only after the " +
-		"document validates and the stored row is read, and only when a trust field changes (issue 2558); " +
-		"the drive's empty body is refused first, and the unconnected pool has no stored row"
-)
+var actionPermissionExceptions = map[string]string{}
 
 // TestEveryWriteRouteOfTheSurfaceHasAnActionEntry is the ratchet of the action
 // table (ADR-0059 R0.1c): a write route of the surface with no entry fails, an

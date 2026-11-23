@@ -4549,7 +4549,7 @@
   "pages.admin.scimClients.empty": "No SCIM client exists. An identity provider cannot provision until one is created.",
   "pages.admin.scimClients.error.create": "Failed to create that SCIM client.",
   "pages.admin.scimClients.error.delete": "Failed to delete that SCIM client.",
-  "pages.admin.scimClients.error.forbidden": "You need the admin.auth.users permission to manage SCIM clients.",
+  "pages.admin.scimClients.error.forbidden": "You need the identity.sso.view or admin.auth.users permission to see SCIM clients.",
   "pages.admin.scimClients.error.load": "Failed to load the SCIM clients.",
   "pages.admin.scimClients.error.revoke": "Failed to revoke that SCIM client.",
   "pages.admin.scimClients.error.rotate": "Failed to rotate that SCIM client's secret.",
@@ -4926,7 +4926,7 @@
   "pages.admin.identityProviders.nameIdFormat.transient": "Transient",
   "pages.admin.identityProviders.nameIdFormat.unspecified": "Unspecified",
   "pages.admin.identityTrust.refusal.fields": "Changed: {{fields}}.",
-  "pages.admin.identityTrust.refusal.provider": "Only a super admin can create an identity provider, turn it on or off, replace its secret, or change its issuer, metadata, certificates or identity attributes.",
+  "pages.admin.identityTrust.refusal.provider": "Only a super admin can create or delete an identity provider, turn it on or off, replace its secret, or change its issuer, metadata, certificates or identity attributes.",
   "pages.admin.identityTrust.refusal.rebind": "Only a super admin can re-bind accounts to an identity provider.",
   "pages.admin.identityTrust.refusal.scimClient": "Only a super admin can create, rotate or delete a SCIM client.",
   "pages.admin.identityTrust.refusal.unresolved": "Your own permissions could not be checked, so the change was not saved. Try again.",
@@ -7329,5 +7329,10 @@
   "runtimeFailure.refusal.policyFallback": "This run was refused by a platform or budget policy.",
   "runtimeFailure.refusal.policyTitle": "Request refused by policy",
   "runtimeFailure.refusal.validationFallback": "This run was refused because the request or configuration could not be accepted.",
-  "runtimeFailure.refusal.validationTitle": "Request refused"
+  "runtimeFailure.refusal.validationTitle": "Request refused",
+  "features.pipelines.editorPanel.mode.flow": "Flow",
+  "features.pipelines.editorPanel.mode.yaml": "YAML",
+  "features.pipelines.yamlEditor.copyYaml": "Copy YAML",
+  "features.pipelines.yamlEditor.fullScreenTitle": "YAML",
+  "features.pipelines.yamlEditor.fullScreenView": "Full screen view"
 }

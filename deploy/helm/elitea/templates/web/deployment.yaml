@@ -34,6 +34,10 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "elitea-web.serviceAccountName" . }}
+      {{- with .Values.web.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       terminationGracePeriodSeconds: {{ .Values.web.terminationGracePeriodSeconds }}
       {{- include "elitea.scaling.topologySpread" (dict "ctx" . "v" .Values.web "selector" (include "elitea-web.selectorLabels" .)) | nindent 6 }}
       {{- include "elitea.imagePullSecrets" (dict "local" .Values.web.imagePullSecrets "global" .Values.image.pullSecrets) | nindent 6 }}
@@ -41,6 +45,10 @@ spec:
         - name: elitea-web
           image: "{{ .Values.web.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.web.image.pullPolicy }}
+          {{- with .Values.web.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           ports:
             - name: http
               containerPort: 80
