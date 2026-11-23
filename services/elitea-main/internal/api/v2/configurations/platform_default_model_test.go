@@ -79,8 +79,8 @@ func (f *fakeModelDefaults) ReleaseDeletedProjectModelDefaults(
 func platformDefaultRouter(handler *Handler) chi.Router {
 	r := chi.NewRouter()
 	r.Route("/gateway", func(r chi.Router) {
-		r.Mount("/default_model", handler.PlatformDefaultModelRoutes())
-		r.Mount("/platform_models", handler.GlobalModelRoutes())
+		r.Mount("/default_model", handler.PlatformDefaultModelRoutes(openCatalogueGates))
+		r.Mount("/platform_models", handler.GlobalModelRoutes(openCatalogueGates))
 	})
 	return r
 }
