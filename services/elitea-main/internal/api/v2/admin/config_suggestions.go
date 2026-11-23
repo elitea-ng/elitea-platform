@@ -30,7 +30,6 @@ package admin
 
 import (
 	"net/http"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -75,14 +74,7 @@ const unknownSuggestionSource = "unknown suggestion source"
 // the response says nothing about a section the caller cannot open.
 func (h *Handler) PluginConfigSuggestions(w http.ResponseWriter, r *http.Request) {
 	key := chi.URLParam(r, "key")
-	// A source no section declares is refused before the caller's set is
-	// read: no permission could change that answer.
-	declared := slices.ContainsFunc(configurationSections(), func(s configSection) bool {
-		return s.declaresSuggestionSource(key)
-	})
-	if !declared || !slices.ContainsFunc(h.readableSections(r), func(s configSection) bool {
-		return s.declaresSuggestionSource(key)
-	}) {
+	if !h.mayReadSuggestionSource(r, key) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": unknownSuggestionSource})
 		return
 	}

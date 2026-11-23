@@ -45,6 +45,7 @@ package admin
 import (
 	"net/http"
 	"slices"
+	"sync"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
@@ -109,9 +110,12 @@ var (
 
 // narrowPermissions answers the narrow names that admit a verb: the write
 // permission for a write, either half for a read. Nil for a legacy-only
-// section.
+// section, and nil for an incomplete declaration (no area, or half a pair, or
+// none: a section that forgot its `access`), so an omission fails closed to
+// the legacy path rather than admitting an empty name. The registry test
+// fails on such a section.
 func (a sectionAccess) narrowPermissions(write bool) []string {
-	if a.LegacyOnly {
+	if a.LegacyOnly || a.Area == "" || a.Read == "" || a.Write == "" {
 		return nil
 	}
 	if write {
@@ -273,15 +277,35 @@ func (h *Handler) readableSections(r *http.Request) []configSection {
 	return readable
 }
 
-// declaresSuggestionSource reports whether a section has a field that takes
-// its choices from source.
-func (s configSection) declaresSuggestionSource(source string) bool {
-	for _, field := range s.fields {
-		for _, key := range []string{"enum_source", "enum_source_keys", "enum_source_values"} {
-			if got, _ := field[key].(string); got == source {
-				return true
+// suggestionSourceSections indexes, once, the sections that declare each
+// suggestion source. The declarations are static, so the index is built from
+// the first call of configSections and a suggestion request does not rebuild
+// every section to answer a name lookup. The index is read only: its raw maps
+// are never served.
+var suggestionSourceSections = sync.OnceValue(func() map[string][]configSection {
+	index := map[string][]configSection{}
+	for _, section := range configurationSections() {
+		for _, field := range section.fields {
+			for _, key := range []string{"enum_source", "enum_source_keys", "enum_source_values"} {
+				source, _ := field[key].(string)
+				if source == "" || slices.ContainsFunc(index[source], func(s configSection) bool { return s.id == section.id }) {
+					continue
+				}
+				index[source] = append(index[source], section)
 			}
 		}
 	}
-	return false
+	return index
+})
+
+// mayReadSuggestionSource reports whether the caller may read a section that
+// declares source. A source no section declares is refused before the
+// caller's set is read: no permission could change that answer.
+func (h *Handler) mayReadSuggestionSource(r *http.Request, source string) bool {
+	declaring := suggestionSourceSections()[source]
+	if len(declaring) == 0 {
+		return false
+	}
+	held, ok := h.administrationSet(r)
+	return ok && slices.ContainsFunc(declaring, func(s configSection) bool { return s.readableBy(held) })
 }

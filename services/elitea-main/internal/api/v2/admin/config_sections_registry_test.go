@@ -147,6 +147,20 @@ func TestTheRouteGateIsComputedFromTheSections(t *testing.T) {
 			t.Errorf("the route gate admits %q, which no section declares", name)
 		}
 	}
+	if slices.Contains(admitted, "") {
+		t.Error("the route gate admits the empty name")
+	}
+	// A section that forgot its `access`, or declared half of it, has no
+	// narrow path: it falls back to the legacy one.
+	for _, incomplete := range []sectionAccess{
+		{},
+		{Read: adminaccess.PlatformConfigView, Write: adminaccess.PlatformConfigManage},
+		{Area: adminaccess.AreaPlatform, Read: adminaccess.PlatformConfigView},
+	} {
+		if got := incomplete.narrowPermissions(false); got != nil {
+			t.Errorf("%+v admits %q on the narrow path, want nothing", incomplete, got)
+		}
+	}
 	for _, refused := range []string{adminaccess.ConfigurationGovernance, adminaccess.EntitlementsExport} {
 		if slices.Contains(admitted, refused) {
 			t.Errorf("the route gate admits %q; its holder alone was refused at the route before", refused)

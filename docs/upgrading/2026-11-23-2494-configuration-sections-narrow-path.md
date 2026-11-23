@@ -47,5 +47,18 @@ sections whose values already answered 403 to them (for example Branding without
 the `projects` suggestions, which only the LLM Governance section declares and
 which that holder cannot open.
 
+Some holders gain access. Before, every section also needed `runtime.plugins`.
+Now a role that holds a section's narrow permission without `runtime.plugins`
+reads that section, and saves it when the name is its write permission. This
+also covers the sections that keep their single permission: a custom role with
+`configuration.branding`, `configuration.native_clients`,
+`configuration.microsoft_apps` or `configuration.service_descriptors` and no
+`runtime.plugins` can now read and save the Branding, native client (Native
+clients, Native client policy, Cloud executor), Microsoft apps or Service
+Descriptors section through the Configuration routes. The first three names
+already opened their own pages (Branding, native clients, Microsoft apps)
+without `runtime.plugins`. Review custom
+roles that hold one of these names if they should not edit the section.
+
 **What to do.** Nothing. A custom role that should manage one section can now be
 given that section's narrow permission instead of `runtime.plugins`.
