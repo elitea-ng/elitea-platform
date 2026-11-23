@@ -139,12 +139,18 @@ func checkAuthTime(authTime *float64, login oidcLoginState, now time.Time) (time
 }
 
 // checkAuthenticationInstant holds a LIMITED sign-in's stated authentication
-// time to the limit: present, not after now+skew, and not older than
-// limit+skew. The time it answers is never older than `now - limit`: one the
-// skew alone admitted is recorded at the edge of the limit, so the check that
-// asked for the sign-in with the same limit passes it instead of asking again
-// in a loop. OIDC passes `auth_time` with the id_token verifier's skew; SAML
-// passes AuthnInstant with the provider's authored clock skew.
+// time to the limit: present, not after now+skew, and less than limit+skew
+// old. OIDC passes `auth_time` with the id_token verifier's skew; SAML passes
+// AuthnInstant with the provider's authored clock skew.
+//
+// A time within the limit is recorded as stated. One older than the limit,
+// admitted by the skew alone, is admitted on the premise that the provider's
+// clock lags this one by up to the skew, so it is recorded as that premise
+// reads it: shifted forward by the skew, never past now. That reading is
+// always strictly inside the limit (the admission is strict), so the check
+// that asked for this sign-in with the same limit passes it instead of asking
+// again. Recording such a time AT the edge of the limit would fail that check
+// on the very next request, and send the person round the sign-in again.
 func checkAuthenticationInstant(at time.Time, limit, skew time.Duration, now time.Time) (time.Time, bool) {
 	if at.IsZero() {
 		return time.Time{}, false
@@ -155,11 +161,15 @@ func checkAuthenticationInstant(at time.Time, limit, skew time.Duration, now tim
 	if at.After(now.Add(skew)) {
 		return time.Time{}, false
 	}
-	if now.Sub(at) > limit+skew {
+	// Strict: a time exactly limit+skew old would read as exactly the edge.
+	if now.Sub(at) >= limit+skew {
 		return time.Time{}, false
 	}
 	if edge := now.Add(-limit); at.Before(edge) {
-		at = edge
+		at = at.Add(skew)
+		if at.After(now) {
+			at = now
+		}
 	}
 	return at.UTC(), true
 }

@@ -546,8 +546,8 @@ func TestAPasswordReEntryForAnotherLoginIsRefused(t *testing.T) {
 	service, _, _, provider, sessionID := reauthenticationFixture(t)
 	_, err := service.Reauthenticate(context.Background(), sessionID, "other",
 		provider.NewVerifier("other", "other-secret"))
-	if !errors.Is(err, ErrUnauthenticated) {
-		t.Fatalf("error = %v, want %v", err, ErrUnauthenticated)
+	if !errors.Is(err, ErrReauthenticationStale) {
+		t.Fatalf("error = %v, want %v", err, ErrReauthenticationStale)
 	}
 }
 
@@ -585,5 +585,17 @@ func TestAFormSessionWithNoRecordedTimeHasAnUnknownAuthenticationTime(t *testing
 	}
 	if !authorization.AuthenticatedAt.IsZero() {
 		t.Fatalf("authenticated at = %s, want unknown", authorization.AuthenticatedAt)
+	}
+}
+
+// A second submission of a right password, after a first one rotated the
+// session, is a stale prompt, not a wrong password.
+func TestARotationRaceIsAStalePromptNotAWrongPassword(t *testing.T) {
+	service, sessions, _, provider, sessionID := reauthenticationFixture(t)
+	sessions.rotateErr = errSessionMissing
+	_, err := service.Reauthenticate(context.Background(), sessionID, "admin",
+		provider.NewVerifier("admin", "admin-secret"))
+	if !errors.Is(err, ErrReauthenticationStale) || errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("error = %v, want only %v", err, ErrReauthenticationStale)
 	}
 }

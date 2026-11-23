@@ -26,6 +26,12 @@ import (
 	sessionstate "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/session"
 )
 
+// ErrReauthenticationStale is a re-entry for a prompt that no longer matches
+// the session: rendered for another login, or a session that was rotated (a
+// second submission, another tab) between the read and the write. It is not a
+// wrong password, and the prompt is shown again without saying so.
+var ErrReauthenticationStale = errors.New("browser re-authentication prompt is stale")
+
 // ReauthenticationSubject is the authenticated Form session a password
 // prompt is for.
 type ReauthenticationSubject struct {
@@ -65,7 +71,8 @@ func (s *Service) ReauthenticationSubject(ctx context.Context, sessionID string)
 // password) for the login ReauthenticationSubject answered.
 //
 // A wrong password, a password of ANOTHER Form login, and a session that is no
-// longer a live Form session are ErrUnauthenticated, and the session is left
+// longer a live Form session are ErrUnauthenticated; a prompt that no longer
+// matches the session is ErrReauthenticationStale. The session is left
 // untouched: neither its identifier nor its authentication time moves. The
 // state written is the session's own, so a re-entry cannot change who the
 // session is, which provider attributes it carries, or when its
@@ -89,7 +96,7 @@ func (s *Service) Reauthenticate(
 	if subject.Login != login {
 		// The prompt was rendered for another session than the one this
 		// cookie now names (a sign-in in another tab).
-		return ReauthenticateResult{}, ErrUnauthenticated
+		return ReauthenticateResult{}, ErrReauthenticationStale
 	}
 	current, err := s.sessions.Read(ctx, sessionID)
 	if err != nil {
@@ -127,8 +134,9 @@ func (s *Service) Reauthenticate(
 	newSessionID, err := s.sessions.RotateAndReplace(ctx, sessionID, replacement)
 	if err != nil {
 		if errors.Is(err, sessionstate.ErrNotFound) {
-			// Signed out (or rotated) between the read and the write.
-			return ReauthenticateResult{}, ErrUnauthenticated
+			// Signed out, or rotated by a concurrent re-entry, between the
+			// read and the write. The password was right.
+			return ReauthenticateResult{}, ErrReauthenticationStale
 		}
 		return ReauthenticateResult{}, sanitizedError(ctx, ErrAuthenticationFinalization, "rotate re-authenticated browser session", err)
 	}

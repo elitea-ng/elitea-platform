@@ -392,9 +392,13 @@ func TestCheckAuthnInstant(t *testing.T) {
 		"an AuthnInstant older than the limit is refused": {
 			instant: at(-16 * time.Minute), request: limited,
 		},
-		"the authored skew admits a drift, recorded at the edge": {
+		"the authored skew admits a drift, read as a lagging clock": {
 			instant: at(-16 * time.Minute), request: limited, skew: 2 * time.Minute,
-			wantAt: now.Add(-15 * time.Minute), wantProven: true, wantOK: true,
+			wantAt: now.Add(-14 * time.Minute), wantProven: true, wantOK: true,
+		},
+		"a skew larger than the limit never records a time after now": {
+			instant: at(-30 * time.Second), request: samlLoginRequest{limited: true}, skew: 2 * time.Minute,
+			wantAt: now, wantProven: true, wantOK: true,
 		},
 		"an AuthnInstant in the future beyond the skew is refused": {
 			instant: at(3 * time.Minute), request: limited, skew: time.Minute,

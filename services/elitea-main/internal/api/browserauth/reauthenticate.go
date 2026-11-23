@@ -172,6 +172,11 @@ func (h *Handler) submitReauthenticate(writer http.ResponseWriter, request *http
 		h.form.NewVerifier(subject.Login, password))
 	if err != nil {
 		switch {
+		case errors.Is(err, browserapp.ErrReauthenticationStale):
+			// Not a wrong password: the prompt no longer matches the
+			// session (a second submission, another tab). Ask again,
+			// without saying the password was wrong.
+			h.redirectReauthenticate(writer, request, target, false)
 		case errors.Is(err, browserapp.ErrUnauthenticated):
 			// A wrong password: the session is unchanged; ask again.
 			h.redirectReauthenticate(writer, request, target, true)
