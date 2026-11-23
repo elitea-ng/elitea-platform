@@ -161,3 +161,27 @@ test("ready_for_review reuses a green fast tier of the same head, and ci-gate ac
   const n = needs({ a: { result: "skipped" }, b: { result: "skipped" } });
   assert.deepEqual(evaluate({ stage: "final", needs: n, run: reused, draft: false, tiers }), { ok: true, problems: [] });
 });
+
+test("ci-web-e2e skipped because the lane filter reached no lane is a verdict, not an absence", () => {
+  const t = { jobs: { "ci-build-once": { tier: "heavy", paths: ["deploy/**"] }, "ci-web-e2e": { tier: "heavy", paths: ["deploy/**"] } } };
+  const r = { "ci-build-once": true, "ci-web-e2e": true };
+  const none = { "reaches-stack": "false", "reaches-model": "false", "reaches-handoff": "false", "reaches-sandbox": "false" };
+  const base = (build, e2e = { result: "skipped" }) => ({ changes: { result: "success" }, "fast-gate": { result: "success" }, "ci-build-once": build, "ci-web-e2e": e2e });
+  // A chart-only pull request: build-once ran and reached no lane.
+  assert.deepEqual(evaluate({ stage: "final", needs: base({ result: "success", outputs: none }), run: r, draft: false, tiers: t }), { ok: true, problems: [] });
+  // Any lane reached, an output missing, or build-once not a success: still missing.
+  for (const build of [
+    { result: "success", outputs: { ...none, "reaches-stack": "true" } },
+    { result: "success", outputs: { ...none, "reaches-sandbox": "true" } },
+    { result: "success", outputs: { "reaches-stack": "false" } },
+    { result: "success" },
+    { result: "skipped", outputs: none },
+  ]) {
+    const out = evaluate({ stage: "final", needs: base(build), run: r, draft: false, tiers: t });
+    assert.equal(out.ok, false, JSON.stringify(build));
+    assert.match(out.problems.join("\n"), /ci-web-e2e: missing/);
+  }
+  // A failed ci-web-e2e is never excused.
+  const failed = evaluate({ stage: "final", needs: base({ result: "success", outputs: none }, { result: "failure" }), run: r, draft: false, tiers: t });
+  assert.match(failed.problems.join("\n"), /ci-web-e2e: failure/);
+});

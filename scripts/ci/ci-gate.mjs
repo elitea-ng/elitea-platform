@@ -27,6 +27,24 @@ import { isEntrypoint } from "./py-compat.mjs";
 const SELF = fileURLToPath(import.meta.url);
 export const TIERS_FILE = path.join(path.dirname(SELF), "tier-paths.json");
 
+// ci-web-e2e's lanes each carry their own lane-filter `if:`
+// (scripts/ci/e2e-lane-filter.sh, run by ci-build-once's model-path-changes
+// job). A change the path filter sends to ci-web-e2e (deploy/** holds the
+// compose files) can still reach no lane: a chart-only pull request. Every
+// lane then skips, and GitHub reports the calling job as skipped. That is a
+// verdict, not an absence, when ci-build-once SUCCEEDED and its outputs say no
+// lane is reached; anything else (a failed or skipped build-once, an output
+// that is missing or true) stays missing.
+export const E2E_LANE_OUTPUTS = ["reaches-stack", "reaches-model", "reaches-handoff", "reaches-sandbox"];
+
+/** True when ci-build-once's lane filter decided that no ci-web-e2e lane runs. */
+export function e2eReachesNoLane(needs) {
+  const build = needs["ci-build-once"];
+  if (build?.result !== "success") return false;
+  const outputs = build.outputs ?? {};
+  return E2E_LANE_OUTPUTS.every((key) => outputs[key] === "false");
+}
+
 /**
  * @param {{stage: "fast"|"final", needs: Record<string,{result:string}>, run: Record<string,boolean>, draft: boolean, tiers: {jobs: Record<string,{tier:string}>}}} input
  * @returns {{ok: boolean, problems: string[]}}
@@ -48,6 +66,7 @@ export function evaluate({ stage, needs, run, draft, tiers }) {
     } else if (run[id] === true && result !== "success") {
       // A draft never runs the heavy tier: the one `draft` problem below says so.
       if (draft && job.tier === "heavy") continue;
+      if (id === "ci-web-e2e" && result === "skipped" && e2eReachesNoLane(needs)) continue;
       const why = job.tier === "heavy" ? "the fast tier did not pass" : "it did not run";
       problems.push(`${id}: missing (${result}; ${why})`);
     }
