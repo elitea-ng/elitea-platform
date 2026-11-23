@@ -172,6 +172,10 @@ services:
 
   elitea-main:
     environment:
+      # The governed mocks answer the provider hosts from a container address,
+      # which the worker refuses as private since #2950 unless an operator
+      # permits it. The standalone list plus every alias governed-mocks serves.
+      ELITEA_WORKER_EGRESS_PRIVATE_PERMIT: "mcp-mock,ado-mock,qtest-mock,llm-mock,llm-real,jira.governed.test,sharepoint.governed.test,graph.microsoft.com,login.microsoftonline.com,entra.governed.test"
       ELITEA_ENTERPRISE_CREDENTIAL_GOVERNANCE_ENABLED: "${ELITEA_GOVERNED_FLAG:-true}"
       ELITEA_CREDENTIAL_GOVERNANCE_POLICY_REVISION: "${GOVERNED_POLICY_REVISION:-gov-conformance-r1}"
       # https, because inbound governed MCP builds the resource URI from it
