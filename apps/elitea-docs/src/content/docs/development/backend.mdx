@@ -111,6 +111,17 @@ Every permission that `elitea-main` resolves in the `administration` mode is a r
 
 Danger, whether a reason is required, the elevation rule and refusing tokens are never fields of a permission row. One permission covers actions of different danger, so these belong to the action table, keyed by route and action. The action table is added by a later ADR-0059 story.
 
+### The administration surface
+
+The administration surface is every route whose decision resolves the `administration` mode, wherever it is mounted and whether the check is a route gate or in a handler. It is wider than the `/admin` block of the router: budgets and the audit routes live under `/elitea_core`, project create and delete under `/projects`, the administration secrets under `/secrets` and the tracing status under `/tracing`, and a Configuration section's own permission is checked inside the value handler, after it has found the section.
+
+The surface is found by running the router, not by reading it. `internal/api/adminsurface` builds the composed production router with a recording permission resolver (`RouterConfig.PermissionResolver`), sends an authenticated request to every mounted route and probes each `administration`-mode resolution: it grants nothing, every registered name, or one name at a time, and records the names whose grant gives the same answer as granting everything. A route the helper cannot route to a decision (a missing store answers 503 first) is reported as unreached, never as outside the surface. The tests in `internal/api/administration_surface_test.go` fail on:
+
+- a check that accepts no registered name: it names a permission outside the registry, or its effect cannot be seen. A check of the second kind that a test router cannot show is listed in `invisibleChecks`, with the reason.
+- a route under `/api/v2/admin`, with an `administration` segment or with a `{mode}` segment that made no permission decision. A route that is open on purpose is listed in `declaredWithoutDecision`, with the reason.
+
+A route that takes several actions in its body, or reads something from its path before it checks, is driven once per variant (`adminsurface.Variant`). The Configuration value routes are driven once per section; the sections come from the router's own schema list. The recording resolver must never reach production: `TestBinaryDoesNotLinkTheRecordingResolver` in `cmd/elitea-main` fails if a command links the package.
+
 ### Add a permission
 
 <Steps>

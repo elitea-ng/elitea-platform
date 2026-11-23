@@ -1,0 +1,148 @@
+package adminsurface
+
+import (
+	"context"
+	"regexp"
+	"runtime"
+	"strings"
+	"sync"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+)
+
+// Resolver is the recording permission resolver. It holds no state of its
+// own: every request Drive sends carries a recorder in its context, and the
+// resolver answers from it. A resolution with no recorder in its context (a
+// goroutine that outlived its request, or a request Drive did not send) is
+// refused and counted as an orphan, so it cannot pass unnoticed.
+//
+// It implements auth.PermissionResolver and auth.MembershipPermissionResolver.
+type Resolver struct {
+	mu      sync.Mutex
+	orphans []Call
+}
+
+// Call is one permission resolution a request made.
+type Call struct {
+	Mode      string
+	ProjectID string
+	// Caller is the function that asked, e.g.
+	// ".../internal/api/v2/admin.(*Handler).hasAdministrationPermission".
+	Caller string
+	// Gate is true when the caller is a route gate of internal/api/middleware
+	// (RequireCentralPermissions and its siblings), false when the check is in
+	// a handler or another middleware.
+	Gate bool
+}
+
+// Orphans answers the resolutions that reached the resolver without a recorder.
+func (r *Resolver) Orphans() []Call {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]Call(nil), r.orphans...)
+}
+
+// ResolvePermissions answers through the request's recorder.
+func (r *Resolver) ResolvePermissions(
+	ctx context.Context, _ auth.User, mode string, projectID string,
+) (auth.PermissionResolution, error) {
+	return r.answer(ctx, mode, projectID)
+}
+
+// ResolveMembershipPermissions answers through the request's recorder, as a
+// resolution with no project.
+func (r *Resolver) ResolveMembershipPermissions(
+	ctx context.Context, _ auth.User, mode string,
+) (auth.PermissionResolution, error) {
+	return r.answer(ctx, mode, "")
+}
+
+func (r *Resolver) answer(ctx context.Context, mode, projectID string) (auth.PermissionResolution, error) {
+	call := Call{Mode: mode, ProjectID: projectID}
+	call.Caller, call.Gate = caller()
+	rec, ok := ctx.Value(recorderKey{}).(*recorder)
+	if !ok {
+		r.mu.Lock()
+		r.orphans = append(r.orphans, call)
+		r.mu.Unlock()
+		return auth.PermissionResolution{}, auth.ErrPermissionDenied
+	}
+	return auth.PermissionResolution{UserID: principalUserID, Permissions: rec.record(call)}, nil
+}
+
+// principalUserID is the numeric id of the synthetic principal.
+const principalUserID = 1
+
+type recorderKey struct{}
+
+// recorder holds one request's resolutions and the probe that answers them.
+type recorder struct {
+	mu sync.Mutex
+	// grant answers the n-th administration-mode resolution of the request.
+	grant func(n int) []string
+	// others answers every other mode.
+	others []string
+	calls  []Call
+	admin  int
+}
+
+func (rec *recorder) record(call Call) []string {
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	rec.calls = append(rec.calls, call)
+	if call.Mode != auth.PermissionModeAdministration {
+		return append([]string{}, rec.others...)
+	}
+	n := rec.admin
+	rec.admin++
+	return append([]string{}, rec.grant(n)...)
+}
+
+func (rec *recorder) snapshot() []Call {
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	return append([]Call(nil), rec.calls...)
+}
+
+const (
+	thisPackage       = "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/adminsurface."
+	middlewarePackage = "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware."
+)
+
+// caller names the function that asked the resolver. The middleware's
+// in-handler helpers (HoldsPermissionIn, HoldsResolvedPermission) are skipped,
+// so the handler that called them is named.
+func caller() (string, bool) {
+	pcs := make([]uintptr, 32)
+	n := runtime.Callers(2, pcs)
+	frames := runtime.CallersFrames(pcs[:n])
+	for {
+		frame, more := frames.Next()
+		name := frame.Function
+		switch {
+		case strings.HasPrefix(name, thisPackage):
+		case strings.HasPrefix(name, middlewarePackage+"Holds"):
+		case strings.HasPrefix(name, middlewarePackage+"Require"):
+			return trimClosure(name), true
+		default:
+			return trimClosure(name), false
+		}
+		if !more {
+			return "", false
+		}
+	}
+}
+
+// trimClosure drops the ".func1.2" suffix of a closure, so one check keeps one
+// name however its gate was built.
+func trimClosure(name string) string {
+	slash := strings.LastIndex(name, "/") + 1
+	if loc := closureSuffix.FindStringIndex(name[slash:]); loc != nil {
+		return name[:slash+loc[0]]
+	}
+	return name
+}
+
+// closureSuffix is the first ".funcN" of a function name (a closure), or a
+// trailing ".N" (a closure nested in a closure, or a generic instance).
+var closureSuffix = regexp.MustCompile(`\.func\d+(\..*)?$|(\.\d+)+$`)
