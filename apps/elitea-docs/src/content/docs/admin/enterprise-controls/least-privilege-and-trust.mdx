@@ -150,6 +150,9 @@ A chat answer shows this as `error_code: egress_policy_invalid`. A synchronous t
   <Step title="Seed the platform allowlist">
     Select **Copy as allowlist**. This copies the reached hosts as entries, one per line: a bare host (any port) where only ports 80 and 443 were used, and one `host:port` entry for each port otherwise. Remove the hosts that you do not approve, and paste the rest into the **Platform Allowlist** field. Toolkit base URLs, the base URL of each configuration that a toolkit uses, and the fixed API hosts of each toolkit type are added to each run automatically, governed runs included, so you do not need to list them.
   </Step>
+  <Step title="Permit on-premises hosts">
+    In both modes the worker refuses loopback, private-network, CGNAT, link-local and cloud metadata addresses. A toolkit or MCP server on a private network, such as a self-hosted Jira or GitLab, needs an entry in the **Private Permit** field: a host name, `*.domain` or CIDR block. Link-local and metadata addresses stay refused even when the permit names them. Only this platform field supplies the permit. A project entry or a toolkit URL never adds to it. Refusals are listed in the panel with the reason `not_public`.
+  </Step>
   <Step title="Add project entries if necessary">
     A project that needs more hosts than the platform list can add its own. A project admin (permission `models.project_settings.edit`) creates one configuration of type `worker_egress`:
 

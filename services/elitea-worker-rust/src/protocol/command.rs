@@ -683,6 +683,7 @@ fn validate_agent_command(command: &WorkerCommandV1) -> Result<AgentExecutionKin
     validate_command_invariants(command, input, agent)?;
     super::security_context::SecurityContextReference::from_command(command)?;
     super::egress::policy_from_command(command)?;
+    super::egress::private_permit_from_command(command)?;
     super::delegation::policy_from_command(command)?;
     super::approval_policy::policy_from_command(command)?;
     // A revision this worker does not know names a contract it cannot
@@ -813,6 +814,7 @@ fn validate_toolkit_execute_read_command(
     validate_common_command_invariants(command, input, "the toolkit root identity is malformed")?;
     super::security_context::SecurityContextReference::from_command(command)?;
     super::egress::policy_from_command(command)?;
+    super::egress::private_permit_from_command(command)?;
     Ok(kind)
 }
 

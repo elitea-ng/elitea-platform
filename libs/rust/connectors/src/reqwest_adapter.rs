@@ -60,7 +60,21 @@ macro_rules! reqwest_adapter {
             ///
             /// reqwest could not build the client.
             pub fn hardened(policy: &ClientPolicy) -> Result<Self, BuildError> {
-                let mut builder = $reqwest::Client::builder()
+                Self::hardened_from($reqwest::Client::builder(), policy)
+            }
+
+            /// [`Self::hardened`] on a builder the host prepared (its
+            /// resolver, its proxy setting): the policy's settings are
+            /// applied on top, and redirects stay off.
+            ///
+            /// # Errors
+            ///
+            /// reqwest could not build the client.
+            pub fn hardened_from(
+                builder: $reqwest::ClientBuilder,
+                policy: &ClientPolicy,
+            ) -> Result<Self, BuildError> {
+                let mut builder = builder
                     .https_only(true)
                     .redirect($reqwest::redirect::Policy::none());
                 if policy.disable_retries {

@@ -196,7 +196,7 @@ impl IndexIngestRuntime {
             .rsplit_once(':')
             .map(|(host, _)| host.to_owned());
         let vector = VectorClient::connect_lazy(&config).map_err(|_| IndexRuntimeBuildError)?;
-        let transport = elitea_connectors::reqwest012::ReqwestTransport::hardened(
+        let transport = elitea_agent_runtime::egress::hardened_transport(
             &elitea_connectors::github::client::CLIENT_POLICY,
         )
         .map_err(|_| IndexRuntimeBuildError)?;

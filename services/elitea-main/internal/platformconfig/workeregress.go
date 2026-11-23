@@ -17,17 +17,30 @@ import (
 // allowlist in the signed command (WorkerCommandV1.egress_policy).
 //
 // `open` (the default) leaves public hosts unrestricted: only the worker's
-// SSRF rules apply, and commands carry no policy at all. `allowlist` limits a
+// SSRF rules apply, and commands carry no policy at all unless the private
+// permit below names something. `allowlist` limits a
 // run to the platform entries here, its project's entries (the `worker_egress`
 // project setting), and the hosts of the toolkits and MCP servers the run
 // uses. A governed run (the credential governance profile) is always
 // `allowlist`, whatever this says.
+//
+// `private_permit` (#2950) is the operator's list of private destinations
+// (an on-premises Jira, GitLab or Confluence) the worker may reach although
+// its SSRF rule refuses private, loopback and CGNAT addresses: a host name or
+// *.domain admits what it resolves to, a CIDR block or IP literal the
+// addresses inside it. Link-local and metadata addresses stay refused
+// whatever it names. It applies in both modes and travels on the signed
+// command (WorkerEgressPolicyV1.private_allow); no toolkit setting can add to
+// it. Main's own outbound guard can read the same list
+// (WorkerEgressSettings.PrivatePermit) for destinations it reaches on the
+// operator's behalf.
 const SectionWorkerEgress = "worker_egress"
 
 // Field keys of SectionWorkerEgress.
 const (
-	KeyWorkerEgressMode      = "mode"
-	KeyWorkerEgressAllowlist = "allowlist"
+	KeyWorkerEgressMode          = "mode"
+	KeyWorkerEgressAllowlist     = "allowlist"
+	KeyWorkerEgressPrivatePermit = "private_permit"
 )
 
 // WorkerEgressMode is the platform mode.
@@ -45,7 +58,15 @@ const (
 	MaxWorkerEgressPlatformEntries = 512
 	MaxWorkerEgressProjectEntries  = 256
 	MaxWorkerEgressPolicyEntries   = 1024
-	MaxWorkerEgressEntryBytes      = 261 // a 253-byte name, a colon and a port
+	// MaxWorkerEgressPrivateEntries bounds the console's private permit and,
+	// separately, the deployment's (ELITEA_WORKER_EGRESS_PRIVATE_PERMIT), so
+	// their union stays within MaxWorkerEgressPrivatePolicyEntries and each
+	// list that saves or starts also dispatches.
+	MaxWorkerEgressPrivateEntries = 128
+	// MaxWorkerEgressPrivatePolicyEntries is the command contract's bound on
+	// WorkerEgressPolicyV1.private_allow.
+	MaxWorkerEgressPrivatePolicyEntries = 2 * MaxWorkerEgressPrivateEntries
+	MaxWorkerEgressEntryBytes           = 261 // a 253-byte name, a colon and a port
 )
 
 // WorkerEgressSettings is the platform section.
@@ -55,11 +76,15 @@ type WorkerEgressSettings struct {
 	// validated on write; LoadWorkerEgressSettings keeps it as stored, and
 	// the command assembly refuses a malformed entry (fail closed).
 	Allowlist []string `json:"allowlist"`
+	// PrivatePermit is the stored private-destination permit (#2950), in
+	// the egresslib grammar, kept as stored like Allowlist: the command
+	// assembly refuses a malformed entry.
+	PrivatePermit []string `json:"private_permit"`
 }
 
 // DefaultWorkerEgressSettings is a deployment that never saved the section.
 func DefaultWorkerEgressSettings() WorkerEgressSettings {
-	return WorkerEgressSettings{Mode: WorkerEgressOpen, Allowlist: []string{}}
+	return WorkerEgressSettings{Mode: WorkerEgressOpen, Allowlist: []string{}, PrivatePermit: []string{}}
 }
 
 // LoadWorkerEgressSettings reads the section over the defaults. A query error
@@ -95,19 +120,27 @@ func WorkerEgressSettingsFromValues(values Values) WorkerEgressSettings {
 		}
 	}
 	if raw, present := values[KeyWorkerEgressAllowlist].([]any); present {
-		entries := make([]string, 0, len(raw))
-		for _, item := range raw {
-			entry, ok := item.(string)
-			if !ok {
-				// Kept as a value the grammar refuses, so the assembly
-				// fails closed on it instead of skipping it.
-				entry = fmt.Sprint(item) + " (not a string)"
-			}
-			entries = append(entries, entry)
-		}
-		settings.Allowlist = entries
+		settings.Allowlist = storedEntries(raw)
+	}
+	if raw, present := values[KeyWorkerEgressPrivatePermit].([]any); present {
+		settings.PrivatePermit = storedEntries(raw)
 	}
 	return settings
+}
+
+// storedEntries keeps a stored list as written. A value that is not a string
+// is kept as a value the grammar refuses, so the assembly fails closed on it
+// instead of skipping it.
+func storedEntries(raw []any) []string {
+	entries := make([]string, 0, len(raw))
+	for _, item := range raw {
+		entry, ok := item.(string)
+		if !ok {
+			entry = fmt.Sprint(item) + " (not a string)"
+		}
+		entries = append(entries, entry)
+	}
+	return entries
 }
 
 // ValidateWorkerEgressEntries checks a list an administrator saves, the

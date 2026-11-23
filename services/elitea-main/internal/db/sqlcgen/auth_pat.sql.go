@@ -26,7 +26,9 @@ RETURNING
     uuid,
     expires,
     COALESCE(user_id, 0)::integer AS user_id,
-    name
+    name,
+    admin_access,
+    admin_scopes
 `
 
 type CreatePATForActiveUserParams struct {
@@ -37,13 +39,20 @@ type CreatePATForActiveUserParams struct {
 }
 
 type CreatePATForActiveUserRow struct {
-	ID      int32            `db:"id" json:"id"`
-	Uuid    *string          `db:"uuid" json:"uuid"`
-	Expires pgtype.Timestamp `db:"expires" json:"expires"`
-	UserID  int32            `db:"user_id" json:"user_id"`
-	Name    *string          `db:"name" json:"name"`
+	ID          int32            `db:"id" json:"id"`
+	Uuid        *string          `db:"uuid" json:"uuid"`
+	Expires     pgtype.Timestamp `db:"expires" json:"expires"`
+	UserID      int32            `db:"user_id" json:"user_id"`
+	Name        *string          `db:"name" json:"name"`
+	AdminAccess string           `db:"admin_access" json:"admin_access"`
+	AdminScopes []string         `db:"admin_scopes" json:"admin_scopes"`
 }
 
+// admin_access and admin_scopes (shared 0265, ADR-0059 R1.1) are returned here
+// and by the list, get and principal queries for the resolver (R1.2a) and the
+// token handlers (R1.3a). The INSERT names neither column ON PURPOSE: a new
+// token takes the column default `none`, so it has no administration rights
+// until scopes are chosen. Nothing reads them before R1.2a.
 func (q *Queries) CreatePATForActiveUser(ctx context.Context, arg CreatePATForActiveUserParams) (CreatePATForActiveUserRow, error) {
 	row := q.db.QueryRow(ctx, createPATForActiveUser,
 		arg.Uuid,
@@ -58,6 +67,8 @@ func (q *Queries) CreatePATForActiveUser(ctx context.Context, arg CreatePATForAc
 		&i.Expires,
 		&i.UserID,
 		&i.Name,
+		&i.AdminAccess,
+		&i.AdminScopes,
 	)
 	return i, err
 }
@@ -163,7 +174,9 @@ SELECT
     COALESCE(owner.email, '')::text AS email,
     binding.project_id,
     (bound_project.suspended IS FALSE
-        AND bound_project.create_success IS TRUE)::boolean AS bound_project_active
+        AND bound_project.create_success IS TRUE)::boolean AS bound_project_active,
+    token.admin_access,
+    token.admin_scopes
 FROM public.auth_core__token AS token
 JOIN public.auth_core__user AS owner ON owner.id = token.user_id
 LEFT JOIN elitea_identity.token_project_binding AS binding
@@ -176,11 +189,13 @@ WHERE token.uuid = $1::text
 `
 
 type GetActivePATPrincipalByUUIDRow struct {
-	TokenID            int32  `db:"token_id" json:"token_id"`
-	UserID             int32  `db:"user_id" json:"user_id"`
-	Email              string `db:"email" json:"email"`
-	ProjectID          *int32 `db:"project_id" json:"project_id"`
-	BoundProjectActive bool   `db:"bound_project_active" json:"bound_project_active"`
+	TokenID            int32    `db:"token_id" json:"token_id"`
+	UserID             int32    `db:"user_id" json:"user_id"`
+	Email              string   `db:"email" json:"email"`
+	ProjectID          *int32   `db:"project_id" json:"project_id"`
+	BoundProjectActive bool     `db:"bound_project_active" json:"bound_project_active"`
+	AdminAccess        string   `db:"admin_access" json:"admin_access"`
+	AdminScopes        []string `db:"admin_scopes" json:"admin_scopes"`
 }
 
 // This is the single query the credential validator runs for every request.
@@ -206,6 +221,8 @@ func (q *Queries) GetActivePATPrincipalByUUID(ctx context.Context, uuid string) 
 		&i.Email,
 		&i.ProjectID,
 		&i.BoundProjectActive,
+		&i.AdminAccess,
+		&i.AdminScopes,
 	)
 	return i, err
 }
@@ -270,7 +287,9 @@ SELECT
     token.expires,
     COALESCE(token.user_id, 0)::integer AS user_id,
     token.name,
-    binding.project_id
+    binding.project_id,
+    token.admin_access,
+    token.admin_scopes
 FROM public.auth_core__token AS token
 LEFT JOIN elitea_identity.token_project_binding AS binding
        ON binding.token_id = token.id
@@ -285,12 +304,14 @@ type GetOwnedPATParams struct {
 }
 
 type GetOwnedPATRow struct {
-	ID        int32            `db:"id" json:"id"`
-	Uuid      *string          `db:"uuid" json:"uuid"`
-	Expires   pgtype.Timestamp `db:"expires" json:"expires"`
-	UserID    int32            `db:"user_id" json:"user_id"`
-	Name      *string          `db:"name" json:"name"`
-	ProjectID *int32           `db:"project_id" json:"project_id"`
+	ID          int32            `db:"id" json:"id"`
+	Uuid        *string          `db:"uuid" json:"uuid"`
+	Expires     pgtype.Timestamp `db:"expires" json:"expires"`
+	UserID      int32            `db:"user_id" json:"user_id"`
+	Name        *string          `db:"name" json:"name"`
+	ProjectID   *int32           `db:"project_id" json:"project_id"`
+	AdminAccess string           `db:"admin_access" json:"admin_access"`
+	AdminScopes []string         `db:"admin_scopes" json:"admin_scopes"`
 }
 
 func (q *Queries) GetOwnedPAT(ctx context.Context, arg GetOwnedPATParams) (GetOwnedPATRow, error) {
@@ -303,6 +324,8 @@ func (q *Queries) GetOwnedPAT(ctx context.Context, arg GetOwnedPATParams) (GetOw
 		&i.UserID,
 		&i.Name,
 		&i.ProjectID,
+		&i.AdminAccess,
+		&i.AdminScopes,
 	)
 	return i, err
 }
@@ -314,7 +337,9 @@ SELECT
     token.expires,
     COALESCE(token.user_id, 0)::integer AS user_id,
     token.name,
-    binding.project_id
+    binding.project_id,
+    token.admin_access,
+    token.admin_scopes
 FROM public.auth_core__token AS token
 LEFT JOIN elitea_identity.token_project_binding AS binding
        ON binding.token_id = token.id
@@ -324,12 +349,14 @@ ORDER BY token.id
 `
 
 type ListOwnedPATsRow struct {
-	ID        int32            `db:"id" json:"id"`
-	Uuid      *string          `db:"uuid" json:"uuid"`
-	Expires   pgtype.Timestamp `db:"expires" json:"expires"`
-	UserID    int32            `db:"user_id" json:"user_id"`
-	Name      *string          `db:"name" json:"name"`
-	ProjectID *int32           `db:"project_id" json:"project_id"`
+	ID          int32            `db:"id" json:"id"`
+	Uuid        *string          `db:"uuid" json:"uuid"`
+	Expires     pgtype.Timestamp `db:"expires" json:"expires"`
+	UserID      int32            `db:"user_id" json:"user_id"`
+	Name        *string          `db:"name" json:"name"`
+	ProjectID   *int32           `db:"project_id" json:"project_id"`
+	AdminAccess string           `db:"admin_access" json:"admin_access"`
+	AdminScopes []string         `db:"admin_scopes" json:"admin_scopes"`
 }
 
 // The LEFT JOIN onto elitea_identity.token_project_binding is what lets a user
@@ -355,6 +382,8 @@ func (q *Queries) ListOwnedPATs(ctx context.Context, userID int32) ([]ListOwnedP
 			&i.UserID,
 			&i.Name,
 			&i.ProjectID,
+			&i.AdminAccess,
+			&i.AdminScopes,
 		); err != nil {
 			return nil, err
 		}

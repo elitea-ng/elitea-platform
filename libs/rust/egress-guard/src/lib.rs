@@ -13,6 +13,9 @@
 //! - [`PublicPolicy`] narrows the public hosts a run may reach (ADR-0044
 //!   decision 2, #1490): `Open` admits any host, `Allowlist` only the hosts
 //!   its entries name. It never widens the SSRF rule.
+//! - [`PrivatePermit`] is the operator's list of private destinations that
+//!   may be reached anyway (an on-premises Jira, #2950); forbidden addresses
+//!   stay refused under it. [`resolve_permitted`] applies it.
 //! - [`GuardedResolver`] is a `reqwest` resolver that resolves a name,
 //!   classifies EVERY address and returns only the admitted ones, so the
 //!   connection goes to an address that was checked. A name that later
@@ -26,12 +29,14 @@
 mod allowlist;
 mod classify;
 mod policy;
+mod private;
 mod resolver;
 
 pub use allowlist::{Allowlist, AllowlistError, PermitSet};
 pub use classify::{Class, canonical, classify};
 pub use policy::{MAX_PUBLIC_ALLOWLIST_ENTRIES, PublicPolicy, PublicPolicyError};
+pub use private::{MAX_PRIVATE_PERMIT_ENTRIES, PrivatePermit};
 pub use resolver::{
     GuardedResolver, Lookup, LookupFuture, MAX_RESOLVED_ADDRESSES, ResolveError, SystemLookup,
-    filter, resolve_checked, resolve_checked_with,
+    filter, resolve_checked, resolve_checked_with, resolve_permitted,
 };
