@@ -698,7 +698,7 @@ export function check(tests, invocations, allowlist, sourceCount) {
     errors.push(
       `the sources carry ${sourceCount} #[ignore] attribute(s) but the test list names ` +
         `${tests.length} ignored test(s): the list is empty, truncated or built without ` +
-        "--all-features, so it cannot vouch for anything",
+        "the supervisor's feature set (--features sandbox-supervisor), so it cannot vouch for anything",
     );
   }
   const used = new Set();

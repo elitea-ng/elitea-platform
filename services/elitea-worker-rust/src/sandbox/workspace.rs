@@ -245,7 +245,7 @@ pub struct WorkspaceManifest {
     record: Record,
 }
 impl WorkspaceManifest {
-    #[cfg(test)]
+    #[cfg(all(test, feature = "sandbox-supervisor"))]
     pub(crate) fn fixture(
         selection: WorkspaceSelection,
         policy: WorkspacePolicy,

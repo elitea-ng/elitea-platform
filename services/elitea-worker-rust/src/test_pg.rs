@@ -86,6 +86,7 @@ impl TestConnectOptions {
         self.0.get_database()
     }
 
+    #[cfg(feature = "sandbox-supervisor")]
     pub(crate) fn get_username(&self) -> &str {
         self.0.get_username()
     }
@@ -131,6 +132,7 @@ impl TestPoolOptions {
     }
 
     /// [`Self::connect_with`] for a URL.
+    #[cfg(feature = "sandbox-supervisor")]
     pub(crate) async fn connect(self, url: &str) -> Result<PgPool, sqlx::Error> {
         self.connect_with(connect_options(url)?).await
     }
@@ -220,6 +222,7 @@ fn set_time_zone_statement(zone: &str) -> String {
 /// A random 32-character lowercase hex id. `PostgreSQL` fixtures that share
 /// one database derive job scopes and owner ids from it, so tests running in
 /// parallel never select, claim or reap each other's rows.
+#[cfg(feature = "sandbox-supervisor")]
 #[allow(
     clippy::format_collect,
     reason = "Keep independent hexadecimal fixture generation separate from production helpers."

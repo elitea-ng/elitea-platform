@@ -78,6 +78,26 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
   `test-support` and with it switches off its panic guard, so the `libs/rust` leg also lints the agent runtime
   with the worker's exact feature list (`toolkit-sql`, `toolkit-office`, `toolkit-data-analysis`,
   `toolkit-delta-lake`) and with none (the desktop host).
+- **The worker's feature sets.** The worker (`services/elitea-worker-rust`) is never linted or tested with
+  `--all-features`. Its Containerfile builds two binaries: the worker image with no feature flag, and the code
+  sandbox supervisor with `--features sandbox-supervisor`. `--all-features` adds the two bench-only features
+  and compiles the supervisor's code into every target, so it hid what only the default build sees. The first
+  default-set Clippy found ten dead test helpers (unused imports, test fixtures and `test_pg` helpers that only
+  supervisor-gated tests call). So `ci-rust-lint.yml` has one leg per image set (`lint (worker)` with no
+  features, `lint (worker, sandbox supervisor)`), each with Clippy and rustdoc. They run in parallel, so the fast
+  tier gets no longer. `ci-rust.yml`'s `test` job runs every target with `--features sandbox-supervisor`
+  (PostgreSQL, NATS and Docker included), then `cargo test --lib` on the default set: the lib that every
+  deployment runs, compiled as it ships, with no database. That step shares the job's target cache. It rebuilds
+  the dependencies whose features differ between the sets (`tower`, `hyper-rustls`, `jiff` and what links them)
+  and the worker. `ci-rust.yml` builds with `CARGO_PROFILE_DEV_DEBUG=line-tables-only`, so the cache entry that
+  now holds both sets' dependencies stays at about its one-set size. The two benches need their bench-only
+  features, so `--all-targets` skips them. `lint (worker)` lints them on their own (`cargo clippy --benches
+  --features graph-shaping-bench,node-settings-bench`), which is the one place a bench feature is allowed; that
+  run never counts as an image set's lint.
+  `scripts/ci/check-worker-feature-sets.mjs` (run in `no-binaries.yml`) reads the image sets from the
+  Containerfile's `cargo auditable build` lines. It fails when a workflow (or `scripts/runtime/test_sandbox_ledger.py`)
+  runs `cargo build|check|clippy|doc|test` on the worker with `--all-features` or with a feature list that no
+  image builds, and when an image set has no Clippy or no test run.
 - **Go vet once.** `ci-go.yml` runs no standalone `go vet`: the `lint` job's golangci-lint runs `govet` over
   the same `go.work` modules, with the default build tags and the test files, and with golangci-lint's default
   analyzer set, which is `go tool vet help`'s Go 1.26 list less `loopclosure` (a no-op from go1.22, and every
@@ -382,7 +402,15 @@ Rust services (worker, vector, doc-extractor, the DeepWiki and Inventory engines
 gateway is Go outside `go.work`, so it builds with `GOWORK=off` on its own `go.mod`'s Go. They are built on the
 pool and never lifted from an image, because the images link a different glibc from the pool's. That job has
 no Rust cache: the cache budget has no room for a release target directory, and the one Rust entry caches the
-test profile. It builds cold, with the five workspaces sharing one target directory. It keeps the release
+test profile. It builds cold, in two parallel legs of one pod each (`E2E native build (Rust, worker)` and
+`(Rust, engines)`, `NATIVE_RUST_SERVICES`). As one job the five built one after another for 33 minutes, which
+was the pull request's critical path. The time went to 3 minutes of fetching git crates, 12 of worker, 2 of
+vector, 5 of doc-extractor, 3 of DeepWiki, 6 of Inventory and 1.5 of gateway. The worker leg builds the worker,
+vector and the gateway. The engines leg builds Inventory first, then the doc-extractor and the DeepWiki
+engine, whose dependency graphs are almost all inside Inventory's. Each leg shares one target directory across
+its workspaces and uploads its own artefact (`native-e2e-rust-bin-<leg>`, checked by its own sha256). The lanes
+download both. Lifting the binaries from the `ci-build-once` images stays ruled out by the glibc, and the
+images also build the full release profile. It keeps the release
 semantics (no debug assertions, `panic = "abort"` where set) but drops the whole-program optimisation (thin
 LTO, one codegen unit, opt-level 3) through `CARGO_PROFILE_RELEASE_*`. The compose image smoke runs the
 shipped profile; `NATIVE_RUST_FULL_RELEASE=1` builds it natively. Neither build job

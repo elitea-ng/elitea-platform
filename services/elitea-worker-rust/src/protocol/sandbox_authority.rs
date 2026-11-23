@@ -165,7 +165,7 @@ impl ClaimBoundSandboxAuthority {
     /// The same fixture under its own execution id (32 lowercase hex digits):
     /// tests that run in parallel and read per-run process state (the failed
     /// program's output slot, #2234) each take a distinct one.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "sandbox-supervisor"))]
     pub(crate) fn original_code_visit_conformance_fixture_for(execution_id: &str) -> Self {
         tests::original_code_visit_conformance_fixture(execution_id.to_owned())
     }
