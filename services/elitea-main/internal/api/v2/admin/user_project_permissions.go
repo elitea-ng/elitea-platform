@@ -551,8 +551,14 @@ func dedupeSorted(values []string) []string {
 func refuseReservedProjectGrant(
 	ctx context.Context, transaction pgx.Tx, projects []int, roleMap map[string][]string,
 ) error {
-	for role, permissions := range roleMap {
-		for _, permission := range permissions {
+	// Sorted, so the same request is always refused for the same cell.
+	roles := make([]string, 0, len(roleMap))
+	for role := range roleMap {
+		roles = append(roles, role)
+	}
+	sort.Strings(roles)
+	for _, role := range roles {
+		for _, permission := range dedupeSorted(roleMap[role]) {
 			if !adminaccess.SeededOnly(permission) {
 				continue
 			}

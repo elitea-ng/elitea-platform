@@ -98,6 +98,20 @@ func TestSelfRemovalIsRefusedOnTheModesRoute(t *testing.T) {
 	expectRoles(t, env, escalationModes, "modes_operator")
 }
 
+// A write that leaves the caller's own roles as they are changes nothing, so
+// the rule does not refuse it: re-saving the own role, removing a role the
+// caller does not hold (404, as before).
+func TestASelfWriteThatChangesNothingIsNotRefused(t *testing.T) {
+	env := newEscalationEnvironment(t)
+	expectStatus(t, adminDo(t, env.as(escalationAdmin), http.MethodPost, usersAction,
+		map[string]any{"action": "set_admin_role", "user_id": env.ids[escalationAdmin], "role_name": "admin"}),
+		http.StatusOK)
+	expectRoles(t, env, escalationAdmin, "admin")
+	expectStatus(t, adminDo(t, env.as(escalationModes), http.MethodDelete,
+		modesRemove(env.ids[escalationModes], "empty_role"), nil), http.StatusNotFound)
+	expectRoles(t, env, escalationModes, "modes_operator")
+}
+
 /* ── the global administrator's exemption ─────────────────────────────── */
 
 func TestASuperAdminAssignsARoleToItself(t *testing.T) {
@@ -233,6 +247,9 @@ func TestBreakGlassIsNotARoleName(t *testing.T) {
 	if roleExists(t, env.pool, adminaccess.ReservedRoleName) {
 		t.Fatal("the refused role was created")
 	}
+	// In any case.
+	expectStatus(t, adminDo(t, router, http.MethodPost, centralRoles,
+		map[string]string{"name": "Break_Glass"}), http.StatusBadRequest)
 	// Nor the new name of a rename.
 	expectStatus(t, adminDo(t, router, http.MethodPut, centralRoles,
 		map[string]string{"name": "empty_role", "new_name": adminaccess.ReservedRoleName}), http.StatusBadRequest)

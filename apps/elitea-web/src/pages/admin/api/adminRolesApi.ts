@@ -98,6 +98,7 @@ export function permissionMatrixFailureReason(error: unknown): string | undefine
 interface RoleRefusalBody {
   readonly code?: unknown;
   readonly role?: unknown;
+  readonly roles?: unknown;
   readonly permissions?: unknown;
 }
 
@@ -150,8 +151,13 @@ function roleRefusalReason(body: RoleRefusalBody): string | undefined {
     ? body.permissions.filter((name): name is string => typeof name === 'string')
     : [];
   const role = typeof body.role === 'string' ? body.role : '';
+  const roles = Array.isArray(body.roles) ? body.roles.filter((name): name is string => typeof name === 'string') : [];
   const sentences = [message()];
-  if (role !== '') sentences.push(t('pages.admin.roles.refusal.role', 'Role: {{role}}.', { role }));
+  if (roles.length > 1) {
+    sentences.push(t('pages.admin.roles.refusal.roles', 'Roles: {{roles}}.', { roles: roles.join(', ') }));
+  } else if (role !== '') {
+    sentences.push(t('pages.admin.roles.refusal.role', 'Role: {{role}}.', { role }));
+  }
   if (permissions.length > 0) {
     sentences.push(
       t('pages.admin.roles.refusal.permissions', 'Permissions: {{permissions}}.', {

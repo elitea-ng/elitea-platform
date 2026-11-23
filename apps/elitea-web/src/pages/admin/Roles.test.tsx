@@ -295,6 +295,27 @@ describe('Admin › Roles', () => {
     expect(alert).not.toHaveTextContent(error);
   });
 
+  it('names every built-in role a locked-set refusal is about', async () => {
+    server.use(
+      http.put('*/admin/permissions/:scope/:mode', () =>
+        HttpResponse.json(
+          { error: 'built-in', code: 'role_set_locked', role: 'admin', roles: ['admin', 'editor'] },
+          { status: 403 },
+        ),
+      ),
+    );
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminRoles />);
+
+    await expandGroup(user, 'models.alpha');
+    await user.click(screen.getByRole('checkbox', { name: 'editor: models.alpha.edit' }));
+    await user.click(await screen.findByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'This is a built-in role, so its permissions are locked. Create a custom role for a different set. Roles: admin, editor.',
+    );
+  });
+
   it('toggles a whole group from its group checkbox', async () => {
     const user = userEvent.setup();
     renderAdminRoute(<AdminRoles />);

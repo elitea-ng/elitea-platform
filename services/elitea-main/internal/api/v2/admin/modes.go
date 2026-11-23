@@ -41,6 +41,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -326,7 +327,19 @@ func (h *Handler) ModesRemove(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove role"})
 		return
 	}
-	if refusal := h.checkCentralRoles(ctx, transaction, caller, mode, "", []string{role}, userID); refusal != nil {
+	held, err := adminaccess.UserCentralRoles(ctx, transaction, userID, mode)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove role"})
+		return
+	}
+	refusal, err := h.checkCentralRoles(ctx, transaction, caller, centralChange{
+		mode: mode, removed: []string{role}, targetID: userID, changes: slices.Contains(held, role),
+	})
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove role"})
+		return
+	}
+	if refusal != nil {
 		adminaccess.Write(w, r, refusal)
 		return
 	}

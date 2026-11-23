@@ -350,7 +350,8 @@ func SetLocked(roles []string) *Refusal {
 		Code: CodeSetLocked,
 		Message: subject + " and cannot be edited; " +
 			"a built-in set is locked, so create a custom role for a different set",
-		Role: roles[0],
+		Role:  roles[0],
+		Roles: append([]string(nil), roles...),
 	}
 }
 

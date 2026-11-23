@@ -15,6 +15,10 @@ type Refusal struct {
 	Message string
 	// Role names the role the refusal is about, when there is one.
 	Role string
+	// Roles names every role a refusal is about when there are several (a
+	// matrix save that touches more than one built-in set). Role is the
+	// first of them.
+	Roles []string
 	// Permissions are the permissions the caller lacks, or would gain.
 	Permissions []string
 	// ProjectID is the project of a CodeSelfEscalation refusal.
@@ -29,6 +33,9 @@ func (r *Refusal) Body() map[string]any {
 	body := map[string]any{"error": r.Message, "code": r.Code}
 	if r.Role != "" {
 		body["role"] = r.Role
+	}
+	if len(r.Roles) > 1 {
+		body["roles"] = r.Roles
 	}
 	if len(r.Permissions) > 0 {
 		body["permissions"] = r.Permissions

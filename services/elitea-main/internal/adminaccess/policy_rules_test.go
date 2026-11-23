@@ -3,7 +3,10 @@ package adminaccess
 // The rules ADR-0059 R0.8a adds to the #2555 policy (issue 2497). The #2555
 // tests in policy_test.go stay as they were.
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 // Every seeded_only name of the registry is refused on every role, in every
 // plane and for a global administrator, except the one grant #2555 kept.
@@ -57,8 +60,13 @@ func TestLockedAndUnassignableRefusalsCarryTheLockCode(t *testing.T) {
 	if refusal.Code != CodeSetLocked || refusal.Role != "admin" {
 		t.Fatalf("refusal = %+v", refusal)
 	}
-	if body := refusal.Body(); body["error"] == "" || body["code"] != CodeSetLocked {
+	// Every touched built-in role is named, so the client can show them all.
+	if body := refusal.Body(); body["error"] == "" || body["code"] != CodeSetLocked ||
+		fmt.Sprint(body["roles"]) != "[admin editor]" {
 		t.Fatalf("body = %v", body)
+	}
+	if _, listed := SetLocked([]string{"editor"}).Body()["roles"]; listed {
+		t.Fatal("a refusal about one role lists roles")
 	}
 	if refusal := Unassignable(RoleSystem); refusal.Code != CodeSetLocked || refusal.Role != RoleSystem {
 		t.Fatalf("refusal = %+v", refusal)

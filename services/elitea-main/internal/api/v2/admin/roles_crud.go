@@ -280,7 +280,7 @@ func validateRoleName(name string) error {
 				"of each row, so a role by that name would hide every permission name",
 		}
 	}
-	if name == adminaccess.ReservedRoleName {
+	if strings.EqualFold(name, adminaccess.ReservedRoleName) {
 		return matrixError{
 			status: http.StatusBadRequest,
 			message: strconv.Quote(name) + " is reserved: it names the break-glass section " +
