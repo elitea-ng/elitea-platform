@@ -171,8 +171,8 @@ func TestInitialGlobalAdminMatchingAcceptsBothSpellings(t *testing.T) {
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			require.Equal(t, testCase.want,
-				matchesInitialGlobalAdmin(
-					testCase.admins, testCase.providerRef, testCase.verifiedEmail))
+				initialGlobalAdminMatch(
+					testCase.admins, testCase.providerRef, testCase.verifiedEmail) != "")
 		})
 	}
 }

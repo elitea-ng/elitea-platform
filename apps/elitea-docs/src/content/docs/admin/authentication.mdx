@@ -107,8 +107,9 @@ Re-bind only when you are sure that the new issuer is the same directory as the 
 `identity.initial_global_admins` (or `ELITEA_INITIAL_GLOBAL_ADMINS` on a deployment without an authentication document) names the accounts that get `super_admin` at their first sign-in. It is a **bootstrap only**: it applies only while no active account holds `super_admin`.
 
 - While nobody holds `super_admin`, the first listed account to sign in gets it. A suspended `super_admin` does not count, so the list can still recover a deployment whose only global administrator is suspended.
-- Once an active account holds `super_admin`, a listed account that signs in gets no role. The server logs a warning that says which kind of entry matched (`reference` or `email`), but not the address, and names the command to use instead.
-- Add later administrators from the console of an existing administrator, or with `elitea-main admin-role grant`. Then empty the list: anyone who can edit it and owns an account at your identity provider could otherwise become global administrator while no `super_admin` is active.
+- Once an active account holds `super_admin`, a listed account that signs in gets no role. The server logs a warning that says which kind of entry matched (`reference` or `email`), but not the address, and how to add an administrator instead.
+- Add later administrators from the console of an existing administrator (or with `POST /api/v2/admin/auth_users/administration`). Then empty the list: anyone who can edit it and owns an account at your identity provider could otherwise become global administrator while no `super_admin` is active.
+- An operator command, `elitea-main admin-role grant`, for a deployment with no administrator left ships in a later release.
 
 ## OIDC sign-in rules
 

@@ -20975,7 +20975,7 @@ components:
         suspended: { type: boolean }
         is_admin:
           type: boolean
-          description: Legacy field. True when `admin_role` is not null.
+          description: Legacy field. True when the account holds any administration role (`admin_roles` is not empty).
         is_active:
           type: boolean
           description: Legacy field. The inverse of `suspended`.

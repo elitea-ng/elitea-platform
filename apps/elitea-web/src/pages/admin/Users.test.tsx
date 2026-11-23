@@ -170,7 +170,10 @@ describe('Admin › Users', () => {
     expect(writes()[0]!.url).toContain('/admin/user_suspend/administration/12');
   });
 
-  it('sends the legacy set_admin_role body when the role select changes', async () => {
+  // Ada holds admin and llm_manager (the v2.yaml example). The picker shows
+  // only the legacy role, so it swaps that one and keeps llm_manager: the
+  // single role_name form would replace the whole set and drop it unseen.
+  it('swaps the legacy role and keeps the roles the picker does not show', async () => {
     const user = userEvent.setup();
     renderAdminRoute(<AdminUsers />);
     await screen.findByText('Ada Admin');
@@ -183,11 +186,11 @@ describe('Admin › Users', () => {
     expect(writes()[0]!.body).toEqual({
       action: 'set_admin_role',
       user_id: 11,
-      role_name: 'viewer',
+      role_names: ['llm_manager', 'viewer'],
     });
   });
 
-  it('clears every admin role by sending role_name: null, not the empty string', async () => {
+  it('clears the legacy role with None and keeps the other roles', async () => {
     const user = userEvent.setup();
     renderAdminRoute(<AdminUsers />);
     await screen.findByText('Ada Admin');
@@ -196,12 +199,11 @@ describe('Admin › Users', () => {
     await user.click(await screen.findByRole('option', { name: 'None' }));
 
     await waitFor(() => expect(writes()).toHaveLength(1));
-    // `''` is the DOM value; the server's validator accepts a role name or
-    // `null`, and would reject `""` as an invalid role.
+    // `''` is the DOM value; it must never reach the server as a role name.
     expect(writes()[0]!.body).toEqual({
       action: 'set_admin_role',
       user_id: 11,
-      role_name: null,
+      role_names: ['llm_manager'],
     });
   });
 

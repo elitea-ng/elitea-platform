@@ -197,6 +197,11 @@ func Replace(ctx context.Context, q Querier, userID int64, mode string, roles []
 // auth_core__user, so without it the roles would vanish with no history row
 // and the history would show them as still granted. It returns the changes
 // it wrote, in (mode, name) order.
+//
+// Every mode, the default one included, on purpose: rolegrants writes every
+// row of auth_core__user_role, so every removal is recorded. A role granted
+// before the history existed (or by a migration) gets a revoked row with no
+// granted one, as any revocation of such a role does.
 func RevokeAll(ctx context.Context, q Querier, userID int64, origin Origin) ([]Change, error) {
 	rows, err := q.Query(ctx, `
 SELECT role.mode, role.name

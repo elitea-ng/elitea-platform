@@ -3271,8 +3271,8 @@ main:
     #
     # IT IS A BOOTSTRAP ONLY. The list grants nothing once an unsuspended
     # account holds super_admin: a listed sign-in then logs a warning and gets
-    # no role. Add later administrators with `elitea-main admin-role grant` or
-    # from the console of an existing administrator, and empty the list.
+    # no role. Add later administrators from the console of an existing
+    # administrator, and empty the list.
     #
     # A malformed entry WARNS at start-up and is ignored. The pod logs how many
     # entries are reference-shaped and how many are address-shaped, so a

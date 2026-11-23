@@ -66,7 +66,7 @@ A handful of environment variables on elitea-main turn whole capabilities on or 
 
 ## First login and setup
 
-The first account to sign in with a matching entry becomes a global administrator. Set the entry through your authentication configuration document, or through the environment variable `ELITEA_INITIAL_GLOBAL_ADMINS` (a comma-separated list) if your deployment has no such document — this is the usual path for a single-sign-on-only install. The list is a bootstrap only: once an active account holds `super_admin`, it grants nothing, and you add later administrators from the console or with `elitea-main admin-role grant`.
+The first account to sign in with a matching entry becomes a global administrator. Set the entry through your authentication configuration document, or through the environment variable `ELITEA_INITIAL_GLOBAL_ADMINS` (a comma-separated list) if your deployment has no such document — this is the usual path for a single-sign-on-only install. The list is a bootstrap only: once an active account holds `super_admin`, it grants nothing, and you add later administrators from the console of an existing administrator.
 
 Each entry takes one of three shapes:
 

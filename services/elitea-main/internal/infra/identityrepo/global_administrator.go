@@ -3,6 +3,7 @@ package identityrepo
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
@@ -40,4 +41,42 @@ func InitialGlobalAdminsIgnored(ctx context.Context, db sqlcgen.DBTX, admins []s
 		return false, nil
 	}
 	return GlobalAdministratorExists(ctx, db)
+}
+
+// initialAdministrationRoleDue reports whether the initial administration
+// role is still to be granted to userID: the account holds no role in the
+// mode (a demotion is never undone), and no global administrator exists. It
+// logs the skip of a listed entry once the bootstrap is over, naming the
+// entry's shape and never the address.
+func initialAdministrationRoleDue(
+	ctx context.Context,
+	db sqlcgen.DBTX,
+	userID int32,
+	mode string,
+	entryShape string,
+) (bool, error) {
+	count, err := sqlcgen.New(db).CountAuthUserRolesInMode(ctx, sqlcgen.CountAuthUserRolesInModeParams{
+		UserID: userID,
+		Mode:   mode,
+	})
+	if err != nil {
+		return false, fmt.Errorf("identityrepo: count administration roles: %w", err)
+	}
+	if count != 0 {
+		return false, nil
+	}
+	exists, err := GlobalAdministratorExists(ctx, db)
+	if err != nil {
+		return false, err
+	}
+	if !exists {
+		return true, nil
+	}
+	slog.WarnContext(ctx,
+		"identity.initial_global_admins entry ignored: the deployment already has a global administrator, "+
+			"and the list applies only while there is none. An existing administrator assigns the role "+
+			"(the admin console, or POST /api/v2/admin/auth_users/administration); "+
+			"`elitea-main admin-role grant` covers a deployment with none",
+		"entry_shape", entryShape, "user_id", userID)
+	return false, nil
 }

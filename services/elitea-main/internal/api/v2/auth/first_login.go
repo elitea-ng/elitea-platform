@@ -21,7 +21,7 @@ import (
 type FirstLoginPolicy struct {
 	// InitialGlobalAdmins is `identity.initial_global_admins` from the
 	// authentication configuration document, or ELITEA_INITIAL_GLOBAL_ADMINS
-	// when the deployment has no document. See matchesInitialGlobalAdmin for
+	// when the deployment has no document. See initialGlobalAdminMatch for
 	// what an entry is compared against.
 	InitialGlobalAdmins []string
 }
@@ -52,7 +52,7 @@ func InitialGlobalAdminsFromEnv() []string {
 	return admins
 }
 
-// matchesInitialGlobalAdmin decides whether a stored provider reference names a
+// initialGlobalAdminMatch decides whether a stored provider reference names a
 // configured initial global administrator.
 //
 // THE MATCHING RULE, stated once, because getting it wrong makes the whole
@@ -80,12 +80,9 @@ func InitialGlobalAdminsFromEnv() []string {
 // below therefore cannot reach it: identity.MatchesInitialGlobalAdmin compares
 // an `email:` entry against the address and against nothing else, so a subject
 // spelled `email:someone@corp.com` collects no grant.
-func matchesInitialGlobalAdmin(admins []string, providerRef, verifiedEmail string) bool {
-	return initialGlobalAdminMatch(admins, providerRef, verifiedEmail) != ""
-}
-
-// initialGlobalAdminMatch is matchesInitialGlobalAdmin that also names the
-// shape of the entry that matched (identity.InitialGlobalAdminMatch), or "".
+//
+// It answers the shape of the entry that matched
+// (identity.InitialGlobalAdminMatch), or "" for no match.
 func initialGlobalAdminMatch(admins []string, providerRef, verifiedEmail string) string {
 	if shape := identity.InitialGlobalAdminMatch(admins, providerRef, verifiedEmail); shape != "" {
 		return shape

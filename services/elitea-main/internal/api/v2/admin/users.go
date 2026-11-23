@@ -220,7 +220,7 @@ LIMIT `+limitPlaceholder+` OFFSET `+offsetPlaceholder, listArgs...)
 			"suspended":  suspended,
 			// `is_admin` and `is_active` are the legacy-era fields; both are
 			// kept so existing clients (admin_ui, the QA suite) keep working.
-			"is_admin":  adminRole != nil,
+			"is_admin":  len(adminRoles) > 0, // any administration role
 			"is_active": !suspended,
 			// The highest of the four legacy roles, kept for one release
 			// beside the set (ADR-0059 R0.8b); R0.13 removes it.
@@ -321,7 +321,7 @@ func (h *Handler) deleteUsers(w http.ResponseWriter, r *http.Request, body authU
 	// 2922): the cascade would drop it with no history row, and the grant
 	// history would show the role as still granted.
 	ctx := r.Context()
-	origin, ok := h.accountDeletionOrigin(r)
+	caller, ruled, ok := h.accountDeleter(r)
 	if !ok {
 		adminaccess.Write(w, r, adminaccess.Unresolved(
 			"your own account could not be read, so the users were not deleted"))
@@ -339,7 +339,23 @@ func (h *Handler) deleteUsers(w http.ResponseWriter, r *http.Request, body authU
 		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
 		return
 	}
+	origin := grantOrigin(r, caller)
 	for _, id := range ids {
+		// Deleting an account takes its administration roles, so the role
+		// rules of a removal apply: deleting a super_admin needs super_admin,
+		// the caller holds every permission of each role taken, and changes
+		// no role of its own. One refused account refuses the whole delete.
+		if ruled {
+			refusal, err := h.checkAccountDeletion(ctx, tx, caller, id)
+			if err != nil {
+				apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
+				return
+			}
+			if refusal != nil {
+				adminaccess.Write(w, r, refusal)
+				return
+			}
+		}
 		if _, err := rolegrants.RevokeAll(ctx, tx, int64(id), origin); err != nil {
 			slog.ErrorContext(ctx, "could not revoke the roles of a deleted user", "user_id", id, "err", err)
 			apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
@@ -370,28 +386,42 @@ func (h *Handler) deleteUsers(w http.ResponseWriter, r *http.Request, body authU
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deleted": tag.RowsAffected()})
 }
 
-// accountDeletionOrigin is the grant history origin of the revocations an
-// account delete writes: the caller is the actor, resolved as the role routes
-// resolve it, or from the principal's own user id when the handler has no
-// resolver. The history needs an actor for a console or api change, so a
-// caller who resolves to no account deletes nothing.
-func (h *Handler) accountDeletionOrigin(r *http.Request) (rolegrants.Origin, bool) {
+// accountDeleter is the caller of an account delete, the actor of the
+// revocations it writes. It is resolved as the role routes resolve it; then
+// `ruled` is true and the role rules apply (checkAccountDeletion). A handler
+// built without a permission resolver (unit fixtures only) reads the actor
+// from the principal's own user id and applies no role rule. The history
+// needs an actor for a console or api change, so a caller who resolves to no
+// account deletes nothing (ok false).
+func (h *Handler) accountDeleter(r *http.Request) (caller adminaccess.Caller, ruled, ok bool) {
 	if h.resolver != nil {
 		caller, refusal := adminaccess.ResolveCaller(r, h.resolver)
-		if refusal != nil {
-			return rolegrants.Origin{}, false
-		}
-		return grantOrigin(r, caller), true
+		return caller, true, refusal == nil
 	}
-	principal, ok := auth.UserFromContext(r.Context())
-	if !ok {
-		return rolegrants.Origin{}, false
+	principal, found := auth.UserFromContext(r.Context())
+	if !found {
+		return adminaccess.Caller{}, false, false
 	}
-	id, ok := principal.OwningUserID()
-	if !ok {
-		return rolegrants.Origin{}, false
+	id, found := principal.OwningUserID()
+	if !found {
+		return adminaccess.Caller{}, false, false
 	}
-	return grantOrigin(r, adminaccess.Caller{UserID: id}), true
+	return adminaccess.Caller{UserID: id}, false, true
+}
+
+// checkAccountDeletion applies the rules of a role removal to the
+// administration roles an account delete takes from `id`, under the
+// role-writes lock the delete holds.
+func (h *Handler) checkAccountDeletion(
+	ctx context.Context, tx pgx.Tx, caller adminaccess.Caller, id int,
+) (*adminaccess.Refusal, error) {
+	held, err := adminaccess.UserCentralRoles(ctx, tx, id, adminaccess.ModeAdministration)
+	if err != nil || len(held) == 0 {
+		return nil, err
+	}
+	return h.checkCentralRoles(ctx, tx, caller, centralChange{
+		mode: adminaccess.ModeAdministration, taken: held, targetID: id, changes: true,
+	})
 }
 
 func (h *Handler) setAdminRole(w http.ResponseWriter, r *http.Request, body authUsersActionRequest) {
@@ -777,6 +807,17 @@ func (h *Handler) checkCentralRoles(
 	}
 	if len(unassignable) > 0 {
 		return adminaccess.Unassignable(unassignable[0]), nil
+	}
+	// Without the seed record nothing is marked, but `system` is still the
+	// service accounts' role: it stays unassignable by name there.
+	if mode == adminaccess.ModeAdministration && slices.Contains(change.given, adminaccess.RoleSystem) {
+		present, err := h.seedRecordPresent(ctx, q)
+		if err != nil {
+			return nil, err
+		}
+		if !present {
+			return adminaccess.Unassignable(adminaccess.RoleSystem), nil
+		}
 	}
 	roles := append(append([]string{}, change.given...), change.taken...)
 	if !caller.SuperAdmin && slices.Contains(roles, adminaccess.SuperAdminRole) {

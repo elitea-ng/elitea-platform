@@ -256,14 +256,17 @@ func applyInitialAdministrationRole(
 // names the entry's shape (`entryShape`, never the address) and the command
 // that replaces the list.
 //
-// The check and the grant run under adminaccess.LockRoleWrites, so a global
-// administrator made by another role write cannot appear between them. The
-// lock is NOT this transaction's first statement, unlike every other role
-// write: the sign-in has already locked its provider identity and account
-// rows. A role write that then waits on one of those rows (an account delete
-// of this very account, mid-sign-in) and this sign-in can deadlock; PostgreSQL
-// detects it and fails one of the two, which is retried. It is taken only for
-// a listed address, so an ordinary sign-in never waits on it.
+// The grant and its final check run under adminaccess.LockRoleWrites, so a
+// global administrator made by another role write cannot appear between them.
+// The lock is taken only when a grant is due: a listed account that holds no
+// administration role, on a deployment with no global administrator. That is
+// a bootstrap sign-in, so ordinary sign-ins never wait on it. The lock is NOT
+// this transaction's first statement, unlike every other role write: the
+// sign-in has already locked its provider identity and account rows. A role
+// write that waits on one of those rows (deleting this very account during
+// its first sign-in) and this sign-in can deadlock. PostgreSQL detects it and
+// fails one of the two; when the sign-in is the one, it fails and the person
+// signs in again. Nothing retries it automatically.
 //
 // The grant goes through rolegrants, so it writes one history row with source
 // `bootstrap` and no actor (issue 2499) in the same transaction. `db` is that
@@ -279,30 +282,19 @@ func ApplyInitialAdministrationRole(
 	if mode == "" || role == "" {
 		return nil
 	}
+	// The two checks run first WITHOUT the lock, so the sign-in of a listed
+	// account that already holds a role, or of any listed account once the
+	// bootstrap is over, never waits on role writes. Only a sign-in that may
+	// grant takes the lock, and then repeats both checks under it.
+	proceed, err := initialAdministrationRoleDue(ctx, db, userID, mode, entryShape)
+	if err != nil || !proceed {
+		return err
+	}
 	if err := adminaccess.LockRoleWrites(ctx, db); err != nil {
 		return fmt.Errorf("identityrepo: %w", err)
 	}
-	queries := sqlcgen.New(db)
-	count, err := queries.CountAuthUserRolesInMode(ctx, sqlcgen.CountAuthUserRolesInModeParams{
-		UserID: userID,
-		Mode:   mode,
-	})
-	if err != nil {
-		return fmt.Errorf("identityrepo: count administration roles: %w", err)
-	}
-	if count != 0 {
-		return nil
-	}
-	exists, err := GlobalAdministratorExists(ctx, db)
-	if err != nil {
+	if proceed, err = initialAdministrationRoleDue(ctx, db, userID, mode, entryShape); err != nil || !proceed {
 		return err
-	}
-	if exists {
-		slog.WarnContext(ctx,
-			"identity.initial_global_admins entry ignored: the deployment already has a global administrator; "+
-				"the list applies only while there is none. Use `elitea-main admin-role grant` or an existing administrator",
-			"entry_shape", entryShape, "user_id", userID)
-		return nil
 	}
 	// Grant reports false only when the row is already there: a concurrent
 	// first sign-in of the same account committed it (and its history row)

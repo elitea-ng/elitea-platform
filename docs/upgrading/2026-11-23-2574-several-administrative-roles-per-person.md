@@ -35,7 +35,13 @@ the POST to replace a role must also DELETE the old one, or use
 first (highest first), then the others by name. The single field
 `admin_role` (the highest of the four legacy names, or `null`) is kept for one
 release so existing clients keep working; read `admin_roles` instead. It will
-be removed by ADR-0059 R0.13 (#2502).
+be removed by ADR-0059 R0.13 (#2502). `is_admin` is now true for any
+administration role, so a person who holds only `security_auditor` has
+`is_admin: true` and `admin_role: null`.
+
+**The Users page** keeps its single-role picker. It now sends `role_names`, so
+picking a legacy role swaps only that role and keeps the person's other roles,
+which the picker does not show.
 
 **Contract.** `v2.yaml` now describes `GET` and `POST /admin/auth_users/{mode}`
 (`listAdminAuthUsers`, `adminAuthUsersAction`) with examples, and the role

@@ -219,8 +219,8 @@ func TestTheSetFormGivesSeveralRolesAndTheListingReportsThem(t *testing.T) {
 
 	// The listing: both roles, and no single legacy role.
 	row := listedUser(t, router, plain)
-	if !slices.Equal(row.AdminRoles, []string{"llm_manager", "security_auditor"}) || row.AdminRole != nil {
-		t.Fatalf("listing = %+v, want admin_roles [llm_manager security_auditor] and admin_role null", row)
+	if !slices.Equal(row.AdminRoles, []string{"llm_manager", "security_auditor"}) || row.AdminRole != nil || !row.IsAdmin {
+		t.Fatalf("listing = %+v, want admin_roles [llm_manager security_auditor], admin_role null and is_admin true", row)
 	}
 
 	// The same set again changes nothing.
@@ -322,6 +322,7 @@ type listedAdminUser struct {
 	ID         int      `json:"id"`
 	AdminRole  *string  `json:"admin_role"`
 	AdminRoles []string `json:"admin_roles"`
+	IsAdmin    bool     `json:"is_admin"`
 }
 
 func listedUser(t *testing.T, router chi.Router, id int) listedAdminUser {

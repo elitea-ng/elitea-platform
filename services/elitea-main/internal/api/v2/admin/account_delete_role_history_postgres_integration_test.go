@@ -43,6 +43,50 @@ SELECT $1, id FROM public.auth_core__role WHERE mode = 'default' AND name = 'vie
 	}
 }
 
+// Deleting an account takes its administration roles, so the rules of a role
+// removal apply: a caller without super_admin cannot delete a super_admin,
+// and nothing is deleted or recorded.
+func TestDeletingASuperAdminNeedsSuperAdmin(t *testing.T) {
+	env := newEscalationEnvironment(t)
+	superAdmin := env.ids[escalationSuper]
+	recorder := adminDo(t, env.as(escalationUsersAdmin), http.MethodPost, usersAction,
+		map[string]any{"action": "delete", "users": []map[string]any{{"id": superAdmin}}})
+	expectRefusal(t, recorder, "role_super_admin_required")
+
+	var remaining int
+	if err := env.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM public.auth_core__user WHERE id = $1`, superAdmin).Scan(&remaining); err != nil {
+		t.Fatal(err)
+	}
+	if remaining != 1 {
+		t.Fatalf("the super_admin was deleted by a caller without super_admin")
+	}
+	if history := grantHistory(t, env.pool, superAdmin); len(history) != 0 {
+		t.Fatalf("a refused delete wrote history: %+v", history)
+	}
+}
+
+// Without the seed record (a database whose auth_core tables arrived after
+// shared 0263) nothing is marked unassignable, and `system` is still refused
+// by name.
+func TestSystemStaysUnassignableWithoutTheSeedRecord(t *testing.T) {
+	env := newEscalationEnvironment(t)
+	for _, statement := range []string{
+		`DROP TABLE elitea_auth.admin_role_seeds`,
+		`INSERT INTO public.auth_core__role (name, mode) VALUES ('system', 'administration') ON CONFLICT DO NOTHING`,
+	} {
+		if _, err := env.pool.Exec(context.Background(), statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+	plain := env.ids[escalationPlainTarget]
+	expectRefusal(t, adminDo(t, env.as(escalationSuper), http.MethodPost, usersAction,
+		forUser(setRoles("system"), plain)), "role_set_locked")
+	if history := grantHistory(t, env.pool, plain); len(history) != 0 {
+		t.Fatalf("a refused request wrote history: %+v", history)
+	}
+}
+
 // An account with no role writes no history; the delete is unchanged.
 func TestDeletingAnAccountWithoutRolesWritesNoHistory(t *testing.T) {
 	env := newEscalationEnvironment(t)

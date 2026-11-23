@@ -58,7 +58,9 @@ export const AdminAuthUserRow = zod
     suspended: zod.boolean(),
     is_admin: zod
       .boolean()
-      .describe("Legacy field. True when `admin_role` is not null."),
+      .describe(
+        "Legacy field. True when the account holds any administration role (`admin_roles` is not empty).",
+      ),
     is_active: zod
       .boolean()
       .describe("Legacy field. The inverse of `suspended`."),
