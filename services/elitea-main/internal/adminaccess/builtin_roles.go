@@ -3,7 +3,7 @@ package adminaccess
 // The built-in administration roles of ADR-0059 decision 3 (story R0.7).
 //
 // A role is built-in when elitea_auth.admin_role_seeds holds a row for it, not
-// because of its name: shared 0262 writes the rows, and a custom role that
+// because of its name: shared 0263 writes the rows, and a custom role that
 // already used a built-in name gets none. This file is the other half: the
 // set the registry declares for each built-in role, which the grant-parity
 // test (migrations/builtin_admin_roles_postgres_integration_test.go) holds
@@ -32,7 +32,7 @@ const (
 	// MarkerDeclared: the registry declares the role's set.
 	MarkerDeclared SeedMarker = "declared"
 	// MarkerAsFound: the registry declares no set; the role is locked to the
-	// set it held when shared 0262 ran.
+	// set it held when shared 0263 ran.
 	MarkerAsFound SeedMarker = "as_found"
 	// MarkerUnassignable: locked and never assigned (the administration
 	// `system` role of a legacy-backed database).

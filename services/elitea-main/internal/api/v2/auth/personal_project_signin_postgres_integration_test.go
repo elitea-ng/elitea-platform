@@ -220,6 +220,8 @@ type fakeAuthorization struct {
 	subject string
 	email   string
 	nonce   string
+	// authTime is the id_token's auth_time; nil leaves the claim out.
+	authTime *time.Time
 }
 
 func newFakeIdentityProvider(t *testing.T) *fakeIdentityProvider {
@@ -283,7 +285,7 @@ func newFakeIdentityProvider(t *testing.T) *fakeIdentityProvider {
 // idToken mints the assertion the callback verifies.
 func (p *fakeIdentityProvider) idToken(authorization fakeAuthorization) string {
 	now := time.Now()
-	token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
+	claims := jwt.MapClaims{
 		"iss":            p.server.URL,
 		"aud":            p.clientID,
 		"sub":            authorization.subject,
@@ -293,7 +295,11 @@ func (p *fakeIdentityProvider) idToken(authorization fakeAuthorization) string {
 		"nonce":          authorization.nonce,
 		"iat":            now.Unix(),
 		"exp":            now.Add(time.Hour).Unix(),
-	})
+	}
+	if authorization.authTime != nil {
+		claims["auth_time"] = authorization.authTime.Unix()
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	token.Header["kid"] = "fake-key"
 	signed, err := token.SignedString(p.key)
 	if err != nil {

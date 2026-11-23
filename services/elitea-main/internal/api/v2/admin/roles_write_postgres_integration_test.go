@@ -285,7 +285,7 @@ func newRolesPool(t *testing.T) *pgxpool.Pool {
 		}
 	}
 	// elitea_auth.admin_role_seeds is the record of the built-in roles that
-	// the roles API reads (shared 0262). It is created EMPTY, with the DDL of
+	// the roles API reads (shared 0263). It is created EMPTY, with the DDL of
 	// the migration itself, so no fixture role is built-in unless a test
 	// seeds it (roles_builtin_lock_test.go).
 	if _, err := pool.Exec(ctx, adminRoleSeedsDDL(t)); err != nil {

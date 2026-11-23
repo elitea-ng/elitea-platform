@@ -572,7 +572,7 @@ ON CONFLICT (role_id, permission) DO NOTHING;
 -- re-reads, then revokes it again so the run is repeatable.
 --
 -- 30b writes a CUSTOM role, not `editor`: `editor` is a built-in role since
--- shared 0262 (ADR-0059 R0.7), and the roles API refuses to edit the set of a
+-- shared 0263 (ADR-0059 R0.7), and the roles API refuses to edit the set of a
 -- built-in role. `e2e_custom` has no seed row, so it is an ordinary custom
 -- role.
 INSERT INTO auth_core__role (name, mode) VALUES ('e2e_custom', 'administration')

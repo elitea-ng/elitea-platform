@@ -1,16 +1,16 @@
 package migrations_test
 
-// Shared 0262 (issue 2496, ADR-0059 R0.7, migration B of decision 4): the
+// Shared 0263 (issue 2496, ADR-0059 R0.7, migration B of decision 4): the
 // built-in administration roles, their grants and the seed record
 // elitea_auth.admin_role_seeds.
 //
 // Two databases, as in the 0261 test: fresh (001_initial.sql plus the corpus
-// before 0262) and legacy (001_initial.sql with the central roles of
-// testdata/postgres/legacy-rbac-matrix.json, then the corpus before 0262).
+// before 0263) and legacy (001_initial.sql with the central roles of
+// testdata/postgres/legacy-rbac-matrix.json, then the corpus before 0263).
 //
 // ADR-0058 story E5.1 (#2403) creates the same seed table and the
 // security_auditor role. Until it merges, e51Fixture stands in for it: the
-// seed-table DDL of 0262 and the role insert with its three grants. Replace
+// seed-table DDL of 0263 and the role insert with its three grants. Replace
 // the fixture with the real migration file when #2403 lands.
 
 import (
@@ -39,14 +39,14 @@ import (
 )
 
 const (
-	builtInRolesFile      = "0262_builtin_admin_roles.sql"
+	builtInRolesFile      = "0263_builtin_admin_roles.sql"
 	builtInRolesMigration = "shared/" + builtInRolesFile
 )
 
 // e51Grants are the three security_auditor grants of ADR-0058 E5.1.
 var e51Grants = []string{"runs.evidence.read", "security.signals.project.view", "security.signals.view"}
 
-// newRoles are the roles 0262 creates.
+// newRoles are the roles 0263 creates.
 var newRoles = []string{
 	adminaccess.RoleLLMManager, adminaccess.RoleProjectAdministrator,
 	adminaccess.RoleEmergencyAccess, adminaccess.RoleSecurityAuditor,
@@ -54,7 +54,7 @@ var newRoles = []string{
 
 // e51Fixture is ADR-0058 E5.1's part of security_auditor: the seed table if
 // absent, and the role with its seed row and three grants under the same
-// three cases as 0262.
+// three cases as 0263.
 func e51Fixture(t *testing.T) string {
 	t.Helper()
 	return `DO $$
@@ -81,7 +81,7 @@ END
 $$;`
 }
 
-// seedTableDDL is the CREATE SCHEMA and CREATE TABLE of 0262, as written there.
+// seedTableDDL is the CREATE SCHEMA and CREATE TABLE of 0263, as written there.
 func seedTableDDL(t *testing.T) string {
 	t.Helper()
 	body, err := fs.ReadFile(migrations.Files, builtInRolesMigration)
@@ -102,7 +102,7 @@ var seedTableDDLPattern = regexp.MustCompile(
 
 /* ── grant parity ─────────────────────────────────────────────────────── */
 
-// Each built-in role holds the registry's set, in either order of 0262 and
+// Each built-in role holds the registry's set, in either order of 0263 and
 // ADR-0058 E5.1, and the two orders give the same grants.
 func TestBuiltInAdminRolesHoldTheRegistrySetsInEitherOrder(t *testing.T) {
 	orders := map[string]func(*testing.T, *pgxpool.Pool){
@@ -110,7 +110,7 @@ func TestBuiltInAdminRolesHoldTheRegistrySetsInEitherOrder(t *testing.T) {
 			execSQL(t, pool, e51Fixture(t))
 			applySharedCorpus(t, pool)
 		},
-		"0262 first": func(t *testing.T, pool *pgxpool.Pool) {
+		"0263 first": func(t *testing.T, pool *pgxpool.Pool) {
 			applySharedCorpus(t, pool)
 			execSQL(t, pool, e51Fixture(t))
 		},
@@ -118,7 +118,7 @@ func TestBuiltInAdminRolesHoldTheRegistrySetsInEitherOrder(t *testing.T) {
 	results := map[string]map[string][]string{}
 	for name, apply := range orders {
 		t.Run(name, func(t *testing.T) {
-			pool := newPoolBefore0262(t)
+			pool := newPoolBefore0263(t)
 			apply(t, pool)
 			sets := builtInRoleSets(t, pool)
 			results[name] = sets
@@ -126,10 +126,10 @@ func TestBuiltInAdminRolesHoldTheRegistrySetsInEitherOrder(t *testing.T) {
 			assertSeedRows(t, pool, false)
 		})
 	}
-	if a, b := results["e51 first"], results["0262 first"]; a != nil && b != nil {
+	if a, b := results["e51 first"], results["0263 first"]; a != nil && b != nil {
 		for role, set := range a {
 			if !slices.Equal(set, b[role]) {
-				t.Errorf("%s differs by order:\n  e51 first:  %v\n  0262 first: %v", role, set, b[role])
+				t.Errorf("%s differs by order:\n  e51 first:  %v\n  0263 first: %v", role, set, b[role])
 			}
 		}
 	}
@@ -209,7 +209,7 @@ func assertSeedRows(t *testing.T, pool *pgxpool.Pool, legacy bool) {
 func TestACustomRoleOfABuiltInNameIsLeftAlone(t *testing.T) {
 	for _, name := range []string{adminaccess.RoleLLMManager, adminaccess.RoleSecurityAuditor} {
 		t.Run(name, func(t *testing.T) {
-			pool := newPoolBefore0262(t)
+			pool := newPoolBefore0263(t)
 			execSQL(t, pool, fmt.Sprintf(`
 INSERT INTO public.auth_core__role (name, mode) VALUES ('%s', 'administration');
 INSERT INTO public.auth_core__role_permission (role_id, permission)
@@ -255,9 +255,9 @@ SELECT id, 'llm.usage.view' FROM public.auth_core__role WHERE mode = 'administra
 /* ── the id sequence ──────────────────────────────────────────────────── */
 
 // 001_initial.sql inserts roles with explicit ids; the serial sequence can sit
-// below them. The inserts of 0262 do not collide.
+// below them. The inserts of 0263 do not collide.
 func TestBuiltInAdminRolesDoNotCollideWithExplicitRoleIDs(t *testing.T) {
-	pool := newPoolBefore0262(t)
+	pool := newPoolBefore0263(t)
 	execSQL(t, pool, `
 INSERT INTO public.auth_core__role (id, name, mode) VALUES
     (1, 'r1', 'default'), (2, 'r2', 'default'), (3, 'r3', 'default')
@@ -285,8 +285,8 @@ SELECT setval(pg_get_serial_sequence('public.auth_core__role', 'id'), 1, false);
 // system is unassignable and keeps its 195, editor and viewer are as_found.
 func TestBuiltInAdminRolesKeepEveryGrant(t *testing.T) {
 	for name, build := range map[string]func(*testing.T) *pgxpool.Pool{
-		"fresh":  newPoolBefore0262,
-		"legacy": newLegacyPoolBefore0262,
+		"fresh":  newPoolBefore0263,
+		"legacy": newLegacyPoolBefore0263,
 	} {
 		t.Run(name, func(t *testing.T) {
 			pool := build(t)
@@ -302,25 +302,25 @@ func TestBuiltInAdminRolesKeepEveryGrant(t *testing.T) {
 			// Each seeded role, its set before and after.
 			for role, set := range seededBefore {
 				if got := roleSet(t, pool, role); !slices.Equal(got, set) {
-					t.Errorf("%s held %d permissions before 0262 and %d after", role, len(set), len(got))
+					t.Errorf("%s held %d permissions before 0263 and %d after", role, len(set), len(got))
 				}
 			}
 
 			if lost := grantDifference(before, after); len(lost) > 0 {
-				t.Errorf("0262 removed %d grants:\n  %s", len(lost), strings.Join(lost, "\n  "))
+				t.Errorf("0263 removed %d grants:\n  %s", len(lost), strings.Join(lost, "\n  "))
 			}
 			// The only rows added belong to the new roles.
 			for _, row := range grantDifference(after, before) {
 				if !slices.ContainsFunc(newRoles, func(role string) bool {
 					return strings.HasPrefix(row, "administration/"+role+": ")
 				}) {
-					t.Errorf("0262 added %s", row)
+					t.Errorf("0263 added %s", row)
 				}
 			}
 			assertSeedRows(t, pool, name == "legacy")
 			if name == "legacy" {
-				// The fixture gives system 195; the corpus before 0262
-				// removes some on purpose (0136, 0172). 0262 removes none,
+				// The fixture gives system 195; the corpus before 0263
+				// removes some on purpose (0136, 0172). 0263 removes none,
 				// which the set comparison above proves.
 				for _, role := range []string{adminaccess.RoleSystem, adminaccess.RoleEditor, adminaccess.RoleViewer} {
 					if len(seededBefore[role]) == 0 {
@@ -348,7 +348,7 @@ func TestBuiltInAdminRolesReapplyWritesNothing(t *testing.T) {
 	before := count()
 	execMigrationFile(t, pool, builtInRolesMigration)
 	if after := count(); after != before {
-		t.Fatalf("re-applying 0262 changed %s to %s", before, after)
+		t.Fatalf("re-applying 0263 changed %s to %s", before, after)
 	}
 }
 
@@ -359,13 +359,13 @@ func TestBuiltInAdminRolesIsANoOpWithoutAuthCore(t *testing.T) {
 	var present bool
 	queryRow(t, pool, `SELECT to_regclass('elitea_auth.admin_role_seeds') IS NOT NULL`, &present)
 	if present {
-		t.Fatal("0262 created the seed table on a database without auth_core")
+		t.Fatal("0263 created the seed table on a database without auth_core")
 	}
 }
 
 /* ── harness ───────────────────────────────────────────────────────────── */
 
-func newPoolBefore0262(t *testing.T) *pgxpool.Pool {
+func newPoolBefore0263(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	pool := newEmptyDatabase(t)
 	applyBootstrapSchema(t, pool)
@@ -373,7 +373,7 @@ func newPoolBefore0262(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-func newLegacyPoolBefore0262(t *testing.T) *pgxpool.Pool {
+func newLegacyPoolBefore0263(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	pool := newEmptyDatabase(t)
 	applyBootstrapSchema(t, pool)

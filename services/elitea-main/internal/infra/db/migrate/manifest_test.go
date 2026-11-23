@@ -1202,12 +1202,17 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// super_admin and admin (identity.sso.trust.manage to super_admin alone;
 	// issue 2491, ADR-0059 R0.2). Deletes nothing.
 	//
-	// 262: shared/0262_builtin_admin_roles.sql, the built-in administration
+	// 262: shared/0262_browser_session_authenticated_at.sql, when the person
+	// behind a browser session last authenticated
+	// (browser_sessions.authenticated_at; issue 2577, ADR-0059 R1.10a). No
+	// permission.
+	//
+	// 263: shared/0263_builtin_admin_roles.sql, the built-in administration
 	// roles llm_manager, project_administrator, emergency_access and
 	// security_auditor with their grants, and elitea_auth.admin_role_seeds,
 	// the record of which roles are built-in (issue 2496, ADR-0059 R0.7).
 	// Deletes nothing.
-	require.EqualValues(t, 262, Head(shared))
+	require.EqualValues(t, 263, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

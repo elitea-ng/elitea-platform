@@ -139,6 +139,9 @@ type AuthConfig struct {
 func Auth(cfg AuthConfig) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// The recent-authentication limit of the composed session
+			// manager, for RecentAuthentication on the routes behind this.
+			r = withReauthenticationLimit(r, cfg.SessionStore)
 			// The Form session holds the slot the forwarded identity held:
 			// first. It runs only when the request names no explicit
 			// credential, which is the order the forward-auth kernel applied
@@ -226,6 +229,8 @@ func Auth(cfg AuthConfig) func(http.Handler) http.Handler {
 						// From the row, after validation: a validator that
 						// rebuilds the principal does not carry it.
 						user.BrowserSessionRef = session.Ref
+						user.BrowserSessionAuthenticatedAt = session.AuthenticatedAt
+						user.BrowserSessionProvider = session.Provider
 						serveAuthenticated(next, w, r, user, auth.AuthenticationSourceSession)
 						return
 					}

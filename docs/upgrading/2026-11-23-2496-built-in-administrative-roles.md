@@ -1,6 +1,6 @@
 # Administration: built-in administrative roles, and their sets are locked (#2496, ADR-0059)
 
-**What changed.** Shared migration `0262_builtin_admin_roles.sql` adds four
+**What changed.** Shared migration `0263_builtin_admin_roles.sql` adds four
 built-in roles to the central `administration` mode and records which roles are
 built-in in a new table, `elitea_auth.admin_role_seeds`.
 

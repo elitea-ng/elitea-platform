@@ -53,7 +53,7 @@ import (
 // administration-mode roles — super_admin, admin, editor and viewer — and
 // `system` is not one of them.
 //
-// shared/0262 (ADR-0059 R0.7) adds the built-in project_administrator, which
+// shared/0263 (ADR-0059 R0.7) adds the built-in project_administrator, which
 // holds both strings.
 //
 // The holders are sorted, because administrationGrantHolders sorts what it

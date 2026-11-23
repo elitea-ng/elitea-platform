@@ -23,11 +23,11 @@ import (
 	migrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
-// adminRoleSeedsDDL is the CREATE SCHEMA and CREATE TABLE of shared 0262, read
+// adminRoleSeedsDDL is the CREATE SCHEMA and CREATE TABLE of shared 0263, read
 // from the migration so the fixture cannot drift from it.
 func adminRoleSeedsDDL(t *testing.T) string {
 	t.Helper()
-	const file = "shared/0262_builtin_admin_roles.sql"
+	const file = "shared/0263_builtin_admin_roles.sql"
 	body, err := fs.ReadFile(migrations.Files, file)
 	if err != nil {
 		t.Fatalf("read %s: %v", file, err)
@@ -165,7 +165,7 @@ func TestTheEscalationCodeComesBeforeTheLock(t *testing.T) {
 		rolepolicy.CodeOwnRoleLocked)
 }
 
-// A database whose seed table is absent (0262 ran before the auth_core
+// A database whose seed table is absent (0263 ran before the auth_core
 // tables existed) records no built-in role: the writes are not refused for
 // it, and do not fail.
 func TestWithoutTheSeedTableNothingIsLocked(t *testing.T) {

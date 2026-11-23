@@ -80,7 +80,7 @@ async function reloadMatrix(page: Page): Promise<Record<string, unknown>[]> {
 /**
  * The custom administration role journey 30b writes, seeded by
  * `scripts/e2e-stack.sh seed`. Not `editor`: the built-in roles are locked
- * since shared 0262 (ADR-0059 R0.7), and the server refuses to edit their sets.
+ * since shared 0263 (ADR-0059 R0.7), and the server refuses to edit their sets.
  */
 const CUSTOM_ROLE = 'e2e_custom';
 

@@ -1,4 +1,4 @@
--- 0262_builtin_admin_roles.sql — the built-in administration roles of ADR-0059
+-- 0263_builtin_admin_roles.sql — the built-in administration roles of ADR-0059
 -- decision 3, their grants and the record of which roles are built-in (issue
 -- #2496, ADR-0059 R0.7, migration B of decision 4).
 --
@@ -76,7 +76,7 @@ DECLARE
 BEGIN
     IF to_regclass('public.auth_core__role') IS NULL
        OR to_regclass('public.auth_core__role_permission') IS NULL THEN
-        RAISE NOTICE '0262: auth_core tables absent, no built-in role to seed';
+        RAISE NOTICE '0263: auth_core tables absent, no built-in role to seed';
         RETURN;
     END IF;
 
@@ -106,7 +106,7 @@ BEGIN
     -- 3. The roles 001_initial.sql seeds, and `system` on a legacy-backed
     -- database. A role that is absent gets no row.
     INSERT INTO elitea_auth.admin_role_seeds (role_id, name, mode, marker, seeded_by)
-    SELECT role.id, role.name, role.mode, seed.marker, '0262_builtin_admin_roles.sql'
+    SELECT role.id, role.name, role.mode, seed.marker, '0263_builtin_admin_roles.sql'
     FROM public.auth_core__role AS role
     JOIN (VALUES
         ('super_admin', 'declared'),
@@ -132,12 +132,12 @@ BEGIN
             RETURNING id INTO found_role;
             INSERT INTO elitea_auth.admin_role_seeds (role_id, name, mode, marker, seeded_by)
             VALUES (found_role, built_in.name, 'administration', 'declared',
-                    '0262_builtin_admin_roles.sql');
+                    '0263_builtin_admin_roles.sql');
         ELSE
             SELECT EXISTS (SELECT 1 FROM elitea_auth.admin_role_seeds WHERE role_id = found_role)
             INTO has_seed;
             IF NOT has_seed THEN
-                RAISE NOTICE '0262: the administration role % already exists and is not built-in; it is left unchanged, gets no grant and is not locked', built_in.name;
+                RAISE NOTICE '0263: the administration role % already exists and is not built-in; it is left unchanged, gets no grant and is not locked', built_in.name;
                 CONTINUE;
             END IF;
         END IF;

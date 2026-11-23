@@ -42,7 +42,7 @@ package admin
 //   - A BUILT-IN role is never a rename or delete target, and its permission
 //     set is not edited (ADR-0059 decision 3, story R0.7). Built-in is a
 //     recorded fact: the role has a row in elitea_auth.admin_role_seeds, which
-//     shared 0262 writes for the roles it creates and for the four that
+//     shared 0263 writes for the roles it creates and for the four that
 //     001_initial.sql seeds. A custom role that already used a built-in name
 //     (`llm_manager`, say) before the upgrade has no row and stays an ordinary
 //     custom role. See seededRoles.
@@ -118,7 +118,7 @@ const (
 // every mode and in the project scopes. See the file header for the call
 // sites; the list is not a style rule. It is not the list of built-in roles:
 // that is the seed table (seededRoles), which covers the administration mode
-// only and also holds the roles of shared 0262.
+// only and also holds the roles of shared 0263.
 //
 // `system` is already `roleSystem` in roles.go, where it is the column the
 // matrix refuses to write. The same role is refused here for a wider reason:
@@ -306,12 +306,12 @@ func refuseCodeNamed(name, what string) error {
 }
 
 // seededRoles returns which of names are built-in roles of the central mode:
-// the roles with a row in elitea_auth.admin_role_seeds (shared 0262). It is
+// the roles with a row in elitea_auth.admin_role_seeds (shared 0263). It is
 // one query, run inside the transaction of the write it guards, so a role
 // cannot become built-in between the check and the write.
 //
-// Shared 0262 creates the table on a database that has the auth_core tables
-// when it runs. A database whose auth_core tables appeared after it (0262 is
+// Shared 0263 creates the table on a database that has the auth_core tables
+// when it runs. A database whose auth_core tables appeared after it (0263 is
 // then ledgered as a no-op) has no table and no recorded role, so nothing is
 // built-in there; the code-named roles stay refused by name. Until the table
 // has been seen once, each call first asks whether it exists, because reading

@@ -10,7 +10,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/oauth2"
 
@@ -30,8 +32,16 @@ const maxReconsentClaimsBytes = 8 << 10
 // assertion that failed would come back. So claims that cannot be used
 // (not Entra mode, or a value that does not decode) fall back to
 // `prompt=login`.
-func reconsentOptions(r *http.Request, entra *entraRuntime) []oauth2.AuthCodeOption {
+//
+// A limited sign-in (ADR-0059 R1.10a, recent_authentication.go) adds
+// `max_age` in whole seconds. The limit is parsed and bound to the signed
+// state by Login; it is passed in rather than read here so the two cannot
+// disagree.
+func reconsentOptions(r *http.Request, entra *entraRuntime, limit time.Duration, limited bool) []oauth2.AuthCodeOption {
 	var options []oauth2.AuthCodeOption
+	if limited {
+		options = append(options, oauth2.SetAuthURLParam("max_age", strconv.FormatInt(int64(limit/time.Second), 10)))
+	}
 	query := r.URL.Query()
 	prompt := query.Get("prompt")
 	if prompt != "login" && prompt != "consent" {
