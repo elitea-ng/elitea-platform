@@ -28,7 +28,7 @@ import (
 )
 
 // The two permissions of this surface — decision D4, pending user
-// confirmation. shared/0261 grants manage to project admins and list to
+// confirmation. shared/0264 grants manage to project admins and list to
 // admin, editor and viewer. Manage does not imply list: the rule-names route
 // asks for list alone.
 const (

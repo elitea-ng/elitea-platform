@@ -47,6 +47,7 @@ import (
 	v2evaluation "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
 	v2events "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/events"
 	v2folders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/folders"
+	v2httpactions "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/httpactions"
 	indexingapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/indexing"
 	indextypesapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
 	v2inventory "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/inventory"
@@ -93,6 +94,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/authsvc"
 	infradb "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db"
 	dbrepos "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/egress"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/natsbus"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
@@ -105,8 +107,6 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/vectorintrospection"
-	v2httpactions "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/httpactions"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/egress"
 )
 
 func main() {
