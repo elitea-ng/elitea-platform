@@ -239,7 +239,7 @@ describe('Admin › Roles', () => {
     expect(screen.getByRole('checkbox', { name: 'editor: models.alpha.edit' })).toBeChecked();
   });
 
-  it('shows the reserved super admin permission refusal in its own words', async () => {
+  it('shows the reserved permission refusal in its own words', async () => {
     server.use(
       http.put('*/admin/permissions/:scope/:mode', () =>
         HttpResponse.json(
@@ -261,7 +261,58 @@ describe('Admin › Roles', () => {
     await user.click(await screen.findByRole('button', { name: 'Save' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'The super admin permission can be granted only to the super admin role.',
+      "This permission is granted only by the platform's own setup, so no change here can add it to a role.",
+    );
+  });
+
+  it.each([
+    {
+      code: 'role_self_assignment',
+      error: 'you cannot change your own administration roles; another administrator must make this change',
+      message: 'You cannot change your own administration roles. Ask another administrator. Role: editor.',
+    },
+    {
+      code: 'role_set_locked',
+      error: '"editor" is a built-in role and cannot be edited',
+      message:
+        'This is a built-in role, so its permissions are locked. Create a custom role for a different set. Role: editor.',
+    },
+  ])('shows the $code refusal in its own words', async ({ code, error, message }) => {
+    server.use(
+      http.put('*/admin/permissions/:scope/:mode', () =>
+        HttpResponse.json({ error, code, role: 'editor' }, { status: 403 }),
+      ),
+    );
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminRoles />);
+
+    await expandGroup(user, 'models.alpha');
+    await user.click(screen.getByRole('checkbox', { name: 'editor: models.alpha.edit' }));
+    await user.click(await screen.findByRole('button', { name: 'Save' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(message);
+    expect(alert).not.toHaveTextContent(error);
+  });
+
+  it('names every built-in role a locked-set refusal is about', async () => {
+    server.use(
+      http.put('*/admin/permissions/:scope/:mode', () =>
+        HttpResponse.json(
+          { error: 'built-in', code: 'role_set_locked', role: 'admin', roles: ['admin', 'editor'] },
+          { status: 403 },
+        ),
+      ),
+    );
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminRoles />);
+
+    await expandGroup(user, 'models.alpha');
+    await user.click(screen.getByRole('checkbox', { name: 'editor: models.alpha.edit' }));
+    await user.click(await screen.findByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'This is a built-in role, so its permissions are locked. Create a custom role for a different set. Roles: admin, editor.',
     );
   });
 

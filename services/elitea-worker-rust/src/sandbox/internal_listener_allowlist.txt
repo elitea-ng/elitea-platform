@@ -1,0 +1,68 @@
+# The Rust worker's internal listeners: the reviewed allowlist (ADR-0059
+# decision 7, "Internal paths"; story R1.9). surface_allowlist_tests.rs (beside
+# this file, run by the worker job of ci-rust.yml) compares it with the tonic
+# services the crate's non-test source serves and with every listener and
+# registration site of that source, both ways. The format and the meaning of
+# each field are at the top of surface_allowlist_tests.rs.
+#
+# The default worker binary serves nothing. The elitea-sandbox-supervisor
+# binary (feature sandbox-supervisor) serves one mTLS listener per runtime
+# profile (sandbox/process.rs run_profiles): the client certificate must chain
+# to the profile's CA, and each request carries a grant elitea-main signed for
+# this supervisor's audience, bound to one run (its claim and fence). None of
+# the methods writes provider, policy, identity or role data: they run, read
+# and remove sandbox containers and their ledger rows. An "admin" line here
+# would have to be decided by Main's route and listed in docs/ARCHITECTURE.md.
+#
+# A grpc line names the file that names the service's tonic server module (and
+# so builds the server). The profile file beside it binds the listener and
+# registers the server (the site lines below).
+
+# --- supervisor: elitea.runtime.v1.SandboxSupervisorService (sandbox/service.rs) ---
+grpc | src/sandbox/service.rs | /elitea.runtime.v1.SandboxSupervisorService/HydrateSandboxWorkspace | write | claim | the worker (sandbox client) with a Main-signed run grant: copies a run's workspace into its sandbox
+grpc | src/sandbox/service.rs | /elitea.runtime.v1.SandboxSupervisorService/SubmitRustCompiledSnapshot | write | claim | the worker with a Main-signed compiled-code grant: compiles or reuses a cached snapshot (run data)
+grpc | src/sandbox/service.rs | /elitea.runtime.v1.SandboxSupervisorService/PublishRustCompiledSnapshot | write | claim | the worker with a Main-signed compiled-code grant: publishes a compiled snapshot (run content)
+grpc | src/sandbox/service.rs | /elitea.runtime.v1.SandboxSupervisorService/SubmitSandboxJob | write | claim | the worker with a Main-signed run grant: starts one sandbox job (run data)
+grpc | src/sandbox/service.rs | /elitea.runtime.v1.SandboxSupervisorService/CancelSandboxJob | write | claim | the worker with the job's grant: cancels the job it owns (run data)
+grpc | src/sandbox/service.rs | /elitea.runtime.v1.SandboxSupervisorService/LookupSandboxDependencies | read | claim | the worker with a Main-signed grant: looks up cached dependency content; reserves nothing
+grpc | src/sandbox/service.rs | /elitea.runtime.v1.SandboxSupervisorService/PrepareSandboxDependencies | write | claim | the worker with a Main-signed preparation grant: prepares a dependency bundle (run content)
+grpc | src/sandbox/service.rs | /elitea.runtime.v1.SandboxSupervisorService/PublishSandboxDependencies | write | claim | the worker with a Main-signed preparation grant: publishes a prepared bundle (run content)
+grpc | src/sandbox/service.rs | /elitea.runtime.v1.SandboxSupervisorService/HydrateSandboxDependencies | write | claim | the worker with a Main-signed run grant: copies a bundle into the run's sandbox
+grpc | src/sandbox/service.rs | /elitea.runtime.v1.SandboxSupervisorService/CodeOwnerRecoveryRead | read | claim | elitea-main (its configured workload identity) with a Main-signed owner grant: reads a recovery observation
+grpc | src/sandbox/service.rs | /elitea.runtime.v1.SandboxSupervisorService/CodeOwnerRecoverySealNoEffect | write | claim | elitea-main (its configured workload identity) with a Main-signed owner grant: seals a recovery row as no effect (run data)
+grpc | src/sandbox/service.rs | /elitea.runtime.v1.SandboxSupervisorService/CodePlatformOwnerReadRetainedRuntime | read | claim | elitea-main (its configured workload identity) with a Main-signed owner grant: reads a retained runtime
+grpc | src/sandbox/service.rs | /elitea.runtime.v1.SandboxSupervisorService/CodePlatformOwnerReadPendingCall | read | claim | elitea-main (its configured workload identity) with a Main-signed owner grant: reads a pending platform call
+grpc | src/sandbox/service.rs | /elitea.runtime.v1.SandboxSupervisorService/CodePlatformOwnerPublishReply | write | claim | elitea-main (its configured workload identity) with a Main-signed owner grant: hands a platform call its reply (run data)
+
+# --- browser profile: elitea.runtime.v1.BrowserSessionService --------------------
+# (sandbox/browser_session_service.rs, served by browser_session_profile.rs)
+grpc | src/sandbox/browser_session_service.rs | /elitea.runtime.v1.BrowserSessionService/StartBrowserSession | write | claim | the worker (browser_run) with a Main-signed run grant: starts a browser container for the run
+grpc | src/sandbox/browser_session_service.rs | /elitea.runtime.v1.BrowserSessionService/BrowserCall | write | claim | the worker (browser_run) with the session's grant: drives the run's own browser (run data)
+grpc | src/sandbox/browser_session_service.rs | /elitea.runtime.v1.BrowserSessionService/BrowserView | write | claim | elitea-main (browser view client) with a Main-signed view grant: relays the live view and the viewer's input
+grpc | src/sandbox/browser_session_service.rs | /elitea.runtime.v1.BrowserSessionService/DestroyBrowserSession | write | claim | the worker (browser_run) with the session's grant: removes the run's browser container
+
+# --- workspace profile: elitea.runtime.v1.WorkspaceRunService --------------------
+# (sandbox/workspace_run_service.rs, served by workspace_run_profile.rs)
+grpc | src/sandbox/workspace_run_service.rs | /elitea.runtime.v1.WorkspaceRunService/StartWorkspaceRun | write | claim | the worker (workspace_run) with a Main-signed run grant: starts a workspace container for the run
+grpc | src/sandbox/workspace_run_service.rs | /elitea.runtime.v1.WorkspaceRunService/ExecWorkspaceRun | write | claim | the worker (workspace_run) with the run's grant: runs the runner's unpack, serve or pack in it
+grpc | src/sandbox/workspace_run_service.rs | /elitea.runtime.v1.WorkspaceRunService/DestroyWorkspaceRun | write | claim | the worker (workspace_run) with the run's grant: removes the run's workspace container
+
+# --- listener and registration sites ---------------------------------------------
+site | src/sandbox/process.rs | TcpListener::bind | 1
+site | src/sandbox/service.rs | Server::builder | 1
+site | src/sandbox/service.rs | .add_service( | 1
+site | src/sandbox/service.rs | serve_with_incoming | 1
+site | src/sandbox/service.rs | TcpListenerStream | 1
+site | src/sandbox/service.rs | sandbox_supervisor_service_server | 1
+site | src/sandbox/browser_session_profile.rs | TcpListener::bind | 1
+site | src/sandbox/browser_session_profile.rs | Server::builder | 1
+site | src/sandbox/browser_session_profile.rs | .add_service( | 1
+site | src/sandbox/browser_session_profile.rs | serve_with_incoming | 1
+site | src/sandbox/browser_session_profile.rs | TcpListenerStream | 1
+site | src/sandbox/browser_session_service.rs | browser_session_service_server | 1
+site | src/sandbox/workspace_run_profile.rs | TcpListener::bind | 1
+site | src/sandbox/workspace_run_profile.rs | Server::builder | 1
+site | src/sandbox/workspace_run_profile.rs | .add_service( | 1
+site | src/sandbox/workspace_run_profile.rs | serve_with_incoming | 1
+site | src/sandbox/workspace_run_profile.rs | TcpListenerStream | 1
+site | src/sandbox/workspace_run_service.rs | workspace_run_service_server | 1

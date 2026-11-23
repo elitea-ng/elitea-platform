@@ -25,9 +25,10 @@
 // StoredConfigurationResolver the stored connection check consumes
 // (stored_check.go, which this file does not modify). That is what makes the
 // route possible at all: a platform credential's api_key is sealed in the
-// public project's vault, so an operator holding `configuration.governance`
-// has no copy of it to send. The resolved payload goes to the gateway and is
-// dropped; no branch here logs it, returns it, or persists it.
+// public project's vault, so an operator holding `llm.catalogue.manage` (or
+// `configuration.governance`) has no copy of it to send. The resolved payload
+// goes to the gateway and is dropped; no branch here logs it, returns it, or
+// persists it.
 //
 // # What it must NOT do
 //

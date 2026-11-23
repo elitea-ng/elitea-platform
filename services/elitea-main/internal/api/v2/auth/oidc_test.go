@@ -45,12 +45,16 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/browsersession"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identityrepo"
 )
 
@@ -476,4 +480,203 @@ func TestTheNonceCookieIsClearedOnEveryCallback(t *testing.T) {
 		}
 	}
 	t.Fatal("the callback does not clear the nonce cookie")
+}
+
+/* ── recent authentication (ADR-0059 R1.10a) ───────────────────────────── */
+
+// limitedLogin runs Login for a query and returns the recorder.
+func limitedLogin(handler *OIDCHandler, query string) *httptest.ResponseRecorder {
+	recorder := httptest.NewRecorder()
+	handler.Login(recorder, httptest.NewRequest(http.MethodGet, "/auth/oidc/login?"+query, nil))
+	return recorder
+}
+
+// limitedCallback completes a login started with query, with the provider
+// stating authTime (nil leaves auth_time out of the id_token).
+func limitedCallback(t *testing.T, provider *fakeIdentityProvider, handler *OIDCHandler, query string, authTime *time.Time) *httptest.ResponseRecorder {
+	t.Helper()
+	login := limitedLogin(handler, query)
+	if login.Code != http.StatusFound {
+		t.Fatalf("login status = %d, want 302: %s", login.Code, login.Body.String())
+	}
+	authorizeURL, err := url.Parse(login.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	code := "code-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	provider.mu.Lock()
+	provider.codes[code] = fakeAuthorization{
+		subject: "subject-1", email: "person@example.test",
+		nonce: authorizeURL.Query().Get("nonce"), authTime: authTime,
+	}
+	provider.mu.Unlock()
+	callback := httptest.NewRequest(http.MethodGet, "/auth/oidc/callback?code="+url.QueryEscape(code)+
+		"&state="+url.QueryEscape(authorizeURL.Query().Get("state")), nil)
+	for _, cookie := range login.Result().Cookies() {
+		callback.AddCookie(cookie)
+	}
+	recorder := httptest.NewRecorder()
+	handler.Callback(recorder, callback)
+	return recorder
+}
+
+func TestAnOIDCSignInStartedWithALimitSendsMaxAge(t *testing.T) {
+	provider := newFakeIdentityProvider(t)
+	handler := provider.handler(t, nil)
+
+	login := limitedLogin(handler, "max_age=600&target_to=%2Fadmin%2Faccess")
+	if login.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302: %s", login.Code, login.Body.String())
+	}
+	authorizeURL, err := url.Parse(login.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := authorizeURL.Query().Get("max_age"); got != "600" {
+		t.Fatalf("max_age = %q, want %q", got, "600")
+	}
+	// The limit is bound to the SIGNED state, which the callback reads back.
+	var stateCookie string
+	for _, cookie := range login.Result().Cookies() {
+		if cookie.Name == oidcStateCookie {
+			stateCookie = cookie.Value
+		}
+	}
+	state, ok := handler.consumeState(stateCookie, authorizeURL.Query().Get("state"))
+	if !ok || !state.limited || state.limit != 10*time.Minute || state.targetTo != "/admin/access" {
+		t.Fatalf("state = %+v (ok %v), want a 10m limit and target /admin/access", state, ok)
+	}
+
+	// An ordinary sign-in sends no max_age and binds no limit.
+	ordinary := limitedLogin(handler, "target_to=%2F")
+	ordinaryURL, err := url.Parse(ordinary.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ordinaryURL.Query().Has("max_age") {
+		t.Fatalf("an ordinary sign-in sent max_age=%q", ordinaryURL.Query().Get("max_age"))
+	}
+}
+
+func TestAnOIDCCallbackWithAnOldOrAbsentAuthTimeIsRefused(t *testing.T) {
+	provider := newFakeIdentityProvider(t)
+	// No pool: a refused callback must stop before any account is read or
+	// any session written, so reaching provisioning would fail here.
+	handler := provider.handler(t, nil)
+
+	old := time.Now().Add(-20 * time.Minute)
+	future := time.Now().Add(20 * time.Minute)
+	for name, authTime := range map[string]*time.Time{
+		"auth_time is absent":            nil,
+		"auth_time is older than limit":  &old,
+		"auth_time is in the far future": &future,
+	} {
+		t.Run(name, func(t *testing.T) {
+			recorder := limitedCallback(t, provider, handler, "max_age=600&target_to=%2Fadmin", authTime)
+			// Refused back to the sign-in page with its error and target. Every
+			// earlier refusal of a callback that carries a code is a plain
+			// error status, so this redirect is the auth_time check's: the
+			// token, its signature and its nonce all verified.
+			if recorder.Code != http.StatusFound || recorder.Header().Get("Location") != SignInErrorURL("/admin") {
+				t.Fatalf("status = %d, Location = %q; want 302 to %q: %s", recorder.Code,
+					recorder.Header().Get("Location"), SignInErrorURL("/admin"), recorder.Body.String())
+			}
+			cleared := map[string]bool{}
+			for _, cookie := range recorder.Result().Cookies() {
+				if cookie.Name == browsersession.CookieName && cookie.MaxAge >= 0 {
+					t.Fatalf("a refused callback set a session cookie: %+v", cookie)
+				}
+				if cookie.MaxAge < 0 {
+					cleared[cookie.Name] = true
+				}
+			}
+			for _, name := range []string{oidcStateCookie, oidcNonceCookie, oidcPKCECookie} {
+				if !cleared[name] {
+					t.Fatalf("the refused callback left the %s cookie set", name)
+				}
+			}
+		})
+	}
+}
+
+func TestALimitedSignInRefusesAnAbsoluteOrCrossOriginReturnPath(t *testing.T) {
+	provider := newFakeIdentityProvider(t)
+	handler := provider.handler(t, nil)
+
+	for _, target := range []string{
+		"https://attacker.example/admin",
+		"//attacker.example/admin",
+		"/\\attacker.example/admin",
+		"javascript:alert(1)",
+		"admin/relative",
+	} {
+		t.Run(target, func(t *testing.T) {
+			recorder := limitedLogin(handler, "max_age=600&target_to="+url.QueryEscape(target))
+			if recorder.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 for target %q", recorder.Code, target)
+			}
+			if len(recorder.Result().Cookies()) != 0 {
+				t.Fatal("a refused limited sign-in set login cookies")
+			}
+		})
+	}
+	if recorder := limitedLogin(handler, "max_age=600&target_to=%2Fadmin%2Fusers%3Ftab%3Droles"); recorder.Code != http.StatusFound {
+		t.Fatalf("a same-origin relative path was refused: %d", recorder.Code)
+	}
+}
+
+func TestTheLimitOfASignInMustBeAWholeNumberOfSecondsInRange(t *testing.T) {
+	for raw, want := range map[string]bool{
+		"0": true, "900": true, "86400": true,
+		"": false, "-1": false, "86401": false, "15m": false, "9e2": false, "+900": false, "0900": false,
+		"36028797018963968": false, "9223372036854775807": false, "9223372036854775808": false,
+	} {
+		_, limited, err := requestedAuthenticationLimit(url.Values{"max_age": {raw}})
+		if (err == nil) != want || (err == nil && !limited) {
+			t.Fatalf("max_age=%q: limited %v, err %v; want accepted %v", raw, limited, err, want)
+		}
+	}
+	if _, limited, err := requestedAuthenticationLimit(url.Values{}); err != nil || limited {
+		t.Fatalf("no max_age: limited %v, err %v; want an ordinary sign-in", limited, err)
+	}
+}
+
+func TestTheAuthTimeDecidesTheSessionsAuthenticationTime(t *testing.T) {
+	now := time.Date(2026, time.November, 23, 12, 0, 0, 0, time.UTC)
+	seconds := func(at time.Time) *float64 { value := float64(at.Unix()); return &value }
+	limited := oidcLoginState{limit: 10 * time.Minute, limited: true}
+
+	for name, testCase := range map[string]struct {
+		authTime *float64
+		login    oidcLoginState
+		wantOK   bool
+		wantAt   time.Time
+	}{
+		"ordinary, no auth_time: the time is unknown": {login: oidcLoginState{}, wantOK: true},
+		"ordinary, an old auth_time is recorded as it is": {
+			authTime: seconds(now.Add(-3 * time.Hour)), login: oidcLoginState{}, wantOK: true, wantAt: now.Add(-3 * time.Hour),
+		},
+		"limited, fresh auth_time": {
+			authTime: seconds(now.Add(-time.Minute)), login: limited, wantOK: true, wantAt: now.Add(-time.Minute),
+		},
+		// Admitted by the skew alone: read as the provider's clock lagging by
+		// the whole skew, so it is inside the limit and the check that asked
+		// with the same limit passes it (ADR-0059 R1.10b review).
+		"limited, within the limit and the clock skew": {
+			authTime: seconds(now.Add(-14 * time.Minute)), login: limited, wantOK: true, wantAt: now.Add(-9 * time.Minute),
+		},
+		"limited, at the outer edge of the limit and the clock skew": {
+			authTime: seconds(now.Add(-15 * time.Minute)), login: limited,
+		},
+		"limited, past the limit and the clock skew": {authTime: seconds(now.Add(-16 * time.Minute)), login: limited},
+		"limited, absent": {login: limited},
+		"limited, ahead by more than the clock skew": {authTime: seconds(now.Add(6 * time.Minute)), login: limited},
+	} {
+		t.Run(name, func(t *testing.T) {
+			at, ok := checkAuthTime(testCase.authTime, testCase.login, now)
+			if ok != testCase.wantOK || !at.Equal(testCase.wantAt) {
+				t.Fatalf("checkAuthTime = (%s, %v), want (%s, %v)", at, ok, testCase.wantAt, testCase.wantOK)
+			}
+		})
+	}
 }

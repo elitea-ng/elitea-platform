@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -323,6 +324,17 @@ type RouterConfig struct {
 	// working gate from a broken one. Production leaves this unset and keeps
 	// the Pool-backed resolver.
 	ProjectPermissionResolver platformauth.PermissionResolver
+	// PermissionResolver overrides legacyrbac.NewPostgresResolver(Pool) for
+	// EVERY route: the gates, the sub-routers and the handlers that resolve a
+	// permission themselves. It exists for the administration surface helper
+	// (internal/api/adminsurface), which drives every mounted route with a
+	// recording resolver. Production leaves it unset. Two tests in
+	// cmd/elitea-main hold that: TestBinaryDoesNotLinkTheRecordingResolver
+	// (no binary links the helper) and
+	// TestNoProductionCodeOverridesThePermissionResolver (no non-test code
+	// sets this field). The two narrower overrides above still win for their
+	// routes.
+	PermissionResolver RouterPermissionResolver
 	// ArtifactHandler overrides newArtifactHandler's Pool/ObjectStore-backed
 	// construction (S11) — newArtifactHandler always builds real
 	// Postgres-backed repositories from Pool with no injection seam, so a
@@ -1487,6 +1499,7 @@ func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 func mountMCPServerRoutes(
 	r chi.Router,
 	pool *pgxpool.Pool,
+	permissions platformauth.PermissionResolver,
 	authenticate func(http.Handler) http.Handler,
 	agentStart v2mcp.AgentStartUseCase,
 	toolkitExecute v2mcp.ToolkitExecuteReadUseCase,
@@ -1517,7 +1530,9 @@ func mountMCPServerRoutes(
 	}
 	handler := v2mcp.NewHandlerWithToolkitRuns(
 		pool, resolver, agentStart, toolkitRun,
-		legacyrbac.NewPostgresResolver(pool),
+		// The router's one resolver, so RouterConfig.PermissionResolver
+		// reaches this mount like every other.
+		permissions,
 		v2mcp.WithInternalChatTools(conversationHandler, folderHandler),
 		v2mcp.WithInternalChatRuntime(conversationHandler, typedConfigurations),
 		v2mcp.WithInternalToolkitHandler(toolkitHandler),
@@ -1785,7 +1800,12 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// API's response middleware untouched (internal/api/webedge). A no-op when
 	// WebUpstream is nil.
 	r.Use(webedge.Middleware(cfg.WebUpstream))
-	permissionResolver := legacyrbac.NewPostgresResolver(cfg.Pool)
+	// Resolved through a local so the override decides only the authorization
+	// answer, never which routes register (see coreResolver below).
+	var permissionResolver RouterPermissionResolver = legacyrbac.NewPostgresResolver(cfg.Pool)
+	if override := cfg.PermissionResolver; override != nil {
+		permissionResolver = override
+	}
 
 	// The audit-trail recorder. Built from the same pool the audit READS use,
 	// for the reason stated at newProjectProvisioner: a write path and a read
@@ -2378,7 +2398,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		}
 	}
 	mountMCPServerRoutes(
-		r, cfg.Pool, authenticate, cfg.MCPAgentStart, cfg.MCPToolkitExecute,
+		r, cfg.Pool, permissionResolver, authenticate, cfg.MCPAgentStart, cfg.MCPToolkitExecute,
 		toolkitHandler, configurationsHandler, coreHandler, prebuiltMCPVault, cfg.CurrentNotificationStore,
 		cfg.ToolkitArgumentSchemas, cfg.MCPToolkitRun, personalProjects,
 		cfg.InternalConfigurationTools, draftHandler, cfg.ToolkitDiscovery, convHandler, folderHandler,
@@ -2807,17 +2827,27 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			// select the permission mode: legacy reached these handlers only
 			// through its `administration` AdminAPI, so the resolution mode is
 			// always `administration`.
-			central := func(permission string) func(http.Handler) http.Handler {
+			central := func(permissions ...string) func(http.Handler) http.Handler {
 				return apimw.RequireCentralPermissions(
 					permissionResolver, platformauth.PermissionModeAdministration,
-					permission,
+					permissions...,
 				)
 			}
 			// auth_users.py, user_suspend.py
 			requireAdminUsers := central(adminaccess.AdminAuthUsers)
-			// System info, plugin config, maintenance and background jobs —
-			// all declare ["runtime.plugins"].
+			// Plugin config, maintenance and identity providers declare
+			// ["runtime.plugins"]. System info, e-mail, background jobs and the
+			// prebuilt MCP catalogue declared it too, and now accept a narrow
+			// name beside it (below).
 			requireRuntimePlugins := central(adminaccess.RuntimePlugins)
+			// The narrow names of ADR-0059 decision 2 for the low-risk
+			// platform subjects (R0.4a). Each gate accepts the narrow name OR
+			// runtime.plugins, so a holder of the legacy name sees no change
+			// (testdata/admin_platform_legacy.golden).
+			requireEmail := central(adminaccess.PlatformEmailManage, adminaccess.RuntimePlugins)
+			requireOperationsView := central(adminaccess.PlatformOperationsView, adminaccess.RuntimePlugins)
+			requireOperationsManage := central(adminaccess.PlatformOperationsManage, adminaccess.RuntimePlugins)
+			requireMCPCatalogue := central(adminaccess.MCPCatalogueManage, adminaccess.RuntimePlugins)
 			// moderation_status.py / moderation_statuses.py. The queue itself is
 			// registered further down, next to the three other moderation routes
 			// this unit added, so all four read as one surface.
@@ -2861,7 +2891,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// which is why every Help Center card said "No links configured".
 				r.Get("/plugin_config_values/prompt_lib/resources", adminHandler.PromptLibResourcesValues)
 
-				r.With(requireRuntimePlugins).Get("/system_info/{mode}", adminHandler.SystemInfo)
+				r.With(requireOperationsView).Get("/system_info/{mode}", adminHandler.SystemInfo)
 				// Before this gate any authenticated session could read the
 				// global user list — id, name, email, last_login, suspended and
 				// administration role for every row of auth_core__user.
@@ -3024,20 +3054,20 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// unavailable because its rows are plaintext and a catalogue
 				// entry carries a client secret (config_schemas.go).
 				//
-				// The permission is the SAME `runtime.plugins` the section it
-				// replaces already required, so an operator who could edit that
-				// section can edit the catalogue, and no new permission string
-				// arrives without a grant (router_permission_grant_gate_test.go).
+				// The permission is `mcp.catalogue.manage` (ADR-0059 R0.4a, one
+				// name for read and edit) or the SAME `runtime.plugins` the
+				// section it replaces already required, so an operator who
+				// could edit that section can still edit the catalogue.
 				//
 				// The mode segment is static `administration`: the catalogue is
 				// platform-wide and there is no project-scoped view of it, so
 				// another mode 404s rather than being answered with the same
 				// rows under a scope that does not apply to them.
-				r.With(requireRuntimePlugins).
+				r.With(requireMCPCatalogue).
 					Get("/mcp_prebuilt_servers/administration", adminHandler.PrebuiltMCPList)
-				r.With(requireRuntimePlugins).
+				r.With(requireMCPCatalogue).
 					Put("/mcp_prebuilt_servers/administration/{key}", adminHandler.PrebuiltMCPSave)
-				r.With(requireRuntimePlugins).
+				r.With(requireMCPCatalogue).
 					Delete("/mcp_prebuilt_servers/administration/{key}", adminHandler.PrebuiltMCPDelete)
 				// The TYPED identity provider definitions — the real surface
 				// behind the Configuration page's "Authentication" section,
@@ -3159,10 +3189,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// rows are plaintext and the SMTP password is a credential
 				// (config_schemas.go).
 				//
-				// The permission is the SAME `runtime.plugins` that section
-				// already required, so an operator who could edit it can
-				// configure the relay, and no new permission string arrives
-				// without a grant (router_permission_grant_gate_test.go).
+				// The permission is `platform.email.manage` (ADR-0059 R0.4a:
+				// read and edit the settings, send a test; there is no view
+				// half) or the SAME `runtime.plugins` that section already
+				// required, so an operator who could edit it can still
+				// configure the relay.
 				//
 				// The mode segment is static `administration`: a mail relay is
 				// a deployment fact with no project-scoped view, so another
@@ -3174,9 +3205,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// not in behaviour, and an operator who may configure the relay
 				// must be able to verify it without also holding the grant that
 				// lets them re-brand the product.
-				r.With(requireRuntimePlugins).Get("/email/administration", adminHandler.EmailSettingsRead)
-				r.With(requireRuntimePlugins).Put("/email/administration", adminHandler.EmailSettingsSave)
-				r.With(requireRuntimePlugins).Post("/email/test/administration", adminHandler.EmailTestSend)
+				r.With(requireEmail).Get("/email/administration", adminHandler.EmailSettingsRead)
+				r.With(requireEmail).Put("/email/administration", adminHandler.EmailSettingsSave)
+				r.With(requireEmail).Post("/email/test/administration", adminHandler.EmailTestSend)
 				// The branding package (ADR-0024 decision 9): export, import
 				// with a dry run, and the kept versions for rollback.
 				r.With(requireBranding).Get("/branding/package/administration", adminHandler.BrandingPackageExport)
@@ -3196,20 +3227,21 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// Admin › Tasks — the platform's own background jobs, read
 				// from this platform's tables.
 				//
-				// Gated on `runtime.plugins` in administration mode, the
-				// permission the admin Tasks page has always declared. No new
-				// permission string arrives, so the grant gate stays untripped.
+				// Gated in administration mode on `platform.operations.view`
+				// (the read) and `platform.operations.manage` (a cancel, the
+				// notice run), each beside `runtime.plugins`, the permission
+				// the admin Tasks page has always declared (ADR-0059 R0.4a).
 				//
 				// A STATIC `administration` segment, not `{mode}`: a mode
 				// variable would name a resolution this router does not
 				// perform — the same argument the moderation routes below make.
-				r.With(requireRuntimePlugins).Get("/background_jobs/administration", adminHandler.BackgroundJobs)
-				r.With(requireRuntimePlugins).Post(
+				r.With(requireOperationsView).Get("/background_jobs/administration", adminHandler.BackgroundJobs)
+				r.With(requireOperationsManage).Post(
 					"/background_jobs/administration/{kind}/{jobID}:cancel",
 					adminHandler.CancelBackgroundJob,
 				)
 				// Run the personal-access-token expiry notice pass now
-				// (#940 A3). Same surface, same `runtime.plugins` gate, and
+				// (#940 A3). Same surface, same operations.manage gate, and
 				// the same producer the scheduler runs — see
 				// admin/pat_expiry_notices.go for why an operator needs it and
 				// why it must not be a second implementation.
@@ -3217,7 +3249,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// One static segment, so it cannot collide with the
 				// `{kind}/{jobID}:cancel` route above: that pattern is two
 				// segments, this is one.
-				r.With(requireRuntimePlugins).Post(
+				r.With(requireOperationsManage).Post(
 					"/background_jobs/administration/pat_expiry_notices:run",
 					adminHandler.RunPATExpiryNotices,
 				)
@@ -3686,11 +3718,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				governanceHandler := gateway.NewGovernanceHandler(cfg.Pool)
 				// The LLM Proxy surface: the gateway's enforcement status and
 				// the model price catalogue, joined to the usage that makes the
-				// catalogue actionable. It shares this group's permission
-				// deliberately — it explains and prices the same enforcement
-				// the governance CRUD beside it authors, and a second
-				// permission string would need its own grant migration to reach
-				// anybody (the #386 shape, one block up).
+				// catalogue actionable. The status, usage and logs are usage
+				// reads; the prices are the catalogue (gates below).
 				//
 				// `cfg.GatewayStatus` may be nil. A deployment with no gateway
 				// address is supported, and the handler reports that posture
@@ -3710,38 +3739,75 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					llmProxyDB = cfg.Pool
 				}
 				llmProxyHandler := gateway.NewLLMProxyHandler(llmProxyDB, cfg.GatewayStatus)
-				r.Group(func(r chi.Router) {
-					r.Use(central(adminaccess.ConfigurationGovernance))
-					r.Route("/gateway", func(r chi.Router) {
-						r.Mount("/", budgetAlertHandler.Routes())
-						governanceHandler.Register(r)
-						llmProxyHandler.Register(r)
-						// PLATFORM-WIDE provider credentials — the public
-						// project's shared `ai_credentials` rows, which the LLM
-						// gateway already resolves for every project (issue
-						// #316). See global_providers.go for why this is the
-						// same rows and the same handlers rather than a second
-						// credential model.
-						//
-						// It inherits this group's `configuration.governance`
-						// gate from the enclosing Group, which is correct for a
-						// surface whose four verbs take one permission — and is
-						// why it can be a Mount at all, unlike the project-scoped
-						// Routes() that needs five different strings.
-						r.Mount("/providers", configurationsHandler.GlobalProviderRoutes())
-						// PLATFORM-WIDE models — the other half. A credential
-						// authenticates; a model is what a caller addresses.
-						// Both are the public project's shared rows, and the
-						// gateway resolves a public model against public
-						// credentials ONLY, so the two surfaces are mounted
-						// together and global_models.go enforces that pairing.
-						r.Mount("/platform_models", configurationsHandler.GlobalModelRoutes())
-						// The PLATFORM DEFAULT model (#6826): which platform
-						// model a new project starts with, and what a project
-						// with no usable default of its own falls back to.
-						// platform_default_model.go has the precedence.
-						r.Mount("/default_model", configurationsHandler.PlatformDefaultModelRoutes())
+				// One gate per sub-surface (ADR-0059 R0.3). Until R0.3 one
+				// group-wide `configuration.governance` gate covered all of
+				// /gateway, so a person who should manage models and spend had
+				// to be given `admin`. Each gate now accepts the narrow name of
+				// ADR-0059 decision 2 OR `configuration.governance`, so a
+				// holder of the legacy name sees no change
+				// (testdata/admin_gateway_legacy.golden). The sub-routers take
+				// the gates as arguments, so a route cannot be mounted
+				// without one. Shared 0261 grants the narrow names.
+				requireLLMUsageView := central(adminaccess.LLMUsageView, adminaccess.ConfigurationGovernance)
+				requireLLMAlertsManage := central(adminaccess.LLMAlertsManage, adminaccess.ConfigurationGovernance)
+				requireLLMPolicyView := central(adminaccess.LLMPolicyView, adminaccess.ConfigurationGovernance)
+				// The governance writes admit a policy OR a guardrails
+				// manager; the handler then decides by the kind of the row, so
+				// only the second writes a guardrail (gateway/gates.go).
+				requireLLMPolicyOrGuardrailsManage := central(
+					adminaccess.LLMPolicyManage, adminaccess.LLMGuardrailsManage, adminaccess.ConfigurationGovernance,
+				)
+				// The kind check reads the permissions the Manage gate resolved
+				// for this request (administration mode, no project), so it
+				// asks the resolver no second time and cannot disagree with
+				// the gate about who the caller is.
+				holdsCentralAdministrationPermission := func(r *http.Request, names ...string) bool {
+					held, ok := apimw.ResolvedProjectPermissions(
+						r.Context(), platformauth.PermissionModeAdministration, "",
+					)
+					return ok && slices.ContainsFunc(names, func(name string) bool {
+						return slices.Contains(held, name)
 					})
+				}
+				catalogueGates := v2configs.CatalogueGates{
+					View:   central(adminaccess.LLMCatalogueView, adminaccess.ConfigurationGovernance),
+					Manage: central(adminaccess.LLMCatalogueManage, adminaccess.ConfigurationGovernance),
+				}
+				r.Route("/gateway", func(r chi.Router) {
+					r.Mount("/", budgetAlertHandler.Routes(requireLLMUsageView, requireLLMAlertsManage))
+					governanceHandler.Register(r, gateway.GovernanceGates{
+						View:   requireLLMPolicyView,
+						Manage: requireLLMPolicyOrGuardrailsManage,
+						Holds:  holdsCentralAdministrationPermission,
+					})
+					llmProxyHandler.Register(r, gateway.LLMProxyGates{
+						Usage:           requireLLMUsageView,
+						CatalogueView:   catalogueGates.View,
+						CatalogueManage: catalogueGates.Manage,
+					})
+					// PLATFORM-WIDE provider credentials — the public
+					// project's shared `ai_credentials` rows, which the LLM
+					// gateway already resolves for every project (issue
+					// #316). See global_providers.go for why this is the
+					// same rows and the same handlers rather than a second
+					// credential model.
+					//
+					// The listing takes the catalogue view gate; every other
+					// route, `check` and `revalidate` included (they use the
+					// stored credential), the manage gate.
+					r.Mount("/providers", configurationsHandler.GlobalProviderRoutes(catalogueGates))
+					// PLATFORM-WIDE models — the other half. A credential
+					// authenticates; a model is what a caller addresses.
+					// Both are the public project's shared rows, and the
+					// gateway resolves a public model against public
+					// credentials ONLY, so the two surfaces are mounted
+					// together and global_models.go enforces that pairing.
+					r.Mount("/platform_models", configurationsHandler.GlobalModelRoutes(catalogueGates))
+					// The PLATFORM DEFAULT model (#6826): which platform
+					// model a new project starts with, and what a project
+					// with no usable default of its own falls back to.
+					// platform_default_model.go has the precedence.
+					r.Mount("/default_model", configurationsHandler.PlatformDefaultModelRoutes(catalogueGates))
 				})
 			})
 
@@ -5900,13 +5966,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			//
 			// Port of legacy/plugins/tracing/api/v2/{collect,otlp,status}.py —
 			// see internal/api/v2/tracing's package doc for the option-(a)
-			// architecture decision and the "runtime.plugins" admin-status gate
-			// (reusing the permission system_info.py/plugin_config_*.py/
-			// maintenance.py/runtime_*.py already declare, rather than seeding
-			// the legacy runtime's unseeded "models.admin.tracing.view" fresh).
+			// architecture decision. The admin-status gate accepts
+			// "platform.operations.view" (ADR-0059 R0.4a) or "runtime.plugins",
+			// the permission system_info.py/plugin_config_*.py/maintenance.py/
+			// runtime_*.py already declare, rather than seeding the legacy
+			// runtime's unseeded "models.admin.tracing.view" fresh.
 			requireTracingAdminStatus := apimw.RequireCentralPermissions(
 				permissionResolver, platformauth.PermissionModeAdministration,
-				adminaccess.RuntimePlugins,
+				adminaccess.PlatformOperationsView, adminaccess.RuntimePlugins,
 			)
 			tracingHandler := v2tracing.NewHandler(
 				cfg.Pool,
@@ -6480,4 +6547,12 @@ func composedStore[T any](logger *slog.Logger, what string, store T, err error) 
 		return zero
 	}
 	return store
+}
+
+// RouterPermissionResolver is what the router's one shared resolver answers:
+// a permission set in one project or mode, and the union over the caller's
+// memberships. legacyrbac.PostgresResolver is the production implementation.
+type RouterPermissionResolver interface {
+	platformauth.PermissionResolver
+	platformauth.MembershipPermissionResolver
 }

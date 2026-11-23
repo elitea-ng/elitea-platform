@@ -479,6 +479,11 @@ test('@visual pipeline-editor-authored-graph', async ({ page }) => {
   await expect(page.getByTestId('node-admission-issues')).toHaveCount(0);
   await expect(page.getByTestId('graph-admission-gate')).toHaveCount(0);
   await expect(page.getByTestId('edit-pipeline-test-chat-disabled')).toBeVisible({ timeout: 20_000 });
+  const closePanel = page.getByTestId('pipeline-node-panel-close');
+  if (await closePanel.isVisible().catch(() => false)) {
+    await closePanel.click();
+    await expect(page.getByTestId('pipeline-node-panel')).toHaveCount(0);
+  }
   // The last menu click leaves the pointer where the menu item was, which can
   // be over the canvas's State toggle: one run caught its hover outline, the
   // next its resting fill. Park it, as `admin.visual.spec.ts` does.
@@ -527,7 +532,13 @@ test('@visual pipeline-editor-node-admission', async ({ page }) => {
 
   const card = page.locator('.react-flow__node[data-id="Agent_1"]');
   await expect(card).toBeVisible({ timeout: 15_000 });
-  const issues = card.getByTestId('node-admission-issues');
+  await expect(card.getByTestId('pipeline-node-v2-status-needs-configuration')).toBeVisible({ timeout: 15_000 });
+  const panel = page.locator('[data-testid="pipeline-node-panel"][data-node-id="Agent_1"]');
+  if (!(await panel.isVisible().catch(() => false))) {
+    await card.click();
+  }
+  await expect(panel).toBeVisible({ timeout: 15_000 });
+  const issues = panel.getByTestId('node-admission-issues');
   await expect(issues).toBeVisible({ timeout: 15_000 });
   // The exact sentence, not merely "an alert is present". The panel names the
   // YAML FIELD and says what is wrong with it, and that specificity is the
@@ -538,6 +549,8 @@ test('@visual pipeline-editor-node-admission', async ({ page }) => {
   await expect(gate).toBeVisible({ timeout: 15_000 });
   await expect(gate).toContainText('Agent_1');
   await expect(page.getByTestId('pipeline-save-button')).toBeDisabled();
+  await page.mouse.move(0, 0);
+  await pinScrollToTop(page);
   await settle(page);
 
   await expect(page).toHaveScreenshot('pipeline-editor-node-admission.png', {
@@ -553,15 +566,27 @@ test('@visual pipeline-editor-interrupts-enabled', async ({ page }) => {
 
   const card = page.locator('.react-flow__node[data-id="LLM_1"]');
   await expect(card).toBeVisible({ timeout: 15_000 });
-  await expect(card.getByRole('switch', { name: 'Interrupt before' })).toBeEnabled();
-  await expect(card.getByRole('switch', { name: 'Interrupt before' })).not.toBeChecked();
-  await expect(card.getByRole('switch', { name: 'Interrupt after' })).toBeEnabled();
-  await expect(card.getByRole('switch', { name: 'Interrupt after' })).not.toBeChecked();
-  await expect(card.getByTestId('interrupt-withheld-reason')).toHaveCount(0);
+  const panel = page.locator('[data-testid="pipeline-node-panel"][data-node-id="LLM_1"]');
+  if (!(await panel.isVisible().catch(() => false))) {
+    await card.click();
+  }
+  await expect(panel).toBeVisible({ timeout: 15_000 });
+  const advancedSection = panel.getByTestId('pipeline-node-panel-advanced-section');
+  if (!(await advancedSection.isVisible().catch(() => false))) {
+    await panel.getByRole('button', { name: 'Advanced', exact: true }).click();
+  }
+  await expect(advancedSection).toBeVisible({ timeout: 10_000 });
+  await expect(advancedSection.getByRole('switch', { name: 'Interrupt before' })).toBeEnabled();
+  await expect(advancedSection.getByRole('switch', { name: 'Interrupt before' })).not.toBeChecked();
+  await expect(advancedSection.getByRole('switch', { name: 'Interrupt after' })).toBeEnabled();
+  await expect(advancedSection.getByRole('switch', { name: 'Interrupt after' })).not.toBeChecked();
+  await expect(panel.getByTestId('interrupt-withheld-reason')).toHaveCount(0);
   // The document is admissible, so neither admission surface is on screen —
   // this shot must not double as the admission one.
   await expect(page.getByTestId('node-admission-issues')).toHaveCount(0);
   await expect(page.getByTestId('graph-admission-gate')).toHaveCount(0);
+  await page.mouse.move(0, 0);
+  await pinScrollToTop(page);
   await settle(page);
 
   await expect(page).toHaveScreenshot('pipeline-editor-interrupts-enabled.png', {

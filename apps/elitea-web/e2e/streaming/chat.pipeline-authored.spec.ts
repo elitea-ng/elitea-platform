@@ -99,25 +99,16 @@ const MINTED_LLM_NODE_ID = 'LLM_1';
 async function renameNodeThroughCard(page: Page, fromId: string, toId: string): Promise<void> {
   const node = page.locator(`.react-flow__node[data-id="${fromId}"]`);
   await expect(node).toBeVisible({ timeout: 15_000 });
-  // EDIT MODE IS PROVEN, not assumed. The node renamed here is the create
-  // page's starter `LLM_1` (`PIPELINE_STARTER_TEMPLATE`), whose card body is
-  // already expanded with VISIBLE inputs (the Trigger autocomplete first).
-  // So "the first input is visible" was true before the double-click did
-  // anything, and when the double-click raced the Add-node reveal pan the
-  // name was typed into the Trigger box, Tab reverted it, and nothing was
-  // renamed (chat-stream-real, PR #1520 round 3: header still "LLM_1", not
-  // editing). Edit mode REPLACES the label with the name box, so the label
-  // vanishing — and the first input holding the node's own id — is the proof.
-  const label = node.getByText(fromId, { exact: true });
-  await expect(async () => {
-    if ((await label.count()) > 0) await label.dblclick({ timeout: 5_000 });
-    await expect(label).toHaveCount(0, { timeout: 2_000 });
-  }).toPass({ timeout: 20_000 });
-  const nameInput = node.locator('input').first();
+  const panel = page.locator(`[data-testid="pipeline-node-panel"][data-node-id="${fromId}"]`);
+  if (!(await panel.isVisible().catch(() => false))) {
+    await node.click();
+  }
+  await expect(panel).toBeVisible({ timeout: 10_000 });
+  const nameInput = panel.getByTestId('pipeline-node-panel-name-input');
   await expect(nameInput).toHaveValue(fromId, { timeout: 5_000 });
   await nameInput.fill(toId);
   await expect(nameInput).toHaveValue(toId);
-  await nameInput.press('Tab');
+  await nameInput.blur();
   // The rename rewrites the react-flow node's own id, `entry_point`, and any
   // transition pointing at the old one — so the canvas re-keying is itself
   // the evidence the commit landed.
@@ -151,13 +142,19 @@ async function renameNodeThroughCard(page: Page, fromId: string, toId: string): 
  */
 async function mapTaskToTurnInput(page: Page, nodeId: string): Promise<void> {
   const node = page.locator(`.react-flow__node[data-id="${nodeId}"]`);
-  const typeSelects = node.getByRole('combobox', { name: 'Type' });
+  const panel = page.locator(`[data-testid="pipeline-node-panel"][data-node-id="${nodeId}"]`);
+  if (!(await panel.isVisible().catch(() => false))) {
+    await node.click();
+  }
+  await expect(panel).toBeVisible({ timeout: 10_000 });
+  const typeSelects = panel.getByRole('combobox', { name: 'Type' });
   await expect(typeSelects).toHaveCount(3, { timeout: 15_000 });
   await openSelect(typeSelects.nth(1));
   await page.getByRole('option', { name: 'Variable', exact: true }).click();
 
-  // Only the `task` row is a variable now, so this names exactly one field.
-  const valueSelect = node.getByRole('combobox', { name: 'Value' });
+  // Only the `task` row is a variable inside this drawer now, so this names
+  // exactly one field.
+  const valueSelect = panel.getByRole('combobox', { name: 'Value' });
   await expect(valueSelect).toHaveCount(1, { timeout: 10_000 });
   await openSelect(valueSelect);
   await page.getByRole('option', { name: 'input', exact: true }).click();

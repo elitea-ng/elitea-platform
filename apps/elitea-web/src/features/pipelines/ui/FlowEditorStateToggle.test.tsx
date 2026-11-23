@@ -40,4 +40,18 @@ describe('FlowEditorStateToggle', () => {
 
     expect(onToggle).toHaveBeenCalledTimes(1);
   });
+
+  it('shifts left by rightOffset when the node config drawer is open', () => {
+    renderWithTheme(
+      <FlowEditorStateToggle
+        isOpen={false}
+        onToggle={vi.fn()}
+        rightOffset={400}
+      />,
+    );
+
+    const wrapper = screen.getByTestId('pipeline-state-toggle-wrapper');
+    expect(wrapper).toHaveAttribute('data-right-offset', '400');
+    expect(wrapper).toHaveStyle({ right: '420px' });
+  });
 });

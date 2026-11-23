@@ -31,6 +31,10 @@ A catalogued server is a built-in Elitea type, not part of the toolkit catalogue
 </Note>
 
 <Note>
+If an entry has a stored client secret and you move its server URL, base URL or token URL to another origin (a different scheme, host or port), type the client secret again in the same save, or remove it. Otherwise the save is refused with "re-enter the client secret when the server origin changes" under the secret field. This keeps a stored secret from being sent to a new server by someone who never knew it. A change that stays on the same origin, such as a new path, keeps the stored secret.
+</Note>
+
+<Note>
 Removing a catalogued server deletes its stored client secret permanently. To stop offering a server without losing the secret, edit it and clear **Offer this server to projects** instead of deleting it.
 </Note>
 

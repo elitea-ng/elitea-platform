@@ -41,10 +41,10 @@
  * of a card ~1000px below the fold.
  *
  * `compactCanvas` is what a user does about that, through the editor's own
- * two controls: "Toggle cards size" collapses every card to its header AND
- * runs the dagre auto-layout (`FlowEditor.tsx`'s `onExpandAll`), which never
- * overlaps; "Fit View" then brings the whole graph on screen. After it, both
- * handles are visible, ~12px, and about 550px apart.
+ * Wave U2 canvas controls: "Auto-arrange" (`Arrange top to bottom`) runs the
+ * dagre auto-layout (`FlowEditor.tsx`'s `onArrange`), which separates the
+ * cards cleanly; "Fit view" then brings the whole graph on screen. After it,
+ * both handles are visible and separated.
  *
  * The drag itself is a REAL mouse path — `mouse.down`, four `mouse.move`s,
  * `mouse.up`. @xyflow/system's `onPointerDown` (12.11.2) listens for plain
@@ -147,13 +147,12 @@ async function addNode(page: Page, label: string): Promise<void> {
 /**
  * Block until the canvas geometry stops moving.
  *
- * "Toggle cards size" re-layouts on a 200ms timer and then calls `fitView` on
- * another 100ms one (`FlowEditor.tsx`'s `onExpandAll`), and the collapse
- * itself changes every card's measured height afterwards. A `boundingBox()`
- * read in the middle of that returns a position the handle no longer occupies
- * by the time the mouse gets there — which fails as "the connection was
- * refused" and says nothing about the timing. Two identical consecutive
- * samples is the cheapest honest settle.
+ * "Auto-arrange" runs `calculateLayoutNodes` and then calls `fitView` on a
+ * 100ms timer (`FlowEditor.tsx`'s `onArrange`), while "Fit view" animates over
+ * 150ms (`CanvasControls.tsx`). A `boundingBox()` read in the middle of that
+ * returns a position the handle no longer occupies by the time the mouse gets
+ * there — which fails as "the connection was refused" and says nothing about
+ * the timing. Three identical consecutive samples is the cheapest honest settle.
  */
 async function settleCanvas(page: Page): Promise<void> {
   const seen: string[] = [];
@@ -185,8 +184,8 @@ async function settleCanvas(page: Page): Promise<void> {
 }
 
 /**
- * Collapse the cards (which also auto-arranges) and fit the graph on screen —
- * see the module header.
+ * Auto-arrange the canvas via Wave U2's "Auto-arrange" menu (`Arrange top to
+ * bottom`) and fit the graph on screen — see the module header.
  *
  * Call it AFTER any save, never before a drag that follows one: saving makes
  * the page refetch the version and re-seed the editor's nodes from it, which
@@ -195,23 +194,29 @@ async function settleCanvas(page: Page): Promise<void> {
  * cards below the fold, and the drag then pressed the mouse down on nothing).
  */
 async function compactCanvas(page: Page): Promise<void> {
+  const closePanel = page.getByTestId('pipeline-node-panel-close');
+  if (await closePanel.isVisible().catch(() => false)) {
+    await closePanel.click();
+    await expect(page.getByTestId('pipeline-node-panel')).toHaveCount(0);
+  }
   await settleCanvas(page);
-  await page.getByRole('button', { name: 'Toggle cards size' }).click();
+  await page.getByRole('button', { name: 'Auto-arrange' }).click();
+  await page.getByRole('menuitem', { name: 'Arrange top to bottom' }).click();
   await settleCanvas(page);
   await fitCanvas(page);
 }
 
 /**
- * Bring the whole graph back on screen, without touching the card size.
+ * Bring the whole graph back on screen, without rearranging.
  *
  * Needed after every save for the reason above, and it is not optional on
  * WebKit: `locator.click()` there refuses an element outside the viewport
  * outright ("element is outside of the viewport", retried until the test timed
  * out), where Chromium had scrolled to it. The canvas cannot be scrolled — it
- * is a transformed surface — so the fix is the editor's own Fit View.
+ * is a transformed surface — so the fix is the editor's own Fit view control.
  */
 async function fitCanvas(page: Page): Promise<void> {
-  await page.getByRole('button', { name: 'Fit View' }).click();
+  await page.getByRole('button', { name: 'Fit view' }).click();
   await settleCanvas(page);
 }
 
@@ -429,7 +434,7 @@ test('deleting a transition’s target repairs the dangling transition in the st
   // refit is what makes the node clickable after the save re-seeded the
   // editor — see `fitCanvas`.
   await fitCanvas(page);
-  await page.locator('.react-flow__node[data-id="LLM_2"]').click();
+  await page.locator('.react-flow__node[data-id="LLM_2"]').getByText('LLM_2', { exact: true }).first().click();
   await page.keyboard.press('Delete');
   const confirm = page.getByRole('dialog');
   await expect(confirm).toBeVisible({ timeout: 10_000 });

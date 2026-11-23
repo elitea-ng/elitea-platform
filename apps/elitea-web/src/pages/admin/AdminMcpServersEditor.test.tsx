@@ -341,6 +341,27 @@ describe('Admin › MCP Servers catalogue', () => {
     expect(screen.getByTestId('admin-mcp-server-dialog')).toBeInTheDocument();
   });
 
+  it('shows a refusal that names client_secret on the secret control (issue 2944)', async () => {
+    const user = userEvent.setup();
+    const reason = 're-enter the client secret when the server origin changes';
+    useCatalogueHandlers({ saveStatus: 400, saveBody: { error: reason, field: 'client_secret' } });
+    renderAdminRoute(<AdminMcpServersEditor />);
+    await openEditFor('GitHub Copilot');
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    const secret = await screen.findByTestId('admin-mcp-server-client-secret');
+    await waitFor(() => expect(secret).toHaveAttribute('aria-invalid', 'true'));
+    expect(screen.getByTestId('admin-mcp-server-dialog')).toHaveTextContent(reason);
+    // Shown where the operator has to type, not repeated in the banner.
+    expect(screen.queryByTestId('admin-mcp-server-dialog-error')).not.toBeInTheDocument();
+
+    // Typing the secret answers the refusal: the control is no longer red.
+    await user.type(secret, 's');
+    await waitFor(() => expect(secret).not.toHaveAttribute('aria-invalid', 'true'));
+    expect(screen.getByTestId('admin-mcp-server-dialog')).not.toHaveTextContent(reason);
+  });
+
   it('confirms before a delete, and says the secret goes with it', async () => {
     const user = userEvent.setup();
     renderAdminRoute(<AdminMcpServersEditor />);

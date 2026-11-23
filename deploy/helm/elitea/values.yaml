@@ -3100,6 +3100,14 @@ main:
     # either rule stops the boot with a message that names the variable.
     ELITEA_SESSION_ABSOLUTE_LIFETIME: ""
 
+    # ELITEA_SESSION_REAUTHENTICATION_MAX_AGE is how long ago a person may have
+    # last authenticated for an action that needs a RECENT sign-in (ADR-0059:
+    # administration scopes on tokens, break-glass, critical actions). It is
+    # measured from the authentication, never from the last request. Empty
+    # means 15m. A value outside 1m..24h stops the boot with a message that
+    # names the variable.
+    ELITEA_SESSION_REAUTHENTICATION_MAX_AGE: ""
+
     # ELITEA_SESSION_REJECT_LEGACY_COOKIES ends the upgrade window.
     #
     # A deployment that upgrades to this release holds signed, self-contained
@@ -4724,6 +4732,24 @@ web:
     name: ""
     annotations: {}
 
+  # Hardening (privilege escalation on exec). The image is the stock
+  # nginx:stable-alpine (apps/elitea-web/Containerfile): its master process
+  # starts as root, binds :80 (NET_BIND_SERVICE), chowns its temp dirs under
+  # /var/cache/nginx (CHOWN) and switches its workers to the `nginx` user
+  # (SETUID/SETGID); docker-entrypoint.sh writes config.js into the image
+  # filesystem at start. So every other capability is dropped, and those four
+  # are added back; it needs no other (it signals its workers over a channel,
+  # not kill(2)). runAsNonRoot and readOnlyRootFilesystem need an
+  # unprivileged nginx image first.
+  podSecurityContext:
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+      add: ["CHOWN", "NET_BIND_SERVICE", "SETGID", "SETUID"]
+
   podAnnotations: {}
   nodeSelector: {}
   tolerations: []
@@ -4996,6 +5022,19 @@ scheduler:
     create: true
     name: ""
     annotations: {}
+
+  # Same hardening as main: the image is distroless static:nonroot and the
+  # binary writes no files (no os.Create/CreateTemp/WriteFile in
+  # services/elitea-scheduler), so a read-only root filesystem costs nothing.
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
 
   podAnnotations: {}
   nodeSelector: {}
@@ -7790,6 +7829,33 @@ otelCollector:
     create: true
     name: ""
     annotations: {}
+
+  # The contrib image runs as a non-root user (10001) and the shipped config
+  # (debug exporter) writes nothing to disk. An exporter or extension that
+  # does (file exporter, file_storage queue) needs a writable volume for its
+  # path: add it with extraVolumes/extraVolumeMounts below (an emptyDir, or a
+  # PVC when it must outlive the pod). Setting readOnlyRootFilesystem to false
+  # is not enough on its own: the image has no directory uid 10001 may write.
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
+
+  # Extra pod volumes and container mounts, e.g. a writable directory for a
+  # file exporter or a file_storage extension:
+  #   extraVolumes:
+  #     - name: otel-data
+  #       emptyDir: {}
+  #   extraVolumeMounts:
+  #     - name: otel-data
+  #       mountPath: /var/lib/otelcol
+  extraVolumes: []
+  extraVolumeMounts: []
 
   podAnnotations: {}
   nodeSelector: {}

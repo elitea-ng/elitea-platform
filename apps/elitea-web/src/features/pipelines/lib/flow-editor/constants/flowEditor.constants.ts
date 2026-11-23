@@ -25,6 +25,8 @@ export const DEFAULT_OUTPUT = 'default_output';
 export const PIPELINE_STATE = 'state';
 export const STATE_MESSAGES = 'messages';
 export const STATE_INPUT = 'input';
+export const STATE_TOOL_OUTCOMES = 'tool_outcomes';
+export const STATE_LAST_TOOL_OUTCOME = 'last_tool_outcome';
 export const RUN_STATE_NODE = 'run_state';
 
 export const StateVariableTypes = {
@@ -41,8 +43,20 @@ export const DefaultState = {
   [STATE_MESSAGES]: { type: StateVariableTypes.List },
 } as const;
 
+export const DefaultStateTypes: Readonly<Record<string, StateVariableType>> = {
+  [STATE_INPUT]: StateVariableTypes.String,
+  [STATE_MESSAGES]: StateVariableTypes.List,
+  [STATE_TOOL_OUTCOMES]: StateVariableTypes.Json,
+  [STATE_LAST_TOOL_OUTCOME]: StateVariableTypes.Json,
+};
+
 export const STATE_INPUT_ATTACHMENTS = 'input_attachments';
-export const StateDefaultProps = [STATE_INPUT, STATE_MESSAGES] as const;
+export const StateDefaultProps = [
+  STATE_INPUT,
+  STATE_MESSAGES,
+  STATE_TOOL_OUTCOMES,
+  STATE_LAST_TOOL_OUTCOME,
+] as const;
 export const StateManagedProps = [STATE_INPUT_ATTACHMENTS] as const;
 
 /** A state-variable type value seen only in pre-migration YAML — treated as an alias of `Number`. */

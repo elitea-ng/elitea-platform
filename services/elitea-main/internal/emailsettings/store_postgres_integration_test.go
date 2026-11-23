@@ -123,10 +123,11 @@ func TestPasswordIsTriStateAcrossSaves(t *testing.T) {
 
 	// An OMITTED password must leave the sealed one alone. This is the case
 	// that erases a credential when absent and empty are collapsed: the
-	// operator edits the host, the form sends no password, and every message
-	// after that is refused at AUTH.
+	// operator edits the sender, the form sends no password, and every message
+	// after that is refused at AUTH. (Moving the HOST without the password is
+	// refused instead: TestSaveRefusesToMoveTheRelayWithAKeptPassword.)
 	changed := base
-	changed.Host = "smtp2.acme.example"
+	changed.From = "relay@acme.example"
 	require.NoError(t, store.Save(ctx, changed, nil, "ops"))
 	require.Equal(t, sealed, vault.values[SecretName()], "an unrelated edit erased the sealed password")
 
@@ -250,4 +251,72 @@ CREATE TABLE IF NOT EXISTS centry.platform_config (
 );`)
 	require.NoError(t, err)
 	return pool
+}
+
+// A save that moves the relay and omits the password is refused and leaves the
+// stored layer as it was; the same save with the password typed again lands
+// (#2944).
+func TestSaveRefusesToMoveTheRelayWithAKeptPassword(t *testing.T) {
+	pool := newEmailPool(t)
+	vault := newMemoryVault()
+	store := NewStore(pool, vault)
+	ctx := context.Background()
+	base := Settings{Host: "smtp.acme.example", Port: 587, Username: "relay-user", From: "noreply@acme.example"}
+	sealed := "not-a-real-relay-password"
+	require.NoError(t, store.Save(ctx, base, &sealed, "ops"))
+
+	movedHost := base
+	movedHost.Host = "smtp.elsewhere.example"
+	movedPort := base
+	movedPort.Port = 2525
+	for name, moved := range map[string]Settings{"host": movedHost, "port": movedPort} {
+		err := store.Save(ctx, moved, nil, "ops")
+		var field FieldError
+		require.ErrorAs(t, err, &field, name)
+		require.Equal(t, "password", field.Field, name)
+		loaded, _, err := store.Load(ctx)
+		require.NoError(t, err)
+		require.Equal(t, base.Host, loaded.Host, "a refused save moved the relay (%s)", name)
+		require.Equal(t, base.Port, loaded.Port, "a refused save moved the relay (%s)", name)
+	}
+
+	// Case and surrounding space are not a new destination.
+	same := base
+	same.Host = "  SMTP.acme.example "
+	require.NoError(t, store.Save(ctx, same, nil, "ops"))
+
+	// A weaker TLS mode is a move too: `none` sends the password in clear.
+	weaker := base
+	weaker.TLS = "none"
+	require.ErrorIs(t, store.Save(ctx, weaker, nil, "ops"), ErrReenterPassword)
+
+	retyped := "not-a-real-relay-password-2"
+	require.NoError(t, store.Save(ctx, movedHost, &retyped, "ops"))
+	loaded, _, err := store.Load(ctx)
+	require.NoError(t, err)
+	require.Equal(t, movedHost.Host, loaded.Host)
+	require.Equal(t, retyped, vault.values[SecretName()])
+}
+
+// Over an environment layer the comparison is of EFFECTIVE relays: pinning the
+// environment's own host is not a move, and SMTP_PASSWORD is a password in
+// force that a moved relay must not inherit (#2944).
+func TestSaveComparesTheEffectiveRelayOverTheEnvironment(t *testing.T) {
+	pool := newEmailPool(t)
+	store := NewStore(pool, newMemoryVault())
+	NewResolver(store, Settings{Host: "smtp.env.example", Port: 587, TLS: "starttls"}, "env-not-a-real-password")
+	ctx := context.Background()
+
+	// Nothing stored, nothing sealed: the environment decides the relay.
+	pinned := Settings{Host: "smtp.env.example", Port: 587, From: "noreply@acme.example"}
+	require.NoError(t, store.Save(ctx, pinned, nil, "ops"),
+		"typing the environment's own host was treated as a move")
+
+	moved := pinned
+	moved.Host = "smtp.elsewhere.example"
+	require.ErrorIs(t, store.Save(ctx, moved, nil, "ops"), ErrReenterPassword,
+		"the environment password followed a moved relay")
+	loaded, _, err := store.Load(ctx)
+	require.NoError(t, err)
+	require.Equal(t, pinned.Host, loaded.Host)
 }

@@ -208,6 +208,8 @@ See [DeepWiki and Inventory](/menus/deepwiki-and-inventory) for the product-faci
 
 Traces flow over OpenTelemetry to the chart's own `otelCollector` (on by default, `otel/opentelemetry-collector-contrib`). The shipped pipeline exports to `debug` (log-only) — swap the `otelCollector.config` exporter for a real sink (an OTLP/HTTP endpoint, a vendor backend) before relying on traces outliving the pod. There is no bundled Langfuse or third-party APM integration.
 
+The collector runs as non-root on a read-only root filesystem (`otelCollector.securityContext`). An exporter or extension that writes files (`file`, `file_storage`) needs a writable directory for its path: mount one with `otelCollector.extraVolumes` and `otelCollector.extraVolumeMounts` (an `emptyDir`, or a PVC to keep the files).
+
 The chart sets each component's `OTEL_EXPORTER_OTLP_ENDPOINT` (elitea-main, the scheduler, the LLM gateway, DeepWiki, Inventory, elitea-vector and the worker) where you have not set it or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or `OTEL_SDK_DISABLED`:
 
 1. `global.otelEndpoint`, when set;

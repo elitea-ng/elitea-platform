@@ -256,6 +256,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash deploy/helm/tests/render-vector.sh
 
+      # elitea-web, elitea-scheduler and otel-collector render a pod and a
+      # container securityContext (allowPrivilegeEscalation=false at least):
+      # without one GKE Security Posture reports every pod as "allows
+      # privilege escalation on exec".
+      - name: Web, scheduler and otel-collector render a securityContext
+        if: ${{ !cancelled() }}
+        run: bash deploy/helm/tests/render-security-context.sh
+
       # S10: the runtime plane, the worker, elitea-vector with the bundled
       # Qdrant, DeepWiki and Inventory are ON by default. The shipped defaults
       # plus only the operator's values render all of it with elitea-main's

@@ -252,3 +252,22 @@ func TestTrimNormalisesWhatAFormSubmits(t *testing.T) {
 		t.Fatalf("got %+v", got)
 	}
 }
+
+// RelayChanged is the #2944 destination test: host, port and TLS mode move the
+// relay; the sender, the user name and spelling of the host do not.
+func TestRelayChanged(t *testing.T) {
+	base := Settings{Host: "smtp.acme.example", Port: 587, TLS: "starttls", From: "a@acme.example"}
+	for name, after := range map[string]Settings{
+		"host": {Host: "smtp.elsewhere.example", Port: 587, TLS: "starttls"},
+		"port": {Host: "smtp.acme.example", Port: 2525, TLS: "starttls"},
+		"tls":  {Host: "smtp.acme.example", Port: 587, TLS: "none"},
+	} {
+		if !RelayChanged(base, after) {
+			t.Errorf("%s: a moved relay read as unchanged", name)
+		}
+	}
+	same := Settings{Host: " SMTP.acme.example ", Port: 587, TLS: "StartTLS", From: "b@acme.example", Username: "u"}
+	if RelayChanged(base, same) {
+		t.Error("an edit that keeps host, port and TLS mode read as a move")
+	}
+}

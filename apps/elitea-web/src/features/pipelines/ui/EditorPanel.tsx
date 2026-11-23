@@ -16,14 +16,12 @@ import Box from '@mui/material/Box';
 import IconButton from '@mui/material/IconButton';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
-import { useTheme, type SxProps, type Theme } from '@mui/material/styles';
+import type { SxProps, Theme } from '@mui/material/styles';
 import { useRouterState } from '@tanstack/react-router';
 
 import { t } from '@/shared/i18n';
-import { handleCopy } from '@/shared/lib/clipboard';
 import { PipelineEditorMode } from '@/shared/lib/enums';
 import type { CodeMirrorEditorHandle } from '@/shared/ui/CodeMirrorEditor';
-import { CopyLinkIcon } from '@/shared/ui/icons/copy-link-icon';
 import { RefreshIcon } from '@/shared/ui/icons/refresh-icon';
 import { TabGroupButton } from '@/shared/ui/TabGroupButton';
 import type { TabGroupButtonItem } from '@/shared/ui/TabGroupButton';
@@ -290,7 +288,10 @@ export const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(funct
   );
 
   const buttonItems = useMemo<readonly TabGroupButtonItem[]>(
-    () => Object.entries(PipelineEditorMode).map(([label, value]) => ({ label, value })),
+    () => [
+      { label: t('features.pipelines.editorPanel.mode.flow', 'Flow'), value: PipelineEditorMode.Flow },
+      { label: t('features.pipelines.editorPanel.mode.yaml', 'YAML'), value: PipelineEditorMode.Yaml },
+    ],
     [],
   );
 
@@ -317,9 +318,6 @@ export const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(funct
 
   const onAddNode = useCallback((type: PipelineNodeType) => void flowEditorRef.current?.onAddNode(type), []);
 
-  const onCopy = useCallback(() => {
-    void handleCopy(yamlCode);
-  }, [yamlCode]);
   useEffect(() => {
     const nodes = (yamlJsonObject as { readonly nodes?: readonly { readonly decision?: unknown }[] }).nodes;
     const yamlString = nodes?.find((node) => node.decision) ? serializeDocument(yamlJsonObject, { originalYaml: yamlCode }) : undefined;
@@ -330,7 +328,6 @@ export const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(funct
   const initialNodes: readonly FlowNode[] = useMemo(() => parseYaml(yamlJsonObject).nodes as unknown as readonly FlowNode[], [yamlJsonObject]);
   const initialEdges: readonly FlowEdge[] = useMemo(() => parseYaml(yamlJsonObject).edges as unknown as readonly FlowEdge[], [yamlJsonObject]);
 
-  const theme = useTheme();
   const rootBaseSx: SxProps<Theme> = useMemo(() => ({ display: display ?? 'flex', flexDirection: 'column', height: '100%', minHeight: 0, flex: 1 }), [display]);
   const rootSx = combineSx(rootBaseSx, sx);
 
@@ -348,16 +345,6 @@ export const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(funct
               onAddNode={onAddNode}
               disabled={disabled}
             />
-          )}
-          {mode === PipelineEditorMode.Yaml && (
-            <Tooltip
-              title={t('features.pipelines.editorPanel.copyYaml', 'Copy yaml code to clipboard')}
-              placement="top"
-            >
-              <IconButton onClick={onCopy}>
-                <CopyLinkIcon style={{ width: '1rem', height: '1rem', fill: theme.vars.palette.icon.fill.secondary }} />
-              </IconButton>
-            </Tooltip>
           )}
         </Box>
       </Box>

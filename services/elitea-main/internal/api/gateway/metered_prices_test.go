@@ -45,7 +45,7 @@ func TestUpsertMeteredPriceMarksOverriddenAndNamesTheAuthor(t *testing.T) {
 		strings.NewReader(`{"provider":"tavily","operation":"web_search","unit":"credit","price_per_unit_usd":0.008}`))
 	r = r.WithContext(auth.ContextWithUser(r.Context(), auth.User{ID: "7", Email: "ops@example.com"}))
 	rec := httptest.NewRecorder()
-	h.Routes().ServeHTTP(rec, r)
+	h.Routes(openLLMProxyGates).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
@@ -79,7 +79,7 @@ func TestUpsertMeteredPriceMarksOverriddenAndNamesTheAuthor(t *testing.T) {
 // other side: free is an authored 0, not an absent price.
 func TestUpsertMeteredPriceAcceptsAnExplicitZero(t *testing.T) {
 	db := &recordingQuerier{}
-	rec := doLLMProxy(t, NewLLMProxyHandler(db, nil).Routes(), http.MethodPut, "/metered-prices",
+	rec := doLLMProxy(t, NewLLMProxyHandler(db, nil).Routes(openLLMProxyGates), http.MethodPut, "/metered-prices",
 		`{"provider":"ddg_instant","operation":"web_search","unit":"request","price_per_unit_usd":0}`)
 	if rec.Code != http.StatusOK || db.args[3] != "0" {
 		t.Fatalf("status = %d, args %#v", rec.Code, db.args)
@@ -104,7 +104,7 @@ func TestUpsertMeteredPriceRefusals(t *testing.T) {
 		"string garbage":    `{"provider":"tavily","operation":"web_search","unit":"credit","price_per_unit_usd":"cheap"}`,
 		"null price":        `{"provider":"tavily","operation":"web_search","unit":"credit","price_per_unit_usd":null}`,
 	} {
-		rec := doLLMProxy(t, h.Routes(), http.MethodPut, "/metered-prices", body)
+		rec := doLLMProxy(t, h.Routes(openLLMProxyGates), http.MethodPut, "/metered-prices", body)
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("%s: status = %d, want 400", name, rec.Code)
 		}
@@ -114,7 +114,7 @@ func TestUpsertMeteredPriceRefusals(t *testing.T) {
 func TestMeteredPricesWithoutAPoolAre503(t *testing.T) {
 	h := NewLLMProxyHandler(nil, nil)
 	for _, method := range []string{http.MethodGet, http.MethodPut} {
-		rec := doLLMProxy(t, h.Routes(), method, "/metered-prices", `{}`)
+		rec := doLLMProxy(t, h.Routes(openLLMProxyGates), method, "/metered-prices", `{}`)
 		if rec.Code != http.StatusServiceUnavailable {
 			t.Errorf("%s: status = %d, want 503", method, rec.Code)
 		}
@@ -126,7 +126,7 @@ func TestMeteredPricesWithoutAPoolAre503(t *testing.T) {
 // "5e-7". It reaches NUMERIC as written, and the answer is a decimal string.
 func TestUpsertMeteredPriceTakesADecimalString(t *testing.T) {
 	db := &recordingQuerier{}
-	rec := doLLMProxy(t, NewLLMProxyHandler(db, nil).Routes(), http.MethodPut, "/metered-prices",
+	rec := doLLMProxy(t, NewLLMProxyHandler(db, nil).Routes(openLLMProxyGates), http.MethodPut, "/metered-prices",
 		`{"provider":"tavily","operation":"web_search","unit":"credit","price_per_unit_usd":"0.0000005"}`)
 	if rec.Code != http.StatusOK || db.args[3] != "0.0000005" {
 		t.Fatalf("status = %d, args %#v, body %s", rec.Code, db.args, rec.Body.String())

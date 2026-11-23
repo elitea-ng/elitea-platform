@@ -16,11 +16,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	dbschema "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/schema"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
 )
 
 // superAdminCaller holds admin.auth.users.super_admin in every mode, so the
@@ -28,7 +28,7 @@ import (
 type superAdminCaller struct{}
 
 func (superAdminCaller) ResolvePermissions(context.Context, auth.User, string, string) (auth.PermissionResolution, error) {
-	return auth.PermissionResolution{UserID: 1, Permissions: []string{rolepolicy.SuperAdminPermission}}, nil
+	return auth.PermissionResolution{UserID: 1, Permissions: []string{adminaccess.SuperAdminPermission}}, nil
 }
 
 // prepareEscalationFixture gives the project roles their own grants: `admin`
@@ -109,8 +109,8 @@ func TestAProjectEditorCannotPromoteItselfToProjectAdmin(t *testing.T) {
 
 	recorder := usersWriteDo(t, router, http.MethodPut, fmt.Sprintf("/admin/users/default/%d", usersWriteProjectID),
 		map[string]any{"userId": fmt.Sprint(memberID), "roles": []string{"admin"}})
-	if recorder.Code != http.StatusForbidden || refusalCode(t, recorder.Body.Bytes()) != rolepolicy.CodePermissionNotHeld {
-		t.Fatalf("status = %d body %s, want 403 %s", recorder.Code, recorder.Body.String(), rolepolicy.CodePermissionNotHeld)
+	if recorder.Code != http.StatusForbidden || refusalCode(t, recorder.Body.Bytes()) != adminaccess.CodePermissionNotHeld {
+		t.Fatalf("status = %d body %s, want 403 %s", recorder.Code, recorder.Body.String(), adminaccess.CodePermissionNotHeld)
 	}
 	if roles := projectRolesOf(t, pool, memberID); fmt.Sprint(roles) != "[editor]" {
 		t.Fatalf("roles after the refusal = %v, want [editor]", roles)
@@ -174,9 +174,9 @@ func TestAnOperatorCannotGiveItsOwnAccountAProjectRole(t *testing.T) {
 	} {
 		recorder := usersWriteDo(t, router, attempt.method, path, attempt.body)
 		if recorder.Code != http.StatusForbidden ||
-			refusalCode(t, recorder.Body.Bytes()) != rolepolicy.CodeSelfEscalation {
+			refusalCode(t, recorder.Body.Bytes()) != adminaccess.CodeSelfEscalation {
 			t.Fatalf("%s: status = %d body %s, want 403 %s", attempt.name, recorder.Code,
-				recorder.Body.String(), rolepolicy.CodeSelfEscalation)
+				recorder.Body.String(), adminaccess.CodeSelfEscalation)
 		}
 	}
 

@@ -209,6 +209,35 @@ type FieldError struct {
 
 func (e FieldError) Error() string { return e.Reason }
 
+// ErrReenterPassword refuses a save that moves the relay while keeping a
+// password the caller did not type.
+//
+// The password is write-only: no route returns it. A save that changes the
+// host or the port and omits the password would send the kept password, at the
+// next AUTH, to wherever the new host points, so an administrator who may edit
+// the relay but was never shown the credential could read it out by aiming
+// the relay at a server it runs. A TLS mode change is treated the same way:
+// `none` would send it in clear text to anyone on the path. Typing the
+// password again proves the caller already knows it; clearing it sends
+// nothing (#2944).
+var ErrReenterPassword = FieldError{
+	Field: "password",
+	Reason: "re-enter the password when the relay changes: the stored password is only " +
+		"sent to the host, port and TLS mode it was entered for",
+}
+
+// RelayChanged reports whether `after` sends to a different relay than
+// `before`: another host (compared without case or surrounding space), another
+// port, or another TLS mode. Callers pass EFFECTIVE documents (the stored
+// layer over the environment's), so typing the value the environment already
+// supplies is not a move, and removing a stored value in favour of a different
+// environment one is.
+func RelayChanged(before, after Settings) bool {
+	return !strings.EqualFold(strings.TrimSpace(before.Host), strings.TrimSpace(after.Host)) ||
+		before.Port != after.Port ||
+		!strings.EqualFold(strings.TrimSpace(before.TLS), strings.TrimSpace(after.TLS))
+}
+
 // Layered merges two layers, with `over` winning FIELD BY FIELD.
 func Layered(under, over Settings) Settings {
 	merged := under
@@ -298,6 +327,12 @@ type SecretStore interface {
 type Store struct {
 	pool  *pgxpool.Pool
 	vault SecretStore
+	// env and envPassword are the environment layer, set by NewResolver when
+	// it is built over this store. Save needs them to compare the EFFECTIVE
+	// relay before and after a write, and to know that SMTP_PASSWORD is a
+	// password in force too (#2944).
+	env         Settings
+	envPassword string
 }
 
 // NewStore wires the store. Either dependency may be absent; the surface that
@@ -442,9 +477,17 @@ func (s *Store) Save(ctx context.Context, settings Settings, password *string, a
 	// the password must be refused before either half lands.
 	willHold := sealing
 	if password == nil {
-		sealed, err := s.PasswordSealed(ctx)
+		stored, sealed, err := s.Load(ctx)
 		if err != nil {
 			return err
+		}
+		// A kept password must not follow the relay to a new destination: the
+		// caller may hold only `platform.email.manage`, was never shown the
+		// password, and could otherwise read it out by pointing the relay at a
+		// host it controls (#2944). Refused before anything is written.
+		inForce := sealed || s.envPassword != ""
+		if inForce && RelayChanged(Layered(s.env, stored), Layered(s.env, settings)) {
+			return ErrReenterPassword
 		}
 		willHold = sealed
 	}

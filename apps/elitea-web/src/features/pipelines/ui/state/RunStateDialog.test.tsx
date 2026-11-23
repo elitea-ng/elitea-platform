@@ -221,4 +221,143 @@ describe('RunStateDialog', () => {
     // "Before" shows the agent step's value; "After" does not borrow it as a final value.
     expect(screen.getAllByText('"an interim answer"')).toHaveLength(1);
   });
+
+  it('renders grouped timeline steps with Expand all control and surfaces 5b-1 continued node_errors safely', () => {
+    renderWithTheme(
+      <RunStateDialog
+        data={baseData({
+          status: 'Completed',
+          groupedTimeline: [
+            {
+              id: 'agent_call',
+              status: 'Completed',
+              created_at: '2024-01-01T00:00:00.000Z',
+              group_id: 'application:call-1',
+              scope_id: 'application:call-1',
+              group_label: 'Research Agent',
+              state: {
+                node_errors: [
+                  {
+                    node: 'agent_call',
+                    handled: 'continue',
+                    input_step: 1,
+                    error: { support_ref: 'ERR-42', message: 'Transient upstream error' },
+                  },
+                ],
+              },
+            },
+            {
+              id: 'nested_llm',
+              status: 'Completed',
+              created_at: '2024-01-01T00:00:02.000Z',
+              group_id: 'application:call-1',
+              scope_id: 'application:call-1',
+              group_label: 'Research Agent',
+              is_nested: true,
+              state: { answer: 'nested value' },
+            },
+          ],
+        })}
+        state={{ answer: { type: 'str' } }}
+        open
+        onClose={vi.fn()}
+        onStop={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId('pipeline-run-details-panel')).toBeInTheDocument();
+    expect(screen.getByTestId('pipeline-run-details-timeline-expand-all')).toBeInTheDocument();
+    expect(screen.getByText(/Failed · continued/)).toBeInTheDocument();
+    expect(screen.getByText(/ERR-42/)).toBeInTheDocument();
+  });
+
+  it('computes outer-step Before without leaking nested child state and shows Final state on lastOuterIndex (#6883)', () => {
+    renderWithTheme(
+      <RunStateDialog
+        data={baseData({
+          status: 'Completed',
+          groupedTimeline: [
+            {
+              id: 'start_outer',
+              status: 'Completed',
+              created_at: '2024-01-01T00:00:00.000Z',
+              state: { answer: 'outer-start' },
+            },
+            {
+              id: 'nested_child',
+              status: 'Completed',
+              created_at: '2024-01-01T00:00:01.000Z',
+              group_id: 'application:call-1',
+              scope_id: 'application:call-1',
+              group_label: 'Sub Agent',
+              is_nested: true,
+              state: { answer: 'nested-secret' },
+            },
+            {
+              id: 'final_outer',
+              status: 'Completed',
+              created_at: '2024-01-01T00:00:02.000Z',
+              state: {},
+            },
+          ],
+        })}
+        state={{ answer: { type: 'str' } }}
+        open
+        onClose={vi.fn()}
+        onStop={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('pipeline-run-details-timeline-step-2'));
+    expect(screen.getByText('Final state')).toBeInTheDocument();
+    expect(screen.queryByText('"nested-secret"')).not.toBeInTheDocument();
+    expect(screen.getAllByText('"outer-start"').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('resets selectedStep when data.label changes and clamps when steps shrink on a mounted dialog', () => {
+    const { rerender } = renderWithTheme(
+      <RunStateDialog
+        data={baseData({ label: 'Run #1' })}
+        state={{ counter: { type: 'number' } }}
+        open
+        onClose={vi.fn()}
+        onStop={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'increment' }));
+    expect(screen.getByText('Timeline step:').nextSibling).toHaveTextContent('increment');
+
+    // Shrinking steps clamps selectedStep to the new tail.
+    rerender(
+      <RunStateDialog
+        data={baseData({
+          label: 'Run #1',
+          timeline: [{ id: 'only_step', status: 'Completed', created_at: '2024-01-01T00:00:00.000Z', state: { counter: 9 } }],
+        })}
+        state={{ counter: { type: 'number' } }}
+        open
+        onClose={vi.fn()}
+        onStop={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('Timeline step:').nextSibling).toHaveTextContent('only_step');
+
+    // Switching to another run resets selectedStep to 0.
+    rerender(
+      <RunStateDialog
+        data={baseData({ label: 'Run #2' })}
+        state={{ counter: { type: 'number' } }}
+        open
+        onClose={vi.fn()}
+        onStop={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('Timeline step:').nextSibling).toHaveTextContent('start');
+  });
 });

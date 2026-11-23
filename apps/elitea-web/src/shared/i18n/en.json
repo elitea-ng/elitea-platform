@@ -1727,9 +1727,12 @@
   "pages.admin.roles.refusal.notHeld": "You can grant, assign or remove only permissions that you hold yourself.",
   "pages.admin.roles.refusal.ownRole": "You hold this role, so you cannot change its permissions. Ask a super admin.",
   "pages.admin.roles.refusal.permissions": "Permissions: {{permissions}}.",
-  "pages.admin.roles.refusal.reserved": "The super admin permission can be granted only to the super admin role.",
+  "pages.admin.roles.refusal.reserved": "This permission is granted only by the platform's own setup, so no change here can add it to a role.",
   "pages.admin.roles.refusal.role": "Role: {{role}}.",
+  "pages.admin.roles.refusal.roles": "Roles: {{roles}}.",
+  "pages.admin.roles.refusal.selfAssignment": "You cannot change your own administration roles. Ask another administrator.",
   "pages.admin.roles.refusal.selfEscalation": "This change would give you permissions that you do not hold.",
+  "pages.admin.roles.refusal.setLocked": "This is a built-in role, so its permissions are locked. Create a custom role for a different set.",
   "pages.admin.roles.refusal.superAdmin": "Only a super admin can assign or remove the super admin role.",
   "pages.admin.roles.refusal.unresolved": "Your own permissions could not be checked, so the change was not saved. Try again.",
   "pages.admin.roles.saved.matrix": "Permissions saved.",
@@ -7337,5 +7340,10 @@
   "pipelines.nodeConfigPanel.yamlSingleNodeError": "The node YAML must describe exactly one node.",
   "pipelines.nodeConfigPanel.yamlAliasNotAllowedError": "YAML anchors and aliases are not supported in node YAML.",
   "pipelines.nodeConfigPanel.yamlTooLargeError": "The node YAML exceeds the maximum allowed size.",
-  "pipelines.nodeConfigPanel.yamlTypeImmutableError": "Changing the node type in YAML view is not supported."
+  "pipelines.nodeConfigPanel.yamlTypeImmutableError": "Changing the node type in YAML view is not supported.",
+  "features.pipelines.editorPanel.mode.flow": "Flow",
+  "features.pipelines.editorPanel.mode.yaml": "YAML",
+  "features.pipelines.yamlEditor.copyYaml": "Copy YAML",
+  "features.pipelines.yamlEditor.fullScreenTitle": "YAML",
+  "features.pipelines.yamlEditor.fullScreenView": "Full screen view"
 }
