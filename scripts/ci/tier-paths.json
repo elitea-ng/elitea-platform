@@ -668,7 +668,17 @@
         ".github/workflows/ci-governed-conformance.yml",
         ".github/workflows/ci-build-once.yml",
         ".github/actions/stack-images/**",
-        ".github/actions/pull-stack-images/**"
+        ".github/actions/pull-stack-images/**",
+        "libs/rust/egress-guard/**",
+        "libs/rust/agent-runtime/src/egress*.rs",
+        "libs/rust/agent-runtime/src/toolkits/egress*.rs",
+        "libs/rust/agent-runtime/src/toolkits/mcp*.rs",
+        "libs/rust/agent-runtime/src/toolkits/mcp/**",
+        "libs/rust/agent-runtime/src/toolkits/governed*.rs",
+        "libs/rust/agent-runtime/src/toolkits/governed/**",
+        "services/elitea-worker-rust/src/protocol/egress.rs",
+        "services/elitea-worker-rust/src/**/governed*.rs",
+        "services/elitea-worker-rust/src/toolkits/*governed*.rs"
       ]
     },
     "ci-handoff-loadgate": {

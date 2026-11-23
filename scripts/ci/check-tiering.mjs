@@ -252,6 +252,36 @@ export function checkGoDuplicates(ci, workflows, tiers = { jobs: {} }) {
 }
 
 /**
+ * The governed stack runs the worker's egress, governed and MCP code against its own
+ * test hosts. PR #2976 changed that code (the private-address refusal, egress-guard and
+ * toolkits/mcp/governed.rs), ci-governed-conformance was skipped by its path filter,
+ * and the stack's hosts were then refused as private addresses on main (#2981). Each
+ * file below stands for a part of that code and must reach the job.
+ */
+export const GOVERNED_MUST_REACH = [
+  "libs/rust/egress-guard/src/private.rs",
+  "libs/rust/egress-guard/src/resolver.rs",
+  "libs/rust/agent-runtime/src/egress.rs",
+  "libs/rust/agent-runtime/src/toolkits/mcp.rs",
+  "libs/rust/agent-runtime/src/toolkits/mcp/governed.rs",
+  "libs/rust/agent-runtime/src/toolkits/governed/adapters/x.rs",
+  "services/elitea-worker-rust/src/protocol/egress.rs",
+  "services/elitea-worker-rust/src/indexing/governed.rs",
+  "services/elitea-worker-rust/src/execution/governed_direct.rs",
+  "services/elitea-worker-rust/src/agents/governed_nested.rs",
+  "deploy/docker-compose.governed.yml",
+];
+
+/** Every GOVERNED_MUST_REACH file reaches ci-governed-conformance. */
+export function checkGovernedConformance(tiers) {
+  const paths = tiers.jobs?.["ci-governed-conformance"]?.paths;
+  if (!Array.isArray(paths)) return ["ci-governed-conformance: tier-paths.json has no path list"];
+  return GOVERNED_MUST_REACH.filter((file) => !reaches([file], paths)).map(
+    (file) => `ci-governed-conformance: a change to ${file} does not start it; the worker's egress, governed and MCP code runs on the governed stack (#2981)`,
+  );
+}
+
+/**
  * The desktop package job keeps its gate: exact pull-request paths, a dry run of both
  * platforms (and a macOS debug build) on a pull request only, and the full run from
  * publish.yml that attaches the packages, macOS signed.
@@ -376,7 +406,7 @@ export function main({ root = ROOT, out = console.log, err = console.error } = {
     err(`::error::${error.message}`);
     return 1;
   }
-  const errors = [...check(model), ...checkDesktopPackage(model), ...checkWebUnitSuite(model.ci, model.workflows), ...checkGoDuplicates(model.ci, model.workflows, model.tiers), ...checkLoadGateMigrations(model.tiers, model.migrations)];
+  const errors = [...check(model), ...checkDesktopPackage(model), ...checkGovernedConformance(model.tiers), ...checkWebUnitSuite(model.ci, model.workflows), ...checkGoDuplicates(model.ci, model.workflows, model.tiers), ...checkLoadGateMigrations(model.tiers, model.migrations)];
   if (errors.length) {
     for (const e of errors) err(`::error::${e}`);
     return 1;

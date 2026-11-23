@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { check, checkDesktopPackage, checkGoDuplicates, checkLoadGateMigrations, LOADGATE_MIGRATIONS, checkWebUnitSuite, GO_RUNS, load, main, DESKTOP_PACKAGE_PATHS, WEB_COVERAGE_RUNS, DRAFT_CONDITION, FAST_GATE_CONDITION, GATE_DRAFT_SKIP, MINIMUM_CALL_JOBS } from "./check-tiering.mjs";
+import { check, checkDesktopPackage, checkGovernedConformance, GOVERNED_MUST_REACH, checkGoDuplicates, checkLoadGateMigrations, LOADGATE_MIGRATIONS, checkWebUnitSuite, GO_RUNS, load, main, DESKTOP_PACKAGE_PATHS, WEB_COVERAGE_RUNS, DRAFT_CONDITION, FAST_GATE_CONDITION, GATE_DRAFT_SKIP, MINIMUM_CALL_JOBS } from "./check-tiering.mjs";
 
 const call = (id, extra = {}) => ({ needs: ["changes"], if: `fromJSON(needs.changes.outputs.run)['${id}']`, uses: `./.github/workflows/${id}.yml`, ...extra });
 const heavyCall = (id) =>
@@ -318,4 +318,15 @@ test("the load gate starts on exactly the migrations that name the publish table
 test("the repository's load gate filter is exact", () => {
   const model = load();
   assert.deepEqual(checkLoadGateMigrations(model.tiers, model.migrations), []);
+});
+
+test("ci-governed-conformance: the worker's egress, governed and MCP code and the governed compose file start it (#2981)", () => {
+  assert.deepEqual(checkGovernedConformance(load().tiers), []);
+  // The filter before #2983: PR #2976's egress-guard and toolkits/mcp/governed.rs did not start it.
+  const old = { jobs: { "ci-governed-conformance": { paths: ["conformance/governed/**", "deploy/docker-compose.governed.yml", "deploy/governed/**"] } } };
+  const missed = checkGovernedConformance(old).join("\n");
+  assert.equal(checkGovernedConformance(old).length, GOVERNED_MUST_REACH.length - 1);
+  assert.match(missed, /egress-guard\/src\/private\.rs/);
+  assert.match(missed, /toolkits\/mcp\/governed\.rs/);
+  assert.deepEqual(checkGovernedConformance({ jobs: {} }), ["ci-governed-conformance: tier-paths.json has no path list"]);
 });

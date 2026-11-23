@@ -111,7 +111,12 @@ so. Push again later. Re-running the jobs does not help, because the capacity is
 - a job of `ci.yml` has no entry in `scripts/ci/tier-paths.json`;
 - a workflow starts on `pull_request` and is not a job of `ci.yml` (a new workflow would run untiered);
 - a called workflow builds its concurrency group from `github.workflow`. In a called workflow that name is
-  `CI`, so all called workflows would cancel each other.
+  `CI`, so all called workflows would cancel each other;
+- `ci-governed-conformance` is not started by a change to the worker's egress, governed or MCP code
+  (`libs/rust/egress-guard`, `agent-runtime`'s `egress*` and `toolkits/{mcp,governed}*`, the worker's
+  `protocol/egress.rs` and `governed*` modules) or to `deploy/docker-compose.governed.yml`
+  (`GOVERNED_MUST_REACH`). PR #2976 changed that code and the job was skipped, so the governed stack's test
+  hosts were refused as private addresses on main (#2981).
 
 To add a workflow to the pull request pipeline:
 

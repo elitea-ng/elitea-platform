@@ -10,6 +10,9 @@
   run. That job now gets one second attempt. `ci-gate` reads the workflow's new `verdict` output, so a second
   attempt that passes turns the gate green. A job that ran and failed still fails the gate.
 
+- `ci-governed-conformance` now also runs for a change to the worker's egress, governed or MCP code and to
+  the egress-guard crate, and `check-tiering.mjs` keeps it that way (#2981).
+
 `docs/contributing/ci.md`, "A job GitHub never acquired", has the evidence and the trade-off.
 
 **Who is affected.** Contributors whose pull requests run CI. Deployments are not affected: no chart value,
