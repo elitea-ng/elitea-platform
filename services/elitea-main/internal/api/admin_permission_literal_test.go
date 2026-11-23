@@ -141,6 +141,76 @@ func holds(r resolver) bool {
 	}
 }
 
+// TestAdministrationLiteralFixtureCoversTheOtherShapes proves the check does
+// not skip what it cannot read: a gate whose permission or mode does not
+// resolve fails, and a literal tested in a switch case, a Contains call or an
+// index expression fails like one tested with ==.
+func TestAdministrationLiteralFixtureCoversTheOtherShapes(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	packageDir := filepath.Join(root, "internal", "synthetic")
+	for _, dir := range []string{filepath.Join(root, registryPackage), packageDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("create %s: %v", dir, err)
+		}
+	}
+	write(t, filepath.Join(packageDir, "routes.go"), `package synthetic
+
+import "slices"
+
+const modeAdministration = "administration"
+
+func RequireCentralPermissions(_ any, _ string, _ ...string) func() { return nil }
+
+func name() string { return "fixture.computed" }
+
+func mode() string { return "administration" }
+
+func Routes() []func() {
+	return []func(){
+		RequireCentralPermissions(nil, modeAdministration, name()),
+		RequireCentralPermissions(nil, mode(), "fixture.unknown_mode"),
+	}
+}
+
+type resolver interface {
+	ResolvePermissions(_ any, _ any, _ string, _ string) ([]string, error)
+}
+
+func holds(r resolver, held map[string]bool) bool {
+	granted, _ := r.ResolvePermissions(nil, nil, modeAdministration, "")
+	for _, name := range granted {
+		switch name {
+		case "fixture.case":
+			return true
+		}
+	}
+	return slices.Contains(granted, "fixture.contains") || held["fixture.index"]
+}
+`)
+
+	report := administrationLiterals(t, root)
+	wants := []string{
+		"cannot resolve the permission argument",
+		"cannot resolve the permission mode",
+		`"fixture.case"`,
+		`"fixture.contains"`,
+		`"fixture.index"`,
+	}
+	if len(report.violations) != len(wants) {
+		t.Fatalf("violations = %q, want %d", report.violations, len(wants))
+	}
+	for _, want := range wants {
+		found := false
+		for _, violation := range report.violations {
+			found = found || strings.Contains(violation, want)
+		}
+		if !found {
+			t.Errorf("no violation mentions %s; violations = %q", want, report.violations)
+		}
+	}
+}
+
 func administrationLiterals(t *testing.T, root string) literalReport {
 	t.Helper()
 	index := &sourceIndex{
@@ -162,8 +232,23 @@ func administrationLiterals(t *testing.T, root string) literalReport {
 			continue
 		}
 		for _, file := range files {
-			gates, _ := index.gatesIn(dir, file)
+			gates, unresolved := index.gatesIn(dir, file)
+			// A gate this check cannot read is a gate it cannot hold to the
+			// registry, so it fails rather than being skipped.
+			for _, site := range unresolved {
+				report.violations = append(report.violations, fmt.Sprintf(
+					"cannot resolve the permission argument at %s, so this check cannot tell whether it is\n"+
+						"    an administration permission outside the registry. Pass a constant of %s.",
+					site, registryPackage))
+			}
 			for _, g := range gates {
+				if g.mode == "" && g.takesMode {
+					report.violations = append(report.violations, fmt.Sprintf(
+						"%s:%d: cannot resolve the permission mode of the gate %s, so this check cannot tell\n"+
+							"    whether it resolves the administration mode. Pass a mode constant.",
+						relativeTo(root, g.position), g.position.Line, g.helper))
+					continue
+				}
 				if g.mode != "administration" {
 					continue
 				}
@@ -187,8 +272,16 @@ func administrationLiterals(t *testing.T, root string) literalReport {
 }
 
 // inAppComparisons reads every function of file that resolves the
-// administration mode and records each `==` or `!=` against a resolvable
-// string that is not a mode name.
+// administration mode and records each resolvable string that is not a mode
+// name and that the function tests a granted name against: an operand of `==`
+// or `!=`, a `case` of a switch, an argument of a `Contains` or `Index` call
+// (slices.Contains(resolution.Permissions, ...)) and the key of an index
+// expression (held[...]).
+//
+// Its limit: it reads the function that calls ResolvePermissions. A function
+// that receives the resolved list and tests it elsewhere is not read; such a
+// test must take its name from a parameter or a registry constant, which code
+// review holds. R0.1b (#2581) drives the composed router instead.
 func (index *sourceIndex) inAppComparisons(dir string, file *ast.File, registryDir string, report *literalReport) {
 	for _, declaration := range file.Decls {
 		function, ok := declaration.(*ast.FuncDecl)
@@ -196,11 +289,7 @@ func (index *sourceIndex) inAppComparisons(dir string, file *ast.File, registryD
 			continue
 		}
 		ast.Inspect(function.Body, func(node ast.Node) bool {
-			binary, ok := node.(*ast.BinaryExpr)
-			if !ok || (binary.Op != token.EQL && binary.Op != token.NEQ) {
-				return true
-			}
-			for _, operand := range []ast.Expr{binary.X, binary.Y} {
+			for _, operand := range testedOperands(node) {
 				value, origin, ok := index.resolveStringOrigin(operand, file, dir, 0)
 				if !ok || adminModes[value] {
 					continue
@@ -247,4 +336,31 @@ func relativeDir(root, dir string) string {
 		return dir
 	}
 	return relative
+}
+
+// testedOperands returns the expressions of node that a granted name may be
+// tested against.
+func testedOperands(node ast.Node) []ast.Expr {
+	switch typed := node.(type) {
+	case *ast.BinaryExpr:
+		if typed.Op == token.EQL || typed.Op == token.NEQ {
+			return []ast.Expr{typed.X, typed.Y}
+		}
+	case *ast.CaseClause:
+		return typed.List
+	case *ast.IndexExpr:
+		return []ast.Expr{typed.Index}
+	case *ast.CallExpr:
+		var name string
+		switch function := typed.Fun.(type) {
+		case *ast.SelectorExpr:
+			name = function.Sel.Name
+		case *ast.Ident:
+			name = function.Name
+		}
+		if name == "Contains" || name == "Index" {
+			return typed.Args
+		}
+	}
+	return nil
 }

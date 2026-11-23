@@ -76,10 +76,15 @@ const (
 )
 
 // row is a row with the defaults of an existing name: grantable from the
-// matrix, allowed as a token scope, not legacy, no narrower parent, not kept
-// by a native session and no maintenance bypass.
+// matrix, not legacy, no narrower parent, not kept by a native session, no
+// maintenance bypass, and NOT a token scope.
+//
+// Token defaults to false so that a name becomes a token scope only by a
+// deliberate opt-in. Nothing reads the field yet: the scoped token (ADR-0059
+// decision 7, stories R1.1 and R1.2) opts rows in when it ships, and a row it
+// does not name stays refused, which is the safe failure.
 func row(name string, area Area, class Class) Permission {
-	return Permission{Name: name, Area: area, Class: class, Grantable: GrantableAny, Token: true}
+	return Permission{Name: name, Area: area, Class: class, Grantable: GrantableAny}
 }
 
 // rows is the permission table. Every row other than the three set apart below
@@ -91,7 +96,6 @@ func rows() []Permission {
 	// migration grants it. It gates identity trust (#2558), which is never
 	// a token scope (ADR-0059 decision 7).
 	superAdmin.Grantable = GrantableSeededOnly
-	superAdmin.Token = false
 
 	runtimePlugins := row(RuntimePlugins, AreaPlatform, ClassWrite)
 	// The maintenance bypass (middleware/maintenance.go and the

@@ -227,12 +227,18 @@ func (t Table) Lookup(name string) (Permission, bool) {
 }
 
 // registry is the table of this service. It is built once and never written.
+//
+// A bad row panics at initialisation, in every binary and test binary that
+// links this package. That is deliberate: a table that cannot be trusted
+// must not serve a gate, and a lazily built table would move the same failure
+// to the first request. The panic names the row and the file to fix.
 var registry = mustTable(rows())
 
 func mustTable(rows []Permission) Table {
 	table, err := NewTable(rows)
 	if err != nil {
-		panic(err)
+		panic(fmt.Sprintf("invalid permission table: fix the row in "+
+			"services/elitea-main/internal/adminaccess/permissions.go: %v", err))
 	}
 	return table
 }

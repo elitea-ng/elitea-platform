@@ -87,13 +87,17 @@ func TestTableIsACopy(t *testing.T) {
 
 func TestSunsetConstantsAreUnset(t *testing.T) {
 	t.Parallel()
-	// Story R3.15 sets both in one commit; until then both stay empty, and
+	// Story R3.15 sets both in one commit and replaces this test with one
+	// for the dates it sets; until then both stay empty, and
 	// scripts/ci/check-sunset.mjs (R0.14b) reads them as unset.
-	if adminaccess.ReplacementShippedOn != "" {
-		t.Errorf("ReplacementShippedOn = %q, want empty until R3.15", adminaccess.ReplacementShippedOn)
+	constants := map[string]string{
+		"ReplacementShippedOn": adminaccess.ReplacementShippedOn,
+		"SunsetAfter":          adminaccess.SunsetAfter,
 	}
-	if adminaccess.SunsetAfter != "" {
-		t.Errorf("SunsetAfter = %q, want empty until R3.15", adminaccess.SunsetAfter)
+	for name, value := range constants {
+		if value != "" {
+			t.Errorf("%s = %q, want empty until R3.15", name, value)
+		}
 	}
 }
 
@@ -101,7 +105,7 @@ func TestSunsetConstantsAreUnset(t *testing.T) {
 // story changes them on purpose.
 func TestAttributesOfTheNamedRows(t *testing.T) {
 	t.Parallel()
-	var seededOnly, nativeClient, maintenance []string
+	var seededOnly, nativeClient, maintenance, token []string
 	for _, row := range adminaccess.Registry().Rows() {
 		if row.Grantable == adminaccess.GrantableSeededOnly {
 			seededOnly = append(seededOnly, row.Name)
@@ -111,6 +115,9 @@ func TestAttributesOfTheNamedRows(t *testing.T) {
 		}
 		if row.Maintenance {
 			maintenance = append(maintenance, row.Name)
+		}
+		if row.Token {
+			token = append(token, row.Name)
 		}
 		if row.Legacy {
 			t.Errorf("%q is legacy; story R0.14a marks the legacy names", row.Name)
@@ -127,9 +134,9 @@ func TestAttributesOfTheNamedRows(t *testing.T) {
 	// decision 7): Marketplace moderation and the maintenance bypass.
 	want("native_client", nativeClient, adminaccess.RuntimeAdminPublishedAgents, adminaccess.RuntimePlugins)
 	want("maintenance", maintenance, adminaccess.RuntimePlugins)
-	if row, _ := adminaccess.Lookup(adminaccess.AdminAuthUsersSuperAdmin); row.Token {
-		t.Errorf("%s can be a token scope; identity trust never is", row.Name)
-	}
+	// No row is a token scope until the scoped token (R1.1, R1.2) opts rows
+	// in. Identity trust (admin.auth.users.super_admin) never is.
+	want("token", token)
 }
 
 // TestSeededOnlyPermissionsAreSeeded fails when a permission is marked
@@ -139,8 +146,10 @@ func TestAttributesOfTheNamedRows(t *testing.T) {
 //
 // It reads the grants the way TestEveryGatedPermissionHasAGrant does
 // (internal/api/router_permission_grant_gate_test.go): every
-// `INSERT INTO public.auth_core__role_permission` block of migrations/shared,
-// comment lines removed, whose text names the `administration` mode.
+// `INSERT INTO public.auth_core__role_permission` statement of
+// migrations/shared, comment lines removed, whose text names the
+// `administration` mode. Unlike that test it cuts each block at the end of
+// its statement, so a name a later statement mentions is not a grant.
 func TestSeededOnlyPermissionsAreSeeded(t *testing.T) {
 	t.Parallel()
 	granted := administrationGrants(t)
@@ -190,11 +199,20 @@ func administrationGrants(t *testing.T) map[string]bool {
 		}
 		blocks := strings.Split(strings.Join(kept, "\n"), marker)
 		for _, block := range blocks[1:] {
+			// One statement only: a later DELETE or UPDATE that names the
+			// permission, or a later mode, is not this grant.
+			if end := strings.Index(block, ";"); end >= 0 {
+				block = block[:end]
+			}
 			if !strings.Contains(block, "mode = 'administration'") {
 				continue
 			}
 			for _, match := range sqlPermissionLiteral.FindAllStringSubmatch(block, -1) {
-				granted[match[1]] = true
+				name := match[1]
+				if strings.HasPrefix(name, "public.") || strings.Contains(name, "auth_core__") {
+					continue
+				}
+				granted[name] = true
 			}
 		}
 	}

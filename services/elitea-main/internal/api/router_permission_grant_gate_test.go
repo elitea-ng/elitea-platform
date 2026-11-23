@@ -174,6 +174,8 @@ type gate struct {
 	// origins holds, per permission, the package directory of the string
 	// literal its argument resolves to (admin_permission_literal_test.go).
 	origins []string
+	// takesMode is the helper's: an empty mode on such a gate is unresolved.
+	takesMode bool
 }
 
 // TestEveryGatedPermissionHasAGrant is the gate this file exists for.
@@ -514,6 +516,9 @@ type helperSignature struct {
 	variadic        bool
 	mode            string
 	modeKnown       bool
+	// takesMode is true when the helper, or the gate it wraps, names a
+	// permission mode, so an empty mode means "unresolved", not "none".
+	takesMode bool
 }
 
 // helpersIn returns the gate helpers of one package: the four base
@@ -534,7 +539,8 @@ func (index *sourceIndex) helpersIn(dir string) map[string]helperSignature {
 	}
 	helpers := map[string]helperSignature{}
 	for name, position := range baseGates {
-		helpers[name] = helperSignature{permissionIndex: position, variadic: true}
+		_, takesMode := modeArgIndex[name]
+		helpers[name] = helperSignature{permissionIndex: position, variadic: true, takesMode: takesMode}
 	}
 
 	helperName := func(function ast.Expr) (string, bool) {
@@ -605,7 +611,8 @@ func (index *sourceIndex) helpersIn(dir string) map[string]helperSignature {
 						if at < 0 {
 							continue
 						}
-						derived := helperSignature{permissionIndex: at}
+						_, calledTakesMode := modeArgIndex[called]
+						derived := helperSignature{permissionIndex: at, takesMode: calledTakesMode || inner.takesMode}
 						// The derived helper fixes the mode, because the mode
 						// is written at the middleware call inside its body.
 						// Resolve it against the file that DEFINES the helper.
@@ -681,9 +688,10 @@ func (index *sourceIndex) gatesIn(dir string, file *ast.File) ([]gate, []string)
 			}
 			signature := helpers[called]
 			found := gate{
-				position: index.fileSet.Position(typed.Lparen),
-				helper:   called,
-				mode:     index.modeOf(called, signature, typed, file, dir),
+				position:  index.fileSet.Position(typed.Lparen),
+				helper:    called,
+				mode:      index.modeOf(called, signature, typed, file, dir),
+				takesMode: signature.takesMode,
 			}
 			var unresolved []string
 			for i := signature.permissionIndex; i < len(typed.Args); i++ {

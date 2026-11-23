@@ -11,6 +11,10 @@
   administration permission that no role holds any more (an operator
   unchecked its last holder) is listed again as a row of the Roles matrix, so
   it can be granted again. Before this change such a row disappeared until a
-  role held the name again.
+  role held the name again. The matrices of the public and support projects
+  share that list, as they always have, so the row reappears there too;
+  granting an administration permission to a project role still has no effect.
+  `admin.auth.users.super_admin` is the exception: only a migration grants
+  it, so it is listed only where a role holds it.
 - **What to do:** nothing. No configuration, migration or operator action is
   needed, and no behaviour of a gate changes.

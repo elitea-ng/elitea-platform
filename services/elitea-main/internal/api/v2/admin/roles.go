@@ -313,16 +313,26 @@ func RetiredPermissions() []string {
 // no migration, and an operator who unchecks the last holder of a
 // middleware-gated name can grant it again.
 //
+// A `seeded_only` row is not declared: only a migration grants it, so the
+// matrix has no business offering it where no role holds it. On a seeded
+// database it is a row anyway, from its grant.
+//
 // The governed credential permissions are default-mode names, so they are not
 // rows of the administration table and are declared beside it.
 func declaredPermissions() []string {
-	registered := adminaccess.Names()
+	registered := adminaccess.Registry().Rows()
 	declared := make([]string, 0, len(registered)+len(credentialgrant.Permissions()))
 	// The five governed credential permissions (#1116). No migration grants
 	// them, by requirement, so without this declaration an operator could
 	// never grant them.
 	declared = append(declared, credentialgrant.Permissions()...)
-	return append(declared, registered...)
+	for _, row := range registered {
+		if row.Grantable == adminaccess.GrantableSeededOnly {
+			continue
+		}
+		declared = append(declared, row.Name)
+	}
+	return declared
 }
 
 // mergePermissionCatalogue returns the sorted union of the granted names and

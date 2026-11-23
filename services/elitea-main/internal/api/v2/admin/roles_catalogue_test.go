@@ -65,6 +65,12 @@ func TestRolesCatalogueIsUnchangedForTheExistingNames(t *testing.T) {
 			t.Errorf("the clean catalogue gained %q, which is not a registry name", name)
 		}
 	}
+	// A seeded_only name is offered only where a role already holds it.
+	for _, row := range adminaccess.Registry().Rows() {
+		if row.Grantable == adminaccess.GrantableSeededOnly && slices.Contains(clean, row.Name) {
+			t.Errorf("the clean catalogue declares the seeded_only %q", row.Name)
+		}
+	}
 }
 
 // TestEveryConfigSectionGateIsARegistryName pins that a section's
