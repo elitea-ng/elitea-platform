@@ -152,7 +152,6 @@ export function goCacheSteps(workflows) {
   return out;
 }
 
-/** The planned cache entries, DERIVED from the workflows: every rust-cache, go-cache and npm-cache step that saves on main. */
 /**
  * Every actions/cache, actions/cache/save and actions/cache/restore step of a
  * workflow whose key starts with a literal: {workflow, job, family, saves,
@@ -182,6 +181,7 @@ export function actionsCacheSteps(workflows) {
 /** The planned size of one entry: projected (changed, not measured yet), then measured, then the estimate. */
 const sizeOf = (budget, key, estimate) => budget.projected?.[key] ?? budget.measured?.[key] ?? estimate;
 
+/** The planned cache entries, DERIVED from the workflows: every rust-cache, go-cache, npm-cache and actions/cache step that saves on main. */
 export function plannedEntries(workflows, budget) {
   const est = budget.estimates;
   const entries = [];

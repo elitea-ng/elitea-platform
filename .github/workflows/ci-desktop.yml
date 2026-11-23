@@ -108,6 +108,12 @@ jobs:
         id: rust-cache
         uses: Swatinem/rust-cache@v2
         with:
+          # v1 (2026-11-23): the trim step at the end of this job runs only on
+          # a run that saves, and an exact hit never saves, so the untrimmed
+          # v0 entry would have stayed for as long as Cargo.lock did. The new
+          # prefix makes the next nightly write a trimmed entry; the v0 one is
+          # deleted. desktop-package.yml's reader spells the same prefix.
+          prefix-key: v1-rust
           shared-key: desktop-host
           save-if: ${{ github.ref == 'refs/heads/main' }}
           workspaces: |

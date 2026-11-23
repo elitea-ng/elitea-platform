@@ -17,10 +17,18 @@
 //    under $CARGO_HOME/git/db, the commits a `source = "git+...#<commit>"` line
 //    of the lockfiles names become its shallow boundary (git's own `shallow`
 //    file), every other ref goes, and the repository is repacked and pruned:
-//    tree-sitter-cpp went from 96 MB to 1.8 MB. Cargo reads a locked commit
-//    from the database when it is there and fetches only one it cannot find,
-//    so a job that restores the trimmed database fetches nothing. A repository
-//    that holds none of the commits is stale and removed.
+//    tree-sitter-cpp went from 96 MB to 1.8 MB. HEAD stays unborn, as in the
+//    database cargo creates (`git init --bare`, then a fetch into
+//    refs/commit/<sha>); pointing it at refs/commit/<sha> broke cargo's
+//    checkout ("the remote's default branch does not fit the refspec
+//    configuration"). Cargo reads a locked commit
+//    from the database when it is there and fetches only one it cannot find:
+//    checked 2026-11-23 with cargo itself (libgit2) on the trimmed cpp
+//    database, a deleted checkout directory and `cargo fetch --locked` then
+//    `cargo build`: no network fetch, the checkout rebuilt from the database.
+//    A commit that is not there is fetched into it as before, and cargo
+//    re-initialises a database it cannot fetch into. A repository that holds
+//    none of the commits is stale and removed.
 //
 // 2. BUILD-SCRIPT OBJECT FILES. A `-sys` crate's build script compiles C into
 //    OUT_DIR (`<target>/<profile>/build/<pkg>-<hash>/out`) and archives the
@@ -28,7 +36,9 @@
 //    The `.o` files are left beside it and never read again: cargo does not
 //    rerun a build script whose inputs did not change, and one that does rerun
 //    compiles them anew. aws-lc-sys's CMake tree, sqlite, zstd and the twelve
-//    tree-sitter grammars leave theirs in every target directory.
+//    tree-sitter grammars leave theirs in every target directory. Host builds
+//    only, which is what the two cache writers build: a `--target <triple>`
+//    build's outputs (`<target>/<triple>/<profile>/build`) are not walked.
 //
 // A trim that fails warns and leaves what it could not trim as it was: the
 // entry is then larger, never wrong.

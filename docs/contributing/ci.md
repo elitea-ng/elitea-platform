@@ -192,7 +192,9 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
   on a pool pod, and 0.23 GiB of each Rust entry. Trimmed, the cpp grammar's database went from 96 MB to 1.8 MB.
   `ci-rust-shared.yml` (`engines` leg) saves the trimmed `libs/rust` database as its own entry,
   `cargo-git-db-v1-<os>-<hash of code-parsers' manifest>`. Its other legs and the `ci-rust-lint.yml` legs that
-  lock the grammars restore that entry, so cargo fetches nothing.
+  lock the grammars restore that entry, so cargo fetches nothing. The trim runs only on a run that saves, and an
+  exact hit never saves, so the desktop host's key moved to `prefix-key: v1-rust` (the package dry run reads the
+  same) to get a trimmed entry written; the worker's key changed with its debug-info setting.
 
   The npm cache is Linux only. On macOS the web lockfile's entry was a second copy, 0.19 GiB, so the macOS jobs
   fetch from the registry, as the Windows jobs already did.

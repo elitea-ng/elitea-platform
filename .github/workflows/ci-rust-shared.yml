@@ -67,13 +67,15 @@ jobs:
             args: >-
               -p elitea-agent-runtime -p elitea-local-tools -p elitea-workspace-runner -p elitea-local-index
               --all-targets --all-features
-          # Built alone with `toolkit-sql`, the runtime has serde_json
-          # `preserve_order` off and links sqlx, which is how the worker links
-          # it (the desktop build drops `toolkit-sql`). Its digest tests pin
-          # the same values both ways (ADR-0029 decision 2); `agent hosts`
-          # runs them with the order on.
+          # Built alone with the worker's features (its Cargo.toml), the
+          # runtime has serde_json `preserve_order` off and links sqlx, which
+          # is how the worker links it (the desktop build drops `toolkit-sql`).
+          # Its digest tests pin the same values both ways (ADR-0029 decision
+          # 2); `agent hosts` runs them with the order on. Until 2026-11-23 the
+          # run left out `toolkit-data-analysis`, so the data-analysis tools
+          # were never tested with the order off, as the worker runs them.
           - name: agent runtime (worker features)
-            args: -p elitea-agent-runtime --all-targets --features toolkit-sql,toolkit-office,toolkit-delta-lake
+            args: -p elitea-agent-runtime --all-targets --features toolkit-sql,toolkit-office,toolkit-data-analysis,toolkit-delta-lake
           - name: engines
             args: >-
               --workspace --exclude elitea-agent-runtime --exclude elitea-local-tools
@@ -134,11 +136,21 @@ jobs:
           key: cargo-git-db-v1-${{ runner.os }}-${{ hashFiles('libs/rust/code-parsers/Cargo.toml') }}
           restore-keys: cargo-git-db-v1-${{ runner.os }}-
 
+      # Every lockfile that links code-parsers locks the commits its manifest
+      # pins (the key hashes that manifest), so a restored database holds
+      # them. A git fetch after a restore means it did not: a warning, since
+      # the leg is then only as slow as it was.
       - name: Fetch the crates and the git dependencies
+        env:
+          RESTORED: ${{ steps.gitdb.outputs.cache-matched-key }}
         run: |
+          set -o pipefail
           start=$(date +%s)
-          cargo fetch --locked
-          echo "cargo fetch: $(( $(date +%s) - start ))s (git database restored: ${{ steps.gitdb.outputs.cache-matched-key || 'no' }})"
+          cargo fetch --locked 2>&1 | tee "${RUNNER_TEMP}/cargo-fetch.log"
+          echo "cargo fetch: $(( $(date +%s) - start ))s; git database restored from: ${RESTORED:-nothing}"
+          if [ -n "${RESTORED}" ] && grep -q 'Updating git repository' "${RUNNER_TEMP}/cargo-fetch.log"; then
+            echo "::warning::cargo cloned a git dependency although its database was restored from ${RESTORED}; see scripts/ci/trim-cargo-cache.mjs"
+          fi
 
       - name: Tests
         env:
