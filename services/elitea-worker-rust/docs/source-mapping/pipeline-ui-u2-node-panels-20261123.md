@@ -33,7 +33,7 @@
   - `node scripts/ci/check-upgrading-notes.mjs` — **PASS**
 - **Dependency Audit (`npm audit`):** 21 pre-existing moderate dev-dependency advisories (`glob` / `minimatch` under `@storybook/react-vite` and `orval`); **0** new advisories and **0** dependency changes in `package.json` / `package-lock.json`.
 - **Vitest (`nice -n 10 npx vitest run --maxWorkers=2 src/features/pipelines/`):**
-  - **273/273 test files passed** (`2,978 passed | 1 expected fail (2,979)`, `0` unexpected failures; the 1 expected fail is the pre-existing `DataTypeValueField.test.tsx:146` `it.fails` for issue #1930)
+  - **273/273 test files passed** (`2,980 passed | 1 expected fail (2,981)`, `0` unexpected failures; the 1 expected fail is the pre-existing `DataTypeValueField.test.tsx:146` `it.fails` for issue #1930)
   - Includes `useNodeYamlEditor.test.tsx` (7 tests covering Python `*args` / Markdown `*emphasis*` acceptance and YAML 1.2 punctuation anchor/alias rejection via `parseEvents`), `ProjectPickers.test.tsx` (6 tests covering `attachedOnly` wire/attachment shapes and client-side search filtering), `FlowNodeConfigDrawer.test.tsx` (19 tests covering admission validity on duplicate, 128-byte IDs, prototype-key guards, `Parallel`/`Map` non-duplicable), `NodeCard.test.tsx` (9 tests covering `< 0.6` zoom mini-card, admission status icon, `NodeErrorOutputHandle`), `BaseToolNode.test.tsx` (read-only lock), `ParallelNode.test.tsx` (canvas handle check), `ToolkitsSelect.test.tsx` (5 tests), and `FlowEditor.test.tsx` (19 tests).
 - **Secret Scan:** `/usr/bin/grep` on `git diff origin/main..HEAD` — `0` hits.
 
