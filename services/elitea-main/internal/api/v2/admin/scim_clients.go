@@ -194,7 +194,7 @@ func (h *Handler) SCIMClientCreate(w http.ResponseWriter, r *http.Request) {
 	if !h.scimClientsReady(w) {
 		return
 	}
-	if !h.requireSuperAdmin(w, r, scimClientGate("")) {
+	if !h.requireIdentityTrust(w, r, scimClientGate("")) {
 		return
 	}
 	var body scimClientCreateBody
@@ -260,7 +260,7 @@ func (h *Handler) SCIMClientRotate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !h.requireSuperAdmin(w, r, scimClientGate(strconv.FormatInt(id, 10))) {
+	if !h.requireIdentityTrust(w, r, scimClientGate(strconv.FormatInt(id, 10))) {
 		return
 	}
 	issued, err := h.scimClients.Rotate(r.Context(), id)
@@ -312,7 +312,7 @@ func (h *Handler) SCIMClientDelete(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !h.requireSuperAdmin(w, r, scimClientGate(strconv.FormatInt(id, 10))) {
+	if !h.requireIdentityTrust(w, r, scimClientGate(strconv.FormatInt(id, 10))) {
 		return
 	}
 	err := h.scimClients.Delete(r.Context(), id)

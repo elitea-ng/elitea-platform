@@ -65,7 +65,7 @@ func (h *Handler) IdentityProviderRebind(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid provider key"})
 		return
 	}
-	if !h.requireSuperAdmin(w, r, trustGate{
+	if !h.requireIdentityTrust(w, r, trustGate{
 		code:          CodeIdentityRebindSuperAdminRequired,
 		message:       "only a super admin can re-bind accounts to an identity provider",
 		refusedAction: AuditIdentityRebindRefused,
