@@ -283,6 +283,10 @@ func actionRows() []Action {
 		post(admin("/microsoft_oauth_apps/{id}/disable"), ConfigurationMicrosoftApps),
 		post(admin("/microsoft_oauth_apps/{id}/enable"), ConfigurationMicrosoftApps),
 		post(admin("/microsoft_oauth_apps/{id}/test"), ConfigurationMicrosoftApps),
+		// Feature or delist a Marketplace listing: the moderation check in
+		// the handler (eliteacore holdsModerationPermission), behind the
+		// project's agent list gate. The surface reaches it since #2925.
+		write(http.MethodPatch, core("/marketplace_listing/prompt_lib/{projectID}/{listingID}"), RuntimeAdminPublishedAgents),
 		post(core("/register_descriptor/{projectID}"), ProviderHubDescriptorRegister),
 		del(core("/register_descriptor/{projectID}"), ProviderHubDescriptorRegister),
 		post(core("/register_descriptor/{projectID}/activate"), ProviderHubDescriptorActivate),

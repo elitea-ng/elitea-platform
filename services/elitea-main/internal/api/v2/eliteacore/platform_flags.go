@@ -308,7 +308,13 @@ func (h *Handler) announcements(
 		slog.ErrorContext(ctx, "platform_settings: banner read failed; reporting no banner", "err", err)
 		banner = platformconfig.Banner{}
 	}
-	maintenance, err := platformconfig.LoadMaintenance(ctx, h.pool)
+	readMaintenance := func(ctx context.Context) (platformconfig.Maintenance, error) {
+		return platformconfig.LoadMaintenance(ctx, h.pool)
+	}
+	if h.maintenanceState != nil {
+		readMaintenance = h.maintenanceState
+	}
+	maintenance, err := readMaintenance(ctx)
 	if err != nil {
 		slog.ErrorContext(ctx, "platform_settings: maintenance read failed; reporting no maintenance",
 			"err", err)

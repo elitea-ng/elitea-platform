@@ -74,12 +74,21 @@ func contains(list []string, want string) bool {
 	return false
 }
 
+// testOnlyRouterFields are the RouterConfig fields only internal/api/adminsurface
+// sets, each with what setting it in production would do.
+var testOnlyRouterFields = map[string]string{
+	"PermissionResolver": "it replaces the resolver of every route",
+	"MaintenanceState": "it replaces the maintenance window the platform_settings rows hold, " +
+		"for the gate and the platform_settings read",
+}
+
 // TestNoProductionCodeOverridesThePermissionResolver fails on non-test code
 // that sets RouterConfig.PermissionResolver, the test-only override of the
 // router's resolver for every route. The link test above catches the recording
 // resolver; this one catches any other resolver put in that slot, which would
 // replace authorization on every route. It reads the source of the whole
-// module: only this module can import internal/api.
+// module: only this module can import internal/api. RouterConfig.MaintenanceState,
+// the helper's seam for an open maintenance window, is held to the same rule.
 func TestNoProductionCodeOverridesThePermissionResolver(t *testing.T) {
 	root := filepath.Join("..", "..")
 	fset := token.NewFileSet()
@@ -122,8 +131,10 @@ func TestNoProductionCodeOverridesThePermissionResolver(t *testing.T) {
 					return true
 				}
 				for _, elt := range n.Elts {
-					if kv, ok := elt.(*ast.KeyValueExpr); ok && isIdent(kv.Key, "PermissionResolver") {
-						sites = append(sites, fset.Position(kv.Pos()).String())
+					if kv, ok := elt.(*ast.KeyValueExpr); ok {
+						if field, ok := kv.Key.(*ast.Ident); ok && testOnlyRouterFields[field.Name] != "" {
+							sites = append(sites, fset.Position(kv.Pos()).String()+" sets RouterConfig."+field.Name)
+						}
 					}
 				}
 			case *ast.AssignStmt:
@@ -131,8 +142,8 @@ func TestNoProductionCodeOverridesThePermissionResolver(t *testing.T) {
 					return true
 				}
 				for _, lhs := range n.Lhs {
-					if sel, ok := lhs.(*ast.SelectorExpr); ok && sel.Sel.Name == "PermissionResolver" {
-						sites = append(sites, fset.Position(sel.Pos()).String())
+					if sel, ok := lhs.(*ast.SelectorExpr); ok && testOnlyRouterFields[sel.Sel.Name] != "" {
+						sites = append(sites, fset.Position(sel.Pos()).String()+" sets RouterConfig."+sel.Sel.Name)
 					}
 				}
 			}
@@ -147,8 +158,9 @@ func TestNoProductionCodeOverridesThePermissionResolver(t *testing.T) {
 		t.Fatalf("scanned %d non-test Go files under the module root; the walk did not cover the module", scanned)
 	}
 	for _, site := range sites {
-		t.Errorf("%s sets RouterConfig.PermissionResolver outside a test; it replaces the resolver of every route "+
-			"and exists only for internal/api/adminsurface", site)
+		field := site[strings.LastIndex(site, ".")+1:]
+		t.Errorf("%s outside a test; %s, and it exists only for internal/api/adminsurface",
+			site, testOnlyRouterFields[field])
 	}
 }
 

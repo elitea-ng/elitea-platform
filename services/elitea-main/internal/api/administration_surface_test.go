@@ -394,3 +394,86 @@ func TestEveryWriteRouteOfTheSurfaceHasAnActionEntry(t *testing.T) {
 		}
 	})
 }
+
+// maintenanceBypassNames are the registry rows marked `maintenance`: the names
+// the in-application maintenance bypass accepts.
+func maintenanceBypassNames() []string {
+	var names []string
+	for _, row := range adminaccess.Registry().Rows() {
+		if row.Maintenance {
+			names = append(names, row.Name)
+		}
+	}
+	return names
+}
+
+// sessionAndWindowCheck is one check TestAdministrationSurfaceReachesSessionAndWindowChecks
+// expects.
+type sessionAndWindowCheck struct {
+	route   adminsurface.Route
+	variant string
+	// caller is the suffix of Check.Caller, from the package directory.
+	caller      string
+	gate        bool
+	kind        adminsurface.Kind
+	permissions []string
+}
+
+// TestAdministrationSurfaceReachesSessionAndWindowChecks holds the checks the
+// default request never reaches (ADR-0059 #2925) to the surface: the
+// maintenance bypass, which runs only while a window is open; the token mint,
+// which asks the administration mode of a native device session only; and the
+// Marketplace moderation check, behind a project gate in the default mode.
+// Each must appear with the function that asks and what it accepts.
+func TestAdministrationSurfaceReachesSessionAndWindowChecks(t *testing.T) {
+	t.Parallel()
+	result := drivenComposedSurface(t).result
+
+	bypass := maintenanceBypassNames()
+	for _, w := range []sessionAndWindowCheck{
+		{adminsurface.TokenMint, adminsurface.VariantNativeSession,
+			"/internal/api/v2/auth.(*Handler).ownerHoldsAdministration", false, adminsurface.KindWholeSet, nil},
+		{adminsurface.MarketplaceListingUpdate, adminsurface.VariantModeration,
+			"/internal/api/v2/eliteacore.(*Handler).holdsModerationPermission", false, adminsurface.KindAnyOf,
+			[]string{adminaccess.RuntimeAdminPublishedAgents}},
+		{adminsurface.PlatformSettings, adminsurface.VariantMaintenance,
+			"/internal/api/v2/eliteacore.(*Handler).holdsMaintenanceBypass", false, adminsurface.KindAnyOf, bypass},
+		{adminsurface.MaintenanceUserRoute, adminsurface.VariantMaintenance,
+			"/internal/api/middleware.(*maintenanceGate).isAdministrator", true, adminsurface.KindAnyOf, bypass},
+	} {
+		var found []adminsurface.Check
+		for _, entry := range result.Find(w.route.Method, w.route.Pattern) {
+			if entry.Variant != w.variant {
+				continue
+			}
+			for _, check := range entry.Checks {
+				if strings.HasSuffix(check.Caller, w.caller) {
+					found = append(found, check)
+				}
+			}
+		}
+		if len(found) != 1 {
+			t.Errorf("%s (variant %q): %d checks by %s in the surface, want 1", w.route, w.variant, len(found), w.caller)
+			continue
+		}
+		check := found[0]
+		if check.Gate != w.gate || check.Kind != w.kind || !slices.Equal(check.Permissions, w.permissions) {
+			t.Errorf("%s (variant %q), %s: got gate=%v %s %v, want gate=%v %s %v", w.route, w.variant, w.caller,
+				check.Gate, check.Kind, check.Permissions, w.gate, w.kind, w.permissions)
+		}
+	}
+
+	// A write whose every check reads the whole answer needs no action entry
+	// (ActionFailures skips it). The list is pinned so that a new one is a
+	// decision, not an accident of the probe.
+	var wholeSet []string
+	for _, entry := range result.Surface {
+		if entry.IsWrite() && entry.NamesNoPermission() {
+			wholeSet = append(wholeSet, entry.Route.String()+" "+entry.Variant)
+		}
+	}
+	want := []string{adminsurface.TokenMint.String() + " " + adminsurface.VariantNativeSession}
+	if !slices.Equal(wholeSet, want) {
+		t.Errorf("writes that name no permission: got %q, want %q", wholeSet, want)
+	}
+}

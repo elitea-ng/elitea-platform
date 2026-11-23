@@ -205,6 +205,13 @@ type RouterConfig struct {
 	SAMLHandler        *v2auth.SAMLHandler
 	HealthDeps         health.Deps
 	Pool               *pgxpool.Pool
+	// MaintenanceState reads the maintenance window in place of the
+	// platform_settings rows of Pool, for the maintenance gate and the
+	// platform_settings flag read alike, on every request and uncached. Nil,
+	// which cmd/elitea-main always leaves it, reads Pool. It is the seam the
+	// administration surface helper (internal/api/adminsurface) opens a
+	// window through, because its pool reaches no database.
+	MaintenanceState func(context.Context) (platformconfig.Maintenance, error)
 	// BrandPackPath is the brand pack's file layer (BRAND_PACK_PATH, read in
 	// cmd/elitea-main/brand_pack_config.go). Empty means no file layer. Used
 	// only when Branding is nil.
@@ -2226,6 +2233,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	apiGates := []func(http.Handler) http.Handler{
 		apimw.Maintenance(apimw.MaintenanceConfig{
 			Pool:     cfg.Pool,
+			State:    cfg.MaintenanceState,
 			Resolver: permissionResolver,
 		}),
 		apimw.ClientVersion(apimw.ClientVersionConfig{
@@ -2342,6 +2350,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		v2core.WithListingSuspender(v2core.NewListingSuspender(cfg.SuspensionService)),
 		v2core.WithMemoryUserJournal(memoryUserJournal),
 		v2core.WithPermissionResolver(permissionResolver),
+		v2core.WithMaintenanceState(cfg.MaintenanceState),
 		v2core.WithObjectStore(cfg.ObjectStore),
 		v2core.WithInviteMailer(inviteMailer),
 		v2core.WithPrebuiltMCPCatalogue(prebuiltMCPStore, prebuiltMCPVault),

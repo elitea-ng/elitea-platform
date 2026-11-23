@@ -126,6 +126,12 @@ type MaintenanceConfig struct {
 	// permissive default, stated at the composition root rather than discovered
 	// per request.
 	Pool *pgxpool.Pool
+	// State, when set, reads the switch in place of Pool, on every request:
+	// the gate does not cache it, so the reader owns its own cost. It exists
+	// for the administration surface helper (internal/api/adminsurface),
+	// whose pool reaches no database, to open a window per request. Nil,
+	// which cmd/elitea-main always leaves it, reads Pool through the cache.
+	State func(context.Context) (platformconfig.Maintenance, error)
 	// Resolver decides who is an administrator. A nil resolver would make the
 	// window refuse EVERYONE including administrators, so it disables the
 	// middleware for the same reason a nil pool does: a maintenance mode nobody
@@ -142,7 +148,10 @@ type MaintenanceConfig struct {
 // testable without a database. Those are the parts with a decision in them; the
 // query itself belongs to platformconfig and is covered there.
 type maintenanceGate struct {
-	load     func(context.Context) (platformconfig.Maintenance, error)
+	load func(context.Context) (platformconfig.Maintenance, error)
+	// uncached reads the switch on every request instead of through load
+	// and the cache (MaintenanceConfig.State).
+	uncached func(context.Context) (platformconfig.Maintenance, error)
 	resolver auth.PermissionResolver
 	now      func() time.Time
 
@@ -155,7 +164,7 @@ type maintenanceGate struct {
 // returns a pass-through, so a deployment that has not wired it is not silently
 // half-enforcing.
 func Maintenance(config MaintenanceConfig) func(http.Handler) http.Handler {
-	if config.Pool == nil || config.Resolver == nil {
+	if (config.Pool == nil && config.State == nil) || config.Resolver == nil {
 		return func(next http.Handler) http.Handler { return next }
 	}
 	pool := config.Pool
@@ -163,6 +172,7 @@ func Maintenance(config MaintenanceConfig) func(http.Handler) http.Handler {
 		load: func(ctx context.Context) (platformconfig.Maintenance, error) {
 			return platformconfig.LoadMaintenance(ctx, pool)
 		},
+		uncached: config.State,
 		resolver: config.Resolver,
 		now:      config.now,
 	}
@@ -186,6 +196,14 @@ func (g *maintenanceGate) clock() time.Time {
 // there the zero state — not in maintenance — is the permissive default the
 // file doc chooses.
 func (g *maintenanceGate) resolve(ctx context.Context) platformconfig.Maintenance {
+	if g.uncached != nil {
+		state, err := g.uncached(ctx)
+		if err != nil {
+			slog.WarnContext(ctx, "maintenance state unreadable; not in maintenance", "error", err)
+			return platformconfig.Maintenance{}
+		}
+		return state
+	}
 	// THE QUERY DOES NOT RUN UNDER THE LOCK, and that is the whole shape of this
 	// function.
 	//

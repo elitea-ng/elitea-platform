@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
 // Route is one mounted (method, pattern).
@@ -76,13 +77,43 @@ type Entry struct {
 }
 
 // Variant is one way to drive a route: a request body (an `action` of a
-// multiplexed route) and the path placeholders that select what the handler
-// reads (a Configuration section).
+// multiplexed route), the path placeholders that select what the handler
+// reads (a Configuration section), and what a check that the default request
+// never reaches needs: the grants of a gate in another mode, a credential
+// other than the bearer token, an open maintenance window.
 type Variant struct {
 	Name   string
 	Body   string
 	Params map[string]string
+	// OtherModes, when not nil, replaces Options.OtherModes for this variant:
+	// the grants of a gate in another mode in front of an in-handler
+	// administration check (the Marketplace moderation check sits behind
+	// the project's agent list gate).
+	OtherModes []string
+	// Authenticate, when not nil, replaces Options.Authenticate: a check that
+	// only another credential reaches (the token mint asks the
+	// administration mode of a native device session only).
+	Authenticate func(*http.Request)
+	// Maintenance drives the variant with a maintenance window open. The
+	// router must read the window through MaintenanceState (ComposedRouter
+	// does), since no database holds one.
+	Maintenance bool
 }
+
+type maintenanceKey struct{}
+
+// MaintenanceState answers an open window for a request Drive sent with
+// Variant.Maintenance, and a closed one for every other request. It is the
+// api.RouterConfig.MaintenanceState of ComposedRouter.
+func MaintenanceState(ctx context.Context) (platformconfig.Maintenance, error) {
+	if open, _ := ctx.Value(maintenanceKey{}).(bool); open {
+		return platformconfig.Maintenance{Enabled: true, Title: MaintenanceTitle}, nil
+	}
+	return platformconfig.Maintenance{}, nil
+}
+
+// MaintenanceTitle is the title of the window MaintenanceState opens.
+const MaintenanceTitle = "adminsurface window"
 
 // Unreached is a route Drive could not place in the surface, with the status
 // it answered:
@@ -361,6 +392,15 @@ func (d driver) probe(route Route, variant Variant, full outcome, i int, call Ca
 			anyOf = append(anyOf, name)
 		}
 	}
+	// A check that every registered name satisfies alone asks whether the
+	// caller holds ANY administration permission (the token mint of a
+	// native session, the maintenance gate in front of a route an
+	// administration gate decides): it reads the whole answer and names no
+	// permission.
+	if len(anyOf) > 0 && len(anyOf) == len(all) {
+		check.Kind = KindWholeSet
+		return check
+	}
 	if len(anyOf) > 0 {
 		check.Kind, check.Permissions = KindAnyOf, anyOf
 		return check
@@ -381,8 +421,16 @@ func (d driver) probe(route Route, variant Variant, full outcome, i int, call Ca
 }
 
 func (d driver) run(route Route, variant Variant, grant func(int) []string) outcome {
-	rec := &recorder{grant: grant, others: d.opts.OtherModes}
-	ctx, cancel := context.WithTimeout(context.WithValue(context.Background(), recorderKey{}, rec), d.opts.Timeout)
+	others := d.opts.OtherModes
+	if variant.OtherModes != nil {
+		others = variant.OtherModes
+	}
+	rec := &recorder{grant: grant, others: others}
+	base := context.WithValue(context.Background(), recorderKey{}, rec)
+	if variant.Maintenance {
+		base = context.WithValue(base, maintenanceKey{}, true)
+	}
+	ctx, cancel := context.WithTimeout(base, d.opts.Timeout)
 	defer cancel()
 
 	req := httptest.NewRequestWithContext(ctx, route.Method, d.path(route.Pattern, variant.Params),
@@ -390,7 +438,10 @@ func (d driver) run(route Route, variant Variant, grant func(int) []string) outc
 	if variant.Body != "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if d.opts.Authenticate != nil {
+	switch {
+	case variant.Authenticate != nil:
+		variant.Authenticate(req)
+	case d.opts.Authenticate != nil:
 		d.opts.Authenticate(req)
 	}
 
