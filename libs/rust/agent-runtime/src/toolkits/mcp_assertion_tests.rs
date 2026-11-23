@@ -32,7 +32,7 @@ impl DelegationAssertionSource for Source {
 /// A session client as `connect_session` builds one: through the guarded
 /// builder (#2950).
 fn session_client() -> reqwest_mcp::Client {
-    crate::egress::mcp_client_builder(&reqwest_mcp::Url::parse(ENDPOINT).expect("endpoint"))
+    crate::egress::mcp_client_builder(&reqwest_mcp::Url::parse(ENDPOINT).expect("endpoint"), None)
         .build()
         .expect("client")
 }

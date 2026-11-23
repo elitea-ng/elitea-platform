@@ -251,6 +251,11 @@ pub struct RemoteMcpConfig {
     /// The run's delegation assertions (ADR-0044 decision 4): every request
     /// to the server carries one. `None` sends none.
     assertions: Option<Arc<DelegationAssertions>>,
+    /// The run whose egress rules (its private permit, #2950) the session's
+    /// resolver applies. Carried here, not read from the task scope, because
+    /// a session is opened wherever the toolsets are assembled. `None` falls
+    /// back to the scope's run ([`crate::egress::current`]).
+    egress: Option<Arc<crate::egress::RunEgress>>,
 }
 
 impl RemoteMcpConfig {
@@ -346,7 +351,15 @@ impl RemoteMcpConfig {
             pinned_tools: super::mcp_pin::parse_pinned_tools(settings)
                 .map_err(|()| invalid_configuration())?,
             assertions: None,
+            egress: None,
         })
+    }
+
+    /// Open the session under `egress`, the run's rules (#2950).
+    #[must_use]
+    pub(crate) fn with_egress(mut self, egress: &Arc<crate::egress::RunEgress>) -> Self {
+        self.egress = Some(Arc::clone(egress));
+        self
     }
 
     /// Carry the run's delegation assertions on every request to the
@@ -720,7 +733,7 @@ pub(crate) fn session_client_builder(
     config: &RemoteMcpConfig,
 ) -> Result<reqwest_mcp::ClientBuilder, McpMaterializationError> {
     let origin = reqwest_mcp::Url::parse(config.endpoint()).map_err(|_| invalid_configuration())?;
-    let mut client = crate::egress::mcp_client_builder(&origin)
+    let mut client = crate::egress::mcp_client_builder(&origin, config.egress.clone())
         .https_only(true)
         .redirect(same_origin_redirect_policy(origin))
         .retry(reqwest_mcp::retry::never())
@@ -846,7 +859,8 @@ pub async fn materialize_mcp_toolsets_with_tokens_and_authorization(
     let mut authorization = DelegatedAuthorizationCatalog::default();
     for reference in references {
         let config = RemoteMcpConfig::parse(reference, mcp_tokens)?
-            .with_assertions(policy.egress().assertions());
+            .with_assertions(policy.egress().assertions())
+            .with_egress(policy.egress());
         // A remote server outside the run's egress policy (#1490), or one
         // that resolves only to private, local or metadata addresses the
         // operator's private permit does not name (#2950), is never

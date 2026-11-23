@@ -1229,7 +1229,7 @@ async fn same_origin_redirect_is_followed_and_cross_origin_is_refused() {
     let (other, other_seen) = redirect_server(String::new()).await;
     let (base, seen) = redirect_server(other.clone()).await;
     let client_for = |path: &str| {
-        crate::egress::mcp_client_builder(&reqwest_mcp::Url::parse(&base).unwrap())
+        crate::egress::mcp_client_builder(&reqwest_mcp::Url::parse(&base).unwrap(), None)
             .redirect(same_origin_redirect_policy(
                 reqwest_mcp::Url::parse(&format!("{base}{path}")).unwrap(),
             ))
@@ -2368,18 +2368,19 @@ async fn the_session_client_refuses_private_and_metadata_destinations() {
     );
     assert!(seen.lock().unwrap().is_empty(), "nothing was sent");
 
-    // The same fixture under a name the permit lists is reached.
+    // The same fixture under a name the permit lists is reached. The config
+    // carries its run, as materialization stamps it, so the session is bound
+    // to that run's permit even when it is built outside any egress scope
+    // (toolset assembly is).
     let endpoint = format!("http://permitted.example:{port}/mcp");
     let config = direct_config(json!({"Authorization": "Bearer pat"}), &Map::new())
-        .with_endpoint_for_test(&endpoint);
-    let client = crate::egress::scope(std::sync::Arc::clone(&run), async {
-        session_client_builder(&config)
-            .expect("builder")
-            .https_only(false)
-            .build()
-            .expect("client")
-    })
-    .await;
+        .with_endpoint_for_test(&endpoint)
+        .with_egress(&run);
+    let client = session_client_builder(&config)
+        .expect("builder")
+        .https_only(false)
+        .build()
+        .expect("client");
     let response = client
         .post(&endpoint)
         .body("{}")

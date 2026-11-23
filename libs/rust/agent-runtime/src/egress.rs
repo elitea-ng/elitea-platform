@@ -867,15 +867,19 @@ fn guard(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
 }
 
 /// The builder of a remote MCP session (reqwest 0.13, rmcp's line), bound to
-/// the run in scope ([`current`]) for connections to `endpoint`'s port: no
+/// `egress` (or, when `None`, the run in scope, [`current`]) for connections
+/// to `endpoint`'s port: no
 /// proxy, and the guarded resolver. The session sends outside any request
 /// scope, so the run is fixed at build; redirects are the caller's (same
 /// origin only, so the port never changes).
-pub(crate) fn mcp_client_builder(endpoint: &reqwest_mcp::Url) -> reqwest_mcp::ClientBuilder {
+pub(crate) fn mcp_client_builder(
+    endpoint: &reqwest_mcp::Url,
+    egress: Option<Arc<RunEgress>>,
+) -> reqwest_mcp::ClientBuilder {
     reqwest_mcp::Client::builder()
         .no_proxy()
         .dns_resolver(PermitResolver::fixed(
-            current(),
+            egress.unwrap_or_else(current),
             endpoint.port_or_known_default(),
         ))
 }

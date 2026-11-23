@@ -227,7 +227,8 @@ impl GovernedServer {
         }
         let settings = reference.settings().ok_or_else(invalid_configuration)?;
         let config = RemoteMcpConfig::parse(reference, &Map::new())?
-            .with_assertions(policy.egress().assertions());
+            .with_assertions(policy.egress().assertions())
+            .with_egress(policy.egress());
         // A credential in the toolkit's own headers is a claim-time credential;
         // the internal tool service is the platform's authority, not a grant.
         if config.served_internally() || !config.static_headers.is_empty() {
@@ -291,6 +292,7 @@ impl GovernedServer {
             internal_builder: false,
             pinned_tools: base.pinned_tools.clone(),
             assertions: base.assertions.clone(),
+            egress: base.egress.clone(),
         }
     }
 
