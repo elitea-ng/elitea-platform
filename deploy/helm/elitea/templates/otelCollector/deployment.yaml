@@ -65,12 +65,18 @@ spec:
               mountPath: /etc/otel-collector-config.yaml
               subPath: otel-collector-config.yaml
               readOnly: true
+            {{- with .Values.otelCollector.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           resources:
             {{- toYaml .Values.otelCollector.resources | nindent 12 }}
       volumes:
         - name: config
           configMap:
             name: {{ include "otel-collector.fullname" . }}-config
+        {{- with .Values.otelCollector.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- with .Values.otelCollector.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

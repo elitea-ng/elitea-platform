@@ -4734,16 +4734,21 @@ web:
 
   # Hardening (privilege escalation on exec). The image is the stock
   # nginx:stable-alpine (apps/elitea-web/Containerfile): its master process
-  # starts as root, binds :80, switches its workers to the `nginx` user
-  # (SETUID/SETGID), and docker-entrypoint.sh writes config.js into the image
-  # filesystem at start. So only what costs nothing is set here. Dropping ALL
-  # capabilities, runAsNonRoot or readOnlyRootFilesystem needs an unprivileged
-  # nginx image first.
+  # starts as root, binds :80 (NET_BIND_SERVICE), chowns its temp dirs under
+  # /var/cache/nginx (CHOWN) and switches its workers to the `nginx` user
+  # (SETUID/SETGID); docker-entrypoint.sh writes config.js into the image
+  # filesystem at start. So every other capability is dropped, and those four
+  # are added back; it needs no other (it signals its workers over a channel,
+  # not kill(2)). runAsNonRoot and readOnlyRootFilesystem need an
+  # unprivileged nginx image first.
   podSecurityContext:
     seccompProfile:
       type: RuntimeDefault
   securityContext:
     allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+      add: ["CHOWN", "NET_BIND_SERVICE", "SETGID", "SETUID"]
 
   podAnnotations: {}
   nodeSelector: {}
@@ -7827,8 +7832,10 @@ otelCollector:
 
   # The contrib image runs as a non-root user (10001) and the shipped config
   # (debug exporter) writes nothing to disk. An exporter or extension that
-  # does (file exporter, file_storage queue) needs a writable volume mounted
-  # for it, or readOnlyRootFilesystem set to false.
+  # does (file exporter, file_storage queue) needs a writable volume for its
+  # path: add it with extraVolumes/extraVolumeMounts below (an emptyDir, or a
+  # PVC when it must outlive the pod). Setting readOnlyRootFilesystem to false
+  # is not enough on its own: the image has no directory uid 10001 may write.
   podSecurityContext:
     runAsNonRoot: true
     seccompProfile:
@@ -7838,6 +7845,17 @@ otelCollector:
     readOnlyRootFilesystem: true
     capabilities:
       drop: ["ALL"]
+
+  # Extra pod volumes and container mounts, e.g. a writable directory for a
+  # file exporter or a file_storage extension:
+  #   extraVolumes:
+  #     - name: otel-data
+  #       emptyDir: {}
+  #   extraVolumeMounts:
+  #     - name: otel-data
+  #       mountPath: /var/lib/otelcol
+  extraVolumes: []
+  extraVolumeMounts: []
 
   podAnnotations: {}
   nodeSelector: {}
