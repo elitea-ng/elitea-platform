@@ -146,13 +146,14 @@ var platformNarrowNames = []string{
 }
 
 // platformNeighbourRoutes stay on runtime.plugins (or their own permission)
-// in this story: identity (R0.4c), maintenance (R0.4b) and the Configuration
-// page (R0.5). A narrow holder is refused on every one.
+// in this story: identity (R0.4c) and maintenance (R0.4b). A narrow holder is
+// refused on every one. The Configuration page was a neighbour until R0.5
+// gave its sections their own narrow path: the e-mail and the MCP servers
+// sections now admit platform.email.manage and mcp.catalogue.manage, which
+// v2/admin/config_values_narrow_test.go proves.
 var platformNeighbourRoutes = []platformGateRoute{
 	{method: http.MethodPut, path: "/api/v2/admin/identity_providers/administration/fixture", body: "{}"},
 	{method: http.MethodGet, path: "/api/v2/admin/maintenance/administration"},
-	{method: http.MethodGet, path: "/api/v2/admin/plugin_config_schemas/administration"},
-	{method: http.MethodPut, path: "/api/v2/admin/plugin_config_values/administration/email", body: "{}"},
 }
 
 // TestPlatformRoutesAdmitTheirNarrowNameOnly: a holder of one narrow name gets

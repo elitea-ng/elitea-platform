@@ -63,9 +63,22 @@ const maxSuggestionValues = 4096
 // has no toolkits, which would be alarming and wrong.
 const suggestionsUnavailable = "this deployment cannot enumerate the toolkit registry, so no suggestions are available for this field"
 
+// unknownSuggestionSource is the answer for a source no section the caller
+// may read declares, and for one no section declares at all.
+const unknownSuggestionSource = "unknown suggestion source"
+
 // PluginConfigSuggestions serves one suggestion source.
+//
+// The source is served only when a section the caller may read declares it
+// (ADR-0059 R0.5). Otherwise it answers exactly as an unknown source does, so
+// the response says nothing about a section the caller cannot open.
 func (h *Handler) PluginConfigSuggestions(w http.ResponseWriter, r *http.Request) {
-	switch chi.URLParam(r, "key") {
+	key := chi.URLParam(r, "key")
+	if !h.mayReadSuggestionSource(r, key) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": unknownSuggestionSource})
+		return
+	}
+	switch key {
 	case "toolkit_names":
 		h.toolkitNameSuggestions(w, r)
 	case "toolkit_tools":
@@ -75,7 +88,7 @@ func (h *Handler) PluginConfigSuggestions(w http.ResponseWriter, r *http.Request
 	default:
 		// 400 rather than an empty list: an unknown source is a caller bug, and
 		// answering it with "no suggestions" hides a typo in a schema.
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "unknown suggestion source"})
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": unknownSuggestionSource})
 	}
 }
 

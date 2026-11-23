@@ -38,6 +38,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 	adminapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/admin"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
@@ -366,10 +367,21 @@ func TestServiceDescriptorListingHasNoOtherMode(t *testing.T) {
 //
 // What is asserted now is the property equality was standing in for: the section
 // names the page, and it does not carry the refusal.
+// descriptorSectionReader holds configuration.service_descriptors.
+type descriptorSectionReader struct{}
+
+func (descriptorSectionReader) ResolvePermissions(
+	context.Context, auth.User, string, string,
+) (auth.PermissionResolution, error) {
+	return auth.PermissionResolution{UserID: 1, Permissions: []string{adminaccess.ConfigurationServiceDescriptors}}, nil
+}
+
 func TestConfigurationSectionDefersToTheDescriptorsPage(t *testing.T) {
 	pool := newAuditPool(t)
 	principal := auth.User{ID: "1", UserID: "1"}
-	handler := adminapi.NewHandler(pool)
+	// The schema list names only the sections the caller can open (ADR-0059
+	// R0.5); this caller holds the section's permission.
+	handler := adminapi.NewHandler(pool, adminapi.WithPermissionResolver(descriptorSectionReader{}))
 
 	router := chi.NewRouter()
 	router.Use(func(next http.Handler) http.Handler {

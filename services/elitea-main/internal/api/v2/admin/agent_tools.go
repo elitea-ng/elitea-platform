@@ -33,8 +33,9 @@ func (h *Handler) invalidateAgentTools(section string) {
 func agentToolsSection() map[string]any {
 	const section = platformconfig.SectionAgents
 	return map[string]any{
-		"id":    section,
-		"title": "Agent tools",
+		"id":     section,
+		"access": agentGovernanceAccess(),
+		"title":  "Agent tools",
 		"description": "Ceilings on each agent's tool envelope. An agent's author can limit how often a tool " +
 			"may be called in a turn, which tools the agent may use when nobody is present (a turn another " +
 			"agent handed it), and which tools its sub-agents may get. These settings can only narrow an " +

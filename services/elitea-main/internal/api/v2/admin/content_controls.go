@@ -46,8 +46,9 @@ func (h *Handler) invalidateContentControls(section string) {
 func aiDisclosureSection() map[string]any {
 	const section = platformconfig.SectionAIDisclosure
 	return map[string]any{
-		"id":    section,
-		"title": "AI Disclosure",
+		"id":     section,
+		"access": agentGovernanceAccess(),
+		"title":  "AI Disclosure",
 		"description": "Outbound tools that write human-readable text outside the platform (a Jira comment, a " +
 			"Slack message, an e-mail, a pull request comment) add this marker to the text they send. A project " +
 			"can change the text but cannot remove the marker. Save this section only after every worker runs " +
@@ -88,8 +89,9 @@ func aiDisclosureSection() map[string]any {
 func platformPreambleSection() map[string]any {
 	const section = platformconfig.SectionPlatformPreamble
 	return map[string]any{
-		"id":    section,
-		"title": "Platform Preamble",
+		"id":     section,
+		"access": agentGovernanceAccess(),
+		"title":  "Platform Preamble",
 		"description": "Instructions that the worker puts before the system prompt of every agent. The agent " +
 			"author cannot change or remove them. The worker always puts its built-in rule for untrusted " +
 			"content first. Each change makes a new revision and a security audit event. Save this section " +

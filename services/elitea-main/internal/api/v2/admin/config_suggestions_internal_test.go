@@ -10,6 +10,9 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 type toolkitRegistryStub struct {
@@ -48,7 +51,9 @@ func suggestionsRouter(handler *Handler) *chi.Mux {
 func suggestionsGet(t *testing.T, handler *Handler, path string) (*httptest.ResponseRecorder, map[string]any) {
 	t.Helper()
 	recorder := httptest.NewRecorder()
-	suggestionsRouter(handler).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+	request := httptest.NewRequest(http.MethodGet, path, nil)
+	request = request.WithContext(auth.ContextWithUser(request.Context(), auth.User{ID: "5", UserID: "5"}))
+	suggestionsRouter(handler).ServeHTTP(recorder, request)
 	body := map[string]any{}
 	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
 		t.Fatalf("body is not an object: %s", recorder.Body.String())
@@ -56,8 +61,12 @@ func suggestionsGet(t *testing.T, handler *Handler, path string) (*httptest.Resp
 	return recorder, body
 }
 
+// suggestionsReader holds runtime.plugins, so it reads the guardrails
+// section, which declares both toolkit sources.
+var suggestionsReader = fixedResolver{adminaccess.RuntimePlugins}
+
 func registryHandler() *Handler {
-	return &Handler{suggestions: &toolkitRegistryStub{types: map[string][]string{
+	return &Handler{resolver: suggestionsReader, suggestions: &toolkitRegistryStub{types: map[string][]string{
 		"github":     {"get_issue", "create_issue"},
 		"sharepoint": {"search", "read"},
 	}}}
@@ -128,9 +137,9 @@ func TestAnUnknownToolkitAnswersAnEmptyListNotAnError(t *testing.T) {
 // empty picker would tell the operator their platform has no toolkits.
 func TestAnEmptyRegistryReportsUnavailableRatherThanEmpty(t *testing.T) {
 	for name, handler := range map[string]*Handler{
-		"unwired":   {},
-		"typed nil": {suggestions: (*toolkitRegistryStub)(nil)},
-		"empty":     {suggestions: &toolkitRegistryStub{}},
+		"unwired":   {resolver: suggestionsReader},
+		"typed nil": {resolver: suggestionsReader, suggestions: (*toolkitRegistryStub)(nil)},
+		"empty":     {resolver: suggestionsReader, suggestions: &toolkitRegistryStub{}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			for _, source := range []string{"toolkit_names", "toolkit_tools?toolkit=github"} {
