@@ -2370,6 +2370,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"POST /api/v2/tracing/otlp/prompt_lib/{projectID}",
 		"POST /api/v2/webhooks/prompt_lib/{projectID}/",
 		"POST /api/v2/webhooks/prompt_lib/{projectID}/{webhookID}/deliveries/{deliveryID}/redeliver",
+		"POST /api/v2/webhooks/prompt_lib/{projectID}/{webhookID}/rotate_secret",
 		"POST /app/{projectID}/mcp",
 		"POST /app/{projectID}/mcp/*",
 		"PUT /api/v2/admin/branding/administration",
