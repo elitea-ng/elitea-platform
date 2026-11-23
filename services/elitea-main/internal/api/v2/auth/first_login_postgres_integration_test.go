@@ -25,6 +25,7 @@ package auth
 
 import (
 	"context"
+	"io/fs"
 	"strconv"
 	"testing"
 
@@ -33,6 +34,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/identity"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identityrepo"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 /* ── the administration role ───────────────────────────────────────────── */
@@ -407,6 +409,13 @@ func newFirstLoginPool(t *testing.T) *pgxpool.Pool {
 			('admin', 'administration'),
 			('user', 'administration'),
 			('viewer', 'default');`)
+	require.NoError(t, err)
+
+	// The role history the grant writes (issue 2499), from the real shared
+	// migration: it is self-contained and guards its auth_core index.
+	grants, err := fs.ReadFile(platformmigrations.Files, "shared/0260_admin_role_grants.sql")
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, string(grants))
 	require.NoError(t, err)
 
 	return pool

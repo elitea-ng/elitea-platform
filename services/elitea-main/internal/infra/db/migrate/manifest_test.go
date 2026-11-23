@@ -1191,7 +1191,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// terminal index-metadata effect that keeps failing validation rest as
 	// QUARANTINED (with its error code) instead of staying PENDING and
 	// stalling the terminal reconciler. No permission.
-	require.EqualValues(t, 259, Head(shared))
+	//
+	// 260: shared/0260_admin_role_grants.sql, the append-only history of
+	// central role assignments (elitea_auth.admin_role_grants) and the
+	// auth_core__project_user_role (user_id) index (issue 2499, ADR-0059
+	// R0.10a). No permission.
+	require.EqualValues(t, 260, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

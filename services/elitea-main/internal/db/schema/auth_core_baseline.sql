@@ -148,3 +148,34 @@ CREATE TABLE public.auth_core__project_user_role (
         ON UPDATE CASCADE ON DELETE CASCADE,
     UNIQUE (project_id, user_id, role_id)
 );
+
+-- The history every central role write records (internal/adminaccess/
+-- rolegrants, issue 2499). migrations/shared/0260_admin_role_grants.sql is the
+-- target-schema authority and adds the append-only trigger; this is the same
+-- table, so every fixture built on this projection can run the role writes.
+CREATE SCHEMA IF NOT EXISTS elitea_auth;
+
+CREATE TABLE IF NOT EXISTS elitea_auth.admin_role_grants (
+    id            bigint      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_id       integer     NOT NULL,
+    role_name     text        NOT NULL,
+    role_mode     text        NOT NULL,
+    action        text        NOT NULL,
+    actor_user_id integer,
+    occurred_at   timestamptz NOT NULL DEFAULT now(),
+    reason        text,
+    source        text        NOT NULL,
+    source_ref    text,
+    CONSTRAINT admin_role_grants_action_known
+        CHECK (action IN ('granted', 'revoked')),
+    CONSTRAINT admin_role_grants_source_known
+        CHECK (source IN ('console', 'api', 'scim', 'migration', 'bootstrap', 'operator', 'review')),
+    CONSTRAINT admin_role_grants_role_present
+        CHECK (length(btrim(role_name)) > 0 AND length(btrim(role_mode)) > 0),
+    CONSTRAINT admin_role_grants_actor_matches_source
+        CHECK (
+            (source IN ('console', 'api') AND actor_user_id IS NOT NULL)
+            OR (source IN ('bootstrap', 'migration') AND actor_user_id IS NULL)
+            OR source IN ('scim', 'operator', 'review')
+        )
+);

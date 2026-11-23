@@ -46,6 +46,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess/rolegrants"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
 )
@@ -130,7 +131,7 @@ type modeAssignRequest struct {
 // ModesAssign serves `POST /admin/modes/administration`.
 //
 // The assignment is SINGLE-ROLE-PER-MODE, exactly as `assign_user_to_role`
-// enforces it: every existing assignment the user holds in that mode is dropped
+// enforces it: every other assignment the user holds in that mode is dropped
 // before the new one is written, both inside one transaction.
 func (h *Handler) ModesAssign(w http.ResponseWriter, r *http.Request) {
 	if h.pool == nil {
@@ -189,7 +190,7 @@ func (h *Handler) ModesAssign(w http.ResponseWriter, r *http.Request) {
 	// centralRoleModes later cannot reopen that path.
 	//
 	// The DEMOTION arm stays scoped to `administration`. currentAdminRole
-	// (users.go) reads the administration-mode role only, and the DELETE below
+	// (users.go) reads the administration-mode role only, and the write below
 	// removes assignments in the requested mode only.
 	var caller rolepolicy.Caller
 	var ok bool
@@ -221,7 +222,7 @@ func (h *Handler) ModesAssign(w http.ResponseWriter, r *http.Request) {
 
 	// The subset rule (issue 2488), the same one the admin Users surface
 	// applies: the caller holds every permission of the role given and of
-	// every role in this mode that the DELETE below takes away. Before it,
+	// every role in this mode that the write below takes away. Before it,
 	// `modes.users` assigned ANY role of the mode — a custom role holding
 	// everything included. It runs under the role-writes lock, in this
 	// transaction.
@@ -233,32 +234,20 @@ func (h *Handler) ModesAssign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := transaction.Exec(ctx, `
-DELETE FROM public.auth_core__user_role assignment
-USING public.auth_core__role role
-WHERE role.id = assignment.role_id
-  AND role.mode = $1
-  AND assignment.user_id = $2`, mode, userID); err != nil {
+	// The difference, not a rewrite (issue 2499): every other role of the
+	// mode is taken, the role is given if the user does not hold it yet, and
+	// each change writes one history row in this transaction.
+	if _, err := rolegrants.Set(ctx, transaction, int64(userID), mode, role, grantOrigin(r, caller)); err != nil {
+		// No matching role means the deployment does not define it in that
+		// mode. Committing here would revoke what the user had and grant
+		// nothing.
+		if errors.Is(err, rolegrants.ErrRoleNotFound) {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error": fmt.Sprintf("role %q is not defined in mode %q", role, mode),
+			})
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to assign role"})
-		return
-	}
-
-	tag, err := transaction.Exec(ctx, `
-INSERT INTO public.auth_core__user_role (user_id, role_id)
-SELECT $1, role.id
-FROM public.auth_core__role role
-WHERE role.name = $2 AND role.mode = $3
-ON CONFLICT (user_id, role_id) DO NOTHING`, userID, role, mode)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to assign role"})
-		return
-	}
-	// No matching role means the deployment does not define it in that mode.
-	// Committing here would revoke what the user had and grant nothing.
-	if tag.RowsAffected() == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"error": fmt.Sprintf("role %q is not defined in mode %q", role, mode),
-		})
 		return
 	}
 
@@ -342,18 +331,12 @@ func (h *Handler) ModesRemove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tag, err := transaction.Exec(ctx, `
-DELETE FROM public.auth_core__user_role assignment
-USING public.auth_core__role role
-WHERE role.id = assignment.role_id
-  AND assignment.user_id = $1
-  AND role.mode = $2
-  AND role.name = $3`, userID, mode, role)
+	removed, err := rolegrants.Revoke(ctx, transaction, int64(userID), mode, role, grantOrigin(r, caller))
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove role"})
 		return
 	}
-	if tag.RowsAffected() == 0 {
+	if !removed {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "assignment not found"})
 		return
 	}
@@ -361,7 +344,7 @@ WHERE role.id = assignment.role_id
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove role"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "removed": tag.RowsAffected()})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "removed": 1})
 }
 
 /* ── helpers ───────────────────────────────────────────────────────────── */
