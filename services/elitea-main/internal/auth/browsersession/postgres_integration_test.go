@@ -252,6 +252,121 @@ func TestPostgresSweepRemovesOnlyDeadRows(t *testing.T) {
 	}
 }
 
+// TestPostgresARefreshDoesNotMoveTheAuthenticationTime (ADR-0059 R1.10a). The
+// recorded authentication time is what "signed in within the last 15
+// minutes" reads, so a session kept alive by requests must keep its sign-in
+// time: a Touch that wrote authenticated_at would make every polled session
+// recent forever.
+func TestPostgresARefreshDoesNotMoveTheAuthenticationTime(t *testing.T) {
+	dial := &clock{now: time.Date(2026, time.November, 23, 9, 0, 0, 0, time.UTC)}
+	manager := newIntegrationManager(t, Policy{
+		IdleTimeout: time.Hour, AbsoluteLifetime: 8 * time.Hour,
+	}, dial.Now)
+	ctx := context.Background()
+
+	providerAuthentication := dial.Now().Add(-30 * time.Minute)
+	value, err := manager.Create(ctx, NewSession{
+		UserID: 42, Provider: ProviderOIDC, AuthenticatedAt: providerAuthentication,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	created, err := manager.Validate(ctx, value)
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if !created.AuthenticatedAt.Equal(providerAuthentication) {
+		t.Fatalf("authenticated_at = %s, want the provider's %s", created.AuthenticatedAt, providerAuthentication)
+	}
+
+	// Several refreshes, each past the touch throttle, through real SQL.
+	for range 3 {
+		dial.advance(2 * TouchInterval)
+		refreshed, err := manager.Validate(ctx, value)
+		if err != nil {
+			t.Fatalf("Validate: %v", err)
+		}
+		if !refreshed.LastSeenAt.After(created.LastSeenAt) {
+			t.Fatalf("the refresh did not run: last_seen_at %s then %s", created.LastSeenAt, refreshed.LastSeenAt)
+		}
+		if !refreshed.AuthenticatedAt.Equal(providerAuthentication) {
+			t.Fatalf("a refresh moved authenticated_at from %s to %s", providerAuthentication, refreshed.AuthenticatedAt)
+		}
+	}
+
+	// A sign-in with no provider authentication time records the sign-in.
+	plain, err := manager.Create(ctx, NewSession{UserID: 42, Provider: ProviderSAML})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	plainSession, err := manager.Validate(ctx, plain)
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if !plainSession.AuthenticatedAt.Equal(dial.Now()) {
+		t.Fatalf("authenticated_at = %s, want the sign-in %s", plainSession.AuthenticatedAt, dial.Now())
+	}
+}
+
+// TestPostgresARowFromBeforeTheMigrationReadsCreatedAt. A row written without
+// authenticated_at (a row 0261 backfilled, or one a replica of the previous
+// release inserted during a rolling upgrade) reads its created_at, the only
+// authentication time it ever knew. The backfill itself is asserted by
+// re-running the migration's UPDATE against such a row.
+func TestPostgresARowFromBeforeTheMigrationReadsCreatedAt(t *testing.T) {
+	pool := newBrowserSessionPool(t)
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatalf("NewPostgresStore: %v", err)
+	}
+	ctx := context.Background()
+	createdAt := time.Date(2026, time.November, 1, 8, 30, 0, 0, time.UTC)
+
+	// The INSERT of the previous release: it does not name the column.
+	id := mustID(t)
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO elitea_auth.browser_sessions
+			(id, user_id, provider, created_at, last_seen_at, expires_at, idle_timeout_seconds)
+		VALUES ($1, 7, 'oidc', $2::timestamptz, $2::timestamptz, $2::timestamptz + interval '30 days', 3600)`, id, createdAt); err != nil {
+		t.Fatalf("insert a pre-0261 row: %v", err)
+	}
+	session, err := store.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !session.AuthenticatedAt.Equal(createdAt) {
+		t.Fatalf("authenticated_at of a pre-0261 row = %s, want created_at %s", session.AuthenticatedAt, createdAt)
+	}
+
+	// The migration's own backfill fills it with the same value.
+	if _, err := pool.Exec(ctx, `
+		UPDATE elitea_auth.browser_sessions
+		SET authenticated_at = created_at
+		WHERE authenticated_at IS NULL`); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	var stored time.Time
+	if err := pool.QueryRow(ctx,
+		`SELECT authenticated_at FROM elitea_auth.browser_sessions WHERE id = $1`, id).Scan(&stored); err != nil {
+		t.Fatalf("read the backfilled column: %v", err)
+	}
+	if !stored.Equal(createdAt) {
+		t.Fatalf("backfilled authenticated_at = %s, want %s", stored, createdAt)
+	}
+
+	// And the column is timestamptz, as every time in this schema.
+	var dataType string
+	if err := pool.QueryRow(ctx, `
+		SELECT data_type FROM information_schema.columns
+		WHERE table_schema = 'elitea_auth' AND table_name = 'browser_sessions'
+		  AND column_name = 'authenticated_at'`).Scan(&dataType); err != nil {
+		t.Fatalf("read the column type: %v", err)
+	}
+	if dataType != "timestamp with time zone" {
+		t.Fatalf("authenticated_at is %q, want timestamp with time zone", dataType)
+	}
+}
+
 func mustID(t *testing.T) string {
 	t.Helper()
 	id, err := NewID()

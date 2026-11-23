@@ -29,16 +29,29 @@ func (s *PostgresStore) Insert(ctx context.Context, session Session) error {
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO elitea_auth.browser_sessions (
 			id, user_id, email, provider, provider_session_index,
-			created_at, last_seen_at, expires_at, idle_timeout_seconds
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+			created_at, last_seen_at, expires_at, idle_timeout_seconds,
+			authenticated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 		session.ID, session.UserID, session.Email, session.Provider,
 		session.ProviderSessionIndex, session.CreatedAt, session.LastSeenAt,
 		session.ExpiresAt, int32(session.IdleTimeout/time.Second),
+		authenticatedAtParameter(session.AuthenticatedAt),
 	)
 	if err != nil {
 		return fmt.Errorf("browsersession: insert session: %w", err)
 	}
 	return nil
+}
+
+// authenticatedAtParameter writes NULL for a zero time, which the reader
+// answers as created_at. Year one would read as an authentication that
+// happened two thousand years ago, which is correct in effect (never recent)
+// but a lie in the row.
+func authenticatedAtParameter(at time.Time) any {
+	if at.IsZero() {
+		return nil
+	}
+	return at
 }
 
 func (s *PostgresStore) Get(ctx context.Context, id string) (Session, error) {
@@ -49,7 +62,8 @@ func (s *PostgresStore) Get(ctx context.Context, id string) (Session, error) {
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, user_id, email, provider, provider_session_index,
 		       created_at, last_seen_at, expires_at, idle_timeout_seconds, revoked_at,
-		       ref, ended_at, COALESCE(end_reason, '')
+		       ref, ended_at, COALESCE(end_reason, ''),
+		       COALESCE(authenticated_at, created_at)
 		FROM elitea_auth.browser_sessions
 		WHERE id = $1`, id,
 	).Scan(
@@ -57,6 +71,7 @@ func (s *PostgresStore) Get(ctx context.Context, id string) (Session, error) {
 		&session.ProviderSessionIndex, &session.CreatedAt, &session.LastSeenAt,
 		&session.ExpiresAt, &idle, &session.RevokedAt,
 		&session.Ref, &session.EndedAt, &session.EndReason,
+		&session.AuthenticatedAt,
 	)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
@@ -73,6 +88,11 @@ func (s *PostgresStore) Get(ctx context.Context, id string) (Session, error) {
 }
 
 func (s *PostgresStore) Touch(ctx context.Context, id string, seenAt time.Time) error {
+	// last_seen_at ONLY. authenticated_at (shared 0261) is the person's last
+	// authentication, and a request is not one: a refresh that moved it would
+	// let a session kept alive by background polling pass every "signed in
+	// within the last 15 minutes" check forever.
+	//
 	// The WHERE clause repeats the throttle. Two replicas can decide to touch
 	// the same session in the same second, and without it the later one writes
 	// an older timestamp over a newer one.

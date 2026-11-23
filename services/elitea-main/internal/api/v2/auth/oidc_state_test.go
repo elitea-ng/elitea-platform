@@ -33,8 +33,8 @@ func TestAStateCookieWhoseTargetCarriesADotStillVerifies(t *testing.T) {
 			if !ok {
 				t.Fatalf("the state cookie for target %q was refused", target)
 			}
-			if got != target {
-				t.Fatalf("target = %q, want %q", got, target)
+			if got.targetTo != target || got.limited {
+				t.Fatalf("state = %+v, want target %q and no limit", got, target)
 			}
 		})
 	}
@@ -82,7 +82,7 @@ func TestTheStateTargetIsStillNarrowedToThisSite(t *testing.T) {
 	if !ok {
 		t.Fatal("a correctly signed state cookie was refused")
 	}
-	if target != "/" {
-		t.Fatalf("target = %q, want %q", target, "/")
+	if target.targetTo != "/" {
+		t.Fatalf("target = %q, want %q", target.targetTo, "/")
 	}
 }

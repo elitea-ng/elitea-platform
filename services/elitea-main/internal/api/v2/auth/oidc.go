@@ -187,7 +187,24 @@ func (h *OIDCHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	targetTo := safeRedirectTarget(r.URL.Query().Get("target_to"))
+	// A limited sign-in (ADR-0059 R1.10a): `max_age` asks the identity
+	// provider for an authentication no older than the limit, and the
+	// callback holds the id_token to it. See recent_authentication.go.
+	limit, limited, err := requestedAuthenticationLimit(r.URL.Query())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	requestedTarget := r.URL.Query().Get("target_to")
+	targetTo := safeRedirectTarget(requestedTarget)
+	if limited && requestedTarget != "" && targetTo != requestedTarget {
+		// The ordinary login falls back to "/" for a target it will not
+		// follow. A limited sign-in is started by the console to return to
+		// one page, so a target it cannot follow is the caller's error and
+		// is said so, rather than silently landing somewhere else.
+		http.Error(w, "target_to must be a same-origin relative path", http.StatusBadRequest)
+		return
+	}
 
 	rawState := make([]byte, 16)
 	if _, err := rand.Read(rawState); err != nil {
@@ -196,7 +213,10 @@ func (h *OIDCHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	stateNonce := base64.RawURLEncoding.EncodeToString(rawState)
 
-	stateValue := stateNonce + "|" + targetTo
+	// The limit is bound to the SIGNED state, never read again from the
+	// callback's query: a caller who could drop it there would get an
+	// unlimited sign-in for a login the console asked to be limited.
+	stateValue := encodeOIDCStateHead(stateNonce, limit, limited) + "|" + targetTo
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     oidcStateCookie,
@@ -250,7 +270,7 @@ func (h *OIDCHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	// A credential re-consent (issue 1477) may ask for a new prompt and
 	// for the claims of an Entra claims challenge.
-	authOptions = append(authOptions, reconsentOptions(r, runtime.entra)...)
+	authOptions = append(authOptions, reconsentOptions(r, runtime.entra, limit, limited)...)
 	authURL := runtime.oauth2Cfg.AuthCodeURL(stateValue, authOptions...)
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
@@ -305,21 +325,25 @@ const oidcStateCookie = "oidc_state"
 // The query parameter must repeat the WHOLE signed state, which is what Login
 // sent to the identity provider. That is the check that ties this callback to a
 // login this server started.
-func (h *OIDCHandler) consumeState(cookieValue, queryState string) (string, bool) {
+func (h *OIDCHandler) consumeState(cookieValue, queryState string) (oidcLoginState, bool) {
 	state, verified := verifyBrowserValue(h.secretKey, cookieValue)
 	if !verified {
-		return "", false
+		return oidcLoginState{}, false
 	}
 	if subtle.ConstantTimeCompare([]byte(state), []byte(queryState)) != 1 {
-		return "", false
+		return oidcLoginState{}, false
 	}
-	// The target is read from the SIGNED value, never from the query, so a
-	// browser cannot redirect itself anywhere the login did not agree to.
-	targetTo := "/"
+	// The target and the limit are read from the SIGNED value, never from the
+	// query, so a browser cannot redirect itself anywhere the login did not
+	// agree to, nor drop the limit the login was started with.
+	login := oidcLoginState{targetTo: "/"}
+	head := state
 	if separator := strings.Index(state, "|"); separator >= 0 {
-		targetTo = safeRedirectTarget(state[separator+1:])
+		head = state[:separator]
+		login.targetTo = safeRedirectTarget(state[separator+1:])
 	}
-	return targetTo, true
+	login.limit, login.limited = decodeOIDCStateHead(head)
+	return login, true
 }
 
 // oidcNonceCookie holds the nonce of ONE login attempt.
@@ -376,7 +400,8 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	targetTo, ok := h.consumeState(stateCookie.Value, r.URL.Query().Get("state"))
+	login, ok := h.consumeState(stateCookie.Value, r.URL.Query().Get("state"))
+	targetTo := login.targetTo
 	if !ok {
 		// One message for every way the state can fail. The caller is
 		// unauthenticated, and which check refused it is a fact about this
@@ -450,6 +475,10 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		Name            string `json:"name"`
 		EmailVerified   *bool  `json:"email_verified"`
 		AuthorizedParty string `json:"azp"`
+		// AuthTime is OpenID Connect Core 2 `auth_time`: when the provider
+		// last authenticated the person. Required when the request carried
+		// `max_age`, optional otherwise.
+		AuthTime *float64 `json:"auth_time"`
 	}
 	if err := idToken.Claims(&claims); err != nil {
 		slog.Error("OIDC: failed to parse claims", "err", err)
@@ -473,6 +502,19 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	if !h.consumeNonce(w, r, idToken.Nonce) {
 		slog.Error("OIDC: id_token nonce does not match the login", "sub", claims.Sub)
 		http.Error(w, "id_token verification failed", http.StatusUnauthorized)
+		return
+	}
+
+	// A limited sign-in must prove a recent authentication; every sign-in
+	// records the authentication time the provider stated. Refused BEFORE
+	// any account is touched or session written, so the stored time of an
+	// existing session is never moved by a refused callback.
+	authenticatedAt, recent := checkAuthTime(claims.AuthTime, login, time.Now())
+	if !recent {
+		slog.Warn("OIDC: refused a limited sign-in without a recent authentication",
+			"sub", claims.Sub, "auth_time_present", claims.AuthTime != nil,
+			"max_age_seconds", int64(login.limit/time.Second))
+		http.Error(w, "the identity provider did not confirm a recent sign-in", http.StatusUnauthorized)
 		return
 	}
 
@@ -544,9 +586,10 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !issueBrowserSession(w, h.sessions, h.secretKey, h.secureCookies, browsersession.NewSession{
-		UserID:   numericUserID,
-		Email:    claims.Email,
-		Provider: browsersession.ProviderOIDC,
+		UserID:          numericUserID,
+		Email:           claims.Email,
+		Provider:        browsersession.ProviderOIDC,
+		AuthenticatedAt: authenticatedAt,
 	}, r) {
 		return
 	}

@@ -3100,6 +3100,14 @@ main:
     # either rule stops the boot with a message that names the variable.
     ELITEA_SESSION_ABSOLUTE_LIFETIME: ""
 
+    # ELITEA_SESSION_REAUTHENTICATION_MAX_AGE is how long ago a person may have
+    # last authenticated for an action that needs a RECENT sign-in (ADR-0059:
+    # administration scopes on tokens, break-glass, critical actions). It is
+    # measured from the authentication, never from the last request. Empty
+    # means 15m. A value outside 1m..24h stops the boot with a message that
+    # names the variable.
+    ELITEA_SESSION_REAUTHENTICATION_MAX_AGE: ""
+
     # ELITEA_SESSION_REJECT_LEGACY_COOKIES ends the upgrade window.
     #
     # A deployment that upgrades to this release holds signed, self-contained

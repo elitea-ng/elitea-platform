@@ -217,6 +217,52 @@ Every run that a browser session started records the session's reference (`execu
 - Set the sign-in frequency and multi-factor policy in your identity provider. The session policy limits how long a browser stays signed in after that.
 - Choose maximums that match your organisation's policy for unattended devices.
 
+## Recent authentication
+
+Some actions need proof that the person signed in a short time ago, not only that the browser is still signed in. A session that stays active through regular requests does not count as a recent sign-in.
+
+### What asks for it
+
+In this release, no action requires a recent sign-in yet. The check is ready for these upcoming features:
+
+- Administration scopes on access tokens.
+- Starting a break-glass elevation.
+- Critical administrative actions.
+
+When an action needs a recent sign-in and the session is too old, the server answers 401 with the code `reauthentication_required`. The header `X-Elitea-Reauthentication-Max-Age` gives the limit in seconds. Only a browser session satisfies the check. A personal access token, a desktop or mobile session, and a run token never do.
+
+### The limit
+
+Each browser session records when its person last authenticated. A request does not change that time; only a new sign-in does. With OIDC, the time is the id_token's `auth_time` claim if the identity provider sends it. Otherwise it is the time of the sign-in.
+
+The limit is 15 minutes by default. Set `ELITEA_SESSION_REAUTHENTICATION_MAX_AGE` on the main service to change it. The value is a Go duration from `1m` to `24h`, for example `10m`. Any other value stops the main service at startup, and the error names the variable.
+
+### Starting a sign-in with a limit
+
+The console asks for a fresh sign-in by opening the OIDC login with two parameters:
+
+```
+/auth/oidc/login?max_age=900&target_to=/admin/access
+```
+
+- `max_age` is the limit in whole seconds, from 0 to 86400. The platform passes it to the identity provider. Any other value is refused with 400.
+- `target_to` is the page to return to. It must be a relative path on this site that starts with `/`. A full URL or a URL to another site is refused with 400. An ordinary sign-in would replace it with `/` instead.
+
+The limit is saved in the signed login state, so it cannot be dropped from the callback.
+
+### What the identity provider must support
+
+For an OIDC provider:
+
+- The provider must honour `max_age`. If the person's session at the provider is older than the limit, the provider must ask them to sign in again.
+- The provider must return the `auth_time` claim in the id_token. OpenID Connect requires the claim when a request carries `max_age`.
+
+The callback refuses with 401 if `auth_time` is missing, or if it is older than the limit. A clock difference of up to five minutes is allowed, which is the same allowance the id_token check uses. A refused callback creates no session and does not change any existing session.
+
+Check your identity provider's documentation for both before you rely on the check.
+
+SAML and Form sign-in do not support a limited sign-in in this release.
+
 ## Connect an identity provider with SCIM
 
 SCIM lets an identity provider push its directory. It creates accounts when people join and deactivates them when they leave. The SCIM endpoint is `/api/v2/scim/v2`.

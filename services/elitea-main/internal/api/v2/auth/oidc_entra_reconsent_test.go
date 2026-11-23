@@ -57,7 +57,7 @@ func TestMergeEntraClaimsReadsBase64(t *testing.T) {
 func loginURL(t *testing.T, query url.Values, entra *entraRuntime) url.Values {
 	t.Helper()
 	cfg := oauth2.Config{ClientID: "c", Endpoint: oauth2.Endpoint{AuthURL: "https://idp.example/authorize"}}
-	raw := cfg.AuthCodeURL("s", reconsentOptions(httptest.NewRequest("GET", "/auth/oidc/login?"+query.Encode(), nil), entra)...)
+	raw := cfg.AuthCodeURL("s", reconsentOptions(httptest.NewRequest("GET", "/auth/oidc/login?"+query.Encode(), nil), entra, 0, false)...)
 	parsed, err := url.Parse(raw)
 	if err != nil {
 		t.Fatal(err)

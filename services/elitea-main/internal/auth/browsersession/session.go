@@ -87,10 +87,16 @@ type Session struct {
 	Provider             string
 	ProviderSessionIndex string
 	CreatedAt            time.Time
-	LastSeenAt           time.Time
-	ExpiresAt            time.Time
-	IdleTimeout          time.Duration
-	RevokedAt            *time.Time
+	// AuthenticatedAt is when the person behind this session last
+	// authenticated (shared 0261, ADR-0059 R1.10): the OIDC auth_time when
+	// the provider sent one, otherwise the sign-in. A refresh never moves it;
+	// only a new sign-in, which writes a new row, does. A row written before
+	// 0261 reads its CreatedAt here.
+	AuthenticatedAt time.Time
+	LastSeenAt      time.Time
+	ExpiresAt       time.Time
+	IdleTimeout     time.Duration
+	RevokedAt       *time.Time
 	// Ref is the session's NON-SECRET reference (shared 0200): what audit
 	// events and the runs a session started name it by. ID is the cookie
 	// value and never leaves this package's store.
@@ -220,6 +226,12 @@ type Policy struct {
 	// RejectLegacyCookies makes apimw.Auth refuse the pre-0117 signed cookie.
 	// See the package header for the window this closes.
 	RejectLegacyCookies bool
+	// ReauthenticationMaxAge is how long ago a person may have last
+	// authenticated for a route that asks for a RECENT authentication
+	// (ADR-0059 R1.10: administration scopes on tokens, starting an
+	// elevation, critical actions). Unlike the two lifetimes it is read at
+	// the check, not stamped on the row: it bounds a request, not a session.
+	ReauthenticationMaxAge time.Duration
 }
 
 // The defaults. Eight hours of inactivity signs a browser out; a session lives
@@ -228,7 +240,14 @@ type Policy struct {
 const (
 	DefaultIdleTimeout      = 8 * time.Hour
 	DefaultAbsoluteLifetime = 7 * 24 * time.Hour
+	// DefaultReauthenticationMaxAge is the ADR-0059 limit: the person signed
+	// in within the last 15 minutes.
+	DefaultReauthenticationMaxAge = 15 * time.Minute
 )
+
+// maxReauthenticationMaxAge caps the setting. A recent authentication that
+// may be a day old is not recent, and a value this large is a mistyped unit.
+const maxReauthenticationMaxAge = 24 * time.Hour
 
 // minAbsoluteLifetime keeps a mistyped value from issuing sessions that are
 // already expired. A minute is short enough for a test to use deliberately and
@@ -237,7 +256,7 @@ const minAbsoluteLifetime = time.Minute
 
 // PolicyFromEnv reads the deployment's lifetimes.
 //
-// Keep the three names as LITERALS inside these os.Getenv calls.
+// Keep the four names as LITERALS inside these os.Getenv calls.
 // services/elitea-llm-gateway/scripts/env-drift-check.sh greps for a quoted
 // name in an os.Getenv call; a named constant hides the read and the gate then
 // reports a false green.
@@ -247,8 +266,9 @@ const minAbsoluteLifetime = time.Minute
 // week believing it did.
 func PolicyFromEnv() (Policy, error) {
 	policy := Policy{
-		IdleTimeout:      DefaultIdleTimeout,
-		AbsoluteLifetime: DefaultAbsoluteLifetime,
+		IdleTimeout:            DefaultIdleTimeout,
+		AbsoluteLifetime:       DefaultAbsoluteLifetime,
+		ReauthenticationMaxAge: DefaultReauthenticationMaxAge,
 	}
 	if raw := strings.TrimSpace(os.Getenv("ELITEA_SESSION_IDLE_TIMEOUT")); raw != "" {
 		value, err := time.ParseDuration(raw)
@@ -265,6 +285,14 @@ func PolicyFromEnv() (Policy, error) {
 				"ELITEA_SESSION_ABSOLUTE_LIFETIME must be a Go duration of at least 1m, for example 168h: %q", raw)
 		}
 		policy.AbsoluteLifetime = value
+	}
+	if raw := strings.TrimSpace(os.Getenv("ELITEA_SESSION_REAUTHENTICATION_MAX_AGE")); raw != "" {
+		value, err := time.ParseDuration(raw)
+		if err != nil || value < minAbsoluteLifetime || value > maxReauthenticationMaxAge {
+			return Policy{}, fmt.Errorf(
+				"ELITEA_SESSION_REAUTHENTICATION_MAX_AGE must be a Go duration between 1m and 24h, for example 15m: %q", raw)
+		}
+		policy.ReauthenticationMaxAge = value
 	}
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("ELITEA_SESSION_REJECT_LEGACY_COOKIES")), "true") {
 		policy.RejectLegacyCookies = true

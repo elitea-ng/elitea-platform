@@ -226,6 +226,8 @@ func Auth(cfg AuthConfig) func(http.Handler) http.Handler {
 						// From the row, after validation: a validator that
 						// rebuilds the principal does not carry it.
 						user.BrowserSessionRef = session.Ref
+						user.BrowserSessionAuthenticatedAt = session.AuthenticatedAt
+						user.BrowserSessionProvider = session.Provider
 						serveAuthenticated(next, w, r, user, auth.AuthenticationSourceSession)
 						return
 					}
