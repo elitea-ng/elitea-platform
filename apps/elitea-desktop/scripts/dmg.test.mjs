@@ -1,7 +1,8 @@
 // node --test scripts/dmg.test.mjs
 //
 // The styled disk image's brand inputs (dmg-settings.mjs) and the check that proves a
-// mounted image is laid out (dmg-verify.mjs), against a .DS_Store and property lists built here.
+// mounted image is laid out (dmg-verify.mjs), against a .DS_Store and property lists built here;
+// and the writer (ds-store.mjs) that hides the window's bars.
 import assert from 'node:assert/strict';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -14,6 +15,7 @@ import { pngInfo } from '../../../scripts/brand/images.mjs';
 import { loadBrandFrom } from '../../../scripts/brand/load.mjs';
 import { dmgSettings, writeDmgInputs } from './dmg-settings.mjs';
 import { dsStoreRecords, iconLocation, layoutProblems, parseBplist, volumeProblems } from './dmg-verify.mjs';
+import { blobRecord, BplistRaw, compareRecords, encodeBplist, freeLists, HIDDEN_CHROME, hideChrome, writeDsStore } from './ds-store.mjs';
 
 const BRANDS = fileURLToPath(new URL('../../../brand/', import.meta.url));
 const sample = loadBrandFrom(join(BRANDS, 'sample'));
@@ -166,8 +168,10 @@ function iloc(x, y) {
   return b;
 }
 const SETTINGS = dmgSettings(sample, '1.0.0');
-const VIEW = { backgroundType: 2, backgroundImageAlias: Buffer.from('\x00\x0fbackground.tiff', 'latin1'), iconSize: 128, textSize: 13, arrangeBy: 'none', labelOnBottom: true };
-const WINDOW = { WindowBounds: '{{200, 569}, {660, 428}}', ShowToolbar: false, ShowStatusBar: false, ShowSidebar: false };
+const VIEW = { backgroundType: 2, backgroundImageAlias: Buffer.from('\x00\x0fbackground.tiff', 'latin1'), iconSize: 128, textSize: 13, arrangeBy: 'none', labelOnBottom: true, backgroundColorRed: 1, backgroundColorGreen: 1, backgroundColorBlue: 1 };
+const WINDOW = { WindowBounds: '{{200, 569}, {660, 428}}', ...HIDDEN_CHROME };
+// What Finder on macOS 26 and later saves: the tab bar on, no path-bar key at all.
+const FINDER_WINDOW = { ShowStatusBar: false, ShowToolbar: false, ShowTabView: true, ContainerShowSidebar: false, WindowBounds: '{{200, 569}, {660, 428}}', ShowSidebar: false };
 function dsStore({ view = VIEW, win = WINDOW, app = iloc(170, 185), apps = iloc(490, 185), stale } = {}) {
   const records = [
     win && rec('.', 'bwsp', 'blob', bplist(win)),
@@ -200,7 +204,10 @@ test('a layout Finder did not apply fails, saying what is wrong', () => {
   assert.match(problems({ view: { ...VIEW, backgroundType: 0, backgroundImageAlias: Buffer.alloc(4) } }), /background is type 0, not a picture[\s\S]*no background alias naming background\.tiff/);
   assert.match(problems({ view: { ...VIEW, iconSize: 64, textSize: 12, arrangeBy: 'name' } }), /icons are 64 points[\s\S]*labels are 12 points[\s\S]*arranged by name/);
   assert.match(problems({ win: null }), /no window settings \(bwsp\)/);
-  assert.match(problems({ win: { ...WINDOW, WindowBounds: '{{200, 120}, {770, 460}}', ShowToolbar: true } }), /window is 770x460, the layout says 660x428[\s\S]*toolbar or status bar/);
+  assert.match(problems({ win: { ...WINDOW, WindowBounds: '{{200, 120}, {770, 460}}', ShowToolbar: true } }), /window is 770x460, the layout says 660x428[\s\S]*does not hide ShowToolbar:/);
+  // The window Finder saves shows its tab bar and says nothing of the path bar: both fail.
+  assert.match(problems({ win: FINDER_WINDOW }), /does not hide ShowTabView, ShowPathbar: only the artwork may show/);
+  assert.match(problems({ view: { ...VIEW, backgroundColorRed: 0 } }), /background colour is 0,1,1, not white/);
   assert.match(problems({ app: null }), /no position for "Sample\.app"/);
   assert.match(problems({ apps: iloc(400, 100) }), /"Applications" is at 400,100, the layout says 490,185/);
   assert.match(layoutProblems(Buffer.from('not a store'), SETTINGS).join('\n'), /not a \.DS_Store/);
@@ -233,4 +240,68 @@ test('the mounted volume: app, Applications link, background, volume icon and la
   } finally {
     rmSync(mnt, { recursive: true, force: true });
   }
+});
+
+test('hide-chrome turns every bar off, keeps the bounds and every other record byte for byte', () => {
+  const before = dsStore({ win: FINDER_WINDOW });
+  assert.notDeepEqual(layoutProblems(before, SETTINGS), []);
+  const after = hideChrome(before);
+  assert.deepEqual(layoutProblems(after, SETTINGS), []);
+  const win = parseBplist(dsStoreRecords(after).find((r) => r.code === 'bwsp').value);
+  assert.deepEqual(win, { ...FINDER_WINDOW, ...HIDDEN_CHROME });
+  const key = (r) => `${r.name} ${r.code}`;
+  const old = dsStoreRecords(before).filter((r) => r.code !== 'bwsp');
+  const now = new Map(dsStoreRecords(after).map((r) => [key(r), r.raw]));
+  for (const r of old) assert.ok(now.get(key(r))?.equals(r.raw), key(r));
+  // Idempotent, and refuses a file Finder never saved a window into.
+  assert.ok(hideChrome(after).equals(after));
+  assert.throws(() => hideChrome(dsStore({ win: null })), /no window settings \(bwsp\)/);
+});
+
+test('the property-list writer round-trips what Finder stores', () => {
+  const value = { a: true, b: false, n: 7, big: 70000, r: 0.5, s: 'ascii', u: 'Ünïcode', d: Buffer.from([1, 2, 3]), list: [1, 'x', { nested: true }], long: 'x'.repeat(40) };
+  assert.deepEqual(parseBplist(encodeBplist(value)), { ...value, d: Buffer.from([1, 2, 3]) });
+  assert.throws(() => encodeBplist({ n: -1 }), /out of range/);
+});
+
+test('the .DS_Store writer keeps Finder order and splits records over pages', () => {
+  // Enough positions to need several leaves under the inner node.
+  const many = Array.from({ length: 300 }, (_, i) => blobRecord(`Item ${String(i).padStart(3, '0')}.app`, 'Iloc', iloc(i, i)));
+  const file = writeDsStore([...many].reverse());
+  const back = dsStoreRecords(file);
+  assert.equal(back.length, many.length);
+  assert.deepEqual(back.map((r) => r.name), [...many].sort(compareRecords).map((r) => r.name));
+  assert.deepEqual(iconLocation(back, 'Item 299.app'), { x: 299, y: 299 });
+  // Case-insensitive by name, then by code.
+  assert.ok(compareRecords({ name: 'applications', code: 'Iloc' }, { name: 'B', code: 'Iloc' }) < 0);
+  assert.ok(compareRecords({ name: '.', code: 'bwsp' }, { name: '.', code: 'icvp' }) < 0);
+});
+
+test('hide-chrome keeps every other window key with its type: reals, 64-bit and negative integers, dates, null', () => {
+  // A window record as a newer Finder might write it, with values the plain encoder cannot express.
+  const real = Buffer.from([0x23, 0x3f, 0xf0, 0, 0, 0, 0, 0, 0]); // 1.0 as a real
+  const negative = Buffer.from([0x13, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe]); // -2
+  const date = Buffer.from([0x33, 0x41, 0xc6, 0, 0, 0, 0, 0, 0]);
+  const win = { ...FINDER_WINDOW, SidebarWidth: new BplistRaw(real), Offset: new BplistRaw(negative), Saved: new BplistRaw(date), Nothing: new BplistRaw(Buffer.from([0x00])) };
+  const before = dsStoreFile([rec('.', 'bwsp', 'blob', encodeBplist(win))]);
+  const after = parseBplist(dsStoreRecords(hideChrome(before))[0].value, { raw: true });
+  for (const k of ['SidebarWidth', 'Offset', 'Saved', 'Nothing']) assert.ok(after[k].bytes.equals(win[k].bytes), k);
+  assert.equal(after.WindowBounds, FINDER_WINDOW.WindowBounds);
+  const plain = parseBplist(encodeBplist(win));
+  assert.deepEqual([plain.SidebarWidth, plain.Offset, plain.Nothing], [1, -2, null]);
+  assert.ok(plain.Saved instanceof Date);
+});
+
+test('the allocator keeps free lists as Finder does: every unused buddy block, none overlapping a used one', () => {
+  const used = [[0, 5], [0x20, 5], [0x800, 11], [0x1000, 12]];
+  const lists = freeLists(used);
+  // As Finder writes for the same blocks: 64 B to 1 KiB below the allocator, then 8 KiB to 1 GiB.
+  assert.deepEqual(lists.map((l, i) => (l.length ? `${i}:${l.map((o) => o.toString(16)).join('/')}` : '')).filter(Boolean).slice(0, 6), ['6:40', '7:80', '8:100', '9:200', '10:400', '13:2000']);
+  assert.deepEqual(lists[30], [0x40000000]);
+  // Free and used blocks tile the 2 GiB space exactly.
+  const total = lists.reduce((sum, l, i) => sum + l.length * 2 ** i, 0) + used.reduce((sum, [, l]) => sum + 2 ** l, 0);
+  assert.equal(total, 2 ** 31);
+  // And the writer's own file carries them.
+  const file = writeDsStore([blobRecord('.', 'bwsp', encodeBplist(WINDOW))]);
+  assert.equal(file.readUInt32BE(4 + 0x800 + 8 + 256 * 4 + 4 + 1 + 4 + 4 + 6 * 4), 1);
 });

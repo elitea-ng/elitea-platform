@@ -209,6 +209,14 @@ test('macOS ships a styled, signed .dmg and the .pkg; the zipped app is gone', (
   assert.match(macos, /brand-output-scan\.mjs --lane desktop[\s\S]*"\$DMG_SETTINGS"/);
   // No brand-specific literal in the shared action: the brand comes from ELITEA_BRAND alone.
   assert.doesNotMatch(action, /Elitea [0-9]|brand\/elitea/);
+  // A package run by hand carries a real version (the volume reads `<Brand> <version>`),
+  // never the development 0.1.0: the dispatch input is required and reaches the action.
+  const dispatch = wf.slice(wf.indexOf('\n  workflow_dispatch:'), wf.indexOf('\nconcurrency:'));
+  assert.match(dispatch, /\n {6}version:\n(?: {8}.*\n)*? {8}required: true\n/);
+  assert.match(macos, /version: \$\{\{ inputs\.version \}\}/);
+  // Finder cannot hide every bar by AppleScript: the window record is rewritten, then read back.
+  const dmgScript = readFileSync(join(REPO, 'apps/elitea-desktop/scripts/macos-dmg.sh'), 'utf8');
+  assert.match(dmgScript, /node "\$here\/ds-store\.mjs" hide-chrome "\$mount\/\.DS_Store"[\s\S]*node "\$here\/dmg-verify\.mjs" "\$mount" "\$settings"/);
 });
 
 test('asset names: <Brand>-<version>-<os>-<arch>[-unsigned].<ext>', () => {

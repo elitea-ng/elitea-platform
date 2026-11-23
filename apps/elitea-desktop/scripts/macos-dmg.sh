@@ -17,7 +17,8 @@
 # DETERMINISTIC STYLING. The layout lives in the .DS_Store Finder writes, and Finder
 # is driven by AppleScript, which a headless runner can time out. So: the AppleScript
 # runs up to three times, each attempt waits for the .DS_Store, and dmg-verify.mjs
-# reads the record back (the background alias, the window, both icon positions) before
+# reads the record back (the background alias, the window with every bar off, both
+# icon positions) before
 # the image is sealed. A layout that did not apply fails the build; it never ships
 # plain.
 #
@@ -117,6 +118,7 @@ on run argv
         set label position of opts to bottom
         set shows item info of opts to false
         set shows icon preview of opts to false
+        set background color of opts to {65535, 65535, 65535}
         set background picture of opts to file ".background:background.tiff"
         set position of item appName of container window to {ax as integer, ay as integer}
         set position of item "Applications" of container window to {fx as integer, fy as integer}
@@ -158,6 +160,11 @@ for attempt in 1 2 3; do
     sync
     if [ "$(GetFileInfo -aC "$mount")" != 1 ]; then
       echo "::warning::the volume's custom-icon flag did not stick"
+    # Finder cannot hide the tab bar, the path bar or the sidebar by AppleScript, and
+    # a Finder that shows tabs saves the window with them: the window record is
+    # rewritten with every bar off (ds-store.mjs), then read back with the rest.
+    elif ! node "$here/ds-store.mjs" hide-chrome "$mount/.DS_Store"; then
+      echo "::warning::the window settings could not be rewritten"
     elif node "$here/dmg-verify.mjs" "$mount" "$settings"; then
       styled=true
       break
@@ -174,6 +181,20 @@ fi
 rm -rf "$mount/.fseventsd" "$mount/.Trashes" "$mount/.Spotlight-V100"
 chmod -Rf go-w "$mount" || true
 sync
+detach "$device"
+device=""
+
+# Finder may write the volume's .DS_Store once more as it lets go of it: read the
+# sealed image back, read-only and out of Finder's sight, before it is converted
+# and signed (the action checks the finished .dmg the same way).
+check="$work/check"
+mkdir -p "$check"
+check_out="$(hdiutil attach -readonly -nobrowse -noautoopen -noverify -mountpoint "$check" "$work/rw.dmg")"
+device="$(printf '%s\n' "$check_out" | awk 'NR == 1 { print $1; exit }')"
+case "$device" in /dev/disk[0-9]*) ;; *) device="";; esac
+if ! node "$here/dmg-verify.mjs" "$check" "$settings"; then
+  echo "::error::the layout changed as the image was detached (Finder rewrote the .DS_Store)" >&2; exit 1
+fi
 detach "$device"
 device=""
 

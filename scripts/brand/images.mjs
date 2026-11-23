@@ -1,6 +1,9 @@
 // Image headers for the brand check: PNG, ICO and ICNS, read with node's
-// standard library only. Nothing here decodes pixels; it reads the sizes and
-// the alpha channel the platforms care about.
+// standard library only: the sizes and the alpha channel the platforms care
+// about, and (decodePng) the pixels of an 8-bit RGB or RGBA PNG, for the disk
+// image background's label contrast.
+
+import { inflateSync } from 'node:zlib';
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -90,4 +93,57 @@ export function icnsSizes(buf) {
 /** True when the text is an SVG document with a viewBox. */
 export function isSvg(text) {
   return /^\s*(<\?xml[^>]*>\s*)?<svg\b[^>]*\bviewBox="[^"]+"/.test(text) && /<\/svg>\s*$/.test(text);
+}
+
+/**
+ * The pixels of a non-interlaced 8-bit RGB or RGBA PNG: `{ width, height, pixel(x, y) }`,
+ * `pixel` returning [r, g, b, a]. Throws on any other kind of PNG.
+ */
+export function decodePng(buf) {
+  const info = pngInfo(buf);
+  if (!info) throw new Error('not a PNG');
+  const depth = buf[24];
+  const type = buf[25];
+  const interlace = buf[28];
+  if (depth !== 8 || (type !== 2 && type !== 6) || interlace !== 0) throw new Error('decodePng reads 8-bit RGB or RGBA PNGs, not interlaced');
+  const channels = type === 6 ? 4 : 3;
+  const idat = [];
+  for (let p = 8; p + 8 <= buf.length; ) {
+    const len = buf.readUInt32BE(p);
+    const kind = buf.toString('latin1', p + 4, p + 8);
+    if (kind === 'IDAT') idat.push(buf.subarray(p + 8, p + 8 + len));
+    p += 12 + len;
+  }
+  const raw = inflateSync(Buffer.concat(idat));
+  const stride = info.width * channels;
+  const out = Buffer.alloc(stride * info.height);
+  for (let y = 0; y < info.height; y++) {
+    const filter = raw[y * (stride + 1)];
+    const src = y * (stride + 1) + 1;
+    const row = y * stride;
+    for (let i = 0; i < stride; i++) {
+      const a = i >= channels ? out[row + i - channels] : 0;
+      const b = y > 0 ? out[row - stride + i] : 0;
+      const c = i >= channels && y > 0 ? out[row - stride + i - channels] : 0;
+      let pred = 0;
+      if (filter === 1) pred = a;
+      else if (filter === 2) pred = b;
+      else if (filter === 3) pred = (a + b) >> 1;
+      else if (filter === 4) {
+        const pa = Math.abs(b - c);
+        const pb = Math.abs(a - c);
+        const pc = Math.abs(a + b - 2 * c);
+        pred = pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+      } else if (filter !== 0) throw new Error(`PNG row ${y}: unknown filter ${filter}`);
+      out[row + i] = (raw[src + i] + pred) & 0xff;
+    }
+  }
+  return {
+    width: info.width,
+    height: info.height,
+    pixel: (x, y) => {
+      const o = y * stride + x * channels;
+      return [out[o], out[o + 1], out[o + 2], channels === 4 ? out[o + 3] : 255];
+    },
+  };
 }

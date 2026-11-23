@@ -97,7 +97,7 @@ The desktop host builds and passes its tests on Windows. On Windows, local comma
 
 ### A package of your own brand
 
-A brand built from this code ([Build your own brand](/development/build-your-own-brand)) signs its packages with its own certificates and hands them to its device management. To build a package from this repository without a release, run GitHub Actions › **Desktop — package for device management** › Run workflow with **keep_artifacts** ticked: the run keeps the packages as artifacts for 7 days. The macOS package of such a run is always signed.
+A brand built from this code ([Build your own brand](/development/build-your-own-brand)) signs its packages with its own certificates and hands them to its device management. To build a package from this repository without a release, run GitHub Actions › **Desktop — package for device management** › Run workflow with the **version** to stamp (for example the release the package is for, `7.9.0`) and **keep_artifacts** ticked: the run keeps the packages as artifacts for 7 days. The version is required: it names the disk image's volume and window (`Elitea 7.9.0`) and the app's version. The macOS package of such a run is always signed.
 
 Windows shows a notification only for an app that its Start Menu shortcut or its package names. The `.msi` shortcut sets `System.AppUserModel.ID` to the brand's desktop identifier, and the app sends its notifications under that identifier. The `.msix` app sends them under its package identity (`<PackageFamilyName>!App`).
 
