@@ -4,7 +4,8 @@
 //
 // Every source that gives or takes a central role calls it: the admin Users
 // route and the modes route (console or api), the first-login grant of
-// identity.initial_global_admins (bootstrap), and later the operator command,
+// identity.initial_global_admins (bootstrap), an account delete (RevokeAll),
+// and later the operator command,
 // a confirmed provisional grant (review) and a SCIM binding (scim). Each
 // change to public.auth_core__user_role writes one history row in the caller's
 // transaction, so the assignment and its history cannot disagree after a
@@ -185,6 +186,44 @@ func Replace(ctx context.Context, q Querier, userID int64, mode string, roles []
 		}
 		if granted {
 			changes = append(changes, Change{UserID: userID, RoleName: name, RoleMode: mode, Action: ActionGranted})
+		}
+	}
+	return changes, nil
+}
+
+// RevokeAll takes every central role the user holds, in every mode, and
+// writes one history row per role (issue 2922). An account delete calls it
+// before the account row goes: auth_core__user_role cascades from
+// auth_core__user, so without it the roles would vanish with no history row
+// and the history would show them as still granted. It returns the changes
+// it wrote, in (mode, name) order.
+func RevokeAll(ctx context.Context, q Querier, userID int64, origin Origin) ([]Change, error) {
+	rows, err := q.Query(ctx, `
+SELECT role.mode, role.name
+FROM public.auth_core__user_role assignment
+JOIN public.auth_core__role role ON role.id = assignment.role_id
+WHERE assignment.user_id = $1
+ORDER BY role.mode, role.name
+FOR UPDATE OF assignment`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("rolegrants: read held roles: %w", err)
+	}
+	held, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Change, error) {
+		change := Change{UserID: userID, Action: ActionRevoked}
+		err := row.Scan(&change.RoleMode, &change.RoleName)
+		return change, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("rolegrants: read held roles: %w", err)
+	}
+	changes := make([]Change, 0, len(held))
+	for _, change := range held {
+		removed, err := Revoke(ctx, q, userID, change.RoleMode, change.RoleName, origin)
+		if err != nil {
+			return nil, err
+		}
+		if removed {
+			changes = append(changes, change)
 		}
 	}
 	return changes, nil

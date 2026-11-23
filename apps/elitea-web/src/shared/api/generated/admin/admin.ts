@@ -3123,7 +3123,8 @@ export const getAdminAuthUsersActionUrl = (mode: string) => {
  * `action`. An unknown action is a 400, never a silent `{"ok": true}`.
  *
  * - `delete`: removes the accounts in `users` outright, in one
- *   transaction.
+ *   transaction. Each central role an account held is revoked first,
+ *   with one grant history row, as the cascade would drop it unrecorded.
  * - `set_admin_role`: sets the administration roles of `user_id`. Send
  *   EITHER `role_names`, the set the user holds afterwards (`[]` for
  *   none), OR the single form `role_name`, which replaces every role

@@ -316,14 +316,36 @@ func (h *Handler) deleteUsers(w http.ResponseWriter, r *http.Request, body authU
 	// users' personal memories (every project: no membership lookup, it would
 	// be gone with the cascade) commits or rolls back with the delete itself.
 	// auth_core__user's dependents all cascade (user_role, token, user_group,
-	// project_user_role, …), so the row delete is sufficient.
+	// project_user_role, …), so the row delete removes them, except that a
+	// central role assignment is revoked first, through rolegrants (issue
+	// 2922): the cascade would drop it with no history row, and the grant
+	// history would show the role as still granted.
 	ctx := r.Context()
+	origin, ok := h.accountDeletionOrigin(r)
+	if !ok {
+		adminaccess.Write(w, r, adminaccess.Unresolved(
+			"your own account could not be read, so the users were not deleted"))
+		return
+	}
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
 		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
 		return
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	// The role-writes lock is the transaction's first statement, as every
+	// role write takes it (adminaccess.HoldRoleWrites says why).
+	if err := adminaccess.LockRoleWrites(ctx, tx); err != nil {
+		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
+		return
+	}
+	for _, id := range ids {
+		if _, err := rolegrants.RevokeAll(ctx, tx, int64(id), origin); err != nil {
+			slog.ErrorContext(ctx, "could not revoke the roles of a deleted user", "user_id", id, "err", err)
+			apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
+			return
+		}
+	}
 	tag, err := tx.Exec(ctx,
 		`DELETE FROM public.auth_core__user WHERE id = ANY($1::int[])`, ids)
 	if err != nil {
@@ -346,6 +368,30 @@ func (h *Handler) deleteUsers(w http.ResponseWriter, r *http.Request, body authU
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deleted": tag.RowsAffected()})
+}
+
+// accountDeletionOrigin is the grant history origin of the revocations an
+// account delete writes: the caller is the actor, resolved as the role routes
+// resolve it, or from the principal's own user id when the handler has no
+// resolver. The history needs an actor for a console or api change, so a
+// caller who resolves to no account deletes nothing.
+func (h *Handler) accountDeletionOrigin(r *http.Request) (rolegrants.Origin, bool) {
+	if h.resolver != nil {
+		caller, refusal := adminaccess.ResolveCaller(r, h.resolver)
+		if refusal != nil {
+			return rolegrants.Origin{}, false
+		}
+		return grantOrigin(r, caller), true
+	}
+	principal, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		return rolegrants.Origin{}, false
+	}
+	id, ok := principal.OwningUserID()
+	if !ok {
+		return rolegrants.Origin{}, false
+	}
+	return grantOrigin(r, adminaccess.Caller{UserID: id}), true
 }
 
 func (h *Handler) setAdminRole(w http.ResponseWriter, r *http.Request, body authUsersActionRequest) {
