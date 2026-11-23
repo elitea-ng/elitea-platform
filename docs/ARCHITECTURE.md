@@ -114,8 +114,9 @@ own allowlist and its own listener test, run by its own CI job (ADR-0059 R1.9):
   `elitea-sandbox-supervisor` binary serves `SandboxSupervisorService`,
   `BrowserSessionService` and `WorkspaceRunService`, one mTLS listener for
   each runtime profile. The test finds each tonic server module that the
-  non-test source names. It reads the routes of that server from the code that
-  tonic generated, and compares them with the allowlist. It also counts every
+  non-test source names, and the file that names it. It reads the routes of
+  that server from the code that tonic generated, and compares each file and
+  route with the allowlist. It also counts every
   listener and registration site in the non-test source. Each request carries
   a grant that Main signed for one run (`claim`). No method writes provider,
   policy, identity or role data.

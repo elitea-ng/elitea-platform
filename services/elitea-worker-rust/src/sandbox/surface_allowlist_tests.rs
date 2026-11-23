@@ -19,8 +19,12 @@
 //
 // The allowlist is reviewed text, one entry a line, fields separated by "|":
 //
-//   grpc | <listener>  | /<service>/<method> | <writes> | <decision> | <reason>
-//   site | <file>      | <construct>         | <count>
+//   grpc | <file>  | /<service>/<method> | <writes> | <decision> | <reason>
+//   site | <file>  | <construct>         | <count>
+//
+// A grpc line's file is the non-test source file that names the service's
+// tonic server module (it builds the server); a second file that names it
+// serves the methods again and needs lines of its own.
 //
 // writes and decision have the meanings of R1.8's Go checks
 // (services/elitea-main/internal/transport/internal_listener_checks_test.go):
@@ -29,7 +33,7 @@
 // main-route, claim (a grant Main signed for this supervisor, bound to the
 // run), workload (the caller's mTLS workload identity) or none. A method
 // declared admin must be decided by Main's own route (main-route) and listed
-// in docs/ARCHITECTURE.md. The listener and the reason are declared by the
+// in docs/ARCHITECTURE.md. writes, decision and the reason are declared by the
 // reviewer; the test cannot prove what a handler writes. It proves that every
 // served method and every site was reviewed.
 
@@ -178,9 +182,10 @@ fn blank(source: &str, keep: Keep) -> String {
             }
         } else if c == 'r'
             && (next == Some('#') || next == Some('"'))
-            && !ident_before(&chars, index)
+            && (!ident_before(&chars, index)
+                || (chars[index - 1] == 'b' && !ident_before(&chars, index - 1)))
         {
-            // A raw string: r"..." or r#"..."#.
+            // A raw string: r"...", r#"..."# or a raw byte string br#"..."#.
             let mut hashes = 0;
             let mut cursor = index + 1;
             while chars.get(cursor) == Some(&'#') {
@@ -249,11 +254,15 @@ fn ident_before(chars: &[char], index: usize) -> bool {
     index > 0 && (chars[index - 1].is_alphanumeric() || chars[index - 1] == '_')
 }
 
-// test_only_attribute is an outer attribute that compiles its item only in a
-// test build: #[cfg(test)] or #[cfg(all(test, ...))]. #[cfg(any(test, ...))]
-// and #[cfg(not(test))] are not.
+// test_only_attribute is an attribute that compiles its item (or, inner, its
+// whole module) only in a test build: #[cfg(test)], #[cfg(all(test, ...))]
+// and their #![...] forms. #[cfg(any(test, ...))] and #[cfg(not(test))] are
+// not.
 fn test_only_attribute(attribute: &str) -> bool {
-    let compact: String = attribute.chars().filter(|c| !c.is_whitespace()).collect();
+    let compact: String = attribute
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '!')
+        .collect();
     compact == "#[cfg(test)]" || compact.starts_with("#[cfg(all(test,")
 }
 
@@ -337,6 +346,21 @@ fn strip_test_items_like(code: &str, other: &str) -> String {
     let mut out = String::with_capacity(other.len());
     let mut index = 0;
     while index < code.len() {
+        if code[index] == '#'
+            && code.get(index + 1) == Some(&'!')
+            && code.get(index + 2) == Some(&'[')
+        {
+            // An inner attribute: a test-only one compiles out the rest of the
+            // module, which for a file's first items is the whole file.
+            let end = attribute_end(&code, index);
+            let attribute: String = code[index..end].iter().collect();
+            if test_only_attribute(&attribute) {
+                return out;
+            }
+            out.extend(&other[index..end]);
+            index = end;
+            continue;
+        }
         if code[index] == '#' && code.get(index + 1) == Some(&'[') {
             let end = attribute_end(&code, index);
             let attribute: String = code[index..end].iter().collect();
@@ -513,19 +537,22 @@ fn server_modules(text: &str) -> Vec<(String, &str)> {
 struct Scan {
     // "file construct" -> how often.
     sites: BTreeMap<String, usize>,
-    // The routes of every server module the source names.
+    // "file route": the routes of every server module the source names, by
+    // the file that names it.
     served: BTreeSet<String>,
 }
 
-fn count(code: &str, needle: &str) -> usize {
+// count is how often `needle` occurs in `code`. A needle that starts with a
+// word char must start a word; a whole-word needle must also end one (a
+// construct is a prefix: serve_with_incoming covers serve_with_incoming_shutdown).
+fn count(code: &str, needle: &str, whole_word: bool) -> usize {
+    let word = |c: char| c.is_alphanumeric() || c == '_';
     code.match_indices(needle)
         .filter(|(at, _)| {
-            // A needle that starts with a word char must start a word.
-            !needle.starts_with(|c: char| c.is_alphanumeric())
-                || !code[..*at]
-                    .chars()
-                    .next_back()
-                    .is_some_and(|c| c.is_alphanumeric() || c == '_')
+            let starts =
+                !needle.starts_with(word) || !code[..*at].chars().next_back().is_some_and(word);
+            let ends = !whole_word || !code[*at + needle.len()..].chars().next().is_some_and(word);
+            starts && ends
         })
         .count()
 }
@@ -540,17 +567,20 @@ fn scan_files(
     };
     for (file, code) in files {
         for construct in SITE_CONSTRUCTS {
-            let occurrences = count(code, construct);
+            let occurrences = count(code, construct, false);
             if occurrences > 0 {
                 scan.sites
                     .insert(format!("{file} {construct}"), occurrences);
             }
         }
         for (module, routes) in servers {
-            let occurrences = count(code, &format!("{module}::"));
+            // The module's name as a whole word: a path, a grouped import
+            // and an alias all name it.
+            let occurrences = count(code, module, true);
             if occurrences > 0 {
                 scan.sites.insert(format!("{file} {module}"), occurrences);
-                scan.served.extend(routes.iter().cloned());
+                scan.served
+                    .extend(routes.iter().map(|route| format!("{file} {route}")));
             }
         }
     }
@@ -563,7 +593,7 @@ fn check(scan: &Scan, entries: &[Entry]) -> Vec<String> {
     let mut sites = BTreeMap::new();
     for entry in entries {
         if entry.kind == "grpc" {
-            listed.insert(entry.name.clone());
+            let key = format!("{} {}", entry.listener, entry.name);
             if entry.writes == "admin" && entry.decision != "main-route" {
                 problems.push(format!(
                         "allowlist line {}: {} can change administration data without an authorization decision in elitea-main (decision {}; it must be main-route)",
@@ -576,12 +606,13 @@ fn check(scan: &Scan, entries: &[Entry]) -> Vec<String> {
                     entry.line, entry.name
                 ));
             }
-            if !scan.served.contains(&entry.name) {
+            if !scan.served.contains(&key) {
                 problems.push(format!(
-                    "allowlist line {}: the worker does not serve {} (remove the line)",
-                    entry.line, entry.name
+                    "allowlist line {}: {} names no tonic server that answers {} (remove the line, or name the file that serves it)",
+                    entry.line, entry.listener, entry.name
                 ));
             }
+            listed.insert(key);
         } else {
             sites.insert(format!("{} {}", entry.listener, entry.name), entry);
         }
@@ -589,7 +620,7 @@ fn check(scan: &Scan, entries: &[Entry]) -> Vec<String> {
     for route in &scan.served {
         if !listed.contains(route) {
             problems.push(format!(
-                "the worker serves {route}, which is not on the allowlist: review what it writes, what decides it and who calls it, and list it"
+                "the worker serves {route} (file, route), which is not on the allowlist: review what it writes, what decides it and who calls it, and list it"
             ));
         }
     }
@@ -741,7 +772,7 @@ fn the_check_fails_on_an_unlisted_fixture_method() {
     let entries = parse_allowlist(ALLOWLIST).expect("the allowlist parses");
     let mut scan = crate_scan();
     scan.served
-        .insert("/fixture.admin.v1.AdminService/SetProviderPolicy".into());
+        .insert("src/sandbox/service.rs /fixture.admin.v1.AdminService/SetProviderPolicy".into());
     let problems = check(&scan, &entries);
     assert!(
         problems
@@ -754,12 +785,14 @@ fn the_check_fails_on_an_unlisted_fixture_method() {
 #[test]
 fn the_check_fails_on_an_administration_write_main_does_not_decide() {
     let entries = parse_allowlist(
-        "grpc | supervisor | /fixture.admin.v1.AdminService/SetProviderPolicy | admin | claim | the fixture",
+        "grpc | src/fixture.rs | /fixture.admin.v1.AdminService/SetProviderPolicy | admin | claim | the fixture",
     )
     .expect("the fixture parses");
     let scan = Scan {
         sites: BTreeMap::new(),
-        served: BTreeSet::from(["/fixture.admin.v1.AdminService/SetProviderPolicy".to_string()]),
+        served: BTreeSet::from([
+            "src/fixture.rs /fixture.admin.v1.AdminService/SetProviderPolicy".to_string(),
+        ]),
     };
     let problems = check(&scan, &entries);
     assert!(
@@ -770,7 +803,7 @@ fn the_check_fails_on_an_administration_write_main_does_not_decide() {
     );
 }
 
-const FIXTURE_SOURCE: &str = r#"
+const FIXTURE_SOURCE: &str = r##"
 // Server::builder() in a comment is no site.
 use crate::protocol::fixture_admin_service_server::FixtureAdminServiceServer;
 
@@ -794,11 +827,26 @@ fn fake_listener() { let _ = std::os::unix::net::UnixListener::bind("/tmp/x"); }
 
 #[cfg(not(test))]
 fn real_listener() { let _ = std::os::unix::net::UnixListener::bind("/run/x"); }
-"#;
+
+const RAW: &[u8] = br#"a "quoted" Server::builder() in a raw byte string"#;
+"##;
+
+// A second server file names the module through an alias; a test-only file
+// (an inner #![cfg(test)]) builds a server that is not a site.
+const FIXTURE_ALIAS: &str = "use crate::protocol::{fixture_admin_service_server as admin};\nfn serve() { let _ = admin::FixtureAdminServiceServer::new(Admin); }\n";
+const FIXTURE_TEST_ONLY: &str =
+    "#![cfg(test)]\nfn fake() { let _ = tonic::transport::Server::builder(); }\n";
 
 #[test]
 fn the_source_check_fails_on_unreviewed_fixture_listeners() {
-    let files = BTreeMap::from([("src/fixture.rs".to_string(), compiled(FIXTURE_SOURCE).code)]);
+    let files = BTreeMap::from([
+        ("src/fixture.rs".to_string(), compiled(FIXTURE_SOURCE).code),
+        ("src/alias.rs".to_string(), compiled(FIXTURE_ALIAS).code),
+        (
+            "src/test_only.rs".to_string(),
+            compiled(FIXTURE_TEST_ONLY).code,
+        ),
+    ]);
     let servers = BTreeMap::from([(
         "fixture_admin_service_server".to_string(),
         BTreeSet::from(["/fixture.admin.v1.AdminService/SetProviderPolicy".to_string()]),
@@ -812,18 +860,22 @@ fn the_source_check_fails_on_unreviewed_fixture_listeners() {
         ("src/fixture.rs serve_with_incoming".to_string(), 1),
         ("src/fixture.rs UnixListener::bind".to_string(), 1),
         ("src/fixture.rs fixture_admin_service_server".to_string(), 1),
+        ("src/alias.rs fixture_admin_service_server".to_string(), 1),
     ]);
     assert_eq!(
         scan.sites, expected,
         "the scan read comments, strings or test-only items"
     );
     let entries = parse_allowlist(
-        "site | src/fixture.rs | Server::builder | 1\nsite | src/gone.rs | TcpListener::bind | 1",
+        "site | src/fixture.rs | Server::builder | 1\nsite | src/gone.rs | TcpListener::bind | 1\n\
+         grpc | src/fixture.rs | /fixture.admin.v1.AdminService/SetProviderPolicy | write | claim | the fixture\n\
+         grpc | src/elsewhere.rs | /fixture.admin.v1.AdminService/SetProviderPolicy | write | claim | the wrong file",
     )
     .expect("the fixture parses");
     let problems = check(&scan, &entries);
     for want in [
-        "/fixture.admin.v1.AdminService/SetProviderPolicy, which is not on the allowlist",
+        "src/alias.rs /fixture.admin.v1.AdminService/SetProviderPolicy (file, route), which is not on the allowlist",
+        "src/elsewhere.rs names no tonic server that answers /fixture.admin.v1.AdminService/SetProviderPolicy",
         "src/fixture.rs Server::builder occurs 2 times, not 1",
         "src/fixture.rs .add_service( builds a listener",
         "src/fixture.rs fixture_admin_service_server builds a listener or names a served tonic service",

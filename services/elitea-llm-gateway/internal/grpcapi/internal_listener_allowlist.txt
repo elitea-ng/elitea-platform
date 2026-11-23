@@ -12,7 +12,13 @@
 #   (chi.Walk over api.NewRouterWithLog), both ways.
 #
 # The format and the meaning of each field are in
-# internal_listener_checks_test.go (the same file as R1.8's).
+# internal_listener_checks_test.go (the same file as R1.8's), with one
+# addition that file cannot name (it must stay equal to Main's copy): an http
+# line whose second field is `llm`, not `<file>:<func>`, is a route of the /llm
+# chi router as chi.Walk reports it (`<METHOD> <pattern>`). The source scan
+# skips those lines (only their writes/decision rule applies there), and
+# internal/server/surface_allowlist_test.go (loadRouterLines) compares them
+# with the router.
 #
 # The gateway writes no provider, policy, identity or role data through any
 # listener: it READS provider credentials, governance definitions and model
