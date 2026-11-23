@@ -105,6 +105,11 @@ type Querier interface {
 	// multipart upload; a normal single-shot grant passes it as NULL.
 	CreateArtifactTransferGrant(ctx context.Context, arg CreateArtifactTransferGrantParams) (CreateArtifactTransferGrantRow, error)
 	CreateAuthUserByEmailIfMissing(ctx context.Context, arg CreateAuthUserByEmailIfMissingParams) (AuthCoreUser, error)
+	// admin_access and admin_scopes (shared 0265, ADR-0059 R1.1) are returned here
+	// and by the list, get and principal queries for the resolver (R1.2a) and the
+	// token handlers (R1.3a). The INSERT names neither column ON PURPOSE: a new
+	// token takes the column default `none`, so it has no administration rights
+	// until scopes are chosen. Nothing reads them before R1.2a.
 	CreatePATForActiveUser(ctx context.Context, arg CreatePATForActiveUserParams) (CreatePATForActiveUserRow, error)
 	// A binding is written once, in the same transaction as the token INSERT, and
 	// after the membership check. There is no update query on purpose: a binding is

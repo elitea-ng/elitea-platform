@@ -384,7 +384,9 @@ func newFirstLoginPool(t *testing.T) *pgxpool.Pool {
 			expires timestamp without time zone,
 			user_id integer REFERENCES auth_core__user (id)
 				ON UPDATE CASCADE ON DELETE CASCADE,
-			name text
+			name text,
+			admin_access text NOT NULL DEFAULT 'none',
+			admin_scopes text[] NOT NULL DEFAULT '{}'
 		);
 		CREATE UNIQUE INDEX ix_auth_core__token_uuid ON auth_core__token (uuid);
 		CREATE TABLE auth_core__role (
