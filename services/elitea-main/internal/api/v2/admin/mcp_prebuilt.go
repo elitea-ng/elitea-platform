@@ -39,6 +39,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -307,6 +308,22 @@ func (h *Handler) PrebuiltMCPSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A kept secret does not follow the entry to a new origin (#2944). The
+	// secret is write-only, so a caller who may edit the catalogue but was
+	// never shown it could otherwise read it out by moving the server, base or
+	// token URL to a host it runs and letting the next token exchange send it
+	// there. Typing the secret again proves the caller knows it; clearing it
+	// sends nothing. Refused before anything is sealed or written.
+	if body.ClientSecret == nil && existing.ClientSecretRef != "" &&
+		prebuiltOriginsChanged(existing, body.URL, body.BaseURL, tokenURL) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": "re-enter the client secret when the server origin changes: the stored secret " +
+				"is only sent to the origins it was entered for",
+			"field": "client_secret",
+		})
+		return
+	}
+
 	// The secret is sealed BEFORE the row is written. A sealed secret with no
 	// row is an orphan in the vault that nothing reads; a row that points at a
 	// secret which was never sealed is a catalogue entry that fails at use. The
@@ -395,6 +412,28 @@ func (h *Handler) PrebuiltMCPDelete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": key})
+}
+
+// prebuiltOriginsChanged reports whether any of the three URLs a client secret
+// can be sent through moves to another origin (scheme and host, port
+// included). A path change on the same origin is not a new destination.
+func prebuiltOriginsChanged(existing mcpregistry.PrebuiltServer, serverURL, baseURL, tokenURL string) bool {
+	return prebuiltOrigin(existing.ServerURL) != prebuiltOrigin(serverURL) ||
+		prebuiltOrigin(existing.BaseURL) != prebuiltOrigin(baseURL) ||
+		prebuiltOrigin(existing.TokenURL) != prebuiltOrigin(tokenURL)
+}
+
+// prebuiltOrigin is the scheme and host of a URL, lower-cased. A value that
+// does not parse to one (a template whose host is a placeholder, say) is
+// compared whole, so any edit to it counts as a move: the conservative answer
+// when the destination cannot be read.
+func prebuiltOrigin(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	parsed, err := url.Parse(trimmed)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "raw:" + trimmed
+	}
+	return strings.ToLower(parsed.Scheme) + "://" + strings.ToLower(parsed.Host)
 }
 
 // prebuiltSecretName derives the vault name for one catalogue entry's client

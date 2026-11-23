@@ -55,7 +55,7 @@ import Typography from '@mui/material/Typography';
 import { t } from '@/shared/i18n';
 
 import { AdminEmailFields, type EmailFormValues } from './AdminEmailFields';
-import { configFailureReason } from './api/adminConfigurationApi';
+import { configFailureField, configFailureReason } from './api/adminConfigurationApi';
 import {
   useAdminEmailSettings,
   useSaveAdminEmailSettings,
@@ -90,6 +90,27 @@ function toPlaceholders(settings: AdminEmailSettings): Record<string, string> {
   };
 }
 
+/**
+ * The server's reason when it refused a save because of the PASSWORD. A save
+ * that moves the relay (host or port) asks for the password again (issue
+ * 2944), and that reason is shown on the password control, where the operator
+ * has to act.
+ */
+function passwordFailure(error: unknown): string | undefined {
+  return configFailureField(error) === 'password' ? configFailureReason(error) : undefined;
+}
+
+/** The banner for a refused save, unless the password control shows it. */
+function EmailSaveError({ error }: { readonly error: Error | null }) {
+  if (error == null || passwordFailure(error) !== undefined) return null;
+  return (
+    <Alert severity="error" data-testid="admin-email-save-error">
+      {configFailureReason(error) ??
+        t('pages.admin.email.error.save', 'Failed to save the outbound e-mail settings.')}
+    </Alert>
+  );
+}
+
 export function AdminEmailEditor() {
   const state = useAdminEmailSettings();
   const save = useSaveAdminEmailSettings();
@@ -122,6 +143,8 @@ export function AdminEmailEditor() {
       </Alert>
     );
   }
+
+  const passwordError = passwordFailure(save.error);
 
   const change = (field: keyof EmailFormValues, value: string) =>
     setValues((current) => (current === undefined ? current : { ...current, [field]: value }));
@@ -174,12 +197,7 @@ export function AdminEmailEditor() {
         </Alert>
       )}
 
-      {save.error != null ? (
-        <Alert severity="error" data-testid="admin-email-save-error">
-          {configFailureReason(save.error) ??
-            t('pages.admin.email.error.save', 'Failed to save the outbound e-mail settings.')}
-        </Alert>
-      ) : null}
+      <EmailSaveError error={save.error} />
 
       <AdminEmailFields
         values={values}
@@ -188,6 +206,7 @@ export function AdminEmailEditor() {
         passwordSet={state.data.password_set}
         passwordSource={state.data.password_source}
         password={password}
+        passwordError={passwordError}
         onChange={change}
         onPasswordChange={setPassword}
         onClearPassword={() => setPassword('')}

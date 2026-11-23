@@ -59,6 +59,12 @@ export interface AdminMcpServerDialogProps {
   readonly isSaving: boolean;
   /** The server's own words when the last attempt was refused. */
   readonly serverError: string | undefined;
+  /**
+   * The field the server's refusal named, when it named one. `client_secret`
+   * moves the reason onto the secret control: a save that moves the server to
+   * another origin asks for the secret again.
+   */
+  readonly serverErrorField?: string | undefined;
   readonly onClose: () => void;
   readonly onSubmit: (draft: AdminMcpServerDraft) => void;
 }
@@ -69,6 +75,7 @@ export function AdminMcpServerDialog({
   existingKeys,
   isSaving,
   serverError,
+  serverErrorField,
   onClose,
   onSubmit,
 }: AdminMcpServerDialogProps) {
@@ -129,7 +136,11 @@ export function AdminMcpServerDialog({
     });
   };
 
-  const error = localError !== '' ? localError : serverError;
+  // A refusal that names the secret is shown ON the secret control, where the
+  // operator has to act, instead of in the banner above the form.
+  const secretError = localError === '' && serverErrorField === 'client_secret' ? serverError : undefined;
+  const bannerError = secretError === undefined ? serverError : undefined;
+  const error = localError !== '' ? localError : bannerError;
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth data-testid="admin-mcp-server-dialog">
@@ -218,6 +229,7 @@ export function AdminMcpServerDialog({
           form={form}
           hasStoredSecret={hasStoredSecret}
           isSaving={isSaving}
+          secretError={secretError}
           onUpdate={update}
         />
 
@@ -312,13 +324,25 @@ function McpSecretFields({
   form,
   hasStoredSecret,
   isSaving,
+  secretError,
   onUpdate,
 }: {
   readonly form: McpServerForm;
   readonly hasStoredSecret: boolean;
   readonly isSaving: boolean;
+  /** The server's refusal of the last save, when it named the secret. */
+  readonly secretError: string | undefined;
   readonly onUpdate: <K extends keyof McpServerForm>(key: K, value: McpServerForm[K]) => void;
 }) {
+  const storedHelp = hasStoredSecret
+    ? t(
+        'pages.admin.mcpServers.dialog.secretStored',
+        'A secret is stored. Leave blank to keep it; it is sealed in the platform vault and never shown.',
+      )
+    : t(
+        'pages.admin.mcpServers.dialog.secretNew',
+        'Sealed into the platform vault. It is never returned by any endpoint.',
+      );
   return (
     <>
       <TextField
@@ -332,17 +356,9 @@ function McpSecretFields({
         fullWidth
         size="small"
         autoComplete="new-password"
-        helperText={
-          hasStoredSecret
-            ? t(
-                'pages.admin.mcpServers.dialog.secretStored',
-                'A secret is stored. Leave blank to keep it; it is sealed in the platform vault and never shown.',
-              )
-            : t(
-                'pages.admin.mcpServers.dialog.secretNew',
-                'Sealed into the platform vault. It is never returned by any endpoint.',
-              )
-        }
+        error={secretError !== undefined}
+        helperText={secretError ?? storedHelp}
+        slotProps={{ htmlInput: { 'data-testid': 'admin-mcp-server-client-secret' } }}
       />
 
       {hasStoredSecret ? (

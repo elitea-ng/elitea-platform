@@ -52,6 +52,8 @@ Turns on maintenance mode: every caller without administration access gets a 503
 
 <Accordion title="E-mail (editable here)">
 The outbound mail relay: SMTP host, port, TLS mode, credentials, from/reply-to addresses, and the public base URL used in links the platform sends. Environment variables (`SMTP_HOST` and its siblings) provide a second layer underneath these rows; a row set here wins over the environment field by field.
+
+The password is never shown again after you save it. If you change the SMTP host or port while a password is in force (one saved here, or one from `SMTP_PASSWORD`), type the password again in the same save, or remove it. Otherwise the save is refused with "re-enter the password when the relay changes" under the password field. This keeps a stored password from being sent to a new relay by someone who never knew it. Edits that keep the host and port, such as a new sender address, keep the stored password.
 </Accordion>
 
 <Accordion title="Notifications (editable here)">

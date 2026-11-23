@@ -197,6 +197,22 @@ describe('AdminEmailEditor', () => {
     );
   });
 
+  it('shows a refusal that names the password on the password control (issue 2944)', async () => {
+    const reason = 're-enter the password when the relay changes';
+    useEmailHandlers({ saveStatus: 400, saveBody: { error: reason, field: 'password' } });
+    const user = userEvent.setup({ delay: null });
+    renderAdminRoute(<AdminEmailEditor />);
+
+    await user.type(await screen.findByTestId('admin-email-host'), '2');
+    await user.click(screen.getByTestId('admin-email-save'));
+
+    const password = screen.getByTestId('admin-email-password');
+    await waitFor(() => expect(password).toHaveAttribute('aria-invalid', 'true'));
+    expect(screen.getByText(reason)).toBeInTheDocument();
+    // Shown where the operator has to type, not repeated in the banner.
+    expect(screen.queryByTestId('admin-email-save-error')).not.toBeInTheDocument();
+  });
+
   it('reports an unconfigured deployment with the reason the server gave', async () => {
     useEmailHandlers({
       state: {

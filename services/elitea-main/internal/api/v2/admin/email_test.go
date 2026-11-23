@@ -73,7 +73,7 @@ type fakeEmailResolver struct{ resolution emailsettings.Resolution }
 func (f *fakeEmailResolver) Resolve(context.Context) emailsettings.Resolution { return f.resolution }
 
 func configuredResolution() emailsettings.Resolution {
-	stored := emailsettings.Settings{Host: "smtp.acme.example", Username: "relay-user"}
+	stored := emailsettings.Settings{Host: "smtp.acme.example", Port: 587, Username: "relay-user"}
 	effective := emailsettings.Settings{
 		Host: "smtp.acme.example", Port: 587, TLS: emailsettings.TLSStartTLS,
 		Username: "relay-user", From: "noreply@acme.example",
@@ -264,7 +264,7 @@ func TestEmailSettingsSave(t *testing.T) {
 			Field: "port", Reason: "the port must be between 1 and 65535",
 		}}
 		rec := callEmail(emailHandler(store, configuredResolution()), http.MethodPut,
-			"/admin/email/administration", `{"host":"h","port":70000}`)
+			"/admin/email/administration", `{"host":"h","port":70000,"password":"`+fixturePassword+`"}`)
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
 		}
@@ -281,12 +281,78 @@ func TestEmailSettingsSave(t *testing.T) {
 		// typed, and there is nothing wrong with what they typed.
 		store := &fakeEmailStore{ready: true, err: errors.New("connection refused")}
 		rec := callEmail(emailHandler(store, configuredResolution()), http.MethodPut,
-			"/admin/email/administration", `{"host":"h"}`)
+			"/admin/email/administration", `{"host":"smtp.acme.example","port":587}`)
 		if rec.Code != http.StatusServiceUnavailable {
 			t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
 		}
 		if strings.Contains(rec.Body.String(), "connection refused") {
 			t.Error("the internal cause crossed the trust boundary")
+		}
+	})
+
+	// #2944: the password is write-only, so a caller who may edit the relay
+	// but was never shown the password must not be able to send it to a host
+	// of its choosing by moving the relay and omitting the field.
+	t.Run("moving the relay without the password is refused and writes nothing", func(t *testing.T) {
+		for name, body := range map[string]string{
+			"host":                     `{"host":"smtp.elsewhere.example","port":587,"username":"relay-user"}`,
+			"port":                     `{"host":"smtp.acme.example","port":2525,"username":"relay-user"}`,
+			"host removed for the env": `{"host":"","port":587,"username":"relay-user"}`,
+		} {
+			store := &fakeEmailStore{ready: true}
+			rec := callEmail(emailHandler(store, configuredResolution()), http.MethodPut,
+				"/admin/email/administration", body)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("%s: status %d body %s", name, rec.Code, rec.Body.String())
+			}
+			var got struct{ Error, Field string }
+			_ = json.Unmarshal(rec.Body.Bytes(), &got)
+			if got.Field != "password" || !strings.Contains(got.Error, "re-enter the password") {
+				t.Errorf("%s: body = %s; the refusal must name the password field", name, rec.Body.String())
+			}
+			// The stored host is unchanged because nothing reached the store.
+			if len(store.saves) != 0 {
+				t.Errorf("%s: a refused save reached the store: %+v", name, store.saves)
+			}
+		}
+	})
+
+	t.Run("an environment password does not follow a moved relay either", func(t *testing.T) {
+		resolution := configuredResolution()
+		resolution.Stored = emailsettings.Settings{}
+		resolution.PasswordSource = emailsettings.SourceEnvironment
+		store := &fakeEmailStore{ready: true}
+		rec := callEmail(emailHandler(store, resolution), http.MethodPut,
+			"/admin/email/administration", `{"host":"smtp.elsewhere.example"}`)
+		if rec.Code != http.StatusBadRequest || len(store.saves) != 0 {
+			t.Fatalf("status %d saves %d body %s", rec.Code, len(store.saves), rec.Body.String())
+		}
+	})
+
+	t.Run("moving the relay with the password re-entered, or cleared, lands", func(t *testing.T) {
+		for _, password := range []string{fixturePassword, ""} {
+			store := &fakeEmailStore{ready: true}
+			body := `{"host":"smtp.elsewhere.example","port":587,"password":"` + password + `"}`
+			rec := callEmail(emailHandler(store, configuredResolution()), http.MethodPut,
+				"/admin/email/administration", body)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("password %q: status %d body %s", password, rec.Code, rec.Body.String())
+			}
+			if len(store.saves) != 1 || store.saves[0].settings.Host != "smtp.elsewhere.example" {
+				t.Fatalf("password %q: saves = %+v", password, store.saves)
+			}
+		}
+	})
+
+	t.Run("no password in force means nothing to re-enter", func(t *testing.T) {
+		resolution := configuredResolution()
+		resolution.PasswordSet = false
+		resolution.PasswordSource = emailsettings.SourceUnset
+		store := &fakeEmailStore{ready: true}
+		rec := callEmail(emailHandler(store, resolution), http.MethodPut,
+			"/admin/email/administration", `{"host":"smtp.elsewhere.example"}`)
+		if rec.Code != http.StatusOK || len(store.saves) != 1 {
+			t.Fatalf("status %d saves %d body %s", rec.Code, len(store.saves), rec.Body.String())
 		}
 	})
 

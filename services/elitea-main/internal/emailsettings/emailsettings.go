@@ -209,6 +209,31 @@ type FieldError struct {
 
 func (e FieldError) Error() string { return e.Reason }
 
+// ErrReenterPassword refuses a save that moves the relay while keeping a
+// password the caller did not type.
+//
+// The password is write-only: no route returns it. A save that changes the
+// host or the port and omits the password would send the kept password, at the
+// next AUTH, to wherever the new host points, so an administrator who may edit
+// the relay but was never shown the credential could read it out by aiming
+// the relay at a server it runs. Typing the password again proves the caller
+// already knows it; clearing it sends nothing (#2944).
+var ErrReenterPassword = FieldError{
+	Field: "password",
+	Reason: "re-enter the password when the relay changes: the stored password is only " +
+		"sent to the host and port it was entered for",
+}
+
+// RelayChanged reports whether `next` sends to a different destination than
+// `stored`: another host (compared without case or surrounding space) or
+// another port. Both are the STORED layer, so a host or port newly stated over
+// an environment default counts as a change, and so does one removed in
+// favour of the environment's.
+func RelayChanged(stored, next Settings) bool {
+	return !strings.EqualFold(strings.TrimSpace(stored.Host), strings.TrimSpace(next.Host)) ||
+		stored.Port != next.Port
+}
+
 // Layered merges two layers, with `over` winning FIELD BY FIELD.
 func Layered(under, over Settings) Settings {
 	merged := under
@@ -442,9 +467,16 @@ func (s *Store) Save(ctx context.Context, settings Settings, password *string, a
 	// the password must be refused before either half lands.
 	willHold := sealing
 	if password == nil {
-		sealed, err := s.PasswordSealed(ctx)
+		stored, sealed, err := s.Load(ctx)
 		if err != nil {
 			return err
+		}
+		// A kept password must not follow the relay to a new destination: the
+		// caller may hold only `platform.email.manage`, was never shown the
+		// password, and could otherwise read it out by pointing the relay at a
+		// host it controls (#2944). Refused before anything is written.
+		if sealed && RelayChanged(stored, settings) {
+			return ErrReenterPassword
 		}
 		willHold = sealed
 	}

@@ -45,7 +45,7 @@ import Typography from '@mui/material/Typography';
 import { t } from '@/shared/i18n';
 
 import { AdminMcpServerDialog } from './AdminMcpServerDialog';
-import { configFailureReason } from './api/adminConfigurationApi';
+import { configFailureField, configFailureReason } from './api/adminConfigurationApi';
 import {
   useAdminMcpServers,
   useDeleteAdminMcpServer,
@@ -228,6 +228,7 @@ export function AdminMcpServersEditor() {
   const [editing, setEditing] = useState<AdminMcpServer | undefined>(undefined);
   const [pendingDelete, setPendingDelete] = useState<AdminMcpServer | undefined>(undefined);
   const [saveError, setSaveError] = useState<string | undefined>(undefined);
+  const [saveErrorField, setSaveErrorField] = useState<string | undefined>(undefined);
   const [actionError, setActionError] = useState<string | undefined>(undefined);
 
   // `listQuery.data ?? []` would allocate a new array every render, so the
@@ -260,6 +261,7 @@ export function AdminMcpServersEditor() {
       // refused.
       onError: (error: unknown) => {
         setSaveError(configFailureReason(error) ?? 'save');
+        setSaveErrorField(configFailureField(error));
       },
     });
   };
@@ -332,6 +334,7 @@ export function AdminMcpServersEditor() {
             ? t('pages.admin.mcpServers.error.save', 'Failed to save that MCP server.')
             : saveError
         }
+        serverErrorField={saveErrorField}
         onClose={() => {
           setDialogOpen(false);
           setEditing(undefined);
