@@ -573,17 +573,26 @@ func TestAnOIDCCallbackWithAnOldOrAbsentAuthTimeIsRefused(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			recorder := limitedCallback(t, provider, handler, "max_age=600&target_to=%2Fadmin", authTime)
-			if recorder.Code != http.StatusUnauthorized {
-				t.Fatalf("status = %d, want 401: %s", recorder.Code, recorder.Body.String())
-			}
-			// The refusal is the auth_time check's, not an earlier one: the
+			// Refused back to the sign-in page with its error and target. Every
+			// earlier refusal of a callback that carries a code is a plain
+			// error status, so this redirect is the auth_time check's: the
 			// token, its signature and its nonce all verified.
-			if !strings.Contains(recorder.Body.String(), "did not confirm a recent sign-in") {
-				t.Fatalf("refused for another reason: %s", recorder.Body.String())
+			if recorder.Code != http.StatusFound || recorder.Header().Get("Location") != SignInErrorURL("/admin") {
+				t.Fatalf("status = %d, Location = %q; want 302 to %q: %s", recorder.Code,
+					recorder.Header().Get("Location"), SignInErrorURL("/admin"), recorder.Body.String())
 			}
+			cleared := map[string]bool{}
 			for _, cookie := range recorder.Result().Cookies() {
 				if cookie.Name == browsersession.CookieName && cookie.MaxAge >= 0 {
 					t.Fatalf("a refused callback set a session cookie: %+v", cookie)
+				}
+				if cookie.MaxAge < 0 {
+					cleared[cookie.Name] = true
+				}
+			}
+			for _, name := range []string{oidcStateCookie, oidcNonceCookie, oidcPKCECookie} {
+				if !cleared[name] {
+					t.Fatalf("the refused callback left the %s cookie set", name)
 				}
 			}
 		})
@@ -620,6 +629,7 @@ func TestTheLimitOfASignInMustBeAWholeNumberOfSecondsInRange(t *testing.T) {
 	for raw, want := range map[string]bool{
 		"0": true, "900": true, "86400": true,
 		"": false, "-1": false, "86401": false, "15m": false, "9e2": false, "+900": false, "0900": false,
+		"36028797018963968": false, "9223372036854775807": false, "9223372036854775808": false,
 	} {
 		_, limited, err := requestedAuthenticationLimit(url.Values{"max_age": {raw}})
 		if (err == nil) != want || (err == nil && !limited) {
@@ -642,15 +652,17 @@ func TestTheAuthTimeDecidesTheSessionsAuthenticationTime(t *testing.T) {
 		wantOK   bool
 		wantAt   time.Time
 	}{
-		"ordinary, no auth_time: the sign-in is the authentication": {login: oidcLoginState{}, wantOK: true},
+		"ordinary, no auth_time: the time is unknown": {login: oidcLoginState{}, wantOK: true},
 		"ordinary, an old auth_time is recorded as it is": {
 			authTime: seconds(now.Add(-3 * time.Hour)), login: oidcLoginState{}, wantOK: true, wantAt: now.Add(-3 * time.Hour),
 		},
 		"limited, fresh auth_time": {
 			authTime: seconds(now.Add(-time.Minute)), login: limited, wantOK: true, wantAt: now.Add(-time.Minute),
 		},
+		// Admitted by the skew alone: recorded at the edge of the limit, so
+		// the check that asked with the same limit passes it.
 		"limited, within the limit and the clock skew": {
-			authTime: seconds(now.Add(-14 * time.Minute)), login: limited, wantOK: true, wantAt: now.Add(-14 * time.Minute),
+			authTime: seconds(now.Add(-14 * time.Minute)), login: limited, wantOK: true, wantAt: now.Add(-10 * time.Minute),
 		},
 		"limited, past the limit and the clock skew": {authTime: seconds(now.Add(-16 * time.Minute)), login: limited},
 		"limited, absent": {login: limited},

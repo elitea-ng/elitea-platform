@@ -59,11 +59,12 @@ is base64url of a JSON object, which always begins `ey`.
 | `ELITEA_SESSION_REAUTHENTICATION_MAX_AGE` | `15m` | The limit of `apimw.RecentAuthentication`, measured from `authenticated_at`. Read at the check, not stamped on the row. |
 
 `authenticated_at` (shared 0261, ADR-0059 R1.10a) is when the person last
-authenticated: the OIDC `auth_time` when the provider sends one, otherwise the
-sign-in. A touch never writes it. `apimw.RecentAuthentication` answers 401
-`reauthentication_required` when it is older than the limit; only a
-server-side browser session row can satisfy it, never a token, a native
-session, a run token or the legacy cookie.
+authenticated: the OIDC `auth_time` (NULL, unknown, when the provider sends
+none), or the SAML sign-in. A touch never writes it. `apimw.RecentAuthentication`
+answers 401 `reauthentication_required` when it is older than the limit or
+unknown; only an OIDC browser session row can satisfy it today (SAML and Form
+after R1.10b), never a token, a native session, a run token or the legacy
+cookie.
 
 Both lifetimes are stamped ONTO the row at creation. A deployment that shortens
 its idle window does not retroactively shorten sessions issued under the old

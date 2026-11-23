@@ -101,35 +101,91 @@ func TestRecentAuthenticationRefusesASessionOlderThanTheLimit(t *testing.T) {
 }
 
 func TestRecentAuthenticationPassesAFreshSessionAndNamesItsKind(t *testing.T) {
-	for name, testCase := range map[string]struct {
-		provider string
-		kind     SessionKind
-	}{
-		"an OIDC session": {provider: browsersession.ProviderOIDC, kind: SessionKindSession},
-		"a SAML session":  {provider: browsersession.ProviderSAML, kind: SessionKindSession},
-		"a Form session":  {provider: browsersession.ProviderForm, kind: SessionKindForm},
+	session := sessionAuthenticatedAt(reauthNow.Add(-14 * time.Minute))
+	var seen BrowserAuthentication
+	check := RecentAuthentication{MaxAge: 15 * time.Minute, Now: func() time.Time { return reauthNow }}
+	handler := Auth(AuthConfig{
+		SessionStore: &stubSessionStore{session: session}, PrincipalValidator: &recordingPrincipals{},
+	})(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		authentication, ok := check.Check(r)
+		if !ok {
+			t.Fatal("an OIDC session authenticated 14 minutes ago did not satisfy a 15-minute limit")
+		}
+		seen = authentication
+	}))
+	handler.ServeHTTP(httptest.NewRecorder(), sessionRequest(t))
+	if seen.Kind != SessionKindSession || seen.Provider != browsersession.ProviderOIDC ||
+		!seen.AuthenticatedAt.Equal(session.AuthenticatedAt) {
+		t.Fatalf("authentication = %+v, want kind %q at %s", seen, SessionKindSession, session.AuthenticatedAt)
+	}
+}
+
+// A SAML or Form row records the sign-in, which is no proof of a fresh
+// authentication until R1.10b (ForceAuthn, the password re-entry). An OIDC
+// row whose authentication time is unknown (no auth_time) is refused too.
+func TestRecentAuthenticationRefusesASessionWhoseAuthenticationIsNotProven(t *testing.T) {
+	saml := sessionAuthenticatedAt(reauthNow.Add(-time.Minute))
+	saml.Provider = browsersession.ProviderSAML
+	form := sessionAuthenticatedAt(reauthNow.Add(-time.Minute))
+	form.Provider = browsersession.ProviderForm
+	unknown := sessionAuthenticatedAt(time.Time{})
+	for name, session := range map[string]browsersession.Session{
+		"a SAML session":                       saml,
+		"a Form session":                       form,
+		"an OIDC session with no auth_time":    unknown,
+		"a sealed session (a future provider)": func() browsersession.Session { s := saml; s.Provider = "sealed"; return s }(),
 	} {
 		t.Run(name, func(t *testing.T) {
-			session := sessionAuthenticatedAt(reauthNow.Add(-14 * time.Minute))
-			session.Provider = testCase.provider
-			var seen BrowserAuthentication
-			check := RecentAuthentication{MaxAge: 15 * time.Minute, Now: func() time.Time { return reauthNow }}
-			handler := Auth(AuthConfig{
+			recorder, reached := serveRecent(t, AuthConfig{
 				SessionStore: &stubSessionStore{session: session}, PrincipalValidator: &recordingPrincipals{},
-			})(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-				authentication, ok := check.Check(r)
-				if !ok {
-					t.Fatal("a session authenticated 14 minutes ago did not satisfy a 15-minute limit")
-				}
-				seen = authentication
-			}))
-			handler.ServeHTTP(httptest.NewRecorder(), sessionRequest(t))
-			if seen.Kind != testCase.kind || !seen.AuthenticatedAt.Equal(session.AuthenticatedAt) {
-				t.Fatalf("authentication = %+v, want kind %q at %s", seen, testCase.kind, session.AuthenticatedAt)
-			}
+			}, sessionRequest(t))
+			assertReauthenticationRequired(t, recorder, reached)
 		})
 	}
 }
+
+// policyStore is a session store that also states its policy, as
+// *browsersession.Manager does.
+type policyStore struct {
+	stubSessionStore
+	policy browsersession.Policy
+}
+
+func (s *policyStore) Policy() browsersession.Policy { return s.policy }
+
+// ELITEA_SESSION_REAUTHENTICATION_MAX_AGE reaches the check: the zero-value
+// RecentAuthentication applies the limit of the session manager Auth holds,
+// and the refusal states it.
+func TestRecentAuthenticationAppliesTheDeploymentsLimit(t *testing.T) {
+	serve := func(authenticatedAt time.Time) (*httptest.ResponseRecorder, bool) {
+		store := &policyStore{
+			stubSessionStore: stubSessionStore{session: sessionAuthenticatedAt(authenticatedAt)},
+			policy:           browsersession.Policy{ReauthenticationMaxAge: 5 * time.Minute},
+		}
+		reached := false
+		check := RecentAuthentication{Now: func() time.Time { return reauthNow }}
+		handler := Auth(AuthConfig{SessionStore: store, PrincipalValidator: &recordingPrincipals{}})(
+			check.Require(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true })))
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, sessionRequest(t))
+		return recorder, reached
+	}
+
+	if _, reached := serve(reauthNow.Add(-4 * time.Minute)); !reached {
+		t.Fatal("a session 4 minutes old was refused under a 5-minute limit")
+	}
+	recorder, reached := serve(reauthNow.Add(-6 * time.Minute))
+	if reached || recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("a session 6 minutes old under a 5-minute limit: status %d, reached %v", recorder.Code, reached)
+	}
+	if got := recorder.Header().Get(HeaderReauthenticationMaxAge); got != "300" {
+		t.Fatalf("%s = %q, want the deployment's 300", HeaderReauthenticationMaxAge, got)
+	}
+}
+
+// The real manager is a policy source; the composition root boxes it as the
+// SessionStore, so the limit it read from the environment is the one applied.
+var _ sessionPolicySource = (*browsersession.Manager)(nil)
 
 // The authentication time, not the last use, decides: a session in constant
 // use (last_seen_at a second ago) whose sign-in is old is refused.
@@ -214,20 +270,9 @@ func TestRecentAuthenticationIsNeverSatisfiedByTheLegacySignedCookie(t *testing.
 	assertReauthenticationRequired(t, recorder, reached)
 }
 
-// A row of a provider the helper does not know is not a browser session to
-// it: a future kind (the sealed session of R2.7) must be refused until the
-// helper is taught it.
-func TestRecentAuthenticationRefusesAnUnknownSessionProvider(t *testing.T) {
-	session := sessionAuthenticatedAt(reauthNow.Add(-time.Minute))
-	session.Provider = "sealed"
-	recorder, reached := serveRecent(t, AuthConfig{
-		SessionStore: &stubSessionStore{session: session}, PrincipalValidator: &recordingPrincipals{},
-	}, sessionRequest(t))
-	assertReauthenticationRequired(t, recorder, reached)
-}
-
 func TestRecentAuthenticationZeroValueUsesTheDefaultLimit(t *testing.T) {
-	if got := (RecentAuthentication{}).maxAge(); got != browsersession.DefaultReauthenticationMaxAge {
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	if got := (RecentAuthentication{}).MaxAgeFor(request); got != browsersession.DefaultReauthenticationMaxAge {
 		t.Fatalf("default limit = %s, want %s", got, browsersession.DefaultReauthenticationMaxAge)
 	}
 }

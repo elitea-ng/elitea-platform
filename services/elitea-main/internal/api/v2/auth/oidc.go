@@ -514,7 +514,10 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("OIDC: refused a limited sign-in without a recent authentication",
 			"sub", claims.Sub, "auth_time_present", claims.AuthTime != nil,
 			"max_age_seconds", int64(login.limit/time.Second))
-		http.Error(w, "the identity provider did not confirm a recent sign-in", http.StatusUnauthorized)
+		// Back to the sign-in page with its error and the same target, as a
+		// provider error is: the per-login cookies are already cleared, and
+		// a bare error page would be a dead end for the person.
+		http.Redirect(w, r, SignInErrorURL(targetTo), http.StatusFound)
 		return
 	}
 
@@ -590,6 +593,9 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		Email:           claims.Email,
 		Provider:        browsersession.ProviderOIDC,
 		AuthenticatedAt: authenticatedAt,
+		// No auth_time: the provider did not say when the person last
+		// authenticated, and the sign-in time is not proof of it.
+		AuthenticationTimeUnknown: authenticatedAt.IsZero(),
 	}, r) {
 		return
 	}

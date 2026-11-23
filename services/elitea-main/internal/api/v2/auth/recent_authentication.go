@@ -49,7 +49,9 @@ func requestedAuthenticationLimit(query url.Values) (time.Duration, bool, error)
 	}
 	raw := query.Get("max_age")
 	seconds, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil || seconds < 0 || time.Duration(seconds)*time.Second > maxRequestedAuthenticationLimit ||
+	// Compared in seconds BEFORE the conversion: a Duration of more than
+	// about 292 years wraps, and a wrapped value would pass a range check.
+	if err != nil || seconds < 0 || seconds > int64(maxRequestedAuthenticationLimit/time.Second) ||
 		strconv.FormatInt(seconds, 10) != raw {
 		return 0, false, errAuthenticationLimit
 	}
@@ -98,11 +100,16 @@ func decodeOIDCStateHead(head string) (time.Duration, bool) {
 // An ordinary sign-in always completes. Its session records `auth_time` when
 // the provider sent one, because that is when the person last proved who they
 // are; a silent single sign-on from an hours-old provider session must not
-// read as a fresh authentication. Without `auth_time` the sign-in itself is
-// the authentication (the zero time, which the session manager reads as now).
+// read as a fresh authentication. Without `auth_time` the time is UNKNOWN (the
+// zero time, stored as NULL), and such a session never satisfies the
+// recent-authentication check: a silent sign-on could otherwise stand in for
+// the limited sign-in the check asks for.
 //
 // A limited sign-in completes only with an `auth_time` that is within the
-// limit, allowing oidcAuthTimeClockSkew either way.
+// limit, allowing oidcAuthTimeClockSkew either way. The time it records is
+// never older than `now - limit`: an `auth_time` the skew alone admitted is
+// recorded at the edge of the limit, so the check that asked for this sign-in
+// with the same limit passes it instead of asking again in a loop.
 func checkAuthTime(authTime *float64, login oidcLoginState, now time.Time) (time.Time, bool) {
 	var at time.Time
 	if authTime != nil && !math.IsNaN(*authTime) && !math.IsInf(*authTime, 0) && *authTime > 0 {
@@ -120,6 +127,9 @@ func checkAuthTime(authTime *float64, login oidcLoginState, now time.Time) (time
 	}
 	if now.Sub(at) > login.limit+oidcAuthTimeClockSkew {
 		return time.Time{}, false
+	}
+	if edge := now.Add(-login.limit); at.Before(edge) {
+		at = edge.UTC()
 	}
 	return at, true
 }

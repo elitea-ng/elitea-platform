@@ -4,17 +4,19 @@
 adds `authenticated_at timestamptz` to `elitea_auth.browser_sessions`. It
 records when the person behind a session last authenticated. The migration fills
 existing rows from `created_at`. The column can be NULL, so a replica of the
-previous release can still create sessions during a rolling upgrade. The reader
-uses `created_at` for such a row.
+previous release can still create sessions during a rolling upgrade. NULL means
+the time is unknown, and such a session never counts as a recent sign-in.
 
-An OIDC sign-in now records the id_token's `auth_time` claim as that time if the
-provider sends one. Otherwise it records the time of the sign-in. A SAML
-sign-in records the time of the sign-in. A request never moves this time. The
-Form session cookie has no such time and does not satisfy the check yet.
+An OIDC sign-in now records the id_token's `auth_time` claim as that time. If
+the provider does not send `auth_time`, the time is unknown (NULL). A SAML
+sign-in records the time of the sign-in. A request never moves this time. In
+this release only an OIDC session can satisfy the recent-authentication check.
+SAML and Form sessions cannot satisfy it yet.
 
 The OIDC login accepts `max_age=<seconds>` (0 to 86400). The platform sends it
 to the identity provider. The callback then refuses an id_token whose
-`auth_time` is missing or older than the limit. A limited login also refuses a
+`auth_time` is missing or older than the limit, and sends the person back to
+the sign-in page with an error. A limited login also refuses a
 `target_to` that is not a same-origin relative path, with 400.
 
 The new setting `ELITEA_SESSION_REAUTHENTICATION_MAX_AGE` (default `15m`, range

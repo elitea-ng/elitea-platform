@@ -348,14 +348,19 @@ func TestASessionRecordsItsAuthenticationTime(t *testing.T) {
 
 	for name, testCase := range map[string]struct {
 		provider time.Time
+		unknown  bool
 		want     time.Time
 	}{
 		"the provider's time":           {provider: signIn.Add(-20 * time.Minute), want: signIn.Add(-20 * time.Minute)},
 		"no provider time: the sign-in": {want: signIn},
 		"a provider clock ahead":        {provider: signIn.Add(time.Hour), want: signIn},
+		"an unknown time stays unknown": {provider: signIn, unknown: true, want: time.Time{}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			value, err := manager.Create(ctx, NewSession{UserID: 7, Provider: ProviderOIDC, AuthenticatedAt: testCase.provider})
+			value, err := manager.Create(ctx, NewSession{
+				UserID: 7, Provider: ProviderOIDC,
+				AuthenticatedAt: testCase.provider, AuthenticationTimeUnknown: testCase.unknown,
+			})
 			if err != nil {
 				t.Fatalf("Create: %v", err)
 			}

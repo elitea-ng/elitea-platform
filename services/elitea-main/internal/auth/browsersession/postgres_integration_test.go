@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
+	"io/fs"
 	"os"
 	"testing"
 	"time"
@@ -306,13 +307,29 @@ func TestPostgresARefreshDoesNotMoveTheAuthenticationTime(t *testing.T) {
 	if !plainSession.AuthenticatedAt.Equal(dial.Now()) {
 		t.Fatalf("authenticated_at = %s, want the sign-in %s", plainSession.AuthenticatedAt, dial.Now())
 	}
+
+	// An unknown time (an id_token without auth_time) is stored as NULL and
+	// read back as zero, which no recent-authentication check accepts.
+	unknown, err := manager.Create(ctx, NewSession{UserID: 42, Provider: ProviderOIDC, AuthenticationTimeUnknown: true})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	unknownSession, err := manager.Validate(ctx, unknown)
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if !unknownSession.AuthenticatedAt.IsZero() {
+		t.Fatalf("authenticated_at of an unknown time = %s, want zero", unknownSession.AuthenticatedAt)
+	}
 }
 
-// TestPostgresARowFromBeforeTheMigrationReadsCreatedAt. A row written without
-// authenticated_at (a row 0261 backfilled, or one a replica of the previous
-// release inserted during a rolling upgrade) reads its created_at, the only
-// authentication time it ever knew. The backfill itself is asserted by
-// re-running the migration's UPDATE against such a row.
+// TestPostgresARowFromBeforeTheMigrationReadsCreatedAt. A row that existed
+// before 0261 is backfilled from created_at, the only authentication time it
+// ever knew. The corpus is already applied here, so the row is written the way
+// the previous release wrote it (without the column) and the migration's own
+// UPDATE is run against it. Before that UPDATE, such a row (one a
+// previous-release replica inserts during a rolling upgrade) reads as an
+// unknown time: zero, never recent.
 func TestPostgresARowFromBeforeTheMigrationReadsCreatedAt(t *testing.T) {
 	pool := newBrowserSessionPool(t)
 	store, err := NewPostgresStore(pool)
@@ -330,28 +347,29 @@ func TestPostgresARowFromBeforeTheMigrationReadsCreatedAt(t *testing.T) {
 		VALUES ($1, 7, 'oidc', $2::timestamptz, $2::timestamptz, $2::timestamptz + interval '30 days', 3600)`, id, createdAt); err != nil {
 		t.Fatalf("insert a pre-0261 row: %v", err)
 	}
+	unfilled, err := store.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !unfilled.AuthenticatedAt.IsZero() {
+		t.Fatalf("authenticated_at of an unfilled row = %s, want zero (unknown)", unfilled.AuthenticatedAt)
+	}
+
+	// The migration's backfill, read from the embedded file itself so this
+	// test cannot drift from what 0261 runs.
+	migration, err := fs.ReadFile(migrations.Files, "shared/0261_browser_session_authenticated_at.sql")
+	if err != nil {
+		t.Fatalf("read 0261: %v", err)
+	}
+	if _, err := pool.Exec(ctx, string(migration)); err != nil {
+		t.Fatalf("re-run 0261: %v", err)
+	}
 	session, err := store.Get(ctx, id)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
 	if !session.AuthenticatedAt.Equal(createdAt) {
 		t.Fatalf("authenticated_at of a pre-0261 row = %s, want created_at %s", session.AuthenticatedAt, createdAt)
-	}
-
-	// The migration's own backfill fills it with the same value.
-	if _, err := pool.Exec(ctx, `
-		UPDATE elitea_auth.browser_sessions
-		SET authenticated_at = created_at
-		WHERE authenticated_at IS NULL`); err != nil {
-		t.Fatalf("backfill: %v", err)
-	}
-	var stored time.Time
-	if err := pool.QueryRow(ctx,
-		`SELECT authenticated_at FROM elitea_auth.browser_sessions WHERE id = $1`, id).Scan(&stored); err != nil {
-		t.Fatalf("read the backfilled column: %v", err)
-	}
-	if !stored.Equal(createdAt) {
-		t.Fatalf("backfilled authenticated_at = %s, want %s", stored, createdAt)
 	}
 
 	// And the column is timestamptz, as every time in this schema.

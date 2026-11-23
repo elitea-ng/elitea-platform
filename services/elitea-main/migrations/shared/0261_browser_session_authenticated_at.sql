@@ -12,17 +12,17 @@
 -- so the row now carries that time:
 --
 --   authenticated_at  the time of the person's last authentication. An OIDC
---                     sign-in writes the id_token's auth_time when the
---                     provider sends one, otherwise the sign-in time; SAML
---                     and Form write the sign-in time. Nothing moves it after
---                     the row is written: a refresh (Touch) writes only
---                     last_seen_at.
+--                     sign-in writes the id_token's auth_time, or NULL when
+--                     the provider sends none; SAML writes the sign-in time.
+--                     Nothing moves it after the row is written: a refresh
+--                     (Touch) writes only last_seen_at.
 --
--- EXISTING ROWS take created_at, the only authentication time this table ever
--- knew. The column stays NULLABLE so a replica of the previous release, which
--- does not name it in its INSERT, keeps signing people in during a rolling
--- upgrade; the reader answers COALESCE(authenticated_at, created_at), so such a
--- row reads exactly like one this migration backfilled.
+-- NULL IS UNKNOWN, and an unknown time never satisfies a recent-authentication
+-- check. EXISTING ROWS take created_at, the only authentication time this
+-- table ever knew. The column stays NULLABLE so a replica of the previous
+-- release, which does not name it in its INSERT, keeps signing people in
+-- during a rolling upgrade; such a row reads as unknown, which only ever asks
+-- for one more sign-in.
 --
 -- Additive only. Idempotent. No BEGIN/COMMIT: the ledgered runner wraps the
 -- file.
@@ -35,4 +35,4 @@ SET authenticated_at = created_at
 WHERE authenticated_at IS NULL;
 
 COMMENT ON COLUMN elitea_auth.browser_sessions.authenticated_at IS
-    'When the person behind this session last authenticated (ADR-0059 R1.10). Never moved by a refresh. NULL only on a row written by a release before shared 0261; readers take created_at for it.';
+    'When the person behind this session last authenticated (ADR-0059 R1.10). Never moved by a refresh. NULL is unknown and never counts as a recent authentication.';

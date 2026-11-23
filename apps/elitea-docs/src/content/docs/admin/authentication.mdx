@@ -229,11 +229,11 @@ In this release, no action requires a recent sign-in yet. The check is ready for
 - Starting a break-glass elevation.
 - Critical administrative actions.
 
-When an action needs a recent sign-in and the session is too old, the server answers 401 with the code `reauthentication_required`. The header `X-Elitea-Reauthentication-Max-Age` gives the limit in seconds. Only a browser session satisfies the check. A personal access token, a desktop or mobile session, and a run token never do.
+When an action needs a recent sign-in and the session is too old, the server answers 401 with the code `reauthentication_required`. The header `X-Elitea-Reauthentication-Max-Age` gives the limit in seconds. Only an OIDC browser session satisfies the check in this release. A personal access token, a desktop or mobile session, and a run token never do. SAML and Form sessions do not satisfy it yet either.
 
 ### The limit
 
-Each browser session records when its person last authenticated. A request does not change that time; only a new sign-in does. With OIDC, the time is the id_token's `auth_time` claim if the identity provider sends it. Otherwise it is the time of the sign-in.
+Each browser session records when its person last authenticated. A request does not change that time; only a new sign-in does. With OIDC, the time is the id_token's `auth_time` claim. If the identity provider does not send `auth_time`, the time is unknown, and the session never counts as a recent sign-in. A SAML session records the time of the sign-in.
 
 The limit is 15 minutes by default. Set `ELITEA_SESSION_REAUTHENTICATION_MAX_AGE` on the main service to change it. The value is a Go duration from `1m` to `24h`, for example `10m`. Any other value stops the main service at startup, and the error names the variable.
 
@@ -257,7 +257,7 @@ For an OIDC provider:
 - The provider must honour `max_age`. If the person's session at the provider is older than the limit, the provider must ask them to sign in again.
 - The provider must return the `auth_time` claim in the id_token. OpenID Connect requires the claim when a request carries `max_age`.
 
-The callback refuses with 401 if `auth_time` is missing, or if it is older than the limit. A clock difference of up to five minutes is allowed, which is the same allowance the id_token check uses. A refused callback creates no session and does not change any existing session.
+The callback refuses the sign-in if `auth_time` is missing or older than the limit, and returns the person to the sign-in page with an error. A clock difference of up to five minutes is allowed, which is the same allowance the id_token check uses. A refused callback creates no session and does not change any existing session.
 
 Check your identity provider's documentation for both before you rely on the check.
 

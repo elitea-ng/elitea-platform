@@ -147,6 +147,11 @@ type NewSession struct {
 	// provider clock ahead of this one cannot stamp a session fresh for
 	// longer than it is.
 	AuthenticatedAt time.Time
+	// AuthenticationTimeUnknown records NO authentication time (NULL): the
+	// plane cannot say when the person last authenticated (an OIDC id_token
+	// without auth_time). Such a session never satisfies the
+	// recent-authentication check. AuthenticatedAt is then ignored.
+	AuthenticationTimeUnknown bool
 }
 
 // Create writes one session row and returns the COOKIE VALUE for it.
@@ -189,7 +194,10 @@ func (m *Manager) CreateCookie(ctx context.Context, request NewSession) (string,
 	}
 	now := m.now().UTC()
 	authenticatedAt := now
-	if !request.AuthenticatedAt.IsZero() && request.AuthenticatedAt.Before(now) {
+	switch {
+	case request.AuthenticationTimeUnknown:
+		authenticatedAt = time.Time{}
+	case !request.AuthenticatedAt.IsZero() && request.AuthenticatedAt.Before(now):
 		authenticatedAt = request.AuthenticatedAt.UTC()
 	}
 	session := Session{

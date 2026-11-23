@@ -43,10 +43,8 @@ func (s *PostgresStore) Insert(ctx context.Context, session Session) error {
 	return nil
 }
 
-// authenticatedAtParameter writes NULL for a zero time, which the reader
-// answers as created_at. Year one would read as an authentication that
-// happened two thousand years ago, which is correct in effect (never recent)
-// but a lie in the row.
+// authenticatedAtParameter writes NULL for a zero time: an unknown
+// authentication time, which the reader answers as zero again.
 func authenticatedAtParameter(at time.Time) any {
 	if at.IsZero() {
 		return nil
@@ -56,14 +54,15 @@ func authenticatedAtParameter(at time.Time) any {
 
 func (s *PostgresStore) Get(ctx context.Context, id string) (Session, error) {
 	var (
-		session Session
-		idle    int32
+		session         Session
+		idle            int32
+		authenticatedAt *time.Time
 	)
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, user_id, email, provider, provider_session_index,
 		       created_at, last_seen_at, expires_at, idle_timeout_seconds, revoked_at,
 		       ref, ended_at, COALESCE(end_reason, ''),
-		       COALESCE(authenticated_at, created_at)
+		       authenticated_at
 		FROM elitea_auth.browser_sessions
 		WHERE id = $1`, id,
 	).Scan(
@@ -71,7 +70,7 @@ func (s *PostgresStore) Get(ctx context.Context, id string) (Session, error) {
 		&session.ProviderSessionIndex, &session.CreatedAt, &session.LastSeenAt,
 		&session.ExpiresAt, &idle, &session.RevokedAt,
 		&session.Ref, &session.EndedAt, &session.EndReason,
-		&session.AuthenticatedAt,
+		&authenticatedAt,
 	)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
@@ -84,6 +83,13 @@ func (s *PostgresStore) Get(ctx context.Context, id string) (Session, error) {
 		return Session{}, fmt.Errorf("browsersession: read session: %w", err)
 	}
 	session.IdleTimeout = time.Duration(idle) * time.Second
+	// NULL is an unknown authentication time (an id_token without auth_time,
+	// or a row a replica of the previous release wrote during the upgrade):
+	// the zero time, which no recent-authentication check accepts. Rows that
+	// existed before shared 0261 were backfilled from created_at.
+	if authenticatedAt != nil {
+		session.AuthenticatedAt = authenticatedAt.UTC()
+	}
 	return session, nil
 }
 
