@@ -85,7 +85,7 @@ var ErrSecurityContextInvalid = errors.New("the run's security context is missin
 // it.
 const (
 	MaxEntries        = platformconfig.MaxWorkerEgressPolicyEntries
-	MaxPrivateEntries = platformconfig.MaxWorkerEgressPrivateEntries
+	MaxPrivateEntries = platformconfig.MaxWorkerEgressPrivatePolicyEntries
 	MaxBytes          = 24 * 1024
 )
 
@@ -147,18 +147,13 @@ func (r *Resolver) WorkerEgressPolicy(ctx context.Context, command *runtimev1.Wo
 	if err != nil {
 		return nil, fmt.Errorf("worker egress: read the platform setting: %w", err)
 	}
-	private, err := AssemblePrivatePermit(append(slices.Clone(settings.PrivatePermit), r.operator...))
-	if err != nil {
-		return nil, err
-	}
 	governed := command.GetSecurityContextRef() != nil
-	if settings.Mode != platformconfig.WorkerEgressAllowlist && !governed {
-		if len(private) == 0 {
+	open := settings.Mode != platformconfig.WorkerEgressAllowlist && !governed
+	if command.GetConfigurationValidation() != nil {
+		if open {
 			return nil, nil
 		}
-		return &runtimev1.WorkerEgressPolicyV1{Mode: runtimev1.WorkerEgressModeV1_WORKER_EGRESS_MODE_V1_OPEN, PrivateAllow: private}, nil
-	}
-	if command.GetConfigurationValidation() != nil {
+
 		// A configuration validation is schema-only: the worker checks the
 		// settings against its pinned catalog and opens no connection
 		// (services/elitea-worker-rust/src/validation/mod.rs,
@@ -167,6 +162,18 @@ func (r *Resolver) WorkerEgressPolicy(ctx context.Context, command *runtimev1.Wo
 		// no entries, which refuses every public host, and is never
 		// refused: nothing it reads could widen or break that.
 		return &runtimev1.WorkerEgressPolicyV1{Mode: runtimev1.WorkerEgressModeV1_WORKER_EGRESS_MODE_V1_ALLOWLIST, Allow: []string{}}, nil
+	}
+	// Built after the validation shortcut, so a permit that cannot be
+	// assembled refuses runs but never a schema-only validation.
+	private, err := AssemblePrivatePermit(append(slices.Clone(settings.PrivatePermit), r.operator...))
+	if err != nil {
+		return nil, err
+	}
+	if open {
+		if len(private) == 0 {
+			return nil, nil
+		}
+		return &runtimev1.WorkerEgressPolicyV1{Mode: runtimev1.WorkerEgressModeV1_WORKER_EGRESS_MODE_V1_OPEN, PrivateAllow: private}, nil
 	}
 	projectID, err := strconv.ParseInt(command.GetResourceProjectId(), 10, 64)
 	if err != nil || projectID <= 0 {

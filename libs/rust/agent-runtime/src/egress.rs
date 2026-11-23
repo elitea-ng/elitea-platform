@@ -65,6 +65,19 @@ pub const REFUSAL_REASON_NOT_ALLOWED: &str = "host_not_allowed";
 /// loopback, link-local or metadata address the operator's private permit
 /// does not name (#2950).
 pub const REFUSAL_REASON_NOT_PUBLIC: &str = "not_public";
+/// The refusal reason for a host whose answer holds more addresses than the
+/// guard checks (`elitea_egress_guard`'s bound): a public host behind a large
+/// DNS answer, which no private permit entry lifts.
+pub const REFUSAL_REASON_TOO_MANY_ADDRESSES: &str = "too_many_addresses";
+
+/// The ledger reason a failed address check reports.
+const fn resolve_refusal_reason(error: ResolveError) -> Option<&'static str> {
+    match error {
+        ResolveError::NotPublic => Some(REFUSAL_REASON_NOT_PUBLIC),
+        ResolveError::TooManyAddresses => Some(REFUSAL_REASON_TOO_MANY_ADDRESSES),
+        ResolveError::Lookup | ResolveError::NotAllowed => None,
+    }
+}
 /// The most hosts each summary list carries; the rest are counted in
 /// [`EgressSummary::other_hosts`].
 pub const MAX_SUMMARY_HOSTS: usize = 256;
@@ -118,6 +131,12 @@ impl EgressRefused {
         if self.reason == REFUSAL_REASON_NOT_PUBLIC {
             return format!(
                 "egress to {} is not allowed: the host is a private, local or metadata address; an administrator can permit an on-premises host in the worker egress private permit",
+                self.authority()
+            );
+        }
+        if self.reason == REFUSAL_REASON_TOO_MANY_ADDRESSES {
+            return format!(
+                "egress to {} is not allowed: the host resolves to more addresses than the worker checks",
                 self.authority()
             );
         }
@@ -427,10 +446,11 @@ impl RunEgress {
             return Ok(());
         };
         match resolve_permitted(self.lookup.as_ref(), host, Some(port), &self.private).await {
-            Err(ResolveError::NotPublic | ResolveError::TooManyAddresses) => {
-                Err(self.refuse(host, port, REFUSAL_REASON_NOT_PUBLIC))
-            }
-            Ok(_) | Err(ResolveError::Lookup | ResolveError::NotAllowed) => Ok(()),
+            Err(error) => match resolve_refusal_reason(error) {
+                Some(reason) => Err(self.refuse(host, port, reason)),
+                None => Ok(()),
+            },
+            Ok(_) => Ok(()),
         }
     }
 
@@ -580,7 +600,10 @@ struct Dial {
     /// An operator allowlist's private permits for an operator-configured
     /// origin (see [`HttpClient::execute_operator_origin`]).
     operator: Option<Arc<PrivatePermit>>,
-    /// The first refusal the resolver made for this request.
+    /// The first refusal the resolver made for this request (or, for a
+    /// fixed resolver, its session). Only that one is counted on the run, so
+    /// a client that resolves again for the same request (a retry, a
+    /// reconnect) does not inflate the ledger.
     refused: Arc<Mutex<Option<EgressRefused>>>,
 }
 
@@ -643,18 +666,23 @@ impl PermitResolver {
             };
             match resolve_permitted(dial.egress.lookup.as_ref(), &host, dial.port, &permit).await {
                 Ok(admitted) => Ok(sockets(admitted)),
-                Err(error @ (ResolveError::NotPublic | ResolveError::TooManyAddresses)) => {
-                    let refused = dial.egress.refuse(
-                        &host,
-                        dial.port.unwrap_or(0),
-                        REFUSAL_REASON_NOT_PUBLIC,
-                    );
-                    if let Ok(mut first) = dial.refused.lock() {
-                        first.get_or_insert(refused);
+                Err(error) => {
+                    if let (Some(reason), Ok(mut first)) =
+                        (resolve_refusal_reason(error), dial.refused.lock())
+                    {
+                        match first.as_ref() {
+                            // Counted already: the tool call still learns why.
+                            Some(refused) => {
+                                let _ = CALL.try_with(|call| call.note(refused));
+                            }
+                            None => {
+                                *first =
+                                    Some(dial.egress.refuse(&host, dial.port.unwrap_or(0), reason));
+                            }
+                        }
                     }
                     Err(Box::new(error) as BoxError)
                 }
-                Err(error) => Err(Box::new(error) as BoxError),
             }
         })
     }

@@ -19,7 +19,8 @@ func workerEgressSection() map[string]any {
 		"id":    section,
 		"title": "Worker Egress",
 		"description": "Which public hosts agents, toolkits and MCP servers may reach from the worker. Open leaves " +
-			"public hosts unrestricted (private, link-local and metadata addresses are always refused). Allowlist " +
+			"public hosts unrestricted (private addresses are refused unless the Private Permit names them; " +
+			"link-local and metadata addresses always are). Allowlist " +
 			"limits each run to the entries below, its project's entries, and the hosts of the toolkits and MCP " +
 			"servers it uses; a refused host is a tool error. Runs under the governed credential profile always " +
 			"use the allowlist. Seed the list from Worker egress hosts before switching. In both modes a toolkit " +

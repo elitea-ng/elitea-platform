@@ -58,10 +58,15 @@ const (
 	MaxWorkerEgressPlatformEntries = 512
 	MaxWorkerEgressProjectEntries  = 256
 	MaxWorkerEgressPolicyEntries   = 1024
-	// MaxWorkerEgressPrivateEntries is the command contract's bound on
+	// MaxWorkerEgressPrivateEntries bounds the console's private permit and,
+	// separately, the deployment's (ELITEA_WORKER_EGRESS_PRIVATE_PERMIT), so
+	// their union stays within MaxWorkerEgressPrivatePolicyEntries and each
+	// list that saves or starts also dispatches.
+	MaxWorkerEgressPrivateEntries = 128
+	// MaxWorkerEgressPrivatePolicyEntries is the command contract's bound on
 	// WorkerEgressPolicyV1.private_allow.
-	MaxWorkerEgressPrivateEntries = 256
-	MaxWorkerEgressEntryBytes     = 261 // a 253-byte name, a colon and a port
+	MaxWorkerEgressPrivatePolicyEntries = 2 * MaxWorkerEgressPrivateEntries
+	MaxWorkerEgressEntryBytes           = 261 // a 253-byte name, a colon and a port
 )
 
 // WorkerEgressSettings is the platform section.

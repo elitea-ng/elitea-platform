@@ -53,7 +53,7 @@ func TestValidateWorkerEgressValues(t *testing.T) {
 		{name: "valid private permit", values: map[string]any{"private_permit": []any{"jira.corp.example", "*.corp.example:8443", "10.20.0.0/16"}}},
 		{name: "private permit url", values: map[string]any{"private_permit": []any{"https://jira.corp.example"}}, want: `"private_permit":`},
 		{name: "private permit not a string", values: map[string]any{"private_permit": []any{1}}, want: `"private_permit"[0] must be a string`},
-		{name: "private permit too many", values: map[string]any{"private_permit": many[:257]}, want: "at most 256"},
+		{name: "private permit too many", values: map[string]any{"private_permit": many[:129]}, want: "at most 128"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got := validateWorkerEgressValues(test.values)

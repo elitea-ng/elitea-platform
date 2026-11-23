@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/elitea-ng/elitea-platform/libs/go/egresslib"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
 // OperatorPermitEnv is the deployment's own private permit (#2950): private
@@ -31,8 +33,10 @@ func ParseOperatorPermit(value string) ([]string, error) {
 		}
 		entries = append(entries, raw)
 	}
-	if len(entries) > MaxPrivateEntries {
-		return nil, fmt.Errorf("%s: at most %d entries", OperatorPermitEnv, MaxPrivateEntries)
+	// Each operator list has half the command's bound, so the merged permit
+	// always fits and a list that starts Main never refuses runs later.
+	if len(entries) > platformconfig.MaxWorkerEgressPrivateEntries {
+		return nil, fmt.Errorf("%s: at most %d entries", OperatorPermitEnv, platformconfig.MaxWorkerEgressPrivateEntries)
 	}
 	return entries, nil
 }

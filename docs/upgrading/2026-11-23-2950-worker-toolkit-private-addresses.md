@@ -26,18 +26,26 @@ grammar:
 
 The deployment can set the same list as the chart value
 `main.env.ELITEA_WORKER_EGRESS_PRIVATE_PERMIT` (comma separated). Main merges
-the two lists. Link-local addresses and the metadata endpoints are never
+the two lists. Each list takes at most 128 entries. Link-local addresses and the metadata endpoints are never
 admitted, even when the permit names them. Only these two operator settings
 supply the permit. A project setting or a toolkit's URL never adds to it. The permit travels on the
 signed worker command (`WorkerEgressPolicyV1.private_allow`). A command
 carries an egress policy in `open` mode only when the permit is not empty.
+
+Toolkit and MCP clients no longer use the `HTTP_PROXY`, `HTTPS_PROXY` and
+`NO_PROXY` environment variables. A forward proxy would make the connection
+instead of the worker, so the address check could not apply to it. The worker
+needs a direct route to the hosts its toolkits reach. The chart sets no proxy
+variables on the worker.
 
 **Who is affected.** Deployments whose toolkits, OpenAPI tools, index sources
 or remote MCP servers point at hosts on a private network: a self-hosted Jira,
 Confluence, GitLab, Bitbucket, Elasticsearch, SonarQube, a Kubernetes API
 server, or an in-cluster MCP service. Until those hosts are permitted, their
 tool calls fail with `egress_host_not_allowed` after the upgrade. Deployments
-whose toolkits reach only public SaaS hosts are not affected.
+that give the worker proxy environment variables, with no direct route out, lose
+toolkit access to public hosts too. Deployments whose toolkits reach only public
+SaaS hosts directly are not affected.
 
 **What to do.**
 

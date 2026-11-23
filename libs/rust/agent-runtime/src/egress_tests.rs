@@ -466,6 +466,10 @@ pub(crate) fn private_lookup() -> Arc<dyn Lookup> {
         ("metadata.example", vec![ip("169.254.169.254")]),
         ("ula.example", vec![ip("fd12:3456::1")]),
         ("permitted.example", vec![ip("127.0.0.1")]),
+        (
+            "crowded.example",
+            (1..=40).map(|n| ip(&format!("203.0.113.{n}"))).collect(),
+        ),
     ])))
 }
 
@@ -663,4 +667,49 @@ async fn check_destination_applies_the_permit_before_a_session_dials() {
             .await
             .is_ok()
     );
+}
+
+/// A public host behind a DNS answer larger than the guard checks is refused
+/// under its own reason, not as a private address the permit could admit.
+#[tokio::test]
+async fn an_oversized_answer_is_refused_as_too_many_addresses() {
+    let run = guarded_run(&[]);
+    let refused = run
+        .check_destination(&url("https://crowded.example/mcp"))
+        .await
+        .expect_err("too many");
+    assert_eq!(refused.reason(), REFUSAL_REASON_TOO_MANY_ADDRESSES);
+    assert!(
+        refused.message().contains("more addresses"),
+        "{}",
+        refused.message()
+    );
+    assert!(!refused.message().contains("private permit"));
+}
+
+/// One request counts one refusal, however often its client resolves.
+#[tokio::test]
+async fn a_request_counts_one_refusal_however_often_it_resolves() {
+    let run = guarded_run(&[]);
+    let resolver = PermitResolver::scoped();
+    let target = url("https://ten.example/");
+    let outcome = run
+        .guarded(&target, async {
+            for _ in 0..3 {
+                assert!(
+                    resolver
+                        .resolve_host("ten.example".to_owned())
+                        .await
+                        .is_err()
+                );
+            }
+        })
+        .await;
+    assert_eq!(
+        outcome.expect_err("refused").reason(),
+        REFUSAL_REASON_NOT_PUBLIC
+    );
+    let refused = run.summary().refused;
+    assert_eq!(refused.len(), 1);
+    assert_eq!(refused[0].count, 1);
 }

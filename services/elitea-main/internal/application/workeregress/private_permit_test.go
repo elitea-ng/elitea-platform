@@ -102,6 +102,10 @@ func TestTheOperatorPermitMergesWithTheSection(t *testing.T) {
 	if _, err := ParseOperatorPermit("ok.example,https://x.example/"); err == nil || !strings.Contains(err.Error(), OperatorPermitEnv) {
 		t.Fatalf("malformed: %v", err)
 	}
+	tooMany := strings.Repeat("a.example,", platformconfig.MaxWorkerEgressPrivateEntries+1)
+	if _, err := ParseOperatorPermit(tooMany); err == nil || !strings.Contains(err.Error(), "at most 128") {
+		t.Fatalf("too many: %v", err)
+	}
 	if entries, err := ParseOperatorPermit(""); err != nil || len(entries) != 0 {
 		t.Fatalf("empty: %v %v", entries, err)
 	}
@@ -113,5 +117,24 @@ func TestTheOperatorPermitMergesWithTheSection(t *testing.T) {
 	}
 	if want := []string{"10.20.0.0/16", "ado-mock:8097"}; !slices.Equal(policy.GetPrivateAllow(), want) {
 		t.Fatalf("private_allow = %v, want %v", policy.GetPrivateAllow(), want)
+	}
+}
+
+// A schema-only configuration validation opens no connection, so a permit
+// that cannot be assembled never refuses it, in either mode.
+func TestAValidationIsNeverRefusedForThePermit(t *testing.T) {
+	validation := &runtimev1.WorkerCommandV1{
+		CapabilityCommand: &runtimev1.WorkerCommandV1_ConfigurationValidation{
+			ConfigurationValidation: &runtimev1.ConfigurationValidationCommandV1{SettingsEntryId: "settings"},
+		},
+	}
+	open, _ := permitResolver(t, platformconfig.WorkerEgressOpen, []string{"https://not-an-entry"}, &inputStub{})
+	if policy, err := open.WorkerEgressPolicy(context.Background(), validation); err != nil || policy != nil {
+		t.Fatalf("open: %v %v", policy, err)
+	}
+	allowlist, _ := permitResolver(t, platformconfig.WorkerEgressAllowlist, []string{"https://not-an-entry"}, &inputStub{})
+	policy, err := allowlist.WorkerEgressPolicy(context.Background(), validation)
+	if err != nil || len(policy.GetAllow()) != 0 || len(policy.GetPrivateAllow()) != 0 {
+		t.Fatalf("allowlist: %v %v", policy, err)
 	}
 }
