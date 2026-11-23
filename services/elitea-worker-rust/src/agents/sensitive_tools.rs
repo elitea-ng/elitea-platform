@@ -62,6 +62,7 @@ pub(crate) fn policy_for_guardrails(
             Arc::new(
                 policy
                     .with_egress(Arc::clone(egress))
+                    .with_db_egress_permits(Arc::clone(fallback.db_egress_permits()))
                     .with_approval_policy(Arc::clone(approval))
                     .with_run_caps(Arc::clone(run_caps))
                     .with_content_controls(Arc::clone(content)),
@@ -1312,5 +1313,33 @@ mod tests {
 
         assert!(catalog.policy_for_scoped("attachments", "lookup").is_none());
         assert!(catalog.policy_for_scoped("repository", "lookup").is_some());
+    }
+
+    #[test]
+    fn guardrails_policy_preserves_deployment_db_egress_permits() {
+        let permits = Arc::new(
+            elitea_agent_runtime::toolkits::DbEgressAllowlist::parse_csv("10.0.1.5:5432")
+                .expect("db allowlist")
+                .private_permits(),
+        );
+        let fallback = Arc::new(
+            policy(json!({}))
+                .as_ref()
+                .clone()
+                .with_db_egress_permits(Arc::clone(&permits)),
+        );
+        let guardrails = json!({ "blocked_toolkits": ["github"] });
+        let built = policy_for_guardrails(
+            guardrails.as_object(),
+            &fallback,
+            &elitea_agent_runtime::egress::RunEgress::open(),
+            &elitea_agent_runtime::approval_policy::ApprovalPolicy::none(),
+            &elitea_agent_runtime::run_caps::RunCapsMeter::unlimited(),
+            &elitea_agent_runtime::preamble::ContentControls::worker_default(),
+        )
+        .expect("guardrails policy");
+        let ip: std::net::IpAddr = "10.0.1.5".parse().expect("ip");
+        assert!(built.db_egress_permits().admits(ip, 5432));
+        assert!(!built.db_egress_permits().admits(ip, 3306));
     }
 }

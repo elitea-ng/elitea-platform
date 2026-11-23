@@ -110,6 +110,9 @@ pub(crate) struct DirectToolkitRuntime {
     /// The command's governed seam (ADR-0039, #1474); `None` for a legacy
     /// command, whose toolkit keeps its claim-time settings.
     governed: Option<Arc<GovernedOperationClient>>,
+    /// Private database egress permits (`ELITEA_DB_EGRESS_ALLOWLIST`); empty
+    /// by default so private database targets fail closed.
+    db_egress_permits: Arc<elitea_agent_runtime::toolkits::DbEgressPermitSet>,
 }
 
 impl Default for DirectToolkitRuntime {
@@ -117,6 +120,9 @@ impl Default for DirectToolkitRuntime {
         Self {
             mcp_connector: Arc::new(AdkHttpMcpConnector::new()),
             governed: None,
+            db_egress_permits: Arc::new(
+                elitea_agent_runtime::toolkits::DbEgressPermitSet::default(),
+            ),
         }
     }
 }
@@ -129,7 +135,21 @@ impl DirectToolkitRuntime {
         Self {
             mcp_connector,
             governed: None,
+            db_egress_permits: Arc::new(
+                elitea_agent_runtime::toolkits::DbEgressPermitSet::default(),
+            ),
         }
+    }
+
+    /// Bind the deployment's private database egress permits
+    /// (`ELITEA_DB_EGRESS_ALLOWLIST`).
+    #[must_use]
+    pub(crate) fn with_db_egress_permits(
+        mut self,
+        db_egress_permits: Arc<elitea_agent_runtime::toolkits::DbEgressPermitSet>,
+    ) -> Self {
+        self.db_egress_permits = db_egress_permits;
+        self
     }
 
     /// The same runtime for one command, with that command's governed seam
@@ -142,6 +162,7 @@ impl DirectToolkitRuntime {
         Self {
             mcp_connector: Arc::clone(&self.mcp_connector),
             governed,
+            db_egress_permits: Arc::clone(&self.db_egress_permits),
         }
     }
 
@@ -299,6 +320,16 @@ impl DirectToolkitRuntime {
         Ok((built.toolsets, built.delegated_authorization))
     }
 
+    fn effective_policy(&self, request: &DirectToolkitRequest) -> Arc<super::ToolAdmissionPolicy> {
+        Arc::new(
+            request
+                .policy()
+                .as_ref()
+                .clone()
+                .with_db_egress_permits(Arc::clone(&self.db_egress_permits)),
+        )
+    }
+
     async fn materialize(
         &self,
         request: &DirectToolkitRequest,
@@ -319,7 +350,8 @@ impl DirectToolkitRuntime {
             .next()
             .map(super::snapshot::FrozenToolReference::kind)
             .ok_or_else(|| failure(DirectToolkitRuntimeErrorCode::InvalidInput, false))?;
-        let admitted = snapshot.apply_policy(request.policy());
+        let policy = self.effective_policy(request);
+        let admitted = snapshot.apply_policy(&policy);
         if admitted.len() != 1 {
             return Err(failure(DirectToolkitRuntimeErrorCode::ToolBlocked, false));
         }
@@ -329,7 +361,7 @@ impl DirectToolkitRuntime {
                 let (toolsets, authorization) =
                     materialize_configured_toolsets_with_authorities_governed(
                         &admitted,
-                        request.policy(),
+                        &policy,
                         tokens,
                         artifacts,
                         index_tools,

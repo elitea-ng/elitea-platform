@@ -5,7 +5,7 @@ use std::sync::Arc;
 use serde_json::{Map, Value};
 
 use crate::approval_policy::{ApprovalPolicy, ApprovalRule};
-use crate::egress::RunEgress;
+use crate::egress::{PermitSet, RunEgress};
 use crate::preamble::ContentControls;
 use crate::run_caps::RunCapsMeter;
 use crate::tool_category::tool_category;
@@ -108,6 +108,7 @@ pub struct ToolAdmissionPolicy {
     sensitive_company_name: Box<str>,
     sensitive_message_template: Box<str>,
     egress: Arc<RunEgress>,
+    db_egress_permits: Arc<PermitSet>,
     approval: Arc<ApprovalPolicy>,
     run_caps: Arc<RunCapsMeter>,
     content: Arc<ContentControls>,
@@ -334,6 +335,7 @@ impl ToolAdmissionPolicy {
                 .unwrap_or(DEFAULT_MESSAGE_TEMPLATE)
                 .into(),
             egress: RunEgress::open(),
+            db_egress_permits: Arc::new(PermitSet::default()),
             approval: ApprovalPolicy::none(),
             run_caps: RunCapsMeter::unlimited(),
             content: ContentControls::worker_default(),
@@ -351,6 +353,21 @@ impl ToolAdmissionPolicy {
     #[must_use]
     pub const fn egress(&self) -> &Arc<RunEgress> {
         &self.egress
+    }
+
+    /// This generation bound to the deployment's private database egress
+    /// permits (`ELITEA_DB_EGRESS_ALLOWLIST`). Empty by default: private
+    /// database addresses are refused until an operator allowlist names them.
+    #[must_use]
+    pub fn with_db_egress_permits(mut self, permits: Arc<PermitSet>) -> Self {
+        self.db_egress_permits = permits;
+        self
+    }
+
+    /// The deployment's private database egress permits.
+    #[must_use]
+    pub const fn db_egress_permits(&self) -> &Arc<PermitSet> {
+        &self.db_egress_permits
     }
 
     /// This generation bound to one run's approval policy (ADR-0041

@@ -130,6 +130,7 @@ pub async fn serve_from_config(
     let deployment = Arc::new(
         load_deploy_config(deployment_path)
             .and_then(RuntimeDeployConfig::with_governed_context_from_env)
+            .and_then(RuntimeDeployConfig::with_db_egress_allowlist_from_env)
             .map_err(|error| map_config_error(&error))?,
     );
     let tool_policy = load_tool_policy(toolkit_security_path)?;
@@ -394,6 +395,11 @@ impl ProductionAgentRuntime {
             .map_err(|_| ProductionRuntimeBuildError)?,
         ));
         let web_facade = Arc::clone(&model_facade);
+        let db_egress_permits = Arc::new(deployment.db_egress_allowlist.private_permits());
+        let tool_policy = Arc::new(
+            Arc::unwrap_or_clone(tool_policy)
+                .with_db_egress_permits(Arc::clone(&db_egress_permits)),
+        );
         let assembler = Arc::new(
             NativeRuntimeAssembler::postgres(
                 Arc::clone(&platform),
@@ -445,7 +451,7 @@ impl ProductionAgentRuntime {
             admission,
             preparation,
             terminal_recovery,
-            DirectToolkitRuntime::new(mcp_connector),
+            DirectToolkitRuntime::new(mcp_connector).with_db_egress_permits(db_egress_permits),
             platform,
             index_runtime,
         )

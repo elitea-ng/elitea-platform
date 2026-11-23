@@ -843,6 +843,34 @@ A `zip` bump is a re-vendor, in one reviewed PR:
    digest, and record any API change in its table.
 4. Run `cargo test --locked -p elitea-office-core` from `libs/rust`.
 
+## `sqlx-postgres/`, `sqlx-mysql/` — SQLx 0.9.0 guarded dial and environment-free options
+
+Patched copies of `sqlx-postgres 0.9.0` and `sqlx-mysql 0.9.0`, applied via
+`[patch.crates-io]` in `libs/rust/Cargo.toml` and
+`services/elitea-worker-rust/Cargo.toml`.
+
+**Why vendored.** Upstream `sqlx 0.9.0` dials `&options.host` directly in TCP
+connect and uses the same `&options.host` for TLS hostname verification
+(`PgSslMode::VerifyFull`, `MySqlSslMode::VerifyIdentity`), so an egress guard
+cannot pin the TCP dial to a pre-checked IP without breaking certificate
+hostname verification. Upstream `PgConnectOptions::new_without_pgpass` also
+reads ambient `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY`, and other `PG*`
+environment variables with no constructor to bypass them.
+
+| | |
+| --- | --- |
+| Upstream repository | `https://github.com/launchbadge/sqlx` |
+| Published commit | `003b698e99e024f3621b8043a2426fde5b741171` (`.cargo_vcs_info.json`) |
+| `sqlx-postgres 0.9.0` archive SHA-256 | `87a2bdd6e83f6b3ea525ca9fee568030508b58355a43d0b2c1674d5f79dcd65e` |
+| `sqlx-mysql 0.9.0` archive SHA-256 | `90b8020fe17c5f2c245bfa2505d7ef59c5604839527c740266ad2214acebea27` |
+| Licence | `MIT OR Apache-2.0` |
+| Changes | Removed each archive's `Cargo.lock` (same reason as `leiden-rs`). Added `connect_addr: Option<IpAddr>` (`connect_addr` builder + `get_connect_addr`) to `PgConnectOptions` and `MySqlConnectOptions` and used it in `PgStream::connect` (`sqlx-postgres/src/connection/stream.rs`) and `MySqlConnection::establish` (`sqlx-mysql/src/connection/establish.rs`) so TCP dials the checked IP literal with no DNS lookup while TLS verifies `&options.host`. Added `PgConnectOptions::new_without_env` and `has_ssl_{root_cert,client_cert,client_key}` in `sqlx-postgres/src/options/mod.rs`. |
+
+**Compile-time guard.** `elitea-agent-runtime` (`toolkit-sql`) calls
+`PgConnectOptions::new_without_env`, `PgConnectOptions::connect_addr`, and
+`MySqlConnectOptions::connect_addr`. Any workspace that enables `toolkit-sql`
+without the `[patch.crates-io]` entries fails to compile.
+
 ## A vendored manifest needs its note
 
 A pull request that changes `<crate>/Cargo.toml` or `<crate>/Cargo.toml.orig`

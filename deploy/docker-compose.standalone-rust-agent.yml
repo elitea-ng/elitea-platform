@@ -64,6 +64,10 @@ services:
 
       ELITEA_RUST_LOG: "info"
       ELITEA_RUST_TRACE: "info"
+      # 5e-1: private database egress permits for the SQL toolkit (comma-separated
+      # CIDR, IP[:port], or localhost[:port]). Empty allows public databases only;
+      # any malformed entry refuses worker startup.
+      ELITEA_DB_EGRESS_ALLOWLIST: "${ELITEA_DB_EGRESS_ALLOWLIST-}"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
     volumes:
       # Same deployment as ./runtime/worker-runtime.json plus the Rust-only

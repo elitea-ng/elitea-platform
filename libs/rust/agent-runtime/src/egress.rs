@@ -37,7 +37,8 @@ use adk_core::{AdkError, ErrorCategory, ErrorComponent, RetryHint};
 use async_trait::async_trait;
 use elitea_connectors::transport::{Request, Response, Transport, TransportError};
 pub use elitea_egress_guard::{
-    Allowlist, MAX_PUBLIC_ALLOWLIST_ENTRIES, PublicPolicy, PublicPolicyError,
+    Allowlist, AllowlistError, MAX_PUBLIC_ALLOWLIST_ENTRIES, PermitSet, PublicPolicy,
+    PublicPolicyError,
 };
 
 /// The tool error code of a refused host.

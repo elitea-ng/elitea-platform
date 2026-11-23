@@ -1,10 +1,11 @@
-//! Capability-disabled SQL toolkit configuration, admission, and bounded drivers.
+//! SQL toolkit configuration, admission, egress-guarded drivers, and tools.
 //!
-//! The family preserves the SDK's two-tool catalog for `PostgreSQL` and `MySQL`,
-//! while treating arbitrary SQL as an effect. Production registration remains
-//! gated on durable effect receipts and verified database/TLS authority.
-
-#![allow(dead_code)] // The complete family remains capability-gated.
+//! Preserves the SDK's two-tool catalog (`execute_sql`, `list_tables_and_columns`)
+//! for `PostgreSQL` and `MySQL` behind the `toolkit-sql` feature. Connections
+//! dial through `elitea-egress-guard` (public by default; private targets only
+//! via `ELITEA_DB_EGRESS_ALLOWLIST` permits), pin the TCP socket to the checked
+//! IP while verifying TLS against the original hostname (`PgSslMode::VerifyFull`,
+//! `MySqlSslMode::VerifyIdentity`), and treat arbitrary SQL as an effect.
 
 pub(in crate::toolkits) mod client;
 pub(in crate::toolkits) mod config;
