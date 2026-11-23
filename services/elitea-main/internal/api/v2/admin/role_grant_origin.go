@@ -3,17 +3,17 @@ package admin
 import (
 	"net/http"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess/rolegrants"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
 )
 
 // grantOrigin is the history origin of a role change made through an admin
 // route: the caller is the actor, and the source is `console` for a browser
 // session and `api` for any other credential (a token). A caller always has a
-// principal here: rolepolicy.ResolveCaller refuses a request without one
+// principal here: adminaccess.ResolveCaller refuses a request without one
 // before any write.
-func grantOrigin(r *http.Request, caller rolepolicy.Caller) rolegrants.Origin {
+func grantOrigin(r *http.Request, caller adminaccess.Caller) rolegrants.Origin {
 	source := rolegrants.SourceAPI
 	if principal, ok := auth.UserFromContext(r.Context()); ok && browserSession(r, principal) {
 		source = rolegrants.SourceConsole

@@ -408,7 +408,7 @@ func checkSource(scan sourceScan, list []surfaceEntry) []string {
 
 // administrationModeName is an identifier that names the administration
 // permission mode: auth.PermissionModeAdministration,
-// rolepolicy.ModeAdministration, identity.InitialAdministrationMode, ...
+// adminaccess.ModeAdministration, identity.InitialAdministrationMode, ...
 func administrationModeName(name string) bool {
 	return strings.Contains(name, "ModeAdministration") || strings.Contains(name, "AdministrationMode")
 }

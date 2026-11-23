@@ -5,21 +5,31 @@ package admin_test
 // in elitea_auth.admin_role_seeds, for a global administrator too. A role of
 // the same kind of name without a row is an ordinary custom role.
 //
-// The stable 403 code `role_set_locked` for the set edit is story R0.8a; here
-// the refusal is the 409 the roles API already gives a code-named role.
+// A rename or a delete answers the 409 the roles API gives a code-named role;
+// the edit of a built-in set answers 403 with the stable code
+// `role_set_locked` (story R0.8a), through the refusal writer of the role
+// policy, so its audit row carries the action role.escalation_refused.
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/admin"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
 	migrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
@@ -127,13 +137,60 @@ func TestTheSetOfABuiltInRoleCannotBeEdited(t *testing.T) {
 	} {
 		before := grantsSQL(t, env.pool, "administration", edit.role)
 		recorder := saveCell(t, router, centralMatrix, edit.permission, edit.role, edit.value)
-		expectStatus(t, recorder, http.StatusConflict)
+		expectRefusal(t, recorder, adminaccess.CodeSetLocked)
 		if !strings.Contains(recorder.Body.String(), edit.role) {
 			t.Errorf("the refusal does not name %s: %s", edit.role, recorder.Body.String())
 		}
 		if after := grantsSQL(t, env.pool, "administration", edit.role); strings.Join(after, ",") != strings.Join(before, ",") {
 			t.Errorf("%s changed from %v to %v after the refusal", edit.role, before, after)
 		}
+	}
+}
+
+// eventRecorder keeps every audit event the request middleware records.
+type eventRecorder struct {
+	mu     sync.Mutex
+	events []audit.Event
+}
+
+func (r *eventRecorder) Record(_ context.Context, event audit.Event) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, event)
+}
+
+// The locked-set refusal goes through the refusal writer of the role policy:
+// behind the real audit middleware it writes exactly one row, and that row
+// carries the action role.escalation_refused.
+func TestALockedSetRefusalWritesOneAuditRow(t *testing.T) {
+	env := newEscalationEnvironment(t)
+	seedBuiltIn(t, env.pool, "editor")
+	recorder := &eventRecorder{}
+	// The middleware audits the /api/v2/admin/ surface, so the matrix routes
+	// are mounted under /api/v2 behind it, with the real resolver.
+	caller := fmt.Sprint(env.ids[escalationSuper])
+	router := chi.NewRouter()
+	router.Use(middleware.Audit(recorder))
+	router.Mount("/api/v2", rolesRouter(
+		admin.NewHandler(env.pool, admin.WithPermissionResolver(legacyrbac.NewPostgresResolver(env.pool))),
+		nil, &auth.User{ID: caller, UserID: caller}))
+
+	const path = "/api/v2/admin/permissions/administration/administration"
+	refused := saveCell(t, router, path, "models.alpha.view", "editor", true)
+	expectRefusal(t, refused, adminaccess.CodeSetLocked)
+
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	if len(recorder.events) != 1 {
+		t.Fatalf("the refused save wrote %d audit rows, want 1: %+v", len(recorder.events), recorder.events)
+	}
+	event := recorder.events[0]
+	if event.Action != adminaccess.RefusalAuditAction || event.EntityType != "role" || event.EntityName != "editor" {
+		t.Fatalf("audit row = action %q entity %s/%s, want %s on role editor",
+			event.Action, event.EntityType, event.EntityName, adminaccess.RefusalAuditAction)
+	}
+	if event.StatusCode == nil || *event.StatusCode != http.StatusForbidden {
+		t.Fatalf("audit row status = %v, want 403", event.StatusCode)
 	}
 }
 
@@ -162,7 +219,7 @@ func TestTheEscalationCodeComesBeforeTheLock(t *testing.T) {
 	env := newEscalationEnvironment(t)
 	seedBuiltIn(t, env.pool, "admin")
 	expectRefusal(t, saveCell(t, env.as(escalationAdmin), centralMatrix, "admin.auth.users", "admin", false),
-		rolepolicy.CodeOwnRoleLocked)
+		adminaccess.CodeOwnRoleLocked)
 }
 
 // A database whose seed table is absent (0263 ran before the auth_core

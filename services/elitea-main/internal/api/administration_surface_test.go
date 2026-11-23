@@ -61,7 +61,7 @@ var declaredWithoutDecision = map[string]string{
 var invisibleChecks = map[string]string{
 	adminsurface.InvisibleKey(
 		adminsurface.Route{Method: http.MethodDelete, Pattern: "/api/v2/admin/scim_group_bindings/administration/{id}"},
-		"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy.ResolveCaller",
+		"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess.ResolveCaller",
 	): "guardBindingWrite compares the caller's set with the role of the STORED binding, which the " +
 		"unconnected pool cannot read, so no grant changes the answer; the rule reads role rows, not a " +
 		"literal, and its one literal (admin.auth.users.super_admin) is seen on the SCIM client routes",

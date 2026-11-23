@@ -47,7 +47,7 @@ package auth
 // audit middleware writes for every refused /api/v2/auth/ request: action
 // TokenMintRefusedAuditAction, entity type `token`, entity name the refusal
 // code. The code alone names the credential kind that was refused (see each
-// constant). The shape follows internal/rolepolicy (#2555): stable codes as
+// constant). The shape follows internal/adminaccess (#2555): stable codes as
 // constants, one writer that annotates, logs and answers.
 //
 // The rule guards the one USER-initiated mint, POST /auth/token/.

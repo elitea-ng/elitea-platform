@@ -1,4 +1,4 @@
-package rolepolicy
+package adminaccess
 
 import (
 	"context"

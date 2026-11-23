@@ -12,7 +12,7 @@
 // the assignment row keeps its id.
 //
 // The caller owns the transaction and, for a console or api change, holds
-// rolepolicy.LockRoleWrites in it.
+// adminaccess.LockRoleWrites in it.
 package rolegrants
 
 import (

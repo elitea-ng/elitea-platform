@@ -76,7 +76,6 @@ import (
 	"strings"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
 )
 
 // The permissions the legacy runtime declares on the two forms this route
@@ -210,14 +209,14 @@ func (h *Handler) BulkInviteMembers(w http.ResponseWriter, r *http.Request) {
 
 	// Each pair commits in its own transaction (addProjectMembership), so the
 	// check and the loop run under a hold of the role-writes lock that spans them.
-	hold, release, err := rolepolicy.HoldRoleWrites(ctx, h.pool)
+	hold, release, err := adminaccess.HoldRoleWrites(ctx, h.pool)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to read the projects"})
 		return
 	}
 	defer release()
 	if refusal := h.checkBulkInviteSelf(r, hold, users, resolvedProjects); refusal != nil {
-		rolepolicy.Write(w, r, refusal)
+		adminaccess.Write(w, r, refusal)
 		return
 	}
 
@@ -454,9 +453,9 @@ func dedupeIDs(ids []int64) []int64 {
 // role carries a permission that the caller does not already hold there.
 // Nothing is written for any pair. A super_admin holder is exempt.
 func (h *Handler) checkBulkInviteSelf(
-	r *http.Request, q rolepolicy.Querier, users []int64, projects map[int64]*projectTarget,
-) *rolepolicy.Refusal {
-	caller, refusal := rolepolicy.ResolveCaller(r, h.resolver)
+	r *http.Request, q adminaccess.Querier, users []int64, projects map[int64]*projectTarget,
+) *adminaccess.Refusal {
+	caller, refusal := adminaccess.ResolveCaller(r, h.resolver)
 	if refusal != nil {
 		return refusal
 	}
@@ -474,16 +473,16 @@ func (h *Handler) checkBulkInviteSelf(
 		if project == nil || project.roleID == nil || project.isPersonal {
 			continue
 		}
-		required, err := rolepolicy.ProjectRolesPermissions(ctx, q, int(id), []int{*project.roleID})
+		required, err := adminaccess.ProjectRolesPermissions(ctx, q, int(id), []int{*project.roleID})
 		if err != nil {
-			return rolepolicy.Unresolved("the project roles could not be read, so the role change was refused")
+			return adminaccess.Unresolved("the project roles could not be read, so the role change was refused")
 		}
 		held, err := caller.ProjectSet(ctx, int(id))
 		if err != nil {
-			return rolepolicy.Unresolved("your own permissions could not be read, so the role change was refused")
+			return adminaccess.Unresolved("your own permissions could not be read, so the role change was refused")
 		}
-		if missing := rolepolicy.Missing(held, required); len(missing) > 0 {
-			return rolepolicy.SelfEscalation(rolepolicy.ProjectGain{ProjectID: id, Permissions: missing})
+		if missing := adminaccess.Missing(held, required); len(missing) > 0 {
+			return adminaccess.SelfEscalation(adminaccess.ProjectGain{ProjectID: id, Permissions: missing})
 		}
 	}
 	return nil
