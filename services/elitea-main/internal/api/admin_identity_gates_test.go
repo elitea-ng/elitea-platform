@@ -150,14 +150,12 @@ func identityAnswer(t *testing.T, router http.Handler, route identityGateRoute) 
 }
 
 // identityLegacyClosed are the rows of the golden file whose answer changes
-// on purpose, with the answer they have now. A holder of runtime.plugins
-// deleting an identity provider is refused in the handler: before R0.4c the
-// route gate was the only check (the R0.1c action table noted it). Every
-// other trust action was already refused to these holders by the issue 2558
-// fix, so its row is unchanged.
-var identityLegacyClosed = map[string]string{
-	adminaccess.RuntimePlugins + "\tDELETE\t/api/v2/admin/identity_providers/administration/fixture": "403 identity_provider_trust_super_admin_required",
-}
+// on purpose, with the answer they have now. It is empty: without a database
+// every trust action a legacy holder can reach answers as it did on main.
+// The one trust action R0.4c closes (a runtime.plugins holder deleting a
+// provider) reads the stored row first, which answers 503 here as it did on
+// main; identity_split_test.go proves the refusal behind it.
+var identityLegacyClosed = map[string]string{}
 
 // TestIdentityRoutesAnswerTheLegacyHoldersAsBefore holds every route's answer
 // to a holder of each legacy name alone to the golden file, captured on main
@@ -216,9 +214,11 @@ func TestIdentityRoutesAdmitTheirNamesOnly(t *testing.T) {
 				}
 			case route.trust && !trusted:
 				// Without a database the SCIM client store is not composed,
-				// so those handlers answer 503 before their trust check;
+				// and the provider delete cannot read the stored row, so those
+				// handlers answer 503 before their trust check;
 				// identity_split_test.go proves the refusal behind it.
-				unwired := got == "503" && strings.Contains(route.path, "/scim_clients/")
+				unwired := got == "503" && (strings.Contains(route.path, "/scim_clients/") ||
+					route.method == http.MethodDelete && strings.Contains(route.path, "/identity_providers/"))
 				if !unwired && !slices.Contains(identityTrustCodes, strings.TrimPrefix(got, "403 ")) {
 					t.Errorf("holder %q: %s %s = %s, want the handler's trust refusal", holder, route.method, route.path, got)
 				}

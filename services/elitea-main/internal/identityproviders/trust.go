@@ -177,7 +177,10 @@ func unclassifiedChanges[T any](before, after T, classes map[string]FieldClass) 
 		if _, classified := classes[name]; classified {
 			continue
 		}
-		if !reflect.DeepEqual(beforeValue.Field(i).Interface(), afterValue.Field(i).Interface()) {
+		// An unexported field cannot be read through Interface (it panics),
+		// so it is reported as changed on every save: fail closed, not a 500.
+		if !beforeValue.Type().Field(i).IsExported() ||
+			!reflect.DeepEqual(beforeValue.Field(i).Interface(), afterValue.Field(i).Interface()) {
 			changed = append(changed, name)
 		}
 	}

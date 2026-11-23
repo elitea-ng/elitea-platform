@@ -62,6 +62,17 @@ func TestAnUnclassifiedFieldIsATrustChange(t *testing.T) {
 	if !slices.Equal(got, []string{"unlisted"}) {
 		t.Errorf("an unlisted field change reported %q, want [unlisted]", got)
 	}
+
+	// An unexported field cannot be compared through reflection: it is a
+	// trust change on every save, and never a panic.
+	type withHidden struct {
+		Listed string `json:"listed"`
+		hidden string
+	}
+	hidden := unclassifiedChanges(withHidden{hidden: "a"}, withHidden{hidden: "a"}, classes)
+	if !slices.Equal(hidden, []string{"hidden"}) {
+		t.Errorf("an unexported unlisted field reported %q, want [hidden]", hidden)
+	}
 }
 
 // storedOIDC and storedSAML are full stored providers, every field set, so a

@@ -132,6 +132,12 @@ func actionRows() []Action {
 		// changes (R0.4c): a trust change and turning a provider off need
 		// identity.sso.trust.manage or super_admin in the handler (issue 2558),
 		// as do the delete and the re-bind; the rest is settings.
+		//
+		// The trust entries here and above name identity.sso.trust.manage.
+		// The route gate also admits the settings name and the legacy name, so
+		// that the handler (requireIdentityTrust) writes the refusal; the
+		// handler accepts identity.sso.trust.manage or
+		// admin.auth.users.super_admin, which only super_admin holds.
 		put(admin("/identity_providers/administration/{key}"), IdentitySSOTrustManage).
 			outcome(ClassifyIdentityProvider, OutcomeTrust).critical(sealed),
 		put(admin("/identity_providers/administration/{key}"), IdentitySSOTrustManage).

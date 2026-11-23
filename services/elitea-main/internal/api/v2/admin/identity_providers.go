@@ -436,6 +436,19 @@ func (h *Handler) IdentityProviderDelete(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid provider key"})
 		return
 	}
+	// A key that names no provider answers 404 to everyone, before the trust
+	// gate, so a mistyped key leaves no refusal on the Audit Trail about a
+	// provider that never existed. The list already tells any reader which
+	// keys exist, so the 404 discloses nothing new.
+	switch _, err := h.identityProviders.Lookup(r.Context(), key); {
+	case errors.Is(err, identityproviders.ErrNotFound):
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "no such identity provider"})
+		return
+	case err != nil:
+		writeJSON(w, http.StatusServiceUnavailable,
+			map[string]any{"error": "the identity provider definitions could not be read"})
+		return
+	}
 	// Deleting a provider decides which identity provider is believed, as
 	// creating one does: a trust action (ADR-0059 R0.4c). Before R0.4c the
 	// route gate (runtime.plugins) was the only check.

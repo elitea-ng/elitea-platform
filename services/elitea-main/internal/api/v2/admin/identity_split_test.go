@@ -29,8 +29,8 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/admin"
 	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/admin"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/identityproviders"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
@@ -66,7 +66,9 @@ func (s splitResolver) ResolvePermissions(context.Context, auth.User, string, st
 
 /* ── fakes ─────────────────────────────────────────────────────────────── */
 
-type splitProviderStore struct{ rows map[string]identityproviders.Provider }
+type splitProviderStore struct {
+	rows map[string]identityproviders.Provider
+}
 
 func (s *splitProviderStore) List(context.Context) ([]identityproviders.Provider, error) {
 	out := []identityproviders.Provider{}
@@ -407,6 +409,11 @@ func TestTheSettingsHalfCannotDeleteRebindRotateOrToggle(t *testing.T) {
 	}
 	if !env.providers.rows["corporate"].Enabled {
 		t.Error("a refused disable reached the store")
+	}
+	// A key that names no provider is 404 before the trust gate, so a typo
+	// leaves no refusal about a provider that never existed.
+	if missing := splitDo(router, http.MethodDelete, "/identity_providers/administration/typo", ""); missing.Code != http.StatusNotFound {
+		t.Errorf("delete of a missing key = %d %s, want 404", missing.Code, missing.Body)
 	}
 	if revoked := splitDo(router, http.MethodPost, "/scim_clients/administration/1/revoke", ""); revoked.Code != http.StatusOK {
 		t.Errorf("SCIM client revoke = %d %s, want 200", revoked.Code, revoked.Body)
