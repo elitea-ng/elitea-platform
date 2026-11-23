@@ -90,10 +90,45 @@ test("drift warns when main's entries leave the plan or the budget, and names th
   const near = drift({ caches: [{ key: "a", ref: "refs/heads/main", size_in_bytes: 3.5 * G }, { key: "pr", ref: "refs/pull/1/merge", size_in_bytes: 5 * G }], entries });
   assert.deepEqual(near.warnings, []);
   assert.equal(near.largest[0], "3.50 a");
+  assert.equal(near.overrun, null);
   const far = drift({ caches: [{ key: "a", ref: "refs/heads/main", size_in_bytes: 9 * G }], entries });
-  assert.equal(far.warnings.length, 2);
-  assert.match(far.warnings.join("\n"), /over the 8 GiB budget/);
+  assert.equal(far.warnings.length, 1);
   assert.match(far.warnings.join("\n"), /update its measured sizes/);
+  assert.match(far.overrun, /over the 8 GiB budget/);
+});
+
+test("drift: a plan that matches but a cache over budget is an overrun, and the report sums by key family", () => {
+  const G = 1024 ** 3;
+  const caches = [
+    { key: "v0-rust-worker-rust-test-Linux-x64-a5cc1cd7-62527f11", ref: "refs/heads/main", size_in_bytes: 4.2 * G },
+    { key: "buildkit-blob-1-sha256:aa", ref: "refs/heads/main", size_in_bytes: 2.2 * G },
+    { key: "buildkit-blob-1-sha256:bb", ref: "refs/heads/main", size_in_bytes: 2 * G },
+  ];
+  const r = drift({ caches, entries: [{ what: "x", gib: 8.2 }] });
+  assert.deepEqual(r.warnings, []);
+  assert.match(r.overrun, /8\.40 GiB, over the 8 GiB budget/);
+  assert.equal(r.families[0], "4.200 v0-rust-worker-rust-test-Linux-x64 (1)");
+  assert.equal(r.families.length, 3);
+});
+
+const gitDb = (step) => ({ on: SCHEDULED, jobs: { s: { steps: [step] } } });
+const SAVE_IF = "${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}";
+const KEY = "cargo-git-db-v1-${{ runner.os }}-${{ hashFiles('x') }}";
+
+test("a workflow's own actions/cache save is an entry of the plan, and an unsized one is an error", () => {
+  const save = { uses: "actions/cache/save@v6", if: SAVE_IF, with: { path: "~/.cargo/git/db", key: KEY } };
+  const sized = { ...budget(1.5), projected: { "actions/cache cargo-git-db-v1-": 0.01 } };
+  const r = check({ budget: sized, workflows: many({ "s.yml": gitDb(save) }) });
+  assert.deepEqual(r.errors, []);
+  assert.ok(r.entries.some((e) => e.what === "actions/cache cargo-git-db-v1-" && e.gib === 0.01));
+  assert.match(errorsOf(many({ "s.yml": gitDb(save) })), /actions\/cache cargo-git-db-v1-: no size/);
+});
+
+test("an actions/cache restore with no scheduled writer of its family is an error; an all-expression key is the cache action's", () => {
+  const restore = { uses: "actions/cache/restore@v6", with: { path: "~/.cargo/git/db", key: KEY } };
+  assert.match(errorsOf(many({ "r.yml": gitDb(restore) })), /restores cargo-git-db-v1-…, which no saving step/);
+  const goSave = { uses: "actions/cache/save@v6", if: SAVE_IF, with: { path: "~/go/pkg/mod", key: "${{ steps.gocache.outputs.key }}" } };
+  assert.equal(errorsOf(many({ "g.yml": gitDb(goSave) })), "");
 });
 
 test("the repository passes", () => {

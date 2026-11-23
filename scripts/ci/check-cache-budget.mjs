@@ -34,12 +34,26 @@
 //    restores: on 2026-11-20 a small job saved main's Go key at 0.39 GiB before
 //    ci-go's 1.3 GiB build ran. Every go-cache reader has that one writer.
 // 6. NO REGISTRY-ONLY RUST CACHE. A target directory or nothing.
+// 7. A WORKFLOW'S OWN actions/cache IS COUNTED TOO (2026-11-23: cargo's git
+//    database, ci-rust-shared.yml). Every actions/cache or actions/cache/save
+//    step of a workflow that saves on main is an entry of its key family (the
+//    literal start of `key:`), sized from cache-budget.json, and a family no
+//    size covers is an error, not a zero. A key that is all expression
+//    (ci-go.yml's save of the go-cache key) is the cache action's entry,
+//    counted there. Every actions/cache/restore of a workflow reads a family
+//    some saving step of a scheduled workflow writes.
+// 8. THE PLAN IS THE CACHE. The janitor (ci-image-cleanup.yml) compares main's
+//    entries with this plan every night, after its prune: a drift of more than
+//    1 GiB warns (update the measured sizes), and main's entries over
+//    BUDGET_GIB FAIL the job. That is an overrun, not a state: on 2026-11-23
+//    main held 8.33 GiB against a plan of 7.71, and nothing had said so.
 
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadYaml, isEntrypoint } from "./ci-compat.mjs";
+import { familyOf } from "./prune-actions-caches.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 // 8, not the janitor's 9: one gibibyte of room for what the plan cannot see (a
@@ -139,18 +153,54 @@ export function goCacheSteps(workflows) {
 }
 
 /** The planned cache entries, DERIVED from the workflows: every rust-cache, go-cache and npm-cache step that saves on main. */
+/**
+ * Every actions/cache, actions/cache/save and actions/cache/restore step of a
+ * workflow whose key starts with a literal: {workflow, job, family, saves,
+ * restores, hasSchedule}. The family is that literal start (what a
+ * restore-keys prefix matches on).
+ */
+export function actionsCacheSteps(workflows) {
+  const out = [];
+  for (const [file, doc] of Object.entries(workflows)) {
+    const hasSchedule = triggerNames(onOf(doc) ?? {}).includes("schedule");
+    for (const [job, def] of Object.entries(doc.jobs ?? {})) {
+      for (const step of def.steps ?? []) {
+        const uses = String(step.uses ?? "");
+        const m = /^actions\/cache(\/save|\/restore)?@/.exec(uses);
+        if (!m) continue;
+        const family = String(step.with?.key ?? "").split("${{")[0].trim();
+        if (!family) continue; // all expression: the cache action whose output it is counts it
+        const iff = String(step.if ?? "");
+        const saves = m[1] !== "/restore" && iff.includes("refs/heads/main");
+        out.push({ workflow: file, job, family, saves, restores: m[1] !== "/save", hasSchedule });
+      }
+    }
+  }
+  return out;
+}
+
+/** The planned size of one entry: projected (changed, not measured yet), then measured, then the estimate. */
+const sizeOf = (budget, key, estimate) => budget.projected?.[key] ?? budget.measured?.[key] ?? estimate;
+
 export function plannedEntries(workflows, budget) {
   const est = budget.estimates;
   const entries = [];
   for (const s of rustCacheSteps(workflows)) {
-    const each = budget.measured?.[`${s.workflow}:${s.job}`] ?? (s.targets ? est.rustWithTargets : est.rustRegistryOnly);
+    const each = sizeOf(budget, `${s.workflow}:${s.job}`, s.targets ? est.rustWithTargets : est.rustRegistryOnly);
     entries.push({ what: `${s.workflow}:${s.job} (rust-cache x${s.legs})`, gib: each * s.legs });
   }
   const goKeys = new Set();
   for (const s of goCacheSteps(workflows)) {
     if (!s.writer || goKeys.has(s.key)) continue;
     goKeys.add(s.key);
-    entries.push({ what: s.key, gib: budget.measured?.[s.key] ?? est.go });
+    entries.push({ what: s.key, gib: sizeOf(budget, s.key, est.go) });
+  }
+  const families = new Set();
+  for (const s of actionsCacheSteps(workflows)) {
+    if (!s.saves || families.has(s.family)) continue;
+    families.add(s.family);
+    // Undefined when unsized: check() names it rather than counting it as nothing.
+    entries.push({ what: `actions/cache ${s.family}`, gib: sizeOf(budget, `actions/cache ${s.family}`, undefined) });
   }
   const npmPaths = new Set();
   for (const doc of Object.values(workflows)) {
@@ -159,7 +209,7 @@ export function plannedEntries(workflows, budget) {
         const uses = String(step.uses ?? "");
         if (!(uses.endsWith("/npm-cache") || uses.includes("actions/npm-cache"))) continue;
         const key = String(step.with?.["cache-dependency-path"] ?? "");
-        if (!npmPaths.has(key)) { npmPaths.add(key); entries.push({ what: `npm-cache ${key}`, gib: budget.measured?.[`npm-cache ${key}`] ?? est.npm }); }
+        if (!npmPaths.has(key)) { npmPaths.add(key); entries.push({ what: `npm-cache ${key}`, gib: sizeOf(budget, `npm-cache ${key}`, est.npm) }); }
       }
     }
   }
@@ -170,8 +220,18 @@ export function plannedEntries(workflows, budget) {
 export function check({ budget, workflows }) {
   const errors = [];
   const entries = plannedEntries(workflows, budget);
+  for (const e of entries.filter((x) => typeof x.gib !== "number" || Number.isNaN(x.gib))) {
+    errors.push(`${e.what}: no size in scripts/ci/cache-budget.json (add it under "projected" until a nightly measures it, then under "measured")`);
+    e.gib = 0;
+  }
   const total = entries.reduce((s, e) => s + e.gib, 0);
   if (entries.length < 8) errors.push(`only ${entries.length} planned cache entries derived: the reader stopped finding steps`);
+  const ac = actionsCacheSteps(workflows);
+  const scheduledFamilies = new Set(ac.filter((s) => s.saves && s.hasSchedule).map((s) => s.family));
+  for (const s of ac) {
+    if (s.saves && !s.hasSchedule) errors.push(`${s.workflow} (${s.job}): an actions/cache step saves ${s.family}… on main in a workflow with no schedule, so nothing ever writes it`);
+    if (s.restores && !s.saves && !scheduledFamilies.has(s.family)) errors.push(`${s.workflow} (${s.job}): restores ${s.family}…, which no saving step of a scheduled workflow writes, so it never restores`);
+  }
   if (total > BUDGET_GIB) {
     const top = [...entries].sort((a, b) => b.gib - a.gib).slice(0, 5).map((e) => `${e.what} ${e.gib.toFixed(1)}`).join("; ");
     errors.push(`the planned cache entries sum to ${total.toFixed(2)} GiB, over the ${BUDGET_GIB} GiB budget (largest: ${top})`);
@@ -208,7 +268,10 @@ export function check({ budget, workflows }) {
 
 /**
  * Drift between the plan and the cache as it is (the nightly janitor runs this
- * after its prune, with `gh api actions/caches`): warnings, never a failure.
+ * after its prune, with `gh api actions/caches`). A plan that drifts more than
+ * the tolerance from the cache is a warning (the measured sizes need
+ * updating); main's entries over the budget are an `overrun`, which fails
+ * the janitor: the one real failure here.
  * @param {{key:string, ref:string, size_in_bytes:number}[]} caches
  */
 export function drift({ caches, entries, budgetGib = BUDGET_GIB, toleranceGib = 1 }) {
@@ -217,10 +280,17 @@ export function drift({ caches, entries, budgetGib = BUDGET_GIB, toleranceGib = 
   const actual = gibOf(main.reduce((s, c) => s + c.size_in_bytes, 0));
   const planned = entries.reduce((s, e) => s + e.gib, 0);
   const warnings = [];
-  if (actual > budgetGib) warnings.push(`main's cache entries hold ${actual.toFixed(2)} GiB, over the ${budgetGib} GiB budget (planned ${planned.toFixed(2)})`);
+  const overrun = actual > budgetGib ? `main's cache entries hold ${actual.toFixed(2)} GiB, over the ${budgetGib} GiB budget (planned ${planned.toFixed(2)}): cut an entry (docs/contributing/ci.md, "The cache plan")` : null;
   if (Math.abs(actual - planned) > toleranceGib) warnings.push(`main's cache entries hold ${actual.toFixed(2)} GiB but scripts/ci/cache-budget.json plans ${planned.toFixed(2)}: update its measured sizes`);
   const largest = [...main].sort((a, b) => b.size_in_bytes - a.size_in_bytes).slice(0, 12).map((c) => `${gibOf(c.size_in_bytes).toFixed(2)} ${c.key}`);
-  return { actual, planned, warnings, largest };
+  const byFamily = new Map();
+  for (const c of main) {
+    const f = familyOf(c.key);
+    const [n, b] = byFamily.get(f) ?? [0, 0];
+    byFamily.set(f, [n + 1, b + c.size_in_bytes]);
+  }
+  const families = [...byFamily].sort((a, b) => b[1][1] - a[1][1]).map(([f, [n, b]]) => `${gibOf(b).toFixed(3)} ${f} (${n})`);
+  return { actual, planned, warnings, overrun, largest, families };
 }
 
 function loadWorkflows(root) {
@@ -237,7 +307,9 @@ export async function reportDrift({ github, owner, repo, root = ROOT, log = cons
   const { workflows, budget } = loadWorkflows(root);
   const { entries } = check({ budget, workflows });
   const r = drift({ caches, entries });
-  log(`cache plan ${r.planned.toFixed(2)} GiB, main holds ${r.actual.toFixed(2)} GiB; largest entries:`);
+  log(`cache plan ${r.planned.toFixed(2)} GiB, main holds ${r.actual.toFixed(2)} GiB; by key family (GiB, entries):`);
+  for (const l of r.families) log(`  ${l}`);
+  log("largest entries:");
   for (const l of r.largest) log(`  ${l}`);
   for (const w of r.warnings) warn(w);
   return r;

@@ -55,8 +55,13 @@ runs:
         # process.arch (x64, arm64), which is what setup-node put in the key;
         # runner.arch spells it X64.
         echo "arch=$(node -p process.arch)" >> "$GITHUB_OUTPUT"
+    # Linux only (2026-11-23): main held the web lockfile's entry twice, 0.20
+    # GiB for Linux and 0.19 for macOS (the desktop host and package jobs),
+    # with the cache over its 8 GiB budget. The macOS jobs fetch from the
+    # registry with the retries set above, as Windows already did.
     - name: Restore the npm cache (save on a run on main)
       id: cache
+      if: runner.os == 'Linux'
       uses: ./.github/actions/main-write-cache
       with:
         slot: npm

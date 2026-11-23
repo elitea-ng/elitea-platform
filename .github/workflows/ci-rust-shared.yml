@@ -1,9 +1,8 @@
 name: CI — Rust shared crates
 
-# The libs/rust workspace's own gate: fmt, Clippy, rustdoc and the tests of
-# every member (the engine cores, the agent runtime, llm-wire, the vendored
-# adk crates), plus the agent runtime's two serde_json orders and its two
-# production feature sets with the panic guard on.
+# The libs/rust workspace's own gate: the tests of every member (the engine
+# cores, the agent runtime, llm-wire, the vendored adk crates), plus the agent
+# runtime as the worker links it (serde_json order off, the SQL family on).
 #
 # Moved out of ci-deepwiki-engine.yml's `engine` job (2026-10-20), with the
 # same commands and flags. There it ran on every DeepWiki-only change, took
@@ -11,14 +10,33 @@ name: CI — Rust shared crates
 # hit its 45-min timeout before the Go host tests ran (job 118778015092).
 # Here it runs when the workspace, or something its tests read, changes —
 # and in parallel with the engine jobs when both are touched.
+#
+# FOUR LEGS, split along the dependency graph (2026-11-23). One job ran it all
+# in sequence and was the critical path of a Rust pull request: 36 min in run
+# 45075137150 (job 137376497651) on a 4-CPU pool pod with no cache. Of that,
+# 4m10s was cargo cloning two tree-sitter grammars' full git history (240 MB,
+# below), 14 min compiling 941 crates, 7 min running the tests (office-core's
+# hostile, gate, review and corpus suites alone 4 min) and 10 min building the
+# agent runtime twice more for its two feature-set runs. Each leg below builds
+# only its own part of the graph, on its own pod:
+#   agent hosts      the agent runtime with every feature and the crates
+#                    built on it (local tools, workspace runner, local index);
+#   agent runtime    the runtime as the worker links it;
+#   engines          every other member;
+#   office core      its own slow suites, beside a 224-crate closure.
+# The runtime's second feature-set run (`test-preserve-order` plus the
+# toolkits) is gone: `--all-features` in `agent hosts` is that set plus
+# `test-support` and `toolkit-data-analysis`, and every `test-support` gate in
+# the runtime reads `any(test, feature = "test-support")`, on in a test build
+# anyway. So it compiled the runtime a third time to run the same tests.
 
 on:
   # Called by ci.yml, which owns the PR tiers and the path filter
   # (scripts/ci/tier-paths.json); no `pull_request` arm of its own.
   workflow_call:
   # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
-  # The nightly run on main tests main. The caches it may write follow
-  # scripts/ci/check-cache-budget.mjs (one writer per key); staggered ahead
+  # The nightly run on main tests main and writes the one cache below
+  # (scripts/ci/check-cache-budget.mjs: one writer per key); staggered ahead
   # of publish.yml's 02:07 nightly pre-release.
   schedule:
     - cron: "23 0 * * *"
@@ -37,21 +55,48 @@ env:
 
 jobs:
   shared-crates:
-    name: Shared crates — tests
+    name: Shared crates — ${{ matrix.name }}
     runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
-    # 22 min measured cold for the first step alone (no cache under this
-    # key yet); the agent-runtime steps reuse its build.
-    timeout-minutes: 45
+    # 36 min for all four in one job, cold; each leg builds a part of that.
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: agent hosts
+            args: >-
+              -p elitea-agent-runtime -p elitea-local-tools -p elitea-workspace-runner -p elitea-local-index
+              --all-targets --all-features
+          # Built alone with `toolkit-sql`, the runtime has serde_json
+          # `preserve_order` off and links sqlx, which is how the worker links
+          # it (the desktop build drops `toolkit-sql`). Its digest tests pin
+          # the same values both ways (ADR-0029 decision 2); `agent hosts`
+          # runs them with the order on.
+          - name: agent runtime (worker features)
+            args: -p elitea-agent-runtime --all-targets --features toolkit-sql,toolkit-office,toolkit-delta-lake
+          - name: engines
+            args: >-
+              --workspace --exclude elitea-agent-runtime --exclude elitea-local-tools
+              --exclude elitea-workspace-runner --exclude elitea-local-index --exclude elitea-office-core
+              --all-targets --all-features
+            # The one writer of the cargo git cache below.
+            git-db-writer: "true"
+          - name: office core
+            args: -p elitea-office-core --all-targets --all-features
+    defaults:
+      run:
+        working-directory: libs/rust
     steps:
       - uses: actions/checkout@v7
       # eng-runner: caches and TMPDIR on the work volume, and rustup (none in
       # its image). Does nothing on a hosted runner.
+      # node for the writer leg's trim script (none in the pool's image).
       - uses: ./.github/actions/eng-runner-env
         with:
           rust: "true"
+          node: "true"
 
       - name: Assert the pinned toolchain
-        working-directory: libs/rust
         run: bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
 
       - name: Free runner disk for the all-features build
@@ -62,6 +107,7 @@ jobs:
         # PR #1561: a dependency refresh rebuilds most of the graph beside
         # the cached copy). Bounded and NON-FATAL, as in ci-rust.yml: a
         # refused rm only warns, and the build then fails honestly on ENOSPC.
+        working-directory: .
         run: |
           df -h / | tail -1
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
@@ -69,26 +115,48 @@ jobs:
             || echo "::warning::could not remove every preinstalled toolchain; continuing"
           df -h / | tail -1
 
-      # No cargo cache here (scripts/ci/cache-budget.json, measured 2026-11-20): a
-      # registry-only entry is 0.3-0.6 GiB of the 10 GB cap and saves about the
-      # time cargo takes to fetch the crates. The budget goes to target caches.
+      # No target cache here: the cache budget has no room for one
+      # (scripts/ci/cache-budget.json). What it does hold is cargo's git
+      # database. code-parsers pins two tree-sitter grammars by git rev, and
+      # cargo clones each repository's whole history to read one commit: 240 MB,
+      # 4m10s of every cold libs/rust job (job 137376497651). Trimmed to the
+      # pinned commits (scripts/ci/trim-cargo-cache.mjs) it is a few MB, and
+      # cargo then finds the rev in it and fetches nothing. The key is the
+      # manifest that pins the revs; a prefix restore still holds every commit
+      # that did not move. The path is literal and `~/`, as every reader spells
+      # it (scripts/ci/check-cache-path-parity.mjs); on eng-runner ~/.cargo is
+      # the link eng-runner-env makes to CARGO_HOME.
+      - name: Restore cargo's git database
+        id: gitdb
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/.cargo/git/db
+          key: cargo-git-db-v1-${{ runner.os }}-${{ hashFiles('libs/rust/code-parsers/Cargo.toml') }}
+          restore-keys: cargo-git-db-v1-${{ runner.os }}-
 
-      # Formatting, Clippy and rustdoc (the workspace, and the two production
-      # feature sets of the agent runtime) run in ci-rust-lint.yml, in the fast tier.
-      - name: Shared crates — tests
-        working-directory: libs/rust
-        run: cargo test --locked --workspace --all-targets --all-features
-
-      # The workspace run above links serde_json `preserve_order` (other
-      # members enable it), which is how a desktop binary would link the
-      # agent runtime. Built alone with `toolkit-sql`, the runtime has it off
-      # and links sqlx, which is how the worker links it (the desktop build
-      # drops `toolkit-sql`). Its digest tests pin the same values both ways
-      # (ADR-0029 decision 2); the explicit feature run asserts the feature
-      # really reaches serde_json, with `toolkit-sql` so the SQL family's
-      # encodings are covered too.
-      - name: Agent runtime — digests with and without preserve_order
-        working-directory: libs/rust
+      - name: Fetch the crates and the git dependencies
         run: |
-          cargo test --locked -p elitea-agent-runtime --all-targets --features toolkit-sql,toolkit-office,toolkit-delta-lake
-          cargo test --locked -p elitea-agent-runtime --all-targets --features test-preserve-order,toolkit-sql,toolkit-office,toolkit-delta-lake
+          start=$(date +%s)
+          cargo fetch --locked
+          echo "cargo fetch: $(( $(date +%s) - start ))s (git database restored: ${{ steps.gitdb.outputs.cache-matched-key || 'no' }})"
+
+      - name: Tests
+        env:
+          ARGS: ${{ matrix.args }}
+        run: |
+          # Unquoted on purpose: the leg's package and feature flags.
+          # shellcheck disable=SC2086
+          cargo test --locked ${ARGS}
+
+      # Main only, after the tests whatever they did: the git database is as
+      # good after a red test as after a green one.
+      - name: Trim cargo's git database to the pinned commits
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && matrix.git-db-writer == 'true' && steps.gitdb.outputs.cache-hit != 'true' }}
+        working-directory: .
+        run: node scripts/ci/trim-cargo-cache.mjs --lock libs/rust/Cargo.lock
+      - name: Save cargo's git database
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && matrix.git-db-writer == 'true' && steps.gitdb.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.cargo/git/db
+          key: cargo-git-db-v1-${{ runner.os }}-${{ hashFiles('libs/rust/code-parsers/Cargo.toml') }}
