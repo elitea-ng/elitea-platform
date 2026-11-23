@@ -966,7 +966,9 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 574 -> 577 (issue 2268, epic 2254 story S1c): the Microsoft sign-in start, callback and
 // redeem. The shared web feature that calls them is story S1d, so none is in the manifest yet and
 // MANIFEST_ENTRY_COUNT is unchanged.
-const GENERATED_OPERATION_COUNT = 577;
+// 577 -> 582 (5d-1 HTTP actions): listHttpActionRules, createHttpActionRule, getHttpActionRule,
+// updateHttpActionRule, listHttpActionRuleNames.
+const GENERATED_OPERATION_COUNT = 582;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1303,8 +1305,10 @@ const GENERATED_OPERATION_COUNT = 577;
  *
  * 389 -> 393 (issue 1631, ADR-0051 M5): marketplace.getFeedback, saveReview, saveWorkforceReport and
  * actOnFeedback, the Feedback section of a listing. All generated.
+ *
+ * 393 -> 398 (5d-1 HTTP actions): the five HTTP action rule operations for Settings › HTTP Actions.
  */
-const MANIFEST_ENTRY_COUNT = 393;
+const MANIFEST_ENTRY_COUNT = 398;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

@@ -143,7 +143,7 @@ func httpConfigurationAccess(ctx context.Context, tx sqlExecutor, projectID, act
 		return httpConfiguration{}, app.ErrUnavailable
 	}
 	privateAllowed := author != nil && *author == actorID && ruleUpdatedBy > 0 && *author == ruleUpdatedBy
-	if kind != "openapi" || !(shared || author == nil || privateAllowed) || len(data) > maxHTTPConfigurationData {
+	if kind != "openapi" || (!shared && author != nil && !privateAllowed) || len(data) > maxHTTPConfigurationData {
 		return httpConfiguration{}, httpPolicyDenied(nil)
 	}
 	h := sha256.New()

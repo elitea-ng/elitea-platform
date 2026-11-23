@@ -20,13 +20,15 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/httpaction"
 )
 
+const testHTTPActionRuleConfigID = int32(701)
+
 func newHTTPActionRulesTestRepo(t *testing.T) (*HTTPActionRulesRepo, *pgxpool.Pool) {
 	t.Helper()
 	pool := newMigratedPostgresIntegrationPool(t)
 	if _, err := pool.Exec(httpActionRuleContext(t), `
 INSERT INTO p_1.configuration (id,uuid,project_id,elitea_title,type,section,data,meta,shared,status_ok,source,author_id,created_at)
-VALUES (1,'60000000-0000-4000-8000-000000000001',1,'shared_openapi','openapi','credentials','{}'::jsonb,'{}'::jsonb,true,true,'user',7,now() AT TIME ZONE 'UTC')
-ON CONFLICT (id) DO NOTHING`); err != nil {
+VALUES ($1,'60000000-0000-4000-8000-000000000701',1,'shared_openapi','openapi','credentials','{}'::jsonb,'{}'::jsonb,true,true,'user',7,now() AT TIME ZONE 'UTC')`,
+		testHTTPActionRuleConfigID); err != nil {
 		t.Fatal(err)
 	}
 	repo, err := NewHTTPActionRulesRepo(pool)
@@ -39,7 +41,7 @@ ON CONFLICT (id) DO NOTHING`); err != nil {
 func testHTTPActionRule(name string) httpaction.Rule {
 	return httpaction.Rule{
 		Name: name, Origin: "https://api.example.com", PathTemplate: "/v1/items/{id}", Method: "GET",
-		QueryNames: []string{"page"}, ConfigurationID: 1, Toolkit: "openapi", Tool: "get_item", Enabled: true,
+		QueryNames: []string{"page"}, ConfigurationID: testHTTPActionRuleConfigID, Toolkit: "openapi", Tool: "get_item", Enabled: true,
 	}
 }
 
@@ -228,7 +230,7 @@ func TestHTTPActionRulesRepoPostgres_ConflictsAndScoping(t *testing.T) {
 	if _, err := repo.Get(ctx, 2, created.ID); !errors.Is(err, ErrHTTPActionRuleNotFound) {
 		t.Fatalf("cross-project get = %v, want not found", err)
 	}
-	if _, err := repo.Update(ctx, 2, created.ID, 7, testHTTPActionRule("same.name"), 2); !errors.Is(err, ErrHTTPActionRuleNotFound) {
+	if _, err := repo.Update(ctx, 2, created.ID, 7, p2Rule, 2); !errors.Is(err, ErrHTTPActionRuleNotFound) {
 		t.Fatalf("cross-project update = %v, want not found", err)
 	}
 	if _, err := repo.Get(ctx, 1, created.ID+1000); !errors.Is(err, ErrHTTPActionRuleNotFound) {
@@ -286,31 +288,35 @@ func TestHTTPActionRulesRepoPostgres_ConfigurationAccessCheckedAtWrite(t *testin
 	ctx := httpActionRuleContext(t)
 	if _, err := pool.Exec(ctx, `
 INSERT INTO p_1.configuration (id,uuid,project_id,elitea_title,type,section,data,meta,shared,status_ok,source,author_id,created_at) VALUES
- (10,'60000000-0000-4000-8000-000000000010',1,'own_private','openapi','credentials','{}'::jsonb,'{}'::jsonb,false,true,'user',7,now() AT TIME ZONE 'UTC'),
- (11,'60000000-0000-4000-8000-000000000011',1,'other_private','openapi','credentials','{}'::jsonb,'{}'::jsonb,false,true,'user',99,now() AT TIME ZONE 'UTC'),
- (12,'60000000-0000-4000-8000-000000000012',1,'wrong_type','github','credentials','{}'::jsonb,'{}'::jsonb,true,true,'user',7,now() AT TIME ZONE 'UTC')`); err != nil {
+ (710,'60000000-0000-4000-8000-000000000710',1,'own_private','openapi','credentials','{}'::jsonb,'{}'::jsonb,false,true,'user',7,now() AT TIME ZONE 'UTC'),
+ (711,'60000000-0000-4000-8000-000000000711',1,'other_private','openapi','credentials','{}'::jsonb,'{}'::jsonb,false,true,'user',99,now() AT TIME ZONE 'UTC'),
+ (712,'60000000-0000-4000-8000-000000000712',1,'wrong_type','github','credentials','{}'::jsonb,'{}'::jsonb,true,true,'user',7,now() AT TIME ZONE 'UTC')`); err != nil {
 		t.Fatal(err)
 	}
 	// Own private openapi config is accepted.
 	own := testHTTPActionRule("own.private")
-	own.ConfigurationID = 10
+	own.ConfigurationID = 710
 	if _, err := repo.Create(ctx, 1, 7, own); err != nil {
 		t.Fatalf("own private openapi config refused: %v", err)
 	}
-	for name, cfgID := range map[string]int32{
-		"other user private": 11,
-		"non-openapi type":   12,
-		"missing config":     999,
+	for _, tc := range []struct {
+		label    string
+		ruleName string
+		cfgID    int32
+	}{
+		{label: "other user private", ruleName: "bad.other", cfgID: 711},
+		{label: "non-openapi type", ruleName: "bad.type", cfgID: 712},
+		{label: "missing config", ruleName: "bad.missing", cfgID: 999},
 	} {
-		rule := testHTTPActionRule("bad." + name[:4])
-		rule.ConfigurationID = cfgID
+		rule := testHTTPActionRule(tc.ruleName)
+		rule.ConfigurationID = tc.cfgID
 		if _, err := repo.Create(ctx, 1, 7, rule); !errors.Is(err, ErrHTTPActionRuleConfigurationInvalid) {
-			t.Errorf("%s: err = %v, want ErrHTTPActionRuleConfigurationInvalid", name, err)
+			t.Errorf("%s: err = %v, want ErrHTTPActionRuleConfigurationInvalid", tc.label, err)
 		}
 	}
-	// Foreign project config (config 1 exists in p_1, not p_2).
+	// Foreign project config (testHTTPActionRuleConfigID exists in p_1, not p_2).
 	foreign := testHTTPActionRule("foreign.cfg")
-	foreign.ConfigurationID = 1
+	foreign.ConfigurationID = testHTTPActionRuleConfigID
 	if _, err := repo.Create(ctx, 2, 7, foreign); !errors.Is(err, ErrHTTPActionRuleConfigurationInvalid) {
 		t.Fatalf("foreign project config err = %v, want ErrHTTPActionRuleConfigurationInvalid", err)
 	}

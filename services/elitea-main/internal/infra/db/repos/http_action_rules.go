@@ -85,8 +85,8 @@ func scanHTTPActionRule(row sqlRow) (HTTPActionRuleRecord, error) {
 	if err != nil {
 		return HTTPActionRuleRecord{}, err
 	}
-	if err := record.Rule.Validate(); err != nil {
-		return HTTPActionRuleRecord{}, fmt.Errorf("%w: rule %d: %v", ErrHTTPActionRuleStoredInvalid, record.Rule.ID, err)
+	if err := record.Validate(); err != nil {
+		return HTTPActionRuleRecord{}, fmt.Errorf("%w: rule %d: %v", ErrHTTPActionRuleStoredInvalid, record.ID, err)
 	}
 	return record, nil
 }
@@ -123,7 +123,7 @@ WHERE project_id = $1 ORDER BY name LIMIT $2`, projectID, httpaction.MaxRulesPer
 		if err != nil {
 			return nil, fmt.Errorf("http action rules: list: %w", err)
 		}
-		if err := record.Rule.Validate(); err != nil {
+		if err := record.Validate(); err != nil {
 			slog.WarnContext(ctx, "http action rules: skipping invalid stored rule", "project_id", projectID, "rule_id", record.ID)
 			continue
 		}
@@ -280,7 +280,7 @@ func checkHTTPActionRuleConfiguration(ctx context.Context, tx sqlExecutor, proje
 		}
 		return err
 	}
-	if kind != "openapi" || !(shared || author == nil || *author == actorID) {
+	if kind != "openapi" || (!shared && author != nil && *author != actorID) {
 		return ErrHTTPActionRuleConfigurationInvalid
 	}
 	return nil

@@ -186,8 +186,6 @@ var auditedSurfaces = []string{
 	// recorded, with the grant. The reads are GETs.
 	"/api/v2/elitea_core/delegation_grants/",
 	"/api/v2/elitea_core/delegation_grant/",
-	// Scheduled execution: creating one delegates future action to the platform.
-	"/api/v2/scheduling/",
 	// HTTP action rules: which origin, path, method and credential a pipeline
 	// may call out to — an egress grant written by project admins.
 	"/api/v2/httpactions/",
