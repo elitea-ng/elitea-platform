@@ -39,7 +39,14 @@ package admin
 //
 // # What the server refuses, and why the UI is not the place for it
 //
-//   - A BUILT-IN role name is never a rename or delete target. `super_admin`,
+//   - A BUILT-IN role is never a rename or delete target, and its permission
+//     set is not edited (ADR-0059 decision 3, story R0.7). Built-in is a
+//     recorded fact: the role has a row in elitea_auth.admin_role_seeds, which
+//     shared 0263 writes for the roles it creates and for the four that
+//     001_initial.sql seeds. A custom role that already used a built-in name
+//     (`llm_manager`, say) before the upgrade has no row and stays an ordinary
+//     custom role. See seededRoles.
+//   - A CODE-NAMED role name is never a rename or delete target. `super_admin`,
 //     `admin`, `editor`, `viewer` and `system` are not conventions: they are
 //     string literals in this service's own SQL and Go. `users.go`'s
 //     `adminRolePriority`, `eliteacore`'s `usersPageQuery` (`r.name =
@@ -78,6 +85,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
@@ -104,16 +112,19 @@ const (
 	RolesDeletePermission = adminaccess.ConfigurationRolesRolesDelete
 )
 
-/* ── the names this surface will not touch ─────────────────────────────── */
+/* ── the roles this surface will not touch ─────────────────────────────── */
 
-// builtInRoles are the role names this service names in its own code. See the
-// file header for the call sites; the list is not a style rule.
+// codeNamedRoles are the role names this service names in its own code, in
+// every mode and in the project scopes. See the file header for the call
+// sites; the list is not a style rule. It is not the list of built-in roles:
+// that is the seed table (seededRoles), which covers the administration mode
+// only and also holds the roles of shared 0263.
 //
 // `system` is already `roleSystem` in roles.go, where it is the column the
 // matrix refuses to write. The same role is refused here for a wider reason:
 // `projectprovisioning` assigns it to the per-project machine identity, so
 // deleting it takes that identity's only role with it.
-var builtInRoles = map[string]struct{}{
+var codeNamedRoles = map[string]struct{}{
 	"super_admin": {},
 	"admin":       {},
 	"editor":      {},
@@ -280,17 +291,92 @@ func validateRoleName(name string) error {
 	return nil
 }
 
-// refuseBuiltIn guards the two destructive writes. Creation is NOT guarded by
+// refuseCodeNamed guards the two destructive writes. Creation is NOT guarded by
 // it: a deployment whose central role list is missing `editor` must be able to
 // put it back, and the unique constraint already refuses a duplicate.
-func refuseBuiltIn(name, what string) error {
-	if _, built := builtInRoles[name]; !built {
+func refuseCodeNamed(name, what string) error {
+	if _, built := codeNamedRoles[name]; !built {
 		return nil
 	}
 	return matrixError{
 		status: http.StatusConflict,
 		message: strconv.Quote(name) + " is a built-in role and cannot be " + what +
 			": this service names it in its own SQL and Go, which a rename would not follow",
+	}
+}
+
+// seededRoles returns which of names are built-in roles of the central mode:
+// the roles with a row in elitea_auth.admin_role_seeds (shared 0263). It is
+// one query, run inside the transaction of the write it guards, so a role
+// cannot become built-in between the check and the write.
+//
+// Shared 0263 creates the table on a database that has the auth_core tables
+// when it runs. A database whose auth_core tables appeared after it (0263 is
+// then ledgered as a no-op) has no table and no recorded role, so nothing is
+// built-in there; the code-named roles stay refused by name. Until the table
+// has been seen once, each call first asks whether it exists, because reading
+// an absent relation would abort the caller's transaction. Once seen it is
+// never dropped, so the steady state is the one read.
+func (h *Handler) seededRoles(ctx context.Context, q rolepolicy.Querier, mode string, names []string) ([]string, error) {
+	if len(names) == 0 {
+		return nil, nil
+	}
+	if !h.seedTable.Load() {
+		var present bool
+		if err := q.QueryRow(ctx,
+			`SELECT to_regclass('elitea_auth.admin_role_seeds') IS NOT NULL`).Scan(&present); err != nil {
+			return nil, fmt.Errorf("look for the built-in role record: %w", err)
+		}
+		if !present {
+			return nil, nil
+		}
+		h.seedTable.Store(true)
+	}
+	rows, err := q.Query(ctx, `
+SELECT role.name
+FROM elitea_auth.admin_role_seeds AS seed
+JOIN public.auth_core__role AS role ON role.id = seed.role_id
+WHERE role.mode = $1 AND role.name = ANY($2::text[])
+ORDER BY role.name`, mode, names)
+	if err != nil {
+		return nil, fmt.Errorf("read the built-in roles: %w", err)
+	}
+	seeded, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("read the built-in roles: %w", err)
+	}
+	return seeded, nil
+}
+
+// refuseSeeded refuses a write to a built-in role. The stable code of the
+// permission-edit refusal (`role_set_locked`, 403) is story R0.8a.
+func (h *Handler) refuseSeeded(ctx context.Context, q rolepolicy.Querier, target roleTarget, name, what string) error {
+	if !target.central() {
+		return nil
+	}
+	seeded, err := h.seededRoles(ctx, q, target.mode, []string{name})
+	if err != nil {
+		return err
+	}
+	if len(seeded) == 0 {
+		return nil
+	}
+	return builtInRoleError(seeded, what)
+}
+
+func builtInRoleError(seeded []string, what string) error {
+	quoted := make([]string, len(seeded))
+	for i, name := range seeded {
+		quoted[i] = strconv.Quote(name)
+	}
+	subject := quoted[0] + " is a built-in role"
+	if len(quoted) > 1 {
+		subject = strings.Join(quoted, ", ") + " are built-in roles"
+	}
+	return matrixError{
+		status: http.StatusConflict,
+		message: subject + " and cannot be " + what +
+			"; a built-in set is locked, so create a custom role for a different set",
 	}
 }
 
@@ -395,13 +481,13 @@ func (h *Handler) AdminRoleRename(w http.ResponseWriter, r *http.Request) {
 		writeMatrixError(w, err)
 		return
 	}
-	if err := refuseBuiltIn(body.Name, "renamed"); err != nil {
+	if err := refuseCodeNamed(body.Name, "renamed"); err != nil {
 		writeMatrixError(w, err)
 		return
 	}
 	// Renaming a role INTO a built-in name would produce a second role the
 	// platform's own literals then match by accident.
-	if err := refuseBuiltIn(body.NewName, "used as a new name"); err != nil {
+	if err := refuseCodeNamed(body.NewName, "used as a new name"); err != nil {
 		writeMatrixError(w, err)
 		return
 	}
@@ -447,6 +533,10 @@ func (h *Handler) renameRole(
 		if guard, err = rolepolicy.BeginSelfGuard(ctx, transaction, *caller); err != nil {
 			return 0, err
 		}
+	}
+
+	if err := h.refuseSeeded(ctx, transaction, target, name, "renamed"); err != nil {
+		return 0, err
 	}
 
 	var tag pgconn.CommandTag
@@ -537,7 +627,7 @@ func (h *Handler) AdminRoleDelete(w http.ResponseWriter, r *http.Request) {
 	// own SQL and Go. No code names a role in a RETIRED mode, so the legacy
 	// developer-mode `admin` or `super_admin` is a leftover and can go.
 	if _, retired := retiredRoleModes[target.mode]; !retired || !target.central() {
-		if err := refuseBuiltIn(body.Name, "deleted"); err != nil {
+		if err := refuseCodeNamed(body.Name, "deleted"); err != nil {
 			writeMatrixError(w, err)
 			return
 		}
@@ -582,6 +672,10 @@ func (h *Handler) deleteRole(
 		return 0, fmt.Errorf("begin role delete: %w", err)
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
+
+	if err := h.refuseSeeded(ctx, transaction, target, name, "deleted"); err != nil {
+		return 0, err
+	}
 
 	members, err := countRoleAssignments(ctx, transaction, target, name)
 	if err != nil {

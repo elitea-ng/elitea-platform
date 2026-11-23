@@ -55,7 +55,7 @@ Open **Roles**. It shows a permission matrix across three scopes, each a tab:
 
 Besides the broad central permissions such as `runtime.plugins` and `configuration.governance`, the deployment has narrow ones, each for one subject. The upgrade that adds them grants all of them to the `super_admin` role and all but `identity.sso.trust.manage` to the `admin` role, so both administrator roles keep everything they could do and hold the new names too. No existing grant is removed.
 
-A route accepts a narrow permission beside the broad one it narrows, so a holder of the broad permission sees no change. The rows that say **Accepted** are wired today on the server; the other names are accepted as later releases wire their routes. The admin navigation still shows the E-mail, Tasks and Configuration pages only to a holder of `runtime.plugins`, so a role that holds only a narrow name can call those routes but does not see the pages in the menu until a later release. Later releases also add built-in roles (such as an LLM manager or a project administrator) that hold only a narrow set.
+A route accepts a narrow permission beside the broad one it narrows, so a holder of the broad permission sees no change. The rows that say **Accepted** are wired today on the server; the other names are accepted as later releases wire their routes. The admin navigation still shows the E-mail, Tasks and Configuration pages only to a holder of `runtime.plugins`, so a role that holds only a narrow name can call those routes but does not see the pages in the menu until a later release. The built-in narrow roles below hold only a narrow set.
 
 | Permission | Allows | Narrows |
 |---|---|---|
@@ -91,6 +91,25 @@ A route accepts a narrow permission beside the broad one it narrows, so a holder
 Six names are not a narrower part of an existing permission. `projects.settings.view` and `projects.settings.manage` are a privilege increase: once the project settings gate accepts them, both administrator roles can read and change the guarded settings (cloud executor, worker egress, AI disclosure, browser, computer use) of a project they are not a member of. `identity.sso.trust.manage` names a power that `super_admin` already has. The four `access.breakglass.*` names belong to break-glass elevation and allow nothing until that feature ships; then every holder of `admin` can use them.
 </Note>
 
+## Built-in administration roles
+
+Six built-in roles of the central administration mode hold a set of permissions that Elitea defines. The upgrade that adds the four new ones creates them with their sets; it assigns them to nobody. The Roles matrix still labels each column with the role name; the display names appear when the roles can be assigned from the console.
+
+| Role | Display name | Permissions | Cannot |
+|---|---|---|---|
+| `super_admin` | Global administrator | Every administration permission except `configuration.service_descriptors`, which no upgrade grants. Alone among the assignable roles it holds `admin.auth.users.super_admin` and `identity.sso.trust.manage`. | Hold `security.signals.reidentify`; that permission goes to no built-in role. |
+| `admin` | Platform administrator | Every administration permission except `admin.auth.users.super_admin`, `identity.sso.trust.manage` and `configuration.service_descriptors`. | Make a global administrator, or change whom an identity provider vouches for. |
+| `llm_manager` | LLM manager | `llm.catalogue.view`, `llm.catalogue.manage`, `llm.policy.view`, `llm.policy.manage`, `llm.usage.view`, `llm.alerts.manage`, `models.admin.project_budgets.view`, `models.admin.project_budgets.edit`, `projects.projects.projects.view` | Manage users, roles, identity providers, SCIM, tokens, project members, branding, e-mail, maintenance, retention, the kill switch, the agent registry, delegation reviews, worker egress or guardrails. |
+| `project_administrator` | Project administrator (all projects) | `projects.projects.projects.view`, `projects.projects.projects.edit`, `projects.projects.project.create`, `projects.projects.project.delete`, `projects.members.manage`, `projects.settings.view`, `projects.settings.manage`, `configuration.users.users.view`, `configuration.roles.roles.view`, `configuration.roles.user_project_permissions.view`, `invites.bulkusers`, `invites.bulkprojects`, `admin.moderation`, `admin.moderation.edit`, `models.admin.project_budgets.view` | Change platform configuration or LLM settings, identity providers or SCIM bindings, edit the project role matrix, assign administrative roles, suspend or delete users, or configure the credentials, models and toolkits of a project. It cannot read project content without a membership, and cannot give itself one. |
+| `security_auditor` | Security auditor | `models.admin.audit_trail.view`, `access.roles.view`, `access.breakglass.review`, and the security signal permissions when security signals ship | Use any route that writes or approves, other than attesting a break-glass review. Never `security.signals.reidentify`. |
+| `emergency_access` | Emergency access | `access.breakglass.request` | Anything else: the role only lets its holder ask for a break-glass elevation. |
+
+The administration `editor` and `viewer` roles are built-in too. Elitea defines no set for them: they keep the set they held at the upgrade (empty on a new deployment). On a deployment upgraded from the legacy platform, the administration `system` role is also built-in; it keeps its set and is never assigned.
+
+**The sets are locked.** The server refuses to rename or delete a built-in role, and to change its permissions in the Roles matrix, for every caller, a super admin included. The refusal is `409`. A deployment that wants a different set creates a custom role and gives it the permissions. The operator command `elitea-main admin-role reset <role>`, which a later release adds, puts a built-in set back to the one Elitea defines.
+
+**Built-in is a record, not a name.** The upgrade records each built-in role in `elitea_auth.admin_role_seeds`. A role that already had one of the new names (for example a custom `llm_manager` or `security_auditor`) before the upgrade is left as it was: it gets no permission, is not recorded and is not locked, and can still be renamed and deleted. The upgrade runs once, so renaming the custom role later does not add the built-in one.
+
 ## No escalation
 
 The server makes sure that no administrator can raise their own access, and that no administrator can give a central (administration) role or permission that they do not hold. It applies these rules to the Roles matrix, to role definitions, to the Users page, to the role assignments under `/admin/modes`, to project members, to bulk invites, to the personal and team project matrix and to SCIM group bindings:
@@ -108,7 +127,7 @@ A super admin (a holder of `admin.auth.users.super_admin`) is exempt from all ru
 The server refuses a change that breaks a rule with `403` and a `code`: `role_permission_not_held`, `role_own_set_locked`, `role_permission_reserved`, `role_super_admin_required`, `role_self_escalation` or `role_caller_unresolved`. The body also names the `role` and the `permissions`. The Roles page shows that reason in place of a generic error. Each refusal is in the Audit Trail with the action `role.escalation_refused`.
 
 <Note>
-An account that holds only the `admin` role cannot change the permissions of the `admin` role. A super admin can. The accounts in `identity.initial_global_admins` (`ELITEA_INITIAL_GLOBAL_ADMINS`) get `super_admin` on their first sign-in.
+Nobody can change the permissions of a built-in role through the console or the API, a super admin included (see [Built-in administration roles](#built-in-administration-roles)). The accounts in `identity.initial_global_admins` (`ELITEA_INITIAL_GLOBAL_ADMINS`) get `super_admin` on their first sign-in.
 </Note>
 
 ## Role changes are recorded

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"sync/atomic"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -22,6 +23,9 @@ type Handler struct {
 	// memoryUsers journals the removal of a deleted user's personal memories;
 	// nil when the deployment keeps none in the vector store.
 	memoryUsers MemoryUserJournal
+	// seedTable is set once elitea_auth.admin_role_seeds has been seen
+	// (roles_crud.go, seededRoles).
+	seedTable   atomic.Bool
 	pool        *pgxpool.Pool
 	resolver    auth.PermissionResolver
 	suggestions ToolkitRegistrySource
