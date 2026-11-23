@@ -334,10 +334,20 @@ func configSections() []map[string]any {
 // section list itself, so the sidebar shows an entry the server never described.
 // Every other section — including its permission and, now, its availability — is
 // server-declared, and one that is not is one the page can get wrong on its own.
+//
+// Its READ half is the permission of the page it points at,
+// runtime.airun.serviceproviders, not configuration.service_descriptors (ADR-0059
+// R0.5). The section has no fields: reading it is reading the pointer. No
+// migration grants configuration.service_descriptors (adminaccess
+// ungrantedByMigration), so with that name as the read half the filtered schema
+// list would hide the pointer from every administrator, who saw it before.
+// Whoever may open the page may read where it is. The write half and the legacy
+// path keep configuration.service_descriptors.
 func serviceDescriptorsSection() map[string]any {
 	return map[string]any{
-		"id":                  "service_descriptors",
-		"access":              singleAccess(adminaccess.AreaPlatform, adminaccess.ConfigurationServiceDescriptors),
+		"id": "service_descriptors",
+		"access": narrowAccess(adminaccess.AreaPlatform,
+			adminaccess.RuntimeAirunServiceProviders, adminaccess.ConfigurationServiceDescriptors),
 		"unavailable_reason":  serviceDescriptorsElsewhereUnavailable,
 		"title":               "Service Descriptors",
 		"description":         "Registered provider service descriptors.",

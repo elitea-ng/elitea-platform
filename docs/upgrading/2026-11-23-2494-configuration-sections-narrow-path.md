@@ -21,8 +21,11 @@ governance sections use `llm.policy.view` and `llm.policy.manage`; e-mail uses
 `platform.email.manage`; maintenance uses `platform.maintenance.manage`; the
 identity sections (Authentication, Session Policy) use `identity.sso.view` and
 `identity.sso.settings.manage`; MCP Servers uses `mcp.catalogue.manage`;
-branding, native clients, Microsoft apps and service descriptors keep their own
-single permission for both halves; every other section uses
+branding, native clients and Microsoft apps keep their own single permission for
+both halves; Service Descriptors, a section with no fields that points at its
+own page, reads with that page's `runtime.airun.serviceproviders` and saves
+with `configuration.service_descriptors` (no migration grants that name, so
+otherwise no administrator would see the pointer); every other section uses
 `platform.config.view` and `platform.config.manage`. The agent governance
 sections and Entitlement Export keep the legacy path only. The full table is in
 the administrator guide, "Features and configuration", "Who can open a

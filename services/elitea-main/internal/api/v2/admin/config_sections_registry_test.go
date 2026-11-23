@@ -14,6 +14,15 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 )
 
+// pointerReadHalves are sections whose read half is the permission of the
+// page the section points at rather than a name that narrows the legacy
+// path, each with the reason.
+var pointerReadHalves = map[string]string{
+	"service_descriptors": "a fieldless pointer to /admin/app/service-descriptors, whose listing is gated on " +
+		"runtime.airun.serviceproviders; configuration.service_descriptors is granted by no migration, so " +
+		"without this every administrator would lose the pointer from the filtered list",
+}
+
 // sectionAccessProblems answers what is wrong with one section's
 // declaration, or nothing.
 func sectionAccessProblems(section configSection) []string {
@@ -44,7 +53,8 @@ func sectionAccessProblems(section configSection) []string {
 		// The narrow name must narrow what the legacy path asks for, or be
 		// the section's own single permission: no reach a legacy holder does
 		// not already have opens on the narrow path by surprise.
-		if name != section.legacyPermission {
+		pointer := half == "read" && pointerReadHalves[section.id] != "" && len(section.fields) == 0
+		if name != section.legacyPermission && !pointer {
 			for _, legacy := range []string{adminaccess.RuntimePlugins, section.legacyPermission} {
 				if legacy != "" && !slices.Contains(row.Narrows, legacy) {
 					problems = append(problems, fmt.Sprintf("%s permission %q does not narrow %q", half, name, legacy))
@@ -182,7 +192,8 @@ func TestSectionPairsFollowDecisionTwo(t *testing.T) {
 		"branding":            {adminaccess.ConfigurationBranding, adminaccess.ConfigurationBranding},
 		"native_clients":      {adminaccess.ConfigurationNativeClients, adminaccess.ConfigurationNativeClients},
 		"microsoft_apps":      {adminaccess.ConfigurationMicrosoftApps, adminaccess.ConfigurationMicrosoftApps},
-		"service_descriptors": {adminaccess.ConfigurationServiceDescriptors, adminaccess.ConfigurationServiceDescriptors},
+		// The read half is the pointer's page (pointerReadHalves).
+		"service_descriptors": {adminaccess.RuntimeAirunServiceProviders, adminaccess.ConfigurationServiceDescriptors},
 	}
 	for _, section := range configurationSections() {
 		if pair, ok := want[section.id]; ok {

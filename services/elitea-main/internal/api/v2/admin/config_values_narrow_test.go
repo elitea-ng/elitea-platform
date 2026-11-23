@@ -340,6 +340,24 @@ func TestSuggestionsForAnUnreadableSectionAnswerAsAnUnknownSource(t *testing.T) 
 	}
 }
 
+// Both administrator roles keep the whole Configuration page: their declared
+// sets list every section. A section whose read half no migration grants
+// would vanish from every administrator's page, which is the regression the
+// service_descriptors read half avoids.
+func TestBothAdministratorRolesListEverySection(t *testing.T) {
+	sections := everySection(t)
+	for _, name := range []string{adminaccess.RoleSuperAdmin, adminaccess.RoleAdmin} {
+		role, ok := adminaccess.LookupBuiltInRole(name)
+		if !ok || !role.DeclaresSet() {
+			t.Fatalf("built-in role %s has no declared set", name)
+		}
+		listed, code := listedSections(t, newConfigRouter(role.Set()...))
+		if code != http.StatusOK || !slices.Equal(listed, sections) {
+			t.Errorf("%s: the schema list answers %d with %v, want every section %v", name, code, listed, sections)
+		}
+	}
+}
+
 // For every narrow name, the single-permission sections' names and the legacy
 // holders, the schema list names exactly the sections whose values the holder
 // can GET: a listed section never answers 403, and one that does not is
