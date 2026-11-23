@@ -27,7 +27,7 @@ package admin
 // bound group, and so into whatever role the group binding grants. That makes
 // minting one a global-administrator power (ADR-0059 R3B-1, issue 2558). The
 // create, the rotate (a fresh secret is a fresh credential) and the delete
-// therefore also need rolepolicy.SuperAdminPermission (identity_trust.go); a
+// therefore also need adminaccess.SuperAdminPermission (identity_trust.go); a
 // refusal is a 403 with code CodeSCIMClientSuperAdminRequired and an audit row.
 // Listing and revoking stay open to the route gate: neither gives anybody a
 // credential.

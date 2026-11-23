@@ -133,7 +133,7 @@ func row(name string, area Area, class Class) Permission {
 func rows() []Permission {
 	superAdmin := row(AdminAuthUsersSuperAdmin, AreaPeopleAccess, ClassWrite)
 	// The global administrator's own permission. Shared 0060 grants it to
-	// super_admin and rolepolicy refuses it to every other role, so only a
+	// super_admin and the role policy refuses it to every other role, so only a
 	// migration grants it. It gates identity trust (#2558), which is never
 	// a token scope (ADR-0059 decision 7).
 	superAdmin.Grantable = GrantableSeededOnly

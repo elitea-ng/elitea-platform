@@ -103,7 +103,7 @@ type Grantable string
 
 const (
 	// GrantableAny may be granted from the Roles matrix, under the
-	// no-escalation rules of internal/rolepolicy.
+	// no-escalation rules of internal/adminaccess.
 	GrantableAny Grantable = "any"
 	// GrantableSeededOnly is granted by a seeding migration and by nothing
 	// else. The registry test fails when no migration grants such a name.

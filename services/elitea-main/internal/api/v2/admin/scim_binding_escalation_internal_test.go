@@ -15,8 +15,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
 )
 
 type fixedResolver []string
@@ -47,7 +47,7 @@ func TestABindingEditFailsClosedWhenTheCallerCannotBeRead(t *testing.T) {
 	recorder := saveBindingAs(t, NewHandler(nil, WithSCIMGroupBindings(store)), principal)
 	require.Equal(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
 	recorder = saveBindingAs(t, NewHandler(nil, WithSCIMGroupBindings(store),
-		WithPermissionResolver(fixedResolver{rolepolicy.SuperAdminPermission})), nil)
+		WithPermissionResolver(fixedResolver{adminaccess.SuperAdminPermission})), nil)
 	require.Equal(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
 
 	// A caller who is not super_admin, with no database to read the binding's
@@ -57,7 +57,7 @@ func TestABindingEditFailsClosedWhenTheCallerCannotBeRead(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
-	require.Equal(t, rolepolicy.CodeCallerUnresolved, body["code"])
+	require.Equal(t, adminaccess.CodeCallerUnresolved, body["code"])
 }
 
 func TestEveryBindingWriteFailsClosedForACallerWhoIsNotASuperAdmin(t *testing.T) {
@@ -80,13 +80,13 @@ func TestEveryBindingWriteFailsClosedForACallerWhoIsNotASuperAdmin(t *testing.T)
 		require.Equal(t, http.StatusForbidden, recorder.Code, "%s %s: %s", call.method, call.target, recorder.Body.String())
 		var decoded map[string]any
 		require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &decoded))
-		require.Equal(t, rolepolicy.CodeCallerUnresolved, decoded["code"])
+		require.Equal(t, adminaccess.CodeCallerUnresolved, decoded["code"])
 	}
 }
 
 func TestASuperAdminEditsABindingAsBefore(t *testing.T) {
 	store := &stubBindingStore{}
 	recorder := saveBindingAs(t, NewHandler(nil, WithSCIMGroupBindings(store),
-		WithPermissionResolver(fixedResolver{rolepolicy.SuperAdminPermission})), &auth.User{ID: "5", UserID: "5"})
+		WithPermissionResolver(fixedResolver{adminaccess.SuperAdminPermission})), &auth.User{ID: "5", UserID: "5"})
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
 }
