@@ -4732,6 +4732,19 @@ web:
     name: ""
     annotations: {}
 
+  # Hardening (privilege escalation on exec). The image is the stock
+  # nginx:stable-alpine (apps/elitea-web/Containerfile): its master process
+  # starts as root, binds :80, switches its workers to the `nginx` user
+  # (SETUID/SETGID), and docker-entrypoint.sh writes config.js into the image
+  # filesystem at start. So only what costs nothing is set here. Dropping ALL
+  # capabilities, runAsNonRoot or readOnlyRootFilesystem needs an unprivileged
+  # nginx image first.
+  podSecurityContext:
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+
   podAnnotations: {}
   nodeSelector: {}
   tolerations: []
@@ -5004,6 +5017,19 @@ scheduler:
     create: true
     name: ""
     annotations: {}
+
+  # Same hardening as main: the image is distroless static:nonroot and the
+  # binary writes no files (no os.Create/CreateTemp/WriteFile in
+  # services/elitea-scheduler), so a read-only root filesystem costs nothing.
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
 
   podAnnotations: {}
   nodeSelector: {}
@@ -7798,6 +7824,20 @@ otelCollector:
     create: true
     name: ""
     annotations: {}
+
+  # The contrib image runs as a non-root user (10001) and the shipped config
+  # (debug exporter) writes nothing to disk. An exporter or extension that
+  # does (file exporter, file_storage queue) needs a writable volume mounted
+  # for it, or readOnlyRootFilesystem set to false.
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
 
   podAnnotations: {}
   nodeSelector: {}
