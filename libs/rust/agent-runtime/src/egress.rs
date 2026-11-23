@@ -319,6 +319,15 @@ impl RunEgress {
         }
     }
 
+    /// Count one outbound connection to `host` on `port` that succeeded (for
+    /// non-HTTP protocols such as SQL).
+    pub fn record_reached_host(&self, host: &str, port: u16) {
+        let host = ledger_host(host);
+        if !host.is_empty() && port != 0 {
+            self.count(false, host, port);
+        }
+    }
+
     fn count(&self, refused: bool, host: String, port: u16) {
         if let Ok(mut ledger) = self.ledger.lock() {
             ledger.count(refused, host, port);

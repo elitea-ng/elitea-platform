@@ -320,7 +320,16 @@ impl SqlClient {
             self.egress.policy(),
         )
         .await
-        .map_err(map_resolve_error)
+        .map_err(|error| {
+            if matches!(
+                error,
+                ResolveError::NotPublic | ResolveError::TooManyAddresses
+            ) {
+                self.egress
+                    .record_refused(self.config.host(), self.config.port());
+            }
+            map_resolve_error(error)
+        })
     }
 
     async fn connect_postgres(&self) -> Result<PgConnection, SqlClientError> {
@@ -330,7 +339,11 @@ impl SqlClient {
             for address in admitted {
                 let options = self.postgres_options(address);
                 match PgConnection::connect_with(&options).await {
-                    Ok(connection) => return Ok(connection),
+                    Ok(connection) => {
+                        self.egress
+                            .record_reached_host(self.config.host(), self.config.port());
+                        return Ok(connection);
+                    }
                     Err(ref error @ sqlx::Error::Io(ref io_error))
                         if !is_tls_io_error(io_error) =>
                     {
@@ -353,7 +366,11 @@ impl SqlClient {
             for address in admitted {
                 let options = self.mysql_options(address);
                 match MySqlConnection::connect_with(&options).await {
-                    Ok(connection) => return Ok(connection),
+                    Ok(connection) => {
+                        self.egress
+                            .record_reached_host(self.config.host(), self.config.port());
+                        return Ok(connection);
+                    }
                     Err(ref error @ sqlx::Error::Io(ref io_error))
                         if !is_tls_io_error(io_error) =>
                     {
@@ -731,7 +748,16 @@ fn map_project_effect_error(_: super::project::ProjectError) -> SqlClientError {
 }
 
 fn is_tls_io_error(error: &std::io::Error) -> bool {
-    matches!(error.get_ref(), Some(inner) if inner.is::<rustls::Error>())
+    let mut source: Option<&(dyn std::error::Error + 'static)> = error
+        .get_ref()
+        .map(|inner| inner as &(dyn std::error::Error + 'static));
+    while let Some(current) = source {
+        if current.is::<rustls::Error>() {
+            return true;
+        }
+        source = current.source();
+    }
+    false
 }
 
 fn map_pre_dispatch_error(error: &sqlx::Error) -> SqlClientError {

@@ -148,7 +148,7 @@ PY
 
 echo "== worker.dbEgressAllowlist renders ELITEA_DB_EGRESS_ALLOWLIST =="
 "$HELM" template t "$CHART" "${RENDER[@]}" \
-  --set-string worker.dbEgressAllowlist='10.0.0.0/8,192.168.1.5:5432' \
+  --set-string 'worker.dbEgressAllowlist=10.0.0.0/8\,192.168.1.5:5432' \
   >"$TMP/db-egress.yaml" 2>"$TMP/db-egress.err" || true
 python3 - "$TMP/db-egress.yaml" <<'PY' && ok "worker.dbEgressAllowlist reaches ELITEA_DB_EGRESS_ALLOWLIST" || bad "db egress worker env: $(tail -1 "$TMP/db-egress.err")"
 import sys, yaml

@@ -840,9 +840,23 @@ pub fn parse_db_egress_allowlist(
     };
     elitea_agent_runtime::toolkits::DbEgressAllowlist::parse_csv(value).map_err(|_| {
         RuntimeConfigError::InvalidConfiguration(
-            "ELITEA_DB_EGRESS_ALLOWLIST is malformed: want comma-separated host, host:port, *.domain or CIDR entries",
+            "ELITEA_DB_EGRESS_ALLOWLIST is malformed: want comma-separated CIDR, IP[:port], or localhost[:port] entries",
         )
     })
+}
+
+fn parse_db_egress_allowlist_env(
+    result: Result<String, std::env::VarError>,
+) -> Result<elitea_agent_runtime::toolkits::DbEgressAllowlist, RuntimeConfigError> {
+    match result {
+        Ok(value) => parse_db_egress_allowlist(Some(&value)),
+        Err(std::env::VarError::NotPresent) => {
+            Ok(elitea_agent_runtime::toolkits::DbEgressAllowlist::default())
+        }
+        Err(std::env::VarError::NotUnicode(_)) => Err(RuntimeConfigError::InvalidConfiguration(
+            "ELITEA_DB_EGRESS_ALLOWLIST must be valid UTF-8",
+        )),
+    }
 }
 
 /// Parse [`GOVERNED_CONTEXT_ENVIRONMENT`]: unset or blank is off; `true`,
@@ -886,22 +900,9 @@ impl RuntimeDeployConfig {
     /// Returns [`RuntimeConfigError::InvalidConfiguration`] when the variable
     /// is non-UTF-8 or carries any malformed allowlist entry.
     pub fn with_db_egress_allowlist_from_env(mut self) -> Result<Self, RuntimeConfigError> {
-        match std::env::var(DB_EGRESS_ALLOWLIST_ENVIRONMENT) {
-            Ok(value) => {
-                self.db_egress_allowlist = parse_db_egress_allowlist(Some(&value))?;
-                Ok(self)
-            }
-            Err(std::env::VarError::NotPresent) => {
-                self.db_egress_allowlist =
-                    elitea_agent_runtime::toolkits::DbEgressAllowlist::default();
-                Ok(self)
-            }
-            Err(std::env::VarError::NotUnicode(_)) => {
-                Err(RuntimeConfigError::InvalidConfiguration(
-                    "ELITEA_DB_EGRESS_ALLOWLIST must be valid UTF-8",
-                ))
-            }
-        }
+        self.db_egress_allowlist =
+            parse_db_egress_allowlist_env(std::env::var(DB_EGRESS_ALLOWLIST_ENVIRONMENT))?;
+        Ok(self)
     }
 }
 
@@ -1364,6 +1365,8 @@ mod tests {
             "db.internal:0",
             "db.internal:70000",
             "a b",
+            "*",
+            "*:5432",
             "*.",
             "10.0.0.1, bad entry",
         ] {
@@ -1372,6 +1375,20 @@ mod tests {
                 "malformed ELITEA_DB_EGRESS_ALLOWLIST must fail closed: {malformed}"
             );
         }
+
+        assert!(
+            super::parse_db_egress_allowlist_env(Err(std::env::VarError::NotPresent))
+                .expect("absent env defaults empty")
+                .private_permits()
+                .is_empty()
+        );
+        assert!(
+            super::parse_db_egress_allowlist_env(Err(std::env::VarError::NotUnicode(
+                std::ffi::OsString::from("non-utf8"),
+            )))
+            .is_err(),
+            "non-UTF-8 ELITEA_DB_EGRESS_ALLOWLIST must fail closed"
+        );
     }
 
     #[test]

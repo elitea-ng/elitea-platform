@@ -1,4 +1,4 @@
-//! Focused compatibility and safety tests for the capability-disabled SQL family.
+//! Focused compatibility, egress, TLS, and safety tests for the SQL toolkit family.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io;
@@ -1610,4 +1610,161 @@ async fn sql_egress_guard_blocks_dns_rebinding_oversized_dns_and_run_public_poli
     assert_eq!(run_egress.summary().refused.len(), 1);
     assert_eq!(run_egress.summary().refused[0].host, "blocked.example.test");
     assert_eq!(run_egress.summary().refused[0].port, 5432);
+}
+
+#[test]
+fn postgres_options_new_without_env_ignores_populated_pg_env_in_child_process() {
+    const CHILD_MARKER: &str = "ELITEA_TEST_PG_ENV_CHILD";
+    if std::env::var_os(CHILD_MARKER).is_none() {
+        let exe = std::env::current_exe().expect("test executable path");
+        let output = std::process::Command::new(exe)
+            .args([
+                "--exact",
+                "toolkits::sql_tests::postgres_options_new_without_env_ignores_populated_pg_env_in_child_process",
+                "--nocapture",
+            ])
+            .env(CHILD_MARKER, "1")
+            .env("PGSSLROOTCERT", "/nonexistent/ambient-root.crt")
+            .env("PGSSLCERT", "/nonexistent/ambient-client.crt")
+            .env("PGSSLKEY", "/nonexistent/ambient-client.key")
+            .env("PGSSLMODE", "disable")
+            .env("PGHOST", "ambient.pg.invalid")
+            .env("PGPORT", "6543")
+            .env("PGUSER", "ambient_user")
+            .env("PGPASSWORD", "ambient_password")
+            .env("PGDATABASE", "ambient_db")
+            .env("PGAPPNAME", "ambient_app")
+            .env("PGOPTIONS", "-c statement_timeout=0")
+            .output()
+            .expect("spawn child test process");
+        assert!(
+            output.status.success(),
+            "child test failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    // Positive control: upstream `new_without_pgpass` absorbs ambient PGSSL*/PG* vars.
+    let ambient = PgConnectOptions::new_without_pgpass();
+    assert!(ambient.has_ssl_root_cert());
+    assert!(ambient.has_ssl_client_cert());
+    assert!(ambient.has_ssl_client_key());
+    assert_eq!(ambient.get_host(), "ambient.pg.invalid");
+    assert_eq!(ambient.get_port(), 6543);
+    assert_eq!(ambient.get_options(), Some("-c statement_timeout=0"));
+
+    // Hardened path: `new_without_env` and `SqlClient::postgres_options` ignore all of them.
+    let clean = PgConnectOptions::new_without_env();
+    assert!(!clean.has_ssl_root_cert());
+    assert!(!clean.has_ssl_client_cert());
+    assert!(!clean.has_ssl_client_key());
+    assert_eq!(clean.get_host(), "localhost");
+    assert_eq!(clean.get_port(), 5432);
+    assert_eq!(clean.get_options(), None);
+    assert_eq!(clean.get_application_name(), None);
+
+    let dial_ip = IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34));
+    let profile = test_connection_profile(config(SqlDialect::Postgres), dial_ip);
+    assert_eq!(profile.host, "database.example.test");
+    assert_eq!(profile.port, 5432);
+    assert_eq!(profile.tls, "verify-full");
+    assert!(!profile.has_ssl_root_cert);
+    assert!(!profile.has_ssl_client_cert);
+    assert!(!profile.has_ssl_client_key);
+}
+
+#[tokio::test]
+async fn sql_egress_ledger_records_private_refusals_and_reached_connections() {
+    // 1. Private-address refusal is recorded in the run's egress ledger.
+    let run_egress = RunEgress::open();
+    let private_lookup = Arc::new(FakeLookup::new([(
+        "private.pg.example.test",
+        vec!["10.0.1.5".parse().expect("private ip")],
+    )]));
+    let client = SqlClient::new(
+        config_for_host_port(SqlDialect::Postgres, "private.pg.example.test", 5432),
+        Arc::new(PermitSet::default()),
+        Arc::clone(&run_egress),
+    )
+    .with_lookup(private_lookup);
+    assert_eq!(
+        client
+            .list_tables_and_columns()
+            .await
+            .expect_err("private IP must be refused")
+            .code(),
+        SqlClientErrorCode::EgressRefused
+    );
+    let summary = run_egress.summary();
+    assert_eq!(summary.refused.len(), 1);
+    assert_eq!(summary.refused[0].host, "private.pg.example.test");
+    assert_eq!(summary.refused[0].port, 5432);
+    assert_eq!(summary.refused[0].count, 1);
+    assert_eq!(summary.reached, Vec::new());
+
+    // 2. Successful verified-TLS PostgreSQL connect records the host as reached.
+    let (ca_pem, acceptor) = build_tls_fixture("reached.pg.example.test");
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind PG reached listener");
+    let port = listener.local_addr().expect("PG reached addr").port();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = timeout(FAKE_SERVER_TIMEOUT, listener.accept())
+            .await
+            .expect("accept")
+            .expect("accept");
+        let mut ssl_req = [0_u8; 8];
+        stream.read_exact(&mut ssl_req).await.expect("SSLRequest");
+        stream.write_all(b"S").await.expect("S");
+        let mut tls = acceptor.accept(stream).await.expect("TLS accept");
+        let mut len_buf = [0_u8; 4];
+        tls.read_exact(&mut len_buf).await.expect("startup len");
+        let len = usize::try_from(u32::from_be_bytes(len_buf)).expect("len");
+        let mut startup = vec![0_u8; len.saturating_sub(4)];
+        tls.read_exact(&mut startup).await.expect("startup body");
+        // AuthenticationOk ('R', len=8, status=0) + ReadyForQuery ('Z', len=5, 'I').
+        tls.write_all(&[b'R', 0, 0, 0, 8, 0, 0, 0, 0, b'Z', 0, 0, 0, 5, b'I'])
+            .await
+            .expect("PG auth ok + ready");
+        tls.flush().await.expect("flush");
+        // Close after connect succeeds; introspection query then returns EOF cleanly.
+        let mut scratch = [0_u8; 64];
+        let _ = timeout(
+            std::time::Duration::from_millis(200),
+            tls.read(&mut scratch),
+        )
+        .await;
+    });
+    let reached_egress = RunEgress::open();
+    let lookup = Arc::new(FakeLookup::new([(
+        "reached.pg.example.test",
+        vec![IpAddr::V4(Ipv4Addr::LOCALHOST)],
+    )]));
+    let permits = Arc::new(
+        Allowlist::parse_csv(&format!("127.0.0.1:{port}"))
+            .expect("permit")
+            .private_permits(),
+    );
+    let client = SqlClient::new(
+        config_for_host_port(SqlDialect::Postgres, "reached.pg.example.test", port),
+        permits,
+        Arc::clone(&reached_egress),
+    )
+    .with_lookup(lookup)
+    .with_test_root_cert_pem(ca_pem);
+    let _ = timeout(FAKE_SERVER_TIMEOUT, client.list_tables_and_columns())
+        .await
+        .expect("call completes");
+    timeout(FAKE_SERVER_TIMEOUT, server)
+        .await
+        .expect("server completes")
+        .expect("server task");
+    let summary = reached_egress.summary();
+    assert_eq!(summary.refused, Vec::new());
+    assert_eq!(summary.reached.len(), 1);
+    assert_eq!(summary.reached[0].host, "reached.pg.example.test");
+    assert_eq!(summary.reached[0].port, port);
+    assert_eq!(summary.reached[0].count, 1);
 }
