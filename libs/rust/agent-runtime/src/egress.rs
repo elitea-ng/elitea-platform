@@ -34,8 +34,8 @@
 //! refused even then. Such a refusal fails the tool call with
 //! [`EGRESS_HOST_NOT_ALLOWED`] and is counted with the reason
 //! [`REFUSAL_REASON_NOT_PUBLIC`]. The resolver is reusable by any client that
-//! sends for a run: [`client_builder`] (reqwest 0.12), [`mcp_client_builder`]
-//! (reqwest 0.13), [`guarded_http_connector`] (hyper) and
+//! sends for a run: [`client_builder`] (reqwest 0.12), `mcp_client_builder`
+//! (reqwest 0.13), `guarded_http_connector` (hyper) and
 //! [`hardened_transport`] (the connectors' transport), each read through
 //! [`RunEgress::guarded`]. The web fetch keeps its own guarded resolver. The
 //! worker's own gRPC to Main and the model gateway never goes through here.
@@ -456,7 +456,7 @@ impl RunEgress {
 
     /// Send under the SSRF rule: `send` is the request of a client built
     /// here ([`client_builder`], [`hardened_transport`],
-    /// [`guarded_http_connector`]), whose resolver reads this run's permit
+    /// `guarded_http_connector`), whose resolver reads this run's permit
     /// and `url`'s port while `send` runs. An IP literal is judged before
     /// `send` starts.
     ///
