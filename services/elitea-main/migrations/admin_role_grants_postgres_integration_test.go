@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	dbschema "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/schema"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	migrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
@@ -121,6 +122,44 @@ VALUES (1, 'super_admin', 'administration', 'granted', 'bootstrap')`); err != ni
 	if _, err := pool.Exec(ctx, `DELETE FROM elitea_auth.admin_role_grants`); err == nil {
 		t.Fatal("DELETE was not refused on a database without auth_core")
 	}
+}
+
+// The baseline projection (internal/db/schema/auth_core_baseline.sql) copies
+// the table so fixtures built on it can run the role writes. The copy must be
+// the same table, or those fixtures test a different shape.
+func TestAdminRoleGrantsProjectionMatchesTheMigration(t *testing.T) {
+	body, err := fs.ReadFile(migrations.Files, adminRoleGrantsMigration)
+	if err != nil {
+		t.Fatalf("read %s: %v", adminRoleGrantsMigration, err)
+	}
+	migration := adminRoleGrantsTable(t, string(body))
+	projection := adminRoleGrantsTable(t, dbschema.AuthCoreBaselineSQLCProjection)
+	if migration != projection {
+		t.Fatalf("auth_core_baseline.sql's admin_role_grants differs from %s:\nmigration:  %s\nprojection: %s",
+			adminRoleGrantsMigration, migration, projection)
+	}
+}
+
+// adminRoleGrantsTable is the CREATE TABLE statement for the history, with
+// comments dropped and whitespace collapsed.
+func adminRoleGrantsTable(t *testing.T, sql string) string {
+	t.Helper()
+	const head = "CREATE TABLE IF NOT EXISTS elitea_auth.admin_role_grants ("
+	start := strings.Index(sql, head)
+	if start < 0 {
+		t.Fatalf("no %q in the file", head)
+	}
+	end := strings.Index(sql[start:], "\n);")
+	if end < 0 {
+		t.Fatal("the CREATE TABLE has no end")
+	}
+	var kept []string
+	for line := range strings.SplitSeq(sql[start:start+end+3], "\n") {
+		if code, _, _ := strings.Cut(line, "--"); strings.TrimSpace(code) != "" {
+			kept = append(kept, strings.Join(strings.Fields(code), " "))
+		}
+	}
+	return strings.Join(kept, " ")
 }
 
 func indexExists(t *testing.T, pool *pgxpool.Pool, schema, name string) bool {

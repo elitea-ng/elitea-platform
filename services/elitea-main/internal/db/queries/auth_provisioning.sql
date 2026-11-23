@@ -51,14 +51,6 @@ JOIN public.auth_core__role AS role ON role.id = user_role.role_id
 WHERE user_role.user_id = sqlc.arg(user_id)::integer
   AND role.mode = sqlc.arg(mode)::varchar(64);
 
--- name: AssignAuthUserRoleByNameAndMode :execrows
-INSERT INTO public.auth_core__user_role (user_id, role_id)
-SELECT sqlc.arg(user_id)::integer, role.id
-FROM public.auth_core__role AS role
-WHERE role.name = sqlc.arg(role_name)::varchar(64)
-  AND role.mode = sqlc.arg(mode)::varchar(64)
-ON CONFLICT (user_id, role_id) DO NOTHING;
-
 -- name: HasAuthAdministrationAdminRole :one
 SELECT EXISTS (
     SELECT 1

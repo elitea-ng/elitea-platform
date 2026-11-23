@@ -67,10 +67,18 @@ WHERE assignment.user_id = $1 AND role.mode = 'administration' AND role.name = $
 }
 
 // asBrowser mounts both assignment routes for a caller signed in through a
-// browser session, whose changes the history records as `console`.
+// server-side browser session, whose changes the history records as
+// `console`.
 func (e escalationEnvironment) asBrowser(email string) chi.Router {
+	return e.asPrincipal(email, func(principal *auth.User) { principal.BrowserSessionRef = 77 })
+}
+
+// asPrincipal mounts both assignment routes for a caller whose principal
+// `shape` adjusts.
+func (e escalationEnvironment) asPrincipal(email string, shape func(*auth.User)) chi.Router {
 	id := fmt.Sprint(e.ids[email])
-	principal := &auth.User{ID: id, UserID: id, BrowserSessionRef: 77}
+	principal := &auth.User{ID: id, UserID: id}
+	shape(principal)
 	handler := admin.NewHandler(e.pool, admin.WithPermissionResolver(legacyrbac.NewPostgresResolver(e.pool)))
 	router := chi.NewRouter()
 	router.Mount("/o", modesRouter(handler, principal))
@@ -152,6 +160,44 @@ func TestTheModesRouteRecordsAGrantAndARevocation(t *testing.T) {
 	}
 	if got := grantHistory(t, env.pool, plain); fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("history = %+v, want %+v", got, want)
+	}
+}
+
+// The source by credential: the Form plane and the session cookie carry
+// AuthType "session" and no session ref, and are a browser; a token is not.
+func TestTheSourceFollowsTheCredential(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		shape  func(p *auth.User, tokenID string)
+		source string
+	}{
+		{"form session", func(p *auth.User, _ string) { p.AuthType = "session" }, "console"},
+		{"server-side session", func(p *auth.User, _ string) {
+			p.AuthType = "session"
+			p.BrowserSessionRef = 9
+		}, "console"},
+		{"token", func(p *auth.User, token string) { p.AuthType = "token"; p.TokenID = token }, "api"},
+		{"session-typed token", func(p *auth.User, token string) { p.AuthType = "session"; p.TokenID = token }, "api"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newEscalationEnvironment(t)
+			plain := env.ids[escalationPlainTarget]
+			var tokenID string
+			if err := env.pool.QueryRow(context.Background(), `
+INSERT INTO public.auth_core__token (user_id, name, uuid)
+VALUES ($1, 'history-source', '6f1c1a52-2499-4d0a-9c1e-000000002499')
+RETURNING id::text`, env.ids[escalationSuper]).Scan(&tokenID); err != nil {
+				t.Fatalf("seed the caller's token: %v", err)
+			}
+			shape := func(p *auth.User) { tc.shape(p, tokenID) }
+			expectStatus(t, adminDo(t, env.asPrincipal(escalationSuper, shape), http.MethodPost,
+				"/u/admin/auth_users/administration",
+				map[string]any{"action": "set_admin_role", "user_id": plain, "role_name": "editor"}), http.StatusOK)
+			history := grantHistory(t, env.pool, plain)
+			if len(history) != 1 || history[0].source != tc.source {
+				t.Fatalf("history = %+v, want one %s row", history, tc.source)
+			}
+		})
 	}
 }
 

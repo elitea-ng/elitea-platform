@@ -73,7 +73,7 @@ An account that holds only the `admin` role cannot change the permissions of the
 
 ## Role changes are recorded
 
-Every change to a central role assignment is recorded. A grant or a removal writes one record with the account, the role name and mode, what happened (`granted` or `revoked`), who did it, when, and the source of the change. Records cannot be edited or deleted. A record keeps the role name, so it stays readable after a custom role is deleted.
+Every change to a central role assignment that Elitea makes is recorded: on the Users page, under `/admin/modes`, and at the first sign-in of an initial administrator. A grant or a removal writes one record with the account, the role name and mode, what happened (`granted` or `revoked`), who did it, when, and the source of the change. Records cannot be edited or deleted. A record keeps the role name, so it stays readable after a custom role is deleted.
 
 The source says how the change was made:
 
@@ -82,7 +82,6 @@ The source says how the change was made:
 | `console` | An administrator signed in through the browser, on the Users page or under `/admin/modes`. |
 | `api` | A caller with an access token, on the same routes. |
 | `bootstrap` | The first sign-in of an account in `identity.initial_global_admins`. There is no actor. |
-| `migration` | An upgrade step. There is no actor. |
-| `operator`, `review`, `scim` | Reserved for the operator command, a confirmed provisional grant and a SCIM binding to an administration role. |
+| `migration`, `operator`, `review`, `scim` | Reserved for an upgrade step, the operator command, a confirmed provisional grant and a SCIM binding to an administration role. A `migration` record has no actor. |
 
-Replacing an account's role writes two records: the old role `revoked` and the new one `granted`. Assigning a role that the account already holds writes nothing and changes nothing. A refused change writes nothing either. Records start at the upgrade that added them: assignments made before it have none.
+Replacing an account's role writes two records: the old role `revoked` and the new one `granted`. Assigning a role that the account already holds writes nothing and changes nothing. A refused change writes nothing either. Records start at the upgrade that added them: assignments made before it have none. A change made outside Elitea, such as SQL run by hand against the database, or the roles removed with a deleted account, leaves no record.

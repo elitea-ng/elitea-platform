@@ -14,7 +14,6 @@ type Querier interface {
 	AcquireAuthProviderAdvisoryLock(ctx context.Context, providerRef string) error
 	AdvanceScheduledJobCursor(ctx context.Context, arg AdvanceScheduledJobCursorParams) (int64, error)
 	AllocateIndexGeneration(ctx context.Context, arg AllocateIndexGenerationParams) (int64, error)
-	AssignAuthUserRoleByNameAndMode(ctx context.Context, arg AssignAuthUserRoleByNameAndModeParams) (int64, error)
 	AssignExistingProjectRoles(ctx context.Context, arg AssignExistingProjectRolesParams) (int64, error)
 	AuthorizeRuntimeValidationProject(ctx context.Context, arg AuthorizeRuntimeValidationProjectParams) (bool, error)
 	BulkDeleteCurrentNotifications(ctx context.Context, arg BulkDeleteCurrentNotificationsParams) (int64, error)

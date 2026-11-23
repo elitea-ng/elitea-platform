@@ -20,29 +20,6 @@ func (q *Queries) AcquireAuthProviderAdvisoryLock(ctx context.Context, providerR
 	return err
 }
 
-const assignAuthUserRoleByNameAndMode = `-- name: AssignAuthUserRoleByNameAndMode :execrows
-INSERT INTO public.auth_core__user_role (user_id, role_id)
-SELECT $1::integer, role.id
-FROM public.auth_core__role AS role
-WHERE role.name = $2::varchar(64)
-  AND role.mode = $3::varchar(64)
-ON CONFLICT (user_id, role_id) DO NOTHING
-`
-
-type AssignAuthUserRoleByNameAndModeParams struct {
-	UserID   int32  `db:"user_id" json:"user_id"`
-	RoleName string `db:"role_name" json:"role_name"`
-	Mode     string `db:"mode" json:"mode"`
-}
-
-func (q *Queries) AssignAuthUserRoleByNameAndMode(ctx context.Context, arg AssignAuthUserRoleByNameAndModeParams) (int64, error) {
-	result, err := q.db.Exec(ctx, assignAuthUserRoleByNameAndMode, arg.UserID, arg.RoleName, arg.Mode)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const assignExistingProjectRoles = `-- name: AssignExistingProjectRoles :execrows
 INSERT INTO public.auth_core__project_user_role (project_id, user_id, role_id)
 SELECT

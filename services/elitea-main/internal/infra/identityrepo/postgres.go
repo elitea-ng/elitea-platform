@@ -268,16 +268,17 @@ func ApplyInitialAdministrationRole(
 	if count != 0 {
 		return nil
 	}
-	assigned, err := rolegrants.Grant(ctx, db, int64(userID), mode, role,
+	// Grant reports false only when the row is already there: a concurrent
+	// first sign-in of the same account committed it (and its history row)
+	// first. The user then holds the role, which is what this grant is for, so
+	// that is not an error.
+	_, err = rolegrants.Grant(ctx, db, int64(userID), mode, role,
 		rolegrants.Origin{Source: rolegrants.SourceBootstrap})
 	if errors.Is(err, rolegrants.ErrRoleNotFound) {
 		return errors.New("identityrepo: initial administration role is unavailable")
 	}
 	if err != nil {
 		return fmt.Errorf("identityrepo: assign initial administration role: %w", err)
-	}
-	if !assigned {
-		return errors.New("identityrepo: initial administration role is unavailable")
 	}
 	return nil
 }
