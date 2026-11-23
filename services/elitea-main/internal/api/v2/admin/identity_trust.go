@@ -16,13 +16,13 @@ package admin
 // Both are therefore equal to `super_admin`. Their route gates
 // (`runtime.plugins`, `admin.auth.users`) are held by `admin` too, so the
 // handler checks the caller's own administration set, read from the database
-// for each request (rolepolicy.ResolveCaller), for
-// rolepolicy.SuperAdminPermission. It fails closed: a caller that cannot be
-// read is refused with rolepolicy.CodeCallerUnresolved.
+// for each request (adminaccess.ResolveCaller), for
+// adminaccess.SuperAdminPermission. It fails closed: a caller that cannot be
+// read is refused with adminaccess.CodeCallerUnresolved.
 //
 // # The refusal, and the audit rows
 //
-// The conventions are rolepolicy's (#2555): a 403 whose JSON carries `error`
+// The conventions are the role policy's (internal/adminaccess) (#2555): a 403 whose JSON carries `error`
 // and a stable `code`, and an annotation on the audit row the request
 // middleware writes for every admin write and every refusal (event type
 // `api`), so the row names the domain action rather than only the route. A
@@ -33,8 +33,8 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
 )
 
 // The refusal codes. Clients key their message on these, so they are stable.
@@ -76,9 +76,9 @@ type trustGate struct {
 }
 
 // requireSuperAdmin answers 403 and returns false unless the caller holds
-// rolepolicy.SuperAdminPermission.
+// adminaccess.SuperAdminPermission.
 func (h *Handler) requireSuperAdmin(w http.ResponseWriter, r *http.Request, gate trustGate) bool {
-	caller, refusal := rolepolicy.ResolveCaller(r, h.resolver)
+	caller, refusal := adminaccess.ResolveCaller(r, h.resolver)
 	if refusal != nil {
 		refusal.Message = "your own permissions could not be read, so the change was refused"
 		writeTrustRefusal(w, r, gate, refusal)
@@ -87,13 +87,13 @@ func (h *Handler) requireSuperAdmin(w http.ResponseWriter, r *http.Request, gate
 	if caller.SuperAdmin {
 		return true
 	}
-	writeTrustRefusal(w, r, gate, &rolepolicy.Refusal{Code: gate.code, Message: gate.message})
+	writeTrustRefusal(w, r, gate, &adminaccess.Refusal{Code: gate.code, Message: gate.message})
 	return false
 }
 
-// writeTrustRefusal is rolepolicy.Write with this surface's audit action and
+// writeTrustRefusal is adminaccess.Write with this surface's audit action and
 // entity.
-func writeTrustRefusal(w http.ResponseWriter, r *http.Request, gate trustGate, refusal *rolepolicy.Refusal) {
+func writeTrustRefusal(w http.ResponseWriter, r *http.Request, gate trustGate, refusal *adminaccess.Refusal) {
 	audit.Annotate(r.Context(), audit.Annotation{
 		Action:     gate.refusedAction,
 		EntityType: gate.entityType,

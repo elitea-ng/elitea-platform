@@ -153,7 +153,7 @@ type NewSession struct {
 	// recent-authentication check. AuthenticatedAt is then ignored.
 	AuthenticationTimeUnknown bool
 	// AuthenticationProven says the recorded time is PROOF of an
-	// authentication, not merely the moment of the sign-in (shared 0263,
+	// authentication, not merely the moment of the sign-in (shared 0264,
 	// ADR-0059 R1.10b): an OIDC id_token's auth_time, or a SAML
 	// AuthnInstant answering a request that carried ForceAuthn. Only a
 	// proven row satisfies the recent-authentication check. It is ignored

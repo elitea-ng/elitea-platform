@@ -48,6 +48,10 @@ pub mod runtime_loss;
 pub mod runtime_workspace;
 #[cfg(feature = "sandbox-supervisor")]
 pub mod service;
+// ADR-0059 R1.9: the reviewed allowlist of the worker's served methods and
+// listener sites (internal_listener_allowlist.txt).
+#[cfg(test)]
+mod surface_allowlist_tests;
 pub mod workspace;
 pub mod workspace_run;
 #[cfg(feature = "sandbox-supervisor")]

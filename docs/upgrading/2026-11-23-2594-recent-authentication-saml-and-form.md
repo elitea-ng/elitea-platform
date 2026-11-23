@@ -1,6 +1,6 @@
 # Recent authentication for SAML and Form sign-in (#2594, ADR-0059)
 
-**What changed.** Shared migration `0263_recent_authentication_saml_and_form.sql`
+**What changed.** Shared migration `0264_recent_authentication_saml_and_form.sql`
 adds two columns:
 
 - `elitea_auth.browser_sessions.authentication_proven` (`boolean NOT NULL

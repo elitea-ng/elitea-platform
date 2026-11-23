@@ -97,7 +97,7 @@ func newPostgresStore(pool *pgxpool.Pool, config Config, generate idGenerator) (
 // overwritten; an expired row under the same ID is absent to every read, so
 // it is replaced, exactly as an expired Redis key no longer blocked SET NX.
 //
-// authenticated_at (shared 0263) travels beside the record; see
+// authenticated_at (shared 0264) travels beside the record; see
 // sessionstate.State.AuthenticatedAt.
 const insertSQL = `
 INSERT INTO elitea_auth.form_sessions AS current (id_hash, record, expires_at, authenticated_at)

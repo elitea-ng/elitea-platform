@@ -570,7 +570,7 @@ func TestOnlyAnAuthenticatedFormSessionHasAReauthenticationSubject(t *testing.T)
 	}
 }
 
-// A session signed in before shared 0263 has no known time until re-entry.
+// A session signed in before shared 0264 has no known time until re-entry.
 func TestAFormSessionWithNoRecordedTimeHasAnUnknownAuthenticationTime(t *testing.T) {
 	service, sessions, _, _, sessionID := reauthenticationFixture(t)
 	state, err := sessions.Read(context.Background(), sessionID)

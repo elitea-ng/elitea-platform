@@ -226,9 +226,10 @@ func TestArchitectureListsTheInternalAdministrationWrites(t *testing.T) {
 	}
 }
 
-// TestTheListenerChecksCopiesAreAlike keeps the scheduler's and the host's
-// copies of internal_listener_checks_test.go equal to this one beyond the
-// package clause, so a fix to a check reaches all three.
+// TestTheListenerChecksCopiesAreAlike keeps the scheduler's, the host's and
+// the gateway's copies of internal_listener_checks_test.go equal to this one
+// beyond the package clause, so a fix to a check reaches every copy. The
+// gateway is outside go.work; its own twin of this test runs in ci-gateway.
 func TestTheListenerChecksCopiesAreAlike(t *testing.T) {
 	body := func(file string) string {
 		raw, err := os.ReadFile(file)
@@ -245,6 +246,7 @@ func TestTheListenerChecksCopiesAreAlike(t *testing.T) {
 	for _, copied := range []string{
 		"../../../elitea-scheduler/cmd/elitea-scheduler/internal_listener_checks_test.go",
 		"../../../elitea-subapp-host/internal/spi/internal_listener_checks_test.go",
+		"../../../elitea-llm-gateway/internal/grpcapi/internal_listener_checks_test.go",
 	} {
 		if body(copied) != want {
 			t.Errorf("%s differs from internal_listener_checks_test.go beyond the package clause: copy the fix", copied)

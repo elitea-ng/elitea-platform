@@ -125,7 +125,7 @@ func TestRecentAuthenticationPassesAFreshSessionAndNamesItsKind(t *testing.T) {
 
 // A row whose time is not proof of an authentication is refused, however
 // recent the time: a SAML sign-in without ForceAuthn (R1.10b), a row written
-// before shared 0263 (an OIDC or SAML row that 0262 stamped with its sign-in
+// before shared 0264 (an OIDC or SAML row that 0262 stamped with its sign-in
 // time), an `elitea_session` row for the Form provider (no plane writes one
 // proven), an OIDC row with no auth_time, and a provider this file does not
 // know.
@@ -142,7 +142,7 @@ func TestRecentAuthenticationRefusesASessionWhoseAuthenticationIsNotProven(t *te
 	sealed.Provider = "sealed"
 	for name, session := range map[string]browsersession.Session{
 		"a SAML session without ForceAuthn":    unproven(browsersession.ProviderSAML),
-		"an OIDC row written before 0263":      unproven(browsersession.ProviderOIDC),
+		"an OIDC row written before 0264":      unproven(browsersession.ProviderOIDC),
 		"an unproven Form row":                 unproven(browsersession.ProviderForm),
 		"an OIDC session with no auth_time":    unknown,
 		"a sealed session (a future provider)": sealed,

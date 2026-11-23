@@ -47,9 +47,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	appmailer "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/mailer"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
 	"log/slog"
 	"net/http"
 	"net/mail"
@@ -277,7 +277,7 @@ func (h *Handler) usersCreate(w http.ResponseWriter, r *http.Request, mode strin
 	}
 	// Each address commits in its own transaction (inviteOne), so the check
 	// and the loop run under a hold of the role-writes lock that spans them.
-	hold, release, err := rolepolicy.HoldRoleWrites(r.Context(), h.pool)
+	hold, release, err := adminaccess.HoldRoleWrites(r.Context(), h.pool)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to read project roles"})
 		return
@@ -289,7 +289,7 @@ func (h *Handler) usersCreate(w http.ResponseWriter, r *http.Request, mode strin
 		projectID: projectID, asMember: mode != userWriteModeAdministration, assigned: roleIDs,
 		invited: body.Emails,
 	}); refusal != nil {
-		rolepolicy.Write(w, r, refusal)
+		adminaccess.Write(w, r, refusal)
 		return
 	}
 
@@ -550,14 +550,14 @@ func (h *Handler) usersUpdate(w http.ResponseWriter, r *http.Request, mode strin
 
 	// The no-escalation check runs under the role-writes lock, in this
 	// transaction, before its first write.
-	if err := rolepolicy.LockRoleWrites(ctx, tx); err != nil {
+	if err := adminaccess.LockRoleWrites(ctx, tx); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to update user roles"})
 		return
 	}
 	if refusal := h.checkMembershipChange(r, tx, membershipChange{
 		projectID: projectID, asMember: mode != userWriteModeAdministration, assigned: roleIDs, targets: userIDs,
 	}); refusal != nil {
-		rolepolicy.Write(w, r, refusal)
+		adminaccess.Write(w, r, refusal)
 		return
 	}
 
@@ -689,14 +689,14 @@ func (h *Handler) UsersDelete(w http.ResponseWriter, r *http.Request) {
 	// The no-escalation check runs under the role-writes lock, in this
 	// transaction, before its first write. The `{mode}` route is the only
 	// DELETE, and its gate is the member's.
-	if err := rolepolicy.LockRoleWrites(ctx, tx); err != nil {
+	if err := adminaccess.LockRoleWrites(ctx, tx); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove users"})
 		return
 	}
 	if refusal := h.checkMembershipChange(r, tx, membershipChange{
 		projectID: projectID, asMember: true, targets: userIDs,
 	}); refusal != nil {
-		rolepolicy.Write(w, r, refusal)
+		adminaccess.Write(w, r, refusal)
 		return
 	}
 

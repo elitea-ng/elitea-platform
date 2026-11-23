@@ -322,7 +322,7 @@ func TestPostgresARefreshDoesNotMoveTheAuthenticationTime(t *testing.T) {
 		t.Fatalf("authenticated_at of an unknown time = %s, want zero", unknownSession.AuthenticatedAt)
 	}
 
-	// authentication_proven (shared 0263) round-trips: a proven time reads
+	// authentication_proven (shared 0264) round-trips: a proven time reads
 	// back proven, and the plain SAML sign-in above (no ForceAuthn) and an
 	// unknown time read back unproven.
 	proven, err := manager.Create(ctx, NewSession{

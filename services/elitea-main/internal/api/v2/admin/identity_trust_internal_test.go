@@ -17,15 +17,15 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/identityproviders"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
 )
 
 // superAdmin and plainAdmin are callers resolved from the database.
 var (
-	superAdmin = WithPermissionResolver(fixedResolver{rolepolicy.SuperAdminPermission, "runtime.plugins"})
+	superAdmin = WithPermissionResolver(fixedResolver{adminaccess.SuperAdminPermission, "runtime.plugins"})
 	plainAdmin = WithPermissionResolver(fixedResolver{"runtime.plugins", "admin.auth.users"})
 )
 
@@ -166,7 +166,7 @@ func TestTheTrustGateFailsClosed(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	handler.IdentityProviderSave(recorder, providerRequest(http.MethodPut, "corporate", attackerIssuerBody))
 	require.Equal(t, http.StatusForbidden, recorder.Code)
-	require.Equal(t, rolepolicy.CodeCallerUnresolved, decodedBody(t, recorder)["code"])
+	require.Equal(t, adminaccess.CodeCallerUnresolved, decodedBody(t, recorder)["code"])
 }
 
 func TestTrustChangesNamesOnlyTheWideningDirection(t *testing.T) {

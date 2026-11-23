@@ -57,15 +57,15 @@ func TestValidateRoleNameBounds(t *testing.T) {
 // Every built-in name is refused for the two DESTRUCTIVE writes, and creation
 // is deliberately not guarded by the same list — a deployment missing `editor`
 // must be able to put it back, and the unique constraint refuses a duplicate.
-func TestRefuseBuiltInCoversEveryNameTheServiceHardcodes(t *testing.T) {
+func TestRefuseCodeNamedCoversEveryNameTheServiceHardcodes(t *testing.T) {
 	for _, name := range []string{"super_admin", "admin", "editor", "viewer", roleSystem} {
-		if err := refuseBuiltIn(name, "deleted"); err == nil {
+		if err := refuseCodeNamed(name, "deleted"); err == nil {
 			t.Errorf("%q is a built-in role but was accepted as a delete target", name)
 		} else {
 			assertStatus(t, err, http.StatusConflict)
 		}
 	}
-	if err := refuseBuiltIn("security_reviewer", "deleted"); err != nil {
+	if err := refuseCodeNamed("security_reviewer", "deleted"); err != nil {
 		t.Fatalf("a deployment-defined role was refused: %v", err)
 	}
 }
@@ -73,9 +73,9 @@ func TestRefuseBuiltInCoversEveryNameTheServiceHardcodes(t *testing.T) {
 // `roleSystem` is the constant roles.go already uses for the matrix column it
 // refuses to write. The two lists must not drift apart: a `system` column that
 // cannot be edited but CAN be deleted is the worse of the two failures.
-func TestBuiltInRolesContainsTheMatrixSystemRole(t *testing.T) {
-	if _, ok := builtInRoles[roleSystem]; !ok {
-		t.Fatalf("builtInRoles does not carry %q, the role roles.go refuses to grant to", roleSystem)
+func TestCodeNamedRolesContainsTheMatrixSystemRole(t *testing.T) {
+	if _, ok := codeNamedRoles[roleSystem]; !ok {
+		t.Fatalf("codeNamedRoles does not carry %q, the role roles.go refuses to grant to", roleSystem)
 	}
 }
 

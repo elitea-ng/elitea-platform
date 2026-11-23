@@ -62,8 +62,8 @@ is base64url of a JSON object, which always begins `ey`.
 authenticated: the OIDC `auth_time` (NULL, unknown, when the provider sends
 none), or the SAML `AuthnInstant` of a sign-in that asked for ForceAuthn (NULL
 for any other SAML sign-in). A touch never writes it.
-`authentication_proven` (shared 0263, R1.10b) says the time is proof of an
-authentication; rows written before 0263 and rows a previous-release replica
+`authentication_proven` (shared 0264, R1.10b) says the time is proof of an
+authentication; rows written before 0264 and rows a previous-release replica
 writes are unproven. `apimw.RecentAuthentication` answers 401
 `reauthentication_required` when the time is older than the limit, unknown or
 unproven. A proven OIDC or SAML row, or a Form session

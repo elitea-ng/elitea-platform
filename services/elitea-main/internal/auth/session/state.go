@@ -45,7 +45,7 @@ type State struct {
 	//
 	// It is NOT part of the language-neutral record: the store keeps it in
 	// its own column (elitea_auth.form_sessions.authenticated_at, shared
-	// 0263), because the previous release decodes the record with unknown
+	// 0264), because the previous release decodes the record with unknown
 	// members refused and deletes a record it cannot decode. Rotation
 	// compares the record bytes only, so moving this time never conflicts
 	// with them.

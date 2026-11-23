@@ -1,4 +1,4 @@
--- 0263_recent_authentication_saml_and_form.sql — recent authentication for
+-- 0264_recent_authentication_saml_and_form.sql — recent authentication for
 -- SAML and Form sessions (ADR-0059 decision 5, path 1 step 4; story R1.10b,
 -- issue 2594).
 --

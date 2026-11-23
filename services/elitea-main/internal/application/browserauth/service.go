@@ -121,7 +121,7 @@ type Authorization struct {
 	Expiration         *time.Time
 	// AuthenticatedAt is when the person last entered their password: at
 	// sign-in or at a re-entry (Reauthenticate). Zero is unknown (a session
-	// signed in before shared 0263, or by a previous-release replica).
+	// signed in before shared 0264, or by a previous-release replica).
 	AuthenticatedAt time.Time
 }
 

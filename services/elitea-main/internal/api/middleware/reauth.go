@@ -30,9 +30,9 @@ import (
 //   - a Form session, at the last time its person typed the password: the
 //     sign-in, or the re-entry at /auth/form/reauthenticate.
 //
-// The row says so (browser_sessions.authentication_proven, shared 0263; a
+// The row says so (browser_sessions.authentication_proven, shared 0264; a
 // Form session's time is only ever a password entry). A SAML sign-in without
-// ForceAuthn, a row written before 0263, and a row whose authentication time
+// ForceAuthn, a row written before 0264, and a row whose authentication time
 // is unknown are refused. So are a personal access token, a native session, a
 // run token and the pre-0117 signed cookie, whatever they claim. The refusal
 // is the same 401 for all of them: the remedy is a fresh browser
@@ -75,7 +75,7 @@ type BrowserAuthentication struct {
 // request, and false when the request was not authenticated by a session
 // this helper can vouch for: a token, a native session, a run token, the
 // legacy signed cookie, a session whose authentication time is not proven
-// (a SAML sign-in without ForceAuthn, a row written before shared 0263), a
+// (a SAML sign-in without ForceAuthn, a row written before shared 0264), a
 // provider this file does not know, or nobody.
 func BrowserAuthenticationOf(r *http.Request) (BrowserAuthentication, bool) {
 	source, ok := auth.AuthenticationSourceFromContext(r.Context())

@@ -96,9 +96,9 @@ type Session struct {
 	// Rows that existed before 0262 were backfilled from created_at.
 	AuthenticatedAt time.Time
 	// AuthenticationProven is TRUE when AuthenticatedAt is proof of an
-	// authentication (shared 0263, ADR-0059 R1.10b): an OIDC auth_time, or a
+	// authentication (shared 0264, ADR-0059 R1.10b): an OIDC auth_time, or a
 	// SAML AuthnInstant under ForceAuthn. A SAML sign-in without ForceAuthn,
-	// every row written before 0263, and a row a previous-release replica
+	// every row written before 0264, and a row a previous-release replica
 	// writes are unproven, and the recent-authentication check refuses them.
 	AuthenticationProven bool
 	LastSeenAt           time.Time

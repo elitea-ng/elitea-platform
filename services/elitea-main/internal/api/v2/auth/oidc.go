@@ -597,7 +597,7 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		// authenticated, and the sign-in time is not proof of it.
 		AuthenticationTimeUnknown: authenticatedAt.IsZero(),
 		// auth_time is the provider's statement of the authentication, so
-		// a stated one is proof (shared 0263).
+		// a stated one is proof (shared 0264).
 		AuthenticationProven: !authenticatedAt.IsZero(),
 	}, r) {
 		return

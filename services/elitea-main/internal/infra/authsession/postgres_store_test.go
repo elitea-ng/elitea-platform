@@ -261,7 +261,7 @@ func TestPostgresStoreRotateAndReplaceCommitsAuthenticatedStateAtomically(t *tes
 	}
 }
 
-// authenticated_at (shared 0263, ADR-0059 R1.10b) travels beside the record:
+// authenticated_at (shared 0264, ADR-0059 R1.10b) travels beside the record:
 // Create and RotateAndReplace write the given time, Rotate keeps the old
 // row's, NULL reads back as unknown, and the record bytes never carry it (the
 // previous release refuses an unknown member and deletes the record).

@@ -38,11 +38,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess/rolegrants"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/nativeauth"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -395,7 +395,7 @@ func (h *Handler) setAdminRole(w http.ResponseWriter, r *http.Request, body auth
 		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to read current role")
 		return
 	} else if refusal != nil {
-		rolepolicy.Write(w, r, refusal)
+		adminaccess.Write(w, r, refusal)
 		return
 	}
 
@@ -558,55 +558,98 @@ WHERE u.id = $1`, userID, adminRolePriority).Scan(&role)
 // role given (`assigned`, "" for none) and of every role taken away. A holder
 // of admin.auth.users.super_admin is exempt. It fails closed.
 func (h *Handler) checkCentralAssignment(
-	ctx context.Context, q rolepolicy.Querier, caller rolepolicy.Caller, mode, assigned string, targetID int,
-) (*rolepolicy.Refusal, error) {
-	if err := rolepolicy.LockRoleWrites(ctx, q); err != nil {
+	ctx context.Context, q adminaccess.Querier, caller adminaccess.Caller, mode, assigned string, targetID int,
+) (*adminaccess.Refusal, error) {
+	if err := adminaccess.LockRoleWrites(ctx, q); err != nil {
 		return nil, err
 	}
-	removed, err := rolepolicy.UserCentralRoles(ctx, q, targetID, mode)
+	removed, err := adminaccess.UserCentralRoles(ctx, q, targetID, mode)
 	if err != nil {
 		return nil, err
 	}
-	return h.checkCentralRoles(ctx, q, caller, mode, assigned, removed), nil
+	// The write takes every role of the mode and gives `assigned`, so it
+	// changes nothing when the target holds exactly `assigned` (or nothing,
+	// and nothing is given).
+	unchanged := (assigned == "" && len(removed) == 0) || (len(removed) == 1 && removed[0] == assigned)
+	return h.checkCentralRoles(ctx, q, caller, centralChange{
+		mode: mode, assigned: assigned, removed: removed, targetID: targetID, changes: !unchanged,
+	})
 }
 
-// checkCentralRoles is the rule for one central assignment: `assigned` is the
-// role given ("" for none), `removed` the roles taken away. The caller must
-// hold rolepolicy.LockRoleWrites in the transaction `q` belongs to, and is
-// read again here, so the check and the write see the same state.
+// centralChange is one central assignment as checkCentralRoles sees it.
+type centralChange struct {
+	mode string
+	// assigned is the role given, "" for none.
+	assigned string
+	// removed are the roles taken away.
+	removed []string
+	// targetID is the user whose roles change.
+	targetID int
+	// changes is false when the write would leave the target's roles as they
+	// are; the not-yourself rule refuses only a change.
+	changes bool
+}
+
+// checkCentralRoles is the rule for one central assignment. The caller must
+// hold adminaccess.LockRoleWrites in the transaction `q` belongs to, and is
+// read again here, so the check and the write see the same state. A failed
+// read of the seed record is an error (500), not a refusal.
 //
+//   - A built-in role whose seed row is marked unassignable (the legacy
+//     `system`) is given to nobody, by any caller (ADR-0059 R0.8a).
 //   - super_admin, given or taken, needs admin.auth.users.super_admin, in
 //     every mode.
+//   - A caller who is not a standing global administrator changes no role of
+//     its own, in either direction (CodeSelfAssignment). It is decided before
+//     the subset rule, so the caller gets the more specific code. A write that
+//     changes nothing is not refused by it.
 //   - In the administration mode, the caller holds every permission of every
 //     role given or taken. The retired developer mode grants nothing that a
 //     route reads, so clearing a developer-mode row that the legacy runtime
 //     left behind needs no subset.
 func (h *Handler) checkCentralRoles(
-	ctx context.Context, q rolepolicy.Querier, caller rolepolicy.Caller, mode, assigned string, removed []string,
-) *rolepolicy.Refusal {
+	ctx context.Context, q adminaccess.Querier, caller adminaccess.Caller, change centralChange,
+) (*adminaccess.Refusal, error) {
 	caller, err := caller.Reload(ctx)
 	if err != nil {
-		return rolepolicy.Unresolved("your own permissions could not be read, so the role change was refused")
+		return adminaccess.Unresolved("your own permissions could not be read, so the role change was refused"), nil
+	}
+	mode, assigned, removed := change.mode, change.assigned, change.removed
+	if assigned != "" {
+		unassignable, err := h.seededRolesMarked(ctx, q, mode, []string{assigned}, adminaccess.MarkerUnassignable)
+		if err != nil {
+			return nil, err
+		}
+		if len(unassignable) > 0 {
+			return adminaccess.Unassignable(assigned), nil
+		}
 	}
 	roles := append([]string{}, removed...)
 	if assigned != "" {
 		roles = append(roles, assigned)
 	}
-	if !caller.SuperAdmin && slices.Contains(roles, rolepolicy.SuperAdminRole) {
-		return rolepolicy.SuperAdminRequired()
-	}
-	if caller.SuperAdmin || mode != rolepolicy.ModeAdministration {
-		return nil
-	}
-	required, err := rolepolicy.CentralRolePermissions(ctx, q, mode, roles)
-	if err != nil {
-		return rolepolicy.Unresolved("the permissions of the role could not be read, so the role change was refused")
+	if !caller.SuperAdmin && slices.Contains(roles, adminaccess.SuperAdminRole) {
+		return adminaccess.SuperAdminRequired(), nil
 	}
 	role := assigned
 	if role == "" && len(removed) > 0 {
 		role = removed[0]
 	}
-	return rolepolicy.CheckAssignment(caller.Administration, false, role, required)
+	if change.changes {
+		if refusal := adminaccess.CheckSelfAssignment(
+			caller.UserID, caller.SuperAdmin, int64(change.targetID), role,
+		); refusal != nil {
+			return refusal, nil
+		}
+	}
+	if caller.SuperAdmin || mode != adminaccess.ModeAdministration {
+		return nil, nil
+	}
+	required, err := adminaccess.CentralRolePermissions(ctx, q, mode, roles)
+	if err != nil {
+		return adminaccess.Unresolved("the permissions of the role could not be read, so the role change was refused"), nil
+	}
+	return adminaccess.CheckAssignment(caller.Administration, false, role, required), nil
 }
 
 // resolveAssigningCaller reads the caller of an assignment once, before its
@@ -617,15 +660,15 @@ func (h *Handler) checkCentralRoles(
 // it again under the lock.
 func (h *Handler) resolveAssigningCaller(
 	w http.ResponseWriter, r *http.Request, touchesSuperAdmin bool,
-) (rolepolicy.Caller, bool) {
-	caller, refusal := rolepolicy.ResolveCaller(r, h.resolver)
+) (adminaccess.Caller, bool) {
+	caller, refusal := adminaccess.ResolveCaller(r, h.resolver)
 	if touchesSuperAdmin && (refusal != nil || !caller.SuperAdmin) {
-		rolepolicy.Write(w, r, rolepolicy.SuperAdminRequired())
-		return rolepolicy.Caller{}, false
+		adminaccess.Write(w, r, adminaccess.SuperAdminRequired())
+		return adminaccess.Caller{}, false
 	}
 	if refusal != nil {
-		rolepolicy.Write(w, r, refusal)
-		return rolepolicy.Caller{}, false
+		adminaccess.Write(w, r, refusal)
+		return adminaccess.Caller{}, false
 	}
 	return caller, true
 }

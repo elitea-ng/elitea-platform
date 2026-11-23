@@ -108,7 +108,7 @@ type User struct {
 	BrowserSessionProvider string `json:"-"`
 	// BrowserSessionAuthenticationProven is TRUE when
 	// BrowserSessionAuthenticatedAt is proof of an authentication, not the
-	// moment of a sign-in that may have been silent (shared 0263, ADR-0059
+	// moment of a sign-in that may have been silent (shared 0264, ADR-0059
 	// R1.10b): an OIDC auth_time, a SAML AuthnInstant under ForceAuthn, or a
 	// Form password entry. Set and serialised like
 	// BrowserSessionAuthenticatedAt.

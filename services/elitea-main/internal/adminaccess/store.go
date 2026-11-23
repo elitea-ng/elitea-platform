@@ -1,4 +1,4 @@
-package rolepolicy
+package adminaccess
 
 import (
 	"context"
@@ -64,14 +64,14 @@ func ResolveCaller(r *http.Request, resolver auth.PermissionResolver) (Caller, *
 // change before the commit.
 func (c Caller) Reload(ctx context.Context) (Caller, error) {
 	if c.resolver == nil {
-		return Caller{}, errors.New("rolepolicy: the caller has no resolver")
+		return Caller{}, errors.New("adminaccess: the caller has no resolver")
 	}
 	resolution, err := c.resolver.ResolvePermissions(ctx, c.principal, ModeAdministration, "")
 	if err != nil {
 		return Caller{}, err
 	}
 	if resolution.UserID != c.UserID {
-		return Caller{}, errors.New("rolepolicy: the caller resolved to another user")
+		return Caller{}, errors.New("adminaccess: the caller resolved to another user")
 	}
 	administration := SetOf(resolution.Permissions...)
 	c.Administration = administration
