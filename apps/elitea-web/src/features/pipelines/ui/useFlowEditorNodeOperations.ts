@@ -189,29 +189,62 @@ function resolveLayoutOrientation(
     : FlowEditorConstants.ORIENTATION.vertical;
 }
 
+interface PendingDuplicateState {
+  readonly baseDoc: YamlPipelineDocument;
+  readonly doc: YamlPipelineDocument;
+  readonly addedIds: readonly string[];
+}
+
+function resolveDuplicateContext(
+  committedDoc: YamlPipelineDocument,
+  pending: PendingDuplicateState | null,
+  flowNodes: readonly FlowNode[],
+  nodeId: string,
+): {
+  readonly currentDoc: YamlPipelineDocument;
+  readonly yamlNode: YamlPipelineNode;
+  readonly originalFlowNode: FlowNode;
+  readonly existingNodeIds: readonly string[];
+  readonly priorAddedIds: readonly string[];
+} | undefined {
+  const activePending = pending?.baseDoc === committedDoc ? pending : null;
+  const currentDoc = activePending ? activePending.doc : committedDoc;
+  const yamlNodes = (currentDoc.nodes ?? []).filter((node): node is YamlPipelineNode => Boolean(node));
+  const yamlNode = yamlNodes.find(node => node.id === nodeId);
+  const originalFlowNode = flowNodes.find(node => node.id === nodeId);
+  if (!yamlNode || !originalFlowNode || !canDuplicateNodeType(yamlNode.type)) {
+    return undefined;
+  }
+  const priorAddedIds = activePending?.addedIds ?? [];
+  return {
+    currentDoc,
+    yamlNode,
+    originalFlowNode,
+    existingNodeIds: [...yamlNodes.map(node => node.id), ...flowNodes.map(node => node.id), ...priorAddedIds],
+    priorAddedIds,
+  };
+}
+
 /** Duplicates a canvas node's YAML configuration without outgoing connections and selects the copy. */
 function useOnDuplicateNode(
   args: Pick<UseFlowEditorNodeOperationsArgs, 'flowNodes' | 'setFlowNodes' | 'setYamlJsonObject' | 'yamlJsonObjectRef'>,
 ): UseFlowEditorNodeOperationsResult['onDuplicateNode'] {
   const { flowNodes, setFlowNodes, setYamlJsonObject, yamlJsonObjectRef } = args;
+  const pendingStateRef = useRef<PendingDuplicateState | null>(null);
 
   return useCallback(
     (nodeId, toolNames = []) => {
-      const currentDoc = yamlJsonObjectRef.current;
-      const yamlNodes = (currentDoc?.nodes ?? []).filter((node): node is YamlPipelineNode => Boolean(node));
-      const yamlNode = yamlNodes.find(node => node.id === nodeId);
-      const originalFlowNode = flowNodes.find(node => node.id === nodeId);
-      if (!yamlNode || !originalFlowNode || !canDuplicateNodeType(yamlNode.type)) {
-        return undefined;
-      }
+      const committedDoc = yamlJsonObjectRef.current;
+      const context = resolveDuplicateContext(committedDoc, pendingStateRef.current, flowNodes, nodeId);
+      if (!context) return undefined;
 
-      const existingNodeIds = [...yamlNodes.map(node => node.id), ...flowNodes.map(node => node.id)];
-      const newId = getDuplicateNodeId({ name: nodeId, existingNodeIds, toolNames });
-      const copiedYamlNode = duplicateYamlNode(yamlNode, newId);
-      const stored = setYamlJsonObject(withAppendedNode(currentDoc, copiedYamlNode, false));
-      if (stored === false) return undefined;
+      const newId = getDuplicateNodeId({ name: nodeId, existingNodeIds: context.existingNodeIds, toolNames });
+      const nextDoc = withAppendedNode(context.currentDoc, duplicateYamlNode(context.yamlNode, newId), false);
+      if (setYamlJsonObject(nextDoc) === false) return undefined;
 
-      const copiedFlowNode = duplicateFlowNode(originalFlowNode, newId);
+      pendingStateRef.current = { baseDoc: committedDoc, doc: nextDoc, addedIds: [...context.priorAddedIds, newId] };
+
+      const copiedFlowNode = duplicateFlowNode(context.originalFlowNode, newId);
       setFlowNodes(prevNodes => [
         ...prevNodes.map(node => (node.selected ? { ...node, selected: false } : node)),
         copiedFlowNode,

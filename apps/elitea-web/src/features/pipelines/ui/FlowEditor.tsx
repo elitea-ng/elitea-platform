@@ -204,7 +204,20 @@ const FlowEditorImpl = forwardRef<FlowEditorHandle, FlowEditorProps>(function Fl
     onLayoutVersionChange,
   });
 
-  const latest = useLatest({ fitViewVoid, flowNodes, onAddNode, onDuplicateNode, onRcvAgentEvent, setFlowEdges, setFlowNodes, deleteAllRunNodes, calculateLayoutNodes, expandAll, orientation, onStopRun, pipelineRunNodes });
+  const versionToolNames = useMemo(
+    () => (versionTools ?? []).map(entry => entry.name).filter((name): name is string => Boolean(name)),
+    [versionTools],
+  );
+
+  const handleDuplicateNode = useCallback(
+    (nodeId: string): FlowNode | undefined => {
+      if (safeDisabled) return undefined;
+      return onDuplicateNode(nodeId, versionToolNames);
+    },
+    [onDuplicateNode, safeDisabled, versionToolNames],
+  );
+
+  const latest = useLatest({ fitViewVoid, flowNodes, onAddNode, handleDuplicateNode, onRcvAgentEvent, setFlowEdges, setFlowNodes, deleteAllRunNodes, calculateLayoutNodes, expandAll, orientation, onStopRun, pipelineRunNodes });
 
   useImperativeHandle(
     ref,
@@ -213,7 +226,7 @@ const FlowEditorImpl = forwardRef<FlowEditorHandle, FlowEditorProps>(function Fl
         if (latest.current.flowNodes.length > 2) setTimeout(latest.current.fitViewVoid, 100);
       },
       onAddNode: type => latest.current.onAddNode(type),
-      onDuplicateNode: nodeId => latest.current.onDuplicateNode(nodeId),
+      onDuplicateNode: nodeId => latest.current.handleDuplicateNode(nodeId),
       onRcvAgentEvent: event => latest.current.onRcvAgentEvent(event),
       setFlowEdges: updater => latest.current.setFlowEdges(updater),
       setFlowNodes: updater => latest.current.setFlowNodes(updater),
@@ -253,14 +266,6 @@ const FlowEditorImpl = forwardRef<FlowEditorHandle, FlowEditorProps>(function Fl
       setTimeout(fitViewVoid, 100);
     },
     [calculateLayoutNodes, yamlJsonObject, expandAll, fitViewVoid],
-  );
-
-  const handleDuplicateNode = useCallback(
-    (nodeId: string) => {
-      if (safeDisabled) return;
-      onDuplicateNode(nodeId);
-    },
-    [onDuplicateNode, safeDisabled],
   );
 
   const onToggleStateDrawer = useCallback(() => setIsStateDrawerOpen(prev => !prev), []);

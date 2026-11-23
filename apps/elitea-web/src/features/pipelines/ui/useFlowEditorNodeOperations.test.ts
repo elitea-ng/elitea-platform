@@ -390,6 +390,40 @@ describe('useFlowEditorNodeOperations', () => {
     expect(writtenCopy?.['settings']).toBeUndefined();
   });
 
+  it('rapid synchronous onDuplicateNode calls before commit produce distinct IDs and preserve both copies', () => {
+    const setFlowNodes = vi.fn();
+    const setYamlJsonObject = vi.fn();
+    const original = makeNode('LLM_1', PipelineNodeTypes.LLM, 100, 120);
+    const { result } = renderHook(() =>
+      useFlowEditorNodeOperations({
+        flowNodes: [original],
+        setFlowNodes,
+        setFlowEdges: vi.fn(),
+        setYamlJsonObject,
+        yamlJsonObjectRef: {
+          current: {
+            entry_point: 'LLM_1',
+            nodes: [{ id: 'LLM_1', type: PipelineNodeTypes.LLM, transition: 'END' }],
+          },
+        },
+        getViewport: () => ({ x: 0, y: 0, zoom: 1 }),
+        setCenter: vi.fn(),
+        getZoom: () => 1,
+        editorRef: { current: null },
+        editorWidth: 800,
+        editorHeight: 600,
+      }),
+    );
+
+    const first = result.current.onDuplicateNode('LLM_1');
+    const second = result.current.onDuplicateNode('LLM_1');
+
+    expect(first?.id).toBe('LLM_1_copy');
+    expect(second?.id).toBe('LLM_1_copy_2');
+    const latestDoc = setYamlJsonObject.mock.calls[1]?.[0] as { nodes: Array<{ id: string }> };
+    expect(latestDoc.nodes.map(node => node.id)).toEqual(['LLM_1', 'LLM_1_copy', 'LLM_1_copy_2']);
+  });
+
   it('onDuplicateNode returns undefined for non-duplicable (END/deprecated) or missing nodes', () => {
     const setYamlJsonObject = vi.fn();
     const { result } = renderHook(() =>

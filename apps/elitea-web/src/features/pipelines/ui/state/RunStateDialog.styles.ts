@@ -14,75 +14,6 @@
  * base rule at equal specificity).
  */
 import type { SxProps, Theme } from '@mui/material/styles';
-import { stepConnectorClasses } from '@mui/material/StepConnector';
-
-/**
- * A perfect circle, not a design-system corner-radius choice — R-T10's
- * `ad-hoc-radius` rule (`tools/lint-rules/rules/ad-hoc-radius.mjs`) flags
- * any *literal* `borderRadius` value, but only inspects `Literal` AST
- * nodes; an `Identifier` reference (this constant) is untouched by that
- * check, matching the rule's own stated intent ("radii come from the
- * radiusSm|Md|Lg tokens") — `50%` for a circle isn't a radius-token choice
- * at all, there is no token this could be instead.
- */
-const CIRCLE_RADIUS = '50%';
-
-/**
- * `visible` (default `true`) folds the trailing-connector `display: 'none'`
- * override directly into this one `sx` function, rather than composing it
- * as a second array entry at the call site — `StepConnector`'s own `sx`
- * type (`@mui/material/StepConnector`) does not accept a nested `SxProps<
- * Theme>[]` array the way `Box`'s more permissive `sx` prop does (verified:
- * `tsc` reports "Index signature for type 'string' is missing" for that
- * shape), so a single combined function is both simpler and the only form
- * that type-checks.
- *
- * Baseline splits this into two entirely separate style objects: the real
- * inter-step connector (`processConnectorStyles(isError).connector`,
- * status-coloured on every state incl. its unclassed base rule) versus the
- * trailing `timeline.length < 2` placeholder connector (`styles.
- * stepConnector`, a single hardcoded `theme.vars.palette.border.flowNode` gray with
- * no `isError` dependency at all). Both connectors are rendered through
- * the same `<ProcessConnector isError visible>` call site pattern here, so
- * the `&:last-child` selector below stands in for that baseline split:
- * per `@mui/material/Step`'s own render (`children: [hasConnector ?
- * connector : null, children]`), every *real* inter-step connector is
- * nested inside its following `Step` (never its parent `Stepper`'s last
- * child), while this component's own trailing placeholder instance is
- * appended as a direct extra child of `Stepper` *after* all `Step`s — the
- * one spot in the tree that is always the Stepper root's actual last
- * child, in both the `visible`/`hidden` cases. `&:last-child` therefore
- * targets exactly, and only, the placeholder instance, at higher CSS
- * specificity (3 selectors) than the unclassed base `.line` rule (2
- * selectors) so it always wins there — real connectors, never being their
- * own parent's last child, are untouched by it.
- */
-export function processConnectorSx(isError: boolean, visible = true): SxProps<Theme> {
-  return (theme: Theme) => {
-    const lineColor = !isError ? theme.vars.palette.status.published : theme.vars.palette.status.rejected;
-    const placeholderLineColor = theme.vars.palette.border.flowNode;
-    return {
-      display: visible ? undefined : 'none',
-      [`&.${stepConnectorClasses.active}`]: {
-        [`& .${stepConnectorClasses.line}`]: { borderColor: lineColor },
-      },
-      [`&.${stepConnectorClasses.completed}`]: {
-        [`& .${stepConnectorClasses.line}`]: { borderColor: lineColor },
-      },
-      [`& .${stepConnectorClasses.line}`]: {
-        marginLeft: '-1.0625rem',
-        marginRight: '-1.0625rem',
-        borderColor: lineColor,
-        borderTopWidth: '0.375rem',
-        borderRadius: theme.vars.shape.radiusMd,
-        zIndex: 0,
-      },
-      '&:last-child': {
-        [`& .${stepConnectorClasses.line}`]: { borderColor: placeholderLineColor },
-      },
-    };
-  };
-}
 
 export const stateItemViewHeaderContainerSx: SxProps<Theme> = {
   display: 'flex',
@@ -120,52 +51,6 @@ export const stateItemViewValueBoxSx: SxProps<Theme> = (theme: Theme) => ({
   border: `.0625rem solid ${theme.vars.palette.border.lines}`,
   overflow: 'auto',
 });
-
-export function processStepIconOuterSx(active: boolean, isError: boolean): SxProps<Theme> {
-  return (theme: Theme) => ({
-    width: '1.3125rem',
-    height: '1.3125rem',
-    borderRadius: CIRCLE_RADIUS,
-    display: 'flex',
-    justifyContent: 'center',
-    alignItems: 'center',
-    boxSizing: 'border-box',
-    // Button-reset properties, not in the baseline (a plain `<div
-    // onClick>`) — this port renders the real element as a native
-    // `<button>` for `jsx-a11y/prefer-tag-over-role` (see `./
-    // RunStateDialog.parts.tsx`'s `ProcessStepIcon`), which needs its
-    // default button chrome (border/background/padding/font) reset to
-    // reproduce the baseline's div-shaped look.
-    padding: 0,
-    background: 'transparent',
-    font: 'inherit',
-    cursor: 'pointer',
-    border: active
-      ? `.0625rem solid ${!isError ? theme.vars.palette.status.published : theme.vars.palette.status.rejected}`
-      : 0,
-    zIndex: 1,
-    '&:hover': {
-      width: '1.5rem',
-      height: '1.5rem',
-    },
-  });
-}
-
-export function processStepIconInnerSx(isError: boolean): SxProps<Theme> {
-  return (theme: Theme) => ({
-    width: '1.25rem',
-    height: '1.25rem',
-    borderRadius: CIRCLE_RADIUS,
-    boxSizing: 'border-box',
-    backgroundColor: !isError ? theme.vars.palette.status.published : theme.vars.palette.status.rejected,
-    border: `.1875rem solid ${theme.vars.palette.background.tabPanel}`,
-    zIndex: 1,
-    '&:hover': {
-      width: '1.4375rem',
-      height: '1.4375rem',
-    },
-  });
-}
 
 function runStatusColor(status: string, theme: Theme): string {
   switch (status) {
@@ -263,34 +148,6 @@ export const contentContainerSx: SxProps<Theme> = (theme: Theme) => ({
   width: '100%',
   gap: theme.spacing(0.5),
 });
-
-export const statusIndicatorSx: SxProps<Theme> = {
-  display: 'flex',
-  gap: '.25rem',
-  alignItems: 'center',
-  justifyContent: 'flex-end',
-};
-
-export const progressBoxSx: SxProps<Theme> = { width: '0.875rem', height: '0.875rem' };
-
-export const iconInactiveSx: SxProps<Theme> = (theme: Theme) => ({ color: theme.vars.palette.icon.fill.inactive });
-
-/** The `Interrupt`/`Stopped` branches' `AttentionIcon` wrapper — baseline: `sx={[styles.progressBox, (theme) => ({ color: theme.vars.palette.status.onModeration })]}`. */
-export const attentionIconSx: SxProps<Theme> = (theme: Theme) => ({
-  width: '0.875rem',
-  height: '0.875rem',
-  color: theme.vars.palette.status.onModeration,
-});
-
-export const iconErrorSx: SxProps<Theme> = (theme: Theme) => ({
-  width: '1rem',
-  height: '1rem',
-  color: theme.vars.palette.status.rejected,
-});
-
-export const textErrorSx: SxProps<Theme> = (theme: Theme) => ({ color: theme.vars.palette.status.rejected });
-
-export const textPublishedSx: SxProps<Theme> = (theme: Theme) => ({ color: theme.vars.palette.status.published });
 
 export const statesHeaderSx: SxProps<Theme> = (theme: Theme) => ({
   padding: `0 ${theme.spacing(3)} ${theme.spacing(1.5)} ${theme.spacing(3)}`,

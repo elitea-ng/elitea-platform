@@ -314,6 +314,8 @@ describe('StateDrawer', () => {
       />,
     );
 
-    expect(screen.getByTestId('pipeline-state-drawer')).toBeInTheDocument();
+    const drawer = screen.getByTestId('pipeline-state-drawer');
+    expect(drawer).toBeInTheDocument();
+    expect(getComputedStyle(drawer).right).toBe('400px');
   });
 });

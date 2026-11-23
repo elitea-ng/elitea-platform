@@ -243,16 +243,17 @@ describe('FlowEditor', () => {
     expect(screen.getByTestId('pipeline-canvas-arrange')).toBeInTheDocument();
   });
 
-  it('duplicates a node via ref.onDuplicateNode, appending a disconnected copy to YAML', () => {
+  it('duplicates a node via ref.onDuplicateNode, avoiding versionTools name collisions and preserving compiler-admitted Printer transition', () => {
     const ref = createRef<FlowEditorHandle>();
     const setYamlJsonObject = vi.fn();
     const userNode = { id: 'Printer_1', type: 'printer', position: { x: 10, y: 20 }, data: { label: 'Printer_1' } };
     renderFlowEditor(
       baseProps({
         yamlJsonObject: {
-          nodes: [{ id: 'Printer_1', type: 'printer', transition: 'END' }],
+          nodes: [{ id: 'Printer_1', type: 'printer', transition: 'Next_1', content: 'hi' }],
         },
         initialNodes: [userNode],
+        versionTools: [{ id: 't1', type: 'toolkit', name: 'Printer_1_copy' }],
         setYamlJsonObject,
       }),
       ref,
@@ -261,9 +262,34 @@ describe('FlowEditor', () => {
     setYamlJsonObject.mockClear();
     const duplicated = ref.current?.onDuplicateNode('Printer_1');
 
-    expect(duplicated?.id).toBe('Printer_1_copy');
-    const writtenDoc = setYamlJsonObject.mock.calls[0]?.[0] as { nodes?: Array<{ id?: string; type?: string }> } | undefined;
-    expect(writtenDoc?.nodes?.some(node => node.id === 'Printer_1_copy' && node.type === 'printer')).toBe(true);
+    expect(duplicated?.id).toBe('Printer_1_copy_2');
+    const writtenDoc = setYamlJsonObject.mock.calls[0]?.[0] as {
+      nodes?: Array<{ id?: string; type?: string; transition?: string }>;
+    } | undefined;
+    expect(
+      writtenDoc?.nodes?.some(
+        node => node.id === 'Printer_1_copy_2' && node.type === 'printer' && node.transition === 'END',
+      ),
+    ).toBe(true);
+  });
+
+  it('refuses ref.onDuplicateNode when disabled (read-only guard)', () => {
+    const ref = createRef<FlowEditorHandle>();
+    const setYamlJsonObject = vi.fn();
+    const userNode = { id: 'Printer_1', type: 'printer', position: { x: 10, y: 20 }, data: { label: 'Printer_1' } };
+    renderFlowEditor(
+      baseProps({
+        yamlJsonObject: { nodes: [{ id: 'Printer_1', type: 'printer', transition: 'END' }] },
+        initialNodes: [userNode],
+        setYamlJsonObject,
+        disabled: true,
+      }),
+      ref,
+    );
+
+    setYamlJsonObject.mockClear();
+    expect(ref.current?.onDuplicateNode('Printer_1')).toBeUndefined();
+    expect(setYamlJsonObject).not.toHaveBeenCalled();
   });
 
   it('renders with disabled left unset (exercises the `disabled ?? false` fallback)', () => {

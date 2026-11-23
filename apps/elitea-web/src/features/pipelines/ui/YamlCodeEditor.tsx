@@ -1,5 +1,5 @@
 import type { ReactNode, Ref } from 'react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 
 import Box from '@mui/material/Box';
 import IconButton from '@mui/material/IconButton';
@@ -159,6 +159,15 @@ const fullScreenSurfaceSx: SxProps<Theme> = (theme) => ({
   },
 });
 
+function assignRef<T>(target: Ref<T> | undefined, value: T | null): void {
+  if (!target) return;
+  if (typeof target === 'function') {
+    target(value);
+    return;
+  }
+  (target as { current: T | null }).current = value;
+}
+
 export function YamlCodeEditor({
   code,
   onChangeCode,
@@ -168,25 +177,52 @@ export function YamlCodeEditor({
 }: YamlCodeEditorProps): ReactNode {
   const theme = useTheme();
   const [isFullScreen, setIsFullScreen] = useState(false);
+  const inlineEditorRef = useRef<CodeMirrorEditorHandle | null>(null);
+  const fullScreenEditorRef = useRef<CodeMirrorEditorHandle | null>(null);
   const extensions = useMemo(() => [createYamlLanguage(), createYamlLinter()], []);
   const actionIconStyle = useMemo(
     () => ({ width: '1rem', height: '1rem', fill: theme.vars.palette.icon.fill.secondary }),
     [theme.vars.palette.icon.fill.secondary],
   );
 
+  const attachInlineRef = useCallback(
+    (handle: CodeMirrorEditorHandle | null) => {
+      inlineEditorRef.current = handle;
+      assignRef(ref, handle);
+    },
+    [ref],
+  );
+
+  const flushEditorIfDirty = useCallback(
+    (editorHandle: CodeMirrorEditorHandle | null): string => {
+      const liveCode = editorHandle?.getCode();
+      if (liveCode === undefined) return code;
+      if (liveCode !== code.replace(/\r\n?/g, '\n')) {
+        onChangeCode(liveCode);
+        return liveCode;
+      }
+      return code;
+    },
+    [code, onChangeCode],
+  );
+
   const onCopy = useCallback(() => {
-    void handleCopy(code);
-  }, [code]);
+    const activeHandle = isFullScreen ? fullScreenEditorRef.current : inlineEditorRef.current;
+    const liveCode = activeHandle?.getCode() ?? code;
+    void handleCopy(liveCode);
+  }, [code, isFullScreen]);
 
   const onOpenFullScreen = useCallback(() => {
+    flushEditorIfDirty(inlineEditorRef.current);
     setIsFullScreen(true);
     onFullScreenChange?.(true);
-  }, [onFullScreenChange]);
+  }, [flushEditorIfDirty, onFullScreenChange]);
 
   const onCloseFullScreen = useCallback(() => {
+    flushEditorIfDirty(fullScreenEditorRef.current);
     setIsFullScreen(false);
     onFullScreenChange?.(false);
-  }, [onFullScreenChange]);
+  }, [flushEditorIfDirty, onFullScreenChange]);
 
   const copyLabel = t('features.pipelines.yamlEditor.copyYaml', 'Copy YAML');
   const fullScreenLabel = t('features.pipelines.yamlEditor.fullScreenView', 'Full screen view');
@@ -227,7 +263,7 @@ export function YamlCodeEditor({
         sx={editorSurfaceSx}
       >
         <CodeMirrorEditor
-          ref={ref ?? null}
+          ref={attachInlineRef}
           value={code}
           onChange={onChangeCode}
           extensions={extensions}
@@ -251,6 +287,7 @@ export function YamlCodeEditor({
               sx={fullScreenSurfaceSx}
             >
               <CodeMirrorEditor
+                ref={fullScreenEditorRef}
                 value={code}
                 onChange={onChangeCode}
                 extensions={extensions}

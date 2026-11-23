@@ -44,14 +44,17 @@ import DialogContent from '@mui/material/DialogContent';
 import Typography from '@mui/material/Typography';
 
 import { FlowEditorConstants } from '../../lib/flow-editor/constants';
-import type { GroupedTimelineStep } from '../../lib/run-state-timeline';
+import {
+  findLastOuterStepIndex,
+  type GroupedTimelineStep,
+} from '../../lib/run-state-timeline';
 import { BasicAccordion, type AccordionItem } from '@/shared/ui/BasicAccordion';
 import { t } from '@/shared/i18n';
 
 import { TimeLine } from '../run-state-timeline';
 import { RunStatus, StateItemView, StateValueModal } from './RunStateDialog.parts';
 import { HeaderActions } from './RunStateDialog.status';
-import { isRunFinished, stepStateValues, type StepStateValues } from './runStateValues';
+import { isRunFinished, stepStateValues } from './runStateValues';
 import {
   contentContainerSx,
   dialogContentSx,
@@ -82,48 +85,6 @@ function groupedTimelineOf(data: RunStateDialogData): readonly GroupedTimelineSt
   return grouped && grouped.length > 0 ? grouped : undefined;
 }
 
-function lastOuterStepIndex(steps: readonly GroupedTimelineStep[]): number {
-  for (let index = steps.length - 1; index >= 0; index -= 1) {
-    if (!steps[index]?.is_nested) return index;
-  }
-  return steps.length - 1;
-}
-
-function previousScopedStep(
-  steps: readonly GroupedTimelineStep[],
-  selectedStep: number,
-  currentStep: GroupedTimelineStep | undefined,
-): GroupedTimelineStep | undefined {
-  for (let index = selectedStep - 1; index >= 0; index -= 1) {
-    const candidate = steps[index];
-    if (!candidate) continue;
-    if (currentStep?.is_nested) {
-      if (candidate.is_nested && candidate.scope_id === currentStep.scope_id) return candidate;
-    } else if (!candidate.is_nested) {
-      return candidate;
-    }
-  }
-  return undefined;
-}
-
-function resolveStepValues(
-  steps: readonly GroupedTimelineStep[],
-  selectedStep: number,
-  variable: string,
-  runFinished: boolean,
-): StepStateValues {
-  const currentStep = steps[selectedStep];
-  if (currentStep?.is_nested) {
-    const prev = previousScopedStep(steps, selectedStep, currentStep);
-    return {
-      before: prev ? prev.state?.[variable] : '',
-      after: currentStep.state?.[variable],
-      isFinal: false,
-    };
-  }
-  return stepStateValues(steps, selectedStep, variable, runFinished);
-}
-
 /** @public */
 export interface RunStateDialogProps {
   readonly data: RunStateDialogData;
@@ -150,7 +111,8 @@ export function RunStateDialog(props: RunStateDialogProps): ReactNode {
 
   const outerSteps = timelineOf(data);
   const steps = groupedTimelineOf(data) ?? outerSteps;
-  const lastOuterIndex = lastOuterStepIndex(steps);
+  const lastOuterIndex = findLastOuterStepIndex(steps);
+  const effectiveSelectedStep = steps.length > 0 ? Math.min(selectedStep, steps.length - 1) : 0;
   const variables = useMemo(() => Object.keys(state ?? { input: '', messages: [] }), [state]);
 
   const onSelect = useCallback((index: number) => setSelectedStep(index), []);
@@ -161,6 +123,18 @@ export function RunStateDialog(props: RunStateDialogProps): ReactNode {
   }, []);
 
   const onCloseValueModal = useCallback(() => setShowValueModal(false), []);
+
+  useEffect(() => {
+    setSelectedStep(0);
+  }, [data.label]);
+
+  useEffect(() => {
+    if (steps.length > 0 && selectedStep >= steps.length) {
+      setSelectedStep(steps.length - 1);
+    } else if (steps.length === 0 && selectedStep !== 0) {
+      setSelectedStep(0);
+    }
+  }, [selectedStep, steps.length]);
 
   useEffect(() => {
     if (data.status === FlowEditorConstants.PipelineStatus.InProgress && lastOuterIndex >= 0) {
@@ -215,7 +189,7 @@ export function RunStateDialog(props: RunStateDialogProps): ReactNode {
                 steps={steps}
                 outerSteps={outerSteps}
                 status={data.status}
-                selectedStep={selectedStep}
+                selectedStep={effectiveSelectedStep}
                 onSelect={onSelect}
               />
               <Box sx={statesHeaderSx}>
@@ -228,9 +202,8 @@ export function RunStateDialog(props: RunStateDialogProps): ReactNode {
               </Box>
               <Box sx={statesContainerSx}>
                 {variables.map((variable, index) => {
-                  // #6883: the last step of a finished (terminal) run shows the run's
-                  // final state — see `runStateValues.ts`.
-                  const values = resolveStepValues(steps, selectedStep, variable, runFinished);
+                  // #6883 + EL-3734: scoped before/after and outer-only final state — see `runStateValues.ts`.
+                  const values = stepStateValues(steps, effectiveSelectedStep, variable, runFinished);
                   const items: readonly AccordionItem[] = [
                     {
                       title: variable,

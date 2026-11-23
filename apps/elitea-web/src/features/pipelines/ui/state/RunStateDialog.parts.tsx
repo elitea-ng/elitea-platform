@@ -23,22 +23,16 @@ import type { ReactNode } from 'react';
 import Close from '@mui/icons-material/Close';
 import FullscreenOutlinedIcon from '@mui/icons-material/FullscreenOutlined';
 import Box from '@mui/material/Box';
-import CircularProgress from '@mui/material/CircularProgress';
 import Dialog from '@mui/material/Dialog';
 import DialogContent from '@mui/material/DialogContent';
 import DialogTitle from '@mui/material/DialogTitle';
 import IconButton from '@mui/material/IconButton';
 import type { SxProps, Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
-import Tooltip from '@mui/material/Tooltip';
 
 import { t } from '@/shared/i18n';
 
 import {
-  iconInactiveSx,
-  processStepIconInnerSx,
-  processStepIconOuterSx,
-  progressBoxSx,
   runStatusContainerSx,
   runStatusTextSx,
   stateItemViewContainerSx,
@@ -106,44 +100,6 @@ export function StateItemView({ onFullScreen, name, valueBefore, valueAfter, isF
   );
 }
 
-export interface ProcessStepIconProps {
-  readonly active: boolean;
-  readonly tooltip: string;
-  readonly index: number;
-  readonly onSelect: (index: number) => void;
-  readonly isError: boolean;
-}
-
-export function ProcessStepIcon({ active, tooltip, index, onSelect, isError }: ProcessStepIconProps): ReactNode {
-  const select = (): void => onSelect(index);
-
-  return (
-    <Tooltip
-      title={tooltip}
-      placement="top"
-    >
-      {/* Baseline: a plain `<Box onClick>` with no keyboard affordance at
-          all (a `<div>`, not a real button). This app's `jsx-a11y` gates
-          are stricter than the baseline ever enforced — a real native
-          `<button>` (via `Box component="button"`) both satisfies
-          `prefer-tag-over-role` (no `role="button"` on a non-button
-          element) and gets Enter/Space activation for free, so no manual
-          `onKeyDown` is needed either. Not a baseline behaviour, a real
-          a11y fix, same class of addition `shared/ui/BasicAccordion.tsx`'s
-          own doc comment documents for its `aria-labelledby` gap. */}
-      <Box
-        component="button"
-        type="button"
-        aria-label={tooltip}
-        sx={processStepIconOuterSx(active, isError)}
-        onClick={select}
-      >
-        <Box sx={processStepIconInnerSx(isError)} />
-      </Box>
-    </Tooltip>
-  );
-}
-
 export interface RunStatusProps {
   readonly status: string;
 }
@@ -159,36 +115,6 @@ export function RunStatus({ status }: RunStatusProps): ReactNode {
         {status}
       </Typography>
     </Box>
-  );
-}
-
-export interface InProgressIndicatorProps {
-  readonly stepName: string;
-}
-
-/** The timeline header's live "Performing..." indicator — split out of `./RunStateDialog.tsx` for the same complexity-budget reason as its siblings above. */
-export function InProgressIndicator({ stepName }: InProgressIndicatorProps): ReactNode {
-  return (
-    <>
-      <Typography
-        variant="bodyMedium"
-        color="text.secondary"
-      >
-        {`${stepName}:`}
-      </Typography>
-      <Box sx={progressBoxSx}>
-        <CircularProgress
-          size={14}
-          sx={iconInactiveSx}
-        />
-      </Box>
-      <Typography
-        variant="bodyMedium"
-        sx={iconInactiveSx}
-      >
-        {t('pipelines.flowEditor.state.performing', 'Performing')}
-      </Typography>
-    </>
   );
 }
 
