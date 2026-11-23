@@ -52,7 +52,7 @@ RETURNING id`).Scan(&userID); err != nil {
 	// second arrives, and hold exactly both sets after it.
 	resolver := legacyrbac.NewPostgresResolver(pool)
 	id := strconv.FormatInt(userID, 10)
-	principal := auth.User{ID: id, UserID: id}
+	principal := auth.User{ID: id, UserID: id, CredentialKind: auth.CredentialKindSession}
 	var previous []string
 	for count, name := range roles {
 		if _, err := pool.Exec(ctx, `

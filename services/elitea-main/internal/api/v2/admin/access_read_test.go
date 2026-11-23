@@ -38,7 +38,7 @@ const (
 // the gates of internal/api/router.go.
 func (e escalationEnvironment) gatedAccessRouter(email string) chi.Router {
 	id := fmt.Sprint(e.ids[email])
-	principal := auth.User{ID: id, UserID: id}
+	principal := auth.User{ID: id, UserID: id, CredentialKind: auth.CredentialKindSession}
 	resolver := legacyrbac.NewPostgresResolver(e.pool)
 	handler := admin.NewHandler(e.pool, admin.WithPermissionResolver(resolver))
 	central := func(permissions ...string) func(http.Handler) http.Handler {
@@ -152,8 +152,8 @@ func TestTheAccessHistoryNamesWhoGrantedARoleWhenAndFromWhere(t *testing.T) {
 		granted.ActorEmail == nil || *granted.ActorEmail != escalationSuper {
 		t.Fatalf("granted row names actor %v %v, want %d %s", granted.ActorUserID, granted.ActorEmail, actor, escalationSuper)
 	}
-	if granted.Source != "console" || revoked.Source != "api" {
-		t.Fatalf("sources = %s, %s; want console then api", granted.Source, revoked.Source)
+	if granted.Source != "console" || revoked.Source != "console" {
+		t.Fatalf("sources = %s, %s; want console for both browser sessions", granted.Source, revoked.Source)
 	}
 	if granted.OccurredAt.Before(before) || granted.OccurredAt.After(time.Now().Add(time.Minute)) {
 		t.Fatalf("granted at %s, want about now", granted.OccurredAt)

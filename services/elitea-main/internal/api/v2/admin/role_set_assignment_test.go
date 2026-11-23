@@ -184,7 +184,7 @@ func TestRemovingOneOfTwoRolesLeavesTheOtherAndWritesOneRow(t *testing.T) {
 	}
 	want := []grantRow{{
 		user: plain, actor: env.ids[escalationSuper], role: adminaccess.RoleSecurityAuditor,
-		mode: "administration", action: "revoked", source: "api",
+		mode: "administration", action: "revoked", source: "console",
 	}}
 	if got := grantHistory(t, env.pool, plain); fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("history = %+v, want %+v", got, want)
