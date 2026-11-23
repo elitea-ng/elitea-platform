@@ -7334,5 +7334,7 @@
   "features.pipelines.editorPanel.mode.yaml": "YAML",
   "features.pipelines.yamlEditor.copyYaml": "Copy YAML",
   "features.pipelines.yamlEditor.fullScreenTitle": "YAML",
-  "features.pipelines.yamlEditor.fullScreenView": "Full screen view"
+  "features.pipelines.yamlEditor.fullScreenView": "Full screen view",
+  "entities.webhook.table.secretNotSet": "Not set",
+  "entities.webhook.table.secretWriteOnly": "Shown once when created or rotated. Rotate to get a new one."
 }

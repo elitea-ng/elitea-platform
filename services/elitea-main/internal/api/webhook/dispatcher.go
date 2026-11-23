@@ -161,7 +161,35 @@ type Dispatcher struct {
 	// absent guard degrades rather than fails closed here, unlike
 	// Handler.validateDestination's write-path gate.
 	guard *DestinationGuard
+	// secrets resolves a webhook's vault reference to its signing secret.
+	// nil refuses every delivery of a webhook that has a reference — see
+	// WithSecretResolver.
+	secrets SecretResolver
 }
+
+// SecretResolver reads one value out of a project vault by its
+// `{{secret.NAME}}` reference. internal/api/v2/secrets.Handler implements it.
+type SecretResolver interface {
+	ResolveSecretValue(ctx context.Context, projectID, secretRef string) (string, error)
+}
+
+// WithSecretResolver wires the vault the dispatcher reads each webhook's
+// signing secret from (issue 2963).
+//
+// Without it a webhook whose row carries a reference is never sent: its
+// delivery is logged FAILED with errSigningSecretUnavailable. Sending it
+// unsigned instead would hand the receiver a request it cannot tell from a
+// forgery, which is worse than no request.
+func WithSecretResolver(resolver SecretResolver) DispatcherOption {
+	return func(d *Dispatcher) {
+		d.secrets = resolver
+	}
+}
+
+// errSigningSecretUnavailable is the logged reason a delivery was not sent
+// because its signing secret could not be read from the vault. The message
+// names no vault id, reference or value.
+var errSigningSecretUnavailable = errors.New("the webhook signing secret could not be read from the project vault")
 
 // DispatcherOption configures a Dispatcher built by NewDispatcher.
 type DispatcherOption func(*Dispatcher)
@@ -247,12 +275,44 @@ func (d *Dispatcher) HandleDomainEvent(ctx context.Context, projectID, eventType
 			continue
 		}
 		wh := wh
+		// Read once per webhook for this dispatch batch, and held no longer:
+		// every retry of this event signs with it, and the next event reads
+		// the vault again, so a rotation takes effect on the next event
+		// rather than whenever a cache expires.
+		secret := d.resolveSigningSecret(ctx, wh)
 		// One goroutine per subscriber: a slow or unreachable destination
 		// must not delay delivery to every other webhook on the same event,
 		// the same reason the original (unwired) HandleEvent already used
 		// `go d.deliver` per webhook.
-		go d.deliverAndLog(ctx, wh, eventType, body)
+		go d.deliverAndLog(ctx, wh, secret, eventType, body)
 	}
+}
+
+// signingSecret is one webhook's resolved signing material for one dispatch.
+// value "" with err nil means the webhook has no secret and its deliveries go
+// out unsigned, which is what such a webhook has always done (issue 2959
+// tracks requiring one).
+type signingSecret struct {
+	value string
+	err   error
+}
+
+// resolveSigningSecret reads the secret a delivery is signed with: the vault
+// value the row's reference names, or, for a row the start-up vault move has
+// not reached yet, the plaintext the row still holds.
+func (d *Dispatcher) resolveSigningSecret(ctx context.Context, wh Webhook) signingSecret {
+	if wh.SecretRef == "" {
+		return signingSecret{value: wh.Secret}
+	}
+	if d.secrets == nil {
+		return signingSecret{err: errSigningSecretUnavailable}
+	}
+	value, err := d.secrets.ResolveSecretValue(ctx, wh.ProjectID, wh.SecretRef)
+	if err != nil || value == "" {
+		slog.Error("webhook: resolve signing secret", "webhook", wh.ID, "project", wh.ProjectID, "err", err)
+		return signingSecret{err: errSigningSecretUnavailable}
+	}
+	return signingSecret{value: value}
 }
 
 // deliveryBody is the exact byte sequence signed and POSTed. `payload` is
@@ -272,8 +332,8 @@ func deliveryBody(eventType, projectID string, payload any) ([]byte, error) {
 // for it. It is the async path's terminal function (always called via `go`)
 // and Redeliver's building block (called directly, on the caller's
 // goroutine, for the synchronous UX Redeliver's own comment explains).
-func (d *Dispatcher) deliverAndLog(ctx context.Context, wh Webhook, eventType string, body []byte) {
-	outcome := d.attempt(ctx, wh, eventType, body)
+func (d *Dispatcher) deliverAndLog(ctx context.Context, wh Webhook, secret signingSecret, eventType string, body []byte) {
+	outcome := d.attempt(ctx, wh, secret, eventType, body)
 	if d.deliveries == nil {
 		return
 	}
@@ -315,7 +375,14 @@ func (d *Dispatcher) deliverAndLog(ctx context.Context, wh Webhook, eventType st
 // failed the dial-time re-resolution: rebinding, or a record that changed in
 // the few milliseconds between the two checks). Either way the outcome is
 // DeliveryStatusBlocked, not DeliveryStatusFailed, and the loop stops.
-func (d *Dispatcher) attempt(ctx context.Context, wh Webhook, eventType string, body []byte) deliveryOutcome {
+func (d *Dispatcher) attempt(ctx context.Context, wh Webhook, secret signingSecret, eventType string, body []byte) deliveryOutcome {
+	if secret.err != nil {
+		// Nothing is sent: an unsigned request to a receiver that expects a
+		// signature is indistinguishable from a forged one. Not retried here,
+		// since the vault answers the same way three times in a row; a
+		// Redeliver re-reads it.
+		return deliveryOutcome{Attempts: 1, Status: DeliveryStatusFailed, LastError: secret.err.Error()}
+	}
 	if d.guard != nil {
 		if err := d.guard.Validate(ctx, wh.URL); err != nil {
 			return deliveryOutcome{Attempts: 1, Status: DeliveryStatusBlocked, LastError: err.Error()}
@@ -324,7 +391,7 @@ func (d *Dispatcher) attempt(ctx context.Context, wh Webhook, eventType string, 
 	var outcome deliveryOutcome
 	for i := 0; i < maxDeliveryAttempts; i++ {
 		outcome.Attempts++
-		code, err := d.send(ctx, wh, eventType, body)
+		code, err := d.send(ctx, wh, secret.value, eventType, body)
 		if err != nil {
 			if errors.Is(err, ErrDestinationRefused) {
 				outcome.Status = DeliveryStatusBlocked
@@ -366,7 +433,7 @@ func (d *Dispatcher) attempt(ctx context.Context, wh Webhook, eventType string, 
 
 // send makes exactly one HTTP attempt and returns the response status code
 // (0 on a transport-level failure, alongside the error).
-func (d *Dispatcher) send(ctx context.Context, wh Webhook, eventType string, body []byte) (int, error) {
+func (d *Dispatcher) send(ctx context.Context, wh Webhook, secret, eventType string, body []byte) (int, error) {
 	attemptCtx, cancel := context.WithTimeout(ctx, deliveryTimeout)
 	defer cancel()
 
@@ -377,8 +444,8 @@ func (d *Dispatcher) send(ctx context.Context, wh Webhook, eventType string, bod
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "EliteA-Webhook/1.0")
 	req.Header.Set(EventTypeHeader, eventType)
-	if wh.Secret != "" {
-		req.Header.Set(SignatureHeader, "sha256="+signBody(wh.Secret, body))
+	if secret != "" {
+		req.Header.Set(SignatureHeader, "sha256="+signBody(secret, body))
 	}
 
 	resp, err := d.client.Do(req)
@@ -444,7 +511,7 @@ func (d *Dispatcher) Redeliver(ctx context.Context, projectID, webhookID, delive
 		return Delivery{}, err
 	}
 
-	outcome := d.attempt(ctx, wh, original.Event, original.Payload)
+	outcome := d.attempt(ctx, wh, d.resolveSigningSecret(ctx, wh), original.Event, original.Payload)
 	return d.deliveries.Create(ctx, Delivery{
 		WebhookID:    wh.ID,
 		ProjectID:    wh.ProjectID,

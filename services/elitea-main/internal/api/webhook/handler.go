@@ -2,6 +2,8 @@ package webhook
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -13,12 +15,31 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
+// Webhook is one row of the outbound webhook registry, and the shape every
+// read route returns.
+//
+// The signing secret is WRITE-ONLY (issue 2963). It lives in the project
+// vault as a hidden secret, the row keeps only the `{{secret.NAME}}`
+// reference, and neither field below that carries secret material is ever
+// marshalled: both are tagged `json:"-"`. A read reports only whether a
+// secret is set (HasSecret). Create and RotateSecret return the value once,
+// through secretResponse.
 type Webhook struct {
-	ID        string    `json:"id"`
-	ProjectID string    `json:"project_id"`
-	URL       string    `json:"url"`
-	Events    []string  `json:"events"`
-	Secret    string    `json:"secret,omitempty"`
+	ID        string   `json:"id"`
+	ProjectID string   `json:"project_id"`
+	URL       string   `json:"url"`
+	Events    []string `json:"events"`
+	// Secret is plaintext signing material. On the way IN to the repository
+	// it is the value to seal. On the way OUT it is non-empty only for a row
+	// written before the vault move reached it (see
+	// migrations/shared/0265_webhook_secret_reference.sql), which the
+	// dispatcher still signs with so an upgrade sends nothing unsigned.
+	Secret string `json:"-"`
+	// SecretRef is the vault reference the dispatcher resolves per delivery.
+	SecretRef string `json:"-"`
+	// HasSecret reports that deliveries are signed. It is the only trace of
+	// the secret a read carries.
+	HasSecret bool      `json:"has_secret"`
 	Active    bool      `json:"active"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -26,11 +47,36 @@ type Webhook struct {
 
 type Repository interface {
 	List(ctx context.Context, projectID string) ([]Webhook, error)
+	// Create stores wh and, when wh.Secret is non-empty, seals it into the
+	// project vault in the same transaction.
 	Create(ctx context.Context, projectID string, wh Webhook) (Webhook, error)
 	Get(ctx context.Context, projectID, webhookID string) (Webhook, error)
-	Update(ctx context.Context, projectID, webhookID string, wh Webhook) (Webhook, error)
+	// Update replaces url, events and active. A nil secret keeps the stored
+	// secret; a non-nil one replaces it ("" removes it).
+	Update(ctx context.Context, projectID, webhookID string, wh Webhook, secret *string) (Webhook, error)
 	Delete(ctx context.Context, projectID, webhookID string) error
 	ListByEvent(ctx context.Context, projectID, eventType string) ([]Webhook, error)
+	// RotateSecret replaces the stored secret with `secret` and removes the
+	// previous vault value, in one transaction.
+	RotateSecret(ctx context.Context, projectID, webhookID, secret string) (Webhook, error)
+}
+
+// webhookWriteRequest is the create and update body. `secret` is a pointer
+// so an update can tell "not sent" (keep the stored secret) from "" (remove
+// it). Update never echoes it.
+type webhookWriteRequest struct {
+	URL    string   `json:"url"`
+	Events []string `json:"events"`
+	Secret *string  `json:"secret"`
+	Active bool     `json:"active"`
+}
+
+// secretResponse is the one shape that carries the secret: the answer to
+// Create (when the caller set one) and to RotateSecret. No other route
+// returns it, and no route returns it twice.
+type secretResponse struct {
+	Webhook
+	Secret string `json:"secret,omitempty"`
 }
 
 // The permissions the five routes below are gated on (#496).
@@ -58,16 +104,11 @@ type Repository interface {
 //     database. A new name would be granted by nothing, which is #354/#359/#402.
 //   - Their viewer/editor split is already decided by the legacy matrix: the two
 //     reads to admin, editor and viewer; the three writes to admin and editor.
-//   - The disclosure tier matches. The read returns `secret`, and the
-//     configurations read those strings normally gate returns `data`, which on
-//     this platform holds the provider api_key verbatim. Granting the webhook
-//     read to a role that already reads the other would be inconsistent in one
-//     direction, and withholding it would be inconsistent in the other.
-//
-// The listing still discloses the `secret` to every holder of the read string.
-// That is a redaction question about the response body, not an authorization
-// question about the route, and it is deliberately not answered here: #496 is
-// the missing gate, and the gate is what stops project A reading project B.
+//   - The disclosure tier matches. Neither read returns secret material: the
+//     configurations read returns `{{secret.NAME}}` references, and the
+//     webhook read returns `has_secret` (issue 2963). The signing secret is
+//     shown once, by Create and RotateSecret, to a caller holding a WRITE
+//     string.
 const (
 	listPermission    = "configurations.configurations.list"
 	detailsPermission = "configurations.configuration.details"
@@ -106,8 +147,8 @@ type Handler struct {
 type Option func(*Handler)
 
 // WithPermissionResolver supplies the resolver EVERY route is gated on. Without
-// it all five answer 403, which is the safe direction: the surface reads and
-// rotates another tenant's webhook secret.
+// it every route answers 403, which is the safe direction: the surface
+// repoints and rotates another tenant's webhooks.
 func WithPermissionResolver(resolver auth.PermissionResolver) Option {
 	return func(h *Handler) { h.permissionResolver = resolver }
 }
@@ -144,8 +185,8 @@ func NewHandler(repo Repository, opts ...Option) *Handler {
 //
 // It applied no gate at all until #496. Every handler below takes that path
 // segment straight to the repository, which filters `webhooks WHERE
-// project_id = $1`, so any authenticated caller could list another project's
-// webhook url and `secret`, replace the destination, or rotate the secret.
+// project_id = $1`, so the gate is what keeps one project's callers off
+// another project's webhooks.
 //
 // The gate lives HERE rather than at the mount in router.go because the five
 // routes need four different strings and one mount can carry only one
@@ -159,6 +200,9 @@ func (h *Handler) Routes() chi.Router {
 	r.With(h.require(detailsPermission)).Get("/{webhookID}", h.Get)
 	r.With(h.require(updatePermission)).Put("/{webhookID}", h.Update)
 	r.With(h.require(deletePermission)).Delete("/{webhookID}", h.Delete)
+	// Rotating the signing secret is a write that returns the new value
+	// once, so it takes the update string, the same one PUT takes.
+	r.With(h.require(updatePermission)).Post("/{webhookID}/rotate_secret", h.RotateSecret)
 	// The delivery log is a READ of what the webhook already did, so it
 	// takes the same permission as reading the webhook itself.
 	r.With(h.require(detailsPermission)).Get("/{webhookID}/deliveries", h.ListDeliveries)
@@ -190,7 +234,11 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": webhooks})
+	items := make([]Webhook, len(webhooks))
+	for index, wh := range webhooks {
+		items[index] = wh.redacted()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
@@ -202,50 +250,104 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, wh)
+	writeJSON(w, http.StatusOK, wh.redacted())
 }
 
+// Create registers a webhook. A `secret` in the body is sealed into the
+// project vault and returned in this response only.
 func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectID")
 
-	var wh Webhook
-	if err := json.NewDecoder(r.Body).Decode(&wh); err != nil {
+	var body webhookWriteRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		apierr.Write(w, apierr.BadRequest("invalid request body"))
 		return
 	}
-	if err := h.validateDestination(r.Context(), wh.URL); err != nil {
+	if err := h.validateDestination(r.Context(), body.URL); err != nil {
 		apierr.Write(w, err)
 		return
 	}
+	secret := ""
+	if body.Secret != nil {
+		secret = *body.Secret
+	}
 
-	created, err := h.repo.Create(r.Context(), projectID, wh)
+	created, err := h.repo.Create(r.Context(), projectID, Webhook{
+		URL: body.URL, Events: body.Events, Secret: secret, Active: body.Active,
+	})
 	if err != nil {
 		apierr.Write(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, created)
+	writeJSON(w, http.StatusCreated, secretResponse{Webhook: created.redacted(), Secret: secret})
 }
 
 func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectID")
 	webhookID := chi.URLParam(r, "webhookID")
 
-	var wh Webhook
-	if err := json.NewDecoder(r.Body).Decode(&wh); err != nil {
+	var body webhookWriteRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		apierr.Write(w, apierr.BadRequest("invalid request body"))
 		return
 	}
-	if err := h.validateDestination(r.Context(), wh.URL); err != nil {
+	if err := h.validateDestination(r.Context(), body.URL); err != nil {
 		apierr.Write(w, err)
 		return
 	}
 
-	updated, err := h.repo.Update(r.Context(), projectID, webhookID, wh)
+	updated, err := h.repo.Update(r.Context(), projectID, webhookID, Webhook{
+		URL: body.URL, Events: body.Events, Active: body.Active,
+	}, body.Secret)
 	if err != nil {
 		apierr.Write(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, updated)
+	writeJSON(w, http.StatusOK, updated.redacted())
+}
+
+// RotateSecret replaces the webhook's signing secret with a new random value
+// this server generates, and returns it once. The previous value stops
+// signing at once, so a receiver must switch to the new one.
+func (h *Handler) RotateSecret(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectID")
+	webhookID := chi.URLParam(r, "webhookID")
+
+	secret, err := NewSigningSecret()
+	if err != nil {
+		apierr.Write(w, apierr.Internal("internal server error"))
+		return
+	}
+	rotated, err := h.repo.RotateSecret(r.Context(), projectID, webhookID, secret)
+	if err != nil {
+		apierr.Write(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, secretResponse{Webhook: rotated.redacted(), Secret: secret})
+}
+
+// signingSecretBytes is the entropy of one generated signing secret: 256
+// bits, the width of an HMAC-SHA256 output.
+const signingSecretBytes = 32
+
+// NewSigningSecret returns one random signing secret, base64url with no
+// padding, from the operating system's cryptographically secure source.
+func NewSigningSecret() (string, error) {
+	raw := make([]byte, signingSecretBytes)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+// redacted is the row as a route returns it. The secret fields are already
+// `json:"-"`; clearing them as well means a later change to a tag cannot turn
+// a response into a disclosure.
+func (wh Webhook) redacted() Webhook {
+	wh.HasSecret = wh.HasSecret || wh.Secret != "" || wh.SecretRef != ""
+	wh.Secret = ""
+	wh.SecretRef = ""
+	return wh
 }
 
 func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {

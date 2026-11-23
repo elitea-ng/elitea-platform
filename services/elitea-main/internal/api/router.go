@@ -6178,8 +6178,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 
 			// === Webhooks ===
 			//
-			// Five routes over `webhooks WHERE project_id = $1`. The listing
-			// returns the row's `secret` and the PUT rotates it, and until #496
+			// The routes over `webhooks WHERE project_id = $1`. The signing
+			// secret is write-only (issue 2963): it lives in the project vault
+			// and only Create and rotate_secret return it, once. Until #496
 			// the subrouter carried no gate, so any authenticated caller could
 			// name any project id. The gates are inside the package — see that
 			// Routes() header for the permission each route takes and why the

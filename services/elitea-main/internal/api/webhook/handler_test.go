@@ -45,6 +45,8 @@ func permissiveTestGuard() *DestinationGuard {
 
 type mockWebhookRepo struct {
 	webhooks []Webhook
+	// rotatedTo is the last value RotateSecret stored.
+	rotatedTo string
 }
 
 func (m *mockWebhookRepo) List(_ context.Context, _ string) ([]Webhook, error) {
@@ -69,10 +71,37 @@ func (m *mockWebhookRepo) Get(_ context.Context, _ string, id string) (Webhook, 
 	return Webhook{}, nil
 }
 
-func (m *mockWebhookRepo) Update(_ context.Context, _ string, id string, wh Webhook) (Webhook, error) {
+func (m *mockWebhookRepo) Update(_ context.Context, _ string, id string, wh Webhook, secret *string) (Webhook, error) {
+	for index := range m.webhooks {
+		if m.webhooks[index].ID != id {
+			continue
+		}
+		stored := &m.webhooks[index]
+		stored.URL, stored.Events, stored.Active = wh.URL, wh.Events, wh.Active
+		if secret != nil {
+			stored.Secret, stored.SecretRef = "", ""
+			if *secret != "" {
+				stored.SecretRef = "{{secret.rotated}}"
+			}
+		}
+		stored.UpdatedAt = time.Now()
+		return *stored, nil
+	}
 	wh.ID = id
 	wh.UpdatedAt = time.Now()
 	return wh, nil
+}
+
+func (m *mockWebhookRepo) RotateSecret(_ context.Context, _ string, id, secret string) (Webhook, error) {
+	m.rotatedTo = secret
+	for index := range m.webhooks {
+		if m.webhooks[index].ID == id {
+			m.webhooks[index].Secret = ""
+			m.webhooks[index].SecretRef = "{{secret.rotated}}"
+			return m.webhooks[index], nil
+		}
+	}
+	return Webhook{ID: id, SecretRef: "{{secret.rotated}}"}, nil
 }
 
 func (m *mockWebhookRepo) Delete(_ context.Context, _ string, _ string) error {
@@ -113,6 +142,7 @@ var webhookPermissions = []struct {
 	{http.MethodGet, "/api/v2/projects/proj-1/webhooks/wh-1", detailsPermission},
 	{http.MethodPut, "/api/v2/projects/proj-1/webhooks/wh-1", updatePermission},
 	{http.MethodDelete, "/api/v2/projects/proj-1/webhooks/wh-1", deletePermission},
+	{http.MethodPost, "/api/v2/projects/proj-1/webhooks/wh-1/rotate_secret", updatePermission},
 	{http.MethodGet, "/api/v2/projects/proj-1/webhooks/wh-1/deliveries", detailsPermission},
 	{http.MethodPost, "/api/v2/projects/proj-1/webhooks/wh-1/deliveries/del-1/redeliver", updatePermission},
 }
@@ -323,6 +353,169 @@ func TestHandler_Create(t *testing.T) {
 	_ = json.NewDecoder(w.Body).Decode(&wh)
 	if wh.ID != "wh-new" {
 		t.Errorf("expected ID wh-new, got %s", wh.ID)
+	}
+}
+
+/* ── the secret is write-only (issue 2963) ─────────────────────────────── */
+
+// decodeObject decodes one JSON object into raw members, so a test can tell
+// an absent `secret` key from an empty one.
+func decodeObject(t *testing.T, body []byte) map[string]json.RawMessage {
+	t.Helper()
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(body, &object); err != nil {
+		t.Fatalf("decode %s: %v", body, err)
+	}
+	return object
+}
+
+func serve(r http.Handler, method, path, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, path, bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w
+}
+
+// assertNoSecretMaterial fails when a response object carries the secret, its
+// vault reference, or any of the given values anywhere in its bytes.
+func assertNoSecretMaterial(t *testing.T, route string, body []byte, values ...string) {
+	t.Helper()
+	object := decodeObject(t, body)
+	for _, key := range []string{"secret", "secret_ref"} {
+		if _, present := object[key]; present {
+			t.Errorf("%s returned a %q member: %s", route, key, body)
+		}
+	}
+	for _, value := range values {
+		if bytes.Contains(body, []byte(value)) {
+			t.Errorf("%s response contains secret material %q", route, value)
+		}
+	}
+	var hasSecret bool
+	if err := json.Unmarshal(object["has_secret"], &hasSecret); err != nil || !hasSecret {
+		t.Errorf("%s has_secret = %s, want true", route, object["has_secret"])
+	}
+}
+
+// The list and detail routes never return the secret, for any caller that
+// passes the gate: not the vault reference, and not a plaintext the vault move
+// has not reached yet. They say only that one is set.
+func TestReadRoutesNeverReturnTheSecret(t *testing.T) {
+	repo := &mockWebhookRepo{webhooks: []Webhook{
+		{ID: "wh-vault", ProjectID: "proj-1", URL: "https://example.com/a", Events: []string{}, SecretRef: "{{secret.0123456789abcdef0123456789abcdef}}", Active: true},
+		{ID: "wh-legacy", ProjectID: "proj-1", URL: "https://example.com/b", Events: []string{}, Secret: "legacy-plaintext-value", Active: true},
+	}}
+	r := webhookRouter(repo, entitledResolver())
+	material := []string{"0123456789abcdef0123456789abcdef", "legacy-plaintext-value"}
+
+	list := serve(r, http.MethodGet, "/api/v2/projects/proj-1/webhooks/", "")
+	if list.Code != http.StatusOK {
+		t.Fatalf("list status = %d", list.Code)
+	}
+	var listBody struct {
+		Items []json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(list.Body.Bytes(), &listBody); err != nil || len(listBody.Items) != 2 {
+		t.Fatalf("list body = %s", list.Body.String())
+	}
+	for _, item := range listBody.Items {
+		assertNoSecretMaterial(t, "GET list", item, material...)
+	}
+
+	for _, id := range []string{"wh-vault", "wh-legacy"} {
+		detail := serve(r, http.MethodGet, "/api/v2/projects/proj-1/webhooks/"+id, "")
+		if detail.Code != http.StatusOK {
+			t.Fatalf("detail status = %d", detail.Code)
+		}
+		assertNoSecretMaterial(t, "GET "+id, detail.Body.Bytes(), material...)
+	}
+}
+
+// Create returns the secret the caller set, once; the next read does not.
+func TestCreateReturnsTheSecretOnce(t *testing.T) {
+	repo := &mockWebhookRepo{}
+	r := webhookRouter(repo, entitledResolver())
+
+	created := serve(r, http.MethodPost, "/api/v2/projects/proj-1/webhooks/",
+		`{"url":"https://example.com/hook","events":["skill.created"],"secret":"caller-chosen-value","active":true}`)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create status = %d: %s", created.Code, created.Body.String())
+	}
+	var createdBody struct {
+		ID        string `json:"id"`
+		Secret    string `json:"secret"`
+		HasSecret bool   `json:"has_secret"`
+	}
+	if err := json.Unmarshal(created.Body.Bytes(), &createdBody); err != nil {
+		t.Fatal(err)
+	}
+	if createdBody.Secret != "caller-chosen-value" || !createdBody.HasSecret {
+		t.Fatalf("create returned secret %q has_secret %v, want the submitted value once", createdBody.Secret, createdBody.HasSecret)
+	}
+
+	detail := serve(r, http.MethodGet, "/api/v2/projects/proj-1/webhooks/"+createdBody.ID, "")
+	assertNoSecretMaterial(t, "GET after create", detail.Body.Bytes(), "caller-chosen-value")
+}
+
+// A create without a secret returns no `secret` member and has_secret false.
+func TestCreateWithoutASecretReportsNone(t *testing.T) {
+	r := webhookRouter(&mockWebhookRepo{}, entitledResolver())
+	created := serve(r, http.MethodPost, "/api/v2/projects/proj-1/webhooks/",
+		`{"url":"https://example.com/hook","events":[],"active":true}`)
+	object := decodeObject(t, created.Body.Bytes())
+	if _, present := object["secret"]; present {
+		t.Errorf("create without a secret returned one: %s", created.Body.String())
+	}
+	if string(object["has_secret"]) != "false" {
+		t.Errorf("has_secret = %s, want false", object["has_secret"])
+	}
+}
+
+// Rotate generates a new value server-side and returns it once; the update
+// route never echoes a secret, even one it was sent.
+func TestRotateReturnsTheNewSecretOnceAndUpdateNever(t *testing.T) {
+	repo := &mockWebhookRepo{webhooks: []Webhook{
+		{ID: "wh-1", ProjectID: "proj-1", URL: "https://example.com/a", Events: []string{}, SecretRef: "{{secret.old}}", Active: true},
+	}}
+	r := webhookRouter(repo, entitledResolver())
+
+	rotated := serve(r, http.MethodPost, "/api/v2/projects/proj-1/webhooks/wh-1/rotate_secret", "")
+	if rotated.Code != http.StatusOK {
+		t.Fatalf("rotate status = %d: %s", rotated.Code, rotated.Body.String())
+	}
+	var rotatedBody struct {
+		Secret string `json:"secret"`
+	}
+	if err := json.Unmarshal(rotated.Body.Bytes(), &rotatedBody); err != nil {
+		t.Fatal(err)
+	}
+	if len(rotatedBody.Secret) != 43 || rotatedBody.Secret != repo.rotatedTo {
+		t.Fatalf("rotate returned %q, stored %q; want one generated 256-bit value", rotatedBody.Secret, repo.rotatedTo)
+	}
+	detail := serve(r, http.MethodGet, "/api/v2/projects/proj-1/webhooks/wh-1", "")
+	assertNoSecretMaterial(t, "GET after rotate", detail.Body.Bytes(), rotatedBody.Secret)
+
+	updated := serve(r, http.MethodPut, "/api/v2/projects/proj-1/webhooks/wh-1",
+		`{"url":"https://example.com/a","events":[],"secret":"sent-on-update","active":false}`)
+	if updated.Code != http.StatusOK {
+		t.Fatalf("update status = %d: %s", updated.Code, updated.Body.String())
+	}
+	assertNoSecretMaterial(t, "PUT", updated.Body.Bytes(), "sent-on-update", rotatedBody.Secret)
+}
+
+// Two generated secrets are distinct and 256 bits wide.
+func TestNewSigningSecretIsRandom(t *testing.T) {
+	first, err := NewSigningSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewSigningSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second || len(first) != 43 {
+		t.Fatalf("NewSigningSecret returned %q and %q", first, second)
 	}
 }
 

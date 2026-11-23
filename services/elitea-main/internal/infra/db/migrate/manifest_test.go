@@ -1216,7 +1216,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 264: shared/0264_recent_authentication_saml_and_form.sql,
 	// browser_sessions.authentication_proven and form_sessions.authenticated_at
 	// (issue 2594, ADR-0059 R1.10b). No permission.
-	require.EqualValues(t, 264, Head(shared))
+	//
+	// 265: shared/0265_webhook_secret_reference.sql, webhooks.secret_ref, the
+	// vault reference that replaces the plaintext signing secret (issue
+	// 2963). No permission.
+	require.EqualValues(t, 265, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

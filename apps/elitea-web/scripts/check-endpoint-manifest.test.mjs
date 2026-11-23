@@ -966,7 +966,9 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 574 -> 577 (issue 2268, epic 2254 story S1c): the Microsoft sign-in start, callback and
 // redeem. The shared web feature that calls them is story S1d, so none is in the manifest yet and
 // MANIFEST_ENTRY_COUNT is unchanged.
-const GENERATED_OPERATION_COUNT = 577;
+// 577 -> 578 (issue 2963): rotateWebhookSecret, the write-only webhook signing secret's rotation.
+// The Webhooks settings page calls it, so MANIFEST_ENTRY_COUNT moves too.
+const GENERATED_OPERATION_COUNT = 578;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1303,8 +1305,11 @@ const GENERATED_OPERATION_COUNT = 577;
  *
  * 389 -> 393 (issue 1631, ADR-0051 M5): marketplace.getFeedback, saveReview, saveWorkforceReport and
  * actOnFeedback, the Feedback section of a listing. All generated.
+ *
+ * 393 -> 394 (issue 2963): webhooks.rotateWebhookSecret, the Webhooks settings page's rotate action
+ * now that the signing secret is write-only. Generated.
  */
-const MANIFEST_ENTRY_COUNT = 393;
+const MANIFEST_ENTRY_COUNT = 394;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

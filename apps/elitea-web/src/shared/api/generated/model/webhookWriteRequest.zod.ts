@@ -50,11 +50,16 @@ export const WebhookWriteRequest = zod
         "NOTE(issue 876, SSRF hardening): resolved and checked before the row is written. A destination that resolves to a loopback, private, link-local or multicast address is refused with 400 unless ELITEA_WEBHOOK_EGRESS_ALLOWLIST explicitly permits private-network egress (link-local and multicast are refused no matter what that variable says).\n",
       ),
     events: zod.array(zod.string()),
-    secret: zod.string().optional(),
+    secret: zod
+      .string()
+      .optional()
+      .describe(
+        "Write-only signing secret, sealed into the project vault. On create it is returned once in the response. On update, omit it to keep the stored secret, send a value to replace it (not echoed), or send an empty string to remove it.\n",
+      ),
     active: zod.boolean(),
   })
   .describe(
-    "The create/update body (handler.go's Create/Update decode `Webhook` directly; `id`/`project_id`/timestamps are server-assigned and ignored if sent).\n",
+    "The create/update body. `id`/`project_id`/timestamps are server-assigned and ignored if sent.\n",
   );
 
 export type WebhookWriteRequest = zod.input<typeof WebhookWriteRequest>;

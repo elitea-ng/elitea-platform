@@ -11,13 +11,18 @@
  * these routes.
  *
  * `useListWebhooks` (a real GET) is the one generated hook this page uses
- * as-is. The three writes go through the generated RAW functions
- * (`createWebhook`/`updateWebhook`/`deleteWebhook`) wrapped in a local
- * `useMutation`, the same pattern `RequestModelConnection.tsx` uses for
+ * as-is. The four writes go through the generated RAW functions
+ * (`createWebhook`/`updateWebhook`/`rotateWebhookSecret`/`deleteWebhook`)
+ * wrapped in a local `useMutation`, the same pattern `RequestModelConnection.tsx` uses for
  * `createModerationRequest`: `orval.config.ts`'s `query.useQuery: true`
  * makes every generated `useXxx` a query-shaped hook regardless of HTTP verb
  * (there is no generated `useMutation` variant), so a write needs its own
  * `useMutation` wrapper rather than the generated `useCreateWebhook` etc.
+ *
+ * The signing secret is write-only (issue 2963). No read returns it, so the
+ * page never holds a stored secret: an edit or a toggle omits `secret` and
+ * the server keeps it, and the value is shown exactly once, from the create
+ * or rotate response, in `WebhookSecretDialog`.
  */
 import { memo, useCallback, useMemo, useState } from 'react';
 
@@ -33,11 +38,12 @@ import { serverErrorMessage } from '@/shared/api/serverErrorMessage';
 import { t } from '@/shared/i18n';
 import { useSelectedProjectStore } from '@/widgets/app-shell';
 import { DrawerPageHeader } from '@/shared/ui/settings/DrawerPageHeader';
-import type { ListWebhooks200, Webhook, WebhookWriteRequest } from '@/shared/api/generated/model';
+import type { ListWebhooks200, Webhook, WebhookWithSecret, WebhookWriteRequest } from '@/shared/api/generated/model';
 import {
   createWebhook,
   deleteWebhook,
   getListWebhooksQueryKey,
+  rotateWebhookSecret,
   updateWebhook,
   useListWebhooks,
 } from '@/shared/api/generated/webhooks/webhooks';
@@ -60,14 +66,17 @@ function toViewRow(webhook: Webhook): WebhookViewRow {
     id: webhook.id,
     url: webhook.url,
     events: webhook.events,
-    secret: webhook.secret ?? '',
+    hasSecret: webhook.has_secret,
     active: webhook.active,
   };
 }
 
-/** The three writes' shared shape — every one replaces the full record (handler.go's Update has no partial-patch mode). */
-function writeBody(url: string, events: readonly string[], secret: string, active: boolean): WebhookWriteRequest {
-  return { url, events: [...events], secret, active };
+/**
+ * The create and update body. An update omits `secret`, which keeps the
+ * stored one: the page cannot send it back, because no read returns it.
+ */
+function writeBody(url: string, events: readonly string[], active: boolean, secret?: string): WebhookWriteRequest {
+  return secret === undefined ? { url, events: [...events], active } : { url, events: [...events], secret, active };
 }
 
 export const WebhooksContent = memo(function WebhooksContent() {
@@ -92,6 +101,10 @@ export const WebhooksContent = memo(function WebhooksContent() {
   const updateMutation = useMutation({
     mutationFn: ({ webhookID, body }: { webhookID: string; body: WebhookWriteRequest }) =>
       updateWebhook(projectId, webhookID, body),
+    onSuccess: invalidateList,
+  });
+  const rotateMutation = useMutation({
+    mutationFn: (webhookID: string) => rotateWebhookSecret(projectId, webhookID),
     onSuccess: invalidateList,
   });
   const deleteMutation = useMutation({
@@ -132,7 +145,7 @@ export const WebhooksContent = memo(function WebhooksContent() {
         // An edit keeps the row's existing secret — rotating is a separate
         // action (see WebhookFormDialog's own header comment on why).
         updateMutation.mutate(
-          { webhookID: editingRow.id, body: writeBody(values.url, values.events, editingRow.secret, values.active) },
+          { webhookID: editingRow.id, body: writeBody(values.url, values.events, values.active) },
           {
             onSuccess: () => setFormOpen(false),
             onError: (error) => {
@@ -148,10 +161,12 @@ export const WebhooksContent = memo(function WebhooksContent() {
         return;
       }
       const secret = generateWebhookSecret();
-      createMutation.mutate(writeBody(values.url, values.events, secret, values.active), {
-        onSuccess: () => {
+      createMutation.mutate(writeBody(values.url, values.events, values.active, secret), {
+        onSuccess: (response) => {
           setFormOpen(false);
-          setRevealSecret(secret);
+          // The create response is the one place the server returns the
+          // secret; the dialog shows that value, once.
+          setRevealSecret((response.data as WebhookWithSecret).secret ?? secret);
         },
         onError: (error) => {
           const message = serverErrorMessage(
@@ -167,25 +182,22 @@ export const WebhooksContent = memo(function WebhooksContent() {
   );
 
   /* ── rotate ────────────────────────────────────────────────────────── */
+  // The server generates the new value and returns it in this response only.
   const rotateSecret = useCallback(
     (row: WebhookViewRow) => {
-      const secret = generateWebhookSecret();
-      updateMutation.mutate(
-        { webhookID: row.id, body: writeBody(row.url, row.events, secret, row.active) },
-        {
-          onSuccess: () => setRevealSecret(secret),
-          onError: onError(t('entities.webhook.error.rotateFailed', 'Failed to rotate the secret')),
-        },
-      );
+      rotateMutation.mutate(row.id, {
+        onSuccess: (response) => setRevealSecret((response.data as WebhookWithSecret).secret ?? ''),
+        onError: onError(t('entities.webhook.error.rotateFailed', 'Failed to rotate the secret')),
+      });
     },
-    [updateMutation, onError],
+    [rotateMutation, onError],
   );
 
   /* ── enable / disable ─────────────────────────────────────────────── */
   const toggleActive = useCallback(
     (row: WebhookViewRow, active: boolean) => {
       updateMutation.mutate(
-        { webhookID: row.id, body: writeBody(row.url, row.events, row.secret, active) },
+        { webhookID: row.id, body: writeBody(row.url, row.events, active) },
         { onError: onError(t('entities.webhook.error.updateFailed', 'Failed to update the webhook')) },
       );
     },
