@@ -377,6 +377,11 @@ impl PipelineNodeRuntimes {
         self.execution.as_ref().and_then(|ctx| ctx.deadline)
     }
 
+    #[cfg(test)]
+    pub(crate) fn execution_deadline_for_tests(&self) -> Option<tokio::time::Instant> {
+        self.execution_deadline()
+    }
+
     /// FU-250: the servers of the run's tokens, never the tokens themselves.
     pub(crate) fn with_delegated_servers(
         mut self,

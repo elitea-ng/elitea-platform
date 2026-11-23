@@ -264,6 +264,13 @@ pub(crate) trait NodeAttemptBody: Node {
     ) -> Option<GraphError> {
         None
     }
+
+    /// Optional typed `GraphError` returned when restoring a committed terminal
+    /// stop from the journal (SEC-5B2-05: preserves FU-343 `model_gateway.*`
+    /// classes across process replacement).
+    fn restored_stop_graph_error(&self, _: NodeFailureClass) -> Option<GraphError> {
+        None
+    }
 }
 
 /// Read-only owning projection. It must never invoke an external operation.
@@ -1202,6 +1209,9 @@ impl RecoverableNode {
                             .report_restored_terminal_failure(context, failure.class)
                             .await?;
                     }
+                    if let Some(graph_error) = self.body.restored_stop_graph_error(failure.class) {
+                        return Err(graph_error);
+                    }
                     return Err(recovery_error("pipeline.node_recovery.failed"));
                 }
                 NodeAttemptPhase::ControlStopped { class, .. } => {
@@ -1338,25 +1348,28 @@ impl RecoverableNode {
                         }
                         if failure.failure.class != NodeFailureClass::LeaseLost
                             && reason != super::node_recovery::StopReason::OperatorApprovalRequired
-                            && let Some(code) = failure.terminal_code
                         {
                             journal.ensure_current()?;
-                            self.body
-                                .record_terminal_failure_detail(failure.failure_detail.as_deref())
-                                .await;
-                            self.body
-                                .report_terminal_failure_classified(
-                                    context,
-                                    &authority,
-                                    code,
-                                    failure.failure.class,
-                                )
-                                .await?;
-                            if let Some(graph_error) = self
-                                .body
-                                .terminal_stop_graph_error(code, failure.failure.class)
-                            {
-                                return Err(graph_error);
+                            if let Some(code) = failure.terminal_code {
+                                self.body
+                                    .record_terminal_failure_detail(
+                                        failure.failure_detail.as_deref(),
+                                    )
+                                    .await;
+                                self.body
+                                    .report_terminal_failure_classified(
+                                        context,
+                                        &authority,
+                                        code,
+                                        failure.failure.class,
+                                    )
+                                    .await?;
+                                if let Some(graph_error) = self
+                                    .body
+                                    .terminal_stop_graph_error(code, failure.failure.class)
+                                {
+                                    return Err(graph_error);
+                                }
                             }
                             return Err(recovery_error("pipeline.node_recovery.failed"));
                         }

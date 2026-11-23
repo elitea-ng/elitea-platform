@@ -662,6 +662,10 @@ impl DirectToolNode {
     /// Pauses, blocks and skips are decided before this point and never reach the
     /// journal or retry loop. Effectful tools run behind the fenced Started
     /// journal; platform-classified read-only native tools may retry safely.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Keep effect-journal admission, live/restore parity, and read-only settings dispatch cohesive."
+    )]
     async fn dispatch(
         &self,
         context: &NodeContext,
@@ -735,16 +739,23 @@ impl DirectToolNode {
             recoverable = recoverable.with_clock(Arc::clone(clock));
         }
         let result = recoverable.execute(context).await;
-        // This visit's own outcome wins over the journal's projection of it: an
-        // authorization challenge cannot pass through the journal as an interrupt, and
-        // a failed call without a recovery card stops the pipeline with its typed error
-        // while the journal keeps the uncertain effect so the same attempt is never
-        // dispatched again.
-        if let Some(handed_over) = control
+        // Live/restore parity (SEC-5B2-04): a settled `on_error: continue`/
+        // `error_output` output (or completed output) has no interrupt and must
+        // not be overwritten by a stale `control = Some(Err(_))`.
+        let handed_over = control
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
-        {
+            .take();
+        if let Ok(output) = result {
+            if output.interrupt.is_none() {
+                return Ok(output);
+            }
+            if let Some(handed_over) = handed_over {
+                return handed_over;
+            }
+            return Ok(output);
+        }
+        if let Some(handed_over) = handed_over {
             return handed_over;
         }
         result.map_err(|error| {
@@ -752,6 +763,15 @@ impl DirectToolNode {
                 if code == super::node_recovery_runtime::CHILD_EFFECT_UNKNOWN_CODE)
             {
                 return DirectNodeFailure::may_have_started();
+            }
+            if matches!(
+                &error,
+                GraphError::Other(code)
+                    if code == "pipeline.node_errors.exhausted"
+                        || code == "pipeline.node_settings.invalid"
+                        || code == "pipeline.node_recovery.cancelled"
+            ) {
+                return DirectNodeFailure::graph(error);
             }
             tracing::error!(failure_reason = %error, "pipeline direct-tool node recovery stopped");
             DirectNodeFailure::policy(
@@ -805,10 +825,9 @@ impl DirectToolNode {
                 .as_ref()
                 .is_some_and(|parent| parent.is_cancelled())
             {
-                return Err(DirectNodeFailure::policy(
-                    "tool_execution",
-                    "The tool execution was cancelled.",
-                ));
+                return Err(DirectNodeFailure::graph(GraphError::Other(
+                    "pipeline.node_recovery.cancelled".to_owned(),
+                )));
             }
             match ledger.phase() {
                 NodeAttemptPhase::Ready => {
@@ -850,12 +869,7 @@ impl DirectToolNode {
                 Ok(output) => {
                     let output = fill_neutral_outputs(admitted, output);
                     return mark_node_executed_once(admitted, self.name(), context, output, None)
-                        .map_err(|_| {
-                            DirectNodeFailure::policy(
-                                "tool_execution",
-                                "The run-once node limit was exceeded.",
-                            )
-                        });
+                        .map_err(DirectNodeFailure::graph);
                 }
                 Err(failure) => {
                     let class = failure.failure_class();
@@ -900,12 +914,7 @@ impl DirectToolNode {
                                     class.retry_condition().is_some(),
                                     attempts,
                                 )
-                                .map_err(|_| {
-                                    DirectNodeFailure::policy(
-                                        "tool_execution",
-                                        "Node error settlement failed.",
-                                    )
-                                });
+                                .map_err(DirectNodeFailure::graph);
                             }
                             return Err(failure);
                         }
@@ -930,7 +939,7 @@ impl DirectToolNode {
             .execution_deadline
             .map(|deadline| deadline.saturating_duration_since(now));
         if remaining_run.is_some_and(|remaining| remaining.is_zero()) {
-            return Err(DirectNodeFailure::deadline_exceeded());
+            return Err(DirectNodeFailure::deadline_exceeded_before_dispatch());
         }
         let call_id = tool_context.function_call_id().to_owned();
         let argument_digest = argument_digest(&call_id, tool.name(), &arguments)
@@ -954,7 +963,7 @@ impl DirectToolNode {
                             .execution_deadline
                             .is_some_and(|deadline| tokio::time::Instant::now() >= deadline)
                     {
-                        return Err(DirectNodeFailure::deadline_exceeded());
+                        return Err(DirectNodeFailure::deadline_exceeded_in_flight());
                     }
                     return Err(DirectNodeFailure::timeout());
                 }
@@ -1149,6 +1158,10 @@ impl Node for DirectToolNode {
         self.definition.id()
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Keep span instrumentation, pre-dispatch settlement, and failure projection together."
+    )]
     async fn execute(&self, context: &NodeContext) -> Result<NodeOutput, GraphError> {
         let span = tracing::info_span!(
             "agent.pipeline.direct_tool_node",
@@ -1194,6 +1207,14 @@ impl Node for DirectToolNode {
                         crate::protocol::output::RECOVERY_REFUSED_DETAIL
                     ),
                 })
+            }
+            Err(DirectNodeFailure {
+                cause: DirectNodeFailureCause::Graph(error),
+                ..
+            }) => {
+                span.record("outcome", "failed");
+                span.record("error_code", "pipeline.toolkit_node.failed");
+                Err(*error)
             }
             Err(failure) => {
                 if let Some(admitted) = &self.settings
@@ -1355,13 +1376,24 @@ impl NodeAttemptBody for DirectToolAttempt {
             }
             Err(failure) => {
                 let is_timeout = matches!(failure.cause, DirectNodeFailureCause::Timeout);
-                let is_deadline = matches!(failure.cause, DirectNodeFailureCause::DeadlineExceeded);
+                let is_pre_dispatch_deadline = matches!(
+                    failure.cause,
+                    DirectNodeFailureCause::DeadlineExceededBeforeDispatch
+                );
+                let is_in_flight_deadline = matches!(
+                    failure.cause,
+                    DirectNodeFailureCause::DeadlineExceededInFlight
+                );
                 let class = failure.failure_class();
-                let recorded = if is_deadline {
+                let recorded = if is_pre_dispatch_deadline {
                     NodeFailure::new(
                         NodeFailureClass::DeadlineInsufficient,
                         ReplaySafety::NoExternalEffect,
                     )
+                } else if is_in_flight_deadline {
+                    // SEC-5B2-01: tool.execute() already started; keep the
+                    // effect uncertain so node recovery Reconciles with 0 repeats.
+                    NodeFailure::new(NodeFailureClass::DeadlineInsufficient, unknown)
                 } else {
                     match failure.stage {
                         "argument_digest" => NodeFailure::new(
@@ -1377,12 +1409,13 @@ impl NodeAttemptBody for DirectToolAttempt {
                         _ => NodeFailure::new(class, unknown),
                     }
                 };
-                // On a timeout or retryable failure of an effectful tool under
-                // `settings:`, surface the Reconcile recovery card (0 repeats)
-                // instead of swallowing it behind `control`.
+                // On a timeout, in-flight deadline expiry, or retryable failure
+                // of an effectful tool under `settings:`, surface the Reconcile
+                // recovery card (0 repeats) instead of swallowing it behind `control`.
                 let escalate_reconcile = self.node.settings.is_some()
                     && matches!(recorded.replay, ReplaySafety::UnknownExternalEffect { .. })
                     && (is_timeout
+                        || is_in_flight_deadline
                         || (self
                             .node
                             .settings
@@ -2422,8 +2455,14 @@ enum DirectNodeFailureCause {
     Tool,
     #[error("The tool call exceeded its execution timeout.")]
     Timeout,
-    #[error("The execution deadline expired before the tool call completed.")]
-    DeadlineExceeded,
+    #[error("The execution deadline expired before the tool call started.")]
+    DeadlineExceededBeforeDispatch,
+    #[error("The execution deadline expired while the tool call was in flight.")]
+    DeadlineExceededInFlight,
+    /// Structured `GraphError` propagated verbatim (e.g. `pipeline.node_errors.exhausted`,
+    /// `pipeline.node_settings.invalid`, `pipeline.node_recovery.cancelled`).
+    #[error("{0}")]
+    Graph(Box<GraphError>),
     /// A journaled call in a saved child started before the Worker was lost
     /// and may have reached its tool (FU-248).
     #[error("The tool call may already have run; it was not repeated.")]
@@ -2436,7 +2475,9 @@ impl DirectNodeFailure {
             (
                 DirectNodeFailureCause::Tool
                 | DirectNodeFailureCause::Timeout
-                | DirectNodeFailureCause::DeadlineExceeded,
+                | DirectNodeFailureCause::DeadlineExceededBeforeDispatch
+                | DirectNodeFailureCause::DeadlineExceededInFlight
+                | DirectNodeFailureCause::Graph(_),
                 _,
             )
             | (DirectNodeFailureCause::Policy(_), "tool_execution") => "pipeline.tool_failed",
@@ -2455,13 +2496,18 @@ impl DirectNodeFailure {
 
     fn failure_class(&self) -> NodeFailureClass {
         match &self.cause {
-            DirectNodeFailureCause::DeadlineExceeded => NodeFailureClass::DeadlineInsufficient,
+            DirectNodeFailureCause::DeadlineExceededBeforeDispatch
+            | DirectNodeFailureCause::DeadlineExceededInFlight => {
+                NodeFailureClass::DeadlineInsufficient
+            }
             DirectNodeFailureCause::Timeout => NodeFailureClass::AttemptTimeout,
             DirectNodeFailureCause::MayHaveStarted => NodeFailureClass::WorkerInterrupted,
             DirectNodeFailureCause::Policy(_) if self.stage == "authorization" => {
                 NodeFailureClass::AuthorizationDenied
             }
-            DirectNodeFailureCause::Policy(_) => NodeFailureClass::Unknown,
+            DirectNodeFailureCause::Graph(_) | DirectNodeFailureCause::Policy(_) => {
+                NodeFailureClass::Unknown
+            }
             DirectNodeFailureCause::Execution(DirectToolExecutionError::InvalidArguments) => {
                 NodeFailureClass::InvalidInput
             }
@@ -2538,12 +2584,32 @@ impl DirectNodeFailure {
         }
     }
 
-    const fn deadline_exceeded() -> Self {
+    const fn deadline_exceeded_before_dispatch() -> Self {
         Self {
             stage: "tool_execution",
-            cause: DirectNodeFailureCause::DeadlineExceeded,
+            cause: DirectNodeFailureCause::DeadlineExceededBeforeDispatch,
             upstream_code: Some("tool.deadline_exceeded"),
             category: Some(ErrorCategory::Timeout),
+            retry_after_ms: None,
+        }
+    }
+
+    const fn deadline_exceeded_in_flight() -> Self {
+        Self {
+            stage: "tool_execution",
+            cause: DirectNodeFailureCause::DeadlineExceededInFlight,
+            upstream_code: Some("tool.deadline_exceeded"),
+            category: Some(ErrorCategory::Timeout),
+            retry_after_ms: None,
+        }
+    }
+
+    fn graph(error: GraphError) -> Self {
+        Self {
+            stage: "tool_execution",
+            cause: DirectNodeFailureCause::Graph(Box::new(error)),
+            upstream_code: None,
+            category: None,
             retry_after_ms: None,
         }
     }

@@ -3030,6 +3030,19 @@ fn retry_after_header_is_surfaced_bounded_on_429_and_503_responses() {
         parse_retry_after_ms(&headers_with(&[("retry-after-ms", "1500")]), now),
         Some(1_500)
     );
+    // SEC-5B2-06: retry-after-ms enforces ASCII digits only (rejects leading `+`)
+    // and saturates values > u64::MAX within the 64-byte header bound.
+    assert_eq!(
+        parse_retry_after_ms(&headers_with(&[("retry-after-ms", "+500")]), now),
+        None
+    );
+    assert_eq!(
+        parse_retry_after_ms(
+            &headers_with(&[("retry-after-ms", "999999999999999999999999")]),
+            now
+        ),
+        Some(MAX_WAIT_BETWEEN_TRIES_MS + 1)
+    );
     // Exact cap (300s) vs cap + 1 (301s -> saturates to cap + 1 sentinel).
     assert_eq!(
         parse_retry_after_ms(&headers_with(&[("retry-after", "300")]), now),

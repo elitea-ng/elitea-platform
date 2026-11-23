@@ -1602,10 +1602,12 @@ pub(super) fn parse_retry_after_ms(
     now: chrono::DateTime<chrono::Utc>,
 ) -> Option<u64> {
     let cap_sentinel = |ms: u64| ms.min(RETRY_AFTER_CAP_MS.saturating_add(1));
-    if let Some(raw) = single_optional_bounded_header(headers, "retry-after-ms")
-        && let Ok(ms) = raw.trim().parse::<u64>()
-    {
-        return Some(cap_sentinel(ms));
+    if let Some(raw) = single_optional_bounded_header(headers, "retry-after-ms") {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() && trimmed.bytes().all(|byte| byte.is_ascii_digit()) {
+            let ms = trimmed.parse::<u64>().unwrap_or(u64::MAX);
+            return Some(cap_sentinel(ms));
+        }
     }
     let raw = single_optional_bounded_header(headers, http::header::RETRY_AFTER.as_str())?;
     let trimmed = raw.trim();

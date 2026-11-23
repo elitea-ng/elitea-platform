@@ -1307,3 +1307,829 @@ nodes:
         );
     });
 }
+
+#[tokio::test]
+async fn effectful_direct_tool_pre_dispatch_deadline_stops_with_zero_calls_and_in_flight_deadline_reconciles_with_zero_repeats()
+ {
+    // Part 1 (SEC-5B2-01): pre-dispatch expired deadline -> 0 tool calls, Stop (NoExternalEffect).
+    let pre_calls = Arc::new(AtomicUsize::new(0));
+    let pre_tool: Arc<dyn Tool> = Arc::new(ScriptedDirectTool {
+        name: "search_records",
+        read_only: false,
+        calls: Arc::clone(&pre_calls),
+        outcomes: Arc::new(Mutex::new(VecDeque::from([Ok(
+            json!({"report": {"ok": 1}}),
+        )]))),
+        delay: None,
+    });
+    let pre_resolver: Arc<dyn PipelineDirectToolResolver> = Arc::new(DirectResolver {
+        tool: pre_tool,
+        sensitive: None,
+    });
+    let pre_node = DirectToolNode::new(
+        direct_tool_def("toolkit"),
+        BTreeMap::from([("report".to_owned(), "dict".to_owned())]),
+        pre_resolver,
+    )
+    .with_node_recovery(scoped())
+    .with_execution_deadline(Some(tokio::time::Instant::now() - Duration::from_secs(1)))
+    .with_settings(
+        admitted_settings(
+            "{retry_on_fail: true, max_tries: 3, wait_between_tries_ms: 500, on_error: continue}",
+            AdmittedNodeFamily::Toolkit,
+            &[("report", "dict")],
+        ),
+        Some(Arc::new("exec-dt-pre-deadline".to_owned())),
+    );
+    let pre_ctx = NodeContext::new(
+        State::new(),
+        ExecutionConfig::new("dt-pre-deadline-thread"),
+        1,
+    );
+    let pre_err = pre_node
+        .execute(&pre_ctx)
+        .await
+        .err()
+        .expect("pre-dispatch expired deadline stops typed and does not continue");
+    assert_eq!(
+        pre_calls.load(Ordering::SeqCst),
+        0,
+        "must not dispatch after deadline"
+    );
+    assert!(
+        pre_err
+            .to_string()
+            .contains("deadline expired before the tool call started"),
+        "unexpected error: {pre_err}"
+    );
+
+    // Part 2 (SEC-5B2-01): in-flight execution deadline expiry on effectful tool -> 1 call, Reconcile, 0 repeats.
+    let inflight_calls = Arc::new(AtomicUsize::new(0));
+    let inflight_tool: Arc<dyn Tool> = Arc::new(ScriptedDirectTool {
+        name: "search_records",
+        read_only: false,
+        calls: Arc::clone(&inflight_calls),
+        outcomes: Arc::new(Mutex::new(VecDeque::from([
+            Ok(json!({"report": {"too_late": true}})),
+            Ok(json!({"report": {"should_never_repeat": true}})),
+        ]))),
+        delay: Some(Duration::from_secs(2)),
+    });
+    let inflight_resolver: Arc<dyn PipelineDirectToolResolver> = Arc::new(DirectResolver {
+        tool: inflight_tool,
+        sensitive: None,
+    });
+    let recovery: Arc<dyn NodeRecoveryFactory> = scoped();
+    let inflight_node = DirectToolNode::new(
+        direct_tool_def("toolkit"),
+        BTreeMap::from([("report".to_owned(), "dict".to_owned())]),
+        inflight_resolver,
+    )
+    .with_node_recovery(Arc::clone(&recovery))
+    .with_execution_deadline(Some(tokio::time::Instant::now() + Duration::from_millis(80)))
+    .with_settings(
+        admitted_settings(
+            "{retry_on_fail: true, max_tries: 3, wait_between_tries_ms: 500, timeout_ms: 5000, on_error: continue}",
+            AdmittedNodeFamily::Toolkit,
+            &[("report", "dict")],
+        ),
+        Some(Arc::new("exec-dt-inflight-deadline".to_owned())),
+    );
+    let inflight_ctx = NodeContext::new(
+        State::new(),
+        ExecutionConfig::new("dt-inflight-deadline-thread"),
+        1,
+    );
+    let first = inflight_node
+        .execute(&inflight_ctx)
+        .await
+        .expect("in-flight deadline expiry on effectful tool must escalate to Reconcile");
+    assert_eq!(inflight_calls.load(Ordering::SeqCst), 1);
+    assert!(matches!(
+        first.interrupt,
+        Some(Interrupt::Dynamic { data: Some(ref d), .. })
+            if d["guardrail_type"] == "pipeline_node_recovery"
+    ));
+
+    // Re-entering the same step on the same journal still Reconciles with 0 additional calls.
+    let second = inflight_node
+        .execute(&inflight_ctx)
+        .await
+        .expect("re-entry stays in Reconcile");
+    assert_eq!(
+        inflight_calls.load(Ordering::SeqCst),
+        1,
+        "must never repeat effectful tool"
+    );
+    assert!(matches!(
+        second.interrupt,
+        Some(Interrupt::Dynamic { data: Some(ref d), .. })
+            if d["guardrail_type"] == "pipeline_node_recovery"
+    ));
+}
+
+#[test]
+fn code_committed_projector_verify_no_effect_rejects_direct_tool_audience() {
+    use crate::sandbox::code_recovery::{
+        CODE_RESULT_AUDIENCE, CodeRecoveryVisit, WholeCodeBinding, WholeCodeRecoveryReceipt,
+        original_job_key,
+    };
+
+    let yaml = "
+state:
+  answer: str
+entry_point: calc
+nodes:
+  - id: calc
+    type: code
+    language: python
+    code:
+      type: fixed
+      value: \"return 'ok'\"
+    input: []
+    output: [answer]
+    transition: END
+";
+    let definition = PipelineDefinition::from_yaml(yaml).expect("code pipeline");
+    let code_def = definition
+        .original_code_definition_fixture("calc")
+        .expect("code node");
+    let execution_id = "2".repeat(32);
+    let projector = definition
+        .node_result_projector("calc", &execution_id, 1)
+        .expect("projector builds")
+        .expect("code projector exists");
+
+    let ctx = NodeContext::new(State::new(), ExecutionConfig::new("code-aud-thread"), 1);
+    let digest = code_def.validated_digest();
+    let activation = NodeAttemptActivation::from_context("calc", digest, &ctx).expect("act");
+    let scoped_activation = [7u8; 32];
+    let dispatch_activation = [8u8; 32];
+    let receipt_sha = [9u8; 32];
+    let dispatch_hex = crate::sandbox::code_recovery::hex(&dispatch_activation);
+    let activation_hex = crate::sandbox::code_recovery::hex(&scoped_activation);
+
+    let binding = WholeCodeBinding {
+        schema: "elitea.sandbox.whole-code-binding.v1".to_owned(),
+        purpose: "whole_code_execute".to_owned(),
+        execution_id: execution_id.clone(),
+        original_generation: 1,
+        dispatch_activation: dispatch_hex.clone(),
+        job_key: original_job_key(&execution_id, &dispatch_hex),
+        request_digest: "4".repeat(64),
+        supervisor_audience: "dns:original.supervisor".to_owned(),
+        node_digest: crate::sandbox::code_recovery::hex(&digest),
+        activation_id: activation_hex.clone(),
+        node_id: "calc".to_owned(),
+        graph_thread: "code-aud-thread".to_owned(),
+        step: 1,
+        attempt: 2,
+        language: "python".to_owned(),
+        prepared_job_sha256: "3".repeat(64),
+        source_sha256: crate::sandbox::code_recovery::sha256(b"return 'ok'"),
+        input_sha256: crate::sandbox::code_recovery::sha256(b"{}"),
+    };
+    let visit = CodeRecoveryVisit {
+        activation_id: activation_hex.clone(),
+        node_id: "calc".to_owned(),
+        graph_thread: "code-aud-thread".to_owned(),
+        step: 1,
+        attempt: 2,
+        expected_revision: 2,
+        receipt_sha256: crate::sandbox::code_recovery::hex(&receipt_sha),
+    };
+    let owner = WholeCodeRecoveryReceipt::sealed_no_effect(binding, visit).expect("sealed");
+    let wire = owner.canonical_bytes().expect("wire");
+    let wire_sha = crate::sandbox::code_recovery::sha256(&wire);
+    let valid_proof = NodeRecoveryOwnerProof {
+        schema: "elitea.pipeline.node-recovery-owner-proof.v1".to_owned(),
+        kind: NodeRecoveryOwnerProofKind::VerifiedNoEffect,
+        execution_id,
+        generation: 1,
+        activation_id: activation_hex,
+        expected_revision: 2,
+        attempt: 2,
+        effect_id: dispatch_hex.clone(),
+        owner_receipt_sha256: wire_sha.clone(),
+        result_ref: None,
+        owner_receipt_ref: Some(NodeRecoveryResultReference {
+            content_id: dispatch_hex,
+            immutable_version: wire_sha.clone(),
+            digest_sha256: wire_sha,
+            byte_length: wire.len() as u64,
+            media_type: "application/json".to_owned(),
+            required_grant_audience: CODE_RESULT_AUDIENCE.to_owned(),
+        }),
+    };
+    let auth = super::node_recovery_runtime::NodeAttemptAuthority::for_test_owner_projection(
+        &activation,
+        scoped_activation,
+        2,
+        dispatch_activation,
+        receipt_sha,
+    );
+    // Positive control: exact CODE_RESULT_AUDIENCE succeeds.
+    projector
+        .verify_no_effect_receipt(&ctx, &auth, &valid_proof, &wire)
+        .expect("CODE_RESULT_AUDIENCE must pass");
+
+    // Negative control (SEC-5B2-02): flipping ONLY audience to DIRECT_TOOL_RECEIPT_AUDIENCE fails closed.
+    let mut wrong_audience_proof = valid_proof;
+    if let Some(ref mut r) = wrong_audience_proof.owner_receipt_ref {
+        r.required_grant_audience = DIRECT_TOOL_RECEIPT_AUDIENCE.to_owned();
+    }
+    assert!(
+        projector
+            .verify_no_effect_receipt(&ctx, &auth, &wrong_audience_proof, &wire)
+            .is_err(),
+        "SEC-5B2-02: CodeCommittedProjector::verify_no_effect_receipt must reject DIRECT_TOOL_RECEIPT_AUDIENCE"
+    );
+}
+
+#[tokio::test]
+async fn saved_child_pipeline_runtimes_preserve_parent_execution_deadline() {
+    // SEC-5B2-03: verify PipelineNodeRuntimes carries execution_deadline into compiled
+    // subgraph nodes (LlmNode and DirectToolNode) and clamps retries to the deadline.
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(250);
+    let attempts = Arc::new(Mutex::new(VecDeque::from([
+        ScriptedLlmAttempt::FailBeforeOutput(unavailable_error()),
+        ScriptedLlmAttempt::Succeed("SHOULD_NOT_RUN"),
+    ])));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let factory: Arc<dyn PipelineLlmAgentFactory> = Arc::new(ScriptedLlmFactory {
+        attempts,
+        calls: Arc::clone(&calls),
+        events: None,
+    });
+    let runtimes = PipelineNodeRuntimes::new(Some(factory), None, None)
+        .with_execution_id("exec-child-deadline")
+        .with_execution_deadline(deadline);
+    assert_eq!(runtimes.execution_deadline_for_tests(), Some(deadline));
+
+    let child_yaml = "
+state:
+  answer: str
+entry_point: ask
+nodes:
+  - id: ask
+    type: llm
+    input_mapping:
+      task: {type: fixed, value: hi}
+    output: [answer]
+    settings:
+      retry_on_fail: true
+      max_tries: 3
+      wait_between_tries_ms: 5000
+      on_error: continue
+    transition: END
+";
+    let child_def = PipelineDefinition::from_yaml(child_yaml).expect("child pipeline");
+    let subgraph = child_def
+        .compile_subgraph_with_runtime(Arc::new(MemoryCheckpointer::new()), &runtimes)
+        .expect("compiles child subgraph");
+    let err = subgraph
+        .invoke(
+            HashMap::new(),
+            ExecutionConfig::new("child-deadline-thread"),
+        )
+        .await
+        .expect_err("child retry exceeding parent execution deadline stops typed");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(
+        !err.to_string().is_empty(),
+        "typed stop error must be returned"
+    );
+}
+
+#[tokio::test]
+async fn journaled_direct_tool_settled_no_external_effect_matches_live_and_restore() {
+    // SEC-5B2-04(a): on a journaled effectful DirectToolNode with `on_error: continue`,
+    // a NoExternalEffect stop (`argument_digest`) settles Ok(output) both live and on
+    // journal restore without being overwritten by stale `control = Some(Err(_))`.
+    let calls = Arc::new(AtomicUsize::new(0));
+    let tool: Arc<dyn Tool> = Arc::new(ScriptedDirectTool {
+        name: "search_records",
+        read_only: false,
+        calls: Arc::clone(&calls),
+        outcomes: Arc::new(Mutex::new(VecDeque::new())),
+        delay: None,
+    });
+    let resolver: Arc<dyn PipelineDirectToolResolver> = Arc::new(DirectResolver {
+        tool,
+        sensitive: None,
+    });
+    let def = DirectToolNodeDefinition::from_yaml(
+        "id: lookup\ntype: toolkit\ntoolkit_name: Support\ntool: search_records\ninput_mapping:\n  query: {type: variable, value: deep_arg}\ninput: [deep_arg]\noutput: [report]\nstructured_output: true\ntransition: END\n",
+    )
+    .expect("direct tool def");
+    let recovery: Arc<dyn NodeRecoveryFactory> = scoped();
+    let node = DirectToolNode::new(
+        def,
+        BTreeMap::from([("report".to_owned(), "dict".to_owned())]),
+        resolver,
+    )
+    .with_node_recovery(Arc::clone(&recovery))
+    .with_settings(
+        admitted_settings(
+            "{on_error: continue, always_output_data: true}",
+            AdmittedNodeFamily::Toolkit,
+            &[("report", "dict")],
+        ),
+        Some(Arc::new("exec-dt-settled-parity".to_owned())),
+    );
+    // Nest 70 levels deep (> 64) so `argument_digest` rejects before tool.execute().
+    let mut deep = json!("leaf");
+    for _ in 0..70 {
+        deep = json!({"nested": deep});
+    }
+    let mut state = State::new();
+    state.insert("deep_arg".to_owned(), deep);
+    let ctx = NodeContext::new(state, ExecutionConfig::new("dt-settled-parity-thread"), 1);
+    let live = node
+        .execute(&ctx)
+        .await
+        .expect("live NoExternalEffect failure settles Ok under on_error: continue");
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert!(live.interrupt.is_none());
+    let live_errors = live
+        .updates
+        .get("node_errors")
+        .and_then(Value::as_array)
+        .expect("live node_errors");
+    assert_eq!(live_errors.len(), 1);
+    assert_eq!(live_errors[0]["error"]["code"], "pipeline.toolkit.failed");
+
+    // Re-entering on the same journal restores the identical settled failure.
+    let restored = node
+        .execute(&ctx)
+        .await
+        .expect("restored NoExternalEffect failure settles identically");
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        restored.updates.get("node_errors"),
+        live.updates.get("node_errors")
+    );
+}
+
+#[tokio::test]
+async fn read_only_direct_tool_preserves_64_entry_node_errors_cap_error_output_and_execute_once() {
+    // Part 1 (SEC-5B2-04(b)): 65th node_errors entry preserves GraphError("pipeline.node_errors.exhausted").
+    let calls = Arc::new(AtomicUsize::new(0));
+    let tool: Arc<dyn Tool> = Arc::new(ScriptedDirectTool {
+        name: "search_records",
+        read_only: true,
+        calls: Arc::clone(&calls),
+        outcomes: Arc::new(Mutex::new(VecDeque::from([Err(AdkError::new(
+            ErrorComponent::Tool,
+            ErrorCategory::InvalidInput,
+            "tool.bad_arg",
+            "bad arg",
+        ))]))),
+        delay: None,
+    });
+    let resolver: Arc<dyn PipelineDirectToolResolver> = Arc::new(DirectResolver {
+        tool,
+        sensitive: None,
+    });
+    let node = DirectToolNode::new(
+        direct_tool_def("toolkit"),
+        BTreeMap::from([("report".to_owned(), "dict".to_owned())]),
+        resolver,
+    )
+    .with_settings(
+        admitted_settings(
+            "{on_error: continue}",
+            AdmittedNodeFamily::Toolkit,
+            &[("report", "dict")],
+        ),
+        Some(Arc::new("exec-dt-cap64".to_owned())),
+    );
+    let mut state = State::new();
+    state.insert(
+        "node_errors".to_owned(),
+        Value::Array(vec![json!({"code": "existing"}); 64]),
+    );
+    let ctx = NodeContext::new(state, ExecutionConfig::new("dt-cap64-thread"), 1);
+    let err = node
+        .execute(&ctx)
+        .await
+        .err()
+        .expect("65th node_errors entry must fail closed");
+    assert!(
+        matches!(err, GraphError::Other(ref code) if code == "pipeline.node_errors.exhausted"),
+        "expected GraphError::Other(pipeline.node_errors.exhausted), got: {err:?}"
+    );
+
+    // Part 2 (SEC-5B2-04(b) & SEC-5B2-07): on_error: error_output routes to error_transition.
+    let err_calls = Arc::new(AtomicUsize::new(0));
+    let err_tool: Arc<dyn Tool> = Arc::new(ScriptedDirectTool {
+        name: "search_records",
+        read_only: true,
+        calls: Arc::clone(&err_calls),
+        outcomes: Arc::new(Mutex::new(VecDeque::from([Err(AdkError::new(
+            ErrorComponent::Tool,
+            ErrorCategory::InvalidInput,
+            "tool.bad_arg",
+            "bad arg",
+        ))]))),
+        delay: None,
+    });
+    let err_resolver: Arc<dyn PipelineDirectToolResolver> = Arc::new(DirectResolver {
+        tool: err_tool,
+        sensitive: None,
+    });
+    let err_node = DirectToolNode::new(
+        direct_tool_def("toolkit"),
+        BTreeMap::from([("report".to_owned(), "dict".to_owned())]),
+        err_resolver,
+    )
+    .with_settings(
+        admitted_settings(
+            "{on_error: error_output, error_transition: fallback}",
+            AdmittedNodeFamily::Toolkit,
+            &[("report", "dict")],
+        ),
+        Some(Arc::new("exec-dt-err-route".to_owned())),
+    );
+    let routed = err_node
+        .execute(&NodeContext::new(
+            State::new(),
+            ExecutionConfig::new("dt-err-route-thread"),
+            1,
+        ))
+        .await
+        .expect("error_output routes cleanly");
+    assert_eq!(routed.goto, Some(vec!["fallback".to_owned()]));
+    assert_eq!(
+        routed.updates["node_errors"]
+            .as_array()
+            .expect("errors")
+            .len(),
+        1
+    );
+
+    // Part 3 (SEC-5B2-04(b) & SEC-5B2-07): execute_once runs read-only direct tool once across 3 visits.
+    let once_calls = Arc::new(AtomicUsize::new(0));
+    let once_tool: Arc<dyn Tool> = Arc::new(ScriptedDirectTool {
+        name: "search_records",
+        read_only: true,
+        calls: Arc::clone(&once_calls),
+        outcomes: Arc::new(Mutex::new(VecDeque::from([
+            Ok(json!({"report": {"visit": 1}})),
+            Ok(json!({"report": {"visit": 2}})),
+        ]))),
+        delay: None,
+    });
+    let once_resolver: Arc<dyn PipelineDirectToolResolver> = Arc::new(DirectResolver {
+        tool: once_tool,
+        sensitive: None,
+    });
+    let once_yaml = "
+state:
+  report: dict
+  visits: int
+entry_point: lookup
+nodes:
+  - id: lookup
+    type: toolkit
+    toolkit_name: Support
+    tool: search_records
+    input_mapping:
+      query: {type: fixed, value: q}
+    output: [report]
+    structured_output: true
+    settings: {execute_once: true}
+    transition: bump
+  - id: bump
+    type: state_modifier
+    template: '{{ (visits | default(0)) + 1 }}'
+    input: [visits]
+    output: [visits]
+    transition: check
+  - id: check
+    type: router
+    condition: \"{{ 'lookup' if visits < 3 else 'END' }}\"
+    input: [visits]
+    routes: [lookup, END]
+    default_output: END
+";
+    let once_def = PipelineDefinition::from_yaml(once_yaml).expect("execute_once pipeline");
+    let runtimes = PipelineNodeRuntimes::new(None, Some(once_resolver), None)
+        .with_execution_id("exec-dt-once");
+    let result = once_def
+        .compile_with_runtime(
+            "dt-once-root",
+            Arc::new(MemoryCheckpointer::new()),
+            None,
+            &runtimes,
+        )
+        .expect("graph")
+        .invoke(HashMap::new(), ExecutionConfig::new("dt-once-thread"))
+        .await
+        .expect("completes");
+    assert_eq!(result["visits"], json!(3));
+    assert_eq!(result["report"], json!({"visit": 1}));
+    assert_eq!(once_calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn tool_free_llm_journal_restore_preserves_typed_model_gateway_class_and_local_errors_never_emit_model_failure()
+ {
+    // Part 1 (SEC-5B2-05): restored terminal RateLimited stop preserves typed
+    // `model_gateway.rate_limited` GraphError AND emits `model_gateway.rate_limited`.
+    let def = llm_definition();
+    let recovery: Arc<dyn NodeRecoveryFactory> = scoped();
+    let (sender, receiver) = pipeline_node_event_channel();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let factory: Arc<dyn PipelineLlmAgentFactory> = Arc::new(ScriptedLlmFactory {
+        attempts: Arc::new(Mutex::new(VecDeque::from([
+            ScriptedLlmAttempt::FailBeforeOutput(rate_limited_error(None)),
+            ScriptedLlmAttempt::Succeed("NEVER"),
+        ]))),
+        calls: Arc::clone(&calls),
+        events: Some(sender),
+    });
+    let node = LlmNode::new(
+        def,
+        BTreeMap::from([("answer".to_owned(), "str".to_owned())]),
+        factory,
+    )
+    .with_node_recovery(Arc::clone(&recovery))
+    .with_settings(
+        admitted_settings(
+            "{on_error: stop}",
+            AdmittedNodeFamily::Llm,
+            &[("answer", "str")],
+        ),
+        Some(Arc::new("exec-llm-restore".to_owned())),
+    );
+    let ctx = NodeContext::new(State::new(), ExecutionConfig::new("llm-restore-thread"), 1);
+    let live_err = node
+        .execute(&ctx)
+        .await
+        .err()
+        .expect("live rate_limited stop");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        super::agent::model_gateway_code_in_message(&live_err.to_string()),
+        Some("model_gateway.rate_limited")
+    );
+    // Drain the live terminal model failure before restoring.
+    assert_eq!(
+        receiver.try_model_failure_code().await,
+        Some("model_gateway.rate_limited")
+    );
+
+    // Re-enter the same step on the same journal -> restored stop must preserve
+    // `model_gateway.rate_limited` and invoke 0 new model calls.
+    let restored_err = node
+        .execute(&ctx)
+        .await
+        .err()
+        .expect("restored rate_limited stop");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "restore must not re-run model"
+    );
+    assert_eq!(
+        super::agent::model_gateway_code_in_message(&restored_err.to_string()),
+        Some("model_gateway.rate_limited")
+    );
+    assert_eq!(
+        receiver.try_model_failure_code().await,
+        Some("model_gateway.rate_limited")
+    );
+
+    // Part 2 (SEC-5B2-05): local non-model error (InvalidStructuredOutput) exits
+    // cleanly without looping and emits ZERO spurious `model_gateway.incomplete_stream`.
+    let structured_yaml = "
+state:
+  answer: dict
+entry_point: ask
+nodes:
+  - id: ask
+    type: llm
+    input_mapping:
+      task: {type: fixed, value: hi}
+    output: [answer]
+    structured_output: true
+    transition: END
+";
+    let structured_def = PipelineDefinition::from_yaml(structured_yaml)
+        .expect("structured pipeline")
+        .llm_definition_fixture("ask")
+        .expect("ask node");
+    let (local_sender, local_receiver) = pipeline_node_event_channel();
+    let local_calls = Arc::new(AtomicUsize::new(0));
+    let local_factory: Arc<dyn PipelineLlmAgentFactory> = Arc::new(ScriptedLlmFactory {
+        attempts: Arc::new(Mutex::new(VecDeque::from([ScriptedLlmAttempt::Succeed(
+            "not valid json",
+        )]))),
+        calls: Arc::clone(&local_calls),
+        events: Some(local_sender),
+    });
+    let local_node = LlmNode::new(
+        structured_def,
+        BTreeMap::from([("answer".to_owned(), "dict".to_owned())]),
+        local_factory,
+    )
+    .with_node_recovery(scoped())
+    .with_settings(
+        admitted_settings(
+            "{on_error: stop}",
+            AdmittedNodeFamily::Llm,
+            &[("answer", "dict")],
+        ),
+        Some(Arc::new("exec-llm-local-err".to_owned())),
+    );
+    let local_err = local_node
+        .execute(&NodeContext::new(
+            State::new(),
+            ExecutionConfig::new("llm-local-err-thread"),
+            1,
+        ))
+        .await
+        .err()
+        .expect("invalid structured output stops");
+    assert_eq!(local_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        super::agent::model_gateway_code_in_message(&local_err.to_string()),
+        None,
+        "local error must not masquerade as model_gateway.*"
+    );
+    assert_eq!(
+        local_receiver.try_model_failure_code().await,
+        None,
+        "local non-model error must emit 0 send_model_failure signals"
+    );
+}
+
+#[tokio::test]
+async fn tool_bearing_llm_with_settings_supports_hitl_resume_and_never_retries_may_have_started() {
+    // SEC-5B2-07: tool-bearing LlmNode with `settings:` uses the in-memory ledger
+    // (never poisoning a step journal across HITL resume) and never retries or
+    // swallows `MayHaveStarted`.
+    let yaml = "
+state:
+  answer: str
+entry_point: ask
+nodes:
+  - id: ask
+    type: llm
+    input_mapping:
+      task: {type: fixed, value: hi}
+    tool_names:
+      Support: [search_records]
+    output: [answer]
+    transition: END
+";
+    let def = PipelineDefinition::from_yaml(yaml)
+        .expect("tool-bearing llm pipeline")
+        .llm_definition_fixture("ask")
+        .expect("ask node");
+    let recovery: Arc<dyn NodeRecoveryFactory> = scoped();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let factory: Arc<dyn PipelineLlmAgentFactory> = Arc::new(ScriptedLlmFactory {
+        attempts: Arc::new(Mutex::new(VecDeque::from([
+            ScriptedLlmAttempt::FailBeforeOutput(unavailable_error()),
+            ScriptedLlmAttempt::Succeed("RESUMED_OK"),
+        ]))),
+        calls: Arc::clone(&calls),
+        events: None,
+    });
+    let clock = DeterministicClock::new(1_000);
+    let node = LlmNode::new(
+        def.clone(),
+        BTreeMap::from([("answer".to_owned(), "str".to_owned())]),
+        factory,
+    )
+    .with_node_recovery(Arc::clone(&recovery))
+    .with_clock(Arc::clone(&clock) as Arc<dyn NodeRecoveryClock>)
+    .with_settings(
+        admitted_settings(
+            "{retry_on_fail: true, max_tries: 3, wait_between_tries_ms: 200, on_error: continue}",
+            AdmittedNodeFamily::Llm,
+            &[("answer", "str")],
+        ),
+        Some(Arc::new("exec-llm-tools".to_owned())),
+    );
+    let ctx = NodeContext::new(State::new(), ExecutionConfig::new("llm-tools-thread"), 1);
+    let out = node
+        .execute(&ctx)
+        .await
+        .expect("pre-output retry succeeds on tool-bearing LLM");
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert_eq!(out.updates.get("answer"), Some(&json!("RESUMED_OK")));
+
+    // Confirm step journal was NOT touched (empty -> HITL resume at same step stays clean).
+    let activation =
+        NodeAttemptActivation::from_context("ask", def.config_digest(), &ctx).expect("act");
+    let journal = recovery
+        .open(
+            &activation,
+            &elitea_agent_runtime::graph::node_recovery::NodeRecoveryPolicy::default(),
+        )
+        .await
+        .expect("open");
+    assert!(
+        journal
+            .load_for_tests()
+            .await
+            .expect("load")
+            .ledger_for_tests()
+            .history()
+            .is_empty(),
+        "tool-bearing LLM must not write to RecoverableNode step journal"
+    );
+
+    // MayHaveStarted on a tool-bearing LLM never retries and never settles under on_error: continue.
+    struct MayHaveStartedFactory(Arc<AtomicUsize>);
+    impl PipelineLlmAgentFactory for MayHaveStartedFactory {
+        fn build(
+            &self,
+            _: &LlmNodeDefinition,
+            _: &LlmExecutionInput,
+            _: Option<Value>,
+            _: Option<&PipelineLlmReplayEnvelope>,
+            _: &PipelineModelScope,
+        ) -> Result<PipelineLlmAgentBinding, LlmExecutionError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Err(LlmExecutionError::MayHaveStarted)
+        }
+    }
+    let mhs_calls = Arc::new(AtomicUsize::new(0));
+    let mhs_node = LlmNode::new(
+        def,
+        BTreeMap::from([("answer".to_owned(), "str".to_owned())]),
+        Arc::new(MayHaveStartedFactory(Arc::clone(&mhs_calls))),
+    )
+    .with_settings(
+        admitted_settings(
+            "{retry_on_fail: true, max_tries: 3, wait_between_tries_ms: 200, on_error: continue}",
+            AdmittedNodeFamily::Llm,
+            &[("answer", "str")],
+        ),
+        Some(Arc::new("exec-llm-mhs".to_owned())),
+    );
+    let mhs_err = mhs_node
+        .execute(&NodeContext::new(
+            State::new(),
+            ExecutionConfig::new("llm-mhs-thread"),
+            1,
+        ))
+        .await
+        .err()
+        .expect("MayHaveStarted must stop");
+    assert_eq!(
+        mhs_calls.load(Ordering::SeqCst),
+        1,
+        "MayHaveStarted must never retry"
+    );
+    assert!(
+        mhs_err
+            .to_string()
+            .contains(crate::agents::pipeline::scoped_runtime::CALL_MAY_HAVE_STARTED_CODE),
+        "expected may_have_started code, got: {mhs_err}"
+    );
+}
+
+#[tokio::test]
+async fn llm_on_error_error_output_routes_to_error_transition() {
+    // SEC-5B2-07: on_error: error_output routes LlmNode failure to error_transition.
+    let calls = Arc::new(AtomicUsize::new(0));
+    let factory: Arc<dyn PipelineLlmAgentFactory> = Arc::new(ScriptedLlmFactory {
+        attempts: Arc::new(Mutex::new(VecDeque::from([
+            ScriptedLlmAttempt::FailBeforeOutput(unavailable_error()),
+        ]))),
+        calls: Arc::clone(&calls),
+        events: None,
+    });
+    let node = LlmNode::new(
+        llm_definition(),
+        BTreeMap::from([("answer".to_owned(), "str".to_owned())]),
+        factory,
+    )
+    .with_node_recovery(scoped())
+    .with_settings(
+        admitted_settings(
+            "{on_error: error_output, error_transition: recover}",
+            AdmittedNodeFamily::Llm,
+            &[("answer", "str")],
+        ),
+        Some(Arc::new("exec-llm-err-route".to_owned())),
+    );
+    let out = node
+        .execute(&NodeContext::new(
+            State::new(),
+            ExecutionConfig::new("llm-err-route-thread"),
+            1,
+        ))
+        .await
+        .expect("error_output settles and routes");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(out.goto, Some(vec!["recover".to_owned()]));
+    let errors = out.updates["node_errors"].as_array().expect("node_errors");
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0]["error"]["code"], "pipeline.llm.unavailable");
+}

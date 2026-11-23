@@ -1882,29 +1882,12 @@ impl NodeAttemptBody for LlmAttemptBody {
         _: &NodeContext,
         class: NodeFailureClass,
     ) -> Result<(), GraphError> {
-        if let Some(sender) = self.node.factory.event_sender() {
-            let (category, code, message) = match class {
-                NodeFailureClass::RateLimited => (
-                    adk_rust::ErrorCategory::RateLimited,
-                    "model_gateway.rate_limited",
-                    "the model gateway rate limit was reached",
-                ),
-                NodeFailureClass::AttemptTimeout | NodeFailureClass::DeadlineInsufficient => (
-                    adk_rust::ErrorCategory::Timeout,
-                    "model_gateway.upstream_timeout",
-                    "the model gateway timed out",
-                ),
-                NodeFailureClass::DependencyUnavailable => (
-                    adk_rust::ErrorCategory::Unavailable,
-                    "model_gateway.unavailable",
-                    "the model gateway is unavailable",
-                ),
-                _ => (
-                    adk_rust::ErrorCategory::Internal,
-                    "model_gateway.incomplete_stream",
-                    "the model gateway stream ended before completion",
-                ),
-            };
+        // SEC-5B2-05: only model-gateway failure classes emit `send_model_failure`;
+        // local non-model errors (`InvalidInput`, `InvalidResult`, `Unknown`)
+        // must never emit a spurious `model_gateway.incomplete_stream`.
+        if let Some(sender) = self.node.factory.event_sender()
+            && let Some((category, code, message)) = restored_model_gateway_spec(class)
+        {
             let error = AdkError::new(adk_rust::ErrorComponent::Model, category, code, message);
             sender
                 .send_model_failure(&error)
@@ -1924,6 +1907,49 @@ impl NodeAttemptBody for LlmAttemptBody {
         _: NodeFailureClass,
     ) -> Option<GraphError> {
         super::agent::model_gateway_graph_error(self.name(), code)
+    }
+
+    fn restored_stop_graph_error(&self, class: NodeFailureClass) -> Option<GraphError> {
+        restored_model_gateway_spec(class)
+            .and_then(|(_, code, _)| super::agent::model_gateway_graph_error(self.name(), code))
+    }
+}
+
+const fn restored_model_gateway_spec(
+    class: NodeFailureClass,
+) -> Option<(adk_rust::ErrorCategory, &'static str, &'static str)> {
+    match class {
+        NodeFailureClass::RateLimited => Some((
+            adk_rust::ErrorCategory::RateLimited,
+            "model_gateway.rate_limited",
+            "the model gateway rate limit was reached",
+        )),
+        NodeFailureClass::AttemptTimeout | NodeFailureClass::DeadlineInsufficient => Some((
+            adk_rust::ErrorCategory::Timeout,
+            "model_gateway.upstream_timeout",
+            "the model gateway timed out",
+        )),
+        NodeFailureClass::DependencyUnavailable => Some((
+            adk_rust::ErrorCategory::Unavailable,
+            "model_gateway.unavailable",
+            "the model gateway is unavailable",
+        )),
+        NodeFailureClass::ModelOutputIncomplete => Some((
+            adk_rust::ErrorCategory::Internal,
+            "model_gateway.incomplete_stream",
+            "the model gateway stream ended before completion",
+        )),
+        NodeFailureClass::AuthenticationDenied => Some((
+            adk_rust::ErrorCategory::Unauthorized,
+            "model_gateway.unauthorized",
+            "the model gateway rejected the execution credential",
+        )),
+        NodeFailureClass::AuthorizationDenied => Some((
+            adk_rust::ErrorCategory::Forbidden,
+            "model_gateway.forbidden",
+            "the model gateway rejected the execution project",
+        )),
+        _ => None,
     }
 }
 
