@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -110,12 +111,29 @@ func (v *LocalValidator) ValidateToken(ctx context.Context, tokenStr string) (au
 		TokenID:        strconv.FormatInt(int64(principal.TokenID), 10),
 		Email:          principal.Email,
 		AuthType:       "token",
+		CredentialKind: patCredentialKind(principal.Email),
 		TokenProjectID: tokenProjectID(principal.ProjectID),
 		TokenProjectActive: tokenProjectActive(
 			principal.ProjectID,
 			principal.BoundProjectActive,
 		),
 	}, nil
+}
+
+// projectSystemEmail is the address of a project's system identity, exactly
+// as shared 0265 and GetActiveProjectSystemPAT match it. centry.user is a
+// reserved domain (internal/infra/identityrepo), so no person can hold it.
+var projectSystemEmail = regexp.MustCompile(`^system_user_[0-9]+@centry[.]user$`)
+
+// patCredentialKind is the credential kind of a personal access token row
+// (ADR-0059 decision 7): `system` for a token of a project's system identity,
+// which is not a person and holds no administration rights, `token` for
+// every other one. The email is the owner row's, read by the same query.
+func patCredentialKind(ownerEmail string) auth.CredentialKind {
+	if projectSystemEmail.MatchString(ownerEmail) {
+		return auth.CredentialKindSystem
+	}
+	return auth.CredentialKindToken
 }
 
 // tokenProjectActive carries the bound project's lifecycle state, which the

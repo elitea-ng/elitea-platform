@@ -307,16 +307,34 @@ func assertNone(t *testing.T, pool *pgxpool.Pool, what string, tokenID int32) {
 	}
 }
 
-// resolveAdministration is today's resolver over a token principal.
+// resolveAdministration is the resolver over a personal access token
+// principal (credential kind `token`, ADR-0059 R1.2a). It reads admin_access,
+// so it runs only after 0265.
 func resolveAdministration(t *testing.T, pool *pgxpool.Pool, tokenID, userID int32) []string {
 	t.Helper()
 	resolution, err := legacyrbac.NewPostgresResolver(pool).ResolvePermissions(context.Background(), auth.User{
-		TokenID:  strconv.Itoa(int(tokenID)),
-		UserID:   strconv.Itoa(int(userID)),
-		AuthType: "token",
+		TokenID:        strconv.Itoa(int(tokenID)),
+		UserID:         strconv.Itoa(int(userID)),
+		AuthType:       "token",
+		CredentialKind: auth.CredentialKindToken,
 	}, auth.PermissionModeAdministration, "")
 	if err != nil {
 		t.Fatalf("resolve the administration set of token %d: %v", tokenID, err)
+	}
+	return resolution.Permissions
+}
+
+// resolvePreviousRelease is what the previous release resolved for a token:
+// its resolver ignored the credential, so a token resolved its owner's whole
+// administration set, the set a browser session of the owner resolves now.
+func resolvePreviousRelease(t *testing.T, pool *pgxpool.Pool, userID int32) []string {
+	t.Helper()
+	id := strconv.Itoa(int(userID))
+	resolution, err := legacyrbac.NewPostgresResolver(pool).ResolvePermissions(context.Background(), auth.User{
+		ID: id, UserID: id, AuthType: "session", CredentialKind: auth.CredentialKindSession,
+	}, auth.PermissionModeAdministration, "")
+	if err != nil {
+		t.Fatalf("resolve the administration set of user %d: %v", userID, err)
 	}
 	return resolution.Permissions
 }
@@ -349,7 +367,7 @@ func TestTokenAdminAccessBackfillKeepsWhatEveryTokenResolves(t *testing.T) {
 	}
 	before := map[int32][]string{}
 	for _, tok := range tokens {
-		before[tok.id] = resolveAdministration(t, pool, tok.id, tok.owner)
+		before[tok.id] = resolvePreviousRelease(t, pool, tok.owner)
 	}
 	if len(before[tokens[0].id]) == 0 {
 		t.Fatal("premise: the administrator's token resolves no administration permission before the upgrade")
@@ -371,10 +389,13 @@ func TestTokenAdminAccessBackfillKeepsWhatEveryTokenResolves(t *testing.T) {
 	}
 
 	// A token whose owner held no administration permission at migration
-	// time stays `none` when the owner is given `admin` later. R1.2a asserts
-	// that it then resolves nothing; this story asserts the column.
+	// time stays `none` when the owner is given `admin` later, and resolves
+	// nothing (R1.2a).
 	assignAdminRole(t, pool, plain, "admin")
 	assertNone(t, pool, "the plain user's token after the owner became admin", tokens[2].id)
+	if got := resolveAdministration(t, pool, tokens[2].id, plain); len(got) != 0 {
+		t.Errorf("the plain user's token resolves %v after the owner became admin, want nothing", got)
+	}
 }
 
 // A native device session and the project system token are not personal

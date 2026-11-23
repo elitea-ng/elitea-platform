@@ -1221,7 +1221,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// and admin_scopes, with the `inherit` backfill for personal access tokens
 	// of administration-role holders (issue 2505, ADR-0059 R1.1). No
 	// permission.
-	require.EqualValues(t, 265, Head(shared))
+	//
+	// 266: shared/0266_form_session_ref.sql, elitea_auth.form_sessions.ref
+	// from the browser_sessions.ref sequence, so a Form session reaches the
+	// resolver with a reference (issue 2506, ADR-0059 R1.2a). No permission.
+	require.EqualValues(t, 266, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

@@ -194,7 +194,7 @@ func TestEntitlements_AgreeWithTheResolver(t *testing.T) {
 		mode          string
 	}{{101, 201, auth.PermissionModeDefault}, {105, 202, auth.PermissionModeDefault}, {101, 0, auth.PermissionModeAdministration}} {
 		id := entitlementID(check.user)
-		resolution, err := resolver.ResolvePermissions(ctx, auth.User{ID: id, UserID: id}, check.mode, entitlementID(check.project))
+		resolution, err := resolver.ResolvePermissions(ctx, auth.User{ID: id, UserID: id, CredentialKind: auth.CredentialKindSession}, check.mode, entitlementID(check.project))
 		if err != nil {
 			t.Fatalf("resolve %+v: %v", check, err)
 		}
@@ -430,7 +430,7 @@ SELECT 150, id FROM auth_core__role WHERE name = 'admin' AND mode = 'administrat
 		t.Fatal(err)
 	}
 	resolution, err := legacyrbac.NewPostgresResolver(pool).ResolvePermissions(ctx,
-		auth.User{ID: "150", UserID: "150"}, auth.PermissionModeAdministration, "")
+		auth.User{ID: "150", UserID: "150", CredentialKind: auth.CredentialKindSession}, auth.PermissionModeAdministration, "")
 	if err != nil || !slices.Contains(resolution.Permissions, entitlements.ExportPermission) {
 		t.Fatalf("an administrator does not resolve %s: %v %v", entitlements.ExportPermission, resolution.Permissions, err)
 	}

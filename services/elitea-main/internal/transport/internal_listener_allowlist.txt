@@ -172,6 +172,7 @@ helper | internal/providerhost/proxy/providertest | a fake elitea.subapp.v1 Prov
 mode | internal/auth/permissions.go | defines the constant
 mode | internal/infra/legacyrbac/postgres.go | the permission resolver itself (R1.2a, #2506, adds its zero-credential rule)
 mode | internal/api/middleware/maintenance.go | public-route middleware: resolves for the request's authenticated principal, only on the public HTTP API
+mode | internal/api/middleware/rbac.go | public-route gates refuse a native device session at an administration-mode gate (R1.2a, #2506); it resolves nothing itself
 mode | internal/application/identity/provision.go | enrollment carries the configured initial administration role of a new user; it resolves nothing
 mode | internal/infra/identityrepo/postgres.go | enrollment applies that initial administration role; it resolves nothing
 mode | internal/adminaccess/policy.go | the role policy (R0.8a, #2497) names the mode of the central roles it rules on; it resolves nothing

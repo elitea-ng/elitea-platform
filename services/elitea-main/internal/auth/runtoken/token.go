@@ -292,5 +292,8 @@ func (v *Validator) ValidateRunToken(ctx context.Context, token, audience string
 		UserID:   userID,
 		TokenID:  strconv.FormatInt(binding.TokenID, 10),
 		AuthType: "token",
+		// The verifier is what knows a run token from a personal access token:
+		// both arrive as AuthType "token" with a token row (ADR-0059 R1.2a).
+		CredentialKind: auth.CredentialKindRun,
 	}, binding, nil
 }

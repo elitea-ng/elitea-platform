@@ -64,6 +64,41 @@ func TestFormSessionsResolveALiveSession(t *testing.T) {
 	}
 }
 
+// A Form session reaches the resolver as the kind `form` with its row's
+// non-zero reference (elitea_auth.form_sessions.ref, shared 0266; ADR-0059
+// R1.2a), whichever provider of the graph signed it in. A row without a
+// reference (a store that has none) carries none and can hold no elevation.
+func TestFormSessionsCarryTheKindAndTheRowReference(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		provider string
+		ref      int64
+	}{
+		{"password", browserapp.FormProviderName, 51},
+		{"another provider of the graph", "corporate-oidc", 52},
+		{"no reference", browserapp.FormProviderName, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sessions := newTestFormSessions(t, func(context.Context, string) (browserapp.Authorization, error) {
+				authorization := sessionAuthorization("71")
+				authorization.Provider = tc.provider
+				authorization.SessionRef = tc.ref
+				return authorization, nil
+			})
+			principal, err := sessions.AuthenticateFormSession(formSessionRequest(CookieValuePrefix + canonicalSessionID(5)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if principal.CredentialKind != auth.CredentialKindForm || principal.BrowserSessionRef != tc.ref {
+				t.Fatalf("kind %q ref %d, want form and %d", principal.CredentialKind, principal.BrowserSessionRef, tc.ref)
+			}
+			if got := principal.Credential().ElevationSessionRef(); got != tc.ref {
+				t.Fatalf("elevation ref %d, want %d", got, tc.ref)
+			}
+		})
+	}
+}
+
 func TestFormSessionsClassifyEveryRefusal(t *testing.T) {
 	valid := CookieValuePrefix + canonicalSessionID(4)
 	storeDown := errors.New("session store unavailable")

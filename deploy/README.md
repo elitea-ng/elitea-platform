@@ -531,7 +531,8 @@ configured.
 
 Check what a running deployment resolved. The route is gated on
 `runtime.plugins` in administration mode, so send an administrator session
-cookie or a personal access token with it:
+cookie, or a personal access token that carries administration rights (a new
+token carries none; see docs/upgrading/2026-11-23-2506-credential-decides-administration-set.md):
 
 ```bash
 curl -s -H "Authorization: Bearer $ADMIN_PAT" \

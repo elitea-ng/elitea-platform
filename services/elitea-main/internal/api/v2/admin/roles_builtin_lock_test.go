@@ -173,7 +173,7 @@ func TestALockedSetRefusalWritesOneAuditRow(t *testing.T) {
 	router.Use(middleware.Audit(recorder))
 	router.Mount("/api/v2", rolesRouter(
 		admin.NewHandler(env.pool, admin.WithPermissionResolver(legacyrbac.NewPostgresResolver(env.pool))),
-		nil, &auth.User{ID: caller, UserID: caller}))
+		nil, &auth.User{ID: caller, UserID: caller, CredentialKind: auth.CredentialKindSession}))
 
 	const path = "/api/v2/admin/permissions/administration/administration"
 	refused := saveCell(t, router, path, "models.alpha.view", "editor", true)
