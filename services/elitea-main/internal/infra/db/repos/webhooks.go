@@ -247,7 +247,7 @@ type WebhookSecretMoveReport struct {
 
 // MoveLegacySecretsToVault seals every plaintext `secret` still in the table
 // into its project vault, writes the reference and blanks the column (issue
-// 2963, migrations/shared/0266_webhook_secret_reference.sql).
+// 2963, migrations/shared/0267_webhook_secret_reference.sql).
 //
 // It is Go and not SQL because SQL cannot open the vault: the value is sealed
 // with the project's Fernet key. One row per transaction, each re-checked

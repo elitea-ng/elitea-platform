@@ -32,7 +32,7 @@ type Webhook struct {
 	// Secret is plaintext signing material. On the way IN to the repository
 	// it is the value to seal. On the way OUT it is non-empty only for a row
 	// written before the vault move reached it (see
-	// migrations/shared/0266_webhook_secret_reference.sql), which the
+	// migrations/shared/0267_webhook_secret_reference.sql), which the
 	// dispatcher still signs with so an upgrade sends nothing unsigned.
 	Secret string `json:"-"`
 	// SecretRef is the vault reference the dispatcher resolves per delivery.

@@ -15,29 +15,17 @@ import (
 // before any write.
 func grantOrigin(r *http.Request, caller adminaccess.Caller) rolegrants.Origin {
 	source := rolegrants.SourceAPI
-	if principal, ok := auth.UserFromContext(r.Context()); ok && browserSession(r, principal) {
+	if principal, ok := auth.UserFromContext(r.Context()); ok && browserSession(principal) {
 		source = rolegrants.SourceConsole
 	}
 	return rolegrants.Origin{ActorUserID: caller.UserID, Source: source}
 }
 
-// browserSession reports whether the principal signed in through a browser.
-// Until the credential kind reaches the principal (R1.2, #2506) it is read
-// from what each browser plane sets:
-//
-//   - the server-side session reader sets a positive BrowserSessionRef;
-//   - the Form plane and the session-cookie path set AuthType "session" and no
-//     token id, and the authentication middleware records the session source.
-//
-// A token principal carries a TokenID, and the middleware records a token or
-// API-key source for it, so it is never a browser session.
-func browserSession(r *http.Request, principal auth.User) bool {
-	if principal.BrowserSessionRef > 0 {
-		return true
-	}
-	if principal.TokenID != "" || principal.AuthType != "session" {
-		return false
-	}
-	source, known := auth.AuthenticationSourceFromContext(r.Context())
-	return !known || source == auth.AuthenticationSourceSession
+// browserSession reports whether the principal signed in through a browser:
+// its credential kind (ADR-0059 R1.2a) is a browser session (`session`,
+// `form`, `sealed`) and it names no token row. Every other kind, the zero
+// kind included, is `api`.
+func browserSession(principal auth.User) bool {
+	credential := principal.Credential()
+	return credential.IsBrowserSession() && credential.TokenID == ""
 }

@@ -3,7 +3,7 @@
 **What changed.** An outbound webhook's signing secret is now stored in the
 project's secret vault as a hidden secret. The `webhooks` row keeps only a
 reference to it (new column `secret_ref`, shared migration
-`0266_webhook_secret_reference.sql`), and the `secret` column is left empty.
+`0267_webhook_secret_reference.sql`), and the `secret` column is left empty.
 
 - `GET /webhooks/prompt_lib/{projectID}` and
   `GET /webhooks/prompt_lib/{projectID}/{webhookID}` no longer return

@@ -82,12 +82,13 @@ func TestActivatingAProviderWritesAnAuditRow(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	router := NewRouter(RouterConfig{
+	router := asConsoleSession(NewRouter(RouterConfig{
 		Pool:               pool,
+		SessionSecret:      consoleTestSessionSecret,
 		AuthValidator:      testTokenValidator{user: privilegedAuditTestUser()},
 		PrincipalValidator: testPrincipalValidator{},
 		AuditRecorder:      recorder,
-	})
+	}), privilegedAuditTestUser())
 
 	response := httptest.NewRecorder()
 	request := testAuthHeader(httptest.NewRequest(http.MethodPost,
@@ -159,11 +160,12 @@ DELETE FROM auth_core__role_permission
 		t.Fatalf("withdraw the activate grant: %v", err)
 	}
 
-	router := NewRouter(RouterConfig{
+	router := asConsoleSession(NewRouter(RouterConfig{
 		Pool:               pool,
+		SessionSecret:      consoleTestSessionSecret,
 		AuthValidator:      testTokenValidator{user: privilegedAuditTestUser()},
 		PrincipalValidator: testPrincipalValidator{},
-	})
+	}), privilegedAuditTestUser())
 
 	// REGISTRATION STILL WORKS, which is what makes the refusal below a
 	// statement about the permission rather than about a broken principal.

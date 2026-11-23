@@ -50,6 +50,11 @@ type State struct {
 	// compares the record bytes only, so moving this time never conflicts
 	// with them.
 	AuthenticatedAt *time.Time `json:"-"`
+	// Ref is the stable, non-secret reference of the stored session row
+	// (elitea_auth.form_sessions.ref, shared 0266), 0 when the store has none.
+	// Like AuthenticatedAt it is a column, not a member of the record: the
+	// store assigns it and only reads it back.
+	Ref int64 `json:"-"`
 }
 
 // Validate checks the fixed session schema and its allocation bounds. It does

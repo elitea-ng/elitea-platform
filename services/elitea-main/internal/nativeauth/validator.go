@@ -114,6 +114,7 @@ func (v *AccessValidator) ValidateToken(ctx context.Context, token string) (auth
 		AuthType: "token",
 		// The one producer of NativeClientID: read from the session row.
 		NativeClientID: clientID,
+		CredentialKind: auth.CredentialKindNative,
 	}
 	if projectID != nil && *projectID > 0 {
 		bound := int64(*projectID)

@@ -1,4 +1,4 @@
--- 0266_webhook_secret_reference.sql — webhook signing secrets move to the
+-- 0267_webhook_secret_reference.sql — webhook signing secrets move to the
 -- project vault (issue 2963).
 --
 -- 0122 stored each outbound webhook's signing secret in public.webhooks.secret

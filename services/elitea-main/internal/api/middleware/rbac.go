@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
@@ -177,7 +178,7 @@ func RequireResolvedMembershipPermissions(
 			// Fail closed, exactly as RequireResolvedPermissionsForProject
 			// does: a route composed without a resolver refuses everyone
 			// rather than running ungated.
-			if resolver == nil {
+			if resolver == nil || nativeAtAdministrationGate(user, mode) {
 				apierr.WriteStatus(w, http.StatusForbidden, "insufficient permissions")
 				return
 			}
@@ -234,6 +235,10 @@ func RequireResolvedPermissionsForProject(
 				apierr.WriteStatus(w, http.StatusForbidden, "insufficient permissions")
 				return
 			}
+			if nativeAtAdministrationGate(user, mode) {
+				apierr.WriteStatus(w, http.StatusForbidden, "insufficient permissions")
+				return
+			}
 
 			resolution, err := resolver.ResolvePermissions(
 				r.Context(),
@@ -258,6 +263,19 @@ func RequireResolvedPermissionsForProject(
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// nativeAtAdministrationGate reports a native device session (desktop,
+// mobile) at an administration-mode ROUTE gate. No such gate admits one
+// (ADR-0059 decision 7, "Native sessions"): the two permissions a native
+// session keeps (registry rows marked native_client) serve the two
+// in-application checks that call the resolver themselves, the maintenance
+// bypass and Marketplace moderation. Without this, `runtime.plugins`, a legacy
+// name many administration routes still accept, would open those routes to a
+// stolen desktop refresh token.
+func nativeAtAdministrationGate(user auth.User, mode string) bool {
+	return user.CredentialKind == auth.CredentialKindNative &&
+		strings.EqualFold(strings.TrimSpace(mode), auth.PermissionModeAdministration)
 }
 
 type resolvedProjectPermissionsKey struct{}

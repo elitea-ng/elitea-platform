@@ -102,7 +102,7 @@ func newEscalationEnvironment(t *testing.T) escalationEnvironment {
 // as mounts every role write for one caller, with the real resolver.
 func (e escalationEnvironment) as(email string) chi.Router {
 	id := fmt.Sprint(e.ids[email])
-	principal := &auth.User{ID: id, UserID: id}
+	principal := &auth.User{ID: id, UserID: id, CredentialKind: auth.CredentialKindSession}
 	handler := admin.NewHandler(e.pool, admin.WithPermissionResolver(legacyrbac.NewPostgresResolver(e.pool)))
 	router := chi.NewRouter()
 	router.Mount("/m", rolesRouter(handler, nil, principal))
@@ -457,7 +457,7 @@ func TestAGroupBindingAssignsOnlyARoleTheCallerHolds(t *testing.T) {
 		router := chi.NewRouter()
 		router.Use(func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				next.ServeHTTP(w, r.WithContext(auth.ContextWithUser(r.Context(), auth.User{ID: id, UserID: id})))
+				next.ServeHTTP(w, r.WithContext(auth.ContextWithUser(r.Context(), auth.User{ID: id, UserID: id, CredentialKind: auth.CredentialKindSession})))
 			})
 		})
 		router.Post("/bindings", handler.SCIMGroupBindingCreate)

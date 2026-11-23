@@ -129,3 +129,40 @@ func TestServeSPA_LegacyCookieStillFillsTheOperatorIn(t *testing.T) {
 		t.Fatalf("injected %+v, want the legacy cookie's operator", injected)
 	}
 }
+
+// TestServeSPA_TheResolverSeesABrowserSession. Since ADR-0059 R1.2a the
+// credential decides the administration set and a principal without a kind
+// resolves none, so the shell must hand the resolver the browser session the
+// cookie named. The resolver here answers the way legacyrbac does (empty for
+// the zero kind); without the kind both cookie shapes get an empty sidebar.
+func TestServeSPA_TheResolverSeesABrowserSession(t *testing.T) {
+	t.Parallel()
+
+	session := adminSession()
+	session.Ref = 314
+	for _, tc := range []struct {
+		name    string
+		cookie  string
+		wantRef int64
+	}{
+		{"server-side session", serverSessionCookie(t), 314},
+		{"legacy signed cookie", validCookie(t), 0},
+	} {
+		var seen auth.User
+		resolver := resolverFunc(func(_ context.Context, principal auth.User, _, _ string) (auth.PermissionResolution, error) {
+			seen = principal
+			if principal.CredentialKind == auth.CredentialKindNone {
+				return auth.PermissionResolution{Permissions: []string{}}, nil
+			}
+			return auth.PermissionResolution{Permissions: []string{"admin.auth.users"}}, nil
+		})
+		injected := serveAdminIndex(t, Config{Resolver: resolver, Sessions: stubSessions{session: session}}, tc.cookie)
+		if seen.CredentialKind != auth.CredentialKindSession || seen.BrowserSessionRef != tc.wantRef {
+			t.Fatalf("%s: the resolver got kind %q ref %d, want session ref %d",
+				tc.name, seen.CredentialKind, seen.BrowserSessionRef, tc.wantRef)
+		}
+		if len(injected.Permissions) != 1 {
+			t.Fatalf("%s: permissions = %v, want the operator's", tc.name, injected.Permissions)
+		}
+	}
+}
