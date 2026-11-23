@@ -169,6 +169,7 @@ type Actions struct {
 func NewActions(entries []Action, permissions Table) (Actions, error) {
 	sorted := make([]Action, len(entries))
 	for i, entry := range entries {
+		entry.Pattern = RoutePattern(entry.Pattern)
 		filled, err := fill(entry, permissions)
 		if err != nil {
 			return Actions{}, err
@@ -335,8 +336,10 @@ func validateRoute(route string, group []Action) error {
 // Entries returns a copy of the entries, sorted.
 func (t Actions) Entries() []Action { return append([]Action(nil), t.entries...) }
 
-// Route returns the entries of one (method, pattern), sorted by name.
+// Route returns the entries of one (method, pattern), sorted by name. pattern
+// may be in either form RoutePattern accepts.
 func (t Actions) Route(method, pattern string) []Action {
+	pattern = RoutePattern(pattern)
 	var out []Action
 	for _, a := range t.entries {
 		if a.Method == method && a.Pattern == pattern {
@@ -347,9 +350,9 @@ func (t Actions) Route(method, pattern string) []Action {
 }
 
 // Lookup returns the entry of (method, pattern, action). action is "" on a
-// route with one action.
+// route with one action. pattern may be in either form RoutePattern accepts.
 func (t Actions) Lookup(method, pattern, action string) (Action, bool) {
-	i, ok := t.byKey[Action{Method: method, Pattern: pattern, Name: action}.Key()]
+	i, ok := t.byKey[Action{Method: method, Pattern: RoutePattern(pattern), Name: action}.Key()]
 	if !ok {
 		return Action{}, false
 	}
@@ -373,9 +376,44 @@ func mustActions(entries []Action, permissions Table) Actions {
 func ActionTable() Actions { return actions }
 
 // ActionFor returns the entry of (method, pattern, action) of this service.
-// pattern is the chi route pattern as the router mounts it; action is "" on a
-// route with one action, and otherwise ActionName of the selector value and
-// the classifier outcome.
+// pattern is the chi route pattern, as chi.Walk lists it or as
+// chi.RouteContext(ctx).RoutePattern() answers it during a request; action is
+// "" on a route with one action, and otherwise ActionName of the selector
+// value and the classifier outcome.
+//
+// ActionFor does not know the request's mode. A gate that has it calls
+// ActionInMode, which answers no entry outside the administration mode.
 func ActionFor(method, pattern, action string) (Action, bool) {
 	return actions.Lookup(method, pattern, action)
+}
+
+// AdministrationMode is the mode an action entry describes
+// (auth.PermissionModeAdministration; this package imports nothing from it).
+const AdministrationMode = "administration"
+
+// ActionInMode is ActionFor for a request in mode. On a pattern with a
+// `{mode}` segment it answers no entry unless mode is the administration
+// mode: the same route in the default mode (the user-facing project delete)
+// is not on the administration surface.
+func ActionInMode(mode, method, pattern, action string) (Action, bool) {
+	if mode != AdministrationMode && strings.Contains(pattern, "{mode}") {
+		return Action{}, false
+	}
+	return ActionFor(method, pattern, action)
+}
+
+// RoutePattern answers pattern in the form chi's RoutePattern() gives during
+// a request: a sub-router mounted at "/" leaves "/*/" in the pattern chi.Walk
+// lists, which chi collapses to "/", and a trailing "/" is dropped. Entries
+// are keyed in this form, so a walked pattern and a request's pattern find
+// the same entry.
+func RoutePattern(pattern string) string {
+	for strings.Contains(pattern, "/*/") {
+		pattern = strings.ReplaceAll(pattern, "/*/", "/")
+	}
+	if pattern != "/" {
+		pattern = strings.TrimSuffix(pattern, "//")
+		pattern = strings.TrimSuffix(pattern, "/")
+	}
+	return pattern
 }

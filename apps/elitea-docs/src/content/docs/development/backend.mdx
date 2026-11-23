@@ -150,9 +150,9 @@ r.With(requireBranding).Put("/branding/administration", adminHandler.BrandingSav
 
 ### Add an action entry
 
-Every route of the administration surface that can change something, and whose checks accept a `write` or `approve` permission, has an entry in the action table, `internal/adminaccess/action_rows.go`. A GET or HEAD has none: it changes nothing, whatever permission gates it. `TestEveryWriteRouteOfTheSurfaceHasAnActionEntry` (`internal/api/administration_surface_test.go`) drives the composed router and fails on a write route with no entry, on an entry whose route or variant the surface does not have, and on an entry whose permission none of the route's checks accept. So a new write route fails CI until it has its entry.
+Every route of the administration surface that can change something (every method but GET and HEAD) has an entry in the action table, `internal/adminaccess/action_rows.go`. A route is classed by its effect, not by the class of the permission that gates it: a GET has no entry whatever gates it, and a POST that changes nothing (a validation, a connection check) has one with no danger. `TestEveryWriteRouteOfTheSurfaceHasAnActionEntry` (`internal/api/administration_surface_test.go`) drives the composed router and fails on such a route with no entry, on an entry whose route or variant the surface does not have, and on an entry whose permission none of the route's checks accept. So a new write route fails CI until it has its entry.
 
-An entry is keyed by method, chi route pattern and action name, and `adminaccess.ActionFor(method, pattern, action)` looks it up. On a pattern with a `{mode}` segment the entry describes the `administration` mode only. Its fields:
+An entry is keyed by method, chi route pattern and action name, and `adminaccess.ActionFor(method, pattern, action)` looks it up. The pattern may be the one `chi.Walk` lists or the one `RoutePattern()` answers during a request (a sub-router mounted at `/` leaves `/*/` in the first, and a trailing `/` is dropped in the second); `adminaccess.RoutePattern` maps one to the other. On a pattern with a `{mode}` segment the entry describes the `administration` mode only: a gate that knows the mode calls `adminaccess.ActionInMode`, which answers no entry in another mode, so the user-facing project delete is not marked. Its fields:
 
 | Field | Meaning |
 | --- | --- |
@@ -160,13 +160,13 @@ An entry is keyed by method, chi route pattern and action name, and `adminaccess
 | `Danger` | None, `dangerous` or `critical`: the first list of ADR-0059 decision 6. |
 | `Reason` | Whether the action asks for a reason. Every `dangerous` and `critical` action does, so the table sets it. |
 | `Elevation` | What an elevation may do (decision 5): `allow`, `flag` (allowed, marked for the review), `deny` or `sealed` (only a sealed elevation at the `super_admin` level). A `critical` action must declare one; any other defaults to `allow`. |
-| `Token` | `allowed` or `never`. A `critical` action defaults to `never`; `allowed` on a `critical` action needs a written `TokenReason`. |
+| `Token` | `allowed` or `never`. A `critical` action defaults to `never`; `allowed` on a `critical` action needs a written `TokenReason` (the `.tokenAllowed(reason)` builder). |
 | `Selector` | On a route that takes several actions, the part of the request that picks one: a body field (`action` of `POST /admin/auth_users/{mode}`) or a path placeholder (`{plugin}`, the Configuration section). The surface test drives the route once per value. |
 | `Classifier` | When the danger depends on what the request changes, one entry per outcome of a classifier in `action_classifiers.go`: shortening or lengthening a retention policy, changing a global provider's endpoint, credential or keyless identity or only its settings, an identity provider trust change, turning it off or only its settings, a guardrail rule or another governance row, maintenance turned on, a platform-wide kill switch, suspending or unsuspending a user. Do not mark a whole route `critical` when only one outcome is. |
 
 To add one:
 
-1. Add the entry next to its console area in `actionRows()`. A route with one action takes `post`, `put` or `del` with its permission, then `.dangerous()`, `.critical(elevation)` or `.elevation(value)` where the defaults do not hold.
+1. Add the entry next to its console area in `actionRows()`. A route with one action takes `post`, `put` or `del` with its permission, then `.dangerous()`, `.critical(elevation)`, `.elevation(value)` or `.tokenAllowed(reason)` where the defaults do not hold.
 2. If the route multiplexes actions on its body, give each action a `Selector` and list the handler in `multiplexed` (`internal/adminaccess/actions_test.go`): that test reads the action names from the handler's `switch` and fails when the two lists differ.
 3. Regenerate the golden file with `UPDATE_GOLDEN=1 go test ./internal/adminaccess/` and review `internal/adminaccess/testdata/actions.golden`. It lists method, route, action, danger, reason, elevation and token for every entry, so a change of danger shows in review.
 

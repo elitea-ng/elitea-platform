@@ -372,9 +372,9 @@ func TestEveryWriteRouteOfTheSurfaceHasAnActionEntry(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		failures := result.ActionFailures(table, adminaccess.Registry(), nil)
+		failures := result.ActionFailures(table, nil)
 		for _, want := range []string{
-			`POST /api/v2/admin/fixture (variant "") is a write route of the administration surface with no action entry`,
+			`POST /api/v2/admin/fixture (variant "") can change something on the administration surface and has no action entry`,
 			`PUT /api/v2/admin/fixture requires "configuration.branding"`,
 			"DELETE /api/v2/admin/fixture has an action entry, but the administration surface has no such route",
 		} {
@@ -391,7 +391,7 @@ func TestEveryWriteRouteOfTheSurfaceHasAnActionEntry(t *testing.T) {
 		t.Parallel()
 		result := drivenComposedSurface(t).result
 		for _, failure := range result.ActionFailures(
-			adminaccess.ActionTable(), adminaccess.Registry(), actionPermissionExceptions) {
+			adminaccess.ActionTable(), actionPermissionExceptions) {
 			t.Error(failure)
 		}
 		// The multiplexed user route is driven once per action.

@@ -31,6 +31,14 @@ func (a Action) dangerous() Action            { a.Danger = DangerDangerous; retu
 func (a Action) elevation(e Elevation) Action { a.Elevation = e; return a }
 func (a Action) critical(e Elevation) Action  { a.Danger = DangerCritical; a.Elevation = e; return a }
 func (a Action) selected(s Selector) Action   { a.Selector = s; a.Name = s.Value; return a }
+
+// tokenAllowed lets a token call a critical action, with the written reason
+// ADR-0059 decision 7 requires. No entry uses it yet: story R1.2 declares the
+// identity trust exception with it.
+func (a Action) tokenAllowed(reason string) Action {
+	a.Token, a.TokenReason = TokenAllowed, reason
+	return a
+}
 func (a Action) outcome(c Classifier, outcome string) Action {
 	a.Classifier = c
 	a.Name = ActionName(a.Selector.Value, outcome)
@@ -157,7 +165,9 @@ func actionRows() []Action {
 		del(core("/user_budget/administration/{projectID}/user_budget/{userID}"), ModelsAdminProjectBudgetsEdit),
 
 		// Models and spend: the gateway.
-		post(admin("/gateway/providers/"), ConfigurationGovernance),
+		// Creating a global provider sets its endpoint, credential and keyless
+		// identity, so it is critical like changing them.
+		post(admin("/gateway/providers"), ConfigurationGovernance).critical(flag),
 		put(admin("/gateway/providers/{configID}"), ConfigurationGovernance).
 			outcome(ClassifyGlobalProvider, OutcomeRoute).critical(flag),
 		put(admin("/gateway/providers/{configID}"), ConfigurationGovernance).
@@ -166,15 +176,15 @@ func actionRows() []Action {
 		post(admin("/gateway/providers/{configID}/check"), ConfigurationGovernance),
 		post(admin("/gateway/providers/{configID}/models"), ConfigurationGovernance),
 		post(admin("/gateway/providers/{configID}/revalidate"), ConfigurationGovernance),
-		post(admin("/gateway/platform_models/"), ConfigurationGovernance),
+		post(admin("/gateway/platform_models"), ConfigurationGovernance),
 		put(admin("/gateway/platform_models/{configID}"), ConfigurationGovernance),
 		del(admin("/gateway/platform_models/{configID}"), ConfigurationGovernance).dangerous(),
-		put(admin("/gateway/default_model/"), ConfigurationGovernance),
-		del(admin("/gateway/default_model/"), ConfigurationGovernance),
+		put(admin("/gateway/default_model"), ConfigurationGovernance),
+		del(admin("/gateway/default_model"), ConfigurationGovernance),
 		put(admin("/gateway/models"), ConfigurationGovernance),
 		del(admin("/gateway/models/{id}"), ConfigurationGovernance),
 		put(admin("/gateway/metered-prices"), ConfigurationGovernance),
-		put(admin("/gateway/*/budget-alerts"), ConfigurationGovernance),
+		put(admin("/gateway/budget-alerts"), ConfigurationGovernance),
 		post(admin("/gateway/governance/validate-cel"), ConfigurationGovernance),
 
 		// Agents and governance.

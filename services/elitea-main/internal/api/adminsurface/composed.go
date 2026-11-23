@@ -157,10 +157,15 @@ func (c Composed) Options() (Options, error) {
 		if action.Selector.In != adminaccess.SelectBody {
 			continue
 		}
-		route := Route{Method: action.Method, Pattern: action.Pattern}.String()
 		variant := Variant{Name: "action " + action.Selector.Value, Body: action.Selector.Body()}
-		if !slices.ContainsFunc(opts.Variants[route], func(v Variant) bool { return v.Name == variant.Name }) {
-			opts.Variants[route] = append(opts.Variants[route], variant)
+		for _, mounted := range c.Routes {
+			if mounted.Method != action.Method || adminaccess.RoutePattern(mounted.Pattern) != action.Pattern {
+				continue
+			}
+			route := mounted.String()
+			if !slices.ContainsFunc(opts.Variants[route], func(v Variant) bool { return v.Name == variant.Name }) {
+				opts.Variants[route] = append(opts.Variants[route], variant)
+			}
 		}
 	}
 	return opts, nil

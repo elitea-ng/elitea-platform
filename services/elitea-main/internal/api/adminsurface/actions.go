@@ -9,22 +9,14 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 )
 
-// IsWrite reports whether a surface entry is classed `write` or `approve`:
-// its method can change something (a GET or HEAD is `read` whatever gates it)
-// and one of its checks accepts a permission that the permission table
-// classes `write` or `approve`.
-func (e Entry) IsWrite(permissions adminaccess.Table) bool {
-	if e.Method == http.MethodGet || e.Method == http.MethodHead {
-		return false
-	}
-	for _, check := range e.Checks {
-		for _, name := range check.Permissions {
-			if row, ok := permissions.Lookup(name); ok && row.Class != adminaccess.ClassRead {
-				return true
-			}
-		}
-	}
-	return false
+// IsWrite reports whether a surface entry can change something: every
+// method but GET and HEAD. A route is classed by its effect, not by the class
+// of the permission that gates it, so a POST behind a `read` permission, or one
+// whose write permission is checked only in its handler, still needs an
+// action entry; an effect-free POST (a validation, a check) has one with no
+// danger.
+func (e Entry) IsWrite() bool {
+	return e.Method != http.MethodGet && e.Method != http.MethodHead
 }
 
 // SelectorValue answers the value a variant selects: the part of its name
@@ -35,24 +27,26 @@ func (e Entry) SelectorValue() string {
 	return value
 }
 
+// driveKey keys a route in the form the action table uses
+// (adminaccess.RoutePattern), so a walked pattern and an entry meet.
 func driveKey(method, pattern, selector string) string {
-	return method + " " + pattern + "\x00" + selector
+	return method + " " + adminaccess.RoutePattern(pattern) + "\x00" + selector
 }
 
-// ActionFailures answers one message per write entry of the surface (IsWrite)
-// with no action entry for its (method, pattern, selector value); per action
+// ActionFailures answers one message per entry of the surface that can change
+// something (IsWrite) with no action entry for its (method, pattern, selector
+// value); per action
 // entry whose permission none of the route's checks accepts, unless
 // permissionExceptions holds the entry's Key with a reason; per stale
 // exception; and per action entry whose route and selector value the surface
 // does not have, so that the table and the surface stay one list.
-func (res Result) ActionFailures(table adminaccess.Actions, permissions adminaccess.Table,
-	permissionExceptions map[string]string) []string {
+func (res Result) ActionFailures(table adminaccess.Actions, permissionExceptions map[string]string) []string {
 	var failures []string
 	driven := map[string]bool{}
 	usedException := map[string]bool{}
 	for _, entry := range res.Surface {
 		driven[driveKey(entry.Method, entry.Pattern, entry.SelectorValue())] = true
-		if !entry.IsWrite(permissions) {
+		if !entry.IsWrite() {
 			continue
 		}
 		var matched []adminaccess.Action
@@ -63,7 +57,7 @@ func (res Result) ActionFailures(table adminaccess.Actions, permissions adminacc
 		}
 		if len(matched) == 0 {
 			failures = append(failures, fmt.Sprintf(
-				"%s (variant %q) is a write route of the administration surface with no action entry: "+
+				"%s (variant %q) can change something on the administration surface and has no action entry: "+
 					"add one to internal/adminaccess/action_rows.go", entry.Route, entry.Variant))
 			continue
 		}

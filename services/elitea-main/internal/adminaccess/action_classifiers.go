@@ -97,16 +97,17 @@ func RetentionAction(old, new RetentionBounds) string {
 // change neither sends prompts elsewhere nor changes who the platform is to
 // the provider. Every other field, named or not, is the endpoint, the
 // credential or the keyless identity, so an unknown field fails toward
-// critical.
-var globalProviderSettingsFields = []string{
-	"label", "name", "display_name", "description", "models", "tags", "status", "status_ok",
-}
+// critical. Only plain text a person reads is listed: a model list can carry
+// a per-model base address, so `models` is not a setting.
+var globalProviderSettingsFields = []string{"label", "display_name", "description", "tags"}
 
 // GlobalProviderUpdateAction answers OutcomeRoute when an update of a global
 // provider changes its endpoint, credential or keyless identity, and
 // OutcomeSettings when it changes only the fields above. changed are the
-// names of the fields the update changes: top-level fields and the fields of
-// `data`, without a prefix.
+// names of the fields the update changes, one level deep: a top-level field
+// of the row, or a direct field of its `data`. A change anywhere inside a
+// nested value is reported as the field that holds it, so a nested key that
+// happens to be called `label` cannot pass as one.
 func GlobalProviderUpdateAction(changed []string) string {
 	for _, field := range changed {
 		if !slices.Contains(globalProviderSettingsFields, strings.ToLower(field)) {

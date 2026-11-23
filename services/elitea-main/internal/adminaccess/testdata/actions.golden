@@ -41,9 +41,9 @@ POST	/api/v2/admin/external_agent_identities/{id}:provision	-	none	false	allow	a
 POST	/api/v2/admin/external_agent_identities/{id}:resume	-	none	false	allow	allowed
 POST	/api/v2/admin/external_agent_identities/{id}:retire	-	none	false	allow	allowed
 POST	/api/v2/admin/external_agent_identities/{id}:suspend	-	none	false	allow	allowed
-PUT	/api/v2/admin/gateway/*/budget-alerts	-	none	false	allow	allowed
-DELETE	/api/v2/admin/gateway/default_model/	-	none	false	allow	allowed
-PUT	/api/v2/admin/gateway/default_model/	-	none	false	allow	allowed
+PUT	/api/v2/admin/gateway/budget-alerts	-	none	false	allow	allowed
+DELETE	/api/v2/admin/gateway/default_model	-	none	false	allow	allowed
+PUT	/api/v2/admin/gateway/default_model	-	none	false	allow	allowed
 POST	/api/v2/admin/gateway/governance	guardrail	critical	true	allow	never
 POST	/api/v2/admin/gateway/governance	other	none	false	allow	allowed
 POST	/api/v2/admin/gateway/governance/validate-cel	-	none	false	allow	allowed
@@ -54,10 +54,10 @@ PUT	/api/v2/admin/gateway/governance/{id}	other	none	false	allow	allowed
 PUT	/api/v2/admin/gateway/metered-prices	-	none	false	allow	allowed
 PUT	/api/v2/admin/gateway/models	-	none	false	allow	allowed
 DELETE	/api/v2/admin/gateway/models/{id}	-	none	false	allow	allowed
-POST	/api/v2/admin/gateway/platform_models/	-	none	false	allow	allowed
+POST	/api/v2/admin/gateway/platform_models	-	none	false	allow	allowed
 DELETE	/api/v2/admin/gateway/platform_models/{configID}	-	dangerous	true	allow	allowed
 PUT	/api/v2/admin/gateway/platform_models/{configID}	-	none	false	allow	allowed
-POST	/api/v2/admin/gateway/providers/	-	none	false	allow	allowed
+POST	/api/v2/admin/gateway/providers	-	critical	true	flag	never
 DELETE	/api/v2/admin/gateway/providers/{configID}	-	dangerous	true	allow	allowed
 PUT	/api/v2/admin/gateway/providers/{configID}	route	critical	true	flag	never
 PUT	/api/v2/admin/gateway/providers/{configID}	settings	none	false	allow	allowed

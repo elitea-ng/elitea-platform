@@ -15,6 +15,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/identityproviders"
 )
 
@@ -40,6 +41,48 @@ func TestActionTableBuilds(t *testing.T) {
 	}
 	if _, ok := adminaccess.ActionFor(http.MethodPost, adminaccess.AuthUsersActionPattern, ""); ok {
 		t.Error("ActionFor answered an unnamed action on a route that multiplexes actions")
+	}
+}
+
+// TestActionForTakesTheRequestPattern pins that the pattern chi.Walk lists and
+// the one RoutePattern() answers during a request find the same entry: a
+// sub-router mounted at "/" leaves "/*/" in the walked pattern, and a trailing
+// slash is dropped at request time.
+func TestActionForTakesTheRequestPattern(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ method, walked, request string }{
+		{http.MethodPut, "/api/v2/admin/gateway/*/budget-alerts", "/api/v2/admin/gateway/budget-alerts"},
+		{http.MethodPost, "/api/v2/admin/gateway/providers/", "/api/v2/admin/gateway/providers"},
+	} {
+		if got := adminaccess.RoutePattern(c.walked); got != c.request {
+			t.Errorf("RoutePattern(%q) = %q, want %q", c.walked, got, c.request)
+		}
+		walked, ok1 := adminaccess.ActionFor(c.method, c.walked, "")
+		request, ok2 := adminaccess.ActionFor(c.method, c.request, "")
+		if !ok1 || !ok2 || walked.Key() != request.Key() {
+			t.Errorf("%q and %q do not find the same entry: %v %v", c.walked, c.request, ok1, ok2)
+		}
+	}
+}
+
+// TestActionInModeIsTheAdministrationModeOnly pins that the user-facing
+// project delete, the same pattern in the default mode, has no entry.
+func TestActionInModeIsTheAdministrationModeOnly(t *testing.T) {
+	t.Parallel()
+	const pattern = "/api/v2/projects/project/{mode}/{projectID}"
+	if adminaccess.AdministrationMode != auth.PermissionModeAdministration {
+		t.Fatalf("AdministrationMode is %q; the resolver's mode is %q",
+			adminaccess.AdministrationMode, auth.PermissionModeAdministration)
+	}
+	if entry, ok := adminaccess.ActionInMode(adminaccess.AdministrationMode, http.MethodDelete, pattern, ""); !ok ||
+		entry.Danger != adminaccess.DangerCritical {
+		t.Errorf("the administration project delete: %+v, %v; want the critical entry", entry, ok)
+	}
+	if _, ok := adminaccess.ActionInMode(auth.PermissionModeDefault, http.MethodDelete, pattern, ""); ok {
+		t.Error("the default-mode project delete has an entry; only the administration mode is on the surface")
+	}
+	if _, ok := adminaccess.ActionInMode(auth.PermissionModeDefault, http.MethodPut, "/api/v2/admin/branding/administration", ""); !ok {
+		t.Error("a pattern without {mode} lost its entry in ActionInMode")
 	}
 }
 
@@ -278,6 +321,9 @@ func TestGlobalProviderUpdateAction(t *testing.T) {
 		{[]string{"vertex_credentials"}, adminaccess.OutcomeRoute},
 		{[]string{"label", "api_key"}, adminaccess.OutcomeRoute},
 		{[]string{"a_field_nobody_classified"}, adminaccess.OutcomeRoute},
+		{[]string{"models"}, adminaccess.OutcomeRoute},
+		{[]string{"name"}, adminaccess.OutcomeRoute},
+		{[]string{"status_ok"}, adminaccess.OutcomeRoute},
 		{[]string{"label"}, adminaccess.OutcomeSettings},
 		{[]string{"Display_Name", "description"}, adminaccess.OutcomeSettings},
 		{nil, adminaccess.OutcomeSettings},
