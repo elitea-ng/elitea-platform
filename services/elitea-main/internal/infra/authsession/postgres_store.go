@@ -376,11 +376,12 @@ func (s *PostgresStore) readRecord(ctx context.Context, id string) (sessionstate
 	var (
 		record          []byte
 		authenticatedAt *time.Time
+		ref             int64
 	)
 	err := s.pool.QueryRow(opCtx, `
-		SELECT record, authenticated_at FROM elitea_auth.form_sessions
+		SELECT record, authenticated_at, ref FROM elitea_auth.form_sessions
 		WHERE id_hash = $1 AND expires_at > now()`, IDHash(id),
-	).Scan(&record, &authenticatedAt)
+	).Scan(&record, &authenticatedAt, &ref)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return sessionstate.State{}, nil, ErrNotFound
@@ -403,6 +404,7 @@ func (s *PostgresStore) readRecord(ctx context.Context, id string) (sessionstate
 		at := authenticatedAt.UTC()
 		state.AuthenticatedAt = &at
 	}
+	state.Ref = ref
 	return state, record, nil
 }
 

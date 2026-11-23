@@ -305,13 +305,27 @@ Each personal access token records which administration permissions it may use, 
 
 | Value | The token may use |
 |---|---|
-| `none` | No administration permission, once the value is enforced. This is the value of every new token. |
+| `none` | No administration permission. This is the value of every new token. |
 | `scoped` | Only the administration permissions chosen for the token, and only while its owner still holds them. |
 | `inherit` | All administration permissions of its owner, until the sunset date that a later release announces. |
 
 The upgrade that added these values set `inherit` on each existing personal access token whose owner held an administration permission at that time. Every other existing token got `none`, and keeps `none` when its owner gets an administration role later. Desktop and mobile device sessions and project system tokens always have `none`.
 
-In this release, the platform records the value but does not enforce it yet: every token, including a new `none` token, still resolves its owner's administration permissions. Choosing administration scopes for a token, and enforcing the value, come in later releases.
+The platform enforces the value. A `none` token gets `403` on every administration API, also when its owner is an administrator. Choosing administration scopes for a token comes in a later release.
+
+## Which credential carries which administration rights
+
+The administration permissions of a request come from the credential that sent it, not only from the person who owns it:
+
+| Credential | Administration permissions |
+|---|---|
+| Browser session (OIDC, SAML or Form sign-in) | All of the owner's. |
+| Personal access token | By its value above: none, its scopes that the owner still holds, or all of the owner's. |
+| Desktop or mobile device session | Only the two checks the apps make in place: working during a maintenance window, and Marketplace moderation. No administration API answers it. |
+| Agent run token | None. |
+| Project system token | None. |
+
+A request with the `X-API-Key` header follows the credential the header carries: a personal access token or a run token. A `scoped` token is checked on each request, so a permission its owner loses is lost by the token at once. Project and developer permissions do not depend on the credential.
 
 ## Connect an identity provider with SCIM
 

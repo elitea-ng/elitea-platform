@@ -38,6 +38,11 @@ type PermissionResolution struct {
 	// Permissions may be empty. Empty means "this principal holds none in this
 	// mode", which is an ANSWER; a refusal is ErrPermissionDenied instead.
 	Permissions []string
+	// ElevationSessionRef is the browser session an elevation may be bound
+	// to (auth.Credential.ElevationSessionRef), 0 when the credential that
+	// was resolved can hold none. Only the administration mode sets it; the
+	// elevation union (ADR-0059 R2.1) reads it.
+	ElevationSessionRef int64
 }
 
 // PermissionResolver resolves the permissions of a principal in one mode.

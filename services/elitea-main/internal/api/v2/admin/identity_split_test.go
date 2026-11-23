@@ -232,7 +232,7 @@ func identityRoutes(handler *admin.Handler, resolver auth.PermissionResolver, us
 	r := chi.NewRouter()
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			next.ServeHTTP(w, req.WithContext(auth.ContextWithUser(req.Context(), auth.User{ID: userID, UserID: userID})))
+			next.ServeHTTP(w, req.WithContext(auth.ContextWithUser(req.Context(), auth.User{ID: userID, UserID: userID, CredentialKind: auth.CredentialKindSession})))
 		})
 	})
 	r.With(providersView).Get("/identity_providers/administration", handler.IdentityProviderList)

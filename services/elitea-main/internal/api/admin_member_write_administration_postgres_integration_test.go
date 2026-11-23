@@ -124,21 +124,17 @@ SELECT EXISTS (
 
 func newMemberWriteRouter(pool *pgxpool.Pool, userID int) http.Handler {
 	id := fmt.Sprintf("%d", userID)
-	return NewRouter(RouterConfig{
-		Pool:       pool,
-		SkillsRepo: struct{ v2skills.Repository }{},
-		AuthValidator: testTokenValidator{user: auth.User{
-			ID:     id,
-			UserID: id,
-			Email:  "f1-" + id + "@autotest.local",
-			// AuthType is deliberately NOT "token": legacyrbac resolves a
-			// token principal through auth_core__token, and this fixture mints
-			// no token row. A session-shaped principal is resolved by its
-			// UserID, which is the shape a browser session carries and the
-			// shape the admin panel's caller has.
-		}},
+	user := auth.User{ID: id, UserID: id, Email: "f1-" + id + "@autotest.local"}
+	// The admin panel's caller is a browser session, and since ADR-0059 R1.2a
+	// only a browser credential carries its owner's administration set: the
+	// request arrives as the signed console cookie, not as a token.
+	return asConsoleSession(NewRouter(RouterConfig{
+		Pool:               pool,
+		SkillsRepo:         struct{ v2skills.Repository }{},
+		SessionSecret:      consoleTestSessionSecret,
+		AuthValidator:      testTokenValidator{user: user},
 		PrincipalValidator: testPrincipalValidator{},
-	})
+	}), user)
 }
 
 func serveMemberWrite(

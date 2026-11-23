@@ -47,7 +47,7 @@ func TestProjectCreateGrantResolvesForAnAdministrationAdmin(t *testing.T) {
 	seedFreshDatabaseShape(t, pool)
 	seedAdministrationRoles(t, pool)
 	resolver := legacyrbac.NewPostgresResolver(pool)
-	administrator := auth.User{ID: "1", UserID: "1"}
+	administrator := auth.User{ID: "1", UserID: "1", CredentialKind: auth.CredentialKindSession}
 
 	before, err := resolver.ResolvePermissions(
 		context.Background(), administrator, auth.PermissionModeAdministration, "")
@@ -87,7 +87,7 @@ func TestProjectCreateGrantWithholdsFromEditorAndViewer(t *testing.T) {
 	for role, userID := range map[string]string{"editor": "2", "viewer": "3"} {
 		t.Run(role, func(t *testing.T) {
 			resolution, err := resolver.ResolvePermissions(
-				context.Background(), auth.User{ID: userID, UserID: userID},
+				context.Background(), auth.User{ID: userID, UserID: userID, CredentialKind: auth.CredentialKindSession},
 				auth.PermissionModeAdministration, "")
 			if err != nil {
 				t.Fatal(err)
@@ -116,7 +116,7 @@ func TestProjectCreateGrantDoesNotLeakIntoProjectScope(t *testing.T) {
 	resolver := legacyrbac.NewPostgresResolver(pool)
 
 	resolution, err := resolver.ResolvePermissions(
-		context.Background(), auth.User{ID: "1", UserID: "1"}, auth.PermissionModeDefault, "1")
+		context.Background(), auth.User{ID: "1", UserID: "1", CredentialKind: auth.CredentialKindSession}, auth.PermissionModeDefault, "1")
 	if err != nil {
 		t.Fatal(err)
 	}

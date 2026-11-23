@@ -64,6 +64,9 @@ const (
 // requests. That trap cost #207 a round.
 func descriptorRouter(t *testing.T, pool *pgxpool.Pool, principal auth.User) chi.Router {
 	t.Helper()
+	// A browser session: the credential decides the administration set
+	// (ADR-0059 R1.2a), and the zero kind resolves none.
+	principal.CredentialKind = auth.CredentialKindSession
 	handler := eliteacore.NewHandler(pool)
 	resolver := legacyrbac.NewPostgresResolver(pool)
 
