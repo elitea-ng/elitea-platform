@@ -562,12 +562,13 @@
         "services/elitea-subapp-host/internal/apps/inventory/descriptor.json",
         "libs/rust/vendor/adk-agent/**",
         "libs/rust/vendor/adk-runner/**",
-        "apps/elitea-web/src/**",
-        "apps/elitea-web/vite.config.ts",
+        "apps/elitea-web/src/entries/desktop/**",
+        "apps/elitea-web/src/shared/desktop/**",
         "apps/elitea-web/package.json",
         "apps/elitea-web/package-lock.json",
-        "libs/ts/client-core/**",
-        ".github/workflows/ci-desktop.yml"
+        ".github/workflows/ci-desktop.yml",
+        ".github/actions/desktop-host-checks/**",
+        "scripts/ci/runner-acquired.mjs"
       ]
     },
     "ci-desktop-control": {
