@@ -15,12 +15,13 @@ package repos
 // measure cleanly:
 //
 //   - a window whose canary saw a stall above loadGateStallThreshold is
-//     INVALID, whatever its p99: it is logged and measured again, in process,
-//     up to loadGateAttempts times;
+//     INVALID: it is logged and measured again, in process, up to
+//     loadGateAttempts times; unless its p99 minus the stall still breaches
+//     the gate, which no stall explains, and fails at once;
 //   - the FIRST clean window decides the case: a breach there fails as a
 //     regression and is never re-measured (a retry must not become a second
 //     chance for a slow publish path);
-//   - when no attempt gave a clean window the case fails too, with
+//   - when no attempt gave a judged window the case fails too, with
 //     "measurement invalid: runner stalled N in every attempt", a failure
 //     distinct from a regression, never a pass.
 
@@ -123,83 +124,126 @@ func (s loadGateStall) String() string {
 		s.schedulerAt.Round(time.Millisecond), s.sampler.Round(10*time.Microsecond))
 }
 
+// loadGateReading is what one window measured: the gated p99 and the stall.
+type loadGateReading struct {
+	p99   time.Duration
+	stall loadGateStall
+}
+
+// explains says whether the window's stall can account for a breach of the
+// gate. A stall delays a publish by at most its length (a publish takes a few
+// milliseconds, so it spans one stall), so p99 minus the stall still at or
+// over the gate is slow code, stalled runner or not.
+func (r loadGateReading) explains(gate time.Duration) bool {
+	return r.p99-r.stall.worst() < gate
+}
+
+func (r loadGateReading) String() string {
+	return fmt.Sprintf("p99=%s %s", r.p99.Round(10*time.Microsecond), r.stall)
+}
+
 // loadGateStalledError is the "no clean window" failure: distinct from a
 // regression, and never a pass.
 type loadGateStalledError struct {
 	threshold time.Duration
-	stalls    []loadGateStall
+	readings  []loadGateReading
 }
 
 func (e *loadGateStalledError) Error() string {
-	least := e.stalls[0].worst()
-	parts := make([]string, 0, len(e.stalls))
-	for index, stall := range e.stalls {
-		least = min(least, stall.worst())
-		parts = append(parts, fmt.Sprintf("attempt %d: %s", index+1, stall))
+	least := e.readings[0].stall.worst()
+	parts := make([]string, 0, len(e.readings))
+	for index, reading := range e.readings {
+		least = min(least, reading.stall.worst())
+		parts = append(parts, fmt.Sprintf("attempt %d: %s", index+1, reading))
 	}
 	return fmt.Sprintf("measurement invalid: runner stalled %s in every attempt (%d attempts, threshold %s; %s)",
-		least.Round(time.Millisecond), len(e.stalls), e.threshold, strings.Join(parts, "; "))
+		least.Round(time.Millisecond), len(e.readings), e.threshold, strings.Join(parts, "; "))
 }
 
-// measureStallFree measures up to attempts windows and returns the first
-// whose stall is within threshold, with its 1-based attempt number. Every
-// window's stall is logged. measure runs one complete window (its own
-// fixture) and returns its result and stall.
-func measureStallFree[R any](logf func(string, ...any), name string, attempts int, threshold time.Duration,
-	measure func(attempt int) (R, loadGateStall)) (R, int, error) {
-	stalls := make([]loadGateStall, 0, attempts)
+// measureStallFree measures up to attempts windows and returns the one the
+// gate judges, its reading and its 1-based attempt number:
+//
+//   - a window whose stall is within threshold is clean and judged;
+//   - a stalled window whose breach the stall cannot explain (p99 minus the
+//     stall still at or over the gate) is judged too, and fails: a regression
+//     that also stalls the process is not re-rolled until a quiet window;
+//   - any other stalled window is invalid and measured again.
+//
+// No judged window in any attempt returns a *loadGateStalledError. Every
+// window's reading is logged. measure runs one complete window (its own
+// fixture).
+func measureStallFree[R any](logf func(string, ...any), name string, attempts int, threshold, gate time.Duration,
+	measure func(attempt int) (R, loadGateReading)) (R, loadGateReading, int, error) {
+	readings := make([]loadGateReading, 0, attempts)
 	for attempt := 1; attempt <= attempts; attempt++ {
-		result, stall := measure(attempt)
-		if stall.worst() <= threshold {
-			logf("%s: stall canary attempt %d/%d: %s: clean window, gated", name, attempt, attempts, stall)
-			return result, attempt, nil
+		result, reading := measure(attempt)
+		switch {
+		case reading.stall.worst() <= threshold:
+			logf("%s: stall canary attempt %d/%d: %s: clean window, gated", name, attempt, attempts, reading)
+			return result, reading, attempt, nil
+		case !reading.explains(gate):
+			logf("%s: stall canary attempt %d/%d: %s: above %s, but the stall cannot explain the p99; gated",
+				name, attempt, attempts, reading, threshold)
+			return result, reading, attempt, nil
 		}
-		logf("%s: stall canary attempt %d/%d: %s: above %s, window invalid", name, attempt, attempts, stall, threshold)
-		stalls = append(stalls, stall)
+		logf("%s: stall canary attempt %d/%d: %s: above %s, window invalid", name, attempt, attempts, reading, threshold)
+		readings = append(readings, reading)
 	}
 	var zero R
-	return zero, 0, &loadGateStalledError{threshold: threshold, stalls: stalls}
+	return zero, loadGateReading{}, 0, &loadGateStalledError{threshold: threshold, readings: readings}
 }
 
-// checkP99 is the gate on a clean window.
-func checkP99(label string, p99, gate time.Duration) error {
-	if p99 >= gate {
-		return fmt.Errorf("%s p99 = %s in a stall-free window, gate is under %s", label, p99, gate)
+// checkP99 is the gate on a judged window.
+func checkP99(label string, reading loadGateReading, gate time.Duration) error {
+	if reading.p99 >= gate {
+		return fmt.Errorf("%s p99 = %s, gate is under %s (a judged window: %s)", label, reading.p99, gate, reading.stall)
 	}
 	return nil
+}
+
+const testGate = 50 * time.Millisecond
+
+func reading(p99 time.Duration, stall loadGateStall) loadGateReading {
+	return loadGateReading{p99: p99, stall: stall}
 }
 
 // A stalled window is measured again, even when its p99 passed the gate;
 // the first clean window is the one judged.
 func TestLoadGateStallReMeasuresAStalledWindow(t *testing.T) {
 	calls := 0
-	p99, attempt, err := measureStallFree(t.Logf, "case", loadGateAttempts, loadGateStallThreshold,
-		func(int) (time.Duration, loadGateStall) {
+	_, judged, attempt, err := measureStallFree(t.Logf, "case", loadGateAttempts, loadGateStallThreshold, testGate,
+		func(int) (int, loadGateReading) {
 			calls++
 			if calls == 1 {
-				return 2 * time.Millisecond, loadGateStall{scheduler: 900 * time.Millisecond}
+				return calls, reading(2*time.Millisecond, loadGateStall{scheduler: 900 * time.Millisecond})
 			}
-			return 3 * time.Millisecond, loadGateStall{scheduler: time.Millisecond, sampler: 2 * time.Millisecond}
+			return calls, reading(3*time.Millisecond, loadGateStall{scheduler: time.Millisecond, sampler: 2 * time.Millisecond})
 		})
-	if err != nil || calls != 2 || attempt != 2 || p99 != 3*time.Millisecond {
-		t.Fatalf("p99=%s attempt=%d calls=%d err=%v; want the second window (3ms, attempt 2), no error",
-			p99, attempt, calls, err)
+	if err != nil || calls != 2 || attempt != 2 || judged.p99 != 3*time.Millisecond {
+		t.Fatalf("judged=%s attempt=%d calls=%d err=%v; want the second window (3ms, attempt 2), no error",
+			judged, attempt, calls, err)
 	}
-	if err := checkP99("case", p99, 50*time.Millisecond); err != nil {
+	if err := checkP99("case", judged, testGate); err != nil {
 		t.Fatal(err)
 	}
-	// A database-side stall (the sampler's gap) invalidates a window too.
-	calls = 0
-	_, attempt, err = measureStallFree(t.Logf, "case", loadGateAttempts, loadGateStallThreshold,
-		func(int) (time.Duration, loadGateStall) {
-			calls++
-			if calls == 1 {
-				return time.Millisecond, loadGateStall{sampler: 400 * time.Millisecond}
-			}
-			return time.Millisecond, loadGateStall{}
-		})
-	if err != nil || attempt != 2 {
-		t.Fatalf("attempt=%d err=%v; want the sampler stall re-measured", attempt, err)
+	// The issue's window (#2940): p99 954 ms behind a ~1 s stall is invalid,
+	// and so is a database-side stall (the sampler's gap).
+	for _, stall := range []loadGateReading{
+		reading(954*time.Millisecond, loadGateStall{scheduler: time.Second}),
+		reading(time.Millisecond, loadGateStall{sampler: 400 * time.Millisecond}),
+	} {
+		calls = 0
+		_, _, attempt, err = measureStallFree(t.Logf, "case", loadGateAttempts, loadGateStallThreshold, testGate,
+			func(int) (int, loadGateReading) {
+				calls++
+				if calls == 1 {
+					return calls, stall
+				}
+				return calls, reading(2*time.Millisecond, loadGateStall{})
+			})
+		if err != nil || attempt != 2 {
+			t.Fatalf("%s: attempt=%d err=%v; want it re-measured", stall, attempt, err)
+		}
 	}
 }
 
@@ -207,36 +251,57 @@ func TestLoadGateStallReMeasuresAStalledWindow(t *testing.T) {
 // again: the retry is no second chance for a slow publish path.
 func TestLoadGateStallCleanBreachFails(t *testing.T) {
 	calls := 0
-	p99, attempt, err := measureStallFree(t.Logf, "case", loadGateAttempts, loadGateStallThreshold,
-		func(int) (time.Duration, loadGateStall) {
+	_, judged, attempt, err := measureStallFree(t.Logf, "case", loadGateAttempts, loadGateStallThreshold, testGate,
+		func(int) (int, loadGateReading) {
 			calls++
 			// At the threshold is still clean.
-			return 60 * time.Millisecond, loadGateStall{scheduler: loadGateStallThreshold}
+			return calls, reading(60*time.Millisecond, loadGateStall{scheduler: loadGateStallThreshold})
 		})
 	if err != nil || calls != 1 || attempt != 1 {
 		t.Fatalf("attempt=%d calls=%d err=%v; want the first (clean) window judged, measured once", attempt, calls, err)
 	}
-	gateErr := checkP99("other threads'", p99, 50*time.Millisecond)
-	if gateErr == nil || !strings.Contains(gateErr.Error(), "stall-free window") {
+	if gateErr := checkP99("other threads'", judged, testGate); gateErr == nil || !strings.Contains(gateErr.Error(), "p99 = 60ms") {
 		t.Fatalf("checkP99 = %v; want a regression failure", gateErr)
 	}
-	if checkP99("case", 49*time.Millisecond, 50*time.Millisecond) != nil {
+	if checkP99("case", reading(49*time.Millisecond, loadGateStall{}), testGate) != nil {
 		t.Fatal("49ms under a 50ms gate must pass")
 	}
-	if checkP99("case", 50*time.Millisecond, 50*time.Millisecond) == nil {
+	if checkP99("case", reading(testGate, loadGateStall{}), testGate) == nil {
 		t.Fatal("50ms is not under a 50ms gate")
 	}
 }
 
-// No clean window in any attempt is a distinct failure, never a pass, and
+// A stalled window whose breach the stall cannot explain is judged at once:
+// a regression that also stalls the process must not be re-rolled until a
+// quiet window passes.
+func TestLoadGateStallUnexplainedBreachIsJudged(t *testing.T) {
+	calls := 0
+	_, judged, attempt, err := measureStallFree(t.Logf, "case", loadGateAttempts, loadGateStallThreshold, testGate,
+		func(int) (int, loadGateReading) {
+			calls++
+			if calls == 1 {
+				// 100 ms p99 behind a 30 ms stall: 70 ms of it is the code.
+				return calls, reading(100*time.Millisecond, loadGateStall{scheduler: 30 * time.Millisecond})
+			}
+			return calls, reading(40*time.Millisecond, loadGateStall{})
+		})
+	if err != nil || calls != 1 || attempt != 1 {
+		t.Fatalf("attempt=%d calls=%d err=%v; want the stalled breach judged, measured once", attempt, calls, err)
+	}
+	if checkP99("case", judged, testGate) == nil {
+		t.Fatal("a 100ms p99 behind a 30ms stall must fail the gate")
+	}
+}
+
+// No judged window in any attempt is a distinct failure, never a pass, and
 // names the smallest stall seen (the runner stalled at least that much in
-// every attempt).
+// every attempt) and every attempt's p99.
 func TestLoadGateStallEveryAttemptStalledIsInvalid(t *testing.T) {
 	calls := 0
-	_, attempt, err := measureStallFree(t.Logf, "case", loadGateAttempts, loadGateStallThreshold,
-		func(int) (time.Duration, loadGateStall) {
+	_, _, attempt, err := measureStallFree(t.Logf, "case", loadGateAttempts, loadGateStallThreshold, testGate,
+		func(int) (int, loadGateReading) {
 			calls++
-			return time.Millisecond, loadGateStall{scheduler: time.Duration(calls) * 100 * time.Millisecond}
+			return calls, reading(time.Millisecond, loadGateStall{scheduler: time.Duration(calls) * 100 * time.Millisecond})
 		})
 	if calls != loadGateAttempts || attempt != 0 {
 		t.Fatalf("measured %d times, attempt %d; want %d measurements and no judged attempt", calls, attempt, loadGateAttempts)
@@ -246,8 +311,8 @@ func TestLoadGateStallEveryAttemptStalledIsInvalid(t *testing.T) {
 		t.Fatalf("err = %v; want a loadGateStalledError", err)
 	}
 	want := "measurement invalid: runner stalled 100ms in every attempt (3 attempts"
-	if !strings.HasPrefix(err.Error(), want) {
-		t.Fatalf("err = %q; want prefix %q", err, want)
+	if !strings.HasPrefix(err.Error(), want) || !strings.Contains(err.Error(), "attempt 3: p99=1ms") {
+		t.Fatalf("err = %q; want prefix %q and every attempt's p99", err, want)
 	}
 }
 

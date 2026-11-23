@@ -186,7 +186,11 @@ func loadGatePublish(thread loadGateThread, seed string) workspacestore.PublishR
 // is the largest time between two samples beyond the poll's sleep: the
 // database server's side of the stall canary (a query on pg_stat_activity
 // touches no table a publish locks, so only a stalled server or pod delays it).
-func sampleDatabase(t *testing.T, sampler *pgx.Conn, pool *pgxpool.Pool, stop <-chan struct{}) (samples []loadGateSample, maxPoolConns int32, maxGap time.Duration) {
+//
+// The gap counts only once window closes (the publishes are released), not
+// the goroutine setup before it. It includes the sample query's own time on
+// purpose: a stalled server shows as a slow query.
+func sampleDatabase(t *testing.T, sampler *pgx.Conn, pool *pgxpool.Pool, window, stop <-chan struct{}) (samples []loadGateSample, maxPoolConns int32, maxGap time.Duration) {
 	t.Helper()
 	ctx := context.Background()
 	var last time.Time
@@ -196,11 +200,15 @@ func sampleDatabase(t *testing.T, sampler *pgx.Conn, pool *pgxpool.Pool, stop <-
 			return samples, maxPoolConns, maxGap
 		default:
 		}
-		now := time.Now()
-		if !last.IsZero() {
-			maxGap = max(maxGap, now.Sub(last)-loadGateSamplePause)
+		select {
+		case <-window:
+			now := time.Now()
+			if !last.IsZero() {
+				maxGap = max(maxGap, now.Sub(last)-loadGateSamplePause)
+			}
+			last = now
+		default:
 		}
-		last = now
 		var sample loadGateSample
 		if err := sampler.QueryRow(ctx, `
 SELECT count(*) FILTER (WHERE wait_event_type = 'Lock' AND wait_event NOT IN ('extend', 'advisory')),
@@ -270,11 +278,11 @@ func runLoadGate(t *testing.T, pool *pgxpool.Pool, sampler *pgx.Conn, publishes 
 	}
 	stop := make(chan struct{})
 	sampled := make(chan struct{})
+	start := make(chan struct{})
 	go func() {
-		run.samples, run.maxPoolConns, run.stall.sampler = sampleDatabase(t, sampler, pool, stop)
+		run.samples, run.maxPoolConns, run.stall.sampler = sampleDatabase(t, sampler, pool, start, stop)
 		close(sampled)
 	}()
-	start := make(chan struct{})
 	var origin time.Time
 	var ready, done sync.WaitGroup
 	for index, publish := range publishes {
@@ -391,6 +399,7 @@ func max2(a, b int) int {
 // loadGateFixture is one isolated database with 1,000 threads ready to
 // publish, Main's pool and the sampler connection.
 type loadGateFixture struct {
+	setup    *pgxpool.Pool
 	pool     *pgxpool.Pool
 	sampler  *pgx.Conn
 	service  *workspacestore.Service
@@ -420,13 +429,15 @@ func newLoadGateFixture(t *testing.T, projects int) loadGateFixture {
 		}
 	}
 	setup.Reset()
-	return loadGateFixture{pool: pool, sampler: sampler, service: service, threads: threads, maxConns: maxConns}
+	return loadGateFixture{setup: setup, pool: pool, sampler: sampler, service: service, threads: threads, maxConns: maxConns}
 }
 
-// close releases the fixture's pool and sampler before a re-measured
+// close releases the fixture's pools and sampler before a re-measured
 // window opens its own: three fixtures' pools at once would pass the
-// server's max_connections. Their t.Cleanup closes again harmlessly.
+// server's max_connections. Their t.Cleanup closes again harmlessly and
+// drops the database (on the helper's own admin connection).
 func (f loadGateFixture) close() {
+	f.setup.Close()
 	f.pool.Close()
 	_ = f.sampler.Close(context.Background())
 }
@@ -587,6 +598,10 @@ type loadGateWindow struct {
 	p99 time.Duration
 }
 
+func (w loadGateWindow) reading() loadGateReading {
+	return loadGateReading{p99: w.p99, stall: w.run.stall}
+}
+
 // attemptLabel names a re-measured window in the log.
 func attemptLabel(label string, attempt int) string {
 	if attempt > 1 {
@@ -601,11 +616,11 @@ func attemptLabel(label string, attempt int) string {
 // is a complete window on its own fixture, closed before the next opens.
 func gatedWindow(t *testing.T, name string, measure func(attempt int) loadGateWindow) loadGateWindow {
 	t.Helper()
-	window, _, err := measureStallFree(t.Logf, name, loadGateAttempts, loadGateStallThreshold,
-		func(attempt int) (loadGateWindow, loadGateStall) {
+	window, _, _, err := measureStallFree(t.Logf, name, loadGateAttempts, loadGateStallThreshold, loadGateP99,
+		func(attempt int) (loadGateWindow, loadGateReading) {
 			window := measure(attempt)
 			window.f.close()
-			return window, window.run.stall
+			return window, window.reading()
 		})
 	if err != nil {
 		t.Fatal(err)
@@ -662,7 +677,7 @@ func TestLoadGatePublishesAcrossThreads(t *testing.T) {
 				return
 			}
 			window := gatedWindow(t, label, measure)
-			if err := checkP99("publish", window.p99, loadGateP99); err != nil {
+			if err := checkP99("publish", window.reading(), loadGateP99); err != nil {
 				t.Error(err)
 			}
 			// 1,000 DIFFERENT threads: no backend may wait on another's row.
@@ -733,7 +748,7 @@ SELECT last_seq FROM elitea_runtime.workspace_handoffs WHERE project_id = $1 AND
 		}
 		return loadGateWindow{f: f, run: run, p99: p99}
 	})
-	if err := checkP99("other threads' (under same-thread contention)", window.p99, loadGateP99); err != nil {
+	if err := checkP99("other threads' (under same-thread contention)", window.reading(), loadGateP99); err != nil {
 		t.Error(err)
 	}
 	// Only the hot thread's other publishers may wait on its row lock.
@@ -762,7 +777,7 @@ func TestLoadGateSameProjectQuota(t *testing.T) {
 		_, p99, _ := run.report(t, attemptLabel(label, attempt), allIndexes(len(publishes)))
 		return loadGateWindow{f: f, run: run, p99: p99}
 	})
-	if err := checkP99("publish", window.p99, loadGateP99); err != nil {
+	if err := checkP99("publish", window.reading(), loadGateP99); err != nil {
 		t.Error(err)
 	}
 	window.f.checkLocksAndConnections(t, window.run, 0, true)

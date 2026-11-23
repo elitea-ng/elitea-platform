@@ -306,29 +306,42 @@ export function checkDesktopPackage({ ci, tiers, workflows }) {
  */
 export const LOADGATE_JOB = "ci-handoff-loadgate";
 export const LOADGATE_MIGRATIONS = "services/elitea-main/migrations/shared";
-/** The tables the publish reads and writes (internal/infra/db/repos/workspace_store.go). */
-export const LOADGATE_TABLES = /\b(?:elitea_runtime\.workspace_(?:segments|refs|handoffs)|elitea_storage\.(?:buckets|transfer_grants))\b/;
-/** Floor: the migrations naming those tables when the list was made. */
-export const LOADGATE_MINIMUM_MIGRATIONS = 9;
+/**
+ * The tables the publish reads and writes (internal/infra/db/repos/workspace_store.go),
+ * as an identifier in any form: schema-qualified or not (after a SET
+ * search_path), quoted or not, any case. Matched on the SQL with its comments
+ * removed, so a comment that mentions "buckets" does not count.
+ */
+export const LOADGATE_TABLES = /(?<![\w$])"?(?:workspace_(?:segments|refs|handoffs)|transfer_grants|buckets)"?(?![\w$])/i;
+/** A shared migration that names no publish table: the job must not start on it. */
+export const LOADGATE_SENTINEL = `${LOADGATE_MIGRATIONS}/9999_sentinel_names_no_publish_table.sql`;
+export function stripSqlComments(sql) {
+  return String(sql).replace(/\/\*[\s\S]*?\*\//g, " ").replace(/--[^\n]*/g, " ");
+}
+const namesPublishTable = (sql) => LOADGATE_TABLES.test(stripSqlComments(sql));
 export function checkLoadGateMigrations(tiers, migrations) {
   const errors = [];
   const paths = tiers.jobs?.[LOADGATE_JOB]?.paths;
-  if (!Array.isArray(paths)) return [`${LOADGATE_JOB}: tier-paths.json has no paths list`];
-  if (paths.some((p) => p.startsWith(`${LOADGATE_MIGRATIONS}/*`))) {
-    errors.push(`${LOADGATE_JOB}: starts on a wildcard of ${LOADGATE_MIGRATIONS}; list the migrations that name the publish tables instead (#2940)`);
+  if (!Array.isArray(paths) || paths.length === 0) return [`${LOADGATE_JOB}: tier-paths.json has no paths list`];
+  // Any pattern that reaches a migration naming no publish table (a wildcard
+  // of the directory, of migrations/**, of the service) is the old filter back.
+  if (reaches([LOADGATE_SENTINEL], paths)) {
+    errors.push(`${LOADGATE_JOB}: its paths reach every shared migration (a wildcard); list the migrations that name the publish tables instead (#2940)`);
   }
-  const relevant = Object.entries(migrations).filter(([, sql]) => LOADGATE_TABLES.test(sql)).map(([name]) => `${LOADGATE_MIGRATIONS}/${name}`);
-  if (relevant.length < LOADGATE_MINIMUM_MIGRATIONS) {
-    errors.push(`${LOADGATE_JOB}: found ${relevant.length} shared migration(s) naming the publish tables, expected at least ${LOADGATE_MINIMUM_MIGRATIONS}: the scan stopped finding them`);
+  const relevant = Object.entries(migrations).filter(([, sql]) => namesPublishTable(sql)).map(([name]) => `${LOADGATE_MIGRATIONS}/${name}`);
+  if (relevant.length === 0) {
+    errors.push(`${LOADGATE_JOB}: found no shared migration naming the publish tables: the scan stopped finding them`);
   }
   for (const file of relevant) {
     if (!reaches([file], paths)) errors.push(`${LOADGATE_JOB}: ${file} names a table of the handoff publish path; add it to the job's paths in tier-paths.json`);
   }
+  // Every listed migration must exist and name a publish table: a scan that
+  // broke would refuse every listed file here, so the list is its own floor.
   for (const pattern of paths) {
-    if (!pattern.startsWith(`${LOADGATE_MIGRATIONS}/`)) continue;
+    if (!pattern.startsWith(`${LOADGATE_MIGRATIONS}/`) || pattern.includes("*")) continue;
     const name = pattern.slice(LOADGATE_MIGRATIONS.length + 1);
     if (!(name in migrations)) errors.push(`${LOADGATE_JOB}: lists ${pattern}, which does not exist`);
-    else if (!LOADGATE_TABLES.test(migrations[name])) errors.push(`${LOADGATE_JOB}: lists ${pattern}, which names no table of the publish path`);
+    else if (!namesPublishTable(migrations[name])) errors.push(`${LOADGATE_JOB}: lists ${pattern}, which names no table of the publish path`);
   }
   return errors;
 }

@@ -12,7 +12,8 @@ name: CI — Handoff load gate
 # The pool's pods have no guaranteed CPU, and a stall of the pod read as a
 # p99 regression (#2940). Every measured window runs a stall canary (a 1 ms
 # ticker in the test process and the gap between pg_stat_activity samples); a
-# gated window that stalled more than 25 ms is measured again, up to 3 times,
+# gated window that stalled more than 25 ms is measured again, up to 3 times
+# (unless the stall cannot explain its breach, which fails at once),
 # and the first stall-free window decides. No stall-free window fails the case
 # as "measurement invalid", never as a pass
 # (workspace_store_loadgate_stall_test.go). The path filter
