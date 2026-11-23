@@ -107,7 +107,7 @@ async function createPipeline(page: Page, name: string): Promise<string> {
  * writes to.
  */
 async function authorYaml(page: Page, document: string): Promise<void> {
-  await page.getByRole('button', { name: 'Yaml', exact: true }).click();
+  await page.getByRole('button', { name: 'YAML', exact: true }).click();
   const editor = page.locator('.cm-content');
   await expect(editor).toBeVisible({ timeout: 10_000 });
 

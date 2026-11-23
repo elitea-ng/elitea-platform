@@ -80,8 +80,8 @@ function uniqueName(stem: string): string {
   return `${AUTOTEST_PREFIX}${stem}-${String(Date.now()).slice(-7)}`;
 }
 
-/** The Flow/Yaml pair — `TabGroupButton` renders `PipelineEditorMode`'s keys as the button labels. */
-function modeButton(page: Page, label: 'Flow' | 'Yaml') {
+/** The Flow/YAML pair — `TabGroupButton` renders `PipelineEditorMode`'s labels (`YAML` in Wave U2). */
+function modeButton(page: Page, label: 'Flow' | 'YAML') {
   return page.getByRole('button', { name: label, exact: true });
 }
 
@@ -118,9 +118,9 @@ test('J16f: the Flow/Yaml toggle swaps the canvas for the YAML editor, and back'
   await expect(modeButton(page, 'Flow')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId('pipeline-yaml-editor')).toHaveCount(0);
 
-  await modeButton(page, 'Yaml').click();
+  await modeButton(page, 'YAML').click();
   await expect(page.getByTestId('pipeline-yaml-editor'), 'the YAML editor must open').toBeVisible({ timeout: 20_000 });
-  await expect(modeButton(page, 'Yaml')).toHaveAttribute('aria-pressed', 'true');
+  await expect(modeButton(page, 'YAML')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId('rf__wrapper'), 'the canvas must go away, not sit behind the YAML pane').toBeHidden();
 
   await modeButton(page, 'Flow').click();
@@ -156,7 +156,7 @@ test('J16f: the YAML pane shows the graph the server stored for this pipeline', 
   // pane's own failure rather than a load that never happened.
   await expect(page.locator(`.react-flow__node[data-id="${PROBE_NODE_ID}"]`)).toBeVisible({ timeout: 20_000 });
 
-  await modeButton(page, 'Yaml').click();
+  await modeButton(page, 'YAML').click();
   const yamlDocument = page.getByTestId('pipeline-yaml-editor').locator('.cm-content');
   await expect(yamlDocument).toBeVisible({ timeout: 20_000 });
 
@@ -195,7 +195,7 @@ test('J16f: a Flow → Yaml → Flow round trip preserves the canvas, node for n
   const before = [...(await canvasNodeIds(page))].sort();
   expect(before, 'the canvas must hold the starter graph, END and the added Printer').toContain('Printer_1');
 
-  await modeButton(page, 'Yaml').click();
+  await modeButton(page, 'YAML').click();
   await expect(page.getByTestId('pipeline-yaml-editor')).toBeVisible({ timeout: 20_000 });
   // The added node reached the YAML side of the conversion. Without this the
   // test could pass on a toggle that never converted anything at all.
