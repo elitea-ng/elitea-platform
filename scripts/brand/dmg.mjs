@@ -41,7 +41,7 @@ export const DMG_LAYOUT = Object.freeze({
   applications: Object.freeze({ x: 490, y: 185 }),
 });
 
-/** The canvas's luminance band: black text ≥ 4.4:1 at `low`, white text ≥ 4.2:1 at `high`. */
+/** The canvas's luminance band: light, so Finder's dark labels keep LABEL_CONTRAST or more (15:1 at `low`). */
 export const LUMINANCE = Object.freeze({ low: 0.72, high: 0.9 });
 
 /** Black text on the label row keeps at least this contrast (WCAG 1.4.6 AAA is 7:1). */

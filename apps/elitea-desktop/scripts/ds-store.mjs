@@ -123,6 +123,29 @@ function encodeRecord(r) {
   return Buffer.concat([u32(r.name.length), Buffer.from(r.name, 'utf16le').swap16(), Buffer.from(r.code + r.type, 'latin1'), r.raw]);
 }
 
+/**
+ * The buddy allocator's free lists for the `used` blocks (`[offset, log2 size]`): for
+ * each size 2^0..2^31, the offsets of the blocks of that size that hold nothing and
+ * whose parent holds something, over an address space of 2^31 bytes.
+ */
+export function freeLists(used) {
+  const lists = Array.from({ length: 32 }, () => []);
+  const visit = (offset, log) => {
+    const end = offset + 2 ** log;
+    const inside = used.filter(([o, l]) => o < end && o + 2 ** l > offset);
+    if (inside.length === 0) {
+      lists[log].push(offset);
+      return;
+    }
+    if (inside.some(([o, l]) => o === offset && l === log)) return;
+    if (log === 0) throw new Error('.DS_Store: overlapping blocks');
+    visit(offset, log - 1);
+    visit(offset + 2 ** (log - 1), log - 1);
+  };
+  visit(0, 31);
+  return lists;
+}
+
 /** Finder's order: the name case-insensitively (UTF-16 code units), then the code. */
 export function compareRecords(a, b) {
   const x = a.name.toLowerCase();
@@ -184,9 +207,10 @@ export function writeDsStore(records) {
   const rootNode = 2;
   const levels = leaves.length === 1 ? 0 : 1;
   const dsdb = u32(rootNode, levels, sorted.length, nodes.length, PAGE);
-  // Free lists (32, one per size): the gaps between 0x40 and 0x800 are free, one block each size.
-  const free = [];
-  for (let i = 0; i < 32; i++) free.push(i >= 6 && i <= 10 ? u32(1, 1 << i) : u32(0));
+  // Free lists (32, one per size), as Finder keeps them: every buddy block of the
+  // 2 GiB address space no used block falls in (the first 32 bytes are the header).
+  const lists = freeLists([[0, 5], ...offsets.map((o, i) => [o, log2[i]])]);
+  const free = lists.map((list) => u32(list.length, ...list));
   const allocator = Buffer.concat([
     u32(offsets.length, 0),
     u32(...offsets.map((o, i) => o | log2[i])),
@@ -210,10 +234,22 @@ export function writeDsStore(records) {
 }
 
 /**
- * The value of a binary property list (`bplist00`): dictionaries, arrays, strings,
- * integers, reals, booleans and data, which is all Finder's view records hold.
+ * A property-list value kept as its encoded bytes (an integer, real, date, UID or null)
+ * by `parseBplist(buf, { raw: true })`, so `encodeBplist` writes it back unchanged: a
+ * real stays a real, a negative or 64-bit integer and a date survive.
  */
-export function parseBplist(buf) {
+export class BplistRaw {
+  constructor(bytes) {
+    this.bytes = Buffer.from(bytes);
+  }
+}
+
+/**
+ * The value of a binary property list (`bplist00`): dictionaries, arrays, strings,
+ * integers, reals, booleans and data, which is all Finder's view records hold. With
+ * `raw`, every integer, real, date, UID and null comes back as a BplistRaw instead.
+ */
+export function parseBplist(buf, { raw = false } = {}) {
   if (buf.toString('latin1', 0, 8) !== 'bplist00') throw new Error('not a binary property list');
   const t = buf.length - 32;
   const offsetSize = buf.readUInt8(t + 6);
@@ -236,13 +272,14 @@ export function parseBplist(buf) {
     const marker = buf[pos];
     const kind = marker >> 4;
     let n = marker & 0x0f;
-    if (kind === 0) {
-      if (n === 8) return false;
-      if (n === 9) return true;
-      return null;
-    }
-    if (kind === 1) return uint(pos + 1, 1 << n);
+    if (kind === 0 && (n === 8 || n === 9)) return n === 9;
+    // Fixed-size leaves: null (1 byte), integer and real (2^n bytes), date (8), UID (n + 1).
+    const fixed = { 0: 0, 1: 1 << n, 2: 1 << n, 3: 8, 8: n + 1 }[kind];
+    if (raw && fixed !== undefined) return new BplistRaw(buf.subarray(pos, pos + 1 + fixed));
+    if (kind === 0) return null;
+    if (kind === 1) return n === 3 ? Number(buf.readBigInt64BE(pos + 1)) : uint(pos + 1, 1 << n);
     if (kind === 2) return n === 2 ? buf.readFloatBE(pos + 1) : buf.readDoubleBE(pos + 1);
+    if (kind === 3) return new Date((buf.readDoubleBE(pos + 1) + 978307200) * 1000);
     pos += 1;
     if (n === 0x0f) {
       const bytes = 1 << (buf[pos] & 0x0f);
@@ -265,8 +302,8 @@ export function parseBplist(buf) {
 
 /**
  * A binary property list of `value`: plain objects (dictionaries), arrays, strings,
- * integers (non-negative, below 2^32), finite non-integer numbers (reals), booleans
- * and Buffers (data).
+ * integers (non-negative, below 2^32), finite non-integer numbers (reals), booleans,
+ * Buffers (data) and BplistRaw values (written as they were read).
  */
 export function encodeBplist(value) {
   const objects = [];
@@ -284,7 +321,8 @@ export function encodeBplist(value) {
     const at = objects.length;
     objects.push(null);
     let bytes;
-    if (typeof v === 'boolean') bytes = Buffer.from([v ? 0x09 : 0x08]);
+    if (v instanceof BplistRaw) bytes = v.bytes;
+    else if (typeof v === 'boolean') bytes = Buffer.from([v ? 0x09 : 0x08]);
     else if (typeof v === 'number' && Number.isInteger(v)) bytes = int(v);
     else if (typeof v === 'number') {
       bytes = Buffer.alloc(9);
@@ -340,13 +378,14 @@ export const HIDDEN_CHROME = Object.freeze({
 
 /**
  * The .DS_Store `buf` with the root window's settings (`.`, `bwsp`) set to
- * HIDDEN_CHROME, its other keys (the bounds) kept; every other record unchanged.
+ * HIDDEN_CHROME, its other keys (the bounds) kept with their types; every other record
+ * unchanged. Finder reads the result: the sealed image opens with the layout and no bars.
  */
 export function hideChrome(buf) {
   const records = dsStoreRecords(buf);
   const i = records.findIndex((r) => r.name === '.' && r.code === 'bwsp');
   if (i < 0) throw new Error('.DS_Store has no window settings (bwsp) to rewrite: Finder did not save the window');
-  const settings = { ...parseBplist(records[i].value), ...HIDDEN_CHROME };
+  const settings = { ...parseBplist(records[i].value, { raw: true }), ...HIDDEN_CHROME };
   records[i] = blobRecord('.', 'bwsp', encodeBplist(settings));
   return writeDsStore(records);
 }

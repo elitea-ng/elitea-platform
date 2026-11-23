@@ -109,7 +109,8 @@ on:
     inputs:
       # Required: a package handed to device management carries a real version (the
       # .dmg's volume and window read `<Brand> <version>`, the app's bundle version
-      # too), never the development 0.1.0 an empty version stamps.
+      # too), never the development 0.1.0 an empty version stamps. The action's first
+      # steps refuse anything but X.Y.Z or X.Y.Z-pre (stamp-version.mjs), before any build.
       version:
         description: The version to stamp (X.Y.Z or X.Y.Z-pre), e.g. the release the package is for.
         type: string

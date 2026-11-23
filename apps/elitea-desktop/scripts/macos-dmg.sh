@@ -184,6 +184,20 @@ sync
 detach "$device"
 device=""
 
+# Finder may write the volume's .DS_Store once more as it lets go of it: read the
+# sealed image back, read-only and out of Finder's sight, before it is converted
+# and signed (the action checks the finished .dmg the same way).
+check="$work/check"
+mkdir -p "$check"
+check_out="$(hdiutil attach -readonly -nobrowse -noautoopen -noverify -mountpoint "$check" "$work/rw.dmg")"
+device="$(printf '%s\n' "$check_out" | awk 'NR == 1 { print $1; exit }')"
+case "$device" in /dev/disk[0-9]*) ;; *) device="";; esac
+if ! node "$here/dmg-verify.mjs" "$check" "$settings"; then
+  echo "::error::the layout changed as the image was detached (Finder rewrote the .DS_Store)" >&2; exit 1
+fi
+detach "$device"
+device=""
+
 mkdir -p "$(dirname "$dmg")"
 rm -f "$dmg"
 hdiutil convert -quiet "$work/rw.dmg" -format UDZO -imagekey zlib-level=9 -o "$dmg"

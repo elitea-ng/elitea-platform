@@ -66,7 +66,7 @@ export function layoutProblems(dsStore, settings) {
     if (view.textSize !== settings.textSize) problems.push(`the labels are ${view.textSize} points, the layout says ${settings.textSize}`);
     if (view.arrangeBy !== 'none') problems.push(`the icons are arranged by ${view.arrangeBy}, so Finder would move them`);
     const colour = [view.backgroundColorRed, view.backgroundColorGreen, view.backgroundColorBlue];
-    if (!colour.every((c) => c === 1)) problems.push(`the view's background colour is ${colour.join(',')}, not white (behind the picture until it loads)`);
+    if (!colour.every((c) => typeof c === 'number' && Math.abs(c - 1) < 0.001)) problems.push(`the view's background colour is ${colour.join(',')}, not white (behind the picture until it loads)`);
   }
   const win = plist('bwsp', 'window settings');
   if (win) {

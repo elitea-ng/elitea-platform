@@ -15,7 +15,7 @@ import { pngInfo } from '../../../scripts/brand/images.mjs';
 import { loadBrandFrom } from '../../../scripts/brand/load.mjs';
 import { dmgSettings, writeDmgInputs } from './dmg-settings.mjs';
 import { dsStoreRecords, iconLocation, layoutProblems, parseBplist, volumeProblems } from './dmg-verify.mjs';
-import { blobRecord, compareRecords, encodeBplist, HIDDEN_CHROME, hideChrome, writeDsStore } from './ds-store.mjs';
+import { blobRecord, BplistRaw, compareRecords, encodeBplist, freeLists, HIDDEN_CHROME, hideChrome, writeDsStore } from './ds-store.mjs';
 
 const BRANDS = fileURLToPath(new URL('../../../brand/', import.meta.url));
 const sample = loadBrandFrom(join(BRANDS, 'sample'));
@@ -275,4 +275,33 @@ test('the .DS_Store writer keeps Finder order and splits records over pages', ()
   // Case-insensitive by name, then by code.
   assert.ok(compareRecords({ name: 'applications', code: 'Iloc' }, { name: 'B', code: 'Iloc' }) < 0);
   assert.ok(compareRecords({ name: '.', code: 'bwsp' }, { name: '.', code: 'icvp' }) < 0);
+});
+
+test('hide-chrome keeps every other window key with its type: reals, 64-bit and negative integers, dates, null', () => {
+  // A window record as a newer Finder might write it, with values the plain encoder cannot express.
+  const real = Buffer.from([0x23, 0x3f, 0xf0, 0, 0, 0, 0, 0, 0]); // 1.0 as a real
+  const negative = Buffer.from([0x13, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe]); // -2
+  const date = Buffer.from([0x33, 0x41, 0xc6, 0, 0, 0, 0, 0, 0]);
+  const win = { ...FINDER_WINDOW, SidebarWidth: new BplistRaw(real), Offset: new BplistRaw(negative), Saved: new BplistRaw(date), Nothing: new BplistRaw(Buffer.from([0x00])) };
+  const before = dsStoreFile([rec('.', 'bwsp', 'blob', encodeBplist(win))]);
+  const after = parseBplist(dsStoreRecords(hideChrome(before))[0].value, { raw: true });
+  for (const k of ['SidebarWidth', 'Offset', 'Saved', 'Nothing']) assert.ok(after[k].bytes.equals(win[k].bytes), k);
+  assert.equal(after.WindowBounds, FINDER_WINDOW.WindowBounds);
+  const plain = parseBplist(encodeBplist(win));
+  assert.deepEqual([plain.SidebarWidth, plain.Offset, plain.Nothing], [1, -2, null]);
+  assert.ok(plain.Saved instanceof Date);
+});
+
+test('the allocator keeps free lists as Finder does: every unused buddy block, none overlapping a used one', () => {
+  const used = [[0, 5], [0x20, 5], [0x800, 11], [0x1000, 12]];
+  const lists = freeLists(used);
+  // As Finder writes for the same blocks: 64 B to 1 KiB below the allocator, then 8 KiB to 1 GiB.
+  assert.deepEqual(lists.map((l, i) => (l.length ? `${i}:${l.map((o) => o.toString(16)).join('/')}` : '')).filter(Boolean).slice(0, 6), ['6:40', '7:80', '8:100', '9:200', '10:400', '13:2000']);
+  assert.deepEqual(lists[30], [0x40000000]);
+  // Free and used blocks tile the 2 GiB space exactly.
+  const total = lists.reduce((sum, l, i) => sum + l.length * 2 ** i, 0) + used.reduce((sum, [, l]) => sum + 2 ** l, 0);
+  assert.equal(total, 2 ** 31);
+  // And the writer's own file carries them.
+  const file = writeDsStore([blobRecord('.', 'bwsp', encodeBplist(WINDOW))]);
+  assert.equal(file.readUInt32BE(4 + 0x800 + 8 + 256 * 4 + 4 + 1 + 4 + 4 + 6 * 4), 1);
 });
