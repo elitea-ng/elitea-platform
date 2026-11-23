@@ -19,12 +19,23 @@ who holds the legacy name sees no change. The Roles matrix lists the new names.
 seeded-only: only a migration is meant to grant them, and a later release makes
 the Roles matrix refuse them on any other role.
 
-**One privilege increase.** Both administrator roles gain `projects.settings.view`
-and `projects.settings.manage`. These are new capabilities, not narrowings: once
+**New capabilities, not narrowings.** Most of the new names split a power the
+administrator roles already have. Six do not.
+
+Both administrator roles gain `projects.settings.view`
+and `projects.settings.manage`. This is a privilege increase: once
 the project settings gate accepts them (ADR-0059 story R0.6b, #2585), an
 administrator can read and change the guarded settings (cloud executor, worker
 egress, AI disclosure, browser, computer use) of a project they are not a member
 of. Each such write will be marked as a central override in the Audit Trail.
+
+`identity.sso.trust.manage` (to `super_admin` only) names a power that
+`super_admin` already has: the identity trust actions require
+`admin.auth.users.super_admin` today. The four `access.breakglass.*` names (to
+both roles) belong to break-glass elevation, which does not exist yet. They allow
+nothing until it ships. When it does, every `admin` can request, approve, end and
+review elevations and read the sealed credential list. Remove those grants from
+`admin` before then if that role should not have these powers.
 
 **Who is affected.** Every deployment with the `auth_core` tables. No existing
 grant is removed and no session loses a permission.

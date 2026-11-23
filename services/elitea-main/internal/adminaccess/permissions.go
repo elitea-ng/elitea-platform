@@ -219,50 +219,36 @@ func rows() []Permission {
 	}, narrowRows()...)
 }
 
-// narrow is a row of decision 2: the defaults of row, plus the legacy name it
-// narrows ("" for a new capability).
-//
-// Narrows holds ONE name, the legacy permission the row splits. Where
-// decision 2 lists several (llm.policy.* narrows configuration.governance
-// and runtime.plugins; identity.sso.* also narrows admin.auth.users and the
-// user_project_permissions pair; projects.members.manage narrows the
-// configuration.users.users.* writes; access.roles.view also narrows
-// modes.users), it holds the first; the gates of R0.3 to R0.6 accept every
-// legacy name the ADR lists, not only this one.
-func narrow(name string, area Area, class Class, narrows string) Permission {
+// narrow is a row of decision 2: the defaults of row, plus the legacy names
+// it narrows (none for a new capability), as decision 2 lists them.
+func narrow(name string, area Area, class Class, narrows ...string) Permission {
 	p := row(name, area, class)
 	p.Narrows = narrows
 	return p
 }
 
 // seeded is a narrow row that only a migration grants.
-func seeded(name string, area Area, class Class, narrows string) Permission {
-	p := narrow(name, area, class, narrows)
+func seeded(name string, area Area, class Class, narrows ...string) Permission {
+	p := narrow(name, area, class, narrows...)
 	p.Grantable = GrantableSeededOnly
 	return p
 }
 
 // narrowRows are the 25 rows of shared 0261. None is a token scope (Token
 // false): the scoped token of R1.1 and R1.2 opts rows in, and identity trust
-// never is one.
+// never is one. platform.maintenance.manage is the narrow name of the
+// maintenance bypass, but it gets NativeClient and Maintenance only in R0.4,
+// when the bypass accepts it: the attributes say what is enforced.
 func narrowRows() []Permission {
-	maintenance := narrow(PlatformMaintenanceManage, AreaPlatform, ClassWrite, RuntimePlugins)
-	// The narrow name of the maintenance bypass ("use the application during
-	// a window", decision 2). R0.4 makes the in-application bypass accept it
-	// beside runtime.plugins, and a native session keeps that check
-	// (decision 7), so it carries both attributes runtime.plugins carries.
-	maintenance.NativeClient = true
-	maintenance.Maintenance = true
-
 	return []Permission{
 		// Models and spend.
 		narrow(LLMCatalogueView, AreaModelsSpend, ClassRead, ConfigurationGovernance),
 		narrow(LLMCatalogueManage, AreaModelsSpend, ClassWrite, ConfigurationGovernance),
-		narrow(LLMPolicyView, AreaModelsSpend, ClassRead, ConfigurationGovernance),
-		narrow(LLMPolicyManage, AreaModelsSpend, ClassWrite, ConfigurationGovernance),
+		narrow(LLMPolicyView, AreaModelsSpend, ClassRead, ConfigurationGovernance, RuntimePlugins),
+		narrow(LLMPolicyManage, AreaModelsSpend, ClassWrite, ConfigurationGovernance, RuntimePlugins),
 		// Guardrails are a safety control (ADR-0041), not a cost setting, but
 		// they are gateway policy and live in the same area.
-		narrow(LLMGuardrailsManage, AreaModelsSpend, ClassWrite, ConfigurationGovernance),
+		narrow(LLMGuardrailsManage, AreaModelsSpend, ClassWrite, ConfigurationGovernance, RuntimePlugins),
 		narrow(LLMUsageView, AreaModelsSpend, ClassRead, ConfigurationGovernance),
 		narrow(LLMAlertsManage, AreaModelsSpend, ClassWrite, ConfigurationGovernance),
 
@@ -270,7 +256,7 @@ func narrowRows() []Permission {
 		narrow(PlatformConfigView, AreaPlatform, ClassRead, RuntimePlugins),
 		narrow(PlatformConfigManage, AreaPlatform, ClassWrite, RuntimePlugins),
 		narrow(PlatformEmailManage, AreaPlatform, ClassWrite, RuntimePlugins),
-		maintenance,
+		narrow(PlatformMaintenanceManage, AreaPlatform, ClassWrite, RuntimePlugins),
 		narrow(PlatformOperationsView, AreaPlatform, ClassRead, RuntimePlugins),
 		narrow(PlatformOperationsManage, AreaPlatform, ClassWrite, RuntimePlugins),
 		// Prebuilt MCP servers are connectors: the Agents and governance
@@ -280,26 +266,32 @@ func narrowRows() []Permission {
 		// People and access: identity. Trust is equivalent to super_admin:
 		// seeded only, granted to super_admin alone (decision 3). It narrows
 		// nothing; it names the admin.auth.users.super_admin gate of #2558.
-		narrow(IdentitySSOView, AreaPeopleAccess, ClassRead, RuntimePlugins),
-		narrow(IdentitySSOSettingsManage, AreaPeopleAccess, ClassWrite, RuntimePlugins),
-		seeded(IdentitySSOTrustManage, AreaPeopleAccess, ClassWrite, ""),
+		narrow(IdentitySSOView, AreaPeopleAccess, ClassRead,
+			RuntimePlugins, AdminAuthUsers, ConfigurationRolesUserProjectPermsView),
+		narrow(IdentitySSOSettingsManage, AreaPeopleAccess, ClassWrite,
+			RuntimePlugins, AdminAuthUsers, ConfigurationRolesUserProjectPermsEdit),
+		seeded(IdentitySSOTrustManage, AreaPeopleAccess, ClassWrite),
 
-		// Projects. The two settings names are new capabilities, not
-		// narrowings: they let an administration permission reach the
-		// guarded settings of a project (R0.6b).
-		narrow(ProjectsMembersManage, AreaProjects, ClassWrite, ConfigurationUsersUsersCreate),
-		narrow(ProjectsSettingsView, AreaProjects, ClassRead, ""),
-		narrow(ProjectsSettingsManage, AreaProjects, ClassWrite, ""),
+		// Projects. projects.members.manage also narrows
+		// configuration.users.users.delete on the central removal route that
+		// R0.6 adds; that name joins the table with its gate. The two
+		// settings names are new capabilities, not narrowings: they let an
+		// administration permission reach the guarded settings of a project
+		// (R0.6b).
+		narrow(ProjectsMembersManage, AreaProjects, ClassWrite,
+			ConfigurationUsersUsersCreate, ConfigurationUsersUsersEdit),
+		narrow(ProjectsSettingsView, AreaProjects, ClassRead),
+		narrow(ProjectsSettingsManage, AreaProjects, ClassWrite),
 
 		// People and access: the Access page.
-		narrow(AccessRolesView, AreaPeopleAccess, ClassRead, AdminAuthUsers),
+		narrow(AccessRolesView, AreaPeopleAccess, ClassRead, AdminAuthUsers, ModesUsers),
 
 		// Security: Break-glass (decision 6). The four names are seeded
 		// only: the elevation ledger is not something the Roles matrix hands
 		// out (decision 3).
-		seeded(AccessBreakglassRequest, AreaSecurity, ClassWrite, ""),
-		seeded(AccessBreakglassApprove, AreaSecurity, ClassApprove, ""),
-		seeded(AccessBreakglassReview, AreaSecurity, ClassApprove, ""),
-		seeded(AccessBreakglassManage, AreaSecurity, ClassWrite, ""),
+		seeded(AccessBreakglassRequest, AreaSecurity, ClassWrite),
+		seeded(AccessBreakglassApprove, AreaSecurity, ClassApprove),
+		seeded(AccessBreakglassReview, AreaSecurity, ClassApprove),
+		seeded(AccessBreakglassManage, AreaSecurity, ClassWrite),
 	}
 }

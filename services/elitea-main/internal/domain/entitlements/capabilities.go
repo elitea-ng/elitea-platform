@@ -240,20 +240,21 @@ var Capabilities = map[string][]Capability{
 	"configuration.scheduling.schedules.edit": {AdministerPlatform},
 
 	// The narrow administration permissions of ADR-0059 decision 2 (shared
-	// 0261). Each carries the capability of the legacy name it narrows;
-	// the reads are in NotGovernanceRelevant.
-	adminaccess.LLMCatalogueManage:        {AdministerPlatform},
-	adminaccess.LLMPolicyManage:           {OverrideCaps},
-	adminaccess.LLMGuardrailsManage:       {OverrideCaps},
+	// 0261). A write carries at least every capability of each legacy name
+	// it narrows (TestNarrowWritesCarryTheirLegacyCapabilities); the reads
+	// are in NotGovernanceRelevant.
+	adminaccess.LLMCatalogueManage:        {OverrideCaps},
+	adminaccess.LLMPolicyManage:           {OverrideCaps, AdministerPlatform},
+	adminaccess.LLMGuardrailsManage:       {OverrideCaps, AdministerPlatform},
 	adminaccess.LLMAlertsManage:           {OverrideCaps},
 	adminaccess.PlatformConfigManage:      {AdministerPlatform},
 	adminaccess.PlatformEmailManage:       {AdministerPlatform},
 	adminaccess.PlatformMaintenanceManage: {AdministerPlatform},
 	adminaccess.PlatformOperationsManage:  {AdministerPlatform},
-	adminaccess.MCPCatalogueManage:        {ApproveConnectors},
+	adminaccess.MCPCatalogueManage:        {AdministerPlatform, ApproveConnectors},
 	// Identity setup decides who can sign in and, through SCIM group
 	// bindings, which roles they get; identity trust can become any account.
-	adminaccess.IdentitySSOSettingsManage: {ManageAccess},
+	adminaccess.IdentitySSOSettingsManage: {ManageAccess, AdministerPlatform},
 	adminaccess.IdentitySSOTrustManage:    {ManageAccess},
 	adminaccess.ProjectsMembersManage:     {ManageAccess},
 	// The guarded settings of any project: cloud executor, worker egress,

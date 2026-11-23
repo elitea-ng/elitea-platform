@@ -23,11 +23,14 @@
 -- change. The grants land first because the grant gate test
 -- (router_permission_grant_gate_test.go) fails on a gated name nobody holds.
 --
--- THE ONE PRIVILEGE INCREASE. projects.settings.view and
--- projects.settings.manage are new capabilities, not narrowings: once story
--- R0.6b (#2585) wires their gate, both administrator roles reach the guarded
--- settings of projects they are not members of. The upgrade note
--- (docs/upgrading/2026-11-23-2491-narrow-administration-permissions.md) says so.
+-- NEW CAPABILITIES, NOT NARROWINGS. projects.settings.view and
+-- projects.settings.manage are a privilege increase: once story R0.6b (#2585)
+-- wires their gate, both administrator roles reach the guarded settings of
+-- projects they are not members of. The four access.breakglass.* names allow
+-- nothing until break-glass ships, then they allow it to admin as well.
+-- identity.sso.trust.manage names a power super_admin already has. The
+-- upgrade note (docs/upgrading/2026-11-23-2491-narrow-administration-permissions.md)
+-- says so.
 --
 -- DELETE NOTHING, UPDATE NOTHING. Every existing grant stays. Applying the
 -- file twice writes nothing the second time. Do not edit 0060 (it returns

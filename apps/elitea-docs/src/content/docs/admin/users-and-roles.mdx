@@ -88,7 +88,7 @@ No page or route accepts the narrow names yet. Later releases let each route acc
 `identity.sso.trust.manage` and the four `access.breakglass.*` permissions are seeded-only: an upgrade grants them, and they are not meant to be added to other roles from the Roles matrix.
 
 <Note>
-`projects.settings.view` and `projects.settings.manage` are the only new names that are not a narrower part of an existing permission. Once the project settings gate accepts them, both administrator roles can read and change the guarded settings (cloud executor, worker egress, AI disclosure, browser, computer use) of a project they are not a member of.
+Six names are not a narrower part of an existing permission. `projects.settings.view` and `projects.settings.manage` are a privilege increase: once the project settings gate accepts them, both administrator roles can read and change the guarded settings (cloud executor, worker egress, AI disclosure, browser, computer use) of a project they are not a member of. `identity.sso.trust.manage` names a power that `super_admin` already has. The four `access.breakglass.*` names belong to break-glass elevation and allow nothing until that feature ships; then every holder of `admin` can use them.
 </Note>
 
 ## No escalation
