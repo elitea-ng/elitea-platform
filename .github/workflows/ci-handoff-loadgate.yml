@@ -9,6 +9,16 @@ name: CI — Handoff load gate
 # the `loadgate` build tag (a measurement, not a unit test), so ci-go.yml
 # never runs it; this job does, against a real PostgreSQL.
 #
+# The pool's pods have no guaranteed CPU, and a stall of the pod read as a
+# p99 regression (#2940). Every measured window runs a stall canary (a 1 ms
+# ticker in the test process and the gap between pg_stat_activity samples); a
+# gated window that stalled more than 25 ms is measured again, up to 3 times,
+# and the first stall-free window decides. No stall-free window fails the case
+# as "measurement invalid", never as a pass
+# (workspace_store_loadgate_stall_test.go). The path filter
+# (scripts/ci/tier-paths.json) lists only the shared migrations that name a
+# table of the publish path; check-tiering.mjs keeps that list exact.
+#
 # The job fails when the tests did not RUN: a missing ELITEA_TEST_DATABASE_URL
 # makes them t.Skip, and a skip must not read as a pass.
 
@@ -104,6 +114,9 @@ jobs:
           # 1-64).
           ELITEA_LOADGATE_MAX_CONNS: "32"
           GOFLAGS: -count=1
+          # The pod's cgroup gives 4 CPU while nproc reports the node's 8
+          # (eng-runner-env sets it on the pool too; a hosted runner has 4).
+          GOMAXPROCS: "4"
         run: |
           set -uo pipefail
           # The step shell runs with -e: capture the status explicitly, or a
@@ -117,8 +130,9 @@ jobs:
             echo '### Handoff publish load gate'
             echo 'Gated at 300/s: p99 < 50 ms, no row lock waits between threads, no pool growth.'
             echo 'Logged, not gated: 1,000/s and the all-at-once burst.'
+            echo 'Stall canary: a gated window that stalled more than 25 ms is invalid and measured again (#2940).'
             echo '```'
-            grep -E 'n=[0-9]+ wall=|pool in window|non-lock waits' loadgate.log | sed -E 's/^.*_test\.go:[0-9]+: //'  || true
+            grep -E 'n=[0-9]+ wall=|pool in window|non-lock waits|stall canary|measurement invalid' loadgate.log | sed -E 's/^.*_test\.go:[0-9]+: //'  || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$status" -ne 0 ]; then

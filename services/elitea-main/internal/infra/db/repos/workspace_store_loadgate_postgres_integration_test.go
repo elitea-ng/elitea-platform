@@ -35,6 +35,11 @@ package repos
 // inside the window, for comparison), 1,000/s (the starts 1 ms apart) and the
 // burst (all 1,000 released at one instant: p99 is the pool's drain time).
 //
+// Every window runs a stall canary (workspace_store_loadgate_stall_test.go,
+// #2940): a gated window in which the runner stalled is invalid and measured
+// again on a fresh fixture; the first stall-free window decides, and no
+// stall-free window fails the case as "measurement invalid", never a pass.
+//
 // Every gated case starts with a warm pool (warmPool), as a running Main
 // has. Each case logs the pool's new connections, empty acquires and acquire
 // wait, and the GC pause, inside its window.
@@ -177,16 +182,25 @@ func loadGatePublish(thread loadGateThread, seed string) workspacestore.PublishR
 }
 
 // sampleDatabase polls pg_stat_activity until stop closes: the backends of
-// this database other than the sampler, and those waiting on a lock.
-func sampleDatabase(t *testing.T, sampler *pgx.Conn, pool *pgxpool.Pool, stop <-chan struct{}) (samples []loadGateSample, maxPoolConns int32) {
+// this database other than the sampler, and those waiting on a lock. maxGap
+// is the largest time between two samples beyond the poll's sleep: the
+// database server's side of the stall canary (a query on pg_stat_activity
+// touches no table a publish locks, so only a stalled server or pod delays it).
+func sampleDatabase(t *testing.T, sampler *pgx.Conn, pool *pgxpool.Pool, stop <-chan struct{}) (samples []loadGateSample, maxPoolConns int32, maxGap time.Duration) {
 	t.Helper()
 	ctx := context.Background()
+	var last time.Time
 	for {
 		select {
 		case <-stop:
-			return samples, maxPoolConns
+			return samples, maxPoolConns, maxGap
 		default:
 		}
+		now := time.Now()
+		if !last.IsZero() {
+			maxGap = max(maxGap, now.Sub(last)-loadGateSamplePause)
+		}
+		last = now
 		var sample loadGateSample
 		if err := sampler.QueryRow(ctx, `
 SELECT count(*) FILTER (WHERE wait_event_type = 'Lock' AND wait_event NOT IN ('extend', 'advisory')),
@@ -201,7 +215,7 @@ WHERE datname = current_database() AND pid <> pg_backend_pid() AND backend_type 
 			Scan(&sample.lockWaiters, &sample.extendWaiters, &sample.quotaWaiters, &sample.backends, &sample.waits,
 				&sample.otherWaits); err != nil {
 			t.Errorf("sample: %v", err)
-			return samples, maxPoolConns
+			return samples, maxPoolConns, maxGap
 		}
 		samples = append(samples, sample)
 		if total := pool.Stat().TotalConns(); total > maxPoolConns {
@@ -209,9 +223,12 @@ WHERE datname = current_database() AND pid <> pg_backend_pid() AND backend_type 
 		}
 		// 2 ms, not faster: on a two-core runner a tighter poll is itself
 		// load that competes with the publishes it measures.
-		time.Sleep(2 * time.Millisecond)
+		time.Sleep(loadGateSamplePause)
 	}
 }
+
+// loadGateSamplePause is the sampler's sleep between two samples.
+const loadGateSamplePause = 2 * time.Millisecond
 
 func percentile(durations []time.Duration, p float64) time.Duration {
 	sorted := append([]time.Duration(nil), durations...)
@@ -239,6 +256,8 @@ type loadGateRun struct {
 	emptyAcquires int64
 	acquireWait   time.Duration
 	gcPause       time.Duration
+	// stall is what the canaries saw inside the window (#2940).
+	stall loadGateStall
 }
 
 // runLoadGate starts every publish at its offset after a common start (all
@@ -252,7 +271,7 @@ func runLoadGate(t *testing.T, pool *pgxpool.Pool, sampler *pgx.Conn, publishes 
 	stop := make(chan struct{})
 	sampled := make(chan struct{})
 	go func() {
-		run.samples, run.maxPoolConns = sampleDatabase(t, sampler, pool, stop)
+		run.samples, run.maxPoolConns, run.stall.sampler = sampleDatabase(t, sampler, pool, stop)
 		close(sampled)
 	}()
 	start := make(chan struct{})
@@ -278,10 +297,12 @@ func runLoadGate(t *testing.T, pool *pgxpool.Pool, sampler *pgx.Conn, publishes 
 	before := pool.Stat()
 	var gcBefore, gcAfter runtime.MemStats
 	runtime.ReadMemStats(&gcBefore)
+	canary := startStallCanary(loadGateCanaryInterval)
 	origin = time.Now()
 	close(start)
 	done.Wait()
 	run.wall = time.Since(origin)
+	run.stall.scheduler, run.stall.schedulerAt = canary.Stop()
 	after := pool.Stat()
 	runtime.ReadMemStats(&gcAfter)
 	run.newConns = after.NewConnsCount() - before.NewConnsCount()
@@ -355,6 +376,8 @@ func (run loadGateRun) report(t *testing.T, name string, indexes []int) (p50, p9
 	t.Logf("%s: pool in window: new-conns=%d empty-acquires=%d acquire-wait=%s gc-pause=%s | slowest 1%% started %s..%s",
 		name, run.newConns, run.emptyAcquires, run.acquireWait.Round(time.Millisecond), run.gcPause.Round(time.Microsecond),
 		first.Round(time.Millisecond), last.Round(time.Millisecond))
+	t.Logf("%s: stall canary in window: %s (GOMAXPROCS=%d; a window above %s is invalid)", name, run.stall,
+		runtime.GOMAXPROCS(0), loadGateStallThreshold)
 	return p50, p99, max
 }
 
@@ -398,6 +421,14 @@ func newLoadGateFixture(t *testing.T, projects int) loadGateFixture {
 	}
 	setup.Reset()
 	return loadGateFixture{pool: pool, sampler: sampler, service: service, threads: threads, maxConns: maxConns}
+}
+
+// close releases the fixture's pool and sampler before a re-measured
+// window opens its own: three fixtures' pools at once would pass the
+// server's max_connections. Their t.Cleanup closes again harmlessly.
+func (f loadGateFixture) close() {
+	f.pool.Close()
+	_ = f.sampler.Close(context.Background())
 }
 
 // warm opens the fixture's pool before the measured window (warmPool).
@@ -548,6 +579,40 @@ func allIndexes(n int) []int {
 	return out
 }
 
+// loadGateWindow is one measured window of a case: its fixture (closed by
+// the time the gate judges it), the run and the gated p99.
+type loadGateWindow struct {
+	f   loadGateFixture
+	run loadGateRun
+	p99 time.Duration
+}
+
+// attemptLabel names a re-measured window in the log.
+func attemptLabel(label string, attempt int) string {
+	if attempt > 1 {
+		return fmt.Sprintf("%s (attempt %d)", label, attempt)
+	}
+	return label
+}
+
+// gatedWindow measures a gated case until a window is stall-free
+// (measureStallFree, #2940) and returns that window for the gate; it fails
+// the case as "measurement invalid" when no attempt gave one. Each attempt
+// is a complete window on its own fixture, closed before the next opens.
+func gatedWindow(t *testing.T, name string, measure func(attempt int) loadGateWindow) loadGateWindow {
+	t.Helper()
+	window, _, err := measureStallFree(t.Logf, name, loadGateAttempts, loadGateStallThreshold,
+		func(attempt int) (loadGateWindow, loadGateStall) {
+			window := measure(attempt)
+			window.f.close()
+			return window, window.run.stall
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return window
+}
+
 func TestLoadGatePublishesAcrossThreads(t *testing.T) {
 	for _, mode := range []struct {
 		name    string
@@ -563,105 +628,116 @@ func TestLoadGatePublishesAcrossThreads(t *testing.T) {
 		{"burst", func(int) []time.Duration { return nil }, false, false},
 	} {
 		t.Run(mode.name, func(t *testing.T) {
-			// One thread per project, as with personal projects: no two
-			// publishes share a project's quota lock.
-			f := newLoadGateFixture(t, loadGateThreads)
-			if !mode.cold {
-				f = f.warm(t)
-			}
-			publishes := make([]func() error, 0, len(f.threads))
-			for index, thread := range f.threads {
-				publishes = append(publishes, f.publish(thread, mode.name+"-"+strconv.Itoa(index)))
-			}
-			run := runLoadGate(t, f.pool, f.sampler, publishes, mode.offsets(len(publishes)))
-			for index, err := range run.errs {
-				if err != nil {
-					t.Fatalf("publish %d: %v", index, err)
-				}
-			}
 			label := "1000 threads, " + mode.name
 			if !mode.gated {
 				label += " (not gated)"
 			}
-			_, p99, _ := run.report(t, label, allIndexes(len(publishes)))
-			var segments int
-			if err := f.pool.QueryRow(context.Background(), `SELECT count(*) FROM elitea_runtime.workspace_segments`).Scan(&segments); err != nil || segments != loadGateThreads {
-				t.Fatalf("segments = %d, %v; want one per thread", segments, err)
+			measure := func(attempt int) loadGateWindow {
+				// One thread per project, as with personal projects: no two
+				// publishes share a project's quota lock.
+				f := newLoadGateFixture(t, loadGateThreads)
+				if !mode.cold {
+					f = f.warm(t)
+				}
+				publishes := make([]func() error, 0, len(f.threads))
+				for index, thread := range f.threads {
+					publishes = append(publishes, f.publish(thread, mode.name+"-"+strconv.Itoa(index)))
+				}
+				run := runLoadGate(t, f.pool, f.sampler, publishes, mode.offsets(len(publishes)))
+				for index, err := range run.errs {
+					if err != nil {
+						t.Fatalf("publish %d: %v", index, err)
+					}
+				}
+				_, p99, _ := run.report(t, attemptLabel(label, attempt), allIndexes(len(publishes)))
+				var segments int
+				if err := f.pool.QueryRow(context.Background(), `SELECT count(*) FROM elitea_runtime.workspace_segments`).Scan(&segments); err != nil || segments != loadGateThreads {
+					t.Fatalf("segments = %d, %v; want one per thread", segments, err)
+				}
+				return loadGateWindow{f: f, run: run, p99: p99}
 			}
 			if !mode.gated {
+				// Logged, not gated: one window, its canary in the log.
+				measure(1).f.close()
 				return
 			}
-			if p99 >= loadGateP99 {
-				t.Errorf("p99 publish = %s, gate is under %s", p99, loadGateP99)
+			window := gatedWindow(t, label, measure)
+			if err := checkP99("publish", window.p99, loadGateP99); err != nil {
+				t.Error(err)
 			}
 			// 1,000 DIFFERENT threads: no backend may wait on another's row.
-			f.checkLocksAndConnections(t, run, 0, false)
+			window.f.checkLocksAndConnections(t, window.run, 0, false)
 		})
 	}
 }
 
 func TestLoadGateSameThreadContention(t *testing.T) {
-	f := newLoadGateFixture(t, loadGateThreads).warm(t)
 	const contenders = 50
-	hot := f.threads[0]
-	var wins, conflicts atomic.Int64
-	publishes := make([]func() error, 0, contenders+len(f.threads)-1)
-	offsets := []time.Duration{}
-	// 50 publishes of the SAME first snapshot on the hot thread, released at
-	// once, each with a different handoff/1 value and no expected old value:
-	// exactly one creates the refs; the others answer thread_busy without a
-	// database round trip, or a ref conflict once the winner committed.
-	for index := 0; index < contenders; index++ {
-		request := loadGatePublish(hot, "hot-"+strconv.Itoa(index))
-		request.Refs[0].New = sha1Of("hot-base")
-		publishes = append(publishes, func() error {
-			_, err := f.service.Publish(context.Background(), request)
-			// A loser answers thread_busy (a publish of the thread is in
-			// flight) or, once the winner committed, a real ref conflict.
-			var conflict *workspacestore.RefConflictError
-			switch {
-			case err == nil:
-				wins.Add(1)
-				return nil
-			case errors.As(err, &conflict), errors.Is(err, workspacestore.ErrThreadBusy):
-				conflicts.Add(1)
-				return nil
-			default:
-				return err
-			}
-		})
-		// Released together in the middle of the run.
-		offsets = append(offsets, time.Duration(len(f.threads)/2)*time.Second/loadGateRate)
-	}
-	others := []int{}
-	spread := atRate(len(f.threads)-1, loadGateRate)
-	for index, thread := range f.threads[1:] {
-		others = append(others, len(publishes))
-		publishes = append(publishes, f.publish(thread, "other-"+strconv.Itoa(index)))
-		offsets = append(offsets, spread[index])
-	}
-	run := runLoadGate(t, f.pool, f.sampler, publishes, offsets)
-	for index, err := range run.errs {
-		if err != nil {
-			t.Fatalf("publish %d: %v", index, err)
+	window := gatedWindow(t, "other threads", func(attempt int) loadGateWindow {
+		f := newLoadGateFixture(t, loadGateThreads).warm(t)
+		hot := f.threads[0]
+		var wins, conflicts atomic.Int64
+		publishes := make([]func() error, 0, contenders+len(f.threads)-1)
+		offsets := []time.Duration{}
+		// 50 publishes of the SAME first snapshot on the hot thread, released
+		// at once, each with a different handoff/1 value and no expected old
+		// value: exactly one creates the refs; the others answer thread_busy
+		// without a database round trip, or a ref conflict once the winner
+		// committed.
+		for index := 0; index < contenders; index++ {
+			request := loadGatePublish(hot, "hot-"+strconv.Itoa(index))
+			request.Refs[0].New = sha1Of("hot-base")
+			publishes = append(publishes, func() error {
+				_, err := f.service.Publish(context.Background(), request)
+				// A loser answers thread_busy (a publish of the thread is in
+				// flight) or, once the winner committed, a real ref conflict.
+				var conflict *workspacestore.RefConflictError
+				switch {
+				case err == nil:
+					wins.Add(1)
+					return nil
+				case errors.As(err, &conflict), errors.Is(err, workspacestore.ErrThreadBusy):
+					conflicts.Add(1)
+					return nil
+				default:
+					return err
+				}
+			})
+			// Released together in the middle of the run.
+			offsets = append(offsets, time.Duration(len(f.threads)/2)*time.Second/loadGateRate)
 		}
-	}
-	run.report(t, "hot thread", allIndexes(contenders))
-	_, p99, _ := run.report(t, "other threads", others)
-	if wins.Load() != 1 || conflicts.Load() != contenders-1 {
-		t.Fatalf("hot thread: %d wins, %d conflicts; want 1 and %d", wins.Load(), conflicts.Load(), contenders-1)
-	}
-	if p99 >= loadGateP99 {
-		t.Errorf("other threads' p99 = %s under same-thread contention, gate is under %s", p99, loadGateP99)
+		others := []int{}
+		spread := atRate(len(f.threads)-1, loadGateRate)
+		for index, thread := range f.threads[1:] {
+			others = append(others, len(publishes))
+			publishes = append(publishes, f.publish(thread, "other-"+strconv.Itoa(index)))
+			offsets = append(offsets, spread[index])
+		}
+		run := runLoadGate(t, f.pool, f.sampler, publishes, offsets)
+		for index, err := range run.errs {
+			if err != nil {
+				t.Fatalf("publish %d: %v", index, err)
+			}
+		}
+		run.report(t, attemptLabel("hot thread", attempt), allIndexes(contenders))
+		_, p99, _ := run.report(t, attemptLabel("other threads", attempt), others)
+		// Exactly one winner holds in every window, stalled or not.
+		if wins.Load() != 1 || conflicts.Load() != contenders-1 {
+			t.Fatalf("hot thread: %d wins, %d conflicts; want 1 and %d", wins.Load(), conflicts.Load(), contenders-1)
+		}
+		var seq int64
+		if err := f.pool.QueryRow(context.Background(), `
+SELECT last_seq FROM elitea_runtime.workspace_handoffs WHERE project_id = $1 AND conversation_uuid = $2::uuid`,
+			hot.thread.ProjectID, hot.thread.ConversationUUID).Scan(&seq); err != nil || seq != 1 {
+			t.Fatalf("hot thread last_seq = %d, %v; want 1", seq, err)
+		}
+		return loadGateWindow{f: f, run: run, p99: p99}
+	})
+	if err := checkP99("other threads' (under same-thread contention)", window.p99, loadGateP99); err != nil {
+		t.Error(err)
 	}
 	// Only the hot thread's other publishers may wait on its row lock.
-	f.checkLocksAndConnections(t, run, contenders-1, false)
-	var seq int64
-	if err := f.pool.QueryRow(context.Background(), `
-SELECT last_seq FROM elitea_runtime.workspace_handoffs WHERE project_id = $1 AND conversation_uuid = $2::uuid`,
-		hot.thread.ProjectID, hot.thread.ConversationUUID).Scan(&seq); err != nil || seq != 1 {
-		t.Fatalf("hot thread last_seq = %d, %v; want 1", seq, err)
-	}
+	window.f.checkLocksAndConnections(t, window.run, contenders-1, false)
 }
 
 // TestLoadGateSameProjectQuota: 1,000 threads in 50 projects (20 each), at
@@ -670,20 +746,24 @@ SELECT last_seq FROM elitea_runtime.workspace_handoffs WHERE project_id = $1 AND
 // max_project_workspace_gb ceiling); they never wait on each other's rows,
 // and p99 stays under the gate.
 func TestLoadGateSameProjectQuota(t *testing.T) {
-	f := newLoadGateFixture(t, loadGateQuotaProjects).warm(t)
-	publishes := make([]func() error, 0, len(f.threads))
-	for index, thread := range f.threads {
-		publishes = append(publishes, f.publish(thread, "quota-"+strconv.Itoa(index)))
-	}
-	run := runLoadGate(t, f.pool, f.sampler, publishes, atRate(len(publishes), loadGateRate))
-	for index, err := range run.errs {
-		if err != nil {
-			t.Fatalf("publish %d: %v", index, err)
+	const label = "1000 threads in 50 projects, 300/s"
+	window := gatedWindow(t, label, func(attempt int) loadGateWindow {
+		f := newLoadGateFixture(t, loadGateQuotaProjects).warm(t)
+		publishes := make([]func() error, 0, len(f.threads))
+		for index, thread := range f.threads {
+			publishes = append(publishes, f.publish(thread, "quota-"+strconv.Itoa(index)))
 		}
+		run := runLoadGate(t, f.pool, f.sampler, publishes, atRate(len(publishes), loadGateRate))
+		for index, err := range run.errs {
+			if err != nil {
+				t.Fatalf("publish %d: %v", index, err)
+			}
+		}
+		_, p99, _ := run.report(t, attemptLabel(label, attempt), allIndexes(len(publishes)))
+		return loadGateWindow{f: f, run: run, p99: p99}
+	})
+	if err := checkP99("publish", window.p99, loadGateP99); err != nil {
+		t.Error(err)
 	}
-	_, p99, _ := run.report(t, "1000 threads in 50 projects, 300/s", allIndexes(len(publishes)))
-	if p99 >= loadGateP99 {
-		t.Errorf("p99 publish = %s, gate is under %s", p99, loadGateP99)
-	}
-	f.checkLocksAndConnections(t, run, 0, true)
+	window.f.checkLocksAndConnections(t, window.run, 0, true)
 }

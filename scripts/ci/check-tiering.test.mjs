@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { check, checkDesktopPackage, checkGoDuplicates, checkWebUnitSuite, GO_RUNS, load, main, DESKTOP_PACKAGE_PATHS, WEB_COVERAGE_RUNS, DRAFT_CONDITION, FAST_GATE_CONDITION, GATE_DRAFT_SKIP, MINIMUM_CALL_JOBS } from "./check-tiering.mjs";
+import { check, checkDesktopPackage, checkGoDuplicates, checkLoadGateMigrations, LOADGATE_MIGRATIONS, LOADGATE_MINIMUM_MIGRATIONS, checkWebUnitSuite, GO_RUNS, load, main, DESKTOP_PACKAGE_PATHS, WEB_COVERAGE_RUNS, DRAFT_CONDITION, FAST_GATE_CONDITION, GATE_DRAFT_SKIP, MINIMUM_CALL_JOBS } from "./check-tiering.mjs";
 
 const call = (id, extra = {}) => ({ needs: ["changes"], if: `fromJSON(needs.changes.outputs.run)['${id}']`, uses: `./.github/workflows/${id}.yml`, ...extra });
 const heavyCall = (id) =>
@@ -281,4 +281,33 @@ test("the repository passes", () => {
   const errors = [...check(model), ...checkDesktopPackage(model)];
   assert.deepEqual(errors, []);
   assert.equal(main({ out: () => {}, err: () => {} }), 0);
+});
+
+test("the load gate starts on exactly the migrations that name the publish tables (#2940)", () => {
+  const dir = LOADGATE_MIGRATIONS;
+  const migrations = { "0001_auth.sql": "ALTER TABLE elitea_auth.users ADD COLUMN x int; -- buckets of time" };
+  const paths = [".github/workflows/ci-handoff-loadgate.yml"];
+  for (let i = 0; i < LOADGATE_MINIMUM_MIGRATIONS; i++) {
+    const name = `01${String(i).padStart(2, "0")}_workspace.sql`;
+    migrations[name] = "CREATE INDEX ON elitea_runtime.workspace_segments (seq);";
+    paths.push(`${dir}/${name}`);
+  }
+  const tiers = (list) => ({ jobs: { "ci-handoff-loadgate": { tier: "heavy", paths: list } } });
+  assert.deepEqual(checkLoadGateMigrations(tiers(paths), migrations), []);
+  // A new migration on a publish table that the filter misses is refused.
+  const missed = { ...migrations, "0200_grants.sql": "ALTER TABLE elitea_storage.transfer_grants ADD COLUMN y int;" };
+  has(checkLoadGateMigrations(tiers(paths), missed), `${dir}/0200_grants.sql names a table of the handoff publish path`);
+  // The whole directory again is refused, as is a listed file that names no
+  // publish table or no longer exists.
+  has(checkLoadGateMigrations(tiers([...paths, `${dir}/**`]), migrations), "wildcard");
+  has(checkLoadGateMigrations(tiers([...paths, `${dir}/0001_auth.sql`]), migrations), "names no table of the publish path");
+  has(checkLoadGateMigrations(tiers([...paths, `${dir}/0999_gone.sql`]), migrations), "does not exist");
+  // A scan that finds nothing fails.
+  has(checkLoadGateMigrations(tiers(paths), { "0001_auth.sql": migrations["0001_auth.sql"] }), "the scan stopped finding them");
+  has(checkLoadGateMigrations({ jobs: {} }, migrations), "has no paths list");
+});
+
+test("the repository's load gate filter is exact", () => {
+  const model = load();
+  assert.deepEqual(checkLoadGateMigrations(model.tiers, model.migrations), []);
 });

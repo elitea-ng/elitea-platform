@@ -26,6 +26,9 @@
 //   * a called workflow's concurrency group is built from `github.workflow` (in a
 //     called workflow that is the CALLER's name, so every called workflow shares
 //     one group and they cancel each other).
+//   * the handoff load gate's path list misses a shared migration whose SQL
+//     names a table of the publish transaction, lists one that names none, or
+//     falls back to a wildcard of migrations/shared (checkLoadGateMigrations, #2940).
 //
 // And the desktop package job (`desktop-package`, checkDesktopPackage) keeps its gate:
 // on a pull request it runs only for DESKTOP_PACKAGE_PATHS (exactly those), as an
@@ -45,6 +48,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadYaml, isEntrypoint } from "./ci-compat.mjs";
+import { reaches } from "./tier-changes.mjs";
 
 const SELF = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(SELF), "..", "..");
@@ -291,6 +295,53 @@ export function checkDesktopPackage({ ci, tiers, workflows }) {
   return errors;
 }
 
+/**
+ * The handoff publish load gate's migrations (#2940). ci-handoff-loadgate
+ * starts on the shared migrations that can change the publish path, by name,
+ * not on all of migrations/shared/**: a p99 gate on the shared pool reads a
+ * runner stall as a regression, so it should not run for an auth column. The
+ * list is exact only while every migration that names a table of the publish
+ * transaction is in it, so this derives that set from the SQL and refuses a
+ * migration the filter misses (a new one fails here until it is added).
+ */
+export const LOADGATE_JOB = "ci-handoff-loadgate";
+export const LOADGATE_MIGRATIONS = "services/elitea-main/migrations/shared";
+/** The tables the publish reads and writes (internal/infra/db/repos/workspace_store.go). */
+export const LOADGATE_TABLES = /\b(?:elitea_runtime\.workspace_(?:segments|refs|handoffs)|elitea_storage\.(?:buckets|transfer_grants))\b/;
+/** Floor: the migrations naming those tables when the list was made. */
+export const LOADGATE_MINIMUM_MIGRATIONS = 9;
+export function checkLoadGateMigrations(tiers, migrations) {
+  const errors = [];
+  const paths = tiers.jobs?.[LOADGATE_JOB]?.paths;
+  if (!Array.isArray(paths)) return [`${LOADGATE_JOB}: tier-paths.json has no paths list`];
+  if (paths.some((p) => p.startsWith(`${LOADGATE_MIGRATIONS}/*`))) {
+    errors.push(`${LOADGATE_JOB}: starts on a wildcard of ${LOADGATE_MIGRATIONS}; list the migrations that name the publish tables instead (#2940)`);
+  }
+  const relevant = Object.entries(migrations).filter(([, sql]) => LOADGATE_TABLES.test(sql)).map(([name]) => `${LOADGATE_MIGRATIONS}/${name}`);
+  if (relevant.length < LOADGATE_MINIMUM_MIGRATIONS) {
+    errors.push(`${LOADGATE_JOB}: found ${relevant.length} shared migration(s) naming the publish tables, expected at least ${LOADGATE_MINIMUM_MIGRATIONS}: the scan stopped finding them`);
+  }
+  for (const file of relevant) {
+    if (!reaches([file], paths)) errors.push(`${LOADGATE_JOB}: ${file} names a table of the handoff publish path; add it to the job's paths in tier-paths.json`);
+  }
+  for (const pattern of paths) {
+    if (!pattern.startsWith(`${LOADGATE_MIGRATIONS}/`)) continue;
+    const name = pattern.slice(LOADGATE_MIGRATIONS.length + 1);
+    if (!(name in migrations)) errors.push(`${LOADGATE_JOB}: lists ${pattern}, which does not exist`);
+    else if (!LOADGATE_TABLES.test(migrations[name])) errors.push(`${LOADGATE_JOB}: lists ${pattern}, which names no table of the publish path`);
+  }
+  return errors;
+}
+
+function loadMigrations(root) {
+  const directory = path.join(root, LOADGATE_MIGRATIONS);
+  const migrations = {};
+  for (const name of fs.readdirSync(directory).filter((n) => n.endsWith(".sql")).sort()) {
+    migrations[name] = fs.readFileSync(path.join(directory, name), "utf8");
+  }
+  return migrations;
+}
+
 export function load(root = ROOT) {
   const directory = path.join(root, ".github", "workflows");
   const workflows = {};
@@ -301,7 +352,7 @@ export function load(root = ROOT) {
   const ci = workflows["ci.yml"]?.parsed;
   if (!ci) throw new Error("no .github/workflows/ci.yml");
   const tiers = JSON.parse(fs.readFileSync(path.join(root, "scripts", "ci", "tier-paths.json"), "utf8"));
-  return { ci, tiers, workflows };
+  return { ci, tiers, workflows, migrations: loadMigrations(root) };
 }
 
 export function main({ root = ROOT, out = console.log, err = console.error } = {}) {
@@ -312,7 +363,7 @@ export function main({ root = ROOT, out = console.log, err = console.error } = {
     err(`::error::${error.message}`);
     return 1;
   }
-  const errors = [...check(model), ...checkDesktopPackage(model), ...checkWebUnitSuite(model.ci, model.workflows), ...checkGoDuplicates(model.ci, model.workflows, model.tiers)];
+  const errors = [...check(model), ...checkDesktopPackage(model), ...checkWebUnitSuite(model.ci, model.workflows), ...checkGoDuplicates(model.ci, model.workflows, model.tiers), ...checkLoadGateMigrations(model.tiers, model.migrations)];
   if (errors.length) {
     for (const e of errors) err(`::error::${e}`);
     return 1;

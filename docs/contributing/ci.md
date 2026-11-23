@@ -127,6 +127,22 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
   shards (api-core, infra-suites, db-storage) run the same packages with `-race`. ci.yml passes `no-binaries`
   ci-go's filter as `go_runs`; `ci-contract` carries `"unless": "ci-go"` in `tier-paths.json`, so the changes
   output itself says it does not run and the gates read its skip as correct. `check-tiering.mjs` holds both.
+- **Handoff load gate.** `ci-handoff-loadgate.yml` gates the workspace publish path at a p99 under 50 ms
+  (ADR-0034 decision 15), measured on the shared pool, whose pods have no guaranteed CPU. A stall of the pod
+  must not read as a regression (#2940), so every measured window runs a stall canary: a goroutine that ticks
+  every 1 ms and records its largest lag, plus the largest gap between two `pg_stat_activity` samples beyond
+  their 2 ms sleep (the database server's side). A gated window whose canary saw more than 25 ms is invalid. It is
+  logged and measured again on a fresh fixture, up to 3 attempts. The first clean window decides: a breach
+  there fails as a regression and is never measured again. When every attempt stalled, the case fails as
+  `measurement invalid: runner stalled N in every attempt`. That is a different failure from a regression,
+  and it is never a pass. The canary of every window is in the log and the job summary (`stall canary`).
+  The job starts only on changes that can reach the publish path: the workspacestore and handoff packages,
+  the `workspace_*` files of the repos package (the test included), the workflow, and the shared migrations
+  that name a table of the publish transaction (`elitea_runtime.workspace_segments`, `workspace_refs`,
+  `workspace_handoffs`, `elitea_storage.buckets`, `transfer_grants`). Those migrations are listed one by one
+  in `tier-paths.json`. `check-tiering.mjs` reads every shared migration's SQL and fails when one that names
+  such a table is missing from the list, when a listed one names none, and when the list is a wildcard of the
+  directory again. The nightly run on main tests everything regardless of the filter.
 - **Web coverage.** One web unit suite per run. On a draft, and in the nightly, the unit shards run without
   coverage in the fast tier (`ci-web.yml` `unit-tests`). On a ready pull request `ci-web-coverage.yml` runs every
   unit test with coverage in the heavy tier and enforces the thresholds, and the plain shards are skipped:
