@@ -2,9 +2,6 @@ package adminsurface
 
 import (
 	"context"
-	"regexp"
-	"runtime"
-	"strings"
 	"sync"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
@@ -105,49 +102,3 @@ func (rec *recorder) snapshot() []Call {
 	defer rec.mu.Unlock()
 	return append([]Call(nil), rec.calls...)
 }
-
-const (
-	thisPackage       = "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/adminsurface."
-	middlewarePackage = "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware."
-)
-
-// caller names the function that asked the resolver. The middleware's
-// in-handler helpers (HoldsPermissionIn, HoldsResolvedPermission) are skipped,
-// so the handler that called them is named.
-func caller() (string, bool) {
-	pcs := make([]uintptr, 32)
-	n := runtime.Callers(2, pcs)
-	frames := runtime.CallersFrames(pcs[:n])
-	for {
-		frame, more := frames.Next()
-		name := frame.Function
-		switch {
-		case strings.HasPrefix(name, thisPackage):
-		case strings.HasPrefix(name, middlewarePackage+"Holds"):
-		case strings.HasPrefix(name, middlewarePackage):
-			// Every other function of the middleware package runs in front of
-			// the handler: the Require* gates, and middleware such as the
-			// maintenance window that decides for the whole API.
-			return trimClosure(name), true
-		default:
-			return trimClosure(name), false
-		}
-		if !more {
-			return "", false
-		}
-	}
-}
-
-// trimClosure drops the ".func1.2" suffix of a closure, so one check keeps one
-// name however its gate was built.
-func trimClosure(name string) string {
-	slash := strings.LastIndex(name, "/") + 1
-	if loc := closureSuffix.FindStringIndex(name[slash:]); loc != nil {
-		return name[:slash+loc[0]]
-	}
-	return name
-}
-
-// closureSuffix is the first ".funcN" of a function name (a closure), or a
-// trailing ".N" (a closure nested in a closure, or a generic instance).
-var closureSuffix = regexp.MustCompile(`\.func\d+(\..*)?$|(\.\d+)+$`)
