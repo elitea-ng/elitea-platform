@@ -28,7 +28,7 @@ const contentSx: SxProps<Theme> = {
 export const NodeDeprecationBanner = memo(function NodeDeprecationBanner({
   type,
 }: NodeDeprecationBannerProps): ReactNode {
-  const tip = DeprecatedTips[type];
+  const tip = Object.hasOwn(DeprecatedTips, type) ? DeprecatedTips[type] : undefined;
   if (!tip) return null;
 
   return (

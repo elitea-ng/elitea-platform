@@ -171,7 +171,8 @@ const CORE_SUMMARY_EXTRACTORS: Readonly<Record<string, CoreSummaryExtractor>> = 
 };
 
 function getCoreSummary(yamlNode: YamlPipelineNode, requiredInputs: readonly string[]): NodeCardV2SummaryData {
-  const extractor = CORE_SUMMARY_EXTRACTORS[yamlNode.type ?? ''];
+  const nodeType = typeof yamlNode.type === 'string' ? yamlNode.type : '';
+  const extractor = Object.hasOwn(CORE_SUMMARY_EXTRACTORS, nodeType) ? CORE_SUMMARY_EXTRACTORS[nodeType] : undefined;
   return extractor ? extractor(yamlNode, requiredInputs) : { primary: '', secondary: '' };
 }
 
@@ -185,7 +186,8 @@ export function getNodeCardV2Summary(
 ): NodeCardV2SummaryData {
   const { type, isDeprecated = false, requiredInputs = [] } = options;
   if (isDeprecated) {
-    const displayName = (PipelineNodeDisplayNames as Readonly<Record<string, string>>)[type] ?? type;
+    const displayNames = PipelineNodeDisplayNames as Readonly<Record<string, string>>;
+    const displayName = Object.hasOwn(displayNames, type) ? displayNames[type]! : type;
     return { primary: displayName, secondary: 'Deprecated' };
   }
   if (!yamlNode) return { primary: '', secondary: '' };

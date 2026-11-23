@@ -44,6 +44,7 @@ import { updateYamlNode } from '../../lib/flow-editor/helpers/flowEditor.helpers
 import type { YamlPipelineNode } from '../../lib/flow-editor/helpers/pipelineFlow.types';
 import { useNodeAiAssistantConfig } from '../../lib/flow-editor/hooks/useNodeAiAssistantConfig';
 import { usePrinterInputMapping } from '../../lib/flow-editor/hooks/usePrinterInputMapping';
+import { nodeSettingsFamilyKeys } from '../../lib/nodeSettings.helpers';
 import { NodeConfigSection } from '../node-config-drawer/NodeConfigSection';
 import { NodeCard } from './BaseNode/NodeCard';
 import { CustomHandle } from './CustomHandle';
@@ -173,13 +174,15 @@ export const PrinterNode = memo(function PrinterNode({ id, data, selected, llmSe
           modelConfig={pipelineLLMConfig as never}
         />
       </NodeConfigSection>
-      <NodeConfigSection section="advanced" defaultExpanded={false}>
-        <NodeSettings
-          id={id}
-          type={PipelineNodeTypes.Printer}
-          disabled={Boolean(isRunningPipeline || disabled)}
-        />
-      </NodeConfigSection>
+      {nodeSettingsFamilyKeys(PipelineNodeTypes.Printer) !== undefined ? (
+        <NodeConfigSection section="advanced" defaultExpanded={false}>
+          <NodeSettings
+            id={id}
+            type={PipelineNodeTypes.Printer}
+            disabled={Boolean(isRunningPipeline || disabled)}
+          />
+        </NodeConfigSection>
+      ) : null}
     </NodeCard>
   );
 });

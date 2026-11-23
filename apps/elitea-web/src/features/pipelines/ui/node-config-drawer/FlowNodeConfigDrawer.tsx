@@ -1,5 +1,5 @@
 import type { ComponentType, ReactNode } from 'react';
-import { memo, useCallback, useContext, useMemo, useState } from 'react';
+import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 import Box from '@mui/material/Box';
 import type { SxProps, Theme } from '@mui/material/styles';
@@ -82,8 +82,16 @@ interface LiveNodeMeta {
   readonly isDeprecated: boolean;
   readonly isLegacyDecision: boolean;
   readonly isLegacyLayout: boolean;
+  readonly canDuplicate: boolean;
   readonly isReadOnly: boolean;
   readonly displayName: string;
+}
+
+function isLegacyLayoutType(type: string, isDeprecated: boolean, isLegacyDecision: boolean): boolean {
+  if (isLegacyDecision) return true;
+  if (type === PipelineNodeTypes.Default || type === PipelineNodeTypes.Custom) return true;
+  // `FunctionNode` delegates to `BaseToolNode`, which already renders `NodeConfigSection`s.
+  return isDeprecated && type !== PipelineNodeTypes.Function;
 }
 
 function deriveLiveNodeMeta(flowNode: FlowNode, flowContext: FlowEditorContextValue): LiveNodeMeta {
@@ -91,13 +99,15 @@ function deriveLiveNodeMeta(flowNode: FlowNode, flowContext: FlowEditorContextVa
   const isDeprecated = isDeprecatedNodeType(type);
   const isLegacyDecision = type === PipelineNodeTypes.Decision && id.endsWith(DECISION_NODE_ID_SUFFIX);
   const usesLabelAsName = type === PipelineNodeTypes.Decision || type === PipelineNodeTypes.Condition;
+  const isOwnershipNode = type === PipelineNodeTypes.Parallel || type === PipelineNodeTypes.Map;
   return {
     id,
     type,
     isEntrypoint: flowContext.yamlJsonObject.entry_point === id,
     isDeprecated,
     isLegacyDecision,
-    isLegacyLayout: isDeprecated || type === PipelineNodeTypes.Default || isLegacyDecision,
+    isLegacyLayout: isLegacyLayoutType(type, isDeprecated, isLegacyDecision),
+    canDuplicate: !isDeprecated && !isLegacyDecision && !isOwnershipNode,
     isReadOnly: Boolean(flowContext.isRunningPipeline || flowContext.disabled),
     displayName: usesLabelAsName ? (data?.label ?? id) : id,
   };
@@ -123,39 +133,59 @@ function LiveNodePanel({
   toolNames,
 }: LiveNodePanelBodyProps): ReactNode {
   const { data } = flowNode;
-  const { id, type, isEntrypoint, isDeprecated, isLegacyDecision, isLegacyLayout, isReadOnly, displayName } =
-    deriveLiveNodeMeta(flowNode, flowContext);
+  const meta = deriveLiveNodeMeta(flowNode, flowContext);
+  const { id, type, isEntrypoint, isDeprecated, isLegacyDecision, isLegacyLayout, canDuplicate, isReadOnly, displayName } =
+    meta;
   const [view, setView] = useState<NodeConfigViewMode>('flow');
+  const pendingRenamedIdRef = useRef<string | null>(null);
 
-  const handleRenamed = useCallback((newId: string) => onSelectNode(newId), [onSelectNode]);
+  useEffect(() => {
+    if (pendingRenamedIdRef.current === id) {
+      pendingRenamedIdRef.current = null;
+      return;
+    }
+    setView('flow');
+  }, [id]);
+
+  const handleRenamed = useCallback(
+    (newId: string) => {
+      pendingRenamedIdRef.current = newId;
+      onSelectNode(newId);
+    },
+    [onSelectNode],
+  );
   const yamlEditor = useNodeYamlEditor({ nodeId: id, onRenamed: handleRenamed, toolNames });
 
   const handleMakeEntrypoint = useCallback(
     (nodeId: string) => {
+      if (isReadOnly) return;
       flowContext.setYamlJsonObject({ ...flowContext.yamlJsonObject, entry_point: nodeId });
     },
-    [flowContext],
+    [flowContext, isReadOnly],
   );
 
   const handleDuplicate = useCallback(
     (nodeId: string) => {
+      if (isReadOnly || !canDuplicate) return;
       const nextId = duplicatePipelineNode({
         sourceId: nodeId,
         yamlJsonObject: flowContext.yamlJsonObject,
         flowNodes,
         setYamlJsonObject: flowContext.setYamlJsonObject,
         setFlowNodes: flowContext.setFlowNodes,
+        toolNames,
       });
       if (nextId) onSelectNode(nextId);
     },
-    [flowContext, flowNodes, onSelectNode],
+    [canDuplicate, flowContext, flowNodes, isReadOnly, onSelectNode, toolNames],
   );
 
   const handleDelete = useCallback(
     (nodeId: string) => {
+      if (isReadOnly) return;
       flowContext.handleDeleteNode?.(nodeId);
     },
-    [flowContext],
+    [flowContext, isReadOnly],
   );
 
   const viewItems = useMemo<TabGroupButtonItem[]>(
@@ -206,7 +236,7 @@ function LiveNodePanel({
             code={yamlEditor.code}
             onChangeCode={yamlEditor.onChangeCode}
             error={yamlEditor.error}
-            disabled={isReadOnly}
+            disabled={isReadOnly || isLegacyDecision}
           />
         ) : (
           <>
@@ -238,7 +268,7 @@ function LiveNodePanel({
           type={type}
           isEntrypoint={isEntrypoint}
           canMakeEntrypoint={!isDeprecated}
-          canDuplicate={!isDeprecated && !isLegacyDecision}
+          canDuplicate={canDuplicate}
           disabled={isReadOnly}
           onMakeEntrypoint={handleMakeEntrypoint}
           onDuplicate={handleDuplicate}
@@ -270,9 +300,11 @@ export const FlowNodeConfigDrawer = memo(function FlowNodeConfigDrawer({
   );
 
   const configurableNode = isConfigurableNode(selectedNode) ? selectedNode : undefined;
-  const NodeComponent = configurableNode?.type
-    ? (nodeTypes[configurableNode.type] as ComponentType<Record<string, unknown>> | undefined)
-    : undefined;
+  const nodeTypeKey = configurableNode?.type;
+  const NodeComponent =
+    nodeTypeKey && Object.hasOwn(nodeTypes, nodeTypeKey)
+      ? (nodeTypes[nodeTypeKey] as ComponentType<Record<string, unknown>> | undefined)
+      : undefined;
 
   const isOpen = Boolean(flowContext && configurableNode && NodeComponent);
 
@@ -280,7 +312,6 @@ export const FlowNodeConfigDrawer = memo(function FlowNodeConfigDrawer({
     <NodeConfigDrawer open={isOpen}>
       {flowContext && configurableNode && NodeComponent ? (
         <LiveNodePanel
-          key={configurableNode.id}
           flowNode={configurableNode}
           NodeComponent={NodeComponent}
           flowNodes={flowNodes}

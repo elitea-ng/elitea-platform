@@ -16,6 +16,8 @@ import {
   type FlowEditorContextValue,
   type NodeConfigPanelContextValue,
 } from '../../../lib/flow-editor/flowEditorContext';
+import { ERROR_OUTPUT_HANDLE } from '../../../lib/flow-editor/helpers/nodeErrorRoute.helpers';
+import { NodeErrorOutputHandle } from '../NodeErrorOutputHandle';
 import { NodeCard, type NodeCardProps } from './NodeCard';
 
 beforeAll(() => {
@@ -144,5 +146,57 @@ describe('NodeCard (Wave U2 dual-mode)', () => {
 
     expect(getByTestId('pipeline-node-panel-basic-section')).toBeInTheDocument();
     expect(getByTestId('node-card-children')).toBeInTheDocument();
+  });
+
+  it('collapses to mini-card mode when canvas zoom is below 0.6', () => {
+    const flowEditorValue = buildFlowEditorContextValue({
+      yamlJsonObject: { nodes: [{ id: 'Node1', type: 'llm' }] },
+    });
+    const fullProps: NodeCardProps = { name: 'Node1', isEntrypoint: false, id: 'Node1', type: 'llm' };
+    const { getByTestId, queryByTestId } = renderTree(
+      <ReactFlowProvider>
+        <FlowEditorContext.Provider value={flowEditorValue}>
+          <ReactFlow
+            defaultViewport={{ x: 0, y: 0, zoom: 0.45 }}
+            nodes={[{ id: 'Node1', type: 'testNode', position: { x: 0, y: 0 }, data: {} }]}
+            edges={[]}
+            nodeTypes={{ testNode: () => <NodeCard {...fullProps} /> }}
+          />
+        </FlowEditorContext.Provider>
+      </ReactFlowProvider>,
+    );
+
+    expect(getByTestId('pipeline-node-v2-card-node1')).toHaveAttribute('data-mini', 'true');
+    expect(queryByTestId('pipeline-node-v2-summary')).not.toBeInTheDocument();
+  });
+
+  it('surfaces admission issues as needsConfiguration status icon and Not configured summary on canvas', () => {
+    const flowEditorValue = buildFlowEditorContextValue({
+      yamlJsonObject: { nodes: [{ id: 'Node1', type: 'printer' }] },
+    });
+    const { getByTestId, getByText } = renderNodeCard({ type: 'printer' }, flowEditorValue);
+
+    expect(getByTestId('pipeline-node-v2-card-node1')).toHaveAttribute('data-status', 'needsConfiguration');
+    expect(getByTestId('pipeline-node-v2-status-needs-configuration')).toBeInTheDocument();
+    expect(getByText('Not configured')).toBeInTheDocument();
+  });
+
+  it('renders NodeErrorOutputHandle on the canvas card when on_error is error_output', () => {
+    const flowEditorValue = buildFlowEditorContextValue({
+      yamlJsonObject: {
+        nodes: [{ id: 'Node1', type: 'code', settings: { on_error: 'error_output' } }],
+      },
+    });
+    const { container } = renderNodeCard(
+      {
+        type: 'code',
+        handles: () => (
+          <NodeErrorOutputHandle id="Node1" isRunningPipeline={false} disabled={false} isPerforming={false} />
+        ),
+      },
+      flowEditorValue,
+    );
+
+    expect(container.querySelector(`[data-handleid="${ERROR_OUTPUT_HANDLE}"]`)).toBeInTheDocument();
   });
 });

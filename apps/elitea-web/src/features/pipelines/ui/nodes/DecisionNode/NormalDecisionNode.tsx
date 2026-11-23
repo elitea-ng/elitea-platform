@@ -178,13 +178,13 @@ export const NormalDecisionNode = memo(function NormalDecisionNode(props: Normal
         <InputSelect
           id={id}
           inputFieldName="input"
-          disabled={isRunningPipeline}
+          disabled={isFieldsDisabled}
         />
         <CommonInterruptSettings
           id={id}
           showStructuredOutput={false}
           type={FlowEditorConstants.PipelineNodeTypes.Decision}
-          disabled={isRunningPipeline}
+          disabled={isFieldsDisabled}
         />
         <NodeSettings
           id={id}

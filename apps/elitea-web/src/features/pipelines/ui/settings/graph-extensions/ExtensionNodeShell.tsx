@@ -5,6 +5,7 @@ import type { FlowNode } from '../../../lib/flow-editor/reactFlowTypes';
 import { FlowEditorContext } from '../../../lib/flow-editor/flowEditorContext';
 import { patchGraphExtensionNode } from '../../../lib/graphExtensions.helpers';
 import type { ExtensionSettingsProps } from '../../../lib/graphExtensions.types';
+import { nodeSettingsFamilyKeys } from '../../../lib/nodeSettings.helpers';
 import { NodeConfigSection } from '../../node-config-drawer/NodeConfigSection';
 import { NodeCard } from '../../nodes/BaseNode/NodeCard';
 import { CustomHandle } from '../../nodes/CustomHandle';
@@ -40,8 +41,10 @@ export function ExtensionNodeShell({ id, type = '', data, selected, renderSettin
     <NodeConfigSection section="basic">
       {renderSettings({ node, disabled, change, remove })}
     </NodeConfigSection>
-    <NodeConfigSection section="advanced" defaultExpanded={false}>
-      <NodeSettings id={id} type={node.type ?? ''} disabled={disabled} />
-    </NodeConfigSection>
+    {nodeSettingsFamilyKeys(node.type ?? '') !== undefined ? (
+      <NodeConfigSection section="advanced" defaultExpanded={false}>
+        <NodeSettings id={id} type={node.type ?? ''} disabled={disabled} />
+      </NodeConfigSection>
+    ) : null}
   </NodeCard>;
 }

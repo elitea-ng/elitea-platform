@@ -80,7 +80,8 @@ export const NodeNameField = memo(function NodeNameField({
       setError(rejection);
       return;
     }
-    flowContext.setYamlJsonObject(renameYamlDocument(flowContext.yamlJsonObject, name, draftName));
+    const stored = flowContext.setYamlJsonObject(renameYamlDocument(flowContext.yamlJsonObject, name, draftName));
+    if (stored === false) return;
     flowContext.setFlowNodes((prevNodes: FlowNode[]) => prevNodes.map((node) => renameFlowNode(node, name, draftName)));
     flowContext.setFlowEdges((prevEdges: FlowEdge[]) => prevEdges.map((edge) => renameFlowEdge(edge, name, draftName)));
     setError('');

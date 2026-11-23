@@ -115,12 +115,12 @@ export interface BaseToolNodeProps {
 
 interface BaseToolNodeYamlState {
   readonly isRunningPipeline: boolean | undefined;
+  readonly disabled: boolean | undefined;
   readonly yamlJsonObject: FlowEditorContextValue['yamlJsonObject'] | undefined;
   readonly setYamlJsonObject: FlowEditorContextValue['setYamlJsonObject'] | undefined;
   readonly yamlNode: import('../../lib/flow-editor/helpers/pipelineFlow.types').YamlPipelineNode | undefined;
 }
 
-/** Groups every `FlowEditorContext`-derived read this component needs -- split out purely to keep `BaseToolNode` under the §3.5 complexity ceiling (each optional-chain read counts as a branch). */
 function useBaseToolNodeYamlState(id: string): BaseToolNodeYamlState {
   const flowEditorContext = useContext(FlowEditorContext);
   const yamlJsonObject = flowEditorContext?.yamlJsonObject;
@@ -128,6 +128,7 @@ function useBaseToolNodeYamlState(id: string): BaseToolNodeYamlState {
 
   return {
     isRunningPipeline: flowEditorContext?.isRunningPipeline,
+    disabled: flowEditorContext?.disabled,
     yamlJsonObject,
     setYamlJsonObject: flowEditorContext?.setYamlJsonObject,
     yamlNode,
@@ -136,24 +137,25 @@ function useBaseToolNodeYamlState(id: string): BaseToolNodeYamlState {
 
 interface BaseToolNodeHandlesProps {
   readonly isRunningPipeline: boolean | undefined;
+  readonly disabled: boolean | undefined;
   readonly isPerforming: boolean | undefined;
 }
 
-/** `BaseToolNode.jsx:121-140` (the `handles` render-prop body) as its own named component -- see `useBaseToolNodeYamlState`'s doc comment for why. */
-function BaseToolNodeHandles({ isRunningPipeline, isPerforming }: BaseToolNodeHandlesProps): ReactNode {
+function BaseToolNodeHandles({ isRunningPipeline, disabled, isPerforming }: BaseToolNodeHandlesProps): ReactNode {
+  const isConnectable = !isRunningPipeline && !disabled;
   return (
     <>
       <CustomHandle
         type="target"
         id="target"
-        isConnectable={!isRunningPipeline}
+        isConnectable={isConnectable}
         isRunningPipeline={Boolean(isRunningPipeline)}
         isPerforming={Boolean(isPerforming)}
       />
       <CustomHandle
         type="source"
         id="source"
-        isConnectable={!isRunningPipeline}
+        isConnectable={isConnectable}
         isRunningPipeline={Boolean(isRunningPipeline)}
         isPerforming={Boolean(isPerforming)}
       />
@@ -249,7 +251,7 @@ function BaseToolNodeAdvancedSection({
       <NodeFieldHeading label={t('pipelines.flowEditor.baseToolNode.inputLabel', 'Input')} nodeType={nodeType} fieldKey={NODE_FIELD_KEYS.input} />
       <InputSelect id={id} inputFieldName="input" disabled={disabled} />
       <NodeFieldHeading label={t('pipelines.flowEditor.baseToolNode.outputLabel', 'Output')} nodeType={nodeType} fieldKey={NODE_FIELD_KEYS.output} />
-      <OutputSelect id={id} label={t('pipelines.flowEditor.baseToolNode.outputLabel', 'Output')} outputFieldName="output" />
+      <OutputSelect id={id} label={t('pipelines.flowEditor.baseToolNode.outputLabel', 'Output')} outputFieldName="output" disabled={disabled} />
       <CommonInterruptSettings id={id} showStructuredOutput={showStructuredOutput} type={nodeType} disabled={disabled} />
       <NodeSettings id={id} type={nodeType} disabled={disabled} />
     </NodeConfigSection>
@@ -259,7 +261,7 @@ function BaseToolNodeAdvancedSection({
 export const BaseToolNode = memo(function BaseToolNode(props: BaseToolNodeProps): ReactNode {
   const { id, data, selected, nodeType, showStructuredOutput = false, customFilterTypes = defaultFilterTypes, versionTools } = props;
 
-  const { isRunningPipeline, yamlJsonObject, setYamlJsonObject, yamlNode } = useBaseToolNodeYamlState(id);
+  const { isRunningPipeline, disabled, yamlJsonObject, setYamlJsonObject, yamlNode } = useBaseToolNodeYamlState(id);
 
   const {
     onChangeTool,
@@ -344,7 +346,7 @@ export const BaseToolNode = memo(function BaseToolNode(props: BaseToolNodeProps)
     }),
     [customFilterTypes, projectId, versionTools, yamlJsonObject],
   );
-  const isDisabled = Boolean(isRunningPipeline);
+  const isDisabled = Boolean(isRunningPipeline || disabled);
 
   const resolvedPickerValue = resolvePickerValue(selectedToolkit, toolkit, customFilterTypes);
 
@@ -357,7 +359,7 @@ export const BaseToolNode = memo(function BaseToolNode(props: BaseToolNodeProps)
       isPerforming={Boolean(data?.isPerforming)}
       id={id}
       requiredInputs={requiredInputs}
-      handles={() => <BaseToolNodeHandles isRunningPipeline={isRunningPipeline} isPerforming={data?.isPerforming} />}
+      handles={() => <BaseToolNodeHandles isRunningPipeline={isRunningPipeline} disabled={disabled} isPerforming={data?.isPerforming} />}
     >
       <NodeConfigSection section="basic">
         <ProjectToolkitPicker
@@ -367,6 +369,7 @@ export const BaseToolNode = memo(function BaseToolNode(props: BaseToolNodeProps)
           onSelect={onSelectPickerToolkit}
           onClear={onClearToolkit}
           disabled={isDisabled}
+          attachedOnly
           pickerContext={pickerContext}
           data-testid={pickerMeta.testId}
         />

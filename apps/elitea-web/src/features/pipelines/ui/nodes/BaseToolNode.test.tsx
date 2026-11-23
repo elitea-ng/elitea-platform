@@ -130,8 +130,18 @@ describe('BaseToolNode', () => {
     it('disables the toolkit select and every switch when isRunningPipeline is true', async () => {
       const { getAllByRole, findByText } = renderBaseToolNode({}, { isRunningPipeline: true });
       await findByText('my-github');
-      // The toolkit ToolSelect is always the first combobox in DOM order.
       await waitFor(() => expect(getAllByRole('combobox', { hidden: true })[0]).toHaveAttribute('aria-disabled', 'true'));
+      for (const switchControl of getAllByRole('switch', { hidden: true })) {
+        expect(switchControl).toBeDisabled();
+      }
+    });
+
+    it('disables every combobox (including OutputSelect) and switch when disabled is true (read-only/deprecated lock)', async () => {
+      const { getAllByRole, findByText } = renderBaseToolNode({}, { disabled: true });
+      await findByText('my-github');
+      for (const combo of getAllByRole('combobox', { hidden: true })) {
+        expect(combo).toHaveAttribute('aria-disabled', 'true');
+      }
       for (const switchControl of getAllByRole('switch', { hidden: true })) {
         expect(switchControl).toBeDisabled();
       }

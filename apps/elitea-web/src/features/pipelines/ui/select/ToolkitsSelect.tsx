@@ -23,10 +23,16 @@ export interface ToolkitsSelectProps {
   readonly versionTools?: readonly PipelineToolEntry[];
 }
 
+const FORBIDDEN_TOOLKIT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+function isSafeToolkitKey(key: string): boolean {
+  return key.length > 0 && !FORBIDDEN_TOOLKIT_KEYS.has(key);
+}
+
 /**
  * Grouped Toolkits & MCPs multi-picker for LLM nodes (Wave U2 Part A).
- * Backed by Wave U1's `ProjectToolkitsMultiPicker` while preserving `ToolkitsSelect`'s
- * YAML `tool_names` write semantics.
+ * Backed by Wave U1's `ProjectToolkitsMultiPicker` (`attachedOnly`) while preserving
+ * `ToolkitsSelect`'s YAML `tool_names` write semantics and prototype-key safety.
  */
 export function ToolkitsSelect(props: ToolkitsSelectProps): ReactNode {
   const { id, label, disabled = false, onValueChange, versionTools = [] } = props;
@@ -46,32 +52,39 @@ export function ToolkitsSelect(props: ToolkitsSelectProps): ReactNode {
 
   const selectedToolkits = useMemo(() => {
     const toolNames = (yamlNode?.['tool_names'] as Record<string, readonly string[]> | undefined) ?? {};
-    return Object.keys(toolNames);
+    return Object.keys(toolNames).filter(isSafeToolkitKey);
   }, [yamlNode]);
 
   const applySelection = useCallback(
     (nextNames: string[]) => {
       if (!setYamlJsonObject) return;
-      const currentToolNames = (yamlNode?.['tool_names'] as Record<string, readonly string[]> | undefined) ?? {};
-      const updatedToolNames: Record<string, readonly string[]> = {};
+      const rawCurrent = yamlNode?.['tool_names'];
+      const currentToolNames =
+        rawCurrent && typeof rawCurrent === 'object' && !Array.isArray(rawCurrent)
+          ? (rawCurrent as Record<string, unknown>)
+          : {};
+      const entries: [string, readonly string[]][] = [];
 
       for (const toolkitName of nextNames) {
+        if (!isSafeToolkitKey(toolkitName)) continue;
         const availableTools = availableToolNames(findToolkit(versionTools, toolkitName, getToolkitNameFromSchema));
-        const existing = currentToolNames[toolkitName];
-        updatedToolNames[toolkitName] = existing
-          ? existing.filter((tool) => availableTools.length === 0 || availableTools.includes(tool))
+        const existing = Object.hasOwn(currentToolNames, toolkitName) ? currentToolNames[toolkitName] : undefined;
+        const nextTools = Array.isArray(existing)
+          ? existing.filter((tool): tool is string => typeof tool === 'string' && (availableTools.length === 0 || availableTools.includes(tool)))
           : availableTools;
+        entries.push([toolkitName, nextTools]);
       }
 
+      const updatedToolNames = Object.fromEntries(entries);
       FlowEditorHelpers.updateYamlNode(id, 'tool_names', updatedToolNames, yamlJsonObject, setYamlJsonObject);
-      onValueChange?.(nextNames);
+      onValueChange?.(entries.map(([key]) => key));
     },
     [id, onValueChange, setYamlJsonObject, yamlJsonObject, yamlNode, versionTools, getToolkitNameFromSchema],
   );
 
   const handleAdd = useCallback(
     (_source: PickerToolEntry | ToolkitListRow, toolkitName: string) => {
-      if (!toolkitName || selectedToolkits.includes(toolkitName)) return;
+      if (!isSafeToolkitKey(toolkitName) || selectedToolkits.includes(toolkitName)) return;
       applySelection([...selectedToolkits, toolkitName]);
     },
     [applySelection, selectedToolkits],
@@ -108,6 +121,7 @@ export function ToolkitsSelect(props: ToolkitsSelectProps): ReactNode {
       onRemove={handleRemove}
       onClear={handleClear}
       disabled={disabled}
+      attachedOnly
       pickerContext={pickerContext}
       data-testid="pipeline-llm-toolkits-picker"
     />

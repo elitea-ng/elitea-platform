@@ -7334,5 +7334,8 @@
   "pipelines.nodeConfigPanel.name": "Name",
   "pipelines.nodeConfigPanel.yamlInvalid": "Invalid YAML syntax.",
   "pipelines.nodeConfigPanel.yamlMissingIdError": "The node YAML must include a valid id.",
-  "pipelines.nodeConfigPanel.yamlSingleNodeError": "The node YAML must describe exactly one node."
+  "pipelines.nodeConfigPanel.yamlSingleNodeError": "The node YAML must describe exactly one node.",
+  "pipelines.nodeConfigPanel.yamlAliasNotAllowedError": "YAML anchors and aliases are not supported in node YAML.",
+  "pipelines.nodeConfigPanel.yamlTooLargeError": "The node YAML exceeds the maximum allowed size.",
+  "pipelines.nodeConfigPanel.yamlTypeImmutableError": "Changing the node type in YAML view is not supported."
 }

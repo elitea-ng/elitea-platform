@@ -7,8 +7,14 @@ import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
 import { buildFlowEditorContextValue } from '../../__tests__/testUtils';
 import { FlowEditorConstants } from '../../lib/flow-editor/constants';
+import { getNodeDocsLink } from '../../lib/flow-editor/constants/nodeDocs.constants';
+import { getNodeFieldInfo } from '../../lib/flow-editor/constants/nodeFieldInfo.constants';
 import { FlowEditorContext, type FlowEditorContextValue } from '../../lib/flow-editor/flowEditorContext';
+import { isCompilerLegalNodeId } from '../../lib/flow-editor/helpers/flowEditor.helpers';
+import type { YamlPipelineNode } from '../../lib/flow-editor/helpers/pipelineFlow.types';
+import { collectGraphAdmissionIssues } from '../../lib/graphAdmission.helpers';
 import type { FlowNode } from '../../lib/flow-editor/reactFlowTypes';
+import { getNodeCardV2Summary } from '../node-card-v2/nodeCardV2.helpers';
 import { NodeCard } from '../nodes/BaseNode/NodeCard';
 import {
   buildDuplicateNodeId,
@@ -16,6 +22,7 @@ import {
   duplicatePipelineNode,
 } from './duplicateNode.helpers';
 import { FlowNodeConfigDrawer } from './FlowNodeConfigDrawer';
+import { NodeDeprecationBanner } from './NodeDeprecationBanner';
 
 const { PipelineNodeTypes } = FlowEditorConstants;
 
@@ -30,6 +37,8 @@ function StubNode({ id, type }: { readonly id: string; readonly type?: string })
 const TEST_NODE_TYPES = {
   [PipelineNodeTypes.LLM]: StubNode,
   [PipelineNodeTypes.Tool]: StubNode,
+  [PipelineNodeTypes.Parallel]: StubNode,
+  [PipelineNodeTypes.Map]: StubNode,
 };
 
 function makeFlowNode(id: string, type: string = PipelineNodeTypes.LLM): FlowNode {
@@ -79,10 +88,32 @@ afterEach(() => {
 });
 
 describe('duplicateNode.helpers', () => {
-  it('mints unique _copy suffixes', () => {
+  it('mints unique _copy suffixes, enforces 128-byte legal ids, and avoids toolNames collisions', () => {
     expect(buildDuplicateNodeId('llm_1', ['llm_1'])).toBe('llm_1_copy');
     expect(buildDuplicateNodeId('llm_1', ['llm_1', 'llm_1_copy'])).toBe('llm_1_copy_2');
-    expect(buildDuplicateNodeId('llm_1', ['llm_1', 'llm_1_copy', 'llm_1_copy_2'])).toBe('llm_1_copy_3');
+    expect(buildDuplicateNodeId('llm_1', ['llm_1'], ['llm_1_copy'])).toBe('llm_1_copy_2');
+
+    const longId = 'a'.repeat(140);
+    const minted = buildDuplicateNodeId(longId, [longId]);
+    expect(new TextEncoder().encode(minted).length).toBeLessThanOrEqual(128);
+    expect(isCompilerLegalNodeId(minted)).toBe(true);
+  });
+
+  it.each<[string, YamlPipelineNode]>([
+    ['printer', { id: 'p1', type: 'printer', final_message: 'hi', transition: 'next' }],
+    ['decision', { id: 'd1', type: 'decision', description: 'pick', nodes: ['a'], default_output: 'b' }],
+    ['hitl', { id: 'h1', type: 'hitl', user_message: { type: 'fixed', value: 'ok?' }, routes: { approve: 'a', edit: 'b', reject: 'c' }, edit_state_key: 'k' }],
+    ['router', { id: 'r1', type: 'router', condition: 'true' as never, routes: ['a'], default_output: 'b' }],
+    ['llm', { id: 'l1', type: 'llm', transition: 'END' }],
+    ['code', { id: 'c1', type: 'code', code: { type: 'fixed', value: 'result = 1' }, transition: 'END' }],
+    ['state_modifier', { id: 's1', type: 'state_modifier', template: '{{ input }}', transition: 'END' }],
+  ])('duplicated %s node passes graph admission with 0 issues', (_label, source) => {
+    const dup = cloneYamlNodeForDuplicate(source, `${source.id}_copy`);
+    const issues = collectGraphAdmissionIssues({
+      entry_point: dup.id,
+      nodes: [dup],
+    });
+    expect(issues).toEqual([]);
   });
 
   it('clones YAML node and strips outgoing edges and error_transition while keeping other settings', () => {
@@ -214,5 +245,29 @@ describe('FlowNodeConfigDrawer', () => {
     await user.click(buttons[1]!);
 
     expect(screen.getByTestId('pipeline-node-panel-yaml')).toBeInTheDocument();
+  });
+
+  it('disables duplicate for Parallel and Map ownership nodes', () => {
+    renderDrawer(
+      'par_1',
+      [makeFlowNode('par_1', PipelineNodeTypes.Parallel)],
+      { yamlJsonObject: { nodes: [{ id: 'par_1', type: PipelineNodeTypes.Parallel }] } },
+    );
+    expect(screen.getByTestId('pipeline-node-panel-duplicate')).toBeDisabled();
+  });
+
+  it.each(['__proto__', 'constructor', 'prototype'])('guards prototype key %s safely across drawer, docs, summary, and field info', (protoKey) => {
+    renderDrawer(
+      'bad_node',
+      [makeFlowNode('bad_node', protoKey)],
+      { yamlJsonObject: { nodes: [{ id: 'bad_node', type: protoKey }] } },
+    );
+    expect(screen.queryByTestId('pipeline-node-panel')).not.toBeInTheDocument();
+
+    const { container } = renderWithTheme(<NodeDeprecationBanner type={protoKey} />);
+    expect(container.textContent).toBe('');
+    expect(getNodeDocsLink(protoKey)).toBeNull();
+    expect(getNodeCardV2Summary({ id: 'n', type: protoKey }, { type: protoKey })).toEqual({ primary: '', secondary: '' });
+    expect(getNodeFieldInfo(protoKey, protoKey)).toBe('');
   });
 });

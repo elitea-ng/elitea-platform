@@ -254,6 +254,7 @@ export const AgentNode = memo(function AgentNode(props: AgentNodeProps): ReactNo
           onSelect={onSelectAgentItem}
           onClear={onClearAgent}
           disabled={isFieldsDisabled}
+          attachedOnly
           pickerContext={pickerContext}
           data-testid="pipeline-agent-node-picker"
         />

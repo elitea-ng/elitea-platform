@@ -34,14 +34,16 @@ export interface NodeDocsLink {
 }
 
 export function getNodeDocsLink(type: string): NodeDocsLink | null {
-  const migrationGuideUrl = DeprecatedTips[type]?.linkUrl;
+  const migrationGuideUrl = Object.hasOwn(DeprecatedTips, type) ? DeprecatedTips[type]?.linkUrl : undefined;
   if (migrationGuideUrl) {
     return { url: migrationGuideUrl, tooltip: MIGRATION_GUIDE_TOOLTIP };
   }
 
-  const url = NODE_DOCS_URLS[type as PipelineNodeType];
+  const urls = NODE_DOCS_URLS as Readonly<Record<string, string | undefined>>;
+  const url = Object.hasOwn(urls, type) ? urls[type] : undefined;
   if (!url) return null;
 
-  const displayName = (PipelineNodeDisplayNames as Readonly<Record<string, string>>)[type] ?? type;
+  const displayNames = PipelineNodeDisplayNames as Readonly<Record<string, string>>;
+  const displayName = Object.hasOwn(displayNames, type) ? displayNames[type]! : type;
   return { url, tooltip: `Open ${displayName} node documentation` };
 }

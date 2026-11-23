@@ -37,6 +37,16 @@ function isPipelineSource(source: PickerToolEntry | ApplicationListRow): boolean
   return source.agent_type === 'pipeline' || source.version_details?.agent_type === 'pipeline';
 }
 
+function resolveAgentGroupRows(
+  attachedOnly: boolean,
+  attachedTools: readonly PickerToolEntry[],
+  fetchedRows: readonly ApplicationListRow[],
+  pipelineGroup: boolean,
+): readonly ApplicationListRow[] {
+  if (!attachedOnly) return fetchedRows;
+  return attachedTools.filter((tool) => isPipelineSource(tool) === pipelineGroup) as unknown as readonly ApplicationListRow[];
+}
+
 export interface ProjectAgentPickerContext {
   readonly attachedTools?: readonly PickerToolEntry[] | undefined;
   readonly excludeId?: number | string | undefined;
@@ -52,8 +62,26 @@ export interface ProjectAgentPickerProps {
   readonly onSelect?: ((item: PickerItem<PickerToolEntry | ApplicationListRow>) => void) | undefined;
   readonly onClear?: (() => void) | undefined;
   readonly disabled?: boolean | undefined;
+  readonly attachedOnly?: boolean | undefined;
   readonly pickerContext?: ProjectAgentPickerContext | undefined;
   readonly 'data-testid'?: string | undefined;
+}
+
+function resolveAgentPickerContext(
+  pickerContext: ProjectAgentPickerContext | undefined,
+  flowYaml: PipelineYamlDocument,
+) {
+  return {
+    yamlJsonObject: pickerContext?.yamlJsonObject ?? flowYaml,
+    versionStatus: pickerContext?.versionStatus,
+    projectId: pickerContext?.projectId,
+    excludeId: pickerContext?.excludeId,
+    rawAttached: pickerContext?.attachedTools ?? [],
+  };
+}
+
+function suffixTestId(testId: string | undefined, suffix: string): string | undefined {
+  return testId ? `${testId}-${suffix}` : undefined;
 }
 
 /**
@@ -67,28 +95,31 @@ export const ProjectAgentPicker = memo(function ProjectAgentPicker({
   onSelect,
   onClear,
   disabled = false,
+  attachedOnly = false,
   pickerContext,
   'data-testid': testId,
 }: ProjectAgentPickerProps): ReactNode {
   const flowContext = useContext(FlowEditorContext);
-  const yamlJsonObject = pickerContext?.yamlJsonObject ?? flowContext?.yamlJsonObject;
-  const isVersionLocked = useIsVersionLocked(pickerContext?.versionStatus);
-  const projectId = pickerContext?.projectId;
-  const excludeId = pickerContext?.excludeId;
+  const { yamlJsonObject, versionStatus, projectId, excludeId, rawAttached } = resolveAgentPickerContext(
+    pickerContext,
+    flowContext?.yamlJsonObject,
+  );
+  const isVersionLocked = useIsVersionLocked(versionStatus);
 
   const resolvedLabel = label ?? t('pipelines.toolPicker.agentsAndPipelinesLabel', 'Agents & Pipelines');
 
   const { anchorEl, isOpen, hasOpened, search, setSearch, query, openMenu, closeMenu } = usePickerMenu();
+  const skipFetch = attachedOnly || !hasOpened;
   const agents = useProjectApplicationsList({
     agentsType: 'classic',
     query,
-    skip: !hasOpened,
+    skip: skipFetch,
     projectId,
   });
   const pipelines = useProjectApplicationsList({
     agentsType: 'pipeline',
     query,
-    skip: !hasOpened,
+    skip: skipFetch,
     projectId,
   });
 
@@ -98,10 +129,7 @@ export const ProjectAgentPicker = memo(function ProjectAgentPicker({
   }, [agents, pipelines]);
   const openCreatePage = useCreateInNewTab(reload);
 
-  const attachedTools = useMemo(
-    () => (pickerContext?.attachedTools ?? []).filter(isApplicationTool),
-    [pickerContext?.attachedTools],
-  );
+  const attachedTools = useMemo(() => rawAttached.filter(isApplicationTool), [rawAttached]);
   const usedNames = useMemo(
     () => getReferencedNames(collectToolReferences(yamlJsonObject), TOOL_REF_KINDS.application),
     [yamlJsonObject],
@@ -126,15 +154,15 @@ export const ProjectAgentPicker = memo(function ProjectAgentPicker({
       {
         key: 'agents',
         title: t('pipelines.toolPicker.groupAgents', 'Agents'),
-        items: buildItems(agents.rows, false),
+        items: buildItems(resolveAgentGroupRows(attachedOnly, attachedTools, agents.rows, false), false),
       },
       {
         key: 'pipelines',
         title: t('pipelines.toolPicker.groupPipelines', 'Pipelines'),
-        items: buildItems(pipelines.rows, true),
+        items: buildItems(resolveAgentGroupRows(attachedOnly, attachedTools, pipelines.rows, true), true),
       },
     ],
-    [agents.rows, buildItems, pipelines.rows],
+    [agents.rows, attachedOnly, attachedTools, buildItems, pipelines.rows],
   );
 
   const handleSelect = useCallback(
@@ -159,7 +187,7 @@ export const ProjectAgentPicker = memo(function ProjectAgentPicker({
           closeMenu();
           openCreatePage(CREATE_APPLICATION_ROUTE);
         },
-        testId: testId ? `${testId}-create-agent` : undefined,
+        testId: suffixTestId(testId, 'create-agent'),
       },
       {
         key: 'pipeline',
@@ -168,7 +196,7 @@ export const ProjectAgentPicker = memo(function ProjectAgentPicker({
           closeMenu();
           openCreatePage(CREATE_PIPELINE_ROUTE);
         },
-        testId: testId ? `${testId}-create-pipeline` : undefined,
+        testId: suffixTestId(testId, 'create-pipeline'),
       },
     ],
     [closeMenu, openCreatePage, testId],
@@ -188,7 +216,7 @@ export const ProjectAgentPicker = memo(function ProjectAgentPicker({
             isPipeline={item.isPipeline}
           />
         }
-        data-testid={testId ? `${testId}-option` : undefined}
+        data-testid={suffixTestId(testId, 'option')}
       />
     ),
     [handleSelect, testId, value],
@@ -249,7 +277,7 @@ export const ProjectAgentPicker = memo(function ProjectAgentPicker({
         renderItem={renderItem}
         loadState={loadState}
         messages={messages}
-        data-testid={testId ? `${testId}-menu` : undefined}
+        data-testid={suffixTestId(testId, 'menu')}
       />
     </>
   );

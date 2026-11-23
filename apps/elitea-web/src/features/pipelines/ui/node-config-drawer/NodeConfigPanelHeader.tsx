@@ -12,7 +12,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import { t } from '@/shared/i18n';
 import { BaseBtn, BUTTON_VARIANTS } from '@/shared/ui/BaseBtn';
 
-import { PipelineNodeDisplayNames, type PipelineNodeType } from '../../lib/flow-editor/constants/flowEditor.constants';
+import { PipelineNodeDisplayNames } from '../../lib/flow-editor/constants/flowEditor.constants';
 import { getNodeDocsLink, NODE_DOCS_LINK_REL } from '../../lib/flow-editor/constants/nodeDocs.constants';
 import { NodeTypeIconTile } from '../add-node/NodeTypeIconTile';
 import { PipelineNodeDescriptions } from '../add-node/nodeTypeDescriptions';
@@ -56,8 +56,10 @@ export const NodeConfigPanelHeader = memo(function NodeConfigPanelHeader({
   type,
   onClose,
 }: NodeConfigPanelHeaderProps): ReactNode {
-  const typeName = (PipelineNodeDisplayNames as Readonly<Record<string, string>>)[type] ?? type;
-  const description = PipelineNodeDescriptions[type as PipelineNodeType];
+  const displayNames = PipelineNodeDisplayNames as Readonly<Record<string, string>>;
+  const descriptions = PipelineNodeDescriptions as Readonly<Record<string, string>>;
+  const typeName = Object.hasOwn(displayNames, type) ? displayNames[type]! : type;
+  const description = Object.hasOwn(descriptions, type) ? descriptions[type] : undefined;
   const docsLink = useMemo(() => getNodeDocsLink(type), [type]);
 
   return (

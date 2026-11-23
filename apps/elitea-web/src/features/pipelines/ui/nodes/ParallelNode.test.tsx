@@ -1,6 +1,10 @@
 import { cleanup } from '@testing-library/react';
+import { ReactFlowProvider } from '@xyflow/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { renderExtensionCard } from '../../__tests__/graphExtensionTestUtils';
+import { buildFlowEditorContextValue, renderWithRouterAndProject } from '../../__tests__/testUtils';
+import { FlowEditorContext } from '../../lib/flow-editor/flowEditorContext';
+import { parsePipelineYamlDocument } from '../../lib/pipelineYamlDocument.helpers';
 import { parallelYaml } from '../../__tests__/parallelTestUtils';
 import { usePipelineYamlStore } from '../../model/pipelineYamlStore';
 import { ParallelNode } from './ParallelNode';
@@ -26,5 +30,20 @@ describe('the fixed Parallel card', () => {
     expect(screen.getAllByText(/reduction: This field/u).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/input_mapping: This field/u).length).toBeGreaterThan(0);
     expect(usePipelineYamlStore.getState().yamlCode).toBe(yaml);
+  });
+  it('renders connectable target and source handles on the canvas view-only card', async () => {
+    const parsed = parsePipelineYamlDocument(parallelYaml);
+    const ctx = buildFlowEditorContextValue({ yamlJsonObject: parsed.yamlJsonObject });
+    const props = { id: 'extension', type: 'parallel', data: {}, selected: false } as unknown as Parameters<typeof ParallelNode>[0];
+    const screen = renderWithRouterAndProject(
+      <ReactFlowProvider>
+        <FlowEditorContext.Provider value={ctx}>
+          <ParallelNode {...props} />
+        </FlowEditorContext.Provider>
+      </ReactFlowProvider>,
+      undefined,
+    );
+    await screen.findByTestId('pipeline-node-v2-card-extension');
+    expect(screen.container.querySelectorAll('.react-flow__handle.connectable').length).toBeGreaterThan(0);
   });
 });

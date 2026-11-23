@@ -62,6 +62,7 @@ export interface ProjectToolkitsMultiPickerProps {
   readonly onRemove?: ((toolkitName: string) => void) | undefined;
   readonly onClear?: (() => void) | undefined;
   readonly disabled?: boolean | undefined;
+  readonly attachedOnly?: boolean | undefined;
   readonly pickerContext?: ProjectToolkitsMultiPickerContext | undefined;
   readonly 'data-testid'?: string | undefined;
 }
@@ -165,6 +166,7 @@ export const ProjectToolkitsMultiPicker = memo(function ProjectToolkitsMultiPick
   onRemove,
   onClear,
   disabled = false,
+  attachedOnly = false,
   pickerContext,
   'data-testid': testId,
 }: ProjectToolkitsMultiPickerProps): ReactNode {
@@ -178,8 +180,8 @@ export const ProjectToolkitsMultiPicker = memo(function ProjectToolkitsMultiPick
   const isMcpVisible = useIsMcpVisible();
 
   const { anchorEl, isOpen, hasOpened, search, setSearch, query, openMenu, closeMenu } = usePickerMenu();
-  const toolkits = useProjectToolkitsList({ mcp: false, query, skip: !hasOpened, projectId });
-  const mcps = useProjectToolkitsList({ mcp: true, query, skip: !hasOpened || !isMcpVisible, projectId });
+  const toolkits = useProjectToolkitsList({ mcp: false, query, skip: attachedOnly || !hasOpened, projectId });
+  const mcps = useProjectToolkitsList({ mcp: true, query, skip: attachedOnly || !hasOpened || !isMcpVisible, projectId });
 
   const reload = useCallback(() => {
     toolkits.reload();
@@ -193,18 +195,20 @@ export const ProjectToolkitsMultiPicker = memo(function ProjectToolkitsMultiPick
   );
 
   const buildItems = useCallback(
-    (rows: readonly ToolkitListRow[], mcp: boolean) =>
-      buildToolkitPickerItems({
-        rows,
-        attachedTools: (attachedTools ?? []).filter(
-          (tool) => !isApplicationTool(tool) && isMcpAttachment(tool) === mcp,
-        ),
+    (rows: readonly ToolkitListRow[], mcp: boolean) => {
+      const filteredAttached = (attachedTools ?? []).filter(
+        (tool) => !isApplicationTool(tool) && isMcpAttachment(tool) === mcp,
+      );
+      return buildToolkitPickerItems({
+        rows: attachedOnly ? (filteredAttached as unknown as readonly ToolkitListRow[]) : rows,
+        attachedTools: filteredAttached,
         usedNames,
         query: search,
         getToolkitName: getToolkitNameFromSchema,
         getLabel: getToolkitDisplayName,
-      }).map((item) => ({ ...item, mcp })),
-    [attachedTools, getToolkitNameFromSchema, search, usedNames],
+      }).map((item) => ({ ...item, mcp }));
+    },
+    [attachedOnly, attachedTools, getToolkitNameFromSchema, search, usedNames],
   );
 
   const groups = useMemo<PickerGroup<PickerItem<PickerToolEntry | ToolkitListRow>>[]>(

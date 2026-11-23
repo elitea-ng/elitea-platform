@@ -55,6 +55,7 @@ export interface ProjectToolkitPickerProps {
   readonly onSelect?: ((source: PickerToolEntry | ToolkitListRow, toolkitName: string) => void) | undefined;
   readonly onClear?: (() => void) | undefined;
   readonly disabled?: boolean | undefined;
+  readonly attachedOnly?: boolean | undefined;
   readonly pickerContext?: ProjectToolkitPickerContext | undefined;
   readonly 'data-testid'?: string | undefined;
 }
@@ -125,6 +126,7 @@ export const ProjectToolkitPicker = memo(function ProjectToolkitPicker({
   onSelect,
   onClear,
   disabled = false,
+  attachedOnly = false,
   pickerContext,
   'data-testid': testId,
 }: ProjectToolkitPickerProps): ReactNode {
@@ -138,7 +140,7 @@ export const ProjectToolkitPicker = memo(function ProjectToolkitPicker({
   const resolvedLabel = getToolkitPickerLabel(mcp, label);
 
   const { anchorEl, isOpen, hasOpened, search, setSearch, query, openMenu, closeMenu } = usePickerMenu();
-  const list = useProjectToolkitsList({ mcp, query, skip: !hasOpened, projectId });
+  const list = useProjectToolkitsList({ mcp, query, skip: attachedOnly || !hasOpened, projectId });
   const openCreatePage = useCreateInNewTab(list.reload);
 
   const attachedTools = useMemo(
@@ -153,14 +155,14 @@ export const ProjectToolkitPicker = memo(function ProjectToolkitPicker({
   const items = useMemo(
     () =>
       buildToolkitPickerItems({
-        rows: list.rows,
+        rows: attachedOnly ? (attachedTools as unknown as readonly ToolkitListRow[]) : list.rows,
         attachedTools,
         usedNames,
         query: search,
         getToolkitName: getToolkitNameFromSchema,
         getLabel: getToolkitDisplayName,
       }),
-    [attachedTools, getToolkitNameFromSchema, list.rows, search, usedNames],
+    [attachedOnly, attachedTools, getToolkitNameFromSchema, list.rows, search, usedNames],
   );
 
   const selectedTool = useMemo(

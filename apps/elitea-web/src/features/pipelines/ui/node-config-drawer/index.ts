@@ -31,6 +31,7 @@ export { NodeDeprecationBanner, type NodeDeprecationBannerProps } from './NodeDe
 export { NodeNameField, type NodeNameFieldProps } from './NodeNameField';
 export { NodeYamlView, type NodeYamlViewProps } from './NodeYamlView';
 export {
+  MAX_NODE_YAML_BYTES,
   useNodeYamlEditor,
   type UseNodeYamlEditorArgs,
   type UseNodeYamlEditorResult,
