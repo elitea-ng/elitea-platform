@@ -69,7 +69,7 @@ describe('useNodeYamlEditor', () => {
     expect(setYamlJsonObject).toHaveBeenCalledTimes(1);
   });
 
-  it('rejects YAML anchors and aliases before parsing', () => {
+  it('rejects YAML anchors and aliases (including YAML 1.2 punctuation anchors) before load', () => {
     const setYamlJsonObject = vi.fn();
     const { Wrapper } = makeWrapper({ setYamlJsonObject });
     const { result } = renderHook(() => useNodeYamlEditor({ nodeId: 'node_1' }), { wrapper: Wrapper });
@@ -77,9 +77,50 @@ describe('useNodeYamlEditor', () => {
     act(() => {
       result.current.onChangeCode('id: node_1\ntype: printer\na: &bomb [1, 2]\nb: *bomb\n');
     });
+    expect(result.current.error).toBe('YAML anchors and aliases are not supported in node YAML.');
 
+    act(() => {
+      result.current.onChangeCode('id: node_1\ntype: printer\na: &.1 [1, 2]\nb: *.1\n');
+    });
+    expect(result.current.error).toBe('YAML anchors and aliases are not supported in node YAML.');
+
+    act(() => {
+      result.current.onChangeCode('id: node_1\ntype: printer\na: &!a foo\nb: *!a\n');
+    });
     expect(result.current.error).toBe('YAML anchors and aliases are not supported in node YAML.');
     expect(setYamlJsonObject).not.toHaveBeenCalled();
+  });
+
+  it('accepts Python *args in code nodes and Markdown *emphasis* in prompt/message scalars', () => {
+    const setYamlJsonObject = vi.fn();
+    const { Wrapper } = makeWrapper({
+      setYamlJsonObject,
+      yamlJsonObject: {
+        entry_point: 'code_1',
+        nodes: [
+          { id: 'code_1', type: 'code', code: { type: 'fixed', value: 'pass' } },
+          { id: 'node_1', type: 'printer', final_message: 'hello', transition: 'END' },
+        ],
+      },
+    });
+
+    const codeHook = renderHook(() => useNodeYamlEditor({ nodeId: 'code_1' }), { wrapper: Wrapper });
+    act(() => {
+      codeHook.result.current.onChangeCode(
+        'id: code_1\ntype: code\ncode:\n  type: fixed\n  value: |\n    def fn(a, *args, **kwargs):\n      return args\n',
+      );
+    });
+    expect(codeHook.result.current.error).toBeNull();
+    expect(setYamlJsonObject).toHaveBeenCalledTimes(1);
+
+    const printerHook = renderHook(() => useNodeYamlEditor({ nodeId: 'node_1' }), { wrapper: Wrapper });
+    act(() => {
+      printerHook.result.current.onChangeCode(
+        'id: node_1\ntype: printer\nfinal_message: "Use *emphasis* and & symbols freely"\ntransition: END\n',
+      );
+    });
+    expect(printerHook.result.current.error).toBeNull();
+    expect(setYamlJsonObject).toHaveBeenCalledTimes(2);
   });
 
   it('rejects non-single-node YAML, missing id, type changes, and duplicate ids', () => {

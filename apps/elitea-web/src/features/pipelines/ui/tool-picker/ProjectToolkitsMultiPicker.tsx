@@ -32,6 +32,7 @@ import { useCreateInNewTab } from '../../lib/tool-picker/useCreateInNewTab';
 import { useIsVersionLocked } from '../../lib/tool-picker/useIsVersionLocked';
 import { usePickerMenu } from '../../lib/tool-picker/usePickerMenu';
 import { useProjectToolkitsList } from '../../lib/tool-picker/useProjectToolkitsList';
+import { buildAttachedToolkitPickerItems } from './attachedOnlyPickerItems.helpers';
 import { PickerEntityIcon } from './PickerEntityIcon';
 import { PickerItemRow } from './PickerItemRow';
 import { PickerMcpStatus } from './PickerMcpStatus';
@@ -199,8 +200,18 @@ export const ProjectToolkitsMultiPicker = memo(function ProjectToolkitsMultiPick
       const filteredAttached = (attachedTools ?? []).filter(
         (tool) => !isApplicationTool(tool) && isMcpAttachment(tool) === mcp,
       );
+      if (attachedOnly) {
+        return buildAttachedToolkitPickerItems({
+          attachedTools: filteredAttached,
+          usedNames,
+          query: search,
+          getToolkitName: getToolkitNameFromSchema,
+          getLabel: getToolkitDisplayName,
+          mcp,
+        });
+      }
       return buildToolkitPickerItems({
-        rows: attachedOnly ? (filteredAttached as unknown as readonly ToolkitListRow[]) : rows,
+        rows,
         attachedTools: filteredAttached,
         usedNames,
         query: search,

@@ -25,6 +25,7 @@ import { useCreateInNewTab } from '../../lib/tool-picker/useCreateInNewTab';
 import { useIsVersionLocked } from '../../lib/tool-picker/useIsVersionLocked';
 import { usePickerMenu } from '../../lib/tool-picker/usePickerMenu';
 import { useProjectApplicationsList } from '../../lib/tool-picker/useProjectApplicationsList';
+import { buildAttachedApplicationPickerItems } from './attachedOnlyPickerItems.helpers';
 import { PickerEntityIcon } from './PickerEntityIcon';
 import { PickerItemRow } from './PickerItemRow';
 import { PickerMenu } from './PickerMenu';
@@ -35,16 +36,6 @@ const CREATE_PIPELINE_ROUTE = '/pipelines/create';
 
 function isPipelineSource(source: PickerToolEntry | ApplicationListRow): boolean {
   return source.agent_type === 'pipeline' || source.version_details?.agent_type === 'pipeline';
-}
-
-function resolveAgentGroupRows(
-  attachedOnly: boolean,
-  attachedTools: readonly PickerToolEntry[],
-  fetchedRows: readonly ApplicationListRow[],
-  pipelineGroup: boolean,
-): readonly ApplicationListRow[] {
-  if (!attachedOnly) return fetchedRows;
-  return attachedTools.filter((tool) => isPipelineSource(tool) === pipelineGroup) as unknown as readonly ApplicationListRow[];
 }
 
 export interface ProjectAgentPickerContext {
@@ -136,17 +127,28 @@ export const ProjectAgentPicker = memo(function ProjectAgentPicker({
   );
 
   const buildItems = useCallback(
-    (rows: readonly ApplicationListRow[], pipelineGroup: boolean) =>
-      buildApplicationPickerItems({
+    (rows: readonly ApplicationListRow[], pipelineGroup: boolean) => {
+      const groupAttached = attachedTools.filter((tool) => isPipelineSource(tool) === pipelineGroup);
+      if (attachedOnly) {
+        return buildAttachedApplicationPickerItems({
+          attachedTools: groupAttached,
+          usedNames,
+          query: search,
+          excludeId,
+          pipelineGroup,
+        });
+      }
+      return buildApplicationPickerItems({
         rows,
-        attachedTools: attachedTools.filter((tool) => isPipelineSource(tool) === pipelineGroup),
+        attachedTools: groupAttached,
         allAttachedTools: attachedTools,
         usedNames,
         query: search,
         excludeId,
         hostTier: PIPELINE_HOST_TIER,
-      }).map((item) => ({ ...item, isPipeline: pipelineGroup })),
-    [attachedTools, excludeId, search, usedNames],
+      }).map((item) => ({ ...item, isPipeline: pipelineGroup }));
+    },
+    [attachedOnly, attachedTools, excludeId, search, usedNames],
   );
 
   const groups = useMemo<PickerGroup<PickerItem<PickerToolEntry | ApplicationListRow>>[]>(
@@ -154,15 +156,15 @@ export const ProjectAgentPicker = memo(function ProjectAgentPicker({
       {
         key: 'agents',
         title: t('pipelines.toolPicker.groupAgents', 'Agents'),
-        items: buildItems(resolveAgentGroupRows(attachedOnly, attachedTools, agents.rows, false), false),
+        items: buildItems(agents.rows, false),
       },
       {
         key: 'pipelines',
         title: t('pipelines.toolPicker.groupPipelines', 'Pipelines'),
-        items: buildItems(resolveAgentGroupRows(attachedOnly, attachedTools, pipelines.rows, true), true),
+        items: buildItems(pipelines.rows, true),
       },
     ],
-    [agents.rows, attachedOnly, attachedTools, buildItems, pipelines.rows],
+    [agents.rows, buildItems, pipelines.rows],
   );
 
   const handleSelect = useCallback(

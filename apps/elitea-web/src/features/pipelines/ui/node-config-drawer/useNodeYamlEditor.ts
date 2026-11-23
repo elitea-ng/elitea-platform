@@ -1,5 +1,5 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { dump, load } from 'js-yaml';
+import { dump, EVENT_ID, load, parseEvents } from 'js-yaml';
 
 import { t } from '@/shared/i18n';
 
@@ -19,7 +19,6 @@ const { DECISION_NODE_ID_SUFFIX } = FlowEditorConstants;
 /** Maximum byte size accepted by per-node YAML parsing (64 KiB). */
 export const MAX_NODE_YAML_BYTES = 64 * 1024;
 
-const YAML_ALIAS_OR_ANCHOR_RE = /(?:^|[\s,[\]{}:])(?:&|\*)[A-Za-z0-9_-]+/;
 const encoder = new TextEncoder();
 
 export interface UseNodeYamlEditorArgs {
@@ -53,6 +52,12 @@ function resolveYamlNodeId(nodeId: string): string {
     : nodeId;
 }
 
+function hasYamlAnchorOrAlias(events: ReturnType<typeof parseEvents>): boolean {
+  return events.some(
+    (ev) => ev.type === EVENT_ID.ALIAS || ('anchorStart' in ev && ev.anchorStart >= 0),
+  );
+}
+
 function parseSingleNodeYaml(
   nextCode: string,
   expectedType: string | undefined,
@@ -62,17 +67,18 @@ function parseSingleNodeYaml(
       error: t('pipelines.nodeConfigPanel.yamlTooLargeError', 'The node YAML exceeds the maximum allowed size.'),
     };
   }
-  if (YAML_ALIAS_OR_ANCHOR_RE.test(nextCode)) {
-    return {
-      error: t(
-        'pipelines.nodeConfigPanel.yamlAliasNotAllowedError',
-        'YAML anchors and aliases are not supported in node YAML.',
-      ),
-    };
-  }
 
   let parsed: unknown;
   try {
+    const events = parseEvents(nextCode, {});
+    if (hasYamlAnchorOrAlias(events)) {
+      return {
+        error: t(
+          'pipelines.nodeConfigPanel.yamlAliasNotAllowedError',
+          'YAML anchors and aliases are not supported in node YAML.',
+        ),
+      };
+    }
     parsed = load(nextCode);
   } catch (err) {
     return {
@@ -112,26 +118,26 @@ function applyParsedNodeUpdate(
   nextNode: YamlPipelineNode,
   toolNames: readonly string[],
   onRenamed: ((newId: string) => void) | undefined,
-): string | null {
+): { readonly error: string | null; readonly committed: boolean } {
   const nextId = nextNode.id;
   if (nextId !== yamlNodeId) {
     const rejection = findRenameRejection(nextId, yamlNodeId, flowContext.yamlJsonObject, toolNames);
-    if (rejection) return rejection;
+    if (rejection) return { error: rejection, committed: false };
     const renamedDoc = renameYamlDocument(flowContext.yamlJsonObject, yamlNodeId, nextId);
     const updatedNodes = (renamedDoc.nodes ?? []).map((entry) => (entry.id === nextId ? nextNode : entry));
     const stored = flowContext.setYamlJsonObject({ ...renamedDoc, nodes: updatedNodes });
-    if (stored === false) return null;
+    if (stored === false) return { error: null, committed: false };
     flowContext.setFlowNodes((prevNodes: FlowNode[]) => prevNodes.map((n) => renameFlowNode(n, yamlNodeId, nextId)));
     flowContext.setFlowEdges((prevEdges: FlowEdge[]) => prevEdges.map((e) => renameFlowEdge(e, yamlNodeId, nextId)));
     onRenamed?.(nextId);
-    return null;
+    return { error: null, committed: true };
   }
 
   const updatedNodes = (flowContext.yamlJsonObject.nodes ?? []).map((entry) =>
     entry.id === yamlNodeId ? nextNode : entry,
   );
-  flowContext.setYamlJsonObject({ ...flowContext.yamlJsonObject, nodes: updatedNodes });
-  return null;
+  const stored = flowContext.setYamlJsonObject({ ...flowContext.yamlJsonObject, nodes: updatedNodes });
+  return { error: null, committed: stored !== false };
 }
 
 /**
@@ -179,8 +185,14 @@ export function useNodeYamlEditor({
       }
 
       lastCommittedSerializedRef.current = serializeYamlNode(result.node);
-      const writeError = applyParsedNodeUpdate(flowContext, yamlNodeId, result.node, toolNames, onRenamed);
-      if (writeError) {
+      const { error: writeError, committed } = applyParsedNodeUpdate(
+        flowContext,
+        yamlNodeId,
+        result.node,
+        toolNames,
+        onRenamed,
+      );
+      if (writeError || !committed) {
         lastCommittedSerializedRef.current = null;
         setError(writeError);
         return;

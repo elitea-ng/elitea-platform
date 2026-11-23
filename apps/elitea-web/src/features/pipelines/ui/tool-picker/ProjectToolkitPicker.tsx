@@ -30,6 +30,7 @@ import { useCreateInNewTab } from '../../lib/tool-picker/useCreateInNewTab';
 import { useIsVersionLocked } from '../../lib/tool-picker/useIsVersionLocked';
 import { usePickerMenu } from '../../lib/tool-picker/usePickerMenu';
 import { useProjectToolkitsList } from '../../lib/tool-picker/useProjectToolkitsList';
+import { buildAttachedToolkitPickerItems } from './attachedOnlyPickerItems.helpers';
 import { PickerEntityIcon } from './PickerEntityIcon';
 import { PickerItemRow } from './PickerItemRow';
 import { PickerMcpStatus } from './PickerMcpStatus';
@@ -154,14 +155,22 @@ export const ProjectToolkitPicker = memo(function ProjectToolkitPicker({
 
   const items = useMemo(
     () =>
-      buildToolkitPickerItems({
-        rows: attachedOnly ? (attachedTools as unknown as readonly ToolkitListRow[]) : list.rows,
-        attachedTools,
-        usedNames,
-        query: search,
-        getToolkitName: getToolkitNameFromSchema,
-        getLabel: getToolkitDisplayName,
-      }),
+      attachedOnly
+        ? buildAttachedToolkitPickerItems({
+            attachedTools,
+            usedNames,
+            query: search,
+            getToolkitName: getToolkitNameFromSchema,
+            getLabel: getToolkitDisplayName,
+          })
+        : buildToolkitPickerItems({
+            rows: list.rows,
+            attachedTools,
+            usedNames,
+            query: search,
+            getToolkitName: getToolkitNameFromSchema,
+            getLabel: getToolkitDisplayName,
+          }),
     [attachedOnly, attachedTools, getToolkitNameFromSchema, list.rows, search, usedNames],
   );
 
