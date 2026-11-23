@@ -1212,7 +1212,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// security_auditor with their grants, and elitea_auth.admin_role_seeds,
 	// the record of which roles are built-in (issue 2496, ADR-0059 R0.7).
 	// Deletes nothing.
-	require.EqualValues(t, 263, Head(shared))
+	//
+	// 264: shared/0264_recent_authentication_saml_and_form.sql,
+	// browser_sessions.authentication_proven and form_sessions.authenticated_at
+	// (issue 2594, ADR-0059 R1.10b). No permission.
+	require.EqualValues(t, 264, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

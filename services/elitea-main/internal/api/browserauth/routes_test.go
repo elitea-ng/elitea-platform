@@ -29,6 +29,9 @@ func TestFormRoutesOwnExactChildSurfaceWithoutDuplicates(t *testing.T) {
 		FormLoginPath:     {http.MethodGet, http.MethodHead, http.MethodOptions},
 		FormAuthorizePath: {http.MethodOptions, http.MethodPost},
 		FormLogoutPath:    {http.MethodGet, http.MethodHead, http.MethodOptions},
+		FormReauthenticatePath: {
+			http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodPost,
+		},
 	}
 	if len(observed) != len(expected) {
 		t.Fatalf("routes = %v, want %v", observed, expected)
@@ -106,6 +109,10 @@ func TestFormRoutesMethodContractsAndUnsupportedMethods(t *testing.T) {
 		{path: FormLoginPath, allow: "GET, HEAD, OPTIONS", allowed: methodSet(http.MethodGet, http.MethodHead, http.MethodOptions)},
 		{path: FormAuthorizePath, allow: "POST, OPTIONS", allowed: methodSet(http.MethodPost, http.MethodOptions)},
 		{path: FormLogoutPath, allow: "GET, HEAD, OPTIONS", allowed: methodSet(http.MethodGet, http.MethodHead, http.MethodOptions)},
+		{
+			path: FormReauthenticatePath, allow: "GET, HEAD, POST, OPTIONS",
+			allowed: methodSet(http.MethodGet, http.MethodHead, http.MethodPost, http.MethodOptions),
+		},
 	}
 	methods := []string{
 		http.MethodGet,

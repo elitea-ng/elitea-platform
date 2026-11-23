@@ -261,6 +261,64 @@ func TestPostgresStoreRotateAndReplaceCommitsAuthenticatedStateAtomically(t *tes
 	}
 }
 
+// authenticated_at (shared 0264, ADR-0059 R1.10b) travels beside the record:
+// Create and RotateAndReplace write the given time, Rotate keeps the old
+// row's, NULL reads back as unknown, and the record bytes never carry it (the
+// previous release refuses an unknown member and deletes the record).
+func TestPostgresStoreKeepsTheAuthenticationTimeBesideTheRecord(t *testing.T) {
+	t.Parallel()
+
+	signedIn := time.Date(2026, time.November, 23, 9, 0, 0, 0, time.UTC)
+	reentered := signedIn.Add(40 * time.Minute)
+	ids := []string{testSessionID(40), testSessionID(41), testSessionID(42), testSessionID(43)}
+	store, pool := newTestStore(t, time.Hour, 5*time.Minute, sequenceGenerator(ids...))
+
+	unknownID, err := store.Create(context.Background(), completedState(signedIn.Add(time.Hour)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.Read(context.Background(), unknownID); err != nil || got.AuthenticatedAt != nil {
+		t.Fatalf("a row without a time: %+v, %v; want an unknown time", got.AuthenticatedAt, err)
+	}
+
+	state := completedState(signedIn.Add(time.Hour))
+	state.AuthenticatedAt = &signedIn
+	createdID, err := store.Create(context.Background(), state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Read(context.Background(), createdID)
+	if err != nil || got.AuthenticatedAt == nil || !got.AuthenticatedAt.Equal(signedIn) {
+		t.Fatalf("created: %+v, %v; want %s", got.AuthenticatedAt, err, signedIn)
+	}
+	var record []byte
+	if err := pool.QueryRow(context.Background(),
+		`SELECT record FROM elitea_auth.form_sessions WHERE id_hash = $1`, IDHash(createdID)).Scan(&record); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(record), "authenticated") {
+		t.Fatalf("the record carries the authentication time: %s", record)
+	}
+
+	replacement := got
+	replacement.AuthenticatedAt = &reentered
+	replacedID, err := store.RotateAndReplace(context.Background(), createdID, replacement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.Read(context.Background(), replacedID); err != nil || !got.AuthenticatedAt.Equal(reentered) {
+		t.Fatalf("replaced: %+v, %v; want %s", got.AuthenticatedAt, err, reentered)
+	}
+
+	rotatedID, err := store.Rotate(context.Background(), replacedID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.Read(context.Background(), rotatedID); err != nil || !got.AuthenticatedAt.Equal(reentered) {
+		t.Fatalf("rotated: %+v, %v; want the kept %s", got.AuthenticatedAt, err, reentered)
+	}
+}
+
 func TestPostgresStoreRotateAndReplaceRejectsInvalidStateBeforeMutation(t *testing.T) {
 	t.Parallel()
 
@@ -691,7 +749,7 @@ func TestPostgresStoreFailsClosedWhenPostgreSQLIsUnavailable(t *testing.T) {
 	}
 	// The rotation transaction path, past the read: a closed pool cannot
 	// begin it either.
-	if _, err := store.rotateRecord(context.Background(), id, []byte("{}"), []byte("{}"), 0); !errors.Is(err, ErrUnavailable) {
+	if _, err := store.rotateRecord(context.Background(), id, []byte("{}"), []byte("{}"), 0, nil); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("rotate transaction error = %v, want %v", err, ErrUnavailable)
 	}
 }
