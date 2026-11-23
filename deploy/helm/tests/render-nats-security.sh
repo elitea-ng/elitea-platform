@@ -323,6 +323,15 @@ refuse "bootstrap: egress policy without API server ports" "apiServer.ports is e
   --set 'natsBootstrap.networkPolicy.apiServer.cidrs={10.0.0.2/32}' --set 'natsBootstrap.networkPolicy.apiServer.ports=null'
 refuse "bootstrap: egress policy, own NATS, no rule for it" "Add a rule for it to natsBootstrap.networkPolicy.extraEgress" "${EL[@]}" --set nats.enabled=false \
   --set natsBootstrap.networkPolicy.enabled=true --set 'natsBootstrap.networkPolicy.apiServer.cidrs={10.0.0.2/32}'
+refuse "bootstrap: egress policy, natsUrl elsewhere, no rule for it" "Add a rule for it to natsBootstrap.networkPolicy.extraEgress" "${EL[@]}" \
+  --set natsBootstrap.natsUrl=tls://nats.example.invalid:4222 \
+  --set natsBootstrap.networkPolicy.enabled=true --set 'natsBootstrap.networkPolicy.apiServer.cidrs={10.0.0.2/32}'
+refuse "bootstrap: egress policy, an address without a prefix" "is not a CIDR" "${EL[@]}" --set natsBootstrap.networkPolicy.enabled=true \
+  --set 'natsBootstrap.networkPolicy.apiServer.cidrs={10.0.0.2}'
+"$HELM" template "${EL[@]}" --set natsBootstrap.networkPolicy.enabled=true \
+  --set 'natsBootstrap.networkPolicy.apiServer.cidrs={10.0.0.2/32}' --set natsBootstrap.natsUrl=tls://nats.example.invalid:4222 \
+  --set 'natsBootstrap.networkPolicy.extraEgress[0].ports[0].port=4222' \
+  --set 'natsBootstrap.networkPolicy.dnsEgress[0].ports[0].port=5353' > "$TMP/bootstrap-egress-own.yaml"
 "$HELM" template "${EL[@]}" --set natsBootstrap.networkPolicy.enabled=true \
   --set 'natsBootstrap.networkPolicy.apiServer.cidrs={10.0.0.2/32,10.0.0.3/32}' > "$TMP/bootstrap-egress.yaml"
 # The admission policy that pins what the issuer may create: opt-in.
@@ -761,6 +770,14 @@ check("bootstrap egress policy: in place before the Job on Argo CD",
       ep and int(ep[0]["metadata"]["annotations"]["argocd.argoproj.io/sync-wave"]) < int(jobmeta.get("argocd.argoproj.io/sync-wave", "0"))
       and not (ep[0]["metadata"].get("annotations") or {}).get("argocd.argoproj.io/hook")
       and not (ep[0]["metadata"].get("annotations") or {}).get("helm.sh/hook"), ep and ep[0]["metadata"])
+# natsBootstrap.natsUrl elsewhere: no rule for the bundled pods, the operator's
+# rule instead, and dnsEgress replaces the kube-dns rule.
+eo = [d for d in docs("bootstrap-egress-own.yaml") if d["kind"] == "NetworkPolicy" and d["metadata"]["name"] == EGRESS_NAME]
+eorules = eo[0]["spec"]["egress"] if eo else []
+check("bootstrap egress policy: natsUrl elsewhere drops the bundled 4222 rule, keeps extraEgress",
+      eo and not any("to" in r and port_set(r) == [("TCP", 4222)] for r in eorules) and {"ports": [{"port": 4222}]} in eorules, eorules)
+check("bootstrap egress policy: dnsEgress replaces the kube-dns rule",
+      eo and {"ports": [{"port": 5353}]} in eorules and not any(port_set(r) == [("TCP", 53), ("UDP", 53)] for r in eorules), eorules)
 
 # certificate.create=false: your Secrets, mounted as they are, no issuer.
 oj = [d for d in docs("own-certs.yaml") if d["kind"] == "Job" and d["metadata"]["name"] == "elitea-nats-bootstrap"]

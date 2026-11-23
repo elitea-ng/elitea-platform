@@ -8,16 +8,27 @@
 {{- if and $create (not $np.apiServer.ports) }}
 {{- fail "natsBootstrap.networkPolicy.apiServer.ports is empty: name the API server endpoints' port (6443 on many clusters, 443 on others)." }}
 {{- end }}
-{{- if and (not .Values.nats.enabled) (not $np.extraEgress) }}
-{{- fail "natsBootstrap.networkPolicy.enabled is true with nats.enabled false: the chart cannot tell where your NATS server runs, and this policy would block the bootstrap from reaching it. Add a rule for it to natsBootstrap.networkPolicy.extraEgress." }}
+{{- range $np.apiServer.cidrs }}
+{{- if not (regexMatch "^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$|^[0-9A-Fa-f:]+/[0-9]{1,3}$" (toString .)) }}
+{{- fail (printf "natsBootstrap.networkPolicy.apiServer.cidrs holds %q, which is not a CIDR: write each API server endpoint address with its prefix, e.g. 10.0.0.2/32 (or /128)." (toString .)) }}
+{{- end }}
+{{- end }}
+{{- /* The 4222 rule names the bundled server's pods, which is where the Job
+       dials unless natsBootstrap.natsUrl points elsewhere (natsClient cannot
+       point away from the bundled server: templates/natsClient.yaml refuses
+       it). Any other server needs a rule the chart cannot write. */ -}}
+{{- $bundled := and .Values.nats.enabled (not $b.natsUrl) }}
+{{- if and (not $bundled) (not $np.extraEgress) }}
+{{- fail "natsBootstrap.networkPolicy.enabled is true and the bootstrap dials a NATS server the chart does not run (nats.enabled false, or natsBootstrap.natsUrl set): this policy would block the bootstrap from reaching it. Add a rule for it to natsBootstrap.networkPolicy.extraEgress." }}
 {{- end }}
 # Egress allowance for the elitea-nats-bootstrap Job's pod (opt-in,
 # natsBootstrap.networkPolicy).
 #
 # The pod needs:
-#   - cluster DNS;
+#   - cluster DNS (k8s-app=kube-dns pods, or natsBootstrap.networkPolicy.dnsEgress);
 #   - the NATS client port 4222 (the bundled server, or a rule in
-#     natsBootstrap.networkPolicy.extraEgress for a NATS of your own);
+#     natsBootstrap.networkPolicy.extraEgress for a NATS of your own, required
+#     with nats.enabled false or natsBootstrap.natsUrl set);
 #   - with natsBootstrap.tls.certificate.create (the default), the Kubernetes
 #     API server: the issue init container creates and reads the bootstrap
 #     Certificates and Secrets through https://kubernetes.default.svc.
@@ -53,8 +64,15 @@ spec:
   policyTypes:
     - Egress
   egress:
+    {{- with $np.dnsEgress }}
+    # Cluster DNS, as natsBootstrap.networkPolicy.dnsEgress names it.
+    {{- toYaml . | nindent 4 }}
+    {{- else }}
+    # Cluster DNS: pods labelled k8s-app=kube-dns (natsBootstrap.networkPolicy.dnsEgress
+    # replaces this where the resolver carries other labels).
     {{- include "elitea.netpol.dnsEgress" . | nindent 4 }}
-    {{- if .Values.nats.enabled }}
+    {{- end }}
+    {{- if $bundled }}
     # The bundled NATS server's client port.
     - to:
         - namespaceSelector:

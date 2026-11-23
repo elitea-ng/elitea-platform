@@ -9,9 +9,9 @@ the Job (`2026-11-22-2911-nats-bootstrap-certificates-created-by-the-job.md`,
 - **What changed:** the `elitea-nats-bootstrap` Job's `issue` init container
   calls the Kubernetes API server (`https://kubernetes.default.svc`) to create
   and read the four bootstrap Certificates and their Secrets. The old
-  `elitea-nats-bootstrap-cleanup` Job made the same kind of calls, but from a
-  pod with other labels. The new pod carries the bootstrap Job's labels:
-  `app.kubernetes.io/name: nats-bootstrap` and
+  `elitea-nats-bootstrap-cleanup` Job of 7.6.0 to 7.8.0 made the same kind of
+  calls, but from a pod with other labels (7.5.0 made none). The new pod
+  carries the bootstrap Job's labels: `app.kubernetes.io/name: nats-bootstrap` and
   `app.kubernetes.io/instance: <release>`.
 - **Who is affected:** installs where an egress NetworkPolicy covers the
   namespace and does not admit the API server for that pod: a default-deny
@@ -50,9 +50,14 @@ the Job (`2026-11-22-2911-nats-bootstrap-certificates-created-by-the-job.md`,
 
   It renders `elitea-nats-bootstrap-egress` (Argo CD wave `-11`, before the
   Job), which opens DNS, the bundled NATS server's `4222` and those endpoints
-  for the bootstrap pod only. With `nats.enabled: false`, add a rule for your
-  NATS server to `natsBootstrap.networkPolicy.extraEgress` (the chart refuses
-  to render without one). Or apply your own policy, for example:
+  for the bootstrap pod only. `apiServer.cidrs` is required, each entry an
+  address with its prefix. When the Job dials a NATS server the chart does not
+  run (`nats.enabled: false`, or `natsBootstrap.natsUrl` set), add a rule for
+  it to `natsBootstrap.networkPolicy.extraEgress`; the chart refuses to render
+  without one. Where the cluster resolver's pods are not labelled
+  `k8s-app: kube-dns`, replace the DNS rule with
+  `natsBootstrap.networkPolicy.dnsEgress`. Or apply your own policy, for
+  example:
 
   ```yaml
   apiVersion: networking.k8s.io/v1
@@ -82,11 +87,11 @@ the Job (`2026-11-22-2911-nats-bootstrap-certificates-created-by-the-job.md`,
 
 ## 2. A stale cleanup Job
 
-- **What changed:** 7.6.0 to 7.8.x rendered an `elitea-nats-bootstrap-cleanup`
+- **What changed:** 7.6.0 to 7.8.0 rendered an `elitea-nats-bootstrap-cleanup`
   Job. Its delete policy did not cover every outcome, so one from an earlier
   sync can be left in the namespace, and 7.9.0 no longer renders it, so
   nothing removes it.
-- **Who is affected:** installs that ran a 7.6.0 to 7.8.x chart.
+- **Who is affected:** installs that ran a 7.6.0 to 7.8.0 chart.
 - **What to do:** delete it. Nothing reads it, and the new Job does its work:
 
   ```sh

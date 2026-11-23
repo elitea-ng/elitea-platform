@@ -1831,9 +1831,15 @@ natsBootstrap:
       ports:
         - 443
         - 6443
+    # Raw NetworkPolicyEgressRule entries that replace the DNS rule. Empty:
+    # UDP/TCP 53 to pods labelled k8s-app=kube-dns in any namespace. Set it
+    # where the resolver carries other labels (OpenShift's DNS pods, a
+    # NodeLocal DNSCache address).
+    dnsEgress: []
     # Raw NetworkPolicyEgressRule entries appended to the policy: the NATS
-    # server when nats.enabled is false (required then), or anything else the
-    # Job must reach.
+    # server when the Job dials one the chart does not run (nats.enabled
+    # false, or natsBootstrap.natsUrl set; required then), or anything else
+    # the Job must reach.
     extraEgress: []
 
   # Extra args appended to every `nats` invocation. Connection, TLS and inbox
