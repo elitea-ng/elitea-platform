@@ -75,6 +75,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
 )
 
@@ -85,8 +86,8 @@ import (
 // administration-mode `super_admin` and `admin`, which is the split
 // legacy/plugins/admin/module.py:511-517 and :527-533 give them.
 const (
-	BulkInviteUsersPermission    = "invites.bulkusers"
-	BulkInviteProjectsPermission = "invites.bulkprojects"
+	BulkInviteUsersPermission    = adminaccess.InvitesBulkUsers
+	BulkInviteProjectsPermission = adminaccess.InvitesBulkProjects
 )
 
 // The values of bulkInviteResult.Outcome. Each is a different thing for an

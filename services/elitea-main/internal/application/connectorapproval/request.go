@@ -49,6 +49,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/elitea-ng/elitea-platform/libs/go/egresslib"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcatalogue"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/toolcategory"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpregistry"
@@ -56,7 +57,7 @@ import (
 
 // ApprovePermission approves or rejects connector requests (administration
 // mode; shared 0207 grants it to super_admin and admin).
-const ApprovePermission = "connector.approve"
+const ApprovePermission = adminaccess.ConnectorApprove
 
 // RequestPermission creates, submits and withdraws a project's connector
 // requests: the permission that already gates adding a toolkit.

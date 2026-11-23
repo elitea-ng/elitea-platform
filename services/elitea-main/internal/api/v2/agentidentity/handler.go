@@ -27,6 +27,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentidentity"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentidentity/governance"
@@ -35,10 +36,10 @@ import (
 
 // Permissions this surface is gated on (seeded by shared 0181).
 const (
-	PermissionBindingsManage  = "models.agent_identity.bindings.manage"
-	PermissionBindingsApprove = "models.agent_identity.bindings.approve"
-	PermissionMandatesManage  = "models.agent_identity.mandates.manage"
-	PermissionMandatesApprove = "models.agent_identity.mandates.approve"
+	PermissionBindingsManage  = adminaccess.AgentIdentityBindingsManage
+	PermissionBindingsApprove = adminaccess.AgentIdentityBindingsApprove
+	PermissionMandatesManage  = adminaccess.AgentIdentityMandatesManage
+	PermissionMandatesApprove = adminaccess.AgentIdentityMandatesApprove
 )
 
 const maxBodyBytes = 16 << 10

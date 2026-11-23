@@ -69,11 +69,13 @@ package rolepolicy
 
 import (
 	"sort"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 )
 
 // SuperAdminPermission is the permission that separates `super_admin` from
 // `admin`. Holding it exempts a caller from the subset and own-role rules.
-const SuperAdminPermission = "admin.auth.users.super_admin"
+const SuperAdminPermission = adminaccess.AdminAuthUsersSuperAdmin
 
 // SuperAdminRole is the only role that may hold SuperAdminPermission.
 const SuperAdminRole = "super_admin"

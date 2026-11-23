@@ -3,6 +3,7 @@ package admin
 import (
 	"fmt"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
@@ -38,7 +39,7 @@ func cloudExecutorSection() map[string]any {
 		"order":               8,
 		"icon":                "cloud_sync",
 		"always_visible":      true,
-		"required_permission": "configuration.native_clients",
+		"required_permission": adminaccess.ConfigurationNativeClients,
 		"fields": []map[string]any{
 			{"key": platformconfig.KeyCloudExecutorEnabled, "type": "boolean", "title": "Enable the Cloud Executor",
 				"description": "Allow Send to cloud from the desktop.", "section": section, "default": defaults.Enabled},

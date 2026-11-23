@@ -3,6 +3,7 @@ package admin
 import (
 	"fmt"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/approvalpolicy"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/toolcategory"
@@ -91,7 +92,7 @@ func approvalPolicySection() map[string]any {
 		"order":               7,
 		"icon":                "rule",
 		"always_visible":      true,
-		"required_permission": "configuration.governance",
+		"required_permission": adminaccess.ConfigurationGovernance,
 		"fields":              fields,
 	}
 }

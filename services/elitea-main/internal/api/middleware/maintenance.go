@@ -89,6 +89,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
@@ -108,7 +109,7 @@ const maintenanceLoadTimeout = 3 * time.Second
 // on this surface, and the one the Configuration section requires in order to
 // author the switch. A caller who cannot START a window is not admitted during
 // one; a caller who can, is.
-const MaintenanceAdminPermission = "runtime.plugins"
+const MaintenanceAdminPermission = adminaccess.RuntimePlugins
 
 // maintenanceAllowlist are the `/api/v2` path prefixes maintenance never
 // refuses. See the file doc for why each is here.

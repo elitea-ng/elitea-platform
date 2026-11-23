@@ -171,6 +171,9 @@ type gate struct {
 	helper      string
 	mode        string
 	permissions []string
+	// origins holds, per permission, the package directory of the string
+	// literal its argument resolves to (admin_permission_literal_test.go).
+	origins []string
 }
 
 // TestEveryGatedPermissionHasAGrant is the gate this file exists for.
@@ -460,33 +463,44 @@ func (index *sourceIndex) importDirs(file *ast.File) map[string]string {
 func (index *sourceIndex) resolveString(
 	expression ast.Expr, file *ast.File, dir string, depth int,
 ) (string, bool) {
+	value, _, ok := index.resolveStringOrigin(expression, file, dir, depth)
+	return value, ok
+}
+
+// resolveStringOrigin is resolveString that also returns the package directory
+// of the string literal the chain ends at. admin_permission_literal_test.go
+// reads it: an administration-mode permission must end at a literal of
+// internal/adminaccess.
+func (index *sourceIndex) resolveStringOrigin(
+	expression ast.Expr, file *ast.File, dir string, depth int,
+) (string, string, bool) {
 	if depth > 12 {
-		return "", false
+		return "", "", false
 	}
 	switch node := expression.(type) {
 	case *ast.BasicLit:
 		if node.Kind == token.STRING {
 			value, err := strconv.Unquote(node.Value)
-			return value, err == nil
+			return value, dir, err == nil
 		}
 	case *ast.Ident:
 		if definition, ok := index.constants[dir][node.Name]; ok {
-			return index.resolveString(definition.value, definition.file, definition.dir, depth+1)
+			return index.resolveStringOrigin(definition.value, definition.file, definition.dir, depth+1)
 		}
 	case *ast.SelectorExpr:
 		qualifier, ok := node.X.(*ast.Ident)
 		if !ok {
-			return "", false
+			return "", "", false
 		}
 		packageDir, ok := index.imports[file][qualifier.Name]
 		if !ok {
-			return "", false
+			return "", "", false
 		}
 		if definition, ok := index.constants[packageDir][node.Sel.Name]; ok {
-			return index.resolveString(definition.value, definition.file, definition.dir, depth+1)
+			return index.resolveStringOrigin(definition.value, definition.file, definition.dir, depth+1)
 		}
 	}
-	return "", false
+	return "", "", false
 }
 
 // helperSignature describes where a helper carries its permission argument.
@@ -682,8 +696,9 @@ func (index *sourceIndex) gatesIn(dir string, file *ast.File) ([]gate, []string)
 					// This call is the helper's definition. Skip the whole site.
 					return true
 				}
-				if value, ok := index.resolveString(argument, file, dir, 0); ok {
+				if value, origin, ok := index.resolveStringOrigin(argument, file, dir, 0); ok {
 					found.permissions = append(found.permissions, value)
+					found.origins = append(found.origins, origin)
 					continue
 				}
 				unresolved = append(unresolved, fmt.Sprintf("%s:%d (%s)",

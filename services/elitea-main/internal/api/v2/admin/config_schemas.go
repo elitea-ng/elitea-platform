@@ -1,5 +1,7 @@
 package admin
 
+import "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
+
 // Why most of these sections carry an `unavailable_reason` — unit A14, #200.
 //
 // This file describes what the admin Configuration page can offer. In the
@@ -341,7 +343,7 @@ func serviceDescriptorsSection() map[string]any {
 		"order":               8,
 		"icon":                "settings_input_component",
 		"always_visible":      true,
-		"required_permission": "configuration.service_descriptors",
+		"required_permission": adminaccess.ConfigurationServiceDescriptors,
 		"fields":              []map[string]any{},
 	}
 }
@@ -885,7 +887,7 @@ func governanceSection() map[string]any {
 		"description":         "Author LLM-gateway governance: budgets, rate limits, credential billing policy, per-model/provider scopes, MCP allowlists, egress allowlists, and CEL routing rules. Definitions are enforced by the LLM gateway on every request.",
 		"order":               5,
 		"icon":                "policy",
-		"required_permission": "configuration.governance",
+		"required_permission": adminaccess.ConfigurationGovernance,
 		"fields": []map[string]any{
 			// --- Budget (project/team/customer/global) ---
 			{
@@ -1147,7 +1149,7 @@ func nativeClientsSection() map[string]any {
 		"description":         "Register the mobile and desktop apps that may sign users in to this deployment.",
 		"order":               7,
 		"icon":                "devices",
-		"required_permission": "configuration.native_clients",
+		"required_permission": adminaccess.ConfigurationNativeClients,
 		"fields":              []map[string]any{},
 	}
 }
@@ -1174,7 +1176,7 @@ func emailSection() map[string]any {
 		"description":         "Configure the SMTP relay this deployment sends invitations and notices through.",
 		"order":               9,
 		"icon":                "mail_outline",
-		"required_permission": "runtime.plugins",
+		"required_permission": adminaccess.RuntimePlugins,
 		"fields":              []map[string]any{},
 	}
 }
@@ -1195,7 +1197,7 @@ func microsoftAppsSection() map[string]any {
 		"description":         "Register the Microsoft Entra apps people sign in with for Outlook, Teams, Microsoft Graph, Dataverse and SharePoint credentials.",
 		"order":               14,
 		"icon":                "hub",
-		"required_permission": "configuration.microsoft_apps",
+		"required_permission": adminaccess.ConfigurationMicrosoftApps,
 		"fields":              []map[string]any{},
 	}
 }
@@ -1440,7 +1442,7 @@ func brandingSection() map[string]any {
 		"order":               88,
 		"icon":                "palette",
 		"always_visible":      true,
-		"required_permission": "configuration.branding",
+		"required_permission": adminaccess.ConfigurationBranding,
 		"fields": []map[string]any{
 			text("product_name", "Product name", "Shown in the document title, the login page and e-mail."),
 			text("product_short_name", "Short name", "Used where the full name does not fit."),
@@ -1702,7 +1704,7 @@ func maintenanceSection() map[string]any {
 		// The same permission the middleware bypasses on. A caller who cannot
 		// be admitted during a maintenance window must not be able to start one
 		// either.
-		"required_permission": "runtime.plugins",
+		"required_permission": adminaccess.RuntimePlugins,
 		"fields": []map[string]any{
 			{
 				"key":   "maintenance_enabled",

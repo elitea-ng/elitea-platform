@@ -27,6 +27,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialuse"
@@ -43,8 +44,8 @@ const (
 	AdminTrimmingRemove    = "/permission_trimming/remove"
 	ProjectTrimmingPath    = "/permission_trimming/prompt_lib/{projectID}"
 	ProjectTrimmingRemove  = "/permission_trimming/prompt_lib/{projectID}/remove"
-	ReadPermission         = "credentials.inventory.read"
-	ManagePermission       = "credentials.inventory.manage"
+	ReadPermission         = adminaccess.CredentialsInventoryRead
+	ManagePermission       = adminaccess.CredentialsInventoryManage
 	TrimmingPermission     = "agents.trimming.manage"
 	ProjectEgressPermision = "models.project_settings.edit"
 	maxBody                = 8 << 10

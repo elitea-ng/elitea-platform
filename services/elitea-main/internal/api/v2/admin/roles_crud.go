@@ -79,6 +79,7 @@ import (
 	"regexp"
 	"strconv"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 	"github.com/go-chi/chi/v5"
@@ -98,9 +99,9 @@ import (
 // have reported as three routes that answer 403 to every caller on a clean
 // database.
 const (
-	RolesCreatePermission = "configuration.roles.roles.create"
-	RolesEditPermission   = "configuration.roles.roles.edit"
-	RolesDeletePermission = "configuration.roles.roles.delete"
+	RolesCreatePermission = adminaccess.ConfigurationRolesRolesCreate
+	RolesEditPermission   = adminaccess.ConfigurationRolesRolesEdit
+	RolesDeletePermission = adminaccess.ConfigurationRolesRolesDelete
 )
 
 /* ── the names this surface will not touch ─────────────────────────────── */

@@ -3,6 +3,7 @@ package admin
 import (
 	"fmt"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
@@ -26,7 +27,7 @@ func entitlementExportSection() map[string]any {
 		"order":               7,
 		"icon":                "fact_check",
 		"always_visible":      true,
-		"required_permission": "entitlements.export",
+		"required_permission": adminaccess.EntitlementsExport,
 		"fields": []map[string]any{
 			{
 				"key":   platformconfig.KeyEntitlementExportSCIMClientIDs,

@@ -92,6 +92,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 )
 
@@ -101,10 +102,10 @@ const adminVaultKey = "admin"
 
 // The permissions the legacy `AdminAPI` methods declare, one per operation.
 const (
-	permSecretView   = "configuration.secrets.secret.view"
-	permSecretCreate = "configuration.secrets.secret.create"
-	permSecretEdit   = "configuration.secrets.secret.edit"
-	permSecretDelete = "configuration.secrets.secret.delete"
+	permSecretView   = adminaccess.ConfigurationSecretsSecretView
+	permSecretCreate = adminaccess.ConfigurationSecretsSecretCreate
+	permSecretEdit   = adminaccess.ConfigurationSecretsSecretEdit
+	permSecretDelete = adminaccess.ConfigurationSecretsSecretDelete
 )
 
 // validSecretName mirrors `EngineBase._secret_pattern`: the character class

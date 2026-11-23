@@ -57,6 +57,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcatalogue"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
@@ -97,7 +98,7 @@ func WithToolkitTypePolicy(store ToolkitTypePolicyStore) Option {
 // do. A literal repeated at the route would be a second copy to drift, and
 // router_permission_grant_gate_test.go resolves the constant through the import
 // graph, so the gate reads exactly what ships.
-const ToolkitTypeManagePermission = "toolkit_catalogue.type.manage"
+const ToolkitTypeManagePermission = adminaccess.ToolkitCatalogueTypeManage
 
 // toolkitTypeCapabilities is the worker-support verdict source. It is a value
 // with no state, so it needs no injection and no nil guard.

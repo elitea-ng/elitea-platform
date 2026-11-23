@@ -62,6 +62,7 @@ import (
 	"sort"
 	"strconv"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
@@ -305,31 +306,23 @@ func RetiredPermissions() []string {
 
 // declaredPermissions lists the permission names this service enforces itself.
 //
-// Every admin Configuration section that carries `required_permission` is read
-// from the section list. A new section cannot add a gate this catalogue does
-// not know. `config_values.go` refuses the section to a caller who does not
-// hold that name. The name must be grantable even when no role holds it
-// yet: `configuration.advanced` and `configuration.service_descriptors` are
-// declared here and seeded by no migration.
+// The administration-mode names come from the permission table of
+// internal/adminaccess (ADR-0059 R0.1), which every central gate and every
+// Configuration section's `required_permission` names. A name stays grantable
+// even when no role holds it: `configuration.service_descriptors` is seeded by
+// no migration, and an operator who unchecks the last holder of a
+// middleware-gated name can grant it again.
 //
-// Middleware gates are NOT here yet. Their names are constants that the gate
-// call sites pass, so no runtime source lists them. The complete registry that
-// both the gates and this catalogue read is the target shape; until it exists,
-// a middleware-gated name stays grantable only while some role holds it.
+// The governed credential permissions are default-mode names, so they are not
+// rows of the administration table and are declared beside it.
 func declaredPermissions() []string {
-	declared := make([]string, 0, len(configSections())+len(credentialgrant.Permissions()))
+	registered := adminaccess.Names()
+	declared := make([]string, 0, len(registered)+len(credentialgrant.Permissions()))
 	// The five governed credential permissions (#1116). No migration grants
 	// them, by requirement, so without this declaration an operator could
 	// never grant them.
 	declared = append(declared, credentialgrant.Permissions()...)
-	for _, section := range configSections() {
-		permission, ok := section["required_permission"].(string)
-		if !ok || permission == "" {
-			continue
-		}
-		declared = append(declared, permission)
-	}
-	return declared
+	return append(declared, registered...)
 }
 
 // mergePermissionCatalogue returns the sorted union of the granted names and

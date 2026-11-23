@@ -126,6 +126,8 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 )
 
 // The permissions the legacy originals declare, resolved in `administration`
@@ -139,12 +141,12 @@ const (
 	// ServiceDescriptorListPermission gates the listing —
 	// legacy/plugins/elitea_core/api/v2/admin.py:
 	// `@auth.decorators.check_api(["runtime.airun.serviceproviders"])`.
-	ServiceDescriptorListPermission = "runtime.airun.serviceproviders"
+	ServiceDescriptorListPermission = adminaccess.RuntimeAirunServiceProviders
 
 	// ServiceDescriptorRegisterPermission gates both registration verbs —
 	// legacy/plugins/elitea_core/api/v2/register_descriptor.py declares
 	// `provider_hub.descriptor.register` on POST and DELETE alike.
-	ServiceDescriptorRegisterPermission = "provider_hub.descriptor.register"
+	ServiceDescriptorRegisterPermission = adminaccess.ProviderHubDescriptorRegister
 
 	// ServiceDescriptorActivatePermission gates activate and deactivate. It has
 	// no legacy original — the legacy runtime had no activation, because it had no
@@ -159,7 +161,7 @@ const (
 	// record a descriptor automatically the operator who may put it in force —
 	// and a holder of `.register` alone gets 403 on activate, which the
 	// acceptance suite asserts rather than leaving to the router to remember.
-	ServiceDescriptorActivatePermission = "provider_hub.descriptor.activate"
+	ServiceDescriptorActivatePermission = adminaccess.ProviderHubDescriptorActivate
 )
 
 // ServiceDescriptorsUnavailableReason is the single sentence the server gives for

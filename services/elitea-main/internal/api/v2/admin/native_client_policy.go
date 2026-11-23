@@ -5,6 +5,7 @@ import (
 	"math"
 	"strings"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/clientversion"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
@@ -54,7 +55,7 @@ func nativeClientPolicySection() map[string]any {
 		"order":               7,
 		"icon":                "phonelink_lock",
 		"always_visible":      true,
-		"required_permission": "configuration.native_clients",
+		"required_permission": adminaccess.ConfigurationNativeClients,
 		"fields": append([]map[string]any{
 			{
 				"key":         platformconfig.KeyNativeRequireDeviceLock,
