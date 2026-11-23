@@ -119,7 +119,9 @@ jobs:
           # brand-template tests the brand repository template (ADR-0052 W5,
           # docs/brand-template/) against this tree: its brand passes
           # brand-check, its secrets match the packaging actions.
-          for t in check-helm-version check-chart-deps check-vendor-manifest-notes browser-bakeoff-report check-upgrading-notes check-whats-new brand-output-scan brand-template; do
+          # check-sunset.mjs is the ADR-0059 sunset check (history-gates runs
+          # it); sunset-reminder.mjs is the decision of sunset-reminder.yml.
+          for t in check-helm-version check-chart-deps check-vendor-manifest-notes browser-bakeoff-report check-upgrading-notes check-whats-new brand-output-scan brand-template check-sunset sunset-reminder; do
             expected="$(grep -c '^test(' "scripts/ci/${t}.test.mjs")"
             status=0
             output="$(node --test --test-reporter=tap "scripts/ci/${t}.test.mjs" 2>&1)" || status=$?
@@ -796,3 +798,22 @@ jobs:
             fi
           fi
           node scripts/ci/check-landed-line-survival.mjs --tip "${tip}"
+
+      # ADR-0059 decision 2 (#2590). The legacy administration items end on a
+      # date: the removal must not merge before SunsetAfter (or before two
+      # stable minors follow the release that shipped the replacements), and
+      # from 14 days after it nothing else merges. The check reads the commit
+      # under test (the pull request's merge commit; the trunk head on the
+      # nightly run), its committer date and the stable tags reachable from
+      # it, never the wall clock. It runs here, not in repo-gates, because the
+      # release floor needs the full history and the tags. Its scenarios run
+      # in the repo-gates loop.
+      # -- The legacy items keep to the sunset date --
+      - name: The legacy administration items keep to the sunset date
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-sunset.mjs --sha HEAD
+      # The same script on a released commit: a rebuild of an old tag gives
+      # the answer it gave on the day the tag was cut.
+      - name: The sunset check still passes on the v7.6.0 release
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-sunset.mjs --sha v7.6.0

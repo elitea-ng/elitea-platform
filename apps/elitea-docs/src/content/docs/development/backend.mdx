@@ -174,6 +174,32 @@ Nothing enforces the table yet. The token refusal, the elevation restriction, th
 
 The two sunset date constants of ADR-0059 decision 2, `adminaccess.ReplacementShippedOn` and `adminaccess.SunsetAfter`, are in the same package. They stay empty until the last replacement of the legacy names ships.
 
+### The sunset check
+
+The legacy administration items end on a date, not at a version: the names `runtime.plugins` and `configuration.governance`, `inherit` token administration access, and the period in which a request without a reason is still served. `scripts/ci/check-sunset.mjs` holds the code to that date. It reads two constants in `services/elitea-main/internal/adminaccess/registry.go`:
+
+- `ReplacementShippedOn`: the day the later of the two replacements merged (the sealed sign-in route of R2.7 and the reason handling of R3.8);
+- `SunsetAfter`: the first day the removal may merge, at least 90 days later.
+
+Both are `YYYY-MM-DD` and are set together, in one pull request (R3.15). The check reads the commit under test, never the working tree or the clock: the constants, whether each legacy item and each replacement is in the tree, the commit's committer date (as a UTC day) and the stable release tags (`vX.Y.Z`, no nightlies) reachable from it. A rebuild of an old tag therefore gives the answer it gave on the day the tag was cut. It fails in four cases:
+
+1. `ReplacementShippedOn` is set and `SunsetAfter` is empty or less than 90 days later (or `SunsetAfter` is set alone).
+2. Both replacements are in the code and `ReplacementShippedOn` is empty.
+3. The legacy items are gone, and the commit is dated before `SunsetAfter` (or no date is set), or fewer than two stable minor releases follow the first release that holds both replacements.
+4. A legacy item is still in the code and the commit is dated more than 14 days after `SunsetAfter`. From then on only the removal merges.
+
+The detection table at the top of the script lists the marker of each item and each replacement: a constant the owning story adds, found by a pattern over the package's non-test Go files. A story that owes a marker (R2.7, R3.8) adds the constant the table names and sets its row's `landed` to `true`. The test then requires the pattern to match the real tree, so a rename cannot read as a removal. A commit whose tree has no `registry.go` predates the rule and passes.
+
+Run it locally from the repository root (the release floor needs the full history and the tags, so a shallow clone is refused when the legacy items are gone):
+
+```bash
+node scripts/ci/check-sunset.mjs              # HEAD
+node scripts/ci/check-sunset.mjs --sha v7.6.0 # any commit or tag
+node --test scripts/ci/check-sunset.test.mjs
+```
+
+CI runs it in the `history-gates` job of `.github/workflows/no-binaries.yml`, on every pull request and on the nightly run on `main`, once on the commit under test and once on `v7.6.0`. `.github/workflows/sunset-reminder.yml` runs every day on `main` and opens one tracking issue for the removal from 30 days before `SunsetAfter`. It reads the clock and gates nothing.
+
 ## Add a new service
 
 1. Create `services/<name>/` with its `Containerfile`. A Go service joins the root `go.work` (unless, like the LLM gateway, it pins its own toolchain); a Rust service is its own Cargo project.
