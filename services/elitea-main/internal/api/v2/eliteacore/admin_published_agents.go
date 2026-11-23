@@ -34,11 +34,12 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/marketplace"
 )
 
 // PublishedAgentsListPermission is the permission the legacy original declares.
-const PublishedAgentsListPermission = "runtime.admin.published_agents"
+const PublishedAgentsListPermission = adminaccess.RuntimeAdminPublishedAgents
 
 // maxPublishedAgentsPageSize bounds `?page_size`, so a caller cannot ask for
 // the whole catalogue in one response.

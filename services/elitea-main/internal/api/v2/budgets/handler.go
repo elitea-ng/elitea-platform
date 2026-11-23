@@ -66,6 +66,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
@@ -76,10 +77,10 @@ import (
 const (
 	// AdminViewPermission gates every administration-mode read
 	// (project_budget.py, project_budgets.py, user_budget.py, user_budgets.py).
-	AdminViewPermission = "models.admin.project_budgets.view"
+	AdminViewPermission = adminaccess.ModelsAdminProjectBudgetsView
 	// AdminEditPermission gates the two administration-mode writes
 	// (project_budget.py PUT, user_budget.py PUT).
-	AdminEditPermission = "models.admin.project_budgets.edit"
+	AdminEditPermission = adminaccess.ModelsAdminProjectBudgetsEdit
 	// ProjectViewPermission gates the project-scoped (prompt_lib) reads, in
 	// DEFAULT mode, exactly as the legacy `PromptLibAPI` handlers declare.
 	ProjectViewPermission = "models.project_context.view"

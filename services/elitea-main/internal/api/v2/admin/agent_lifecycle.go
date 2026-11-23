@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
@@ -141,7 +142,7 @@ func agentLifecycleSection() map[string]any {
 		"order":               8,
 		"icon":                "verified_user",
 		"always_visible":      true,
-		"required_permission": "configuration.governance",
+		"required_permission": adminaccess.ConfigurationGovernance,
 		"fields":              fields,
 	}
 }

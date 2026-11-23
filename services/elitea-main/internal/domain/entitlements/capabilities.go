@@ -21,7 +21,11 @@
 // about whether an access review must see it.
 package entitlements
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
+)
 
 // Capability is a governance capability label, stable across releases: an
 // identity governance tool keys its certification items on it.
@@ -108,12 +112,12 @@ const (
 
 // ExportPermission gates the admin export (administration mode). Shared
 // migration 0209 grants it to super_admin and admin.
-const ExportPermission = "entitlements.export"
+const ExportPermission = adminaccess.EntitlementsExport
 
 // ConnectorApprovePermission approves a connector (ADR-0044 decision 1). It
 // is mapped by name; until the connector approval change lands nobody holds
 // it, so it produces no row.
-const ConnectorApprovePermission = "connector.approve"
+const ConnectorApprovePermission = adminaccess.ConnectorApprove
 
 // Capabilities maps each governance-relevant permission to the capabilities
 // it carries. It is the ONLY place this mapping exists.

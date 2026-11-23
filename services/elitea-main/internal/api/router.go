@@ -19,6 +19,7 @@ import (
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/agentidentity/eliteanative"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/adminui"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/browserauth"
@@ -2813,14 +2814,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				)
 			}
 			// auth_users.py, user_suspend.py
-			requireAdminUsers := central("admin.auth.users")
+			requireAdminUsers := central(adminaccess.AdminAuthUsers)
 			// System info, plugin config, maintenance and background jobs —
 			// all declare ["runtime.plugins"].
-			requireRuntimePlugins := central("runtime.plugins")
+			requireRuntimePlugins := central(adminaccess.RuntimePlugins)
 			// moderation_status.py / moderation_statuses.py. The queue itself is
 			// registered further down, next to the three other moderation routes
 			// this unit added, so all four read as one surface.
-			requireModeration := central("admin.moderation")
+			requireModeration := central(adminaccess.AdminModeration)
 			// The admin PROJECTS surface. projects.py declares
 			// `projects.projects.projects.view` and project_suspend.py declares
 			// `projects.projects.projects.edit`.
@@ -2831,8 +2832,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			// verbatim to the admin USER listing, which was left open only
 			// because it predated the migration that makes any of this
 			// resolvable.
-			requireProjectsView := central("projects.projects.projects.view")
-			requireProjectsEdit := central("projects.projects.projects.edit")
+			requireProjectsView := central(adminaccess.ProjectsProjectsView)
+			requireProjectsEdit := central(adminaccess.ProjectsProjectsEdit)
 
 			// The SCIM 2.0 tree is NOT mounted here. It authenticates a SCIM
 			// client, not a user, so it sits outside this group's Auth
@@ -2878,7 +2879,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// table `/auth_users` set_admin_role writes, so it carries the
 				// same super_admin escalation guard — otherwise it would be a
 				// second, unguarded route to the platform's highest role.
-				requireModeUsers := central("modes.users")
+				requireModeUsers := central(adminaccess.ModesUsers)
 				r.With(requireModeUsers).Get("/modes/administration", adminHandler.Modes)
 				r.With(requireModeUsers).Post("/modes/administration", adminHandler.ModesAssign)
 				r.With(requireModeUsers).Delete("/modes/administration", adminHandler.ModesRemove)
@@ -2972,8 +2973,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// auth_core__user_role per request. The read is gated too: this
 				// matrix is the deployment's authorisation model, and knowing
 				// which role holds which privilege is itself sensitive.
-				requireRolesView := central("configuration.roles.permissions.view")
-				requireRolesEdit := central("configuration.roles.permissions.edit")
+				requireRolesView := central(adminaccess.ConfigurationRolesPermissionsView)
+				requireRolesEdit := central(adminaccess.ConfigurationRolesPermissionsEdit)
 				r.With(requireRolesView).Get("/permissions/{scope}/{mode}", adminHandler.AdminPermissions)
 				r.With(requireRolesEdit).Put("/permissions/{scope}/{mode}", adminHandler.AdminPermissionsSave)
 				r.With(requireRolesEdit).Post("/permissions/{scope}/{mode}", adminHandler.AdminPermissionsSync)
@@ -3058,7 +3059,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// is, registered or not: these routes are how the first
 				// client is registered.
 				if nativeHandler != nil {
-					requireNativeClients := central("configuration.native_clients")
+					requireNativeClients := central(adminaccess.ConfigurationNativeClients)
 					r.With(requireNativeClients).
 						Get("/native_clients/administration", nativeHandler.AdminList)
 					r.With(requireNativeClients).
@@ -3093,7 +3094,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// over {id}. Mounted unconditionally: a Handler without the
 				// store answers 503.
 				{
-					requireMicrosoftApps := central("configuration.microsoft_apps")
+					requireMicrosoftApps := central(adminaccess.ConfigurationMicrosoftApps)
 					r.With(requireMicrosoftApps).Get("/microsoft_oauth_apps", adminHandler.MicrosoftAppsList)
 					r.With(requireMicrosoftApps).Post("/microsoft_oauth_apps", adminHandler.MicrosoftAppsCreate)
 					r.With(requireMicrosoftApps).Put("/microsoft_oauth_apps/settings", adminHandler.MicrosoftAppsSettings)
@@ -3147,7 +3148,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// permission, granted by shared migration 0109: a rebrand
 				// changes what every user sees, and `runtime.plugins` is
 				// already the widest configuration grant on this page.
-				requireBranding := central("configuration.branding")
+				requireBranding := central(adminaccess.ConfigurationBranding)
 				r.With(requireBranding).Get("/branding/administration", adminHandler.BrandingRead)
 				r.With(requireBranding).Put("/branding/administration", adminHandler.BrandingSave)
 				r.With(requireBranding).Delete("/branding/administration", adminHandler.BrandingReset)
@@ -3224,9 +3225,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// Admin › Schedules — the recurring routines the platform runs
 				// (#1369). Gated on the permission pair the screen has always
 				// declared; static `administration` segment as above.
-				r.With(central("configuration.scheduling.schedules.view")).
+				r.With(central(adminaccess.ConfigurationSchedulingSchedulesView)).
 					Get("/platform_routines/administration", adminHandler.PlatformRoutines)
-				r.With(central("configuration.scheduling.schedules.edit")).
+				r.With(central(adminaccess.ConfigurationSchedulingSchedulesEdit)).
 					Put("/platform_routines/administration/{id}", adminHandler.UpdatePlatformRoutine)
 
 				// Data retention and legal holds (ADR-0042 decision 4, issue
@@ -3375,7 +3376,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// The cross-project agent registry (ADR-0040 decision 1),
 				// JSON or CSV, behind configuration.governance like the
 				// Agent Lifecycle section.
-				r.With(central("configuration.governance")).
+				r.With(central(adminaccess.ConfigurationGovernance)).
 					Get(v2agentlifecycle.AdminRegistryPath, v2agentlifecycle.NewHandler(agentLifecycle, nil).AdminRegistry)
 
 				// The delegations that await review (ADR-0044 Amendment 1,
@@ -3384,9 +3385,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// writes the grants it missed. Behind the permission of the
 				// Delegation section it explains. Mounted unconditionally: a
 				// handler without the grant store answers 503.
-				r.With(central("configuration.governance")).
+				r.With(central(adminaccess.ConfigurationGovernance)).
 					Get("/delegation_review", adminHandler.DelegationReviewList)
-				r.With(central("configuration.governance")).
+				r.With(central(adminaccess.ConfigurationGovernance)).
 					Post("/delegation_review/scan", adminHandler.DelegationReviewScan)
 
 				// The connector approval queue (ADR-0044 decision 1, #1501):
@@ -3490,7 +3491,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// refuses EVERY caller reads as a pass.
 				r.With(projectPermission("configuration.users.users.view")).
 					Get("/users/{mode}/{projectID}", coreHandler.Users)
-				r.With(central("configuration.users.users.view")).
+				r.With(central(adminaccess.ConfigurationUsersUsersView)).
 					Get("/users/administration/{projectID}", coreHandler.Users)
 				r.With(apimw.RequireResolvedPermissions(
 					permissionResolver, platformauth.PermissionModeDefault,
@@ -3530,11 +3531,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// internal/api/v2/eliteacore/users_write.go.
 				r.With(apimw.RequireCentralPermissions(
 					permissionResolver, platformauth.PermissionModeAdministration,
-					"configuration.users.users.create",
+					adminaccess.ConfigurationUsersUsersCreate,
 				)).Post("/users/administration/{projectID}", coreHandler.AdministrationUsersCreate)
 				r.With(apimw.RequireCentralPermissions(
 					permissionResolver, platformauth.PermissionModeAdministration,
-					"configuration.users.users.edit",
+					adminaccess.ConfigurationUsersUsersEdit,
 				)).Put("/users/administration/{projectID}", coreHandler.AdministrationUsersUpdate)
 				// The project ROLE listing, gated the same way and for the same
 				// reason as the member listing above: `coreHandler.Roles` reads
@@ -3553,7 +3554,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// transcribes that difference rather than levelling it.
 				r.With(projectPermission("configuration.roles.roles.view")).
 					Get("/roles/{mode}/{projectID}", coreHandler.Roles)
-				r.With(central("configuration.roles.roles.view")).
+				r.With(central(adminaccess.ConfigurationRolesRolesView)).
 					Get("/roles/administration/{projectID}", coreHandler.Roles)
 
 				// Role DEFINITIONS — create, rename, delete (gap G9).
@@ -3621,7 +3622,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Get("/moderation_statuses/administration", moderationHandler.AdministrationRequests)
 				r.With(apimw.RequireCentralPermissions(
 					permissionResolver, platformauth.PermissionModeAdministration,
-					"admin.moderation.edit",
+					adminaccess.AdminModerationEdit,
 				)).Put("/moderation_status/administration", moderationHandler.AdministrationRequestUpdate)
 				r.With(apimw.RequireResolvedPermissions(
 					permissionResolver, platformauth.PermissionModeDefault,
@@ -3710,7 +3711,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				}
 				llmProxyHandler := gateway.NewLLMProxyHandler(llmProxyDB, cfg.GatewayStatus)
 				r.Group(func(r chi.Router) {
-					r.Use(central("configuration.governance"))
+					r.Use(central(adminaccess.ConfigurationGovernance))
 					r.Route("/gateway", func(r chi.Router) {
 						r.Mount("/", budgetAlertHandler.Routes())
 						governanceHandler.Register(r)
@@ -5843,7 +5844,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// listing itself is the sensitive part.
 				requireAuditTrail := apimw.RequireCentralPermissions(
 					permissionResolver, platformauth.PermissionModeAdministration,
-					"models.admin.audit_trail.view",
+					adminaccess.ModelsAdminAuditTrailView,
 				)
 				r.With(requireAuditTrail).Get("/audit/{mode}", coreHandler.AuditTrail)
 				r.With(requireAuditTrail).Get("/audit_heatmap/{mode}", coreHandler.AuditHeatmap)
@@ -5905,7 +5906,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			// the legacy runtime's unseeded "models.admin.tracing.view" fresh).
 			requireTracingAdminStatus := apimw.RequireCentralPermissions(
 				permissionResolver, platformauth.PermissionModeAdministration,
-				"runtime.plugins",
+				adminaccess.RuntimePlugins,
 			)
 			tracingHandler := v2tracing.NewHandler(
 				cfg.Pool,

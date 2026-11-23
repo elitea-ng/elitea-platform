@@ -3,6 +3,7 @@ package admin
 import (
 	"fmt"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/breaker"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
@@ -127,7 +128,7 @@ func circuitBreakerSection() map[string]any {
 		"order":               7,
 		"icon":                "bolt",
 		"always_visible":      true,
-		"required_permission": "configuration.governance",
+		"required_permission": adminaccess.ConfigurationGovernance,
 		"fields":              fields,
 	}
 }

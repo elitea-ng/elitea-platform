@@ -17,12 +17,13 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	app "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/egressaudit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 // Permission is the route's grant: the worker egress settings' own.
-const Permission = "configuration.governance"
+const Permission = adminaccess.ConfigurationGovernance
 
 // HostsPath is the route under /api/v2.
 const HostsPath = "/admin/worker_egress/hosts"

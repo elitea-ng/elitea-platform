@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
@@ -25,7 +26,7 @@ import (
 // corpus granted it before migrations/shared/0069_project_create_permissions.sql,
 // which had to land with the route: gating on a permission nothing grants is
 // 403-for-everyone.
-const CreateProjectPermission = "projects.projects.project.create"
+const CreateProjectPermission = adminaccess.ProjectsProjectCreate
 
 // administrationMode is the only `{mode}` this route answers on.
 //
@@ -179,7 +180,7 @@ func (h *Handler) CreateProject(w http.ResponseWriter, r *http.Request) {
 
 // DeleteProjectPermission gates the delete route. Same provenance and the same
 // administration-mode-only grant as CreateProjectPermission.
-const DeleteProjectPermission = "projects.projects.project.delete"
+const DeleteProjectPermission = adminaccess.ProjectsProjectDelete
 
 // deleteProjectResponse is `delete_project`'s body: one status per step, under
 // the key `steps`.

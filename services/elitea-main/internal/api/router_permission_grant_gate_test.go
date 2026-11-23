@@ -171,6 +171,11 @@ type gate struct {
 	helper      string
 	mode        string
 	permissions []string
+	// origins holds, per permission, the package directory of the string
+	// literal its argument resolves to (admin_permission_literal_test.go).
+	origins []string
+	// takesMode is the helper's: an empty mode on such a gate is unresolved.
+	takesMode bool
 }
 
 // TestEveryGatedPermissionHasAGrant is the gate this file exists for.
@@ -460,33 +465,44 @@ func (index *sourceIndex) importDirs(file *ast.File) map[string]string {
 func (index *sourceIndex) resolveString(
 	expression ast.Expr, file *ast.File, dir string, depth int,
 ) (string, bool) {
+	value, _, ok := index.resolveStringOrigin(expression, file, dir, depth)
+	return value, ok
+}
+
+// resolveStringOrigin is resolveString that also returns the package directory
+// of the string literal the chain ends at. admin_permission_literal_test.go
+// reads it: an administration-mode permission must end at a literal of
+// internal/adminaccess.
+func (index *sourceIndex) resolveStringOrigin(
+	expression ast.Expr, file *ast.File, dir string, depth int,
+) (string, string, bool) {
 	if depth > 12 {
-		return "", false
+		return "", "", false
 	}
 	switch node := expression.(type) {
 	case *ast.BasicLit:
 		if node.Kind == token.STRING {
 			value, err := strconv.Unquote(node.Value)
-			return value, err == nil
+			return value, dir, err == nil
 		}
 	case *ast.Ident:
 		if definition, ok := index.constants[dir][node.Name]; ok {
-			return index.resolveString(definition.value, definition.file, definition.dir, depth+1)
+			return index.resolveStringOrigin(definition.value, definition.file, definition.dir, depth+1)
 		}
 	case *ast.SelectorExpr:
 		qualifier, ok := node.X.(*ast.Ident)
 		if !ok {
-			return "", false
+			return "", "", false
 		}
 		packageDir, ok := index.imports[file][qualifier.Name]
 		if !ok {
-			return "", false
+			return "", "", false
 		}
 		if definition, ok := index.constants[packageDir][node.Sel.Name]; ok {
-			return index.resolveString(definition.value, definition.file, definition.dir, depth+1)
+			return index.resolveStringOrigin(definition.value, definition.file, definition.dir, depth+1)
 		}
 	}
-	return "", false
+	return "", "", false
 }
 
 // helperSignature describes where a helper carries its permission argument.
@@ -500,6 +516,9 @@ type helperSignature struct {
 	variadic        bool
 	mode            string
 	modeKnown       bool
+	// takesMode is true when the helper, or the gate it wraps, names a
+	// permission mode, so an empty mode means "unresolved", not "none".
+	takesMode bool
 }
 
 // helpersIn returns the gate helpers of one package: the four base
@@ -520,7 +539,8 @@ func (index *sourceIndex) helpersIn(dir string) map[string]helperSignature {
 	}
 	helpers := map[string]helperSignature{}
 	for name, position := range baseGates {
-		helpers[name] = helperSignature{permissionIndex: position, variadic: true}
+		_, takesMode := modeArgIndex[name]
+		helpers[name] = helperSignature{permissionIndex: position, variadic: true, takesMode: takesMode}
 	}
 
 	helperName := func(function ast.Expr) (string, bool) {
@@ -591,7 +611,8 @@ func (index *sourceIndex) helpersIn(dir string) map[string]helperSignature {
 						if at < 0 {
 							continue
 						}
-						derived := helperSignature{permissionIndex: at}
+						_, calledTakesMode := modeArgIndex[called]
+						derived := helperSignature{permissionIndex: at, takesMode: calledTakesMode || inner.takesMode}
 						// The derived helper fixes the mode, because the mode
 						// is written at the middleware call inside its body.
 						// Resolve it against the file that DEFINES the helper.
@@ -667,9 +688,10 @@ func (index *sourceIndex) gatesIn(dir string, file *ast.File) ([]gate, []string)
 			}
 			signature := helpers[called]
 			found := gate{
-				position: index.fileSet.Position(typed.Lparen),
-				helper:   called,
-				mode:     index.modeOf(called, signature, typed, file, dir),
+				position:  index.fileSet.Position(typed.Lparen),
+				helper:    called,
+				mode:      index.modeOf(called, signature, typed, file, dir),
+				takesMode: signature.takesMode,
 			}
 			var unresolved []string
 			for i := signature.permissionIndex; i < len(typed.Args); i++ {
@@ -682,8 +704,9 @@ func (index *sourceIndex) gatesIn(dir string, file *ast.File) ([]gate, []string)
 					// This call is the helper's definition. Skip the whole site.
 					return true
 				}
-				if value, ok := index.resolveString(argument, file, dir, 0); ok {
+				if value, origin, ok := index.resolveStringOrigin(argument, file, dir, 0); ok {
 					found.permissions = append(found.permissions, value)
+					found.origins = append(found.origins, origin)
 					continue
 				}
 				unresolved = append(unresolved, fmt.Sprintf("%s:%d (%s)",

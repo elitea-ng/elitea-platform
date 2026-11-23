@@ -28,6 +28,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/retention"
@@ -36,8 +37,8 @@ import (
 
 // Permissions the routes need.
 const (
-	PermissionRetentionManage = "retention.manage"
-	PermissionLegalHoldManage = "legal_hold.manage"
+	PermissionRetentionManage = adminaccess.RetentionManage
+	PermissionLegalHoldManage = adminaccess.LegalHoldManage
 )
 
 const maxBodyBytes = 8 << 10

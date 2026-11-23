@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/agentidentity"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/agentidentity/reconcile"
 	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentidentity"
@@ -25,7 +26,7 @@ import (
 
 // PermissionExternalManage gates every external identity route (shared
 // 0186). Activation also needs PermissionBindingsApprove.
-const PermissionExternalManage = "models.agent_identity.external.manage"
+const PermissionExternalManage = adminaccess.AgentIdentityExternalManage
 
 // ExternalService is the decision surface the handler calls.
 // *agentidentity.ExternalIdentityService implements it.

@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/toolcategory"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
@@ -54,7 +55,7 @@ func aiDisclosureSection() map[string]any {
 		"order":               8,
 		"icon":                "label",
 		"always_visible":      true,
-		"required_permission": "configuration.governance",
+		"required_permission": adminaccess.ConfigurationGovernance,
 		"fields": []map[string]any{
 			{
 				"key":   platformconfig.KeyAIDisclosureMarkerText,
@@ -96,7 +97,7 @@ func platformPreambleSection() map[string]any {
 		"order":               9,
 		"icon":                "article",
 		"always_visible":      true,
-		"required_permission": "configuration.governance",
+		"required_permission": adminaccess.ConfigurationGovernance,
 		"fields": []map[string]any{
 			{
 				"key":         platformconfig.KeyPlatformPreambleText,

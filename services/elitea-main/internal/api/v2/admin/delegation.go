@@ -3,6 +3,7 @@ package admin
 import (
 	"fmt"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
@@ -47,7 +48,7 @@ func delegationSection() map[string]any {
 		"order":               6,
 		"icon":                "account_tree",
 		"always_visible":      true,
-		"required_permission": "configuration.governance",
+		"required_permission": adminaccess.ConfigurationGovernance,
 		"fields": []map[string]any{
 			{
 				"key":   platformconfig.KeyDelegationMaxDepth,

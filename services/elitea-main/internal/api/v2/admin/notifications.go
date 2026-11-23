@@ -1,6 +1,9 @@
 package admin
 
-import "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
+import (
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
+)
 
 // notificationsSection is the platform's notification settings (ADR-0045
 // decision 6, #1437). It is LIVE: the web push dispatcher and the
@@ -16,7 +19,7 @@ func notificationsSection() map[string]any {
 		"order":               9,
 		"icon":                "notifications",
 		"always_visible":      true,
-		"required_permission": "configuration.governance",
+		"required_permission": adminaccess.ConfigurationGovernance,
 		"fields": []map[string]any{
 			{
 				"key":   platformconfig.KeyNotificationsWebPush,

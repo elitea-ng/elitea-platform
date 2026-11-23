@@ -61,14 +61,15 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
 )
 
 const (
 	// UserProjectPermissionsViewPermission and …EditPermission are what the
 	// legacy originals declare in their check_api decorators.
-	UserProjectPermissionsViewPermission = "configuration.roles.user_project_permissions.view"
-	UserProjectPermissionsEditPermission = "configuration.roles.user_project_permissions.edit"
+	UserProjectPermissionsViewPermission = adminaccess.ConfigurationRolesUserProjectPermsView
+	UserProjectPermissionsEditPermission = adminaccess.ConfigurationRolesUserProjectPermsEdit
 )
 
 /* ── read ──────────────────────────────────────────────────────────────── */

@@ -3,6 +3,7 @@ package admin
 import (
 	"fmt"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/proactivity"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
@@ -26,7 +27,7 @@ func proactivitySection() map[string]any {
 		"order":               8,
 		"icon":                "alarm",
 		"always_visible":      true,
-		"required_permission": "configuration.governance",
+		"required_permission": adminaccess.ConfigurationGovernance,
 		"fields": []map[string]any{
 			{
 				"key":   platformconfig.KeyProactivityEnabled,

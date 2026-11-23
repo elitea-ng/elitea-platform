@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/guardrails"
 )
 
@@ -99,7 +100,7 @@ const BreakerMessage = "The agent circuit breaker stopped this agent. An adminis
 // Permission is the grant behind every suspend and resume route: central
 // (administration mode) for the admin routes, project-resolved (default
 // mode) for the project routes. Shared 0194 seeds it.
-const Permission = "safety.suspend"
+const Permission = adminaccess.SafetySuspend
 
 // ErrorCode is the typed refusal a covered run start answers.
 const ErrorCode = "execution_suspended"

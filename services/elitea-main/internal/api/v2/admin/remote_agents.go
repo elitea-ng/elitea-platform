@@ -3,6 +3,7 @@ package admin
 import (
 	"fmt"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/remoteagent"
 )
@@ -27,7 +28,7 @@ func remoteAgentsSection() map[string]any {
 		"order":               6,
 		"icon":                "hub",
 		"always_visible":      true,
-		"required_permission": "configuration.governance",
+		"required_permission": adminaccess.ConfigurationGovernance,
 		"fields": []map[string]any{
 			{"key": platformconfig.KeyRemoteAgentsOutboundAssertions, "type": "string", "title": "Outbound Assertions",
 				"description": "off (the default) sends no assertion; allowlist sends one only to the origins listed in " +

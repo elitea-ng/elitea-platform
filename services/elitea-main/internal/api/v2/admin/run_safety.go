@@ -3,6 +3,7 @@ package admin
 import (
 	"fmt"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
@@ -64,7 +65,7 @@ func sessionPolicySection() map[string]any {
 		"order":               7,
 		"icon":                "timer",
 		"always_visible":      true,
-		"required_permission": "runtime.plugins",
+		"required_permission": adminaccess.RuntimePlugins,
 		"fields": []map[string]any{
 			{
 				"key":   platformconfig.KeySessionMaxIdleTimeoutSeconds,
@@ -148,7 +149,7 @@ func runCapsSection() map[string]any {
 		"order":               6,
 		"icon":                "hourglass_bottom",
 		"always_visible":      true,
-		"required_permission": "configuration.governance",
+		"required_permission": adminaccess.ConfigurationGovernance,
 		"fields":              fields,
 	}
 }
