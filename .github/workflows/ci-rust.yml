@@ -30,15 +30,17 @@ permissions:
 env:
   CARGO_INCREMENTAL: "0"
   CARGO_TERM_COLOR: always
-  # Line tables only (panics and backtraces keep file:line, no local-variable
-  # debug info): the `test` job builds the worker's dependencies for both
-  # image feature sets into the one worker-rust-test cache entry, and full
-  # debug info made that ~28% larger than one set's (measured on a local
-  # build, 2026-11-22). With line tables both sets come to about the one-set
-  # full-debug size (1.78 GiB on main), so the entry does not grow. Workflow
-  # level: rust-cache keys on CARGO_* variables, and `test` and
-  # `workspace-run-docker` share the entry.
-  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  # No debug info, as the macOS desktop host builds (ci-desktop.yml). The
+  # `test` job builds the worker's dependencies for both image feature sets
+  # into the one worker-rust-test cache entry: 1.78 GiB on main with one set
+  # and full debug info, about the same with both sets and line tables
+  # (2026-11-22), with the cache over its 8 GiB budget. The desktop host
+  # measured its dependencies at 2.29 GiB compressed with line tables and
+  # 1.17 without (2026-11-20). A failed assertion or a panic still names its
+  # file and line (the panic's location is not debug info); only a backtrace
+  # loses its line numbers. Workflow level: rust-cache keys on CARGO_*
+  # variables, and `test` and `workspace-run-docker` share the entry.
+  CARGO_PROFILE_DEV_DEBUG: "0"
 
 jobs:
   code-runner:
@@ -159,6 +161,7 @@ jobs:
       # 1292.66 MB, two copies of one directory. They share one key now,
       # and only `test` saves it.
       - name: Cache cargo registry and build artefacts
+        id: rust-cache
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: worker-rust-test
@@ -442,6 +445,16 @@ jobs:
             echo "::error::node --test check-worker-ignored-tests.test.mjs exited ${status}"
             exit "${status}"
           fi
+
+      # The last step, on a run that saves (main, no exact hit): rust-cache's
+      # post step saves what is left. It takes cargo's git database down to
+      # the commits Cargo.lock pins (the two tree-sitter grammars' histories,
+      # ~0.23 GiB of this entry) and drops the build scripts' object files
+      # (scripts/ci/trim-cargo-cache.mjs says why both are safe).
+      - name: Trim the cache entry before rust-cache saves it
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.rust-cache.outputs.cache-hit != 'true' }}
+        working-directory: .
+        run: node scripts/ci/trim-cargo-cache.mjs --lock services/elitea-worker-rust/Cargo.lock --target services/elitea-worker-rust/target
 
   # ADR-0034 decision 9: the cloud executor's workspace runs on the real
   # Docker runtime. The runner image is built HERE (never locally) and pushed

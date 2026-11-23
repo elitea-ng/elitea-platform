@@ -202,9 +202,13 @@ pub async fn run(driver: &dyn BrowserDriver, config: &Config<'_>) -> Report {
             first
                 .as_ref()
                 .map_err(Clone::clone)
-                .and_then(|(_, raw)| no_secrets(raw)),
+                .and_then(|(_, raw)| no_secrets(&without_address(raw, &url))),
         );
-        report.record(fixture.name, "text mode", text_mode(driver, fixture).await);
+        report.record(
+            fixture.name,
+            "text mode",
+            text_mode(driver, fixture, &url).await,
+        );
         report.record(fixture.name, "screenshot", screenshot(driver).await);
         match fixture.name {
             "forms" => forms(driver, &mut report).await,
@@ -321,6 +325,21 @@ fn same_tree(actual: &str, expected: &str) -> Result<(), String> {
     }
 }
 
+/// `raw` without the fixture server's address (`host:port`), which every
+/// result that names a page carries. The port is random, and a secret's
+/// digits can sit in it: on 2026-11-23 the Windows run served the fixtures
+/// from a port holding "737" and failed every fixture's two secret checks.
+fn without_address(raw: &str, url: &str) -> String {
+    let authority = url
+        .split_once("://")
+        .map_or("", |(_, rest)| rest.split('/').next().unwrap_or_default());
+    if authority.is_empty() {
+        raw.to_owned()
+    } else {
+        raw.replace(authority, "")
+    }
+}
+
 fn no_secrets(raw: &str) -> Result<(), String> {
     match SECRET_VALUES.iter().find(|secret| raw.contains(*secret)) {
         Some(secret) => Err(format!("{secret:?} is in the result")),
@@ -328,12 +347,15 @@ fn no_secrets(raw: &str) -> Result<(), String> {
     }
 }
 
-async fn text_mode(driver: &dyn BrowserDriver, fixture: &Fixture) -> Result<(), String> {
+async fn text_mode(driver: &dyn BrowserDriver, fixture: &Fixture, url: &str) -> Result<(), String> {
     let result = call(driver, spec::BROWSER_SNAPSHOT, &json!({ "mode": "text" })).await?;
     let content = result["content"].as_str().unwrap_or_default();
     let (inner, nonce) = frame::unframe(content).ok_or("content is not one nonce frame")?;
     // The nonce is random hex and may contain a secret's digits ("737").
-    no_secrets(&result.to_string().replace(nonce, ""))?;
+    no_secrets(&without_address(
+        &result.to_string().replace(nonce, ""),
+        url,
+    ))?;
     let title = format!("# title {}", Value::String(fixture.title.to_owned()));
     if !inner.lines().any(|line| line == title) {
         return Err(format!("no {title:?} line"));
@@ -576,6 +598,20 @@ mod tests {
         let (yielded_at, ()) = tokio::join!(ticker, sleep(std::time::Duration::from_millis(50)));
         assert!(yielded_at.duration_since(started) < std::time::Duration::from_millis(50));
         assert!(started.elapsed() >= std::time::Duration::from_millis(50));
+    }
+
+    #[test]
+    fn a_port_holding_a_secrets_digits_is_not_a_leak_but_the_secret_is() {
+        let url = "http://127.0.0.1:57371/forms.html";
+        let raw = r##"{"content":"# url http://127.0.0.1:57371/forms.html\n- frame http://127.0.0.1:57371/child.html"}"##;
+        assert!(
+            no_secrets(raw).is_err(),
+            "the port alone trips the raw check"
+        );
+        assert_eq!(no_secrets(&without_address(raw, url)), Ok(()));
+        let leaked = r##"{"content":"# url http://127.0.0.1:57371/forms.html\n- textbox \"Security code\" = 737"}"##;
+        assert!(no_secrets(&without_address(leaked, url)).is_err());
+        assert_eq!(without_address(raw, "about:blank"), raw);
     }
 
     #[test]

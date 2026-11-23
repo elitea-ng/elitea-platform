@@ -47,11 +47,13 @@ jobs:
       matrix:
         include:
           - name: shared crates
+            git-db: "true"
             dir: libs/rust
             doc: --workspace
             features: --all-features
           # The worker image: `cargo auditable build` with no feature flag.
           - name: worker
+            git-db: "true"
             dir: services/elitea-worker-rust
             doc: --
             features: ""
@@ -59,6 +61,7 @@ jobs:
           # The supervisor image: `--features sandbox-supervisor`.
           # Same directory as `worker`: its formatting is checked there.
           - name: worker, sandbox supervisor
+            git-db: "true"
             dir: services/elitea-worker-rust
             doc: --
             features: --features sandbox-supervisor
@@ -68,10 +71,12 @@ jobs:
             jobs: "1"
             features: --all-features
           - name: deepwiki engine
+            git-db: "true"
             dir: services/elitea-deepwiki-engine
             doc: --
             features: --all-features
           - name: inventory engine
+            git-db: "true"
             dir: services/elitea-inventory-engine
             doc: --
             features: --all-features
@@ -114,9 +119,20 @@ jobs:
             || echo "::warning::could not remove every preinstalled toolchain; continuing"
           df -h / | tail -1
 
-      # No cargo cache here (scripts/ci/cache-budget.json, measured 2026-11-20): a
-      # registry-only entry is 0.3-0.6 GiB of the 10 GB cap and saves about the
-      # time cargo takes to fetch the crates. The budget goes to target caches.
+      # No target or registry cache here (scripts/ci/cache-budget.json, measured
+      # 2026-11-20): a registry-only entry is 0.3-0.6 GiB of the 10 GB cap and
+      # saves about the time cargo takes to fetch the crates. The legs that
+      # lock code-parsers' two tree-sitter grammars (`git-db`) restore cargo's
+      # git database, trimmed to the pinned commits, that ci-rust-shared.yml
+      # saves (a few MB; the full clone was 4 min of every cold job). Same key
+      # and literal path as its writer.
+      - name: Restore cargo's git database
+        if: matrix.git-db == 'true'
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/.cargo/git/db
+          key: cargo-git-db-v1-${{ runner.os }}-${{ hashFiles('libs/rust/code-parsers/Cargo.toml') }}
+          restore-keys: cargo-git-db-v1-${{ runner.os }}-
 
       - name: Check formatting
         if: matrix.fmt != 'false'

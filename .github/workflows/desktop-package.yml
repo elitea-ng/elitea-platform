@@ -184,6 +184,8 @@ jobs:
         if: github.event_name == 'pull_request'
         uses: Swatinem/rust-cache@v2
         with:
+          # The writer's (ci-desktop.yml desktop) prefix, character for character.
+          prefix-key: v1-rust
           shared-key: desktop-host
           save-if: false
           workspaces: |

@@ -109,23 +109,27 @@ jobs:
             });
             if (code !== 0) core.setFailed(`scripts/ci/prune-actions-caches.mjs exited ${code}`);
       # The plan (scripts/ci/cache-budget.json, derived by check-cache-budget.mjs)
-      # against what main's entries actually hold after the prune. A warning, not
-      # a failure: it says when the measured sizes need updating (2026-11-20 the
-      # plan said 0.1 GiB per registry-only Rust entry and they held 0.4).
+      # against what main's entries actually hold after the prune, by key family.
+      # A drift of more than 1 GiB is a warning: the measured sizes need
+      # updating (2026-11-20 the plan said 0.1 GiB per registry-only Rust entry
+      # and they held 0.4). Main's entries over the 8 GiB budget FAIL the job:
+      # that is a real overrun, and LRU eviction of the entries pull requests
+      # restore is next (2026-11-23: 8.33 GiB held against a plan of 7.71, and
+      # no warning had been read). A report that cannot run stays a warning.
       - name: Install scripts/ci dependencies (the YAML reader)
         id: deps
         if: ${{ !cancelled() }}
         continue-on-error: true
         uses: ./.github/actions/ci-scripts-deps
-      - name: The cache plan matches the cache
+      - name: The cache plan matches the cache, and main is within its budget
         if: ${{ !cancelled() }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
-            // Reporting only: whatever goes wrong here is a warning, the prune above is the job.
+            let report = null;
             try {
               const { reportDrift } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/ci/check-cache-budget.mjs`);
-              await reportDrift({
+              report = await reportDrift({
                 github,
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -136,3 +140,4 @@ jobs:
             } catch (error) {
               core.warning(`the cache drift report could not run: ${error.message}`);
             }
+            if (report?.overrun) core.setFailed(report.overrun);

@@ -84,6 +84,14 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
   `test-support` and with it switches off its panic guard, so the `libs/rust` leg also lints the agent runtime
   with the worker's exact feature list (`toolkit-sql`, `toolkit-office`, `toolkit-data-analysis`,
   `toolkit-delta-lake`) and with none (the desktop host).
+- **The shared crates' tests.** `ci-rust-shared.yml` tests `libs/rust` in four parallel legs, split along the
+  dependency graph, each on its own pool pod: `agent hosts` (the agent runtime with every feature, and the local
+  tools, workspace runner and local index built on it), `agent runtime (worker features)` (the runtime as the
+  worker links it: `toolkit-sql`, serde_json order off), `engines` (every other member) and `office core` (its
+  slow suites). It was one job that ran all of it in sequence: 36 minutes on PR #2740 (4 of them cloning two
+  git dependencies, 14 compiling 941 crates, 7 running tests, 10 building the agent runtime twice more). The
+  runtime's second feature-set run (`test-preserve-order` with the toolkits) is gone: `--all-features` in
+  `agent hosts` is that set plus `test-support`, which changes nothing in a test build of the runtime.
 - **The worker's feature sets.** The worker (`services/elitea-worker-rust`) is never linted or tested with
   `--all-features`. Its Containerfile builds two binaries: the worker image with no feature flag, and the code
   sandbox supervisor with `--features sandbox-supervisor`. `--all-features` adds the two bench-only features
@@ -95,8 +103,9 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
   (PostgreSQL, NATS and Docker included), then `cargo test --lib` on the default set: the lib that every
   deployment runs, compiled as it ships, with no database. That step shares the job's target cache. It rebuilds
   the dependencies whose features differ between the sets (`tower`, `hyper-rustls`, `jiff` and what links them)
-  and the worker. `ci-rust.yml` builds with `CARGO_PROFILE_DEV_DEBUG=line-tables-only`, so the cache entry that
-  now holds both sets' dependencies stays at about its one-set size. The two benches need their bench-only
+  and the worker. `ci-rust.yml` builds with `CARGO_PROFILE_DEV_DEBUG=0`, as the macOS desktop host does, so the
+  cache entry that holds both sets' dependencies is smaller than the one-set entry was (a panic still names its
+  file and line; only a backtrace loses its line numbers). The two benches need their bench-only
   features, so `--all-targets` skips them. `lint (worker)` lints them on their own (`cargo clippy --benches
   --features graph-shaping-bench,node-settings-bench`), which is the one place a bench feature is allowed; that
   run never counts as an image set's lint.
@@ -156,8 +165,11 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
   debug binary that `cargo test` built.
 - **Actions cache.** The cache has a 10 GB cap. `ci-image-cleanup.yml` runs
   `scripts/ci/prune-actions-caches.mjs` every night: it keeps one entry per key family, removes pull-request
-  copies, and removes the least recently used entries above 9 GiB. It then compares what main's entries hold
-  with the plan and warns when they differ by more than 1 GiB.
+  copies, and removes the least recently used entries above 9 GiB. It then prints what main's entries hold by
+  key family, warns when that differs from the plan by more than 1 GiB (update the measured sizes), and fails
+  when main's entries hold more than the 8 GiB budget. That failure is a real overrun: the next new entry makes
+  GitHub evict the least recently used ones, which are the ones pull requests restore. On 2026-11-23 main held
+  8.33 GiB against a plan of 7.71, and a measured plan would have failed the check below.
 - **The cache plan.** `scripts/ci/check-cache-budget.mjs` derives every cache entry from the workflows, sizes it
   from `scripts/ci/cache-budget.json` (measured with `gh api repos/{owner}/{repo}/actions/caches`), and fails
   when:
@@ -166,12 +178,32 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
     `save: "false"` or `save-if: false`);
   - a reader's key has no writer on a schedule;
   - a Rust cache is registry only. A registry-only entry measured 0.3 to 0.6 GiB and saves only the seconds
-    cargo takes to fetch the crates.
+    cargo takes to fetch the crates;
+  - a workflow's own `actions/cache` save has no size in the file (each key family is an entry), or a restore
+    reads a family that no scheduled workflow saves.
+
+  Each size is looked up as `projected` (an entry a change resized that no nightly has measured yet, with the
+  reason in `projectedWhy`), then `measured`, then the estimate. When the janitor prints the new sizes, move
+  them to `measured`.
 
   Three Rust jobs keep a target cache:
   - the worker tests (`ci-rust.yml` `test`);
   - the macOS desktop host (`ci-desktop.yml` `desktop`, shared key `desktop-host`);
   - the macOS package dry run on a pull request, which restores the host's entry.
+
+  Both writers end with `scripts/ci/trim-cargo-cache.mjs` on a run that saves. It cuts cargo's git database
+  down to the commits the lockfiles pin, and it deletes the build scripts' `.o` files, which are already
+  archived into the static libraries that get linked. `libs/rust/code-parsers` pins two tree-sitter grammars by
+  git rev. Cargo clones each repository's whole history to read one commit: 240 MB, 4 minutes of every cold job
+  on a pool pod, and 0.23 GiB of each Rust entry. Trimmed, the cpp grammar's database went from 96 MB to 1.8 MB.
+  `ci-rust-shared.yml` (`engines` leg) saves the trimmed `libs/rust` database as its own entry,
+  `cargo-git-db-v1-<os>-<hash of code-parsers' manifest>`. Its other legs and the `ci-rust-lint.yml` legs that
+  lock the grammars restore that entry, so cargo fetches nothing. The trim runs only on a run that saves, and an
+  exact hit never saves, so the desktop host's key moved to `prefix-key: v1-rust` (the package dry run reads the
+  same) to get a trimmed entry written; the worker's key changed with its debug-info setting.
+
+  The npm cache is Linux only. On macOS the web lockfile's entry was a second copy, 0.19 GiB, so the macOS jobs
+  fetch from the registry, as the Windows jobs already did.
 
   The workspace Go key has one writer, `ci-go.yml` `test-checks`. Its nightly run compiles every `go.work`
   module with `go test -race -run '^$' -exec true`.
@@ -262,7 +294,7 @@ These jobs are routed (when `ENG_RUNNER` is on, on our own pull requests):
 | `dependency-scanning.yml` | `scan` |
 | `helm-lint.yml` | `template` (both charts) |
 | `ci-rust-lint.yml` | `lint` (every workspace) |
-| `ci-rust-shared.yml` | `shared-crates` (tests) |
+| `ci-rust-shared.yml` | `shared-crates` (the four test legs) |
 | `ci-rust.yml` | `code-runner` |
 | `ci-doc-extractor.yml` | `extractor` |
 | `ci-deepwiki-engine.yml` | `serde-order`, `engine` (with the Go host against the binary) |

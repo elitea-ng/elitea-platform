@@ -105,8 +105,15 @@ jobs:
       # dry run restores the same entry (shared-key `desktop-host`); its size is
       # counted in scripts/ci/cache-budget.json.
       - name: Cache cargo registry and build artefacts
+        id: rust-cache
         uses: Swatinem/rust-cache@v2
         with:
+          # v1 (2026-11-23): the trim step at the end of this job runs only on
+          # a run that saves, and an exact hit never saves, so the untrimmed
+          # v0 entry would have stayed for as long as Cargo.lock did. The new
+          # prefix makes the next nightly write a trimmed entry; the v0 one is
+          # deleted. desktop-package.yml's reader spells the same prefix.
+          prefix-key: v1-rust
           shared-key: desktop-host
           save-if: ${{ github.ref == 'refs/heads/main' }}
           workspaces: |
@@ -169,6 +176,18 @@ jobs:
           cargo fmt --all -- --check
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked --all-targets
+
+      # The last step, on a run that saves (main, no exact hit): rust-cache's
+      # post step saves what is left. Cargo's git database goes down to the
+      # commits the two lockfiles pin (the tree-sitter grammars' histories,
+      # ~0.23 GiB of this entry), and the build scripts' object files go
+      # (scripts/ci/trim-cargo-cache.mjs says why both are safe).
+      - name: Trim the cache entry before rust-cache saves it
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.rust-cache.outputs.cache-hit != 'true' }}
+        run: >-
+          node scripts/ci/trim-cargo-cache.mjs
+          --lock apps/elitea-desktop/src-tauri/Cargo.lock apps/elitea-desktop/doc-extract-sidecar/Cargo.lock
+          --target apps/elitea-desktop/src-tauri/target apps/elitea-desktop/doc-extract-sidecar/target
 
   # The browser pane's Windows and Linux drivers (ADR-0048 decision 6,
   # #1593). The macOS job above is the one that builds and tests the whole
