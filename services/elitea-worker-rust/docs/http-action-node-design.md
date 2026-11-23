@@ -1,9 +1,9 @@
 # HTTP action node design (Gate 5d, revision 2)
 
-Status: Main side implemented in 5d-1 (2026-10-19, `feat/http-action-main-foundation`); the Worker node arrives in 5d-2 and
+Status: Main side implemented in 5d-1 (2026-11-23, `feat/http-action-main-foundation`); the Worker node arrives in 5d-2 and
 HTTP inside fan-out children in 5d-3. Section "Implementation status (5d-1)" below lists every place where the code
 differs from the original proposal; the source mapping
-`source-mapping/http-action-main-foundation-20261019.md` has the tests and evidence.
+`source-mapping/http-action-main-foundation-20261123.md` has the tests and evidence.
 
 | Item | Value |
 | --- | --- |
@@ -25,9 +25,9 @@ Line numbers were checked on `origin/main` in this worktree on 2026-10-08.
 | Egress | The pre-#1149 rows in §3 and §16 are historical. Since #1149 the guard is `M/internal/infra/egress` (`RoundTripper()`, `RequireHTTPS()`, `Proxy=nil`, dial-time re-resolution). HTTP actions build it once with `egress.NewHTTPActionGuard(ELITEA_HTTP_ACTION_EGRESS_ALLOWLIST)` for rule writes, the action dial and the OAuth2 token fetch. The `Transport` port is `http.RoundTripper`, which an `*http.Client` cannot satisfy (FU-073). |
 | Attempts | Invocation v3 carries `attempt` (0-15, mirrors `MAX_NODE_ATTEMPTS`); the effect primary key is `(execution, generation, activation, attempt)` and `effect_id` v3 hashes the attempt. A new attempt is admitted only after an `uncertain` or `failed` one and only for class I rules (decision D2). |
 | Rule pinning | Begin stores the rule exactly as read (`rule_wire`, `rule_id`, `rule_revision`; `policy_digest` is its SHA-256). Recovery re-renders from `inputs_bytes` and `rule_wire` and must reproduce `request_bytes`. |
-| Dispatch deadline | `dispatch_deadline` (call deadline + 5 s commit window): a `dispatching` row of the live claim before it is `503 dispatch_in_flight`; after it, or under another claim, it becomes `uncertain/reconciliation_required`. |
+| Dispatch deadline | `dispatch_deadline` (call deadline + 5 s artifact-write + 5 s commit window): a `dispatching` row of the live claim before it is `Unavailable` (`dispatch_in_flight`); after it, or under another claim, it becomes `uncertain/reconciliation_required`. |
 | Pool | Per Main replica, in the HTTP action service (not the shared content pool): 32 slots, 8 per execution (decision D5). |
-| Failure answers | JSON `{"code": ...}`: 413 `inputs_too_large`, 422 `invalid_input`, 403 `policy_denied`, 409 `nondeterministic_inputs`, 503 `dispatch_in_flight`/`capacity`/`unavailable` (+ `Retry-After`), 500 `internal`. |
+| Failure answers | Typed gRPC statuses on `ContentServer.ExecuteHTTPAction`: `ResourceExhausted` (`inputs_too_large`), `InvalidArgument` (`invalid_input`), `PermissionDenied` (`policy_denied`), `Aborted` (`nondeterministic_inputs`), `Unavailable` (`dispatch_in_flight`/`capacity`/`unavailable`), `Internal` (`internal`). |
 | Responses | Above 512 KiB a json/text response is stored in the rule's `output_bucket` and projected as an artifact; without a bucket, and above `max_bytes`, the receipt is `failed/response_too_large`. |
 
 ## 1. Summary

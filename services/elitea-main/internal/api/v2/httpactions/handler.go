@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -35,6 +36,9 @@ const (
 	PermissionManage = "models.http_action_rules.manage"
 	// PermissionList gates the rule names the pipeline editor reads.
 	PermissionList = "models.http_action_rules.list"
+	// permissionConfigurationDetails is required in addition to PermissionManage
+	// when a rule write binds a non-zero configuration_id (migration 0072).
+	permissionConfigurationDetails = "configurations.configuration.details"
 )
 
 // MaxRequestBodyBytes bounds one create/update body. The largest valid rule
@@ -131,7 +135,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rule, _, actorID, ok := h.admit(w, r)
+	rule, _, actorID, ok := h.admit(w, r, projectID)
 	if !ok {
 		return
 	}
@@ -153,7 +157,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rule, revision, actorID, ok := h.admit(w, r)
+	rule, revision, actorID, ok := h.admit(w, r, projectID)
 	if !ok {
 		return
 	}
@@ -190,7 +194,7 @@ type writeRequest struct {
 
 // admit decodes, validates and egress-checks one write body, and names the
 // acting user. It writes the refusal itself.
-func (h *Handler) admit(w http.ResponseWriter, r *http.Request) (httpaction.Rule, *int64, int64, bool) {
+func (h *Handler) admit(w http.ResponseWriter, r *http.Request, projectID int64) (httpaction.Rule, *int64, int64, bool) {
 	user, _ := auth.UserFromContext(r.Context())
 	actorID, ok := user.OwningUserID()
 	if !ok {
@@ -226,6 +230,17 @@ func (h *Handler) admit(w http.ResponseWriter, r *http.Request) (httpaction.Rule
 	if err := rule.Validate(); err != nil {
 		apierr.Write(w, ruleRefusal(err))
 		return httpaction.Rule{}, nil, 0, false
+	}
+	if rule.ConfigurationID > 0 {
+		if h.resolver == nil {
+			apierr.Write(w, apierr.Forbidden("insufficient permissions"))
+			return httpaction.Rule{}, nil, 0, false
+		}
+		resolution, err := h.resolver.ResolvePermissions(r.Context(), user, auth.PermissionModeDefault, strconv.FormatInt(projectID, 10))
+		if err != nil || !slices.Contains(resolution.Permissions, permissionConfigurationDetails) {
+			apierr.Write(w, apierr.Forbidden("an HTTP action rule referencing a configuration requires configuration access"))
+			return httpaction.Rule{}, nil, 0, false
+		}
 	}
 	if err := h.guard.Validate(r.Context(), rule.Origin); err != nil {
 		// The guard's own message names the host; the answer never does.
@@ -304,6 +319,8 @@ func (h *Handler) fail(w http.ResponseWriter, r *http.Request, operation string,
 		apierr.Write(w, apierr.Conflict(repos.ErrHTTPActionRuleStale.Error()))
 	case errors.Is(err, repos.ErrHTTPActionRuleLimit):
 		apierr.Write(w, apierr.Conflict(repos.ErrHTTPActionRuleLimit.Error()))
+	case errors.Is(err, repos.ErrHTTPActionRuleConfigurationInvalid):
+		apierr.Write(w, apierr.BadRequest(repos.ErrHTTPActionRuleConfigurationInvalid.Error()))
 	default:
 		if r.Context().Err() == nil {
 			slog.ErrorContext(r.Context(), "http action rules: request failed", "operation", operation, "error", err)

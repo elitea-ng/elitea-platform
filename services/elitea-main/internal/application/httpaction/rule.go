@@ -54,6 +54,11 @@ type Rule struct {
 	OutputBucket    string   `json:"output_bucket,omitempty"`
 	Replay          string   `json:"replay,omitempty"`
 	Enabled         bool     `json:"enabled"`
+	// UpdatedBy records the last user who wrote this rule (DB column
+	// updated_by). It is never serialized on the wire; credential resolution
+	// uses it to ensure a private configuration belongs to both the actor and
+	// the rule's last writer.
+	UpdatedBy int64 `json:"-"`
 }
 
 // RuleError names the invalid field. It never echoes the submitted value.

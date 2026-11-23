@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -19,9 +20,11 @@ import (
 
 	app "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/httpaction"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/egress"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/sync/singleflight"
 )
 
 // HTTP action credentials (decision D3): a rule's configuration_id names an
@@ -58,6 +61,7 @@ type HTTPActionCredentials struct {
 
 	mu     sync.Mutex
 	tokens map[httpTokenKey]httpToken
+	flight singleflight.Group
 }
 
 type httpTokenKey struct {
@@ -89,10 +93,11 @@ type httpConfiguration struct {
 // httpConfigurationAccess is the live authority check for one configuration:
 // the original actor holds configurations.configuration.details in the
 // project now, the row is an `openapi` configuration of that project visible
-// to the actor (shared, unowned, or their own), and its revision is derived
+// to the actor (shared, unowned, or a private configuration owned by both the
+// executing actor and the rule's last writer), and its revision is derived
 // from identity, last write and data. It runs on the caller's transaction so
 // Begin orders it against concurrent changes.
-func httpConfigurationAccess(ctx context.Context, tx sqlExecutor, projectID, actorID int64, configurationID int32, lock bool) (httpConfiguration, error) {
+func httpConfigurationAccess(ctx context.Context, tx sqlExecutor, projectID, actorID, ruleUpdatedBy int64, configurationID int32, lock bool) (httpConfiguration, error) {
 	executor, ok := tx.(pgxExecutor)
 	if !ok || projectID <= 0 || projectID > 2147483647 || actorID <= 0 || configurationID <= 0 {
 		return httpConfiguration{}, httpPolicyDenied(nil)
@@ -137,7 +142,8 @@ func httpConfigurationAccess(ctx context.Context, tx sqlExecutor, projectID, act
 	if err != nil {
 		return httpConfiguration{}, app.ErrUnavailable
 	}
-	if kind != "openapi" || !(shared || author == nil || *author == actorID) || len(data) > maxHTTPConfigurationData {
+	privateAllowed := author != nil && *author == actorID && ruleUpdatedBy > 0 && *author == ruleUpdatedBy
+	if kind != "openapi" || !(shared || author == nil || privateAllowed) || len(data) > maxHTTPConfigurationData {
 		return httpConfiguration{}, httpPolicyDenied(nil)
 	}
 	h := sha256.New()
@@ -156,7 +162,7 @@ func (c *HTTPActionCredentials) Resolve(ctx context.Context, admitted app.Admiss
 	var configuration httpConfiguration
 	err := c.store.WithinTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly}, func(tx sqlExecutor) error {
 		var err error
-		configuration, err = httpConfigurationAccess(ctx, tx, admitted.ProjectID, admitted.ActorID, configurationID, false)
+		configuration, err = httpConfigurationAccess(ctx, tx, admitted.ProjectID, admitted.ActorID, admitted.RuleUpdatedBy, configurationID, false)
 		return err
 	})
 	if err != nil {
@@ -245,15 +251,44 @@ func validHTTPCredentialHeader(name string) bool {
 // clientCredentialsToken fetches (or reuses) an OAuth2 client-credentials
 // token. The cache key includes the configuration revision, so an edited
 // configuration never reuses an old token, and an entry never outlives the
-// token's own expiry or one hour.
+// token's own expiry or one hour. Concurrent uncached fetches for the same
+// revision are coalesced via singleflight.
 func (c *HTTPActionCredentials) clientCredentialsToken(ctx context.Context, key httpTokenKey, fields map[string]string) (string, error) {
+	if cached, ok := c.cachedToken(key); ok {
+		return cached, nil
+	}
+	flightKey := fmt.Sprintf("%d:%d:%s", key.project, key.config, key.revision)
+	ch := c.flight.DoChan(flightKey, func() (any, error) {
+		if cached, ok := c.cachedToken(key); ok {
+			return cached, nil
+		}
+		fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), httpTokenTimeout)
+		defer cancel()
+		return c.fetchClientCredentialsToken(fetchCtx, key, fields)
+	})
+	select {
+	case <-ctx.Done():
+		return "", app.ErrUnavailable
+	case result := <-ch:
+		if result.Err != nil {
+			return "", result.Err
+		}
+		return result.Val.(string), nil
+	}
+}
+
+func (c *HTTPActionCredentials) cachedToken(key httpTokenKey) (string, bool) {
 	now := c.now()
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	if cached, ok := c.tokens[key]; ok && now.Before(cached.expires) {
-		c.mu.Unlock()
-		return cached.value, nil
+		return cached.value, true
 	}
-	c.mu.Unlock()
+	return "", false
+}
+
+func (c *HTTPActionCredentials) fetchClientCredentialsToken(ctx context.Context, key httpTokenKey, fields map[string]string) (string, error) {
+	now := c.now()
 	endpoint, err := url.Parse(fields["token_url"])
 	if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.User != nil || endpoint.Fragment != "" || len(fields["token_url"]) > 2048 {
 		return "", httpPolicyDenied(nil)
@@ -268,9 +303,7 @@ func (c *HTTPActionCredentials) clientCredentialsToken(ctx context.Context, key 
 		form.Set("client_secret", fields["client_secret"])
 	}
 	body := form.Encode()
-	tokenCtx, cancel := context.WithTimeout(ctx, httpTokenTimeout)
-	defer cancel()
-	request, err := http.NewRequestWithContext(tokenCtx, http.MethodPost, endpoint.String(), strings.NewReader(body))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), strings.NewReader(body))
 	if err != nil {
 		return "", httpPolicyDenied(nil)
 	}
@@ -284,11 +317,20 @@ func (c *HTTPActionCredentials) clientCredentialsToken(ctx context.Context, key 
 	// RoundTrip, not a client: a redirect from the token endpoint is refused.
 	response, err := c.transport.RoundTrip(request)
 	if err != nil {
+		if errors.Is(err, egress.ErrDestinationRefused) || errors.Is(err, app.ErrEgressRefused) {
+			return "", httpPolicyDenied(nil)
+		}
 		return "", app.ErrUnavailable
 	}
 	defer func() { _ = response.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(response.Body, MaxHTTPTokenResponseBytes+1))
-	if err != nil || len(raw) > MaxHTTPTokenResponseBytes || response.StatusCode != http.StatusOK {
+	if err != nil || len(raw) > MaxHTTPTokenResponseBytes {
+		return "", app.ErrUnavailable
+	}
+	if response.StatusCode != http.StatusOK {
+		if response.StatusCode >= 400 && response.StatusCode <= 499 && response.StatusCode != http.StatusTooManyRequests && response.StatusCode != http.StatusRequestTimeout {
+			return "", httpPolicyDenied(nil)
+		}
 		return "", app.ErrUnavailable
 	}
 	var token struct {

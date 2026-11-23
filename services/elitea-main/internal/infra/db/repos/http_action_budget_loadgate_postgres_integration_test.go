@@ -7,14 +7,13 @@ package repos
 // store load gate because its p95 depends on the host, not on the code alone.
 
 import (
-	"net/http"
 	"sort"
 	"strconv"
 	"testing"
 	"time"
 )
 
-// Budget: Main overhead per action (route, admission, rule, credential,
+// Budget: Main overhead per action (RPC, admission, rule, credential,
 // Lookup/Begin/Commit; the local remote answers immediately) p95 ≤ 15 ms over
 // 1,000 actions on real PostgreSQL.
 func TestHTTPActionMainOverheadBudgetPostgres(t *testing.T) {
@@ -27,10 +26,10 @@ func TestHTTPActionMainOverheadBudgetPostgres(t *testing.T) {
 	for i := range runs {
 		body := w.invocation(uint64(i+1), "item-"+strconv.Itoa(i))
 		started := time.Now()
-		response := w.post(httpWorldClaim, 0x11, body)
+		_, err := w.post(httpWorldClaim, 0x11, body)
 		durations = append(durations, time.Since(started))
-		if response.Code != http.StatusOK {
-			t.Fatalf("run %d: %d %s", i, response.Code, response.Body)
+		if err != nil {
+			t.Fatalf("run %d: %v", i, err)
 		}
 	}
 	sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })

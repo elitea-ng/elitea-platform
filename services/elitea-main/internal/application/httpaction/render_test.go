@@ -75,6 +75,9 @@ func TestRenderVectors(t *testing.T) {
 			rule := vectorRule(t, vector.Rule)
 			node, err := ParseNode(vector.Node)
 			if err != nil {
+				if vector.Expect.Error != "" && FailureCode(err) == vector.Expect.Error {
+					return
+				}
 				t.Fatalf("node: %v", err)
 			}
 			inputs, err := CanonicalJSON(vector.Inputs)
@@ -233,10 +236,39 @@ func TestRenderEncodingCannotEscapeOperation(t *testing.T) {
 
 func TestRenderRefusesEveryRestrictedHeader(t *testing.T) {
 	for _, name := range []string{"authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key", "api-key", "host", "connection", "content-length", "content-type", "transfer-encoding", "te", "trailer", "upgrade", "proxy-connection", "keep-alive", "idempotency-key", "x-elitea-claim-id"} {
-		template := basicTemplate(t, `{"path":{"item":{"value":"i"}},"headers":[{"name":"`+name+`","value":"v"}]}`)
-		if _, err := Render(basicRule(), template, []byte(`{}`)); FailureCode(err) != CodeInvalidInput {
-			t.Fatalf("%s: %v", name, err)
+		raw := `{"id":"fetch","type":"http","revision":2,"operation":"tracker.item","request":{"path":{"item":{"value":"i"}},"headers":[{"name":"` + name + `","value":"v"}]},"response":{"mode":"json"},"output":["out"]}`
+		if _, err := ParseNode([]byte(raw)); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("ParseNode accepted restricted header %s: %v", name, err)
 		}
+		template := basicTemplate(t, `{"path":{"item":{"value":"i"}}}`)
+		template.Request.Headers = []HeaderBinding{{Name: name, Binding: Binding{Value: json.RawMessage(`"v"`)}}}
+		if _, err := Render(basicRule(), template, []byte(`{}`)); FailureCode(err) != CodeInvalidInput {
+			t.Fatalf("Render accepted restricted header %s: %v", name, err)
+		}
+	}
+}
+
+func TestParseNodeHeaderCapAndJSONContentType(t *testing.T) {
+	base := func(req string) []byte {
+		return []byte(`{"id":"n","type":"http","revision":2,"operation":"tracker.item","request":` + req + `,"response":{"mode":"json"},"output":["o"]}`)
+	}
+	// Literal header values allow up to 8192 bytes (matching Request.Validate)
+	// and refuse 8193 bytes or invalid HTTP header field values (e.g. DEL 0x7f).
+	if _, err := ParseNode(base(`{"path":{"item":{"value":"i"}},"headers":[{"name":"x-big","value":"` + strings.Repeat("a", 8192) + `"}]}`)); err != nil {
+		t.Fatalf("8192-byte literal header refused: %v", err)
+	}
+	if _, err := ParseNode(base(`{"path":{"item":{"value":"i"}},"headers":[{"name":"x-big","value":"` + strings.Repeat("a", 8193) + `"}]}`)); err == nil {
+		t.Fatal("8193-byte literal header accepted")
+	}
+	if _, err := ParseNode(base(`{"path":{"item":{"value":"i"}},"headers":[{"name":"x-ctl","value":"bad\u007fval"}]}`)); err == nil {
+		t.Fatal("invalid HTTP header field value (DEL) accepted at parse")
+	}
+	// JSON body accepts application/json and +json media types and refuses non-JSON ones.
+	if _, err := ParseNode(base(`{"path":{"item":{"value":"i"}},"body":{"kind":"json","from":"p","content_type":"application/merge-patch+json"}}`)); err != nil {
+		t.Fatalf("+json content_type refused: %v", err)
+	}
+	if _, err := ParseNode(base(`{"path":{"item":{"value":"i"}},"body":{"kind":"json","from":"p","content_type":"text/plain"}}`)); err == nil {
+		t.Fatal("non-JSON content_type accepted for json body")
 	}
 }
 

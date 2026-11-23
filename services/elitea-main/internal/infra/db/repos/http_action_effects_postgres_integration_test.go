@@ -3,7 +3,7 @@ package repos
 // Real-PostgreSQL evidence for HTTP action effects (T-5D 5d-1; design §13).
 //
 // Boundary crossed: service integration — real PostgreSQL 18, the full
-// ledgered migrations (incl. 0170), the real claim/lease SQL, the real legacy
+// ledgered migrations (incl. 0261), the real claim/lease SQL, the real legacy
 // RBAC resolver on the Begin transaction, and the real configuration row.
 // Requires ELITEA_TEST_DATABASE_URL.
 
@@ -85,7 +85,7 @@ VALUES (1,'tracker.item','https://api.example.com','/items/{item}',$1,'{}',$2,'t
 }
 
 func (w *httpWorld) admission(claim string, epoch uint64) app.Admission {
-	return app.Admission{ExecutionID: httpWorldExecution, Generation: 1, ProjectID: 1, ActorID: httpWorldActor, ClaimID: claim, LeaseEpoch: epoch, Deadline: time.Now().Add(time.Hour), Template: w.template, Tools: allowAllTools()}
+	return app.Admission{ExecutionID: httpWorldExecution, Generation: 1, ProjectID: 1, ActorID: httpWorldActor, RuleUpdatedBy: httpWorldActor, ClaimID: claim, LeaseEpoch: epoch, Deadline: time.Now().Add(time.Hour), Template: w.template, Tools: allowAllTools()}
 }
 
 func (w *httpWorld) invocation(attempt uint32, item string) app.Invocation {
@@ -105,7 +105,7 @@ func (w *httpWorld) credentialRevision() string {
 	w.t.Helper()
 	var revision string
 	if err := w.repo.store.WithinTx(w.t.Context(), pgx.TxOptions{}, func(tx sqlExecutor) error {
-		access, err := httpConfigurationAccess(w.t.Context(), tx, 1, httpWorldActor, httpWorldConfig, false)
+		access, err := httpConfigurationAccess(w.t.Context(), tx, 1, httpWorldActor, httpWorldActor, httpWorldConfig, false)
 		revision = access.revision
 		return err
 	}); err != nil {
@@ -188,11 +188,12 @@ func TestHTTPEffectCrashWindowsPostgres(t *testing.T) {
 	}
 	// Case 10 / 3: Main dies, the lease is lost, a new claim takes over.
 	w.exec(`UPDATE elitea_runtime.execution_claims SET released_at=clock_timestamp(), release_reason='takeover' WHERE claim_id=$1`, httpWorldClaim)
-	if err := w.repo.Commit(t.Context(), admitted, completedReceipt(begun)); !errors.Is(err, ErrHTTPEffectFenced) {
-		t.Fatalf("commit after lease loss: %v", err)
-	}
 	w.access(httpWorldExecution, 1, httpWorldClaim2, 2, 0x12)
 	takeover := w.admission(httpWorldClaim2, 2)
+	// A different claim cannot Commit the row begun under claim 1.
+	if err := w.repo.Commit(t.Context(), takeover, completedReceipt(begun)); !errors.Is(err, ErrHTTPEffectFenced) {
+		t.Fatalf("commit under wrong claim succeeded: %v", err)
+	}
 	receipt, found, err := w.repo.Lookup(t.Context(), takeover, inv)
 	if err != nil || !found || receipt.State != "uncertain" || *receipt.FailureCode != "reconciliation_required" {
 		t.Fatalf("takeover lookup: %+v %v %v", receipt, found, err)
@@ -202,11 +203,23 @@ func TestHTTPEffectCrashWindowsPostgres(t *testing.T) {
 	if err != nil || dispatch || again.State != "uncertain" || w.effectRows() != 1 {
 		t.Fatalf("re-dispatch after crash: %+v %v %v rows=%d", again, dispatch, err, w.effectRows())
 	}
-	// The fenced original commit still cannot overwrite the settled row.
-	w.exec(`UPDATE elitea_runtime.execution_claims SET released_at=clock_timestamp() WHERE claim_id=$1`, httpWorldClaim2)
-	w.exec(`UPDATE elitea_runtime.execution_claims SET released_at=NULL WHERE claim_id=$1`, httpWorldClaim)
+	// Once settled to uncertain, the original claim's late Commit is fenced
+	// and cannot overwrite the settled row.
 	if err := w.repo.Commit(t.Context(), admitted, completedReceipt(begun)); !errors.Is(err, ErrHTTPEffectFenced) {
 		t.Fatalf("late commit overwrote the uncertain receipt: %v", err)
+	}
+	// Conversely, if a job is cancelled before any takeover settles the row,
+	// the original dispatcher's Commit still records the known outcome.
+	cancelWorld := newHTTPWorld(t, "POST")
+	cancelAdmitted := cancelWorld.admission(httpWorldClaim, 1)
+	cancelInv := cancelWorld.invocation(0, "c")
+	cancelBegun, _, err := cancelWorld.repo.Begin(t.Context(), cancelAdmitted, cancelInv, cancelWorld.intent(cancelAdmitted, cancelInv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelWorld.exec(`UPDATE elitea_runtime.execution_jobs SET desired_state='CANCELLED' WHERE execution_id=$1`, httpWorldExecution)
+	if err := cancelWorld.repo.Commit(t.Context(), cancelAdmitted, completedReceipt(cancelBegun)); err != nil {
+		t.Fatalf("commit of known outcome after cancel was lost: %v", err)
 	}
 }
 
@@ -272,6 +285,9 @@ func TestHTTPEffectBeginRechecksAuthorityPostgres(t *testing.T) {
 			w.exec(`UPDATE p_1.configuration SET data='{"api_key":"{{secret.k2}}"}'::jsonb, updated_at=now() AT TIME ZONE 'UTC' WHERE id=$1`, httpWorldConfig)
 		},
 		"configuration private": func(w *httpWorld) { w.exec(`UPDATE p_1.configuration SET author_id=12 WHERE id=$1`, httpWorldConfig) },
+		"private config rule edited by other admin": func(w *httpWorld) {
+			w.exec(`UPDATE elitea_runtime.http_action_rules SET updated_by=12 WHERE id=$1`, w.ruleID)
+		},
 		"configuration retyped": func(w *httpWorld) { w.exec(`UPDATE p_1.configuration SET type='github' WHERE id=$1`, httpWorldConfig) },
 		"claim released": func(w *httpWorld) {
 			w.exec(`UPDATE elitea_runtime.execution_claims SET released_at=clock_timestamp() WHERE claim_id=$1`, httpWorldClaim)
@@ -374,6 +390,94 @@ func TestHTTPEffectAttemptsPostgres(t *testing.T) {
 	if _, dispatch, err := post.repo.Begin(t.Context(), postAdmitted, postSecond, post.intent(postAdmitted, postSecond)); dispatch || !errors.Is(err, app.ErrUnauthorized) {
 		t.Fatalf("POST replay=never retried after uncertain: %v", err)
 	}
+}
+
+// Attempt N>0 hardening: inputs/binding/request must match attempt N-1 (else
+// 409 nondeterministic_inputs), and attempt N-1's pinned rule must itself have
+// been retryable for its own request (so editing replay=never -> idempotency_key
+// after an uncertain attempt cannot unlock a blind retry).
+func TestHTTPEffectAttemptRetryHardeningPostgres(t *testing.T) {
+	t.Run("inputs differ between attempts", func(t *testing.T) {
+		w := newHTTPWorld(t, "GET")
+		admitted := w.admission(httpWorldClaim, 1)
+		first := w.invocation(0, "i")
+		begun, _, err := w.repo.Begin(t.Context(), admitted, first, w.intent(admitted, first))
+		if err != nil {
+			t.Fatal(err)
+		}
+		// While attempt 0 is still dispatching under the live claim, attempt 1 returns ErrDispatchInFlight.
+		sameNext := w.invocation(1, "i")
+		if _, dispatch, err := w.repo.Begin(t.Context(), admitted, sameNext, w.intent(admitted, sameNext)); dispatch || !errors.Is(err, app.ErrDispatchInFlight) {
+			t.Fatalf("attempt 1 while attempt 0 dispatching: dispatch=%v err=%v", dispatch, err)
+		}
+		uncertain := begun
+		uncertain.State = "uncertain"
+		failure := "reconciliation_required"
+		uncertain.FailureCode = &failure
+		if err := w.repo.Commit(t.Context(), admitted, uncertain); err != nil {
+			t.Fatal(err)
+		}
+		changed := w.invocation(1, "other")
+		if _, dispatch, err := w.repo.Begin(t.Context(), admitted, changed, w.intent(admitted, changed)); dispatch || app.FailureCode(err) != app.CodeNonDetermined || w.effectRows() != 1 {
+			t.Fatalf("attempt 1 with different inputs: dispatch=%v err=%v rows=%d", dispatch, err, w.effectRows())
+		}
+	})
+
+	t.Run("rule origin edited between attempts", func(t *testing.T) {
+		w := newHTTPWorld(t, "GET")
+		admitted := w.admission(httpWorldClaim, 1)
+		first := w.invocation(0, "i")
+		begun, _, err := w.repo.Begin(t.Context(), admitted, first, w.intent(admitted, first))
+		if err != nil {
+			t.Fatal(err)
+		}
+		uncertain := begun
+		uncertain.State = "uncertain"
+		failure := "reconciliation_required"
+		uncertain.FailureCode = &failure
+		if err := w.repo.Commit(t.Context(), admitted, uncertain); err != nil {
+			t.Fatal(err)
+		}
+		w.exec(`UPDATE elitea_runtime.http_action_rules SET origin='https://other.example.com', revision=revision+1 WHERE id=$1`, w.ruleID)
+		second := w.invocation(1, "i")
+		if _, dispatch, err := w.repo.Begin(t.Context(), admitted, second, w.intent(admitted, second)); dispatch || app.FailureCode(err) != app.CodeNonDetermined || w.effectRows() != 1 {
+			t.Fatalf("attempt 1 after rule origin edit: dispatch=%v err=%v rows=%d", dispatch, err, w.effectRows())
+		}
+	})
+
+	t.Run("rule replay flipped from never to idempotency_key after uncertain", func(t *testing.T) {
+		w := newHTTPWorld(t, "POST")
+		admitted := w.admission(httpWorldClaim, 1)
+		makeInv := func(attempt uint32) app.Invocation {
+			inputs := []byte(`{"idempotency_key":"idem-1","path":{"item":"i"}}`)
+			binding := strings.Repeat("d", 64)
+			inv := app.Invocation{SchemaVersion: app.Schema, NodeID: "fetch", ThreadID: "graph", Step: 1, Attempt: attempt, BindingDigest: binding, InputsB64: base64.StdEncoding.EncodeToString(inputs), InputsDigest: app.Digest(inputs)}
+			inv.ActivationID = app.VisitID(inv.ThreadID, inv.NodeID, inv.Step, app.BindingBytes(binding))
+			parsed, err := app.ParseInvocation(inv)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return parsed
+		}
+		first := makeInv(0)
+		begun, _, err := w.repo.Begin(t.Context(), admitted, first, w.intent(admitted, first))
+		if err != nil {
+			t.Fatal(err)
+		}
+		uncertain := begun
+		uncertain.State = "uncertain"
+		failure := "reconciliation_required"
+		uncertain.FailureCode = &failure
+		if err := w.repo.Commit(t.Context(), admitted, uncertain); err != nil {
+			t.Fatal(err)
+		}
+		// Admin flips replay from never -> idempotency_key after attempt 0 went uncertain.
+		w.exec(`UPDATE elitea_runtime.http_action_rules SET replay='idempotency_key', revision=revision+1 WHERE id=$1`, w.ruleID)
+		second := makeInv(1)
+		if _, dispatch, err := w.repo.Begin(t.Context(), admitted, second, w.intent(admitted, second)); dispatch || !errors.Is(err, app.ErrUnauthorized) || w.effectRows() != 1 {
+			t.Fatalf("attempt 1 after replay flip: dispatch=%v err=%v rows=%d", dispatch, err, w.effectRows())
+		}
+	})
 }
 
 type httpWriteCounter struct {

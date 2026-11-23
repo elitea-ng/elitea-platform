@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"golang.org/x/net/http/httpguts"
 )
 
 // Render limits (§3.4 of the T-5D brief). MaxInputsBytes is mirrored by the
@@ -19,8 +21,9 @@ const (
 	// MaxSegmentBytes bounds one rendered path segment before encoding.
 	MaxSegmentBytes = 1024
 	// MaxTemplateBytes bounds one frozen node template (canonical JSON).
-	MaxTemplateBytes = 64 * 1024
-	maxLiteralString = 1024
+	MaxTemplateBytes       = 64 * 1024
+	maxLiteralString       = 1024
+	maxHeaderLiteralString = 8192
 )
 
 // Failure codes a render or admission refusal carries. They are the only
@@ -197,6 +200,12 @@ func Render(rule Rule, node NodeTemplate, rawInputs []byte) (Rendered, error) {
 	if err != nil {
 		return Rendered{}, err
 	}
+	return RenderDecoded(rule, node, inputs)
+}
+
+// RenderDecoded builds the request from already-decoded canonical inputs, so
+// callers that validated inputs during ParseInvocation do not decode twice.
+func RenderDecoded(rule Rule, node NodeTemplate, inputs Inputs) (Rendered, error) {
 	if rule.Validate() != nil || !rule.Enabled || node.Operation != rule.Name {
 		return Rendered{}, policyDenied()
 	}
@@ -392,7 +401,7 @@ func renderHeaders(bindings []HeaderBinding, inputs map[string]any) ([]Header, e
 		if err != nil {
 			return nil, err
 		}
-		if strings.ContainsAny(text, "\r\n\x00") {
+		if strings.ContainsAny(text, "\r\n\x00") || !httpguts.ValidHeaderFieldValue(text) {
 			return nil, invalidInput()
 		}
 		headers = append(headers, Header{Name: name, Value: text})

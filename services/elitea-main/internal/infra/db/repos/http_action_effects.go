@@ -63,11 +63,11 @@ func (r *HTTPActionRepository) Rule(ctx context.Context, projectID int64, name s
 type httpEffectRow struct {
 	state, effect, inputsDigest, bindingDigest, requestDigest, claimID string
 	expired                                                            bool
-	receiptWire                                                        []byte
+	receiptWire, ruleWire, requestBytes                                []byte
 }
 
 const httpEffectSelect = `SELECT state,effect_id,COALESCE(inputs_digest,''),frozen_binding_digest,request_digest,dispatch_claim_id,
- COALESCE(dispatch_deadline<clock_timestamp(),TRUE),receipt_wire
+ COALESCE(dispatch_deadline<clock_timestamp(),TRUE),receipt_wire,rule_wire,request_bytes
  FROM elitea_runtime.execution_http_effects
  WHERE execution_id=$1 AND generation=$2 AND activation_id=$3 AND attempt=$4`
 
@@ -77,7 +77,7 @@ func readHTTPEffect(ctx context.Context, q sqlExecutor, admitted app.Admission, 
 		statement += " FOR UPDATE"
 	}
 	var row httpEffectRow
-	err := q.QueryRow(ctx, statement, admitted.ExecutionID, int64(admitted.Generation), inv.ActivationID, int32(inv.Attempt)).Scan(&row.state, &row.effect, &row.inputsDigest, &row.bindingDigest, &row.requestDigest, &row.claimID, &row.expired, &row.receiptWire)
+	err := q.QueryRow(ctx, statement, admitted.ExecutionID, int64(admitted.Generation), inv.ActivationID, int32(inv.Attempt)).Scan(&row.state, &row.effect, &row.inputsDigest, &row.bindingDigest, &row.requestDigest, &row.claimID, &row.expired, &row.receiptWire, &row.ruleWire, &row.requestBytes)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return httpEffectRow{}, false, nil
 	}
@@ -163,7 +163,7 @@ func (r *HTTPActionRepository) Begin(ctx context.Context, admitted app.Admission
 			return httpPolicyDenied(err)
 		}
 		if rule.ConfigurationID > 0 {
-			access, err := httpConfigurationAccess(ctx, tx, admitted.ProjectID, admitted.ActorID, rule.ConfigurationID, true)
+			access, err := httpConfigurationAccess(ctx, tx, admitted.ProjectID, admitted.ActorID, rule.UpdatedBy, rule.ConfigurationID, true)
 			if err != nil {
 				return err
 			}
@@ -180,7 +180,24 @@ func (r *HTTPActionRepository) Begin(ctx context.Context, admitted app.Admission
 			if err != nil {
 				return err
 			}
-			if !exists || !intent.Retryable || row.state != "uncertain" && row.state != "failed" {
+			if !exists {
+				return httpPolicyDenied(nil)
+			}
+			if row.state == "dispatching" {
+				if row.claimID == admitted.ClaimID && !row.expired {
+					return app.ErrDispatchInFlight
+				}
+				return httpPolicyDenied(nil)
+			}
+			if row.inputsDigest != inv.InputsDigest || row.bindingDigest != inv.BindingDigest || row.requestDigest != intent.RequestDigest {
+				return &app.Failure{Code: app.CodeNonDetermined}
+			}
+			prevRule, err := app.DecodePolicyWire(row.ruleWire)
+			var prevReq app.Request
+			if err != nil || app.Decode(row.requestBytes, &prevReq) != nil || !prevRule.Retryable(prevReq) {
+				return httpPolicyDenied(nil)
+			}
+			if !intent.Retryable || row.state != "uncertain" && row.state != "failed" {
 				return httpPolicyDenied(nil)
 			}
 		}
@@ -216,7 +233,13 @@ func (r *HTTPActionRepository) Begin(ctx context.Context, admitted app.Admission
 	return receipt, dispatch, nil
 }
 
-// Commit records the outcome under the original dispatch claim and lease.
+// Commit records the outcome under the original dispatch claim and lease
+// epoch. Fencing relies on the atomic UPDATE predicate (state='dispatching'
+// AND dispatch_claim_id=$4 AND dispatch_lease_epoch=$5) rather than requiring
+// a live RUNNING lease, so a known remote outcome is preserved even if the job
+// was cancelled or the lease ticked over before another claim settled the row.
+// Once a new claim settles the row to uncertain, 0 rows match and Commit
+// returns ErrHTTPEffectFenced.
 func (r *HTTPActionRepository) Commit(ctx context.Context, admitted app.Admission, receipt app.Receipt) error {
 	if !validHTTPAdmission(admitted) || receipt.State != "completed" && receipt.State != "failed" && receipt.State != "uncertain" {
 		return app.ErrUnauthorized
@@ -225,22 +248,17 @@ func (r *HTTPActionRepository) Commit(ctx context.Context, admitted app.Admissio
 	if err != nil || len(wire) > 3*1024*1024 {
 		return app.ErrUnavailable
 	}
-	return r.store.WithinTx(ctx, pgx.TxOptions{}, func(tx sqlExecutor) error {
-		if err := lockHTTPActionClaim(ctx, tx, admitted); err != nil {
-			return ErrHTTPEffectFenced
-		}
-		tag, err := tx.Exec(ctx, `UPDATE elitea_runtime.execution_http_effects
+	tag, err := r.store.Exec(ctx, `UPDATE elitea_runtime.execution_http_effects
  SET state=$6,receipt_json=$7::jsonb,receipt_wire=$8,receipt_sha256=$9,resolved_at=clock_timestamp()
  WHERE execution_id=$1 AND generation=$2 AND effect_id=$3 AND state='dispatching' AND dispatch_claim_id=$4 AND dispatch_lease_epoch=$5`,
-			admitted.ExecutionID, int64(admitted.Generation), receipt.EffectID, admitted.ClaimID, int64(admitted.LeaseEpoch), receipt.State, string(wire), wire, app.Digest(wire))
-		if err != nil {
-			return app.ErrUnavailable
-		}
-		if tag.RowsAffected() != 1 {
-			return ErrHTTPEffectFenced
-		}
-		return nil
-	})
+		admitted.ExecutionID, int64(admitted.Generation), receipt.EffectID, admitted.ClaimID, int64(admitted.LeaseEpoch), receipt.State, string(wire), wire, app.Digest(wire))
+	if err != nil {
+		return app.ErrUnavailable
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrHTTPEffectFenced
+	}
+	return nil
 }
 
 // lockHTTPActionClaim fences a write on the live claim and lease epoch.

@@ -91,14 +91,21 @@ func (f *fakeCredentials) Resolve(context.Context, Admission, int32) (Credential
 	return Credential{Headers: f.last, Revision: strings.Repeat("c", 64)}, nil
 }
 
-type fakeArtifacts struct{ writes int }
+type fakeArtifacts struct {
+	writes       int
+	writeCtxOK   bool
+	writeHasDead bool
+	writeDead    time.Time
+}
 
 func (f *fakeArtifacts) Read(context.Context, Admission, Artifact, uint64) ([]byte, error) {
 	return nil, errors.New("unused")
 }
 
-func (f *fakeArtifacts) Write(_ context.Context, _ Admission, bucket, effect, _ string, data []byte) (Artifact, error) {
+func (f *fakeArtifacts) Write(ctx context.Context, _ Admission, bucket, effect, _ string, data []byte) (Artifact, error) {
 	f.writes++
+	f.writeCtxOK = ctx.Err() == nil
+	f.writeDead, f.writeHasDead = ctx.Deadline()
 	sum := Digest(data)
 	return Artifact{Reference: "artifact:" + bucket + ":http-effects/" + effect + "/" + sum + ".bin", ImmutableVersion: sum, SHA256: sum, ByteLength: uint64(len(data))}, nil
 }
@@ -364,5 +371,54 @@ func TestReceiptAndErrorsCarryNoSecretOrBody(t *testing.T) {
 		if bytes.Contains(encoded, []byte(sentinel)) {
 			t.Fatalf("receipt carries %s", sentinel)
 		}
+	}
+}
+
+func TestExecuteDetachedArtifactWriteHonorsDispatchDeadline(t *testing.T) {
+	h := newHarness(t, "GET", `{"path":{"item":{"from":"k"}}}`)
+	h.rules.rule.OutputBucket = "http-results"
+	ctx, cancel := context.WithCancel(t.Context())
+	big := `"` + strings.Repeat("a", MaxInline+100) + `"`
+	h.respond = func(*http.Request) (*http.Response, error) {
+		cancel() // caller disconnects right after remote response arrives
+		return jsonResponse(200, big), nil
+	}
+	receipt, err := h.service.Execute(ctx, invocationFor(t, h, 0, `{"path":{"item":"i"}}`))
+	if err != nil || receipt.State != "completed" || receipt.Result == nil || receipt.Result.Data.Kind != "artifact" {
+		t.Fatalf("detached artifact write failed: %+v %v", receipt, err)
+	}
+	if !h.artifacts.writeCtxOK || !h.artifacts.writeHasDead || h.artifacts.writeDead.After(h.effects.begun[0].DispatchDeadline) {
+		t.Fatalf("artifact write ctx not detached/bounded: ok=%v hasDeadline=%v dead=%v dispatch=%v",
+			h.artifacts.writeCtxOK, h.artifacts.writeHasDead, h.artifacts.writeDead, h.effects.begun[0].DispatchDeadline)
+	}
+}
+
+func TestExecuteDialEgressRefusalIsFailedPolicyDenied(t *testing.T) {
+	h := newHarness(t, "POST", `{"path":{"item":{"from":"k"}}}`)
+	h.respond = func(*http.Request) (*http.Response, error) {
+		return nil, ErrEgressRefused
+	}
+	receipt, err := h.service.Execute(t.Context(), invocationFor(t, h, 0, `{"path":{"item":"i"}}`))
+	if err != nil || receipt.State != "failed" || receipt.FailureCode == nil || *receipt.FailureCode != CodePolicyDenied {
+		t.Fatalf("egress refusal receipt = %+v, err = %v; want failed/policy_denied", receipt, err)
+	}
+}
+
+func TestExecuteJSONBodyHonorsPlusJSONContentType(t *testing.T) {
+	h := newHarness(t, "PATCH", `{"path":{"item":{"from":"k"}},"body":{"kind":"json","from":"b","content_type":"application/merge-patch+json"}}`)
+	receipt, err := h.service.Execute(t.Context(), invocationFor(t, h, 0, `{"body":{"a":1},"path":{"item":"i"}}`))
+	if err != nil || receipt.State != "completed" {
+		t.Fatalf("patch +json failed: %+v %v", receipt, err)
+	}
+	if got := h.requests[0].Header.Get("Content-Type"); got != "application/merge-patch+json" {
+		t.Fatalf("Content-Type = %q, want application/merge-patch+json", got)
+	}
+}
+
+func TestExecuteRefusesInvalidCredentialHeaderValueBeforeBegin(t *testing.T) {
+	h := newHarness(t, "GET", `{"path":{"item":{"from":"k"}}}`)
+	h.credentials.headers = http.Header{"Authorization": {"Bearer bad\x7fvalue"}}
+	if _, err := h.service.Execute(t.Context(), invocationFor(t, h, 0, `{"path":{"item":"i"}}`)); FailureCode(err) != CodePolicyDenied || len(h.effects.begun) != 0 {
+		t.Fatalf("invalid credential header admitted: %v begun=%d", err, len(h.effects.begun))
 	}
 }

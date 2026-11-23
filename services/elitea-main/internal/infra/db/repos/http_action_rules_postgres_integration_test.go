@@ -1,6 +1,6 @@
 package repos
 
-// HTTP action rules (shared/0170) against the migrated corpus: the write
+// HTTP action rules (shared/0261) against the migrated corpus: the write
 // paths, the per-project limit under a concurrent burst, the revision fence,
 // the audit row of every write, and project scoping on every read and write.
 //
@@ -23,6 +23,12 @@ import (
 func newHTTPActionRulesTestRepo(t *testing.T) (*HTTPActionRulesRepo, *pgxpool.Pool) {
 	t.Helper()
 	pool := newMigratedPostgresIntegrationPool(t)
+	if _, err := pool.Exec(httpActionRuleContext(t), `
+INSERT INTO p_1.configuration (id,uuid,project_id,elitea_title,type,section,data,meta,shared,status_ok,source,author_id,created_at)
+VALUES (1,'60000000-0000-4000-8000-000000000001',1,'shared_openapi','openapi','credentials','{}'::jsonb,'{}'::jsonb,true,true,'user',7,now() AT TIME ZONE 'UTC')
+ON CONFLICT (id) DO NOTHING`); err != nil {
+		t.Fatal(err)
+	}
 	repo, err := NewHTTPActionRulesRepo(pool)
 	if err != nil {
 		t.Fatal(err)
@@ -197,8 +203,10 @@ func TestHTTPActionRulesRepoPostgres_ConflictsAndScoping(t *testing.T) {
 	if _, err := repo.Create(ctx, 1, 7, testHTTPActionRule("same.name")); !errors.Is(err, ErrHTTPActionRuleNameTaken) {
 		t.Fatalf("duplicate create = %v, want name taken", err)
 	}
-	// The same name in another project is a different rule.
-	if _, err := repo.Create(ctx, 2, 7, testHTTPActionRule("same.name")); err != nil {
+	// The same name in another project is a different rule (no config in project 2).
+	p2Rule := testHTTPActionRule("same.name")
+	p2Rule.ConfigurationID = 0
+	if _, err := repo.Create(ctx, 2, 7, p2Rule); err != nil {
 		t.Fatalf("same name in project 2: %v", err)
 	}
 	other, err := repo.Create(ctx, 1, 7, testHTTPActionRule("other.name"))
@@ -235,10 +243,15 @@ func TestHTTPActionRulesRepoPostgres_ConflictsAndScoping(t *testing.T) {
 }
 
 // A row a newer validator refuses (here: a dot segment the column CHECK does
-// not see) is never handed out as a rule.
+// not see) is never handed out as a rule, does not break List for sibling
+// rules, and can still be repaired or disabled via Update.
 func TestHTTPActionRulesRepoPostgres_ReadRevalidatesStoredRows(t *testing.T) {
 	repo, pool := newHTTPActionRulesTestRepo(t)
 	ctx := httpActionRuleContext(t)
+	healthy, err := repo.Create(ctx, 1, 7, testHTTPActionRule("healthy.rule"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	created, err := repo.Create(ctx, 1, 7, testHTTPActionRule("widened.rule"))
 	if err != nil {
 		t.Fatal(err)
@@ -251,6 +264,55 @@ func TestHTTPActionRulesRepoPostgres_ReadRevalidatesStoredRows(t *testing.T) {
 	}
 	if _, err := readHTTPActionRule(ctx, pgxExecutor{queryer: pool}, 1, "widened.rule", false); !errors.Is(err, ErrHTTPActionRuleStoredInvalid) {
 		t.Fatalf("readHTTPActionRule of a widened row = %v, want stored-invalid", err)
+	}
+	listed, err := repo.List(ctx, 1)
+	if err != nil || len(listed) != 1 || listed[0].ID != healthy.ID {
+		t.Fatalf("list with one invalid row = %+v, %v; want only healthy sibling", listed, err)
+	}
+	// Admin can disable/repair the invalid row via Update.
+	repaired := testHTTPActionRule("widened.rule")
+	repaired.Enabled = false
+	updated, err := repo.Update(ctx, 1, created.ID, 7, repaired, created.Revision)
+	if err != nil || updated.Enabled || updated.Revision != created.Revision+1 {
+		t.Fatalf("disable/repair invalid row = %+v, %v", updated, err)
+	}
+	if listed, err = repo.List(ctx, 1); err != nil || len(listed) != 2 {
+		t.Fatalf("list after repair = %d rules, %v", len(listed), err)
+	}
+}
+
+func TestHTTPActionRulesRepoPostgres_ConfigurationAccessCheckedAtWrite(t *testing.T) {
+	repo, pool := newHTTPActionRulesTestRepo(t)
+	ctx := httpActionRuleContext(t)
+	if _, err := pool.Exec(ctx, `
+INSERT INTO p_1.configuration (id,uuid,project_id,elitea_title,type,section,data,meta,shared,status_ok,source,author_id,created_at) VALUES
+ (10,'60000000-0000-4000-8000-000000000010',1,'own_private','openapi','credentials','{}'::jsonb,'{}'::jsonb,false,true,'user',7,now() AT TIME ZONE 'UTC'),
+ (11,'60000000-0000-4000-8000-000000000011',1,'other_private','openapi','credentials','{}'::jsonb,'{}'::jsonb,false,true,'user',99,now() AT TIME ZONE 'UTC'),
+ (12,'60000000-0000-4000-8000-000000000012',1,'wrong_type','github','credentials','{}'::jsonb,'{}'::jsonb,true,true,'user',7,now() AT TIME ZONE 'UTC')`); err != nil {
+		t.Fatal(err)
+	}
+	// Own private openapi config is accepted.
+	own := testHTTPActionRule("own.private")
+	own.ConfigurationID = 10
+	if _, err := repo.Create(ctx, 1, 7, own); err != nil {
+		t.Fatalf("own private openapi config refused: %v", err)
+	}
+	for name, cfgID := range map[string]int32{
+		"other user private": 11,
+		"non-openapi type":   12,
+		"missing config":     999,
+	} {
+		rule := testHTTPActionRule("bad." + name[:4])
+		rule.ConfigurationID = cfgID
+		if _, err := repo.Create(ctx, 1, 7, rule); !errors.Is(err, ErrHTTPActionRuleConfigurationInvalid) {
+			t.Errorf("%s: err = %v, want ErrHTTPActionRuleConfigurationInvalid", name, err)
+		}
+	}
+	// Foreign project config (config 1 exists in p_1, not p_2).
+	foreign := testHTTPActionRule("foreign.cfg")
+	foreign.ConfigurationID = 1
+	if _, err := repo.Create(ctx, 2, 7, foreign); !errors.Is(err, ErrHTTPActionRuleConfigurationInvalid) {
+		t.Fatalf("foreign project config err = %v, want ErrHTTPActionRuleConfigurationInvalid", err)
 	}
 }
 
@@ -266,7 +328,9 @@ func TestHTTPActionRulesRepoPostgres_LimitHoldsAtTheBoundary(t *testing.T) {
 		t.Fatalf("rule %d = %v, want the limit", httpaction.MaxRulesPerProject+1, err)
 	}
 	// The limit is per project.
-	if _, err := repo.Create(ctx, 2, 7, testHTTPActionRule("rule_overflow")); err != nil {
+	overflowP2 := testHTTPActionRule("rule_overflow")
+	overflowP2.ConfigurationID = 0
+	if _, err := repo.Create(ctx, 2, 7, overflowP2); err != nil {
 		t.Fatalf("project 2 is not bounded by project 1's rules: %v", err)
 	}
 	listed, err := repo.List(ctx, 1)

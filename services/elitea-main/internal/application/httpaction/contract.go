@@ -17,6 +17,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"golang.org/x/net/http/httpguts"
 )
 
 // Schema is the Worker-to-Main invocation (http-action-invocation.schema.json,
@@ -42,6 +44,11 @@ var ErrUnavailable = errors.New("HTTP action dependency is unavailable")
 // claim; the caller retries the same invocation later and never dispatches.
 var ErrDispatchInFlight = errors.New("HTTP action dispatch is in flight")
 
+// ErrEgressRefused: the egress guard refused the destination before dialing
+// (no bytes were sent), so the outcome is failed/policy_denied rather than
+// uncertain.
+var ErrEgressRefused = errors.New("HTTP action destination refused by egress policy")
+
 // ScopeRef names a saved-child scope (fan-out children). Children arrive with
 // 5d-3; until then a scope_ref is refused as policy_denied.
 type ScopeRef struct {
@@ -63,6 +70,9 @@ type Invocation struct {
 	ScopeRef      *ScopeRef `json:"scope_ref,omitempty"`
 	// Inputs holds the decoded canonical inputs after ParseInvocation.
 	Inputs []byte `json:"-"`
+	// ParsedInputs holds the structured inputs decoded by ParseInvocation so
+	// Execute does not canonicalize and decode inputs a second time.
+	ParsedInputs *Inputs `json:"-"`
 }
 type Header struct {
 	Name  string `json:"name"`
@@ -196,10 +206,12 @@ func ParseInvocation(inv Invocation) (Invocation, error) {
 		// back to root authority for a scoped call.
 		return Invocation{}, policyDenied()
 	}
-	if _, err := DecodeInputs(inputs); err != nil {
+	decoded, err := DecodeInputs(inputs)
+	if err != nil {
 		return Invocation{}, err
 	}
 	inv.Inputs = inputs
+	inv.ParsedInputs = &decoded
 	return inv, nil
 }
 func VisitID(thread, node string, step uint64, request [32]byte) string {
@@ -278,7 +290,7 @@ func (r *Request) Validate() error {
 	for _, header := range r.Headers {
 		name := strings.ToLower(header.Name)
 		total += len(header.Name) + len(header.Value)
-		if RestrictedHeader(name) || !validHeaderName(name) || seen[name] || len(header.Name) > 128 || len(header.Value) > 8192 || total > 16384 || strings.ContainsAny(header.Value, "\r\n\x00") {
+		if RestrictedHeader(name) || !validHeaderName(name) || seen[name] || len(header.Name) > 128 || len(header.Value) > 8192 || total > 16384 || strings.ContainsAny(header.Value, "\r\n\x00") || !httpguts.ValidHeaderFieldValue(header.Value) {
 			return ErrInvalid
 		}
 		seen[name] = true
@@ -319,7 +331,7 @@ func (r *Request) Validate() error {
 			return ErrInvalid
 		}
 	case "json":
-		if len(r.Body.Value) == 0 || len(r.Body.Value) > 256*1024 || r.Body.Reference != nil || r.Body.ContentType != "" || !boundedJSON(r.Body.Value) {
+		if len(r.Body.Value) == 0 || len(r.Body.Value) > 256*1024 || r.Body.Reference != nil || (r.Body.ContentType != "" && !validJSONMedia(r.Body.ContentType)) || !boundedJSON(r.Body.Value) {
 			return ErrInvalid
 		}
 	case "text":
@@ -359,6 +371,14 @@ func validMedia(v string) bool {
 		return true
 	}
 	return found && valid(kind) && valid(subtype)
+}
+
+func validJSONMedia(v string) bool {
+	if !validMedia(v) {
+		return false
+	}
+	lower := strings.ToLower(v)
+	return lower == "application/json" || strings.HasSuffix(lower, "+json")
 }
 func validHeaderName(v string) bool {
 	if v == "" {

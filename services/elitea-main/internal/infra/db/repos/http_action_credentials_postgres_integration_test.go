@@ -12,8 +12,10 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	app "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/httpaction"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/egress"
@@ -101,6 +103,15 @@ func TestHTTPCredentialsLiveAuthorityPostgres(t *testing.T) {
 			}
 		})
 	}
+	// A private configuration is refused when the rule's last writer is not
+	// the configuration's author (even if the actor is the author).
+	wPriv := newHTTPWorld(t, "GET")
+	privCreds, _ := NewHTTPActionCredentials(wPriv.pool, mapUnsecreter{"k": "v"}, http.DefaultTransport)
+	foreignWriter := wPriv.admission(httpWorldClaim, 1)
+	foreignWriter.RuleUpdatedBy = 12
+	if _, err := privCreds.Resolve(t.Context(), foreignWriter, httpWorldConfig); app.FailureCode(err) != app.CodePolicyDenied {
+		t.Fatalf("private config with foreign rule writer resolved: %v", err)
+	}
 	// Shared configurations of other authors are usable; the revision moves
 	// with every write so Begin refuses a credential changed after resolve.
 	w := newHTTPWorld(t, "GET")
@@ -175,7 +186,49 @@ func TestHTTPCredentialsOAuthClientCredentialsPostgres(t *testing.T) {
 		t.Fatalf("http token endpoint accepted: %v", err)
 	}
 	w.setConfiguration(`{"client_id":"client","client_secret":"{{secret.cs}}","token_url":"https://10.0.0.9/token"}`)
-	if _, err := resolve(); !errors.Is(err, app.ErrUnavailable) {
-		t.Fatalf("private token endpoint dialled: %v", err)
+	if _, err := resolve(); app.FailureCode(err) != app.CodePolicyDenied {
+		t.Fatalf("private token endpoint dialled or wrong error: %v", err)
+	}
+	// 4xx from token endpoint (invalid client credentials) is policy_denied, not 503 retry loop.
+	w.setConfiguration(`{"client_id":"wrong","client_secret":"{{secret.cs}}","token_url":"` + token.URL + `/token","method":"Basic"}`)
+	if _, err := resolve(); app.FailureCode(err) != app.CodePolicyDenied {
+		t.Fatalf("401 from token endpoint: %v, want policy_denied", err)
+	}
+	// Concurrent uncached token requests coalesce via singleflight to a single remote fetch.
+	var burstFetches atomic.Int32
+	slowToken := httptest.NewTLSServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		burstFetches.Add(1)
+		time.Sleep(50 * time.Millisecond)
+		rw.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(rw).Encode(map[string]any{"access_token": "tok-burst", "token_type": "Bearer", "expires_in": 3600})
+	}))
+	defer slowToken.Close()
+	burstTransport := guard.Transport()
+	burstTransport.TLSClientConfig = slowToken.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+	burstCreds, _ := NewHTTPActionCredentials(w.pool, mapUnsecreter{"cs": "s3cr%t"}, burstTransport)
+	w.setConfiguration(`{"client_id":"client","client_secret":"{{secret.cs}}","token_url":"` + slowToken.URL + `/token","scope":"burst"}`)
+	var wg sync.WaitGroup
+	errs := make(chan error, 16)
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			cred, err := burstCreds.Resolve(context.Background(), admitted, httpWorldConfig)
+			if err != nil {
+				errs <- err
+				return
+			}
+			if cred.Headers.Get("Authorization") != "Bearer tok-burst" {
+				errs <- errors.New("unexpected token: " + cred.Headers.Get("Authorization"))
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	if burstFetches.Load() != 1 {
+		t.Fatalf("singleflight coalescing failed: %d remote token fetches for 16 concurrent callers", burstFetches.Load())
 	}
 }

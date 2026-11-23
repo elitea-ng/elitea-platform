@@ -62,7 +62,13 @@ func (f *fakeRepo) Update(_ context.Context, projectID, ruleID, actorID int64, r
 type grantAll struct{}
 
 func (grantAll) ResolvePermissions(_ context.Context, user auth.User, _ string, _ string) (auth.PermissionResolution, error) {
-	return auth.PermissionResolution{UserID: 5, Permissions: []string{PermissionManage, PermissionList}}, nil
+	return auth.PermissionResolution{UserID: 5, Permissions: []string{PermissionManage, PermissionList, permissionConfigurationDetails}}, nil
+}
+
+type grantManageOnly struct{}
+
+func (grantManageOnly) ResolvePermissions(_ context.Context, user auth.User, _ string, _ string) (auth.PermissionResolution, error) {
+	return auth.PermissionResolution{UserID: 5, Permissions: []string{PermissionManage}}, nil
 }
 
 type fakeResolver map[string][]net.IPAddr
@@ -270,6 +276,7 @@ func TestRepositoryErrorsMapToStatuses(t *testing.T) {
 		{repos.ErrHTTPActionRuleNameTaken, http.StatusConflict},
 		{repos.ErrHTTPActionRuleStale, http.StatusConflict},
 		{repos.ErrHTTPActionRuleLimit, http.StatusConflict},
+		{repos.ErrHTTPActionRuleConfigurationInvalid, http.StatusBadRequest},
 		{fmt.Errorf("wrapped: %w", repos.ErrHTTPActionRuleStoredInvalid), http.StatusInternalServerError},
 		{fmt.Errorf("boom"), http.StatusInternalServerError},
 	} {
@@ -315,5 +322,21 @@ func TestWritesAnnotateTheAuditRow(t *testing.T) {
 	if !ok || annotation.EntityType != AuditEntityType || annotation.EntityID == nil || *annotation.EntityID != 41 ||
 		annotation.ProjectID == nil || *annotation.ProjectID != 3 {
 		t.Fatalf("annotation = %+v (%v)", annotation, ok)
+	}
+}
+
+func TestConfigReferenceRequiresConfigurationAccessPermission(t *testing.T) {
+	repo := &fakeRepo{}
+	h := NewHandler(repo, testGuard(t, ""), grantManageOnly{})
+	body := validBody()
+	body["configuration_id"] = 42
+	response := serve(t, h, http.MethodPost, rulesPath, body)
+	if response.Code != http.StatusForbidden || len(repo.created) != 0 {
+		t.Fatalf("manage-only admin bound configuration_id: %d %s (created=%d)", response.Code, response.Body.String(), len(repo.created))
+	}
+	// configuration_id=0 (no credential) still succeeds without configuration access.
+	body["configuration_id"] = 0
+	if response := serve(t, h, http.MethodPost, rulesPath, body); response.Code != http.StatusCreated {
+		t.Fatalf("configuration_id=0 refused: %d %s", response.Code, response.Body.String())
 	}
 }

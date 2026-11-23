@@ -24,6 +24,7 @@ import Paper from '@mui/material/Paper';
 import Snackbar from '@mui/material/Snackbar';
 import type { SxProps, Theme } from '@mui/material/styles';
 
+import { serverErrorMessage } from '@/shared/api/serverErrorMessage';
 import { t } from '@/shared/i18n';
 import { useSelectedProjectStore } from '@/widgets/app-shell';
 import { BannerMessage } from '@/shared/ui/BannerMessage';
@@ -42,12 +43,10 @@ import {
   useListHttpActionRules,
 } from '@/shared/api/generated/httpactions/httpactions';
 
-import { httpActionsFeature, webhooksFeature } from '@/features/settings';
+import { httpActionsFeature } from '@/features/settings';
 import type { HttpActionRuleFormValues } from '@/features/settings';
 
 const { useHttpActionRulePermissions, HttpActionRuleFormDialog, HttpActionRulesTable } = httpActionsFeature;
-// The same `{error}`/`{message}` body extraction the Webhooks tab uses.
-const { webhookServerErrorMessage: serverErrorMessage } = webhooksFeature;
 
 /** The write body for a rule's current values; `output_bucket` is omitted when blank (the schema refuses ''). */
 function writeBody(values: HttpActionRuleFormValues, revision?: number): HttpActionRuleWriteRequest {

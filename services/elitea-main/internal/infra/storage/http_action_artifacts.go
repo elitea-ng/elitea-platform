@@ -2,6 +2,9 @@ package storage
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"net/http"
 	"strings"
 
 	app "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/httpaction"
@@ -10,12 +13,24 @@ import (
 
 // NewHTTPActionTransport returns the only production HTTP action transport:
 // the guard's RoundTripper (HTTPS only via egress.NewHTTPActionGuard, no
-// proxy, no redirect followed, dial-time address check).
+// proxy, no redirect followed, dial-time address check). Dial-time egress
+// refusals are tagged with app.ErrEgressRefused so the executor records them
+// as failed/policy_denied rather than uncertain.
 func NewHTTPActionTransport(guard *egress.Guard) (app.Transport, error) {
 	if guard == nil {
 		return nil, app.ErrUnavailable
 	}
-	return guard.RoundTripper(), nil
+	return egressRoundTripper{base: guard.RoundTripper()}, nil
+}
+
+type egressRoundTripper struct{ base http.RoundTripper }
+
+func (t egressRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
+	response, err := t.base.RoundTrip(r)
+	if err != nil && errors.Is(err, egress.ErrDestinationRefused) {
+		return nil, fmt.Errorf("%w: %w", app.ErrEgressRefused, err)
+	}
+	return response, err
 }
 
 // HTTPActionArtifacts reads request bodies from, and writes large responses

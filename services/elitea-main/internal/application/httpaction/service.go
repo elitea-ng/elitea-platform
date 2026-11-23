@@ -5,9 +5,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"net/http"
 	"time"
+
+	"golang.org/x/net/http/httpguts"
 )
 
 // Admission contains facts from Main's live claim and the frozen start input.
@@ -25,6 +28,10 @@ type Admission struct {
 	Template NodeTemplate
 	// Tools answers the frozen guardrail policy for the rule's toolkit/tool.
 	Tools ToolPolicy
+	// RuleUpdatedBy is set from the resolved rule's updated_by before
+	// credential resolution so a private configuration is admitted only when
+	// its author is both the executing actor and the rule's last writer.
+	RuleUpdatedBy int64
 }
 
 // ToolPolicy is the frozen toolkit guardrail policy of the execution.
@@ -98,10 +105,15 @@ type Artifacts interface {
 // DNS-rebinding-safe dial under ELITEA_HTTP_ACTION_EGRESS_ALLOWLIST.
 type Transport = http.RoundTripper
 
-// commitTimeout bounds the receipt write after a dispatch. It runs detached
-// from the caller's cancellation so a Worker disconnect does not turn a known
-// outcome into an uncertain one.
-const commitTimeout = 5 * time.Second
+// commitTimeout bounds the receipt write after a dispatch, and
+// artifactWriteTimeout bounds spilling a large response to object storage.
+// Both run detached from caller cancellation so a Worker disconnect does not
+// turn a known outcome into an uncertain one, and both are accounted for in
+// the persisted dispatch_deadline.
+const (
+	artifactWriteTimeout = 5 * time.Second
+	commitTimeout        = 5 * time.Second
+)
 
 type Service struct {
 	admit       Admitter
@@ -144,10 +156,16 @@ func (s *Service) Execute(ctx context.Context, inv Invocation) (Receipt, error) 
 	if !admitted.Tools.Permits(rule.Toolkit, rule.Tool) {
 		return Receipt{}, policyDenied()
 	}
-	rendered, err := Render(rule, admitted.Template, inv.Inputs)
+	var rendered Rendered
+	if inv.ParsedInputs != nil {
+		rendered, err = RenderDecoded(rule, admitted.Template, *inv.ParsedInputs)
+	} else {
+		rendered, err = Render(rule, admitted.Template, inv.Inputs)
+	}
 	if err != nil {
 		return Receipt{}, err
 	}
+	admitted.RuleUpdatedBy = rule.UpdatedBy
 	request := rendered.Request
 	retryable := rule.Retryable(request)
 	if inv.Attempt > 0 && !retryable {
@@ -189,6 +207,9 @@ func (s *Service) Execute(ctx context.Context, inv Invocation) (Receipt, error) 
 		}
 		credentialRevision = credential.Revision
 		for name, values := range credential.Headers {
+			if len(values) != 1 || !httpguts.ValidHeaderFieldName(name) || !httpguts.ValidHeaderFieldValue(values[0]) {
+				return Receipt{}, policyDenied()
+			}
 			if _, exists := headers[http.CanonicalHeaderKey(name)]; exists {
 				return Receipt{}, policyDenied()
 			}
@@ -197,7 +218,7 @@ func (s *Service) Execute(ctx context.Context, inv Invocation) (Receipt, error) 
 	}
 	count := 0
 	for name, values := range headers {
-		if len(values) != 1 {
+		if len(values) != 1 || !httpguts.ValidHeaderFieldName(name) || !httpguts.ValidHeaderFieldValue(values[0]) {
 			return Receipt{}, policyDenied()
 		}
 		count += len(name) + len(values[0])
@@ -206,7 +227,11 @@ func (s *Service) Execute(ctx context.Context, inv Invocation) (Receipt, error) 
 		return Receipt{}, invalidInput()
 	}
 	if request.Body.Kind == "json" {
-		headers.Set("Content-Type", "application/json")
+		contentType := "application/json"
+		if request.Body.ContentType != "" {
+			contentType = request.Body.ContentType
+		}
+		headers.Set("Content-Type", contentType)
 	} else if request.Body.ContentType != "" {
 		headers.Set("Content-Type", request.Body.ContentType)
 	}
@@ -227,7 +252,7 @@ func (s *Service) Execute(ctx context.Context, inv Invocation) (Receipt, error) 
 	}
 	outbound.Header = headers
 	outbound.ContentLength = int64(len(body))
-	intent := Intent{EffectID: EffectID(admitted.ExecutionID, admitted.Generation, inv), Rule: rule, RequestWire: rendered.Wire, RequestDigest: rendered.Digest, CredentialRevision: credentialRevision, Retryable: retryable, DispatchDeadline: deadline.Add(commitTimeout)}
+	intent := Intent{EffectID: EffectID(admitted.ExecutionID, admitted.Generation, inv), Rule: rule, RequestWire: rendered.Wire, RequestDigest: rendered.Digest, CredentialRevision: credentialRevision, Retryable: retryable, DispatchDeadline: deadline.Add(artifactWriteTimeout + commitTimeout)}
 	receipt, dispatch, err := s.effects.Begin(ctx, admitted, inv, intent)
 	if err != nil {
 		return Receipt{}, err
@@ -238,6 +263,11 @@ func (s *Service) Execute(ctx context.Context, inv Invocation) (Receipt, error) 
 	// No retry or redirect occurs beyond this durable dispatch fence.
 	response, callErr := s.transport.RoundTrip(outbound)
 	if callErr != nil {
+		if errors.Is(callErr, ErrEgressRefused) {
+			receipt.State = "failed"
+			receipt.FailureCode = code(CodePolicyDenied)
+			return s.finish(ctx, admitted, receipt)
+		}
 		receipt.State = "uncertain"
 		receipt.FailureCode = code("reconciliation_required")
 		return s.finish(ctx, admitted, receipt)
@@ -280,7 +310,13 @@ func (s *Service) Execute(ctx context.Context, inv Invocation) (Receipt, error) 
 			receipt.FailureCode = code("response_too_large")
 			return s.finish(ctx, admitted, receipt)
 		}
-		saved, saveErr := s.artifacts.Write(ctx, admitted, rule.OutputBucket, receipt.EffectID, response.Header.Get("Content-Type"), captured)
+		artifactDeadline := time.Now().Add(artifactWriteTimeout)
+		if intent.DispatchDeadline.Before(artifactDeadline) {
+			artifactDeadline = intent.DispatchDeadline
+		}
+		artifactCtx, artifactCancel := context.WithDeadline(context.WithoutCancel(ctx), artifactDeadline)
+		saved, saveErr := s.artifacts.Write(artifactCtx, admitted, rule.OutputBucket, receipt.EffectID, response.Header.Get("Content-Type"), captured)
+		artifactCancel()
 		if saveErr != nil {
 			receipt.State = "uncertain"
 			receipt.FailureCode = code("artifact_unavailable")

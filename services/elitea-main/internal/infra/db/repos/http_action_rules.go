@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -21,6 +23,10 @@ var (
 	ErrHTTPActionRuleNameTaken = errors.New("an HTTP action rule with this name already exists in the project")
 	ErrHTTPActionRuleStale     = errors.New("the HTTP action rule changed since it was read; reload it and retry")
 	ErrHTTPActionRuleLimit     = fmt.Errorf("the project already holds the maximum of %d HTTP action rules", httpaction.MaxRulesPerProject)
+	// ErrHTTPActionRuleConfigurationInvalid: configuration_id does not name an
+	// OpenAPI configuration in this project that the writing admin may use.
+	// Neutral wording avoids disclosing foreign or other-user private configs.
+	ErrHTTPActionRuleConfigurationInvalid = errors.New("HTTP action rule configuration_id must reference an accessible OpenAPI configuration in this project")
 	// ErrHTTPActionRuleStoredInvalid: a stored row fails today's Validate (a
 	// row written by an older binary). It is never handed out as a rule.
 	ErrHTTPActionRuleStoredInvalid = errors.New("stored HTTP action rule is invalid")
@@ -54,14 +60,14 @@ func NewHTTPActionRulesRepo(pool *pgxpool.Pool) (*HTTPActionRulesRepo, error) {
 }
 
 const httpActionRuleColumns = `id, project_id, revision, name, origin, path_template, method, query_names,
- configuration_id, toolkit, tool, coalesce(output_bucket, ''), replay, enabled, created_at, updated_at`
+ configuration_id, toolkit, tool, coalesce(output_bucket, ''), replay, enabled, updated_by, created_at, updated_at`
 
-func scanHTTPActionRule(row sqlRow) (HTTPActionRuleRecord, error) {
+func scanHTTPActionRuleRaw(row sqlRow) (HTTPActionRuleRecord, error) {
 	var record HTTPActionRuleRecord
 	rule := &record.Rule
 	if err := row.Scan(&rule.ID, &rule.ProjectID, &rule.Revision, &rule.Name, &rule.Origin, &rule.PathTemplate,
 		&rule.Method, &rule.QueryNames, &rule.ConfigurationID, &rule.Toolkit, &rule.Tool, &rule.OutputBucket,
-		&rule.Replay, &rule.Enabled, &record.CreatedAt, &record.UpdatedAt); err != nil {
+		&rule.Replay, &rule.Enabled, &rule.UpdatedBy, &record.CreatedAt, &record.UpdatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return HTTPActionRuleRecord{}, ErrHTTPActionRuleNotFound
 		}
@@ -71,8 +77,16 @@ func scanHTTPActionRule(row sqlRow) (HTTPActionRuleRecord, error) {
 	if rule.QueryNames == nil {
 		rule.QueryNames = []string{}
 	}
-	if err := rule.Validate(); err != nil {
-		return HTTPActionRuleRecord{}, fmt.Errorf("%w: rule %d: %v", ErrHTTPActionRuleStoredInvalid, rule.ID, err)
+	return record, nil
+}
+
+func scanHTTPActionRule(row sqlRow) (HTTPActionRuleRecord, error) {
+	record, err := scanHTTPActionRuleRaw(row)
+	if err != nil {
+		return HTTPActionRuleRecord{}, err
+	}
+	if err := record.Rule.Validate(); err != nil {
+		return HTTPActionRuleRecord{}, fmt.Errorf("%w: rule %d: %v", ErrHTTPActionRuleStoredInvalid, record.Rule.ID, err)
 	}
 	return record, nil
 }
@@ -92,7 +106,10 @@ func readHTTPActionRule(ctx context.Context, q sqlExecutor, projectID int64, nam
 	return record.Rule, nil
 }
 
-// List returns the project's rules ordered by name.
+// List returns the project's valid rules ordered by name. A stored row that
+// fails today's validator is logged and skipped so one legacy/corrupt row
+// cannot break listing the rest of the project's rules; Update can still
+// replace or disable it by id and revision.
 func (r *HTTPActionRulesRepo) List(ctx context.Context, projectID int64) ([]HTTPActionRuleRecord, error) {
 	rows, err := r.store.Query(ctx, `SELECT `+httpActionRuleColumns+` FROM elitea_runtime.http_action_rules
 WHERE project_id = $1 ORDER BY name LIMIT $2`, projectID, httpaction.MaxRulesPerProject)
@@ -102,9 +119,13 @@ WHERE project_id = $1 ORDER BY name LIMIT $2`, projectID, httpaction.MaxRulesPer
 	defer rows.Close()
 	items := []HTTPActionRuleRecord{}
 	for rows.Next() {
-		record, err := scanHTTPActionRule(rows)
+		record, err := scanHTTPActionRuleRaw(rows)
 		if err != nil {
 			return nil, fmt.Errorf("http action rules: list: %w", err)
+		}
+		if err := record.Rule.Validate(); err != nil {
+			slog.WarnContext(ctx, "http action rules: skipping invalid stored rule", "project_id", projectID, "rule_id", record.ID)
+			continue
 		}
 		items = append(items, record)
 	}
@@ -155,6 +176,11 @@ func (r *HTTPActionRulesRepo) Create(ctx context.Context, projectID, actorID int
 	}
 	var created HTTPActionRuleRecord
 	err := r.store.WithinTx(ctx, pgx.TxOptions{}, func(tx sqlExecutor) error {
+		if rule.ConfigurationID > 0 {
+			if err := checkHTTPActionRuleConfiguration(ctx, tx, projectID, actorID, rule.ConfigurationID); err != nil {
+				return err
+			}
+		}
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('elitea.http_action_rules/' || $1::bigint::text, 0))`, projectID); err != nil {
 			return err
 		}
@@ -193,6 +219,11 @@ func (r *HTTPActionRulesRepo) Update(ctx context.Context, projectID, ruleID, act
 	}
 	var updated HTTPActionRuleRecord
 	err := r.store.WithinTx(ctx, pgx.TxOptions{}, func(tx sqlExecutor) error {
+		if rule.ConfigurationID > 0 {
+			if err := checkHTTPActionRuleConfiguration(ctx, tx, projectID, actorID, rule.ConfigurationID); err != nil {
+				return err
+			}
+		}
 		record, err := scanHTTPActionRule(tx.QueryRow(ctx, `
 UPDATE elitea_runtime.http_action_rules SET
  name = $3, origin = $4, path_template = $5, method = $6, query_names = $7, configuration_id = $8, toolkit = $9,
@@ -226,6 +257,35 @@ RETURNING `+httpActionRuleColumns,
 	return updated, nil
 }
 
+func checkHTTPActionRuleConfiguration(ctx context.Context, tx sqlExecutor, projectID, actorID int64, configurationID int32) error {
+	if projectID <= 0 || projectID > 2147483647 || actorID <= 0 || configurationID <= 0 {
+		return ErrHTTPActionRuleConfigurationInvalid
+	}
+	table := pgx.Identifier{"p_" + strconv.FormatInt(projectID, 10), "configuration"}.Sanitize()
+	var (
+		kind   string
+		shared bool
+		author *int64
+	)
+	err := tx.QueryRow(ctx, `SELECT type, shared, author_id FROM `+table+` WHERE id = $1 AND project_id = $2 FOR SHARE`,
+		configurationID, int32(projectID)).Scan(&kind, &shared, &author)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrHTTPActionRuleConfigurationInvalid
+	}
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && (pgErr.Code == "3F000" || pgErr.Code == "42P01") {
+			// Project tenant schema or configuration table does not exist.
+			return ErrHTTPActionRuleConfigurationInvalid
+		}
+		return err
+	}
+	if kind != "openapi" || !(shared || author == nil || *author == actorID) {
+		return ErrHTTPActionRuleConfigurationInvalid
+	}
+	return nil
+}
+
 func checkHTTPActionRuleWrite(projectID, actorID int64, rule *httpaction.Rule) error {
 	if projectID <= 0 || actorID <= 0 {
 		return errors.New("http action rules: project and actor ids must be positive")
@@ -250,7 +310,7 @@ func httpActionRuleWriteError(operation string, err error) error {
 	switch {
 	case errors.As(err, &postgres) && postgres.Code == "23505":
 		return ErrHTTPActionRuleNameTaken
-	case errors.Is(err, ErrHTTPActionRuleLimit), errors.Is(err, ErrHTTPActionRuleStale), errors.Is(err, ErrHTTPActionRuleNotFound):
+	case errors.Is(err, ErrHTTPActionRuleLimit), errors.Is(err, ErrHTTPActionRuleStale), errors.Is(err, ErrHTTPActionRuleNotFound), errors.Is(err, ErrHTTPActionRuleConfigurationInvalid):
 		return err
 	}
 	return fmt.Errorf("http action rules: %s: %w", operation, err)

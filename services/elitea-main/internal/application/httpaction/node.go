@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"io"
 	"regexp"
+	"strings"
 	"unicode/utf8"
+
+	"golang.org/x/net/http/httpguts"
 )
 
 // NodeSchema is the `type: http`, `revision: 2` node shape
@@ -154,7 +157,7 @@ func parseRequestTemplate(raw json.RawMessage) (RequestTemplate, error) {
 		template.Body = &parsed
 	}
 	if key, found := fields["idempotency_key"]; found {
-		binding, err := parseBinding(key, false)
+		binding, err := parseBinding(key, false, maxLiteralString)
 		if err != nil {
 			return RequestTemplate{}, err
 		}
@@ -176,7 +179,7 @@ func parseBindingMap(raw json.RawMessage) (map[string]Binding, error) {
 		if !bindingKey.MatchString(name) {
 			return nil, ErrInvalid
 		}
-		binding, err := parseBinding(value, false)
+		binding, err := parseBinding(value, false, maxLiteralString)
 		if err != nil {
 			return nil, err
 		}
@@ -186,8 +189,8 @@ func parseBindingMap(raw json.RawMessage) (map[string]Binding, error) {
 }
 
 // parseBinding reads `{from, optional?}` or `{value}`; literal values are a
-// string of at most 1024 bytes, an int64 or a boolean.
-func parseBinding(raw json.RawMessage, allowName bool) (Binding, error) {
+// string of at most maxString bytes, an int64 or a boolean.
+func parseBinding(raw json.RawMessage, allowName bool, maxString int) (Binding, error) {
 	allowed := []string{"from", "optional", "value"}
 	if allowName {
 		allowed = append(allowed, "name")
@@ -215,7 +218,7 @@ func parseBinding(raw json.RawMessage, allowName bool) (Binding, error) {
 		}
 		switch typed := decoded.(type) {
 		case string:
-			if len(typed) > maxLiteralString {
+			if len(typed) > maxString {
 				return Binding{}, ErrInvalid
 			}
 		case bool:
@@ -239,16 +242,16 @@ func parseHeaderBinding(raw json.RawMessage) (HeaderBinding, error) {
 		return HeaderBinding{}, err
 	}
 	var header HeaderBinding
-	if decodeStrict(fields["name"], &header.Name) != nil || !headerNameSyntax.MatchString(header.Name) {
-		return HeaderBinding{}, ErrInvalid
+	if decodeStrict(fields["name"], &header.Name) != nil || !headerNameSyntax.MatchString(header.Name) || RestrictedHeader(strings.ToLower(header.Name)) {
+		return HeaderBinding{}, invalidInput()
 	}
 	if value, found := fields["value"]; found {
 		var text string
-		if decodeStrict(value, &text) != nil || len(text) > 8192 || bytes.ContainsAny([]byte(text), "\x00\r\n") {
+		if decodeStrict(value, &text) != nil || len(text) > maxHeaderLiteralString || bytes.ContainsAny([]byte(text), "\x00\r\n") || !httpguts.ValidHeaderFieldValue(text) {
 			return HeaderBinding{}, ErrInvalid
 		}
 	}
-	header.Binding, err = parseBinding(raw, true)
+	header.Binding, err = parseBinding(raw, true, maxHeaderLiteralString)
 	if err != nil {
 		return HeaderBinding{}, err
 	}
@@ -279,6 +282,9 @@ func parseBodyTemplate(raw json.RawMessage) (BodyTemplate, error) {
 			return BodyTemplate{}, ErrInvalid
 		}
 	case "json", "text":
+		if body.Kind == "json" && hasContentType && !validJSONMedia(body.ContentType) {
+			return BodyTemplate{}, ErrInvalid
+		}
 		if hasFrom == hasValue {
 			return BodyTemplate{}, ErrInvalid
 		}
