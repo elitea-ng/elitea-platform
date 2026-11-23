@@ -1196,7 +1196,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// central role assignments (elitea_auth.admin_role_grants) and the
 	// auth_core__project_user_role (user_id) index (issue 2499, ADR-0059
 	// R0.10a). No permission.
-	require.EqualValues(t, 260, Head(shared))
+	//
+	// 261: shared/0261_browser_session_authenticated_at.sql, when the person
+	// behind a browser session last authenticated
+	// (browser_sessions.authenticated_at; issue 2577, ADR-0059 R1.10a). No
+	// permission.
+	require.EqualValues(t, 261, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
