@@ -318,3 +318,89 @@ func TestAdministrationSurfaceFailsOnAnUnreachedRoute(t *testing.T) {
 		}
 	})
 }
+
+// actionPermissionExceptions are action entries whose permission the checks
+// Drive sees on the route do not name, each with the reason. The entry names
+// the permission the action requires; the drive's empty body stops before the
+// check that names it.
+var actionPermissionExceptions = map[string]string{
+	"PUT " + identityProvider + " " + adminaccess.OutcomeTrust:   identityTrustInHandler,
+	"PUT " + identityProvider + " " + adminaccess.OutcomeDisable: identityTrustInHandler,
+}
+
+const (
+	identityProvider       = "/api/v2/admin/identity_providers/administration/{key}"
+	identityTrustInHandler = "IdentityProviderSave asks for admin.auth.users.super_admin only after the " +
+		"document validates and the stored row is read, and only when a trust field changes (issue 2558); " +
+		"the drive's empty body is refused first, and the unconnected pool has no stored row"
+)
+
+// TestEveryWriteRouteOfTheSurfaceHasAnActionEntry is the ratchet of the action
+// table (ADR-0059 R0.1c): a write route of the surface with no entry fails, an
+// entry whose route the surface lacks fails, and an entry must require a
+// permission the route's checks accept.
+func TestEveryWriteRouteOfTheSurfaceHasAnActionEntry(t *testing.T) {
+	t.Parallel()
+
+	t.Run("fixtures", func(t *testing.T) {
+		t.Parallel()
+		resolver := &adminsurface.Resolver{}
+		r := chi.NewRouter()
+		r.Use(func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				next.ServeHTTP(w, r.WithContext(auth.ContextWithUser(r.Context(), adminsurface.Principal())))
+			})
+		})
+		ok := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }
+		gate := apimw.RequireCentralPermissions(resolver, auth.PermissionModeAdministration, adminaccess.RuntimePlugins)
+		r.With(gate).Get("/api/v2/admin/fixture", ok)
+		r.With(gate).Post("/api/v2/admin/fixture", ok)
+		r.With(gate).Put("/api/v2/admin/fixture", ok)
+		routes := []adminsurface.Route{
+			{Method: http.MethodGet, Pattern: "/api/v2/admin/fixture"},
+			{Method: http.MethodPost, Pattern: "/api/v2/admin/fixture"},
+			{Method: http.MethodPut, Pattern: "/api/v2/admin/fixture"},
+		}
+		result := adminsurface.Drive(r, resolver, routes, adminsurface.Options{Registry: adminaccess.Names()})
+
+		table, err := adminaccess.NewActions([]adminaccess.Action{
+			// The PUT has an entry, with a permission the gate does not name.
+			{Method: http.MethodPut, Pattern: "/api/v2/admin/fixture", Permission: adminaccess.ConfigurationBranding},
+			// An entry whose route is not mounted.
+			{Method: http.MethodDelete, Pattern: "/api/v2/admin/fixture", Permission: adminaccess.RuntimePlugins},
+		}, adminaccess.Registry())
+		if err != nil {
+			t.Fatal(err)
+		}
+		failures := result.ActionFailures(table, nil)
+		for _, want := range []string{
+			`POST /api/v2/admin/fixture (variant "") can change something on the administration surface and has no action entry`,
+			`PUT /api/v2/admin/fixture requires "configuration.branding"`,
+			"DELETE /api/v2/admin/fixture has an action entry, but the administration surface has no such route",
+		} {
+			if !slices.ContainsFunc(failures, func(f string) bool { return strings.HasPrefix(f, want) }) {
+				t.Errorf("no failure starts with %q; got %q", want, failures)
+			}
+		}
+		if len(failures) != 3 {
+			t.Errorf("got %d failures %q; want exactly the three above (the GET is read)", len(failures), failures)
+		}
+	})
+
+	t.Run("composed router", func(t *testing.T) {
+		t.Parallel()
+		result := drivenComposedSurface(t).result
+		for _, failure := range result.ActionFailures(
+			adminaccess.ActionTable(), actionPermissionExceptions) {
+			t.Error(failure)
+		}
+		// The multiplexed user route is driven once per action.
+		for _, action := range []string{"action delete", "action set_admin_role"} {
+			found := slices.ContainsFunc(result.Find(http.MethodPost, adminaccess.AuthUsersActionPattern),
+				func(e adminsurface.Entry) bool { return e.Variant == action })
+			if !found {
+				t.Errorf("POST %s was not driven with the variant %q", adminaccess.AuthUsersActionPattern, action)
+			}
+		}
+	})
+}
