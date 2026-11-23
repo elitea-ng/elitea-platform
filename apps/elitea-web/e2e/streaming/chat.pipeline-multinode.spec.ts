@@ -189,19 +189,19 @@ async function settleCanvas(page: Page): Promise<void> {
 }
 
 /**
- * Collapse the cards (which also runs the dagre auto-arrange) and fit the
- * graph on screen, through the editor's own two controls.
+ * Auto-arrange the graph via Wave U2's "Auto-arrange" menu (`Arrange top to
+ * bottom`) and fit it on screen, through the editor's own canvas controls.
  *
- * Two expanded LLM cards overlap almost completely and hang ~1000px below the
- * fold at the editor's opening zoom, which puts the first node's source handle
- * under the second card and off screen. Collapsed and auto-arranged they sit
- * side by side with both handles reachable.
+ * Two newly added LLM cards overlap near the drop offset, which puts the first
+ * node's source handle under the second card. Running dagre auto-arrange and
+ * fit view separates them cleanly with both handles reachable.
  */
 async function compactCanvas(page: Page): Promise<void> {
   await settleCanvas(page);
-  await page.getByRole('button', { name: 'Toggle cards size' }).click();
+  await page.getByRole('button', { name: 'Auto-arrange' }).click();
+  await page.getByRole('menuitem', { name: 'Arrange top to bottom' }).click();
   await settleCanvas(page);
-  await page.getByRole('button', { name: 'Fit View' }).click();
+  await page.getByRole('button', { name: 'Fit view' }).click();
   await settleCanvas(page);
 }
 

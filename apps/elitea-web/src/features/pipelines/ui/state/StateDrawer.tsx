@@ -41,6 +41,8 @@ export interface StateDrawerProps {
   readonly setYamlJsonObject: SetYamlJsonObject;
   readonly yamlJsonObject: YamlPipelineDocument;
   readonly disabled?: boolean | undefined;
+  /** Horizontal offset in pixels from the right edge (e.g. `400` when `NodeConfigDrawer` is open). */
+  readonly rightOffset?: number | undefined;
 }
 
 type StateMap = Readonly<Record<string, unknown>>;
@@ -50,7 +52,7 @@ function stateOf(document: YamlPipelineDocument): StateMap {
 }
 
 export function StateDrawer(props: StateDrawerProps): ReactNode {
-  const { isOpen, onClose, setYamlJsonObject, yamlJsonObject, disabled } = props;
+  const { isOpen, onClose, setYamlJsonObject, yamlJsonObject, disabled, rightOffset = 0 } = props;
   const displayStates = useMemo(
     () => (yamlJsonObject.state === undefined ? undefined : stateVariableSpecsForDisplay(stateOf(yamlJsonObject))),
     [yamlJsonObject],
@@ -67,10 +69,7 @@ export function StateDrawer(props: StateDrawerProps): ReactNode {
         newState = {
           ...oldState,
           [name]: {
-            type:
-              name === FlowEditorConstants.STATE_MESSAGES
-                ? FlowEditorConstants.StateVariableTypes.List
-                : FlowEditorConstants.StateVariableTypes.String,
+            type: FlowEditorConstants.DefaultStateTypes[name] ?? FlowEditorConstants.StateVariableTypes.String,
           },
         };
       } else {
@@ -119,7 +118,11 @@ export function StateDrawer(props: StateDrawerProps): ReactNode {
   if (!isOpen) return null;
 
   return (
-    <Box ref={containerRef} sx={containerSx(drawerWidth, isResizing, isHoveringHandle)}>
+    <Box
+      ref={containerRef}
+      sx={containerSx(drawerWidth, isResizing, isHoveringHandle, rightOffset)}
+      data-testid="pipeline-state-drawer"
+    >
       <Box
         sx={resizeHandleSx}
         onMouseDown={handleResizeStart}
@@ -139,6 +142,7 @@ export function StateDrawer(props: StateDrawerProps): ReactNode {
           aria-label={t('pipelines.flowEditor.state.closeDrawer', 'Close')}
           onClick={onClose}
           sx={closeButtonSx}
+          data-testid="pipeline-state-drawer-close-button"
         >
           <CloseIcon fontSize="small" />
         </IconButton>
@@ -158,11 +162,11 @@ export function StateDrawer(props: StateDrawerProps): ReactNode {
   );
 }
 
-function containerSx(width: number, isResizing: boolean, isHovering: boolean): SxProps<Theme> {
+function containerSx(width: number, isResizing: boolean, isHovering: boolean, rightOffset: number): SxProps<Theme> {
   return (theme: Theme) => ({
     position: 'absolute',
     top: 0,
-    right: 0,
+    right: `${rightOffset / 16}rem`,
     width: `${width}px`,
     height: '100%',
     display: 'flex',
@@ -172,7 +176,7 @@ function containerSx(width: number, isResizing: boolean, isHovering: boolean): S
     }`,
     background: theme.vars.palette.background.secondary,
     zIndex: 10,
-    transition: isResizing ? 'none' : 'border-color 0.2s ease',
+    transition: isResizing ? 'none' : 'border-color 0.2s ease, right 0.2s ease',
   });
 }
 

@@ -1,3 +1,5 @@
+import { EditorView } from '@codemirror/view';
+import { act, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -149,5 +151,58 @@ describe('YamlCodeEditor', () => {
     await vi.waitFor(() => {
       expect(container.querySelector('.error_yaml_code')).not.toBeNull();
     });
+  });
+
+  it('renders Copy YAML and Full screen view actions and opens/closes the full-screen modal', async () => {
+    const user = userEvent.setup();
+    const onFullScreenChange = vi.fn();
+    const { getByTestId, queryByTestId } = renderWithTheme(
+      <YamlCodeEditor
+        code="nodes: []"
+        onChangeCode={vi.fn()}
+        onFullScreenChange={onFullScreenChange}
+      />,
+    );
+
+    expect(getByTestId('pipeline-yaml-copy-button')).toBeInTheDocument();
+    expect(queryByTestId('pipeline-yaml-full-screen-modal')).not.toBeInTheDocument();
+
+    await user.click(getByTestId('pipeline-yaml-full-screen-button'));
+    expect(getByTestId('pipeline-yaml-full-screen-modal')).toBeInTheDocument();
+    expect(onFullScreenChange).toHaveBeenCalledWith(true);
+
+    await user.click(getByTestId('pipeline-yaml-full-screen-close-button'));
+    expect(queryByTestId('pipeline-yaml-full-screen-modal')).not.toBeInTheDocument();
+    expect(onFullScreenChange).toHaveBeenCalledWith(false);
+  });
+
+  it('flushes pending un-debounced edits when closing full-screen modal within 30ms', () => {
+    const onChangeCode = vi.fn();
+    const { getByTestId, queryByTestId } = renderWithTheme(
+      <YamlCodeEditor
+        code="nodes: []"
+        onChangeCode={onChangeCode}
+      />,
+    );
+
+    fireEvent.click(getByTestId('pipeline-yaml-full-screen-button'));
+    const modal = getByTestId('pipeline-yaml-full-screen-modal');
+    const modalContent = modal.querySelector('.cm-content');
+    if (!(modalContent instanceof HTMLElement)) throw new Error('Full-screen CodeMirror content not found');
+    const view = EditorView.findFromDOM(modalContent);
+    if (!view) throw new Error('Full-screen CodeMirror view not found');
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      act(() => {
+        view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: 'nodes:\n  - id: fast_edit' } });
+      });
+      // Close BEFORE the 30ms debounce fires — live text must be flushed synchronously.
+      fireEvent.click(getByTestId('pipeline-yaml-full-screen-close-button'));
+      expect(queryByTestId('pipeline-yaml-full-screen-modal')).not.toBeInTheDocument();
+      expect(onChangeCode).toHaveBeenCalledWith('nodes:\n  - id: fast_edit');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

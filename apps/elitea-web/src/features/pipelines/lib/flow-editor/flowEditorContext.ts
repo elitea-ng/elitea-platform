@@ -39,6 +39,7 @@ export interface FlowEditorContextValue {
   readonly deleteRunNode?: (id: string) => void;
   readonly isRunningPipeline?: boolean;
   readonly handleDeleteNode?: (id: string) => void;
+  readonly handleDuplicateNode?: (id: string) => void;
   readonly expandAll?: boolean;
   readonly setFlowNodes: SetFlowNodes;
   readonly setFlowEdges: SetFlowEdges;

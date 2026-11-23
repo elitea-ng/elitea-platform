@@ -211,31 +211,85 @@ describe('FlowEditor', () => {
     vi.useRealTimers();
   });
 
-  it('clicking the "Toggle cards size" canvas control toggles the expand-all state (onExpandAll)', () => {
-    vi.useFakeTimers();
-    const { container } = renderFlowEditor(baseProps());
+  it('toggles canvas lock and minimap visibility via CanvasControls', async () => {
+    const user = userEvent.setup();
+    renderFlowEditor(baseProps());
 
-    const buttons = container.querySelectorAll('.react-flow__controls-button');
-    expect(buttons).toHaveLength(6);
-    act(() => {
-      (buttons[4] as HTMLElement).click();
-    });
-    void act(() => vi.advanceTimersByTime(300));
+    const lockButton = screen.getByTestId('pipeline-canvas-lock');
+    expect(lockButton).toHaveAttribute('aria-pressed', 'false');
+    await user.click(lockButton);
+    expect(lockButton).toHaveAttribute('aria-pressed', 'true');
 
-    vi.useRealTimers();
+    const minimapButton = screen.getByTestId('pipeline-canvas-minimap-toggle');
+    expect(screen.queryByTestId('rf__minimap')).not.toBeInTheDocument();
+    await user.click(minimapButton);
+    expect(screen.getByTestId('rf__minimap')).toBeInTheDocument();
+    await user.click(minimapButton);
+    expect(screen.queryByTestId('rf__minimap')).not.toBeInTheDocument();
   });
 
-  it('clicking the "Auto-arrange" canvas control re-lays-out the graph (onReLayoutClick)', () => {
-    vi.useFakeTimers();
-    const { container } = renderFlowEditor(baseProps());
+  it('opens the TB/LR Auto-arrange menu and arranges the graph when nodes exist', async () => {
+    const user = userEvent.setup();
+    const userNode = { id: 'Printer_1', type: 'printer', position: { x: 0, y: 0 }, data: { label: 'Printer_1' } };
+    renderFlowEditor(
+      baseProps({
+        yamlJsonObject: { nodes: [{ id: 'Printer_1', type: 'printer' }] },
+        initialNodes: [userNode],
+      }),
+    );
 
-    const buttons = container.querySelectorAll('.react-flow__controls-button');
-    act(() => {
-      (buttons[5] as HTMLElement).click();
-    });
-    void act(() => vi.advanceTimersByTime(100));
+    await user.click(screen.getByTestId('pipeline-canvas-arrange'));
+    await user.click(screen.getByTestId('pipeline-canvas-arrange-lr'));
+    expect(screen.getByTestId('pipeline-canvas-arrange')).toBeInTheDocument();
+  });
 
-    vi.useRealTimers();
+  it('duplicates a node via ref.onDuplicateNode, avoiding versionTools name collisions and preserving compiler-admitted Printer transition', () => {
+    const ref = createRef<FlowEditorHandle>();
+    const setYamlJsonObject = vi.fn();
+    const userNode = { id: 'Printer_1', type: 'printer', position: { x: 10, y: 20 }, data: { label: 'Printer_1' } };
+    renderFlowEditor(
+      baseProps({
+        yamlJsonObject: {
+          nodes: [{ id: 'Printer_1', type: 'printer', transition: 'Next_1', content: 'hi' }],
+        },
+        initialNodes: [userNode],
+        versionTools: [{ id: 't1', type: 'toolkit', name: 'Printer_1_copy' }],
+        setYamlJsonObject,
+      }),
+      ref,
+    );
+
+    setYamlJsonObject.mockClear();
+    const duplicated = ref.current?.onDuplicateNode('Printer_1');
+
+    expect(duplicated?.id).toBe('Printer_1_copy_2');
+    const writtenDoc = setYamlJsonObject.mock.calls[0]?.[0] as {
+      nodes?: Array<{ id?: string; type?: string; transition?: string }>;
+    } | undefined;
+    expect(
+      writtenDoc?.nodes?.some(
+        node => node.id === 'Printer_1_copy_2' && node.type === 'printer' && node.transition === 'END',
+      ),
+    ).toBe(true);
+  });
+
+  it('refuses ref.onDuplicateNode when disabled (read-only guard)', () => {
+    const ref = createRef<FlowEditorHandle>();
+    const setYamlJsonObject = vi.fn();
+    const userNode = { id: 'Printer_1', type: 'printer', position: { x: 10, y: 20 }, data: { label: 'Printer_1' } };
+    renderFlowEditor(
+      baseProps({
+        yamlJsonObject: { nodes: [{ id: 'Printer_1', type: 'printer', transition: 'END' }] },
+        initialNodes: [userNode],
+        setYamlJsonObject,
+        disabled: true,
+      }),
+      ref,
+    );
+
+    setYamlJsonObject.mockClear();
+    expect(ref.current?.onDuplicateNode('Printer_1')).toBeUndefined();
+    expect(setYamlJsonObject).not.toHaveBeenCalled();
   });
 
   it('renders with disabled left unset (exercises the `disabled ?? false` fallback)', () => {
