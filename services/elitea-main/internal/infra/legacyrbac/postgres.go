@@ -212,10 +212,24 @@ type TokenAdminAccess struct {
 	Scopes []string
 }
 
+// tokenScopeAllowed says whether a name may be a token scope at all: its
+// registry row opts in (adminaccess.Permission.Token). The write path (R1.3a)
+// validates scopes too; this is the read side, so a scope written by hand or
+// by a defect (super_admin, identity trust) never resolves. No row opts in
+// yet, so every scoped token resolves nothing until R1.3a opts rows in: the
+// safe failure. A variable so the package's tests can stand in an
+// eligibility while no row has it.
+var tokenScopeAllowed = func(name string) bool {
+	row, ok := adminaccess.Lookup(name)
+	return ok && row.Token
+}
+
 // AdministrationSet is the administration set a credential of kind holds,
 // given its owner's standing set (owner) and, for a personal access token,
 // the token row's access. It is the one statement of the credentials table of
 // ADR-0059 decision 7; the resolver applies it to what PostgreSQL answered.
+// A scoped token keeps the scopes its owner still holds and the registry
+// admits as token scopes (tokenScopeAllowed).
 // The result is sorted, de-duplicated and never nil.
 func AdministrationSet(kind auth.CredentialKind, access TokenAdminAccess, owner []string) []string {
 	var keep func(string) bool
@@ -227,7 +241,9 @@ func AdministrationSet(kind auth.CredentialKind, access TokenAdminAccess, owner 
 		case TokenAdminAccessInherit:
 			keep = func(string) bool { return true }
 		case TokenAdminAccessScoped:
-			keep = func(name string) bool { return slices.Contains(access.Scopes, name) }
+			keep = func(name string) bool {
+				return slices.Contains(access.Scopes, name) && tokenScopeAllowed(name)
+			}
 		}
 	case auth.CredentialKindNative:
 		keep = func(name string) bool {

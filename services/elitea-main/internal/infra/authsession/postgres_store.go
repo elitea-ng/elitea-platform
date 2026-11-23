@@ -104,7 +104,7 @@ INSERT INTO elitea_auth.form_sessions AS current (id_hash, record, expires_at, a
 VALUES ($1, $2, now() + make_interval(secs => $3::double precision / 1000), $4)
 ON CONFLICT (id_hash) DO UPDATE
     SET record = EXCLUDED.record, expires_at = EXCLUDED.expires_at,
-        authenticated_at = EXCLUDED.authenticated_at
+        authenticated_at = EXCLUDED.authenticated_at, ref = DEFAULT
     WHERE current.expires_at <= now()`
 
 // Create stores state under a fresh opaque ID. Existing live rows are never
@@ -277,12 +277,13 @@ func (s *PostgresStore) rotateRecord(
 	var (
 		stored    []byte
 		expiresAt time.Time
+		ref       int64
 	)
 	err = tx.QueryRow(opCtx, `
-		SELECT record, expires_at FROM elitea_auth.form_sessions
+		SELECT record, expires_at, ref FROM elitea_auth.form_sessions
 		WHERE id_hash = $1 AND expires_at > now()
 		FOR UPDATE`, IDHash(id),
-	).Scan(&stored, &expiresAt)
+	).Scan(&stored, &expiresAt, &ref)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return "", ErrNotFound
@@ -312,7 +313,7 @@ func (s *PostgresStore) rotateRecord(
 				VALUES ($1, $2, $3, $4)
 				ON CONFLICT (id_hash) DO UPDATE
 				    SET record = EXCLUDED.record, expires_at = EXCLUDED.expires_at,
-				        authenticated_at = EXCLUDED.authenticated_at
+				        authenticated_at = EXCLUDED.authenticated_at, ref = DEFAULT
 				    WHERE current.expires_at <= now()`,
 				IDHash(candidate), replacementRecord, expiresAt, authenticatedAtParameter(authenticatedAt))
 		}
@@ -329,6 +330,13 @@ func (s *PostgresStore) rotateRecord(
 		return "", err
 	}
 	if _, err = tx.Exec(opCtx, `DELETE FROM elitea_auth.form_sessions WHERE id_hash = $1`, IDHash(id)); err != nil {
+		return "", storeError(ctx, "rotate", err)
+	}
+	// The new row is the same session under a fresh identifier, so it keeps
+	// the reference (shared 0266) that runs and elevations name. The old row
+	// is gone first: the reference is unique.
+	if _, err = tx.Exec(opCtx, `UPDATE elitea_auth.form_sessions SET ref = $2 WHERE id_hash = $1`,
+		IDHash(created), ref); err != nil {
 		return "", storeError(ctx, "rotate", err)
 	}
 	if err = tx.Commit(opCtx); err != nil {

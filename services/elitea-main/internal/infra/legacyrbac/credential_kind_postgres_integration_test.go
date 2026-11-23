@@ -135,7 +135,9 @@ func TestAPersonalAccessTokenResolvesByItsAdminAccess(t *testing.T) {
 		f.administration(t, credentialPrincipal(auth.CredentialKindToken, 1, inherit)).Permissions,
 		credentialFixtureAdminSet)
 
-	// A scope the owner does not hold is never resolved.
+	// A scope the owner does not hold is never resolved. No registry row is a
+	// token scope before R1.3a, so the test stands the eligibility in.
+	legacyrbac.AllowTokenScopesForTest(t, adminaccess.AdminAuthUsers, "not.held.by.owner")
 	scoped := f.token(t, 1, legacyrbac.TokenAdminAccessScoped, adminaccess.AdminAuthUsers, "not.held.by.owner")
 	wantSet(t, "a scoped token",
 		f.administration(t, credentialPrincipal(auth.CredentialKindToken, 1, scoped)).Permissions,
@@ -146,6 +148,7 @@ func TestAPersonalAccessTokenResolvesByItsAdminAccess(t *testing.T) {
 // needed for it to lose what its owner lost.
 func TestAScopedTokenLosesAScopeItsOwnerLoses(t *testing.T) {
 	f := newCredentialFixture(t)
+	legacyrbac.AllowTokenScopesForTest(t, adminaccess.AdminAuthUsers, adminaccess.RuntimePlugins)
 	scoped := f.token(t, 1, legacyrbac.TokenAdminAccessScoped, adminaccess.AdminAuthUsers, adminaccess.RuntimePlugins)
 	principal := credentialPrincipal(auth.CredentialKindToken, 1, scoped)
 	wantSet(t, "the scoped token before", f.administration(t, principal).Permissions,

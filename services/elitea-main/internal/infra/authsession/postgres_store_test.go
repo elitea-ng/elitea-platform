@@ -319,14 +319,16 @@ func TestPostgresStoreKeepsTheAuthenticationTimeBesideTheRecord(t *testing.T) {
 	}
 }
 
-// Every Form session row carries a stable, non-zero reference (shared 0266,
+// Every Form session carries a stable, non-zero reference (shared 0266,
 // ADR-0059 R1.2a), drawn from the browser_sessions.ref sequence so the two
-// kinds of row never share a number. A rotation writes a new row and so a
-// new reference; the record never holds it.
+// kinds of row never share a number. A rotation is the same session under a
+// fresh identifier and keeps it (runs and elevations name it); a new session
+// that reuses an expired row's identifier gets a new one; the record never
+// holds it.
 func TestPostgresStoreGivesEveryRowAReference(t *testing.T) {
 	t.Parallel()
 
-	ids := []string{testSessionID(50), testSessionID(51), testSessionID(52)}
+	ids := []string{testSessionID(50), testSessionID(51), testSessionID(52), testSessionID(53), testSessionID(53)}
 	store, pool := newTestStore(t, time.Hour, 5*time.Minute, sequenceGenerator(ids...))
 	first, err := store.Create(context.Background(), completedState(time.Now().Add(time.Hour)))
 	if err != nil {
@@ -354,8 +356,28 @@ func TestPostgresStoreGivesEveryRowAReference(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, err := store.Read(context.Background(), rotated); err != nil || got.Ref <= 0 || got.Ref == a.Ref {
-		t.Fatalf("the rotated row answered %d, %v; want a new positive reference", got.Ref, err)
+	if got, err := store.Read(context.Background(), rotated); err != nil || got.Ref != a.Ref {
+		t.Fatalf("the rotated session answered %d, %v; want its kept reference %d", got.Ref, err, a.Ref)
+	}
+	replaced, err := store.RotateAndReplace(context.Background(), rotated, completedState(time.Now().Add(time.Hour)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.Read(context.Background(), replaced); err != nil || got.Ref != a.Ref {
+		t.Fatalf("the re-entered session answered %d, %v; want its kept reference %d", got.Ref, err, a.Ref)
+	}
+	// An expired row is replaced by the next session drawing its identifier;
+	// that is a different session and must not inherit the dead one's number.
+	expire(t, pool, replaced)
+	reused, err := store.Create(context.Background(), completedState(time.Now().Add(time.Hour)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reused != replaced {
+		t.Fatalf("the generator gave %q, want the expired %q", reused, replaced)
+	}
+	if got, err := store.Read(context.Background(), reused); err != nil || got.Ref <= 0 || got.Ref == a.Ref {
+		t.Fatalf("a new session on an expired row answered %d, %v; want a new reference", got.Ref, err)
 	}
 	var sequence, expression string
 	if err := pool.QueryRow(context.Background(), `

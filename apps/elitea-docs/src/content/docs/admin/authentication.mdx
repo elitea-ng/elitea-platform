@@ -91,7 +91,7 @@ curl -X POST "https://<host>/api/v2/admin/identity_providers/administration/corp
   -d '{"from_issuer": "https://old-idp.example.com/realms/corp"}'
 ```
 
-The answer is `{"provider_key": "corporate", "issuer": "<new issuer>", "rebound": <count>}`. The old binding is removed, so the old issuer stops working. A repeated request moves nothing.
+`$SUPER_ADMIN_TOKEN` is a personal access token of the super admin with `admin_access` `inherit`: a new token carries no administration rights (see [Which credential carries which administration rights](#which-credential-carries-which-administration-rights)). The answer is `{"provider_key": "corporate", "issuer": "<new issuer>", "rebound": <count>}`. The old binding is removed, so the old issuer stops working. A repeated request moves nothing.
 
 - To move the accounts of another provider, add `"from_provider_key": "<key>"`. Use `"from_provider_key": "@environment"` for the accounts of a provider that was configured through environment variables, when you replace it with a provider on this screen.
 - To bind accounts that have no binding, send `{"from_unbound": true}` alone. After the upgrade, these are the accounts of a protocol that had no enabled stored provider. An account linked by a replica of the previous release while the upgrade rolled out is bound at its next sign-in, as long as the provider has not been saved since the upgrade.
