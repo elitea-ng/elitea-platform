@@ -92,8 +92,36 @@ listed below, and the administration-mode rule above.
 
 A future internal RPC that changes administration data carries the principal
 and the elevation id, Main makes the decision, and it follows ADR-0036 (gRPC
-over mTLS, contract in `libs/proto`). The gateway and the Rust worker, outside
-the Go workspace, have their own listener tests.
+over mTLS, contract in `libs/proto`).
+
+The LLM gateway and the Rust worker are outside the Go workspace. Each has its
+own allowlist and its own listener test, run by its own CI job (ADR-0059 R1.9):
+
+| Service | Allowlist | Test | CI job |
+|---------|-----------|------|--------|
+| elitea-llm-gateway | `services/elitea-llm-gateway/internal/grpcapi/internal_listener_allowlist.txt` | `internal/grpcapi/surface_allowlist_test.go`, `internal/server/surface_allowlist_test.go` | `ci-gateway` |
+| elitea-worker-rust | `services/elitea-worker-rust/src/sandbox/internal_listener_allowlist.txt` | `src/sandbox/surface_allowlist_tests.rs` | `ci-rust` |
+
+- **The gateway** uses a copy of the Go checks above. Its test builds the
+  `GatewayService` listener through `grpcapi.NewServer` and compares
+  `GetServiceInfo()` with the allowlist. It also scans the module's source for
+  listener sites and the routes of the health and metrics mux. The HTTP twin
+  walks the `/llm` chi router (`chi.Walk`), which only the `GatewayService`
+  RPCs reach. The gateway reads provider, policy and model data from
+  PostgreSQL. Its calls write run and metering data only: the request log,
+  budget counters and usage.
+- **The worker** serves nothing in its default binary. The
+  `elitea-sandbox-supervisor` binary serves `SandboxSupervisorService`,
+  `BrowserSessionService` and `WorkspaceRunService`, one mTLS listener for
+  each runtime profile. The test finds each tonic server module that the
+  non-test source names. It reads the routes of that server from the code that
+  tonic generated, and compares them with the allowlist. It also counts every
+  listener and registration site in the non-test source. Each request carries
+  a grant that Main signed for one run (`claim`). No method writes provider,
+  policy, identity or role data.
+
+Each allowlist line gives a reason: who calls the method and what it writes. A
+fixture method, route or site that is not on the list makes each test fail.
 
 The internal methods that can change administration data, and the caller
 identity each requires (the test compares this table with the allowlists):

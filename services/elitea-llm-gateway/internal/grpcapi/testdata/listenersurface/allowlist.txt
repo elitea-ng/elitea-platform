@@ -1,0 +1,4 @@
+# Fixture: the reviewed state is one gRPC server in serveAdmin and a helper
+# directory that does not exist.
+site | server.go:serveAdmin | grpc.NewServer | 1
+helper | fixturetest | fixture

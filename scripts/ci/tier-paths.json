@@ -120,6 +120,8 @@
         "services/elitea-llm-gateway/**",
         ".github/workflows/ci-gateway.yml",
         "scripts/ci/check-gateway-toolchain.sh",
+        "docs/ARCHITECTURE.md",
+        "services/elitea-main/internal/transport/internal_listener_checks_test.go",
         "libs/go/natsconn/**",
         "deploy/helm/elitea/values.yaml",
         "deploy/helm/elitea/values-nats-ha.yaml",

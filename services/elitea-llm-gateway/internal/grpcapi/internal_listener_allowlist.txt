@@ -1,0 +1,90 @@
+# elitea-llm-gateway's internal listeners: the reviewed allowlist (ADR-0059
+# decision 7, "Internal paths"; story R1.9). The gateway is outside go.work, so
+# R1.8's tests in the workspace cannot see it; ci-gateway.yml runs these:
+#
+# - internal/grpcapi/surface_allowlist_test.go compares the grpc lines with
+#   what the real GatewayService listener (grpcapi.NewServer) reports through
+#   grpc.Server.GetServiceInfo(), both ways;
+# - internal/server/surface_allowlist_test.go compares the site lines and the
+#   http lines named by a file with the module's source (the health and
+#   metrics mux, every listener and registration site), and the http lines of
+#   the `llm` listener with the routes the /llm chi router registers
+#   (chi.Walk over api.NewRouterWithLog), both ways.
+#
+# The format and the meaning of each field are in
+# internal_listener_checks_test.go (the same file as R1.8's).
+#
+# The gateway writes no provider, policy, identity or role data through any
+# listener: it READS provider credentials, governance definitions and model
+# mappings from PostgreSQL, which elitea-main writes through its public API.
+# What its calls write is run and metering data: the per-request log row
+# (requestlog middleware on the router root, every /llm route) and the budget
+# counters and usage events on NATS. An "admin" line here would have to be
+# listed in docs/ARCHITECTURE.md and decided by Main's route.
+
+# --- gRPC listener (GATEWAY_GRPC_ADDR): elitea.gateway.v1.GatewayService ---------
+# mTLS only (grpcapi.ServerTLS requires a client certificate from
+# GATEWAY_TLS_CA_FILE) and the Allowlist interceptor admits only the workload
+# identities in GATEWAY_GRPC_CLIENTS (elitea-main by default). Each /llm call
+# also carries Main's HMAC-signed identity tuple, verified by the handler.
+# Every RPC runs the /llm chi router below in process (bridge.go).
+grpc | gateway | /elitea.gateway.v1.GatewayService/ChatCompletions | write | workload | elitea-main (GATEWAY_GRPC_CLIENTS): a model call; writes the request log, budget counters and usage
+grpc | gateway | /elitea.gateway.v1.GatewayService/Completions | write | workload | elitea-main (GATEWAY_GRPC_CLIENTS): a model call; writes the request log, budget counters and usage
+grpc | gateway | /elitea.gateway.v1.GatewayService/Messages | write | workload | elitea-main (GATEWAY_GRPC_CLIENTS): a model call; writes the request log, budget counters and usage
+grpc | gateway | /elitea.gateway.v1.GatewayService/CountTokens | write | workload | elitea-main (GATEWAY_GRPC_CLIENTS): counts tokens; writes the request log only
+grpc | gateway | /elitea.gateway.v1.GatewayService/Responses | write | workload | elitea-main (GATEWAY_GRPC_CLIENTS): a model call; writes the request log, budget counters and usage
+grpc | gateway | /elitea.gateway.v1.GatewayService/Embeddings | write | workload | elitea-main (GATEWAY_GRPC_CLIENTS): a model call; writes the request log, budget counters and usage
+grpc | gateway | /elitea.gateway.v1.GatewayService/ImageGenerate | write | workload | elitea-main (GATEWAY_GRPC_CLIENTS): a model call; writes the request log, budget counters and usage
+grpc | gateway | /elitea.gateway.v1.GatewayService/ImageEdit | write | workload | elitea-main (GATEWAY_GRPC_CLIENTS): a model call; writes the request log, budget counters and usage
+grpc | gateway | /elitea.gateway.v1.GatewayService/Speech | write | workload | elitea-main (GATEWAY_GRPC_CLIENTS): a model call; writes the request log, budget counters and usage
+grpc | gateway | /elitea.gateway.v1.GatewayService/Transcribe | write | workload | elitea-main (GATEWAY_GRPC_CLIENTS): a model call; writes the request log, budget counters and usage
+grpc | gateway | /elitea.gateway.v1.GatewayService/Realtime | write | workload | elitea-main (GATEWAY_GRPC_CLIENTS): a realtime model session; writes the request log, budget counters and usage
+grpc | gateway | /elitea.gateway.v1.GatewayService/ListModels | write | workload | elitea-main (GATEWAY_GRPC_CLIENTS): reads the project's model mappings; writes the request log only
+grpc | gateway | /elitea.gateway.v1.GatewayService/GetModel | write | workload | elitea-main (GATEWAY_GRPC_CLIENTS): reads one model mapping; writes the request log only
+grpc | gateway | /elitea.gateway.v1.GatewayService/CheckConnection | write | workload | elitea-main (GATEWAY_GRPC_CLIENTS): one round trip with an UNSAVED credential the request carries; stores nothing of it, writes the request log only
+grpc | gateway | /elitea.gateway.v1.GatewayService/ListProviderModels | write | workload | elitea-main (GATEWAY_GRPC_CLIENTS): lists a provider's models with an UNSAVED credential; stores nothing of it, writes the request log only
+grpc | gateway | /elitea.gateway.v1.GatewayService/ListProviderVoices | write | workload | elitea-main (GATEWAY_GRPC_CLIENTS): answers a dialect's published voices; writes the request log only
+grpc | gateway | /elitea.gateway.v1.GatewayService/MeteredAdmit | write | workload | elitea-main (GATEWAY_GRPC_CLIENTS): admits a metered tool operation; reserves budget (metering data)
+grpc | gateway | /elitea.gateway.v1.GatewayService/MeteredSettle | write | workload | elitea-main (GATEWAY_GRPC_CLIENTS): bills a metered tool operation (metering data)
+grpc | gateway | /elitea.gateway.v1.GatewayService/GovernanceStatus | read | workload | elitea-main (GATEWAY_GRPC_CLIENTS): reports which governance rules are in force; changes nothing
+
+# --- the /llm chi router (api.NewRouterWithLog), reached only through the -------
+# GatewayService RPCs above, never on a listener of its own. The patterns are
+# chi's, as chi.Walk reports them. The request log middleware on the root
+# writes a row for every route, so none of them is "read".
+http | llm | POST /llm/v1/messages | write | workload | elitea-main via GatewayService/Messages: a model call (request log, budget, usage)
+http | llm | POST /llm/v1/messages/count_tokens | write | workload | elitea-main via GatewayService/CountTokens: request log only
+http | llm | POST /llm/v1/messages/* | write | workload | no RPC reaches it (the bridge admits fixed paths); answers 404, writes the request log only
+http | llm | POST /llm/v1/images/edits | write | workload | elitea-main via GatewayService/ImageEdit: a model call (request log, budget, usage)
+http | llm | POST /llm/v1/images/variations | write | workload | elitea-main via GatewayService/ImageEdit: a model call (request log, budget, usage)
+http | llm | POST /llm/v1/images/generations | write | workload | elitea-main via GatewayService/ImageGenerate: a model call (request log, budget, usage)
+http | llm | POST /llm/v1/audio/speech | write | workload | elitea-main via GatewayService/Speech: a model call (request log, budget, usage)
+http | llm | POST /llm/v1/audio/transcriptions | write | workload | elitea-main via GatewayService/Transcribe: a model call (request log, budget, usage)
+http | llm | POST /llm/v1/audio/translations | write | workload | elitea-main via GatewayService/Transcribe: a model call (request log, budget, usage)
+http | llm | POST /llm/v1/chat/completions | write | workload | elitea-main via GatewayService/ChatCompletions: a model call (request log, budget, usage)
+http | llm | POST /llm/v1/completions | write | workload | elitea-main via GatewayService/Completions: a model call (request log, budget, usage)
+http | llm | POST /llm/v1/embeddings | write | workload | elitea-main via GatewayService/Embeddings: a model call (request log, budget, usage)
+http | llm | POST /llm/v1/responses | write | workload | elitea-main via GatewayService/Responses: a model call (request log, budget, usage)
+http | llm | GET /llm/v1/realtime | write | workload | elitea-main via GatewayService/Realtime: a realtime session (request log, budget, usage)
+http | llm | GET /llm/v1/models | write | workload | elitea-main via GatewayService/ListModels: reads model mappings; request log only
+http | llm | GET /llm/v1/models/* | write | workload | elitea-main via GatewayService/GetModel: reads one model mapping; request log only
+http | llm | POST /llm/v1/check_connection | write | workload | elitea-main via GatewayService/CheckConnection: an unsaved credential, stored nowhere; request log only
+http | llm | POST /llm/v1/list_provider_models | write | workload | elitea-main via GatewayService/ListProviderModels: an unsaved credential, stored nowhere; request log only
+http | llm | POST /llm/v1/list_provider_voices | write | workload | elitea-main via GatewayService/ListProviderVoices: request log only
+http | llm | POST /llm/v1/metered/admit | write | workload | elitea-main via GatewayService/MeteredAdmit: reserves budget (metering data)
+http | llm | POST /llm/v1/metered/settle | write | workload | elitea-main via GatewayService/MeteredSettle: bills (metering data)
+
+# --- health port (GATEWAY_HTTP_ADDR): plain HTTP, probes and metrics only -------
+# The patterns name no method, so every method reaches them; each handler only
+# reads.
+http | cmd/elitea-llm-gateway/main.go:main | /healthz | read | none | kubelet probe (no credential)
+http | cmd/elitea-llm-gateway/main.go:main | /readyz | read | none | kubelet probe (no credential)
+http | cmd/elitea-llm-gateway/main.go:main | /metrics | read | none | metrics scraper (no credential)
+
+# --- listener sites ---------------------------------------------------------------
+site | cmd/elitea-llm-gateway/main.go:main | http.NewServeMux | 1
+site | internal/server/server.go:New | http.Server | 1
+site | internal/server/server.go:Server.ListenAndServe | net.Listen | 1
+site | internal/grpcapi/listener.go:NewServer | grpc.NewServer | 1
+site | internal/grpcapi/listener.go:NewServer | RegisterGatewayServiceServer | 1
+site | internal/grpcapi/listener.go:Server.ListenAndServe | net.Listen | 1
