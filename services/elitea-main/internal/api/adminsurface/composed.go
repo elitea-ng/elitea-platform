@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -15,6 +16,10 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/oapiserver"
+	v2agentidentity "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentidentity"
+	v2credentialreferences "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialreferences"
+	v2mandateattachments "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/mandateattachments"
+	v2retention "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/retention"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	dbrepos "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
@@ -81,6 +86,19 @@ func ComposedRouter() (Composed, error) {
 		NativeClients:          nativeauth.NewRegistry(nil, pool),
 		NativeStore:            nativeauth.NewStore(pool, nativeauth.Config{}),
 
+		// Administration route groups the router mounts only when their
+		// handler is set. cmd/elitea-main always sets RetentionAdmin, and sets
+		// the four agent identity handlers with the governance flag on. Zero
+		// handlers are enough: Drive reads the route gates in front of them,
+		// and a handler that has nothing behind it answers the same way to
+		// every request (ADR-0059 R0.1c: the action table is checked against
+		// these routes too).
+		RetentionAdmin:             v2retention.NewHandler(dbrepos.NewRetentionPolicyRepo(pool)),
+		AgentIdentityAdmin:         &v2agentidentity.Handler{},
+		ExternalAgentIdentityAdmin: &v2agentidentity.ExternalHandler{},
+		MandateAttachments:         &v2mandateattachments.Handler{},
+		CredentialReferencesAdmin:  &v2credentialreferences.Handler{},
+
 		// The Postgres recorder writes from a goroutine of its own, which
 		// panics on the unconnected pool.
 		AuditRecorder:              discardAudit{},
@@ -131,6 +149,18 @@ func (c Composed) Options() (Options, error) {
 		route := Route{Method: method, Pattern: ConfigurationValues}.String()
 		for _, section := range sections {
 			opts.Variants[route] = append(opts.Variants[route], section.Variant())
+		}
+	}
+	// A route that multiplexes actions on its body is driven once per action
+	// the action table declares, with the body that selects it.
+	for _, action := range adminaccess.ActionTable().Entries() {
+		if action.Selector.In != adminaccess.SelectBody {
+			continue
+		}
+		route := Route{Method: action.Method, Pattern: action.Pattern}.String()
+		variant := Variant{Name: "action " + action.Selector.Value, Body: action.Selector.Body()}
+		if !slices.ContainsFunc(opts.Variants[route], func(v Variant) bool { return v.Name == variant.Name }) {
+			opts.Variants[route] = append(opts.Variants[route], variant)
 		}
 	}
 	return opts, nil
