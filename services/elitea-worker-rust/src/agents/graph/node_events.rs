@@ -640,6 +640,15 @@ impl PipelineNodeEventReceiver {
             _ => None,
         }
     }
+
+    /// The registered code of the next queued model failure, if one is buffered.
+    pub(crate) async fn try_model_failure_code(&self) -> Option<&'static str> {
+        let mut guard = self.inner.lock().await;
+        match guard.as_mut()?.try_recv().ok()? {
+            PipelineNodeEventSignal::ModelFailed { code, .. } => Some(code),
+            _ => None,
+        }
+    }
 }
 
 impl PipelineNodeEventDrain<'_> {

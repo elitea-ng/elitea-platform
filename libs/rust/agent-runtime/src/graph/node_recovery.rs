@@ -828,7 +828,7 @@ impl NodeAttemptLedger {
         failure: NodeFailure,
         now_ms: u64,
     ) -> Result<Self, NodeRecoveryError> {
-        self.record_failure_inner(failure, now_ms, None)
+        self.record_failure_inner(failure, now_ms, None, None)
     }
 
     /// Persist a failure clamped against the run's execution deadline (5b-1,
@@ -844,29 +844,94 @@ impl NodeAttemptLedger {
         run_deadline_ms: u64,
         required_ms: u64,
     ) -> Result<Self, NodeRecoveryError> {
-        self.record_failure_inner(failure, now_ms, Some((run_deadline_ms, required_ms)))
+        self.record_failure_inner(failure, now_ms, None, Some((run_deadline_ms, required_ms)))
+    }
+
+    /// Persist a failure honoring a server `Retry-After` hint (`retry_after_ms`)
+    /// inside the node's bounded retry budget (5b-2).
+    ///
+    /// When the policy plans `RetryAt`:
+    /// - `retry_after_ms > MAX_BACKOFF_MS` stops immediately with `ElapsedLimit`
+    ///   (never waits past the platform cap).
+    /// - Otherwise the effective wait is `max(policy_wait, retry_after_ms)`
+    ///   checked against both the node's elapsed deadline and `run_window`.
+    pub fn record_failure_with_retry_after(
+        &self,
+        failure: NodeFailure,
+        now_ms: u64,
+        retry_after_ms: Option<u64>,
+        run_window: Option<(u64, u64)>,
+    ) -> Result<Self, NodeRecoveryError> {
+        self.record_failure_inner(failure, now_ms, retry_after_ms, run_window)
     }
 
     fn record_failure_inner(
         &self,
         failure: NodeFailure,
         now_ms: u64,
+        retry_after_ms: Option<u64>,
         run_window: Option<(u64, u64)>,
     ) -> Result<Self, NodeRecoveryError> {
         self.require_running(now_ms)?;
         self.require_stable_effect(failure)?;
         let planned = self.plan(&self.policy, failure, now_ms)?;
-        let (decision, clamped) = match (planned, run_window) {
-            (
-                RecoveryDecision::RetryAt { not_before_ms, .. },
-                Some((run_deadline_ms, required_ms)),
-            ) if not_before_ms
-                .checked_add(required_ms)
-                .is_none_or(|finish| finish > run_deadline_ms) =>
-            {
-                (RecoveryDecision::Stop(StopReason::ElapsedLimit), true)
+        let (decision, used_retry_after, clamped) = match planned {
+            RecoveryDecision::RetryAt {
+                not_before_ms,
+                next_attempt,
+                effect_id,
+            } => {
+                let mut target_ms = not_before_ms;
+                let mut exceeded = false;
+                let mut applied_retry_after = false;
+                if let Some(ra_ms) = retry_after_ms {
+                    applied_retry_after = true;
+                    if ra_ms > MAX_BACKOFF_MS {
+                        exceeded = true;
+                    } else {
+                        let server_ms = now_ms
+                            .checked_add(ra_ms)
+                            .ok_or(NodeRecoveryError::InvalidClock)?;
+                        target_ms = target_ms.max(server_ms);
+                        let first = self
+                            .history
+                            .first()
+                            .ok_or(NodeRecoveryError::InvalidHistory)?;
+                        if self
+                            .retry_deadline(first.started_ms)?
+                            .is_some_and(|deadline| target_ms >= deadline)
+                        {
+                            exceeded = true;
+                        }
+                    }
+                }
+                let run_exceeded = !exceeded
+                    && matches!(
+                        run_window,
+                        Some((run_deadline_ms, required_ms))
+                            if target_ms
+                                .checked_add(required_ms)
+                                .is_none_or(|finish| finish > run_deadline_ms)
+                    );
+                if exceeded || run_exceeded {
+                    (
+                        RecoveryDecision::Stop(StopReason::ElapsedLimit),
+                        applied_retry_after,
+                        run_exceeded,
+                    )
+                } else {
+                    (
+                        RecoveryDecision::RetryAt {
+                            not_before_ms: target_ms,
+                            next_attempt,
+                            effect_id,
+                        },
+                        applied_retry_after,
+                        false,
+                    )
+                }
             }
-            (decision, _) => (decision, false),
+            decision => (decision, false, false),
         };
         let mut next = self.next_revision()?;
         let record = next
@@ -876,17 +941,26 @@ impl NodeAttemptLedger {
         record.finished_ms = Some(now_ms);
         record.outcome = AttemptOutcome::Failed { failure, decision };
         next.phase = NodeAttemptPhase::Failed(decision);
-        next.events.push(match (clamped, run_window) {
-            (true, Some((run_deadline_ms, required_ms))) => {
-                codec::NodeRecoveryEvent::FailureWithin {
+        next.events.push(
+            match (used_retry_after, retry_after_ms, clamped, run_window) {
+                (true, Some(ra_ms), _, window) => codec::NodeRecoveryEvent::FailureWithRetryAfter {
                     failure,
                     now_ms,
-                    run_deadline_ms,
-                    required_ms,
+                    retry_after_ms: ra_ms,
+                    run_deadline_ms: window.map(|(deadline, _)| deadline),
+                    required_ms: window.map(|(_, required)| required),
+                },
+                (false, _, true, Some((run_deadline_ms, required_ms))) => {
+                    codec::NodeRecoveryEvent::FailureWithin {
+                        failure,
+                        now_ms,
+                        run_deadline_ms,
+                        required_ms,
+                    }
                 }
-            }
-            _ => codec::NodeRecoveryEvent::Failure { failure, now_ms },
-        });
+                _ => codec::NodeRecoveryEvent::Failure { failure, now_ms },
+            },
+        );
         Ok(next)
     }
 

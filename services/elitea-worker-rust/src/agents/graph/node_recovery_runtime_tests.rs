@@ -929,6 +929,7 @@ impl NodeAttemptBody for ReportBody {
             failure,
             terminal_code: Some("pipeline.code_preparation_unconfirmed"),
             failure_detail: None,
+            retry_after_ms: None,
         })
     }
     async fn report_terminal_failure(

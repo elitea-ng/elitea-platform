@@ -1010,6 +1010,7 @@ pub(crate) fn model_failure(upstream_code: Option<&str>) -> RuntimeFailureKind {
             | "model_gateway.response_type"
             | "model_gateway.done_before_completion"
             | "model_gateway.event_after_completion"
+            | "model_gateway.too_many_events"
             | "anthropic_gateway.invalid_stream"
             | "anthropic_gateway.incomplete_stream",
         ) => RuntimeFailureKind::ModelResponseInvalid,

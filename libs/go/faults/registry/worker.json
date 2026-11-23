@@ -298,6 +298,70 @@
       "owner": "elitea-worker-rust"
     },
     {
+      "code": "pipeline.llm.failed",
+      "sentence": "The LLM node could not complete this model call.",
+      "action": "Check the model configuration and prompt inputs, then run the pipeline again.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "pipeline.llm.rate_limited",
+      "sentence": "The model gateway rate limit stopped the LLM node.",
+      "action": "Wait briefly or raise the node's retry settings, then run the pipeline again.",
+      "audience": "user",
+      "retryable": "yes",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "pipeline.llm.timeout",
+      "sentence": "The LLM node exceeded its execution timeout.",
+      "action": "Increase the node's timeout or simplify the prompt, then run the pipeline again.",
+      "audience": "user",
+      "retryable": "yes",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "pipeline.llm.unavailable",
+      "sentence": "The model gateway was unavailable for the LLM node.",
+      "action": "Check the model gateway health or retry the pipeline.",
+      "audience": "user",
+      "retryable": "yes",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "pipeline.mcp.failed",
+      "sentence": "The MCP tool node could not complete this call.",
+      "action": "Check the MCP server connection and tool inputs, then run the pipeline again.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "pipeline.mcp.timeout",
+      "sentence": "The MCP tool node exceeded its execution timeout.",
+      "action": "Increase the node's timeout or check the MCP server response time, then run the pipeline again.",
+      "audience": "user",
+      "retryable": "yes",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "pipeline.toolkit.failed",
+      "sentence": "The Toolkit node could not complete this tool call.",
+      "action": "Check the toolkit configuration and inputs, then run the pipeline again.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "pipeline.toolkit.timeout",
+      "sentence": "The Toolkit node exceeded its execution timeout.",
+      "action": "Increase the node's timeout or check the target service, then run the pipeline again.",
+      "audience": "user",
+      "retryable": "yes",
+      "owner": "elitea-worker-rust"
+    },
+    {
       "code": "pipeline.node.failed_continued",
       "sentence": "A pipeline node failed and its settings recorded the failure in node_errors, so the run went on.",
       "action": "Nothing for the platform; read the node_errors entry with the same support reference to see which node failed.",

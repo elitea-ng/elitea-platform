@@ -238,9 +238,51 @@
     },
     {
       "name": "an LLM node",
-      "yaml": "state:\n  answer: str\nentry_point: ask\nnodes:\n  - id: ask\n    type: llm\n    input_mapping:\n      task: {type: fixed, value: Hi}\n    output: [answer]\n    settings: {execute_once: true}\n    transition: END\n",
-      "refusal": "family_not_yet",
+      "yaml": "state:\n  answer: str\nentry_point: ask\nnodes:\n  - id: ask\n    type: llm\n    input_mapping:\n      task: {type: fixed, value: Hi}\n    output: [answer]\n    settings: {retry_on_fail: true, max_tries: 3, wait_between_tries_ms: 1000, on_error: continue, always_output_data: true, execute_once: true, timeout_ms: 15000}\n    transition: END\n",
+      "refusal": null,
+      "node": null
+    },
+    {
+      "name": "an LLM node routes on error",
+      "yaml": "state:\n  answer: str\nentry_point: ask\nnodes:\n  - id: ask\n    type: llm\n    input_mapping:\n      task: {type: fixed, value: Hi}\n    output: [answer]\n    settings: {on_error: error_output, error_transition: fallback}\n    transition: END\n  - id: fallback\n    type: state_modifier\n    template: 'fallback'\n    output: [answer]\n    transition: END\n",
+      "refusal": null,
+      "node": null
+    },
+    {
+      "name": "an LLM node with max_tries 6",
+      "yaml": "state:\n  answer: str\nentry_point: ask\nnodes:\n  - id: ask\n    type: llm\n    input_mapping:\n      task: {type: fixed, value: Hi}\n    output: [answer]\n    settings: {retry_on_fail: true, max_tries: 6}\n    transition: END\n",
+      "refusal": "max_tries_range",
       "node": "ask"
+    },
+    {
+      "name": "an LLM node with timeout 900001",
+      "yaml": "state:\n  answer: str\nentry_point: ask\nnodes:\n  - id: ask\n    type: llm\n    input_mapping:\n      task: {type: fixed, value: Hi}\n    output: [answer]\n    settings: {timeout_ms: 900001}\n    transition: END\n",
+      "refusal": "timeout_range",
+      "node": "ask"
+    },
+    {
+      "name": "a toolkit node",
+      "yaml": "state:\n  report: dict\nentry_point: lookup\nnodes:\n  - id: lookup\n    type: toolkit\n    toolkit_name: Support\n    tool: search\n    input_mapping:\n      query: {type: fixed, value: hi}\n    output: [report]\n    settings: {retry_on_fail: true, max_tries: 3, wait_between_tries_ms: 500, on_error: continue, always_output_data: true, execute_once: true, timeout_ms: 5000}\n    transition: END\n",
+      "refusal": null,
+      "node": null
+    },
+    {
+      "name": "an mcp node",
+      "yaml": "state:\n  report: dict\nentry_point: call_mcp\nnodes:\n  - id: call_mcp\n    type: mcp\n    toolkit_name: Remote\n    tool: echo\n    input_mapping:\n      query: {type: fixed, value: hi}\n    output: [report]\n    settings: {retry_on_fail: true, max_tries: 2, wait_between_tries_ms: 100, on_error: error_output, error_transition: END, timeout_ms: 2000}\n    transition: END\n",
+      "refusal": null,
+      "node": null
+    },
+    {
+      "name": "a toolkit node with wait 300001",
+      "yaml": "state:\n  report: dict\nentry_point: lookup\nnodes:\n  - id: lookup\n    type: toolkit\n    toolkit_name: Support\n    tool: search\n    input_mapping:\n      query: {type: fixed, value: hi}\n    output: [report]\n    settings: {retry_on_fail: true, wait_between_tries_ms: 300001}\n    transition: END\n",
+      "refusal": "wait_range",
+      "node": "lookup"
+    },
+    {
+      "name": "an Agent node",
+      "yaml": "state:\n  answer: str\nentry_point: delegate\nnodes:\n  - id: delegate\n    type: agent\n    tool: child\n    input_mapping:\n      task: {type: fixed, value: work}\n    output: [answer]\n    settings: {execute_once: true}\n    transition: END\n",
+      "refusal": "family_not_yet",
+      "node": "delegate"
     },
     {
       "name": "a HITL node",
@@ -327,10 +369,10 @@
       "node": null
     },
     {
-      "name": "a default value on an LLM node is refused (decision 1)",
-      "yaml": "state:\n  answer: str\nentry_point: ask\nnodes:\n  - id: ask\n    type: llm\n    input_mapping:\n      task: {type: fixed, value: Hi}\n    output: [answer]\n    settings: {on_error: stop}\n    transition: END\n",
+      "name": "a default value on an Agent node is refused (decision 1)",
+      "yaml": "state:\n  answer: str\nentry_point: delegate\nnodes:\n  - id: delegate\n    type: agent\n    tool: child\n    input_mapping:\n      task: {type: fixed, value: work}\n    output: [answer]\n    settings: {on_error: stop}\n    transition: END\n",
       "refusal": "family_not_yet",
-      "node": "ask"
+      "node": "delegate"
     },
     {
       "name": "max_tries 70000",

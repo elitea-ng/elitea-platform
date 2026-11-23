@@ -19,10 +19,19 @@ const SCHEMA_V3: &str = "elitea.pipeline.node-recovery.v3";
 /// a run-deadline-clamped failure decision. Earlier Workers refuse it by schema
 /// instead of misclassifying or replaying a retry past the run deadline.
 const SCHEMA_V4: &str = "elitea.pipeline.node-recovery.v4";
+/// A ledger that recorded a server `Retry-After` wait override (5b-2). Earlier
+/// Workers refuse it by schema instead of recomputing a shorter wait.
+const SCHEMA_V5: &str = "elitea.pipeline.node-recovery.v5";
 
 /// The oldest schema that can express every event in `ledger`.
 fn schema_for(ledger: &NodeAttemptLedger) -> &'static str {
-    if ledger.events.iter().any(|event| {
+    if ledger
+        .events
+        .iter()
+        .any(|event| matches!(event, NodeRecoveryEvent::FailureWithRetryAfter { .. }))
+    {
+        SCHEMA_V5
+    } else if ledger.events.iter().any(|event| {
         matches!(
             event,
             NodeRecoveryEvent::FailureWithin { .. }
@@ -75,6 +84,15 @@ pub enum NodeRecoveryEvent {
         now_ms: u64,
         run_deadline_ms: u64,
         required_ms: u64,
+    },
+    FailureWithRetryAfter {
+        failure: NodeFailure,
+        now_ms: u64,
+        retry_after_ms: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        run_deadline_ms: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        required_ms: Option<u64>,
     },
     Success {
         receipt_id: [u8; 32],
@@ -190,6 +208,20 @@ fn apply_event(
             run_deadline_ms,
             required_ms,
         } => ledger.record_failure_within(failure, now_ms, run_deadline_ms, required_ms),
+        NodeRecoveryEvent::FailureWithRetryAfter {
+            failure,
+            now_ms,
+            retry_after_ms,
+            run_deadline_ms,
+            required_ms,
+        } => {
+            let window = match (run_deadline_ms, required_ms) {
+                (Some(deadline), Some(required)) => Some((deadline, required)),
+                (None, None) => None,
+                _ => return Err(NodeRecoveryError::InvalidHistory),
+            };
+            ledger.record_failure_with_retry_after(failure, now_ms, Some(retry_after_ms), window)
+        }
         NodeRecoveryEvent::Success { receipt_id, now_ms } => {
             ledger.record_success(receipt_id, now_ms)
         }
@@ -412,6 +444,80 @@ mod tests {
             .start_attempt(100)
             .unwrap();
         assert!(require_successor(&first, &replacement).is_err());
+    }
+
+    #[test]
+    fn retry_after_wins_up_to_cap_and_refuses_past_cap_or_run_deadline() {
+        use crate::graph::node_recovery::{MAX_BACKOFF_MS, RecoveryDecision, StopReason};
+        let fixed = NodeRecoveryPolicy::admit(
+            3,
+            BTreeSet::from([RetryCondition::RateLimited]),
+            Some(NodeBackoff {
+                initial_ms: 1_000,
+                maximum_ms: 1_000,
+                multiplier: 1,
+            }),
+            Some(3_600_000),
+            None,
+        )
+        .unwrap();
+        let failure = NodeFailure {
+            class: NodeFailureClass::RateLimited,
+            replay: ReplaySafety::NoExternalEffect,
+        };
+        let started = NodeAttemptLedger::new([3; 32], fixed.clone())
+            .unwrap()
+            .start_attempt(1_000)
+            .unwrap();
+
+        // Retry-After: 7s with configured wait 1s -> waits 7s and round-trips under v5.
+        let seven_s = started
+            .record_failure_with_retry_after(failure, 1_100, Some(7_000), Some((100_000, 1_000)))
+            .unwrap();
+        assert_eq!(
+            seven_s.phase(),
+            NodeAttemptPhase::Failed(RecoveryDecision::RetryAt {
+                not_before_ms: 8_100,
+                next_attempt: 2,
+                effect_id: None,
+            })
+        );
+        let raw = encode(&seven_s).unwrap();
+        assert_eq!(raw["schema"], SCHEMA_V5);
+        assert_eq!(decode(&raw, [3; 32], &fixed).unwrap(), seven_s);
+
+        // Retry-After at exact cap (300_000 ms) is admitted.
+        let at_cap = started
+            .record_failure_with_retry_after(failure, 1_100, Some(MAX_BACKOFF_MS), None)
+            .unwrap();
+        assert_eq!(
+            at_cap.phase(),
+            NodeAttemptPhase::Failed(RecoveryDecision::RetryAt {
+                not_before_ms: 1_100 + MAX_BACKOFF_MS,
+                next_attempt: 2,
+                effect_id: None,
+            })
+        );
+
+        // Retry-After past cap (300_001 ms) stops immediately with ElapsedLimit (no wait).
+        let past_cap = started
+            .record_failure_with_retry_after(failure, 1_100, Some(MAX_BACKOFF_MS + 1), None)
+            .unwrap();
+        assert_eq!(
+            past_cap.phase(),
+            NodeAttemptPhase::Failed(RecoveryDecision::Stop(StopReason::ElapsedLimit))
+        );
+        let raw_past = encode(&past_cap).unwrap();
+        assert_eq!(decode(&raw_past, [3; 32], &fixed).unwrap(), past_cap);
+
+        // Retry-After that would cross execution deadline stops immediately with ElapsedLimit.
+        let past_run = started
+            .record_failure_with_retry_after(failure, 1_100, Some(7_000), Some((9_000, 1_000)))
+            .unwrap();
+        assert_eq!(
+            past_run.phase(),
+            NodeAttemptPhase::Failed(RecoveryDecision::Stop(StopReason::ElapsedLimit))
+        );
     }
 }
 

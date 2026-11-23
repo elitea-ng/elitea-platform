@@ -41,6 +41,9 @@ pub(super) struct RawSettingsCatalog {
 pub(crate) enum AdmittedNodeFamily {
     Deterministic(DeterministicFamily),
     Code,
+    Llm,
+    Toolkit,
+    Mcp,
 }
 
 impl AdmittedNodeFamily {
@@ -49,6 +52,9 @@ impl AdmittedNodeFamily {
         match self {
             Self::Deterministic(family) => family.node_type(),
             Self::Code => "code",
+            Self::Llm => "llm",
+            Self::Toolkit => "toolkit",
+            Self::Mcp => "mcp",
         }
     }
 }
@@ -223,6 +229,9 @@ impl RawSettingsCatalog {
             let admitted_family = match family {
                 SettingsFamily::Deterministic(family) => AdmittedNodeFamily::Deterministic(family),
                 SettingsFamily::Code => AdmittedNodeFamily::Code,
+                SettingsFamily::Llm => AdmittedNodeFamily::Llm,
+                SettingsFamily::Toolkit => AdmittedNodeFamily::Toolkit,
+                SettingsFamily::Mcp => AdmittedNodeFamily::Mcp,
                 SettingsFamily::NotYet => {
                     return Err(refusal(&id, NodeSettingsRefusal::FamilyNotYet));
                 }

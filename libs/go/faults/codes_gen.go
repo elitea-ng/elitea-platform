@@ -62,6 +62,18 @@ const (
 	PipelineCodeSupervisorBusy Code = "pipeline.code.supervisor_busy"
 	// The Code node exceeded its execution timeout.
 	PipelineCodeTimeout Code = "pipeline.code.timeout"
+	// The LLM node could not complete this model call.
+	PipelineLlmFailed Code = "pipeline.llm.failed"
+	// The model gateway rate limit stopped the LLM node.
+	PipelineLlmRateLimited Code = "pipeline.llm.rate_limited"
+	// The LLM node exceeded its execution timeout.
+	PipelineLlmTimeout Code = "pipeline.llm.timeout"
+	// The model gateway was unavailable for the LLM node.
+	PipelineLlmUnavailable Code = "pipeline.llm.unavailable"
+	// The MCP tool node could not complete this call.
+	PipelineMcpFailed Code = "pipeline.mcp.failed"
+	// The MCP tool node exceeded its execution timeout.
+	PipelineMcpTimeout Code = "pipeline.mcp.timeout"
 	// A pipeline node failed and its settings recorded the failure in node_errors, so the run went on.
 	PipelineNodeFailedContinued Code = "pipeline.node.failed_continued"
 	// This run already recorded the most node failures one run may hold, so the next failure stopped the run instead of continuing.
@@ -104,6 +116,10 @@ const (
 	PipelineSplitOutFailed Code = "pipeline.split_out.failed"
 	// The State Modifier node could not produce its output from this input.
 	PipelineStateModifierFailed Code = "pipeline.state_modifier.failed"
+	// The Toolkit node could not complete this tool call.
+	PipelineToolkitFailed Code = "pipeline.toolkit.failed"
+	// The Toolkit node exceeded its execution timeout.
+	PipelineToolkitTimeout Code = "pipeline.toolkit.timeout"
 	// A background runner failed its pass and will try again.
 	RunnerCycleFailed Code = "runner.cycle_failed"
 	// A background runner stopped on a dependency failure and is being restarted.

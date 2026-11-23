@@ -330,7 +330,17 @@ pub enum SettingsFamily {
     /// Code sandbox node (5b-1 PR B): journaled retries, on-error,
     /// always-output, run-once and per-node timeout.
     Code,
-    /// A node type whose slice has not wired settings yet (5b-2..5b-5):
+    /// LLM node (5b-2): pre-first-visible-delta retries honoring `Retry-After`,
+    /// on-error, always-output, run-once and per-node timeout.
+    Llm,
+    /// Direct Toolkit node (5b-3): platform read-only retries or effectful
+    /// journal + Reconcile, on-error, always-output, run-once and timeout.
+    Toolkit,
+    /// Direct MCP node (5b-3): effectful journal + Reconcile (MCP
+    /// `readOnlyHint` is untrusted for retry), on-error, always-output,
+    /// run-once and timeout.
+    Mcp,
+    /// A node type whose slice has not wired settings yet (5b-4..5b-5):
     /// the whole block is refused.
     NotYet,
     /// HITL and Printer pause the run: no settings, ever.
@@ -346,6 +356,9 @@ impl SettingsFamily {
             "split_out" => Self::Deterministic(DeterministicFamily::SplitOut),
             "aggregate" => Self::Deterministic(DeterministicFamily::Aggregate),
             "code" => Self::Code,
+            "llm" => Self::Llm,
+            "toolkit" => Self::Toolkit,
+            "mcp" => Self::Mcp,
             "hitl" | "printer" => Self::Pause,
             _ => Self::NotYet,
         }
@@ -361,7 +374,7 @@ impl SettingsFamily {
                 "always_output_data",
                 "execute_once",
             ],
-            Self::Code => &[
+            Self::Code | Self::Llm | Self::Toolkit | Self::Mcp => &[
                 "retry_on_fail",
                 "max_tries",
                 "wait_between_tries_ms",
@@ -511,7 +524,11 @@ impl NodeSettings {
         match family {
             SettingsFamily::NotYet => return Err(NodeSettingsRefusal::FamilyNotYet),
             SettingsFamily::Pause => return Err(NodeSettingsRefusal::FamilyPause),
-            SettingsFamily::Deterministic(_) | SettingsFamily::Code => {}
+            SettingsFamily::Deterministic(_)
+            | SettingsFamily::Code
+            | SettingsFamily::Llm
+            | SettingsFamily::Toolkit
+            | SettingsFamily::Mcp => {}
         }
         let admitted = family.admitted_keys();
         if self.retry_on_fail && !admitted.contains(&"retry_on_fail") {
