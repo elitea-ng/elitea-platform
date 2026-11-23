@@ -7,7 +7,8 @@
 -- administration set (finding C8). Two columns make the narrower answers
 -- expressible:
 --
---   admin_access  `none`     no administration rights (the default);
+--   admin_access  `none`     no administration rights once enforced (the
+--                            default);
 --                 `scoped`   only the names in admin_scopes;
 --                 `inherit`  the owner's set, until the sunset date (R4.2).
 --   admin_scopes  the administration permission names of a `scoped` token.
@@ -32,9 +33,12 @@
 --     elitea_auth.native_sessions.token_id. Both tests are applied.
 --   project system tokens: every token of a project's system identity, the
 --     account `system_user_<project id>@centry.user` that
---     GetActiveProjectSystemPAT (internal/db/queries/auth_pat.sql) joins on.
+--     GetActiveProjectSystemPAT (internal/db/queries/auth_pat.sql) joins on
+--     (centry.user is a reserved domain; internal/infra/identityrepo). The
+--     email form is matched exactly, also for a project whose row is gone.
 --
--- NEW ROWS take the column default `none`. The three insert sites (personal
+-- NEW ROWS take the column default `none`: once R1.2a enforces it, a new
+-- token has no administration rights until scopes are chosen (R1.3a). The three insert sites (personal
 -- access tokens, native device sessions, the project system token) do not
 -- name the columns, and a replica of the previous release, which does not
 -- know them, writes `none` too during a rolling upgrade.
@@ -53,7 +57,6 @@
 DO $$
 DECLARE
     already_present boolean;
-    system_clause   text := '';
     session_clause  text := '';
     backfilled      bigint;
 BEGIN
@@ -105,20 +108,14 @@ BEGIN
         RETURN;
     END IF;
 
-    -- The two exclusions name tables a database may lack; each is added only
-    -- where its table exists (no table, no such row).
+    -- The native session table may be absent (no table, no such row), so its
+    -- exclusion is added only where it exists. The system identity is matched
+    -- by its exact email form, not through centry.project, so the account of
+    -- a project whose row is gone is excluded too.
     IF to_regclass('elitea_auth.native_sessions') IS NOT NULL THEN
         session_clause := '
           AND NOT EXISTS (SELECT 1 FROM elitea_auth.native_sessions AS device
                           WHERE device.token_id = token.id)';
-    END IF;
-    IF to_regclass('centry.project') IS NOT NULL THEN
-        system_clause := '
-          AND NOT EXISTS (SELECT 1
-                          FROM public.auth_core__user AS owner
-                          JOIN centry.project AS project
-                            ON owner.email = (''system_user_'' || project.id::text || ''@centry.user'')
-                          WHERE owner.id = token.user_id)';
     END IF;
 
     EXECUTE '
@@ -133,8 +130,11 @@ BEGIN
                        AND role.mode = ''administration''
                       JOIN public.auth_core__role_permission AS role_grant
                         ON role_grant.role_id = role.id
-                      WHERE assignment.user_id = token.user_id)'
-        || session_clause || system_clause;
+                      WHERE assignment.user_id = token.user_id)
+          AND NOT EXISTS (SELECT 1 FROM public.auth_core__user AS owner
+                          WHERE owner.id = token.user_id
+                            AND owner.email ~ ''^system_user_[0-9]+@centry[.]user$'')'
+        || session_clause;
     GET DIAGNOSTICS backfilled = ROW_COUNT;
     RAISE NOTICE '0265: % personal access token(s) backfilled to inherit', backfilled;
 END

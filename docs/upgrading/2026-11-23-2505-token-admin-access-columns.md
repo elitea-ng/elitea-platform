@@ -8,9 +8,10 @@ columns to `public.auth_core__token`:
 - `admin_scopes` (`text[] NOT NULL DEFAULT '{}'`), the administration
   permissions of a `scoped` token. It stays empty for `none` and `inherit`.
 
-A token created after the upgrade has no administration rights until scopes
-are chosen. Its `admin_access` is `none`. This holds for personal access tokens,
-desktop and mobile device sessions, and project system tokens.
+A token created after the upgrade is recorded as `none`. Once a later ADR-0059
+release enforces the value, such a token has no administration rights until
+scopes are chosen. This holds for personal access tokens, desktop and mobile
+device sessions, and project system tokens.
 
 The migration sets existing rows once:
 
@@ -25,7 +26,9 @@ The migration sets existing rows once:
 - Desktop and mobile device sessions and project system tokens get `none`.
 
 **Nothing is enforced yet.** In this release nothing reads the two columns, so
-no request is answered differently. A later ADR-0059 release makes the
+no request is answered differently: every token, new or old, still resolves its
+owner's administration permissions. Do not treat a new token as having no
+administration rights before the enforcing release. A later ADR-0059 release makes the
 resolver read them; its upgrade note says what changes then.
 
 **Who is affected.** No one in this release. If you back up or replicate
