@@ -15,8 +15,9 @@ func browserSection() map[string]any {
 	const section = platformconfig.SectionBrowser
 	defaults := platformconfig.DefaultBrowserSettings()
 	return map[string]any{
-		"id":    section,
-		"title": "Cloud Browser",
+		"id":     section,
+		"access": agentGovernanceAccess(),
+		"title":  "Cloud Browser",
 		"description": "The browser toolkit's limits. A project turns the cloud browser on in its own settings. " +
 			"The browser reaches the internet only through the egress proxy. Allowlist (the default) limits it to " +
 			"the worker egress allowlist, the project's worker egress entries and the project's browser domains. " +

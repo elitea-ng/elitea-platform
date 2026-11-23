@@ -47,8 +47,9 @@ func nativeClientPolicySection() map[string]any {
 	const section = platformconfig.SectionNativeClientPolicy
 	defaults := platformconfig.DefaultNativeClientPolicy()
 	return map[string]any{
-		"id":    section,
-		"title": "Native client policy",
+		"id":     section,
+		"access": nativeClientsSectionAccess,
+		"title":  "Native client policy",
 		"description": "What this deployment requires of its mobile and desktop apps. The policy is sent with " +
 			"every token an app receives, so a change reaches signed-in devices within one access-token " +
 			"lifetime. The app enforces the device settings; the server refuses app versions below the minimum.",
