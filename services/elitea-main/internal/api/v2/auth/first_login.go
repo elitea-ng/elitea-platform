@@ -81,15 +81,21 @@ func InitialGlobalAdminsFromEnv() []string {
 // an `email:` entry against the address and against nothing else, so a subject
 // spelled `email:someone@corp.com` collects no grant.
 func matchesInitialGlobalAdmin(admins []string, providerRef, verifiedEmail string) bool {
-	if identity.MatchesInitialGlobalAdmin(admins, providerRef, verifiedEmail) {
-		return true
+	return initialGlobalAdminMatch(admins, providerRef, verifiedEmail) != ""
+}
+
+// initialGlobalAdminMatch is matchesInitialGlobalAdmin that also names the
+// shape of the entry that matched (identity.InitialGlobalAdminMatch), or "".
+func initialGlobalAdminMatch(admins []string, providerRef, verifiedEmail string) string {
+	if shape := identity.InitialGlobalAdminMatch(admins, providerRef, verifiedEmail); shape != "" {
+		return shape
 	}
 	for _, prefix := range []string{OIDCProviderRefPrefix, SAMLProviderRefPrefix} {
 		if bare, found := strings.CutPrefix(providerRef, prefix); found {
-			return identity.MatchesInitialGlobalAdmin(admins, bare, verifiedEmail)
+			return identity.InitialGlobalAdminMatch(admins, bare, verifiedEmail)
 		}
 	}
-	return false
+	return ""
 }
 
 // applyFirstLoginGrants is what a login gets beyond an account row, and it runs
@@ -124,10 +130,10 @@ func applyFirstLoginGrants(
 	}
 	queries := sqlcgen.New(tx)
 
-	if matchesInitialGlobalAdmin(policy.InitialGlobalAdmins, providerRef, verifiedEmail) {
+	if shape := initialGlobalAdminMatch(policy.InitialGlobalAdmins, providerRef, verifiedEmail); shape != "" {
 		if err := identityrepo.ApplyInitialAdministrationRole(
 			ctx, tx, int32(userID),
-			identity.InitialAdministrationMode, identity.InitialAdministrationRole,
+			identity.InitialAdministrationMode, identity.InitialAdministrationRole, shape,
 		); err != nil {
 			return err
 		}

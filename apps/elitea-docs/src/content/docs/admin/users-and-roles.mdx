@@ -139,7 +139,7 @@ The server makes sure that no administrator can raise their own access, and that
 The six rules for central roles:
 
 1. **Grant and assign only what you hold.** You can add a permission to a central role, or remove one from it, only if you hold that permission yourself. You can assign or remove a central role only if you hold every permission of that role. Removing counts, so an administrator with fewer permissions cannot demote one with more.
-2. **Not yourself.** You cannot give yourself a central role, or take one away from yourself, on the Users page or under `/admin/modes`. Another administrator makes that change. The first administrator comes from `identity.initial_global_admins`.
+2. **Not yourself.** You cannot give yourself a central role, or take one away from yourself, on the Users page or under `/admin/modes`. Another administrator makes that change. The first administrator comes from `identity.initial_global_admins`, which applies only while no active account holds `super_admin`.
 3. **Your own role is locked.** You cannot change the permissions of a central role that you hold.
 4. **Seeded only.** Six permissions are granted by the upgrade migrations only, and no change through the console or the API adds them to a role: `admin.auth.users.super_admin`, `identity.sso.trust.manage`, `access.breakglass.request`, `access.breakglass.approve`, `access.breakglass.manage` and `access.breakglass.review`.
 5. **Locked sets.** The permissions of a built-in role cannot be changed (see [Built-in administration roles](#built-in-administration-roles)). A role that is never assigned (the legacy `system` role) is assigned to nobody.
@@ -174,7 +174,7 @@ The server refuses a change that breaks a rule with `403` and a `code`:
 The body also names the `role` and the `permissions`. The Roles page shows that reason in place of a generic error. Each refusal is in the Audit Trail with the action `role.escalation_refused`.
 
 <Note>
-Nobody can change the permissions of a built-in role through the console or the API, a super admin included (see [Built-in administration roles](#built-in-administration-roles)). The accounts in `identity.initial_global_admins` (`ELITEA_INITIAL_GLOBAL_ADMINS`) get `super_admin` on their first sign-in.
+Nobody can change the permissions of a built-in role through the console or the API, a super admin included (see [Built-in administration roles](#built-in-administration-roles)). The accounts in `identity.initial_global_admins` (`ELITEA_INITIAL_GLOBAL_ADMINS`) get `super_admin` on their first sign-in, but only while no active account holds `super_admin` (see [The first global administrator](/admin/authentication#the-first-global-administrator)).
 </Note>
 
 ## Role changes are recorded

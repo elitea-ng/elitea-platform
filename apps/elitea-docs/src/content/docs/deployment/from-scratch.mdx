@@ -62,7 +62,7 @@ Write the answers down. Every one ends up in a value or a Secret, and several ar
 | PostgreSQL server and its `max_connections` | `pg.internal:5432`, `200` | the database DSN Secrets, `postgresql.maxConnections` | edit values; the chart re-checks the connection budget |
 | Bucket and region | `elitea-artifacts`, `eu-west-1` | `STORAGE_*` / `S3_*` env | data does not move by itself |
 | Identity provider and client | issuer URL, client id, client secret | `OIDC_*` env and a Secret | edit values |
-| First administrator | `email:admin@example.com` | `ELITEA_INITIAL_GLOBAL_ADMINS` | add entries any time; nobody is ever demoted by this list |
+| First administrator | `email:admin@example.com` | `ELITEA_INITIAL_GLOBAL_ADMINS` | a bootstrap only: it applies while no active account holds `super_admin`; add later administrators with `elitea-main admin-role grant` or the console |
 | Worker identity (SPIFFE id) | `spiffe://elitea.example.com/ns/elitea/sa/worker` | the worker certificate, `worker.runtimeSession.expectedIdentity` | re-mint the worker certificate |
 | Model provider hosts | `api.openai.com`, `10.0.5.20:8000` | `GATEWAY_EGRESS_ALLOWLIST` | edit values |
 

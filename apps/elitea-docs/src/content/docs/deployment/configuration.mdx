@@ -38,6 +38,8 @@ Configure identity providers under **Configuration › Authentication** in the a
 
 A fresh database seeds only `dev@elitea.ai`. On a single-sign-on deployment, this account has no password. Set `identity.initial_global_admins` or the equivalent environment variable before you rely on the admin console.
 
+The list is a bootstrap only. It grants `super_admin` at first sign-in only while no active account holds `super_admin`. After that, a listed sign-in gets no role and logs a warning. Add later administrators from the console or with `elitea-main admin-role grant`, and empty the list once the first administrator has signed in. See [The first global administrator](/admin/authentication#the-first-global-administrator).
+
 ## E-mail: SMTP bootstrap defaults
 
 `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_TLS`, `EMAIL_FROM`, `EMAIL_REPLY_TO` and `PUBLIC_BASE_URL` are a **default layer**, not the whole configuration. **Admin → E-mail** writes a second layer into the database, and `internal/emailsettings` merges the two field by field on every send — the database wins where it has a value.

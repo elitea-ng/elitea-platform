@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess/rolegrants"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/identity"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
@@ -226,9 +227,12 @@ func applyInitialAdministrationRole(
 	userID int32,
 	command identity.ProvisionCommand,
 ) error {
+	// This plane matches by provider reference only (identity.IsInitialGlobalAdmin
+	// passes no verified address), so the entry is always a reference.
 	return ApplyInitialAdministrationRole(
 		ctx, db, userID,
 		command.InitialAdministrationMode, command.InitialAdministrationRole,
+		identity.InitialGlobalAdminShapeReference,
 	)
 }
 
@@ -244,6 +248,23 @@ func applyInitialAdministrationRole(
 // role in the administration mode is left exactly as the operator left them, so
 // a demotion is never silently undone by the next login.
 //
+// The list is a BOOTSTRAP (issue 2589, ADR-0059 decision 5): it applies only
+// while the deployment has no unsuspended holder of
+// admin.auth.users.super_admin. Once one exists, anyone who could edit the
+// list and own an identity-provider account could otherwise make themselves
+// global administrator at first sign-in. A skipped entry logs a warning that
+// names the entry's shape (`entryShape`, never the address) and the command
+// that replaces the list.
+//
+// The check and the grant run under adminaccess.LockRoleWrites, so a global
+// administrator made by another role write cannot appear between them. The
+// lock is NOT this transaction's first statement, unlike every other role
+// write: the sign-in has already locked its provider identity and account
+// rows. A role write that then waits on one of those rows (an account delete
+// of this very account, mid-sign-in) and this sign-in can deadlock; PostgreSQL
+// detects it and fails one of the two, which is retried. It is taken only for
+// a listed address, so an ordinary sign-in never waits on it.
+//
 // The grant goes through rolegrants, so it writes one history row with source
 // `bootstrap` and no actor (issue 2499) in the same transaction. `db` is that
 // transaction; `queries` is bound to it.
@@ -253,9 +274,13 @@ func ApplyInitialAdministrationRole(
 	userID int32,
 	mode string,
 	role string,
+	entryShape string,
 ) error {
 	if mode == "" || role == "" {
 		return nil
+	}
+	if err := adminaccess.LockRoleWrites(ctx, db); err != nil {
+		return fmt.Errorf("identityrepo: %w", err)
 	}
 	queries := sqlcgen.New(db)
 	count, err := queries.CountAuthUserRolesInMode(ctx, sqlcgen.CountAuthUserRolesInModeParams{
@@ -266,6 +291,17 @@ func ApplyInitialAdministrationRole(
 		return fmt.Errorf("identityrepo: count administration roles: %w", err)
 	}
 	if count != 0 {
+		return nil
+	}
+	exists, err := GlobalAdministratorExists(ctx, db)
+	if err != nil {
+		return err
+	}
+	if exists {
+		slog.WarnContext(ctx,
+			"identity.initial_global_admins entry ignored: the deployment already has a global administrator; "+
+				"the list applies only while there is none. Use `elitea-main admin-role grant` or an existing administrator",
+			"entry_shape", entryShape, "user_id", userID)
 		return nil
 	}
 	// Grant reports false only when the row is already there: a concurrent
