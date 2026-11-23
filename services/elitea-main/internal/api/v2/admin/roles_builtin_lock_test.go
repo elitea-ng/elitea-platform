@@ -19,7 +19,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	migrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
@@ -162,7 +162,7 @@ func TestTheEscalationCodeComesBeforeTheLock(t *testing.T) {
 	env := newEscalationEnvironment(t)
 	seedBuiltIn(t, env.pool, "admin")
 	expectRefusal(t, saveCell(t, env.as(escalationAdmin), centralMatrix, "admin.auth.users", "admin", false),
-		rolepolicy.CodeOwnRoleLocked)
+		adminaccess.CodeOwnRoleLocked)
 }
 
 // A database whose seed table is absent (0263 ran before the auth_core

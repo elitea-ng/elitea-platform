@@ -1,4 +1,4 @@
-// Package rolepolicy holds the no-escalation rule for every write that changes
+// The role policy: the no-escalation rule for every write that changes
 // what a role grants or who holds a role (issue 2488, ADR-0059 R0.8).
 //
 // # The defect it closes
@@ -65,17 +65,16 @@
 // Every refusal is a 403 with a stable `code`, and an annotation on the audit
 // row the request middleware writes for every refused admin write (event type
 // `api`, action RefusalAuditAction).
-package rolepolicy
+
+package adminaccess
 
 import (
 	"sort"
-
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 )
 
 // SuperAdminPermission is the permission that separates `super_admin` from
 // `admin`. Holding it exempts a caller from the subset and own-role rules.
-const SuperAdminPermission = adminaccess.AdminAuthUsersSuperAdmin
+const SuperAdminPermission = AdminAuthUsersSuperAdmin
 
 // SuperAdminRole is the only role that may hold SuperAdminPermission.
 const SuperAdminRole = "super_admin"

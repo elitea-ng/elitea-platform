@@ -46,9 +46,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess/rolegrants"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
 )
 
 // modeAssignment is one row of the listing.
@@ -192,7 +192,7 @@ func (h *Handler) ModesAssign(w http.ResponseWriter, r *http.Request) {
 	// The DEMOTION arm stays scoped to `administration`. currentAdminRole
 	// (users.go) reads the administration-mode role only, and the write below
 	// removes assignments in the requested mode only.
-	var caller rolepolicy.Caller
+	var caller adminaccess.Caller
 	var ok bool
 	{
 		current, err := h.currentAdminRole(ctx, userID)
@@ -230,7 +230,7 @@ func (h *Handler) ModesAssign(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to read current role"})
 		return
 	} else if refusal != nil {
-		rolepolicy.Write(w, r, refusal)
+		adminaccess.Write(w, r, refusal)
 		return
 	}
 
@@ -322,12 +322,12 @@ func (h *Handler) ModesRemove(w http.ResponseWriter, r *http.Request) {
 	// The subset rule (issue 2488): removing an administration role needs every
 	// permission of that role too. A developer-mode row needs only the
 	// super_admin guard; see checkCentralRoles.
-	if err := rolepolicy.LockRoleWrites(ctx, transaction); err != nil {
+	if err := adminaccess.LockRoleWrites(ctx, transaction); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove role"})
 		return
 	}
 	if refusal := h.checkCentralRoles(ctx, transaction, caller, mode, "", []string{role}); refusal != nil {
-		rolepolicy.Write(w, r, refusal)
+		adminaccess.Write(w, r, refusal)
 		return
 	}
 

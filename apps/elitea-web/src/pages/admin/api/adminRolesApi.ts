@@ -103,7 +103,7 @@ interface RoleRefusalBody {
 
 /**
  * The no-escalation refusals, keyed on the server's stable `code`
- * (internal/rolepolicy). The server's `error` sentence is the fallback for a
+ * (internal/adminaccess). The server's `error` sentence is the fallback for a
  * code this client does not know yet.
  */
 const ROLE_REFUSAL_MESSAGES: Readonly<Record<string, () => string>> = {

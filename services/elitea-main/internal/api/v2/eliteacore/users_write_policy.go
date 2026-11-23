@@ -3,7 +3,7 @@ package eliteacore
 // The no-escalation rule on project membership (issue 2488, ADR-0059 R0.8).
 //
 // The three write verbs give and take PROJECT roles. Project roles never
-// resolve in the administration plane (internal/rolepolicy), so the risk here
+// resolve in the administration plane (internal/adminaccess), so the risk here
 // is inside the project. The rule depends on how the caller reached the write:
 //
 //   - Through the `{mode}` routes, the gate resolves the caller's permissions
@@ -28,7 +28,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 )
 
 // membershipChange is one write's effect on project roles.
@@ -49,14 +49,14 @@ type membershipChange struct {
 // checkMembershipChange returns the refusal of a change, or nil. A super_admin
 // caller is answered before any query.
 //
-// `q` is a transaction that holds rolepolicy.LockRoleWrites: the write's own
-// transaction (update, delete) or a rolepolicy.HoldRoleWrites hold that spans
+// `q` is a transaction that holds adminaccess.LockRoleWrites: the write's own
+// transaction (update, delete) or a adminaccess.HoldRoleWrites hold that spans
 // the per-address transactions (create). The caller is resolved here, after
 // the lock, so the check and the write see the same state.
 func (h *Handler) checkMembershipChange(
-	r *http.Request, q rolepolicy.Querier, change membershipChange,
-) *rolepolicy.Refusal {
-	caller, refusal := rolepolicy.ResolveCaller(r, h.permissionResolver)
+	r *http.Request, q adminaccess.Querier, change membershipChange,
+) *adminaccess.Refusal {
+	caller, refusal := adminaccess.ResolveCaller(r, h.permissionResolver)
 	if refusal != nil {
 		return refusal
 	}
@@ -64,12 +64,12 @@ func (h *Handler) checkMembershipChange(
 		return nil
 	}
 	ctx := r.Context()
-	unreadable := rolepolicy.Unresolved("the project roles could not be read, so the role change was refused")
+	unreadable := adminaccess.Unresolved("the project roles could not be read, so the role change was refused")
 
 	roleIDs := append([]int{}, change.assigned...)
 	if change.asMember {
 		if len(change.targets) > 0 {
-			current, err := rolepolicy.MembersProjectRoleIDs(ctx, q, change.projectID, change.targets)
+			current, err := adminaccess.MembersProjectRoleIDs(ctx, q, change.projectID, change.targets)
 			if err != nil {
 				return unreadable
 			}
@@ -85,24 +85,24 @@ func (h *Handler) checkMembershipChange(
 		}
 	}
 
-	required, err := rolepolicy.ProjectRolesPermissions(ctx, q, change.projectID, roleIDs)
+	required, err := adminaccess.ProjectRolesPermissions(ctx, q, change.projectID, roleIDs)
 	if err != nil {
 		return unreadable
 	}
 	held, err := caller.ProjectSet(ctx, change.projectID)
 	if err != nil {
-		return rolepolicy.Unresolved("your own permissions could not be read, so the role change was refused")
+		return adminaccess.Unresolved("your own permissions could not be read, so the role change was refused")
 	}
-	missing := rolepolicy.Missing(held, required)
+	missing := adminaccess.Missing(held, required)
 	if len(missing) == 0 {
 		return nil
 	}
 	if !change.asMember {
-		return rolepolicy.SelfEscalation(rolepolicy.ProjectGain{
+		return adminaccess.SelfEscalation(adminaccess.ProjectGain{
 			ProjectID: int64(change.projectID), Permissions: missing,
 		})
 	}
-	refusal = rolepolicy.NotHeld(
+	refusal = adminaccess.NotHeld(
 		"you can give or take only project roles whose permissions you all hold in this project", "", missing)
 	refusal.ProjectID = int64(change.projectID)
 	return refusal
@@ -111,7 +111,7 @@ func (h *Handler) checkMembershipChange(
 // callerIsAmong is true when the change reaches the caller's own account: as
 // a target, or as one of the invited addresses. The address lookup runs only
 // when there are addresses.
-func callerIsAmong(r *http.Request, q rolepolicy.Querier, callerID int64, change membershipChange) (bool, error) {
+func callerIsAmong(r *http.Request, q adminaccess.Querier, callerID int64, change membershipChange) (bool, error) {
 	if slices.Contains(change.targets, int(callerID)) {
 		return true, nil
 	}

@@ -65,7 +65,6 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -612,8 +611,8 @@ func rowPermissionName(row map[string]json.RawMessage, index int) (string, error
 // ## The no-escalation rule (issue 2488)
 //
 // The diff is checked before anything is written, against the CALLER's own
-// set read from the database (internal/rolepolicy). A refusal comes back as a
-// *rolepolicy.Refusal and nothing is written. The materialised cells of an
+// set read from the database (internal/adminaccess). A refusal comes back as a
+// *adminaccess.Refusal and nothing is written. The materialised cells of an
 // inherited matrix count as grants: they are new rows.
 func (h *Handler) saveGrants(
 	r *http.Request, scope, mode string, current permissionMatrix, submission matrixSubmission,
@@ -628,12 +627,12 @@ func (h *Handler) saveGrants(
 	if len(toGrant) == 0 && len(toRevoke) == 0 {
 		return 0, 0, nil
 	}
-	caller, refusal := rolepolicy.ResolveCaller(r, h.resolver)
+	caller, refusal := adminaccess.ResolveCaller(r, h.resolver)
 	if refusal != nil {
 		return 0, 0, refusal
 	}
-	centralPlane := scope == scopeAdministration && rolepolicy.AdministrationPlane(mode)
-	check := func(ctx context.Context, q rolepolicy.Querier) error {
+	centralPlane := scope == scopeAdministration && adminaccess.AdministrationPlane(mode)
+	check := func(ctx context.Context, q adminaccess.Querier) error {
 		return h.checkMatrixEdit(ctx, q, caller, centralPlane, mode, current, toGrant, toRevoke)
 	}
 	if err := h.applyGrantChanges(ctx, scope, mode, toGrant, toRevoke, caller, !centralPlane, check); err != nil {
@@ -657,10 +656,10 @@ func (h *Handler) saveGrants(
 // as new grants of the reserved permission. The effect guard still measures
 // them.
 //
-// It runs inside the write transaction, after rolepolicy.LockRoleWrites, and
+// It runs inside the write transaction, after adminaccess.LockRoleWrites, and
 // reads the caller again there.
 func (h *Handler) checkMatrixEdit(
-	ctx context.Context, q rolepolicy.Querier, caller rolepolicy.Caller, centralPlane bool, mode string,
+	ctx context.Context, q adminaccess.Querier, caller adminaccess.Caller, centralPlane bool, mode string,
 	current permissionMatrix, toGrant, toRevoke []grant,
 ) error {
 	if !centralPlane {
@@ -673,24 +672,24 @@ func (h *Handler) checkMatrixEdit(
 				}
 			}
 		}
-		if refusal := rolepolicy.CheckReserved("", policyCells(added)); refusal != nil {
+		if refusal := adminaccess.CheckReserved("", policyCells(added)); refusal != nil {
 			return refusal
 		}
 		return nil
 	}
 	caller, err := caller.Reload(ctx)
 	if err != nil {
-		return rolepolicy.Unresolved("your own permissions could not be read, so the role change was refused")
+		return adminaccess.Unresolved("your own permissions could not be read, so the role change was refused")
 	}
 	callerSet, err := caller.CentralSet(ctx, mode)
 	if err != nil {
 		return fmt.Errorf("read the caller's %s permissions: %w", mode, err)
 	}
-	held, err := rolepolicy.HeldCentralRoles(ctx, q, caller.UserID, mode)
+	held, err := adminaccess.HeldCentralRoles(ctx, q, caller.UserID, mode)
 	if err != nil {
 		return err
 	}
-	if refusal := rolepolicy.CheckCentralEdit(rolepolicy.CentralEdit{
+	if refusal := adminaccess.CheckCentralEdit(adminaccess.CentralEdit{
 		Caller:     callerSet,
 		SuperAdmin: caller.SuperAdmin,
 		HeldRoles:  held,
@@ -709,7 +708,7 @@ func (h *Handler) checkMatrixEdit(
 // role (ADR-0059 decision 3, rule 5: the built-in sets are locked, for a
 // global administrator too). The repair path for a damaged set is the
 // operator command `elitea-main admin-role reset` (story R0.12a).
-func (h *Handler) refuseSeededCells(ctx context.Context, q rolepolicy.Querier, mode string, toGrant, toRevoke []grant) error {
+func (h *Handler) refuseSeededCells(ctx context.Context, q adminaccess.Querier, mode string, toGrant, toRevoke []grant) error {
 	touched := map[string]bool{}
 	var names []string
 	for _, cell := range append(append([]grant(nil), toGrant...), toRevoke...) {
@@ -728,10 +727,10 @@ func (h *Handler) refuseSeededCells(ctx context.Context, q rolepolicy.Querier, m
 	return nil
 }
 
-func policyCells(cells []grant) []rolepolicy.Cell {
-	converted := make([]rolepolicy.Cell, 0, len(cells))
+func policyCells(cells []grant) []adminaccess.Cell {
+	converted := make([]adminaccess.Cell, 0, len(cells))
 	for _, cell := range cells {
-		converted = append(converted, rolepolicy.Cell{Role: cell.role, Permission: cell.permission})
+		converted = append(converted, adminaccess.Cell{Role: cell.role, Permission: cell.permission})
 	}
 	return converted
 }
@@ -740,9 +739,9 @@ func policyCells(cells []grant) []rolepolicy.Cell {
 // with its code and audit annotation, and any other error as writeMatrixError
 // does.
 func writeRoleWriteError(w http.ResponseWriter, r *http.Request, err error) {
-	var refusal *rolepolicy.Refusal
+	var refusal *adminaccess.Refusal
 	if errors.As(err, &refusal) {
-		rolepolicy.Write(w, r, refusal)
+		adminaccess.Write(w, r, refusal)
 		return
 	}
 	writeMatrixError(w, err)
@@ -798,11 +797,11 @@ func sortGrants(cells []grant) {
 // gain rolls the whole write back.
 //
 // `check` is the no-escalation check of the edit. It runs after
-// rolepolicy.LockRoleWrites and before the first statement, so no concurrent
+// adminaccess.LockRoleWrites and before the first statement, so no concurrent
 // role write can outdate it before the commit.
 func (h *Handler) applyGrantChanges(
 	ctx context.Context, scope, mode string, granted, revoked []grant,
-	caller rolepolicy.Caller, guardSelf bool, check func(context.Context, rolepolicy.Querier) error,
+	caller adminaccess.Caller, guardSelf bool, check func(context.Context, adminaccess.Querier) error,
 ) error {
 	insertSQL, deleteSQL, scopeArg, err := h.grantStatements(ctx, scope, mode)
 	if err != nil {
@@ -815,7 +814,7 @@ func (h *Handler) applyGrantChanges(
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
 
-	if err := rolepolicy.LockRoleWrites(ctx, transaction); err != nil {
+	if err := adminaccess.LockRoleWrites(ctx, transaction); err != nil {
 		return err
 	}
 	if check != nil {
@@ -823,9 +822,9 @@ func (h *Handler) applyGrantChanges(
 			return err
 		}
 	}
-	var guard *rolepolicy.SelfGuard
+	var guard *adminaccess.SelfGuard
 	if guardSelf {
-		if guard, err = rolepolicy.BeginSelfGuard(ctx, transaction, caller); err != nil {
+		if guard, err = adminaccess.BeginSelfGuard(ctx, transaction, caller); err != nil {
 			return err
 		}
 	}
@@ -913,9 +912,9 @@ func (h *Handler) AdminPermissionsSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	caller, refusal := rolepolicy.ResolveCaller(r, h.resolver)
+	caller, refusal := adminaccess.ResolveCaller(r, h.resolver)
 	if refusal != nil {
-		rolepolicy.Write(w, r, refusal)
+		adminaccess.Write(w, r, refusal)
 		return
 	}
 	result, err := h.syncDefaultPermissionsToProjects(r.Context(), caller)
@@ -949,7 +948,7 @@ type syncResult struct {
 // The sync rewrites the caller's own project roles too, wherever the caller is
 // a member of a shared project, so it runs the effect guard of the
 // no-escalation rule on its transaction (issue 2488).
-func (h *Handler) syncDefaultPermissionsToProjects(ctx context.Context, caller rolepolicy.Caller) (syncResult, error) {
+func (h *Handler) syncDefaultPermissionsToProjects(ctx context.Context, caller adminaccess.Caller) (syncResult, error) {
 	publicProjectID, err := h.scopeProjectID(ctx, scopePublic)
 	if err != nil {
 		return syncResult{}, err
@@ -961,7 +960,7 @@ func (h *Handler) syncDefaultPermissionsToProjects(ctx context.Context, caller r
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
 
-	guard, err := rolepolicy.BeginSelfGuard(ctx, transaction, caller)
+	guard, err := adminaccess.BeginSelfGuard(ctx, transaction, caller)
 	if err != nil {
 		return syncResult{}, err
 	}
