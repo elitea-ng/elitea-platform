@@ -55,7 +55,7 @@ Open **Roles**. It shows a permission matrix across three scopes, each a tab:
 
 Besides the broad central permissions such as `runtime.plugins` and `configuration.governance`, the deployment has narrow ones, each for one subject. The upgrade that adds them grants all of them to the `super_admin` role and all but `identity.sso.trust.manage` to the `admin` role, so both administrator roles keep everything they could do and hold the new names too. No existing grant is removed.
 
-A route accepts a narrow permission beside the broad one it narrows, so a holder of the broad permission sees no change. The rows that say **Accepted** are wired today; the other names are accepted as later releases wire their routes. Later releases also add built-in roles (such as an LLM manager or a project administrator) that hold only a narrow set.
+A route accepts a narrow permission beside the broad one it narrows, so a holder of the broad permission sees no change. The rows that say **Accepted** are wired today on the server; the other names are accepted as later releases wire their routes. The admin navigation still shows the E-mail, Tasks and Configuration pages only to a holder of `runtime.plugins`, so a role that holds only a narrow name can call those routes but does not see the pages in the menu until a later release. Later releases also add built-in roles (such as an LLM manager or a project administrator) that hold only a narrow set.
 
 | Permission | Allows | Narrows |
 |---|---|---|

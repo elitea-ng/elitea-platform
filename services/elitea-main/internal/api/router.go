@@ -2834,8 +2834,10 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			}
 			// auth_users.py, user_suspend.py
 			requireAdminUsers := central(adminaccess.AdminAuthUsers)
-			// System info, plugin config, maintenance and background jobs —
-			// all declare ["runtime.plugins"].
+			// Plugin config, maintenance and identity providers declare
+			// ["runtime.plugins"]. System info, e-mail, background jobs and the
+			// prebuilt MCP catalogue declared it too, and now accept a narrow
+			// name beside it (below).
 			requireRuntimePlugins := central(adminaccess.RuntimePlugins)
 			// The narrow names of ADR-0059 decision 2 for the low-risk
 			// platform subjects (R0.4a). Each gate accepts the narrow name OR

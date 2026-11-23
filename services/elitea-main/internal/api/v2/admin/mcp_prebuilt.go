@@ -17,13 +17,14 @@ package admin
 // credential silently dropped. Both are worse than a section that says where
 // the real surface is, which is what `config_schemas.go` now says.
 //
-// # The permission is the one the page it replaces already used
+// # The permission
 //
-// `runtime.plugins`, resolved in administration mode, gates every route here.
-// The legacy `plugin_config_values.py` declares the same string, so an operator
-// who could edit the section can edit the catalogue and no new grant is needed
-// — which also means no new way for the grant gate in
-// `internal/api/router_permission_grant_gate_test.go` to be tripped.
+// `mcp.catalogue.manage` or `runtime.plugins`, resolved in administration
+// mode, gates every route here (ADR-0059 R0.4a). The legacy
+// `plugin_config_values.py` declares `runtime.plugins`, so an operator who
+// could edit the section can still edit the catalogue; shared 0261 grants the
+// narrow name, so the grant gate in
+// `internal/api/router_permission_grant_gate_test.go` stays untripped.
 //
 // # What a caller can and cannot see
 //
