@@ -165,7 +165,7 @@ var credentialKindAdminSet = []string{
 
 // A native device session of an `admin` (ADR-0059 decision 7, "Native
 // sessions"; R1.2a) keeps exactly the names of the two in-application checks,
-// the maintenance bypass (apimw.MaintenanceAdminPermission) and Marketplace
+// the maintenance bypass (adminaccess.AdmitsDuringMaintenance) and Marketplace
 // moderation (eliteacore.PublishedAgentsListPermission), and no
 // administration route admits it: GET /admin/identity_providers/administration
 // accepts runtime.plugins, the native session holds it, and the answer is
@@ -215,7 +215,7 @@ func TestANativeSessionOfAnAdminKeepsOnlyTheInApplicationChecks(t *testing.T) {
 	for _, permission := range listed {
 		names = append(names, permission.Name)
 	}
-	want := []string{eliteacore.PublishedAgentsListPermission, apimw.MaintenanceAdminPermission}
+	want := []string{eliteacore.PublishedAgentsListPermission, adminaccess.RuntimePlugins}
 	slices.Sort(want)
 	if !slices.Equal(names, want) {
 		t.Fatalf("a native session of an admin resolves %v, want exactly the maintenance bypass and "+

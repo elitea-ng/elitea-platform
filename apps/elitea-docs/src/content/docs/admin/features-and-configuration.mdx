@@ -48,6 +48,8 @@ A dismissible banner shown across the app, with its own icon, style, and message
 
 <Accordion title="Maintenance (editable here)">
 Turns on maintenance mode: every caller without administration access gets a 503 and the splash screen, with its own title, message, and optional HTML. The admin console and authentication routes stay reachable so the window is reversible from inside itself.
+
+A holder of `platform.maintenance.manage` or `runtime.plugins` uses the whole application during the window. A holder of another administration permission keeps only the administration routes of that permission, for example a project budget under an LLM manager's budget permission; everything else answers the 503. See [Maintenance windows](/deployment/operations#maintenance-windows).
 </Accordion>
 
 <Accordion title="E-mail (editable here)">

@@ -55,6 +55,35 @@ package middleware
 //
 // Health endpoints need no entry: they are not mounted under `/api/v2`.
 //
+// # Who works during a window (ADR-0059 decision 2, R0.4b)
+//
+// The gate names no permission. It reads the registry:
+//
+//   - A holder of a permission the registry marks `maintenance`
+//     (adminaccess.AdmitsDuringMaintenance: platform.maintenance.manage and the
+//     legacy runtime.plugins) uses the whole application, as an administrator
+//     did before. This is the in-application bypass; the platform_settings
+//     flag read answers `bypass` from the same rule.
+//   - A holder of any other administration permission reaches the routes an
+//     administration-mode route gate decides (MaintenanceConfig.
+//     AdministrationRoute), wherever they are mounted: the budgets and audit
+//     routes under `/elitea_core`, project create and delete, the
+//     administration secrets. The gate lets the request through and the
+//     route's own gate decides, so the holder of a narrow permission gets
+//     exactly what that gate gives outside a window: the route of their
+//     permission, and 403 on the others. Every other route answers the
+//     maintenance refusal, so a narrow role is not a way into the product
+//     during a window.
+//   - A caller with no administration permission gets the refusal, as before.
+//
+// The route list is not kept here. The router marks the routes whose chain
+// holds an administration-mode gate when it is built (the gates of
+// rbac.go carry the mark IsAdministrationGate reads), and answers for the
+// route a request will reach. A route whose only administration check is in
+// its handler is not marked, and its narrow holders get the refusal: the
+// failure is closed. internal/api/middleware/maintenance_narrow_test.go drives
+// every route of the composed router to hold both directions.
+//
 // # Failure is permissive, and that direction is chosen
 //
 // A store this middleware cannot read yields "not in maintenance". The opposite
@@ -104,13 +133,6 @@ const maintenanceCacheTTL = 10 * time.Second
 // the last known state rather than to hold a request open waiting for it.
 const maintenanceLoadTimeout = 3 * time.Second
 
-// MaintenanceAdminPermission is the permission that gets through a maintenance
-// window. It is `runtime.plugins` — the name the legacy maintenance.py declares
-// on this surface, and the one the Configuration section requires in order to
-// author the switch. A caller who cannot START a window is not admitted during
-// one; a caller who can, is.
-const MaintenanceAdminPermission = adminaccess.RuntimePlugins
-
 // maintenanceAllowlist are the `/api/v2` path prefixes maintenance never
 // refuses. See the file doc for why each is here.
 var maintenanceAllowlist = []string{
@@ -137,6 +159,11 @@ type MaintenanceConfig struct {
 	// middleware for the same reason a nil pool does: a maintenance mode nobody
 	// can leave is worse than one that never engages.
 	Resolver auth.PermissionResolver
+	// AdministrationRoute reports whether the request will reach a route an
+	// administration-mode route gate decides (see "Who works during a
+	// window"). The router sets it from its own routes. Nil marks no route:
+	// only a bypass holder then works outside the allowlist during a window.
+	AdministrationRoute func(*http.Request) bool
 	// now is injectable so the cache TTL is testable without sleeping.
 	now func() time.Time
 }
@@ -153,7 +180,9 @@ type maintenanceGate struct {
 	// and the cache (MaintenanceConfig.State).
 	uncached func(context.Context) (platformconfig.Maintenance, error)
 	resolver auth.PermissionResolver
-	now      func() time.Time
+	// administrationRoute is MaintenanceConfig.AdministrationRoute.
+	administrationRoute func(*http.Request) bool
+	now                 func() time.Time
 
 	mu        sync.Mutex
 	state     platformconfig.Maintenance
@@ -172,9 +201,10 @@ func Maintenance(config MaintenanceConfig) func(http.Handler) http.Handler {
 		load: func(ctx context.Context) (platformconfig.Maintenance, error) {
 			return platformconfig.LoadMaintenance(ctx, pool)
 		},
-		uncached: config.State,
-		resolver: config.Resolver,
-		now:      config.now,
+		uncached:            config.State,
+		resolver:            config.Resolver,
+		administrationRoute: config.AdministrationRoute,
+		now:                 config.now,
 	}
 	return gate.middleware
 }
@@ -265,7 +295,7 @@ func (g *maintenanceGate) middleware(next http.Handler) http.Handler {
 			return
 		}
 
-		if g.isAdministrator(r) {
+		if g.admits(r) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -274,15 +304,20 @@ func (g *maintenanceGate) middleware(next http.Handler) http.Handler {
 	})
 }
 
-// isAdministrator resolves the caller's administration-mode permissions.
+// admits resolves the caller's administration-mode permissions and applies the
+// rule of "Who works during a window": a bypass holder everywhere, a holder of
+// any administration permission on a route an administration gate decides.
 //
-// An UNAUTHENTICATED caller is not an administrator and is refused — the
-// window's whole purpose. A resolver ERROR is also refused rather than admitted:
-// unlike the switch itself, where permissiveness protects users from an
-// accidental outage, permissiveness here would admit every caller to a platform
-// an operator has deliberately closed, which is the failure the operator was
+// An UNAUTHENTICATED caller holds nothing and is refused — the window's whole
+// purpose. A resolver ERROR is also refused rather than admitted: unlike the
+// switch itself, where permissiveness protects users from an accidental
+// outage, permissiveness here would admit every caller to a platform an
+// operator has deliberately closed, which is the failure the operator was
 // preventing.
-func (g *maintenanceGate) isAdministrator(r *http.Request) bool {
+//
+// It resolves on every request and caches nothing about the caller, only the
+// switch: a role change takes effect on the next request.
+func (g *maintenanceGate) admits(r *http.Request) bool {
 	user, ok := auth.UserFromContext(r.Context())
 	if !ok {
 		return false
@@ -293,12 +328,10 @@ func (g *maintenanceGate) isAdministrator(r *http.Request) bool {
 	if err != nil {
 		return false
 	}
-	for _, granted := range resolution.Permissions {
-		if granted == MaintenanceAdminPermission {
-			return true
-		}
+	if adminaccess.AdmitsDuringMaintenance(resolution.Permissions) {
+		return true
 	}
-	return false
+	return len(resolution.Permissions) > 0 && g.administrationRoute != nil && g.administrationRoute(r)
 }
 
 // MaintenanceExempt reports whether maintenance never refuses path — the

@@ -439,7 +439,15 @@ func TestAdministrationSurfaceReachesSessionAndWindowChecks(t *testing.T) {
 		{adminsurface.PlatformSettings, adminsurface.VariantMaintenance,
 			"/internal/api/v2/eliteacore.(*Handler).holdsMaintenanceBypass", false, adminsurface.KindAnyOf, bypass},
 		{adminsurface.MaintenanceUserRoute, adminsurface.VariantMaintenance,
-			"/internal/api/middleware.(*maintenanceGate).isAdministrator", true, adminsurface.KindAnyOf, bypass},
+			"/internal/api/middleware.(*maintenanceGate).admits", true, adminsurface.KindAnyOf, bypass},
+		// On a route an administration gate decides, the maintenance gate
+		// admits a holder of any administration permission and the route
+		// gate decides (ADR-0059 R0.4b).
+		{adminsurface.MaintenanceAdministrationRoute, adminsurface.VariantMaintenance,
+			"/internal/api/middleware.(*maintenanceGate).admits", true, adminsurface.KindWholeSet, nil},
+		{adminsurface.MaintenanceAdministrationRoute, adminsurface.VariantMaintenance,
+			"/internal/api/middleware.RequireResolvedPermissionsForProject", true, adminsurface.KindAnyOf,
+			[]string{adminaccess.ModelsAdminProjectBudgetsEdit}},
 	} {
 		var found []adminsurface.Check
 		for _, entry := range result.Find(w.route.Method, w.route.Pattern) {

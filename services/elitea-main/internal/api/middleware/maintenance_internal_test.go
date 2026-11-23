@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
@@ -99,7 +100,7 @@ func TestMaintenanceRefusesANonAdministrator(t *testing.T) {
 // TestMaintenanceAdmitsAnAdministrator — the switch must stay reversible from
 // inside the window it created.
 func TestMaintenanceAdmitsAnAdministrator(t *testing.T) {
-	gate := onWindow(stubResolver{permissions: []string{MaintenanceAdminPermission}})
+	gate := onWindow(stubResolver{permissions: []string{adminaccess.RuntimePlugins}})
 	user := auth.User{ID: "1"}
 
 	status, reached := serve(gate, "/api/v2/elitea_core/agents", &user)
@@ -114,7 +115,7 @@ func TestMaintenanceAdmitsAnAdministrator(t *testing.T) {
 // the switch read itself. Admitting a caller whose permissions could not be
 // resolved would open a platform an operator deliberately closed.
 func TestMaintenanceRefusesAnonymousAndUnresolvableCallers(t *testing.T) {
-	anonymous := onWindow(stubResolver{permissions: []string{MaintenanceAdminPermission}})
+	anonymous := onWindow(stubResolver{permissions: []string{adminaccess.RuntimePlugins}})
 	if status, _ := serve(anonymous, "/api/v2/elitea_core/agents", nil); status != http.StatusServiceUnavailable {
 		t.Errorf("anonymous status = %d, want 503", status)
 	}
@@ -252,5 +253,38 @@ func TestMaintenanceIsAPassThroughWithoutItsDependencies(t *testing.T) {
 		if !reached {
 			t.Errorf("%s: the middleware was not a pass-through", name)
 		}
+	}
+}
+
+// TestMaintenanceAdmitsANarrowHolderOnlyWhereAnAdministrationGateDecides is
+// the rule of ADR-0059 R0.4b without a router: a bypass name opens every path,
+// any other administration permission opens only a route the router marks,
+// and the mark alone admits nobody.
+func TestMaintenanceAdmitsANarrowHolderOnlyWhereAnAdministrationGateDecides(t *testing.T) {
+	user := auth.User{ID: "7"}
+	for _, tc := range []struct {
+		name        string
+		permissions []string
+		marked      bool
+		admitted    bool
+	}{
+		{"bypass, unmarked route", []string{adminaccess.PlatformMaintenanceManage}, false, true},
+		{"legacy bypass, unmarked route", []string{adminaccess.RuntimePlugins}, false, true},
+		{"narrow, marked route", []string{adminaccess.LLMUsageView}, true, true},
+		{"narrow, unmarked route", []string{adminaccess.LLMUsageView}, false, false},
+		{"nothing, marked route", nil, true, false},
+	} {
+		gate := onWindow(stubResolver{permissions: tc.permissions})
+		gate.administrationRoute = func(*http.Request) bool { return tc.marked }
+		status, reached := serve(gate, "/api/v2/elitea_core/anything", &user)
+		if reached != tc.admitted {
+			t.Errorf("%s: reached=%v (status %d), want %v", tc.name, reached, status, tc.admitted)
+		}
+	}
+
+	failing := onWindow(stubResolver{err: errors.New("resolver down")})
+	failing.administrationRoute = func(*http.Request) bool { return true }
+	if _, reached := serve(failing, "/api/v2/elitea_core/anything", &user); reached {
+		t.Error("a caller whose permissions could not be resolved was admitted to a marked route")
 	}
 }

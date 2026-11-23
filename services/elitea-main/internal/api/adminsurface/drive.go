@@ -248,6 +248,37 @@ func Drive(handler http.Handler, resolver *Resolver, routes []Route, opts Option
 	return result
 }
 
+// Answer is what one request answered.
+type Answer struct {
+	Status int
+	Body   string
+	// Calls are the permission resolutions the request made.
+	Calls []Call
+}
+
+// Maintenance reports whether the answer is the maintenance gate's refusal:
+// 503 with `"maintenance": true` (middleware writeMaintenance).
+func (a Answer) Maintenance() bool {
+	return a.Status == http.StatusServiceUnavailable && strings.Contains(a.Body, `"maintenance":true`)
+}
+
+// Send sends one request of route as variant drives it, as a caller who holds
+// exactly grant in the administration mode and opts.OtherModes (or the
+// variant's) in every other mode. It probes nothing: it is the request a
+// holder of that set makes. A request that does not answer within
+// opts.Timeout answers status -1.
+func Send(handler http.Handler, route Route, variant Variant, opts Options, grant []string) Answer {
+	if opts.Timeout == 0 {
+		opts.Timeout = 10 * time.Second
+	}
+	if variant.Body == "" {
+		variant.Body = defaultBody(route.Method)
+	}
+	d := driver{handler: handler, opts: opts}
+	out := d.run(route, variant, func(int) []string { return grant })
+	return Answer{Status: out.status, Body: out.body, Calls: out.calls}
+}
+
 func defaultBody(method string) string {
 	switch method {
 	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
@@ -478,6 +509,13 @@ func (d driver) run(route Route, variant Variant, grant func(int) []string) outc
 		out.body = ""
 	}
 	return out
+}
+
+// RequestPath answers the path Drive and Send request for pattern: params
+// first, then {mode} as "administration", every other placeholder "1" and a
+// trailing * "x".
+func RequestPath(pattern string, params map[string]string) string {
+	return driver{}.path(pattern, params)
 }
 
 var placeholder = regexp.MustCompile(`\{([^}:]+)(:[^}]*)?\}`)

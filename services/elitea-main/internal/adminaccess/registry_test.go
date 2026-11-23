@@ -149,11 +149,11 @@ func TestAttributesOfTheNamedRows(t *testing.T) {
 		adminaccess.AccessBreakglassRequest, adminaccess.AccessBreakglassReview,
 		adminaccess.AdminAuthUsersSuperAdmin, adminaccess.IdentitySSOTrustManage)
 	// The two in-application checks a native session keeps (ADR-0059
-	// decision 7): Marketplace moderation and the maintenance bypass.
-	// The narrow platform.maintenance.manage gains both when R0.4 makes the
-	// bypass accept it; until then the attributes say what is enforced.
-	want("native_client", nativeClient, adminaccess.RuntimeAdminPublishedAgents, adminaccess.RuntimePlugins)
-	want("maintenance", maintenance, adminaccess.RuntimePlugins)
+	// decision 7): Marketplace moderation and the maintenance bypass, which
+	// accepts platform.maintenance.manage beside runtime.plugins (R0.4b).
+	want("native_client", nativeClient, adminaccess.PlatformMaintenanceManage,
+		adminaccess.RuntimeAdminPublishedAgents, adminaccess.RuntimePlugins)
+	want("maintenance", maintenance, adminaccess.PlatformMaintenanceManage, adminaccess.RuntimePlugins)
 	// No row is a token scope until the scoped token (R1.1, R1.2) opts rows
 	// in. Identity trust (admin.auth.users.super_admin) never is.
 	want("token", token)
