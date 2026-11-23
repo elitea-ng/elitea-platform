@@ -567,12 +567,21 @@ FROM auth_core__role r
 WHERE r.name = 'viewer' AND r.mode = 'administration'
 ON CONFLICT (role_id, permission) DO NOTHING;
 
--- …and it must NOT already be on `editor`: the journey asserts it is absent,
--- grants it, re-reads, then revokes it again so the run is repeatable.
+-- …and it must NOT already be on `editor` or on `e2e_custom`: journey 30
+-- asserts it is absent from `editor`, and 30b grants it to `e2e_custom`,
+-- re-reads, then revokes it again so the run is repeatable.
+--
+-- 30b writes a CUSTOM role, not `editor`: `editor` is a built-in role since
+-- shared 0263 (ADR-0059 R0.7), and the roles API refuses to edit the set of a
+-- built-in role. `e2e_custom` has no seed row, so it is an ordinary custom
+-- role.
+INSERT INTO auth_core__role (name, mode) VALUES ('e2e_custom', 'administration')
+ON CONFLICT (name, mode) DO NOTHING;
+
 DELETE FROM auth_core__role_permission grant_row
 USING auth_core__role r
 WHERE r.id = grant_row.role_id
-  AND r.name = 'editor' AND r.mode = 'administration'
+  AND r.name IN ('editor', 'e2e_custom') AND r.mode = 'administration'
   AND grant_row.permission = 'e2e.roles.probe';
 
 -- Only the ADMIN persona gets it. The member persona deliberately does not, so

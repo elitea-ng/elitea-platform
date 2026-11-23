@@ -700,6 +700,31 @@ func (h *Handler) checkMatrixEdit(
 	}); refusal != nil {
 		return refusal
 	}
+	// Last, so a caller the escalation rules refuse keeps their stable 403
+	// code; what remains is a caller who could otherwise make the edit.
+	return h.refuseSeededCells(ctx, q, mode, toGrant, toRevoke)
+}
+
+// refuseSeededCells refuses a matrix edit that touches the set of a built-in
+// role (ADR-0059 decision 3, rule 5: the built-in sets are locked, for a
+// global administrator too). The repair path for a damaged set is the
+// operator command `elitea-main admin-role reset` (story R0.12a).
+func (h *Handler) refuseSeededCells(ctx context.Context, q rolepolicy.Querier, mode string, toGrant, toRevoke []grant) error {
+	touched := map[string]bool{}
+	var names []string
+	for _, cell := range append(append([]grant(nil), toGrant...), toRevoke...) {
+		if !touched[cell.role] {
+			touched[cell.role] = true
+			names = append(names, cell.role)
+		}
+	}
+	seeded, err := h.seededRoles(ctx, q, mode, names)
+	if err != nil {
+		return err
+	}
+	if len(seeded) > 0 {
+		return builtInRoleError(seeded, "edited")
+	}
 	return nil
 }
 

@@ -284,6 +284,13 @@ func newRolesPool(t *testing.T) *pgxpool.Pool {
 			t.Fatalf("apply baseline projection: %v", err)
 		}
 	}
+	// elitea_auth.admin_role_seeds is the record of the built-in roles that
+	// the roles API reads (shared 0263). It is created EMPTY, with the DDL of
+	// the migration itself, so no fixture role is built-in unless a test
+	// seeds it (roles_builtin_lock_test.go).
+	if _, err := pool.Exec(ctx, adminRoleSeedsDDL(t)); err != nil {
+		t.Fatalf("create elitea_auth.admin_role_seeds: %v", err)
+	}
 	// centry.platform_config carries the support project id the support scope
 	// resolves. No baseline projection holds it, so it is created here the same
 	// way internal/api/v2/eliteacore's platform-flags test creates it. Without
