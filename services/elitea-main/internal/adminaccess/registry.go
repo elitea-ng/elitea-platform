@@ -270,6 +270,18 @@ func Lookup(name string) (Permission, bool) { return registry.Lookup(name) }
 // Names returns every registered permission name, sorted.
 func Names() []string { return registry.Names() }
 
+// HoldsAdministrationPermission reports whether permissions hold at least one
+// registered administration permission. A string the registry does not know
+// is no administration permission, whatever role carries it.
+func HoldsAdministrationPermission(permissions []string) bool {
+	for _, name := range permissions {
+		if _, ok := registry.Lookup(name); ok {
+			return true
+		}
+	}
+	return false
+}
+
 // AdmitsDuringMaintenance reports whether permissions hold a name the
 // registry marks Maintenance: the in-application maintenance bypass, which
 // opens every route during a window (ADR-0059 decision 2, R0.4b). The

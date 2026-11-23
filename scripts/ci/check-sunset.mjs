@@ -36,6 +36,7 @@
 //   node scripts/ci/check-sunset.mjs [--sha <rev>] [--root <repo>]
 
 import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -51,18 +52,28 @@ export const MIN_STABLE_MINORS = 2;
 // ── Detection tables ─────────────────────────────────────────────────────────
 // Each row is found by a regular expression over the non-test Go files of one
 // package at the commit under test. An item is "there" when its pattern
-// matches. The owning story adds the marker; a row whose story has not landed
-// yet simply finds nothing, which neither keeps the legacy items "there" nor
-// counts as a replacement. test: the real tree at HEAD must find every row
-// marked `landed` (check-sunset.test.mjs), so a rename cannot read as removal.
+// matches. A pattern names the declaration (the constant and its value), so a
+// comment that still quotes a removed name does not keep it "there".
+//
+// `landed` says the owning story has merged: a landed legacy item that is not
+// found has been REMOVED, and the removal is held to the date (case 3). A row
+// whose story has not landed yet finds nothing, and that absence means
+// nothing: it neither removes a legacy item nor counts as a replacement. The
+// story that adds the marker sets `landed: true` in the same pull request.
+// While SunsetAfter is empty the test requires every landed row to match the
+// real tree (check-sunset.test.mjs), so a rename cannot read as a removal.
+//
+// The removal is ONE pull request (R4.2, R4.7, R4.8 on one branch, ADR-0059):
+// removing one item early fails case 3, and keeping one past the grace fails
+// case 4.
 //
 // Patterns are POSIX extended regular expressions (git grep -E): write
 // [[:space:]], not \s, which the macOS regex library does not know.
 
 /** The legacy items: all end on SunsetAfter. */
 export const LEGACY_ITEMS = [
-  { id: 'runtime.plugins', story: 'R0.1a (#2490)', dir: ADMINACCESS, pattern: String.raw`"runtime\.plugins"`, landed: true },
-  { id: 'configuration.governance', story: 'R0.1a (#2490)', dir: ADMINACCESS, pattern: String.raw`"configuration\.governance"`, landed: true },
+  { id: 'runtime.plugins', story: 'R0.1a (#2490)', dir: ADMINACCESS, pattern: String.raw`RuntimePlugins[[:space:]]*=[[:space:]]*"runtime\.plugins"`, landed: true },
+  { id: 'configuration.governance', story: 'R0.1a (#2490)', dir: ADMINACCESS, pattern: String.raw`ConfigurationGovernance[[:space:]]*=[[:space:]]*"configuration\.governance"`, landed: true },
   { id: 'inherit token administration access', story: 'R1.1 (#2505)', dir: LEGACYRBAC, pattern: String.raw`TokenAdminAccessInherit[[:space:]]*=[[:space:]]*"inherit"`, landed: true },
   // R3.8 (#2539) owes this constant: true while a request without a reason
   // is served with Elitea-Reason-Missing.
@@ -121,7 +132,8 @@ export function parseConstants(source) {
 /**
  * The verdict. `state` is what the commit holds:
  *   { replacementShippedOn, sunsetAfter, commitDay,
- *     legacyPresent: [ids], replacementsPresent: [ids],
+ *     legacyPresent: [ids found], legacyRemoved: [landed ids not found],
+ *     replacementsPresent: [ids],
  *     minorsAfterReplacement: number | null (null: no stable tag ships both) }
  * It answers the list of failures; empty passes.
  */
@@ -147,24 +159,25 @@ export function decide(state) {
     problems.push(`case 2: both replacements are in the code (${state.replacementsPresent.join(', ')}) and ReplacementShippedOn is empty; story R3.15 sets the two dates`);
   }
 
-  const legacyGone = state.legacyPresent.length === 0;
-  // Case 3.
-  if (legacyGone) {
+  // Case 3: any landed item removed is a removal, held to the date.
+  const removed = state.legacyRemoved;
+  if (removed.length > 0) {
+    const what = `the legacy item(s) ${removed.join(', ')} are gone`;
     if (!sunset) {
-      problems.push('case 3: the legacy items are gone and SunsetAfter is empty; the removal waits for the date');
+      problems.push(`case 3: ${what} and SunsetAfter is empty; the removal waits for the date`);
     } else if (today < sunsetDay) {
-      problems.push(`case 3: the legacy items are gone and the commit is dated ${commitDay}, before SunsetAfter ${sunset}`);
+      problems.push(`case 3: ${what} and the commit is dated ${commitDay}, before SunsetAfter ${sunset}`);
     }
     if (state.minorsAfterReplacement === null) {
-      problems.push('case 3: the legacy items are gone and no stable release reachable from this commit ships both replacements');
+      problems.push(`case 3: ${what} and no stable release reachable from this commit ships both replacements`);
     } else if (state.minorsAfterReplacement < MIN_STABLE_MINORS) {
-      problems.push(`case 3: the legacy items are gone and ${state.minorsAfterReplacement} stable minor release(s) follow the release that shipped the replacements; at least ${MIN_STABLE_MINORS} must`);
+      problems.push(`case 3: ${what} and ${state.minorsAfterReplacement} stable minor release(s) follow the release that shipped the replacements; at least ${MIN_STABLE_MINORS} must`);
     }
   }
 
   // Case 4.
-  if (!legacyGone && sunset && today - sunsetDay > GRACE_DAYS) {
-    problems.push(`case 4: the commit is dated ${commitDay}, ${today - sunsetDay} days after SunsetAfter ${sunset}, and still holds: ${state.legacyPresent.join(', ')}; only the removal (R4.2, R4.7, R4.8) merges from day ${GRACE_DAYS + 1}`);
+  if (state.legacyPresent.length > 0 && sunset && today - sunsetDay > GRACE_DAYS) {
+    problems.push(`case 4: the commit is dated ${commitDay}, ${today - sunsetDay} days after SunsetAfter ${sunset}, and still holds: ${state.legacyPresent.join(', ')}; from day ${GRACE_DAYS + 1} only the removal merges, one pull request that removes every legacy item (R4.2, R4.7, R4.8)`);
   }
   return problems;
 }
@@ -220,11 +233,13 @@ export function inspect(root, rev = 'HEAD') {
   const source = git(root, ['show', `${sha}:${REGISTRY}`], { allowFail: true });
   if (source === null) return null;
   const constants = parseConstants(source);
-  const legacyPresent = LEGACY_ITEMS.filter((item) => found(root, sha, item)).map((item) => item.id);
+  const legacyFound = new Set(LEGACY_ITEMS.filter((item) => found(root, sha, item)).map((item) => item.id));
+  const legacyPresent = LEGACY_ITEMS.filter((item) => legacyFound.has(item.id)).map((item) => item.id);
+  const legacyRemoved = LEGACY_ITEMS.filter((item) => item.landed && !legacyFound.has(item.id)).map((item) => item.id);
   const replacementsPresent = REPLACEMENTS.filter((item) => found(root, sha, item)).map((item) => item.id);
   const commitDay = utcDay(git(root, ['log', '-1', '--format=%cI', sha]).trim());
   let minorsAfterReplacement = null;
-  if (legacyPresent.length === 0) {
+  if (legacyRemoved.length > 0) {
     // Only the release floor reads history; refuse a short walk rather
     // than count the tags of a shallow clone.
     if (git(root, ['rev-parse', '--is-shallow-repository']).trim() === 'true') {
@@ -236,7 +251,21 @@ export function inspect(root, rev = 'HEAD') {
       .map((tag) => ({ tag, hasReplacements: REPLACEMENTS.every((item) => found(root, `refs/tags/${tag}^{commit}`, item)) }));
     minorsAfterReplacement = minorsAfter(tags);
   }
-  return { sha, ...constants, commitDay, legacyPresent, replacementsPresent, minorsAfterReplacement };
+  return { sha, ...constants, commitDay, legacyPresent, legacyRemoved, replacementsPresent, minorsAfterReplacement };
+}
+
+/**
+ * Whether `pattern` matches a non-test Go file directly in `dir` of a checked
+ * out tree (the reminder reads its sparse checkout; it has no history).
+ */
+export function foundOnDisk(root, { dir, pattern }) {
+  const re = new RegExp(pattern.replaceAll('[[:space:]]', String.raw`\s`));
+  const full = path.join(root, dir);
+  if (!fs.existsSync(full)) return false;
+  return fs
+    .readdirSync(full)
+    .filter((name) => name.endsWith('.go') && !name.endsWith('_test.go'))
+    .some((name) => re.test(fs.readFileSync(path.join(full, name), 'utf8')));
 }
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);

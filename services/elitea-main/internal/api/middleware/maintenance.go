@@ -331,7 +331,8 @@ func (g *maintenanceGate) admits(r *http.Request) bool {
 	if adminaccess.AdmitsDuringMaintenance(resolution.Permissions) {
 		return true
 	}
-	return len(resolution.Permissions) > 0 && g.administrationRoute != nil && g.administrationRoute(r)
+	return adminaccess.HoldsAdministrationPermission(resolution.Permissions) &&
+		g.administrationRoute != nil && g.administrationRoute(r)
 }
 
 // MaintenanceExempt reports whether maintenance never refuses path — the

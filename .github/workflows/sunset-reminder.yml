@@ -41,6 +41,7 @@ jobs:
           sparse-checkout: |
             scripts/ci
             services/elitea-main/internal/adminaccess
+            services/elitea-main/internal/infra/legacyrbac
             .github/actions
           persist-credentials: false
       # eng-runner: caches and TMPDIR on the work volume, and node (none in its

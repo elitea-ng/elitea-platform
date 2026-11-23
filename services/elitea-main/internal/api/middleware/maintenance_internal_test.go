@@ -273,6 +273,7 @@ func TestMaintenanceAdmitsANarrowHolderOnlyWhereAnAdministrationGateDecides(t *t
 		{"narrow, marked route", []string{adminaccess.LLMUsageView}, true, true},
 		{"narrow, unmarked route", []string{adminaccess.LLMUsageView}, false, false},
 		{"nothing, marked route", nil, true, false},
+		{"unregistered string only, marked route", []string{"not.a.registered.permission"}, true, false},
 	} {
 		gate := onWindow(stubResolver{permissions: tc.permissions})
 		gate.administrationRoute = func(*http.Request) bool { return tc.marked }

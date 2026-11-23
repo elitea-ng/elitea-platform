@@ -181,19 +181,23 @@ func TestDuringAWindowANarrowHolderReachesNoRouteOutsideTheSurface(t *testing.T)
 	}
 
 	window := adminsurface.Variant{Maintenance: true, OtherModes: []string{}}
-	outside, reachable := 0, 0
+	api, closedByWindow, outside, reachable := 0, 0, 0, 0
+	visited := map[adminsurface.Route]bool{}
 	for _, route := range c.Routes {
 		path := adminsurface.RequestPath(route.Pattern, nil)
 		if !strings.HasPrefix(path, "/api/v2/") || apimw.MaintenanceExempt(path) {
 			continue
 		}
+		api++
 		// A route the window does not close to a caller with no
 		// administration permission is not behind the gate at all (the
 		// branding pack, a shared chat link): no permission changes it.
 		if !adminsurface.Send(c.Handler, route, window, opts, nil).Maintenance() {
 			continue
 		}
+		closedByWindow++
 		entry, ok := inSurface[route]
+		visited[route] = ok
 		if !ok {
 			outside++
 			for _, name := range narrow {
@@ -230,9 +234,23 @@ func TestDuringAWindowANarrowHolderReachesNoRouteOutsideTheSurface(t *testing.T)
 				vault.Pattern, mode, adminaccess.ConfigurationSecretsSecretView, got.Maintenance(), refused)
 		}
 	}
-	if outside < 300 || reachable < 10 {
-		t.Fatalf("checked %d routes outside the surface and %d (route, permission) pairs of it; the drive found too few",
-			outside, reachable)
+	// The counts come from the router and the surface, not from a number
+	// written here: every surface route the window closes was checked with
+	// each permission its check accepts, and the window closes nearly every
+	// route under /api/v2 (the gate sits in front of the router, so a route
+	// it does not close is one of the few public ones).
+	for route, entry := range inSurface {
+		path := adminsurface.RequestPath(route.Pattern, nil)
+		if !strings.HasPrefix(path, "/api/v2/") || apimw.MaintenanceExempt(path) {
+			continue
+		}
+		if _, seen := visited[route]; !seen && adminsurface.Send(c.Handler, route, window, opts, nil).Maintenance() {
+			t.Errorf("surface route %s (%d checks) was not visited", route, len(entry.Checks))
+		}
+	}
+	if api == 0 || outside == 0 || reachable == 0 || closedByWindow*10 < api*9 {
+		t.Fatalf("of %d routes under /api/v2 the window closed %d; %d were outside the surface and %d (route, permission) "+
+			"pairs inside it: the drive or the window lost routes", api, closedByWindow, outside, reachable)
 	}
 }
 

@@ -22,13 +22,15 @@ import {
 const SELF = fileURLToPath(import.meta.url);
 const REPO = path.resolve(path.dirname(SELF), '../..');
 const ALL_LEGACY = LEGACY_ITEMS.map((i) => i.id);
+const LANDED = LEGACY_ITEMS.filter((i) => i.landed).map((i) => i.id);
 const BOTH = REPLACEMENTS.map((i) => i.id);
 
 const state = (over) => ({
   replacementShippedOn: '',
   sunsetAfter: '',
   commitDay: '2026-12-01',
-  legacyPresent: ALL_LEGACY,
+  legacyPresent: LANDED,
+  legacyRemoved: [],
   replacementsPresent: [],
   minorsAfterReplacement: null,
   ...over,
@@ -109,7 +111,7 @@ test('legacy items present within the 14-day grace after the date: passes', () =
 
 test('a commit dated after the date with the legacy items gone and two minors since: passes', () => {
   assert.deepEqual(
-    decide(state({ replacementShippedOn: '2027-01-01', sunsetAfter: '2027-04-01', replacementsPresent: BOTH, legacyPresent: [], commitDay: '2027-04-02', minorsAfterReplacement: 2 })),
+    decide(state({ replacementShippedOn: '2027-01-01', sunsetAfter: '2027-04-01', replacementsPresent: BOTH, legacyPresent: [], legacyRemoved: LANDED, commitDay: '2027-04-02', minorsAfterReplacement: 2 })),
     [],
   );
 });
@@ -130,9 +132,14 @@ test('case 2: both replacements in the code and no date', () => {
 });
 
 test('case 3: legacy gone before the date, with no date, or before two stable minors', () => {
-  const dated = { replacementShippedOn: '2027-01-01', sunsetAfter: '2027-04-01', replacementsPresent: BOTH, legacyPresent: [] };
+  const dated = { replacementShippedOn: '2027-01-01', sunsetAfter: '2027-04-01', replacementsPresent: BOTH, legacyPresent: [], legacyRemoved: LANDED };
   assert.match(decide(state({ ...dated, commitDay: '2027-03-31', minorsAfterReplacement: 3 })).join(), /case 3: .*before SunsetAfter/);
-  assert.match(decide(state({ legacyPresent: [], minorsAfterReplacement: 3 })).join(), /case 3: .*SunsetAfter is empty/);
+  assert.match(decide(state({ legacyPresent: [], legacyRemoved: LANDED, minorsAfterReplacement: 3 })).join(), /case 3: .*SunsetAfter is empty/);
+  // One item removed early is a removal too, though the others are still there.
+  assert.match(
+    decide(state({ ...dated, legacyPresent: LANDED.slice(2), legacyRemoved: LANDED.slice(0, 2), commitDay: '2027-02-01', minorsAfterReplacement: 3 })).join(),
+    /case 3: the legacy item\(s\) runtime\.plugins, configuration\.governance are gone .*before SunsetAfter/,
+  );
   assert.match(decide(state({ ...dated, commitDay: '2027-05-01', minorsAfterReplacement: 1 })).join(), /case 3: .*1 stable minor/);
   assert.match(decide(state({ ...dated, commitDay: '2027-05-01', minorsAfterReplacement: null })).join(), /case 3: .*no stable release/);
 });
@@ -141,7 +148,13 @@ test('case 4: a legacy item still there more than 14 days after the date', () =>
   const problems = decide(
     state({ replacementShippedOn: '2027-01-01', sunsetAfter: '2027-04-01', replacementsPresent: BOTH, legacyPresent: ['runtime.plugins'], commitDay: '2027-04-16' }),
   );
-  assert.match(problems.join(), /case 4: .*15 days after SunsetAfter 2027-04-01.*runtime\.plugins/);
+  assert.match(problems.join(), /case 4: .*15 days after SunsetAfter 2027-04-01.*runtime\.plugins.*one pull request/);
+  // A partial removal past the grace still fails case 4 for what it keeps.
+  const partial = decide(
+    state({ replacementShippedOn: '2027-01-01', sunsetAfter: '2027-04-01', replacementsPresent: BOTH, legacyPresent: LANDED.slice(2), legacyRemoved: LANDED.slice(0, 2), commitDay: '2027-04-20', minorsAfterReplacement: 2 }),
+  );
+  assert.equal(partial.length, 1);
+  assert.match(partial[0], /case 4: .*inherit token administration access/);
 });
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -195,14 +208,16 @@ test('inspect reads the commit, not the working tree, and the tags reachable fro
     r.commit('2027-02-02', 'v7.8.0');
     const ninetyDaysLater = r.commit('2027-04-10', 'v8.0.0');
 
-    r.remove(PERMISSIONS);
+    // The removal leaves a comment that quotes a name: that is not the item.
+    r.write(PERMISSIONS, 'package adminaccess\n\n// Formerly "runtime.plugins" and "configuration.governance".\n');
     r.remove(INHERIT);
     const removal = r.commit('2027-04-11');
     // The working tree is not what is checked.
     r.write(PERMISSIONS, LEGACY_NAMES);
 
     const old = inspect(r.root, before);
-    assert.deepEqual(old.legacyPresent, ALL_LEGACY.slice(0, 3));
+    assert.deepEqual(old.legacyPresent, LANDED);
+    assert.deepEqual(old.legacyRemoved, []);
     assert.deepEqual(old.replacementsPresent, []);
     assert.equal(old.commitDay, '2026-12-01');
     assert.deepEqual(decide(old), []);
@@ -210,6 +225,7 @@ test('inspect reads the commit, not the working tree, and the tags reachable fro
     assert.deepEqual(inspect(r.root, ninetyDaysLater).replacementsPresent, BOTH);
     const gone = inspect(r.root, removal);
     assert.deepEqual(gone.legacyPresent, []);
+    assert.deepEqual(gone.legacyRemoved, LANDED);
     assert.equal(gone.minorsAfterReplacement, 2);
     assert.deepEqual(decide(gone), []);
 
@@ -229,6 +245,10 @@ test('inspect reads the commit, not the working tree, and the tags reachable fro
 test('the real tree at HEAD finds every landed row and passes', () => {
   const head = inspect(REPO, 'HEAD');
   assert.ok(head, `${REGISTRY} is in the tree`);
+  assert.deepEqual(decide(head), []);
+  // Before a date is set no removal can be legitimate, so a landed row that
+  // finds nothing is a pattern that stopped matching.
+  if (head.sunsetAfter) return;
   for (const item of LEGACY_ITEMS.filter((i) => i.landed)) {
     assert.ok(head.legacyPresent.includes(item.id), `${item.id} (${item.story}) is landed and its pattern finds nothing: a rename would read as removal`);
   }
@@ -249,7 +269,7 @@ test('the verdicts are the same with the system time moved one year forward', ()
     const cases = () => [
       decide(state()),
       decide(state({ replacementShippedOn: '2027-01-01', sunsetAfter: '2027-04-01', replacementsPresent: BOTH, commitDay: '2027-04-16' })),
-      decide(state({ legacyPresent: [], minorsAfterReplacement: 3 })),
+      decide(state({ legacyPresent: [], legacyRemoved: LANDED, minorsAfterReplacement: 3 })),
       inspect(r.root, sha),
       decide(inspect(r.root, sha)),
     ];

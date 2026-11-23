@@ -7,10 +7,12 @@
 // scripts/ci/check-sunset.mjs by surprise. Unlike the check, it reads the
 // clock; it gates nothing.
 //
-// Idempotent: the issue title holds the date, and the run looks for an issue
-// of that exact title in ANY state first. A second run opens none, and one
-// closed by hand is not reopened. A new date (a later R3.15 edit) is a new
-// title, so it gets its own issue.
+// Idempotent: the issue title holds the date, and the run lists the issues
+// this workflow opened (REST, any state; not the search API, which is
+// eventually consistent) for that exact title first. A second run opens none,
+// and one closed by hand is not reopened. A new date (a later R3.15 edit) is a
+// new title, so it gets its own issue. The workflow's concurrency group runs
+// one reminder at a time. Once the legacy items are gone it does nothing.
 //
 //   GITHUB_TOKEN=... GITHUB_REPOSITORY=owner/name node scripts/ci/sunset-reminder.mjs [--today YYYY-MM-DD]
 
@@ -19,9 +21,11 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-import { dayNumber, parseConstants, REGISTRY } from './check-sunset.mjs';
+import { dayNumber, foundOnDisk, LEGACY_ITEMS, parseConstants, REGISTRY } from './check-sunset.mjs';
 
 export const REMIND_DAYS = 30;
+/** The login of the workflow token, the author of the issue. */
+export const CREATOR = 'github-actions[bot]';
 
 export const title = (sunsetAfter) => `Sunset on ${sunsetAfter}: remove the legacy administration items (ADR-0059)`;
 
@@ -43,8 +47,9 @@ export function body(sunsetAfter) {
  * What to do today. `existing` is the list of issue titles that already
  * carry this date's title. Answers { open: boolean, reason }.
  */
-export function decide({ today, sunsetAfter, existing }) {
+export function decide({ today, sunsetAfter, existing, legacyPresent = true }) {
   if (!sunsetAfter) return { open: false, reason: 'SunsetAfter is empty: no date to remind of' };
+  if (!legacyPresent) return { open: false, reason: 'the legacy items are gone: the removal has merged' };
   const due = dayNumber(sunsetAfter);
   const now = dayNumber(today);
   if (Number.isNaN(due)) throw new Error(`SunsetAfter "${sunsetAfter}" is not a YYYY-MM-DD date`);
@@ -61,13 +66,19 @@ export function decide({ today, sunsetAfter, existing }) {
  */
 export async function run({ root, today, github }) {
   const { sunsetAfter } = parseConstants(fs.readFileSync(path.join(root, REGISTRY), 'utf8'));
-  const existing = sunsetAfter ? await github.findTitles(title(sunsetAfter)) : [];
-  const decision = decide({ today, sunsetAfter, existing });
+  const legacyPresent = LEGACY_ITEMS.some((item) => item.landed && foundOnDisk(root, item));
+  const asks = sunsetAfter && legacyPresent;
+  const existing = asks ? await github.findTitles(title(sunsetAfter)) : [];
+  const decision = decide({ today, sunsetAfter, existing, legacyPresent });
   if (decision.open) await github.create({ title: title(sunsetAfter), body: body(sunsetAfter) });
   return decision;
 }
 
-/** The REST client of the workflow: the issue search, exact-title filtered. */
+/**
+ * The REST client of the workflow. findTitles lists the issues the workflow
+ * token opened (creator github-actions[bot], any state), page by page, and
+ * keeps the exact title.
+ */
 export function restClient({ token, repository, fetchImpl = fetch }) {
   const api = 'https://api.github.com';
   const headers = { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28' };
@@ -78,9 +89,13 @@ export function restClient({ token, repository, fetchImpl = fetch }) {
   };
   return {
     async findTitles(wanted) {
-      const q = encodeURIComponent(`repo:${repository} is:issue in:title "${wanted}"`);
-      const found = await call(`${api}/search/issues?q=${q}&per_page=100`);
-      return found.items.map((item) => item.title).filter((t) => t === wanted);
+      const titles = [];
+      for (let page = 1; ; page++) {
+        const creator = encodeURIComponent(CREATOR);
+        const items = await call(`${api}/repos/${repository}/issues?state=all&creator=${creator}&per_page=100&page=${page}`);
+        for (const item of items) if (!item.pull_request && item.title === wanted) titles.push(item.title);
+        if (items.length < 100 || titles.length) return titles;
+      }
     },
     async create(issue) {
       await call(`${api}/repos/${repository}/issues`, { method: 'POST', body: JSON.stringify(issue), headers: { 'content-type': 'application/json' } });

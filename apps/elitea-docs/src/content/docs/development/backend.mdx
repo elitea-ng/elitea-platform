@@ -185,10 +185,14 @@ Both are `YYYY-MM-DD` and are set together, in one pull request (R3.15). The che
 
 1. `ReplacementShippedOn` is set and `SunsetAfter` is empty or less than 90 days later (or `SunsetAfter` is set alone).
 2. Both replacements are in the code and `ReplacementShippedOn` is empty.
-3. The legacy items are gone, and the commit is dated before `SunsetAfter` (or no date is set), or fewer than two stable minor releases follow the first release that holds both replacements.
+3. A legacy item is gone (any one of them), and the commit is dated before `SunsetAfter` (or no date is set), or fewer than two stable minor releases follow the first release that holds both replacements.
 4. A legacy item is still in the code and the commit is dated more than 14 days after `SunsetAfter`. From then on only the removal merges.
 
-The detection table at the top of the script lists the marker of each item and each replacement: a constant the owning story adds, found by a pattern over the package's non-test Go files. A story that owes a marker (R2.7, R3.8) adds the constant the table names and sets its row's `landed` to `true`. The test then requires the pattern to match the real tree, so a rename cannot read as a removal. A commit whose tree has no `registry.go` predates the rule and passes.
+The removal is therefore one pull request that removes every legacy item (R4.2, R4.7 and R4.8 on one branch): removing one early fails case 3, and keeping one past the grace period fails case 4.
+
+The detection table at the top of the script lists the marker of each item and each replacement: the declaration of a constant the owning story adds (name and value, so a comment that quotes a removed name does not count), found over the package's non-test Go files. A story that owes a marker (R2.7, R3.8) adds the constant the table names and sets its row's `landed` to `true`. A landed legacy row that finds nothing is a removal. While `SunsetAfter` is empty the test requires every landed row to match the real tree, so a rename cannot read as a removal. A commit whose tree has no `registry.go` predates the rule and passes.
+
+The date is the committer date of the commit under test. On a pull request that is the merge commit GitHub made when the branch or its base last moved, so re-running an old run gives the old answer; a push or a change on `main` gives a new date. On the nightly run it is the last merge on `main`.
 
 Run it locally from the repository root (the release floor needs the full history and the tags, so a shallow clone is refused when the legacy items are gone):
 

@@ -312,6 +312,13 @@ type ModeGatedEndpoint interface {
 // RequireResolvedPermissionsForProject or RequireResolvedMembershipPermissions
 // built for the administration mode. It wraps a handler that serves nothing to
 // read the mark, so call it on middleware, never per request.
+//
+// The router calls it once for each middleware of each route at start-up, as
+// chi already wraps each inline middleware once per route. That holds only
+// while wrapping is cheap: every middleware of the router builds its state
+// in its constructor and allocates nothing but the returned handler when it
+// wraps (audited for R0.4b: RequestID, cors, OtelMiddleware, the JSON
+// compressor, Auth, Audit, Maintenance and the gates of this file).
 func IsAdministrationGate(mw func(http.Handler) http.Handler) bool {
 	if mw == nil {
 		return false
