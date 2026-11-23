@@ -21113,6 +21113,99 @@ components:
           type: integer
           description: The project of a `role_self_escalation` refusal.
 
+    # ---- Access reads (ADR-0059 R0.10b, issue 2588) ------------------------
+
+    AdministrationRoleHolderRole:
+      type: object
+      required: [name, built_in, marker]
+      description: >
+        NOTE(W2): internal/api/v2/admin/access_read.go:33-41.
+      properties:
+        name: { type: string }
+        built_in:
+          type: boolean
+          description: The deployment records the role as built-in (elitea_auth.admin_role_seeds).
+        marker:
+          type: string
+          nullable: true
+          description: >
+            The built-in record's marker, `declared`, `as_found` or
+            `unassignable`; null for a custom role.
+
+    AdministrationRoleHolder:
+      type: object
+      required: [user_id, name, email, suspended, roles]
+      description: >
+        NOTE(W2): internal/api/v2/admin/access_read.go:44-50.
+      properties:
+        user_id: { type: integer }
+        name: { type: string }
+        email: { type: string }
+        suspended: { type: boolean }
+        roles:
+          type: array
+          description: Every administration role the account holds, by name. Never empty.
+          items: { $ref: '#/components/schemas/AdministrationRoleHolderRole' }
+
+    AdministrationRoleHolders:
+      type: object
+      required: [total, rows]
+      description: >
+        NOTE(W2): internal/api/v2/admin/access_read.go:64.
+      properties:
+        total: { type: integer }
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/AdministrationRoleHolder' }
+
+    AdministrationRoleGrant:
+      type: object
+      required: [id, user_id, user_name, user_email, role_name, role_mode, action,
+                 actor_user_id, actor_name, actor_email, occurred_at, reason, source, source_ref]
+      description: >
+        NOTE(W2): internal/api/v2/admin/access_read.go:119-134 — one row of
+        elitea_auth.admin_role_grants (shared 0260).
+      properties:
+        id: { type: integer, format: int64 }
+        user_id: { type: integer }
+        user_name: { type: string, nullable: true }
+        user_email: { type: string, nullable: true }
+        role_name: { type: string }
+        role_mode: { type: string }
+        action:
+          type: string
+          description: '`granted` or `revoked`.'
+        actor_user_id:
+          type: integer
+          nullable: true
+          description: The account that made the change; null for `bootstrap` and `migration`.
+        actor_name: { type: string, nullable: true }
+        actor_email: { type: string, nullable: true }
+        occurred_at: { type: string, format: date-time }
+        reason: { type: string, nullable: true }
+        source:
+          type: string
+          description: >
+            `console`, `api`, `scim`, `migration`, `bootstrap`, `operator` or
+            `review`.
+        source_ref:
+          type: string
+          nullable: true
+          description: A reference within the source, such as a SCIM binding id.
+
+    AdministrationRoleHistory:
+      type: object
+      required: [total, rows]
+      description: >
+        NOTE(W2): internal/api/v2/admin/access_read.go:228.
+      properties:
+        total:
+          type: integer
+          description: The rows that match the filter, over every page.
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/AdministrationRoleGrant' }
+
     BrandingAsset:
       type: object
       required: [kind, digest, extension, content_type, size, path]
@@ -25059,6 +25152,127 @@ paths:
                 role: admin
                 permissions: [configuration.roles.permissions.edit]
         '404': { $ref: '#/components/responses/404' }
+        '500': { $ref: '#/components/responses/500' }
+
+  # ==========================================================================
+  # ADMIN — Access reads (ADR-0059 R0.10b, issue 2588)
+  #
+  # Gated on `access.roles.view`, or the names it narrows (`admin.auth.users`,
+  # `modes.users`): a security auditor reads who holds which administration
+  # role and the grant history without the user directory. The names of
+  # administrators are shown only here (ADR-0059 decision 6).
+  # ==========================================================================
+  /admin/access/roles:
+    get:
+      operationId: listAdministrationRoleHolders
+      summary: List the holders of administration roles
+      description: |
+        Every account that holds at least one administration role, once, with
+        every administration role it holds. An account with no
+        administration role is not listed: this is not the user directory
+        (no paging over every user, no search). A role is `built_in` when the
+        deployment records it as a built-in role, with the record's `marker`;
+        a custom role has `built_in: false` and `marker: null`.
+      tags: [admin]
+      responses:
+        '200':
+          description: The holders, by name
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdministrationRoleHolders'
+              example:
+                total: 2
+                rows:
+                  - user_id: 11
+                    name: Ada Admin
+                    email: ada@example.com
+                    suspended: false
+                    roles:
+                      - { name: admin, built_in: true, marker: declared }
+                      - { name: llm_manager, built_in: true, marker: declared }
+                  - user_id: 14
+                    name: Sam Auditor
+                    email: sam@example.com
+                    suspended: false
+                    roles:
+                      - { name: compliance_reader, built_in: false, marker: null }
+                      - { name: security_auditor, built_in: true, marker: declared }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /admin/access/history:
+    get:
+      operationId: listAdministrationRoleHistory
+      summary: Read the grant history of central roles
+      description: |
+        `elitea_auth.admin_role_grants`, newest first: who was granted or lost
+        which central role, by whom, when and from which source (`console`,
+        `api`, `scim`, `migration`, `bootstrap`, `operator` or `review`). The
+        account and actor names are read from the accounts and are null once
+        an account is deleted; the ids stay.
+      tags: [admin]
+      parameters:
+        - name: user_id
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1 }
+          description: Only the changes to this account's roles.
+        - name: role
+          in: query
+          required: false
+          schema: { type: string }
+          description: Only the changes of this role name.
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: One page of the history
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdministrationRoleHistory'
+              example:
+                total: 2
+                rows:
+                  - id: 42
+                    user_id: 11
+                    user_name: Ada Admin
+                    user_email: ada@example.com
+                    role_name: llm_manager
+                    role_mode: administration
+                    action: granted
+                    actor_user_id: 1
+                    actor_name: Root
+                    actor_email: root@example.com
+                    occurred_at: '2026-11-23T09:30:00Z'
+                    reason: null
+                    source: console
+                    source_ref: null
+                  - id: 41
+                    user_id: 11
+                    user_name: Ada Admin
+                    user_email: ada@example.com
+                    role_name: super_admin
+                    role_mode: administration
+                    action: granted
+                    actor_user_id: null
+                    actor_name: null
+                    actor_email: null
+                    occurred_at: '2026-11-20T08:00:00Z'
+                    reason: null
+                    source: bootstrap
+                    source_ref: null
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
         '500': { $ref: '#/components/responses/500' }
 
   # ==========================================================================

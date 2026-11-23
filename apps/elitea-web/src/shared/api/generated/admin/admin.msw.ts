@@ -49,6 +49,8 @@ import { CredentialKind, PermissionTrimmingItemKind } from "../model";
 import type {
   AdminAuthUsersActionResult,
   AdminAuthUsersPage,
+  AdministrationRoleHistory,
+  AdministrationRoleHolders,
   AgentIdentityBinding,
   AgentIdentityBindingListResponse,
   AgentRegistryList,
@@ -314,6 +316,72 @@ export const getAdminAuthUsersActionResponseMock =
     user_id: 11,
     role_name: null,
     role_names: ["admin", "llm_manager"],
+  });
+
+export const getListAdministrationRoleHoldersResponseMock =
+  (): AdministrationRoleHolders => ({
+    total: 2,
+    rows: [
+      {
+        user_id: 11,
+        name: "Ada Admin",
+        email: "ada@example.com",
+        suspended: false,
+        roles: [
+          { name: "admin", built_in: true, marker: "declared" },
+          { name: "llm_manager", built_in: true, marker: "declared" },
+        ],
+      },
+      {
+        user_id: 14,
+        name: "Sam Auditor",
+        email: "sam@example.com",
+        suspended: false,
+        roles: [
+          { name: "compliance_reader", built_in: false, marker: null },
+          { name: "security_auditor", built_in: true, marker: "declared" },
+        ],
+      },
+    ],
+  });
+
+export const getListAdministrationRoleHistoryResponseMock =
+  (): AdministrationRoleHistory => ({
+    total: 2,
+    rows: [
+      {
+        id: 42,
+        user_id: 11,
+        user_name: "Ada Admin",
+        user_email: "ada@example.com",
+        role_name: "llm_manager",
+        role_mode: "administration",
+        action: "granted",
+        actor_user_id: 1,
+        actor_name: "Root",
+        actor_email: "root@example.com",
+        occurred_at: "2026-11-23T09:30:00Z",
+        reason: null,
+        source: "console",
+        source_ref: null,
+      },
+      {
+        id: 41,
+        user_id: 11,
+        user_name: "Ada Admin",
+        user_email: "ada@example.com",
+        role_name: "super_admin",
+        role_mode: "administration",
+        action: "granted",
+        actor_user_id: null,
+        actor_name: null,
+        actor_email: null,
+        occurred_at: "2026-11-20T08:00:00Z",
+        reason: null,
+        source: "bootstrap",
+        source_ref: null,
+      },
+    ],
   });
 
 export const getListUserModeRolesResponseMock = (
@@ -4381,6 +4449,58 @@ export const getAdminAuthUsersActionMockHandler = (
   );
 };
 
+export const getListAdministrationRoleHoldersMockHandler = (
+  overrideResponse?:
+    | AdministrationRoleHolders
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AdministrationRoleHolders> | AdministrationRoleHolders),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/access/roles",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListAdministrationRoleHoldersResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getListAdministrationRoleHistoryMockHandler = (
+  overrideResponse?:
+    | AdministrationRoleHistory
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AdministrationRoleHistory> | AdministrationRoleHistory),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/access/history",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListAdministrationRoleHistoryResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListUserModeRolesMockHandler = (
   overrideResponse?:
     | ModeRoleListing
@@ -7177,6 +7297,8 @@ export const getAdminMock = () => [
   getUserDeleteMockHandler(),
   getListAdminAuthUsersMockHandler(),
   getAdminAuthUsersActionMockHandler(),
+  getListAdministrationRoleHoldersMockHandler(),
+  getListAdministrationRoleHistoryMockHandler(),
   getListUserModeRolesMockHandler(),
   getAssignUserModeRoleMockHandler(),
   getRemoveUserModeRoleMockHandler(),

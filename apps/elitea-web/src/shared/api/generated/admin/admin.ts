@@ -58,6 +58,8 @@ import type {
   AdminAuthUsersActionResult,
   AdminAuthUsersPage,
   AdminRoleRefusal,
+  AdministrationRoleHistory,
+  AdministrationRoleHolders,
   AgentIdentityBinding,
   AgentIdentityBindingCreate,
   AgentIdentityBindingListResponse,
@@ -127,6 +129,7 @@ import type {
   ListAdminConnectorRequestsParams,
   ListAdminPermissionTrimmingParams,
   ListAdminPublishedAgentsParams,
+  ListAdministrationRoleHistoryParams,
   ListAgentIdentityBindingsParams,
   ListBackgroundJobsParams,
   ListBrandingPackageVersions200,
@@ -3369,6 +3372,444 @@ export function useAdminAuthUsersAction<
   const queryOptions = getAdminAuthUsersActionQueryOptions(
     mode,
     adminAuthUsersActionRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listAdministrationRoleHoldersResponse200 = {
+  data: AdministrationRoleHolders;
+  status: 200;
+};
+
+export type listAdministrationRoleHoldersResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listAdministrationRoleHoldersResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listAdministrationRoleHoldersResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type listAdministrationRoleHoldersResponseSuccess =
+  listAdministrationRoleHoldersResponse200 & {
+    headers: Headers;
+  };
+export type listAdministrationRoleHoldersResponseError = (
+  | listAdministrationRoleHoldersResponse401
+  | listAdministrationRoleHoldersResponse403
+  | listAdministrationRoleHoldersResponse500
+) & {
+  headers: Headers;
+};
+
+export type listAdministrationRoleHoldersResponse =
+  | listAdministrationRoleHoldersResponseSuccess
+  | listAdministrationRoleHoldersResponseError;
+
+export const getListAdministrationRoleHoldersUrl = () => {
+  return `/admin/access/roles`;
+};
+
+/**
+ * Every account that holds at least one administration role, once, with
+ * every administration role it holds. An account with no
+ * administration role is not listed: this is not the user directory
+ * (no paging over every user, no search). A role is `built_in` when the
+ * deployment records it as a built-in role, with the record's `marker`;
+ * a custom role has `built_in: false` and `marker: null`.
+ * @summary List the holders of administration roles
+ */
+export const listAdministrationRoleHolders = async (
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listAdministrationRoleHoldersResponse> => {
+  return eliteaFetch<listAdministrationRoleHoldersResponse>(
+    getListAdministrationRoleHoldersUrl(),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListAdministrationRoleHoldersQueryKey = () => {
+  return [`/admin/access/roles`] as const;
+};
+
+export const getListAdministrationRoleHoldersQueryOptions = <
+  TData = Awaited<ReturnType<typeof listAdministrationRoleHolders>>,
+  TError = N401Response | N403Response | N500Response,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<
+      Awaited<ReturnType<typeof listAdministrationRoleHolders>>,
+      TError,
+      TData
+    >
+  >;
+  request?: SecondParameter<typeof eliteaFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListAdministrationRoleHoldersQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listAdministrationRoleHolders>>
+  > = ({ signal }) =>
+    listAdministrationRoleHolders({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listAdministrationRoleHolders>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListAdministrationRoleHoldersQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listAdministrationRoleHolders>>
+>;
+export type ListAdministrationRoleHoldersQueryError =
+  N401Response | N403Response | N500Response;
+
+export function useListAdministrationRoleHolders<
+  TData = Awaited<ReturnType<typeof listAdministrationRoleHolders>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAdministrationRoleHolders>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAdministrationRoleHolders>>,
+          TError,
+          Awaited<ReturnType<typeof listAdministrationRoleHolders>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListAdministrationRoleHolders<
+  TData = Awaited<ReturnType<typeof listAdministrationRoleHolders>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAdministrationRoleHolders>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAdministrationRoleHolders>>,
+          TError,
+          Awaited<ReturnType<typeof listAdministrationRoleHolders>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListAdministrationRoleHolders<
+  TData = Awaited<ReturnType<typeof listAdministrationRoleHolders>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAdministrationRoleHolders>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the holders of administration roles
+ */
+
+export function useListAdministrationRoleHolders<
+  TData = Awaited<ReturnType<typeof listAdministrationRoleHolders>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAdministrationRoleHolders>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListAdministrationRoleHoldersQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listAdministrationRoleHistoryResponse200 = {
+  data: AdministrationRoleHistory;
+  status: 200;
+};
+
+export type listAdministrationRoleHistoryResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type listAdministrationRoleHistoryResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listAdministrationRoleHistoryResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listAdministrationRoleHistoryResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type listAdministrationRoleHistoryResponseSuccess =
+  listAdministrationRoleHistoryResponse200 & {
+    headers: Headers;
+  };
+export type listAdministrationRoleHistoryResponseError = (
+  | listAdministrationRoleHistoryResponse400
+  | listAdministrationRoleHistoryResponse401
+  | listAdministrationRoleHistoryResponse403
+  | listAdministrationRoleHistoryResponse500
+) & {
+  headers: Headers;
+};
+
+export type listAdministrationRoleHistoryResponse =
+  | listAdministrationRoleHistoryResponseSuccess
+  | listAdministrationRoleHistoryResponseError;
+
+export const getListAdministrationRoleHistoryUrl = (
+  params?: ListAdministrationRoleHistoryParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/admin/access/history?${stringifiedParams}`
+    : `/admin/access/history`;
+};
+
+/**
+ * `elitea_auth.admin_role_grants`, newest first: who was granted or lost
+ * which central role, by whom, when and from which source (`console`,
+ * `api`, `scim`, `migration`, `bootstrap`, `operator` or `review`). The
+ * account and actor names are read from the accounts and are null once
+ * an account is deleted; the ids stay.
+ * @summary Read the grant history of central roles
+ */
+export const listAdministrationRoleHistory = async (
+  params?: ListAdministrationRoleHistoryParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listAdministrationRoleHistoryResponse> => {
+  return eliteaFetch<listAdministrationRoleHistoryResponse>(
+    getListAdministrationRoleHistoryUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListAdministrationRoleHistoryQueryKey = (
+  params?: ListAdministrationRoleHistoryParams,
+) => {
+  return [`/admin/access/history`, ...(params ? [params] : [])] as const;
+};
+
+export const getListAdministrationRoleHistoryQueryOptions = <
+  TData = Awaited<ReturnType<typeof listAdministrationRoleHistory>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  params?: ListAdministrationRoleHistoryParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAdministrationRoleHistory>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListAdministrationRoleHistoryQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listAdministrationRoleHistory>>
+  > = ({ signal }) =>
+    listAdministrationRoleHistory(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listAdministrationRoleHistory>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListAdministrationRoleHistoryQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listAdministrationRoleHistory>>
+>;
+export type ListAdministrationRoleHistoryQueryError =
+  N400Response | N401Response | N403Response | N500Response;
+
+export function useListAdministrationRoleHistory<
+  TData = Awaited<ReturnType<typeof listAdministrationRoleHistory>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  params: undefined | ListAdministrationRoleHistoryParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAdministrationRoleHistory>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAdministrationRoleHistory>>,
+          TError,
+          Awaited<ReturnType<typeof listAdministrationRoleHistory>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListAdministrationRoleHistory<
+  TData = Awaited<ReturnType<typeof listAdministrationRoleHistory>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  params?: ListAdministrationRoleHistoryParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAdministrationRoleHistory>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAdministrationRoleHistory>>,
+          TError,
+          Awaited<ReturnType<typeof listAdministrationRoleHistory>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListAdministrationRoleHistory<
+  TData = Awaited<ReturnType<typeof listAdministrationRoleHistory>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  params?: ListAdministrationRoleHistoryParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAdministrationRoleHistory>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read the grant history of central roles
+ */
+
+export function useListAdministrationRoleHistory<
+  TData = Awaited<ReturnType<typeof listAdministrationRoleHistory>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  params?: ListAdministrationRoleHistoryParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAdministrationRoleHistory>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListAdministrationRoleHistoryQueryOptions(
+    params,
     options,
   );
 

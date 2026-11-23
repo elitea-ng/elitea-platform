@@ -2917,6 +2917,16 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.With(requireAdminUsers).Get("/auth_users/{mode}", adminHandler.AuthUsers)
 				r.With(requireAdminUsers).Post("/auth_users/{mode}", adminHandler.AuthUsersAction)
 				r.With(requireAdminUsers).Put("/user_suspend/{mode}/{userID}", adminHandler.UserSuspend)
+				// The Access reads (ADR-0059 R0.10b): who holds which
+				// administration role, and the grant history. A security
+				// auditor reads them through access.roles.view without the
+				// user directory above, which stays on admin.auth.users; the
+				// names it narrows open them too. Later Access reads
+				// (posture, tokens) share the /access/ prefix.
+				requireAccessRolesView := central(adminaccess.AccessRolesView,
+					adminaccess.AdminAuthUsers, adminaccess.ModesUsers)
+				r.With(requireAccessRolesView).Get("/access/roles", adminHandler.AccessRoles)
+				r.With(requireAccessRolesView).Get("/access/history", adminHandler.AccessHistory)
 				// The MODES registry and the GLOBAL invite (#255). Both are
 				// legacy `AdminAPI`-only surfaces — `mode_handlers` names
 				// `administration` and nothing else — so the segment is STATIC

@@ -969,7 +969,10 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 577 -> 579 (issue 2574, ADR-0059 R0.8b): listAdminAuthUsers and adminAuthUsersAction, the admin
 // Users page routes that were hand-written until the contract described them. Like the other admin
 // operations they are not in the manifest, so MANIFEST_ENTRY_COUNT is unchanged.
-const GENERATED_OPERATION_COUNT = 579;
+// 579 -> 581 (issue 2588, ADR-0059 R0.10b): listAdministrationRoleHolders and
+// listAdministrationRoleHistory, the Access reads. The Access page that calls them is R3.9, so
+// MANIFEST_ENTRY_COUNT is unchanged.
+const GENERATED_OPERATION_COUNT = 581;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

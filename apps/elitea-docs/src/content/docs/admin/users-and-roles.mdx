@@ -190,4 +190,13 @@ The source says how the change was made:
 | `bootstrap` | The first sign-in of an account in `identity.initial_global_admins`. There is no actor. |
 | `migration`, `operator`, `review`, `scim` | Reserved for an upgrade step, the operator command, a confirmed provisional grant and a SCIM binding to an administration role. A `migration` record has no actor. |
 
+### Read the holders and the history
+
+Two read routes answer "who holds which administration role" and "who changed it, when and how". The Access page that shows them comes in a later release.
+
+- **`GET /api/v2/admin/access/roles`** lists every account that holds at least one administration role, once, with all its roles. Each role says whether it is built-in (`built_in`, with the built-in record's `marker`) or custom. Accounts without an administration role are not listed.
+- **`GET /api/v2/admin/access/history`** lists the records below, newest first. Filter with `user_id` and `role`, page with `limit` (up to 200, default 50) and `offset`. Each row names the account, the role and mode, `granted` or `revoked`, the actor, the time and the source.
+
+Both need `access.roles.view`, or one of the two broader permissions it narrows, `admin.auth.users` and `modes.users`. The built-in `security_auditor` role holds `access.roles.view`, so an auditor reads the holders and the history, but not the user directory: `GET /api/v2/admin/auth_users/administration`, which lists every account with its e-mail address, stays on `admin.auth.users`, and an auditor gets `403` there. The names of administrators appear only in these two reads, because a list of administrators is a target list for phishing.
+
 Replacing an account's role writes two records: the old role `revoked` and the new one `granted`. Removing one of two roles writes one record and leaves the other role as it was. Assigning a role that the account already holds writes nothing and changes nothing. A refused change writes nothing either. Records start at the upgrade that added them: assignments made before it have none. A change made outside Elitea, such as SQL run by hand against the database, or the roles removed with a deleted account, leaves no record.
