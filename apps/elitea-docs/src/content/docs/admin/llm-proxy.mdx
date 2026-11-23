@@ -14,6 +14,21 @@ The LLM Proxy screen lives under **Configuration › LLM Proxy** in the admin co
   <Card title="Alerts" icon="bell">The default soft-alert threshold for budget warnings.</Card>
 </CardGroup>
 
+## Permissions per tab
+
+Each tab accepts a narrow administration permission or `configuration.governance`, which still opens every tab. A read permission never shows a credential value.
+
+| Tab | Read | Change |
+|---|---|---|
+| Status, Usage, Logs | `llm.usage.view` | — |
+| Alerts | `llm.usage.view` | `llm.alerts.manage` |
+| Models (prices and metered prices) | `llm.catalogue.view` | `llm.catalogue.manage` |
+| Providers & models, the platform default model | `llm.catalogue.view` | `llm.catalogue.manage` |
+
+**Check connection**, **Revalidate** and **List provider models** on a platform provider need `llm.catalogue.manage`, not `llm.catalogue.view`. Each one calls the provider with the stored credential.
+
+The navigation still asks for `configuration.governance`. A role with only the narrow permissions can call these routes, but the console does not show it the LLM Proxy menu yet.
+
 ## Publish a provider platform-wide
 
 Normally an AI provider credential belongs to one project. **Providers & models** lets you publish one from the public project instead, so every project can use it without configuring its own copy.

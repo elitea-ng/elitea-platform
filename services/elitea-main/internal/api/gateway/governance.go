@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/elitea-ng/elitea-platform/libs/go/egresslib"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 )
 
 // weightSumEpsilon bounds float error when re-verifying that a routing rule's
@@ -53,13 +54,16 @@ type GovernanceRow struct {
 	UpdatedAt string         `json:"updated_at,omitempty"`
 }
 
-// GovernanceHandler serves CRUD for the global governance authoring table. The
-// caller is responsible for RBAC gating (RequirePermissions) — the authorization
-// boundary is the server, mounted under the governance permission group in
-// router.go. This handler additionally re-verifies routing-rule CEL and target
-// weights on every write regardless of what the client validated (§3.1).
+// GovernanceHandler serves CRUD for the global governance authoring table.
+// Register takes the route gates (gates.go), and every write additionally
+// checks the caller against the kind of the row (governanceWritePermissions):
+// the route gate admits a policy or a guardrails manager, and only the second
+// writes a guardrail. This handler also re-verifies routing-rule CEL and
+// target weights on every write regardless of what the client validated
+// (§3.1).
 type GovernanceHandler struct {
-	db governanceQuerier
+	db    governanceQuerier
+	holds func(r *http.Request, names ...string) bool
 }
 
 // NewGovernanceHandler wires a handler over the given querier.
@@ -69,21 +73,72 @@ func NewGovernanceHandler(db governanceQuerier) *GovernanceHandler {
 
 // Routes returns a standalone router mounting the governance CRUD +
 // CEL-validation endpoints — used in tests.
-func (h *GovernanceHandler) Routes() chi.Router {
+func (h *GovernanceHandler) Routes(gates GovernanceGates) chi.Router {
 	r := chi.NewRouter()
-	h.Register(r)
+	h.Register(r, gates)
 	return r
 }
 
-// Register attaches the governance endpoints to an existing router. The caller
-// wires this alongside the other gateway edge controls under a single RBAC
-// group so both share the /gateway prefix without colliding on a Mount pattern.
-func (h *GovernanceHandler) Register(r chi.Router) {
-	r.Get("/governance", h.List)
-	r.Post("/governance", h.Create)
-	r.Put("/governance/{id}", h.Update)
-	r.Delete("/governance/{id}", h.Delete)
-	r.Post("/governance/validate-cel", h.ValidateCEL)
+// Register attaches the governance endpoints to an existing router, each
+// behind its gate, alongside the other gateway edge controls so they share
+// the /gateway prefix without colliding on a Mount pattern. The CEL
+// validation is a read: it changes nothing.
+func (h *GovernanceHandler) Register(r chi.Router, gates GovernanceGates) {
+	view := mustGate("governance", "view", gates.View)
+	manage := mustGate("governance", "manage", gates.Manage)
+	if gates.Holds == nil {
+		panic("gateway: governance mounted without its Holds check")
+	}
+	h.holds = gates.Holds
+	r.With(view).Get("/governance", h.List)
+	r.With(manage).Post("/governance", h.Create)
+	r.With(manage).Put("/governance/{id}", h.Update)
+	r.With(manage).Delete("/governance/{id}", h.Delete)
+	r.With(view).Post("/governance/validate-cel", h.ValidateCEL)
+}
+
+// mayWriteType answers whether the caller may write a row of rowType, and
+// writes the 403 when not. It runs before validation, so a caller who may not
+// write the kind learns nothing about the body. The kind of the STORED row is
+// checked in the write's own statement (governanceWriter.storedClause).
+func (h *GovernanceHandler) mayWriteType(w http.ResponseWriter, r *http.Request, rowType string) bool {
+	// A row with no type has no kind to decide by, and validation refuses it
+	// for every caller with the same 400; nothing is written.
+	if strings.TrimSpace(rowType) == "" || h.writer(r).may(rowType) {
+		return true
+	}
+	writeForbidden(w)
+	return false
+}
+
+// writer answers what the caller may write, from the gate's resolution. A
+// handler that was never registered has no holds and may write nothing.
+func (h *GovernanceHandler) writer(r *http.Request) governanceWriter {
+	if h.holds == nil {
+		return governanceWriter{}
+	}
+	return governanceWriter{
+		legacy:     h.holds(r, adminaccess.ConfigurationGovernance),
+		guardrails: h.holds(r, adminaccess.LLMGuardrailsManage),
+		policy:     h.holds(r, adminaccess.LLMPolicyManage),
+	}
+}
+
+// refuseMissedWrite answers a write that matched no row: 404 when the row
+// does not exist, 403 when it exists and its stored kind is one the caller
+// may not write.
+func (h *GovernanceHandler) refuseMissedWrite(ctx context.Context, w http.ResponseWriter, id string) {
+	var stored string
+	err := h.db.QueryRow(ctx, `SELECT type FROM gateway.governance_config WHERE id::text = $1`, id).Scan(&stored)
+	if err == nil {
+		writeForbidden(w)
+		return
+	}
+	writeError(w, http.StatusNotFound, "governance entry not found")
+}
+
+func writeForbidden(w http.ResponseWriter) {
+	writeError(w, http.StatusForbidden, "insufficient permissions")
 }
 
 // List returns governance rows, optionally filtered by ?type=.
@@ -129,6 +184,9 @@ func (h *GovernanceHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !h.mayWriteType(w, r, body.Type) {
+		return
+	}
 	if err := validateGovernanceRow(body); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -163,6 +221,9 @@ func (h *GovernanceHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !h.mayWriteType(w, r, body.Type) {
+		return
+	}
 	if err := validateGovernanceRow(body); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -172,14 +233,19 @@ func (h *GovernanceHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	dataBytes, _ := json.Marshal(body.Data)
-	const q = `UPDATE gateway.governance_config
+	// The stored row's kind is checked in the same statement, so a policy
+	// manager cannot turn a guardrail into a routing rule, and no write can
+	// slip between a read of the kind and the update.
+	clause, clauseArgs := h.writer(r).storedClause(7)
+	q := `UPDATE gateway.governance_config
 		SET type = $1, section = $2, name = $3, data = $4, enabled = $5, updated_at = now()
-		WHERE id = $6
+		WHERE id = $6 AND ` + clause + `
 		RETURNING id::text, type, section, name, data, enabled, created_at, updated_at`
-	row, err := scanGovernanceRow(h.db.QueryRow(ctx, q, body.Type, body.Section, body.Name, dataBytes, body.Enabled, id))
+	args := append([]any{body.Type, body.Section, body.Name, dataBytes, body.Enabled, id}, clauseArgs...)
+	row, err := scanGovernanceRow(h.db.QueryRow(ctx, q, args...))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "governance entry not found")
+			h.refuseMissedWrite(ctx, w, id)
 			return
 		}
 		if isUniqueViolation(err) {
@@ -198,9 +264,15 @@ func (h *GovernanceHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	id := chi.URLParam(r, "id")
-	ct, err := h.db.Exec(ctx, `DELETE FROM gateway.governance_config WHERE id = $1`, id)
-	if err != nil || ct.RowsAffected() == 0 {
+	clause, clauseArgs := h.writer(r).storedClause(2)
+	ct, err := h.db.Exec(ctx, `DELETE FROM gateway.governance_config WHERE id = $1 AND `+clause,
+		append([]any{id}, clauseArgs...)...)
+	if err != nil {
 		writeError(w, http.StatusNotFound, "governance entry not found")
+		return
+	}
+	if ct.RowsAffected() == 0 {
+		h.refuseMissedWrite(ctx, w, id)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

@@ -52,18 +52,21 @@ package configurations
 //
 // ## Authorisation
 //
-// Central `configuration.governance`, in administration mode — the permission
-// the rest of the `/admin/gateway` group takes. It is shared rather than new for
-// the reason router.go states where that group is mounted: a second permission
-// string reaches nobody until a migration grants it, which is the #386 shape.
-// The privilege this adds is real but narrow: a holder could already write these
-// exact rows through `/api/v2/configurations` if they were an admin of the
-// public project.
+// Central, in administration mode, per route (ADR-0059 R0.3): the listing
+// takes `llm.catalogue.view`, every other route `llm.catalogue.manage`, and
+// router.go builds both gates to accept `configuration.governance` too, so a
+// holder of the legacy name sees no change. GlobalProviderRoutes takes the
+// gates (CatalogueGates), so the routes cannot be mounted without them.
 //
-// The gate is applied at the MOUNT, not per route, because one permission covers
-// all four verbs here. That differs from Routes() above — which needs five
-// different strings and therefore gates inside the package — and the difference
-// is why this router does not simply reuse that one.
+// `check`, `revalidate` and the provider model listing are POSTs that change
+// little or nothing, and are still `manage`: each makes an outbound call with
+// the stored credential, which a holder of the view permission must not be
+// able to trigger. The listing never returns a credential value
+// (global_providers_redaction_test.go).
+//
+// The privilege is real but narrow: a holder could already write these exact
+// rows through `/api/v2/configurations` if they were an admin of the public
+// project.
 
 import (
 	"bytes"
@@ -90,13 +93,14 @@ import (
 const GlobalProviderSection = "ai_credentials"
 
 // GlobalProviderRoutes is the admin surface for platform-wide provider
-// credentials. Mount it behind the central gate; it applies none itself.
-func (h *Handler) GlobalProviderRoutes() chi.Router {
+// credentials, each route behind its catalogue gate.
+func (h *Handler) GlobalProviderRoutes(gates CatalogueGates) chi.Router {
+	view, manage := gates.must("global providers")
 	r := chi.NewRouter()
-	r.Get("/", h.ListGlobalProviders)
-	r.Post("/", h.CreateGlobalProvider)
-	r.Put("/{configID}", h.UpdateGlobalProvider)
-	r.Delete("/{configID}", h.DeleteGlobalProvider)
+	r.With(view).Get("/", h.ListGlobalProviders)
+	r.With(manage).Post("/", h.CreateGlobalProvider)
+	r.With(manage).Put("/{configID}", h.UpdateGlobalProvider)
+	r.With(manage).Delete("/{configID}", h.DeleteGlobalProvider)
 	// The two operations on a SAVED platform credential, delegated to the same
 	// executors the project plane calls (stored_check.go, revalidate.go).
 	//
@@ -120,8 +124,8 @@ func (h *Handler) GlobalProviderRoutes() chi.Router {
 	// credential under another name — reporting the same fact twice, from two
 	// screens that can then disagree — or dial the provider with a row that
 	// holds no secret at all. `GlobalModelRoutes` therefore gets neither route.
-	r.Post("/{configID}/check", h.CheckGlobalProviderConnection)
-	r.Post("/{configID}/revalidate", h.RevalidateGlobalProvider)
+	r.With(manage).Post("/{configID}/check", h.CheckGlobalProviderConnection)
+	r.With(manage).Post("/{configID}/revalidate", h.RevalidateGlobalProvider)
 	// The THIRD operation on a saved platform credential: what models does its
 	// provider offer? It is the successor to legacy's `import_llm_models`,
 	// which read LiteLLM's own model table — a table Bifrost does not keep, so
@@ -133,7 +137,7 @@ func (h *Handler) GlobalProviderRoutes() chi.Router {
 	// GlobalModelRoutes, so the one place that derives a model's section,
 	// validates its credential link and runs admission stays the only author
 	// of those rows.
-	r.Post("/{configID}/models", h.ListGlobalProviderModels)
+	r.With(manage).Post("/{configID}/models", h.ListGlobalProviderModels)
 	return r
 }
 
@@ -151,7 +155,8 @@ func (h *Handler) GlobalProviderRoutes() chi.Router {
 // admission uses. That is the property stored_check.go exists for, and the
 // reason this route can exist at all — the api_key of a platform credential is
 // sealed in the PUBLIC project's vault, so an operator holding
-// `configuration.governance` has no copy of it to re-type.
+// `llm.catalogue.manage` or `configuration.governance` has no copy of it to
+// re-type.
 func (h *Handler) CheckGlobalProviderConnection(w http.ResponseWriter, r *http.Request) {
 	request, ok := h.pinPublicProject(w, r)
 	if !ok {

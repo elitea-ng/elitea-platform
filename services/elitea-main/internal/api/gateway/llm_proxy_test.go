@@ -84,7 +84,7 @@ func decodeLLMProxyBody(t *testing.T, rec *httptest.ResponseRecorder) map[string
 func TestStatusReportsUnreachableAsAResult(t *testing.T) {
 	h := NewLLMProxyHandler(nil, stubStatus{err: errors.New("dial tcp: connection refused")})
 
-	rec := doLLMProxy(t, h.Routes(), http.MethodGet, "/status", "")
+	rec := doLLMProxy(t, h.Routes(openLLMProxyGates), http.MethodGet, "/status", "")
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: an unreachable gateway is a result, not a request failure", rec.Code)
@@ -107,7 +107,7 @@ func TestStatusReportsUnreachableAsAResult(t *testing.T) {
 func TestStatusReportsNotConfiguredDistinctly(t *testing.T) {
 	h := NewLLMProxyHandler(nil, nil)
 
-	rec := doLLMProxy(t, h.Routes(), http.MethodGet, "/status", "")
+	rec := doLLMProxy(t, h.Routes(openLLMProxyGates), http.MethodGet, "/status", "")
 
 	body := decodeLLMProxyBody(t, rec)
 	if body["reachable"] != false {
@@ -127,7 +127,7 @@ func TestStatusPassesTheGatewayBodyThrough(t *testing.T) {
 	upstream := `{"enabled":true,"rate_limits_enforceable":false,"workload_identity_enabled":true,"definitions":{"rows":4,"rejected":[{"id":"a","type":"routing_rule","name":"r","reason":"CEL compile error"}]}}`
 	h := NewLLMProxyHandler(nil, stubStatus{body: json.RawMessage(upstream)})
 
-	rec := doLLMProxy(t, h.Routes(), http.MethodGet, "/status", "")
+	rec := doLLMProxy(t, h.Routes(openLLMProxyGates), http.MethodGet, "/status", "")
 
 	body := decodeLLMProxyBody(t, rec)
 	if body["reachable"] != true {
@@ -208,7 +208,7 @@ func TestGatewayStatusClientRequestsTheRightPath(t *testing.T) {
 func TestUpsertModelRefusesAnOverrideWithNoPrice(t *testing.T) {
 	h := NewLLMProxyHandler(stubQuerier{}, nil)
 
-	rec := doLLMProxy(t, h.Routes(), http.MethodPut, "/models",
+	rec := doLLMProxy(t, h.Routes(openLLMProxyGates), http.MethodPut, "/models",
 		`{"provider":"openai","model_name":"gpt-5"}`)
 
 	if rec.Code != http.StatusBadRequest {
@@ -265,7 +265,7 @@ func TestWritePathNamesOnlyColumnsTheCostPathReads(t *testing.T) {
 func TestUpsertModelRefusesANegativePrice(t *testing.T) {
 	h := NewLLMProxyHandler(stubQuerier{}, nil)
 
-	rec := doLLMProxy(t, h.Routes(), http.MethodPut, "/models",
+	rec := doLLMProxy(t, h.Routes(openLLMProxyGates), http.MethodPut, "/models",
 		`{"provider":"openai","model_name":"gpt-5","input_cost_per_1m_tokens":-1}`)
 
 	if rec.Code != http.StatusBadRequest {
@@ -280,7 +280,7 @@ func TestUpsertModelRefusesANegativePrice(t *testing.T) {
 func TestUpsertModelRefusesAnUnknownField(t *testing.T) {
 	h := NewLLMProxyHandler(stubQuerier{}, nil)
 
-	rec := doLLMProxy(t, h.Routes(), http.MethodPut, "/models",
+	rec := doLLMProxy(t, h.Routes(openLLMProxyGates), http.MethodPut, "/models",
 		`{"provider":"openai","model_name":"gpt-5","input_cost_per_1k_tokens":3}`)
 
 	if rec.Code != http.StatusBadRequest {
@@ -298,7 +298,7 @@ func TestUpsertModelRequiresIdentity(t *testing.T) {
 		`{"provider":"","model_name":"gpt-5","input_cost_per_1m_tokens":3}`,
 		`{"provider":"openai","model_name":"  ","input_cost_per_1m_tokens":3}`,
 	} {
-		rec := doLLMProxy(t, h.Routes(), http.MethodPut, "/models", body)
+		rec := doLLMProxy(t, h.Routes(openLLMProxyGates), http.MethodPut, "/models", body)
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("body %s: status = %d, want 400", body, rec.Code)
 		}
