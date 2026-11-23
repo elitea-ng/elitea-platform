@@ -76,9 +76,10 @@ const (
 )
 
 // The narrow permissions of ADR-0059 decision 2 that shared 0261 grants to
-// super_admin and admin (identity.sso.trust.manage to super_admin alone). No
-// gate accepts them yet; stories R0.3 to R0.6 wire each beside the legacy
-// name it narrows.
+// super_admin and admin (identity.sso.trust.manage to super_admin alone).
+// Stories R0.3 to R0.6 wire each beside the legacy name it narrows: R0.4a
+// wired platform.email.manage, platform.operations.view and .manage, and
+// mcp.catalogue.manage, each accepted beside runtime.plugins.
 const (
 	// Models and spend.
 	LLMCatalogueView    = "llm.catalogue.view"

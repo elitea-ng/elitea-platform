@@ -2826,10 +2826,10 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			// select the permission mode: legacy reached these handlers only
 			// through its `administration` AdminAPI, so the resolution mode is
 			// always `administration`.
-			central := func(permission string) func(http.Handler) http.Handler {
+			central := func(permissions ...string) func(http.Handler) http.Handler {
 				return apimw.RequireCentralPermissions(
 					permissionResolver, platformauth.PermissionModeAdministration,
-					permission,
+					permissions...,
 				)
 			}
 			// auth_users.py, user_suspend.py
@@ -2837,6 +2837,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			// System info, plugin config, maintenance and background jobs —
 			// all declare ["runtime.plugins"].
 			requireRuntimePlugins := central(adminaccess.RuntimePlugins)
+			// The narrow names of ADR-0059 decision 2 for the low-risk
+			// platform subjects (R0.4a). Each gate accepts the narrow name OR
+			// runtime.plugins, so a holder of the legacy name sees no change
+			// (testdata/admin_platform_legacy.golden).
+			requireEmail := central(adminaccess.PlatformEmailManage, adminaccess.RuntimePlugins)
+			requireOperationsView := central(adminaccess.PlatformOperationsView, adminaccess.RuntimePlugins)
+			requireOperationsManage := central(adminaccess.PlatformOperationsManage, adminaccess.RuntimePlugins)
+			requireMCPCatalogue := central(adminaccess.MCPCatalogueManage, adminaccess.RuntimePlugins)
 			// moderation_status.py / moderation_statuses.py. The queue itself is
 			// registered further down, next to the three other moderation routes
 			// this unit added, so all four read as one surface.
@@ -2880,7 +2888,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// which is why every Help Center card said "No links configured".
 				r.Get("/plugin_config_values/prompt_lib/resources", adminHandler.PromptLibResourcesValues)
 
-				r.With(requireRuntimePlugins).Get("/system_info/{mode}", adminHandler.SystemInfo)
+				r.With(requireOperationsView).Get("/system_info/{mode}", adminHandler.SystemInfo)
 				// Before this gate any authenticated session could read the
 				// global user list — id, name, email, last_login, suspended and
 				// administration role for every row of auth_core__user.
@@ -3043,20 +3051,20 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// unavailable because its rows are plaintext and a catalogue
 				// entry carries a client secret (config_schemas.go).
 				//
-				// The permission is the SAME `runtime.plugins` the section it
-				// replaces already required, so an operator who could edit that
-				// section can edit the catalogue, and no new permission string
-				// arrives without a grant (router_permission_grant_gate_test.go).
+				// The permission is `mcp.catalogue.manage` (ADR-0059 R0.4a, one
+				// name for read and edit) or the SAME `runtime.plugins` the
+				// section it replaces already required, so an operator who
+				// could edit that section can still edit the catalogue.
 				//
 				// The mode segment is static `administration`: the catalogue is
 				// platform-wide and there is no project-scoped view of it, so
 				// another mode 404s rather than being answered with the same
 				// rows under a scope that does not apply to them.
-				r.With(requireRuntimePlugins).
+				r.With(requireMCPCatalogue).
 					Get("/mcp_prebuilt_servers/administration", adminHandler.PrebuiltMCPList)
-				r.With(requireRuntimePlugins).
+				r.With(requireMCPCatalogue).
 					Put("/mcp_prebuilt_servers/administration/{key}", adminHandler.PrebuiltMCPSave)
-				r.With(requireRuntimePlugins).
+				r.With(requireMCPCatalogue).
 					Delete("/mcp_prebuilt_servers/administration/{key}", adminHandler.PrebuiltMCPDelete)
 				// The TYPED identity provider definitions — the real surface
 				// behind the Configuration page's "Authentication" section,
@@ -3178,10 +3186,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// rows are plaintext and the SMTP password is a credential
 				// (config_schemas.go).
 				//
-				// The permission is the SAME `runtime.plugins` that section
-				// already required, so an operator who could edit it can
-				// configure the relay, and no new permission string arrives
-				// without a grant (router_permission_grant_gate_test.go).
+				// The permission is `platform.email.manage` (ADR-0059 R0.4a:
+				// read and edit the settings, send a test; there is no view
+				// half) or the SAME `runtime.plugins` that section already
+				// required, so an operator who could edit it can still
+				// configure the relay.
 				//
 				// The mode segment is static `administration`: a mail relay is
 				// a deployment fact with no project-scoped view, so another
@@ -3193,9 +3202,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// not in behaviour, and an operator who may configure the relay
 				// must be able to verify it without also holding the grant that
 				// lets them re-brand the product.
-				r.With(requireRuntimePlugins).Get("/email/administration", adminHandler.EmailSettingsRead)
-				r.With(requireRuntimePlugins).Put("/email/administration", adminHandler.EmailSettingsSave)
-				r.With(requireRuntimePlugins).Post("/email/test/administration", adminHandler.EmailTestSend)
+				r.With(requireEmail).Get("/email/administration", adminHandler.EmailSettingsRead)
+				r.With(requireEmail).Put("/email/administration", adminHandler.EmailSettingsSave)
+				r.With(requireEmail).Post("/email/test/administration", adminHandler.EmailTestSend)
 				// The branding package (ADR-0024 decision 9): export, import
 				// with a dry run, and the kept versions for rollback.
 				r.With(requireBranding).Get("/branding/package/administration", adminHandler.BrandingPackageExport)
@@ -3215,20 +3224,21 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// Admin › Tasks — the platform's own background jobs, read
 				// from this platform's tables.
 				//
-				// Gated on `runtime.plugins` in administration mode, the
-				// permission the admin Tasks page has always declared. No new
-				// permission string arrives, so the grant gate stays untripped.
+				// Gated in administration mode on `platform.operations.view`
+				// (the read) and `platform.operations.manage` (a cancel, the
+				// notice run), each beside `runtime.plugins`, the permission
+				// the admin Tasks page has always declared (ADR-0059 R0.4a).
 				//
 				// A STATIC `administration` segment, not `{mode}`: a mode
 				// variable would name a resolution this router does not
 				// perform — the same argument the moderation routes below make.
-				r.With(requireRuntimePlugins).Get("/background_jobs/administration", adminHandler.BackgroundJobs)
-				r.With(requireRuntimePlugins).Post(
+				r.With(requireOperationsView).Get("/background_jobs/administration", adminHandler.BackgroundJobs)
+				r.With(requireOperationsManage).Post(
 					"/background_jobs/administration/{kind}/{jobID}:cancel",
 					adminHandler.CancelBackgroundJob,
 				)
 				// Run the personal-access-token expiry notice pass now
-				// (#940 A3). Same surface, same `runtime.plugins` gate, and
+				// (#940 A3). Same surface, same operations.manage gate, and
 				// the same producer the scheduler runs — see
 				// admin/pat_expiry_notices.go for why an operator needs it and
 				// why it must not be a second implementation.
@@ -3236,7 +3246,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// One static segment, so it cannot collide with the
 				// `{kind}/{jobID}:cancel` route above: that pattern is two
 				// segments, this is one.
-				r.With(requireRuntimePlugins).Post(
+				r.With(requireOperationsManage).Post(
 					"/background_jobs/administration/pat_expiry_notices:run",
 					adminHandler.RunPATExpiryNotices,
 				)
@@ -5919,13 +5929,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			//
 			// Port of legacy/plugins/tracing/api/v2/{collect,otlp,status}.py —
 			// see internal/api/v2/tracing's package doc for the option-(a)
-			// architecture decision and the "runtime.plugins" admin-status gate
-			// (reusing the permission system_info.py/plugin_config_*.py/
-			// maintenance.py/runtime_*.py already declare, rather than seeding
-			// the legacy runtime's unseeded "models.admin.tracing.view" fresh).
+			// architecture decision. The admin-status gate accepts
+			// "platform.operations.view" (ADR-0059 R0.4a) or "runtime.plugins",
+			// the permission system_info.py/plugin_config_*.py/maintenance.py/
+			// runtime_*.py already declare, rather than seeding the legacy
+			// runtime's unseeded "models.admin.tracing.view" fresh.
 			requireTracingAdminStatus := apimw.RequireCentralPermissions(
 				permissionResolver, platformauth.PermissionModeAdministration,
-				adminaccess.RuntimePlugins,
+				adminaccess.PlatformOperationsView, adminaccess.RuntimePlugins,
 			)
 			tracingHandler := v2tracing.NewHandler(
 				cfg.Pool,

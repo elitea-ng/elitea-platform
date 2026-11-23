@@ -613,6 +613,11 @@ func (index *sourceIndex) helpersIn(dir string) map[string]helperSignature {
 						}
 						_, calledTakesMode := modeArgIndex[called]
 						derived := helperSignature{permissionIndex: at, takesMode: calledTakesMode || inner.takesMode}
+						// A helper that spreads its own variadic parameter into
+						// the gate (`central(permissions ...string)` forwarding
+						// `permissions...`) is variadic too: every argument at
+						// its call site is a permission the gate accepts.
+						derived.variadic = call.Ellipsis.IsValid() && i == len(call.Args)-1 && inner.variadic
 						// The derived helper fixes the mode, because the mode
 						// is written at the middleware call inside its body.
 						// Resolve it against the file that DEFINES the helper.

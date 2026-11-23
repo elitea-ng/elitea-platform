@@ -123,6 +123,8 @@ type Action struct {
 	Classifier Classifier
 	// Permission is the administration permission the action requires. Where
 	// a route gate and an in-handler check both decide, it is the narrower.
+	// Where a gate accepts a narrow name of ADR-0059 decision 2 beside the
+	// legacy name it narrows, it is the narrow name.
 	Permission string
 	Danger     Danger
 	// Reason says whether the action asks for a reason (R3.8). Every

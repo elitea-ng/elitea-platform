@@ -1,0 +1,11 @@
+GET	/api/v2/admin/system_info/administration	200
+GET	/api/v2/tracing/status/administration	200
+GET	/api/v2/admin/background_jobs/administration	503
+POST	/api/v2/admin/background_jobs/administration/agent/job-1:cancel	503
+POST	/api/v2/admin/background_jobs/administration/pat_expiry_notices:run	503
+GET	/api/v2/admin/email/administration	503
+PUT	/api/v2/admin/email/administration	503
+POST	/api/v2/admin/email/test/administration	503
+GET	/api/v2/admin/mcp_prebuilt_servers/administration	503
+PUT	/api/v2/admin/mcp_prebuilt_servers/administration/fixture	400
+DELETE	/api/v2/admin/mcp_prebuilt_servers/administration/fixture	503

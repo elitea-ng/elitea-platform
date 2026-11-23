@@ -48971,8 +48971,8 @@ paths:
       description: >
         internal/api/v2/tracing/handler.go's StatusAdmin. Port of legacy
         status.py's AdminAPI (models.admin.tracing.view), gated here on the
-        already-seeded "runtime.plugins" central permission instead — see
-        the handler package's doc comment.
+        "platform.operations.view" or the already-seeded "runtime.plugins"
+        central permission instead — see the handler package's doc comment.
       tags: [tracing]
       responses:
         '200':

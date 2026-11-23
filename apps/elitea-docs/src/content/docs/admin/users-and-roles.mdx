@@ -55,7 +55,7 @@ Open **Roles**. It shows a permission matrix across three scopes, each a tab:
 
 Besides the broad central permissions such as `runtime.plugins` and `configuration.governance`, the deployment has narrow ones, each for one subject. The upgrade that adds them grants all of them to the `super_admin` role and all but `identity.sso.trust.manage` to the `admin` role, so both administrator roles keep everything they could do and hold the new names too. No existing grant is removed.
 
-No page or route accepts the narrow names yet. Later releases let each route accept its narrow permission beside the broad one, and add built-in roles (such as an LLM manager or a project administrator) that hold only a narrow set.
+A route accepts a narrow permission beside the broad one it narrows, so a holder of the broad permission sees no change. The rows that say **Accepted** are wired today; the other names are accepted as later releases wire their routes. Later releases also add built-in roles (such as an LLM manager or a project administrator) that hold only a narrow set.
 
 | Permission | Allows | Narrows |
 |---|---|---|
@@ -71,11 +71,11 @@ No page or route accepts the narrow names yet. Later releases let each route acc
 | `identity.sso.view` | Read identity providers, SCIM clients and SCIM group bindings. | `runtime.plugins`, `admin.auth.users`, `configuration.roles.user_project_permissions.view` |
 | `identity.sso.settings.manage` | Edit what does not change trust: the display name, the button text and order, the attribute mapping other than its identity fields, and whether an existing provider is enabled; revoke and delete a SCIM client; edit SCIM group bindings to project roles (you still give only what you hold). | `runtime.plugins`, `admin.auth.users`, `configuration.roles.user_project_permissions.edit` |
 | `identity.sso.trust.manage` | Change whom the platform trusts: create or delete an identity provider; change its issuer, metadata URL, client credentials, signing certificate, adoption flags and the identity fields of its attribute mapping; create or rotate a SCIM client. Equivalent to `super_admin`, and granted to `super_admin` alone. | none (today these actions need `admin.auth.users.super_admin`) |
-| `platform.email.manage` | Read and edit e-mail settings; send a test. | `runtime.plugins` |
+| `platform.email.manage` | Read and edit e-mail settings; send a test. There is no separate view permission. **Accepted.** | `runtime.plugins` |
 | `platform.maintenance.manage` | Read and set maintenance mode; use the application during a window. | `runtime.plugins` |
-| `platform.operations.view` | Read system information, tracing status, background jobs and tasks. | `runtime.plugins` |
-| `platform.operations.manage` | Cancel a background job; start the notice run. | `runtime.plugins` |
-| `mcp.catalogue.manage` | Read and edit prebuilt MCP servers. | `runtime.plugins` |
+| `platform.operations.view` | Read system information, tracing status, background jobs and tasks. **Accepted.** | `runtime.plugins` |
+| `platform.operations.manage` | Cancel a background job; start the notice run. It does not include reading the list: pair it with `platform.operations.view`. **Accepted.** | `runtime.plugins` |
+| `mcp.catalogue.manage` | Read and edit prebuilt MCP servers. **Accepted.** | `runtime.plugins` |
 | `projects.members.manage` | Add, change and remove members of any project, without widening your own access. | `configuration.users.users.create`, `.edit` and `.delete` |
 | `projects.settings.view` | Read the guarded settings of any project. | none (new) |
 | `projects.settings.manage` | Edit the guarded settings of any project. | none (new) |
