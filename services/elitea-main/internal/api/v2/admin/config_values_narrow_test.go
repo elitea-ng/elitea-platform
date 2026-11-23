@@ -18,11 +18,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/admin"
 	v2skills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
@@ -181,5 +185,198 @@ func TestConfigurationRoutesAnswerTheLegacyHoldersAsBefore(t *testing.T) {
 	}
 	if got != string(want) {
 		t.Errorf("a legacy holder gets different answers than before:\n got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// sectionAnswer is the status a holder gets on one section's values.
+func sectionAnswer(t *testing.T, router http.Handler, method, id string) int {
+	t.Helper()
+	body := ""
+	if method == http.MethodPut {
+		body = `{"values":{}}`
+	}
+	return serveConfig(t, router, method, configValuesPath+id, body).Code
+}
+
+// legacyAdministratorNames hold every section on the legacy path.
+var legacyAdministratorNames = []string{
+	adminaccess.RuntimePlugins, adminaccess.ConfigurationGovernance, adminaccess.ConfigurationBranding,
+	adminaccess.ConfigurationNativeClients, adminaccess.ConfigurationMicrosoftApps,
+	adminaccess.ConfigurationServiceDescriptors, adminaccess.EntitlementsExport,
+}
+
+// A holder of only llm.guardrails.manage passes both gates on the guardrails
+// section, read and write, and gets 403 on the maintenance section. The
+// router has no store, so a passed request answers what the legacy
+// administrator gets (500 from the store); the save itself is proven against
+// a database by TestAGuardrailsManagerSavesTheGuardrailsSection.
+func TestAGuardrailsManagerReachesGuardrailsAndNotMaintenance(t *testing.T) {
+	legacy := newConfigRouter(legacyAdministratorNames...)
+	router := newConfigRouter(adminaccess.LLMGuardrailsManage)
+	for _, method := range []string{http.MethodGet, http.MethodPut} {
+		got, want := sectionAnswer(t, router, method, "guardrails"), sectionAnswer(t, legacy, method, "guardrails")
+		if got == http.StatusForbidden || got != want {
+			t.Errorf("%s guardrails = %d, want the legacy administrator's %d", method, got, want)
+		}
+		if got := sectionAnswer(t, router, method, "maintenance"); got != http.StatusForbidden {
+			t.Errorf("%s maintenance = %d, want 403", method, got)
+		}
+	}
+}
+
+// The save itself, against a database (ELITEA_TEST_DATABASE_URL): a holder of
+// only llm.guardrails.manage saves the guardrails section through the route
+// gate and the handler router.go composes, reads it back, and is refused the
+// maintenance section.
+func TestAGuardrailsManagerSavesTheGuardrailsSection(t *testing.T) {
+	pool := newConfigPool(t)
+	handler := admin.NewHandler(pool, admin.WithPermissionResolver(grantingResolver(adminaccess.LLMGuardrailsManage)))
+	principal := auth.User{ID: "7", UserID: "7", Email: "operator@example.com"}
+	router := chi.NewRouter()
+	router.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(auth.ContextWithUser(r.Context(), principal)))
+		})
+	})
+	router.With(handler.RequireConfigurationAccess).
+		Get("/admin/plugin_config_values/administration/{plugin}", handler.AdministrationPluginConfigValues)
+	router.With(handler.RequireConfigurationAccess).
+		Put("/admin/plugin_config_values/administration/{plugin}", handler.AdministrationPluginConfigValuesSave)
+
+	const guardrails = "/admin/plugin_config_values/administration/guardrails"
+	saved := configDo(t, router, http.MethodPut, guardrails,
+		map[string]any{"values": map[string]any{"blocked_toolkits": []any{"shell"}}})
+	if saved.Code != http.StatusOK {
+		t.Fatalf("PUT guardrails = %d, want 200 (body %s)", saved.Code, saved.Body.String())
+	}
+	read := configDo(t, router, http.MethodGet, guardrails, nil)
+	if read.Code != http.StatusOK || !strings.Contains(read.Body.String(), `"shell"`) {
+		t.Fatalf("GET guardrails = %d %s, want 200 with the saved toolkit", read.Code, read.Body.String())
+	}
+	for _, method := range []string{http.MethodGet, http.MethodPut} {
+		var body any
+		if method == http.MethodPut {
+			body = map[string]any{"values": map[string]any{"enabled": true}}
+		}
+		if got := configDo(t, router, method, "/admin/plugin_config_values/administration/maintenance", body); got.Code != http.StatusForbidden {
+			t.Errorf("%s maintenance = %d, want 403 (body %s)", method, got.Code, got.Body.String())
+		}
+	}
+}
+
+// The route gate fails closed when no resolver is wired.
+func TestTheConfigurationRouteGateFailsClosedWithoutAResolver(t *testing.T) {
+	handler := admin.NewHandler(nil)
+	gated := handler.RequireConfigurationAccess(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, configSchemasPath, nil)
+	req = req.WithContext(auth.ContextWithUser(req.Context(), auth.User{ID: "7", UserID: "7"}))
+	rec := httptest.NewRecorder()
+	gated.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("no resolver: %d, want 403", rec.Code)
+	}
+}
+
+// A holder of a view permission reads its sections and is refused their PUT.
+func TestAViewHolderReadsAndCannotSave(t *testing.T) {
+	legacy := newConfigRouter(legacyAdministratorNames...)
+	for holder, sections := range map[string][]string{
+		adminaccess.LLMPolicyView:      {"guardrails", "circuit_breaker", "governance"},
+		adminaccess.PlatformConfigView: {"analytics", "resources", "dedicated_banner"},
+		adminaccess.IdentitySSOView:    {"auth", "session_policy"},
+	} {
+		router := newConfigRouter(holder)
+		for _, id := range sections {
+			got, want := sectionAnswer(t, router, http.MethodGet, id), sectionAnswer(t, legacy, http.MethodGet, id)
+			if got == http.StatusForbidden || got != want {
+				t.Errorf("%s: GET %s = %d, want the legacy administrator's %d", holder, id, got, want)
+			}
+			if got := sectionAnswer(t, router, http.MethodPut, id); got != http.StatusForbidden {
+				t.Errorf("%s: PUT %s = %d, want 403", holder, id, got)
+			}
+		}
+	}
+}
+
+// The schema list for a holder of only llm.policy.view names exactly the
+// sections that permission reads, and the suggestions answer that holder,
+// as they answer the legacy administrator, for the sources those sections
+// declare.
+func TestThePolicyViewerListsItsSectionsOnly(t *testing.T) {
+	router := newConfigRouter(adminaccess.LLMPolicyView)
+	ids, code := listedSections(t, router)
+	if want := []string{"guardrails", "governance", "circuit_breaker"}; code != http.StatusOK || !slices.Equal(ids, want) {
+		t.Fatalf("schema list = %d %v, want 200 %v", code, ids, want)
+	}
+	// guardrails declares the toolkit sources and governance declares
+	// projects (501 here: no registry and no store).
+	legacy := newConfigRouter(legacyAdministratorNames...)
+	for _, key := range []string{"toolkit_names", "toolkit_tools?toolkit=fixture", "projects"} {
+		got := serveConfig(t, router, http.MethodGet, configSuggestionsPath+key, "")
+		want := serveConfig(t, legacy, http.MethodGet, configSuggestionsPath+key, "")
+		if got.Code == http.StatusForbidden || got.Code != want.Code || got.Body.String() != want.Body.String() {
+			t.Errorf("suggestions %s = %d %s, want the legacy administrator's %d %s",
+				key, got.Code, got.Body, want.Code, want.Body)
+		}
+	}
+}
+
+// A holder who cannot read the section that declares a source gets exactly
+// the unknown-source answer: the response names no section.
+func TestSuggestionsForAnUnreadableSectionAnswerAsAnUnknownSource(t *testing.T) {
+	router := newConfigRouter(adminaccess.PlatformEmailManage)
+	unknown := serveConfig(t, router, http.MethodGet, configSuggestionsPath+"unknown_source", "")
+	if unknown.Code != http.StatusBadRequest {
+		t.Fatalf("unknown source = %d, want 400", unknown.Code)
+	}
+	for _, key := range []string{"toolkit_names", "toolkit_tools?toolkit=fixture", "projects", "gateway_providers"} {
+		got := serveConfig(t, router, http.MethodGet, configSuggestionsPath+key, "")
+		if got.Code != unknown.Code || got.Body.String() != unknown.Body.String() {
+			t.Errorf("suggestions %s = %d %s, want the unknown-source answer %d %s",
+				key, got.Code, got.Body, unknown.Code, unknown.Body)
+		}
+	}
+}
+
+// For every narrow name, the single-permission sections' names and the legacy
+// holders, the schema list names exactly the sections whose values the holder
+// can GET: a listed section never answers 403, and one that does not is
+// listed.
+func TestTheSchemaListNamesExactlyTheReadableSections(t *testing.T) {
+	sections := everySection(t)
+	holders := [][]string{
+		{adminaccess.RuntimePlugins},
+		{adminaccess.RuntimePlugins, adminaccess.ConfigurationGovernance},
+		legacyAdministratorNames,
+	}
+	single := []string{
+		adminaccess.ConfigurationBranding, adminaccess.ConfigurationNativeClients,
+		adminaccess.ConfigurationMicrosoftApps, adminaccess.ConfigurationServiceDescriptors,
+	}
+	for _, name := range adminaccess.Names() {
+		if row, _ := adminaccess.Lookup(name); len(row.Narrows) > 0 || slices.Contains(single, name) {
+			holders = append(holders, []string{name})
+		}
+	}
+	for _, holder := range holders {
+		router := newConfigRouter(holder...)
+		listed, code := listedSections(t, router)
+		var readable []string
+		for _, id := range sections {
+			if sectionAnswer(t, router, http.MethodGet, id) != http.StatusForbidden {
+				readable = append(readable, id)
+			}
+		}
+		if len(readable) == 0 {
+			if code != http.StatusForbidden {
+				t.Errorf("holder %v reads no section, and the schema list answers %d, want 403", holder, code)
+			}
+			continue
+		}
+		if !slices.Equal(listed, readable) {
+			t.Errorf("holder %v: the schema list names %v, the readable sections are %v", holder, listed, readable)
+		}
 	}
 }

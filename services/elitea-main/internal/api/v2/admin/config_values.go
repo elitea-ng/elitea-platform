@@ -82,10 +82,12 @@ package admin
 // ## Authorisation
 //
 // The administration routes are gated in internal/api/router.go on
-// `runtime.plugins`, which is the permission every legacy handler in this set
-// declares (`@auth.decorators.check_api(["runtime.plugins"])`). Sections
-// carrying `required_permission` are checked here as well, because the
-// permission depends on the SECTION and route middleware cannot see it.
+// RequireConfigurationAccess: `runtime.plugins`, which is the permission every
+// legacy handler in this set declares
+// (`@auth.decorators.check_api(["runtime.plugins"])`), or any narrow name a
+// section declares (ADR-0059 R0.5). The section itself is decided here,
+// because the permission depends on the SECTION and route middleware cannot
+// see it: config_section_access.go states the two paths.
 //
 // The `prompt_lib` read is deliberately ungated beyond authentication, matching
 // the legacy `PromptLibAPI`: the Help Center is a page for every user, and its
@@ -147,7 +149,7 @@ type configFieldMeta struct {
 // `{plugin}` is the legacy name for what is really the SECTION id; the
 // reference client sends the section id there and this preserves that.
 func (h *Handler) AdministrationPluginConfigValues(w http.ResponseWriter, r *http.Request) {
-	section, ok := h.resolveWritableSection(w, r)
+	section, ok := h.resolveWritableSection(w, r, false)
 	if !ok {
 		return
 	}
@@ -210,7 +212,7 @@ type configSaveBody struct {
 // AdministrationPluginConfigValuesSave serves
 // `PUT /admin/plugin_config_values/administration/{plugin}`.
 func (h *Handler) AdministrationPluginConfigValuesSave(w http.ResponseWriter, r *http.Request) {
-	section, ok := h.resolveWritableSection(w, r)
+	section, ok := h.resolveWritableSection(w, r, true)
 	if !ok {
 		return
 	}
@@ -400,29 +402,33 @@ type configSection struct {
 	id     string
 	fields []map[string]any
 	raw    map[string]any
+	// legacyPermission is the section's `required_permission`, "" for none:
+	// the second half of the legacy path (config_section_access.go).
+	legacyPermission string
+	// access is the section's area and narrow pair.
+	access sectionAccess
 }
 
 func findConfigSection(id string) (configSection, bool) {
 	for _, raw := range configSections() {
-		gotID, _ := raw["id"].(string)
-		if gotID != id {
-			continue
+		if gotID, _ := raw["id"].(string); gotID == id {
+			return newConfigSection(raw), true
 		}
-		fields, _ := raw["fields"].([]map[string]any)
-		return configSection{id: gotID, fields: fields, raw: raw}, true
 	}
 	return configSection{}, false
 }
 
 // resolveWritableSection answers 404 for a section that does not exist, 501 with
 // the section's own declared reason for one this platform cannot serve, and 403
-// when the section declares a `required_permission` the caller lacks.
+// when the caller passes on neither path of config_section_access.go: the
+// section's narrow permission for the verb (write for a PUT), or the legacy
+// runtime.plugins and the section's `required_permission`.
 //
 // The 501 is the correction that matters. Before this unit both verbs answered
 // 200 for every section — the GET with schema defaults, the PUT with an empty
 // object — so "this deployment does not configure that" and "that is configured
 // to its defaults" rendered identically, and a save into a void reported success.
-func (h *Handler) resolveWritableSection(w http.ResponseWriter, r *http.Request) (configSection, bool) {
+func (h *Handler) resolveWritableSection(w http.ResponseWriter, r *http.Request, write bool) (configSection, bool) {
 	id := chi.URLParam(r, "plugin")
 	section, ok := findConfigSection(id)
 	if !ok {
@@ -433,11 +439,9 @@ func (h *Handler) resolveWritableSection(w http.ResponseWriter, r *http.Request)
 	// sections a deployment can and cannot serve is itself information about the
 	// deployment, and the caller who may not read a section's values may not read
 	// its disposition either.
-	if perm, _ := section.raw["required_permission"].(string); perm != "" {
-		if !h.hasAdministrationPermission(r, perm) {
-			writeJSON(w, http.StatusForbidden, map[string]any{"error": "access_denied"})
-			return configSection{}, false
-		}
+	if !h.authorizeSection(r, section, write) {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "access_denied"})
+		return configSection{}, false
 	}
 	if reason, _ := section.raw["unavailable_reason"].(string); reason != "" {
 		writeJSON(w, http.StatusNotImplemented, map[string]any{"error": reason})

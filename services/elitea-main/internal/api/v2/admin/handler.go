@@ -278,14 +278,20 @@ func (h *Handler) migrationHead(ctx context.Context) (int64, bool) {
 
 // Projects and ProjectSuspend live in projects.go (unit A14).
 
-func (h *Handler) PluginConfigSchemas(w http.ResponseWriter, _ *http.Request) {
-	sections := configSections()
-	for _, section := range sections {
-		if section["id"] == platformconfig.SectionCloudExecutor {
+// PluginConfigSchemas lists the sections the caller may read (ADR-0059 R0.5):
+// a section the caller can open on neither path is absent, so the list names
+// no section whose values would answer 403.
+func (h *Handler) PluginConfigSchemas(w http.ResponseWriter, r *http.Request) {
+	readable := h.readableSections(r)
+	sections := make([]map[string]any, 0, len(readable))
+	for _, s := range readable {
+		section := s.raw
+		if s.id == platformconfig.SectionCloudExecutor {
 			if notice := cloudExecutorEncryptionNotice(h.cloudExecutorEncryption); notice != "" {
 				section["notice"] = notice
 			}
 		}
+		sections = append(sections, section)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"sections": sections,

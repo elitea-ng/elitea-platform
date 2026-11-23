@@ -16,8 +16,9 @@ func workerEgressSection() map[string]any {
 	const section = platformconfig.SectionWorkerEgress
 	defaults := platformconfig.DefaultWorkerEgressSettings()
 	return map[string]any{
-		"id":    section,
-		"title": "Worker Egress",
+		"id":     section,
+		"access": agentGovernanceAccess(),
+		"title":  "Worker Egress",
 		"description": "Which public hosts agents, toolkits and MCP servers may reach from the worker. Open leaves " +
 			"public hosts unrestricted (private, link-local and metadata addresses are always refused). Allowlist " +
 			"limits each run to the entries below, its project's entries, and the hosts of the toolkits and MCP " +

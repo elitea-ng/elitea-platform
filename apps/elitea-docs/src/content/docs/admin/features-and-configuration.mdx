@@ -140,6 +140,41 @@ A registry for external provider integrations. This deployment publishes none, s
 
 <Screenshot id="admin-configuration-banner" alt="Configuration page with the Banner section open" />
 
+### Who can open a section
+
+A request for a section passes on one of two paths:
+
+- **Narrow path.** The section's read permission opens it; its write permission opens and saves it.
+- **Legacy path.** `runtime.plugins` together with the section's legacy permission (the last column) opens and saves it, as in earlier releases.
+
+The Configuration and Features pages list only the sections the caller can open, and the field suggestions answer only for those sections. A caller who holds neither path for any section gets 403. A holder of only `configuration.governance` is refused, as before.
+
+| Section | Area | Read permission | Write permission | Legacy permission |
+| --- | --- | --- | --- | --- |
+| Guardrails (`guardrails`) | Models and spend | `llm.policy.view` | `llm.guardrails.manage` | none |
+| Circuit Breaker (`circuit_breaker`) | Models and spend | `llm.policy.view` | `llm.policy.manage` | `configuration.governance` |
+| LLM Governance (`governance`) | Models and spend | `llm.policy.view` | `llm.policy.manage` | `configuration.governance` |
+| LLM Proxy (`llm_proxy`) | Models and spend | `platform.config.view` | `platform.config.manage` | none |
+| Authentication (`auth`) | People and access | `identity.sso.view` | `identity.sso.settings.manage` | none |
+| Session Policy (`session_policy`) | People and access | `identity.sso.view` | `identity.sso.settings.manage` | `runtime.plugins` |
+| MCP Configuration (`mcp_configuration`) | Agents and governance | `platform.config.view` | `platform.config.manage` | none |
+| MCP Servers (`mcp_servers`) | Agents and governance | `mcp.catalogue.manage` | `mcp.catalogue.manage` | none |
+| Agent Publishing (`agent_publishing`) | Agents and governance | `platform.config.view` | `platform.config.manage` | none |
+| Skill Publishing (`skill_publishing`) | Agents and governance | `platform.config.view` | `platform.config.manage` | none |
+| Web Search (`web_search`) | Agents and governance | `platform.config.view` | `platform.config.manage` | none |
+| Worker Egress, Cloud Browser, Remote Agents, Connector Catalogue, Run Caps, Delegation, Agent tools, Proactive agents, Approvals, Notifications, Approval Policy, AI Disclosure, Platform Preamble, Agent Lifecycle, Credential Review | Agents and governance | legacy path only | legacy path only | `configuration.governance` |
+| Entitlement Export (`entitlement_export`) | Security | legacy path only | legacy path only | `entitlements.export` |
+| Default Secrets (`default_secrets`) | Platform | `platform.config.view` | `platform.config.manage` | none |
+| Help Center (`resources`), Banner (`dedicated_banner`), Support Assistant (`support_assistant`), Voice Features (`voice_features`), Analytics (`analytics`) | Platform | `platform.config.view` | `platform.config.manage` | none |
+| Native clients (`native_clients`), Native client policy (`native_client_policy`), Cloud executor (`cloud_executor`) | Platform | `configuration.native_clients` | `configuration.native_clients` | `configuration.native_clients` |
+| Branding (`branding`) | Platform | `configuration.branding` | `configuration.branding` | `configuration.branding` |
+| Microsoft apps (`microsoft_apps`) | Platform | `configuration.microsoft_apps` | `configuration.microsoft_apps` | `configuration.microsoft_apps` |
+| Service Descriptors (`service_descriptors`) | Platform | `configuration.service_descriptors` | `configuration.service_descriptors` | `configuration.service_descriptors` |
+| Maintenance (`maintenance`) | Platform | `platform.maintenance.manage` | `platform.maintenance.manage` | `runtime.plugins` |
+| E-mail (`email`) | Platform | `platform.email.manage` | `platform.email.manage` | `runtime.plugins` |
+
+"None" in the last column means `runtime.plugins` alone is the legacy path. The agent governance sections and Entitlement Export have no narrow permission yet. The schema list carries each section's area and pair as `access`.
+
 <Note>
 Configuration's "Advanced", "Observability", "Runtime", and "Admin Panel" sections from the legacy admin UI have no counterpart here — their fields addressed process environment variables and mounted files that no form could ever write, so they were removed rather than kept as permanently unavailable placeholders.
 </Note>
