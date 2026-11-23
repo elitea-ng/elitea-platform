@@ -322,7 +322,7 @@ func TestLoadGateStallCanaryMeasuresLag(t *testing.T) {
 	if lag, _ := startStallCanary(time.Hour).Stop(); lag > 0 {
 		t.Fatalf("lag = %s before the first tick; want none", lag)
 	}
-	canary := &stallCanary{interval: time.Millisecond}
+	canary := &stallCanary{interval: loadGateCanaryInterval}
 	canary.observe(500*time.Microsecond, 0)
 	canary.observe(41*time.Millisecond, 300*time.Millisecond)
 	canary.observe(2*time.Millisecond, 400*time.Millisecond)
