@@ -211,6 +211,11 @@ describe('AdminEmailEditor', () => {
     expect(screen.getByText(reason)).toBeInTheDocument();
     // Shown where the operator has to type, not repeated in the banner.
     expect(screen.queryByTestId('admin-email-save-error')).not.toBeInTheDocument();
+
+    // Typing the password answers the refusal: the control is no longer red.
+    await user.type(password, 'p');
+    await waitFor(() => expect(password).not.toHaveAttribute('aria-invalid', 'true'));
+    expect(screen.queryByText(reason)).not.toBeInTheDocument();
   });
 
   it('reports an unconfigured deployment with the reason the server gave', async () => {

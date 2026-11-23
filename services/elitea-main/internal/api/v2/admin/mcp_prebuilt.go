@@ -38,6 +38,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -423,17 +424,25 @@ func prebuiltOriginsChanged(existing mcpregistry.PrebuiltServer, serverURL, base
 		prebuiltOrigin(existing.TokenURL) != prebuiltOrigin(tokenURL)
 }
 
-// prebuiltOrigin is the scheme and host of a URL, lower-cased. A value that
-// does not parse to one (a template whose host is a placeholder, say) is
+// prebuiltOrigin is the scheme, host and port of a URL, normalised: lower-case,
+// no trailing dot on the host, and the scheme's default port written out, so
+// `https://a.example` and `https://A.example.:443` are one origin. A value
+// that does not parse to one (a template whose host is a placeholder, say) is
 // compared whole, so any edit to it counts as a move: the conservative answer
 // when the destination cannot be read.
 func prebuiltOrigin(raw string) string {
 	trimmed := strings.TrimSpace(raw)
 	parsed, err := url.Parse(trimmed)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+	if err != nil || parsed.Scheme == "" || parsed.Hostname() == "" {
 		return "raw:" + trimmed
 	}
-	return strings.ToLower(parsed.Scheme) + "://" + strings.ToLower(parsed.Host)
+	scheme := strings.ToLower(parsed.Scheme)
+	host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
+	port := parsed.Port()
+	if port == "" {
+		port = map[string]string{"http": "80", "https": "443"}[scheme]
+	}
+	return scheme + "://" + net.JoinHostPort(host, port)
 }
 
 // prebuiltSecretName derives the vault name for one catalogue entry's client

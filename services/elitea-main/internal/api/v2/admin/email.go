@@ -189,15 +189,18 @@ func (h *Handler) EmailSettingsSave(w http.ResponseWriter, r *http.Request) {
 		author = principal.ID
 	}
 
-	// A kept password does not follow the relay to a new host or port (#2944).
-	// The resolver's view covers BOTH layers: a password supplied by
+	// A kept password does not follow the relay to a new host, port or TLS mode
+	// (#2944). The resolver's view covers BOTH layers: a password supplied by
 	// SMTP_PASSWORD is as unreadable to this caller as a sealed one, and moving
-	// the stored host over it would send it to the new relay just the same. The
-	// store repeats the check for the sealed password against its own read, so
-	// a resolver that fell back to the environment cannot let one through.
+	// the stored host over it would send it to the new relay just the same.
+	// The comparison is of EFFECTIVE relays, so pinning the value the
+	// environment already supplies is not a move. The store repeats the check
+	// against its own read, so a resolver that fell back to the environment on
+	// a read error cannot let a sealed password through.
 	if body.Password == nil {
 		current := h.emailResolver.Resolve(r.Context())
-		if current.PasswordSet && emailsettings.RelayChanged(current.Stored, settings) {
+		next := emailsettings.Layered(current.Environment, settings.Trim())
+		if current.PasswordSet && emailsettings.RelayChanged(current.Effective, next) {
 			writeEmailSettingsError(w, emailsettings.ErrReenterPassword)
 			return
 		}

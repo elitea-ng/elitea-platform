@@ -52,7 +52,16 @@ type Resolver struct {
 // NewResolver wires the resolver. A nil source makes every resolution the
 // environment's, which is the behaviour of the deployment before this package
 // existed.
+//
+// When the source is the concrete *Store, the store is told the environment
+// layer as well, so its Save compares the same effective relay this resolver
+// sends to (#2944). One composition root builds both, and Store() hands the
+// same store to the write surface.
 func NewResolver(source Source, env Settings, envPassword string) *Resolver {
+	if store, ok := source.(*Store); ok && store != nil {
+		store.env = env
+		store.envPassword = envPassword
+	}
 	return &Resolver{source: source, env: env, envPassword: envPassword}
 }
 
@@ -90,6 +99,11 @@ type Resolution struct {
 	Stored Settings
 	// Effective is the merged document, for the admin surface's source tags.
 	Effective Settings
+	// Environment is the layer under the stored one. A save lays its document
+	// over it to learn where the next message would go, so a value typed here
+	// that equals the environment's is not a move (#2944). It never carries
+	// the password.
+	Environment Settings
 	// PasswordSet reports whether a password is in force, from either layer.
 	PasswordSet bool
 	// PasswordSource is which layer supplied it.
@@ -137,6 +151,7 @@ func (r *Resolver) Resolve(ctx context.Context) Resolution {
 		PublicBaseURL:  effective.PublicBaseURL,
 		Stored:         stored,
 		Effective:      effective,
+		Environment:    r.env,
 		PasswordSet:    password != "",
 		PasswordSource: passwordSource,
 	}

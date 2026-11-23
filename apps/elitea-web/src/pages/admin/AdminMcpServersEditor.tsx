@@ -240,17 +240,20 @@ export function AdminMcpServersEditor() {
   const openCreate = (): void => {
     setEditing(undefined);
     setSaveError(undefined);
+    setSaveErrorField(undefined);
     setDialogOpen(true);
   };
 
   const openEdit = (server: AdminMcpServer): void => {
     setEditing(server);
     setSaveError(undefined);
+    setSaveErrorField(undefined);
     setDialogOpen(true);
   };
 
   const handleSubmit = (draft: AdminMcpServerDraft): void => {
     setSaveError(undefined);
+    setSaveErrorField(undefined);
     saveMutation.mutate(draft, {
       onSuccess: () => {
         setDialogOpen(false);

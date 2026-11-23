@@ -145,6 +145,12 @@ export function AdminEmailEditor() {
   }
 
   const passwordError = passwordFailure(save.error);
+  // Acting on the password answers a refusal that named it, so the control
+  // stops reading as rejected the moment the operator types or clears it.
+  const editPassword = (value: string) => {
+    setPassword(value);
+    if (passwordError !== undefined) save.reset();
+  };
 
   const change = (field: keyof EmailFormValues, value: string) =>
     setValues((current) => (current === undefined ? current : { ...current, [field]: value }));
@@ -208,8 +214,8 @@ export function AdminEmailEditor() {
         password={password}
         passwordError={passwordError}
         onChange={change}
-        onPasswordChange={setPassword}
-        onClearPassword={() => setPassword('')}
+        onPasswordChange={(value) => editPassword(value)}
+        onClearPassword={() => editPassword('')}
       />
 
       <Box>

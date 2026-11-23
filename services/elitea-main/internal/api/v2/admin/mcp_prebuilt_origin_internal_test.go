@@ -91,6 +91,10 @@ func TestPrebuiltMCPSaveWithNoSecretHasNothingToReenter(t *testing.T) {
 func TestPrebuiltOriginComparesSchemeAndHostOnly(t *testing.T) {
 	require.Equal(t, prebuiltOrigin("https://A.Example/x"), prebuiltOrigin(" https://a.example/y?z=1 "))
 	require.NotEqual(t, prebuiltOrigin("https://a.example"), prebuiltOrigin("https://a.example:444"))
+	// The default port written out, and a trailing dot, are the same origin.
+	require.Equal(t, prebuiltOrigin("https://a.example/mcp"), prebuiltOrigin("https://a.example:443/mcp"))
+	require.Equal(t, prebuiltOrigin("http://a.example"), prebuiltOrigin("http://a.example.:80"))
+	require.NotEqual(t, prebuiltOrigin("http://a.example"), prebuiltOrigin("http://a.example:443"))
 	require.NotEqual(t, prebuiltOrigin("https://a.example"), prebuiltOrigin("http://a.example"))
 	require.NotEqual(t, prebuiltOrigin(""), prebuiltOrigin("https://a.example"))
 	// A value with no readable host is compared whole, so any edit is a move.

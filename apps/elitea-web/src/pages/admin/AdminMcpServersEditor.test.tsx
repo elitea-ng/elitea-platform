@@ -355,6 +355,11 @@ describe('Admin › MCP Servers catalogue', () => {
     expect(screen.getByTestId('admin-mcp-server-dialog')).toHaveTextContent(reason);
     // Shown where the operator has to type, not repeated in the banner.
     expect(screen.queryByTestId('admin-mcp-server-dialog-error')).not.toBeInTheDocument();
+
+    // Typing the secret answers the refusal: the control is no longer red.
+    await user.type(secret, 's');
+    await waitFor(() => expect(secret).not.toHaveAttribute('aria-invalid', 'true'));
+    expect(screen.getByTestId('admin-mcp-server-dialog')).not.toHaveTextContent(reason);
   });
 
   it('confirms before a delete, and says the secret goes with it', async () => {

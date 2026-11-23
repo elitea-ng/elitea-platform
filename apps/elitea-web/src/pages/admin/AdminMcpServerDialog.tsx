@@ -43,6 +43,7 @@ import {
   normalizeCatalogueKey,
   parseMcpHeadersYaml,
   parseMcpYamlMapping,
+  placeServerError,
   resolveSecretForSave,
   validateTokenUrl,
   validateDraft,
@@ -89,7 +90,16 @@ export function AdminMcpServerDialog({
     setLocalError('');
   }, [open, editing]);
 
+  // Whether the operator has acted on the secret since the server's last
+  // refusal. Typing or clearing it answers a refusal that named the secret, so
+  // the control stops reading as rejected until the next save says otherwise.
+  const [secretEdited, setSecretEdited] = useState(false);
+  useEffect(() => {
+    setSecretEdited(false);
+  }, [serverError]);
+
   const update = <K extends keyof McpServerForm>(key: K, value: McpServerForm[K]): void => {
+    if (key === 'clientSecret' || key === 'clearSecret') setSecretEdited(true);
     setForm((previous) => ({ ...previous, [key]: value }));
   };
 
@@ -138,9 +148,12 @@ export function AdminMcpServerDialog({
 
   // A refusal that names the secret is shown ON the secret control, where the
   // operator has to act, instead of in the banner above the form.
-  const secretError = localError === '' && serverErrorField === 'client_secret' ? serverError : undefined;
-  const bannerError = secretError === undefined ? serverError : undefined;
-  const error = localError !== '' ? localError : bannerError;
+  const { banner: error, secret: secretError } = placeServerError(
+    localError,
+    serverError,
+    serverErrorField,
+    secretEdited,
+  );
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth data-testid="admin-mcp-server-dialog">

@@ -216,22 +216,26 @@ func (e FieldError) Error() string { return e.Reason }
 // host or the port and omits the password would send the kept password, at the
 // next AUTH, to wherever the new host points, so an administrator who may edit
 // the relay but was never shown the credential could read it out by aiming
-// the relay at a server it runs. Typing the password again proves the caller
-// already knows it; clearing it sends nothing (#2944).
+// the relay at a server it runs. A TLS mode change is treated the same way:
+// `none` would send it in clear text to anyone on the path. Typing the
+// password again proves the caller already knows it; clearing it sends
+// nothing (#2944).
 var ErrReenterPassword = FieldError{
 	Field: "password",
 	Reason: "re-enter the password when the relay changes: the stored password is only " +
-		"sent to the host and port it was entered for",
+		"sent to the host, port and TLS mode it was entered for",
 }
 
-// RelayChanged reports whether `next` sends to a different destination than
-// `stored`: another host (compared without case or surrounding space) or
-// another port. Both are the STORED layer, so a host or port newly stated over
-// an environment default counts as a change, and so does one removed in
-// favour of the environment's.
-func RelayChanged(stored, next Settings) bool {
-	return !strings.EqualFold(strings.TrimSpace(stored.Host), strings.TrimSpace(next.Host)) ||
-		stored.Port != next.Port
+// RelayChanged reports whether `after` sends to a different relay than
+// `before`: another host (compared without case or surrounding space), another
+// port, or another TLS mode. Callers pass EFFECTIVE documents (the stored
+// layer over the environment's), so typing the value the environment already
+// supplies is not a move, and removing a stored value in favour of a different
+// environment one is.
+func RelayChanged(before, after Settings) bool {
+	return !strings.EqualFold(strings.TrimSpace(before.Host), strings.TrimSpace(after.Host)) ||
+		before.Port != after.Port ||
+		!strings.EqualFold(strings.TrimSpace(before.TLS), strings.TrimSpace(after.TLS))
 }
 
 // Layered merges two layers, with `over` winning FIELD BY FIELD.
@@ -323,6 +327,12 @@ type SecretStore interface {
 type Store struct {
 	pool  *pgxpool.Pool
 	vault SecretStore
+	// env and envPassword are the environment layer, set by NewResolver when
+	// it is built over this store. Save needs them to compare the EFFECTIVE
+	// relay before and after a write, and to know that SMTP_PASSWORD is a
+	// password in force too (#2944).
+	env         Settings
+	envPassword string
 }
 
 // NewStore wires the store. Either dependency may be absent; the surface that
@@ -475,7 +485,8 @@ func (s *Store) Save(ctx context.Context, settings Settings, password *string, a
 		// caller may hold only `platform.email.manage`, was never shown the
 		// password, and could otherwise read it out by pointing the relay at a
 		// host it controls (#2944). Refused before anything is written.
-		if sealed && RelayChanged(stored, settings) {
+		inForce := sealed || s.envPassword != ""
+		if inForce && RelayChanged(Layered(s.env, stored), Layered(s.env, settings)) {
 			return ErrReenterPassword
 		}
 		willHold = sealed

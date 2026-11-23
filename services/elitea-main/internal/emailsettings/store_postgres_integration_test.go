@@ -285,10 +285,38 @@ func TestSaveRefusesToMoveTheRelayWithAKeptPassword(t *testing.T) {
 	same.Host = "  SMTP.acme.example "
 	require.NoError(t, store.Save(ctx, same, nil, "ops"))
 
+	// A weaker TLS mode is a move too: `none` sends the password in clear.
+	weaker := base
+	weaker.TLS = "none"
+	require.ErrorIs(t, store.Save(ctx, weaker, nil, "ops"), ErrReenterPassword)
+
 	retyped := "not-a-real-relay-password-2"
 	require.NoError(t, store.Save(ctx, movedHost, &retyped, "ops"))
 	loaded, _, err := store.Load(ctx)
 	require.NoError(t, err)
 	require.Equal(t, movedHost.Host, loaded.Host)
 	require.Equal(t, retyped, vault.values[SecretName()])
+}
+
+// Over an environment layer the comparison is of EFFECTIVE relays: pinning the
+// environment's own host is not a move, and SMTP_PASSWORD is a password in
+// force that a moved relay must not inherit (#2944).
+func TestSaveComparesTheEffectiveRelayOverTheEnvironment(t *testing.T) {
+	pool := newEmailPool(t)
+	store := NewStore(pool, newMemoryVault())
+	NewResolver(store, Settings{Host: "smtp.env.example", Port: 587, TLS: "starttls"}, "env-not-a-real-password")
+	ctx := context.Background()
+
+	// Nothing stored, nothing sealed: the environment decides the relay.
+	pinned := Settings{Host: "smtp.env.example", Port: 587, From: "noreply@acme.example"}
+	require.NoError(t, store.Save(ctx, pinned, nil, "ops"),
+		"typing the environment's own host was treated as a move")
+
+	moved := pinned
+	moved.Host = "smtp.elsewhere.example"
+	require.ErrorIs(t, store.Save(ctx, moved, nil, "ops"), ErrReenterPassword,
+		"the environment password followed a moved relay")
+	loaded, _, err := store.Load(ctx)
+	require.NoError(t, err)
+	require.Equal(t, pinned.Host, loaded.Host)
 }

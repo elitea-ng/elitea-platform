@@ -3,20 +3,23 @@
 **What changed.** Two administration saves now refuse to keep a stored
 credential when the save changes where that credential is sent:
 
-- `PUT /admin/email/administration`: a save that changes the stored SMTP
-  `host` or `port` while a password is in force (sealed in the platform vault,
-  or supplied by `SMTP_PASSWORD`) and that has no `password` field answers
+- `PUT /admin/email/administration`: a save that changes the effective SMTP
+  `host`, `port` or `tls` mode (the saved value laid over the `SMTP_*`
+  environment defaults; typing the environment's own value is not a change)
+  while a password is in force (sealed in the platform vault, or supplied by
+  `SMTP_PASSWORD`) and that has no `password` field answers
   `400` with `{"field": "password", "error": "re-enter the password when the
   relay changes: …"}`. Nothing is written. The same save with the password, or
   with `"password": ""` to clear it, still lands.
 - `PUT /admin/mcp_prebuilt_servers/administration/{key}`: a save that moves the
-  origin (scheme, host and port) of `url`, `base_url` or `token_url` while the
+  origin (scheme, host and port; a written-out default port or a trailing dot
+  on the host is not a change) of `url`, `base_url` or `token_url` while the
   entry has a stored client secret and that has no `client_secret` field
   answers `400` with `{"field": "client_secret", "error": "re-enter the client
   secret when the server origin changes: …"}`. Nothing is sealed or written. The
   same save with the secret, or with `"client_secret": ""`, still lands.
 
-Saves that keep the host and port (e-mail) or every origin (MCP), for example a
+Saves that keep the host, port and TLS mode (e-mail) or every origin (MCP), for example a
 new sender address, a new path or a new display name, keep the stored
 credential as before.
 
@@ -32,6 +35,6 @@ at a host it runs.
 pre-built MCP server's URLs without sending the credential. No migration, no
 configuration change.
 
-**What to do.** When you change the relay host or port, or move a pre-built MCP
+**What to do.** When you change the relay host, port or TLS mode, or move a pre-built MCP
 server to another origin, send the password or client secret in the same save.
 A script that relied on the old behaviour gets a `400` naming the field.

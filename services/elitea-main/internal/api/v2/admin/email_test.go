@@ -73,15 +73,14 @@ type fakeEmailResolver struct{ resolution emailsettings.Resolution }
 func (f *fakeEmailResolver) Resolve(context.Context) emailsettings.Resolution { return f.resolution }
 
 func configuredResolution() emailsettings.Resolution {
-	stored := emailsettings.Settings{Host: "smtp.acme.example", Port: 587, Username: "relay-user"}
-	effective := emailsettings.Settings{
-		Host: "smtp.acme.example", Port: 587, TLS: emailsettings.TLSStartTLS,
-		Username: "relay-user", From: "noreply@acme.example",
-		PublicBaseURL: "https://ai.acme.example",
+	stored := emailsettings.Settings{Host: "smtp.acme.example", Username: "relay-user"}
+	environment := emailsettings.Settings{
+		Host: "smtp.env.example", Port: 587, TLS: emailsettings.TLSStartTLS,
+		From: "noreply@acme.example", PublicBaseURL: "https://ai.acme.example",
 	}
 	return emailsettings.Resolution{
-		Stored: stored, Effective: effective, Configured: true,
-		PasswordSet: true, PasswordSource: emailsettings.SourceDatabase,
+		Stored: stored, Effective: emailsettings.Layered(environment, stored), Environment: environment,
+		Configured: true, PasswordSet: true, PasswordSource: emailsettings.SourceDatabase,
 	}
 }
 
@@ -298,6 +297,7 @@ func TestEmailSettingsSave(t *testing.T) {
 			"host":                     `{"host":"smtp.elsewhere.example","port":587,"username":"relay-user"}`,
 			"port":                     `{"host":"smtp.acme.example","port":2525,"username":"relay-user"}`,
 			"host removed for the env": `{"host":"","port":587,"username":"relay-user"}`,
+			"tls weakened":             `{"host":"smtp.acme.example","tls":"none","username":"relay-user"}`,
 		} {
 			store := &fakeEmailStore{ready: true}
 			rec := callEmail(emailHandler(store, configuredResolution()), http.MethodPut,
@@ -320,6 +320,7 @@ func TestEmailSettingsSave(t *testing.T) {
 	t.Run("an environment password does not follow a moved relay either", func(t *testing.T) {
 		resolution := configuredResolution()
 		resolution.Stored = emailsettings.Settings{}
+		resolution.Effective = resolution.Environment
 		resolution.PasswordSource = emailsettings.SourceEnvironment
 		store := &fakeEmailStore{ready: true}
 		rec := callEmail(emailHandler(store, resolution), http.MethodPut,
@@ -341,6 +342,16 @@ func TestEmailSettingsSave(t *testing.T) {
 			if len(store.saves) != 1 || store.saves[0].settings.Host != "smtp.elsewhere.example" {
 				t.Fatalf("password %q: saves = %+v", password, store.saves)
 			}
+		}
+	})
+
+	t.Run("pinning the value the environment supplies is not a move", func(t *testing.T) {
+		store := &fakeEmailStore{ready: true}
+		rec := callEmail(emailHandler(store, configuredResolution()), http.MethodPut,
+			"/admin/email/administration",
+			`{"host":"SMTP.acme.example ","port":587,"tls":"starttls","username":"relay-user"}`)
+		if rec.Code != http.StatusOK || len(store.saves) != 1 {
+			t.Fatalf("status %d saves %d body %s", rec.Code, len(store.saves), rec.Body.String())
 		}
 	})
 
