@@ -338,6 +338,54 @@ func TestCookieFormatsCannotBeConfused(t *testing.T) {
 	}
 }
 
+// TestASessionRecordsItsAuthenticationTime (ADR-0059 R1.10a): the provider's
+// authentication time when the plane has one, the sign-in otherwise, never a
+// time after the sign-in, and never moved by a refresh.
+func TestASessionRecordsItsAuthenticationTime(t *testing.T) {
+	manager, store, dial := newTestManager(t, Policy{IdleTimeout: time.Hour, AbsoluteLifetime: 8 * time.Hour})
+	ctx := context.Background()
+	signIn := dial.Now()
+
+	for name, testCase := range map[string]struct {
+		provider time.Time
+		unknown  bool
+		want     time.Time
+	}{
+		"the provider's time":           {provider: signIn.Add(-20 * time.Minute), want: signIn.Add(-20 * time.Minute)},
+		"no provider time: the sign-in": {want: signIn},
+		"a provider clock ahead":        {provider: signIn.Add(time.Hour), want: signIn},
+		"an unknown time stays unknown": {provider: signIn, unknown: true, want: time.Time{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			value, err := manager.Create(ctx, NewSession{
+				UserID: 7, Provider: ProviderOIDC,
+				AuthenticatedAt: testCase.provider, AuthenticationTimeUnknown: testCase.unknown,
+			})
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			id, _ := ParseCookieValue(value)
+			if got := store.rows[id].AuthenticatedAt; !got.Equal(testCase.want) {
+				t.Fatalf("authenticated_at = %s, want %s", got, testCase.want)
+			}
+		})
+	}
+
+	value, err := manager.Create(ctx, NewSession{UserID: 7, Provider: ProviderSAML})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	dial.advance(2 * TouchInterval)
+	refreshed, err := manager.Validate(ctx, value)
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if !refreshed.LastSeenAt.After(signIn) || !refreshed.AuthenticatedAt.Equal(signIn) {
+		t.Fatalf("after a refresh: last_seen_at %s, authenticated_at %s; want only last_seen_at moved",
+			refreshed.LastSeenAt, refreshed.AuthenticatedAt)
+	}
+}
+
 // TestPolicyFromEnvRefusesAMistypedLifetime. A deployment that meant to set a
 // lifetime and mistyped it must not run for a week believing it did.
 func TestPolicyFromEnvRefusesAMistypedLifetime(t *testing.T) {
@@ -352,7 +400,8 @@ func TestPolicyFromEnvRefusesAMistypedLifetime(t *testing.T) {
 			check: func(t *testing.T, policy Policy) {
 				if policy.IdleTimeout != DefaultIdleTimeout ||
 					policy.AbsoluteLifetime != DefaultAbsoluteLifetime ||
-					policy.RejectLegacyCookies {
+					policy.RejectLegacyCookies ||
+					policy.ReauthenticationMaxAge != DefaultReauthenticationMaxAge {
 					t.Fatalf("policy = %+v, want the documented defaults", policy)
 				}
 			},
@@ -370,6 +419,25 @@ func TestPolicyFromEnvRefusesAMistypedLifetime(t *testing.T) {
 					t.Fatalf("policy = %+v, want the authored values", policy)
 				}
 			},
+		},
+		{
+			name: "an authored recent-authentication limit",
+			env:  map[string]string{"ELITEA_SESSION_REAUTHENTICATION_MAX_AGE": "5m"},
+			check: func(t *testing.T, policy Policy) {
+				if policy.ReauthenticationMaxAge != 5*time.Minute {
+					t.Fatalf("policy = %+v, want a 5m recent-authentication limit", policy)
+				}
+			},
+		},
+		{
+			name:    "a recent-authentication limit under a minute",
+			env:     map[string]string{"ELITEA_SESSION_REAUTHENTICATION_MAX_AGE": "30s"},
+			wantErr: true,
+		},
+		{
+			name:    "a recent-authentication limit over a day",
+			env:     map[string]string{"ELITEA_SESSION_REAUTHENTICATION_MAX_AGE": "25h"},
+			wantErr: true,
 		},
 		{
 			name:    "minutes are not a duration",

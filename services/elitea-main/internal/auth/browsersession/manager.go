@@ -141,6 +141,17 @@ type NewSession struct {
 	Email                string
 	Provider             string
 	ProviderSessionIndex string
+	// AuthenticatedAt is when the identity provider last authenticated the
+	// person (the OIDC auth_time). Zero means "now": the sign-in itself is the
+	// authentication. A value after the manager's clock is taken as now, so a
+	// provider clock ahead of this one cannot stamp a session fresh for
+	// longer than it is.
+	AuthenticatedAt time.Time
+	// AuthenticationTimeUnknown records NO authentication time (NULL): the
+	// plane cannot say when the person last authenticated (an OIDC id_token
+	// without auth_time). Such a session never satisfies the
+	// recent-authentication check. AuthenticatedAt is then ignored.
+	AuthenticationTimeUnknown bool
 }
 
 // Create writes one session row and returns the COOKIE VALUE for it.
@@ -182,6 +193,13 @@ func (m *Manager) CreateCookie(ctx context.Context, request NewSession) (string,
 		return "", 0, err
 	}
 	now := m.now().UTC()
+	authenticatedAt := now
+	switch {
+	case request.AuthenticationTimeUnknown:
+		authenticatedAt = time.Time{}
+	case !request.AuthenticatedAt.IsZero() && request.AuthenticatedAt.Before(now):
+		authenticatedAt = request.AuthenticatedAt.UTC()
+	}
 	session := Session{
 		ID:                   id,
 		UserID:               request.UserID,
@@ -189,6 +207,7 @@ func (m *Manager) CreateCookie(ctx context.Context, request NewSession) (string,
 		Provider:             request.Provider,
 		ProviderSessionIndex: request.ProviderSessionIndex,
 		CreatedAt:            now,
+		AuthenticatedAt:      authenticatedAt,
 		LastSeenAt:           now,
 		ExpiresAt:            now.Add(lifetime),
 		IdleTimeout:          idle,
