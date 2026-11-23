@@ -101,7 +101,7 @@ func TestGuardrailTopLevelShapeIsRefusedWith400(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/governance", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
-	(&GovernanceHandler{}).Create(rec, req)
+	(&GovernanceHandler{holds: openGovernanceGates.Holds}).Create(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body %s", rec.Code, rec.Body.String())
 	}

@@ -23,6 +23,7 @@ import {
   getDefaultValueForType,
   getMessagesFromState,
   getValueByType,
+  isDefaultVariableEnabled,
   validateVariableName,
 } from '../../lib/flow-editor/helpers/state.helpers';
 import { useStateValidation } from '../../lib/flow-editor/hooks/useStateValidation';
@@ -159,7 +160,7 @@ export function StateVariableList(props: StateVariableListProps): ReactNode {
         key={FlowEditorConstants.STATE_INPUT}
         name={FlowEditorConstants.STATE_INPUT}
         type={FlowEditorConstants.StateVariableTypes.String}
-        enabled={!states || Boolean(states[FlowEditorConstants.STATE_INPUT])}
+        enabled={isDefaultVariableEnabled(states, FlowEditorConstants.STATE_INPUT)}
         isDefault
         defaultValue={states?.[FlowEditorConstants.STATE_INPUT]?.value}
         drawerWidth={drawerWidth}
@@ -176,9 +177,43 @@ export function StateVariableList(props: StateVariableListProps): ReactNode {
         key={FlowEditorConstants.STATE_MESSAGES}
         name={FlowEditorConstants.STATE_MESSAGES}
         type={FlowEditorConstants.StateVariableTypes.List}
-        enabled={!states || Boolean(states[FlowEditorConstants.STATE_MESSAGES])}
+        enabled={isDefaultVariableEnabled(states, FlowEditorConstants.STATE_MESSAGES)}
         isDefault
         defaultValue={getMessagesFromState(states)}
+        drawerWidth={drawerWidth}
+        validateName={validateName}
+        onToggle={handleToggle}
+        onDelete={handleDelete}
+        onUpdateName={handleUpdateNameWithCreate}
+        onUpdateType={handleUpdateType}
+        onUpdateDefaultValue={handleUpdateDefaultValue}
+        editable={false}
+        disabled={disabled}
+      />
+      <StateVariableItem
+        key={FlowEditorConstants.STATE_TOOL_OUTCOMES}
+        name={FlowEditorConstants.STATE_TOOL_OUTCOMES}
+        type={FlowEditorConstants.StateVariableTypes.Json}
+        enabled={isDefaultVariableEnabled(states, FlowEditorConstants.STATE_TOOL_OUTCOMES)}
+        isDefault
+        defaultValue={states?.[FlowEditorConstants.STATE_TOOL_OUTCOMES]?.value}
+        drawerWidth={drawerWidth}
+        validateName={validateName}
+        onToggle={handleToggle}
+        onDelete={handleDelete}
+        onUpdateName={handleUpdateNameWithCreate}
+        onUpdateType={handleUpdateType}
+        onUpdateDefaultValue={handleUpdateDefaultValue}
+        editable={false}
+        disabled={disabled}
+      />
+      <StateVariableItem
+        key={FlowEditorConstants.STATE_LAST_TOOL_OUTCOME}
+        name={FlowEditorConstants.STATE_LAST_TOOL_OUTCOME}
+        type={FlowEditorConstants.StateVariableTypes.Json}
+        enabled={isDefaultVariableEnabled(states, FlowEditorConstants.STATE_LAST_TOOL_OUTCOME)}
+        isDefault
+        defaultValue={states?.[FlowEditorConstants.STATE_LAST_TOOL_OUTCOME]?.value}
         drawerWidth={drawerWidth}
         validateName={validateName}
         onToggle={handleToggle}
@@ -249,6 +284,7 @@ export function StateVariableList(props: StateVariableListProps): ReactNode {
         onClick={() => setIsCreatingNew(true)}
         sx={addButtonSx}
         disabled={disabled}
+        data-testid="pipeline-state-add-variable-button"
       >
         {t('pipelines.flowEditor.state.addContext', 'Context')}
       </Button>

@@ -15,8 +15,10 @@ package configurations
 // The last one is what the delete confirmation reads: how many projects name
 // the model as their default, and whether it is the platform default.
 //
-// The routes mount inside the `configuration.governance` administration-mode
-// group with the other platform-model routes. They apply no gate themselves.
+// The routes mount beside the other platform-model routes, behind the
+// catalogue gates (CatalogueGates, ADR-0059 R0.3): the read takes
+// `llm.catalogue.view`, the set and the clear `llm.catalogue.manage`, each or
+// `configuration.governance`.
 
 import (
 	"context"
@@ -58,12 +60,13 @@ func WithModelDefaults(manager ModelDefaultsManager) Option {
 }
 
 // PlatformDefaultModelRoutes is the admin surface for the platform default
-// model. Mount it behind the central gate.
-func (h *Handler) PlatformDefaultModelRoutes() chi.Router {
+// model, each route behind its catalogue gate.
+func (h *Handler) PlatformDefaultModelRoutes(gates CatalogueGates) chi.Router {
+	view, manage := gates.must("platform default model")
 	r := chi.NewRouter()
-	r.Get("/", h.GetPlatformDefaultModel)
-	r.Put("/", h.SetPlatformDefaultModel)
-	r.Delete("/", h.ClearPlatformDefaultModel)
+	r.With(view).Get("/", h.GetPlatformDefaultModel)
+	r.With(manage).Put("/", h.SetPlatformDefaultModel)
+	r.With(manage).Delete("/", h.ClearPlatformDefaultModel)
 	return r
 }
 

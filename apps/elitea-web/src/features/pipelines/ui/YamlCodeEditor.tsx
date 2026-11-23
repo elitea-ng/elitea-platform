@@ -1,10 +1,18 @@
 import type { ReactNode, Ref } from 'react';
-import { useMemo } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 
 import Box from '@mui/material/Box';
+import IconButton from '@mui/material/IconButton';
+import Tooltip from '@mui/material/Tooltip';
+import { useTheme, type SxProps, type Theme } from '@mui/material/styles';
 
+import { t } from '@/shared/i18n';
+import { handleCopy } from '@/shared/lib/clipboard';
+import { BaseModal } from '@/shared/ui/BaseModal';
 import { CodeMirrorEditor } from '@/shared/ui/CodeMirrorEditor';
 import type { CodeMirrorEditorHandle } from '@/shared/ui/CodeMirrorEditor';
+import { CopyLinkIcon } from '@/shared/ui/icons/copy-link-icon';
+import { FullScreenIcon } from '@/shared/ui/icons/full-screen-icon';
 import { createYamlLanguage } from '../lib/yamlLanguage';
 import { createYamlLinter, YAML_ERROR_MARK_CLASS } from '../lib/yamlLint';
 
@@ -17,6 +25,8 @@ export interface YamlCodeEditorProps {
   disabled?: boolean;
   /** Read the current document before a mode change unmounts the editor. */
   ref?: Ref<CodeMirrorEditorHandle>;
+  /** Optional callback notified when full-screen mode opens or closes. */
+  onFullScreenChange?: (isFullScreen: boolean) => void;
 }
 
 /**
@@ -103,47 +113,192 @@ export interface YamlCodeEditorProps {
  *    `rgba(var(--el-palette-error-mainChannel) / 0.2)` becomes possible —
  *    needs routing to whoever owns `shared/brand/`.
  */
-export function YamlCodeEditor({ code, onChangeCode, disabled = false, ref }: YamlCodeEditorProps): ReactNode {
+const rootSx: SxProps<Theme> = {
+  display: 'flex',
+  flexDirection: 'column',
+  width: '100%',
+  height: '100%',
+};
+
+const actionsRowSx: SxProps<Theme> = (theme) => ({
+  display: 'flex',
+  justifyContent: 'flex-end',
+  alignItems: 'center',
+  gap: '0.25rem',
+  padding: '0.25rem',
+  flexShrink: 0,
+  backgroundColor: theme.vars.palette.background.paper,
+  borderBottom: `0.0625rem solid ${theme.vars.palette.border.lines}`,
+});
+
+const editorSurfaceSx: SxProps<Theme> = (theme) => ({
+  width: '100%',
+  maxWidth: '100%',
+  flex: 1,
+  minHeight: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  overflow: 'auto',
+  // R-T1: colours come from brand tokens, never raw literals.
+  [`& .${YAML_ERROR_MARK_CLASS}`]: {
+    backgroundColor: theme.vars.palette.background.errorBkg,
+    background: theme.vars.palette.background.errorBkg,
+    borderLeft: `0.1875rem solid ${theme.vars.palette.border.error}`,
+  },
+});
+
+const fullScreenSurfaceSx: SxProps<Theme> = (theme) => ({
+  width: '100%',
+  height: '100%',
+  display: 'flex',
+  flexDirection: 'column',
+  [`& .${YAML_ERROR_MARK_CLASS}`]: {
+    backgroundColor: theme.vars.palette.background.errorBkg,
+    background: theme.vars.palette.background.errorBkg,
+    borderLeft: `0.1875rem solid ${theme.vars.palette.border.error}`,
+  },
+});
+
+function assignRef<T>(target: Ref<T> | undefined, value: T | null): void {
+  if (!target) return;
+  if (typeof target === 'function') {
+    target(value);
+    return;
+  }
+  (target as { current: T | null }).current = value;
+}
+
+export function YamlCodeEditor({
+  code,
+  onChangeCode,
+  disabled = false,
+  ref,
+  onFullScreenChange,
+}: YamlCodeEditorProps): ReactNode {
+  const theme = useTheme();
+  const [isFullScreen, setIsFullScreen] = useState(false);
+  const inlineEditorRef = useRef<CodeMirrorEditorHandle | null>(null);
+  const fullScreenEditorRef = useRef<CodeMirrorEditorHandle | null>(null);
   const extensions = useMemo(() => [createYamlLanguage(), createYamlLinter()], []);
+  const actionIconStyle = useMemo(
+    () => ({ width: '1rem', height: '1rem', fill: theme.vars.palette.icon.fill.secondary }),
+    [theme.vars.palette.icon.fill.secondary],
+  );
+
+  const attachInlineRef = useCallback(
+    (handle: CodeMirrorEditorHandle | null) => {
+      inlineEditorRef.current = handle;
+      assignRef(ref, handle);
+    },
+    [ref],
+  );
+
+  const flushEditorIfDirty = useCallback(
+    (editorHandle: CodeMirrorEditorHandle | null): string => {
+      const liveCode = editorHandle?.getCode();
+      if (liveCode === undefined) return code;
+      if (liveCode !== code.replace(/\r\n?/g, '\n')) {
+        onChangeCode(liveCode);
+        return liveCode;
+      }
+      return code;
+    },
+    [code, onChangeCode],
+  );
+
+  const onCopy = useCallback(() => {
+    const activeHandle = isFullScreen ? fullScreenEditorRef.current : inlineEditorRef.current;
+    const liveCode = activeHandle?.getCode() ?? code;
+    void handleCopy(liveCode);
+  }, [code, isFullScreen]);
+
+  const onOpenFullScreen = useCallback(() => {
+    flushEditorIfDirty(inlineEditorRef.current);
+    setIsFullScreen(true);
+    onFullScreenChange?.(true);
+  }, [flushEditorIfDirty, onFullScreenChange]);
+
+  const onCloseFullScreen = useCallback(() => {
+    flushEditorIfDirty(fullScreenEditorRef.current);
+    setIsFullScreen(false);
+    onFullScreenChange?.(false);
+  }, [flushEditorIfDirty, onFullScreenChange]);
+
+  const copyLabel = t('features.pipelines.yamlEditor.copyYaml', 'Copy YAML');
+  const fullScreenLabel = t('features.pipelines.yamlEditor.fullScreenView', 'Full screen view');
 
   return (
-    <Box
-      className="nopan nodrag nowheel"
-      data-testid="pipeline-yaml-editor"
-      sx={(theme) => ({
-        width: '100%',
-        maxWidth: '100%',
-        height: '100%',
-        display: 'flex',
-        flexDirection: 'column',
-        overflow: 'auto',
-        // R-T1: colours come from brand tokens, never raw literals. The
-        // baseline hardcoded `rgba(215, 22, 22, 0.20)`; `background.errorBkg`
-        // (`default.pack.json`) is the same red already used brand-wide for
-        // error surfaces, at that token's own 0.08 alpha (vs. baseline's
-        // ad-hoc 0.20) — a live CSS-variable reference that repaints
-        // correctly for both colour schemes (R-T7) instead of one fixed
-        // literal for both, but visually fainter on its own. A solid
-        // `border.error`-coloured left border (see the file doc comment's
-        // fix-2 note for why this, and not a higher-alpha background, is
-        // this cluster's fix) restores a strong, unambiguous "this line is
-        // wrong" signal on top of it.
-        [`& .${YAML_ERROR_MARK_CLASS}`]: {
-          backgroundColor: theme.vars.palette.background.errorBkg,
-          background: theme.vars.palette.background.errorBkg,
-          borderLeft: `0.1875rem solid ${theme.vars.palette.border.error}`,
-        },
-      })}
-    >
-      <CodeMirrorEditor
-        ref={ref ?? null}
-        value={code}
-        onChange={onChangeCode}
-        extensions={extensions}
-        height="100%"
-        minHeight="400px"
-        readOnly={disabled}
-      />
+    <Box sx={rootSx}>
+      <Box sx={actionsRowSx}>
+        <Tooltip
+          title={copyLabel}
+          placement="top"
+        >
+          <IconButton
+            size="small"
+            onClick={onCopy}
+            aria-label={copyLabel}
+            data-testid="pipeline-yaml-copy-button"
+          >
+            <CopyLinkIcon style={actionIconStyle} />
+          </IconButton>
+        </Tooltip>
+        <Tooltip
+          title={fullScreenLabel}
+          placement="top"
+        >
+          <IconButton
+            size="small"
+            onClick={onOpenFullScreen}
+            aria-label={fullScreenLabel}
+            data-testid="pipeline-yaml-full-screen-button"
+          >
+            <FullScreenIcon style={actionIconStyle} />
+          </IconButton>
+        </Tooltip>
+      </Box>
+      <Box
+        className="nopan nodrag nowheel"
+        data-testid="pipeline-yaml-editor"
+        sx={editorSurfaceSx}
+      >
+        <CodeMirrorEditor
+          ref={attachInlineRef}
+          value={code}
+          onChange={onChangeCode}
+          extensions={extensions}
+          height="100%"
+          minHeight="400px"
+          readOnly={disabled}
+        />
+      </Box>
+      {isFullScreen && (
+        <BaseModal
+          open={isFullScreen}
+          onClose={onCloseFullScreen}
+          title={t('features.pipelines.yamlEditor.fullScreenTitle', 'YAML')}
+          variant="complex"
+          fullscreen
+          data-testid="pipeline-yaml-full-screen-modal"
+          header={{ closeButtonDataTestId: 'pipeline-yaml-full-screen-close-button' }}
+          content={
+            <Box
+              className="nopan nodrag nowheel"
+              sx={fullScreenSurfaceSx}
+            >
+              <CodeMirrorEditor
+                ref={fullScreenEditorRef}
+                value={code}
+                onChange={onChangeCode}
+                extensions={extensions}
+                height="100%"
+                minHeight="100%"
+                readOnly={disabled}
+              />
+            </Box>
+          }
+        />
+      )}
     </Box>
   );
 }

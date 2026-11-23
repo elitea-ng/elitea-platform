@@ -10,8 +10,8 @@ import (
 )
 
 // The platform default model surface (#6826) is an administration-mode
-// surface. It sits in the `configuration.governance` group with the platform
-// models it chooses from. These tests pin that on the ROUTER: the handler
+// surface. It takes the catalogue gates of the platform models it chooses
+// from (`llm.catalogue.view` / `.manage`, or `configuration.governance`). These tests pin that on the ROUTER: the handler
 // tests mount a router of their own and cannot see the gate.
 //
 // The caller is authenticated and this router has no pool, so legacyrbac

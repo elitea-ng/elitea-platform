@@ -77,10 +77,21 @@ func actionRows() []Action {
 			a.outcome(ClassifyRetention, OutcomeLengthen),
 		}
 	}
-	governanceRow := func(a Action) []Action {
+	// A governance row write: the route gate admits llm.policy.manage or
+	// llm.guardrails.manage (or configuration.governance), and the handler
+	// decides by the kind of the row (internal/api/gateway/gates.go).
+	//
+	// The `other` outcome names llm.policy.manage, the narrowest name that
+	// writes any of its kinds. It is an upper bound: the handler narrows it
+	// further, and the egress allowlist, the MCP allowlist, the credential
+	// policy and the budget alert row still take configuration.governance
+	// alone. A reader of this table that decides admission must not treat
+	// llm.policy.manage as enough for those kinds; splitting the outcome per
+	// kind is a change to ClassifyGovernanceRow.
+	governanceRow := func(method, pattern string) []Action {
 		return []Action{
-			a.outcome(ClassifyGovernanceRow, OutcomeGuardrail).critical(allow),
-			a.outcome(ClassifyGovernanceRow, OutcomeOther),
+			write(method, pattern, LLMGuardrailsManage).outcome(ClassifyGovernanceRow, OutcomeGuardrail).critical(allow),
+			write(method, pattern, LLMPolicyManage).outcome(ClassifyGovernanceRow, OutcomeOther),
 		}
 	}
 
@@ -172,28 +183,32 @@ func actionRows() []Action {
 		put(core("/user_budget/administration/{projectID}/user_budget/{userID}"), ModelsAdminProjectBudgetsEdit),
 		del(core("/user_budget/administration/{projectID}/user_budget/{userID}"), ModelsAdminProjectBudgetsEdit),
 
-		// Models and spend: the gateway.
+		// Models and spend: the gateway (ADR-0059 R0.3). Each route's gate
+		// accepts the narrow name below or configuration.governance.
 		// Creating a global provider sets its endpoint, credential and keyless
 		// identity, so it is critical like changing them.
-		post(admin("/gateway/providers"), ConfigurationGovernance).critical(flag),
-		put(admin("/gateway/providers/{configID}"), ConfigurationGovernance).
+		post(admin("/gateway/providers"), LLMCatalogueManage).critical(flag),
+		put(admin("/gateway/providers/{configID}"), LLMCatalogueManage).
 			outcome(ClassifyGlobalProvider, OutcomeRoute).critical(flag),
-		put(admin("/gateway/providers/{configID}"), ConfigurationGovernance).
+		put(admin("/gateway/providers/{configID}"), LLMCatalogueManage).
 			outcome(ClassifyGlobalProvider, OutcomeSettings),
-		del(admin("/gateway/providers/{configID}"), ConfigurationGovernance).dangerous(),
-		post(admin("/gateway/providers/{configID}/check"), ConfigurationGovernance),
-		post(admin("/gateway/providers/{configID}/models"), ConfigurationGovernance),
-		post(admin("/gateway/providers/{configID}/revalidate"), ConfigurationGovernance),
-		post(admin("/gateway/platform_models"), ConfigurationGovernance),
-		put(admin("/gateway/platform_models/{configID}"), ConfigurationGovernance),
-		del(admin("/gateway/platform_models/{configID}"), ConfigurationGovernance).dangerous(),
-		put(admin("/gateway/default_model"), ConfigurationGovernance),
-		del(admin("/gateway/default_model"), ConfigurationGovernance),
-		put(admin("/gateway/models"), ConfigurationGovernance),
-		del(admin("/gateway/models/{id}"), ConfigurationGovernance),
-		put(admin("/gateway/metered-prices"), ConfigurationGovernance),
-		put(admin("/gateway/budget-alerts"), ConfigurationGovernance),
-		post(admin("/gateway/governance/validate-cel"), ConfigurationGovernance),
+		del(admin("/gateway/providers/{configID}"), LLMCatalogueManage).dangerous(),
+		// check, revalidate and the provider model listing call out with the
+		// stored credential, so they take the manage name, not the view.
+		post(admin("/gateway/providers/{configID}/check"), LLMCatalogueManage),
+		post(admin("/gateway/providers/{configID}/models"), LLMCatalogueManage),
+		post(admin("/gateway/providers/{configID}/revalidate"), LLMCatalogueManage),
+		post(admin("/gateway/platform_models"), LLMCatalogueManage),
+		put(admin("/gateway/platform_models/{configID}"), LLMCatalogueManage),
+		del(admin("/gateway/platform_models/{configID}"), LLMCatalogueManage).dangerous(),
+		put(admin("/gateway/default_model"), LLMCatalogueManage),
+		del(admin("/gateway/default_model"), LLMCatalogueManage),
+		put(admin("/gateway/models"), LLMCatalogueManage),
+		del(admin("/gateway/models/{id}"), LLMCatalogueManage),
+		put(admin("/gateway/metered-prices"), LLMCatalogueManage),
+		put(admin("/gateway/budget-alerts"), LLMAlertsManage),
+		// Changes nothing: a read behind the policy view gate.
+		post(admin("/gateway/governance/validate-cel"), LLMPolicyView),
 
 		// Agents and governance.
 		post(admin("/execution_suspensions"), SafetySuspend).
@@ -283,9 +298,9 @@ func actionRows() []Action {
 	// Deleting an override falls back to the platform maximum, which can be
 	// shorter.
 	rows = append(rows, retention(del(admin("/retention/policies/{dataClass}/projects/{projectID}"), RetentionManage))...)
-	rows = append(rows, governanceRow(post(admin("/gateway/governance"), ConfigurationGovernance))...)
-	rows = append(rows, governanceRow(put(admin("/gateway/governance/{id}"), ConfigurationGovernance))...)
-	rows = append(rows, governanceRow(del(admin("/gateway/governance/{id}"), ConfigurationGovernance))...)
+	rows = append(rows, governanceRow(http.MethodPost, admin("/gateway/governance"))...)
+	rows = append(rows, governanceRow(http.MethodPut, admin("/gateway/governance/{id}"))...)
+	rows = append(rows, governanceRow(http.MethodDelete, admin("/gateway/governance/{id}"))...)
 
 	// The Configuration sections.
 	maintenance := section("maintenance", RuntimePlugins)

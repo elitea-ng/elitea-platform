@@ -353,4 +353,131 @@ describe('useFlowEditorNodeOperations', () => {
     // `layoutAll=false` -> when the parsed node's id/type match an existing canvas node, that node's own live position wins over the freshly-parsed one.
     expect(found?.position).toEqual({ x: 5, y: 5 });
   });
+
+  it('onDuplicateNode appends a disconnected YAML copy and selects the offset canvas copy', () => {
+    const setFlowNodes = vi.fn();
+    const setYamlJsonObject = vi.fn();
+    const original = makeNode('LLM_1', PipelineNodeTypes.LLM, 100, 120);
+    const { result } = renderHook(() =>
+      useFlowEditorNodeOperations({
+        flowNodes: [original],
+        setFlowNodes,
+        setFlowEdges: vi.fn(),
+        setYamlJsonObject,
+        yamlJsonObjectRef: {
+          current: {
+            entry_point: 'LLM_1',
+            nodes: [{ id: 'LLM_1', type: PipelineNodeTypes.LLM, transition: 'END', settings: { error_transition: 'Fallback' } }],
+          },
+        },
+        getViewport: () => ({ x: 0, y: 0, zoom: 1 }),
+        setCenter: vi.fn(),
+        getZoom: () => 1,
+        editorRef: { current: null },
+        editorWidth: 800,
+        editorHeight: 600,
+      }),
+    );
+
+    const copy = result.current.onDuplicateNode('LLM_1');
+
+    expect(copy?.id).toBe('LLM_1_copy');
+    expect(copy?.position).toEqual({ x: 140, y: 160 });
+    const writtenDoc = setYamlJsonObject.mock.calls[0]?.[0] as { nodes: Array<Record<string, unknown>> };
+    const writtenCopy = writtenDoc.nodes.find(node => node['id'] === 'LLM_1_copy');
+    expect(writtenCopy?.['type']).toBe(PipelineNodeTypes.LLM);
+    expect(writtenCopy?.['transition']).toBeUndefined();
+    expect(writtenCopy?.['settings']).toBeUndefined();
+  });
+
+  it('rapid synchronous onDuplicateNode calls before commit produce distinct IDs and preserve both copies', () => {
+    const setFlowNodes = vi.fn();
+    const setYamlJsonObject = vi.fn();
+    const original = makeNode('LLM_1', PipelineNodeTypes.LLM, 100, 120);
+    const { result } = renderHook(() =>
+      useFlowEditorNodeOperations({
+        flowNodes: [original],
+        setFlowNodes,
+        setFlowEdges: vi.fn(),
+        setYamlJsonObject,
+        yamlJsonObjectRef: {
+          current: {
+            entry_point: 'LLM_1',
+            nodes: [{ id: 'LLM_1', type: PipelineNodeTypes.LLM, transition: 'END' }],
+          },
+        },
+        getViewport: () => ({ x: 0, y: 0, zoom: 1 }),
+        setCenter: vi.fn(),
+        getZoom: () => 1,
+        editorRef: { current: null },
+        editorWidth: 800,
+        editorHeight: 600,
+      }),
+    );
+
+    const first = result.current.onDuplicateNode('LLM_1');
+    const second = result.current.onDuplicateNode('LLM_1');
+
+    expect(first?.id).toBe('LLM_1_copy');
+    expect(second?.id).toBe('LLM_1_copy_2');
+    const latestDoc = setYamlJsonObject.mock.calls[1]?.[0] as { nodes: Array<{ id: string }> };
+    expect(latestDoc.nodes.map(node => node.id)).toEqual(['LLM_1', 'LLM_1_copy', 'LLM_1_copy_2']);
+  });
+
+  it('onDuplicateNode returns undefined for non-duplicable (END/deprecated) or missing nodes', () => {
+    const setYamlJsonObject = vi.fn();
+    const { result } = renderHook(() =>
+      useFlowEditorNodeOperations({
+        flowNodes: [makeNode('END', PipelineNodeTypes.End, 0, 0), makeNode('Legacy_1', PipelineNodeTypes.Condition, 0, 0)],
+        setFlowNodes: vi.fn(),
+        setFlowEdges: vi.fn(),
+        setYamlJsonObject,
+        yamlJsonObjectRef: {
+          current: {
+            nodes: [{ id: 'Legacy_1', type: PipelineNodeTypes.Condition }],
+          },
+        },
+        getViewport: () => ({ x: 0, y: 0, zoom: 1 }),
+        setCenter: vi.fn(),
+        getZoom: () => 1,
+        editorRef: { current: null },
+        editorWidth: 800,
+        editorHeight: 600,
+      }),
+    );
+
+    expect(result.current.onDuplicateNode('END')).toBeUndefined();
+    expect(result.current.onDuplicateNode('Legacy_1')).toBeUndefined();
+    expect(result.current.onDuplicateNode('Missing')).toBeUndefined();
+    expect(setYamlJsonObject).not.toHaveBeenCalled();
+  });
+
+  it('calculateLayoutNodes accepts LR orientation for horizontal layout', () => {
+    const setFlowNodes = vi.fn();
+    const { result } = renderHook(() =>
+      useFlowEditorNodeOperations({
+        flowNodes: [makeNode('a', PipelineNodeTypes.Agent, 0, 0)],
+        setFlowNodes,
+        setFlowEdges: vi.fn(),
+        setYamlJsonObject: vi.fn(),
+        yamlJsonObjectRef: { current: {} },
+        getViewport: () => ({ x: 0, y: 0, zoom: 1 }),
+        setCenter: vi.fn(),
+        getZoom: () => 1,
+        editorRef: { current: null },
+        editorWidth: 800,
+        editorHeight: 600,
+      }),
+    );
+
+    result.current.calculateLayoutNodes(
+      { entry_point: 'a', nodes: [{ id: 'a', type: PipelineNodeTypes.Agent, transition: 'END' }] },
+      true,
+      true,
+      true,
+      'LR',
+    );
+
+    expect(setFlowNodes).toHaveBeenCalledTimes(1);
+  });
 });

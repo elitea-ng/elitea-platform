@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -3745,11 +3746,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				governanceHandler := gateway.NewGovernanceHandler(cfg.Pool)
 				// The LLM Proxy surface: the gateway's enforcement status and
 				// the model price catalogue, joined to the usage that makes the
-				// catalogue actionable. It shares this group's permission
-				// deliberately — it explains and prices the same enforcement
-				// the governance CRUD beside it authors, and a second
-				// permission string would need its own grant migration to reach
-				// anybody (the #386 shape, one block up).
+				// catalogue actionable. The status, usage and logs are usage
+				// reads; the prices are the catalogue (gates below).
 				//
 				// `cfg.GatewayStatus` may be nil. A deployment with no gateway
 				// address is supported, and the handler reports that posture
@@ -3769,38 +3767,75 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					llmProxyDB = cfg.Pool
 				}
 				llmProxyHandler := gateway.NewLLMProxyHandler(llmProxyDB, cfg.GatewayStatus)
-				r.Group(func(r chi.Router) {
-					r.Use(central(adminaccess.ConfigurationGovernance))
-					r.Route("/gateway", func(r chi.Router) {
-						r.Mount("/", budgetAlertHandler.Routes())
-						governanceHandler.Register(r)
-						llmProxyHandler.Register(r)
-						// PLATFORM-WIDE provider credentials — the public
-						// project's shared `ai_credentials` rows, which the LLM
-						// gateway already resolves for every project (issue
-						// #316). See global_providers.go for why this is the
-						// same rows and the same handlers rather than a second
-						// credential model.
-						//
-						// It inherits this group's `configuration.governance`
-						// gate from the enclosing Group, which is correct for a
-						// surface whose four verbs take one permission — and is
-						// why it can be a Mount at all, unlike the project-scoped
-						// Routes() that needs five different strings.
-						r.Mount("/providers", configurationsHandler.GlobalProviderRoutes())
-						// PLATFORM-WIDE models — the other half. A credential
-						// authenticates; a model is what a caller addresses.
-						// Both are the public project's shared rows, and the
-						// gateway resolves a public model against public
-						// credentials ONLY, so the two surfaces are mounted
-						// together and global_models.go enforces that pairing.
-						r.Mount("/platform_models", configurationsHandler.GlobalModelRoutes())
-						// The PLATFORM DEFAULT model (#6826): which platform
-						// model a new project starts with, and what a project
-						// with no usable default of its own falls back to.
-						// platform_default_model.go has the precedence.
-						r.Mount("/default_model", configurationsHandler.PlatformDefaultModelRoutes())
+				// One gate per sub-surface (ADR-0059 R0.3). Until R0.3 one
+				// group-wide `configuration.governance` gate covered all of
+				// /gateway, so a person who should manage models and spend had
+				// to be given `admin`. Each gate now accepts the narrow name of
+				// ADR-0059 decision 2 OR `configuration.governance`, so a
+				// holder of the legacy name sees no change
+				// (testdata/admin_gateway_legacy.golden). The sub-routers take
+				// the gates as arguments, so a route cannot be mounted
+				// without one. Shared 0261 grants the narrow names.
+				requireLLMUsageView := central(adminaccess.LLMUsageView, adminaccess.ConfigurationGovernance)
+				requireLLMAlertsManage := central(adminaccess.LLMAlertsManage, adminaccess.ConfigurationGovernance)
+				requireLLMPolicyView := central(adminaccess.LLMPolicyView, adminaccess.ConfigurationGovernance)
+				// The governance writes admit a policy OR a guardrails
+				// manager; the handler then decides by the kind of the row, so
+				// only the second writes a guardrail (gateway/gates.go).
+				requireLLMPolicyOrGuardrailsManage := central(
+					adminaccess.LLMPolicyManage, adminaccess.LLMGuardrailsManage, adminaccess.ConfigurationGovernance,
+				)
+				// The kind check reads the permissions the Manage gate resolved
+				// for this request (administration mode, no project), so it
+				// asks the resolver no second time and cannot disagree with
+				// the gate about who the caller is.
+				holdsCentralAdministrationPermission := func(r *http.Request, names ...string) bool {
+					held, ok := apimw.ResolvedProjectPermissions(
+						r.Context(), platformauth.PermissionModeAdministration, "",
+					)
+					return ok && slices.ContainsFunc(names, func(name string) bool {
+						return slices.Contains(held, name)
 					})
+				}
+				catalogueGates := v2configs.CatalogueGates{
+					View:   central(adminaccess.LLMCatalogueView, adminaccess.ConfigurationGovernance),
+					Manage: central(adminaccess.LLMCatalogueManage, adminaccess.ConfigurationGovernance),
+				}
+				r.Route("/gateway", func(r chi.Router) {
+					r.Mount("/", budgetAlertHandler.Routes(requireLLMUsageView, requireLLMAlertsManage))
+					governanceHandler.Register(r, gateway.GovernanceGates{
+						View:   requireLLMPolicyView,
+						Manage: requireLLMPolicyOrGuardrailsManage,
+						Holds:  holdsCentralAdministrationPermission,
+					})
+					llmProxyHandler.Register(r, gateway.LLMProxyGates{
+						Usage:           requireLLMUsageView,
+						CatalogueView:   catalogueGates.View,
+						CatalogueManage: catalogueGates.Manage,
+					})
+					// PLATFORM-WIDE provider credentials — the public
+					// project's shared `ai_credentials` rows, which the LLM
+					// gateway already resolves for every project (issue
+					// #316). See global_providers.go for why this is the
+					// same rows and the same handlers rather than a second
+					// credential model.
+					//
+					// The listing takes the catalogue view gate; every other
+					// route, `check` and `revalidate` included (they use the
+					// stored credential), the manage gate.
+					r.Mount("/providers", configurationsHandler.GlobalProviderRoutes(catalogueGates))
+					// PLATFORM-WIDE models — the other half. A credential
+					// authenticates; a model is what a caller addresses.
+					// Both are the public project's shared rows, and the
+					// gateway resolves a public model against public
+					// credentials ONLY, so the two surfaces are mounted
+					// together and global_models.go enforces that pairing.
+					r.Mount("/platform_models", configurationsHandler.GlobalModelRoutes(catalogueGates))
+					// The PLATFORM DEFAULT model (#6826): which platform
+					// model a new project starts with, and what a project
+					// with no usable default of its own falls back to.
+					// platform_default_model.go has the precedence.
+					r.Mount("/default_model", configurationsHandler.PlatformDefaultModelRoutes(catalogueGates))
 				})
 			})
 

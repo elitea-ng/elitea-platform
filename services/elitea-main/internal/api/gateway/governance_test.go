@@ -126,7 +126,7 @@ func doJSON(h *GovernanceHandler, method, target string, body string) *httptest.
 	} else {
 		rdr = bytes.NewBufferString(body)
 	}
-	h.Routes().ServeHTTP(rr, httptest.NewRequest(method, target, rdr))
+	h.Routes(openGovernanceGates).ServeHTTP(rr, httptest.NewRequest(method, target, rdr))
 	return rr
 }
 
@@ -483,7 +483,7 @@ func TestValidateCELActionMalformed(t *testing.T) {
 func TestRegisterAttachesRoutes(t *testing.T) {
 	h := NewGovernanceHandler(&fakeQuerier{queryRows: &fakeRows{}})
 	r := chi.NewRouter()
-	h.Register(r)
+	h.Register(r, openGovernanceGates)
 	rr := httptest.NewRecorder()
 	r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/governance", nil))
 	if rr.Code != http.StatusOK {

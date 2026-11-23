@@ -210,7 +210,7 @@ func storedCheckRouter(t *testing.T, pool *pgxpool.Pool, checker handler.Connect
 	// The central gate is not applied. It is applied at the mount in router.go
 	// and asserted in global_providers_test.go; what this file measures is what
 	// happens after a caller is admitted.
-	router.Mount("/api/v2/admin/gateway/providers", configurations.GlobalProviderRoutes())
+	router.Mount("/api/v2/admin/gateway/providers", configurations.GlobalProviderRoutes(openCatalogueGatesExternal))
 	return router
 }
 
