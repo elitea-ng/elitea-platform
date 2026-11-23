@@ -1196,7 +1196,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// central role assignments (elitea_auth.admin_role_grants) and the
 	// auth_core__project_user_role (user_id) index (issue 2499, ADR-0059
 	// R0.10a). No permission.
-	require.EqualValues(t, 260, Head(shared))
+	//
+	// 261: shared/0261_narrow_admin_permissions.sql, the 25 narrow
+	// administration permissions of ADR-0059 decision 2, granted to
+	// super_admin and admin (identity.sso.trust.manage to super_admin alone;
+	// issue 2491, ADR-0059 R0.2). Deletes nothing.
+	require.EqualValues(t, 261, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
