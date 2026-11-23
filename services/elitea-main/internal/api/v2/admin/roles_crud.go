@@ -280,6 +280,13 @@ func validateRoleName(name string) error {
 				"of each row, so a role by that name would hide every permission name",
 		}
 	}
+	if name == adminaccess.ReservedRoleName {
+		return matrixError{
+			status: http.StatusBadRequest,
+			message: strconv.Quote(name) + " is reserved: it names the break-glass section " +
+				"(ADR-0059), so no role can use it",
+		}
+	}
 	if !roleNamePattern.MatchString(name) {
 		return matrixError{
 			status: http.StatusBadRequest,
@@ -317,6 +324,14 @@ func refuseCodeNamed(name, what string) error {
 // an absent relation would abort the caller's transaction. Once seen it is
 // never dropped, so the steady state is the one read.
 func (h *Handler) seededRoles(ctx context.Context, q adminaccess.Querier, mode string, names []string) ([]string, error) {
+	return h.seededRolesMarked(ctx, q, mode, names, "")
+}
+
+// seededRolesMarked is seededRoles narrowed to the seed rows of one marker;
+// "" matches every marker.
+func (h *Handler) seededRolesMarked(
+	ctx context.Context, q adminaccess.Querier, mode string, names []string, marker adminaccess.SeedMarker,
+) ([]string, error) {
 	if len(names) == 0 {
 		return nil, nil
 	}
@@ -335,8 +350,8 @@ func (h *Handler) seededRoles(ctx context.Context, q adminaccess.Querier, mode s
 SELECT role.name
 FROM elitea_auth.admin_role_seeds AS seed
 JOIN public.auth_core__role AS role ON role.id = seed.role_id
-WHERE role.mode = $1 AND role.name = ANY($2::text[])
-ORDER BY role.name`, mode, names)
+WHERE role.mode = $1 AND role.name = ANY($2::text[]) AND ($3 = '' OR seed.marker = $3)
+ORDER BY role.name`, mode, names, string(marker))
 	if err != nil {
 		return nil, fmt.Errorf("read the built-in roles: %w", err)
 	}
@@ -347,8 +362,9 @@ ORDER BY role.name`, mode, names)
 	return seeded, nil
 }
 
-// refuseSeeded refuses a write to a built-in role. The stable code of the
-// permission-edit refusal (`role_set_locked`, 403) is story R0.8a.
+// refuseSeeded refuses a rename or a delete of a built-in role (409). The edit
+// of its set is refused by refuseSeededCells (roles.go) with the 403
+// adminaccess.CodeSetLocked.
 func (h *Handler) refuseSeeded(ctx context.Context, q adminaccess.Querier, target roleTarget, name, what string) error {
 	if !target.central() {
 		return nil

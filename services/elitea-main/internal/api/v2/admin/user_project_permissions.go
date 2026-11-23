@@ -542,27 +542,22 @@ func dedupeSorted(values []string) []string {
 }
 
 // refuseReservedProjectGrant applies the reserved-permission half of the
-// no-escalation rule (issue 2488): admin.auth.users.super_admin is added to no
-// project role. It grants nothing in a project, but the rule is absolute so
-// that no path can put it on a role other than the administration super_admin.
+// no-escalation rule (issue 2488, ADR-0059 R0.8a): a seeded_only permission
+// (adminaccess.SeededOnly) is added to no project role. None grants anything
+// in a project, but the rule is absolute so that no path puts one on a role.
 //
 // Only a NEW grant is refused. A legacy database whose project roles already
-// carry the name can still save the matrix its own GET returned.
+// carry such a name can still save the matrix its own GET returned.
 func refuseReservedProjectGrant(
 	ctx context.Context, transaction pgx.Tx, projects []int, roleMap map[string][]string,
 ) error {
 	for role, permissions := range roleMap {
-		cells := make([]adminaccess.Cell, 0, 1)
 		for _, permission := range permissions {
-			if permission == adminaccess.SuperAdminPermission {
-				cells = append(cells, adminaccess.Cell{Role: role, Permission: permission})
+			if !adminaccess.SeededOnly(permission) {
+				continue
 			}
-		}
-		if len(cells) == 0 {
-			continue
-		}
-		var added bool
-		if err := transaction.QueryRow(ctx, `
+			var added bool
+			if err := transaction.QueryRow(ctx, `
 SELECT EXISTS (
     SELECT 1 FROM public.auth_core__project_role role
     WHERE role.project_id = ANY($1::int[]) AND role.name = $2
@@ -570,11 +565,12 @@ SELECT EXISTS (
         SELECT 1 FROM public.auth_core__project_role_permission held
         WHERE held.role_id = role.id AND held.permission = $3
       )
-)`, projects, role, adminaccess.SuperAdminPermission).Scan(&added); err != nil {
-			return fmt.Errorf("check reserved permission for %s: %w", role, err)
-		}
-		if added {
-			return adminaccess.CheckReserved("", cells)
+)`, projects, role, permission).Scan(&added); err != nil {
+				return fmt.Errorf("check reserved permission for %s: %w", role, err)
+			}
+			if added {
+				return adminaccess.CheckReserved("", []adminaccess.Cell{{Role: role, Permission: permission}})
+			}
 		}
 	}
 	return nil

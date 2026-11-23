@@ -326,7 +326,7 @@ func (h *Handler) ModesRemove(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove role"})
 		return
 	}
-	if refusal := h.checkCentralRoles(ctx, transaction, caller, mode, "", []string{role}); refusal != nil {
+	if refusal := h.checkCentralRoles(ctx, transaction, caller, mode, "", []string{role}, userID); refusal != nil {
 		adminaccess.Write(w, r, refusal)
 		return
 	}

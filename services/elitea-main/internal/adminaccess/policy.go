@@ -24,6 +24,9 @@
 //     empty a role above it, super_admin included, beyond repair;
 //   - a caller does not edit the set of a role the caller holds in that mode
 //     (CodeOwnRoleLocked);
+//   - a caller does not give or take the caller's OWN central roles, on
+//     either assignment route (CodeSelfAssignment, ADR-0059 R0.8a). It is
+//     decided before the subset rule, so the caller gets the specific code;
 //   - a caller assigns or removes an administration role only if the caller
 //     holds every permission of that role (CodePermissionNotHeld). The retired
 //     developer mode grants nothing a route reads, so clearing one of its rows
@@ -55,12 +58,27 @@
 //
 // In BOTH planes:
 //
-//   - `admin.auth.users.super_admin` is added to no role except the
-//     administration `super_admin` role (CodeReservedPermission). This holds
-//     for super_admin holders too.
-//   - A holder of `admin.auth.users.super_admin` is exempt from the other
-//     rules. super_admin keeps full power, and a deployment can still repair
-//     any role.
+//   - a permission the registry marks `seeded_only` (GrantableSeededOnly:
+//     `admin.auth.users.super_admin`, `identity.sso.trust.manage` and the four
+//     `access.breakglass.*` names) is added to no role through the API
+//     (CodeReservedPermission); only migrations grant them. The one exception
+//     is the one #2555 kept: `admin.auth.users.super_admin` on the
+//     administration `super_admin` role, which on a database with the seed
+//     record is a locked built-in set anyway (below).
+//   - A holder of `admin.auth.users.super_admin` is exempt from the subset
+//     rule, the not-yourself rule and the own-role lock. super_admin keeps full
+//     power, and a deployment can still repair any custom role.
+//
+// Bound to every caller, a global administrator included (ADR-0059 decision
+// 3, rules 4 and 5, and the seed record of R0.7):
+//
+//   - the seeded_only names above;
+//   - the set of a built-in role (a row in elitea_auth.admin_role_seeds) is
+//     not edited through the API (CodeSetLocked);
+//   - a role whose seed row is marked `unassignable` (the legacy `system`) is
+//     assigned to nobody (CodeSetLocked);
+//   - `break_glass` is not a role name (ReservedRoleName, a 400 of the
+//     roles API).
 //
 // Every refusal is a 403 with a stable `code`, and an annotation on the audit
 // row the request middleware writes for every refused admin write (event type
@@ -70,6 +88,8 @@ package adminaccess
 
 import (
 	"sort"
+	"strconv"
+	"strings"
 )
 
 // SuperAdminPermission is the permission that separates `super_admin` from
@@ -107,7 +127,24 @@ const (
 	// CodeCallerUnresolved: the caller's own permissions could not be read.
 	// The rule fails closed.
 	CodeCallerUnresolved = "role_caller_unresolved"
+	// CodeSelfAssignment: the write gives or takes one of the caller's own
+	// central roles, and the caller is not a standing global administrator.
+	CodeSelfAssignment = "role_self_assignment"
+	// CodeSetLocked: the write edits the set of a built-in role, or assigns a
+	// built-in role marked unassignable. It binds a global administrator too.
+	CodeSetLocked = "role_set_locked"
 )
+
+// ReservedRoleName is refused as the name of a new role, or as the new name of
+// a rename (ADR-0059 decision 3): it is the name of the break-glass section.
+const ReservedRoleName = "break_glass"
+
+// SeededOnly reports whether the registry marks a permission seeded_only, so
+// that no write through the API adds it to a role.
+func SeededOnly(permission string) bool {
+	row, ok := Lookup(permission)
+	return ok && row.Grantable == GrantableSeededOnly
+}
 
 // RefusalAuditAction is the action the audit row of a refused write carries.
 const RefusalAuditAction = "role.escalation_refused"
@@ -164,23 +201,33 @@ func (s Set) Names() []string {
 	return names
 }
 
-// CheckReserved refuses a grant of SuperAdminPermission to any role other
-// than the administration super_admin role. `mode` is the central mode of the
-// roles, or "" for project roles. It applies to every caller.
+// CheckReserved refuses a grant of a seeded_only permission (SeededOnly) to
+// any role. `mode` is the central mode of the roles, or "" for project roles.
+// It applies to every caller. The one grant it lets through is the one #2555
+// let through: SuperAdminPermission on the administration super_admin role.
 func CheckReserved(mode string, granted []Cell) *Refusal {
 	for _, cell := range granted {
-		if cell.Permission != SuperAdminPermission {
+		if !SeededOnly(cell.Permission) {
 			continue
 		}
-		if mode == ModeAdministration && cell.Role == SuperAdminRole {
-			continue
+		if cell.Permission == SuperAdminPermission {
+			if mode == ModeAdministration && cell.Role == SuperAdminRole {
+				continue
+			}
+			return &Refusal{
+				Code: CodeReservedPermission,
+				Message: SuperAdminPermission + " can be granted only to the administration " +
+					SuperAdminRole + " role",
+				Role:        cell.Role,
+				Permissions: []string{SuperAdminPermission},
+			}
 		}
 		return &Refusal{
 			Code: CodeReservedPermission,
-			Message: SuperAdminPermission + " can be granted only to the administration " +
-				SuperAdminRole + " role",
+			Message: cell.Permission + " is granted by a migration only; " +
+				"no change through the API adds it to a role",
 			Role:        cell.Role,
-			Permissions: []string{SuperAdminPermission},
+			Permissions: []string{cell.Permission},
 		}
 	}
 	return nil
@@ -271,6 +318,49 @@ func SuperAdminRequired() *Refusal {
 		Code:    CodeSuperAdminRequired,
 		Message: "only super_admin can assign or revoke the super_admin role",
 		Role:    SuperAdminRole,
+	}
+}
+
+// CheckSelfAssignment refuses an assignment or a removal whose target is the
+// caller, unless the caller is a standing global administrator. `role` names
+// the role the write gives or takes, for the message.
+func CheckSelfAssignment(callerID int64, superAdmin bool, targetID int64, role string) *Refusal {
+	if superAdmin || callerID <= 0 || callerID != targetID {
+		return nil
+	}
+	return &Refusal{
+		Code:    CodeSelfAssignment,
+		Message: "you cannot change your own administration roles; another administrator must make this change",
+		Role:    role,
+	}
+}
+
+// SetLocked is the refusal of an edit to the set of the built-in roles
+// `roles` (at least one, sorted). It binds a global administrator too.
+func SetLocked(roles []string) *Refusal {
+	quoted := make([]string, len(roles))
+	for i, name := range roles {
+		quoted[i] = strconv.Quote(name)
+	}
+	subject := quoted[0] + " is a built-in role"
+	if len(quoted) > 1 {
+		subject = strings.Join(quoted, ", ") + " are built-in roles"
+	}
+	return &Refusal{
+		Code: CodeSetLocked,
+		Message: subject + " and cannot be edited; " +
+			"a built-in set is locked, so create a custom role for a different set",
+		Role: roles[0],
+	}
+}
+
+// Unassignable is the refusal of an assignment of a built-in role whose seed
+// row is marked unassignable. It binds a global administrator too.
+func Unassignable(role string) *Refusal {
+	return &Refusal{
+		Code:    CodeSetLocked,
+		Message: strconv.Quote(role) + " is a locked built-in role that is never assigned",
+		Role:    role,
 	}
 }
 

@@ -567,26 +567,42 @@ func (h *Handler) checkCentralAssignment(
 	if err != nil {
 		return nil, err
 	}
-	return h.checkCentralRoles(ctx, q, caller, mode, assigned, removed), nil
+	return h.checkCentralRoles(ctx, q, caller, mode, assigned, removed, targetID), nil
 }
 
 // checkCentralRoles is the rule for one central assignment: `assigned` is the
-// role given ("" for none), `removed` the roles taken away. The caller must
-// hold adminaccess.LockRoleWrites in the transaction `q` belongs to, and is
-// read again here, so the check and the write see the same state.
+// role given ("" for none), `removed` the roles taken away, `targetID` the
+// user whose roles change. The caller must hold adminaccess.LockRoleWrites in
+// the transaction `q` belongs to, and is read again here, so the check and the
+// write see the same state.
 //
+//   - A built-in role whose seed row is marked unassignable (the legacy
+//     `system`) is given to nobody, by any caller (ADR-0059 R0.8a).
 //   - super_admin, given or taken, needs admin.auth.users.super_admin, in
 //     every mode.
+//   - A caller who is not a standing global administrator changes no role of
+//     its own, in either direction (CodeSelfAssignment). It is decided before
+//     the subset rule, so the caller gets the more specific code.
 //   - In the administration mode, the caller holds every permission of every
 //     role given or taken. The retired developer mode grants nothing that a
 //     route reads, so clearing a developer-mode row that the legacy runtime
 //     left behind needs no subset.
 func (h *Handler) checkCentralRoles(
 	ctx context.Context, q adminaccess.Querier, caller adminaccess.Caller, mode, assigned string, removed []string,
+	targetID int,
 ) *adminaccess.Refusal {
 	caller, err := caller.Reload(ctx)
 	if err != nil {
 		return adminaccess.Unresolved("your own permissions could not be read, so the role change was refused")
+	}
+	if assigned != "" {
+		unassignable, err := h.seededRolesMarked(ctx, q, mode, []string{assigned}, adminaccess.MarkerUnassignable)
+		if err != nil {
+			return adminaccess.Unresolved("the built-in roles could not be read, so the role change was refused")
+		}
+		if len(unassignable) > 0 {
+			return adminaccess.Unassignable(assigned)
+		}
 	}
 	roles := append([]string{}, removed...)
 	if assigned != "" {
@@ -595,16 +611,19 @@ func (h *Handler) checkCentralRoles(
 	if !caller.SuperAdmin && slices.Contains(roles, adminaccess.SuperAdminRole) {
 		return adminaccess.SuperAdminRequired()
 	}
+	role := assigned
+	if role == "" && len(removed) > 0 {
+		role = removed[0]
+	}
+	if refusal := adminaccess.CheckSelfAssignment(caller.UserID, caller.SuperAdmin, int64(targetID), role); refusal != nil {
+		return refusal
+	}
 	if caller.SuperAdmin || mode != adminaccess.ModeAdministration {
 		return nil
 	}
 	required, err := adminaccess.CentralRolePermissions(ctx, q, mode, roles)
 	if err != nil {
 		return adminaccess.Unresolved("the permissions of the role could not be read, so the role change was refused")
-	}
-	role := assigned
-	if role == "" && len(removed) > 0 {
-		role = removed[0]
 	}
 	return adminaccess.CheckAssignment(caller.Administration, false, role, required)
 }

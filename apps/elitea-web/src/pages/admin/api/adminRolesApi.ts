@@ -112,9 +112,22 @@ const ROLE_REFUSAL_MESSAGES: Readonly<Record<string, () => string>> = {
   role_own_set_locked: () =>
     t('pages.admin.roles.refusal.ownRole', 'You hold this role, so you cannot change its permissions. Ask a super admin.'),
   role_permission_reserved: () =>
-    t('pages.admin.roles.refusal.reserved', 'The super admin permission can be granted only to the super admin role.'),
+    t(
+      'pages.admin.roles.refusal.reserved',
+      "This permission is granted only by the platform's own setup, so no change here can add it to a role.",
+    ),
   role_super_admin_required: () =>
     t('pages.admin.roles.refusal.superAdmin', 'Only a super admin can assign or remove the super admin role.'),
+  role_self_assignment: () =>
+    t(
+      'pages.admin.roles.refusal.selfAssignment',
+      'You cannot change your own administration roles. Ask another administrator.',
+    ),
+  role_set_locked: () =>
+    t(
+      'pages.admin.roles.refusal.setLocked',
+      'This is a built-in role, so its permissions are locked. Create a custom role for a different set.',
+    ),
   role_self_escalation: () =>
     t('pages.admin.roles.refusal.selfEscalation', 'This change would give you permissions that you do not hold.'),
   role_caller_unresolved: () =>

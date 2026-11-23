@@ -706,7 +706,7 @@ func (h *Handler) checkMatrixEdit(
 
 // refuseSeededCells refuses a matrix edit that touches the set of a built-in
 // role (ADR-0059 decision 3, rule 5: the built-in sets are locked, for a
-// global administrator too). The repair path for a damaged set is the
+// global administrator too) with the 403 adminaccess.CodeSetLocked. The repair path for a damaged set is the
 // operator command `elitea-main admin-role reset` (story R0.12a).
 func (h *Handler) refuseSeededCells(ctx context.Context, q adminaccess.Querier, mode string, toGrant, toRevoke []grant) error {
 	touched := map[string]bool{}
@@ -722,7 +722,7 @@ func (h *Handler) refuseSeededCells(ctx context.Context, q adminaccess.Querier, 
 		return err
 	}
 	if len(seeded) > 0 {
-		return builtInRoleError(seeded, "edited")
+		return adminaccess.SetLocked(seeded)
 	}
 	return nil
 }

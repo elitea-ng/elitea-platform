@@ -283,10 +283,12 @@ func TestTheModesRouteAppliesTheSubsetRule(t *testing.T) {
 	// Assigning `admin` needs every permission of `admin`.
 	expectRefusal(t, adminDo(t, router, http.MethodPost, "/o/admin/modes/administration",
 		map[string]any{"user_id": plain, "mode": "administration", "role": "admin"}), adminaccess.CodePermissionNotHeld)
-	// Assigning itself a wider custom role, too.
+	// Assigning itself a wider custom role, too. Since ADR-0059 R0.8a the
+	// not-yourself rule decides first, so the code is the more specific one
+	// (role_self_assignment_test.go covers the rule itself).
 	expectRefusal(t, adminDo(t, router, http.MethodPost, "/o/admin/modes/administration",
 		map[string]any{"user_id": env.ids[escalationModes], "mode": "administration", "role": "matrix_editor"}),
-		adminaccess.CodePermissionNotHeld)
+		adminaccess.CodeSelfAssignment)
 	if names := adminRoleNamesSQL(t, env.pool, plain); len(names) != 0 {
 		t.Fatalf("the refused assignment was written: %v", names)
 	}
