@@ -27,6 +27,8 @@ Each tab accepts a narrow administration permission or `configuration.governance
 
 **Check connection**, **Revalidate** and **List provider models** on a platform provider need `llm.catalogue.manage`, not `llm.catalogue.view`. Each one calls the provider with the stored credential.
 
+**Status** shows the rules the gateway loaded: the id, name and type of each governance rule, and why the gateway refused a rule. So a holder of `llm.usage.view` sees the names and types of the rules, guardrails and allowlists included, even without `llm.policy.view`. It never shows the content of a rule, a credential, or a prompt.
+
 The navigation still asks for `configuration.governance`. A role with only the narrow permissions can call these routes, but the console does not show it the LLM Proxy menu yet.
 
 ## Publish a provider platform-wide

@@ -126,15 +126,23 @@ func (h *GovernanceHandler) writer(r *http.Request) governanceWriter {
 
 // refuseMissedWrite answers a write that matched no row: 404 when the row
 // does not exist, 403 when it exists and its stored kind is one the caller
-// may not write.
+// may not write, and 500 when the read fails, so an outage is not reported
+// as a missing row.
+//
+// The 403 tells a caller that the id exists. That is no disclosure: ids are
+// UUIDs, and the kind of every row is in the listing, which the policy view
+// permission reads.
 func (h *GovernanceHandler) refuseMissedWrite(ctx context.Context, w http.ResponseWriter, id string) {
 	var stored string
 	err := h.db.QueryRow(ctx, `SELECT type FROM gateway.governance_config WHERE id::text = $1`, id).Scan(&stored)
-	if err == nil {
+	switch {
+	case err == nil:
 		writeForbidden(w)
-		return
+	case errors.Is(err, pgx.ErrNoRows):
+		writeError(w, http.StatusNotFound, "governance entry not found")
+	default:
+		writeError(w, http.StatusInternalServerError, "read failed")
 	}
-	writeError(w, http.StatusNotFound, "governance entry not found")
 }
 
 func writeForbidden(w http.ResponseWriter) {

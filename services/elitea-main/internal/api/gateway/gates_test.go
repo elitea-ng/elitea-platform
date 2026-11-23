@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -186,4 +187,13 @@ func doJSONWith(h *GovernanceHandler, gates GovernanceGates, method, target, bod
 	rr := httptest.NewRecorder()
 	h.Routes(gates).ServeHTTP(rr, httptest.NewRequest(method, target, strings.NewReader(body)))
 	return rr
+}
+
+// A delete that matched no row and whose follow-up read fails is a 500, not
+// a 404: an outage must not read as a missing row.
+func TestAMissedDeleteWithAFailedReadIs500(t *testing.T) {
+	q := &fakeQuerier{rowResult: &fakeRow{scanErr: errors.New("pool exhausted")}, execTag: pgconn.NewCommandTag("DELETE 0")}
+	if got := doJSONWith(NewGovernanceHandler(q), openGovernanceGates, http.MethodDelete, "/governance/id1", "").Code; got != http.StatusInternalServerError {
+		t.Errorf("delete = %d, want 500", got)
+	}
 }

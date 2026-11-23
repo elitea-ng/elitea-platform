@@ -37,9 +37,12 @@
  *
  * ## Authorisation
  *
- * Every route this page calls is gated server-side on
- * `configuration.governance` (`internal/api/router.go`, `RequireCentralPermissions`
- * in administration mode). `window.admin_ui_config.permissions` hides the nav
+ * Every route this page calls is gated server-side in administration mode
+ * (`internal/api/router.go`, `internal/api/gateway/gates.go`): the reads on
+ * `llm.policy.view`, the writes on `llm.policy.manage` or
+ * `llm.guardrails.manage`, each or `configuration.governance`, and a write is
+ * then decided by the kind of the row (a guardrail needs
+ * `llm.guardrails.manage`). `window.admin_ui_config.permissions` hides the nav
  * item and never gates anything — see `./adminUiConfig`.
  */
 import { useState } from 'react';

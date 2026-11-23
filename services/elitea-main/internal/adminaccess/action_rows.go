@@ -80,6 +80,14 @@ func actionRows() []Action {
 	// A governance row write: the route gate admits llm.policy.manage or
 	// llm.guardrails.manage (or configuration.governance), and the handler
 	// decides by the kind of the row (internal/api/gateway/gates.go).
+	//
+	// The `other` outcome names llm.policy.manage, the narrowest name that
+	// writes any of its kinds. It is an upper bound: the handler narrows it
+	// further, and the egress allowlist, the MCP allowlist, the credential
+	// policy and the budget alert row still take configuration.governance
+	// alone. A reader of this table that decides admission must not treat
+	// llm.policy.manage as enough for those kinds; splitting the outcome per
+	// kind is a change to ClassifyGovernanceRow.
 	governanceRow := func(method, pattern string) []Action {
 		return []Action{
 			write(method, pattern, LLMGuardrailsManage).outcome(ClassifyGovernanceRow, OutcomeGuardrail).critical(allow),

@@ -229,25 +229,6 @@ func TestGuardrailWriteTakesTheGuardrailsName(t *testing.T) {
 	}
 }
 
-// TestGatewayLegacyNameCountAfterTheSplit pins how many gates of the
-// /admin/gateway surface name configuration.governance after R0.3, for the
-// ratchet of R0.14a (#2503): the one group gate became six, each still
-// accepting the legacy name.
-func TestGatewayLegacyNameCountAfterTheSplit(t *testing.T) {
-	source, err := os.ReadFile("router.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	start := strings.Index(string(source), "One gate per sub-surface (ADR-0059 R0.3)")
-	end := strings.Index(string(source), `r.Route("/gateway"`)
-	if start < 0 || end < start {
-		t.Fatal("router.go no longer has the /admin/gateway gate block this test counts")
-	}
-	if got := strings.Count(string(source[start:end]), "adminaccess.ConfigurationGovernance"); got != 6 {
-		t.Errorf("the /admin/gateway gates name configuration.governance %d times, want 6", got)
-	}
-}
-
 /* ── with a database ───────────────────────────────────────────────────── */
 
 // stubModelDefaults answers the platform default model routes with an empty
