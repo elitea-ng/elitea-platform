@@ -81,6 +81,7 @@
         "deploy/helm/elitea/files/nats-bootstrap.sh",
         "scripts/nats/**",
         "docs/runtime-command-bus.md",
+        "docs/ARCHITECTURE.md",
         "scripts/go/**",
         "scripts/ci/go-test-shards.mjs",
         "scripts/ci/go-test-shards.test.mjs",

@@ -1,0 +1,35 @@
+# elitea-subapp-host's internal listeners: the reviewed allowlist (ADR-0059
+# decision 7, "Internal paths"; story R1.8). internal_listener_surface_test.go
+# compares it with the methods the host's gRPC listener serves and with the
+# listener and registration sites of the module's source, both ways. The
+# format and the meaning of each field are in internal_listener_checks_test.go.
+#
+# The host writes no administration data (provider, policy, identity or role
+# data): it reads policy from PostgreSQL or receives it from elitea-main. An
+# "admin" line here would have to be listed in docs/ARCHITECTURE.md.
+
+# --- gRPC listener (<PREFIX>PLATFORM_GRPC_ADDR) ---------------------------------
+# One listener, mTLS with a client certificate required; every call is
+# authorised by the verified certificate against <PREFIX>PLATFORM_CLIENTS
+# (elitea-main) before any handler runs. Main calls it after its own decision.
+grpc | platform | /elitea.subapp.v1.ProviderService/Describe | read | workload | <PREFIX>PLATFORM_CLIENTS (elitea-main)
+grpc | platform | /elitea.subapp.v1.ProviderService/Health | read | workload | <PREFIX>PLATFORM_CLIENTS (elitea-main)
+grpc | platform | /elitea.subapp.v1.ProviderService/Slots | read | workload | <PREFIX>PLATFORM_CLIENTS (elitea-main)
+grpc | platform | /elitea.subapp.v1.ProviderService/Invoke | write | workload | <PREFIX>PLATFORM_CLIENTS (elitea-main)
+grpc | platform | /elitea.subapp.v1.ProviderService/GetInvocation | read | workload | <PREFIX>PLATFORM_CLIENTS (elitea-main)
+grpc | platform | /elitea.subapp.v1.ProviderService/Cancel | write | workload | <PREFIX>PLATFORM_CLIENTS (elitea-main)
+# Remove what the application holds for a project or a toolkit Main deleted.
+grpc | platform | /elitea.subapp.v1.PlatformOperations/DeleteProject | write | workload | <PREFIX>PLATFORM_CLIENTS (elitea-main)
+grpc | platform | /elitea.subapp.v1.PlatformOperations/DeleteToolkit | write | workload | <PREFIX>PLATFORM_CLIENTS (elitea-main)
+
+# --- admin HTTP port (<PREFIX>ADMIN_ADDR): probes and metrics, read-only -------
+http | internal/spi/admin.go:AdminHandler | GET /healthz | read | none | kubelet probe (no credential)
+http | internal/spi/admin.go:AdminHandler | GET /readyz | read | none | kubelet probe (no credential)
+http | internal/spi/admin.go:AdminHandler | GET /metrics | read | none | metrics scraper (no credential)
+
+# --- listener and registration sites ---------------------------------------------
+site | cmd/elitea-subapp-host/main.go:run | http.Server
+site | internal/spi/admin.go:AdminHandler | http.NewServeMux
+site | internal/spi/platform.go:newAuthorizedGRPCServer | grpc.NewServer
+site | internal/spi/platform.go:NewGRPCServer | RegisterProviderServiceServer
+site | internal/spi/platform.go:registerPlatform | RegisterPlatformOperationsServer

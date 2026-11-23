@@ -216,6 +216,26 @@ func privateGRPCServerOptions(codec *StrictProtoCodec, serverTLS *tls.Config, po
 	)
 }
 
+// The private listeners by name, as ServiceInfo keys them.
+const (
+	PrivateListenerControl = "control"
+	PrivateListenerOutput  = "output"
+	PrivateListenerContent = "content"
+)
+
+// ServiceInfo is every service and method each private listener serves,
+// keyed by PrivateListenerControl, PrivateListenerOutput and
+// PrivateListenerContent, as grpc.Server.GetServiceInfo reports it. The
+// internal-listener surface test (ADR-0059 R1.8) compares it with the
+// reviewed allowlist.
+func (s *PrivateServerSet) ServiceInfo() map[string]map[string]grpc.ServiceInfo {
+	return map[string]map[string]grpc.ServiceInfo{
+		PrivateListenerControl: s.controlServer.GetServiceInfo(),
+		PrivateListenerOutput:  s.outputServer.GetServiceInfo(),
+		PrivateListenerContent: s.contentServer.GetServiceInfo(),
+	}
+}
+
 // Serve binds all three listeners before starting any server. A bind failure
 // closes every listener already acquired. Context cancellation or one server
 // failure drains all siblings through one bounded shutdown owner.
