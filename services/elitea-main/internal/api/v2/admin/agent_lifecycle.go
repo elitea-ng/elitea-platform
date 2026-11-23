@@ -133,8 +133,9 @@ func agentLifecycleSection() map[string]any {
 		"default": false,
 	})
 	return map[string]any{
-		"id":    section,
-		"title": "Agent Lifecycle",
+		"id":     section,
+		"access": agentGovernanceAccess(),
+		"title":  "Agent Lifecycle",
 		"description": "What each risk tier requires before an agent release is published: approvals from people " +
 			"other than its author, a governance role holder among them, mandatory attestations, and how often " +
 			"the release must be recertified. A tier can be raised above the platform minimums, never lowered " +

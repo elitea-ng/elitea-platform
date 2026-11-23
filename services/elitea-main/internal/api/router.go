@@ -3051,7 +3051,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				adminCloudExecutor := newProjectCloudExecutorHandler(cfg.Pool)
 				r.With(requireProjectsView).Get(v2projectcloudexecutor.AdminPath, adminCloudExecutor.Get)
 				r.With(requireProjectsEdit).Put(v2projectcloudexecutor.AdminPath, adminCloudExecutor.Put)
-				r.With(requireRuntimePlugins).Get("/plugin_config_schemas/{mode}", adminHandler.PluginConfigSchemas)
+				// The three Configuration routes admit runtime.plugins or any
+				// narrow name a section declares, computed from the sections
+				// (ADR-0059 R0.5, v2/admin/config_section_access.go); the
+				// handler then decides per section, and the schema list and
+				// the suggestions are filtered to the sections the caller can
+				// read.
+				requireConfiguration := adminHandler.RequireConfigurationAccess
+				r.With(requireConfiguration).Get("/plugin_config_schemas/{mode}", adminHandler.PluginConfigSchemas)
 				// The admin Configuration page's read and write (unit A14).
 				// The `{mode}` pair they replace answered 200 for EVERY section:
 				// the GET with the schema's defaults for all of them at once
@@ -3061,18 +3068,18 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// `administration` is a STATIC segment, so chi's trie prefers it
 				// and a static segment binds no `{mode}` parameter — the trap
 				// #207's test caught. These handlers state their mode rather
-				// than sniffing it from the URL. Sections that additionally
-				// declare a `required_permission` are checked INSIDE the
-				// handler, because that permission depends on the section and
-				// route middleware cannot see it.
+				// than sniffing it from the URL. The section is decided INSIDE
+				// the handler, on its narrow permission or on runtime.plugins
+				// and its `required_permission`, because that permission
+				// depends on the section and route middleware cannot see it.
 				//
 				// The legacy runtime registers no handler for any other mode on
 				// this path except `prompt_lib`/resources above, so there is
 				// deliberately no `{mode}` fallback: another mode 404s rather
 				// than being answered with something plausible.
-				r.With(requireRuntimePlugins).
+				r.With(requireConfiguration).
 					Get("/plugin_config_values/administration/{plugin}", adminHandler.AdministrationPluginConfigValues)
-				r.With(requireRuntimePlugins).
+				r.With(requireConfiguration).
 					Put("/plugin_config_values/administration/{plugin}", adminHandler.AdministrationPluginConfigValuesSave)
 				// The PRE-BUILT MCP server catalogue — the real surface behind
 				// the Configuration page's "MCP Servers" section, which stays
@@ -3242,7 +3249,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.With(requireBranding).Post("/branding/package/administration", adminHandler.BrandingPackageImport)
 				r.With(requireBranding).Get("/branding/package/administration/versions", adminHandler.BrandingPackageVersions)
 				r.With(requireBranding).Post("/branding/package/administration/versions/{digest}/restore", adminHandler.BrandingPackageRestore)
-				r.With(requireRuntimePlugins).Get("/plugin_config_suggestions/{mode}/{key}", adminHandler.PluginConfigSuggestions)
+				r.With(requireConfiguration).Get("/plugin_config_suggestions/{mode}/{key}", adminHandler.PluginConfigSuggestions)
 				// `/moderation_statuses/…` is NOT registered here. #209 gated the
 				// stub that used to sit on this line; this unit replaced the stub
 				// with a real handler, registered below on a static
