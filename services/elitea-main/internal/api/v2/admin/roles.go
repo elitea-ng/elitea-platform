@@ -678,9 +678,6 @@ func (h *Handler) checkMatrixEdit(
 		}
 		return nil
 	}
-	if err := refuseSeededCells(ctx, q, mode, toGrant, toRevoke); err != nil {
-		return err
-	}
 	caller, err := caller.Reload(ctx)
 	if err != nil {
 		return rolepolicy.Unresolved("your own permissions could not be read, so the role change was refused")
@@ -703,14 +700,16 @@ func (h *Handler) checkMatrixEdit(
 	}); refusal != nil {
 		return refusal
 	}
-	return nil
+	// Last, so a caller the escalation rules refuse keeps their stable 403
+	// code; what remains is a caller who could otherwise make the edit.
+	return h.refuseSeededCells(ctx, q, mode, toGrant, toRevoke)
 }
 
 // refuseSeededCells refuses a matrix edit that touches the set of a built-in
 // role (ADR-0059 decision 3, rule 5: the built-in sets are locked, for a
 // global administrator too). The repair path for a damaged set is the
 // operator command `elitea-main admin-role reset` (story R0.12a).
-func refuseSeededCells(ctx context.Context, q rolepolicy.Querier, mode string, toGrant, toRevoke []grant) error {
+func (h *Handler) refuseSeededCells(ctx context.Context, q rolepolicy.Querier, mode string, toGrant, toRevoke []grant) error {
 	touched := map[string]bool{}
 	var names []string
 	for _, cell := range append(append([]grant(nil), toGrant...), toRevoke...) {
@@ -719,7 +718,7 @@ func refuseSeededCells(ctx context.Context, q rolepolicy.Querier, mode string, t
 			names = append(names, cell.role)
 		}
 	}
-	seeded, err := seededRoles(ctx, q, mode, names)
+	seeded, err := h.seededRoles(ctx, q, mode, names)
 	if err != nil {
 		return err
 	}

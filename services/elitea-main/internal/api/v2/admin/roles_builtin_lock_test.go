@@ -12,12 +12,14 @@ import (
 	"context"
 	"io/fs"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
 	migrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
@@ -30,18 +32,17 @@ func adminRoleSeedsDDL(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("read %s: %v", file, err)
 	}
-	text := string(body)
-	start := strings.Index(text, "CREATE SCHEMA IF NOT EXISTS elitea_auth;")
-	table := strings.Index(text, "CREATE TABLE IF NOT EXISTS elitea_auth.admin_role_seeds")
-	if start < 0 || table < start {
+	ddl := seedTableDDLPattern.FindString(string(body))
+	if ddl == "" {
 		t.Fatalf("%s has no seed-table DDL", file)
 	}
-	end := strings.Index(text[table:], "\n    );")
-	if end < 0 {
-		t.Fatalf("%s: the seed-table DDL has no end", file)
-	}
-	return text[start : table+end+len("\n    );")]
+	return ddl
 }
+
+// seedTableDDLPattern matches the CREATE SCHEMA and the CREATE TABLE up to the
+// first line that closes the column list, whatever its indentation.
+var seedTableDDLPattern = regexp.MustCompile(
+	`(?s)CREATE SCHEMA IF NOT EXISTS elitea_auth;\s*CREATE TABLE IF NOT EXISTS elitea_auth\.admin_role_seeds \(.*?\n\s*\);`)
 
 // seedBuiltIn creates the administration role if absent and gives it a seed row.
 func seedBuiltIn(t *testing.T, pool *pgxpool.Pool, name string) {
@@ -153,4 +154,33 @@ func TestACustomRoleWithABuiltInNameIsNotLocked(t *testing.T) {
 	if roleExists(t, env.pool, "auditors") || roleExists(t, env.pool, "security_auditor") {
 		t.Fatal("the custom role is still there")
 	}
+}
+
+// The escalation rules answer first: a caller they refuse keeps the stable
+// 403 code, and the lock refuses only a caller who could otherwise edit.
+func TestTheEscalationCodeComesBeforeTheLock(t *testing.T) {
+	env := newEscalationEnvironment(t)
+	seedBuiltIn(t, env.pool, "admin")
+	expectRefusal(t, saveCell(t, env.as(escalationAdmin), centralMatrix, "admin.auth.users", "admin", false),
+		rolepolicy.CodeOwnRoleLocked)
+}
+
+// A database whose seed table is absent (0262 ran before the auth_core
+// tables existed) records no built-in role: the writes are not refused for
+// it, and do not fail.
+func TestWithoutTheSeedTableNothingIsLocked(t *testing.T) {
+	env := newEscalationEnvironment(t)
+	createCustom(t, env.pool, "llm_manager")
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if _, err := env.pool.Exec(ctx, `DROP TABLE elitea_auth.admin_role_seeds`); err != nil {
+		t.Fatalf("drop the seed table: %v", err)
+	}
+	router := env.as(escalationSuper)
+	expectStatus(t, saveCell(t, router, centralMatrix, "models.alpha.view", "llm_manager", true), http.StatusOK)
+	expectStatus(t, adminDo(t, router, http.MethodDelete, centralRoles,
+		map[string]string{"name": "llm_manager"}), http.StatusOK)
+	// A code-named role is still refused by name.
+	expectStatus(t, adminDo(t, router, http.MethodDelete, centralRoles,
+		map[string]string{"name": "editor"}), http.StatusConflict)
 }

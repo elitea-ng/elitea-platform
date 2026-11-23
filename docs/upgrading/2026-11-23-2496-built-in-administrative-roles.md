@@ -4,7 +4,7 @@
 built-in roles to the central `administration` mode and records which roles are
 built-in in a new table, `elitea_auth.admin_role_seeds`.
 
-| Role | Shown as | Permissions |
+| Role | Display name | Permissions |
 |---|---|---|
 | `llm_manager` | LLM manager | 9: the `llm.*` catalogue, policy, usage and alert names, the project budgets, and the project list |
 | `project_administrator` | Project administrator (all projects) | 15: projects, their members and guarded settings, member and role listings, bulk invites, moderation, budget view |

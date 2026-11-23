@@ -20,6 +20,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -87,18 +88,17 @@ func seedTableDDL(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("read %s: %v", builtInRolesMigration, err)
 	}
-	text := string(body)
-	start := strings.Index(text, "CREATE SCHEMA IF NOT EXISTS elitea_auth;")
-	tableStart := strings.Index(text, "CREATE TABLE IF NOT EXISTS elitea_auth.admin_role_seeds")
-	if start < 0 || tableStart < start {
+	ddl := seedTableDDLPattern.FindString(string(body))
+	if ddl == "" {
 		t.Fatalf("%s has no seed-table DDL", builtInRolesMigration)
 	}
-	end := strings.Index(text[tableStart:], "\n    );")
-	if end < 0 {
-		t.Fatalf("%s: the seed-table DDL has no end", builtInRolesMigration)
-	}
-	return text[start : tableStart+end+len("\n    )")]
+	return strings.TrimSuffix(ddl, ";")
 }
+
+// seedTableDDLPattern matches the CREATE SCHEMA and the CREATE TABLE up to the
+// first line that closes the column list, whatever its indentation.
+var seedTableDDLPattern = regexp.MustCompile(
+	`(?s)CREATE SCHEMA IF NOT EXISTS elitea_auth;\s*CREATE TABLE IF NOT EXISTS elitea_auth\.admin_role_seeds \(.*?\n\s*\);`)
 
 /* ── grant parity ─────────────────────────────────────────────────────── */
 

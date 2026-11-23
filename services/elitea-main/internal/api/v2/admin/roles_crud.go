@@ -310,11 +310,27 @@ func refuseCodeNamed(name, what string) error {
 // one query, run inside the transaction of the write it guards, so a role
 // cannot become built-in between the check and the write.
 //
-// The table is written by shared 0262 on every database with the auth_core
-// tables, so its absence is an error, not "nothing is built-in".
-func seededRoles(ctx context.Context, q rolepolicy.Querier, mode string, names []string) ([]string, error) {
+// Shared 0262 creates the table on a database that has the auth_core tables
+// when it runs. A database whose auth_core tables appeared after it (0262 is
+// then ledgered as a no-op) has no table and no recorded role, so nothing is
+// built-in there; the code-named roles stay refused by name. Until the table
+// has been seen once, each call first asks whether it exists, because reading
+// an absent relation would abort the caller's transaction. Once seen it is
+// never dropped, so the steady state is the one read.
+func (h *Handler) seededRoles(ctx context.Context, q rolepolicy.Querier, mode string, names []string) ([]string, error) {
 	if len(names) == 0 {
 		return nil, nil
+	}
+	if !h.seedTable.Load() {
+		var present bool
+		if err := q.QueryRow(ctx,
+			`SELECT to_regclass('elitea_auth.admin_role_seeds') IS NOT NULL`).Scan(&present); err != nil {
+			return nil, fmt.Errorf("look for the built-in role record: %w", err)
+		}
+		if !present {
+			return nil, nil
+		}
+		h.seedTable.Store(true)
 	}
 	rows, err := q.Query(ctx, `
 SELECT role.name
@@ -334,11 +350,11 @@ ORDER BY role.name`, mode, names)
 
 // refuseSeeded refuses a write to a built-in role. The stable code of the
 // permission-edit refusal (`role_set_locked`, 403) is story R0.8a.
-func refuseSeeded(ctx context.Context, q rolepolicy.Querier, target roleTarget, name, what string) error {
+func (h *Handler) refuseSeeded(ctx context.Context, q rolepolicy.Querier, target roleTarget, name, what string) error {
 	if !target.central() {
 		return nil
 	}
-	seeded, err := seededRoles(ctx, q, target.mode, []string{name})
+	seeded, err := h.seededRoles(ctx, q, target.mode, []string{name})
 	if err != nil {
 		return err
 	}
@@ -519,7 +535,7 @@ func (h *Handler) renameRole(
 		}
 	}
 
-	if err := refuseSeeded(ctx, transaction, target, name, "renamed"); err != nil {
+	if err := h.refuseSeeded(ctx, transaction, target, name, "renamed"); err != nil {
 		return 0, err
 	}
 
@@ -657,7 +673,7 @@ func (h *Handler) deleteRole(
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
 
-	if err := refuseSeeded(ctx, transaction, target, name, "deleted"); err != nil {
+	if err := h.refuseSeeded(ctx, transaction, target, name, "deleted"); err != nil {
 		return 0, err
 	}
 
