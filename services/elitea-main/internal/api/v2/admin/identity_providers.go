@@ -57,6 +57,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/identityproviders"
 )
@@ -291,9 +292,13 @@ func (h *Handler) IdentityProviderSave(w http.ResponseWriter, r *http.Request) {
 	if body.Secret != nil && existing.Key != "" {
 		trustFields = append(trustFields, "secret")
 	}
-	if len(trustFields) > 0 && !h.requireSuperAdmin(w, r, trustGate{
+	// The R0.1c classifier picks the action from the stored row and the body:
+	// a body that changes any trust field is a trust action as a whole, and
+	// turning a provider off is one too (its own entry, OutcomeDisable).
+	action := adminaccess.IdentityProviderSaveAction(trustFields, validated.Enabled)
+	if action != adminaccess.OutcomeSettings && !h.requireIdentityTrust(w, r, trustGate{
 		code: CodeIdentityTrustSuperAdminRequired,
-		message: "only a super admin can create an identity provider, turn it on or off, replace " +
+		message: "only a super admin can create or delete an identity provider, turn it on or off, replace " +
 			"its secret, or change its issuer, metadata, certificates or identity attributes",
 		refusedAction: AuditIdentityTrustRefused,
 		entityType:    "identity_provider",
@@ -431,6 +436,19 @@ func (h *Handler) IdentityProviderDelete(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid provider key"})
 		return
 	}
+	// Deleting a provider decides which identity provider is believed, as
+	// creating one does: a trust action (ADR-0059 R0.4c). Before R0.4c the
+	// route gate (runtime.plugins) was the only check.
+	if !h.requireIdentityTrust(w, r, trustGate{
+		code:          CodeIdentityTrustSuperAdminRequired,
+		message:       "only a super admin can delete an identity provider",
+		refusedAction: AuditIdentityTrustRefused,
+		entityType:    "identity_provider",
+		entityName:    key,
+		fields:        []string{"deleted"},
+	}) {
+		return
+	}
 
 	reference, err := h.identityProviders.Delete(r.Context(), key)
 	if errors.Is(err, identityproviders.ErrNotFound) {
@@ -442,6 +460,7 @@ func (h *Handler) IdentityProviderDelete(w http.ResponseWriter, r *http.Request)
 			map[string]any{"error": "the identity provider definition could not be written"})
 		return
 	}
+	annotateTrustChange(r, AuditIdentityTrustChanged, "identity_provider", key, nil, []string{"deleted"})
 
 	// The row is gone either way. A vault cleanup that fails leaves an entry
 	// nothing reads, which is inert — so it is reported rather than turned into

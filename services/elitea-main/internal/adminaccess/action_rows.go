@@ -116,30 +116,32 @@ func actionRows() []Action {
 		// every holder.
 		del(admin("/roles/{scope}/{mode}"), ConfigurationRolesRolesDelete).critical(deny),
 
-		// People and access: SCIM.
-		post(admin("/scim_clients/administration"), AdminAuthUsersSuperAdmin).critical(sealed),
-		post(admin("/scim_clients/administration/{id}/rotate"), AdminAuthUsersSuperAdmin).critical(sealed),
-		post(admin("/scim_clients/administration/{id}/revoke"), AdminAuthUsers).dangerous(),
-		del(admin("/scim_clients/administration/{id}"), AdminAuthUsersSuperAdmin).dangerous(),
-		post(admin("/scim_group_bindings/administration"), ConfigurationRolesUserProjectPermsEdit).critical(deny),
-		put(admin("/scim_group_bindings/administration/{id}"), ConfigurationRolesUserProjectPermsEdit).critical(deny),
-		del(admin("/scim_group_bindings/administration/{id}"), ConfigurationRolesUserProjectPermsEdit).critical(deny),
+		// People and access: SCIM. Split by action (R0.4c): minting, rotating
+		// and deleting a client are trust actions (identity.sso.trust.manage or
+		// super_admin, in the handler); a revoke and the bindings are settings.
+		// A binding write also meets the role rule of #2555.
+		post(admin("/scim_clients/administration"), IdentitySSOTrustManage).critical(sealed),
+		post(admin("/scim_clients/administration/{id}/rotate"), IdentitySSOTrustManage).critical(sealed),
+		post(admin("/scim_clients/administration/{id}/revoke"), IdentitySSOSettingsManage).dangerous(),
+		del(admin("/scim_clients/administration/{id}"), IdentitySSOTrustManage).dangerous(),
+		post(admin("/scim_group_bindings/administration"), IdentitySSOSettingsManage).critical(deny),
+		put(admin("/scim_group_bindings/administration/{id}"), IdentitySSOSettingsManage).critical(deny),
+		del(admin("/scim_group_bindings/administration/{id}"), IdentitySSOSettingsManage).critical(deny),
 
 		// Security: identity providers. The PUT is split by the fields it
-		// changes; story R0.4c wires the split at the gate. A trust change and
-		// turning a provider off need super_admin in the handler today (issue
-		// 2558); the delete needs only the route gate until R0.4c moves it to
-		// the trust permission. The entries name what each requires today.
-		put(admin("/identity_providers/administration/{key}"), AdminAuthUsersSuperAdmin).
+		// changes (R0.4c): a trust change and turning a provider off need
+		// identity.sso.trust.manage or super_admin in the handler (issue 2558),
+		// as do the delete and the re-bind; the rest is settings.
+		put(admin("/identity_providers/administration/{key}"), IdentitySSOTrustManage).
 			outcome(ClassifyIdentityProvider, OutcomeTrust).critical(sealed),
-		put(admin("/identity_providers/administration/{key}"), AdminAuthUsersSuperAdmin).
+		put(admin("/identity_providers/administration/{key}"), IdentitySSOTrustManage).
 			outcome(ClassifyIdentityProvider, OutcomeDisable).critical(flag),
-		put(admin("/identity_providers/administration/{key}"), RuntimePlugins).
+		put(admin("/identity_providers/administration/{key}"), IdentitySSOSettingsManage).
 			outcome(ClassifyIdentityProvider, OutcomeSettings).elevation(flag),
-		del(admin("/identity_providers/administration/{key}"), RuntimePlugins).critical(sealed),
+		del(admin("/identity_providers/administration/{key}"), IdentitySSOTrustManage).critical(sealed),
 		// Moves linked accounts onto the provider's issuer: the identity
 		// mapping.
-		post(admin("/identity_providers/administration/{key}/rebind"), AdminAuthUsersSuperAdmin).critical(sealed),
+		post(admin("/identity_providers/administration/{key}/rebind"), IdentitySSOTrustManage).critical(sealed),
 
 		// Security: retention and legal holds.
 		post(admin("/legal_holds"), LegalHoldManage),
