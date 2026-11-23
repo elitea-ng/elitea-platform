@@ -350,6 +350,17 @@ operator, whose `nats-jetstream` scaler sizes the worker fleet on consumer lag.
 The exporter sidecar reads 8222 over localhost and kubelet probes are not
 subject to NetworkPolicy.
 
+The bootstrap Job's `issue` init container calls the Kubernetes API server
+(`kubernetes.default.svc`), so under an egress NetworkPolicy that does not
+admit it (default-deny, or "no private ranges") the pod labelled
+`app.kubernetes.io/name: nats-bootstrap` + `app.kubernetes.io/instance:
+<release>` needs egress to the API server's endpoints (TCP 6443 or 443) as
+well as DNS and 4222; without it every call fails with `curl: (7)` and
+`answered HTTP 000`. `natsBootstrap.networkPolicy` (opt-in,
+`templates/natsBootstrap/networkpolicy.yaml`) renders that allowance from the
+endpoint addresses you list
+(`docs/upgrading/2026-11-22-2911-nats-bootstrap-job-needs-api-egress.md`).
+
 ## Assets (all owned by `nats-bootstrap`)
 
 | Asset | Account | Kind | Purpose |

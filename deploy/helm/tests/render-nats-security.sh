@@ -315,6 +315,16 @@ refuse "bootstrap: issueWait + connectWait past the deadline" "issueWait" "${EL[
 refuse "bootstrap: issueWait not an integer"            "must be an integer" "${EL[@]}" --set natsBootstrap.tls.certificate.issueWait=2m
 refuse "bootstrap: admissionPolicy true without the API" "does not serve admissionregistration.k8s.io/v1" "${EL[@]}" --set natsBootstrap.tls.certificate.admissionPolicy=true
 refuse "bootstrap: admissionPolicy not a mode"          "set true, false or" "${EL[@]}" --set natsBootstrap.tls.certificate.admissionPolicy=yes
+# The bootstrap Job's egress policy (natsBootstrap.networkPolicy): opt-in, and
+# refused where it would cut the issue init container off from the API server
+# or the bootstrap off from a NATS the chart cannot see.
+refuse "bootstrap: egress policy without API server addresses" "apiServer.cidrs is empty" "${EL[@]}" --set natsBootstrap.networkPolicy.enabled=true
+refuse "bootstrap: egress policy without API server ports" "apiServer.ports is empty" "${EL[@]}" --set natsBootstrap.networkPolicy.enabled=true \
+  --set 'natsBootstrap.networkPolicy.apiServer.cidrs={10.0.0.2/32}' --set 'natsBootstrap.networkPolicy.apiServer.ports=null'
+refuse "bootstrap: egress policy, own NATS, no rule for it" "Add a rule for it to natsBootstrap.networkPolicy.extraEgress" "${EL[@]}" --set nats.enabled=false \
+  --set natsBootstrap.networkPolicy.enabled=true --set 'natsBootstrap.networkPolicy.apiServer.cidrs={10.0.0.2/32}'
+"$HELM" template "${EL[@]}" --set natsBootstrap.networkPolicy.enabled=true \
+  --set 'natsBootstrap.networkPolicy.apiServer.cidrs={10.0.0.2/32,10.0.0.3/32}' > "$TMP/bootstrap-egress.yaml"
 # The admission policy that pins what the issuer may create: opt-in.
 "$HELM" template "${EL[@]}" --set natsBootstrap.tls.certificate.admissionPolicy=auto \
   --api-versions admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy > "$TMP/issuer-policy.yaml"
@@ -723,6 +733,34 @@ check("issuer policy: pins the issuer, the duration, client auth and no other SA
       and "object.spec.usages == ['client auth']" in vexpr and "!has(object.spec.dnsNames)" in vexpr and "object.spec.isCA == false" in vexpr, vexpr)
 check("issuer policy: in place before the Job on Argo CD",
       all(int(d["metadata"]["annotations"]["argocd.argoproj.io/sync-wave"]) < int(jobmeta.get("argocd.argoproj.io/sync-wave", "0")) for d in vap + vapb))
+
+# The bootstrap Job's egress policy: off by default; on, it selects the Job's
+# pod and opens DNS, the bundled NATS client port and the listed API server
+# endpoints, before the Job on Argo CD.
+EGRESS_NAME = "elitea-nats-bootstrap-egress"
+check("bootstrap egress policy: not rendered by default",
+      not [d for d in docs("bootstrap.yaml") if d["kind"] == "NetworkPolicy" and d["metadata"]["name"] == EGRESS_NAME])
+ep = [d for d in docs("bootstrap-egress.yaml") if d["kind"] == "NetworkPolicy" and d["metadata"]["name"] == EGRESS_NAME]
+espec = ep[0]["spec"] if ep else {}
+podlabels = bjob["spec"]["template"]["metadata"]["labels"]
+sel = espec.get("podSelector", {}).get("matchLabels", {})
+check("bootstrap egress policy: selects the bootstrap Job's pod (name + instance)",
+      sel and sel == {"app.kubernetes.io/name": "nats-bootstrap", "app.kubernetes.io/instance": "elitea"}
+      and all(podlabels.get(k) == v for k, v in sel.items()), (sel, podlabels))
+check("bootstrap egress policy: Egress only", espec.get("policyTypes") == ["Egress"], espec.get("policyTypes"))
+erules = espec.get("egress", [])
+port_set = lambda r: sorted((p.get("protocol"), p.get("port")) for p in r.get("ports", []))
+check("bootstrap egress policy: DNS", any(port_set(r) == [("TCP", 53), ("UDP", 53)] for r in erules), erules)
+check("bootstrap egress policy: the bundled NATS server's 4222",
+      any(port_set(r) == [("TCP", 4222)] and any((t.get("podSelector") or {}).get("matchLabels", {}).get("app.kubernetes.io/component") == "nats"
+                                                and (t.get("namespaceSelector") or {}).get("matchLabels") == {"kubernetes.io/metadata.name": ns} for t in r.get("to", []))
+          for r in erules), erules)
+check("bootstrap egress policy: the listed API server endpoints on 443 and 6443",
+      any(port_set(r) == [("TCP", 443), ("TCP", 6443)] and [t.get("ipBlock", {}).get("cidr") for t in r.get("to", [])] == ["10.0.0.2/32", "10.0.0.3/32"] for r in erules), erules)
+check("bootstrap egress policy: in place before the Job on Argo CD",
+      ep and int(ep[0]["metadata"]["annotations"]["argocd.argoproj.io/sync-wave"]) < int(jobmeta.get("argocd.argoproj.io/sync-wave", "0"))
+      and not (ep[0]["metadata"].get("annotations") or {}).get("argocd.argoproj.io/hook")
+      and not (ep[0]["metadata"].get("annotations") or {}).get("helm.sh/hook"), ep and ep[0]["metadata"])
 
 # certificate.create=false: your Secrets, mounted as they are, no issuer.
 oj = [d for d in docs("own-certs.yaml") if d["kind"] == "Job" and d["metadata"]["name"] == "elitea-nats-bootstrap"]

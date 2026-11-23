@@ -55,6 +55,14 @@ spec:
         # in-memory nats-client-tls volume. Argo CD does not track these
         # Certificates, so a moment of Ready=False while cert-manager issues
         # cannot fail the sync.
+        #
+        # It talks to the Kubernetes API server (kubernetes.default.svc), so
+        # the pod needs egress to the API server's endpoints (TCP 6443 or 443,
+        # depending on the cluster). A default-deny egress NetworkPolicy makes
+        # every call fail with `curl: (7)` and `answered HTTP 000`: allow this
+        # pod's labels (app.kubernetes.io/name: nats-bootstrap,
+        # app.kubernetes.io/instance: <release>) out to the API server, or set
+        # natsBootstrap.networkPolicy (networkpolicy.yaml).
         - name: issue
           image: "{{ .Values.natsBootstrap.image.repository }}:{{ .Values.natsBootstrap.image.tag }}"
           imagePullPolicy: {{ .Values.natsBootstrap.image.pullPolicy }}

@@ -1,0 +1,86 @@
+{{- if and .Values.natsBootstrap.enabled .Values.natsBootstrap.networkPolicy.enabled }}
+{{- $b := .Values.natsBootstrap }}
+{{- $np := $b.networkPolicy }}
+{{- $create := $b.tls.certificate.create }}
+{{- if and $create (not $np.apiServer.cidrs) }}
+{{- fail "natsBootstrap.networkPolicy.enabled is true and natsBootstrap.networkPolicy.apiServer.cidrs is empty. The Job's issue init container calls the Kubernetes API server (natsBootstrap.tls.certificate.create), and this policy would block it: list the API server's endpoint addresses (kubectl get endpointslice -n default -l kubernetes.io/service-name=kubernetes), each as a /32 (or /128)." }}
+{{- end }}
+{{- if and $create (not $np.apiServer.ports) }}
+{{- fail "natsBootstrap.networkPolicy.apiServer.ports is empty: name the API server endpoints' port (6443 on many clusters, 443 on others)." }}
+{{- end }}
+{{- if and (not .Values.nats.enabled) (not $np.extraEgress) }}
+{{- fail "natsBootstrap.networkPolicy.enabled is true with nats.enabled false: the chart cannot tell where your NATS server runs, and this policy would block the bootstrap from reaching it. Add a rule for it to natsBootstrap.networkPolicy.extraEgress." }}
+{{- end }}
+# Egress allowance for the elitea-nats-bootstrap Job's pod (opt-in,
+# natsBootstrap.networkPolicy).
+#
+# The pod needs:
+#   - cluster DNS;
+#   - the NATS client port 4222 (the bundled server, or a rule in
+#     natsBootstrap.networkPolicy.extraEgress for a NATS of your own);
+#   - with natsBootstrap.tls.certificate.create (the default), the Kubernetes
+#     API server: the issue init container creates and reads the bootstrap
+#     Certificates and Secrets through https://kubernetes.default.svc.
+#
+# A cluster without egress NetworkPolicies needs none of this. Turn it on where
+# a default-deny (or "no private ranges") egress policy covers the namespace:
+# NetworkPolicies add up, so this one opens these destinations for this pod
+# alone. It also makes the pod egress-isolated, so anything else it might dial
+# stays closed. The chart cannot know the API server's addresses: list them in
+# apiServer.cidrs. Most CNIs match the endpoint address after the Service's
+# ClusterIP is translated, so the ports are the endpoints' (6443 on many
+# clusters, 443 on others). On Cilium the API server is the kube-apiserver
+# entity, which an ipBlock may not match; add a CiliumNetworkPolicy with
+# toEntities: [kube-apiserver] there instead.
+#
+# Argo CD wave -11, a plain resource and not a hook, so it is in place before
+# the Job in wave -10. On Helm it is an ordinary resource, applied before the
+# post-install/post-upgrade hook Job.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "nats-bootstrap.fullname" . }}-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nats-bootstrap.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-11"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "nats-bootstrap.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes:
+    - Egress
+  egress:
+    {{- include "elitea.netpol.dnsEgress" . | nindent 4 }}
+    {{- if .Values.nats.enabled }}
+    # The bundled NATS server's client port.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ include "elitea-nats.namespace" . }}
+          podSelector:
+            matchLabels:
+              {{- include "elitea-nats.serverSelectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 4222
+    {{- end }}
+    {{- if $create }}
+    # The Kubernetes API server, for the issue init container.
+    - to:
+        {{- range $np.apiServer.cidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        {{- range $np.apiServer.ports }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+    {{- end }}
+    {{- with $np.extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}
