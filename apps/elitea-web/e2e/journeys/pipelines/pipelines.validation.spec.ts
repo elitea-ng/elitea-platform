@@ -171,7 +171,13 @@ async function openNodePanel(page: Page, nodeId: string): Promise<Locator> {
   if (!(await panel.isVisible().catch(() => false))) {
     const card = page.locator(`.react-flow__node[data-id="${nodeId}"]`);
     await expect(card).toBeVisible({ timeout: 15_000 });
-    await card.click();
+    await page.getByRole('button', { name: 'Fit view' }).click();
+    await expect(async () => {
+      if (!(await panel.isVisible().catch(() => false))) {
+        await card.click({ timeout: 3_000 });
+      }
+      await expect(panel).toBeVisible({ timeout: 2_000 });
+    }).toPass({ timeout: 15_000 });
   }
   await expect(panel).toBeVisible({ timeout: 10_000 });
   return panel;
@@ -180,10 +186,12 @@ async function openNodePanel(page: Page, nodeId: string): Promise<Locator> {
 async function openInterruptSwitches(page: Page, nodeId: string): Promise<{ before: Locator; after: Locator }> {
   const panel = await openNodePanel(page, nodeId);
   const advancedSection = panel.getByTestId('pipeline-node-panel-advanced-section');
-  if (!(await advancedSection.isVisible().catch(() => false))) {
-    await panel.getByRole('button', { name: 'Advanced', exact: true }).click();
+  const advancedToggle = advancedSection.getByRole('button', { name: 'Advanced', exact: true });
+  await expect(advancedToggle).toBeVisible({ timeout: 10_000 });
+  if ((await advancedToggle.getAttribute('aria-expanded')) !== 'true') {
+    await advancedToggle.click();
   }
-  await expect(advancedSection).toBeVisible({ timeout: 10_000 });
+  await expect(advancedToggle).toHaveAttribute('aria-expanded', 'true', { timeout: 10_000 });
   return {
     before: advancedSection.getByRole('switch', { name: 'Interrupt before' }),
     after: advancedSection.getByRole('switch', { name: 'Interrupt after' }),

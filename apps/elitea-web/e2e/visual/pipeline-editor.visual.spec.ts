@@ -480,10 +480,13 @@ test('@visual pipeline-editor-authored-graph', async ({ page }) => {
   await expect(page.getByTestId('graph-admission-gate')).toHaveCount(0);
   await expect(page.getByTestId('edit-pipeline-test-chat-disabled')).toBeVisible({ timeout: 20_000 });
   const closePanel = page.getByTestId('pipeline-node-panel-close');
-  if (await closePanel.isVisible().catch(() => false)) {
-    await closePanel.click();
-    await expect(page.getByTestId('pipeline-node-panel')).toHaveCount(0);
-  }
+  await expect(async () => {
+    if ((await page.getByTestId('pipeline-node-panel').count()) === 0) return;
+    if (await closePanel.isVisible().catch(() => false)) {
+      await closePanel.click({ timeout: 2_000 }).catch(() => undefined);
+    }
+    await expect(page.getByTestId('pipeline-node-panel')).toHaveCount(0, { timeout: 2_000 });
+  }).toPass({ timeout: 15_000 });
   // The last menu click leaves the pointer where the menu item was, which can
   // be over the canvas's State toggle: one run caught its hover outline, the
   // next its resting fill. Park it, as `admin.visual.spec.ts` does.
@@ -572,14 +575,18 @@ test('@visual pipeline-editor-interrupts-enabled', async ({ page }) => {
   }
   await expect(panel).toBeVisible({ timeout: 15_000 });
   const advancedSection = panel.getByTestId('pipeline-node-panel-advanced-section');
-  if (!(await advancedSection.isVisible().catch(() => false))) {
-    await panel.getByRole('button', { name: 'Advanced', exact: true }).click();
+  const advancedToggle = advancedSection.getByRole('button', { name: 'Advanced', exact: true });
+  await expect(advancedToggle).toBeVisible({ timeout: 10_000 });
+  if ((await advancedToggle.getAttribute('aria-expanded')) !== 'true') {
+    await advancedToggle.click();
   }
-  await expect(advancedSection).toBeVisible({ timeout: 10_000 });
+  await expect(advancedToggle).toHaveAttribute('aria-expanded', 'true', { timeout: 10_000 });
   await expect(advancedSection.getByRole('switch', { name: 'Interrupt before' })).toBeEnabled();
   await expect(advancedSection.getByRole('switch', { name: 'Interrupt before' })).not.toBeChecked();
-  await expect(advancedSection.getByRole('switch', { name: 'Interrupt after' })).toBeEnabled();
-  await expect(advancedSection.getByRole('switch', { name: 'Interrupt after' })).not.toBeChecked();
+  const interruptAfter = advancedSection.getByRole('switch', { name: 'Interrupt after' });
+  await expect(interruptAfter).toBeEnabled();
+  await expect(interruptAfter).not.toBeChecked();
+  await interruptAfter.scrollIntoViewIfNeeded();
   await expect(panel.getByTestId('interrupt-withheld-reason')).toHaveCount(0);
   // The document is admissible, so neither admission surface is on screen —
   // this shot must not double as the admission one.

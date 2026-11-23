@@ -347,6 +347,7 @@ const FlowEditorImpl = forwardRef<FlowEditorHandle, FlowEditorProps>(function Fl
             orientation={orientation}
             onArrange={onArrange}
             canArrange={canArrange}
+            rightOffsetPx={drawerRightOffset}
           />
         </ReactFlow>
         <FlowNodeConfigDrawer
