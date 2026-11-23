@@ -1216,7 +1216,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 264: shared/0264_recent_authentication_saml_and_form.sql,
 	// browser_sessions.authentication_proven and form_sessions.authenticated_at
 	// (issue 2594, ADR-0059 R1.10b). No permission.
-	require.EqualValues(t, 264, Head(shared))
+	//
+	// 265: shared/0265_token_admin_access.sql, auth_core__token.admin_access
+	// and admin_scopes, with the `inherit` backfill for personal access tokens
+	// of administration-role holders (issue 2505, ADR-0059 R1.1). No
+	// permission.
+	require.EqualValues(t, 265, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

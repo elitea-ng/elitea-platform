@@ -90,7 +90,14 @@ CREATE TABLE public.auth_core__token (
     user_id integer
         REFERENCES public.auth_core__user (id)
         ON UPDATE CASCADE ON DELETE CASCADE,
-    name text
+    name text,
+    -- shared 0265 (ADR-0059 R1.1): administration access of the credential.
+    admin_access text NOT NULL DEFAULT 'none'
+        CONSTRAINT auth_core__token_admin_access_check
+        CHECK (admin_access IN ('none', 'scoped', 'inherit')),
+    admin_scopes text[] NOT NULL DEFAULT '{}',
+    CONSTRAINT auth_core__token_admin_scopes_check
+        CHECK (admin_access = 'scoped' OR cardinality(admin_scopes) = 0)
 );
 
 CREATE UNIQUE INDEX ix_auth_core__token_uuid

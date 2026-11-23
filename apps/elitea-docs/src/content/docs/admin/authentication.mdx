@@ -281,6 +281,20 @@ The prompt is a step of the Form sign-in pages. It shows the login of the curren
 
 Form sessions that existed before this release have no recorded time. They count as a recent sign-in only after the person signs in again or enters the password at the prompt.
 
+## Administration access of personal access tokens
+
+Each personal access token records which administration permissions it may use, apart from the permissions of the person who owns it. It has one of three values:
+
+| Value | The token may use |
+|---|---|
+| `none` | No administration permission. This is the value of every new token. |
+| `scoped` | Only the administration permissions chosen for the token, and only while its owner still holds them. |
+| `inherit` | All administration permissions of its owner, until the sunset date that a later release announces. |
+
+The upgrade that added these values set `inherit` on each existing personal access token whose owner held an administration permission at that time. Every other existing token got `none`, and keeps `none` when its owner gets an administration role later. Desktop and mobile device sessions and project system tokens always have `none`.
+
+In this release, the platform records the value but does not enforce it yet: a token still resolves its owner's administration permissions. Choosing administration scopes for a token, and enforcing the value, come in later releases.
+
 ## Connect an identity provider with SCIM
 
 SCIM lets an identity provider push its directory. It creates accounts when people join and deactivates them when they leave. The SCIM endpoint is `/api/v2/scim/v2`.
