@@ -49,7 +49,7 @@ The folder name is the brand id. Any other file at the top fails the check (OS f
 | --- | --- | --- |
 | `formatVersion` | `1` | `1` |
 | `id` | 2 to 32 characters: a lowercase letter, then letters, digits or `-`; equals the folder name | `elitea` |
-| `productName`, `shortName` | Up to 40 and 20 characters | `Elitea AI`, `Elitea` |
+| `productName`, `shortName` | Up to 40 and 20 characters; `shortName` without `/`, `:`, `"` or `\` (it names the app bundle and the disk image volume) | `Elitea AI`, `Elitea` |
 | `publisher` | The publisher's legal name (bundle copyright, installers) | `EPAM Systems` |
 | `mobile.bundleId` | iOS bundle id and Android package: reverse-DNS, three or more labels, each a lowercase letter then letters or digits, no Java keyword. **Permanent** | `ai.elitea.app` |
 | `mobile.connectSchemes` | Custom URI schemes for connect links; not `http`, `https` or another well-known scheme | `["elitea"]` |
@@ -77,7 +77,7 @@ Bundle id, App Group, widget id and desktop identifier must all differ from each
 
 ## Assets
 
-Every file is required unless marked optional. PNGs are square.
+Every file is required unless marked optional. PNGs are square, except the disk image backgrounds.
 
 | Path under `assets/` | Pixels | Alpha | Used for |
 | --- | --- | --- | --- |
@@ -87,7 +87,8 @@ Every file is required unless marked optional. PNGs are square.
 | `android/adaptive-foreground.png` | 1024 | needed | Adaptive icon foreground (108 dp canvas) |
 | `android/adaptive-background.png` | 1024 | none | Adaptive icon background |
 | `android/adaptive-monochrome.png` | 1024 | needed | Android 13+ themed icon |
-| `macos/icon.icns` | 16 to 1024 | | macOS app icon: 16, 32, 64, 128, 256, 512 and 1024 |
+| `macos/icon.icns` | 16 to 1024 | | macOS app icon: 16, 32, 64, 128, 256, 512 and 1024; also the disk image's volume icon |
+| `macos/dmg-background.png`, `macos/dmg-background@2x.png` | 660x400, 1320x800 | none | Optional: the background of the macOS disk image's window (see [The disk image](#the-disk-image)) |
 | `windows/icon.ico` | 16 to 256 | | Windows app and installer icon: 16, 24, 32, 48, 64, 128 and 256 |
 | `desktop/32x32.png`, `128x128.png`, `128x128@2x.png`, `icon.png` | 32, 128, 256, 512 | either | Desktop bundle and window icons |
 | `desktop/tray-template.png` | 44 | needed | macOS menu bar template image (22 pt at 2x) |
@@ -155,6 +156,20 @@ From the manifest the app takes:
 
 - **Identity:** `shortName` is the product name: the app bundle (`Elitea.app`), the macOS app menu, the window title, the tray tooltip and every message the host writes ("Quit Elitea?"). `desktop.identifier` is the bundle identifier and names the config, data, log and cache folders and the credentials file, so it never changes for a brand. `publisher` sets the bundle's publisher and copyright.
 - **Assets:** the bundle icons (`desktop/32x32.png`, `desktop/128x128.png`, `desktop/128x128@2x.png`, `macos/icon.icns`, `windows/icon.ico`) and the menu-bar template image (`desktop/tray-template.png`), by paths relative to `src-tauri`.
+- **The disk image** (`.dmg`, the macOS download): the volume name and window title `<shortName> <version>`, the volume icon `macos/icon.icns` and the window background (below).
+
+### The disk image
+
+The macOS release carries a styled disk image next to the `.pkg`. Opening it shows one fixed window, the same for every brand (`scripts/brand/dmg.mjs` `DMG_LAYOUT`): 660x400 points, 128-point icons, the app centred at (170, 185), an alias of Applications at (490, 185), measured from the window's top left below the title bar. The brand supplies the picture behind them:
+
+- `assets/macos/dmg-background.png`, 660x400 pixels, opaque, and `assets/macos/dmg-background@2x.png`, 1320x800, for Retina displays. The build merges the two into one TIFF; Finder shows the one that fits the display.
+- Leave room for the two icons and their labels at those positions, and draw the hint between them (an arrow, say). No text is needed: the labels are Finder's.
+- The background is a still picture, but Finder writes the icon labels black in light mode and white in dark mode. Keep the canvas mid-tone, so both read: `brand/elitea` and `brand/sample` keep every pixel between relative luminance 0.17 and 0.20, where black and white text both keep a contrast of 4.2:1 or more.
+- Ship both files or neither. Without them, the build draws a background from `brand.hue` (a wash from the hue to slate, with the arrow). `brand-check` checks their size and alpha, and fails a brand that ships only one.
+
+`node scripts/brand/dmg.mjs brand/<id> --from #rrggbb --to #rrggbb` writes the two files from two colours, as the built-in brands do: `brand/elitea` from the tokens' indigo to violet (`libs/ts/client-core/src/brand/tokens.json`, checked by `scripts/brand/elitea-sync.test.mjs`), `brand/sample` from its two placeholder colours (`placeholder-assets.mjs`).
+
+`apps/elitea-desktop/scripts/dmg-settings.mjs` reads all of this from the selected brand, and `scripts/macos-dmg.sh` builds the image; the shared packaging action holds no brand's name or artwork. A pull request's dry run builds the sample brand's image and scans its settings for ELITEA text (the W4 output scan).
 
 The host reads the product name and identifier from the configuration compiled into it (`src/brand.rs`); none is written in its source. The menu labels the web page translates keep `{product}` in place, and the host fills in its own name. The computer-use guards treat the brand's identifier as the app's own windows, which an agent never reads or acts on. CI builds the host as ELITEA (`ci-desktop.yml`, host job) and as brand/sample (the pane-drivers job on Linux and Windows); `scripts/tauri-brand.test.mjs` checks the overlay of both.
 

@@ -120,6 +120,21 @@ test('a wrong pixel size, alpha where it is forbidden and none where it is neede
   assert.ok(errs.includes('assets/desktop/icon.png: not a PNG'));
 });
 
+test('the disk image background is optional, but a wrong size or alpha fails', () => {
+  const dir = makeBrand();
+  unlinkSync(join(dir, 'assets/macos/dmg-background.png'));
+  unlinkSync(join(dir, 'assets/macos/dmg-background@2x.png'));
+  assert.ok(!errorsOf(dir).some((e) => e.includes('dmg-background')), 'a brand without one passes (one is drawn from its hue)');
+  writeFileSync(join(dir, 'assets/macos/dmg-background.png'), solidPng(400, '#0E7490'));
+  assert.ok(errorsOf(dir).some((e) => e.startsWith('assets/macos/dmg-background@2x.png: missing; the disk image background needs both')), 'one alone fails');
+  writeFileSync(join(dir, 'assets/macos/dmg-background.png'), solidPng(400, '#0E7490'));
+  writeFileSync(join(dir, 'assets/macos/dmg-background@2x.png'), solidPng(800, '#0E7490', { alpha: true }));
+  const errs = errorsOf(dir);
+  assert.ok(errs.some((e) => e.startsWith('assets/macos/dmg-background.png: is 400x400, must be 660x400')), errs.join('\n'));
+  assert.ok(errs.some((e) => e.startsWith('assets/macos/dmg-background@2x.png: is 800x800, must be 1320x800')), errs.join('\n'));
+  assert.ok(errs.some((e) => e.startsWith('assets/macos/dmg-background@2x.png: must be opaque')), errs.join('\n'));
+});
+
 test('a hue with too little contrast fails', () => {
   const errs = errorsOf(makeBrand(validManifest({ brand: { hue: '#fff59d' } })));
   assert.ok(errs.some((e) => e.startsWith('brand.hue: contrast') && e.includes('light background')));

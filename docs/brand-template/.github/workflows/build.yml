@@ -169,7 +169,7 @@ jobs:
           eas build --profile production --platform "$PLATFORM" --non-interactive --no-wait
 
   desktop-macos:
-    name: Desktop macOS (.pkg)
+    name: Desktop macOS (.dmg, .pkg)
     needs: prepare
     if: github.event_name == 'pull_request' || inputs.platforms == 'all' || inputs.platforms == 'macos'
     runs-on: macos-latest
@@ -191,7 +191,11 @@ jobs:
           package-manager-cache: false
       - name: Select the brand
         run: echo "ELITEA_BRAND=$GITHUB_WORKSPACE/$BRAND_DIR" >> "$GITHUB_ENV"
-      # The release's own packaging action: the same steps ELITEA's release runs.
+      # The release's own packaging action: the same steps ELITEA's release runs:
+      # the app, the .pkg for device management and the styled .dmg people download,
+      # whose background, volume name and icon come from this brand folder
+      # (assets/macos/dmg-background.png and @2x; without them, one drawn from the
+      # brand's hue).
       - name: Build, sign and verify (or dry run)
         id: package
         uses: ./elitea/.github/actions/desktop-macos-package
@@ -208,14 +212,18 @@ jobs:
           apple-api-key: ${{ secrets.APPLE_API_KEY }}
           apple-api-issuer: ${{ secrets.APPLE_API_ISSUER }}
           apple-api-private-key: ${{ secrets.APPLE_API_PRIVATE_KEY }}
-      - name: Keep the package (by hand only)
+      # A release before the disk image (it predates 2026-11-22) builds the .pkg alone.
+      - name: Keep the packages (by hand only)
         if: github.event_name == 'workflow_dispatch' && inputs.keep_artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: desktop-macos-pkg
-          path: ${{ steps.package.outputs.package-dir }}/*.pkg
+          name: desktop-macos
+          path: |
+            ${{ steps.package.outputs.package-dir }}/*.dmg
+            ${{ steps.package.outputs.package-dir }}/*.pkg
           retention-days: 7
           if-no-files-found: error
+          compression-level: 0
 
   # Off until ELITEA's desktop host builds on Windows; set the repository
   # variable DESKTOP_WINDOWS_PACKAGE=true once the pinned release says it does.

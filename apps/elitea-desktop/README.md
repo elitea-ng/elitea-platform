@@ -407,8 +407,21 @@ release and for device management:
   nightly pre-release and every release run the signed release build.
   It ships in a `.pkg` (`scripts/macos-pkg.sh`) that installs into
   `/Applications` with no UI, signed with the Developer ID Installer identity,
-  notarised and stapled. The workflow verifies both with `codesign`,
-  `spctl -a -vv`, `pkgutil --check-signature` and `stapler validate`.
+  notarised and stapled. The direct download is a styled `.dmg`
+  (`scripts/macos-dmg.sh`): one fixed window with the brand's background, the
+  app on the left, an Applications alias on the right and an arrow between, the
+  volume named `<Brand> <version>` with the brand's icon
+  (`scripts/dmg-settings.mjs` reads them from the brand; the layout is
+  `scripts/brand/dmg.mjs` `DMG_LAYOUT`). Finder lays the window out by
+  AppleScript, retried up to three times, and `scripts/dmg-verify.mjs` reads
+  the `.DS_Store` back (background alias, window, both icon positions) before
+  the image is sealed, and again on the finished image. The `.dmg` is codesigned
+  with the Developer ID Application identity, notarised and stapled. The
+  workflow verifies all three with `codesign`, `spctl -a` (`--type install` for
+  the package, `-t open --context context:primary-signature` for the disk
+  image), `pkgutil --check-signature` and `stapler validate`. Tauri's own DMG
+  bundler is not used: it cannot put the version in the volume name or set the
+  icon size, skips the styling when `CI=true`, and does not notarise the image.
 - **Windows:** an x64 MSI (Tauri's WiX bundle) and an MSIX (`makeappx`). They are
   unsigned until a Windows signer's secrets are set; then the same job signs and
   verifies them. An unsigned MSIX's `Publisher` carries the unsigned-publisher OID
@@ -434,8 +447,8 @@ decision 10). The stable release and the nightly pre-release carry, named
 
 | Asset | What it is |
 | --- | --- |
-| `Elitea-<version>-macos-arm64.pkg` | the signed, notarised installer package (device management, or a double-click) |
-| `Elitea-<version>-macos-arm64.app.zip` | the notarised, stapled app, zipped with `ditto -c -k --keepParent` |
+| `Elitea-<version>-macos-arm64.dmg` | the styled disk image people download: open it, drag the app to Applications. Signed (Developer ID Application), notarised and stapled |
+| `Elitea-<version>-macos-arm64.pkg` | the signed, notarised installer package (device management) |
 | `Elitea-<version>-windows-x64-unsigned.msi` | the MSI (SmartScreen warns: **More info** › **Run anyway**) |
 | `Elitea-<version>-windows-x64-unsigned.msix` | the MSIX (testing only: a recent Windows 11, Developer Mode and `Add-AppxPackage -AllowUnsigned`) |
 | `SHA256SUMS` | the SHA-256 of each file above |

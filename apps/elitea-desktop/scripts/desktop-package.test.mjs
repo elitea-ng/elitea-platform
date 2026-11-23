@@ -185,10 +185,39 @@ test('the packages reach the release through one job, the only one that writes t
   assert.doesNotMatch(rollback.match(/^ {4}needs: .*$/m)[0], /desktop/);
 });
 
+test('macOS ships a styled, signed .dmg and the .pkg; the zipped app is gone', () => {
+  const wf = readFileSync(join(REPO, '.github/workflows/desktop-package.yml'), 'utf8');
+  const action = readFileSync(join(REPO, '.github/actions/desktop-macos-package/action.yml'), 'utf8');
+  const template = readFileSync(join(REPO, 'docs/brand-template/.github/workflows/build.yml'), 'utf8');
+  const macos = wf.slice(wf.indexOf('\n  macos:'), wf.indexOf('\n  windows:'));
+  assert.doesNotMatch(wf, /ditto -c -k|app\.zip/);
+  assert.match(macos, /for ext in dmg pkg; do/);
+  assert.match(macos, /asset-name macos "\$ext"/);
+  // The kept packages (by hand) and the brand repository's keep step carry the disk image too.
+  for (const keep of [macos, template]) assert.match(keep, /package-dir \}\}\/\*\.dmg/);
+  // The action builds the image from the brand's settings, signs it with the Application identity,
+  // and proves the finished image: its layout mounted read-only, then Gatekeeper and the ticket.
+  // The full release version names the volume (a nightly keeps its suffix).
+  assert.match(action, /version="\$\{VERSION:-\$DESKTOP_VERSION\}"\n {8}inputs="\$RUNNER_TEMP\/dmg-inputs"\n {8}node scripts\/dmg-settings\.mjs "\$inputs" "\$version"/);
+  assert.match(action, /bash scripts\/macos-dmg\.sh "\$\{DESKTOP_BUNDLE\}\/\$\{DESKTOP_APP\}" "\$inputs" "\$dmg"/);
+  assert.match(action, /DMG_SIGNING_IDENTITY: \$\{\{ steps\.plan\.outputs\.sign == 'true' && inputs\.apple-signing-identity \|\| '' \}\}/);
+  assert.match(action, /hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "\$mnt" "\$DMG"/);
+  assert.match(action, /dmg-verify\.mjs" "\$mnt" "\$SETTINGS"/);
+  assert.match(action, /spctl -a -t open --context context:primary-signature -v "\$dmg"/);
+  assert.match(action, /xcrun stapler validate "\$dmg"/);
+  // The sample-brand output scan reads the disk image's settings (volume name, window title).
+  assert.match(macos, /brand-output-scan\.mjs --lane desktop[\s\S]*"\$DMG_SETTINGS"/);
+  // No brand-specific literal in the shared action: the brand comes from ELITEA_BRAND alone.
+  assert.doesNotMatch(action, /Elitea [0-9]|brand\/elitea/);
+});
+
 test('asset names: <Brand>-<version>-<os>-<arch>[-unsigned].<ext>', () => {
   const name = (os, ext, signed, version = '7.8.0', brand = 'Elitea') => assetName({ os, ext, brand, version, signed });
   assert.equal(name('macos', 'pkg', true), 'Elitea-7.8.0-macos-arm64.pkg');
-  assert.equal(name('macos', 'app.zip', true), 'Elitea-7.8.0-macos-arm64.app.zip');
+  assert.equal(name('macos', 'dmg', true), 'Elitea-7.8.0-macos-arm64.dmg');
+  assert.equal(name('macos', 'dmg', true, '1.0.0', 'Acme Agent'), 'Acme-Agent-1.0.0-macos-arm64.dmg');
+  // The zipped app is gone (owner decision 2026-11-22): the .dmg replaced it.
+  assert.throws(() => name('macos', 'app.zip', true), /macos has no \.app\.zip asset \(dmg, pkg\)/);
   assert.equal(name('windows', 'msi', false), 'Elitea-7.8.0-windows-x64-unsigned.msi');
   assert.equal(name('windows', 'msix', false), 'Elitea-7.8.0-windows-x64-unsigned.msix');
   assert.equal(name('windows', 'msi', true), 'Elitea-7.8.0-windows-x64.msi');
@@ -208,16 +237,16 @@ test('asset names: <Brand>-<version>-<os>-<arch>[-unsigned].<ext>', () => {
 });
 
 test('asset names parse back, and nothing else parses', () => {
-  for (const [os, ext, signed] of [['macos', 'pkg', true], ['macos', 'app.zip', true], ['windows', 'msi', false], ['windows', 'msix', true]]) {
+  for (const [os, ext, signed] of [['macos', 'pkg', true], ['macos', 'dmg', true], ['windows', 'msi', false], ['windows', 'msix', true]]) {
     const n = assetName({ os, ext, brand: 'Acme-2', version: '1.2.3-nightly.20261122.7', signed });
     assert.deepEqual(parseAssetName(n), { brand: 'Acme-2', version: '1.2.3-nightly.20261122.7', os, arch: os === 'macos' ? 'arm64' : 'x64', ext, signed });
   }
-  for (const n of ['Elitea_7.8.0_x64_en-US.msi', 'Elitea-7.8.0-arm64.pkg', 'Elitea-7.8.0-macos-x64.pkg', 'Elitea-7.8.0-windows-x64.pkg', 'Elitea-7.8.0-macos-arm64.zip', CHECKSUMS]) {
+  for (const n of ['Elitea_7.8.0_x64_en-US.msi', 'Elitea-7.8.0-arm64.pkg', 'Elitea-7.8.0-macos-x64.pkg', 'Elitea-7.8.0-windows-x64.pkg', 'Elitea-7.8.0-macos-arm64.zip', 'Elitea-7.8.0-macos-arm64.app.zip', 'Elitea-7.8.0-windows-x64.dmg', CHECKSUMS]) {
     assert.equal(parseAssetName(n), null, n);
   }
 });
 
-const RELEASE = ['Elitea-7.8.0-macos-arm64.pkg', 'Elitea-7.8.0-macos-arm64.app.zip', 'Elitea-7.8.0-windows-x64-unsigned.msi', 'Elitea-7.8.0-windows-x64-unsigned.msix'];
+const RELEASE = ['Elitea-7.8.0-macos-arm64.dmg', 'Elitea-7.8.0-macos-arm64.pkg', 'Elitea-7.8.0-windows-x64-unsigned.msi', 'Elitea-7.8.0-windows-x64-unsigned.msix'];
 
 test('release assets: one version, one of each kind, never an unsigned Mac app', () => {
   const assets = checkReleaseAssets(RELEASE, { complete: true });
@@ -231,6 +260,9 @@ test('release assets: one version, one of each kind, never an unsigned Mac app',
   assert.throws(() => checkReleaseAssets([...RELEASE.slice(1), 'Elitea-7.8.1-macos-arm64.pkg']), /7\.8\.1, the others/);
   assert.throws(() => checkReleaseAssets([...RELEASE, 'Elitea-7.8.0-windows-x64.msi']), /two \.msi files for windows/);
   assert.throws(() => checkReleaseAssets(['Elitea-7.8.0-macos-arm64-unsigned.pkg']), /unsigned; a release carries macOS signed/);
+  assert.throws(() => checkReleaseAssets(['Elitea-7.8.0-macos-arm64-unsigned.dmg']), /unsigned; a release carries macOS signed/);
+  // The desktop job passed without its disk image: the release is incomplete.
+  assert.throws(() => checkReleaseAssets(RELEASE.slice(1), { complete: true }), /macos \.dmg did not arrive/);
 });
 
 test('SHA256SUMS is sha256sum format over every asset', () => {
@@ -250,8 +282,9 @@ test('SHA256SUMS is sha256sum format over every asset', () => {
 test('the notes section: macOS signed and notarised, Windows unsigned with the way past SmartScreen', () => {
   const section = releaseNotesSection(checkReleaseAssets(RELEASE));
   assert.ok(section.startsWith(`${NOTES_MARKER}\n## Desktop downloads\n`));
-  assert.match(section, /macOS 12 or later, Apple silicon \(M1 or later\) only\. Signed and notarised\.\*\* `Elitea-7\.8\.0-macos-arm64\.pkg`/);
-  assert.match(section, /`Elitea-7\.8\.0-macos-arm64\.app\.zip` \(unzip/);
+  // The disk image first: the download people use; the package for device management after it.
+  assert.match(section, /macOS 12 or later, Apple silicon \(M1 or later\) only\. Signed and notarised\.\*\* `Elitea-7\.8\.0-macos-arm64\.dmg` \(open it, then drag the app to Applications\), or `Elitea-7\.8\.0-macos-arm64\.pkg` \(installs into Applications; the package for device management\)/);
+  assert.doesNotMatch(section, /unzip|app\.zip/);
   assert.match(section, /Intel Macs are not supported/);
   assert.match(section, /Windows 10 2004 or later, x64\. Unsigned\*\*/);
   assert.match(section, /SmartScreen .*\*\*More info\*\*, then \*\*Run anyway\*\*/);

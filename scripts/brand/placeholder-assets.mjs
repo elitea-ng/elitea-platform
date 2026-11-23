@@ -13,6 +13,7 @@ import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
+import { dmgBackgroundPng } from './dmg.mjs';
 import { encodeIcns, encodeIco, ICNS_PNG_TYPE, placeholderPng, placeholderSvg, solidPng } from './raster.mjs';
 import { ASSETS } from './schema.mjs';
 
@@ -42,7 +43,7 @@ function build(fg, bg) {
   const spec = (path) => ASSETS.find((a) => a.path === path);
   const out = new Map();
   for (const a of ASSETS) {
-    if (a.optional) continue;
+    if (a.optional && !a.placeholder) continue;
     let bytes;
     switch (a.path) {
       case 'ios/icon-1024.png':
@@ -82,6 +83,11 @@ function build(fg, bg) {
       case 'logo/logo-full.svg':
         // A disc and a bar where a wordmark would be: no lettering, so no name to leak.
         bytes = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 372"><circle cx="186" cy="186" r="150" fill="${fg}"/><rect x="420" y="146" width="700" height="80" rx="40" fill="currentColor"/></svg>\n`);
+        break;
+      case 'macos/dmg-background.png':
+      case 'macos/dmg-background@2x.png':
+        // The disk image window, washed from the disc colour to the tile colour.
+        bytes = dmgBackgroundPng({ from: fg, to: bg, scale: a.path.includes('@2x') ? 2 : 1 });
         break;
       default:
         if (a.kind !== 'png') throw new Error(`placeholder-assets: no placeholder for ${a.path}`);

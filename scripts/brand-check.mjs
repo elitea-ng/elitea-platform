@@ -63,7 +63,8 @@ export function checkAsset(spec, buf) {
   if (spec.kind === 'png') {
     const info = pngInfo(buf);
     if (!info) return [`${where}: not a PNG`];
-    if (info.width !== spec.size || info.height !== spec.size) out.push(`${where}: is ${info.width}x${info.height}, must be ${spec.size}x${spec.size} (${spec.use})`);
+    const [w, h] = [spec.width ?? spec.size, spec.height ?? spec.size];
+    if (info.width !== w || info.height !== h) out.push(`${where}: is ${info.width}x${info.height}, must be ${w}x${h} (${spec.use})`);
     if (spec.alpha === true && !info.alpha) out.push(`${where}: needs an alpha channel (${spec.use})`);
     if (spec.alpha === false && info.alpha) out.push(`${where}: must be opaque, with no alpha channel (${spec.use})`);
   } else if (spec.kind === 'ico' || spec.kind === 'icns') {
@@ -138,6 +139,11 @@ export function checkBrand(dir, { reference = null } = {}) {
     errors.push(...checkAsset(spec, buf));
     hashes.set(spec.path, sha256(buf));
   }
+  // The disk image background comes as a pair or not at all: one alone would be
+  // dropped for a background drawn from the hue.
+  const dmgPair = ['macos/dmg-background.png', 'macos/dmg-background@2x.png'];
+  const dmgHave = dmgPair.filter((p) => existsSync(join(brand.assetsDir, p)));
+  if (dmgHave.length === 1) errors.push(`assets/${dmgPair.find((p) => !dmgHave.includes(p))}: missing; the disk image background needs both ${dmgPair.join(' and ')}, or neither`);
   const iconDoc = join(brand.assetsDir, 'ios/app.icon');
   if (existsSync(join(iconDoc, 'icon.json'))) {
     let doc = {};

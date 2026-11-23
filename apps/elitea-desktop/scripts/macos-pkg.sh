@@ -17,6 +17,8 @@
 #
 # The app must be signed and stapled already (tauri build does it) when signing.
 set -euo pipefail
+# shellcheck source=macos-keychain.sh
+. "$(dirname "${BASH_SOURCE[0]}")/macos-keychain.sh"
 
 app="${1:?usage: macos-pkg.sh <App.app> <identifier> <version> <out-dir>}"
 identifier="${2:?identifier}"
@@ -27,9 +29,8 @@ out="${4:?out-dir}"
 name="$(basename "$app" .app)"
 mkdir -p "$out"
 work="$(mktemp -d)"
-keychain=""
 cleanup() {
-  if [ -n "$keychain" ]; then security delete-keychain "$keychain" 2>/dev/null || true; fi
+  macos_keychain_delete
   rm -rf "$work"
 }
 trap cleanup EXIT
@@ -74,10 +75,7 @@ build_product() {
 }
 
 pkg="$out/${name}-${version}-arm64.pkg"
-# A secret pasted with a trailing newline or space names no identity: trim it.
-INSTALLER_IDENTITY="${INSTALLER_IDENTITY:-}"
-INSTALLER_IDENTITY="${INSTALLER_IDENTITY#"${INSTALLER_IDENTITY%%[![:space:]]*}"}"
-INSTALLER_IDENTITY="${INSTALLER_IDENTITY%"${INSTALLER_IDENTITY##*[![:space:]]}"}"
+INSTALLER_IDENTITY="$(trim_identity "${INSTALLER_IDENTITY:-}")"
 if [ -z "$INSTALLER_IDENTITY" ]; then
   build_product
   echo "unsigned package: $pkg"
@@ -88,40 +86,9 @@ fi
 cert="${INSTALLER_CERTIFICATE:-${APPLE_CERTIFICATE:-}}"
 [ -n "$cert" ] || { echo "::error::INSTALLER_IDENTITY is set but no certificate (APPLE_CERTIFICATE) to sign with" >&2; exit 1; }
 : "${APPLE_CERTIFICATE_PASSWORD:?the certificate password}"
-keychain="$work/installer.keychain-db"
-kc_password="$(uuidgen)"
-security create-keychain -p "$kc_password" "$keychain"
-security set-keychain-settings -lut 3600 "$keychain"
-security unlock-keychain -p "$kc_password" "$keychain"
-printf '%s' "$cert" | base64 --decode > "$work/cert.p12"
-security import "$work/cert.p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/productbuild >/dev/null
-rm -f "$work/cert.p12"
-security set-key-partition-list -S apple-tool:,apple: -s -k "$kc_password" "$keychain" >/dev/null
-# productbuild looks the identity up in the search list.
-existing=()
-while IFS= read -r line; do
-  line="${line#"${line%%[![:space:]]*}"}"; line="${line#\"}"; line="${line%\"}"
-  [ -n "$line" ] && existing+=("$line")
-done < <(security list-keychains -d user)
-security list-keychains -d user -s "$keychain" "${existing[@]}"
-security find-identity "$keychain" > "$work/identities.txt"
-security find-identity -v "$keychain" > "$work/valid.txt"
-if ! grep -qF "$INSTALLER_IDENTITY" "$work/valid.txt"; then
-  # Why, without printing a name: absent from the .p12, or present but not valid
-  # (the reason security gives, e.g. CSSMERR_TP_NOT_TRUSTED for a missing
-  # Developer ID intermediate, or an expired certificate).
-  installers="$(grep -c '"Developer ID Installer: ' "$work/valid.txt" || true)"
-  apps="$(grep -c '"Developer ID Application: ' "$work/valid.txt" || true)"
-  reason="$(grep -F "$INSTALLER_IDENTITY" "$work/identities.txt" | head -n 1 | sed -nE 's/.*" \((.*)\)$/\1/p' || true)"
-  if grep -qF "$INSTALLER_IDENTITY" "$work/identities.txt"; then
-    echo "::error::the certificate holds the identity APPLE_INSTALLER_SIGNING_IDENTITY names, but macOS does not accept it as valid (${reason:-no reason given})" >&2
-  else
-    echo "::error::the certificate holds no identity named by APPLE_INSTALLER_SIGNING_IDENTITY (a Developer ID Installer identity is needed). Valid identities in it: ${installers} Developer ID Installer, ${apps} Developer ID Application. Export both identities into the APPLE_CERTIFICATE .p12, and set the secret to the full name \`security find-identity -v\` prints." >&2
-  fi
-  exit 1
-fi
+macos_keychain_import "$work" "$cert" "$APPLE_CERTIFICATE_PASSWORD" "$INSTALLER_IDENTITY" APPLE_INSTALLER_SIGNING_IDENTITY "Developer ID Installer" /usr/bin/productbuild
 
-build_product --sign "$INSTALLER_IDENTITY" --keychain "$keychain"
+build_product --sign "$INSTALLER_IDENTITY" --keychain "$MACOS_KEYCHAIN"
 
 : "${APPLE_API_KEY:?APPLE_API_KEY}" "${APPLE_API_ISSUER:?APPLE_API_ISSUER}" "${APPLE_API_KEY_PATH:?APPLE_API_KEY_PATH}"
 xcrun notarytool submit "$pkg" --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" --wait --timeout 30m

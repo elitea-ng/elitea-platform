@@ -34,10 +34,12 @@ export const PERMANENT_FIELDS = Object.freeze({
 
 /**
  * Every asset a brand folder holds, relative to `assets/`. `kind` is the file
- * type; `size` is the PNG edge in pixels (all are square); `sizes` lists the
+ * type; `size` is the edge of a square PNG in pixels, `width` and `height`
+ * those of one that is not square; `sizes` lists the
  * edges an .ico or .icns must contain; `alpha` is true when the image must
  * have an alpha channel, false when it must be opaque, and absent when
- * either is fine. Optional assets are checked only when present.
+ * either is fine. Optional assets are checked only when present;
+ * `placeholder` ones are written by placeholder-assets.mjs all the same.
  */
 export const ASSETS = Object.freeze([
   { path: 'ios/icon-1024.png', kind: 'png', size: 1024, alpha: false, use: 'iOS app icon and App Store listing (Apple rejects alpha)' },
@@ -47,6 +49,10 @@ export const ASSETS = Object.freeze([
   { path: 'android/adaptive-background.png', kind: 'png', size: 1024, alpha: false, use: 'Android adaptive icon background' },
   { path: 'android/adaptive-monochrome.png', kind: 'png', size: 1024, alpha: true, use: 'Android 13+ themed (monochrome) icon' },
   { path: 'macos/icon.icns', kind: 'icns', sizes: [16, 32, 64, 128, 256, 512, 1024], use: 'macOS app icon' },
+  // The disk image window's background (scripts/brand/dmg.mjs DMG_LAYOUT): optional; a
+  // brand without one gets a background drawn from its hue when the .dmg is built.
+  { path: 'macos/dmg-background.png', kind: 'png', width: 660, height: 400, alpha: false, optional: true, placeholder: true, use: 'macOS disk image background (app left, Applications right)' },
+  { path: 'macos/dmg-background@2x.png', kind: 'png', width: 1320, height: 800, alpha: false, optional: true, placeholder: true, use: 'macOS disk image background, Retina' },
   { path: 'windows/icon.ico', kind: 'ico', sizes: [16, 24, 32, 48, 64, 128, 256], use: 'Windows app and installer icon' },
   { path: 'desktop/32x32.png', kind: 'png', size: 32, use: 'desktop bundle icon' },
   { path: 'desktop/128x128.png', kind: 'png', size: 128, use: 'desktop bundle icon' },
@@ -215,6 +221,9 @@ export function validateManifest(m) {
 
   if (!isText(m.productName, 40)) fail('productName', 'must be 1 to 40 characters, no surrounding spaces');
   if (!isText(m.shortName, 20)) fail('shortName', 'must be 1 to 20 characters, no surrounding spaces');
+  // It names the app bundle (`<shortName>.app`) and the disk image's volume, which
+  // Finder's AppleScript addresses by name: no path separator, colon, quote or backslash.
+  else if (/[/:"\\]/.test(m.shortName)) fail('shortName', 'must not hold "/", ":", "\\"" or "\\\\": it names the app bundle and the disk image volume');
   if (!isText(m.publisher, 120)) fail('publisher', 'must be the publisher\'s legal name, 1 to 120 characters');
 
   // mobile

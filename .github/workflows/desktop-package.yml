@@ -3,8 +3,18 @@ name: Desktop — package for device management
 # The desktop app's packages (ADR-0052 decisions 4, 6 and 8; W2b): an Apple silicon
 # (arm64) macOS app signed with the brand owner's Developer ID, notarised and stapled,
 # in a signed `.pkg` that installs silently and refuses an Intel Mac (Intel is not
-# supported, owner decision 2026-11-20); and an x64 MSI (Intune, SCCM, msiexec) and
+# supported, owner decision 2026-11-20) and in a styled, signed `.dmg` (the direct
+# download, owner decision 2026-11-22); and an x64 MSI (Intune, SCCM, msiexec) and
 # MSIX (the Store, Intune) for Windows.
+#
+# THE DMG. Opening it shows one fixed window: the brand's background
+# (brand/<id>/assets/macos/dmg-background{,@2x}.png, or one drawn from the brand's
+# hue), the app on the left, an Applications alias on the right and an arrow between;
+# the volume, and so the window's title, is `<Brand> <version>`, with the brand's
+# icon. scripts/macos-dmg.sh lays it out through Finder, retries, and reads the
+# .DS_Store back (dmg-verify.mjs); the action mounts the finished image and checks it
+# again. Signed: codesigned with the Developer ID Application identity, notarised,
+# stapled, and accepted by `spctl -a -t open --context context:primary-signature`.
 #
 # ATTACHED TO EVERY RELEASE (owner decision 2026-11-22, amending ADR-0052 decision
 # 10, which kept them off the release). Called from publish.yml with
@@ -12,8 +22,8 @@ name: Desktop — package for device management
 # (`<Brand>-<version>-<os>-<arch>[-unsigned].<ext>`, desktop-package.mjs assetName)
 # and uploads them as a one-day workflow artifact; publish.yml `desktop-assets`
 # attaches them, with SHA256SUMS, to the GitHub release (stable and nightly).
-#   macOS     signed and notarised, ALWAYS (`require_signed_macos`): the .pkg and the
-#             notarised .app zipped (`ditto -c -k --keepParent`).
+#   macOS     signed and notarised, ALWAYS (`require_signed_macos`): the .dmg (the
+#             download people drag to Applications) and the .pkg (device management).
 #   Windows   UNSIGNED until a Windows signer's secrets exist (`require_signed_windows`
 #             is false), named `-unsigned`. Once a signer's full set is set, the same
 #             run signs. The unsigned MSIX installs only on a recent Windows 11
@@ -35,8 +45,9 @@ name: Desktop — package for device management
 #                       target (key `desktop-host`, written by its nightly on main).
 #                       It builds brand/sample and is also the desktop lane of
 #                       the ADR-0052 W4 output scan (scripts/ci/brand-output-scan.mjs):
-#                       the packaged host binary and its overlay carry no ELITEA
-#                       literal. The Windows job builds the ELITEA brand in full
+#                       the packaged host binary, its overlay and the disk image's
+#                       settings (volume name) carry no ELITEA literal; the unsigned
+#                       styled .dmg is built and its layout checked. The Windows job builds the ELITEA brand in full
 #                       (release profile, unsigned): `tauri build`, the sidecar,
 #                       the MSI and makeappx, and stages the release asset names.
 #                       Main and releases build the ELITEA brand.
@@ -45,7 +56,7 @@ name: Desktop — package for device management
 #                       verified, Windows signed when a signer exists; the
 #                       packages go to the release (`upload_release_assets`).
 #   workflow_dispatch   by hand: a package to hand to device management (macOS
-#                       signed; Windows as the release builds it).
+#                       signed, the .pkg and the .dmg; Windows as the release builds it).
 on:
   workflow_call:
     inputs:
@@ -113,13 +124,14 @@ env:
 
 jobs:
   macos:
-    name: macOS Apple Silicon (.app, .pkg)
+    name: macOS Apple Silicon (.dmg, .pkg)
     # Apple silicon: the package is built for the runner's own architecture.
     runs-on: macos-latest
     # A pull request's debug dry run restores the host's cached target; the
     # signed release build (fat LTO, one codegen unit) starts cold and then
-    # waits for notarisation (up to 30 minutes per notarytool submit).
-    timeout-minutes: ${{ github.event_name == 'pull_request' && 45 || 90 }}
+    # waits for three notarisations in turn: the app, the .pkg and the .dmg (up
+    # to 30 minutes per notarytool submit).
+    timeout-minutes: ${{ github.event_name == 'pull_request' && 45 || 150 }}
     # The same value as ci-desktop.yml's macOS host job: it is part of the
     # rust-cache key, so the pull-request dry run restores that job's entry.
     env:
@@ -190,28 +202,35 @@ jobs:
           apple-api-private-key: ${{ secrets.APPLE_API_PRIVATE_KEY }}
 
       # ADR-0052 W4, desktop lane: the host binary the dry run packaged (debug,
-      # brand/sample) and its overlay show no ELITEA word or identifier. Not the
-      # sidecar: only tauri.sidecar.conf.json (the release) names it.
-      - name: Sample-brand output scan (host binary + overlay)
+      # brand/sample), its overlay and the disk image's settings (the volume name
+      # and window title) show no ELITEA word or identifier. Not the sidecar: only
+      # tauri.sidecar.conf.json (the release) names it.
+      - name: Sample-brand output scan (host binary, overlay, disk image settings)
         if: github.event_name == 'pull_request'
+        env:
+          DMG_SETTINGS: ${{ steps.package.outputs.dmg-settings }}
         run: >
           node scripts/ci/brand-output-scan.mjs --lane desktop
           "${DESKTOP_BUNDLE}/${DESKTOP_APP}/Contents/MacOS/elitea-desktop"
           apps/elitea-desktop/src-tauri/tauri.brand.json
+          "$DMG_SETTINGS"
 
-      - name: Keep the package (by hand only)
+      - name: Keep the packages (by hand only)
         if: github.event_name == 'workflow_dispatch' && inputs.keep_artifacts
         uses: actions/upload-artifact@v7
         with:
           name: desktop-macos-pkg
-          path: ${{ steps.package.outputs.package-dir }}/*.pkg
+          path: |
+            ${{ steps.package.outputs.package-dir }}/*.pkg
+            ${{ steps.package.outputs.package-dir }}/*.dmg
           retention-days: 7
           if-no-files-found: error
+          # A .pkg and a .dmg are compressed already.
+          compression-level: 0
 
       # The release names (desktop-package.mjs assetName), staged on EVERY run so a
-      # pull request's dry run proves them too (`-unsigned` there). The .pkg, and the
-      # notarised .app zipped with `ditto -c -k --keepParent`: the stapled ticket is
-      # inside the bundle, so the unzipped app passes Gatekeeper offline.
+      # pull request's dry run proves them too (`-unsigned` there): the .dmg (stapled,
+      # so it opens offline) and the .pkg.
       - name: Stage the release assets
         id: assets
         env:
@@ -226,10 +245,11 @@ jobs:
           version="${VERSION:-$DESKTOP_VERSION}"
           out="$RUNNER_TEMP/release-assets"
           rm -rf "$out" && mkdir -p "$out"
-          pkgs=("$PACKAGE_DIR"/*.pkg)
-          if [ "${#pkgs[@]}" -ne 1 ]; then echo "::error::want one .pkg in $PACKAGE_DIR, found ${#pkgs[@]}"; exit 1; fi
-          cp "${pkgs[0]}" "$out/$(node "$script" asset-name macos pkg "$brand" "$version" "$SIGNED")"
-          ditto -c -k --keepParent "${DESKTOP_BUNDLE}/${DESKTOP_APP}" "$out/$(node "$script" asset-name macos app.zip "$brand" "$version" "$SIGNED")"
+          for ext in dmg pkg; do
+            files=("$PACKAGE_DIR"/*."$ext")
+            if [ "${#files[@]}" -ne 1 ]; then echo "::error::want one .$ext in $PACKAGE_DIR, found ${#files[@]}"; exit 1; fi
+            cp "${files[0]}" "$out/$(node "$script" asset-name macos "$ext" "$brand" "$version" "$SIGNED")"
+          done
           ls -l "$out"
           echo "dir=$out" >> "$GITHUB_OUTPUT"
 
@@ -242,7 +262,7 @@ jobs:
           path: ${{ steps.assets.outputs.dir }}/*
           retention-days: 1
           if-no-files-found: error
-          # A .pkg and a .zip are compressed already.
+          # A .dmg and a .pkg are compressed already.
           compression-level: 0
 
   # ON IN EVERY RELEASE (owner decision 2026-11-22, #1699). No repository variable gates
