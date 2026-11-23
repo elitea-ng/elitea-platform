@@ -95,9 +95,23 @@ func (r *HTTPActionRepository) Lookup(ctx context.Context, admitted app.Admissio
 	var receipt app.Receipt
 	var found bool
 	err := r.store.WithinTx(ctx, pgx.TxOptions{}, func(tx sqlExecutor) error {
-		row, exists, err := readHTTPEffect(ctx, tx, admitted, inv, true)
+		// Read unlocked first so empty and immutable terminal lookups avoid
+		// locking claims/jobs. Any dispatching row follows the canonical lock
+		// order (execution_claims + execution_jobs FOR SHARE before
+		// execution_http_effects FOR UPDATE), fencing dispatching -> uncertain
+		// on a live claim.
+		row, exists, err := readHTTPEffect(ctx, tx, admitted, inv, false)
 		if err != nil || !exists {
 			return err
+		}
+		if row.state == "dispatching" {
+			if err := lockHTTPActionClaim(ctx, tx, admitted); err != nil {
+				return err
+			}
+			row, exists, err = readHTTPEffect(ctx, tx, admitted, inv, true)
+			if err != nil || !exists {
+				return err
+			}
 		}
 		receipt, err = settleExisting(ctx, tx, admitted, inv, row)
 		found = err == nil

@@ -28,10 +28,17 @@ type Node struct {
 
 var operationPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$`)
 
+// maxRawNodeBytes bounds the uncanonicalized node JSON accepted by ParseNode
+// before JSON tokenization; canonical TemplateWire remains bounded at MaxTemplateBytes.
+const maxRawNodeBytes = 2 * MaxTemplateBytes
+
 // ParseNode decodes one HTTP node from strict JSON (the YAML node converted
 // token by token). Unknown fields, a URL, a method or a credential are refused
 // by shape.
 func ParseNode(raw []byte) (Node, error) {
+	if len(raw) == 0 || len(raw) > maxRawNodeBytes {
+		return Node{}, ErrInvalid
+	}
 	fields, err := strictObject(raw, "id", "type", "revision", "operation", "request", "response", "timeout_ms", "output", "transition")
 	if err != nil {
 		return Node{}, err
@@ -78,12 +85,8 @@ func ParseNode(raw []byte) (Node, error) {
 		}
 	}
 	if raw, found := fields["timeout_ms"]; found {
-		var timeout json.Number
-		if decodeStrict(raw, &timeout) != nil || !integerToken.MatchString(timeout.String()) {
-			return Node{}, ErrInvalid
-		}
-		if value, err := timeout.Int64(); err != nil || value < 1 || value > 30000 {
-			return Node{}, ErrInvalid
+		if err := validTimeoutMS(raw); err != nil {
+			return Node{}, err
 		}
 	}
 	node.TemplateWire = canonicalValue(template)
@@ -108,7 +111,7 @@ func DecodeTemplate(wire []byte) (NodeTemplate, error) {
 		return NodeTemplate{}, err
 	}
 	var template NodeTemplate
-	if decodeStrict(fields["operation"], &template.Operation) != nil || !operationPattern.MatchString(template.Operation) {
+	if decodeStrict(fields["operation"], &template.Operation) != nil || len(template.Operation) > maxRuleNameBytes || !operationPattern.MatchString(template.Operation) {
 		return NodeTemplate{}, ErrInvalid
 	}
 	if template.Request, err = parseRequestTemplate(fields["request"]); err != nil {
@@ -119,9 +122,24 @@ func DecodeTemplate(wire []byte) (NodeTemplate, error) {
 	}
 	template.Response = bytes.Clone(fields["response"])
 	if raw, found := fields["timeout_ms"]; found {
+		if err := validTimeoutMS(raw); err != nil {
+			return NodeTemplate{}, err
+		}
 		template.TimeoutMS = bytes.Clone(raw)
 	}
 	return template, nil
+}
+
+func validTimeoutMS(raw json.RawMessage) error {
+	var timeout json.Number
+	if decodeStrict(raw, &timeout) != nil || !integerToken.MatchString(timeout.String()) {
+		return ErrInvalid
+	}
+	value, err := timeout.Int64()
+	if err != nil || value < 1 || value > 30000 {
+		return ErrInvalid
+	}
+	return nil
 }
 
 func parseRequestTemplate(raw json.RawMessage) (RequestTemplate, error) {
@@ -319,7 +337,7 @@ func validResponseTemplate(raw json.RawMessage) error {
 	if _, found := fields["mode"]; !found || decoder.Decode(&contract) != nil {
 		return ErrInvalid
 	}
-	if value, found := fields["max_bytes"]; found && (string(value) == "0" || contract.MaxBytes > MaxResponse) {
+	if _, found := fields["max_bytes"]; found && (contract.MaxBytes == 0 || contract.MaxBytes > MaxResponse) {
 		return ErrInvalid
 	}
 	if value, found := fields["accepted_statuses"]; found && (string(value) == "null" || len(contract.AcceptedStatuses) == 0) {

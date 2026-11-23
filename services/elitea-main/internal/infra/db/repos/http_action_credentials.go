@@ -343,7 +343,7 @@ func (c *HTTPActionCredentials) fetchClientCredentialsToken(ctx context.Context,
 		return "", app.ErrUnavailable
 	}
 	lifetime := httpTokenMaxLifetime
-	if seconds, err := strconv.ParseInt(strings.Trim(string(token.ExpiresIn), `"`), 10, 64); err == nil && seconds > 0 && time.Duration(seconds)*time.Second < lifetime {
+	if seconds, err := strconv.ParseInt(strings.Trim(string(token.ExpiresIn), `"`), 10, 64); err == nil && seconds > 0 && seconds < int64(lifetime/time.Second) {
 		lifetime = time.Duration(seconds) * time.Second
 	}
 	lifetime -= httpTokenEarlyExpiry

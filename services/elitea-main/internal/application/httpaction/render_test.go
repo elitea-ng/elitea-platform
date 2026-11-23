@@ -297,7 +297,10 @@ func TestParseNodeRefusesURLMethodCredentialAndUnknownFields(t *testing.T) {
 		"from and value":  `{"id":"n","type":"http","revision":2,"operation":"a.b","request":{"path":{"a":{"from":"x","value":"y"}}},"response":{"mode":"json"},"output":["o"]}`,
 		"float literal":   `{"id":"n","type":"http","revision":2,"operation":"a.b","request":{"path":{"a":{"value":1.5}}},"response":{"mode":"json"},"output":["o"]}`,
 		"3xx accepted":    strings.Replace(base, `{"mode":"json"}`, `{"mode":"json","accepted_statuses":[{"first":200,"last":302}]}`, 1) + `}`,
+		"max_bytes 0":     strings.Replace(base, `{"mode":"json"}`, `{"mode":"json","max_bytes":0}`, 1) + `}`,
+		"max_bytes null":  strings.Replace(base, `{"mode":"json"}`, `{"mode":"json","max_bytes":null}`, 1) + `}`,
 		"max_bytes 2MiB+": strings.Replace(base, `{"mode":"json"}`, `{"mode":"json","max_bytes":2097153}`, 1) + `}`,
+		"oversized raw":   strings.Repeat(" ", maxRawNodeBytes) + base + `}`,
 	} {
 		if _, err := ParseNode([]byte(raw)); err == nil {
 			t.Errorf("%s accepted", name)
@@ -305,6 +308,18 @@ func TestParseNodeRefusesURLMethodCredentialAndUnknownFields(t *testing.T) {
 	}
 	if _, err := ParseNode([]byte(base + `,"timeout_ms":30000}`)); err != nil {
 		t.Fatalf("timeout 30000 refused: %v", err)
+	}
+	// DecodeTemplate enforces operation length, max_bytes null/0, and timeout_ms bounds.
+	for name, wire := range map[string]string{
+		"operation > 128":  `{"operation":"` + strings.Repeat("a", maxRuleNameBytes+1) + `","request":{},"response":{"mode":"json"}}`,
+		"timeout_ms null":  `{"operation":"a.b","request":{},"response":{"mode":"json"},"timeout_ms":null}`,
+		"timeout_ms 0":     `{"operation":"a.b","request":{},"response":{"mode":"json"},"timeout_ms":0}`,
+		"timeout_ms 30001": `{"operation":"a.b","request":{},"response":{"mode":"json"},"timeout_ms":30001}`,
+		"max_bytes null":   `{"operation":"a.b","request":{},"response":{"mode":"json","max_bytes":null}}`,
+	} {
+		if _, err := DecodeTemplate([]byte(wire)); err == nil {
+			t.Errorf("DecodeTemplate accepted %s", name)
+		}
 	}
 }
 

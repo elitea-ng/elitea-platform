@@ -223,6 +223,35 @@ func TestHTTPEffectCrashWindowsPostgres(t *testing.T) {
 	}
 }
 
+// SEC-5D1-01: a released/superseded claim calling Lookup against a live
+// successor claim's dispatching row is refused with ErrUnauthorized and leaves
+// the row dispatching so the live claim can still Commit.
+func TestHTTPEffectLookupFencesReleasedClaimAgainstLiveDispatchPostgres(t *testing.T) {
+	w := newHTTPWorld(t, "POST")
+	released := w.admission(httpWorldClaim, 1)
+	w.exec(`UPDATE elitea_runtime.execution_claims SET released_at=clock_timestamp(), release_reason='takeover' WHERE claim_id=$1`, httpWorldClaim)
+	w.access(httpWorldExecution, 1, httpWorldClaim2, 2, 0x12)
+	live := w.admission(httpWorldClaim2, 2)
+	inv := w.invocation(0, "i")
+	begun, dispatch, err := w.repo.Begin(t.Context(), live, inv, w.intent(live, inv))
+	if err != nil || !dispatch {
+		t.Fatalf("live Begin failed: dispatch=%v err=%v", dispatch, err)
+	}
+	if _, found, err := w.repo.Lookup(t.Context(), released, inv); found || !errors.Is(err, app.ErrUnauthorized) {
+		t.Fatalf("released claim Lookup against live dispatching row: found=%v err=%v; want ErrUnauthorized", found, err)
+	}
+	var state, owner string
+	if err := w.pool.QueryRow(t.Context(), `SELECT state, dispatch_claim_id FROM elitea_runtime.execution_http_effects WHERE effect_id=$1`, begun.EffectID).Scan(&state, &owner); err != nil {
+		t.Fatal(err)
+	}
+	if state != "dispatching" || owner != httpWorldClaim2 {
+		t.Fatalf("row mutated by released claim: state=%q owner=%q", state, owner)
+	}
+	if err := w.repo.Commit(t.Context(), live, completedReceipt(begun)); err != nil {
+		t.Fatalf("live claim Commit failed after refused stale Lookup: %v", err)
+	}
+}
+
 // A dispatching row past its dispatch deadline is uncertain even for the
 // same claim (Main died and the Worker kept its lease).
 func TestHTTPEffectDispatchDeadlinePostgres(t *testing.T) {

@@ -38,7 +38,7 @@ func TestProjectRolesResolveHTTPActionRulePermissions(t *testing.T) {
 	for i, role := range []string{"admin", "editor", "viewer"} {
 		userID := 17001 + i
 		if _, err := pool.Exec(context.Background(), `INSERT INTO public.auth_core__user (id, email, name) VALUES ($1, $2, $2)
-ON CONFLICT (id) DO NOTHING`, userID, role+"-0170@test.local"); err != nil {
+ON CONFLICT (id) DO NOTHING`, userID, role+"-0261@test.local"); err != nil {
 			t.Fatal(err)
 		}
 		seedRoleMembership(t, pool, 17001+i, role, userID)
@@ -87,7 +87,7 @@ VALUES (1, $1, 'models.chat.messages.create'), (1, $2, 'models.chat.messages.cre
 	grants := grantBlock(t, string(body))
 	for range 2 { // idempotent
 		if _, err := pool.Exec(ctx, grants); err != nil {
-			t.Fatalf("re-run 0170's grant block: %v", err)
+			t.Fatalf("re-run 0261's grant block: %v", err)
 		}
 	}
 
@@ -118,17 +118,17 @@ WHERE project_id = 1 AND role_id = $1 AND permission = $2`, roleID, permission).
 		}
 	}
 	if resolution := resolveDefaultModeFor(t, pool, "1", "1"); !slices.Contains(resolution.Permissions, httpactions.PermissionList) {
-		t.Fatalf("a viewer with a saved matrix does not resolve %s after 0170 (resolved %v)", httpactions.PermissionList, resolution.Permissions)
+		t.Fatalf("a viewer with a saved matrix does not resolve %s after 0261 (resolved %v)", httpactions.PermissionList, resolution.Permissions)
 	}
 }
 
-// grantBlock is 0170's DO block. The rest of the file is DDL that ran once
+// grantBlock is 0261's DO block. The rest of the file is DDL that ran once
 // already; the grant block is the part written to be re-run.
 func grantBlock(t *testing.T, migration string) string {
 	t.Helper()
 	start := strings.Index(migration, "DO $$")
 	if start < 0 {
-		t.Fatal("0170 has no DO block")
+		t.Fatal("0261 has no DO block")
 	}
 	return migration[start:]
 }
