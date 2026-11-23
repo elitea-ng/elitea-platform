@@ -382,21 +382,21 @@ func ActionTable() Actions { return actions }
 // value and the classifier outcome.
 //
 // ActionFor does not know the request's mode. A gate that has it calls
-// ActionInMode, which answers no entry outside the administration mode.
+// ActionForRequest, which answers no entry outside the administration mode.
 func ActionFor(method, pattern, action string) (Action, bool) {
 	return actions.Lookup(method, pattern, action)
 }
 
-// AdministrationMode is the mode an action entry describes
-// (auth.PermissionModeAdministration; this package imports nothing from it).
-const AdministrationMode = "administration"
-
-// ActionInMode is ActionFor for a request in mode. On a pattern with a
-// `{mode}` segment it answers no entry unless mode is the administration
-// mode: the same route in the default mode (the user-facing project delete)
-// is not on the administration surface.
-func ActionInMode(mode, method, pattern, action string) (Action, bool) {
-	if mode != AdministrationMode && strings.Contains(pattern, "{mode}") {
+// ActionForRequest is ActionFor for a request whose `{mode}` the gate has
+// read: administrationMode says whether it is the administration mode. On a
+// pattern with a `{mode}` segment it answers no entry outside that mode: the
+// same route in the default mode (the user-facing project delete) is not on
+// the administration surface. The caller states the mode, so the lookup cannot
+// match the default mode by accident. (A bool, not the mode's name: this
+// package never names the mode, which keeps it out of the internal listener
+// scan of internal/transport.)
+func ActionForRequest(administrationMode bool, method, pattern, action string) (Action, bool) {
+	if !administrationMode && strings.Contains(pattern, "{mode}") {
 		return Action{}, false
 	}
 	return ActionFor(method, pattern, action)

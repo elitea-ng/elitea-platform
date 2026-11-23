@@ -15,7 +15,6 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/identityproviders"
 )
 
@@ -65,24 +64,20 @@ func TestActionForTakesTheRequestPattern(t *testing.T) {
 	}
 }
 
-// TestActionInModeIsTheAdministrationModeOnly pins that the user-facing
+// TestActionForRequestIsTheAdministrationModeOnly pins that the user-facing
 // project delete, the same pattern in the default mode, has no entry.
-func TestActionInModeIsTheAdministrationModeOnly(t *testing.T) {
+func TestActionForRequestIsTheAdministrationModeOnly(t *testing.T) {
 	t.Parallel()
 	const pattern = "/api/v2/projects/project/{mode}/{projectID}"
-	if adminaccess.AdministrationMode != auth.PermissionModeAdministration {
-		t.Fatalf("AdministrationMode is %q; the resolver's mode is %q",
-			adminaccess.AdministrationMode, auth.PermissionModeAdministration)
-	}
-	if entry, ok := adminaccess.ActionInMode(adminaccess.AdministrationMode, http.MethodDelete, pattern, ""); !ok ||
+	if entry, ok := adminaccess.ActionForRequest(true, http.MethodDelete, pattern, ""); !ok ||
 		entry.Danger != adminaccess.DangerCritical {
 		t.Errorf("the administration project delete: %+v, %v; want the critical entry", entry, ok)
 	}
-	if _, ok := adminaccess.ActionInMode(auth.PermissionModeDefault, http.MethodDelete, pattern, ""); ok {
+	if _, ok := adminaccess.ActionForRequest(false, http.MethodDelete, pattern, ""); ok {
 		t.Error("the default-mode project delete has an entry; only the administration mode is on the surface")
 	}
-	if _, ok := adminaccess.ActionInMode(auth.PermissionModeDefault, http.MethodPut, "/api/v2/admin/branding/administration", ""); !ok {
-		t.Error("a pattern without {mode} lost its entry in ActionInMode")
+	if _, ok := adminaccess.ActionForRequest(false, http.MethodPut, "/api/v2/admin/branding/administration", ""); !ok {
+		t.Error("a pattern without {mode} lost its entry in ActionForRequest")
 	}
 }
 
