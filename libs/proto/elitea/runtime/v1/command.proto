@@ -75,9 +75,10 @@ message WorkerCommandV1 {
   ExecutionSecurityContextReferenceV1 security_context_ref = 65;
 
   // The public egress policy for this command's outbound HTTP (ADR-0044
-  // decision 2, #1490). Absent means open: public hosts are unrestricted.
-  // Main omits it while the platform's worker_egress mode is open, so
-  // commands are unchanged byte for byte.
+  // decision 2, #1490). Absent means open: public hosts are unrestricted
+  // and no private destination is permitted. Main omits it while the
+  // platform's worker_egress mode is open and its private permit is empty
+  // (#2950), so such commands are unchanged byte for byte.
   WorkerEgressPolicyV1 egress_policy = 66;
 
   // The delegation policy of an agent run (ADR-0044 decision 3, #1501).
@@ -132,15 +133,14 @@ message WorkerCommandV1 {
 }
 
 // How a worker treats public hosts (ADR-0044 decision 2). The policy narrows
-// which HOSTS a run may reach; it never widens the SSRF rule. Where the SSRF
-// guard applies (web_fetch and every redirect hop), private, link-local,
-// metadata and reserved addresses stay refused in every mode. Toolkit
-// clients (Jira, Confluence, GitHub, ...) never had the SSRF guard, because
-// they reach operator-approved on-prem hosts; for them this policy is the
-// only egress check. Endpoints the operator configured for the worker itself
-// (web-search provider origins admitted by ELITEA_WEB_EGRESS_ALLOWLIST) are
-// not judged by this policy, since Main cannot list them, but they are still
-// reported as reached.
+// which HOSTS a run may reach; it never widens the SSRF rule. The SSRF guard
+// applies to every worker client (web_fetch, the toolkit families, remote
+// MCP sessions, #2950): private addresses are refused unless the policy's
+// `private_allow` names them, and link-local, metadata and reserved
+// addresses stay refused in every mode. Endpoints the operator configured
+// for the worker itself (web-search provider origins admitted by
+// ELITEA_WEB_EGRESS_ALLOWLIST) are not judged by this policy, since Main
+// cannot list them, but they are still reported as reached.
 enum WorkerEgressModeV1 {
   WORKER_EGRESS_MODE_V1_UNSPECIFIED = 0;
   // Any public host. The same as an absent policy.
@@ -160,6 +160,17 @@ message WorkerEgressPolicyV1 {
   // *.domain:port or a CIDR block. At most 1024 entries; a malformed entry
   // fails the command closed.
   repeated string allow = 2;
+  // The operator's private permit (#2950): the private destinations (an
+  // on-premises Jira, GitLab or Confluence) the worker may reach although
+  // the SSRF rule refuses private addresses. Same grammar; a host name or
+  // *.domain admits the private addresses it resolves to, a CIDR block or IP
+  // literal the addresses inside it. Link-local and metadata addresses stay
+  // refused whatever it names. Only the platform's `worker_egress` section
+  // supplies it, never a toolkit setting. At most 256 entries; a malformed
+  // entry fails the command closed. Sent in every mode; Main omits the
+  // policy only while the mode is open and this list is empty.
+  // Field 11, because 3 to 10 were reserved before it existed.
+  repeated string private_allow = 11;
   reserved 3 to 10;
 }
 

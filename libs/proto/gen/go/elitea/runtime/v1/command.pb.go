@@ -98,15 +98,14 @@ func (WorkerCommandTypeV1) EnumDescriptor() ([]byte, []int) {
 }
 
 // How a worker treats public hosts (ADR-0044 decision 2). The policy narrows
-// which HOSTS a run may reach; it never widens the SSRF rule. Where the SSRF
-// guard applies (web_fetch and every redirect hop), private, link-local,
-// metadata and reserved addresses stay refused in every mode. Toolkit
-// clients (Jira, Confluence, GitHub, ...) never had the SSRF guard, because
-// they reach operator-approved on-prem hosts; for them this policy is the
-// only egress check. Endpoints the operator configured for the worker itself
-// (web-search provider origins admitted by ELITEA_WEB_EGRESS_ALLOWLIST) are
-// not judged by this policy, since Main cannot list them, but they are still
-// reported as reached.
+// which HOSTS a run may reach; it never widens the SSRF rule. The SSRF guard
+// applies to every worker client (web_fetch, the toolkit families, remote
+// MCP sessions, #2950): private addresses are refused unless the policy's
+// `private_allow` names them, and link-local, metadata and reserved
+// addresses stay refused in every mode. Endpoints the operator configured
+// for the worker itself (web-search provider origins admitted by
+// ELITEA_WEB_EGRESS_ALLOWLIST) are not judged by this policy, since Main
+// cannot list them, but they are still reported as reached.
 type WorkerEgressModeV1 int32
 
 const (
@@ -261,9 +260,10 @@ type WorkerCommandV1 struct {
 	// unchanged.
 	SecurityContextRef *ExecutionSecurityContextReferenceV1 `protobuf:"bytes,65,opt,name=security_context_ref,json=securityContextRef,proto3" json:"security_context_ref,omitempty"`
 	// The public egress policy for this command's outbound HTTP (ADR-0044
-	// decision 2, #1490). Absent means open: public hosts are unrestricted.
-	// Main omits it while the platform's worker_egress mode is open, so
-	// commands are unchanged byte for byte.
+	// decision 2, #1490). Absent means open: public hosts are unrestricted
+	// and no private destination is permitted. Main omits it while the
+	// platform's worker_egress mode is open and its private permit is empty
+	// (#2950), so such commands are unchanged byte for byte.
 	EgressPolicy *WorkerEgressPolicyV1 `protobuf:"bytes,66,opt,name=egress_policy,json=egressPolicy,proto3" json:"egress_policy,omitempty"`
 	// The delegation policy of an agent run (ADR-0044 decision 3, #1501).
 	// Absent means the defaults: a maximum delegation depth of 4, narrowing
@@ -668,7 +668,18 @@ type WorkerEgressPolicyV1 struct {
 	// The egresslib grammar (`libs/go/egresslib`): host, host:port, *.domain,
 	// *.domain:port or a CIDR block. At most 1024 entries; a malformed entry
 	// fails the command closed.
-	Allow         []string `protobuf:"bytes,2,rep,name=allow,proto3" json:"allow,omitempty"`
+	Allow []string `protobuf:"bytes,2,rep,name=allow,proto3" json:"allow,omitempty"`
+	// The operator's private permit (#2950): the private destinations (an
+	// on-premises Jira, GitLab or Confluence) the worker may reach although
+	// the SSRF rule refuses private addresses. Same grammar; a host name or
+	// *.domain admits the private addresses it resolves to, a CIDR block or IP
+	// literal the addresses inside it. Link-local and metadata addresses stay
+	// refused whatever it names. Only the platform's `worker_egress` section
+	// supplies it, never a toolkit setting. At most 256 entries; a malformed
+	// entry fails the command closed. Sent in every mode; Main omits the
+	// policy only while the mode is open and this list is empty.
+	// Field 11, because 3 to 10 were reserved before it existed.
+	PrivateAllow  []string `protobuf:"bytes,11,rep,name=private_allow,json=privateAllow,proto3" json:"private_allow,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -713,6 +724,13 @@ func (x *WorkerEgressPolicyV1) GetMode() WorkerEgressModeV1 {
 func (x *WorkerEgressPolicyV1) GetAllow() []string {
 	if x != nil {
 		return x.Allow
+	}
+	return nil
+}
+
+func (x *WorkerEgressPolicyV1) GetPrivateAllow() []string {
+	if x != nil {
+		return x.PrivateAllow
 	}
 	return nil
 }
@@ -1402,10 +1420,11 @@ const file_elitea_runtime_v1_command_proto_rawDesc = "" +
 	"\brun_caps\x18E \x01(\v2\".elitea.runtime.v1.WorkerRunCapsV1R\arunCaps\x12U\n" +
 	"\x10output_contracts\x18F \x01(\v2*.elitea.runtime.v1.WorkerOutputContractsV1R\x0foutputContracts\x12U\n" +
 	"\x10content_controls\x18G \x01(\v2*.elitea.runtime.v1.WorkerContentControlsV1R\x0fcontentControlsB\x14\n" +
-	"\x12capability_commandJ\x04\b\x0f\x10\x10J\x04\b\x1a\x10 J\x04\b%\x10@R\x11grant_template_id\"m\n" +
+	"\x12capability_commandJ\x04\b\x0f\x10\x10J\x04\b\x1a\x10 J\x04\b%\x10@R\x11grant_template_id\"\x92\x01\n" +
 	"\x14WorkerEgressPolicyV1\x129\n" +
 	"\x04mode\x18\x01 \x01(\x0e2%.elitea.runtime.v1.WorkerEgressModeV1R\x04mode\x12\x14\n" +
-	"\x05allow\x18\x02 \x03(\tR\x05allowJ\x04\b\x03\x10\v\"\xa5\x03\n" +
+	"\x05allow\x18\x02 \x03(\tR\x05allow\x12#\n" +
+	"\rprivate_allow\x18\v \x03(\tR\fprivateAllowJ\x04\b\x03\x10\v\"\xa5\x03\n" +
 	"\x18WorkerDelegationPolicyV1\x12\x1b\n" +
 	"\tmax_depth\x18\x01 \x01(\rR\bmaxDepth\x12=\n" +
 	"\x04mode\x18\x02 \x01(\x0e2).elitea.runtime.v1.WorkerDelegationModeV1R\x04mode\x12*\n" +

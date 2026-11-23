@@ -15,6 +15,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/libs/go/natsconn"
 
 	executionapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/executions"
+	workeregressapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workeregress"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/commandbus"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
@@ -149,7 +150,11 @@ type Config struct {
 	IndexIngestDispatchEnabled bool
 	// MemoryEmbeddingModel is ELITEA_MEMORY_EMBEDDING_MODEL; empty means the
 	// operator configured none and the Rust worker serves no memory toolkit.
-	MemoryEmbeddingModel          string
+	MemoryEmbeddingModel string
+	// WorkerEgressPrivatePermit is ELITEA_WORKER_EGRESS_PRIVATE_PERMIT
+	// (#2950): the deployment's private destinations, merged into every
+	// worker command's private permit beside the platform section's.
+	WorkerEgressPrivatePermit     []string
 	IndexSchedulingEnabled        bool
 	SchedulerInstanceID           string
 	IndexIngestCommandStream      string
@@ -301,6 +306,11 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 	config.Enabled = true
 	if value, ok := lookup(MemoryEmbeddingModelEnv); ok {
 		config.MemoryEmbeddingModel = strings.TrimSpace(value)
+	}
+	if value, ok := lookup(workeregressapp.OperatorPermitEnv); ok {
+		if config.WorkerEgressPrivatePermit, err = workeregressapp.ParseOperatorPermit(value); err != nil {
+			return Config{}, err
+		}
 	}
 	if config.CommandStream, err = required("ELITEA_RUNTIME_COMMAND_STREAM"); err != nil {
 		return Config{}, err

@@ -7,6 +7,11 @@
 //! fails the command closed at verification ([`policy_from_command`]); an
 //! entry is never skipped.
 //!
+//! The same message carries the operator's private permit (`private_allow`,
+//! #2950) in every mode: the private destinations the SSRF rule admits
+//! anyway. Absent is no permit; a malformed or oversized permit fails the
+//! command closed ([`private_permit_from_command`]).
+//!
 //! One [`RunEgress`] per command (execution, generation, command id) holds
 //! the policy and the ledger of hosts reached and refused. The registry here
 //! hands every path that runs part of the command (an agent turn, its
@@ -22,7 +27,7 @@
 use std::sync::{Arc, OnceLock};
 
 use elitea_agent_runtime::egress::{
-    Allowlist, EgressSummary, PublicPolicy, PublicPolicyError, RunEgress,
+    Allowlist, EgressSummary, PrivatePermit, PublicPolicy, PublicPolicyError, RunEgress,
 };
 
 use super::ProtocolError;
@@ -57,6 +62,31 @@ pub fn policy_from_command(command: &WorkerCommandV1) -> Result<PublicPolicy, Pr
             "the worker egress mode is not supported",
         )),
     }
+}
+
+/// The command's private permit, validated (#2950). Read in every mode;
+/// absent is the empty permit.
+///
+/// # Errors
+///
+/// [`ProtocolError::InvalidInput`] for a malformed or blank entry,
+/// [`ProtocolError::ResourceExhausted`] for more than 256 entries.
+pub fn private_permit_from_command(
+    command: &WorkerCommandV1,
+) -> Result<PrivatePermit, ProtocolError> {
+    let Some(policy) = command.egress_policy.as_ref() else {
+        return Ok(PrivatePermit::default());
+    };
+    PrivatePermit::parse(policy.private_allow.iter().map(String::as_str)).map_err(|error| {
+        match error {
+            PublicPolicyError::TooManyEntries => ProtocolError::ResourceExhausted(
+                "the worker egress private permit exceeds the conformance limit",
+            ),
+            PublicPolicyError::Malformed => {
+                ProtocolError::InvalidInput("the worker egress private permit is malformed")
+            }
+        }
+    })
 }
 
 /// One command's key: the execution, its generation and the command id, as
@@ -119,16 +149,24 @@ impl EgressRegistry {
     /// replaced, never served; a newer generation of the execution drops the
     /// older generations' entries (their leases are gone). A command that
     /// somehow failed validation gets an EMPTY allowlist (nothing public is
-    /// reached), never an open policy.
+    /// reached) and no private permit, never an open policy.
     #[must_use]
     pub fn run_egress(&self, command: &WorkerCommandV1) -> Arc<RunEgress> {
-        let policy = policy_from_command(command)
-            .unwrap_or_else(|_| PublicPolicy::Allowlist(Allowlist::default()));
-        let make = policy.clone();
+        let (policy, private) = match (
+            policy_from_command(command),
+            private_permit_from_command(command),
+        ) {
+            (Ok(policy), Ok(private)) => (policy, private),
+            _ => (
+                PublicPolicy::Allowlist(Allowlist::default()),
+                PrivatePermit::default(),
+            ),
+        };
+        let (make, make_private) = (policy.clone(), private.clone());
         self.tracked.get_or_make(
             CommandKey::of_command(command),
-            |existing| *existing.policy() == policy,
-            || RunEgress::new(make),
+            |existing| *existing.policy() == policy && *existing.private_permit() == private,
+            || RunEgress::with_private(make, make_private),
         )
     }
 
@@ -149,6 +187,17 @@ impl EgressRegistry {
     pub fn forget(&self, identity: &ExecutionIdentityV1) {
         self.tracked.forget(&CommandKey::of_identity(identity));
     }
+}
+
+/// An open run whose private permit admits loopback: what a test that sends
+/// to a local fixture runs under, since the SSRF rule refuses loopback
+/// otherwise (#2950).
+#[cfg(test)]
+pub(crate) fn open_for_local_fixtures() -> Arc<RunEgress> {
+    RunEgress::with_private(
+        PublicPolicy::Open,
+        PrivatePermit::parse(["127.0.0.0/8", "::1"]).expect("loopback permit"),
+    )
 }
 
 /// [`EgressRegistry::run_egress`] on the process's registry.
@@ -174,7 +223,64 @@ mod tests {
         WorkerEgressPolicyV1 {
             mode: WorkerEgressModeV1::Allowlist as i32,
             allow: entries.iter().map(|entry| (*entry).to_owned()).collect(),
+            private_allow: Vec::new(),
         }
+    }
+
+    fn open_permitting(entries: &[&str]) -> WorkerEgressPolicyV1 {
+        WorkerEgressPolicyV1 {
+            mode: WorkerEgressModeV1::Open as i32,
+            allow: Vec::new(),
+            private_allow: entries.iter().map(|entry| (*entry).to_owned()).collect(),
+        }
+    }
+
+    #[test]
+    fn the_private_permit_is_read_in_every_mode_and_fails_closed() {
+        let ip = |text: &str| text.parse::<std::net::IpAddr>().expect("address");
+        assert!(
+            private_permit_from_command(&command("e", None))
+                .expect("absent")
+                .is_empty()
+        );
+        let open = private_permit_from_command(&command(
+            "e",
+            Some(open_permitting(&["jira.corp.example", "10.20.0.0/16"])),
+        ))
+        .expect("valid");
+        assert!(open.admits("jira.corp.example", ip("10.1.1.1"), Some(443)));
+        assert!(open.admits("other.example", ip("10.20.1.1"), Some(443)));
+        assert!(!open.admits("other.example", ip("10.21.1.1"), Some(443)));
+        let mut narrowed = allowlist(&["jira.corp.example"]);
+        narrowed.private_allow = vec!["jira.corp.example".to_owned()];
+        assert!(
+            !private_permit_from_command(&command("e", Some(narrowed)))
+                .expect("valid")
+                .is_empty()
+        );
+        for bad in [&["https://jira.example"][..], &["ok.example", ""]] {
+            assert!(matches!(
+                private_permit_from_command(&command("e", Some(open_permitting(bad)))),
+                Err(ProtocolError::InvalidInput(_))
+            ));
+        }
+        let many: Vec<String> = (0..257).map(|index| format!("h{index}.example")).collect();
+        let many: Vec<&str> = many.iter().map(String::as_str).collect();
+        assert!(matches!(
+            private_permit_from_command(&command("e", Some(open_permitting(&many)))),
+            Err(ProtocolError::ResourceExhausted(_))
+        ));
+        // A malformed permit never opens egress or permits anything.
+        let registry = EgressRegistry::default();
+        let closed = registry.run_egress(&command_at("e-9", 1, Some(open_permitting(&["a b"]))));
+        assert!(!closed.policy().is_open());
+        assert!(closed.private_permit().is_empty());
+        // A changed permit is a new entry, never the old one served.
+        let first =
+            registry.run_egress(&command_at("e-8", 1, Some(open_permitting(&["a.example"]))));
+        let second =
+            registry.run_egress(&command_at("e-8", 1, Some(open_permitting(&["b.example"]))));
+        assert!(!Arc::ptr_eq(&first, &second));
     }
 
     #[test]
@@ -185,6 +291,7 @@ mod tests {
             Some(WorkerEgressPolicyV1 {
                 mode: WorkerEgressModeV1::Open as i32,
                 allow: vec!["ignored.example".to_owned()],
+                private_allow: Vec::new(),
             }),
         ] {
             assert!(
@@ -233,6 +340,7 @@ mod tests {
                 Some(WorkerEgressPolicyV1 {
                     mode: WorkerEgressModeV1::Allowlist as i32,
                     allow: many,
+                    private_allow: Vec::new(),
                 })
             )),
             Err(ProtocolError::ResourceExhausted(_))
@@ -243,6 +351,7 @@ mod tests {
                 Some(WorkerEgressPolicyV1 {
                     mode: 9,
                     allow: Vec::new(),
+                    private_allow: Vec::new(),
                 })
             )),
             Err(ProtocolError::InvalidInput(_))

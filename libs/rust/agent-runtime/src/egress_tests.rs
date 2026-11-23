@@ -81,11 +81,13 @@ fn a_url_without_host_or_port_is_refused_and_counted() {
                 host: INVALID_HOST.to_owned(),
                 port: 0,
                 count: 2,
+                reason: REFUSAL_REASON_NOT_ALLOWED,
             },
             HostCount {
                 host: "api.example.com".to_owned(),
                 port: 0,
                 count: 1,
+                reason: REFUSAL_REASON_NOT_ALLOWED,
             },
         ]
     );
@@ -116,6 +118,7 @@ fn the_summary_counts_and_bounds_hosts() {
             host: "refused.example".to_owned(),
             port: 443,
             count: 3,
+            reason: REFUSAL_REASON_NOT_ALLOWED,
         }]
     );
     assert!(RunEgress::open().summary().is_empty());
@@ -203,6 +206,7 @@ async fn the_client_refuses_an_ip_literal_before_connecting() {
             host: "127.0.0.1".to_owned(),
             port,
             count: 1,
+            reason: "",
         }]
     );
 }
@@ -224,7 +228,7 @@ async fn an_operator_origin_is_sent_under_any_allowlist_and_recorded() {
         "a run-chosen request to the same host is refused"
     );
     let response = client
-        .execute_operator_origin(reqwest::Request::new(reqwest::Method::GET, target))
+        .execute_operator_origin(reqwest::Request::new(reqwest::Method::GET, target), None)
         .await
         .expect("sent");
     assert_eq!(response.status(), reqwest::StatusCode::OK);
@@ -272,22 +276,32 @@ async fn the_connector_transport_refuses_and_records() {
     assert_eq!(summary.refused[0].host, "evil.example");
 }
 
-/// No toolkit family builds a reqwest client of its own: every client goes
-/// through [`client_builder`] + [`BuildForRun::build_for_run`], so a new
-/// family cannot forget the run's egress policy. The exceptions say why.
+/// Nothing in this crate builds an HTTP client of its own: every client
+/// starts from a builder in `egress.rs` ([`client_builder`] +
+/// [`BuildForRun::build_for_run`], [`mcp_client_builder`] for the remote MCP
+/// session, [`fetch_client_builder`] for the direct fetch,
+/// [`guarded_http_connector`] for hyper, [`hardened_transport`] for the
+/// connectors), so a new family cannot forget the run's egress policy or the
+/// SSRF rule (#1490, #2950). No exemption: tests build their clients through
+/// the same builders. Only `egress.rs` itself and this test module (which
+/// names the patterns) are not scanned.
 #[test]
 fn no_toolkit_builds_an_unbound_reqwest_client() {
     const EXEMPT: &[(&str, &str)] = &[
-        // The direct fetch's client resolves through the egress guard under
-        // the run's policy, and `fetch` checks and records every hop.
-        ("toolkits/families/web/direct.rs", "guarded resolver"),
-        // reqwest 0.13 for rmcp; the endpoint is checked against the run's
-        // policy before connecting, and redirects stay on its origin.
-        ("toolkits/mcp.rs", "reqwest_mcp"),
-        ("toolkits/mcp_tests.rs", "reqwest_mcp"),
+        ("egress.rs", "the guarded builders"),
+        ("egress_tests.rs", "names the patterns"),
+    ];
+    const PATTERNS: &[&str] = &[
+        "Client::builder()",
+        "ClientBuilder::new()",
+        "reqwest::Client::new()",
+        "reqwest_mcp::Client::new()",
+        "HttpConnector::new(",
+        ".dns_resolver(",
+        "Proxy::",
     ];
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut stack = vec![root.join("toolkits")];
+    let mut stack = vec![root.clone()];
     let mut offenders = Vec::new();
     while let Some(dir) = stack.pop() {
         for entry in std::fs::read_dir(&dir).expect("source dir") {
@@ -308,14 +322,14 @@ fn no_toolkit_builds_an_unbound_reqwest_client() {
                 continue;
             }
             let text = std::fs::read_to_string(&path).expect("source");
-            if text.contains("Client::builder()") || text.contains("ClientBuilder::new()") {
+            if PATTERNS.iter().any(|pattern| text.contains(pattern)) {
                 offenders.push(relative);
             }
         }
     }
     assert!(
         offenders.is_empty(),
-        "build toolkit HTTP clients with crate::egress::client_builder().build_for_run(): {offenders:?}"
+        "build HTTP clients with the builders in crate::egress (client_builder().build_for_run(), mcp_client_builder, ...): {offenders:?}"
     );
 }
 
@@ -425,4 +439,277 @@ fn a_new_claim_replaces_the_assertion_binding() {
     assert!(Arc::ptr_eq(&bound, &second));
     assert!(!Arc::ptr_eq(&bound, &first));
     assert!(bound.required());
+}
+
+// ── The SSRF rule under every family client (#2950) ─────────────────────────
+
+/// A resolver that answers fixed addresses, so no test touches the network.
+pub(crate) struct FakeLookup(std::collections::HashMap<&'static str, Vec<IpAddr>>);
+
+impl Lookup for FakeLookup {
+    fn lookup(&self, host: String) -> elitea_egress_guard::LookupFuture {
+        let answer = self.0.get(host.as_str()).cloned();
+        Box::pin(async move { answer.ok_or_else(|| std::io::Error::other("no such host")) })
+    }
+}
+
+fn ip(text: &str) -> IpAddr {
+    text.parse().expect("address")
+}
+
+/// The names the tests resolve: one per refused range, and one on loopback
+/// that a permit names.
+pub(crate) fn private_lookup() -> Arc<dyn Lookup> {
+    Arc::new(FakeLookup(std::collections::HashMap::from([
+        ("ten.example", vec![ip("10.1.2.3")]),
+        ("loop.example", vec![ip("127.0.0.1")]),
+        ("metadata.example", vec![ip("169.254.169.254")]),
+        ("ula.example", vec![ip("fd12:3456::1")]),
+        ("permitted.example", vec![ip("127.0.0.1")]),
+        (
+            "crowded.example",
+            (1..=40).map(|n| ip(&format!("203.0.113.{n}"))).collect(),
+        ),
+    ])))
+}
+
+/// A run with `permit` as its private permit and the fake resolver.
+pub(crate) fn guarded_run(permit: &[&str]) -> Arc<RunEgress> {
+    RunEgress::configured(
+        PublicPolicy::Open,
+        PrivatePermit::parse(permit.iter().copied()).expect("permit"),
+        private_lookup(),
+    )
+}
+
+async fn family_client(run: &Arc<RunEgress>) -> HttpClient {
+    scope(Arc::clone(run), async {
+        client_builder().build_for_run().expect("client")
+    })
+    .await
+}
+
+/// Send one GET through `client` as a tool call, and return the error and
+/// the refusal the call was told about.
+async fn refused_call(client: &HttpClient, target: &str) -> (reqwest::Error, EgressRefused) {
+    let (sent, refusal) = attributed(Arc::clone(client.egress()), async {
+        client
+            .execute(reqwest::Request::new(reqwest::Method::GET, url(target)))
+            .await
+    })
+    .await;
+    let error = sent.expect_err(target);
+    (error, refusal.expect("the call is told about the refusal"))
+}
+
+#[tokio::test]
+async fn a_family_client_refuses_names_that_resolve_to_private_link_local_or_metadata_addresses() {
+    let (port, accepted) = one_shot_server().await;
+    let run = guarded_run(&[]);
+    let client = family_client(&run).await;
+    for host in [
+        "ten.example",
+        "loop.example",
+        "metadata.example",
+        "ula.example",
+    ] {
+        let target = format!("http://{host}:{port}/rest/api?token=secret");
+        let (error, refused) = refused_call(&client, &target).await;
+        assert!(is_refusal(&error), "{host}");
+        assert_eq!(refused.reason(), REFUSAL_REASON_NOT_PUBLIC, "{host}");
+        assert_eq!(refused.authority(), format!("{host}:{port}"));
+        assert_eq!(refused.tool_error().code, EGRESS_HOST_NOT_ALLOWED);
+    }
+    assert_eq!(accepted.load(Ordering::SeqCst), 0, "nothing was dialled");
+}
+
+#[tokio::test]
+async fn a_family_client_refuses_private_link_local_and_metadata_ip_literals() {
+    let (port, accepted) = one_shot_server().await;
+    let run = guarded_run(&[]);
+    let client = family_client(&run).await;
+    for (target, authority) in [
+        ("http://10.1.2.3/x".to_owned(), "10.1.2.3:80".to_owned()),
+        (
+            format!("http://127.0.0.1:{port}/x"),
+            format!("127.0.0.1:{port}"),
+        ),
+        (
+            "http://169.254.169.254/latest/meta-data".to_owned(),
+            "169.254.169.254:80".to_owned(),
+        ),
+        (
+            "https://[fd12:3456::1]/x".to_owned(),
+            "[fd12:3456::1]:443".to_owned(),
+        ),
+    ] {
+        let (error, refused) = refused_call(&client, &target).await;
+        assert!(is_refusal(&error), "{target}");
+        assert_eq!(refused.reason(), REFUSAL_REASON_NOT_PUBLIC);
+        assert_eq!(refused.authority(), authority);
+    }
+    assert_eq!(accepted.load(Ordering::SeqCst), 0, "nothing was dialled");
+}
+
+#[tokio::test]
+async fn a_host_in_the_private_permit_is_reached_on_its_checked_address() {
+    let (port, accepted) = one_shot_server().await;
+    let run = guarded_run(&["permitted.example"]);
+    let client = family_client(&run).await;
+    let response = client
+        .execute(reqwest::Request::new(
+            reqwest::Method::GET,
+            url(&format!("http://permitted.example:{port}/rest")),
+        ))
+        .await
+        .expect("a permitted private host is reached");
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_eq!(accepted.load(Ordering::SeqCst), 1);
+    assert_eq!(run.summary().reached[0].host, "permitted.example");
+    // A name the permit does not list, on the same address, stays refused.
+    let (_, refused) = refused_call(&client, &format!("http://loop.example:{port}/")).await;
+    assert_eq!(refused.reason(), REFUSAL_REASON_NOT_PUBLIC);
+    // A permit that pins another port does not admit this one.
+    let pinned = guarded_run(&["permitted.example:1"]);
+    let client = family_client(&pinned).await;
+    refused_call(&client, &format!("http://permitted.example:{port}/")).await;
+    assert_eq!(accepted.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn metadata_stays_refused_when_the_permit_names_link_local() {
+    let run = guarded_run(&["169.254.0.0/16", "metadata.example"]);
+    let client = family_client(&run).await;
+    for target in [
+        "http://metadata.example/latest",
+        "http://169.254.169.254/latest",
+    ] {
+        let (error, refused) = refused_call(&client, target).await;
+        assert!(is_refusal(&error), "{target}");
+        assert_eq!(refused.reason(), REFUSAL_REASON_NOT_PUBLIC);
+    }
+}
+
+#[tokio::test]
+async fn a_refusal_names_the_host_and_port_only_in_the_error_and_the_ledger() {
+    let run = guarded_run(&[]);
+    let client = family_client(&run).await;
+    let (error, refused) =
+        refused_call(&client, "https://ten.example:8443/secret/path?key=hunter2").await;
+    let tool_error = refused.tool_error();
+    assert_eq!(tool_error.code, EGRESS_HOST_NOT_ALLOWED);
+    for text in [
+        error.to_string(),
+        format!("{error:?}"),
+        tool_error.message.clone(),
+        refused.message(),
+    ] {
+        assert!(!text.contains("secret"), "{text}");
+        assert!(!text.contains("hunter2"), "{text}");
+        assert!(!text.contains("/path"), "{text}");
+    }
+    assert!(refused.message().contains("ten.example:8443"));
+    let summary = run.summary();
+    assert_eq!(
+        summary.refused,
+        vec![HostCount {
+            host: "ten.example".to_owned(),
+            port: 8443,
+            count: 1,
+            reason: REFUSAL_REASON_NOT_PUBLIC,
+        }]
+    );
+    assert_eq!(summary.reached, Vec::<HostCount>::new());
+}
+
+#[tokio::test]
+async fn the_connectors_transport_refuses_a_private_destination() {
+    let (port, accepted) = one_shot_server().await;
+    let run = guarded_run(&[]);
+    let transport = EgressTransport::new(
+        Arc::clone(&run),
+        Arc::new(
+            hardened_transport(&elitea_connectors::github::client::CLIENT_POLICY)
+                .expect("transport"),
+        ),
+    );
+    let (sent, refusal) = attributed(Arc::clone(&run), async {
+        transport
+            .execute(Request::new(
+                Method::GET,
+                Url::parse(&format!("https://loop.example:{port}/x?key=secret")).expect("url"),
+            ))
+            .await
+    })
+    .await;
+    assert!(sent.expect_err("refused").is_refused());
+    assert_eq!(refusal.expect("named").reason(), REFUSAL_REASON_NOT_PUBLIC);
+    assert_eq!(run.summary().refused[0].reason, REFUSAL_REASON_NOT_PUBLIC);
+    assert_eq!(accepted.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn check_destination_applies_the_permit_before_a_session_dials() {
+    let run = guarded_run(&["permitted.example"]);
+    assert!(
+        run.check_destination(&url("https://permitted.example/mcp"))
+            .await
+            .is_ok()
+    );
+    let refused = run
+        .check_destination(&url("https://ten.example/mcp?token=x"))
+        .await
+        .expect_err("private");
+    assert_eq!(refused.reason(), REFUSAL_REASON_NOT_PUBLIC);
+    // A name that does not resolve is not a refusal: the dial fails itself.
+    assert!(
+        run.check_destination(&url("https://unknown.example/mcp"))
+            .await
+            .is_ok()
+    );
+}
+
+/// A public host behind a DNS answer larger than the guard checks is refused
+/// under its own reason, not as a private address the permit could admit.
+#[tokio::test]
+async fn an_oversized_answer_is_refused_as_too_many_addresses() {
+    let run = guarded_run(&[]);
+    let refused = run
+        .check_destination(&url("https://crowded.example/mcp"))
+        .await
+        .expect_err("too many");
+    assert_eq!(refused.reason(), REFUSAL_REASON_TOO_MANY_ADDRESSES);
+    assert!(
+        refused.message().contains("more addresses"),
+        "{}",
+        refused.message()
+    );
+    assert!(!refused.message().contains("private permit"));
+}
+
+/// One request counts one refusal, however often its client resolves.
+#[tokio::test]
+async fn a_request_counts_one_refusal_however_often_it_resolves() {
+    let run = guarded_run(&[]);
+    let resolver = PermitResolver::scoped();
+    let target = url("https://ten.example/");
+    let outcome = run
+        .guarded(&target, async {
+            for _ in 0..3 {
+                assert!(
+                    resolver
+                        .resolve_host("ten.example".to_owned())
+                        .await
+                        .is_err()
+                );
+            }
+        })
+        .await;
+    assert_eq!(
+        outcome.expect_err("refused").reason(),
+        REFUSAL_REASON_NOT_PUBLIC
+    );
+    let refused = run.summary().refused;
+    assert_eq!(refused.len(), 1);
+    assert_eq!(refused[0].count, 1);
 }
