@@ -81,7 +81,7 @@ func assignmentAPI(t *testing.T, pool *pgxpool.Pool, email string) http.Handler 
 	t.Helper()
 	var id int
 	queryRow(t, pool, fmt.Sprintf(`SELECT id FROM public.auth_core__user WHERE email = '%s'`, email), &id)
-	principal := auth.User{ID: fmt.Sprint(id), UserID: fmt.Sprint(id)}
+	principal := auth.User{ID: fmt.Sprint(id), UserID: fmt.Sprint(id), CredentialKind: auth.CredentialKindSession}
 	handler := admin.NewHandler(pool, admin.WithPermissionResolver(legacyrbac.NewPostgresResolver(pool)))
 	router := chi.NewRouter()
 	router.Use(func(next http.Handler) http.Handler {

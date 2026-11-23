@@ -319,6 +319,87 @@ func TestPostgresStoreKeepsTheAuthenticationTimeBesideTheRecord(t *testing.T) {
 	}
 }
 
+// Every Form session carries a stable, non-zero reference (shared 0266,
+// ADR-0059 R1.2a), drawn from the browser_sessions.ref sequence so the two
+// kinds of row never share a number. A rotation is the same session under a
+// fresh identifier and keeps it (runs and elevations name it); a new session
+// that reuses an expired row's identifier gets a new one; the record never
+// holds it.
+func TestPostgresStoreGivesEveryRowAReference(t *testing.T) {
+	t.Parallel()
+
+	ids := []string{testSessionID(50), testSessionID(51), testSessionID(52), testSessionID(53), testSessionID(53)}
+	store, pool := newTestStore(t, time.Hour, 5*time.Minute, sequenceGenerator(ids...))
+	first, err := store.Create(context.Background(), completedState(time.Now().Add(time.Hour)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Create(context.Background(), completedState(time.Now().Add(time.Hour)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := store.Read(context.Background(), first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := store.Read(context.Background(), second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Ref <= 0 || b.Ref <= 0 || a.Ref == b.Ref {
+		t.Fatalf("references %d and %d, want two distinct positive values", a.Ref, b.Ref)
+	}
+	if again, err := store.Read(context.Background(), first); err != nil || again.Ref != a.Ref {
+		t.Fatalf("a second read answered %d, %v; want the stable %d", again.Ref, err, a.Ref)
+	}
+	rotated, err := store.Rotate(context.Background(), first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.Read(context.Background(), rotated); err != nil || got.Ref != a.Ref {
+		t.Fatalf("the rotated session answered %d, %v; want its kept reference %d", got.Ref, err, a.Ref)
+	}
+	replaced, err := store.RotateAndReplace(context.Background(), rotated, completedState(time.Now().Add(time.Hour)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.Read(context.Background(), replaced); err != nil || got.Ref != a.Ref {
+		t.Fatalf("the re-entered session answered %d, %v; want its kept reference %d", got.Ref, err, a.Ref)
+	}
+	// An expired row is replaced by the next session drawing its identifier;
+	// that is a different session and must not inherit the dead one's number.
+	expire(t, pool, replaced)
+	reused, err := store.Create(context.Background(), completedState(time.Now().Add(time.Hour)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reused != replaced {
+		t.Fatalf("the generator gave %q, want the expired %q", reused, replaced)
+	}
+	if got, err := store.Read(context.Background(), reused); err != nil || got.Ref <= 0 || got.Ref == a.Ref {
+		t.Fatalf("a new session on an expired row answered %d, %v; want a new reference", got.Ref, err)
+	}
+	var sequence, expression string
+	if err := pool.QueryRow(context.Background(), `
+		SELECT pg_get_serial_sequence('elitea_auth.browser_sessions', 'ref'), pg_get_expr(d.adbin, d.adrelid)
+		FROM pg_attrdef AS d
+		JOIN pg_attribute AS a ON a.attrelid = d.adrelid AND a.attnum = d.adnum
+		WHERE d.adrelid = 'elitea_auth.form_sessions'::regclass AND a.attname = 'ref'`).Scan(&sequence, &expression); err != nil {
+		t.Fatalf("read the ref default: %v", err)
+	}
+	if !strings.Contains(expression, "nextval('"+sequence+"'") {
+		t.Fatalf("form_sessions.ref defaults to %s, want the browser_sessions.ref sequence %s", expression, sequence)
+	}
+	var record []byte
+	if err := pool.QueryRow(context.Background(),
+		`SELECT record FROM elitea_auth.form_sessions WHERE id_hash = $1`, IDHash(second)).Scan(&record); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(record), `"ref"`) {
+		t.Fatalf("the record carries the reference: %s", record)
+	}
+}
+
 func TestPostgresStoreRotateAndReplaceRejectsInvalidStateBeforeMutation(t *testing.T) {
 	t.Parallel()
 

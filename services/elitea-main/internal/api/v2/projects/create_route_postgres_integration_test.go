@@ -358,10 +358,11 @@ func newOnboardingEnvironment(ctx context.Context, t *testing.T, pool *pgxpool.P
 	router.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			next.ServeHTTP(w, withUser(r, auth.User{
-				ID:       fmt.Sprintf("%d", onboardingMakerID),
-				UserID:   fmt.Sprintf("%d", onboardingMakerID),
-				Email:    onboardingMakerEmail,
-				AuthType: "user",
+				ID:             fmt.Sprintf("%d", onboardingMakerID),
+				UserID:         fmt.Sprintf("%d", onboardingMakerID),
+				Email:          onboardingMakerEmail,
+				AuthType:       "user",
+				CredentialKind: auth.CredentialKindSession,
 			}))
 		})
 	})

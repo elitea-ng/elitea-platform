@@ -66,6 +66,9 @@ func overlayPool(t *testing.T) *pgxpool.Pool {
 // test's own wiring instead of production's.
 func activationRouter(t *testing.T, pool *pgxpool.Pool, principal auth.User) chi.Router {
 	t.Helper()
+	// A browser session: the credential decides the administration set
+	// (ADR-0059 R1.2a), and the zero kind resolves none.
+	principal.CredentialKind = auth.CredentialKindSession
 	handler := eliteacore.NewHandler(pool)
 	resolver := legacyrbac.NewPostgresResolver(pool)
 

@@ -307,6 +307,7 @@ func (s Session) User() auth.User {
 		Email:             s.Email,
 		AuthType:          "session",
 		BrowserSessionRef: s.Ref,
+		CredentialKind:    auth.CredentialKindSession,
 	}
 }
 

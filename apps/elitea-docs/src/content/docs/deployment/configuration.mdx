@@ -56,7 +56,7 @@ A change in the console needs no restart or re-sync — the merge runs per messa
 curl -s -H "Authorization: Bearer $ADMIN_PAT" \
   https://elitea.example.com/api/v2/admin/email/administration | jq
 ```
-`.settings` is what the console stored, `.effective` is the merged document the next message uses, `.sources` names `database`/`environment`/`unset` per field, and `.configured`/`.reason` say whether a message can be sent.
+`$ADMIN_PAT` must be a personal access token that carries administration rights: a new token carries none (see [Which credential carries which administration rights](/admin/authentication#which-credential-carries-which-administration-rights)). `.settings` is what the console stored, `.effective` is the merged document the next message uses, `.sources` names `database`/`environment`/`unset` per field, and `.configured`/`.reason` say whether a message can be sent.
 </Step>
 </Steps>
 

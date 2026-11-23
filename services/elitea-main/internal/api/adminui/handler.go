@@ -218,7 +218,7 @@ func (h *Handler) ServeSPA(w http.ResponseWriter, r *http.Request) {
 		// claims at all, so reading only the HMAC form would leave every
 		// OIDC-authenticated operator with an empty sidebar — the same defect
 		// the comment above records, from the other side.
-		userID, email, state := h.sessionIdentity(r, cookie.Value)
+		userID, ref, email, state := h.sessionIdentity(r, cookie.Value)
 		cfg.Access = state
 		if state == "" {
 			cfg.Access = accessUnauthenticated
@@ -233,7 +233,7 @@ func (h *Handler) ServeSPA(w http.ResponseWriter, r *http.Request) {
 			// guards for no reason.
 			if userID > 0 {
 				cfg.UserID = userID
-				cfg.Permissions, cfg.Access = h.resolvePermissions(r.Context(), userID)
+				cfg.Permissions, cfg.Access = h.resolvePermissions(r.Context(), userID, ref)
 			}
 		}
 	}
@@ -362,13 +362,22 @@ func spaContentSecurityPolicy(inlineScript string) string {
 // It returns an empty list on ANY error, a refusal included. The injected list
 // is a presentation hint for the admin SPA, so an empty list hides controls.
 // It never grants anything: every admin route resolves the permissions again.
-func (h *Handler) resolvePermissions(ctx context.Context, userID int64) ([]string, string) {
+//
+// The principal is the browser session the cookie named (kind `session`, with
+// the server-side row's reference, 0 for the legacy signed cookie): since
+// ADR-0059 R1.2a the credential decides the administration set, and a
+// principal without a kind resolves none.
+func (h *Handler) resolvePermissions(ctx context.Context, userID, sessionRef int64) ([]string, string) {
 	if h.cfg.Resolver == nil {
 		return []string{}, accessUnavailable
 	}
 	resolution, err := h.cfg.Resolver.ResolvePermissions(
 		ctx,
-		auth.User{UserID: strconv.FormatInt(userID, 10)},
+		auth.User{
+			UserID:            strconv.FormatInt(userID, 10),
+			CredentialKind:    auth.CredentialKindSession,
+			BrowserSessionRef: sessionRef,
+		},
 		auth.PermissionModeAdministration,
 		"",
 	)
@@ -483,26 +492,26 @@ func sessionClaimUserID(claims map[string]any) (int64, bool) {
 // The third value is "" when a session was read, and otherwise the Access
 // reason: a session the store answered is gone (missing, revoked, expired,
 // idle, malformed) is unauthenticated; a store fault is unavailable.
-func (h *Handler) sessionIdentity(r *http.Request, value string) (int64, string, string) {
+func (h *Handler) sessionIdentity(r *http.Request, value string) (int64, int64, string, string) {
 	if h.cfg.Sessions != nil && browsersession.LooksServerSide(value) {
 		session, err := h.cfg.Sessions.Validate(r.Context(), value)
 		if err != nil {
 			if errors.Is(err, browsersession.ErrNotFound) || errors.Is(err, browsersession.ErrRevoked) ||
 				errors.Is(err, browsersession.ErrExpired) || errors.Is(err, browsersession.ErrIdle) ||
 				errors.Is(err, browsersession.ErrMalformedCookie) {
-				return 0, "", accessUnauthenticated
+				return 0, 0, "", accessUnauthenticated
 			}
 			slog.WarnContext(r.Context(), "admin ui: browser session store failed", "error", err)
-			return 0, "", accessUnavailable
+			return 0, 0, "", accessUnavailable
 		}
-		return session.UserID, session.Email, ""
+		return session.UserID, session.Ref, session.Email, ""
 	}
 	if h.cfg.SecretKey == "" {
-		return 0, "", accessUnauthenticated
+		return 0, 0, "", accessUnauthenticated
 	}
 	claims := h.verifySession(value)
 	if claims == nil {
-		return 0, "", accessUnauthenticated
+		return 0, 0, "", accessUnauthenticated
 	}
 	// The minting code writes the claim as `uid`. The old code read `user_id`,
 	// so window.admin_ui_config.user_id was null on every page load. See
@@ -511,7 +520,7 @@ func (h *Handler) sessionIdentity(r *http.Request, value string) (int64, string,
 	// if it is there.
 	userID, _ := sessionClaimUserID(claims)
 	email, _ := claims["email"].(string)
-	return userID, email, ""
+	return userID, 0, email, ""
 }
 
 func (h *Handler) verifySession(token string) map[string]any {

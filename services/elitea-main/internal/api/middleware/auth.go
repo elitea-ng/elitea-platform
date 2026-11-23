@@ -164,6 +164,11 @@ func Auth(cfg AuthConfig) func(http.Handler) http.Handler {
 					user.BrowserSessionProvider = formSession.BrowserSessionProvider
 					user.BrowserSessionAuthenticatedAt = formSession.BrowserSessionAuthenticatedAt
 					user.BrowserSessionAuthenticationProven = formSession.BrowserSessionAuthenticationProven
+					// The Form row's reference (shared 0266) and the kind:
+					// the credential decides the administration set and is
+					// what an elevation binds to (ADR-0059 R1.2a).
+					user.BrowserSessionRef = formSession.BrowserSessionRef
+					user.CredentialKind = auth.CredentialKindForm
 					// A COOKIE authenticated this request, so it is a session
 					// principal: BrowserWriteOrigin's cross-site write check
 					// and the browser-only routes treat it exactly like the
@@ -203,11 +208,13 @@ func Auth(cfg AuthConfig) func(http.Handler) http.Handler {
 					writeTokenRefusal(w, r, sourceAPIKey, cfg, err)
 					return
 				}
+				kind := bearerCredentialKind(user)
 				user, err = validatePrincipal(r.Context(), cfg, user)
 				if err != nil {
 					writePrincipalRefusal(w, r, sourceAPIKey, err)
 					return
 				}
+				user.CredentialKind = kind
 				serveAuthenticated(next, w, r, user, auth.AuthenticationSourceAPIKey)
 				return
 			}
@@ -239,6 +246,7 @@ func Auth(cfg AuthConfig) func(http.Handler) http.Handler {
 						user.BrowserSessionAuthenticatedAt = session.AuthenticatedAt
 						user.BrowserSessionProvider = session.Provider
 						user.BrowserSessionAuthenticationProven = session.AuthenticationProven
+						user.CredentialKind = auth.CredentialKindSession
 						serveAuthenticated(next, w, r, user, auth.AuthenticationSourceSession)
 						return
 					}
@@ -274,6 +282,10 @@ func Auth(cfg AuthConfig) func(http.Handler) http.Handler {
 							writePrincipalRefusal(w, r, sourceSession, validationErr)
 							return
 						}
+						// The legacy signed cookie: a browser session with no
+						// server-side row, so no reference and no elevation.
+						user.CredentialKind = auth.CredentialKindSession
+						user.BrowserSessionRef = 0
 						serveAuthenticated(next, w, r, user, auth.AuthenticationSourceSession)
 						return
 					}
@@ -309,11 +321,13 @@ func Auth(cfg AuthConfig) func(http.Handler) http.Handler {
 				return
 			}
 
+			kind := bearerCredentialKind(user)
 			user, err = validatePrincipal(r.Context(), cfg, user)
 			if err != nil {
 				writePrincipalRefusal(w, r, sourceToken, err)
 				return
 			}
+			user.CredentialKind = kind
 			serveAuthenticated(next, w, r, user, auth.AuthenticationSourceToken)
 		})
 	}
@@ -371,6 +385,24 @@ func validatePrincipal(ctx context.Context, cfg AuthConfig, user auth.User) (aut
 		return auth.User{}, errPrincipalValidatorAbsent
 	}
 	return cfg.PrincipalValidator.ValidatePrincipal(ctx, user)
+}
+
+// bearerCredentialKind is the credential kind of a principal a token
+// validator returned for a bearer or an X-API-Key credential. Only the kinds
+// a token validator produces pass: `token` and `system` (the personal access
+// token validator) and `native` (the native validator, which alone sets
+// NativeClientID). Any other kind, and none, is the zero kind, which resolves
+// no administration set. A run token never reaches here: serveRunToken takes
+// it first.
+func bearerCredentialKind(user auth.User) auth.CredentialKind {
+	if user.NativeClientID != "" {
+		return auth.CredentialKindNative
+	}
+	switch user.CredentialKind {
+	case auth.CredentialKindToken, auth.CredentialKindSystem:
+		return user.CredentialKind
+	}
+	return auth.CredentialKindNone
 }
 
 func serveAuthenticated(next http.Handler, w http.ResponseWriter, r *http.Request, user auth.User, source auth.AuthenticationSource) {

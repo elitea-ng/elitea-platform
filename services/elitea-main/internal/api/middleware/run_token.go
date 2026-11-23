@@ -86,6 +86,10 @@ func serveRunToken(next http.Handler, w http.ResponseWriter, r *http.Request, cf
 		writePrincipalRefusal(w, r, source, err)
 		return
 	}
+	// A run token, also in X-API-Key: no administration set (ADR-0059
+	// decision 7). Set here whatever the validator or the principal
+	// validator returned, so a rebuilt principal cannot read as a token.
+	user.CredentialKind = auth.CredentialKindRun
 	if !admitRunScope(w, r, source, scope, user, binding) {
 		return
 	}

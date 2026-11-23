@@ -67,6 +67,14 @@ func (f *FormSessions) AuthenticateFormSession(request *http.Request) (auth.User
 		return auth.User{}, apimw.ErrFormSessionRejected
 	}
 	principal := authorization.Principal
+	// The Form session row's reference (shared 0266) and the kind: a Form
+	// browser session, whatever provider of this graph signed it in. The
+	// credential decides the administration set, and an elevation binds to
+	// this reference (ADR-0059 R1.2a).
+	principal.CredentialKind = auth.CredentialKindForm
+	if authorization.SessionRef > 0 {
+		principal.BrowserSessionRef = authorization.SessionRef
+	}
 	if authorization.Provider == browserapp.FormProviderName && !authorization.AuthenticatedAt.IsZero() {
 		// The last password entry of this Form session (sign-in or re-entry,
 		// ADR-0059 R1.10b), for apimw.RecentAuthentication. A Form session is
