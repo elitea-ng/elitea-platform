@@ -247,26 +247,27 @@ In this release, no action requires a recent sign-in yet. The check is ready for
 - Starting a break-glass elevation.
 - Critical administrative actions.
 
-When an action needs a recent sign-in and the session is too old, the server answers 401 with the code `reauthentication_required`. The header `X-Elitea-Reauthentication-Max-Age` gives the limit in seconds. Only an OIDC browser session satisfies the check in this release. A personal access token, a desktop or mobile session, and a run token never do. SAML and Form sessions do not satisfy it yet either.
+When an action needs a recent sign-in and the session is too old, the server answers 401 with the code `reauthentication_required`. The header `X-Elitea-Reauthentication-Max-Age` gives the limit in seconds. An OIDC, SAML or Form browser session can satisfy the check, as described below. A personal access token, a desktop or mobile session, and a run token never do.
 
 ### The limit
 
-Each browser session records when its person last authenticated. A request does not change that time; only a new sign-in does. With OIDC, the time is the id_token's `auth_time` claim. If the identity provider does not send `auth_time`, the time is unknown, and the session never counts as a recent sign-in. A SAML session records the time of the sign-in.
+Each browser session records when its person last authenticated. A request does not change that time; only a new sign-in does. With OIDC, the time is the id_token's `auth_time` claim. If the identity provider does not send `auth_time`, the time is unknown, and the session never counts as a recent sign-in. With SAML, only a sign-in that asked for `ForceAuthn` records a time: the assertion's `AuthnInstant`. An ordinary SAML sign-in records no time, so it never counts as a recent sign-in. With Form sign-in, the time is when the person last typed their password: at sign-in, or at the password prompt.
 
 The limit is 15 minutes by default. Set `ELITEA_SESSION_REAUTHENTICATION_MAX_AGE` on the main service to change it. The value is a Go duration from `1m` to `24h`, for example `10m`. Any other value stops the main service at startup, and the error names the variable.
 
 ### Starting a sign-in with a limit
 
-The console asks for a fresh sign-in by opening the OIDC login with two parameters:
+The console asks for a fresh sign-in by opening the login of the deployment's sign-in method with two parameters:
 
 ```
 /auth/oidc/login?max_age=900&target_to=/admin/access
+/auth/saml/login?max_age=900&target_to=/admin/access
 ```
 
-- `max_age` is the limit in whole seconds, from 0 to 86400. The platform passes it to the identity provider. Any other value is refused with 400.
+- `max_age` is the limit in whole seconds, from 0 to 86400. For OIDC, the platform passes it to the identity provider. For SAML, the platform sets `ForceAuthn="true"` on the authentication request. Any other value is refused with 400.
 - `target_to` is the page to return to. It must be a relative path on this site that starts with `/`. A full URL or a URL to another site is refused with 400. An ordinary sign-in would replace it with `/` instead.
 
-The limit is saved in the signed login state, so it cannot be dropped from the callback.
+The limit is saved in the signed login state (OIDC) or the signed request cookie (SAML), so it cannot be dropped from the callback.
 
 ### What the identity provider must support
 
@@ -277,9 +278,26 @@ For an OIDC provider:
 
 The callback refuses the sign-in if `auth_time` is missing or older than the limit, and returns the person to the sign-in page with an error. A clock difference of up to five minutes is allowed, which is the same allowance the id_token check uses. A refused callback creates no session and does not change any existing session.
 
-Check your identity provider's documentation for both before you rely on the check.
+For a SAML provider:
 
-SAML and Form sign-in do not support a limited sign-in in this release.
+- The provider must honour `ForceAuthn="true"`. It must ask the person to authenticate again, even when they have a session at the provider.
+- The provider must send an `AuthnStatement` whose `AuthnInstant` is the time of that new authentication.
+
+The assertion consumer service refuses the sign-in if `AuthnInstant` is missing or older than the limit, and returns the person to the sign-in page with an error. The clock skew allowed is the provider's **Clock skew** setting, the same allowance the other assertion time checks use. A refused assertion creates no session. A response to a request that did not ask for `ForceAuthn` never changes the time of any session.
+
+Check your identity provider's documentation before you rely on the check.
+
+### The Form password prompt
+
+Form sign-in has no identity provider to ask. Instead, the console opens a password prompt:
+
+```
+/auth/form/reauthenticate?target_to=/admin/access
+```
+
+The prompt is a step of the Form sign-in pages. It shows the login of the current session and asks only for its password. The password is checked the same way as at sign-in, and each attempt counts against the same sign-in attempt limits. A correct password records a new authentication time, replaces the session cookie, and returns the person to `target_to`. A wrong password changes nothing and shows the prompt again. A browser without a Form session is sent to the ordinary sign-in page with the same `target_to`.
+
+Form sessions that existed before this release have no recorded time. They count as a recent sign-in only after the person signs in again or enters the password at the prompt.
 
 ## Connect an identity provider with SCIM
 

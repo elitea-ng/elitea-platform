@@ -676,7 +676,14 @@
         "services/elitea-main/internal/application/workspacestore/**",
         "services/elitea-main/internal/application/workspacehandoff/**",
         "services/elitea-main/internal/infra/db/repos/workspace_*",
-        "services/elitea-main/migrations/shared/**",
+        "services/elitea-main/migrations/shared/0057_artifact_storage.sql",
+        "services/elitea-main/migrations/shared/0058_artifact_multipart.sql",
+        "services/elitea-main/migrations/shared/0087_artifact_object_expiry_from_object_age.sql",
+        "services/elitea-main/migrations/shared/0167_workspace_handoffs.sql",
+        "services/elitea-main/migrations/shared/0168_workspace_store.sql",
+        "services/elitea-main/migrations/shared/0176_workspace_handoff_rest_pending.sql",
+        "services/elitea-main/migrations/shared/0179_workspace_handoff_forge_credential.sql",
+        "services/elitea-main/migrations/shared/0224_handoff_take_back_when_done.sql",
         ".github/workflows/ci-handoff-loadgate.yml"
       ]
     }

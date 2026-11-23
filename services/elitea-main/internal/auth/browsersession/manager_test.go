@@ -386,6 +386,40 @@ func TestASessionRecordsItsAuthenticationTime(t *testing.T) {
 	}
 }
 
+// TestASessionIsProvenOnlyWhenThePlaneSaysSoAndTheTimeIsKnown (ADR-0059
+// R1.10b): a plane's claim of proof is kept with a known time, and dropped
+// with an unknown one.
+func TestASessionIsProvenOnlyWhenThePlaneSaysSoAndTheTimeIsKnown(t *testing.T) {
+	manager, store, dial := newTestManager(t, Policy{IdleTimeout: time.Hour, AbsoluteLifetime: 8 * time.Hour})
+	ctx := context.Background()
+	for name, testCase := range map[string]struct {
+		request NewSession
+		want    bool
+	}{
+		"a proven time": {
+			request: NewSession{UserID: 7, Provider: ProviderSAML, AuthenticatedAt: dial.Now().Add(-time.Minute), AuthenticationProven: true},
+			want:    true,
+		},
+		"a sign-in time the plane does not vouch for": {
+			request: NewSession{UserID: 7, Provider: ProviderSAML},
+		},
+		"an unknown time cannot be proven": {
+			request: NewSession{UserID: 7, Provider: ProviderSAML, AuthenticationTimeUnknown: true, AuthenticationProven: true},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			value, err := manager.Create(ctx, testCase.request)
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			id, _ := ParseCookieValue(value)
+			if got := store.rows[id].AuthenticationProven; got != testCase.want {
+				t.Fatalf("authentication proven = %v, want %v", got, testCase.want)
+			}
+		})
+	}
+}
+
 // TestPolicyFromEnvRefusesAMistypedLifetime. A deployment that meant to set a
 // lifetime and mistyped it must not run for a week believing it did.
 func TestPolicyFromEnvRefusesAMistypedLifetime(t *testing.T) {

@@ -210,8 +210,8 @@ func actionRows() []Action {
 		put(admin("/toolkit_types/administration/{type}"), ToolkitCatalogueTypeManage),
 		put(admin("/toolkit_types/administration/{type}/projects/{projectID}"), ToolkitCatalogueTypeManage),
 		del(admin("/toolkit_types/administration/{type}/projects/{projectID}"), ToolkitCatalogueTypeManage),
-		put(admin("/mcp_prebuilt_servers/administration/{key}"), RuntimePlugins),
-		del(admin("/mcp_prebuilt_servers/administration/{key}"), RuntimePlugins),
+		put(admin("/mcp_prebuilt_servers/administration/{key}"), MCPCatalogueManage),
+		del(admin("/mcp_prebuilt_servers/administration/{key}"), MCPCatalogueManage),
 
 		// Agents and governance: agent identities (mounted with the
 		// governance flag on).
@@ -253,12 +253,12 @@ func actionRows() []Action {
 		post(admin("/branding/package/administration"), ConfigurationBranding),
 		post(admin("/branding/package/administration/versions/{digest}/restore"), ConfigurationBranding),
 		post(admin("/branding/test_email/administration"), ConfigurationBranding),
-		put(admin("/email/administration"), RuntimePlugins).elevation(deny),
-		post(admin("/email/test/administration"), RuntimePlugins),
+		put(admin("/email/administration"), PlatformEmailManage).elevation(deny),
+		post(admin("/email/test/administration"), PlatformEmailManage),
 		// Answers 405: maintenance is authored in the Maintenance section.
 		put(admin("/maintenance/{mode}"), RuntimePlugins),
-		post(admin("/background_jobs/administration/pat_expiry_notices:run"), RuntimePlugins),
-		post(admin("/background_jobs/administration/{kind}/{jobID}:cancel"), RuntimePlugins),
+		post(admin("/background_jobs/administration/pat_expiry_notices:run"), PlatformOperationsManage),
+		post(admin("/background_jobs/administration/{kind}/{jobID}:cancel"), PlatformOperationsManage),
 		put(admin("/platform_routines/administration/{id}"), ConfigurationSchedulingSchedulesEdit),
 		put(admin("/native_clients/administration/{clientID}"), ConfigurationNativeClients),
 		del(admin("/native_clients/administration/{clientID}"), ConfigurationNativeClients),

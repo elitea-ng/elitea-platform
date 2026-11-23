@@ -659,10 +659,14 @@ func TestTheAuthTimeDecidesTheSessionsAuthenticationTime(t *testing.T) {
 		"limited, fresh auth_time": {
 			authTime: seconds(now.Add(-time.Minute)), login: limited, wantOK: true, wantAt: now.Add(-time.Minute),
 		},
-		// Admitted by the skew alone: recorded at the edge of the limit, so
-		// the check that asked with the same limit passes it.
+		// Admitted by the skew alone: read as the provider's clock lagging by
+		// the whole skew, so it is inside the limit and the check that asked
+		// with the same limit passes it (ADR-0059 R1.10b review).
 		"limited, within the limit and the clock skew": {
-			authTime: seconds(now.Add(-14 * time.Minute)), login: limited, wantOK: true, wantAt: now.Add(-10 * time.Minute),
+			authTime: seconds(now.Add(-14 * time.Minute)), login: limited, wantOK: true, wantAt: now.Add(-9 * time.Minute),
+		},
+		"limited, at the outer edge of the limit and the clock skew": {
+			authTime: seconds(now.Add(-15 * time.Minute)), login: limited,
 		},
 		"limited, past the limit and the clock skew": {authTime: seconds(now.Add(-16 * time.Minute)), login: limited},
 		"limited, absent": {login: limited},

@@ -14,7 +14,21 @@ package auth
 // `max_age` was requested). The session the callback writes records
 // `auth_time` as its authentication time, so the helper then passes.
 //
-// SAML ForceAuthn and the Form password re-entry are R1.10b (#2594).
+// The SAML half (R1.10b, #2594) is the same shape:
+//
+//	GET /auth/saml/login?max_age=<seconds>&target_to=<same-origin path>
+//
+// Login sets ForceAuthn="true" on the AuthnRequest and binds the limit to the
+// signed request cookie (the same `<id>:<seconds>|<target>` head). The ACS
+// reads it back from there and refuses an assertion whose AuthnInstant is
+// absent or older than the limit, with the authored clock skew of the
+// assertion's other time checks. Only such a session is PROVEN
+// (browser_sessions.authentication_proven): a SAML sign-in without ForceAuthn
+// records no authentication time at all, because an identity provider's
+// single sign-on answers it without asking the person for anything.
+//
+// The Form plane has no identity provider to ask: its re-entry is a password
+// prompt of its own (internal/api/browserauth, /auth/form/reauthenticate).
 
 import (
 	"errors"
@@ -68,21 +82,23 @@ type oidcLoginState struct {
 // oidcStateLimitSeparator separates the nonce from the limit in the state's
 // head: `<nonce>[:<max_age seconds>]|<target_to>`. The nonce is unpadded
 // base64url and holds no ":", and a state without one is an ordinary sign-in,
-// so a login started by the previous release still completes.
+// so a login started by the previous release still completes. The SAML
+// request cookie uses the same head around its request ID, which gosaml2
+// mints as "_" and a UUID and which holds no ":" either.
 const oidcStateLimitSeparator = ":"
 
-func encodeOIDCStateHead(nonce string, limit time.Duration, limited bool) string {
+func encodeLoginHead(nonce string, limit time.Duration, limited bool) string {
 	if !limited {
 		return nonce
 	}
 	return nonce + oidcStateLimitSeparator + strconv.FormatInt(int64(limit/time.Second), 10)
 }
 
-// decodeOIDCStateHead reads the limit from a VERIFIED state head. A head
+// decodeLoginHead reads the limit from a VERIFIED state head. A head
 // whose limit does not parse cannot come from Login, which signed it; it is
 // read as the strictest limit rather than as none, so a defect here can only
 // refuse a sign-in, never admit an old one.
-func decodeOIDCStateHead(head string) (time.Duration, bool) {
+func decodeLoginHead(head string) (time.Duration, bool) {
 	separator := strings.Index(head, oidcStateLimitSeparator)
 	if separator < 0 {
 		return 0, false
@@ -119,17 +135,78 @@ func checkAuthTime(authTime *float64, login oidcLoginState, now time.Time) (time
 	if !login.limited {
 		return at, true
 	}
+	return checkAuthenticationInstant(at, login.limit, oidcAuthTimeClockSkew, now)
+}
+
+// checkAuthenticationInstant holds a LIMITED sign-in's stated authentication
+// time to the limit: present, not after now+skew, and less than limit+skew
+// old. OIDC passes `auth_time` with the id_token verifier's skew; SAML passes
+// AuthnInstant with the provider's authored clock skew.
+//
+// A time within the limit is recorded as stated. One older than the limit,
+// admitted by the skew alone, is admitted on the premise that the provider's
+// clock lags this one by up to the skew, so it is recorded as that premise
+// reads it: shifted forward by the skew, never past now. That reading is
+// always strictly inside the limit (the admission is strict), so the check
+// that asked for this sign-in with the same limit passes it instead of asking
+// again. Recording such a time AT the edge of the limit would fail that check
+// on the very next request, and send the person round the sign-in again.
+func checkAuthenticationInstant(at time.Time, limit, skew time.Duration, now time.Time) (time.Time, bool) {
 	if at.IsZero() {
 		return time.Time{}, false
 	}
-	if at.After(now.Add(oidcAuthTimeClockSkew)) {
+	if skew < 0 {
+		skew = 0
+	}
+	if at.After(now.Add(skew)) {
 		return time.Time{}, false
 	}
-	if now.Sub(at) > login.limit+oidcAuthTimeClockSkew {
+	// Strict: a time exactly limit+skew old would read as exactly the edge.
+	if now.Sub(at) >= limit+skew {
 		return time.Time{}, false
 	}
-	if edge := now.Add(-login.limit); at.Before(edge) {
-		at = edge.UTC()
+	if edge := now.Add(-limit); at.Before(edge) {
+		at = at.Add(skew)
+		if at.After(now) {
+			at = now
+		}
 	}
-	return at, true
+	return at.UTC(), true
+}
+
+// samlLoginRequest is what the signed SAML request cookie carries back to
+// the ACS.
+type samlLoginRequest struct {
+	requestID string
+	targetTo  string
+	limit     time.Duration
+	limited   bool
+}
+
+// checkAuthnInstant decides the authentication time of the session a SAML
+// ACS writes, and whether a limited sign-in may complete. It answers the
+// time (zero for unknown), whether that time is proof of an authentication,
+// and whether the sign-in may complete.
+//
+// An ORDINARY sign-in (the request carried no ForceAuthn) always completes
+// and records NO authentication time: without ForceAuthn the identity
+// provider may answer from a session of its own without asking the person
+// for anything, so neither the sign-in nor the AuthnInstant it states is
+// proof of a fresh authentication. Such a session never satisfies the
+// recent-authentication check, and no unsolicited or replayed response can
+// move a session's time: the time is decided by the SIGNED request cookie,
+// and the InResponseTo check binds the response to that request.
+//
+// A LIMITED sign-in completes only with an AuthnInstant within the limit,
+// allowing the provider's authored clock skew, and records it as proven.
+func checkAuthnInstant(authnInstant *time.Time, request samlLoginRequest, skew time.Duration, now time.Time) (time.Time, bool, bool) {
+	if !request.limited {
+		return time.Time{}, false, true
+	}
+	var at time.Time
+	if authnInstant != nil {
+		at = *authnInstant
+	}
+	at, ok := checkAuthenticationInstant(at, request.limit, skew, now)
+	return at, ok, ok
 }

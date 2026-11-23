@@ -21,6 +21,7 @@ All browser authentication routes are under `/auth/`.
 | Form login page | `/auth/form/login` |
 | Form credential post | `/auth/form/authorize` |
 | Form logout | `/auth/form/logout` |
+| Form password prompt (recent authentication, ADR-0059 R1.10b) | `/auth/form/reauthenticate` |
 
 The Form rows exist only when `ELITEA_FORM_LOGIN_ENABLED=true` AND no
 single sign-on plane is configured. Form sign-in is off by default; with it

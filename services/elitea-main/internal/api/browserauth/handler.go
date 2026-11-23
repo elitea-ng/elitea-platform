@@ -63,6 +63,14 @@ type Flow interface {
 		browserapp.AssertionVerifier,
 	) (browserapp.CompleteResult, error)
 	Logout(context.Context, string) (browserapp.LogoutContext, error)
+	// The password re-entry (reauthenticate.go).
+	ReauthenticationSubject(context.Context, string) (browserapp.ReauthenticationSubject, error)
+	Reauthenticate(
+		ctx context.Context,
+		sessionID string,
+		login string,
+		verifier browserapp.AssertionVerifier,
+	) (browserapp.ReauthenticateResult, error)
 }
 
 // ClientKeyResolver owns the trusted-proxy policy used for cross-replica rate
@@ -100,7 +108,9 @@ type Handler struct {
 	defaultLogoutTarget string
 	maxFormBodyBytes    int64
 	loginTemplate       *template.Template
-	brand               BrandSource
+	// reauthenticateTemplate is the password prompt (reauthenticate.go).
+	reauthenticateTemplate *template.Template
+	brand                  BrandSource
 }
 
 func NewHandler(
@@ -134,17 +144,22 @@ func NewHandler(
 	if err != nil {
 		return nil, ErrInvalidHandlerConfiguration
 	}
+	reauthenticateTemplate, err := parseAuthPage("reauthenticate.html", reauthenticateTemplateSource)
+	if err != nil {
+		return nil, ErrInvalidHandlerConfiguration
+	}
 	return &Handler{
-		flow:                flow,
-		form:                form,
-		attempts:            attempts,
-		clientKeys:          clientKeys,
-		cookies:             cookies,
-		defaultLoginTarget:  config.DefaultLoginTarget,
-		defaultLogoutTarget: config.DefaultLogoutTarget,
-		maxFormBodyBytes:    config.MaxFormBodyBytes,
-		loginTemplate:       loginTemplate,
-		brand:               config.Brand,
+		flow:                   flow,
+		form:                   form,
+		attempts:               attempts,
+		clientKeys:             clientKeys,
+		cookies:                cookies,
+		defaultLoginTarget:     config.DefaultLoginTarget,
+		defaultLogoutTarget:    config.DefaultLogoutTarget,
+		maxFormBodyBytes:       config.MaxFormBodyBytes,
+		loginTemplate:          loginTemplate,
+		reauthenticateTemplate: reauthenticateTemplate,
+		brand:                  config.Brand,
 	}, nil
 }
 
@@ -162,6 +177,10 @@ func (h *Handler) registerRoutes(router chi.Router) {
 	router.MethodFunc(http.MethodOptions, FormAuthorizePath, options("POST, OPTIONS"))
 	h.registerReadRoute(router, LogoutPath, h.beginLogout)
 	h.registerReadRoute(router, FormLogoutPath, h.logout)
+	router.MethodFunc(http.MethodGet, FormReauthenticatePath, h.renderReauthenticate)
+	router.MethodFunc(http.MethodHead, FormReauthenticatePath, head(h.renderReauthenticate))
+	router.MethodFunc(http.MethodPost, FormReauthenticatePath, h.submitReauthenticate)
+	router.MethodFunc(http.MethodOptions, FormReauthenticatePath, options("GET, HEAD, POST, OPTIONS"))
 }
 
 // FormPaths are every route of the Form router (Handler.Routes), relative to
@@ -171,7 +190,7 @@ func (h *Handler) registerRoutes(router chi.Router) {
 // check, and its only output was the X-Auth-* identity projection that no
 // edge consumes (#1359).
 func FormPaths() []string {
-	return []string{LoginPath, LogoutPath, FormLoginPath, FormAuthorizePath, FormLogoutPath}
+	return []string{LoginPath, LogoutPath, FormLoginPath, FormAuthorizePath, FormLogoutPath, FormReauthenticatePath}
 }
 
 func (h *Handler) registerReadRoute(router chi.Router, path string, handler http.HandlerFunc) {

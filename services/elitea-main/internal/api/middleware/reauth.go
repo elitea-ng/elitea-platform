@@ -19,16 +19,25 @@ import (
 // records (browser_sessions.authenticated_at, shared 0262), which a refresh
 // never moves, so a session kept alive by polling does not stay "recent".
 //
-// ONLY A SESSION WHOSE AUTHENTICATION TIME IS PROVEN SATISFIES IT. Today that
-// is an OIDC session with a known authentication time: the provider's
-// `auth_time`, which a limited sign-in (`max_age`) requires. A personal access
-// token, a native session and a run token carry no authentication time and
-// are refused whatever they claim. So are the pre-0117 signed cookie, the Form
-// session cookie, a SAML session (its sign-in time is not proof of a fresh
-// authentication until ForceAuthn, R1.10b #2594, teaches this file the SAML
-// kind) and a row whose authentication time is unknown. The refusal is the
-// same 401 for all of them: the remedy is a fresh browser sign-in, and a
-// client that cannot do one learns that the route is not for it.
+// ONLY A SESSION WHOSE AUTHENTICATION TIME IS PROVEN SATISFIES IT. Three kinds
+// of browser session can prove one (R1.10a, R1.10b #2594):
+//
+//   - an OIDC session whose provider stated `auth_time` (a limited sign-in,
+//     `max_age`, requires it);
+//   - a SAML session whose assertion answered a request that carried
+//     ForceAuthn="true" (a limited sign-in at /auth/saml/login?max_age=...),
+//     at the assertion's AuthnInstant;
+//   - a Form session, at the last time its person typed the password: the
+//     sign-in, or the re-entry at /auth/form/reauthenticate.
+//
+// The row says so (browser_sessions.authentication_proven, shared 0264; a
+// Form session's time is only ever a password entry). A SAML sign-in without
+// ForceAuthn, a row written before 0264, and a row whose authentication time
+// is unknown are refused. So are a personal access token, a native session, a
+// run token and the pre-0117 signed cookie, whatever they claim. The refusal
+// is the same 401 for all of them: the remedy is a fresh browser
+// authentication, and a client that cannot do one learns that the route is
+// not for it.
 
 // CodeReauthenticationRequired is the error code of the refusal. The web
 // client (R1.3b) reacts to it by sending the person through sign-in with a
@@ -49,6 +58,9 @@ type SessionKind string
 // single sign-on plane.
 const SessionKindSession SessionKind = "session"
 
+// SessionKindForm is a Form plane session (`elitea_auth.form_sessions`).
+const SessionKindForm SessionKind = "form"
+
 // BrowserAuthentication is what the helper knows about the authentication
 // behind a request.
 type BrowserAuthentication struct {
@@ -62,9 +74,9 @@ type BrowserAuthentication struct {
 // BrowserAuthenticationOf reports the browser authentication behind the
 // request, and false when the request was not authenticated by a session
 // this helper can vouch for: a token, a native session, a run token, the
-// legacy signed cookie, the Form session cookie, a provider whose sign-in
-// does not prove a fresh authentication yet, a row with no known
-// authentication time, or nobody.
+// legacy signed cookie, a session whose authentication time is not proven
+// (a SAML sign-in without ForceAuthn, a row written before shared 0264), a
+// provider this file does not know, or nobody.
 func BrowserAuthenticationOf(r *http.Request) (BrowserAuthentication, bool) {
 	source, ok := auth.AuthenticationSourceFromContext(r.Context())
 	if !ok || source != auth.AuthenticationSourceSession {
@@ -72,21 +84,28 @@ func BrowserAuthenticationOf(r *http.Request) (BrowserAuthentication, bool) {
 	}
 	user, ok := auth.UserFromContext(r.Context())
 	if !ok || user.TokenID != "" || user.NativeClientID != "" ||
-		user.BrowserSessionRef <= 0 || user.BrowserSessionAuthenticatedAt.IsZero() {
+		!user.BrowserSessionAuthenticationProven || user.BrowserSessionAuthenticatedAt.IsZero() {
 		return BrowserAuthentication{}, false
 	}
+	kind := SessionKindSession
 	switch user.BrowserSessionProvider {
-	case browsersession.ProviderOIDC:
+	case browsersession.ProviderOIDC, browsersession.ProviderSAML:
+		// An `elitea_session` row: it always has a reference.
+		if user.BrowserSessionRef <= 0 {
+			return BrowserAuthentication{}, false
+		}
+	case browsersession.ProviderForm:
+		// Only the Form session reader (browserauth.FormSessions) sets this
+		// provider with a proven time; no plane writes an `elitea_session`
+		// row for it, and such a row would be unproven.
+		kind = SessionKindForm
 	default:
-		// SAML and Form rows record the sign-in, which a silent single
-		// sign-on or a remembered password produces without a fresh proof
-		// (R1.10b adds ForceAuthn and the password re-entry). A provider
-		// this file does not know (the sealed session of R2.7) cannot be
-		// told apart from a kind a caller must refuse.
+		// A provider this file does not know (the sealed session of R2.7)
+		// cannot be told apart from a kind a caller must refuse.
 		return BrowserAuthentication{}, false
 	}
 	return BrowserAuthentication{
-		Kind:            SessionKindSession,
+		Kind:            kind,
 		Provider:        user.BrowserSessionProvider,
 		AuthenticatedAt: user.BrowserSessionAuthenticatedAt,
 	}, true

@@ -152,11 +152,18 @@ func Auth(cfg AuthConfig) func(http.Handler) http.Handler {
 				user, err := cfg.FormSessions.AuthenticateFormSession(r)
 				switch {
 				case err == nil:
+					// What the Form session row says about the authentication
+					// (ADR-0059 R1.10b), carried past validation: a validator
+					// that rebuilds the principal does not carry it.
+					formSession := user
 					user, err = validatePrincipal(r.Context(), cfg, user)
 					if err != nil {
 						writePrincipalRefusal(w, r, sourceFormSession, err)
 						return
 					}
+					user.BrowserSessionProvider = formSession.BrowserSessionProvider
+					user.BrowserSessionAuthenticatedAt = formSession.BrowserSessionAuthenticatedAt
+					user.BrowserSessionAuthenticationProven = formSession.BrowserSessionAuthenticationProven
 					// A COOKIE authenticated this request, so it is a session
 					// principal: BrowserWriteOrigin's cross-site write check
 					// and the browser-only routes treat it exactly like the
@@ -231,6 +238,7 @@ func Auth(cfg AuthConfig) func(http.Handler) http.Handler {
 						user.BrowserSessionRef = session.Ref
 						user.BrowserSessionAuthenticatedAt = session.AuthenticatedAt
 						user.BrowserSessionProvider = session.Provider
+						user.BrowserSessionAuthenticationProven = session.AuthenticationProven
 						serveAuthenticated(next, w, r, user, auth.AuthenticationSourceSession)
 						return
 					}
