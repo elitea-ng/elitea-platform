@@ -29,6 +29,14 @@ impl DelegationAssertionSource for Source {
     }
 }
 
+/// A session client as `connect_session` builds one: through the guarded
+/// builder (#2950).
+fn session_client() -> reqwest_mcp::Client {
+    crate::egress::mcp_client_builder(&reqwest_mcp::Url::parse(ENDPOINT).expect("endpoint"))
+        .build()
+        .expect("client")
+}
+
 fn source(answer: Result<MintedAssertion, DelegationAssertionError>) -> Arc<Source> {
     Arc::new(Source {
         answer,
@@ -52,7 +60,7 @@ fn the_header_is_the_documented_one() {
 async fn every_request_carries_the_cached_assertion() {
     let minted = source(Ok(issued()));
     let client = AssertingClient::new(
-        reqwest_mcp::Client::new(),
+        session_client(),
         DelegationAssertions::new(minted.clone(), true),
         ENDPOINT,
     );
@@ -67,7 +75,7 @@ async fn every_request_carries_the_cached_assertion() {
     }
     assert_eq!(minted.calls.load(Ordering::SeqCst), 1);
     // Without assertions the headers pass unchanged.
-    let plain = AssertingClient::plain(reqwest_mcp::Client::new());
+    let plain = AssertingClient::plain(session_client());
     assert!(
         plain
             .with_assertion(HashMap::new())
@@ -80,7 +88,7 @@ async fn every_request_carries_the_cached_assertion() {
 #[tokio::test]
 async fn a_governed_request_without_an_assertion_is_refused() {
     let client = AssertingClient::new(
-        reqwest_mcp::Client::new(),
+        session_client(),
         DelegationAssertions::new(source(Err(DelegationAssertionError::Unavailable)), true),
         ENDPOINT,
     );
@@ -91,7 +99,7 @@ async fn a_governed_request_without_an_assertion_is_refused() {
     assert!(error.to_string().contains(ASSERTION_UNAVAILABLE));
     // Any other run sends the request without one.
     let client = AssertingClient::new(
-        reqwest_mcp::Client::new(),
+        session_client(),
         DelegationAssertions::new(source(Err(DelegationAssertionError::Unavailable)), false),
         ENDPOINT,
     );
@@ -131,7 +139,7 @@ async fn the_server_receives_the_assertion() {
     // The audience is the HTTPS endpoint; the test server answers in plain
     // HTTP on the loopback.
     let client = AssertingClient::new(
-        reqwest_mcp::Client::new(),
+        session_client(),
         DelegationAssertions::new(source(Ok(issued())), true),
         ENDPOINT,
     );

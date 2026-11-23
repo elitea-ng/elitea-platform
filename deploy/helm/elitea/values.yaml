@@ -3860,6 +3860,13 @@ main:
     # services/elitea-worker-rust/docs/source-mapping/egress-guard-hardening-20261008.md
     # ("Upgrade notes for operators").
     ELITEA_MCP_EGRESS_ALLOWLIST: ""
+    # The worker's private permit (#2950), merged with Configuration > Worker
+    # Egress > Private Permit: the private destinations agent toolkits and
+    # remote MCP servers may reach (an on-premises Jira or GitLab), comma
+    # separated, egresslib grammar. A host name admits the private addresses it
+    # resolves to. Link-local and cloud-metadata addresses are never admitted.
+    # See docs/upgrading/2026-11-23-2950-worker-toolkit-private-addresses.md.
+    ELITEA_WORKER_EGRESS_PRIVATE_PERMIT: ""
     # (ELITEA_INVENTORY_CALLBACK_BASE_URL is retired, #1359 U5: artifacts go
     # over ArtifactObjectService on the platform listener, and source
     # expansion no longer depends on a callback origin. The render refuses the

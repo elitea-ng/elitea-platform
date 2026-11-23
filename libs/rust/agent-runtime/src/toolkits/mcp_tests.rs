@@ -1229,7 +1229,7 @@ async fn same_origin_redirect_is_followed_and_cross_origin_is_refused() {
     let (other, other_seen) = redirect_server(String::new()).await;
     let (base, seen) = redirect_server(other.clone()).await;
     let client_for = |path: &str| {
-        reqwest_mcp::Client::builder()
+        crate::egress::mcp_client_builder(&reqwest_mcp::Url::parse(&base).unwrap())
             .redirect(same_origin_redirect_policy(
                 reqwest_mcp::Url::parse(&format!("{base}{path}")).unwrap(),
             ))
@@ -2320,4 +2320,71 @@ fn a_projected_token_is_never_logged_at_trace() {
         !stdout.contains("test-only-fu250-marker") && !stderr.contains("test-only-fu250-marker"),
         "a log line carries the token"
     );
+}
+
+/// #2950: the remote MCP session client resolves through the egress guard.
+/// A server URL whose host resolves to a private or the metadata address is
+/// refused at dial, counted as `not_public`, and nothing is sent; a host the
+/// operator's private permit names is reached.
+#[tokio::test]
+async fn the_session_client_refuses_private_and_metadata_destinations() {
+    let (base, seen) = recording_redirect_server(String::new()).await;
+    let port = reqwest_mcp::Url::parse(&base)
+        .unwrap()
+        .port()
+        .expect("fixture port");
+    let run = crate::egress::RunEgress::configured(
+        crate::egress::PublicPolicy::Open,
+        crate::egress::PrivatePermit::parse(["permitted.example"]).expect("permit"),
+        crate::egress::tests::private_lookup(),
+    );
+    for host in ["ten.example", "metadata.example", "loop.example"] {
+        let endpoint = format!("http://{host}:{port}/mcp?token=secret");
+        let config = direct_config(json!({"Authorization": "Bearer pat"}), &Map::new())
+            .with_endpoint_for_test(&endpoint);
+        let client = crate::egress::scope(std::sync::Arc::clone(&run), async {
+            session_client_builder(&config)
+                .expect("builder")
+                .https_only(false)
+                .build()
+                .expect("client")
+        })
+        .await;
+        let error = client
+            .post(&endpoint)
+            .body("{}")
+            .send()
+            .await
+            .expect_err("refused at dial");
+        assert!(error.is_connect(), "{host}: {error}");
+    }
+    let summary = run.summary();
+    assert_eq!(summary.refused.len(), 3);
+    assert!(
+        summary
+            .refused
+            .iter()
+            .all(|host| host.reason == crate::egress::REFUSAL_REASON_NOT_PUBLIC)
+    );
+    assert!(seen.lock().unwrap().is_empty(), "nothing was sent");
+
+    // The same fixture under a name the permit lists is reached.
+    let endpoint = format!("http://permitted.example:{port}/mcp");
+    let config = direct_config(json!({"Authorization": "Bearer pat"}), &Map::new())
+        .with_endpoint_for_test(&endpoint);
+    let client = crate::egress::scope(std::sync::Arc::clone(&run), async {
+        session_client_builder(&config)
+            .expect("builder")
+            .https_only(false)
+            .build()
+            .expect("client")
+    })
+    .await;
+    let response = client
+        .post(&endpoint)
+        .body("{}")
+        .send()
+        .await
+        .expect("a permitted private host is reached");
+    assert_eq!(response.status(), 200);
 }

@@ -126,18 +126,19 @@ pub async fn materialize_governed_mcp_toolsets(
             ));
             continue;
         };
-        // A server outside the run's egress policy is never contacted
-        // (#1490), as on the legacy path: no redemption, no listing, no
-        // session. Its selected tools stay listed and fail as
+        // A server outside the run's egress policy (#1490), or one that
+        // resolves only to refused private, local or metadata addresses
+        // (#2950), is never contacted, as on the legacy path: no redemption,
+        // no listing, no session. Its selected tools stay listed and fail as
         // `egress_host_not_allowed` naming the host.
         let endpoint = super::public_endpoint(&server.config);
         if let Some(endpoint) = &endpoint
-            && policy.egress().check_url(endpoint).is_err()
+            && let Err(refused) = policy.egress().check_destination(endpoint).await
         {
             super::push_egress_refused_toolset(
                 reference,
                 &server.config,
-                endpoint,
+                &refused,
                 policy,
                 &mut out.toolsets,
             )?;

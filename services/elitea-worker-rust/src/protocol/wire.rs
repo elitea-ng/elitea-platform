@@ -318,15 +318,20 @@ mod merge_contract_tests {
 
     #[test]
     fn the_egress_policy_holds_a_mode_and_repeated_entries() {
-        // mode 1 (varint), allow 2 (repeated string): tags 0x08 and 0x12.
+        // mode 1 (varint), allow 2 and private_allow 3 (repeated string):
+        // tags 0x08, 0x12 and 0x1a.
         let policy = scan_message(
-            &[0x08, 0x02, 0x12, 0x01, b'a', 0x12, 0x01, b'b'],
+            &[
+                0x08, 0x02, 0x12, 0x01, b'a', 0x12, 0x01, b'b', 0x1a, 0x01, b'c',
+            ],
             Schema::WorkerEgressPolicy,
         )
         .unwrap();
         assert_eq!(policy.repeated_field(2).len(), 2);
+        assert_eq!(policy.repeated_field(3).len(), 1);
+        // Field 4 is reserved: unknown to this worker.
         assert!(matches!(
-            scan_message(&[0x1a, 0x00], Schema::WorkerEgressPolicy),
+            scan_message(&[0x22, 0x00], Schema::WorkerEgressPolicy),
             Err(super::ProtocolError::IncompatibleVersion(_))
         ));
         assert!(matches!(
@@ -653,11 +658,12 @@ const fn field_rule(schema: Schema, field: u32) -> Option<FieldRule> {
     }
 }
 
-/// `WorkerEgressPolicyV1` (#1490): the mode 1 and the repeated entries 2.
+/// `WorkerEgressPolicyV1` (#1490): the mode 1, the repeated entries 2 and
+/// the repeated private permit 3 (#2950).
 const fn egress_policy_rule(field: u32) -> Option<FieldRule> {
     match field {
         1 => Some(varint()),
-        2 => Some(FieldRule {
+        2 | 3 => Some(FieldRule {
             wire_type: 2,
             oneof: None,
             repeated: true,

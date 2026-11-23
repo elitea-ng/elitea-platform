@@ -12,6 +12,7 @@ use std::time::Duration;
 use crate::allowlist::PermitSet;
 use crate::classify::{Class, classify};
 use crate::policy::PublicPolicy;
+use crate::private::PrivatePermit;
 
 /// The most addresses one answer may carry (`addrcheck.MaxResolvedAddresses`).
 pub const MAX_RESOLVED_ADDRESSES: usize = 32;
@@ -128,24 +129,60 @@ pub async fn resolve_checked_with(
     if !public.admits(host, port) {
         return Err(ResolveError::NotAllowed);
     }
-    let addresses = if let Ok(literal) = host.parse::<IpAddr>() {
-        vec![literal]
-    } else if host.eq_ignore_ascii_case("localhost") {
-        vec![IpAddr::V4(Ipv4Addr::LOCALHOST)]
-    } else {
-        let answer = tokio::time::timeout(DNS_LOOKUP_TIMEOUT, lookup.lookup(host.to_owned()))
-            .await
-            .map_err(|_| ResolveError::Lookup)?
-            .map_err(|_| ResolveError::Lookup)?;
-        if answer.is_empty() {
-            return Err(ResolveError::Lookup);
-        }
-        if answer.len() > MAX_RESOLVED_ADDRESSES {
-            return Err(ResolveError::TooManyAddresses);
-        }
-        answer
-    };
+    let addresses = lookup_addresses(lookup, host).await?;
     let admitted = filter(&addresses, port, private);
+    if admitted.is_empty() {
+        return Err(ResolveError::NotPublic);
+    }
+    Ok(admitted)
+}
+
+/// Every address `host` names: an IP literal itself, `localhost` 127.0.0.1
+/// (never asked of the resolver), any other name what `lookup` answers
+/// within the timeout and the address bound.
+async fn lookup_addresses(lookup: &dyn Lookup, host: &str) -> Result<Vec<IpAddr>, ResolveError> {
+    if let Ok(literal) = host.parse::<IpAddr>() {
+        return Ok(vec![literal]);
+    }
+    if host.eq_ignore_ascii_case("localhost") {
+        return Ok(vec![IpAddr::V4(Ipv4Addr::LOCALHOST)]);
+    }
+    let answer = tokio::time::timeout(DNS_LOOKUP_TIMEOUT, lookup.lookup(host.to_owned()))
+        .await
+        .map_err(|_| ResolveError::Lookup)?
+        .map_err(|_| ResolveError::Lookup)?;
+    if answer.is_empty() {
+        return Err(ResolveError::Lookup);
+    }
+    if answer.len() > MAX_RESOLVED_ADDRESSES {
+        return Err(ResolveError::TooManyAddresses);
+    }
+    Ok(answer)
+}
+
+/// Resolve `host` and return only the addresses an operator's
+/// [`PrivatePermit`] admits (#2950): every public address, the private ones
+/// the permit names (by address or by `host`), never a forbidden one. `port`
+/// is the connection's port, `None` when the caller cannot tell (only
+/// unpinned entries apply). The public policy is the caller's to check
+/// first.
+///
+/// # Errors
+///
+/// [`ResolveError`] when the lookup fails, answers too much, or admits
+/// nothing ([`ResolveError::NotPublic`]).
+pub async fn resolve_permitted(
+    lookup: &dyn Lookup,
+    host: &str,
+    port: Option<u16>,
+    permit: &PrivatePermit,
+) -> Result<Vec<IpAddr>, ResolveError> {
+    let host = host
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .unwrap_or(host);
+    let addresses = lookup_addresses(lookup, host).await?;
+    let admitted = permit.filter(host, &addresses, port);
     if admitted.is_empty() {
         return Err(ResolveError::NotPublic);
     }
