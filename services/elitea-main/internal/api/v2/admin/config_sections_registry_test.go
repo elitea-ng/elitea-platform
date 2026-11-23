@@ -183,15 +183,15 @@ func TestTheRouteGateIsComputedFromTheSections(t *testing.T) {
 func TestSectionPairsFollowDecisionTwo(t *testing.T) {
 	t.Parallel()
 	want := map[string][2]string{
-		"guardrails":          {adminaccess.LLMPolicyView, adminaccess.LLMGuardrailsManage},
-		"circuit_breaker":     {adminaccess.LLMPolicyView, adminaccess.LLMPolicyManage},
-		"email":               {adminaccess.PlatformEmailManage, adminaccess.PlatformEmailManage},
-		"maintenance":         {adminaccess.PlatformMaintenanceManage, adminaccess.PlatformMaintenanceManage},
-		"auth":                {adminaccess.IdentitySSOView, adminaccess.IdentitySSOSettingsManage},
-		"analytics":           {adminaccess.PlatformConfigView, adminaccess.PlatformConfigManage},
-		"branding":            {adminaccess.ConfigurationBranding, adminaccess.ConfigurationBranding},
-		"native_clients":      {adminaccess.ConfigurationNativeClients, adminaccess.ConfigurationNativeClients},
-		"microsoft_apps":      {adminaccess.ConfigurationMicrosoftApps, adminaccess.ConfigurationMicrosoftApps},
+		"guardrails":      {adminaccess.LLMPolicyView, adminaccess.LLMGuardrailsManage},
+		"circuit_breaker": {adminaccess.LLMPolicyView, adminaccess.LLMPolicyManage},
+		"email":           {adminaccess.PlatformEmailManage, adminaccess.PlatformEmailManage},
+		"maintenance":     {adminaccess.PlatformMaintenanceManage, adminaccess.PlatformMaintenanceManage},
+		"auth":            {adminaccess.IdentitySSOView, adminaccess.IdentitySSOSettingsManage},
+		"analytics":       {adminaccess.PlatformConfigView, adminaccess.PlatformConfigManage},
+		"branding":        {adminaccess.ConfigurationBranding, adminaccess.ConfigurationBranding},
+		"native_clients":  {adminaccess.ConfigurationNativeClients, adminaccess.ConfigurationNativeClients},
+		"microsoft_apps":  {adminaccess.ConfigurationMicrosoftApps, adminaccess.ConfigurationMicrosoftApps},
 		// The read half is the pointer's page (pointerReadHalves).
 		"service_descriptors": {adminaccess.RuntimeAirunServiceProviders, adminaccess.ConfigurationServiceDescriptors},
 	}
