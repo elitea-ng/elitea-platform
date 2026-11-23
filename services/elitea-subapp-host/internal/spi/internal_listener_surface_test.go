@@ -26,6 +26,7 @@ const (
 	surfaceAllowlistFile = "internal_listener_allowlist.txt"
 	surfaceArchitecture  = "../../../../docs/ARCHITECTURE.md"
 	surfaceServiceName   = "elitea-subapp-host"
+	surfaceModulePath    = "github.com/elitea-ng/elitea-platform/services/elitea-subapp-host"
 )
 
 // surfaceRunner has both per-project and per-toolkit data, so the listener
@@ -59,13 +60,16 @@ func TestHostListenerServesOnlyReviewedMethods(t *testing.T) {
 
 func TestHostListenerAndRegistrationSitesAreReviewed(t *testing.T) {
 	list := loadAllowlist(t, surfaceAllowlistFile)
-	for _, problem := range checkSource(scanSource(t, surfaceModuleRoot), list) {
+	for _, problem := range checkSource(scanSource(t, surfaceModuleRoot, list), list) {
 		t.Error(problem)
 	}
 }
 
+// The host's handlers live in internal/spi; the scan also reads every package
+// of the module they import.
 func TestHostHandlersNeverResolveTheAdministrationMode(t *testing.T) {
-	for _, problem := range scanAdministrationMode(t, ".") {
+	list := loadAllowlist(t, surfaceAllowlistFile)
+	for _, problem := range scanAdministrationModeClosure(t, surfaceModuleRoot, surfaceModulePath, []string{"."}, list) {
 		t.Error(problem)
 	}
 }
@@ -87,10 +91,24 @@ func TestTheHostSurfaceCheckFailsOnAnUnlistedMethod(t *testing.T) {
 	}
 }
 
-func TestTheHostSourceCheckFailsOnAnUnlistedRoute(t *testing.T) {
-	list := loadAllowlist(t, surfaceAllowlistFile)
-	problems := checkSource(scanSource(t, filepath.Join("testdata", "listenersurface")), list)
-	for _, want := range []string{"RegisterFixtureAdminServiceServer", "POST /admin/roles"} {
+func TestTheHostAdministrationModeScanFailsOnAFixtureHandler(t *testing.T) {
+	if problems := scanAdministrationMode(t, filepath.Join("testdata", "adminmode")); len(problems) != 4 {
+		t.Fatalf("want two constants and two literals flagged, got %v", problems)
+	}
+}
+
+func TestTheHostSourceCheckFailsOnUnreviewedListeners(t *testing.T) {
+	list := loadAllowlist(t, filepath.Join("testdata", "listenersurface", "allowlist.txt"))
+	problems := checkSource(scanSource(t, filepath.Join("testdata", "listenersurface"), list), list)
+	for _, want := range []string{
+		"RegisterFixtureAdminServiceServer",
+		"grpc.NewServer occurs 2 times, not 1",
+		"POST /admin/roles",
+		"server.go:registerMore DELETE /admin/users",
+		"server.go:registerDefault PUT /admin/policy",
+		"server.go:listenRaw net.Listen",
+		"no helper directory fixturetest",
+	} {
 		if !containsSurfaceProblem(problems, want) {
 			t.Errorf("the source check missed %s: %v", want, problems)
 		}

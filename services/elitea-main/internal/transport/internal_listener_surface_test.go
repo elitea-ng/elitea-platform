@@ -167,26 +167,28 @@ func TestInternalListenersServeOnlyReviewedMethods(t *testing.T) {
 
 func TestInternalListenerAndRegistrationSitesAreReviewed(t *testing.T) {
 	list := loadAllowlist(t, allowlistFile)
-	scan := scanSource(t, moduleRoot)
-	for _, problem := range checkSource(scan, list) {
+	for _, problem := range checkSource(scanSource(t, moduleRoot, list), list) {
 		t.Error(problem)
 	}
 }
 
+// TestInternalHandlersNeverResolveTheAdministrationMode scans every package
+// under internal/transport, the package of every registered implementation
+// (the content server lives in infra/storage), and every package of the
+// module they import, directly or not.
 func TestInternalHandlersNeverResolveTheAdministrationMode(t *testing.T) {
+	list := loadAllowlist(t, allowlistFile)
 	_, implementations := composedListeners(t)
-	dirs := map[string]bool{}
-	// Every package under internal/transport, and the package of every
-	// registered implementation (the content server lives in infra/storage).
+	starts := map[string]bool{}
 	if err := filepath.WalkDir(".", func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if entry.IsDir() {
-			if skippedDir(entry.Name()) && path != "." {
-				return filepath.SkipDir
-			}
-			dirs[path] = true
+		if entry.IsDir() && alwaysSkipped(entry.Name()) && path != "." {
+			return filepath.SkipDir
+		}
+		if !entry.IsDir() && strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, "_test.go") {
+			starts[filepath.Dir(path)] = true
 		}
 		return nil
 	}); err != nil {
@@ -194,24 +196,26 @@ func TestInternalHandlersNeverResolveTheAdministrationMode(t *testing.T) {
 	}
 	for _, implementation := range implementations {
 		pkg := reflect.TypeOf(implementation).Elem().PkgPath()
-		relative, ok := strings.CutPrefix(pkg, modulePath+"/internal/transport")
+		relative, ok := strings.CutPrefix(pkg, modulePath+"/internal/transport/")
 		if ok {
-			dirs["."+relative] = true
+			starts[filepath.FromSlash(relative)] = true
 			continue
 		}
 		relative, ok = strings.CutPrefix(pkg, modulePath+"/")
 		if !ok {
 			t.Fatalf("implementation %T is outside the module", implementation)
 		}
-		dirs[filepath.Join(moduleRoot, relative)] = true
+		starts[filepath.Join(moduleRoot, filepath.FromSlash(relative))] = true
 	}
-	if !dirs[filepath.Join(moduleRoot, "internal/infra/storage")] {
-		t.Fatal("the content server's package is not scanned")
+	if !starts[filepath.Join(moduleRoot, "internal", "infra", "storage")] || !starts[filepath.Join("runtimegrpc", "control")] {
+		t.Fatalf("the content and control servers' packages are not scanned: %v", starts)
 	}
-	for dir := range dirs {
-		for _, problem := range scanAdministrationMode(t, dir) {
-			t.Error(problem)
-		}
+	dirs := make([]string, 0, len(starts))
+	for dir := range starts {
+		dirs = append(dirs, dir)
+	}
+	for _, problem := range scanAdministrationModeClosure(t, moduleRoot, modulePath, dirs, list) {
+		t.Error(problem)
 	}
 }
 
@@ -219,6 +223,32 @@ func TestArchitectureListsTheInternalAdministrationWrites(t *testing.T) {
 	list := loadAllowlist(t, allowlistFile)
 	for _, problem := range checkArchitecture(t, architecture, serviceName, list) {
 		t.Error(problem)
+	}
+}
+
+// TestTheListenerChecksCopiesAreAlike keeps the scheduler's and the host's
+// copies of internal_listener_checks_test.go equal to this one beyond the
+// package clause, so a fix to a check reaches all three.
+func TestTheListenerChecksCopiesAreAlike(t *testing.T) {
+	body := func(file string) string {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, rest, ok := strings.Cut(string(raw), "\n")
+		if !ok {
+			t.Fatalf("%s is empty", file)
+		}
+		return rest
+	}
+	want := body("internal_listener_checks_test.go")
+	for _, copied := range []string{
+		"../../../elitea-scheduler/cmd/elitea-scheduler/internal_listener_checks_test.go",
+		"../../../elitea-subapp-host/internal/spi/internal_listener_checks_test.go",
+	} {
+		if body(copied) != want {
+			t.Errorf("%s differs from internal_listener_checks_test.go beyond the package clause: copy the fix", copied)
+		}
 	}
 }
 
@@ -248,20 +278,47 @@ func TestTheSurfaceCheckFailsOnAnAdministrationWriteMainDoesNotDecide(t *testing
 }
 
 func TestTheSourceCheckFailsOnAnUnlistedRegistration(t *testing.T) {
-	list := loadAllowlist(t, allowlistFile)
-	scan := scanSource(t, filepath.Join("testdata", "listenersurface", "registration"))
-	problems := checkSource(scan, list)
-	for _, want := range []string{"RegisterFixtureAdminServiceServer", "grpc.NewServer", "http.Server", "POST /admin/roles"} {
+	list := loadAllowlist(t, filepath.Join("testdata", "listenersurface", "registration_allowlist.txt"))
+	problems := checkSource(scanSource(t, filepath.Join("testdata", "listenersurface", "registration"), list), list)
+	for _, want := range fixtureSourceProblems {
 		if !containsProblem(problems, want) {
 			t.Errorf("the source check missed %s: %v", want, problems)
 		}
 	}
 }
 
+// fixtureSourceProblems is what the source check reports on
+// testdata/listenersurface/registration with its fixture allowlist.
+var fixtureSourceProblems = []string{
+	"RegisterFixtureAdminServiceServer",
+	"grpc.NewServer occurs 2 times, not 1",
+	"server.go:serveAdmin http.Server",
+	"POST /admin/roles",
+	// A mux held in a parameter, the default mux, a raw listener.
+	"server.go:registerMore DELETE /admin/users",
+	"server.go:registerDefault PUT /admin/policy",
+	"server.go:registerDefault http.HandleFunc",
+	"server.go:listenRaw net.Listen",
+	"no helper directory fixturetest",
+}
+
 func TestTheAdministrationModeScanFailsOnAFixtureHandler(t *testing.T) {
 	problems := scanAdministrationMode(t, filepath.Join("testdata", "listenersurface", "adminmode"))
-	if len(problems) != 2 {
-		t.Fatalf("want the constant and the literal flagged, got %v", problems)
+	for _, want := range []string{"(PermissionModeAdministration)", "(ModeAdministration)", "(a literal)"} {
+		if !containsProblem(problems, want) {
+			t.Errorf("the scan missed %s: %v", want, problems)
+		}
+	}
+	if len(problems) != 4 {
+		t.Fatalf("want two constants and two literals flagged, got %v", problems)
+	}
+}
+
+func TestTheAdministrationModeClosureFailsOnAStaleModeLine(t *testing.T) {
+	list := loadAllowlist(t, filepath.Join("testdata", "listenersurface", "stale_mode.txt"))
+	problems := scanAdministrationModeClosure(t, moduleRoot, modulePath, []string{"modelgrpc"}, list)
+	if !containsProblem(problems, "internal/nothing.go does not name the administration mode") {
+		t.Fatalf("a stale mode line passed: %v", problems)
 	}
 }
 

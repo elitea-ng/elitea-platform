@@ -65,19 +65,30 @@ in the source that builds a listener or registers a gRPC service:
 A test beside each allowlist (run by `ci-go`) builds the service's internal
 gRPC listeners through their real constructors and compares what
 `grpc.Server.GetServiceInfo()` reports with the allowlist, and scans the
-module's source for listener and registration sites, both ways: a new method,
-service, listener or internal route fails until it is reviewed. It also fails
-when:
+module's source for listener and registration sites (with how often each
+occurs) and internal mux routes, both ways: a new method, service, listener
+or internal route fails until it is reviewed. Test-helper packages are
+skipped only when the allowlist names them, and no scanned file may import
+one. The test also fails when:
 
-- a method that can change administration data is decided by anything other
-  than Main's own route, run in process with the caller's bearer
+- a method declared to change administration data is decided by anything
+  other than Main's own route, run in process with the caller's bearer
   (`main-route`): an execution claim or a workload certificate never
   authorizes an administration write;
-- an internal handler names the `administration` permission mode. Internal
-  handlers resolve permissions for a principal they build from an execution
-  claim (a synthetic `auth.User`), always in the default (project) mode;
-  resolving the administration mode there would pick up that user's
-  elevation from inside the cluster.
+- an internal handler, or any package of the module it imports, names the
+  `administration` permission mode (a `*ModeAdministration` or
+  `*AdministrationMode` identifier, or the literal), outside the files the
+  allowlist reviews by name (the constant's definition, the resolver, the
+  public-route middleware, enrollment). Internal handlers resolve permissions
+  for a principal they build from an execution claim (a synthetic
+  `auth.User`), always in the default (project) mode; resolving the
+  administration mode there would pick up that user's elevation from inside
+  the cluster.
+
+What a method writes and what decides it are declared by the reviewer of its
+allowlist line; the test cannot prove them. It proves that every method was
+reviewed, that a method declared `admin` is decided by Main's route and
+listed below, and the administration-mode rule above.
 
 A future internal RPC that changes administration data carries the principal
 and the elevation id, Main makes the decision, and it follows ADR-0036 (gRPC

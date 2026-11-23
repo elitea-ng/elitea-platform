@@ -28,8 +28,15 @@ http | internal/spi/admin.go:AdminHandler | GET /readyz | read | none | kubelet 
 http | internal/spi/admin.go:AdminHandler | GET /metrics | read | none | metrics scraper (no credential)
 
 # --- listener and registration sites ---------------------------------------------
-site | cmd/elitea-subapp-host/main.go:run | http.Server
-site | internal/spi/admin.go:AdminHandler | http.NewServeMux
-site | internal/spi/platform.go:newAuthorizedGRPCServer | grpc.NewServer
-site | internal/spi/platform.go:NewGRPCServer | RegisterProviderServiceServer
-site | internal/spi/platform.go:registerPlatform | RegisterPlatformOperationsServer
+site | cmd/elitea-subapp-host/main.go:run | http.Server | 1
+site | cmd/elitea-subapp-host/main.go:run | net.Listen | 1
+site | cmd/elitea-subapp-host/main.go:listen | net.Listen | 1
+site | internal/spi/admin.go:AdminHandler | http.NewServeMux | 1
+site | internal/spi/platform.go:newAuthorizedGRPCServer | grpc.NewServer | 1
+site | internal/spi/platform.go:NewGRPCServer | RegisterProviderServiceServer | 1
+site | internal/spi/platform.go:registerPlatform | RegisterPlatformOperationsServer | 2
+
+# --- helper directories the source scan skips --------------------------------------
+# Test-helper packages: they serve fakes to tests only and no binary links them.
+helper | internal/spi/spitest | the host's listener and HTTP shim for its own tests
+helper | internal/engine/enginetest | a fake elitea.engine.v1 EngineService for the host's tests

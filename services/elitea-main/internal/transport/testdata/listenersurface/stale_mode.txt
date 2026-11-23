@@ -1,0 +1,2 @@
+# Fixture: a mode line that names a file the closure never reaches.
+mode | internal/nothing.go | fixture

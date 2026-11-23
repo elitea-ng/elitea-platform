@@ -11,32 +11,41 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"google.golang.org/grpc"
 )
 
 const (
 	surfaceModuleRoot    = "../.."
+	surfaceModulePath    = "github.com/elitea-ng/elitea-platform/services/elitea-scheduler"
 	surfaceAllowlistFile = "internal_listener_allowlist.txt"
 	surfaceArchitecture  = "../../../../docs/ARCHITECTURE.md"
 	surfaceServiceName   = "elitea-scheduler"
 )
 
-func TestSchedulerListenerSitesAndRoutesAreReviewed(t *testing.T) {
+// TestSchedulerServesNoGRPC holds the scheduler to no gRPC method: the
+// allowlist may name none, and a grpc.NewServer in the source fails the site
+// check below until a composed-listener comparison is added here.
+func TestSchedulerServesNoGRPC(t *testing.T) {
 	list := loadAllowlist(t, surfaceAllowlistFile)
-	for _, entry := range list {
-		if entry.kind == "grpc" {
-			t.Errorf("allowlist line %d: the scheduler serves no gRPC; a gRPC listener here needs the composed-listener comparison first", entry.line)
-		}
-	}
-	for _, problem := range checkSource(scanSource(t, surfaceModuleRoot), list) {
+	for _, problem := range checkServed(map[string]map[string]grpc.ServiceInfo{}, list) {
 		t.Error(problem)
 	}
 }
 
+func TestSchedulerListenerSitesAndRoutesAreReviewed(t *testing.T) {
+	list := loadAllowlist(t, surfaceAllowlistFile)
+	for _, problem := range checkSource(scanSource(t, surfaceModuleRoot, list), list) {
+		t.Error(problem)
+	}
+}
+
+// The health handlers are composed here (cmd/elitea-scheduler); the scan also
+// reads every package of the module they import.
 func TestSchedulerHandlersNeverResolveTheAdministrationMode(t *testing.T) {
-	for _, dir := range []string{".", filepath.Join(surfaceModuleRoot, "internal", "health"), filepath.Join(surfaceModuleRoot, "internal", "budgetwriteback")} {
-		for _, problem := range scanAdministrationMode(t, dir) {
-			t.Error(problem)
-		}
+	list := loadAllowlist(t, surfaceAllowlistFile)
+	for _, problem := range scanAdministrationModeClosure(t, surfaceModuleRoot, surfaceModulePath, []string{"."}, list) {
+		t.Error(problem)
 	}
 }
 
@@ -47,10 +56,24 @@ func TestArchitectureListsTheSchedulerAdministrationWrites(t *testing.T) {
 	}
 }
 
-func TestTheSchedulerSourceCheckFailsOnAnUnlistedListener(t *testing.T) {
-	list := loadAllowlist(t, surfaceAllowlistFile)
-	problems := checkSource(scanSource(t, filepath.Join("testdata", "listenersurface")), list)
-	for _, want := range []string{"grpc.NewServer", "RegisterFixtureAdminServiceServer", "POST /admin/roles"} {
+func TestTheSchedulerAdministrationModeScanFailsOnAFixtureHandler(t *testing.T) {
+	if problems := scanAdministrationMode(t, filepath.Join("testdata", "adminmode")); len(problems) != 4 {
+		t.Fatalf("want two constants and two literals flagged, got %v", problems)
+	}
+}
+
+func TestTheSchedulerSourceCheckFailsOnUnreviewedListeners(t *testing.T) {
+	list := loadAllowlist(t, filepath.Join("testdata", "listenersurface", "allowlist.txt"))
+	problems := checkSource(scanSource(t, filepath.Join("testdata", "listenersurface"), list), list)
+	for _, want := range []string{
+		"RegisterFixtureAdminServiceServer",
+		"grpc.NewServer occurs 2 times, not 1",
+		"POST /admin/roles",
+		"server.go:registerMore DELETE /admin/users",
+		"server.go:registerDefault PUT /admin/policy",
+		"server.go:listenRaw net.Listen",
+		"no helper directory fixturetest",
+	} {
 		found := false
 		for _, problem := range problems {
 			found = found || strings.Contains(problem, want)

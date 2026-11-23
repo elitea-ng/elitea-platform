@@ -16,5 +16,5 @@ http | cmd/elitea-scheduler/main.go:newHealthMux | /readyz/budget-writeback | re
 http | cmd/elitea-scheduler/main.go:newHealthMux | /metrics | read | none | metrics scraper (no credential)
 
 # --- listener sites --------------------------------------------------------------
-site | cmd/elitea-scheduler/main.go:main | http.Server
-site | cmd/elitea-scheduler/main.go:newHealthMux | http.NewServeMux
+site | cmd/elitea-scheduler/main.go:main | http.Server | 1
+site | cmd/elitea-scheduler/main.go:newHealthMux | http.NewServeMux | 1

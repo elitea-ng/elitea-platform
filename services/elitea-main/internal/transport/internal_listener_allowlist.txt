@@ -9,7 +9,9 @@
 # must run Main's public route in process ("main-route"), and is listed in
 # docs/ARCHITECTURE.md ("Internal listeners and administration data") with the
 # caller identity it requires. Reviewing a new line means answering: what does
-# it write, what decides it, who may call it.
+# it write, what decides it, who may call it. Those answers are declared here
+# by the reviewer; the test cannot prove them, only that every method, route,
+# listener and registration has been answered for.
 
 # --- platform listener (ELITEA_RUNTIME_PLATFORM_ADDRESS, :9446) ---------------
 # Each service runs the public handler's own route in process with the
@@ -135,21 +137,40 @@ http | internal/auditexport/config.go:Service.Run | GET /metrics | read | none |
 # --- listener and registration sites ---------------------------------------------
 # The public HTTP API (:8080): every route passes Main's authentication and
 # permission middleware. It is the one place administration data is written.
-site | cmd/elitea-main/http_server.go:newHTTPServer | http.Server
-site | cmd/elitea-main/audit_export.go:serveSafetyMetrics | http.NewServeMux
-site | cmd/elitea-main/audit_export.go:serveSafetyMetrics | http.Server
-site | internal/auditexport/config.go:Service.Run | http.NewServeMux
-site | internal/auditexport/config.go:Service.Run | http.Server
-site | internal/transport/runtimegrpc/platform_server.go:newAuthorizedGRPCServer | grpc.NewServer
-site | internal/transport/runtimegrpc/platform_server.go:newAuthorizedGRPCServer | RegisterHealthServer
-site | internal/transport/runtimegrpc/private_servers.go:newPrivateServerSet | grpc.NewServer
-site | internal/transport/runtimegrpc/private_servers.go:newPrivateServerSet | RegisterRuntimeControlServiceServer
-site | internal/transport/runtimegrpc/private_servers.go:newPrivateServerSet | RegisterTokenIntrospectionServiceServer
-site | internal/transport/runtimegrpc/private_servers.go:newPrivateServerSet | RegisterWorkspaceStoreServiceServer
-site | internal/transport/runtimegrpc/private_servers.go:newPrivateServerSet | RegisterEgressAuditServiceServer
-site | internal/transport/runtimegrpc/private_servers.go:newPrivateServerSet | RegisterExecutionOutputServiceServer
-site | internal/transport/modelgrpc/server.go:Server.PlatformService | RegisterModelServiceServer
-site | internal/transport/artifactgrpc/server.go:Server.PlatformService | RegisterArtifactObjectServiceServer
-site | internal/transport/internaltoolgrpc/server.go:Server.PlatformService | RegisterInternalToolServiceServer
-site | internal/transport/runtimegrpc/vectorintrospection/server.go:Server.PlatformService | RegisterTokenIntrospectionServiceServer
-site | internal/infra/storage/content_server.go:ContentServer.Register | RegisterRuntimeContentServiceServer
+site | cmd/elitea-main/http_server.go:newHTTPServer | http.Server | 1
+site | cmd/elitea-main/audit_export.go:serveSafetyMetrics | http.NewServeMux | 1
+site | cmd/elitea-main/audit_export.go:serveSafetyMetrics | http.Server | 1
+site | internal/auditexport/config.go:Service.Run | http.NewServeMux | 1
+site | internal/auditexport/config.go:Service.Run | http.Server | 1
+site | internal/transport/runtimegrpc/platform_server.go:NewPlatformServer | net.Listen | 1
+site | internal/transport/runtimegrpc/private_servers.go:NewPrivateServerSet | net.Listen | 1
+site | internal/transport/runtimegrpc/platform_server.go:newAuthorizedGRPCServer | grpc.NewServer | 1
+site | internal/transport/runtimegrpc/platform_server.go:newAuthorizedGRPCServer | RegisterHealthServer | 1
+site | internal/transport/runtimegrpc/private_servers.go:newPrivateServerSet | grpc.NewServer | 2
+site | internal/transport/runtimegrpc/private_servers.go:newPrivateServerSet | RegisterRuntimeControlServiceServer | 1
+site | internal/transport/runtimegrpc/private_servers.go:newPrivateServerSet | RegisterTokenIntrospectionServiceServer | 1
+site | internal/transport/runtimegrpc/private_servers.go:newPrivateServerSet | RegisterWorkspaceStoreServiceServer | 1
+site | internal/transport/runtimegrpc/private_servers.go:newPrivateServerSet | RegisterEgressAuditServiceServer | 1
+site | internal/transport/runtimegrpc/private_servers.go:newPrivateServerSet | RegisterExecutionOutputServiceServer | 1
+site | internal/transport/modelgrpc/server.go:Server.PlatformService | RegisterModelServiceServer | 1
+site | internal/transport/artifactgrpc/server.go:Server.PlatformService | RegisterArtifactObjectServiceServer | 1
+site | internal/transport/internaltoolgrpc/server.go:Server.PlatformService | RegisterInternalToolServiceServer | 1
+site | internal/transport/runtimegrpc/vectorintrospection/server.go:Server.PlatformService | RegisterTokenIntrospectionServiceServer | 1
+site | internal/infra/storage/content_server.go:ContentServer.Register | RegisterRuntimeContentServiceServer | 1
+
+# --- helper directories the source scan skips --------------------------------------
+# Test-helper packages: they serve fakes to tests only and no binary links them.
+helper | internal/llmproxy/llmproxytest | a fake elitea.gateway.v1 GatewayService for elitea-main's tests
+helper | internal/llmproxy/gatewaytest | builds on llmproxytest for elitea-main's tests
+helper | internal/providerhost/proxy/providertest | a fake elitea.subapp.v1 ProviderService for elitea-main's tests
+
+# --- files that may name the administration permission mode --------------------------
+# The administration-mode scan reads internal/transport, the package of every
+# registered implementation and every package of the module they import. These
+# files, reached through that closure, name the mode for a reason reviewed here;
+# none is an internal handler resolving it for a principal built from a claim.
+mode | internal/auth/permissions.go | defines the constant
+mode | internal/infra/legacyrbac/postgres.go | the permission resolver itself (R1.2a, #2506, adds its zero-credential rule)
+mode | internal/api/middleware/maintenance.go | public-route middleware: resolves for the request's authenticated principal, only on the public HTTP API
+mode | internal/application/identity/provision.go | enrollment carries the configured initial administration role of a new user; it resolves nothing
+mode | internal/infra/identityrepo/postgres.go | enrollment applies that initial administration role; it resolves nothing
