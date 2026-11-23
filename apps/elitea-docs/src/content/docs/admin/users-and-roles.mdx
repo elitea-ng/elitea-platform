@@ -51,6 +51,46 @@ Open **Roles**. It shows a permission matrix across three scopes, each a tab:
 
 <Screenshot id="admin-roles-matrix" alt="Roles permission matrix with scope tabs" />
 
+## Narrow administration permissions
+
+Besides the broad central permissions such as `runtime.plugins` and `configuration.governance`, the deployment has narrow ones, each for one subject. The upgrade that adds them grants all of them to the `super_admin` role and all but `identity.sso.trust.manage` to the `admin` role, so both administrator roles keep everything they could do and hold the new names too. No existing grant is removed.
+
+No page or route accepts the narrow names yet. Later releases let each route accept its narrow permission beside the broad one, and add built-in roles (such as an LLM manager or a project administrator) that hold only a narrow set.
+
+| Permission | Allows | Narrows |
+|---|---|---|
+| `llm.catalogue.view` | Read global providers, platform models, the default model and prices. Never a credential value. | `configuration.governance` |
+| `llm.catalogue.manage` | Create, edit, check, revalidate and delete them; adopt provider models. | `configuration.governance` |
+| `llm.policy.view` | Read gateway governance rules (routing, throttles, guardrails) and the guardrail and breaker sections; validate a rule expression. | `configuration.governance`, `runtime.plugins` |
+| `llm.policy.manage` | Edit routing and throttle rules and the breaker section. | `configuration.governance`, `runtime.plugins` |
+| `llm.guardrails.manage` | Edit guardrail rules and the guardrail sections, including the fail mode. | `configuration.governance`, `runtime.plugins` |
+| `llm.usage.view` | Read gateway status, usage, request logs and budget alerts. | `configuration.governance` |
+| `llm.alerts.manage` | Edit budget alerts. | `configuration.governance` |
+| `platform.config.view` | Read Configuration sections that have no narrower permission, and Features. | `runtime.plugins` |
+| `platform.config.manage` | Edit them. | `runtime.plugins` |
+| `identity.sso.view` | Read identity providers, SCIM clients and SCIM group bindings. | `runtime.plugins`, `admin.auth.users`, `configuration.roles.user_project_permissions.view` |
+| `identity.sso.settings.manage` | Edit what does not change trust: the display name, the button text and order, the attribute mapping other than its identity fields, and whether an existing provider is enabled; revoke and delete a SCIM client; edit SCIM group bindings to project roles (you still give only what you hold). | `runtime.plugins`, `admin.auth.users`, `configuration.roles.user_project_permissions.edit` |
+| `identity.sso.trust.manage` | Change whom the platform trusts: create or delete an identity provider; change its issuer, metadata URL, client credentials, signing certificate, adoption flags and the identity fields of its attribute mapping; create or rotate a SCIM client. Equivalent to `super_admin`, and granted to `super_admin` alone. | none (today these actions need `admin.auth.users.super_admin`) |
+| `platform.email.manage` | Read and edit e-mail settings; send a test. | `runtime.plugins` |
+| `platform.maintenance.manage` | Read and set maintenance mode; use the application during a window. | `runtime.plugins` |
+| `platform.operations.view` | Read system information, tracing status, background jobs and tasks. | `runtime.plugins` |
+| `platform.operations.manage` | Cancel a background job; start the notice run. | `runtime.plugins` |
+| `mcp.catalogue.manage` | Read and edit prebuilt MCP servers. | `runtime.plugins` |
+| `projects.members.manage` | Add, change and remove members of any project, without widening your own access. | `configuration.users.users.create`, `.edit` and `.delete` |
+| `projects.settings.view` | Read the guarded settings of any project. | none (new) |
+| `projects.settings.manage` | Edit the guarded settings of any project. | none (new) |
+| `access.roles.view` | Read who holds which administrative role, tokens with administration access, the elevation history and the access posture. | `admin.auth.users`, `modes.users` |
+| `access.breakglass.request` | Request an elevation. | none |
+| `access.breakglass.approve` | Approve or deny another person's request; end an elevation. | none |
+| `access.breakglass.review` | Review an ended elevation. | none |
+| `access.breakglass.manage` | Edit the break-glass settings; read the sealed credential list. | none |
+
+`identity.sso.trust.manage` and the four `access.breakglass.*` permissions are seeded-only: an upgrade grants them, and they are not meant to be added to other roles from the Roles matrix.
+
+<Note>
+`projects.settings.view` and `projects.settings.manage` are the only new names that are not a narrower part of an existing permission. Once the project settings gate accepts them, both administrator roles can read and change the guarded settings (cloud executor, worker egress, AI disclosure, browser, computer use) of a project they are not a member of.
+</Note>
+
 ## No escalation
 
 The server makes sure that no administrator can raise their own access, and that no administrator can give a central (administration) role or permission that they do not hold. It applies these rules to the Roles matrix, to role definitions, to the Users page, to the role assignments under `/admin/modes`, to project members, to bulk invites, to the personal and team project matrix and to SCIM group bindings:

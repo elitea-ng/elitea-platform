@@ -4,9 +4,9 @@ package adminaccess
 // resolves the `administration` mode names one of these constants; a string
 // literal there fails internal/api/admin_permission_literal_test.go.
 //
-// The 27 narrow names of ADR-0059 decision 2 are not here yet. Each enters the
-// table in the story whose migration grants it (R0.2, R0.15), so the grant
-// gate stays green at every commit.
+// The narrow names of ADR-0059 decision 2 enter the table in the story whose
+// migration grants them, so the grant gate stays green at every commit: 25 in
+// R0.2 (shared 0261), the agents.governance.* pair in R0.15.
 const (
 	// People and access.
 	AdminAuthUsers                         = "admin.auth.users"
@@ -75,6 +75,47 @@ const (
 	ProviderHubDescriptorActivate        = "provider_hub.descriptor.activate"
 )
 
+// The narrow permissions of ADR-0059 decision 2 that shared 0261 grants to
+// super_admin and admin (identity.sso.trust.manage to super_admin alone). No
+// gate accepts them yet; stories R0.3 to R0.6 wire each beside the legacy
+// name it narrows.
+const (
+	// Models and spend.
+	LLMCatalogueView    = "llm.catalogue.view"
+	LLMCatalogueManage  = "llm.catalogue.manage"
+	LLMPolicyView       = "llm.policy.view"
+	LLMPolicyManage     = "llm.policy.manage"
+	LLMGuardrailsManage = "llm.guardrails.manage"
+	LLMUsageView        = "llm.usage.view"
+	LLMAlertsManage     = "llm.alerts.manage"
+
+	// Platform.
+	PlatformConfigView        = "platform.config.view"
+	PlatformConfigManage      = "platform.config.manage"
+	PlatformEmailManage       = "platform.email.manage"
+	PlatformMaintenanceManage = "platform.maintenance.manage"
+	PlatformOperationsView    = "platform.operations.view"
+	PlatformOperationsManage  = "platform.operations.manage"
+	MCPCatalogueManage        = "mcp.catalogue.manage"
+
+	// People and access: identity.
+	IdentitySSOView           = "identity.sso.view"
+	IdentitySSOSettingsManage = "identity.sso.settings.manage"
+	IdentitySSOTrustManage    = "identity.sso.trust.manage"
+
+	// Projects.
+	ProjectsMembersManage  = "projects.members.manage"
+	ProjectsSettingsView   = "projects.settings.view"
+	ProjectsSettingsManage = "projects.settings.manage"
+
+	// People and access: roles and break-glass.
+	AccessRolesView         = "access.roles.view"
+	AccessBreakglassRequest = "access.breakglass.request"
+	AccessBreakglassApprove = "access.breakglass.approve"
+	AccessBreakglassReview  = "access.breakglass.review"
+	AccessBreakglassManage  = "access.breakglass.manage"
+)
+
 // row is a row with the defaults of an existing name: grantable from the
 // matrix, not legacy, no narrower parent, not kept by a native session, no
 // maintenance bypass, and NOT a token scope.
@@ -109,7 +150,7 @@ func rows() []Permission {
 	// in-application check a native session keeps.
 	publishedAgents.NativeClient = true
 
-	return []Permission{
+	return append([]Permission{
 		// People and access.
 		row(AdminAuthUsers, AreaPeopleAccess, ClassWrite),
 		superAdmin,
@@ -175,5 +216,90 @@ func rows() []Permission {
 		row(RuntimeAirunServiceProviders, AreaPlatform, ClassRead),
 		row(ProviderHubDescriptorRegister, AreaPlatform, ClassWrite),
 		row(ProviderHubDescriptorActivate, AreaPlatform, ClassWrite),
+	}, narrowRows()...)
+}
+
+// narrow is a row of decision 2: the defaults of row, plus the legacy name it
+// narrows ("" for a new capability).
+//
+// Narrows holds ONE name, the legacy permission the row splits. Where
+// decision 2 lists several (llm.policy.* narrows configuration.governance
+// and runtime.plugins; identity.sso.* also narrows admin.auth.users and the
+// user_project_permissions pair; projects.members.manage narrows the
+// configuration.users.users.* writes; access.roles.view also narrows
+// modes.users), it holds the first; the gates of R0.3 to R0.6 accept every
+// legacy name the ADR lists, not only this one.
+func narrow(name string, area Area, class Class, narrows string) Permission {
+	p := row(name, area, class)
+	p.Narrows = narrows
+	return p
+}
+
+// seeded is a narrow row that only a migration grants.
+func seeded(name string, area Area, class Class, narrows string) Permission {
+	p := narrow(name, area, class, narrows)
+	p.Grantable = GrantableSeededOnly
+	return p
+}
+
+// narrowRows are the 25 rows of shared 0261. None is a token scope (Token
+// false): the scoped token of R1.1 and R1.2 opts rows in, and identity trust
+// never is one.
+func narrowRows() []Permission {
+	maintenance := narrow(PlatformMaintenanceManage, AreaPlatform, ClassWrite, RuntimePlugins)
+	// The narrow name of the maintenance bypass ("use the application during
+	// a window", decision 2). R0.4 makes the in-application bypass accept it
+	// beside runtime.plugins, and a native session keeps that check
+	// (decision 7), so it carries both attributes runtime.plugins carries.
+	maintenance.NativeClient = true
+	maintenance.Maintenance = true
+
+	return []Permission{
+		// Models and spend.
+		narrow(LLMCatalogueView, AreaModelsSpend, ClassRead, ConfigurationGovernance),
+		narrow(LLMCatalogueManage, AreaModelsSpend, ClassWrite, ConfigurationGovernance),
+		narrow(LLMPolicyView, AreaModelsSpend, ClassRead, ConfigurationGovernance),
+		narrow(LLMPolicyManage, AreaModelsSpend, ClassWrite, ConfigurationGovernance),
+		// Guardrails are a safety control (ADR-0041), not a cost setting, but
+		// they are gateway policy and live in the same area.
+		narrow(LLMGuardrailsManage, AreaModelsSpend, ClassWrite, ConfigurationGovernance),
+		narrow(LLMUsageView, AreaModelsSpend, ClassRead, ConfigurationGovernance),
+		narrow(LLMAlertsManage, AreaModelsSpend, ClassWrite, ConfigurationGovernance),
+
+		// Platform.
+		narrow(PlatformConfigView, AreaPlatform, ClassRead, RuntimePlugins),
+		narrow(PlatformConfigManage, AreaPlatform, ClassWrite, RuntimePlugins),
+		narrow(PlatformEmailManage, AreaPlatform, ClassWrite, RuntimePlugins),
+		maintenance,
+		narrow(PlatformOperationsView, AreaPlatform, ClassRead, RuntimePlugins),
+		narrow(PlatformOperationsManage, AreaPlatform, ClassWrite, RuntimePlugins),
+		// Prebuilt MCP servers are connectors: the Agents and governance
+		// area, beside Toolkits and Connector requests (decision 6).
+		narrow(MCPCatalogueManage, AreaAgentsGovernance, ClassWrite, RuntimePlugins),
+
+		// People and access: identity. Trust is equivalent to super_admin:
+		// seeded only, granted to super_admin alone (decision 3). It narrows
+		// nothing; it names the admin.auth.users.super_admin gate of #2558.
+		narrow(IdentitySSOView, AreaPeopleAccess, ClassRead, RuntimePlugins),
+		narrow(IdentitySSOSettingsManage, AreaPeopleAccess, ClassWrite, RuntimePlugins),
+		seeded(IdentitySSOTrustManage, AreaPeopleAccess, ClassWrite, ""),
+
+		// Projects. The two settings names are new capabilities, not
+		// narrowings: they let an administration permission reach the
+		// guarded settings of a project (R0.6b).
+		narrow(ProjectsMembersManage, AreaProjects, ClassWrite, ConfigurationUsersUsersCreate),
+		narrow(ProjectsSettingsView, AreaProjects, ClassRead, ""),
+		narrow(ProjectsSettingsManage, AreaProjects, ClassWrite, ""),
+
+		// People and access: the Access page.
+		narrow(AccessRolesView, AreaPeopleAccess, ClassRead, AdminAuthUsers),
+
+		// Security: Break-glass (decision 6). The four names are seeded
+		// only: the elevation ledger is not something the Roles matrix hands
+		// out (decision 3).
+		seeded(AccessBreakglassRequest, AreaSecurity, ClassWrite, ""),
+		seeded(AccessBreakglassApprove, AreaSecurity, ClassApprove, ""),
+		seeded(AccessBreakglassReview, AreaSecurity, ClassApprove, ""),
+		seeded(AccessBreakglassManage, AreaSecurity, ClassWrite, ""),
 	}
 }

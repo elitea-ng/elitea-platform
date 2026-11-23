@@ -129,11 +129,18 @@ func TestAttributesOfTheNamedRows(t *testing.T) {
 			t.Errorf("%s = %v, want %v", what, got, names)
 		}
 	}
-	want("seeded_only", seededOnly, adminaccess.AdminAuthUsersSuperAdmin)
+	// The global administrator's own permission, identity trust (R0.2,
+	// super_admin alone) and the four break-glass names (R0.2).
+	want("seeded_only", seededOnly,
+		adminaccess.AccessBreakglassApprove, adminaccess.AccessBreakglassManage,
+		adminaccess.AccessBreakglassRequest, adminaccess.AccessBreakglassReview,
+		adminaccess.AdminAuthUsersSuperAdmin, adminaccess.IdentitySSOTrustManage)
 	// The two in-application checks a native session keeps (ADR-0059
-	// decision 7): Marketplace moderation and the maintenance bypass.
-	want("native_client", nativeClient, adminaccess.RuntimeAdminPublishedAgents, adminaccess.RuntimePlugins)
-	want("maintenance", maintenance, adminaccess.RuntimePlugins)
+	// decision 7): Marketplace moderation and the maintenance bypass, whose
+	// narrow name is platform.maintenance.manage (R0.2).
+	want("native_client", nativeClient, adminaccess.PlatformMaintenanceManage,
+		adminaccess.RuntimeAdminPublishedAgents, adminaccess.RuntimePlugins)
+	want("maintenance", maintenance, adminaccess.PlatformMaintenanceManage, adminaccess.RuntimePlugins)
 	// No row is a token scope until the scoped token (R1.1, R1.2) opts rows
 	// in. Identity trust (admin.auth.users.super_admin) never is.
 	want("token", token)
