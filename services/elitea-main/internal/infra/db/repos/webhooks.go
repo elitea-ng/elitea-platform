@@ -138,12 +138,14 @@ func (r *WebhooksRepo) Create(ctx context.Context, projectID string, wh webhook.
 	return created, err
 }
 
-// Update replaces url, events and active. A nil secret leaves the stored
-// secret as it is; a non-nil one replaces it, and "" removes it.
+// Update replaces url, events and active. A nil or empty secret leaves the
+// stored secret as it is; a non-empty one replaces it. An empty string is
+// "keep", not "remove": a client that echoes a read back (which carries no
+// secret) must not silently strip the webhook's signature.
 func (r *WebhooksRepo) Update(ctx context.Context, projectID, webhookID string, wh webhook.Webhook, secret *string) (webhook.Webhook, error) {
 	var updated webhook.Webhook
 	err := r.withTx(ctx, func(tx pgx.Tx) error {
-		if secret != nil {
+		if secret != nil && *secret != "" {
 			if err := r.replaceSecret(ctx, tx, projectID, webhookID, *secret); err != nil {
 				return err
 			}
@@ -191,8 +193,9 @@ func (r *WebhooksRepo) RotateSecret(ctx context.Context, projectID, webhookID, s
 	return rotated, err
 }
 
-// Delete removes the row and the vault value its reference names, in one
-// transaction.
+// Delete removes the row and, best effort, the vault value its reference
+// names, in one transaction. A vault that cannot be written does not block
+// the delete (see purgeSecret): a broken webhook must stay removable.
 func (r *WebhooksRepo) Delete(ctx context.Context, projectID, webhookID string) error {
 	return r.withTx(ctx, func(tx pgx.Tx) error {
 		var ref string
@@ -206,7 +209,8 @@ func (r *WebhooksRepo) Delete(ctx context.Context, projectID, webhookID string) 
 		if err != nil {
 			return fmt.Errorf("webhooks: delete: %w", err)
 		}
-		return r.purgeSecret(ctx, tx, projectID, ref)
+		r.purgeSecret(ctx, tx, projectID, ref)
+		return nil
 	})
 }
 
@@ -243,7 +247,7 @@ type WebhookSecretMoveReport struct {
 
 // MoveLegacySecretsToVault seals every plaintext `secret` still in the table
 // into its project vault, writes the reference and blanks the column (issue
-// 2963, migrations/shared/0265_webhook_secret_reference.sql).
+// 2963, migrations/shared/0266_webhook_secret_reference.sql).
 //
 // It is Go and not SQL because SQL cannot open the vault: the value is sealed
 // with the project's Fernet key. One row per transaction, each re-checked
@@ -316,8 +320,8 @@ func (r *WebhooksRepo) moveOneLegacySecret(ctx context.Context, id string) (bool
 	return moved, err
 }
 
-// replaceSecret points the row at a new vault value (or at none, for "") and
-// removes the value it pointed at before. It locks the row first, so two
+// replaceSecret points the row at a new vault value and removes the value it
+// pointed at before. It locks the row first, so two
 // concurrent rotations cannot both purge the same previous value and leave
 // one reference naming nothing.
 func (r *WebhooksRepo) replaceSecret(ctx context.Context, tx pgx.Tx, projectID, webhookID, secret string) error {
@@ -341,7 +345,8 @@ func (r *WebhooksRepo) replaceSecret(ctx context.Context, tx pgx.Tx, projectID, 
 		projectID, webhookID, ref); err != nil {
 		return fmt.Errorf("webhooks: store secret reference: %w", err)
 	}
-	return r.purgeSecret(ctx, tx, projectID, previous)
+	r.purgeSecret(ctx, tx, projectID, previous)
+	return nil
 }
 
 // sealSecret stores one signing secret as a hidden secret under a new random
@@ -370,24 +375,46 @@ func (r *WebhooksRepo) sealSecret(ctx context.Context, tx pgx.Tx, projectID, sec
 	return "{{secret." + name + "}}", nil
 }
 
-// purgeSecret removes the vault value a reference names. "" is a no-op.
-func (r *WebhooksRepo) purgeSecret(ctx context.Context, tx pgx.Tx, projectID, ref string) error {
+// purgeSecret removes the vault value a reference names, BEST EFFORT. "" is a
+// no-op.
+//
+// A failure is logged and does not fail the caller. The row already stopped
+// naming the value, so what is left behind is an unreferenced hidden secret,
+// readable by no route. Failing instead would make a webhook in a project
+// whose vault cannot be written (absent, or sealed under another master key)
+// impossible to delete or rotate. The purge runs under a savepoint, so a
+// failed vault statement cannot abort the caller's transaction.
+func (r *WebhooksRepo) purgeSecret(ctx context.Context, tx pgx.Tx, projectID, ref string) {
 	name, ok := webhookSecretName(ref)
 	if !ok {
-		return nil
+		return
+	}
+	logFailure := func(err error) {
+		slog.ErrorContext(ctx, "webhooks: could not remove a replaced signing secret from the project vault",
+			"project", projectID, "err", err)
 	}
 	if r.vault == nil {
-		return errWebhookSecretStoreUnavailable
+		logFailure(errWebhookSecretStoreUnavailable)
+		return
 	}
 	numericProject, err := vaultProjectID(projectID)
 	if err != nil {
-		return err
+		logFailure(err)
+		return
 	}
-	if err := r.vault.PurgeProjectHiddenSecrets(ctx, tx, numericProject, []string{name}); err != nil {
-		slog.ErrorContext(ctx, "webhooks: purge signing secret", "project", projectID, "err", err)
-		return errWebhookSecretStoreUnavailable
+	savepoint, err := tx.Begin(ctx)
+	if err != nil {
+		logFailure(err)
+		return
 	}
-	return nil
+	if err := r.vault.PurgeProjectHiddenSecrets(ctx, savepoint, numericProject, []string{name}); err != nil {
+		_ = savepoint.Rollback(ctx)
+		logFailure(err)
+		return
+	}
+	if err := savepoint.Commit(ctx); err != nil {
+		logFailure(err)
+	}
 }
 
 // vaultProjectID is the numeric id a project vault is keyed by. The route

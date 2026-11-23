@@ -12,7 +12,9 @@ SELECT
     token.expires,
     COALESCE(token.user_id, 0)::integer AS user_id,
     token.name,
-    binding.project_id
+    binding.project_id,
+    token.admin_access,
+    token.admin_scopes
 FROM public.auth_core__token AS token
 LEFT JOIN elitea_identity.token_project_binding AS binding
        ON binding.token_id = token.id
@@ -27,7 +29,9 @@ SELECT
     token.expires,
     COALESCE(token.user_id, 0)::integer AS user_id,
     token.name,
-    binding.project_id
+    binding.project_id,
+    token.admin_access,
+    token.admin_scopes
 FROM public.auth_core__token AS token
 LEFT JOIN elitea_identity.token_project_binding AS binding
        ON binding.token_id = token.id
@@ -35,6 +39,11 @@ WHERE token.uuid = sqlc.arg(uuid)::text
   AND token.uuid IS NOT NULL
   AND token.user_id = sqlc.arg(user_id)::integer;
 
+-- admin_access and admin_scopes (shared 0265, ADR-0059 R1.1) are returned here
+-- and by the list, get and principal queries for the resolver (R1.2a) and the
+-- token handlers (R1.3a). The INSERT names neither column ON PURPOSE: a new
+-- token takes the column default `none`, so it has no administration rights
+-- until scopes are chosen. Nothing reads them before R1.2a.
 -- name: CreatePATForActiveUser :one
 INSERT INTO public.auth_core__token (uuid, expires, user_id, name)
 SELECT
@@ -50,7 +59,9 @@ RETURNING
     uuid,
     expires,
     COALESCE(user_id, 0)::integer AS user_id,
-    name;
+    name,
+    admin_access,
+    admin_scopes;
 
 -- A binding is written once, in the same transaction as the token INSERT, and
 -- after the membership check. There is no update query on purpose: a binding is
@@ -108,7 +119,9 @@ SELECT
     COALESCE(owner.email, '')::text AS email,
     binding.project_id,
     (bound_project.suspended IS FALSE
-        AND bound_project.create_success IS TRUE)::boolean AS bound_project_active
+        AND bound_project.create_success IS TRUE)::boolean AS bound_project_active,
+    token.admin_access,
+    token.admin_scopes
 FROM public.auth_core__token AS token
 JOIN public.auth_core__user AS owner ON owner.id = token.user_id
 LEFT JOIN elitea_identity.token_project_binding AS binding

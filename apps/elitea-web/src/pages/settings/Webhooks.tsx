@@ -38,7 +38,7 @@ import { serverErrorMessage } from '@/shared/api/serverErrorMessage';
 import { t } from '@/shared/i18n';
 import { useSelectedProjectStore } from '@/widgets/app-shell';
 import { DrawerPageHeader } from '@/shared/ui/settings/DrawerPageHeader';
-import type { ListWebhooks200, Webhook, WebhookWithSecret, WebhookWriteRequest } from '@/shared/api/generated/model';
+import type { ListWebhooks200, Webhook, WebhookWriteRequest } from '@/shared/api/generated/model';
 import {
   createWebhook,
   deleteWebhook,
@@ -69,6 +69,17 @@ function toViewRow(webhook: Webhook): WebhookViewRow {
     hasSecret: webhook.has_secret,
     active: webhook.active,
   };
+}
+
+/**
+ * The secret a create or rotate response carries, or `undefined` when the
+ * body has none. Checked at run time rather than cast: a rotate whose answer
+ * lost the value must not open an empty "copy your secret" dialog.
+ */
+function secretFrom(body: unknown): string | undefined {
+  if (typeof body !== 'object' || body === null || !('secret' in body)) return undefined;
+  const { secret } = body;
+  return typeof secret === 'string' && secret.length > 0 ? secret : undefined;
 }
 
 /**
@@ -166,7 +177,7 @@ export const WebhooksContent = memo(function WebhooksContent() {
           setFormOpen(false);
           // The create response is the one place the server returns the
           // secret; the dialog shows that value, once.
-          setRevealSecret((response.data as WebhookWithSecret).secret ?? secret);
+          setRevealSecret(secretFrom(response.data) ?? secret);
         },
         onError: (error) => {
           const message = serverErrorMessage(
@@ -185,9 +196,17 @@ export const WebhooksContent = memo(function WebhooksContent() {
   // The server generates the new value and returns it in this response only.
   const rotateSecret = useCallback(
     (row: WebhookViewRow) => {
+      const rotateFailed = onError(t('entities.webhook.error.rotateFailed', 'Failed to rotate the secret'));
       rotateMutation.mutate(row.id, {
-        onSuccess: (response) => setRevealSecret((response.data as WebhookWithSecret).secret ?? ''),
-        onError: onError(t('entities.webhook.error.rotateFailed', 'Failed to rotate the secret')),
+        onSuccess: (response) => {
+          const secret = secretFrom(response.data);
+          if (secret === undefined) {
+            rotateFailed();
+            return;
+          }
+          setRevealSecret(secret);
+        },
+        onError: rotateFailed,
       });
     },
     [rotateMutation, onError],

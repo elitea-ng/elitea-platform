@@ -22386,9 +22386,9 @@ components:
           type: string
           description: >
             Write-only signing secret, sealed into the project vault. On
-            create it is returned once in the response. On update, omit it to
-            keep the stored secret, send a value to replace it (not echoed),
-            or send an empty string to remove it.
+            create it is returned once in the response. On update, omit it
+            (or send an empty string) to keep the stored secret, or send a
+            value to replace it; the value is not echoed.
         active: { type: boolean }
       required: [url, events, active]
 

@@ -275,16 +275,18 @@ func (d *Dispatcher) HandleDomainEvent(ctx context.Context, projectID, eventType
 			continue
 		}
 		wh := wh
-		// Read once per webhook for this dispatch batch, and held no longer:
-		// every retry of this event signs with it, and the next event reads
-		// the vault again, so a rotation takes effect on the next event
-		// rather than whenever a cache expires.
-		secret := d.resolveSigningSecret(ctx, wh)
 		// One goroutine per subscriber: a slow or unreachable destination
 		// must not delay delivery to every other webhook on the same event,
 		// the same reason the original (unwired) HandleEvent already used
-		// `go d.deliver` per webhook.
-		go d.deliverAndLog(ctx, wh, secret, eventType, body)
+		// `go d.deliver` per webhook. The vault read runs inside it for the
+		// same reason, so the emitting goroutine never waits on the vault.
+		go func() {
+			// Read once per webhook for this dispatch, and held no longer:
+			// every retry of this event signs with it, and the next event
+			// reads the vault again, so a rotation takes effect on the next
+			// event rather than whenever a cache expires.
+			d.deliverAndLog(ctx, wh, d.resolveSigningSecret(ctx, wh), eventType, body)
+		}()
 	}
 }
 

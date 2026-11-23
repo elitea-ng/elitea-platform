@@ -78,11 +78,8 @@ func (m *mockWebhookRepo) Update(_ context.Context, _ string, id string, wh Webh
 		}
 		stored := &m.webhooks[index]
 		stored.URL, stored.Events, stored.Active = wh.URL, wh.Events, wh.Active
-		if secret != nil {
-			stored.Secret, stored.SecretRef = "", ""
-			if *secret != "" {
-				stored.SecretRef = "{{secret.rotated}}"
-			}
+		if secret != nil && *secret != "" {
+			stored.Secret, stored.SecretRef = "", "{{secret.replaced}}"
 		}
 		stored.UpdatedAt = time.Now()
 		return *stored, nil

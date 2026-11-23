@@ -83,6 +83,11 @@ RETURNING id`, devBootstrapTokenUUID, userID).Scan(&tokenID); err != nil {
 		if principal.UserID != userID || principal.Email != "dev-bootstrap@autotest.local" {
 			t.Fatalf("principal = %+v, want user %d", principal, userID)
 		}
+		// The validator's row carries the administration access of shared
+		// 0265, which the dev bootstrap applies (dumpGuardExemptMigrations).
+		if principal.AdminAccess != "none" || len(principal.AdminScopes) != 0 {
+			t.Errorf("admin_access = %q, admin_scopes = %v, want none and empty", principal.AdminAccess, principal.AdminScopes)
+		}
 		// An unbound token is the default and must stay unbound (spec §3.3).
 		if principal.ProjectID != nil {
 			t.Errorf("project_id = %d for a token with no binding row, want NULL", *principal.ProjectID)

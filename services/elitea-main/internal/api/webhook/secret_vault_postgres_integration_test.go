@@ -154,6 +154,17 @@ func TestCreateStoresTheSecretInTheVaultOnly(t *testing.T) {
 	if _, keptRef := storedSecretColumns(t, pool, created.ID); keptRef != rotatedRef {
 		t.Fatalf("an update without a secret changed the reference to %q", keptRef)
 	}
+	// An empty secret is "keep" as well: a client echoing a read back must
+	// not strip the signature.
+	empty := ""
+	if _, err := webhooksRepo.Update(ctx, projectID, created.ID, webhook.Webhook{
+		URL: receiver.server.URL, Events: []string{"conversation.created"}, Active: true,
+	}, &empty); err != nil {
+		t.Fatalf("update with an empty secret: %v", err)
+	}
+	if _, keptRef := storedSecretColumns(t, pool, created.ID); keptRef != rotatedRef {
+		t.Fatalf("an update with an empty secret changed the reference to %q", keptRef)
+	}
 
 	if err := webhooksRepo.Delete(ctx, projectID, created.ID); err != nil {
 		t.Fatalf("delete: %v", err)
@@ -233,5 +244,31 @@ func TestASecretWriteWithoutAVaultIsRefused(t *testing.T) {
 	}
 	if rows != 0 {
 		t.Fatalf("%d rows hold a plaintext secret", rows)
+	}
+}
+
+// A webhook whose vault can no longer be written stays deletable: the vault
+// clean-up is best effort and never blocks the row delete.
+func TestDeleteSucceedsWhenTheVaultCannotBeWritten(t *testing.T) {
+	pool := newWebhookPool(t)
+	ctx := context.Background()
+
+	vaulted, _ := vaultedWebhooksRepo(t, pool)
+	created, err := vaulted.Create(ctx, "9105", webhook.Webhook{
+		URL: "https://autotest.invalid/hook", Events: []string{}, Secret: "s", Active: true,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	if err := repos.NewWebhooksRepo(pool).Delete(ctx, "9105", created.ID); err != nil {
+		t.Fatalf("delete without a vault: %v", err)
+	}
+	var rows int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM webhooks WHERE id = $1`, created.ID).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 0 {
+		t.Fatal("the webhook row survived the delete")
 	}
 }

@@ -32,7 +32,7 @@ type Webhook struct {
 	// Secret is plaintext signing material. On the way IN to the repository
 	// it is the value to seal. On the way OUT it is non-empty only for a row
 	// written before the vault move reached it (see
-	// migrations/shared/0265_webhook_secret_reference.sql), which the
+	// migrations/shared/0266_webhook_secret_reference.sql), which the
 	// dispatcher still signs with so an upgrade sends nothing unsigned.
 	Secret string `json:"-"`
 	// SecretRef is the vault reference the dispatcher resolves per delivery.
@@ -51,8 +51,8 @@ type Repository interface {
 	// project vault in the same transaction.
 	Create(ctx context.Context, projectID string, wh Webhook) (Webhook, error)
 	Get(ctx context.Context, projectID, webhookID string) (Webhook, error)
-	// Update replaces url, events and active. A nil secret keeps the stored
-	// secret; a non-nil one replaces it ("" removes it).
+	// Update replaces url, events and active. A nil or empty secret keeps
+	// the stored secret; a non-empty one replaces it.
 	Update(ctx context.Context, projectID, webhookID string, wh Webhook, secret *string) (Webhook, error)
 	Delete(ctx context.Context, projectID, webhookID string) error
 	ListByEvent(ctx context.Context, projectID, eventType string) ([]Webhook, error)
@@ -61,9 +61,10 @@ type Repository interface {
 	RotateSecret(ctx context.Context, projectID, webhookID, secret string) (Webhook, error)
 }
 
-// webhookWriteRequest is the create and update body. `secret` is a pointer
-// so an update can tell "not sent" (keep the stored secret) from "" (remove
-// it). Update never echoes it.
+// webhookWriteRequest is the create and update body. On update an absent or
+// empty `secret` keeps the stored one, so a client that sends back what it
+// read (which carries no secret) cannot strip the signature by accident; a
+// non-empty value replaces it. Update never echoes it.
 type webhookWriteRequest struct {
 	URL    string   `json:"url"`
 	Events []string `json:"events"`

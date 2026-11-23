@@ -3,7 +3,7 @@
 **What changed.** An outbound webhook's signing secret is now stored in the
 project's secret vault as a hidden secret. The `webhooks` row keeps only a
 reference to it (new column `secret_ref`, shared migration
-`0265_webhook_secret_reference.sql`), and the `secret` column is left empty.
+`0266_webhook_secret_reference.sql`), and the `secret` column is left empty.
 
 - `GET /webhooks/prompt_lib/{projectID}` and
   `GET /webhooks/prompt_lib/{projectID}/{webhookID}` no longer return
@@ -14,12 +14,16 @@ reference to it (new column `secret_ref`, shared migration
   (same permission as `PUT`): the server generates a new 256-bit secret,
   deletes the previous one and returns the new value once.
 - `PUT /webhooks/prompt_lib/{projectID}/{webhookID}`: `secret` is now
-  optional. Leaving it out keeps the stored secret (it used to clear it). A
-  value replaces it and `""` removes it. The response never includes it.
+  optional. Leaving it out, or sending `""`, keeps the stored secret (both
+  used to clear it), so a page or script that sends back what it read cannot
+  strip the signature. A non-empty value replaces it. The response never
+  includes it.
 - A write that stores a secret answers `503` when the project vault cannot be
   written (for example, a vault sealed with a different `SECRETS_MASTER_KEY`).
   It never falls back to storing plain text.
-- Deleting a webhook also deletes its secret from the vault.
+- Deleting a webhook also deletes its secret from the vault. A vault that
+  cannot be written does not block the delete; the leftover value is logged
+  and no route can read it.
 
 **Existing secrets.** On start-up, elitea-main moves every secret still
 stored in plain text into its project vault, writes the reference and blanks

@@ -1217,10 +1217,15 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// browser_sessions.authentication_proven and form_sessions.authenticated_at
 	// (issue 2594, ADR-0059 R1.10b). No permission.
 	//
-	// 265: shared/0265_webhook_secret_reference.sql, webhooks.secret_ref, the
+	// 265: shared/0265_token_admin_access.sql, auth_core__token.admin_access
+	// and admin_scopes, with the `inherit` backfill for personal access tokens
+	// of administration-role holders (issue 2505, ADR-0059 R1.1). No
+	// permission.
+	//
+	// 266: shared/0266_webhook_secret_reference.sql, webhooks.secret_ref, the
 	// vault reference that replaces the plaintext signing secret (issue
 	// 2963). No permission.
-	require.EqualValues(t, 265, Head(shared))
+	require.EqualValues(t, 266, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

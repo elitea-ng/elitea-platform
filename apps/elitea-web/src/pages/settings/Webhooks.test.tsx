@@ -381,4 +381,50 @@ describe('WebhooksContent — the secret is write-only', () => {
     expect(screen.queryByRole('button', { name: 'Toggle secret visibility' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Copy secret' })).not.toBeInTheDocument();
   });
+
+  it('a rotate answer without a secret reports a failure instead of an empty dialog', async () => {
+    server.use(
+      fullPermissions(),
+      http.get(WEBHOOKS_PATH, () =>
+        HttpResponse.json({
+          items: [
+            {
+              id: 'wh-1',
+              project_id: 'proj-1',
+              url: 'https://example.com/hook',
+              events: [],
+              has_secret: true,
+              active: true,
+              created_at: '2026-01-01T00:00:00Z',
+              updated_at: '2026-01-01T00:00:00Z',
+            },
+          ],
+        }),
+      ),
+      http.post(ROTATE_PATH, () =>
+        HttpResponse.json({
+          id: 'wh-1',
+          project_id: 'proj-1',
+          url: 'https://example.com/hook',
+          events: [],
+          has_secret: true,
+          active: true,
+          created_at: '2026-01-01T00:00:00Z',
+          updated_at: '2026-01-01T00:00:00Z',
+        }),
+      ),
+    );
+
+    mount();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('webhook-rotate-wh-1')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('webhook-rotate-wh-1'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Failed to rotate the secret')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('webhook-secret-value')).not.toBeInTheDocument();
+  });
 });
