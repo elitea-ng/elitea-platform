@@ -678,7 +678,8 @@ type WorkerEgressPolicyV1 struct {
 	// supplies it, never a toolkit setting. At most 256 entries; a malformed
 	// entry fails the command closed. Sent in every mode; Main omits the
 	// policy only while the mode is open and this list is empty.
-	PrivateAllow  []string `protobuf:"bytes,3,rep,name=private_allow,json=privateAllow,proto3" json:"private_allow,omitempty"`
+	// Field 11, because 3 to 10 were reserved before it existed.
+	PrivateAllow  []string `protobuf:"bytes,11,rep,name=private_allow,json=privateAllow,proto3" json:"private_allow,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1423,7 +1424,7 @@ const file_elitea_runtime_v1_command_proto_rawDesc = "" +
 	"\x14WorkerEgressPolicyV1\x129\n" +
 	"\x04mode\x18\x01 \x01(\x0e2%.elitea.runtime.v1.WorkerEgressModeV1R\x04mode\x12\x14\n" +
 	"\x05allow\x18\x02 \x03(\tR\x05allow\x12#\n" +
-	"\rprivate_allow\x18\x03 \x03(\tR\fprivateAllowJ\x04\b\x04\x10\v\"\xa5\x03\n" +
+	"\rprivate_allow\x18\v \x03(\tR\fprivateAllowJ\x04\b\x03\x10\v\"\xa5\x03\n" +
 	"\x18WorkerDelegationPolicyV1\x12\x1b\n" +
 	"\tmax_depth\x18\x01 \x01(\rR\bmaxDepth\x12=\n" +
 	"\x04mode\x18\x02 \x01(\x0e2).elitea.runtime.v1.WorkerDelegationModeV1R\x04mode\x12*\n" +

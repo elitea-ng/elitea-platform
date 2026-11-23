@@ -169,8 +169,9 @@ message WorkerEgressPolicyV1 {
   // supplies it, never a toolkit setting. At most 256 entries; a malformed
   // entry fails the command closed. Sent in every mode; Main omits the
   // policy only while the mode is open and this list is empty.
-  repeated string private_allow = 3;
-  reserved 4 to 10;
+  // Field 11, because 3 to 10 were reserved before it existed.
+  repeated string private_allow = 11;
+  reserved 3 to 10;
 }
 
 // How grant narrowing treats a callee that needs a grant its caller lacks.
