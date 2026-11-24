@@ -72,9 +72,8 @@ func TestElevationReconcilerRunsAndStopsOnShutdown(t *testing.T) {
 
 // A nil pool composes nothing and is not an error.
 func TestElevationReconcilerWithoutADatabase(t *testing.T) {
-	done, err := startElevationReconciler(context.Background(), nil, slog.Default())
-	if done != nil || err != nil {
-		t.Fatalf("startElevationReconciler(nil pool) = %v, %v", done, err)
+	if err := startElevationReconciler(context.Background(), nil, slog.Default()); err != nil {
+		t.Fatalf("startElevationReconciler(nil pool) = %v", err)
 	}
 }
 

@@ -37,6 +37,10 @@ The 30 days are the platform's choice. ADR-0051 says snapshots go "after the ADR
 
 The routine `main.marketplace_signals` runs once a day and pauses in maintenance. For each listing that has a hire it writes the active hires, the 30-day retention, the dismissal rate and the upgrade adoption, for the listing and for each version, and it refreshes the ratings from the visible reviews. The Marketplace page and the admin published agents view read them. The project counter of the published agents view is the number of projects with an active hire. A hire counts as dismissed when its agent is deleted from the project. You can switch the routine off or change its schedule here.
 
+## Break-glass elevation reconciler
+
+The routine `main.elevation_reconciler` runs every minute and keeps running in maintenance. It records each break-glass elevation that ran out as ended with the reason `expired` and moves it to review, and it records each elevation request that nobody answered within the request lifetime as `request_expired`, each with its security audit event. It never decides access: an elevation stops granting at its expiry whether or not the routine has run. You can change its schedule here; switched off, the records and their events wait until it runs again. See [Break-glass access](/admin/break-glass#when-an-elevation-or-a-request-runs-out).
+
 ## See what is running
 
 Open the separate **Tasks** page for a live view of background work this platform actually tracks: index runs, agent turns, toolkit tool calls, scheduled occurrences, and evaluation runs.

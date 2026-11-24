@@ -216,6 +216,10 @@ The output is one line per change, with the history record id and the security a
 | `2` | Invalid invocation: wrong arguments, an unknown user, a user address that matches two accounts (give the numeric id), or an unknown role. Nothing was changed. |
 | `3` | Refused by a rule: the last administrator without the override, a role that is never assigned, a role `reset` does not apply to, or an image older than the database. Nothing was changed. |
 
+## Ending a break-glass elevation from the command line
+
+`elitea-main break-glass end ID` (or `end --all`) ends break-glass elevations from inside the main workload, with the same access rule as `admin-role`, for when the console is what was taken or cannot be reached. See the [break-glass runbook](/deployment/break-glass-runbook).
+
 ## Troubleshooting
 
 Operator-facing infrastructure checks (`/healthz`, `/readyz`, the application-level Health tab, common agent/pipeline/toolkit errors) live on one page: see [Troubleshooting](/support/troubleshooting). This page covers the deployment mechanics around those checks; that one covers what each check actually reports.

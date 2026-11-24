@@ -364,7 +364,7 @@ func (h *Handler) AdministrationPluginConfigValuesSave(w http.ResponseWriter, r 
 	}
 
 	if err := h.storeSectionValues(r, section.id, body.Values, author, beforeWrite); err != nil {
-		if errors.Is(err, errBreakGlassApprovalOffForbidden) {
+		if errors.Is(err, errBreakGlassApprovalOffForbidden) || errors.Is(err, errBreakGlassDelayShortenForbidden) {
 			writeJSON(w, http.StatusForbidden, map[string]any{"error": err.Error()})
 			return
 		}

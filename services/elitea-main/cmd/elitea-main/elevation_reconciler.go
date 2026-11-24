@@ -24,14 +24,16 @@ const elevationReconcilerAuditSource = "elitea-main/elevation-reconciler"
 // row is also taken with FOR UPDATE SKIP LOCKED, so the routine registry's
 // local fallback during an outage cannot record a row twice. It runs in
 // maintenance too: an audit record is not deferred work, and it never decides
-// access (the resolver's predicate does). The loop stops when ctx ends.
-func startElevationReconciler(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger) (<-chan struct{}, error) {
+// access (the resolver's predicate does). The loop stops when ctx ends; a
+// pass cut short by the shutdown rolls back and the next process repeats it,
+// so the shutdown does not wait for it.
+func startElevationReconciler(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger) error {
 	if pool == nil {
-		return nil, nil
+		return nil
 	}
 	appender, err := securityaudit.NewPostgresAppender(elevationReconcilerAuditSource)
 	if err != nil {
-		return nil, fmt.Errorf("compose the elevation reconciler appender: %w", err)
+		return fmt.Errorf("compose the elevation reconciler appender: %w", err)
 	}
 	reconciler, err := adminaccess.NewElevationReconciler(pool, appender,
 		func(ctx context.Context) (time.Duration, error) {
@@ -42,9 +44,10 @@ func startElevationReconciler(ctx context.Context, pool *pgxpool.Pool, logger *s
 			return settings.RequestLifetime, nil
 		}, time.Now)
 	if err != nil {
-		return nil, fmt.Errorf("compose the elevation reconciler: %w", err)
+		return fmt.Errorf("compose the elevation reconciler: %w", err)
 	}
-	return runElevationReconciler(ctx, routines.NewStore(pool), reconciler.Pass, logger), nil
+	runElevationReconciler(ctx, routines.NewStore(pool), reconciler.Pass, logger)
+	return nil
 }
 
 // runElevationReconciler runs pass on the routine's loop until ctx ends; the

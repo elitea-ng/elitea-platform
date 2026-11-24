@@ -27,6 +27,8 @@ every personal access token.
   `admin.access.break_glass_approval` (reason `approval_off_requested`) at
   once. Switching it back on takes effect at once, cancels a pending
   switch-off and writes the event with `approval_on_restored`.
+- Shortening the approval-off delay needs the same standing super_admin
+  (`403` otherwise); lengthening it does not.
 
 **The new audit kind.** `admin.access.changed` events gain the kind
 `break_glass_approval` (`libs/jsonschema/audit/v1/event.schema.json`). A SIEM

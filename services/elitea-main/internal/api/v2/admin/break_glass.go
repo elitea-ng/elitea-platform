@@ -55,6 +55,18 @@ const breakGlassNotInForce = "No route starts an elevation in this release yet: 
 // a standing admin.auth.users.super_admin.
 var errBreakGlassApprovalOffForbidden = errors.New("switching break-glass approval off needs admin.auth.users.super_admin")
 
+// errBreakGlassDelayShortenForbidden refuses a shorter approval-off delay to
+// a caller without a standing super_admin: a shorter delay weakens the next
+// switch-off as much as the switch-off itself.
+var errBreakGlassDelayShortenForbidden = errors.New("shortening the break-glass approval-off delay needs admin.auth.users.super_admin")
+
+// shortensApprovalOffDelay reports whether next holds an effective
+// approval-off delay shorter than the one stored.
+func shortensApprovalOffDelay(stored platformconfig.Values, next map[string]any) bool {
+	return platformconfig.BreakGlassSettingsFromValues(platformconfig.Values(next)).ApprovalOffDelay <
+		platformconfig.BreakGlassSettingsFromValues(stored).ApprovalOffDelay
+}
+
 // breakGlassSectionAccess is the section's pair: access.breakglass.manage for
 // both halves, in the Security area.
 var breakGlassSectionAccess = singleAccess(adminaccess.AreaSecurity, adminaccess.AccessBreakglassManage)
@@ -188,16 +200,21 @@ func (h *Handler) prepareBreakGlassSave(r *http.Request, body map[string]any) (s
 		return nil, http.StatusBadRequest, reason
 	}
 	requested, present := body[platformconfig.KeyBreakGlassApprovalRequired].(bool)
-	if !present {
+	_, delayInBody := body[platformconfig.KeyBreakGlassApprovalOffDelayHours]
+	if !present && !delayInBody {
 		return nil, 0, ""
 	}
-	superAdmin := false
-	if !requested {
-		superAdmin = h.holdsStandingSuperAdmin(r)
+	// Both weakening changes need a standing super_admin: switching approval
+	// off, and shortening the delay a later switch-off waits.
+	superAdmin := h.holdsStandingSuperAdmin(r)
+	if !superAdmin {
 		// Refused before the transaction when the stored state already says
 		// so; the hook decides again under the section's lock.
-		plan := platformconfig.PlanBreakGlassApproval(platformconfig.Values(stored), false, h.clock())
-		if plan.Change == platformconfig.BreakGlassApprovalOffRequested && !superAdmin {
+		if delayInBody && shortensApprovalOffDelay(platformconfig.Values(stored), merged) {
+			return nil, http.StatusForbidden, errBreakGlassDelayShortenForbidden.Error()
+		}
+		if present && !requested && platformconfig.PlanBreakGlassApproval(platformconfig.Values(stored), false, h.clock()).Change ==
+			platformconfig.BreakGlassApprovalOffRequested {
 			return nil, http.StatusForbidden, errBreakGlassApprovalOffForbidden.Error()
 		}
 	}
@@ -212,6 +229,12 @@ func (h *Handler) prepareBreakGlassSave(r *http.Request, body map[string]any) (s
 		}, platformconfig.SectionBreakGlass)
 		if err != nil {
 			return fmt.Errorf("read the break_glass section: %w", err)
+		}
+		if delayInBody && !superAdmin && shortensApprovalOffDelay(current, values) {
+			return errBreakGlassDelayShortenForbidden
+		}
+		if !present {
+			return nil
 		}
 		plan := platformconfig.PlanBreakGlassApproval(current, requested, h.clock())
 		if plan.Change == platformconfig.BreakGlassApprovalOffRequested && !superAdmin {

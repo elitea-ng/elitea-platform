@@ -36,6 +36,8 @@ Dual control is the default: a second person with `access.breakglass.approve` ap
 - takes effect after the **approval-off delay** that was in force before the save (24 hours by default), so a save that also lowers the delay does not shorten its own wait. Until then the section shows the state `off_scheduled`, and a request still needs an approver;
 - writes a security audit event at once: `admin.access.break_glass_approval` with the reason code `approval_off_requested` (see [the audit event schema](/reference/audit-event-schema)).
 
+Shortening the approval-off delay needs the same standing `super_admin` (`403` otherwise), since a shorter delay weakens the next switch-off as much as the switch-off itself. Lengthening it needs only the section.
+
 Switching approval back on needs only the section, takes effect at once, cancels a pending switch-off, and writes the same event with `approval_on_restored`.
 
 ## When an elevation or a request runs out
@@ -45,7 +47,7 @@ Access stops by itself. An elevation grants nothing once its expiry passes, whet
 The record catches up on its own. The `main.elevation_reconciler` routine runs every minute (see [Schedules and tasks](/admin/schedules-and-tasks)) and, for each row, in one transaction:
 
 - an elevation past its expiry that nobody ended is recorded as ended with the end reason `expired`, gets its `expired` security audit event, and moves to `review_pending`;
-- a request that nobody approved or denied within the **request lifetime** is recorded as `request_expired` and gets its `request_expired` event. An approval of it afterwards is refused.
+- a request that nobody approved or denied within the **request lifetime** is recorded as `request_expired` and gets its `request_expired` event. An approval of it afterwards is refused. The lifetime is the one stored when the routine runs, so lowering it also expires the pending requests older than the new value.
 
 An elevation that ends early (by its holder, an approver or the operator command) moves to `review_pending` at the same moment, with its `ended` event. If the audit event cannot be written, the row is left as it was and the next pass completes it; access is not affected either way. One replica runs each pass, and two passes never record the same row twice.
 

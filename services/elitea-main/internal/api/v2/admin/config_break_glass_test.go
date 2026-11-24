@@ -158,13 +158,25 @@ func TestBreakGlassApprovalOffNeedsAStandingSuperAdmin(t *testing.T) {
 	// The same holder still edits the durations: the rule is on the action.
 	admins := breakGlassRouter(t, pool, breakGlassResolver(nil, adminaccess.AccessBreakglassManage))
 	if code, body := saveBreakGlass(t, admins, map[string]any{
-		platformconfig.KeyBreakGlassApprovalRequired:  true,
+		platformconfig.KeyBreakGlassApprovalRequired: true,
 		platformconfig.KeyBreakGlassOnlineMaxMinutes: 120,
 	}); code != http.StatusOK {
 		t.Fatalf("a duration edit by a holder without super_admin: %d %s", code, body.Error)
 	}
 	if events := breakGlassApprovalEvents(t, pool); len(events) != 0 {
 		t.Fatalf("events before any switch: %v", events)
+	}
+	// Shortening the approval-off delay weakens the next switch-off, so it
+	// needs the same standing super_admin; lengthening it does not.
+	if code, _ := saveBreakGlass(t, admins, map[string]any{platformconfig.KeyBreakGlassApprovalOffDelayHours: 1}); code != http.StatusForbidden {
+		t.Fatalf("a shorter delay by a holder without super_admin answered %d, want 403", code)
+	}
+	if code, body := saveBreakGlass(t, admins, map[string]any{platformconfig.KeyBreakGlassApprovalOffDelayHours: 48}); code != http.StatusOK {
+		t.Fatalf("a longer delay by a holder without super_admin: %d %s", code, body.Error)
+	}
+	if code, body := saveBreakGlass(t, breakGlassRouter(t, pool, breakGlassResolver(nil, adminaccess.AccessBreakglassManage,
+		adminaccess.SuperAdminPermission)), map[string]any{platformconfig.KeyBreakGlassApprovalOffDelayHours: 24}); code != http.StatusOK {
+		t.Fatalf("a shorter delay by a standing super_admin: %d %s", code, body.Error)
 	}
 
 	superAdmin := breakGlassResolver(nil, adminaccess.AccessBreakglassManage, adminaccess.SuperAdminPermission)
