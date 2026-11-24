@@ -349,7 +349,7 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "run_command",
         kind: ToolKind::RunCommand,
-        description: "Run a command in the workspace under the OS sandbox. Plain commands run without a shell; pipes, redirects and && run under /bin/sh. Routine commands run without a question; destructive ones (recursive deletes, history rewrites, pushes, deploys, privilege), network and full-access are confirmed by the person.",
+        description: "Run a command in the workspace under the OS sandbox. Plain commands run without a shell; pipes, redirects and && run under /bin/sh. Routine commands run without a question; destructive ones (recursive deletes, history rewrites, pushes, deploys, privilege), network and full-access are confirmed by the person. A rule the person wrote may let one program (such as gh) run with network on, its login and named hosts only, without a question: run it as one plain foreground command (no pipes or &&).",
         parameters: || {
             json!({
                 "type": "object",
@@ -1819,6 +1819,19 @@ impl LocalSession {
         ))
     }
 
+    /// The rules may have changed while the person decided: a command runs
+    /// with what they grant it now, or not at all.
+    fn unchanged_grant(&self, call: &ToolCall, spec: &CommandSpec) -> ToolResult<()> {
+        if self.shell.credential_grants && self.engine.command_grant(call) != spec.grant {
+            return Err(ToolError::new(
+                ErrorCode::Conflict,
+                "the approval rules changed while this command waited, so what they grant it \
+                 changed; nothing ran: run it again",
+            ));
+        }
+        Ok(())
+    }
+
     async fn run_command(self: &Arc<Self>, call_id: &str, args: Value) -> ToolResult<Value> {
         let args: CommandArgs = parse(args)?;
         if args.uses_processes() && !self.shell.background_processes {
@@ -1840,18 +1853,41 @@ impl LocalSession {
         if let Some(refusal) = self.sandboxed_push(&args.command, mode, args.network) {
             return Err(refusal);
         }
-        let spec = CommandSpec {
+        let mut spec = CommandSpec {
             command: args.command,
             cwd,
             timeout: args.timeout_seconds.map(Duration::from_secs),
             mode,
             network: args.network,
             loopback: args.loopback,
+            grant: None,
         };
         if background {
             // Refused before the person is asked about a process that
             // could not start.
             self.processes.check_room()?;
+        }
+        let keep_alive = args.keep_alive.unwrap_or_default();
+        let mut call = ToolCall {
+            tool: ToolKind::RunCommand,
+            paths: vec![spec.cwd.display_string()],
+            command: Some(spec.command.clone()),
+            sandbox: Some(mode),
+            network: args.network,
+            unconfined: false,
+            runner: None,
+            loopback: args.loopback,
+            keep_alive: keep_alive == KeepAlive::Session,
+            background,
+            mcp: None,
+            argv: None,
+            computer: None,
+            browser: None,
+        };
+        // What a rule the person wrote grants it (a login, the network
+        // limited to named hosts): the sandbox below is judged with it.
+        if self.shell.credential_grants {
+            spec.grant = self.engine.command_grant(&call);
         }
         // The sandbox this command gets now decides whether it is
         // confined: one that cannot hide what it denies (no sandbox,
@@ -1860,28 +1896,14 @@ impl LocalSession {
         // every time. A sandbox that cannot run at all is refused after the
         // rules, as before.
         let unconfined = shell::runs_unconfined(&self.workspace, &self.shell, &spec);
-        let keep_alive = args.keep_alive.unwrap_or_default();
-        let call = ToolCall {
-            tool: ToolKind::RunCommand,
-            paths: vec![spec.cwd.display_string()],
-            command: Some(spec.command.clone()),
-            sandbox: Some(mode),
-            network: args.network,
-            unconfined,
-            runner: None,
-            loopback: args.loopback,
-            keep_alive: keep_alive == KeepAlive::Session,
-            mcp: None,
-            argv: None,
-            computer: None,
-            browser: None,
-        };
+        call.unconfined = unconfined;
         let message = match (background, args.tty) {
             (_, true) => "run a command on a terminal",
             (true, false) => "run a command in the background",
             (false, false) => "run a command",
         };
-        self.authorize(call_id, call, message).await?;
+        self.authorize(call_id, call.clone(), message).await?;
+        self.unchanged_grant(&call, &spec)?;
         if mode != SandboxMode::ReadOnly {
             self.blocking(Self::ensure_checkpoint).await?;
         }
@@ -1956,6 +1978,7 @@ impl LocalSession {
             mode,
             network,
             loopback: false,
+            grant: None,
         };
         let unconfined = shell::runs_unconfined(&self.workspace, &self.shell, &spec);
         let call = ToolCall {

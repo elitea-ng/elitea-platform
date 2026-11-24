@@ -40,6 +40,17 @@
 //! | Landlock alone | Landlock's TCP rules are by port, not address: a loopback command gets TCP unrestricted. [`loopback_scoped`] is false, so the session asks for every such command |
 //! | Container | the container's own network: nothing changes |
 //!
+//! **Named hosts** ([`SandboxRequest::network_proxy`], #3005: an allow rule
+//! the person wrote that lists `hosts` or grants a login). The sandbox
+//! cannot filter by host name, so the command reaches one loopback port,
+//! the per-command filtering proxy's ([`crate::egress_proxy`]), and the
+//! proxy admits only the listed hosts:
+//!
+//! | Sandbox | What `network_proxy` allows |
+//! |---|---|
+//! | Seatbelt | `network-outbound` to `localhost:<port>` only: no other address, no DNS, no listening |
+//! | bubblewrap, Landlock, Windows, container | refused ([`scoped_network_supported`] is false): the private network namespace cannot reach the host's loopback, Landlock filters by port only, Windows has no sandbox. The rule grants nothing there, so such calls are asked as before |
+//!
 //! [`SandboxMode::FullAccess`] with the network on is no sandbox at all and
 //! reports [`Enforcement::None`].
 //!
@@ -128,6 +139,22 @@ pub struct SandboxRequest {
     pub loopback: bool,
     /// May the command reach the keychain's services.
     pub allow_keychain: bool,
+    /// With the network off: the one loopback port the command may connect
+    /// to, the host's filtering proxy for a rule's `hosts`
+    /// ([`crate::egress_proxy`], #3005). Only where
+    /// [`scoped_network_supported`]; [`prepare`] refuses it elsewhere,
+    /// even when unenforced commands are allowed.
+    pub network_proxy: Option<u16>,
+}
+
+/// Whether this platform's sandbox can keep a command's network to the
+/// filtering proxy's one loopback port: Seatbelt (macOS) can. bubblewrap's
+/// private network namespace cannot reach the host's loopback, Landlock
+/// filters TCP by port only, and Windows has no sandbox (#1828): there a
+/// rule's `hosts` and `credential` never apply.
+#[must_use]
+pub const fn scoped_network_supported() -> bool {
+    cfg!(target_os = "macos")
 }
 
 impl SandboxRequest {
@@ -417,6 +444,18 @@ pub fn prepare(
     argv: &[String],
     config: &SandboxConfig,
 ) -> ToolResult<Prepared> {
+    if request.network_proxy.is_some()
+        && (request.network || config.container || !scoped_network_supported())
+    {
+        // A command limited to named hosts never runs with more network
+        // than that: not unwrapped, not with the network on, not in a
+        // container (whose network the project sets).
+        return Err(ToolError::new(
+            ErrorCode::SandboxUnavailable,
+            "this machine's sandbox cannot limit a command's network to named hosts \
+             (macOS only for now); nothing ran",
+        ));
+    }
     if config.container {
         // The container holds only the workspace, a scratch directory and
         // no credential; what a request denies is not there to hide.
@@ -1008,6 +1047,15 @@ pub mod seatbelt {
                     ));
                 }
             }
+        } else if let Some(port) = request.network_proxy {
+            // No DNS and no listening: the proxy resolves the host, and
+            // the command reaches nothing but its port.
+            text.push_str(concat!(
+                "\n; network limited to the host's filtering proxy (the rule's hosts):\n",
+                "; one loopback port, nothing else\n",
+                "(allow network-outbound (remote ip (param \"NETWORK_PROXY\")))\n",
+            ));
+            params.push(("NETWORK_PROXY".to_owned(), format!("localhost:{port}")));
         } else if request.loopback {
             text.push_str(concat!(
                 "\n; no network but loopback (asked for): listen on and connect to\n",
@@ -1695,6 +1743,56 @@ mod tests {
             protected: vec![PathBuf::from("/work/space/vendor")],
             ..SandboxRequest::new(mode, network)
         }
+    }
+
+    /// A rule's hosts (#3005): one loopback port, the proxy's, and nothing
+    /// else: no general outbound rule, no DNS, no listening; the port is a
+    /// parameter, never profile text.
+    #[test]
+    fn a_scoped_network_reaches_the_proxy_port_only() {
+        let scoped = SandboxRequest {
+            network_proxy: Some(49_152),
+            ..request(SandboxMode::WorkspaceWrite, false)
+        };
+        let (text, params) = seatbelt::profile(&scoped);
+        assert!(text.contains("(allow network-outbound (remote ip (param \"NETWORK_PROXY\")))"));
+        assert!(!text.contains("(allow network-outbound)\n"), "{text}");
+        assert!(!text.contains("mDNSResponder"), "no DNS");
+        assert!(!text.contains("network-bind"), "no listening");
+        assert!(!text.contains("49152"), "the port travels as a parameter");
+        assert!(params.contains(&("NETWORK_PROXY".to_owned(), "localhost:49152".to_owned())));
+        // Never with the network on, and only where the list is enforced.
+        let both = SandboxRequest {
+            network: true,
+            ..scoped.clone()
+        };
+        let refused = prepare(
+            &both,
+            &["/usr/bin/true".to_owned()],
+            &SandboxConfig::default(),
+        )
+        .expect_err("never with the whole network");
+        assert_eq!(refused.code(), ErrorCode::SandboxUnavailable);
+        let container = SandboxConfig {
+            container: true,
+            ..SandboxConfig::default()
+        };
+        assert!(prepare(&scoped, &["/usr/bin/true".to_owned()], &container).is_err());
+        let unenforced = SandboxConfig {
+            allow_unenforced: true,
+            ..SandboxConfig::default()
+        };
+        let prepared = prepare(&scoped, &["/usr/bin/true".to_owned()], &unenforced);
+        if super::scoped_network_supported() {
+            assert_eq!(prepared.expect("seatbelt").enforcement, Enforcement::Full);
+        } else {
+            assert!(
+                prepared.is_err(),
+                "refused even when unenforced commands run"
+            );
+        }
+        let bwrap = bubblewrap::args(&scoped, &bubblewrap::Masks::default(), &["true".to_owned()]);
+        assert!(bwrap.contains(&"--unshare-net".to_owned()));
     }
 
     /// A task worktree in the host's denied data is readable again for host
