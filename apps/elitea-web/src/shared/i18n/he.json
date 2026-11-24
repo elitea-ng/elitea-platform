@@ -4985,5 +4985,21 @@
   "pages.admin.console.error.retry": "נסה שוב",
   "pages.admin.console.error.title": "לא הצלחנו לטעון את המסוף",
   "pages.admin.console.loading": "טוען את המסוף…",
-  "pages.admin.console.refused": "אין לך גישה למסוף הניהול."
+  "pages.admin.console.refused": "אין לך גישה למסוף הניהול.",
+  "pages.admin.console.area.people_access": "אנשים וגישה",
+  "pages.admin.console.area.projects": "פרויקטים",
+  "pages.admin.console.area.models_spend": "מודלים והוצאות",
+  "pages.admin.console.area.agents_governance": "סוכנים וממשל",
+  "pages.admin.console.area.security": "אבטחה",
+  "pages.admin.console.area.platform": "פלטפורמה",
+  "pages.admin.console.item.schedules-tasks": "תזמונים ומשימות",
+  "pages.admin.schedulesTasks.tab.schedules": "תזמונים",
+  "pages.admin.itemDenied.title": "אין לך אפשרות לפתוח את {{item}}",
+  "pages.admin.itemDenied.explanation": "תפקידי הניהול שלך אינם כוללים את {{item}}. השרת דוחה עבורך את הדפים והשינויים שלו.",
+  "pages.admin.itemDenied.rolesLoading": "מחפש את התפקידים שפותחים אותו…",
+  "pages.admin.itemDenied.rolesError": "לא ניתן היה לקרוא את התפקידים שפותחים אותו.",
+  "pages.admin.itemDenied.noRole": "אף תפקיד בפריסה זו אינו פותח אותו.",
+  "pages.admin.itemDenied.rolesIntro": "התפקידים האלה פותחים אותו:",
+  "pages.admin.itemDenied.askSupport": "כדי לבקש אחד מהתפקידים האלה, פנה לתמיכת ה-IT:",
+  "pages.admin.itemDenied.askFallback": "כדי לבקש אחד מהתפקידים האלה, פנה לאנשים שמנהלים את הפריסה הזו."
 }

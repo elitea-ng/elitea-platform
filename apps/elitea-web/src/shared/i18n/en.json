@@ -7435,5 +7435,21 @@
   "pages.admin.console.error.retry": "Try again",
   "pages.admin.console.error.title": "We couldn't load the console",
   "pages.admin.console.loading": "Loading the console…",
-  "pages.admin.console.refused": "You do not have access to the administration console."
+  "pages.admin.console.refused": "You do not have access to the administration console.",
+  "pages.admin.console.area.agents_governance": "Agents and governance",
+  "pages.admin.console.area.models_spend": "Models and spend",
+  "pages.admin.console.area.people_access": "People and access",
+  "pages.admin.console.area.platform": "Platform",
+  "pages.admin.console.area.projects": "Projects",
+  "pages.admin.console.area.security": "Security",
+  "pages.admin.console.item.schedules-tasks": "Schedules and tasks",
+  "pages.admin.itemDenied.askFallback": "To ask for one of these roles, contact the people who manage this deployment.",
+  "pages.admin.itemDenied.askSupport": "To ask for one of these roles, contact your IT support:",
+  "pages.admin.itemDenied.explanation": "Your administration roles do not include {{item}}. The server refuses its pages and changes for you.",
+  "pages.admin.itemDenied.noRole": "No role on this deployment opens it.",
+  "pages.admin.itemDenied.rolesError": "The roles that open it could not be read.",
+  "pages.admin.itemDenied.rolesIntro": "These roles open it:",
+  "pages.admin.itemDenied.rolesLoading": "Looking up the roles that open it…",
+  "pages.admin.itemDenied.title": "You cannot open {{item}}",
+  "pages.admin.schedulesTasks.tab.schedules": "Schedules"
 }

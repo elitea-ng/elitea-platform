@@ -5,6 +5,8 @@ description: "Switch recurring platform routines on or off, change their schedul
 
 Two admin pages cover recurring and running work: **Schedules & Tasks** for the platform's recurring routines, and **Tasks** for a live view of background jobs.
 
+In the console's six labelled areas, both pages are one item, **Platform › Schedules and tasks**. A strip of two tabs, **Schedules** and **Tasks**, at the top of either page opens the other. With the six areas turned off (see [Six labelled areas](/admin/overview#six-labelled-areas)), the two pages are separate items in the sidebar and show no tabs.
+
 ## Manage schedules
 
 Open **Schedules & Tasks**. It lists every recurring routine the platform runs: the scheduled jobs of the main service (index schedule scan, pipeline schedule scan, artifact retention, token expiry notices) and the workers of the scheduler service (price sync and the retention sweeps). Each row shows the schedule in force, whether the routine is on, when it last ran and its outcome, and when it runs next.
@@ -43,7 +45,7 @@ The routine `main.elevation_reconciler` runs every minute and keeps running in m
 
 ## See what is running
 
-Open the separate **Tasks** page for a live view of background work this platform actually tracks: index runs, agent turns, toolkit tool calls, scheduled occurrences, and evaluation runs.
+Open the **Tasks** tab (or, with the six areas off, the separate **Tasks** page) for a live view of background work this platform actually tracks: index runs, agent turns, toolkit tool calls, scheduled occurrences, and evaluation runs.
 
 <Steps>
   <Step title="Filter by kind">

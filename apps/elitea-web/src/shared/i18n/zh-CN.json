@@ -4985,5 +4985,21 @@
   "pages.admin.console.error.retry": "重试",
   "pages.admin.console.error.title": "无法加载控制台",
   "pages.admin.console.loading": "正在加载控制台…",
-  "pages.admin.console.refused": "您无权访问管理控制台。"
+  "pages.admin.console.refused": "您无权访问管理控制台。",
+  "pages.admin.console.area.people_access": "人员与访问",
+  "pages.admin.console.area.projects": "项目",
+  "pages.admin.console.area.models_spend": "模型与支出",
+  "pages.admin.console.area.agents_governance": "智能体与治理",
+  "pages.admin.console.area.security": "安全",
+  "pages.admin.console.area.platform": "平台",
+  "pages.admin.console.item.schedules-tasks": "计划与任务",
+  "pages.admin.schedulesTasks.tab.schedules": "计划",
+  "pages.admin.itemDenied.title": "你无法打开{{item}}",
+  "pages.admin.itemDenied.explanation": "你的管理角色不包括{{item}}。服务器会拒绝你访问其页面和更改。",
+  "pages.admin.itemDenied.rolesLoading": "正在查找可打开它的角色…",
+  "pages.admin.itemDenied.rolesError": "无法读取可打开它的角色。",
+  "pages.admin.itemDenied.noRole": "此部署中没有角色可打开它。",
+  "pages.admin.itemDenied.rolesIntro": "以下角色可打开它：",
+  "pages.admin.itemDenied.askSupport": "如需申请其中一个角色，请联系你的 IT 支持：",
+  "pages.admin.itemDenied.askFallback": "如需申请其中一个角色，请联系管理此部署的人员。"
 }

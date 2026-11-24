@@ -4985,5 +4985,21 @@
   "pages.admin.console.error.retry": "Повторить",
   "pages.admin.console.error.title": "Не удалось загрузить консоль",
   "pages.admin.console.loading": "Загрузка консоли…",
-  "pages.admin.console.refused": "У вас нет доступа к консоли администрирования."
+  "pages.admin.console.refused": "У вас нет доступа к консоли администрирования.",
+  "pages.admin.console.area.people_access": "Люди и доступ",
+  "pages.admin.console.area.projects": "Проекты",
+  "pages.admin.console.area.models_spend": "Модели и расходы",
+  "pages.admin.console.area.agents_governance": "Агенты и управление",
+  "pages.admin.console.area.security": "Безопасность",
+  "pages.admin.console.area.platform": "Платформа",
+  "pages.admin.console.item.schedules-tasks": "Расписания и задачи",
+  "pages.admin.schedulesTasks.tab.schedules": "Расписания",
+  "pages.admin.itemDenied.title": "Вы не можете открыть «{{item}}»",
+  "pages.admin.itemDenied.explanation": "Ваши административные роли не включают «{{item}}». Сервер отклоняет для вас его страницы и изменения.",
+  "pages.admin.itemDenied.rolesLoading": "Поиск ролей, которые его открывают…",
+  "pages.admin.itemDenied.rolesError": "Не удалось прочитать роли, которые его открывают.",
+  "pages.admin.itemDenied.noRole": "Ни одна роль в этом развертывании его не открывает.",
+  "pages.admin.itemDenied.rolesIntro": "Его открывают эти роли:",
+  "pages.admin.itemDenied.askSupport": "Чтобы запросить одну из этих ролей, обратитесь в ИТ-поддержку:",
+  "pages.admin.itemDenied.askFallback": "Чтобы запросить одну из этих ролей, обратитесь к тем, кто управляет этим развертыванием."
 }
