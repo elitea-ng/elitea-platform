@@ -2169,7 +2169,7 @@ impl RulesEngine {
     /// What a rule the person wrote grants `call`: the hosts its network
     /// is limited to and, with a credential, its program's login
     /// ([`crate::credentials`]). `None` unless the winning rule is an
-    /// allow whose grant applies ([`Self::grant_applies`]) and no layer
+    /// allow whose grant applies (`grant_applies`) and no layer
     /// above denies the call: the session runs a command with exactly what
     /// this returns, and asks it again when the answer changed while the
     /// person decided.
