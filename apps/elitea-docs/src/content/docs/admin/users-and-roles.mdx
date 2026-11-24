@@ -190,6 +190,10 @@ The source says how the change was made:
 | `bootstrap` | The first sign-in of an account in `identity.initial_global_admins`. There is no actor. |
 | `migration`, `operator`, `review`, `scim` | Reserved for an upgrade step, the operator command, a confirmed provisional grant and a SCIM binding to an administration role. A `migration` record has no actor. |
 
+### Security audit events
+
+Each change of who holds what is also a chained security audit event, `admin.access.changed`, that your SIEM receives through the [audit export](/reference/audit-event-schema#adminaccesschanged): a role assigned or removed, a role's permission set edited, a role created or deleted, a membership written by a bulk invite, a global provider's route changed, and a change of identity trust. The event names the actor, the subject and the sets before and after by name. It carries a reason code when one was given, never the reason text. It is written in the same transaction as the change, so a change whose event cannot be written fails and nothing moves.
+
 ### Read the holders and the history
 
 Two read routes answer "who holds which administration role" and "who changed it, when and how". The Access page that shows them comes in a later release.

@@ -153,6 +153,30 @@ type SecurityAuditDetails struct {
 	// run's head hash and step count.
 	ChainHead   string `json:"chain_head,omitempty"`
 	ChainLength int64  `json:"chain_length,omitempty"`
+	// Access is set on ai.elitea.security.v1.admin.access.changed (ADR-0059
+	// R1.5): the change kind and the before and after sets by name. It has
+	// no reason text field, and must never have one.
+	Access *AccessChangeDetails `json:"access,omitempty"`
+}
+
+// AccessChangeDetails is details.access of an admin.access.changed event.
+type AccessChangeDetails struct {
+	Kind        string                   `json:"kind"`
+	Mode        string                   `json:"mode,omitempty"`
+	Source      string                   `json:"source,omitempty"`
+	Before      []string                 `json:"before"`
+	After       []string                 `json:"after"`
+	Fields      []string                 `json:"fields,omitempty"`
+	ElevationID string                   `json:"elevation_id,omitempty"`
+	ReasonCode  string                   `json:"reason_code,omitempty"`
+	Membership  *AccessMembershipDetails `json:"membership,omitempty"`
+}
+
+// AccessMembershipDetails are the facts of a central membership write.
+type AccessMembershipDetails struct {
+	ActorIsMember        bool `json:"actor_is_member"`
+	MemberHoldsAdminRole bool `json:"member_holds_admin_role"`
+	Bulk                 bool `json:"bulk"`
 }
 
 // AdminAuditDetails is details for source admin_audit.
@@ -175,33 +199,34 @@ type storedSecurityEvent struct {
 	OCSFClassUID    int    `json:"ocsfclassuid"`
 	OCSFCategoryUID int    `json:"ocsfcategoryuid"`
 	Data            struct {
-		TenantProjectID      int64    `json:"tenant_project_id"`
-		Action               string   `json:"action"`
-		Effect               string   `json:"effect"`
-		Reasons              []string `json:"reasons"`
-		PrincipalRef         string   `json:"principal_ref"`
-		ActorChain           []string `json:"actor_chain"`
-		ActorFidelity        string   `json:"actor_fidelity"`
-		CallingApplicationID string   `json:"calling_application_id"`
-		AuthenticationRef    string   `json:"authentication_ref"`
-		AgentBindingID       string   `json:"agent_binding_id"`
-		AuthorityID          string   `json:"authority_id"`
-		MandateRef           string   `json:"mandate_ref"`
-		DelegationRef        string   `json:"delegation_ref"`
-		GrantRef             string   `json:"grant_ref"`
-		WorkloadID           string   `json:"workload_id"`
-		ExecutionID          string   `json:"execution_id"`
-		InvocationID         string   `json:"invocation_id"`
-		DecisionID           string   `json:"decision_id"`
-		ResourceType         string   `json:"resource_type"`
-		ResourceID           string   `json:"resource_id"`
-		PolicyRevisionID     string   `json:"policy_revision_id"`
-		AuthorizationEpoch   int64    `json:"authorization_epoch"`
-		RevocationEpoch      int64    `json:"revocation_epoch"`
-		Arrangement          string   `json:"arrangement"`
-		CorrelationID        string   `json:"correlation_id"`
-		ChainHead            string   `json:"chain_head"`
-		ChainLength          int64    `json:"chain_length"`
+		TenantProjectID      int64                `json:"tenant_project_id"`
+		Action               string               `json:"action"`
+		Effect               string               `json:"effect"`
+		Reasons              []string             `json:"reasons"`
+		PrincipalRef         string               `json:"principal_ref"`
+		ActorChain           []string             `json:"actor_chain"`
+		ActorFidelity        string               `json:"actor_fidelity"`
+		CallingApplicationID string               `json:"calling_application_id"`
+		AuthenticationRef    string               `json:"authentication_ref"`
+		AgentBindingID       string               `json:"agent_binding_id"`
+		AuthorityID          string               `json:"authority_id"`
+		MandateRef           string               `json:"mandate_ref"`
+		DelegationRef        string               `json:"delegation_ref"`
+		GrantRef             string               `json:"grant_ref"`
+		WorkloadID           string               `json:"workload_id"`
+		ExecutionID          string               `json:"execution_id"`
+		InvocationID         string               `json:"invocation_id"`
+		DecisionID           string               `json:"decision_id"`
+		ResourceType         string               `json:"resource_type"`
+		ResourceID           string               `json:"resource_id"`
+		PolicyRevisionID     string               `json:"policy_revision_id"`
+		AuthorizationEpoch   int64                `json:"authorization_epoch"`
+		RevocationEpoch      int64                `json:"revocation_epoch"`
+		Arrangement          string               `json:"arrangement"`
+		CorrelationID        string               `json:"correlation_id"`
+		ChainHead            string               `json:"chain_head"`
+		ChainLength          int64                `json:"chain_length"`
+		Access               *AccessChangeDetails `json:"access"`
 	} `json:"data"`
 }
 
@@ -284,6 +309,7 @@ func FromSecurityRecord(record securityaudit.Record) (Event, error) {
 			OutboxSeq:            record.Seq,
 			ChainHead:            d.ChainHead,
 			ChainLength:          d.ChainLength,
+			Access:               accessDetails(d.Access),
 		},
 		ref: string(SourceSecurityAudit) + ":" + strconv.FormatInt(record.Seq, 10),
 	}, nil
@@ -391,4 +417,20 @@ func FromAuditRow(row AuditRow) Event {
 		},
 		ref: string(SourceAdminAudit) + ":" + strconv.FormatInt(row.ID, 10),
 	}
+}
+
+// accessDetails normalises the stored access change: the sets are never
+// null.
+func accessDetails(access *AccessChangeDetails) *AccessChangeDetails {
+	if access == nil {
+		return nil
+	}
+	out := *access
+	if out.Before == nil {
+		out.Before = []string{}
+	}
+	if out.After == nil {
+		out.After = []string{}
+	}
+	return &out
 }

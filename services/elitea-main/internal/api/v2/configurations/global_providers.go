@@ -589,7 +589,7 @@ func (h *Handler) DeleteGlobalProvider(w http.ResponseWriter, r *http.Request) {
 	if !h.requireGlobalRowSection(w, request, GlobalProviderSection) {
 		return
 	}
-	h.Delete(w, request)
+	h.Delete(w, h.withGlobalProviderEvent(request, []string{globalProviderDeleted}))
 }
 
 // maxGlobalProviderBodyBytes bounds the body this router buffers in order to
@@ -616,6 +616,13 @@ func (h *Handler) rewriteGlobalProviderBody(
 	if !ok {
 		return nil, false
 	}
+	// What the write changes, read from the body as the caller sent it,
+	// before the stored data is merged under it (ADR-0059 R1.5).
+	operation := ""
+	if creating {
+		operation = globalProviderCreated
+	}
+	fields := globalProviderFields(body, operation)
 	if !h.admitGlobalProviderType(w, body, creating) {
 		return nil, false
 	}
@@ -643,7 +650,8 @@ func (h *Handler) rewriteGlobalProviderBody(
 	// The ONLY place that may arm the keyless `auth_mode`: this request is
 	// pinned to the public project and forced to shared, which is exactly the
 	// row the gateway accepts as a platform credential (keyless_credentials.go).
-	return request.WithContext(withPlatformCredentialWrite(request.Context())), true
+	request = request.WithContext(withPlatformCredentialWrite(request.Context()))
+	return h.withGlobalProviderEvent(request, fields), true
 }
 
 // mergeStoredGlobalProviderData lays the stored row's `data` UNDER the body's,

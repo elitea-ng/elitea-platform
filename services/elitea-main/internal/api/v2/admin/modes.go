@@ -40,6 +40,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strconv"
@@ -237,7 +238,8 @@ func (h *Handler) ModesAssign(w http.ResponseWriter, r *http.Request) {
 	// One role is given if the user does not hold it yet, with one history
 	// row in this transaction (issue 2499). Every other role of the user
 	// stays: a person holds several administration roles (issue 2574).
-	if _, err := rolegrants.Grant(ctx, transaction, int64(userID), mode, role, grantOrigin(r, caller)); err != nil {
+	origin := grantOrigin(r, caller)
+	if _, err := rolegrants.Grant(ctx, transaction, int64(userID), mode, role, origin); err != nil {
 		// No matching role means the deployment does not define it in that
 		// mode.
 		if errors.Is(err, rolegrants.ErrRoleNotFound) {
@@ -246,6 +248,12 @@ func (h *Handler) ModesAssign(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to assign role"})
+		return
+	}
+	// The security audit event, in this transaction (ADR-0059 R1.5).
+	if err := h.appendRoleAssignment(ctx, transaction, r, caller.UserID, userID, mode, held, origin.Source); err != nil {
+		slog.ErrorContext(ctx, "admin: the role assignment could not be recorded", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to assign role"})
 		return
 	}
@@ -342,13 +350,20 @@ func (h *Handler) ModesRemove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	removed, err := rolegrants.Revoke(ctx, transaction, int64(userID), mode, role, grantOrigin(r, caller))
+	origin := grantOrigin(r, caller)
+	removed, err := rolegrants.Revoke(ctx, transaction, int64(userID), mode, role, origin)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove role"})
 		return
 	}
 	if !removed {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "assignment not found"})
+		return
+	}
+	// The security audit event, in this transaction (ADR-0059 R1.5).
+	if err := h.appendRoleAssignment(ctx, transaction, r, caller.UserID, userID, mode, held, origin.Source); err != nil {
+		slog.ErrorContext(ctx, "admin: the role removal could not be recorded", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove role"})
 		return
 	}
 	if err := transaction.Commit(ctx); err != nil {

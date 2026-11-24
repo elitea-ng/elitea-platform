@@ -12,6 +12,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,9 +20,11 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
@@ -233,5 +236,100 @@ ON CONFLICT (id) DO NOTHING`); err != nil {
 	}
 	if rows[0].CredentialKind == nil || *rows[0].CredentialKind != audit.CredentialKindSession {
 		t.Errorf("credential_kind = %v, want session", rows[0].CredentialKind)
+	}
+}
+
+// A role change through the production router appends its admin.access.changed
+// event (ADR-0059 R1.5) and leaves both chains verifiable: the admin audit
+// chain through the route that serves it (GET
+// /elitea_core/audit_chain_verify/administration, shared 0206) and the
+// security audit chain through securityaudit.Verify (shared 0183).
+func TestARoleChangeLeavesBothAuditChainsVerifiable(t *testing.T) {
+	pool := newAuditEmitterPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), auditEmitterDeadline)
+	defer cancel()
+	for _, file := range []string{
+		"shared/0183_security_audit_outbox.sql",
+		"shared/0206_audit_events_chain.sql",
+		"shared/0260_admin_role_grants.sql",
+	} {
+		body, err := platformmigrations.Files.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, string(body)); err != nil {
+			t.Fatalf("apply %s: %v", file, err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO public.auth_core__user (id, email, name) VALUES (2, 'target@test.local', 'Target')
+ON CONFLICT (id) DO NOTHING`); err != nil {
+		t.Fatal(err)
+	}
+	// The reader of the trail: the route's own permission on the caller's role.
+	if _, err := pool.Exec(ctx, `
+INSERT INTO public.auth_core__role_permission (role_id, permission)
+SELECT id, $1 FROM public.auth_core__role WHERE mode = 'administration' AND name = 'admin'
+ON CONFLICT DO NOTHING`, adminaccess.ModelsAdminAuditTrailView); err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := audit.NewPostgresRecorder(pool, nil)
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), auditEmitterDeadline)
+		defer closeCancel()
+		if err := recorder.Close(closeCtx); err != nil {
+			t.Errorf("close the audit recorder: %v", err)
+		}
+	})
+	router := NewRouter(RouterConfig{
+		Pool:               pool,
+		SessionSecret:      consoleTestSessionSecret,
+		PrincipalValidator: testPrincipalValidator{},
+		AuditRecorder:      recorder,
+	})
+	session := asConsoleSession(router, privilegedAuditTestUser())
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v2/admin/auth_users/administration",
+		strings.NewReader(`{"action":"set_admin_role","user_id":2,"role_name":"admin"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	session.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("set_admin_role = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	if err := recorder.Flush(ctx); err != nil {
+		t.Fatalf("flush the audit recorder: %v", err)
+	}
+
+	var events int
+	if err := pool.QueryRow(ctx, `
+SELECT count(*) FROM elitea_runtime.security_audit_outbox
+WHERE event_type = 'ai.elitea.security.v1.admin.access.changed'`).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if events != 1 {
+		t.Fatalf("admin.access.changed events = %d, want 1", events)
+	}
+	report, err := securityaudit.Verify(ctx, pool, securityaudit.SourceOutbox, 0, 1)
+	if err != nil || report.Break != nil || report.Checked != 1 {
+		t.Fatalf("security audit verify = %+v, %v", report, err)
+	}
+
+	verify := httptest.NewRecorder()
+	session.ServeHTTP(verify, httptest.NewRequest(http.MethodGet,
+		"/api/v2/elitea_core/audit_chain_verify/administration", nil))
+	if verify.Code != http.StatusOK {
+		t.Fatalf("audit_chain_verify = %d: %s", verify.Code, verify.Body.String())
+	}
+	var chain struct {
+		OK      bool  `json:"ok"`
+		Checked int64 `json:"checked"`
+	}
+	if err := json.Unmarshal(verify.Body.Bytes(), &chain); err != nil {
+		t.Fatal(err)
+	}
+	if !chain.OK || chain.Checked == 0 {
+		t.Fatalf("audit_chain_verify = %s, want an unbroken chain with the role change's row", verify.Body.String())
 	}
 }

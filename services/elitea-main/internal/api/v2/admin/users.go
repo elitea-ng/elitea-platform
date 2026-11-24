@@ -341,6 +341,11 @@ func (h *Handler) deleteUsers(w http.ResponseWriter, r *http.Request, body authU
 	}
 	origin := grantOrigin(r, caller)
 	for _, id := range ids {
+		heldBefore, err := adminaccess.UserCentralRoles(ctx, tx, id, adminaccess.ModeAdministration)
+		if err != nil {
+			apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
+			return
+		}
 		// Deleting an account takes its administration roles, so the role
 		// rules of a removal apply: deleting a super_admin needs super_admin,
 		// the caller holds every permission of each role taken, and changes
@@ -358,6 +363,14 @@ func (h *Handler) deleteUsers(w http.ResponseWriter, r *http.Request, body authU
 		}
 		if _, err := rolegrants.RevokeAll(ctx, tx, int64(id), origin); err != nil {
 			slog.ErrorContext(ctx, "could not revoke the roles of a deleted user", "user_id", id, "err", err)
+			apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
+			return
+		}
+		// The administration roles the delete took are a role removal, and
+		// a security audit event like any other (ADR-0059 R1.5).
+		if err := h.appendRoleAssignment(ctx, tx, r, caller.UserID, id, adminaccess.ModeAdministration,
+			heldBefore, origin.Source); err != nil {
+			slog.ErrorContext(ctx, "could not record the roles of a deleted user", "user_id", id, "err", err)
 			apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
 			return
 		}
@@ -521,13 +534,21 @@ func (h *Handler) setAdminRole(w http.ResponseWriter, r *http.Request, body auth
 	// The difference, as rolegrants applies it (issues 2499 and 2574): each
 	// role taken and each role given writes one history row in this
 	// transaction, and a role in both sets is not touched.
+	origin := grantOrigin(r, caller)
 	if _, err := rolegrants.Replace(
-		ctx, transaction, int64(targetID), mode, requested, grantOrigin(r, caller),
+		ctx, transaction, int64(targetID), mode, requested, origin,
 	); err != nil {
 		if errors.Is(err, rolegrants.ErrRoleNotFound) {
 			apierr.WriteStatus(w, http.StatusBadRequest, "administration role not found")
 			return
 		}
+		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to update role")
+		return
+	}
+	// The security audit event of the change, in this transaction: a failed
+	// append rolls the change back (ADR-0059 R1.5).
+	if err := h.appendRoleAssignment(ctx, transaction, r, caller.UserID, targetID, mode, held, origin.Source); err != nil {
+		slog.ErrorContext(ctx, "admin: the role change could not be recorded", "err", err)
 		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to update role")
 		return
 	}
