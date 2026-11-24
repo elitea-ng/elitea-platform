@@ -1817,8 +1817,17 @@ impl AgentHost {
             settings: WorkspaceSettings::default(),
             choices: Arc::new(choices),
             prompt: prompt.clone(),
+            shell: Some({
+                // The library's default temporary directory, with rule
+                // grants on: an allow rule the person wrote may hand one
+                // program its login and named hosts (#3005-#3008).
+                let mut shell = elitea_local_tools::shell::ShellConfig::new(
+                    data_dir.join("tmp").join(workspace_id),
+                );
+                shell.credential_grants = true;
+                shell
+            }),
             data_dir,
-            shell: None,
             deny_read,
             app_id: self.deps.app_id.clone(),
             budgets: elitea_local_tools::budget::Budgets::default(),

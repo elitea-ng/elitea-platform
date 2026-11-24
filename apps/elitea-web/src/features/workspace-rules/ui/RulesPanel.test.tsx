@@ -171,6 +171,33 @@ describe('RulesPanel', { timeout: testTimeout(20_000) }, () => {
     expect(ipc.calls.puts.at(-1)?.file.rules[1]?.pattern).toEqual(['/opt/My Tools/run', 'a|b', { any: true }]);
   });
 
+  it('saves an Allow rule with a login, hosts and conditions, and lists them', async () => {
+    const ipc = createFakeRulesIpc(VIEW);
+    const user = userEvent.setup({ delay: null });
+    renderWithTheme(<RulesPanel ipc={ipc} workspaceId="w1" />);
+    const scope = await screen.findByTestId('rules-scope-user');
+    await user.click(within(scope).getByRole('button', { name: 'Add rule' }));
+    await user.type(within(scope).getByLabelText(/Command pattern/), 'gh api');
+    await user.click(within(scope).getByRole('combobox', { name: 'Login' }));
+    await user.click(await screen.findByRole('option', { name: 'The GitHub CLI (gh) login' }));
+    await user.type(within(scope).getByLabelText(/Flags it must not have/), '-f --input');
+    await user.type(within(scope).getByLabelText(/Allowed flag values/), '-X GET');
+    await user.click(within(scope).getByLabelText(/GraphQL queries only/));
+    await user.click(within(scope).getByRole('button', { name: 'Save rule' }));
+    const saved = await screen.findByTestId('rule-user-2');
+    expect(ipc.calls.puts.at(-1)?.file.rules[1]).toEqual({ pattern: ['gh', 'api'], decision: 'allow', credential: 'gh', conditions: { forbid_flags: ['-f', '--input'], flag_values: { '-X': ['GET'] }, graphql: 'query' } });
+    expect(saved).toHaveTextContent('Covers the workspace-write sandbox with the gh login, reaching only its login’s hosts');
+    expect(within(saved).getByTestId('rule-conditions')).toHaveTextContent('Only when: never -f --input; only -X GET; GraphQL queries only');
+  });
+
+  it('offers the login and hosts on Allow rules only', async () => {
+    const user = userEvent.setup({ delay: null });
+    renderWithTheme(<RulesPanel ipc={createFakeRulesIpc(VIEW)} workspaceId="w1" />);
+    const scope = await screen.findByTestId('rules-scope-workspace');
+    await user.click(within(scope).getByRole('button', { name: 'Edit' }));
+    expect(within(scope).queryByTestId('rule-grant')).toBeNull();
+  });
+
   it('names a migrated legacy rule apart from the workspace file', async () => {
     const ipc = createFakeRulesIpc(VIEW, {
       make: { verdict: 'deny', source: 'workspace', reason: 'legacy rule 1', rule: { scope: 'legacy', index: 1, decision: 'forbidden', pattern: 'make' }, justification: null },

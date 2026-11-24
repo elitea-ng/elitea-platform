@@ -257,7 +257,16 @@ type Rule = {
   not_match?: (string | string[])[];// examples that must not match
   sandbox?: "read-only" | "workspace-write" | "full-access"; // widest sandbox an allow covers (default workspace-write)
   network?: boolean;                // whether an allow covers a call asking for the network
+  credential?: "gh";                // allow only, the person's own rule: hand the program its stored login (#3006)
+  hosts?: string[];                 // allow only: the hosts it may reach through the filtering proxy (#3005); default: the credential's
+  conditions?: Conditions;          // allow only: argument conditions that must all hold (#3007)
   origin?: "repository";            // imported from a proposal: its justification is shown to the person, never the model
+};
+type Conditions = {
+  forbid_flags?: string[];          // none of these anywhere in the argv (`-fX`, `--input=x` and clusters count)
+  require_flags?: string[];         // each present, bare or `=true` (`--draft`)
+  flag_values?: Record<string, string[]>; // every value of the flag is one of these, case-insensitive (`{"-X": ["GET"]}`)
+  graphql?: "query";                // `gh api graphql`: every `query=` document holds queries only; a file (`-F query=@f`, `--input`) fails
 };
 type LoadError = { file: string; rule_index?: number /* 1-based */; example?: string;
                    expected?: "match" | "not_match"; got?: string; message: string };
@@ -289,10 +298,42 @@ plan mode, or the rule that every command is asked on an unconfined
 machine. `forbidden` rules are advisory: they see the commands the analysis
 can find, not what a script starts; the sandbox is the boundary.
 
+**Grants** (#3005–#3008, macOS). An `allow` rule with `credential` or
+`hosts` runs the command it matches with the network on, but only through a
+per-command filtering proxy on `127.0.0.1` that admits `CONNECT host:443` to
+the listed hosts (the Seatbelt profile allows outbound to that one port, and
+no DNS). With `credential: "gh"` the host itself runs
+`gh auth token --hostname github.com` (outside the sandbox, scrubbed
+environment, cached 5 minutes in memory) and gives the command `GH_TOKEN`,
+an empty read-only `GH_CONFIG_DIR` and the notifier/prompt switches off; the
+token is redacted from both output streams. Such a rule answers a network
+call without a question only when all of these hold, otherwise the call
+falls to the next layer (asked):
+
+- the rule is the person's (the user file, or the workspace file without
+  `origin`), and the policy allows the network;
+- the call is one plain foreground command (no pipes or lists, no
+  `background`, `tty`, `loopback` or `keep_alive`);
+- its conditions hold, and the credential profile admits it
+  (`gh auth|alias|config|extension …` never);
+- the sandbox enforces the list: macOS Seatbelt only. On Linux and Windows
+  the rule grants nothing and is an ordinary offline allow.
+
+A load refuses `credential`, `hosts` or `conditions` on a
+`prompt`/`forbidden` rule, `network: true` beside a grant, an IP or a port in
+`hosts`, more than 32 hosts, an unknown profile, and a `credential` whose
+pattern does not start with exactly the profile's program word. An import
+drops `credential` and `hosts` (with a warning) and keeps `conditions`. A
+granted command's tool result carries `grant` ("the gh login, network
+limited to …") and `network: {allowed_hosts, refused_hosts}`. When the
+rules change while such a command waits for an answer, it does not run
+(`local_tools.conflict`).
+
 "Always allow" (`approval_respond` with `allow_always`) for a command appends
 `{pattern: <resolved program + argv prefix>, decision: "allow", justification:
 "Allowed from the approval dialog on <date>", match: [<the approved argv>],
-sandbox, network}` to the workspace's rules file. Command choices an older
+sandbox, network}` to the workspace's rules file: never `credential`, `hosts`
+or `conditions` (a grant is written by the person, in Settings or the file). Command choices an older
 host kept in `choices.json` are moved into it once; file choices stay in
 `choices.json`.
 
