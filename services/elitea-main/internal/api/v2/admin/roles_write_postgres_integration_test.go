@@ -308,6 +308,7 @@ func newRolesPool(t *testing.T) *pgxpool.Pool {
 		);`); err != nil {
 		t.Fatalf("create centry.platform_config: %v", err)
 	}
+	applySecurityAuditOutbox(t, ctx, pool)
 	return pool
 }
 

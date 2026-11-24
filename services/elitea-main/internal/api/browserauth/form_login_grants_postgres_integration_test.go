@@ -23,6 +23,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -41,6 +42,7 @@ import (
 	dbschema "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/schema"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/authsvc"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identityrepo"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 // formLoginPATSigningKey is deployment material in production. Its only job
@@ -377,6 +379,15 @@ INSERT INTO public.auth_core__role (name, mode) VALUES
     ('admin', 'administration'),
     ('user', 'administration'),
     ('viewer', 'default');`); err != nil {
+		t.Fatal(err)
+	}
+	// The security audit outbox the bootstrap grant appends its
+	// admin.access.changed event to (ADR-0059 R1.5).
+	outbox, err := fs.ReadFile(platformmigrations.Files, "shared/0183_security_audit_outbox.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, string(outbox)); err != nil {
 		t.Fatal(err)
 	}
 	return pool

@@ -87,7 +87,10 @@ func Authenticate(credentials Credentials) func(http.Handler) http.Handler {
 func AnnotateAuditActor(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if principal, ok := PrincipalFromContext(r.Context()); ok {
-			audit.Annotate(r.Context(), audit.Annotation{Actor: principal.ActorLabel()})
+			audit.Annotate(r.Context(), audit.Annotation{
+				Actor:               principal.ActorLabel(),
+				ActorCredentialKind: audit.CredentialKindSCIM,
+			})
 		}
 		next.ServeHTTP(w, r)
 	})

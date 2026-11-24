@@ -220,6 +220,9 @@ func (h *Handler) SCIMClientCreate(w http.ResponseWriter, r *http.Request) {
 		}
 		expiresAt = &parsed
 	}
+	// The identity_trust event of the new client, in the store's
+	// transaction (ADR-0059 R1.5).
+	r = h.accessChangeHook(r, identityTrustChange("scim_client", []string{"created", "secret"}))
 	issued, err := h.scimClients.Create(r.Context(), body.Name, body.AuthMethod, expiresAt, createdBy)
 	switch {
 	case errors.Is(err, scimclient.ErrInvalidName), errors.Is(err, scimclient.ErrInvalidMethod),
@@ -234,6 +237,7 @@ func (h *Handler) SCIMClientCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "the SCIM client could not be created"})
 		return
 	}
+	requireChangeHookRan(r, "scim_client.create")
 	annotateTrustChange(r, AuditSCIMClientCreated, "scim_client", issued.Client.Name, audit.ID(issued.Client.ID), nil)
 	noStoreSecret(w)
 	writeJSON(w, http.StatusCreated, issuedBody(issued))
@@ -263,6 +267,7 @@ func (h *Handler) SCIMClientRotate(w http.ResponseWriter, r *http.Request) {
 	if !h.requireIdentityTrust(w, r, scimClientGate(strconv.FormatInt(id, 10))) {
 		return
 	}
+	r = h.accessChangeHook(r, identityTrustChange("scim_client", []string{"secret"}))
 	issued, err := h.scimClients.Rotate(r.Context(), id)
 	switch {
 	case errors.Is(err, scimclient.ErrNotFound):
@@ -276,6 +281,7 @@ func (h *Handler) SCIMClientRotate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "the SCIM client could not be rotated"})
 		return
 	}
+	requireChangeHookRan(r, "scim_client.rotate")
 	annotateTrustChange(r, AuditSCIMClientRotated, "scim_client", issued.Client.Name, audit.ID(id), nil)
 	noStoreSecret(w)
 	writeJSON(w, http.StatusOK, issuedBody(issued))

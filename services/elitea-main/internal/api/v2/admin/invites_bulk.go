@@ -228,7 +228,7 @@ func (h *Handler) BulkInviteMembers(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, userID := range users {
 		for _, projectID := range projects {
-			result := h.bulkInvitePair(ctx, resolvedUsers[userID], userID, resolvedProjects[projectID], projectID, role)
+			result := h.bulkInvitePair(r, resolvedUsers[userID], userID, resolvedProjects[projectID], projectID, role)
 			switch result.Outcome {
 			case bulkInviteOutcomeAdded:
 				summary.Added++
@@ -252,7 +252,7 @@ func (h *Handler) BulkInviteMembers(w http.ResponseWriter, r *http.Request) {
 
 // bulkInvitePair applies one (user, project) pair and describes what happened.
 func (h *Handler) bulkInvitePair(
-	ctx context.Context, user *userTarget, userID int64, project *projectTarget, projectID int64, role string,
+	r *http.Request, user *userTarget, userID int64, project *projectTarget, projectID int64, role string,
 ) bulkInviteResult {
 	result := bulkInviteResult{UserID: userID, ProjectID: projectID}
 	if user != nil {
@@ -284,7 +284,7 @@ func (h *Handler) bulkInvitePair(
 			fmt.Sprintf("project %s does not define the role %q", project.name, role))
 	}
 
-	added, err := h.addProjectMembership(ctx, projectID, userID, *project.roleID)
+	added, err := h.addProjectMembership(r, projectID, userID, *project.roleID)
 	switch {
 	case err != nil:
 		return refuse(bulkInviteOutcomeFailed,
@@ -311,19 +311,32 @@ func (h *Handler) bulkInvitePair(
 // time would both read "not a member" and one of them would then report an
 // insert it did not make. ON CONFLICT DO NOTHING makes the second one report
 // `already_member`, which is what happened.
-func (h *Handler) addProjectMembership(ctx context.Context, projectID, userID int64, roleID int) (bool, error) {
+func (h *Handler) addProjectMembership(r *http.Request, projectID, userID int64, roleID int) (bool, error) {
+	ctx := r.Context()
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
 		return false, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	before, err := projectMemberRoles(ctx, tx, projectID, userID)
+	if err != nil {
+		return false, err
+	}
 	tag, err := tx.Exec(ctx,
 		`INSERT INTO public.auth_core__project_user_role (project_id, user_id, role_id)
 		 VALUES ($1, $2, $3) ON CONFLICT (project_id, user_id, role_id) DO NOTHING`,
 		projectID, userID, roleID)
 	if err != nil {
 		return false, err
+	}
+	// A membership written through a central route is a security audit
+	// event (ADR-0059 R1.5), in this transaction: a failed append fails the
+	// pair. A pair that changed nothing appends none.
+	if tag.RowsAffected() > 0 {
+		if err := h.appendMembershipChange(ctx, tx, r, projectID, userID, before, true); err != nil {
+			return false, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return false, err

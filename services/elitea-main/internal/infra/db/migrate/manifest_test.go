@@ -1229,7 +1229,13 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 267: shared/0267_webhook_secret_reference.sql, webhooks.secret_ref, the
 	// vault reference that replaces the plaintext signing secret (issue
 	// 2963). No permission.
-	require.EqualValues(t, 267, Head(shared))
+	//
+	// 268: shared/0268_admin_audit_role_use.sql, the nullable role-use
+	// columns of centry.audit_events (acting_roles, elevation_id,
+	// credential_kind, central_override, reason_code, reason,
+	// reason_missing), outside the chain hash (issue 2508, ADR-0059 R1.4a).
+	// No permission.
+	require.EqualValues(t, 268, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

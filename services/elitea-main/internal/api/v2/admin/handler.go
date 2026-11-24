@@ -17,6 +17,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/buildinfo"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/microsoftapps"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
 
 type Handler struct {
@@ -130,6 +131,10 @@ type Handler struct {
 	microsoftApps   MicrosoftAppStore
 	microsoftDoer   microsoftapps.HTTPDoer
 	microsoftOrigin string
+
+	// accessAudit appends the admin.access.changed events of the role write
+	// paths in their transactions (ADR-0059 R1.5, access_events.go).
+	accessAudit securityaudit.Appender
 }
 
 // Option configures a Handler at construction time.
@@ -186,7 +191,7 @@ func WithMaintenanceState(state func(context.Context) (platformconfig.Maintenanc
 }
 
 func NewHandler(pool *pgxpool.Pool, options ...Option) *Handler {
-	handler := &Handler{pool: pool}
+	handler := &Handler{pool: pool, accessAudit: defaultAccessAppender()}
 	for _, option := range options {
 		option(handler)
 	}
