@@ -23,11 +23,11 @@
  * field, and the full list comes back.
  */
 import { test, expect } from '@playwright/test';
-import type { Locator, Page } from '@playwright/test';
+import type { APIRequestContext, Locator, Page } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
 import { BASE_URL } from '../../../playwright.config';
-import { AUTOTEST_PREFIX, createConversation, deleteConversation } from '../../fixtures/api';
+import { API_BASE, AUTOTEST_PREFIX, DEFAULT_PROJECT_ID, createConversation, deleteConversation } from '../../fixtures/api';
 
 /** Every entity this file creates carries this suffix (concurrent-agent hygiene). */
 const SUFFIX = '-search';
@@ -36,35 +36,42 @@ function uniqueName(tag: string): string {
   return `${AUTOTEST_PREFIX}${tag}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${SUFFIX}`;
 }
 
-/** Opens the sidebar's Today group (open by default; a remembered close is undone). */
-async function openTodayGroup(page: Page): Promise<void> {
-  const list = page.getByTestId('shell-chats');
-  await expect(list).toBeVisible({ timeout: 20_000 });
-  const today = list
-    .getByTestId('shell-chats-group')
-    .filter({ has: page.locator('.shell-group-caption', { hasText: /^Today$/ }) })
-    .locator('.shell-row-main');
-  await expect(today).toBeVisible({ timeout: 20_000 });
-  if ((await today.getAttribute('aria-expanded')) !== 'true') await today.click();
-}
-
 /**
- * Brings a row into the Today group, paging it with "Show more" as needed:
- * the group delivers its newest rows a page at a time and this file runs in
- * parallel with journeys that seed the same group, so a row created a moment
- * ago on another worker can sit on its second page.
+ * The sidebar's Pinned group, where this file's two rows live.
+ *
+ * Not Today, on purpose (issue 3029). Today is a date bucket the server
+ * cuts into pages of ten, and journeys on other workers seed and delete
+ * rows in it while this one runs (`conversations.list.spec.ts` alone adds
+ * and removes fourteen). Paging it with "Show more" is offset paging over a
+ * list that moves. On a WebKit leg the failing attempt's last snapshot shows
+ * Today holding exactly ten of that file's rows and no "Show more": the
+ * first page was read while they existed, they were deleted, the page at
+ * offset 10 came back empty, and `mergeLoadMorePage` marks a bucket
+ * exhausted on an empty page. This file's rows (older, on page two) were
+ * then unreachable for the whole 30 s. The Pinned bucket is served whole (no paging,
+ * `firstPage` in the folders handler pages only date groups) and holds
+ * only what the caller pinned, so a row pinned here is on screen the
+ * moment the listing is.
  */
-async function revealInToday(page: Page, row: Locator): Promise<void> {
-  const more = page
+function pinnedGroup(page: Page): Locator {
+  return page
     .getByTestId('shell-chats')
     .getByTestId('shell-chats-group')
-    .filter({ has: page.locator('.shell-group-caption', { hasText: /^Today$/ }) })
-    .locator('xpath=ancestor::li[1]')
-    .getByTestId('shell-chats-more');
-  await expect(async () => {
-    if (!(await row.isVisible()) && (await more.isVisible())) await more.locator('.shell-row-main').click();
-    await expect(row).toBeVisible({ timeout: 2_000 });
-  }).toPass({ timeout: 30_000 });
+    .filter({ has: page.locator('.shell-group-caption', { hasText: /^Pinned$/ }) });
+}
+
+/** Opens the Pinned group (open by default; a remembered close is undone). */
+async function openPinnedGroup(page: Page): Promise<void> {
+  const caption = pinnedGroup(page).locator('.shell-row-main');
+  await expect(caption).toBeVisible({ timeout: 20_000 });
+  if ((await caption.getAttribute('aria-expanded')) !== 'true') await caption.click();
+  await expect(caption).toHaveAttribute('aria-expanded', 'true');
+}
+
+/** Pins through the generic social route the rail's own pin uses (`usePinConversation.hooks.ts`). */
+async function pinConversation(request: APIRequestContext, conversationId: string): Promise<void> {
+  const response = await request.post(`${API_BASE}/social/pin/prompt_lib/${DEFAULT_PROJECT_ID}/conversation/${conversationId}`);
+  expect(response.status(), `pin must succeed: ${(await response.text()).slice(0, 300)}`).toBe(200);
 }
 
 test('the rail’s search control narrows the list to the conversation it names', async ({ page }) => {
@@ -72,15 +79,20 @@ test('the rail’s search control narrows the list to the conversation it names'
   const droppedName = uniqueName('dropped');
   const kept = await createConversation(page.request, keptName);
   const dropped = await createConversation(page.request, droppedName);
+  await pinConversation(page.request, kept);
+  await pinConversation(page.request, dropped);
 
   await page.goto(BASE_URL + '/app/chat');
   await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 20_000 });
-  await openTodayGroup(page);
+  await openPinnedGroup(page);
 
-  const keptRow = page.locator(`[data-conversation-id="${kept}"]`);
-  const droppedRow = page.locator(`[data-conversation-id="${dropped}"]`);
-  await revealInToday(page, keptRow);
-  await revealInToday(page, droppedRow);
+  // Scoped to the Pinned group: a row there is the listing's answer, not a
+  // copy that another bucket might also carry.
+  const pinnedRows = pinnedGroup(page).locator('xpath=ancestor::li[1]');
+  const keptRow = pinnedRows.locator(`[data-conversation-id="${kept}"]`);
+  const droppedRow = pinnedRows.locator(`[data-conversation-id="${dropped}"]`);
+  await expect(keptRow).toBeVisible({ timeout: 15_000 });
+  await expect(droppedRow).toBeVisible({ timeout: 15_000 });
 
   // The control is not an input until it is asked to be — the list renders
   // the search field only while the caption's search is open.
@@ -112,13 +124,9 @@ test('the rail’s search control narrows the list to the conversation it names'
   // back — including the row the query had removed.
   await input.press('Escape');
   await expect(input).toHaveCount(0);
-  // The full list comes back folded: Today shows its newest rows and hides
-  // the rest behind "more", and other runs' conversations can push either
-  // row there. Reveal each the way the start of the test did, rather than
-  // expecting both above the fold.
-  await openTodayGroup(page);
-  await revealInToday(page, droppedRow);
-  await revealInToday(page, keptRow);
+  // Pinned is served whole, so both rows are back without any paging.
+  await expect(droppedRow).toBeVisible({ timeout: 15_000 });
+  await expect(keptRow).toBeVisible();
 
   await deleteConversation(page.request, kept);
   await deleteConversation(page.request, dropped);
