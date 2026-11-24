@@ -72,8 +72,13 @@ var policyRuleTypes = []string{"routing_rule", "rate_limit", "budget", "model_co
 //     known here — has no narrow name yet and keeps the legacy name only.
 //
 // configuration.governance writes every type, as before.
+//
+// A personal access token the token rule refuses the guardrail outcome
+// (ADR-0059 R1.2b, issue 2993) writes no stored guardrail, whatever it holds:
+// tokenNoGuardrail.
 type governanceWriter struct {
 	legacy, guardrails, policy bool
+	tokenNoGuardrail           bool
 }
 
 // may answers whether the caller may write a row of rowType.
@@ -91,9 +96,11 @@ func (g governanceWriter) may(rowType string) bool {
 
 // storedClause is the SQL form of may over the stored row's `type` column,
 // for the WHERE of an update or a delete, with its arguments numbered from
-// first. The constants are bound, never spliced.
+// first. The constants are bound, never spliced. The token rule's guardrail
+// refusal is part of the same clause, so a row cannot become a guardrail
+// between the read that classified the write and the write.
 func (g governanceWriter) storedClause(first int) (string, []any) {
-	clause := fmt.Sprintf("($%d OR (type = $%d AND $%d) OR (type = ANY($%d::text[]) AND $%d))",
-		first, first+1, first+2, first+3, first+4)
-	return clause, []any{g.legacy, guardrailType, g.guardrails, policyRuleTypes, g.policy}
+	clause := fmt.Sprintf("($%d OR (type = $%d AND $%d) OR (type = ANY($%d::text[]) AND $%d)) AND NOT ($%d AND type = $%d)",
+		first, first+1, first+2, first+3, first+4, first+5, first+1)
+	return clause, []any{g.legacy, guardrailType, g.guardrails, policyRuleTypes, g.policy, g.tokenNoGuardrail}
 }

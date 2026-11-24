@@ -47,6 +47,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpregistry"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/publicproject"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/entitylimits"
 )
@@ -76,6 +77,9 @@ type Handler struct {
 	memoryUsers        MemoryUserJournal
 	pool               *pgxpool.Pool
 	permissionResolver auth.PermissionResolver
+	// accessAudit appends the admin.access.changed events of the central
+	// member routes (users_write_events.go); nil is the PostgreSQL appender.
+	accessAudit securityaudit.Appender
 
 	// maintenanceState reads the maintenance window in place of pool for the
 	// platform_settings flag read (WithMaintenanceState); nil reads pool.
