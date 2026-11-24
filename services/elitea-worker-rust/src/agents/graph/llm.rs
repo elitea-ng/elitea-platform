@@ -1418,6 +1418,12 @@ impl LlmNode {
                 Ok(node_failure(self.name()))
             }
             LlmAttemptFailure::Execution(LlmExecutionError::MayHaveStarted) => {
+                if let Some(sender) = self.factory.event_sender() {
+                    sender
+                        .send_model_failure(&recovery_refused_error())
+                        .await
+                        .map_err(|_| node_failure(self.name()))?;
+                }
                 Ok(may_have_started(self.name()))
             }
             LlmAttemptFailure::Execution(_) => Ok(node_failure(self.name())),
@@ -1493,6 +1499,18 @@ impl LlmNode {
             return Ok(confirmation);
         }
         if may_have_started_flag.load(Ordering::Acquire) {
+            if last_failure
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+                .is_some()
+                && let Some(sender) = self.factory.event_sender()
+            {
+                sender
+                    .send_model_failure(&recovery_refused_error())
+                    .await
+                    .map_err(|_| node_failure(self.name()))?;
+            }
             return Err(may_have_started(self.name()));
         }
         result
@@ -2215,6 +2233,15 @@ pub(super) async fn run_model_agent_text(
             }
             Err(model_error(&error))
         }
+        Err(LlmAttemptFailure::Execution(LlmExecutionError::MayHaveStarted)) => {
+            if let Some(sender) = factory.event_sender() {
+                sender
+                    .send_model_failure(&recovery_refused_error())
+                    .await
+                    .map_err(|_| LlmExecutionError::Unavailable)?;
+            }
+            Err(LlmExecutionError::MayHaveStarted)
+        }
         Err(LlmAttemptFailure::Execution(error)) => Err(error),
         Ok(PipelineLlmRunOutcome::Confirmation(_))
         | Err(
@@ -2449,6 +2476,15 @@ async fn run_model_agent_attempt(
         },
         None => drive.await,
     }
+}
+
+fn recovery_refused_error() -> AdkError {
+    AdkError::new(
+        adk_rust::ErrorComponent::Agent,
+        adk_rust::ErrorCategory::Unsupported,
+        crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE,
+        crate::protocol::output::RECOVERY_REFUSED_DETAIL,
+    )
 }
 
 /// A tool of this node crossed its boundary in an earlier run without a

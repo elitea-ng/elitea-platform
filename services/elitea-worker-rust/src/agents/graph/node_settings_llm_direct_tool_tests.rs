@@ -2133,3 +2133,162 @@ async fn llm_on_error_error_output_routes_to_error_transition() {
     assert_eq!(errors.len(), 1);
     assert_eq!(errors[0]["error"]["code"], "pipeline.llm.unavailable");
 }
+
+#[tokio::test]
+async fn llm_node_emits_recovery_refused_model_failure_on_may_have_started() {
+    use crate::protocol::output::{RECOVERY_REFUSED_DETAIL, RECOVERY_REFUSED_UPSTREAM_CODE};
+
+    let refused = || {
+        AdkError::new(
+            ErrorComponent::Agent,
+            ErrorCategory::Unsupported,
+            RECOVERY_REFUSED_UPSTREAM_CODE,
+            RECOVERY_REFUSED_DETAIL,
+        )
+    };
+
+    // 1) LlmNode without `settings:`: returns `may_have_started` and emits `RECOVERY_REFUSED_UPSTREAM_CODE`.
+    let plain_calls = Arc::new(AtomicUsize::new(0));
+    let (plain_sender, plain_receiver) = pipeline_node_event_channel();
+    let plain_factory: Arc<dyn PipelineLlmAgentFactory> = Arc::new(ScriptedLlmFactory {
+        attempts: Arc::new(Mutex::new(VecDeque::from([
+            ScriptedLlmAttempt::FailBeforeOutput(refused()),
+        ]))),
+        calls: Arc::clone(&plain_calls),
+        events: Some(plain_sender),
+    });
+    let plain_node = LlmNode::new(
+        llm_definition(),
+        BTreeMap::from([("answer".to_owned(), "str".to_owned())]),
+        plain_factory,
+    );
+    let plain_err = plain_node
+        .execute(&NodeContext::new(
+            State::new(),
+            ExecutionConfig::new("llm-plain-refused-thread"),
+            1,
+        ))
+        .await
+        .err()
+        .expect("MayHaveStarted stops");
+    assert_eq!(plain_calls.load(Ordering::SeqCst), 1);
+    assert!(
+        plain_err
+            .to_string()
+            .contains(crate::agents::pipeline::scoped_runtime::CALL_MAY_HAVE_STARTED_CODE),
+        "expected may_have_started code, got: {plain_err}"
+    );
+    assert_eq!(
+        plain_receiver.try_model_failure_code().await,
+        Some(RECOVERY_REFUSED_UPSTREAM_CODE)
+    );
+
+    // 2) Tool-bearing LlmNode with retry settings (`execute_in_memory_ledger`): 0 retries, emits once.
+    let tool_yaml = "
+state:
+  answer: str
+entry_point: ask
+nodes:
+  - id: ask
+    type: llm
+    input_mapping:
+      task: {type: fixed, value: hi}
+    tool_names:
+      Support: [search_records]
+    output: [answer]
+    transition: END
+";
+    let tool_def = PipelineDefinition::from_yaml(tool_yaml)
+        .expect("tool-bearing llm pipeline")
+        .llm_definition_fixture("ask")
+        .expect("ask node");
+    let tool_calls = Arc::new(AtomicUsize::new(0));
+    let (tool_sender, tool_receiver) = pipeline_node_event_channel();
+    let tool_factory: Arc<dyn PipelineLlmAgentFactory> = Arc::new(ScriptedLlmFactory {
+        attempts: Arc::new(Mutex::new(VecDeque::from([
+            ScriptedLlmAttempt::FailBeforeOutput(refused()),
+            ScriptedLlmAttempt::Succeed("NEVER_RETRY"),
+        ]))),
+        calls: Arc::clone(&tool_calls),
+        events: Some(tool_sender),
+    });
+    let tool_node = LlmNode::new(
+        tool_def,
+        BTreeMap::from([("answer".to_owned(), "str".to_owned())]),
+        tool_factory,
+    )
+    .with_settings(
+        admitted_settings(
+            "{retry_on_fail: true, max_tries: 3, wait_between_tries_ms: 200, on_error: continue}",
+            AdmittedNodeFamily::Llm,
+            &[("answer", "str")],
+        ),
+        Some(Arc::new("exec-llm-tool-refused".to_owned())),
+    );
+    let tool_err = tool_node
+        .execute(&NodeContext::new(
+            State::new(),
+            ExecutionConfig::new("llm-tool-refused-thread"),
+            1,
+        ))
+        .await
+        .err()
+        .expect("MayHaveStarted stops tool-bearing node");
+    assert_eq!(tool_calls.load(Ordering::SeqCst), 1);
+    assert!(
+        tool_err
+            .to_string()
+            .contains(crate::agents::pipeline::scoped_runtime::CALL_MAY_HAVE_STARTED_CODE),
+        "expected may_have_started code, got: {tool_err}"
+    );
+    assert_eq!(
+        tool_receiver.try_model_failure_code().await,
+        Some(RECOVERY_REFUSED_UPSTREAM_CODE)
+    );
+
+    // 3) Tool-free journaled LlmNode with retry settings (`execute_journaled`): 0 retries, emits once.
+    let journal_calls = Arc::new(AtomicUsize::new(0));
+    let (journal_sender, journal_receiver) = pipeline_node_event_channel();
+    let journal_factory: Arc<dyn PipelineLlmAgentFactory> = Arc::new(ScriptedLlmFactory {
+        attempts: Arc::new(Mutex::new(VecDeque::from([
+            ScriptedLlmAttempt::FailBeforeOutput(refused()),
+            ScriptedLlmAttempt::Succeed("NEVER_RETRY"),
+        ]))),
+        calls: Arc::clone(&journal_calls),
+        events: Some(journal_sender),
+    });
+    let journal_node = LlmNode::new(
+        llm_definition(),
+        BTreeMap::from([("answer".to_owned(), "str".to_owned())]),
+        journal_factory,
+    )
+    .with_node_recovery(scoped())
+    .with_settings(
+        admitted_settings(
+            "{retry_on_fail: true, max_tries: 3, wait_between_tries_ms: 200, on_error: continue}",
+            AdmittedNodeFamily::Llm,
+            &[("answer", "str")],
+        ),
+        Some(Arc::new("exec-llm-journal-refused".to_owned())),
+    );
+    let journal_err = journal_node
+        .execute(&NodeContext::new(
+            State::new(),
+            ExecutionConfig::new("llm-journal-refused-thread"),
+            1,
+        ))
+        .await
+        .err()
+        .expect("MayHaveStarted stops journaled node");
+    assert_eq!(journal_calls.load(Ordering::SeqCst), 1);
+    assert!(
+        journal_err
+            .to_string()
+            .contains(crate::agents::pipeline::scoped_runtime::CALL_MAY_HAVE_STARTED_CODE),
+        "expected may_have_started code, got: {journal_err}"
+    );
+    assert_eq!(
+        journal_receiver.try_model_failure_code().await,
+        Some(RECOVERY_REFUSED_UPSTREAM_CODE)
+    );
+}
