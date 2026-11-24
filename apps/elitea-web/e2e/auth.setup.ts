@@ -18,6 +18,7 @@ import * as path from 'path';
 import { test as setup, expect } from '@playwright/test';
 
 import { BASE_URL, STORAGE_STATE } from '../playwright.config';
+import { ADMIN_PERSONAS } from './fixtures/adminPersonas';
 import { readProjectSecretHeader, SECRETS_HEADER_NAME } from './fixtures/api';
 import {
   DEFAULT_PROJECT_ID,
@@ -74,6 +75,19 @@ setup.describe('Auth setup', () => {
     setup.setTimeout(PERSONA_TIMEOUT_MS);
     await performOidcLogin(page, 'e2e-viewer@autotest.local', STORAGE_STATE.viewer, 'seeded');
   });
+
+  // The built-in role personas (ADR-0059 R3.13a, `./fixtures/adminPersonas.ts`):
+  // one sign-in each, in this same serial project for the reason
+  // `playwright.config.ts`'s `setup` project gives. They hold no project, so
+  // none is pinned; the wait in `performOidcLogin` still sees the personal
+  // project the sign-in provisions finish before the next sign-in takes the
+  // provisioning slot.
+  for (const persona of ADMIN_PERSONAS) {
+    setup(`authenticate as ${persona.role} persona`, async ({ page }) => {
+      setup.setTimeout(PERSONA_TIMEOUT_MS);
+      await performOidcLogin(page, persona.email, STORAGE_STATE.personas[persona.role], 'console');
+    });
+  }
 });
 
 /**
@@ -137,6 +151,16 @@ async function performOidcLogin(
   // A session with no subject would still satisfy `authenticated: true` but
   // leaves every downstream journey without an identity to assert against.
   expect(infoBody.user_id, `OIDC session for ${email} carries no user_id`).toBeTruthy();
+
+  if (project === 'console') {
+    // A built-in role persona belongs to no project, so there is no project
+    // to pin and the app shell is not opened: the console journeys start at
+    // `/admin/app/`. The personal project the sign-in asked for is still
+    // waited for, so that the next sign-in finds the provisioning slot free.
+    await readPersonalProjectId(page, email);
+    await page.context().storageState({ path: storageStatePath });
+    return;
+  }
 
   // Open the app on the BASE_URL origin — both because the storage this
   // function is about belongs to that origin, and because the SPA may still be
@@ -223,8 +247,10 @@ async function performOidcLogin(
  *                 against.
  *  - `personal` — the caller's own `project_user_<uid>`. Only the chat driver
  *                 wants this; see `playwright.config.ts`'s STORAGE_STATE.chat.
+ *  - `console`  — no project: the built-in role personas, which hold no
+ *                 project role and start their journeys in the admin console.
  */
-type PersonaProject = 'seeded' | 'personal';
+type PersonaProject = 'seeded' | 'personal' | 'console';
 
 /**
  * The caller's OWN `personal_project_id`, asked for until the server names it.
