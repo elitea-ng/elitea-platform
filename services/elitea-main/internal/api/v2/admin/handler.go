@@ -29,6 +29,11 @@ type Handler struct {
 	pool        *pgxpool.Pool
 	resolver    auth.PermissionResolver
 	suggestions ToolkitRegistrySource
+
+	// maintenanceState reads the maintenance window in place of pool for
+	// GET /admin/maintenance/{mode} (WithMaintenanceState); nil reads pool.
+	maintenanceState func(context.Context) (platformconfig.Maintenance, error)
+
 	// The brand-pack resolver the Branding surface reads and invalidates
 	// (branding.go). Nil unless WithBranding is applied.
 	branding BrandingResolver
@@ -171,6 +176,13 @@ func WithToolkitRegistry(source ToolkitRegistrySource) Option {
 		}
 		h.suggestions = source
 	}
+}
+
+// WithMaintenanceState reads the maintenance window through state instead of
+// the platform_settings rows of the pool, the reader the maintenance gate
+// takes (api.RouterConfig.MaintenanceState). Nil keeps the pool read.
+func WithMaintenanceState(state func(context.Context) (platformconfig.Maintenance, error)) Option {
+	return func(h *Handler) { h.maintenanceState = state }
 }
 
 func NewHandler(pool *pgxpool.Pool, options ...Option) *Handler {
@@ -352,7 +364,13 @@ func (h *Handler) Maintenance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	state, err := platformconfig.LoadMaintenance(r.Context(), h.pool)
+	read := func(ctx context.Context) (platformconfig.Maintenance, error) {
+		return platformconfig.LoadMaintenance(ctx, h.pool)
+	}
+	if h.maintenanceState != nil {
+		read = h.maintenanceState
+	}
+	state, err := read(r.Context())
 	if err != nil {
 		// NOT permissive, unlike the middleware's own read. An operator asking
 		// this endpoint whether the platform is in maintenance must never be

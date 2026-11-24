@@ -24,6 +24,15 @@ prefix to disambiguate. Override only alongside re-minting the certificate.
 {{- default "elitea-worker" .Values.worker.fullnameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
+{{/* The worker's ServiceAccount (#2953): elitea-worker, or worker.serviceAccount.name. */}}
+{{- define "elitea-worker.serviceAccountName" -}}
+{{- if .Values.worker.serviceAccount.create -}}
+{{- default (include "elitea-worker.fullname" .) .Values.worker.serviceAccount.name -}}
+{{- else -}}
+{{- default "default" .Values.worker.serviceAccount.name -}}
+{{- end -}}
+{{- end }}
+
 {{- define "elitea-worker.labels" -}}
 helm.sh/chart: {{ printf "%s-%s" "elitea-worker-python" .Chart.Version | replace "+" "_" }}
 {{ include "elitea-worker.selectorLabels" . }}

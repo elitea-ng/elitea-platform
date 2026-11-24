@@ -68,6 +68,10 @@ spec:
       {{- end }}
     spec:
       serviceAccountName: {{ $s.supervisorServiceAccount }}
+      # The supervisor creates and watches the sandbox pods through the
+      # Kubernetes API (kubernetes-boundary.yaml binds its Role), so it is one
+      # of the few pods that keep the token (#2953).
+      automountServiceAccountToken: true
       {{- include "elitea.imagePullSecrets" (dict "local" (list) "global" .Values.image.pullSecrets) | nindent 6 }}
       terminationGracePeriodSeconds: 25
       securityContext:

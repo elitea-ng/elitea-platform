@@ -271,7 +271,7 @@ func actionRows() []Action {
 		put(admin("/email/administration"), PlatformEmailManage).elevation(deny),
 		post(admin("/email/test/administration"), PlatformEmailManage),
 		// Answers 405: maintenance is authored in the Maintenance section.
-		put(admin("/maintenance/{mode}"), RuntimePlugins),
+		put(admin("/maintenance/{mode}"), PlatformMaintenanceManage),
 		post(admin("/background_jobs/administration/pat_expiry_notices:run"), PlatformOperationsManage),
 		post(admin("/background_jobs/administration/{kind}/{jobID}:cancel"), PlatformOperationsManage),
 		put(admin("/platform_routines/administration/{id}"), ConfigurationSchedulingSchedulesEdit),
@@ -283,6 +283,10 @@ func actionRows() []Action {
 		post(admin("/microsoft_oauth_apps/{id}/disable"), ConfigurationMicrosoftApps),
 		post(admin("/microsoft_oauth_apps/{id}/enable"), ConfigurationMicrosoftApps),
 		post(admin("/microsoft_oauth_apps/{id}/test"), ConfigurationMicrosoftApps),
+		// Feature or delist a Marketplace listing: the moderation check in
+		// the handler (eliteacore holdsModerationPermission), behind the
+		// project's agent list gate. The surface reaches it since #2925.
+		write(http.MethodPatch, core("/marketplace_listing/prompt_lib/{projectID}/{listingID}"), RuntimeAdminPublishedAgents),
 		post(core("/register_descriptor/{projectID}"), ProviderHubDescriptorRegister),
 		del(core("/register_descriptor/{projectID}"), ProviderHubDescriptorRegister),
 		post(core("/register_descriptor/{projectID}/activate"), ProviderHubDescriptorActivate),

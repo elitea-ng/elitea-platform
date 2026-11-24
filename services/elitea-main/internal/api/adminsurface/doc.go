@@ -53,16 +53,30 @@
 // the surface. A request that times out, or a route that answers the same
 // request two ways, is reported too: neither answer is evidence.
 //
+// # Checks the default request does not reach
+//
+// A Variant reaches a check the default request (a bearer token, the window
+// closed, nothing granted in the other modes) never meets. ComposedRouter
+// drives these (SessionAndWindowVariants, ADR-0059 #2925):
+//
+//   - the maintenance bypass, in the gate and in the platform_settings read,
+//     with a window open (Variant.Maintenance). No database holds the window:
+//     ComposedRouter reads it through api.RouterConfig.MaintenanceState, which
+//     opens it for the requests of such a variant only;
+//   - the personal token mint, whose administration-mode check runs for a
+//     native device session only (Variant.Authenticate, NativeToken);
+//   - the Marketplace moderation check, behind the project gate of the
+//     agent list (Variant.OtherModes) and after the body is read.
+//
 // # What Drive cannot see
 //
-//   - A check that runs only on stored data: the maintenance bypass (the
-//     middleware and platform_settings) runs only while a window is open, and
-//     the window is a database row. The pool of the composed router refuses
-//     every connection, so the window is never open.
-//   - A check behind a credential other than a bearer token: the personal
-//     token mint resolves the administration mode only for a browser session.
+//   - A check whose answer feeds a query: the Marketplace reads hand the
+//     moderation answer to the listing query, which the unconnected pool
+//     fails whatever the grant. The listing update is driven instead; it
+//     asks the same function.
 //   - A route cmd/elitea-main adds through a RouterConfig field that the
-//     composed router leaves unset (the admin SPA shell, the Marketplace read).
+//     composed router leaves unset. The admin SPA shell (adminui) is one; it
+//     is presentation only and makes no decision.
 //   - A check that accepts a registered name and an unregistered one: probing
 //     the registry sees only the registered one. The source test
 //     TestNoAdministrationPermissionLiteralOutsideTheRegistry covers it.

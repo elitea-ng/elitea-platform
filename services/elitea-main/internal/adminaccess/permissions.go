@@ -143,8 +143,8 @@ func rows() []Permission {
 
 	runtimePlugins := row(RuntimePlugins, AreaPlatform, ClassWrite)
 	// The maintenance bypass (middleware/maintenance.go and the
-	// platform_settings flag read). A native session keeps it, and today it
-	// is the only permission that admits its holder during a window.
+	// platform_settings flag read), with its narrow name
+	// platform.maintenance.manage. A native session keeps it.
 	runtimePlugins.NativeClient = true
 	runtimePlugins.Maintenance = true
 
@@ -240,9 +240,13 @@ func seeded(name string, area Area, class Class, narrows ...string) Permission {
 // narrowRows are the 25 rows of shared 0261. None is a token scope (Token
 // false): the scoped token of R1.1 and R1.2 opts rows in, and identity trust
 // never is one. platform.maintenance.manage is the narrow name of the
-// maintenance bypass, but it gets NativeClient and Maintenance only in R0.4,
-// when the bypass accepts it: the attributes say what is enforced.
+// maintenance bypass: since R0.4b the bypass accepts it, so it carries
+// Maintenance, and a native session keeps it (NativeClient) as it keeps
+// runtime.plugins.
 func narrowRows() []Permission {
+	maintenance := narrow(PlatformMaintenanceManage, AreaPlatform, ClassWrite, RuntimePlugins)
+	maintenance.NativeClient = true
+	maintenance.Maintenance = true
 	return []Permission{
 		// Models and spend.
 		narrow(LLMCatalogueView, AreaModelsSpend, ClassRead, ConfigurationGovernance),
@@ -259,7 +263,7 @@ func narrowRows() []Permission {
 		narrow(PlatformConfigView, AreaPlatform, ClassRead, RuntimePlugins),
 		narrow(PlatformConfigManage, AreaPlatform, ClassWrite, RuntimePlugins),
 		narrow(PlatformEmailManage, AreaPlatform, ClassWrite, RuntimePlugins),
-		narrow(PlatformMaintenanceManage, AreaPlatform, ClassWrite, RuntimePlugins),
+		maintenance,
 		narrow(PlatformOperationsView, AreaPlatform, ClassRead, RuntimePlugins),
 		narrow(PlatformOperationsManage, AreaPlatform, ClassWrite, RuntimePlugins),
 		// Prebuilt MCP servers are connectors: the Agents and governance

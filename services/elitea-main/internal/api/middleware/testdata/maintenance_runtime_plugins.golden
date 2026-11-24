@@ -1,0 +1,14 @@
+GET	/api/v2/admin/maintenance/administration	others=0	window=false	200	maintenance=false
+GET	/api/v2/admin/maintenance/administration	others=0	window=true	200	maintenance=false
+PUT	/api/v2/admin/maintenance/administration	others=0	window=false	405	maintenance=false
+PUT	/api/v2/admin/maintenance/administration	others=0	window=true	405	maintenance=false
+PUT	/api/v2/admin/plugin_config_values/administration/maintenance	others=0	window=false	500	maintenance=false
+PUT	/api/v2/admin/plugin_config_values/administration/maintenance	others=0	window=true	500	maintenance=false
+GET	/api/v2/elitea_core/platform_settings/prompt_lib	others=0	window=false	200	maintenance=false	bypass=false
+GET	/api/v2/elitea_core/platform_settings/prompt_lib	others=0	window=true	200	maintenance=false	bypass=true
+PUT	/api/v2/elitea_core/project_budget/administration/1/budget	others=0	window=false	403	maintenance=false
+PUT	/api/v2/elitea_core/project_budget/administration/1/budget	others=0	window=true	403	maintenance=false
+GET	/api/v2/elitea_core/applications/prompt_lib/1	others=1	window=false	500	maintenance=false
+GET	/api/v2/elitea_core/applications/prompt_lib/1	others=1	window=true	500	maintenance=false
+GET	/api/v2/elitea_core/applications/prompt_lib/1	others=0	window=false	403	maintenance=false
+GET	/api/v2/elitea_core/applications/prompt_lib/1	others=0	window=true	403	maintenance=false

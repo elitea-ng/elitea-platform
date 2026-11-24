@@ -27,6 +27,8 @@ spec:
         # of it.
         checksum/config: {{ include (print $.Template.BasePath "/pgbouncer/configmap.yaml") . | sha256sum }}
     spec:
+      # Nothing in this pod calls the Kubernetes API (#2953).
+      automountServiceAccountToken: false
       {{- with .Values.pgbouncer.podSecurityContext }}
       securityContext:
         {{- toYaml . | nindent 8 }}
