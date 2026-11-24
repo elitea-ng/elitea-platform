@@ -6,6 +6,8 @@ package main
 // `operator`. CI-only: skipped without ELITEA_TEST_DATABASE_URL.
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strconv"
 	"strings"
@@ -16,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/browsersession"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
@@ -123,6 +126,23 @@ SELECT $1, id FROM public.auth_core__role WHERE name = $2 AND mode = 'administra
 	}
 	if len(resolution.Roles) != 0 {
 		t.Fatalf("a sealed session acts with the standing roles %v", resolution.Roles)
+	}
+	// Through the route gate: 403 where the route needs the standing
+	// super_admin permission, served where it needs the admin set.
+	for permission, want := range map[string]int{
+		adminaccess.SuperAdminPermission: http.StatusForbidden,
+		adminaccess.AdminAuthUsers:       http.StatusNoContent,
+	} {
+		gate := apimw.RequireCentralPermissions(resolver, auth.PermissionModeAdministration, permission)(
+			http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+		request := httptest.NewRequest(http.MethodGet, "/api/v2/admin/gated", nil)
+		request = request.WithContext(auth.ContextWithUser(request.Context(), principal))
+		recorder := httptest.NewRecorder()
+		gate.ServeHTTP(recorder, request)
+		if recorder.Code != want {
+			t.Fatalf("a route needing %s answers the sealed session %d, want %d: %s",
+				permission, recorder.Code, want, recorder.Body.String())
+		}
 	}
 	standing, err := resolver.ResolveStandingAdministration(ctx, principal)
 	if err != nil {

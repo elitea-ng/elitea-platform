@@ -3,8 +3,11 @@ package browsersession
 import (
 	"context"
 	"errors"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -45,6 +48,36 @@ func TestSealedCookieAttributes(t *testing.T) {
 	if cleared.Name != SealedCookieName || cleared.MaxAge >= 0 || cleared.Value != "" || !cleared.Secure ||
 		cleared.SameSite != http.SameSiteStrictMode || cleared.Path != "/" {
 		t.Fatalf("the clearing cookie %+v does not replace the sealed one", cleared)
+	}
+}
+
+// No request of a sealed session can reach an identity provider: the package
+// that validates it (every non-test file of browsersession) imports no
+// identity-provider client, so there is nothing for it to call. The DB suite
+// (sealed_postgres_integration_test.go) runs the session through its whole
+// life with no provider configured at all.
+func TestSealedValidationImportsNoIdentityProviderClient(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	set := token.NewFileSet()
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(set, name, nil, parser.ImportsOnly)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, spec := range file.Imports {
+			path := strings.ToLower(strings.Trim(spec.Path.Value, `"`))
+			for _, client := range []string{"oidc", "saml", "oauth2", "/auth/browserflow", "/api/v2/auth"} {
+				if strings.Contains(path, client) {
+					t.Errorf("%s imports %s: the session reader could call an identity provider", name, path)
+				}
+			}
+		}
 	}
 }
 

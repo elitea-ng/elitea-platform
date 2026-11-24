@@ -266,3 +266,24 @@ func assertSealedCookieCleared(t *testing.T, recorder *httptest.ResponseRecorder
 	}
 	t.Errorf("the refused sealed cookie was not cleared: %v", recorder.Result().Cookies())
 }
+
+// The cookie the sealed sign-in writes, and the one Auth clears: the four
+// attributes of ADR-0059 R2.7a (Secure, HttpOnly, SameSite=Strict, Path=/
+// with no Domain), on a name distinct from the ordinary session's.
+func TestSealedCookieHasTheFourAttributes(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	browsersession.SetSealedCookie(recorder, sealedValue, time.Hour)
+	cookies := recorder.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("cookies %v", cookies)
+	}
+	cookie := cookies[0]
+	if cookie.Name != browsersession.SealedCookieName || cookie.Name == browsersession.CookieName ||
+		!strings.HasPrefix(cookie.Name, "__Host-") {
+		t.Fatalf("cookie name %q", cookie.Name)
+	}
+	if !cookie.Secure || !cookie.HttpOnly || cookie.SameSite != http.SameSiteStrictMode ||
+		cookie.Path != "/" || cookie.Domain != "" {
+		t.Fatalf("sealed cookie %+v lacks an attribute", cookie)
+	}
+}
