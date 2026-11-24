@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -28,11 +29,16 @@ type postgresStore interface {
 
 type PostgresResolver struct {
 	store postgresStore
+	// now is the clock the elevation predicate is evaluated at (nil:
+	// time.Now). Access is the predicate, never a job, so a test clock past
+	// the expiry is enough to show an elevation grants nothing.
+	now func() time.Time
 }
 
 var (
-	_ auth.PermissionResolver           = (*PostgresResolver)(nil)
-	_ auth.MembershipPermissionResolver = (*PostgresResolver)(nil)
+	_ auth.PermissionResolver             = (*PostgresResolver)(nil)
+	_ auth.MembershipPermissionResolver   = (*PostgresResolver)(nil)
+	_ auth.StandingAdministrationResolver = (*PostgresResolver)(nil)
 )
 
 func NewPostgresResolver(pool *pgxpool.Pool) *PostgresResolver {
@@ -62,7 +68,7 @@ func (r *PostgresResolver) ResolvePermissions(
 	}
 
 	if mode == auth.PermissionModeAdministration {
-		return r.administrationResolution(ctx, principal, userID)
+		return r.administrationResolution(ctx, principal, userID, true)
 	}
 	var permissions []string
 	switch mode {
@@ -112,7 +118,7 @@ func (r *PostgresResolver) ResolveMembershipPermissions(
 	}
 
 	if mode == auth.PermissionModeAdministration {
-		return r.administrationResolution(ctx, principal, userID)
+		return r.administrationResolution(ctx, principal, userID, true)
 	}
 	var permissions []string
 	switch mode {
@@ -130,6 +136,28 @@ func (r *PostgresResolver) ResolveMembershipPermissions(
 	return auth.PermissionResolution{UserID: userID, Permissions: permissions}, nil
 }
 
+// ResolveStandingAdministration is the standing-set call (ADR-0059 decision
+// 3, "The exemption is read from standing roles only"; story R2.1b): the
+// administration-mode resolution of ResolvePermissions with no elevation in
+// it, ever, and no provisional grant (R2.12 adds those to ResolvePermissions
+// only). It does not read the elevation ledger at all, so its answer is the
+// same with and without an active elevation. The role rules, the super_admin
+// exemption and the project self-membership check read the caller's own set
+// from it (adminaccess.ResolveCaller).
+func (r *PostgresResolver) ResolveStandingAdministration(
+	ctx context.Context,
+	principal auth.User,
+) (auth.PermissionResolution, error) {
+	if r == nil || r.store == nil {
+		return auth.PermissionResolution{}, ErrPermissionDenied
+	}
+	userID, err := r.resolveUserID(ctx, principal)
+	if err != nil {
+		return auth.PermissionResolution{}, err
+	}
+	return r.administrationResolution(ctx, principal, userID, false)
+}
+
 // administrationResolution answers the administration mode: the credential
 // decides the set (ADR-0059 decision 7, the credentials table). The developer
 // and default modes never come here and resolve as before.
@@ -141,8 +169,16 @@ func (r *PostgresResolver) ResolveMembershipPermissions(
 //     write;
 //   - native: the owner's set intersected with the registry permissions
 //     marked native_client;
-//   - run, system, sealed (its standing set; the elevation is R2.1) and the
+//   - run, system, sealed (its standing set; its elevation is R2.7a) and the
 //     zero kind: empty.
+//
+// With elevated set, a browser session (session, form) with a server-side
+// row also gains the elevation union (ADR-0059 decision 5, "Bound to one
+// session"; story R2.1b): the administration set of the level's role of
+// every ACTIVE elevation of the same person bound to the same session
+// reference (elevationGrants). Every other kind never matches: its
+// ElevationSessionRef is 0, and the kind is checked again here. The
+// standing-set call passes false and never reads the ledger.
 //
 // userID is already resolved and checked by the caller, so a suspended owner
 // or an expired token was refused before any of this.
@@ -150,6 +186,7 @@ func (r *PostgresResolver) administrationResolution(
 	ctx context.Context,
 	principal auth.User,
 	userID int64,
+	elevated bool,
 ) (_ auth.PermissionResolution, failure error) {
 	credential := principal.Credential()
 	resolution := auth.PermissionResolution{
@@ -160,10 +197,17 @@ func (r *PostgresResolver) administrationResolution(
 	}
 	// The admin audit row of the request records the roles the caller acted
 	// with (ADR-0059 R1.4a), from this resolution: no second query. A failed
-	// resolution records nothing.
+	// resolution records nothing. An elevation adds no role name.
 	defer func() {
 		if failure == nil {
 			audit.RecordAdministration(ctx, audit.Administration{ActingRoles: resolution.Roles})
+			if len(resolution.ElevationIDs) > 0 {
+				// The row also records the elevation the request was made
+				// under (shared 0268). The slot below the audit middleware is
+				// what the row is written from, so the returned context is
+				// not needed.
+				_ = audit.ContextWithElevationID(ctx, resolution.ElevationIDs[0])
+			}
 		}
 	}()
 	if !credentialShapeCoherent(credential) {
@@ -193,7 +237,109 @@ func (r *PostgresResolver) administrationResolution(
 	}
 	resolution.Roles = roles
 	resolution.Permissions = AdministrationSet(credential.Kind, access, owner)
+	if !elevated || resolution.ElevationSessionRef <= 0 {
+		return resolution, nil
+	}
+	switch credential.Kind {
+	case auth.CredentialKindSession, auth.CredentialKindForm:
+	default:
+		return resolution, nil
+	}
+	ids, granted, err := r.elevationGrants(ctx, userID, resolution.ElevationSessionRef)
+	if err != nil {
+		return auth.PermissionResolution{}, err
+	}
+	resolution.Permissions, resolution.ElevatedPermissions = UnionElevation(resolution.Permissions, granted)
+	resolution.ElevationIDs = ids
+	if len(ids) > 0 {
+		// The resolver's elevation indicator (R1.3a reads it to refuse
+		// token scopes under an elevation): set whenever an active
+		// elevation is bound to the session, even one that adds nothing
+		// the standing set lacks.
+		resolution.ElevationID = ids[0]
+	}
 	return resolution, nil
+}
+
+// UnionElevation answers the union of a standing set and what the active
+// elevations grant, and the part of it that only the elevations give (nil
+// when that is empty). Both are sorted and de-duplicated; union is never nil.
+func UnionElevation(standing, granted []string) (union, elevatedOnly []string) {
+	union = append(make([]string, 0, len(standing)+len(granted)), standing...)
+	for _, permission := range granted {
+		if !slices.Contains(standing, permission) {
+			elevatedOnly = append(elevatedOnly, permission)
+			union = append(union, permission)
+		}
+	}
+	slices.Sort(union)
+	slices.Sort(elevatedOnly)
+	return slices.Compact(union), slices.Compact(elevatedOnly)
+}
+
+// elevationGrants reads the active elevations of the person bound to ONE
+// browser session, and the administration permissions of their levels' roles
+// (elitea_auth.admin_elevations, shared 0269).
+//
+//   - Both the person and the session reference must match: an elevation of
+//     one person never reaches another person's session, nor a second
+//     session of the same person.
+//   - Active is the predicate, evaluated at the resolver's clock: approved,
+//     started, no end, and the expiry in the future. No sweeper has to run
+//     for an elevation to stop granting.
+//   - The level joins its role by NAME in the administration mode at read
+//     time, so a later grant migration that changes the role reaches an
+//     active elevation; no grant is ever copied.
+//   - Every matching row counts, and the answer is the union of their sets:
+//     the ledger allows one open elevation per session, and the resolver
+//     never picks one row of several.
+//
+// The ids are of the rows that matched, sorted, nil for none; a level whose
+// role is missing or empty still names its elevation and grants nothing.
+func (r *PostgresResolver) elevationGrants(ctx context.Context, userID, sessionRef int64) ([]string, []string, error) {
+	rows, err := r.store.Query(ctx, `
+SELECT elevation.id::text, role_grant.permission
+FROM elitea_auth.admin_elevations AS elevation
+LEFT JOIN public.auth_core__role AS role
+  ON role.name = elevation.level AND role.mode = $3
+LEFT JOIN public.auth_core__role_permission AS role_grant ON role_grant.role_id = role.id
+WHERE elevation.user_id = $1
+  AND elevation.browser_session_ref = $2
+  AND elevation.decision = 'approved'
+  AND elevation.started_at IS NOT NULL
+  AND elevation.started_at <= $4
+  AND elevation.ended_at IS NULL
+  AND elevation.expires_at > $4`,
+		userID, sessionRef, auth.PermissionModeAdministration, r.clock().UTC())
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve the elevations of the session: %w", err)
+	}
+	defer rows.Close()
+	var ids, permissions []string
+	for rows.Next() {
+		var id string
+		var permission *string
+		if err := rows.Scan(&id, &permission); err != nil {
+			return nil, nil, fmt.Errorf("scan an elevation of the session: %w", err)
+		}
+		ids = append(ids, id)
+		if permission != nil {
+			permissions = append(permissions, *permission)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("read the elevations of the session: %w", err)
+	}
+	slices.Sort(ids)
+	slices.Sort(permissions)
+	return slices.Compact(ids), slices.Compact(permissions), nil
+}
+
+func (r *PostgresResolver) clock() time.Time {
+	if r.now != nil {
+		return r.now()
+	}
+	return time.Now()
 }
 
 // administrationRoles answers the user's administration-mode roles and the

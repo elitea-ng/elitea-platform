@@ -219,7 +219,7 @@ func (g *tokenCriticalActions) tokenCaller(r *http.Request, principal auth.User)
 	}
 	return adminaccess.TokenCaller{
 		Access:              resolution.TokenAdminAccess,
-		StandingGlobalAdmin: adminaccess.StandingGlobalAdmin(r.Context(), resolution.Permissions),
+		StandingGlobalAdmin: adminaccess.StandingGlobalAdmin(r.Context(), resolution.StandingPermissions()),
 	}, true
 }
 

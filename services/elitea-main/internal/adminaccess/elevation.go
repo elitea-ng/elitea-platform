@@ -15,13 +15,11 @@ package adminaccess
 // run for access to stop.
 //
 // StartElevation and EndElevation are the writers. Both run in the caller's
-// transaction and take the security audit appender the `admin.elevation`
-// event will be written with. In THIS build they write no event: R2.3 (issue
-// 2517) adds the Append on the same transaction, so that the row and its
-// event commit together or not at all. Until then no production code calls
-// them (TestNoProductionCallerBeforeTheAuditEvent fails when one does); the
-// first callers are R2.2c (issue 2597) and R2.7b (issue 2600), which depend
-// on R2.3.
+// transaction and write the step's `admin.elevation` security audit event
+// (elevation_event.go; R2.3, issue 2517) on it, under one savepoint with the
+// row: the row and its event commit together or not at all, and a failed
+// append leaves no row even when the caller commits after the error. The
+// first callers are R2.2c (issue 2597) and R2.7b (issue 2600).
 //
 // The resolver (R2.1b) must match an elevation on BOTH user_id and
 // browser_session_ref, and must tolerate more than one open row for a
@@ -236,6 +234,12 @@ type ElevationStart struct {
 	At time.Time
 	// Duration is the lifetime from At, at most the path's ceiling.
 	Duration time.Duration
+	// Source is the source of the `started` event (securityaudit
+	// ElevationSource*); "" is the console. A process command passes
+	// operator.
+	Source string
+	// CorrelationID ties the `started` event to the request (the trace id).
+	CorrelationID string
 }
 
 // Validate checks the start without touching the database.
@@ -364,14 +368,19 @@ func scanElevation(row pgx.Row) (ElevationRecord, error) {
 //     (ErrSessionAlreadyElevated), under a transaction-scoped lock on the
 //     session; the table's trigger repeats the check.
 //
-// appender is the security audit appender of the `admin.elevation` event.
-// It is required, but THIS BUILD WRITES NO EVENT through it: R2.3 (issue
-// 2517) adds the Append on tx, after which a failing appender aborts the
-// start. Until then no production code may call this function
-// (TestNoProductionCallerBeforeTheAuditEvent).
+// appender writes the `started` admin.elevation event (R2.3, issue 2517) on
+// tx, under one savepoint with the INSERT: a failed append aborts the start
+// and leaves no row.
 func StartElevation(ctx context.Context, tx pgx.Tx, appender securityaudit.Appender, start ElevationStart) (ElevationRecord, error) {
 	if err := start.Validate(); err != nil {
 		return ElevationRecord{}, err
+	}
+	source := start.Source
+	if source == "" {
+		source = securityaudit.ElevationSourceConsole
+	}
+	if !knownElevationSource(source) {
+		return ElevationRecord{}, fmt.Errorf("%w: unknown event source %q", ErrElevationInvalid, source)
 	}
 	if appender == nil {
 		return ElevationRecord{}, ErrElevationNoAppender
@@ -422,17 +431,32 @@ SELECT
 	case elevated:
 		return ElevationRecord{}, ErrSessionAlreadyElevated
 	}
-	elevation, err := scanElevation(tx.QueryRow(ctx, `
+	var elevation ElevationRecord
+	err := withSavepoint(ctx, tx, func(sp pgx.Tx) error {
+		var err error
+		elevation, err = scanElevation(sp.QueryRow(ctx, `
 INSERT INTO elitea_auth.admin_elevations
     (user_id, browser_session_ref, level, path, reason_code, reason, ticket,
      requester_user_id, approver_user_id, requested_at, decision, decided_at, started_at, expires_at)
 VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), $8, NULLIF($9::bigint, 0), $10, 'approved', $11, $12, $13)
 RETURNING `+elevationColumns,
-		start.UserID, start.BrowserSessionRef, start.Level, start.Path, start.ReasonCode, start.Reason,
-		strings.TrimSpace(start.Ticket), start.requester(), start.ApproverUserID,
-		start.requestedAt().UTC(), start.decidedAt().UTC(), at, at.Add(start.Duration)))
+			start.UserID, start.BrowserSessionRef, start.Level, start.Path, start.ReasonCode, start.Reason,
+			strings.TrimSpace(start.Ticket), start.requester(), start.ApproverUserID,
+			start.requestedAt().UTC(), start.decidedAt().UTC(), at, at.Add(start.Duration)))
+		if err != nil {
+			return fmt.Errorf("start elevation: %w", err)
+		}
+		return AppendElevationEvent(ctx, sp, appender, ElevationEvent{
+			Action:            securityaudit.ElevationStarted,
+			Source:            source,
+			Elevation:         elevation,
+			ActorUserID:       start.UserID,
+			AuthenticationRef: sessionAuthenticationRef(start.BrowserSessionRef),
+			CorrelationID:     start.CorrelationID,
+		})
+	})
 	if err != nil {
-		return ElevationRecord{}, fmt.Errorf("start elevation: %w", err)
+		return ElevationRecord{}, err
 	}
 	return elevation, nil
 }
@@ -454,32 +478,48 @@ type ElevationEnd struct {
 	Reason string
 	// At is the end, from the caller's clock. Required.
 	At time.Time
+	// ActorUserID is who ended it; 0 for the platform or an operator. 0 with
+	// the reason `holder` is the elevated person; the reason `approver`
+	// requires it.
+	ActorUserID int64
+	// Source is the source of the event (securityaudit ElevationSource*);
+	// "" takes the requested end reason's (defaultEndSource). A process
+	// command passes operator.
+	Source string
+	// AuthenticationRef and CorrelationID are the event's: the session or
+	// token row behind the end, and the trace id.
+	AuthenticationRef string
+	CorrelationID     string
 }
 
 // EndElevation records the end of a started elevation, once, and moves it to
 // review_pending, in the caller's transaction. It reports whether it wrote
-// anything: a second end changes nothing and returns the row as it is, with
-// false.
+// anything: a second end changes nothing, writes no event, and returns the
+// row as it is, with false.
 //
 // The stored end reason says why ACCESS stopped. An elevation that had
 // already expired at At ends at its expiry with the reason `expired`,
-// whatever reason the caller gave (the caller's own reason belongs in the
-// R2.3 event, not in the ledger). The reason `expired` before the expiry is
-// refused (ErrElevationNotExpired): it would record a clean timeout for an
-// elevation that something else ended.
+// whatever reason the caller gave; the caller's own reason is then a reason
+// code of the event (`requested_end_reason:<reason>`), not a ledger column.
+// The reason `expired` before the expiry is refused (ErrElevationNotExpired):
+// it would record a clean timeout for an elevation that something else ended.
 //
-// appender is as for StartElevation: required, and not yet written through
-// (R2.3 adds the `ended` event, only when this call wrote the end).
+// The end and its `admin.elevation` event (R2.3) are written under one
+// savepoint: `expired` when the stored end reason is `expired`, `ended`
+// otherwise. A failed append leaves the elevation open.
 func EndElevation(ctx context.Context, tx pgx.Tx, appender securityaudit.Appender, end ElevationEnd) (ElevationRecord, bool, error) {
-	switch end.Reason {
-	case ElevationEndHolder, ElevationEndApprover, ElevationEndOperator, ElevationEndExpired,
-		ElevationEndLogout, ElevationEndSessionRevoked, ElevationEndUserSuspended,
-		ElevationEndUserDeleted, ElevationEndSCIMDeactivated:
-	default:
+	if !knownElevationEndReason(end.Reason) {
 		return ElevationRecord{}, false, fmt.Errorf("%w %q", ErrElevationEndReason, end.Reason)
 	}
 	if end.At.IsZero() {
 		return ElevationRecord{}, false, ErrElevationNoTimestamp
+	}
+	if end.Source != "" && !knownElevationSource(end.Source) {
+		return ElevationRecord{}, false, fmt.Errorf("%w: unknown event source %q", ErrElevationInvalid, end.Source)
+	}
+	if end.Reason == ElevationEndApprover && end.ActorUserID <= 0 {
+		// An approver's end names the approver: the event must say who.
+		return ElevationRecord{}, false, fmt.Errorf("%w: an approver end names the approver", ErrElevationInvalid)
 	}
 	if appender == nil {
 		return ElevationRecord{}, false, ErrElevationNoAppender
@@ -487,7 +527,10 @@ func EndElevation(ctx context.Context, tx pgx.Tx, appender securityaudit.Appende
 	if tx == nil {
 		return ElevationRecord{}, false, errors.New("end elevation: no transaction")
 	}
-	elevation, err := scanElevation(tx.QueryRow(ctx, `
+	var elevation ElevationRecord
+	err := withSavepoint(ctx, tx, func(sp pgx.Tx) error {
+		var err error
+		elevation, err = scanElevation(sp.QueryRow(ctx, `
 UPDATE elitea_auth.admin_elevations
 SET ended_at     = GREATEST(started_at, LEAST($2::timestamptz, expires_at)),
     end_reason   = CASE WHEN $2::timestamptz >= expires_at THEN 'expired' ELSE $3::text END,
@@ -495,6 +538,39 @@ SET ended_at     = GREATEST(started_at, LEAST($2::timestamptz, expires_at)),
 WHERE id = $1 AND started_at IS NOT NULL AND ended_at IS NULL
   AND ($3::text <> 'expired' OR $2::timestamptz >= expires_at)
 RETURNING `+elevationColumns, end.ID, end.At.UTC(), end.Reason))
+		if err != nil {
+			return err
+		}
+		action := securityaudit.ElevationEnded
+		if elevation.EndReason == ElevationEndExpired {
+			action = securityaudit.ElevationExpired
+		}
+		var reasons []string
+		if elevation.EndReason != end.Reason {
+			reasons = []string{"requested_end_reason:" + end.Reason}
+		}
+		// The actor and the source are who ASKED for the end, so they agree
+		// with each other: a holder who ends a lapsed elevation is the actor
+		// of its `expired` event, from the console, and the reason code
+		// says what they asked for.
+		source := end.Source
+		if source == "" {
+			source = defaultEndSource(end.Reason)
+		}
+		actor := end.ActorUserID
+		if actor == 0 && end.Reason == ElevationEndHolder {
+			actor = elevation.UserID
+		}
+		return AppendElevationEvent(ctx, sp, appender, ElevationEvent{
+			Action:            action,
+			Source:            source,
+			Elevation:         elevation,
+			ActorUserID:       actor,
+			AuthenticationRef: end.AuthenticationRef,
+			CorrelationID:     end.CorrelationID,
+			Reasons:           reasons,
+		})
+	})
 	if err == nil {
 		return elevation, true, nil
 	}

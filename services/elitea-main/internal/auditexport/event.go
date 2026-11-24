@@ -157,6 +157,27 @@ type SecurityAuditDetails struct {
 	// R1.5): the change kind and the before and after sets by name. It has
 	// no reason text field, and must never have one.
 	Access *AccessChangeDetails `json:"access,omitempty"`
+	// Elevation is set on ai.elitea.security.v1.admin.elevation (ADR-0059
+	// R2.3): one step of a break-glass elevation. Ids, codes and numbers
+	// only: it has no reason text and no note text field, and must never
+	// have one.
+	Elevation *ElevationDetails `json:"elevation,omitempty"`
+}
+
+// ElevationDetails is details.elevation of an admin.elevation event.
+type ElevationDetails struct {
+	Action       string `json:"action"`
+	Source       string `json:"source"`
+	ElevationID  string `json:"elevation_id,omitempty"`
+	UserID       int64  `json:"user_id,omitempty"`
+	Level        string `json:"level,omitempty"`
+	Path         string `json:"path,omitempty"`
+	ReasonCode   string `json:"reason_code,omitempty"`
+	ExpiresAt    string `json:"expires_at,omitempty"`
+	EndReason    string `json:"end_reason,omitempty"`
+	NoteID       string `json:"note_id,omitempty"`
+	NoteLength   *int   `json:"note_length,omitempty"`
+	CredentialID string `json:"credential_id,omitempty"`
 }
 
 // AccessChangeDetails is details.access of an admin.access.changed event.
@@ -227,6 +248,7 @@ type storedSecurityEvent struct {
 		ChainHead            string               `json:"chain_head"`
 		ChainLength          int64                `json:"chain_length"`
 		Access               *AccessChangeDetails `json:"access"`
+		Elevation            *ElevationDetails    `json:"elevation"`
 	} `json:"data"`
 }
 
@@ -310,6 +332,7 @@ func FromSecurityRecord(record securityaudit.Record) (Event, error) {
 			ChainHead:            d.ChainHead,
 			ChainLength:          d.ChainLength,
 			Access:               accessDetails(d.Access),
+			Elevation:            d.Elevation,
 		},
 		ref: string(SourceSecurityAudit) + ":" + strconv.FormatInt(record.Seq, 10),
 	}, nil
