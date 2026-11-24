@@ -265,7 +265,7 @@ func TestParseSealedExpiry(t *testing.T) {
 			t.Errorf("parseSealedExpiry(%q) = %s, %v; want %s", value, got, err, want)
 		}
 	}
-	for _, value := range []string{"366d", "0d", "-1h", "8761h", "2027-11-25", "99999999999d", "d"} {
+	for _, value := range []string{"366d", "0d", "-1h", "8761h", "2027-11-25", "99999999999d", "-99999999999d", "-106752d", "-1d", "d"} {
 		if _, err := parseSealedExpiry(value, now); err == nil {
 			t.Errorf("parseSealedExpiry(%q) was accepted", value)
 		}

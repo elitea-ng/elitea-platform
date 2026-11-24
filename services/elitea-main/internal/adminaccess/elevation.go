@@ -549,10 +549,14 @@ RETURNING `+elevationColumns, end.ID, end.At.UTC(), end.Reason))
 			// A sealed session lives only as long as its elevation (R2.7a,
 			// browsersession/sealed.go): the session is signed out with it,
 			// in the same savepoint, whoever ended it. The session reader
-			// refuses it without this too; this keeps the row truthful.
+			// refuses it without this too; this keeps the row truthful. The
+			// three columns move together, as in PostgresStore.RevokeAllForUser,
+			// so the session lifecycle relay (shared 0200) writes its end
+			// event; a session already ended (idle, absolute) keeps its end.
 			if _, err := sp.Exec(ctx, `
-UPDATE elitea_auth.browser_sessions SET revoked_at = $2
-WHERE ref = $1 AND provider = 'sealed' AND revoked_at IS NULL`,
+UPDATE elitea_auth.browser_sessions
+SET revoked_at = $2, ended_at = $2, end_reason = 'revoked'
+WHERE ref = $1 AND provider = 'sealed' AND revoked_at IS NULL AND ended_at IS NULL`,
 				elevation.BrowserSessionRef, elevation.EndedAt.UTC()); err != nil {
 				return fmt.Errorf("sign out the sealed session: %w", err)
 			}

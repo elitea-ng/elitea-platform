@@ -281,9 +281,10 @@ func parseSealedExpiry(value string, now time.Time) (time.Duration, error) {
 		if err != nil {
 			return 0, fmt.Errorf("%q is not a number of days", value)
 		}
-		if days > 366 {
-			days = 366 // refused below; no overflow on a huge number
-		}
+		// Clamped both ways before the multiplication, so a huge count of
+		// either sign cannot wrap into a valid lifetime; both are refused
+		// below.
+		days = max(-1, min(days, 366))
 		lifetime = time.Duration(days) * 24 * time.Hour
 	default:
 		if d, err := time.ParseDuration(value); err == nil {

@@ -16,7 +16,11 @@
   the identity provider, and ends with its elevation: ending an elevation on
   the sealed path (by its holder, an approver, `break-glass end` or its
   expiry) also revokes the session row.
-- The ordinary `elitea_session` cookie never authenticates a sealed row.
+- The ordinary `elitea_session` cookie never authenticates a sealed row. A
+  sealed cookie that is no longer live is cleared and counts as absent, so
+  an ordinary session in the same browser still decides the request.
+- The session policy's idle maximum, when set, also applies to a sealed
+  session.
 - No route creates a sealed session yet: the sign-in page that does ships in
   a later release.
 

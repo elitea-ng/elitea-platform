@@ -12,11 +12,16 @@ package middleware
 //     router before the route runs. Off the surface the cookie is ignored, as
 //     if it were absent: the request is decided by the other credentials it
 //     carries, and a request with none is unauthenticated;
-//   - on the surface it wins over the Form and `elitea_session` cookies of
-//     the same browser, so an administration request is never decided by a
-//     session the person did not choose for it. A sealed cookie that is not a
-//     live sealed session (unknown, an ordinary session's identifier, revoked,
-//     expired, or its elevation ended) answers 401 and clears the cookie.
+//   - on the surface a LIVE sealed session wins over the Form and
+//     `elitea_session` cookies of the same browser, so an administration
+//     request is never decided by a session the person did not choose for
+//     it. A sealed cookie that is not a live sealed session (unknown, an
+//     ordinary session's identifier, revoked, expired, or its elevation
+//     ended) is cleared and counts as absent: the other cookies decide, and
+//     a request with none is unauthenticated. A sealed session that ended
+//     must not sign a person out of a single sign-on session they still
+//     hold (the web client treats a 401 as a sign-out), and falling through
+//     grants nothing the other cookie does not already grant.
 
 import (
 	"context"
@@ -61,9 +66,10 @@ func OnAdministrationSurface(r *http.Request) bool {
 }
 
 // serveSealedSession serves r with the sealed session its cookie names and
-// reports true when it answered the request (served or refused). false means
-// the request carries no sealed cookie that counts here, and the other
-// sources decide.
+// reports true when it answered the request (served, or 503 when the store
+// did not answer). false means the request carries no sealed cookie that
+// counts here, and the other sources decide; a refused cookie is cleared
+// first.
 func serveSealedSession(next http.Handler, w http.ResponseWriter, r *http.Request, cfg AuthConfig) bool {
 	cookie, err := r.Cookie(browsersession.SealedCookieName)
 	if err != nil {
@@ -75,8 +81,8 @@ func serveSealedSession(next http.Handler, w http.ResponseWriter, r *http.Reques
 	sealed, ok := cfg.SessionStore.(SealedSessionValidator)
 	if !ok || sealed == nil {
 		browsersession.ClearSealedCookie(w)
-		writeCredentialRefusal(w, r, sourceSealed, reasonSealedSessionUnsupported)
-		return true
+		logCredentialRefusal(r, sourceSealed, reasonSealedSessionUnsupported)
+		return false
 	}
 	session, err := sealed.ValidateSealed(r.Context(), cookie.Value)
 	if err != nil {
@@ -95,8 +101,8 @@ func serveSealedSession(next http.Handler, w http.ResponseWriter, r *http.Reques
 			return true
 		}
 		browsersession.ClearSealedCookie(w)
-		writeCredentialRefusal(w, r, sourceSealed, reason)
-		return true
+		logCredentialRefusal(r, sourceSealed, reason)
+		return false
 	}
 	user, err := validatePrincipal(r.Context(), cfg, session.User())
 	if err != nil {

@@ -68,9 +68,12 @@ CREATE TABLE IF NOT EXISTS elitea_auth.sealed_credentials (
         CHECK (level IN ('admin', 'super_admin')),
     CONSTRAINT sealed_credentials_user_present
         CHECK (user_id > 0),
-    -- The lifetime ceiling in code (ADR-0059 decision 5): 365 days.
+    -- The lifetime ceiling in code (ADR-0059 decision 5): 365 days of 24
+    -- hours (adminaccess.MaxSealedCredentialLifetime). In hours, not 'days':
+    -- timestamptz + '365 days' is calendar arithmetic in the session's time
+    -- zone, an hour short across a daylight-saving change.
     CONSTRAINT sealed_credentials_lifetime_bounded
-        CHECK (expires_at > issued_at AND expires_at <= issued_at + interval '365 days'),
+        CHECK (expires_at > issued_at AND expires_at <= issued_at + interval '8760 hours'),
     CONSTRAINT sealed_credentials_used_after_issue
         CHECK (used_at IS NULL OR used_at >= issued_at),
     CONSTRAINT sealed_credentials_revoked_after_issue

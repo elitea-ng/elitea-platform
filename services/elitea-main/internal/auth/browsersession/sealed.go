@@ -23,7 +23,11 @@ package browsersession
 //     while that elevation is active: when the elevation ends (by its holder,
 //     an approver, `break-glass end` or the reconciler), the next request of
 //     the session is unauthenticated. adminaccess.EndElevation also revokes
-//     the row in the same savepoint.
+//     the row in the same savepoint. The reverse is not true yet: the
+//     session policy's idle maximum can end the session first, and its
+//     elevation then grants nothing (no session can use it) but stays open
+//     in the ledger until its expiry; ending an elevation with its session
+//     is R2.11 (issue 2525).
 //   - Its administration set is the elevation only (auth.CredentialKindSealed):
 //     the owner's standing roles add nothing.
 //

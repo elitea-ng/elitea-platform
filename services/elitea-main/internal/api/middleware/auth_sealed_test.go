@@ -154,13 +154,17 @@ func TestSealedSessionWinsOverTheOrdinaryCookieOnTheSurface(t *testing.T) {
 		t.Errorf("the ordinary session was read %d times on the surface beside a sealed cookie", store.calls)
 	}
 
-	// An invalid sealed cookie is not rescued by the ordinary one.
+	// A sealed cookie that is no longer live is cleared and counts as
+	// absent: the person's ordinary session decides, with its own set, so
+	// the end of a sealed session does not sign them out of single sign-on.
 	store = sealedStoreFixture()
 	store.sealedErr = browsersession.ErrRevoked
 	recorder, user := serveSealed(t, store, sealedRequest{path: surfaceRoute, sealed: true, ordinary: true})
-	if recorder.Code != http.StatusUnauthorized || user != nil {
-		t.Fatalf("status %d, principal %v; want 401 for a revoked sealed session", recorder.Code, user)
+	if recorder.Code != http.StatusOK || user == nil || user.CredentialKind != auth.CredentialKindSession ||
+		user.BrowserSessionRef != 12 {
+		t.Fatalf("status %d, principal %v; want the ordinary session beside a revoked sealed one", recorder.Code, user)
 	}
+	assertSealedCookieCleared(t, recorder)
 }
 
 // Off the surface the cookie is no credential: it is never read, the

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -43,6 +44,28 @@ INSERT INTO elitea_auth.sealed_credentials (selector, verifier_digest, level, us
 VALUES ('0123456789abcdef01234567', '$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$aGFzaA', 'admin', 7, now(), now() + interval '30 days')
 RETURNING id::text`, &rowID)
 
+			// The 365-day ceiling is 365 x 24 hours whatever the session's
+			// time zone: a lifetime crossing a daylight-saving change in a
+			// zone that has one is admitted, an hour more is not.
+			if err := pgx.BeginFunc(context.Background(), pool, func(tx pgx.Tx) error {
+				if _, err := tx.Exec(context.Background(), `SET LOCAL TimeZone = 'America/New_York'`); err != nil {
+					return err
+				}
+				_, err := tx.Exec(context.Background(), `
+INSERT INTO elitea_auth.sealed_credentials (selector, verifier_digest, level, user_id, issued_at, expires_at)
+VALUES ('0123456789abcdef01234568', '$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$aGFzaA', 'admin', 7,
+        '2027-03-13T17:00:00Z', '2027-03-13T17:00:00Z'::timestamptz + interval '8760 hours')`)
+				return err
+			}); err != nil {
+				t.Fatalf("a 365 x 24h lifetime across a DST change is refused: %v", err)
+			}
+			if _, err := pool.Exec(context.Background(), `
+INSERT INTO elitea_auth.sealed_credentials (selector, verifier_digest, level, user_id, issued_at, expires_at)
+VALUES ('0123456789abcdef01234569', '$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$aGFzaA', 'admin', 7,
+        now(), now() + interval '8761 hours')`); err == nil {
+				t.Fatal("a lifetime above 365 x 24h is admitted")
+			}
+
 			execMigrationFile(t, pool, sealedCredentialsMigration)
 
 			if after := tableShape(t, pool, "sealed_credentials", "elitea_auth.sealed_credentials_append_only"); after != before {
@@ -50,8 +73,8 @@ RETURNING id::text`, &rowID)
 			}
 			var rows int
 			queryRow(t, pool, `SELECT count(*) FROM elitea_auth.sealed_credentials`, &rows)
-			if rows != 1 {
-				t.Fatalf("re-applying 0271 left %d rows, want 1", rows)
+			if rows != 2 {
+				t.Fatalf("re-applying 0271 left %d rows, want 2", rows)
 			}
 			if _, err := pool.Exec(context.Background(),
 				`DELETE FROM elitea_auth.sealed_credentials WHERE id = $1::uuid`, rowID); err == nil ||

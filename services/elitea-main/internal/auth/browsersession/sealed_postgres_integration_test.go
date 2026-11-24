@@ -157,13 +157,35 @@ func TestEndingTheElevationSignsTheSealedSessionOut(t *testing.T) {
 	if _, err := f.manager.ValidateSealed(ctx, started.CookieValue); !errors.Is(err, ErrRevoked) {
 		t.Fatalf("the next request after the end = %v, want ErrRevoked", err)
 	}
-	var revokedAt *time.Time
-	if err := f.pool.QueryRow(ctx, `SELECT revoked_at FROM elitea_auth.browser_sessions WHERE ref = $1`,
-		started.Session.Ref).Scan(&revokedAt); err != nil {
+	var revokedAt, endedAt *time.Time
+	var endReason *string
+	if err := f.pool.QueryRow(ctx, `SELECT revoked_at, ended_at, end_reason FROM elitea_auth.browser_sessions WHERE ref = $1`,
+		started.Session.Ref).Scan(&revokedAt, &endedAt, &endReason); err != nil {
 		t.Fatal(err)
 	}
-	if revokedAt == nil || !revokedAt.Equal(f.dial.Now()) {
-		t.Fatalf("the sealed session row was not revoked at the end: %v", revokedAt)
+	// All three, as every other revocation writes them, so the lifecycle
+	// relay records the session's end.
+	if revokedAt == nil || !revokedAt.Equal(f.dial.Now()) || endedAt == nil || !endedAt.Equal(f.dial.Now()) ||
+		endReason == nil || *endReason != EndRevoked {
+		t.Fatalf("the sealed session row after the end: revoked %v, ended %v, reason %v", revokedAt, endedAt, endReason)
+	}
+	lifecycle, err := NewLifecycle(f.pool, BoundsFunc(func(context.Context) (Bounds, error) { return Bounds{}, nil }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lifecycle.now = f.dial.Now
+	if _, err := lifecycle.Pass(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var ends int
+	if err := f.pool.QueryRow(ctx, `
+SELECT count(*) FROM centry.audit_events
+WHERE event_type = 'session' AND entity_type = $1 AND entity_id = $2 AND action = $3`,
+		AuditEntityType, started.Session.Ref, AuditRevoke).Scan(&ends); err != nil {
+		t.Fatal(err)
+	}
+	if ends != 1 {
+		t.Fatalf("the lifecycle relay wrote %d revoke events for the sealed session, want 1", ends)
 	}
 }
 
