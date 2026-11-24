@@ -32,6 +32,28 @@ Open **Users** in the admin console. The table lists every account on the deploy
 Invitations do not have a dedicated accept-invite page. A new member accepts an invite by signing in; the invite is resolved by matching their identity on first login.
 </Note>
 
+## Several administration roles per person
+
+A person can hold several administration roles at once, for example `llm_manager` and `security_auditor`. They hold the union of the permissions of every role; there is no role switcher. Any role of the administration mode can be assigned, built-in or custom, except one that is never assigned (the legacy `system` role).
+
+The Users page still offers one role per person; a control for several roles comes in a later release. Until then, assign several roles through the API.
+
+**`POST /api/v2/admin/auth_users/administration`** with `action: set_admin_role` sets a person's roles. Send one of two forms:
+
+- `role_names`, the set the person holds afterwards (`[]` for none):
+
+  ```json
+  {"action": "set_admin_role", "user_id": 11, "role_names": ["admin", "llm_manager"]}
+  ```
+
+- `role_name`, the single form existing automation uses: it replaces every role with that one role (`null` for none).
+
+A request with both is a `400`, and so is a role the deployment does not define (the answer names it). The server applies the difference: a role in both the old and the new set is not touched, and each role given or taken writes one [record](#role-changes-are-recorded). Every [rule](#no-escalation) applies to each role given or taken, and if one role fails, nothing is written and the refusal names that role. The answer carries `role_names`, the person's roles after the change.
+
+**`POST /api/v2/admin/modes/administration`** with `{"user_id", "mode": "administration", "role"}` adds one role and keeps the others; `DELETE` with `?id=<user_id>:administration:<role>` removes one.
+
+**`GET /api/v2/admin/auth_users/administration`** lists every role of each person in `admin_roles`, the four legacy names first. The single `admin_role` field, the highest of `super_admin`, `admin`, `editor` and `viewer` that the person holds, is kept for one release and then removed.
+
 ## Edit roles and permissions
 
 Open **Roles**. It shows a permission matrix across three scopes, each a tab:
@@ -117,7 +139,7 @@ The server makes sure that no administrator can raise their own access, and that
 The six rules for central roles:
 
 1. **Grant and assign only what you hold.** You can add a permission to a central role, or remove one from it, only if you hold that permission yourself. You can assign or remove a central role only if you hold every permission of that role. Removing counts, so an administrator with fewer permissions cannot demote one with more.
-2. **Not yourself.** You cannot give yourself a central role, or take one away from yourself, on the Users page or under `/admin/modes`. Another administrator makes that change. The first administrator comes from `identity.initial_global_admins`.
+2. **Not yourself.** You cannot give yourself a central role, or take one away from yourself, on the Users page or under `/admin/modes`. Another administrator makes that change. The first administrator comes from `identity.initial_global_admins`, which applies only while no active account holds `super_admin`.
 3. **Your own role is locked.** You cannot change the permissions of a central role that you hold.
 4. **Seeded only.** Six permissions are granted by the upgrade migrations only, and no change through the console or the API adds them to a role: `admin.auth.users.super_admin`, `identity.sso.trust.manage`, `access.breakglass.request`, `access.breakglass.approve`, `access.breakglass.manage` and `access.breakglass.review`.
 5. **Locked sets.** The permissions of a built-in role cannot be changed (see [Built-in administration roles](#built-in-administration-roles)). A role that is never assigned (the legacy `system` role) is assigned to nobody.
@@ -152,7 +174,7 @@ The server refuses a change that breaks a rule with `403` and a `code`:
 The body also names the `role` and the `permissions`. The Roles page shows that reason in place of a generic error. Each refusal is in the Audit Trail with the action `role.escalation_refused`.
 
 <Note>
-Nobody can change the permissions of a built-in role through the console or the API, a super admin included (see [Built-in administration roles](#built-in-administration-roles)). The accounts in `identity.initial_global_admins` (`ELITEA_INITIAL_GLOBAL_ADMINS`) get `super_admin` on their first sign-in.
+Nobody can change the permissions of a built-in role through the console or the API, a super admin included (see [Built-in administration roles](#built-in-administration-roles)). The accounts in `identity.initial_global_admins` (`ELITEA_INITIAL_GLOBAL_ADMINS`) get `super_admin` on their first sign-in, but only while no active account holds `super_admin` (see [The first global administrator](/admin/authentication#the-first-global-administrator)).
 </Note>
 
 ## Role changes are recorded
@@ -168,4 +190,13 @@ The source says how the change was made:
 | `bootstrap` | The first sign-in of an account in `identity.initial_global_admins`. There is no actor. |
 | `migration`, `operator`, `review`, `scim` | Reserved for an upgrade step, the operator command, a confirmed provisional grant and a SCIM binding to an administration role. A `migration` record has no actor. |
 
-Replacing an account's role writes two records: the old role `revoked` and the new one `granted`. Assigning a role that the account already holds writes nothing and changes nothing. A refused change writes nothing either. Records start at the upgrade that added them: assignments made before it have none. A change made outside Elitea, such as SQL run by hand against the database, or the roles removed with a deleted account, leaves no record.
+### Read the holders and the history
+
+Two read routes answer "who holds which administration role" and "who changed it, when and how". The Access page that shows them comes in a later release.
+
+- **`GET /api/v2/admin/access/roles`** lists every account that holds at least one administration role, once, with all its roles. Each role says whether it is built-in (`built_in`, with the built-in record's `marker`) or custom. Accounts without an administration role are not listed.
+- **`GET /api/v2/admin/access/history`** lists the records below, newest first. Filter with `user_id` and `role`, page with `limit` (up to 200, default 50) and `offset`. Each row names the account, the role and mode, `granted` or `revoked`, the actor, the time and the source.
+
+Both need `access.roles.view`, or one of the two broader permissions it narrows, `admin.auth.users` and `modes.users`. The built-in `security_auditor` role holds `access.roles.view`, so an auditor reads the holders and the history, but not the user directory: `GET /api/v2/admin/auth_users/administration`, which lists every account with its e-mail address, stays on `admin.auth.users`, and an auditor gets `403` there. The names of administrators appear only in these two reads, because a list of administrators is a target list for phishing.
+
+Replacing an account's role writes two records: the old role `revoked` and the new one `granted`. Removing one of two roles writes one record and leaves the other role as it was. Assigning a role that the account already holds writes nothing and changes nothing. A refused change writes nothing either. Records start at the upgrade that added them: assignments made before it have none. Deleting an account revokes each of its central roles first, with one `revoked` record each that names who deleted it. A change made outside Elitea, such as SQL run by hand against the database, leaves no record.

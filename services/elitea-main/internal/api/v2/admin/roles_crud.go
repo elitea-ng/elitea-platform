@@ -335,16 +335,8 @@ func (h *Handler) seededRolesMarked(
 	if len(names) == 0 {
 		return nil, nil
 	}
-	if !h.seedTable.Load() {
-		var present bool
-		if err := q.QueryRow(ctx,
-			`SELECT to_regclass('elitea_auth.admin_role_seeds') IS NOT NULL`).Scan(&present); err != nil {
-			return nil, fmt.Errorf("look for the built-in role record: %w", err)
-		}
-		if !present {
-			return nil, nil
-		}
-		h.seedTable.Store(true)
+	if present, err := h.seedRecordPresent(ctx, q); err != nil || !present {
+		return nil, err
 	}
 	rows, err := q.Query(ctx, `
 SELECT role.name
@@ -360,6 +352,24 @@ ORDER BY role.name`, mode, names, string(marker))
 		return nil, fmt.Errorf("read the built-in roles: %w", err)
 	}
 	return seeded, nil
+}
+
+// seedRecordPresent reports whether elitea_auth.admin_role_seeds exists (see
+// seededRoles). Reading an absent relation would abort the caller's
+// transaction, so this asks first until the table has been seen once.
+func (h *Handler) seedRecordPresent(ctx context.Context, q adminaccess.Querier) (bool, error) {
+	if h.seedTable.Load() {
+		return true, nil
+	}
+	var present bool
+	if err := q.QueryRow(ctx,
+		`SELECT to_regclass('elitea_auth.admin_role_seeds') IS NOT NULL`).Scan(&present); err != nil {
+		return false, fmt.Errorf("look for the built-in role record: %w", err)
+	}
+	if present {
+		h.seedTable.Store(true)
+	}
+	return present, nil
 }
 
 // refuseSeeded refuses a rename or a delete of a built-in role (409). The edit

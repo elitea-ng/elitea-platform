@@ -20954,6 +20954,258 @@ components:
           type: integer
           description: Assignments deleted. Never 0 — an id that matched none is a 404.
 
+    # ---- The global user directory (ADR-0059 R0.8b, issue 2574) -----------
+
+    AdminAuthUserRow:
+      type: object
+      required: [id, name, email, last_login, suspended, is_admin, is_active, admin_role, admin_roles]
+      description: >
+        NOTE(W2): internal/api/v2/admin/users.go:215-229 — one account of
+        the deployment.
+      properties:
+        id: { type: integer }
+        name:
+          type: string
+          description: The account name, or its e-mail address when it has none.
+        email: { type: string }
+        last_login:
+          type: string
+          nullable: true
+          description: ISO-8601 to the second, or null for an account that has never signed in.
+        suspended: { type: boolean }
+        is_admin:
+          type: boolean
+          description: Legacy field. True when the account holds any administration role (`admin_roles` is not empty).
+        is_active:
+          type: boolean
+          description: Legacy field. The inverse of `suspended`.
+        admin_role:
+          type: string
+          nullable: true
+          description: >
+            The highest of `super_admin`, `admin`, `editor` and `viewer` that
+            the account holds, null when it holds none of them. Kept for one
+            release beside `admin_roles`; read `admin_roles`.
+        admin_roles:
+          type: array
+          items: { type: string }
+          description: >
+            Every administration role the account holds: the four legacy names
+            first, highest first, then every other role by name. Empty for an
+            account with no administration role.
+
+    AdminAuthUsersPage:
+      type: object
+      required: [rows, total, counts]
+      description: >
+        NOTE(W2): internal/api/v2/admin/users.go:235-242.
+      properties:
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/AdminAuthUserRow' }
+        total:
+          type: integer
+          description: The rows that match the filter, over every page.
+        counts:
+          type: object
+          required: [platform, system]
+          description: Over every account, unfiltered; it labels the page's two tabs.
+          properties:
+            platform: { type: integer }
+            system: { type: integer }
+
+    AdminAuthUsersActionRequest:
+      type: object
+      required: [action]
+      description: >
+        NOTE(W2): internal/api/v2/admin/users.go:247-261. Which fields an
+        action reads is stated on each field.
+      properties:
+        action:
+          type: string
+          description: >
+            `delete` or `set_admin_role`. Any other value is a 400. (Not an
+            enum: its members would collide with other enums of the Go
+            generator.)
+        users:
+          type: array
+          description: '`delete` only: the accounts to delete.'
+          items:
+            type: object
+            required: [id]
+            properties:
+              id: { type: integer }
+        user_id:
+          type: integer
+          description: '`set_admin_role` only: the account whose roles change.'
+        role_name:
+          type: string
+          nullable: true
+          description: >
+            `set_admin_role`, the single form: replace every administration
+            role of the account with this one, null or empty for none. Do not
+            send it with `role_names`.
+        role_names:
+          type: array
+          maxItems: 32
+          items: { type: string }
+          description: >
+            `set_admin_role`, the set form: the administration roles the
+            account holds after the request, `[]` for none. Duplicates are
+            ignored.
+
+    AdminAuthUsersActionResult:
+      type: object
+      required: [ok]
+      description: >
+        NOTE(W2): internal/api/v2/admin/users.go:370 (delete) and
+        users.go:516-518 (set_admin_role).
+      properties:
+        ok: { type: boolean }
+        deleted:
+          type: integer
+          description: '`delete` only: the accounts deleted.'
+        user_id:
+          type: integer
+          description: '`set_admin_role` only.'
+        role_name:
+          type: string
+          nullable: true
+          description: >
+            `set_admin_role` only: the role the single form sent, null for
+            none and in the set form.
+        role_names:
+          type: array
+          items: { type: string }
+          description: >
+            `set_admin_role` only: the account's administration roles after
+            the request, sorted.
+
+    AdminRoleRefusal:
+      type: object
+      required: [error]
+      description: >
+        NOTE(W2): internal/adminaccess/refusal.go:13-47 — a role change
+        refused by a role rule (403). `error` is the message every admin
+        client already shows; a client keys a translated message on `code`.
+      properties:
+        error: { type: string }
+        code:
+          type: string
+          description: >
+            `role_permission_not_held`, `role_own_set_locked`,
+            `role_permission_reserved`, `role_super_admin_required`,
+            `role_self_escalation`, `role_caller_unresolved`,
+            `role_self_assignment` or `role_set_locked`. Absent on a 403 of
+            the route gate.
+        role:
+          type: string
+          description: The role the refusal is about, when there is one.
+        roles:
+          type: array
+          items: { type: string }
+          description: Every role the refusal is about, when there are several.
+        permissions:
+          type: array
+          items: { type: string }
+          description: The permissions the caller lacks, or would gain.
+        project_id:
+          type: integer
+          description: The project of a `role_self_escalation` refusal.
+
+    # ---- Access reads (ADR-0059 R0.10b, issue 2588) ------------------------
+
+    AdministrationRoleHolderRole:
+      type: object
+      required: [name, built_in, marker]
+      description: >
+        NOTE(W2): internal/api/v2/admin/access_read.go:33-41.
+      properties:
+        name: { type: string }
+        built_in:
+          type: boolean
+          description: The deployment records the role as built-in (elitea_auth.admin_role_seeds).
+        marker:
+          type: string
+          nullable: true
+          description: >
+            The built-in record's marker, `declared`, `as_found` or
+            `unassignable`; null for a custom role.
+
+    AdministrationRoleHolder:
+      type: object
+      required: [user_id, name, email, suspended, roles]
+      description: >
+        NOTE(W2): internal/api/v2/admin/access_read.go:43-49.
+      properties:
+        user_id: { type: integer }
+        name: { type: string }
+        email: { type: string }
+        suspended: { type: boolean }
+        roles:
+          type: array
+          description: Every administration role the account holds, by name. Never empty.
+          items: { $ref: '#/components/schemas/AdministrationRoleHolderRole' }
+
+    AdministrationRoleHolders:
+      type: object
+      required: [total, rows]
+      description: >
+        NOTE(W2): internal/api/v2/admin/access_read.go:63.
+      properties:
+        total: { type: integer }
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/AdministrationRoleHolder' }
+
+    AdministrationRoleGrant:
+      type: object
+      required: [id, user_id, user_name, user_email, role_name, role_mode, action,
+                 actor_user_id, actor_name, actor_email, occurred_at, reason, source, source_ref]
+      description: >
+        NOTE(W2): internal/api/v2/admin/access_read.go:120-135 — one row of
+        elitea_auth.admin_role_grants (shared 0260).
+      properties:
+        id: { type: integer, format: int64 }
+        user_id: { type: integer }
+        user_name: { type: string, nullable: true }
+        user_email: { type: string, nullable: true }
+        role_name: { type: string }
+        role_mode: { type: string }
+        action:
+          type: string
+          description: '`granted` or `revoked`.'
+        actor_user_id:
+          type: integer
+          nullable: true
+          description: The account that made the change; null for `bootstrap` and `migration`.
+        actor_name: { type: string, nullable: true }
+        actor_email: { type: string, nullable: true }
+        occurred_at: { type: string, format: date-time }
+        reason: { type: string, nullable: true }
+        source:
+          type: string
+          description: >
+            `console`, `api`, `scim`, `migration`, `bootstrap`, `operator` or
+            `review`.
+        source_ref:
+          type: string
+          nullable: true
+          description: A reference within the source, such as a SCIM binding id.
+
+    AdministrationRoleHistory:
+      type: object
+      required: [total, rows]
+      description: >
+        NOTE(W2): internal/api/v2/admin/access_read.go:224.
+      properties:
+        total:
+          type: integer
+          description: The rows that match the filter, over every page.
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/AdministrationRoleGrant' }
+
     BrandingAsset:
       type: object
       required: [kind, digest, extension, content_type, size, path]
@@ -24771,6 +25023,291 @@ paths:
         '404': { $ref: '#/components/responses/404' }
 
   # ==========================================================================
+  # ADMIN — the global user directory and its writes (unit A14; described
+  # since ADR-0059 R0.8b, issue 2574)
+  #
+  # `{mode}` is a parameter for the legacy wire shape, but only
+  # `administration` has a handler: another value answers 404 on the writes.
+  # ==========================================================================
+  /admin/auth_users/{mode}:
+    parameters:
+      - name: mode
+        in: path
+        required: true
+        schema: { type: string }
+        description: Always `administration`.
+    get:
+      operationId: listAdminAuthUsers
+      summary: List every user account of the deployment
+      description: |
+        One page of `auth_core__user`, with every administration role each
+        account holds. Gated on `admin.auth.users`: the rows carry every
+        user's e-mail address. `counts` is computed over ALL users, unfiltered,
+        because it labels the page's two tabs.
+
+        `admin_roles` lists every administration role of the account: the four
+        legacy names first (highest first), then every other role by name.
+        `admin_role` is the highest of the four legacy names the account holds
+        (null when it holds none of them); it is kept for one release beside
+        `admin_roles` (ADR-0059 R0.8b) and is then removed (R0.13).
+      tags: [admin]
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: search
+          in: query
+          required: false
+          schema: { type: string }
+          description: A substring of the name or the e-mail address, case-insensitive.
+        - name: user_type
+          in: query
+          required: false
+          schema: { type: string }
+          description: >
+            `platform` or `system` (the platform's own service accounts).
+            Anything else lists both.
+        - name: sort_by
+          in: query
+          required: false
+          schema: { type: string }
+          description: >
+            `name` (the default), `email`, `last_login`, `id` or `suspended`.
+            An unknown column sorts by name.
+        - name: sort_order
+          in: query
+          required: false
+          schema: { type: string }
+          description: '`asc` (the default) or `desc`.'
+      responses:
+        '200':
+          description: One page of the user directory
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminAuthUsersPage'
+              example:
+                rows:
+                  - id: 11
+                    name: Ada Admin
+                    email: ada@example.com
+                    last_login: '2026-08-01T10:00:00'
+                    suspended: false
+                    is_admin: true
+                    is_active: true
+                    admin_role: admin
+                    admin_roles: [admin, llm_manager]
+                  - id: 12
+                    name: Bo Blocked
+                    email: bo@example.com
+                    last_login: null
+                    suspended: true
+                    is_admin: false
+                    is_active: false
+                    admin_role: null
+                    admin_roles: []
+                total: 2
+                counts: { platform: 2, system: 1 }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+
+    post:
+      operationId: adminAuthUsersAction
+      summary: Delete users, or set a user's administration roles
+      description: |
+        One endpoint for every write of the Users page, discriminated by
+        `action`. An unknown action is a 400, never a silent `{"ok": true}`.
+
+        - `delete`: removes the accounts in `users` outright, in one
+          transaction. Each central role an account held is revoked first,
+          with one grant history row, as the cascade would drop it unrecorded.
+        - `set_admin_role`: sets the administration roles of `user_id`. Send
+          EITHER `role_names`, the set the user holds afterwards (`[]` for
+          none), OR the single form `role_name`, which replaces every role
+          with that one role (null for none) and is kept for existing
+          automation. A request with both is a 400. Any role defined in the
+          `administration` mode is accepted; one that is not is a 400 that
+          names it.
+
+        The write applies the difference between the roles the user holds and
+        the set: a role in both is not touched, and each role given or taken
+        writes one grant history row. Every rule applies to EACH role given
+        or taken, and one role that fails refuses the whole request with
+        nothing written: the caller holds every permission of the role
+        (`role_permission_not_held`); `super_admin` needs
+        `admin.auth.users.super_admin` (`role_super_admin_required`); a role
+        marked unassignable is given to nobody (`role_set_locked`); a caller
+        who is not a global administrator changes none of its own roles
+        (`role_self_assignment`). The refusal names the role that failed.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminAuthUsersActionRequest'
+            example:
+              action: set_admin_role
+              user_id: 11
+              role_names: [admin, llm_manager]
+      responses:
+        '200':
+          description: The write happened
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminAuthUsersActionResult'
+              example:
+                ok: true
+                user_id: 11
+                role_name: null
+                role_names: [admin, llm_manager]
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >
+            The caller lacks `admin.auth.users`, or a role rule refused one
+            role of the request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminRoleRefusal'
+              example:
+                error: you can assign or remove only a role whose permissions you all hold
+                code: role_permission_not_held
+                role: admin
+                permissions: [configuration.roles.permissions.edit]
+        '404': { $ref: '#/components/responses/404' }
+        '500': { $ref: '#/components/responses/500' }
+
+  # ==========================================================================
+  # ADMIN — Access reads (ADR-0059 R0.10b, issue 2588)
+  #
+  # Gated on `access.roles.view`, or the names it narrows (`admin.auth.users`,
+  # `modes.users`): a security auditor reads who holds which administration
+  # role and the grant history without the user directory. The names of
+  # administrators are shown only here (ADR-0059 decision 6).
+  # ==========================================================================
+  /admin/access/roles:
+    get:
+      operationId: listAdministrationRoleHolders
+      summary: List the holders of administration roles
+      description: |
+        Every account that holds at least one administration role, once, with
+        every administration role it holds. An account with no
+        administration role is not listed: this is not the user directory
+        (no paging over every user, no search). A role is `built_in` when the
+        deployment records it as a built-in role, with the record's `marker`;
+        a custom role has `built_in: false` and `marker: null`.
+      tags: [admin]
+      responses:
+        '200':
+          description: The holders, by name
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdministrationRoleHolders'
+              example:
+                total: 2
+                rows:
+                  - user_id: 11
+                    name: Ada Admin
+                    email: ada@example.com
+                    suspended: false
+                    roles:
+                      - { name: admin, built_in: true, marker: declared }
+                      - { name: llm_manager, built_in: true, marker: declared }
+                  - user_id: 14
+                    name: Sam Auditor
+                    email: sam@example.com
+                    suspended: false
+                    roles:
+                      - { name: compliance_reader, built_in: false, marker: null }
+                      - { name: security_auditor, built_in: true, marker: declared }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /admin/access/history:
+    get:
+      operationId: listAdministrationRoleHistory
+      summary: Read the grant history of central roles
+      description: |
+        `elitea_auth.admin_role_grants`, newest first: who was granted or lost
+        which central role, by whom, when and from which source (`console`,
+        `api`, `scim`, `migration`, `bootstrap`, `operator` or `review`). The
+        account and actor names are read from the accounts and are null once
+        an account is deleted; the ids stay.
+      tags: [admin]
+      parameters:
+        - name: user_id
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1 }
+          description: Only the changes to this account's roles.
+        - name: role
+          in: query
+          required: false
+          schema: { type: string }
+          description: Only the changes of this role name.
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: One page of the history
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdministrationRoleHistory'
+              example:
+                total: 2
+                rows:
+                  - id: 42
+                    user_id: 11
+                    user_name: Ada Admin
+                    user_email: ada@example.com
+                    role_name: llm_manager
+                    role_mode: administration
+                    action: granted
+                    actor_user_id: 1
+                    actor_name: Root
+                    actor_email: root@example.com
+                    occurred_at: '2026-11-23T09:30:00Z'
+                    reason: null
+                    source: console
+                    source_ref: null
+                  - id: 41
+                    user_id: 11
+                    user_name: Ada Admin
+                    user_email: ada@example.com
+                    role_name: super_admin
+                    role_mode: administration
+                    action: granted
+                    actor_user_id: null
+                    actor_name: null
+                    actor_email: null
+                    occurred_at: '2026-11-20T08:00:00Z'
+                    reason: null
+                    source: bootstrap
+                    source_ref: null
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+
+  # ==========================================================================
   # ADMIN — roles
   # ==========================================================================
   # ==========================================================================
@@ -24809,18 +25346,23 @@ paths:
 
     post:
       operationId: assignUserModeRole
-      summary: Assign a user to a role in a mode
+      summary: Give a user one more role in a mode
       description: |
-        SINGLE-ROLE-PER-MODE: every assignment the user holds in that mode is
-        dropped before the new one is written, in one transaction — the rule
-        auth_core's assign_user_to_role enforces. A role the deployment does
-        not define in that mode is a 400 and leaves the user's current role
-        alone, rather than revoking it and granting nothing.
+        ADDS one role and keeps every other role the user holds in the mode
+        (ADR-0059 R0.8b): a person holds several administration roles. Until
+        then this route was single-role-per-mode, as the legacy runtime's
+        assign_user_to_role, and assigning a second role took the first.
+        Assigning a role the user holds changes nothing and writes no
+        history. A role the deployment does not define in that mode is a 400.
+        To take a role, DELETE it; to set the whole set at once, use
+        `set_admin_role` on /admin/auth_users/administration.
 
-        Granting or revoking `super_admin` additionally requires the caller to
-        hold `admin.auth.users.super_admin`: this endpoint writes the same
-        table /admin/auth_users does, so without the guard it would be a
-        second, unguarded route to the platform's highest role.
+        The role rules of /admin/auth_users apply: the caller holds every
+        permission of the role (`role_permission_not_held`); granting
+        `super_admin` requires `admin.auth.users.super_admin`; a role marked
+        unassignable is given to nobody; a caller who is not a global
+        administrator changes none of its own roles. Each grant writes one
+        grant history row.
 
         `default` mode is refused. Default-mode roles are project membership,
         which has no meaning without a project id.
@@ -24831,6 +25373,10 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/ModeRoleAssignRequest'
+            example:
+              user_id: 11
+              mode: administration
+              role: llm_manager
       responses:
         '200':
           description: The assignment now exists
@@ -24838,16 +25384,23 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ModeRoleAssignResult'
+              example:
+                ok: true
+                id: '11:administration:llm_manager'
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403':
           description: >
-            The caller lacks `modes.users`, or is assigning/revoking
-            `super_admin` without `admin.auth.users.super_admin`.
+            The caller lacks `modes.users`, or a role rule refused the role.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/AdminRoleRefusal'
+              example:
+                error: you can assign or remove only a role whose permissions you all hold
+                code: role_permission_not_held
+                role: admin
+                permissions: [configuration.roles.permissions.edit]
         '404': { $ref: '#/components/responses/404' }
         '500': { $ref: '#/components/responses/500' }
 

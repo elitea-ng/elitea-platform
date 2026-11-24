@@ -291,20 +291,35 @@ func IsInitialGlobalAdmin(admins []string, providerReference string) bool {
 // internal/api/v2/auth/first_login.go for why both spellings are accepted in
 // the configuration file but only one is compared here.
 func MatchesInitialGlobalAdmin(admins []string, providerReference, verifiedEmail string) bool {
+	return InitialGlobalAdminMatch(admins, providerReference, verifiedEmail) != ""
+}
+
+// The shapes of an `initial_global_admins` entry a login matched, for a log
+// line that must not name the address (issue 2589).
+const (
+	InitialGlobalAdminShapeReference = "reference"
+	InitialGlobalAdminShapeEmail     = "email"
+)
+
+// InitialGlobalAdminMatch is MatchesInitialGlobalAdmin that also says which
+// shape of entry matched: InitialGlobalAdminShapeReference,
+// InitialGlobalAdminShapeEmail, or "" for no match. The first matching entry
+// decides.
+func InitialGlobalAdminMatch(admins []string, providerReference, verifiedEmail string) string {
 	address := NormalizeInitialGlobalAdminEmail(verifiedEmail)
 	for _, admin := range admins {
 		candidate, isEmailEntry := strings.CutPrefix(admin, InitialGlobalAdminEmailPrefix)
 		if isEmailEntry {
 			if address != "" && NormalizeInitialGlobalAdminEmail(candidate) == address {
-				return true
+				return InitialGlobalAdminShapeEmail
 			}
 			continue
 		}
 		if providerReference != "" && admin == providerReference {
-			return true
+			return InitialGlobalAdminShapeReference
 		}
 	}
-	return false
+	return ""
 }
 
 // NormalizeInitialGlobalAdminEmail folds an address to the form the comparison

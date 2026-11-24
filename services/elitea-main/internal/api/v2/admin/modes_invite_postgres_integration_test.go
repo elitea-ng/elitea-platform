@@ -191,7 +191,7 @@ func TestModesListingReportsEveryCentralAssignment(t *testing.T) {
 	}
 }
 
-func TestModesAssignWritesAndIsSingleRolePerMode(t *testing.T) {
+func TestModesAssignWritesAndAddsARoleBesideTheOthers(t *testing.T) {
 	pool, router, _, memberID := newModesEnvironment(t, nil)
 
 	recorder := adminDo(t, router, http.MethodPost, "/admin/modes/administration",
@@ -209,15 +209,16 @@ func TestModesAssignWritesAndIsSingleRolePerMode(t *testing.T) {
 		t.Fatalf("stored administration roles = %v, want [editor]", roles)
 	}
 
-	// Assigning again REPLACES: auth_core's assign_user_to_role drops every
-	// assignment the user holds in that mode first.
+	// Assigning again ADDS (ADR-0059 R0.8b, issue 2574): a person holds
+	// several administration roles, and the POST gives one more without
+	// taking the others. The Users route's role_names replaces the set.
 	recorder = adminDo(t, router, http.MethodPost, "/admin/modes/administration",
 		map[string]any{"user_id": memberID, "mode": "administration", "role": "viewer"})
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("second POST status = %d, want 200 (body %s)", recorder.Code, recorder.Body.String())
 	}
-	if roles := storedModeRoles(t, pool, memberID, "administration"); len(roles) != 1 || roles[0] != "viewer" {
-		t.Fatalf("stored administration roles = %v after re-assignment, want [viewer]", roles)
+	if roles := storedModeRoles(t, pool, memberID, "administration"); len(roles) != 2 || roles[0] != "editor" || roles[1] != "viewer" {
+		t.Fatalf("stored administration roles = %v after a second assignment, want [editor viewer]", roles)
 	}
 }
 
