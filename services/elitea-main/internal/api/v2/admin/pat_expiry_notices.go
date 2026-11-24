@@ -20,9 +20,10 @@ package admin
 //
 // # The permission
 //
-// `runtime.plugins` in administration mode — the gate the whole Tasks surface
-// already carries (background_jobs.go's header). No new permission string, so
-// no new grant migration and no operator to re-authorise.
+// `platform.operations.manage` or `runtime.plugins` in administration mode —
+// the pair the job cancel carries too (background_jobs.go's header, ADR-0059
+// R0.4a). Shared 0261 grants the narrow name to both administrator roles, so
+// no operator has to be re-authorised.
 //
 // # `within`
 //

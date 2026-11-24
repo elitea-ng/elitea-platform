@@ -43,7 +43,9 @@ import { t } from '@/shared/i18n';
 import { FlowEditorConstants } from '../../lib/flow-editor/constants';
 import type { AiAssistantLlmSettings } from '../../api/aiAssistantPredict';
 import type { FlowNode } from '../../lib/flow-editor/reactFlowTypes';
+import { NodeConfigSection } from '../node-config-drawer/NodeConfigSection';
 import { LabelWithTooltip } from '../settings/InputMappings/LabelWithTooltip';
+import { NodeSettings } from '../settings/NodeSettings';
 import { SimpleLLMInputItem } from '../settings/SimpleLLMInputItem';
 import { InputSelect } from '../select/InputSelect';
 import { NodeCard } from './BaseNode/NodeCard';
@@ -83,36 +85,7 @@ export const HITLNode = memo(function HITLNode(props: HITLNodeProps): ReactNode 
         />
       )}
     >
-      <Box sx={styles.section}>
-        {/*
-          `InputSelect.tsx`'s promoted `label` is `string`-only (no `ReactNode`
-          slot) -- the baseline's `LabelWithTooltip` label replacement is
-          dropped in favour of `LabelWithTooltip` rendered as its own row plus
-          the already-present outer `Tooltip` (both already convey the exact
-          same "Available only when..." copy), rather than a type-incompatible
-          prop.
-        */}
-        <LabelWithTooltip
-          title={t('pipelines.flowEditor.hitlNode.inputLabel', 'Input')}
-          tooltip={model.inputSelectTooltip}
-        />
-        <Tooltip
-          title={model.inputSelectTooltipTitle}
-          placement="top"
-        >
-          <Box
-            component="span"
-            sx={styles.inputSelectTooltipWrapper}
-          >
-            <InputSelect
-              id={id}
-              label=""
-              inputFieldName="input"
-              disabled={model.inputSelectDisabled}
-            />
-          </Box>
-        </Tooltip>
-
+      <NodeConfigSection section="basic">
         <SimpleLLMInputItem
           variableName="user_message"
           variable="user_message"
@@ -124,62 +97,91 @@ export const HITLNode = memo(function HITLNode(props: HITLNodeProps): ReactNode 
           enableAIAssistant
           modelConfig={model.resolvedLlmSettings}
         />
-      </Box>
 
-      <BasicAccordion
-        showMode="left"
-        slotSx={{
-          accordion: styles.accordion,
-          summary: styles.accordionSummary,
-          title: styles.accordionTitle,
-          details: styles.accordionDetails,
-        }}
-        items={[
-          {
-            title: t('pipelines.flowEditor.hitlNode.routerMapping', 'Router mapping'),
-            content: (
-              <Box sx={styles.section}>
-                {HITL_ACTIONS.map(action => (
-                  <HITLRouteRow
-                    key={action.value}
-                    action={action}
-                    value={model.routes[action.value] ?? ''}
-                    onChange={model.handleRouteSelectChange(action.value)}
-                    options={model.routeOptionsByAction[action.value]}
-                    disabled={computeRouteSelectDisabled(action.value, model.isRunningPipeline, model.disabled, model.canEditRoute)}
-                    error={action.value === 'edit' ? model.routeErrorText : ''}
-                  />
-                ))}
-              </Box>
-            ),
-          },
-        ]}
-      />
-
-      <Box
-        sx={styles.editStateKeyRow}
-        className="nopan nodrag"
-      >
-        <HeadingChip label={t('pipelines.flowEditor.hitlNode.editStateKey', 'Edit state key')} />
-        <SingleSelect
-          sx={styles.routeSelect}
-          label={t('pipelines.flowEditor.hitlNode.value', 'Value')}
-          value={model.editStateKey}
-          onChange={model.handleEditStateKeyChange}
-          options={[...model.editStateKeyOptions]}
-          disabled={model.editStateKeySelectDisabled}
-          error={model.routeErrorText}
+        <BasicAccordion
+          showMode="left"
+          slotSx={{
+            accordion: styles.accordion,
+            summary: styles.accordionSummary,
+            title: styles.accordionTitle,
+            details: styles.accordionDetails,
+          }}
+          items={[
+            {
+              title: t('pipelines.flowEditor.hitlNode.routerMapping', 'Router mapping'),
+              content: (
+                <Box sx={styles.section}>
+                  {HITL_ACTIONS.map(action => (
+                    <HITLRouteRow
+                      key={action.value}
+                      action={action}
+                      value={model.routes[action.value] ?? ''}
+                      onChange={model.handleRouteSelectChange(action.value)}
+                      options={model.routeOptionsByAction[action.value]}
+                      disabled={computeRouteSelectDisabled(action.value, model.isRunningPipeline, model.disabled, model.canEditRoute)}
+                      error={action.value === 'edit' ? model.routeErrorText : ''}
+                    />
+                  ))}
+                </Box>
+              ),
+            },
+          ]}
         />
-      </Box>
-      {model.isEditRouteInvalid && (
-        <Typography
-          variant="bodySmall"
-          color="error.main"
-          sx={styles.validationText}
+
+        <Box
+          sx={styles.editStateKeyRow}
+          className="nopan nodrag"
         >
-          {model.editRouteErrorMessage}
-        </Typography>
-      )}
+          <HeadingChip label={t('pipelines.flowEditor.hitlNode.editStateKey', 'Edit state key')} />
+          <SingleSelect
+            sx={styles.routeSelect}
+            label={t('pipelines.flowEditor.hitlNode.value', 'Value')}
+            value={model.editStateKey}
+            onChange={model.handleEditStateKeyChange}
+            options={[...model.editStateKeyOptions]}
+            disabled={model.editStateKeySelectDisabled}
+            error={model.routeErrorText}
+          />
+        </Box>
+        {model.isEditRouteInvalid && (
+          <Typography
+            variant="bodySmall"
+            color="error.main"
+            sx={styles.validationText}
+          >
+            {model.editRouteErrorMessage}
+          </Typography>
+        )}
+      </NodeConfigSection>
+      <NodeConfigSection section="advanced" defaultExpanded={false}>
+        <Box sx={styles.section}>
+          <LabelWithTooltip
+            title={t('pipelines.flowEditor.hitlNode.inputLabel', 'Input')}
+            tooltip={model.inputSelectTooltip}
+          />
+          <Tooltip
+            title={model.inputSelectTooltipTitle}
+            placement="top"
+          >
+            <Box
+              component="span"
+              sx={styles.inputSelectTooltipWrapper}
+            >
+              <InputSelect
+                id={id}
+                label=""
+                inputFieldName="input"
+                disabled={model.inputSelectDisabled}
+              />
+            </Box>
+          </Tooltip>
+        </Box>
+        <NodeSettings
+          id={id}
+          type={FlowEditorConstants.PipelineNodeTypes.Hitl}
+          disabled={model.isRunningPipeline || model.disabled}
+        />
+      </NodeConfigSection>
     </NodeCard>
   );
 });

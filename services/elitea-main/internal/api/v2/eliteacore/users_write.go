@@ -38,7 +38,8 @@ package eliteacore
 //
 // It is accepted here; what differs between the modes is the GATE, not the
 // query. router.go registers the administration-mode verbs separately, on
-// `configuration.users.users.*` resolved CENTRALLY — default mode resolves the
+// projects.members.manage or `configuration.users.users.*` resolved CENTRALLY
+// (ADR-0059 R0.6a) — default mode resolves the
 // same permission from the caller's membership of the target project, which a
 // global administrator does not have. Both still require a concrete, positive
 // project id below, so neither can write project 0's membership.
@@ -47,9 +48,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	appmailer "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/mailer"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
 	"log/slog"
 	"net/http"
 	"net/mail"
@@ -277,7 +278,7 @@ func (h *Handler) usersCreate(w http.ResponseWriter, r *http.Request, mode strin
 	}
 	// Each address commits in its own transaction (inviteOne), so the check
 	// and the loop run under a hold of the role-writes lock that spans them.
-	hold, release, err := rolepolicy.HoldRoleWrites(r.Context(), h.pool)
+	hold, release, err := adminaccess.HoldRoleWrites(r.Context(), h.pool)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to read project roles"})
 		return
@@ -289,7 +290,7 @@ func (h *Handler) usersCreate(w http.ResponseWriter, r *http.Request, mode strin
 		projectID: projectID, asMember: mode != userWriteModeAdministration, assigned: roleIDs,
 		invited: body.Emails,
 	}); refusal != nil {
-		rolepolicy.Write(w, r, refusal)
+		adminaccess.Write(w, r, refusal)
 		return
 	}
 
@@ -550,14 +551,14 @@ func (h *Handler) usersUpdate(w http.ResponseWriter, r *http.Request, mode strin
 
 	// The no-escalation check runs under the role-writes lock, in this
 	// transaction, before its first write.
-	if err := rolepolicy.LockRoleWrites(ctx, tx); err != nil {
+	if err := adminaccess.LockRoleWrites(ctx, tx); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to update user roles"})
 		return
 	}
 	if refusal := h.checkMembershipChange(r, tx, membershipChange{
 		projectID: projectID, asMember: mode != userWriteModeAdministration, assigned: roleIDs, targets: userIDs,
 	}); refusal != nil {
-		rolepolicy.Write(w, r, refusal)
+		adminaccess.Write(w, r, refusal)
 		return
 	}
 
@@ -657,14 +658,27 @@ WHERE binding.token_id = token.id
 // until someone noticed. The handler used to run the assignment delete as a
 // bare pool.Exec; a second bare Exec beside it would have been that split.
 //
-// IT HAS NO ADMINISTRATION TWIN, because no client asks for one.
-// router.go registers DELETE on the `{mode}` route alone, and the admin
-// Projects dialog (apps/elitea-web/src/pages/admin/ProjectMemberDialog.tsx)
-// invites and edits roles but never removes. A static administration DELETE
-// would be a destructive route with no caller and no test that could
-// discriminate a correct implementation from a wrong one.
+// The `{mode}` route resolves its gate in the project, so its caller is a
+// member. The administration twin is AdministrationUsersDelete.
 func (h *Handler) UsersDelete(w http.ResponseWriter, r *http.Request) {
-	projectID, ok := h.userWriteContext(w, r, requestWriteMode(r))
+	h.usersDelete(w, r, requestWriteMode(r))
+}
+
+// AdministrationUsersDelete implements
+// DELETE /api/v2/admin/users/administration/{projectID} — the Remove of the
+// admin Projects page's member dialog (ADR-0059 R0.6a). Its gate is central
+// (projects.members.manage, or configuration.users.users.delete), because the
+// update refuses an empty role set and the `{mode}` DELETE needs a membership
+// of the project. It removes ALL project roles of the members, through the same
+// core as the `{mode}` route: the token bindings, the personal-memory journal
+// and the last-owner behaviour are the same. It states its mode; see
+// requestWriteMode.
+func (h *Handler) AdministrationUsersDelete(w http.ResponseWriter, r *http.Request) {
+	h.usersDelete(w, r, userWriteModeAdministration)
+}
+
+func (h *Handler) usersDelete(w http.ResponseWriter, r *http.Request, mode string) {
+	projectID, ok := h.userWriteContext(w, r, mode)
 	if !ok {
 		return
 	}
@@ -687,16 +701,17 @@ func (h *Handler) UsersDelete(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	// The no-escalation check runs under the role-writes lock, in this
-	// transaction, before its first write. The `{mode}` route is the only
-	// DELETE, and its gate is the member's.
-	if err := rolepolicy.LockRoleWrites(ctx, tx); err != nil {
+	// transaction, before its first write. On the `{mode}` route the gate is
+	// the member's; on the administration route it is central, and a removal
+	// gives no role, so it widens nobody (leaving a project passes).
+	if err := adminaccess.LockRoleWrites(ctx, tx); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove users"})
 		return
 	}
 	if refusal := h.checkMembershipChange(r, tx, membershipChange{
-		projectID: projectID, asMember: true, targets: userIDs,
+		projectID: projectID, asMember: mode != userWriteModeAdministration, targets: userIDs,
 	}); refusal != nil {
-		rolepolicy.Write(w, r, refusal)
+		adminaccess.Write(w, r, refusal)
 		return
 	}
 

@@ -20,12 +20,13 @@ package admin
 //     and a host without a sender address is a message that cannot be
 //     submitted. The generic form would save both and report success.
 //
-// # The permission is the one the page it replaces already used
+// # The permission
 //
-// `runtime.plugins`, resolved in administration mode, gates every route here —
-// the same string the MCP catalogue and the identity provider surfaces carry,
-// and the same one the Configuration page already required. No new permission
-// name arrives, so no new grant is needed and the grant gate in
+// `platform.email.manage` or `runtime.plugins`, resolved in administration
+// mode, gates every route here (ADR-0059 R0.4a). The narrow name is one
+// permission for read, edit and the test send; `runtime.plugins` is the one the
+// Configuration page already required, so a holder of it sees no change.
+// Shared 0261 grants the narrow name, so the grant gate in
 // `internal/api/router_permission_grant_gate_test.go` stays untripped.
 //
 // # What a caller can and cannot see
@@ -188,6 +189,23 @@ func (h *Handler) EmailSettingsSave(w http.ResponseWriter, r *http.Request) {
 		author = principal.ID
 	}
 
+	// A kept password does not follow the relay to a new host, port or TLS mode
+	// (#2944). The resolver's view covers BOTH layers: a password supplied by
+	// SMTP_PASSWORD is as unreadable to this caller as a sealed one, and moving
+	// the stored host over it would send it to the new relay just the same.
+	// The comparison is of EFFECTIVE relays, so pinning the value the
+	// environment already supplies is not a move. The store repeats the check
+	// against its own read, so a resolver that fell back to the environment on
+	// a read error cannot let a sealed password through.
+	if body.Password == nil {
+		current := h.emailResolver.Resolve(r.Context())
+		next := emailsettings.Layered(current.Environment, settings.Trim())
+		if current.PasswordSet && emailsettings.RelayChanged(current.Effective, next) {
+			writeEmailSettingsError(w, emailsettings.ErrReenterPassword)
+			return
+		}
+	}
+
 	if err := h.emailSettings.Save(r.Context(), settings, body.Password, author); err != nil {
 		writeEmailSettingsError(w, err)
 		return
@@ -232,7 +250,8 @@ func writeEmailSettingsError(w http.ResponseWriter, err error) {
 //
 // It is the SAME send as the Branding page's test button, on this page's own
 // permission. Two routes rather than one shared route because the permissions
-// differ — `configuration.branding` there, `runtime.plugins` here — and an
+// differ — `configuration.branding` there, `platform.email.manage` or
+// `runtime.plugins` here — and an
 // operator who may configure the relay must be able to test the relay without
 // also holding the grant that lets them re-brand the product.
 func (h *Handler) EmailTestSend(w http.ResponseWriter, r *http.Request) {

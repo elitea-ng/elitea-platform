@@ -191,13 +191,15 @@ func NewBudgetAlertHandler(store *BudgetAlertStore) *BudgetAlertHandler {
 	return &BudgetAlertHandler{store: store}
 }
 
-// Routes mounts the budget-alerts read/write endpoints. The caller is
-// responsible for RBAC gating (RequirePermissions) — the authorization
-// boundary is the server, not the client.
-func (h *BudgetAlertHandler) Routes() chi.Router {
+// Routes mounts the budget-alerts read/write endpoints behind their gates
+// (gates.go): view (llm.usage.view) for the read, manage (llm.alerts.manage)
+// for the save. router.go builds both to accept configuration.governance too.
+func (h *BudgetAlertHandler) Routes(view, manage Gate) chi.Router {
+	view = mustGate("budget alerts", "view", view)
+	manage = mustGate("budget alerts", "manage", manage)
 	r := chi.NewRouter()
-	r.Get("/budget-alerts", h.Get)
-	r.Put("/budget-alerts", h.Update)
+	r.With(view).Get("/budget-alerts", h.Get)
+	r.With(manage).Put("/budget-alerts", h.Update)
 	return r
 }
 

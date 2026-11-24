@@ -858,7 +858,7 @@ mod tests {
     fn absent_guardrails_keep_the_fallback_rules_but_explicit_empty_clears_them() {
         let fallback = policy(json!({"sensitive_tools": {"*": ["delete_file"]}}));
 
-        let open = elitea_agent_runtime::egress::RunEgress::open();
+        let open = crate::protocol::egress::open_for_local_fixtures();
         let absent = policy_for_guardrails(
             None,
             &fallback,

@@ -1477,6 +1477,7 @@ mod tests {
                 host: "evil.example".to_owned(),
                 port: 443,
                 count: 1,
+                reason: crate::egress::REFUSAL_REASON_NOT_ALLOWED,
             }]
         );
     }

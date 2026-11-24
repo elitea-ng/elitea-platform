@@ -26,7 +26,8 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 POSTURE=(--set-string 'llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://ci-render-only.example.invalid/llm/v1'
-         --set-string 'llmGateway.egressPosture=public-unrestricted')
+         --set-string 'llmGateway.egressPosture=public-unrestricted'
+         -f deploy/helm/tests/fixtures/network-peers.yaml)
 # name | helm args (one shape per line; word-split on purpose)
 shapes=(
   "default|-f deploy/helm/tests/fixtures/operator-values.yaml"

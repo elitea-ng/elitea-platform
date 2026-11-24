@@ -54,6 +54,8 @@ spec:
         {{- include "elitea.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: db-init
     spec:
+      # Nothing in this pod calls the Kubernetes API (#2953).
+      automountServiceAccountToken: false
       restartPolicy: Never
       {{- include "elitea.imagePullSecrets" (dict "local" $d.imagePullSecrets "global" .Values.image.pullSecrets) | nindent 6 }}
       securityContext:

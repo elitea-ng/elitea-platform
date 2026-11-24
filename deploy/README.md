@@ -412,8 +412,14 @@ Fill them in your own GitOps copy of the Application, or with:
 ```bash
 argocd app set elitea \
   -p llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.example.com/llm/v1 \
-  -p llmGateway.egressPosture=public-unrestricted
+  -p llmGateway.egressPosture=public-unrestricted \
+  -p 'networkPolicies.clusterCIDRs={10.244.0.0/16,10.96.0.0/12}' \
+  -p 'networkPolicies.egressPeers.postgresql.to[0].ipBlock.cidr=10.20.0.5/32'
 ```
+
+The last two are the cluster's own pod and Service ranges and the database's
+address, which the worker's and the LLM gateway's egress NetworkPolicies need
+(docs/upgrading/2026-11-23-2951-worker-egress-network-policy.md).
 
 **No secret goes in a parameter.** A Helm parameter is rendered into a
 ConfigMap, which anybody with `get` on the namespace can read. The database
@@ -428,6 +434,8 @@ helm template elitea deploy/helm/elitea \
   --set-string postgresql.key=database-url \
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 \
   --set-string llmGateway.egressPosture=public-unrestricted \
+  --set 'networkPolicies.clusterCIDRs={10.244.0.0/16,10.96.0.0/12}' \
+  --set 'networkPolicies.egressPeers.postgresql.to[0].ipBlock.cidr=10.20.0.5/32' \
   | grep -A4 'name: DATABASE_URL'
 ```
 
@@ -531,7 +539,8 @@ configured.
 
 Check what a running deployment resolved. The route is gated on
 `runtime.plugins` in administration mode, so send an administrator session
-cookie or a personal access token with it:
+cookie, or a personal access token that carries administration rights (a new
+token carries none; see docs/upgrading/2026-11-23-2506-credential-decides-administration-set.md):
 
 ```bash
 curl -s -H "Authorization: Bearer $ADMIN_PAT" \

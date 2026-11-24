@@ -9,7 +9,7 @@ import { installCodeMirrorTestPolyfills } from '@/shared/ui/lib/field/codeMirror
 import { ReactFlow, ReactFlowProvider, type Edge } from '@xyflow/react';
 
 import { buildFlowEditorContextValue, renderWithRouterAndProject } from '../../__tests__/testUtils';
-import { FlowEditorContext, type FlowEditorContextValue } from '../../lib/flow-editor/flowEditorContext';
+import { FlowEditorContext, NodeConfigPanelContext, type FlowEditorContextValue } from '../../lib/flow-editor/flowEditorContext';
 import type { YamlConditionSpec, YamlPipelineDocument } from '../../lib/flow-editor/helpers/pipelineFlow.types';
 import { RouterNode, type RouterNodeProps } from './RouterNode';
 import { resetBackendCapabilitiesForTests, setBackendCapabilityForTests } from '@/shared/config/backendCapabilities';
@@ -65,7 +65,16 @@ function renderRouterNode(flowEditorOverrides: Partial<FlowEditorContextValue> =
         <ReactFlow
           nodes={[{ id: 'Node1', type: 'testNode', position: { x: 0, y: 0 }, data: {} }]}
           edges={edges}
-          nodeTypes={{ testNode: RouterNode }}
+          nodeTypes={{
+            testNode: props => (
+              <>
+                <RouterNode {...props} />
+                <NodeConfigPanelContext.Provider value={{ isEntrypoint: false, isLegacyLayout: false }}>
+                  <RouterNode {...props} />
+                </NodeConfigPanelContext.Provider>
+              </>
+            ),
+          }}
         />
       </FlowEditorContext.Provider>
     </ReactFlowProvider>,
@@ -82,12 +91,12 @@ describe('RouterNode', () => {
   });
 
   it('renders the Condition field, the Routes select, and the Default output chip/select', async () => {
-    const { findByText, getByText } = renderRouterNode();
+    const { findByText, getByText, getAllByText } = renderRouterNode();
     await findByText('Node1');
 
     expect(getByText('Condition')).toBeInTheDocument();
     expect(getByText('Routes')).toBeInTheDocument();
-    expect(getByText('Default output')).toBeInTheDocument();
+    expect(getAllByText('Default output').length).toBeGreaterThan(0);
   });
 
   it('renders the condition value from the matching yaml node in the Condition field', async () => {
@@ -118,7 +127,9 @@ describe('RouterNode', () => {
     const { findByText, getByDisplayValue } = renderWithRouterAndProject(
       <ReactFlowProvider>
         <FlowEditorContext.Provider value={flowEditorValue}>
-          <RouterNode {...minimalRouterNodeProps} />
+          <NodeConfigPanelContext.Provider value={{ isEntrypoint: false, isLegacyLayout: false }}>
+            <RouterNode {...minimalRouterNodeProps} />
+          </NodeConfigPanelContext.Provider>
         </FlowEditorContext.Provider>
       </ReactFlowProvider>,
       PROJECT_ID,
@@ -151,7 +162,9 @@ describe('RouterNode', () => {
       <SocketClientContext.Provider value={socketClient}>
         <ReactFlowProvider>
           <FlowEditorContext.Provider value={flowEditorValue}>
-            <RouterNode {...minimalRouterNodeProps} />
+            <NodeConfigPanelContext.Provider value={{ isEntrypoint: false, isLegacyLayout: false }}>
+              <RouterNode {...minimalRouterNodeProps} />
+            </NodeConfigPanelContext.Provider>
           </FlowEditorContext.Provider>
         </ReactFlowProvider>
       </SocketClientContext.Provider>,
@@ -216,7 +229,7 @@ describe('RouterNode', () => {
     await findByText('Node1');
 
     const comboboxes = getAllByRole('combobox', { hidden: true });
-    await user.click(comboboxes[2] as HTMLElement);
+    await user.click(comboboxes[1] as HTMLElement);
     await user.click(getByRole('option', { name: 'Target1' }));
 
     expect(setYamlJsonObject).toHaveBeenCalledWith(
@@ -248,7 +261,7 @@ describe('RouterNode', () => {
     await findByText('Node1');
 
     const comboboxes = getAllByRole('combobox', { hidden: true });
-    await user.click(comboboxes[2] as HTMLElement);
+    await user.click(comboboxes[1] as HTMLElement);
     await user.click(getByRole('option', { name: 'Target1' }));
 
     const updater = setFlowEdges.mock.calls[0]?.[0] as (prev: unknown[]) => unknown[];

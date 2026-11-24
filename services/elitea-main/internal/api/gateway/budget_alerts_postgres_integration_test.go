@@ -95,7 +95,7 @@ func alertDo(t *testing.T, pool *pgxpool.Pool, method, body string) *httptest.Re
 	h := gateway.NewBudgetAlertHandler(gateway.NewBudgetAlertStore(pool))
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(method, "/budget-alerts", strings.NewReader(body))
-	h.Routes().ServeHTTP(rr, req)
+	h.Routes(admitAll, admitAll).ServeHTTP(rr, req)
 	return rr
 }
 
@@ -414,3 +414,7 @@ WHERE section = 'governance' AND type = 'budget_alert' AND name = 'global'`); er
 		t.Fatalf("GET reports %+v, want {false 33}", cfg)
 	}
 }
+
+// admitAll is a route gate that admits every caller: this test proves the
+// store, and the gates are proven through the production router.
+func admitAll(next http.Handler) http.Handler { return next }

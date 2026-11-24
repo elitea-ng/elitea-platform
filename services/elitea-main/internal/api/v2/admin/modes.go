@@ -40,15 +40,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess/rolegrants"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
 )
 
 // modeAssignment is one row of the listing.
@@ -130,9 +132,11 @@ type modeAssignRequest struct {
 
 // ModesAssign serves `POST /admin/modes/administration`.
 //
-// The assignment is SINGLE-ROLE-PER-MODE, exactly as `assign_user_to_role`
-// enforces it: every other assignment the user holds in that mode is dropped
-// before the new one is written, both inside one transaction.
+// The assignment ADDS one role and keeps every other role the user holds
+// (ADR-0059 R0.8b, issue 2574): a person holds several administration roles.
+// Until then it was single-role-per-mode, as the legacy `assign_user_to_role`
+// enforced it, so assigning a second role silently took the first. DELETE
+// removes one role. Re-assigning a held role changes nothing.
 func (h *Handler) ModesAssign(w http.ResponseWriter, r *http.Request) {
 	if h.pool == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "database unavailable"})
@@ -182,35 +186,18 @@ func (h *Handler) ModesAssign(w http.ResponseWriter, r *http.Request) {
 	// table, so without it `modes.users` would be a second, unguarded way to
 	// grant the platform's highest role.
 	//
-	// The GRANT arm is not scoped to a mode. Only `administration` reaches
-	// this point today, but a `super_admin` role can exist in any mode
+	// The guard is not scoped to a mode. Only `administration` reaches this
+	// point today, but a `super_admin` role can exist in any mode
 	// (auth_core__role is UNIQUE (name, mode)), and a body of
 	// {"mode":"developer","role":"super_admin"} once reached the INSERT with no
-	// escalation check at all. The arm stays unscoped so that a mode added to
+	// escalation check at all. It stays unscoped so that a mode added to
 	// centralRoleModes later cannot reopen that path.
 	//
-	// The DEMOTION arm stays scoped to `administration`. currentAdminRole
-	// (users.go) reads the administration-mode role only, and the write below
-	// removes assignments in the requested mode only.
-	var caller rolepolicy.Caller
-	var ok bool
-	{
-		current, err := h.currentAdminRole(ctx, userID)
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				writeJSON(w, http.StatusNotFound, map[string]any{"error": "user not found"})
-				return
-			}
-			writeJSON(w, http.StatusInternalServerError,
-				map[string]any{"error": "failed to read current role"})
-			return
-		}
-		demotesAdministrationSuperAdmin := mode == auth.PermissionModeAdministration &&
-			current == "super_admin" && role != "super_admin"
-		caller, ok = h.resolveAssigningCaller(w, r, role == "super_admin" || demotesAdministrationSuperAdmin)
-		if !ok {
-			return
-		}
+	// The write ADDS one role (ADR-0059 R0.8b): it takes nothing, so there is
+	// no demotion arm.
+	caller, ok := h.resolveAssigningCaller(w, r, role == adminaccess.SuperAdminRole)
+	if !ok {
+		return
 	}
 
 	transaction, err := h.pool.Begin(ctx)
@@ -220,33 +207,53 @@ func (h *Handler) ModesAssign(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
 
-	// The subset rule (issue 2488), the same one the admin Users surface
-	// applies: the caller holds every permission of the role given and of
-	// every role in this mode that the write below takes away. Before it,
-	// `modes.users` assigned ANY role of the mode — a custom role holding
-	// everything included. It runs under the role-writes lock, in this
-	// transaction.
-	if refusal, err := h.checkCentralAssignment(ctx, transaction, caller, mode, role, userID); err != nil {
+	// The rules of issue 2488 and R0.8a, the same ones the admin Users
+	// surface applies to each role it gives: the caller holds every
+	// permission of the role, an unassignable role is given to nobody, and a
+	// caller changes none of its own roles. Before issue 2488, `modes.users`
+	// assigned ANY role of the mode, a custom role holding everything
+	// included. They run under the role-writes lock, in this transaction.
+	if err := adminaccess.LockRoleWrites(ctx, transaction); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to read current role"})
+		return
+	}
+	held, err := adminaccess.UserCentralRoles(ctx, transaction, userID, mode)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to read current role"})
+		return
+	}
+	alreadyHeld := slices.Contains(held, role)
+	change := centralChange{mode: mode, targetID: userID, changes: !alreadyHeld}
+	if !alreadyHeld {
+		change.given = []string{role}
+	}
+	if refusal, err := h.checkCentralRoles(ctx, transaction, caller, change); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to read current role"})
 		return
 	} else if refusal != nil {
-		rolepolicy.Write(w, r, refusal)
+		adminaccess.Write(w, r, refusal)
 		return
 	}
 
-	// The difference, not a rewrite (issue 2499): every other role of the
-	// mode is taken, the role is given if the user does not hold it yet, and
-	// each change writes one history row in this transaction.
-	if _, err := rolegrants.Set(ctx, transaction, int64(userID), mode, role, grantOrigin(r, caller)); err != nil {
+	// One role is given if the user does not hold it yet, with one history
+	// row in this transaction (issue 2499). Every other role of the user
+	// stays: a person holds several administration roles (issue 2574).
+	origin := grantOrigin(r, caller)
+	if _, err := rolegrants.Grant(ctx, transaction, int64(userID), mode, role, origin); err != nil {
 		// No matching role means the deployment does not define it in that
-		// mode. Committing here would revoke what the user had and grant
-		// nothing.
+		// mode.
 		if errors.Is(err, rolegrants.ErrRoleNotFound) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{
 				"error": fmt.Sprintf("role %q is not defined in mode %q", role, mode),
 			})
 			return
 		}
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to assign role"})
+		return
+	}
+	// The security audit event, in this transaction (ADR-0059 R1.5).
+	if err := h.appendRoleAssignment(ctx, transaction, r, caller.UserID, userID, mode, held, origin.Source); err != nil {
+		slog.ErrorContext(ctx, "admin: the role assignment could not be recorded", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to assign role"})
 		return
 	}
@@ -322,22 +329,55 @@ func (h *Handler) ModesRemove(w http.ResponseWriter, r *http.Request) {
 	// The subset rule (issue 2488): removing an administration role needs every
 	// permission of that role too. A developer-mode row needs only the
 	// super_admin guard; see checkCentralRoles.
-	if err := rolepolicy.LockRoleWrites(ctx, transaction); err != nil {
+	if err := adminaccess.LockRoleWrites(ctx, transaction); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove role"})
 		return
 	}
-	if refusal := h.checkCentralRoles(ctx, transaction, caller, mode, "", []string{role}); refusal != nil {
-		rolepolicy.Write(w, r, refusal)
+	lastAdministrator, err := adminaccess.BeginLastAdministratorGuard(ctx, transaction)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove role"})
+		return
+	}
+	held, err := adminaccess.UserCentralRoles(ctx, transaction, userID, mode)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove role"})
+		return
+	}
+	refusal, err := h.checkCentralRoles(ctx, transaction, caller, centralChange{
+		mode: mode, taken: []string{role}, targetID: userID, changes: slices.Contains(held, role),
+	})
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove role"})
+		return
+	}
+	if refusal != nil {
+		adminaccess.Write(w, r, refusal)
 		return
 	}
 
-	removed, err := rolegrants.Revoke(ctx, transaction, int64(userID), mode, role, grantOrigin(r, caller))
+	origin := grantOrigin(r, caller)
+	removed, err := rolegrants.Revoke(ctx, transaction, int64(userID), mode, role, origin)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove role"})
 		return
 	}
 	if !removed {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "assignment not found"})
+		return
+	}
+	// The last-administrator rule (issue 2500), measured after the removal
+	// in this transaction.
+	if refusal, err := lastAdministrator.Check(ctx, transaction); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove role"})
+		return
+	} else if refusal != nil {
+		adminaccess.Write(w, r, refusal)
+		return
+	}
+	// The security audit event, in this transaction (ADR-0059 R1.5).
+	if err := h.appendRoleAssignment(ctx, transaction, r, caller.UserID, userID, mode, held, origin.Source); err != nil {
+		slog.ErrorContext(ctx, "admin: the role removal could not be recorded", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove role"})
 		return
 	}
 	if err := transaction.Commit(ctx); err != nil {

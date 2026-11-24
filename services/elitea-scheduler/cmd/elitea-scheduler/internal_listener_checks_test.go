@@ -1,11 +1,13 @@
 package main
 
-// The checks of the internal-listener surface test (ADR-0059 R1.8). The same
-// file is in services/elitea-main/internal/transport,
-// services/elitea-scheduler/cmd/elitea-scheduler and
-// services/elitea-subapp-host/internal/spi, each module with its own
-// allowlist. TestTheListenerChecksCopiesAreAlike (elitea-main) fails when the
-// copies differ beyond the package clause.
+// The checks of the internal-listener surface test (ADR-0059 R1.8, R1.9).
+// The same file is in services/elitea-main/internal/transport,
+// services/elitea-scheduler/cmd/elitea-scheduler,
+// services/elitea-subapp-host/internal/spi and, outside go.work,
+// services/elitea-llm-gateway/internal/grpcapi, each module with its own
+// allowlist. TestTheListenerChecksCopiesAreAlike (elitea-main, ci-go) and its
+// gateway twin (ci-gateway) fail when the copies differ beyond the package
+// clause.
 //
 // The allowlist is reviewed text, one entry a line, fields separated by "|":
 //
@@ -406,7 +408,7 @@ func checkSource(scan sourceScan, list []surfaceEntry) []string {
 
 // administrationModeName is an identifier that names the administration
 // permission mode: auth.PermissionModeAdministration,
-// rolepolicy.ModeAdministration, identity.InitialAdministrationMode, ...
+// adminaccess.ModeAdministration, identity.InitialAdministrationMode, ...
 func administrationModeName(name string) bool {
 	return strings.Contains(name, "ModeAdministration") || strings.Contains(name, "AdministrationMode")
 }

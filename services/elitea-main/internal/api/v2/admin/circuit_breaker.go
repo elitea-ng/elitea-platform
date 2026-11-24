@@ -118,8 +118,9 @@ func circuitBreakerSection() map[string]any {
 		)
 	}
 	return map[string]any{
-		"id":    section,
-		"title": "Circuit Breaker",
+		"id":     section,
+		"access": llmPolicySectionAccess,
+		"title":  "Circuit Breaker",
 		"description": "Stops an agent that misbehaves, by rule, per risk tier: error rate over a window of " +
 			"runs, spend per hour, the same tool failing again and again inside one run, and runs per hour. " +
 			"An agent's registry record can tighten these limits and never loosen them. Every trip is in the " +

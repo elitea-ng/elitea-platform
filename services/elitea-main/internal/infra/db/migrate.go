@@ -122,6 +122,15 @@ const agentReleasesMigrationPath = "shared/0198_agent_releases.sql"
 // runs once (elitea_lifecycle.lifecycle_backfills).
 const agentLifecycleMigrationPath = "shared/0204_agent_lifecycle_governance.sql"
 
+// tokenAdminAccessMigrationPath adds auth_core__token.admin_access and
+// admin_scopes (ADR-0059 R1.1, issue 2505). GetActivePATPrincipalByUUID, the
+// one query the credential validator runs for every token, selects both, so
+// a database without this file answers 42703 to every token request. The
+// file is guarded (no auth_core__token, no change) and its backfill runs only
+// in the run that adds the column, so re-running it on every dev start is
+// safe.
+const tokenAdminAccessMigrationPath = "shared/0265_token_admin_access.sql"
+
 // dumpGuardExemptMigrations are the ledgered shared files RunMigrations applies
 // itself, in order. Every one of them MUST be idempotent and MUST tolerate a
 // database that already holds its objects: the pool.Exec below leaves NO ledger
@@ -148,6 +157,7 @@ var dumpGuardExemptMigrations = []string{
 	agentReleasesMigrationPath,
 	// After 0198: its foreign keys name 0198's releases.
 	agentLifecycleMigrationPath,
+	tokenAdminAccessMigrationPath,
 }
 
 func RunMigrations(ctx context.Context, pool *pgxpool.Pool) error {

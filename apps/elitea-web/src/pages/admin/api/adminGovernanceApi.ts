@@ -175,9 +175,12 @@ const governanceKeys = {
  *   - `409 {"error":"a governance entry with this section/type/name already
  *     exists"}` — the unique key is `(section, type, name)`.
  *
- * A 403 is among them: `configuration.governance` gates every route here, and
- * an administration-mode role without it is refused with a body rather than
- * with the re-auth flow (issue 93 changed the shared 403 policy).
+ * A 403 is among them, refused with a body rather than with the re-auth flow
+ * (issue 93 changed the shared 403 policy). The reads take `llm.policy.view`
+ * and the writes `llm.policy.manage` or `llm.guardrails.manage`, each or
+ * `configuration.governance` (ADR-0059 R0.3). A write is also decided by the
+ * kind of the row: a guardrail needs `llm.guardrails.manage`, so a policy
+ * manager gets 403 on a guardrail row while holding a write permission.
  */
 export function governanceFailureReason(error: unknown): string | undefined {
   if (!(error instanceof EliteaApiError)) return undefined;

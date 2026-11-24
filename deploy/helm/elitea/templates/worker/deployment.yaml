@@ -54,6 +54,9 @@ spec:
       annotations:
         checksum/runtime: {{ include (print $.Template.BasePath "/worker/configmap-runtime.yaml") . | sha256sum }}
     spec:
+      serviceAccountName: {{ include "elitea-worker.serviceAccountName" . }}
+      # Nothing in this pod calls the Kubernetes API (#2953).
+      automountServiceAccountToken: {{ include "elitea.automountToken" .Values.worker.serviceAccount }}
       {{- include "elitea.imagePullSecrets" (dict "local" .Values.worker.imagePullSecrets "global" .Values.image.pullSecrets) | nindent 6 }}
       {{- with .Values.worker.podSecurityContext }}
       securityContext:

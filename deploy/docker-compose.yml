@@ -282,6 +282,9 @@ services:
       # services/elitea-main/docs/browser-sessions.md.
       ELITEA_SESSION_IDLE_TIMEOUT: "${ELITEA_SESSION_IDLE_TIMEOUT:-8h}"
       ELITEA_SESSION_ABSOLUTE_LIFETIME: "${ELITEA_SESSION_ABSOLUTE_LIFETIME:-168h}"
+      # How long ago a person may have signed in for an action that needs a
+      # recent authentication (ADR-0059 R1.10). Default 15m.
+      ELITEA_SESSION_REAUTHENTICATION_MAX_AGE: "${ELITEA_SESSION_REAUTHENTICATION_MAX_AGE:-15m}"
       # Set to "true" to refuse the pre-0117 signed cookie outright. Leave it
       # off through an upgrade, or every active browser is signed out the
       # moment the new image starts.

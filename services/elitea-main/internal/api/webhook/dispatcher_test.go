@@ -11,6 +11,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -458,5 +459,158 @@ func TestDispatcherDoesNotFollowRedirects(t *testing.T) {
 	}
 	if logged.Attempts != 1 {
 		t.Errorf("attempts = %d, want 1 (a redirect answers the same way every time)", logged.Attempts)
+	}
+}
+
+/* ── the signing secret comes from the vault (issue 2963) ─────────────── */
+
+// fakeSecretResolver stands in for the project vault.
+type fakeSecretResolver struct {
+	mu     sync.Mutex
+	values map[string]string // keyed by projectID + "|" + reference
+	calls  int
+}
+
+func (f *fakeSecretResolver) ResolveSecretValue(_ context.Context, projectID, secretRef string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	value, ok := f.values[projectID+"|"+secretRef]
+	if !ok {
+		return "", errors.New("secret not found")
+	}
+	return value, nil
+}
+
+func (f *fakeSecretResolver) set(key, value string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.values[key] = value
+}
+
+func (f *fakeSecretResolver) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
+// The signature header is the HMAC of the body keyed by the VAULT value the
+// row's reference names; the row carries no plaintext at all.
+func TestDeliverySignsWithTheVaultValue(t *testing.T) {
+	var mu sync.Mutex
+	var signatures []string
+	var bodies [][]byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := readAll(r)
+		mu.Lock()
+		signatures = append(signatures, r.Header.Get(SignatureHeader))
+		bodies = append(bodies, body)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	const ref = "{{secret.0123456789abcdef0123456789abcdef}}"
+	resolver := &fakeSecretResolver{values: map[string]string{"7|" + ref: "value-held-in-the-vault"}}
+	deliveries := &mockDeliveryRepository{}
+	repo := &mockWebhookRepo{webhooks: []Webhook{{
+		ID: "wh-1", ProjectID: "7", URL: server.URL,
+		Events: []string{"conversation.created"}, SecretRef: ref, Active: true,
+	}}}
+	d := NewDispatcher(repo, deliveries, WithSecretResolver(resolver))
+
+	d.HandleDomainEvent(context.Background(), "7", "conversation.created", map[string]any{"conversation_id": "c-1"})
+	waitFor(t, func() bool { return deliveries.count() == 1 })
+
+	mu.Lock()
+	gotSignature, gotBody := signatures[0], bodies[0]
+	mu.Unlock()
+	if want := "sha256=" + referenceSignature("value-held-in-the-vault", gotBody); gotSignature != want {
+		t.Fatalf("signature header = %q, want %q", gotSignature, want)
+	}
+	if got := deliveries.snapshotCreated()[0].Status; got != DeliveryStatusSuccess {
+		t.Fatalf("status = %s, want success", got)
+	}
+
+	// A redelivery re-reads the vault, so a rotated value signs it.
+	resolver.set("7|"+ref, "rotated-vault-value")
+	if _, err := d.Redeliver(context.Background(), "7", "wh-1", deliveries.snapshotCreated()[0].ID); err != nil {
+		t.Fatalf("Redeliver: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if want := "sha256=" + referenceSignature("rotated-vault-value", bodies[1]); signatures[1] != want {
+		t.Fatalf("redelivery signature = %q, want %q", signatures[1], want)
+	}
+}
+
+// The vault is read once per webhook per dispatch, not once per attempt.
+func TestTheSecretIsResolvedOncePerDispatch(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&attempts, 1) < 3 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	const ref = "{{secret.once}}"
+	resolver := &fakeSecretResolver{values: map[string]string{"7|" + ref: "v"}}
+	deliveries := &mockDeliveryRepository{}
+	repo := &mockWebhookRepo{webhooks: []Webhook{{
+		ID: "wh-1", ProjectID: "7", URL: server.URL,
+		Events: []string{"conversation.created"}, SecretRef: ref, Active: true,
+	}}}
+	d := NewDispatcher(repo, deliveries, WithSecretResolver(resolver))
+
+	d.HandleDomainEvent(context.Background(), "7", "conversation.created", map[string]any{})
+	waitFor(t, func() bool { return deliveries.count() == 1 })
+	if got := atomic.LoadInt32(&attempts); got != 3 {
+		t.Fatalf("attempts = %d, want 3", got)
+	}
+	if got := resolver.callCount(); got != 1 {
+		t.Fatalf("vault reads = %d, want 1 for one dispatch", got)
+	}
+}
+
+// A webhook whose secret cannot be read is never sent unsigned: nothing goes
+// out, and the delivery is logged FAILED with a reason that names no secret.
+func TestAnUnreadableSecretSendsNothing(t *testing.T) {
+	for name, resolver := range map[string]SecretResolver{
+		"no resolver composed": nil,
+		"vault has no value":   &fakeSecretResolver{values: map[string]string{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var received int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				atomic.AddInt32(&received, 1)
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer server.Close()
+
+			deliveries := &mockDeliveryRepository{}
+			repo := &mockWebhookRepo{webhooks: []Webhook{{
+				ID: "wh-1", ProjectID: "7", URL: server.URL,
+				Events: []string{"conversation.created"}, SecretRef: "{{secret.missing}}", Active: true,
+			}}}
+			opts := []DispatcherOption{}
+			if resolver != nil {
+				opts = append(opts, WithSecretResolver(resolver))
+			}
+			d := NewDispatcher(repo, deliveries, opts...)
+
+			d.HandleDomainEvent(context.Background(), "7", "conversation.created", map[string]any{})
+			waitFor(t, func() bool { return deliveries.count() == 1 })
+
+			if got := atomic.LoadInt32(&received); got != 0 {
+				t.Fatalf("receiver saw %d requests, want none", got)
+			}
+			logged := deliveries.snapshotCreated()[0]
+			if logged.Status != DeliveryStatusFailed || logged.LastError != errSigningSecretUnavailable.Error() {
+				t.Fatalf("logged %s %q, want failed with the unavailable-secret reason", logged.Status, logged.LastError)
+			}
+		})
 	}
 }

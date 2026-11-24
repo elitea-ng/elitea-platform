@@ -231,6 +231,18 @@ networkPolicies:
           cidr: 35.191.0.0/16
       - ipBlock:
           cidr: 130.211.0.0/22
+  # The worker's and the LLM gateway's egress policies (#2951, #2952): the
+  # cluster's Pod and Service ranges (gcloud container clusters describe
+  # <cluster> --format="value(clusterIpv4Cidr,servicesIpv4Cidr)"), excepted
+  # from the public-internet rule, and the Cloud SQL instance's private IP.
+  clusterCIDRs:
+    - "<pod CIDR>"
+    - "<service CIDR>"
+  egressPeers:
+    postgresql:
+      to:
+        - ipBlock:
+            cidr: "<Cloud SQL private IP>/32"
 
 main:
   replicaCount: 2

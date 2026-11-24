@@ -80,6 +80,24 @@ func TestSecuredGatewayRunsOnTheChartsPermissions(t *testing.T) {
 	if _, applied, err := c.IncrBudgetIdempotent(ctx, subject, "recovery.1", 100); err != nil || applied {
 		t.Fatalf("IncrBudgetIdempotent replay: applied=%v err=%v; the bootstrap's duplicate window must suppress it", applied, err)
 	}
+	// The rate-limit counters live in their own stream, whose first write
+	// creates another file store and can outlast OpTimeout the same way (seen
+	// in CI as "IncrRateLimit = 0, nats: unavailable: context deadline
+	// exceeded"). Warm it on a separate key: IncrRateLimit is not idempotent,
+	// so a timed-out write may have landed and a retry on the asserted key
+	// could count twice. Only a deadline is retried.
+	rlWarm := RateLimitSubject(RateKindRequests, "warmup", WindowStart(time.Now()))
+	var rlWarmErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		_, rlWarmErr = c.IncrRateLimit(ctx, rlWarm, 1)
+		if rlWarmErr == nil || !strings.Contains(rlWarmErr.Error(), context.DeadlineExceeded.Error()) {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if rlWarmErr != nil {
+		t.Fatalf("IncrRateLimit warm-up: %v\nserver log:\n%s", rlWarmErr, s.Log())
+	}
 	rl := RateLimitSubject(RateKindRequests, "rule1_p42", WindowStart(time.Now()))
 	if total, err := c.IncrRateLimit(ctx, rl, 1); err != nil || total != 1 {
 		t.Fatalf("IncrRateLimit = %d, %v", total, err)

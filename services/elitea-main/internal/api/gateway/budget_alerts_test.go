@@ -48,7 +48,7 @@ func TestHandlerReportsAStoreFailureAsAnError(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			rr := httptest.NewRecorder()
 			req := httptest.NewRequest(tc.method, "/budget-alerts", bytes.NewBufferString(tc.body))
-			h.Routes().ServeHTTP(rr, req)
+			h.Routes(passGate, passGate).ServeHTTP(rr, req)
 			if rr.Code != http.StatusInternalServerError {
 				t.Fatalf("status = %d, want 500 — a surface that cannot persist must not answer 200", rr.Code)
 			}
@@ -66,7 +66,7 @@ func TestUpdateRejectsAThresholdOutsideOneToOneHundred(t *testing.T) {
 	} {
 		rr := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPut, "/budget-alerts", bytes.NewBufferString(body))
-		h.Routes().ServeHTTP(rr, req)
+		h.Routes(passGate, passGate).ServeHTTP(rr, req)
 		// 400 rather than 500: validation runs before the store is consulted,
 		// so a nil pool cannot mask a missing bounds check.
 		if rr.Code != http.StatusBadRequest {
@@ -79,7 +79,7 @@ func TestUpdateRejectsAMalformedBody(t *testing.T) {
 	h := NewBudgetAlertHandler(NewBudgetAlertStore(nil))
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPut, "/budget-alerts", bytes.NewBufferString(`{not json`))
-	h.Routes().ServeHTTP(rr, req)
+	h.Routes(passGate, passGate).ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rr.Code)
 	}

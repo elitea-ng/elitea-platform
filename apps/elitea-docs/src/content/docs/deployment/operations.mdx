@@ -1,6 +1,6 @@
 ---
 title: "Day-2 operations"
-description: "Upgrades, changing SECRETS_MASTER_KEY, scaling, backups, the CI/CD publish pipeline, and security posture."
+description: "Upgrades, changing SECRETS_MASTER_KEY, scaling, backups, the CI/CD publish pipeline, security posture, and administrative roles from the command line."
 ---
 
 Running the platform after install: upgrading it safely, changing its master key, scaling its four independently-scaled components, and where to look when something breaks.
@@ -87,6 +87,20 @@ elitea-main serves the runtime safety metrics on its metrics port (`ELITEA_AUDIT
 
 Turn them off with `main.safetyAlerts.podMonitor.enabled` and `main.safetyAlerts.prometheusRule.enabled`; add the labels your Prometheus selects with `.labels`. `main.safetyAlerts.prometheusRule.activeFor` (default `30m`) sets how long a non-platform suspension stays active before it alerts. Without the Prometheus Operator, scrape the port with your own monitoring and copy the rules from `deploy/helm/elitea/templates/main/safety-monitoring.yaml`. Route the alerts to your on-call: Elitea does not page a person. See [Agent circuit breaker](/admin/enterprise-controls/runtime-safety#agent-circuit-breaker).
 
+## Maintenance windows
+
+Turn maintenance mode on in **Configuration › Maintenance** (see [Features and configuration](/admin/features-and-configuration)). While it is on, the API answers `503` with `"maintenance": true` and your title and message, and the app shows the splash screen. Sign-in, SCIM, the admin console's own routes and the platform settings read the app polls stay open, so the window can always be ended from inside it. The switch takes effect within ten seconds on every replica.
+
+Who can work during a window:
+
+| Caller | What they reach |
+|---|---|
+| Holds `platform.maintenance.manage` or `runtime.plugins` | The whole application, as before. The app does not show the splash to them. A desktop or mobile session keeps this. |
+| Holds any other administration permission (for example a budget or audit permission) | The administration routes of that permission, wherever they are mounted (budgets and the audit trail under `/elitea_core`, project create and delete, the administration secrets), with the same answers as outside a window. Every other route answers the maintenance `503`. |
+| Holds no administration permission | Only the open routes above. |
+
+The rule is checked on every request, so a role given or taken during a window applies to the next request.
+
 ## Backups
 
 <AccordionGroup>
@@ -146,7 +160,61 @@ Separately, `.github/workflows/helm-install-smoke.yml` installs the chart into a
   <Card title="mTLS runtime material" icon="lock">The agent-execution plane's three listeners (control, output, content) all require and verify a client certificate; there is no cleartext mode. The runtime and auth material both arrive as Kubernetes Secrets, copied by an init container into an owner-only `emptyDir` because a plain Secret volume cannot satisfy the permission profile the code enforces.</Card>
   <Card title="Identity headers stop at elitea-main" icon="shield-alert">elitea-main deletes caller-supplied `X-Auth-*` and `X-Elitea-*` identity headers itself, before any route runs, and reads no `X-Auth-*` header as an identity, so a plain Ingress that forwards them is safe. The chart's HTTPRoute removes the same names again (`main.ingress.stripIdentityHeaders`) as defence in depth.</Card>
   <Card title="GATEWAY_IDENTITY_SECRET" icon="key">Required, not optional, on both elitea-main and the gateway, and the two must agree — see [Install with Helm](/deployment/helm-install#secrets-to-create-beforehand).</Card>
+  <Card title="Pod and container securityContext" icon="shield">Every Deployment sets `allowPrivilegeEscalation: false` and a `RuntimeDefault` seccomp profile, read from `<component>.podSecurityContext` / `<component>.securityContext`. elitea-main, the scheduler and the OpenTelemetry collector also run as non-root on a read-only root filesystem with every capability dropped (Pod Security Standards `restricted`). elitea-web runs the stock nginx image, whose master process starts as root: it drops every capability but `CHOWN`, `NET_BIND_SERVICE`, `SETGID` and `SETUID`. Set a key to override it, or `null` to remove it.</Card>
 </CardGroup>
+
+## Administrative roles from the command line
+
+`elitea-main admin-role` gives, takes and lists administration roles, and repairs a built-in role, from inside the main workload. It is for the cases the console refuses by design:
+
+- **The first administrator**, when `identity.initial_global_admins` is not set or has already been used (see [The first global administrator](/admin/authentication#the-first-global-administrator)).
+- **Locked out.** Nobody who can assign roles is left: the last global administrator has left the company, lost their sign-in, or was deprovisioned (see [The last administrator](/admin/users-and-roles#the-last-administrator)). Nobody changes their own roles, so a person who is not a global administrator cannot repair this from the console either.
+- **Removing the last administrator** on purpose, with `--override-last-administrator`.
+- **A damaged built-in role**: its locked set was edited before the upgrade, or by hand in the database.
+
+The control is access to the workload: whoever can run `kubectl exec` in the `elitea-main` Deployment (or a one-off Job from the same image and Secret) can run it. The command reads `DATABASE_URL`, talks to the database directly and exits. It is not reachable over HTTP or gRPC.
+
+```bash
+# Who holds which administration role, and the built-in marker of each role
+kubectl -n <ns> exec deploy/elitea-main -- /elitea-main admin-role list
+
+# Give a role (USER is the numeric user id or the e-mail address)
+kubectl -n <ns> exec deploy/elitea-main -- \
+  /elitea-main admin-role grant alice@example.com super_admin --reason "INC-1234: no administrator left"
+
+# Take a role
+kubectl -n <ns> exec deploy/elitea-main -- \
+  /elitea-main admin-role revoke bob@example.com admin --reason "left the company"
+
+# Take the role of the LAST administrator (refused without the flag)
+kubectl -n <ns> exec deploy/elitea-main -- \
+  /elitea-main admin-role revoke bob@example.com super_admin --override-last-administrator
+
+# Put a built-in role back to the set Elitea defines
+kubectl -n <ns> exec deploy/elitea-main -- /elitea-main admin-role reset admin
+```
+
+**Recover a deployment with no administrator.** The account must exist: the person signs in once (it gets no role), or you look up an existing account with `admin-role list`. Then `admin-role grant <their e-mail> super_admin`. The role applies at their next request; they do not need to sign in again. Give a second person the role from the console afterwards, so the deployment does not depend on one account.
+
+What each sub-command does:
+
+| Sub-command | Effect |
+|---|---|
+| `list` | Every administration role with its marker (`declared`, `as_found`, `unassignable` or `custom`) and its holders, then the count of active administrators the [last-administrator rule](/admin/users-and-roles#the-last-administrator) protects. Writes nothing. |
+| `grant USER ROLE` | Gives one administration role and keeps the others. A role that is never assigned (the legacy `system`) is refused. |
+| `revoke USER ROLE` | Takes one role. When the person is the last administrator, it is refused unless you add `--override-last-administrator`; the deployment then has no administrator until you grant one. |
+| `reset ROLE` | Sets a built-in role with a declared set (`super_admin`, `admin`, `llm_manager`, `project_administrator`, `security_auditor`, `emergency_access`) back to that set: it adds the missing permissions and removes the extra ones. A role marked `as_found` (`editor`, `viewer`) or `unassignable`, or a custom role, is refused. It is also refused when the database was migrated by a newer release than the image you run, because this image could remove a permission the newer release grants: run it from the image of the release that migrated the database. When the reset would take away the permission that makes the last administrator (a damaged `admin` set that holds `admin.auth.users.super_admin`), it is refused unless you add `--override-last-administrator`. |
+
+Every change takes the same database lock as a role change in the console. `grant` and `revoke` write one [grant history](/admin/users-and-roles#role-changes-are-recorded) record with the source `operator` (and your `--reason`, if any) and one security audit event with the source `operator`. `reset` writes one `critical` security audit event with the sets before and after; every use of `--override-last-administrator` is `critical` too. A request that changes nothing (the person already holds the role, the set already matches) writes nothing.
+
+The output is one line per change, with the history record id and the security audit event id. It never prints a secret, and a connection error does not print `DATABASE_URL`.
+
+| Exit code | Meaning |
+|---|---|
+| `0` | Done, or nothing to change. |
+| `1` | Failed: the database could not be reached or a write failed. Nothing was changed. |
+| `2` | Invalid invocation: wrong arguments, an unknown user, a user address that matches two accounts (give the numeric id), or an unknown role. Nothing was changed. |
+| `3` | Refused by a rule: the last administrator without the override, a role that is never assigned, a role `reset` does not apply to, or an image older than the database. Nothing was changed. |
 
 ## Troubleshooting
 

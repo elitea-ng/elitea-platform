@@ -1,6 +1,61 @@
-{{- if .Values.llmGateway.enabled }}
-{{- if .Values.llmGateway.networkPolicy.enabled }}
-# Egress NetworkPolicy — defence in depth for issue #13.
+{{- if and .Values.llmGateway.enabled .Values.networkPolicies.enabled }}
+{{- $np := .Values.networkPolicies }}
+# Ingress to the LLM gateway pods (#2952).
+#
+#   {{ .Values.llmGateway.service.grpcPort }} (grpc)   GatewayService over mutual TLS: elitea-main (the only
+#                identity in GATEWAY_GRPC_CLIENTS by default) and
+#                networkPolicies.llmGateway.extraIngressFrom, for a caller
+#                added to that list.
+#   8083 (http)  /healthz, /readyz and /metrics: networkPolicies.probeFrom and
+#                networkPolicies.metricsFrom (the Prometheus that feeds the
+#                gateway's autoscaler).
+#
+# Kubelet probes are not subject to the policy on the CNIs this chart is tested
+# with; networkPolicies.probeFrom is for those that apply it to them.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "elitea-llm-gateway.fullname" . }}-netpol
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "elitea-llm-gateway.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "elitea-llm-gateway.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  {{- $adminFrom := concat ($np.probeFrom | default list) ($np.metricsFrom | default list) }}
+  {{- /* A rule with an empty `from` admits every source, so a port with no
+         peer gets no rule at all. */}}
+  {{- $grpcPeers := or .Values.main.enabled $np.llmGateway.extraIngressFrom }}
+  {{- if or $grpcPeers $adminFrom }}
+  ingress:
+  {{- end }}
+    {{- if $grpcPeers }}
+    - ports:
+        - port: {{ .Values.llmGateway.service.grpcPort }}
+          protocol: TCP
+      from:
+        {{- if .Values.main.enabled }}
+        {{- include "elitea.netpol.mainPeer" . | nindent 8 }}
+        {{- end }}
+        {{- with $np.llmGateway.extraIngressFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    {{- end }}
+    {{- with $adminFrom }}
+    - ports:
+        - port: 8083
+          protocol: TCP
+      from:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+{{- end }}
+{{- if include "elitea.netpol.gatewayEgress" . }}
+{{- $n := .Values.llmGateway.networkPolicy }}
+---
+# Egress NetworkPolicy, defence in depth for the tenant-authored `api_base`.
 #
 # The gateway dials a TENANT-AUTHORED `api_base` for the self-hosted provider
 # classes. The code-level control (GATEWAY_EGRESS_ALLOWLIST + bifrost's
@@ -8,23 +63,27 @@
 # policy is the second one, so that a bug or a future carve-out in the process
 # still cannot reach arbitrary in-cluster addresses.
 #
-# Shape: allow DNS, allow the operator-declared in-cluster dependencies
-# (`networkPolicy.egress`, where Postgres / NATS / the OTLP collector go), and
-# allow the public internet MINUS every private range. Everything else is
-# denied, because attaching any egress rule to a pod switches it from
-# "unrestricted" to "only what is listed".
+# ON by default (#2952). It admits:
+#   DNS             the cluster resolver (networkPolicies.dnsEgress replaces it)
+#   NATS            the bundled server's 4222, or networkPolicies.egressPeers.nats
+#   PostgreSQL      networkPolicies.egressPeers.postgresql, and the bundled
+#                   PgBouncer when it runs
+#   OTel collector  the bundled collector's OTLP ports, while it runs
+#   llmGateway.networkPolicy.egress, verbatim: every self-hosted model host
+#                   GATEWAY_EGRESS_ALLOWLIST names
+#   public          0.0.0.0/0 and ::/0 on publicEgressPorts minus every private,
+#                   link-local and cluster range (allowPublicEgress)
+#   metadata        the GKE metadata server, with llmGateway.workloadIdentity
 #
-# It is OPT-IN (`enabled: false`) for one honest reason: this chart cannot know
-# your cluster's database, NATS and collector topology, and turning it on with
-# an empty `networkPolicy.egress` would cut the gateway off from its own
-# dependencies. Enable it once you have listed them; the values file carries a
-# worked example. It also requires a CNI that enforces NetworkPolicy (Calico,
-# Cilium, etc.) — on a CNI that ignores them this object is inert, which is why
-# it is not the primary control.
+# Everything else is denied: attaching any egress rule to a pod switches it
+# from "unrestricted" to "only what is listed". It needs a CNI that enforces
+# NetworkPolicy; on one that does not this object is inert, which is why it is
+# not the primary control.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: {{ include "elitea-llm-gateway.fullname" . }}-egress
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "elitea-llm-gateway.labels" . | nindent 4 }}
 spec:
@@ -35,41 +94,20 @@ spec:
     - Egress
   egress:
     # DNS. Without this nothing resolves, including the provider hostnames.
-    - to:
-        - namespaceSelector: {}
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
-      ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
-    {{- with .Values.llmGateway.networkPolicy.egress }}
-    # Operator-declared in-cluster dependencies (Postgres, NATS, OTLP, and any
-    # self-hosted vLLM/Ollama that GATEWAY_EGRESS_ALLOWLIST names).
+    {{- include "elitea.netpol.clusterDnsEgress" . | nindent 4 }}
+    {{- include "elitea.netpol.natsEgress" . | nindent 4 }}
+    {{- include "elitea.netpol.postgresqlEgress" . | nindent 4 }}
+    {{- include "elitea.netpol.otelEgress" . | nindent 4 }}
+    {{- with $n.egress }}
+    # Operator-declared destinations (self-hosted vLLM/Ollama that
+    # GATEWAY_EGRESS_ALLOWLIST names, and anything else the gateway dials).
     {{- toYaml . | nindent 4 }}
     {{- end }}
-    {{- if .Values.llmGateway.networkPolicy.allowPublicEgress }}
+    {{- if include "elitea.netpol.gatewayPublicEgress" . }}
     # Public internet for the cloud provider APIs, with every private range
-    # carved out. `except` entries must be inside the 0.0.0.0/0 block they
-    # narrow — this is what stops a tenant-authored api_base resolving into the
-    # cluster even if the in-process guard were bypassed.
-    - to:
-        - ipBlock:
-            cidr: 0.0.0.0/0
-            except:
-              - 10.0.0.0/8
-              - 172.16.0.0/12
-              - 192.168.0.0/16
-              - 169.254.0.0/16   # link-local, incl. 169.254.169.254 metadata
-              - 127.0.0.0/8
-              - 100.64.0.0/10    # CGNAT, used by some managed CNIs
-              - 192.0.0.0/24
-              - 198.18.0.0/15
-              - 224.0.0.0/4
-      ports:
-        {{- toYaml .Values.llmGateway.networkPolicy.publicEgressPorts | nindent 8 }}
+    # carved out: this is what stops a tenant-authored api_base resolving into
+    # the cluster even if the in-process guard were bypassed.
+    {{- include "elitea.netpol.publicEgress" (dict "ctx" . "ports" $n.publicEgressPorts) | nindent 4 }}
     {{- end }}
     {{- if dig "workloadIdentity" "enabled" false .Values.llmGateway }}
     # Keyless platform credentials (llmGateway.workloadIdentity.enabled): the
@@ -92,5 +130,4 @@ spec:
         - protocol: TCP
           port: 988
     {{- end }}
-{{- end }}
 {{- end }}

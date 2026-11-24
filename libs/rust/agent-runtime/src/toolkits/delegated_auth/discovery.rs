@@ -411,6 +411,7 @@ mod tests {
                 host: "login.example.test".into(),
                 port: 443,
                 count: 1,
+                reason: crate::egress::REFUSAL_REASON_NOT_ALLOWED,
             }]
         );
         assert_eq!(summary.reached, Vec::<HostCount>::new());

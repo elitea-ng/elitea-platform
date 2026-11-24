@@ -35,6 +35,7 @@ function person(id: number, name: string): AdminUserRow {
     suspended: false,
     is_admin: false,
     admin_role: null,
+    admin_roles: [],
   };
 }
 

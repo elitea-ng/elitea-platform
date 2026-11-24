@@ -47,6 +47,8 @@ Open the separate **Tasks** page for a live view of background work this platfor
   </Step>
   <Step title="Cancel a task">
     The cancel control only appears on rows the server reports as cancellable — a task past that point does not offer it, rather than offering a control that would mostly answer with a conflict.
+
+    Cancelling a task needs `platform.operations.manage` or `runtime.plugins`; reading the list needs `platform.operations.view` or `runtime.plugins`. Both administrator roles hold all three.
   </Step>
 </Steps>
 

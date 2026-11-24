@@ -116,6 +116,7 @@ func newGlobalScopePool(t *testing.T) *pgxpool.Pool {
 	})
 
 	applyTenantSchema(t, ctx, pool)
+	applySecurityAuditOutbox(t, ctx, pool)
 	return pool
 }
 
@@ -211,8 +212,8 @@ func globalScopeRouter(pool *pgxpool.Pool) chi.Router {
 		configurations.WithPublicProjectID(globalScopeProject))
 	r := chi.NewRouter()
 	r.Route("/gateway", func(r chi.Router) {
-		r.Mount("/providers", handler.GlobalProviderRoutes())
-		r.Mount("/platform_models", handler.GlobalModelRoutes())
+		r.Mount("/providers", handler.GlobalProviderRoutes(openCatalogueGatesExternal))
+		r.Mount("/platform_models", handler.GlobalModelRoutes(openCatalogueGatesExternal))
 	})
 	return r
 }

@@ -198,12 +198,16 @@ func newPATSigningPool(t *testing.T) *pgxpool.Pool {
 	// The create transaction also stamps elitea_identity.token_lifecycle
 	// (tokens.go Create → repos.RecordPATIssued), so the schema this pool holds
 	// has to include the migration that creates it or every POST is a 500.
-	lifecycle, err := platformmigrations.Files.ReadFile("shared/0125_token_lifecycle.sql")
-	if err != nil {
-		t.Fatalf("read the token lifecycle migration: %v", err)
-	}
-	if _, err := pool.Exec(ctx, string(lifecycle)); err != nil {
-		t.Fatalf("apply shared/0125_token_lifecycle.sql: %v", err)
+	// CreatePATForActiveUser returns auth_core__token.admin_access and
+	// admin_scopes (ADR-0059 R1.1), which shared 0265 adds.
+	for _, name := range []string{"shared/0125_token_lifecycle.sql", "shared/0265_token_admin_access.sql"} {
+		body, err := platformmigrations.Files.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		if _, err := pool.Exec(ctx, string(body)); err != nil {
+			t.Fatalf("apply %s: %v", name, err)
+		}
 	}
 	// The token owner. authenticatedTestUser presents user 1.
 	if _, err := pool.Exec(ctx, `

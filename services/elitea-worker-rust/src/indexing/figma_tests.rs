@@ -87,7 +87,7 @@ async fn run(
         configuration,
         parameters,
         expected,
-        RunEgress::open(),
+        crate::protocol::egress::open_for_local_fixtures(),
     )
     .await
 }

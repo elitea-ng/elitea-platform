@@ -10,7 +10,7 @@ import { ReactFlow, ReactFlowProvider } from '@xyflow/react';
 
 import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/shared/brand';
 
-import { FlowEditorContext, type FlowEditorContextValue } from '../../../lib/flow-editor/flowEditorContext';
+import { FlowEditorContext, NodeConfigPanelContext, type FlowEditorContextValue } from '../../../lib/flow-editor/flowEditorContext';
 import { createTestQueryClient } from '../../../__tests__/testUtils';
 
 /**
@@ -51,7 +51,14 @@ export function renderDeprecatedNode(
   const queryClient = createTestQueryClient();
 
   function TestNode(): ReactNode {
-    return <FlowEditorContext.Provider value={contextValue}>{ui}</FlowEditorContext.Provider>;
+    return (
+      <FlowEditorContext.Provider value={contextValue}>
+        {ui}
+        <NodeConfigPanelContext.Provider value={{ isEntrypoint: false, isLegacyLayout: true }}>
+          {ui}
+        </NodeConfigPanelContext.Provider>
+      </FlowEditorContext.Provider>
+    );
   }
 
   function RootComponent(): ReactNode {

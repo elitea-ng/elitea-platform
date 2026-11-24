@@ -1,0 +1,13 @@
+# The two network facts an install supplies while the worker's or the LLM
+# gateway's egress policy renders (#2951, #2952): the cluster's own pod and
+# Service ranges (kind's defaults) and where PostgreSQL is. Render tests that
+# start from a profile (values-standalone.yaml) layer this file; the ones that
+# start from features-off.yaml or operator-values.yaml carry the same two
+# values there. Render-only values.
+networkPolicies:
+  clusterCIDRs: [10.244.0.0/16, 10.96.0.0/12]
+  egressPeers:
+    postgresql:
+      to:
+        - ipBlock:
+            cidr: 10.20.0.5/32

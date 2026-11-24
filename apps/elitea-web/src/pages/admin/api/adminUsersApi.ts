@@ -7,10 +7,14 @@
  * every `auth_core__user` row in the deployment. They share no endpoint, no
  * row shape and no query key.
  *
- * Not generated: `orval` builds from `v2.yaml`, which does not describe the
- * admin-panel routes (there is no `auth_users` operation in
- * `shared/api/generated/**`). Handwritten in the same shape as
- * `shared/api/configurationsApi.ts` and `entities/secret/api/secretApi.ts`.
+ * GENERATED underneath since ADR-0059 R0.8b (issue 2574): `v2.yaml` now
+ * describes `GET` and `POST /admin/auth_users/{mode}` (`listAdminAuthUsers`,
+ * `adminAuthUsersAction`), so the listing and both writes call the orval
+ * functions, and the web mocks are the contract's examples. This module keeps
+ * its exported names, so the page compiles unchanged, and holds what
+ * generation cannot supply: the envelope peel, the `counts` read and the
+ * query-key namespace. The suspend route is not in the contract yet and stays
+ * hand-written.
  *
  * The wire contract mirrors the legacy runtime
  * (`legacy/plugins/admin/api/v2/auth_users.py` and `user_suspend.py`) and its
@@ -26,6 +30,11 @@ import {
   type UseQueryResult,
 } from '@tanstack/react-query';
 
+import {
+  adminAuthUsersAction,
+  listAdminAuthUsers,
+} from '@/shared/api/generated/admin/admin';
+import type { AdminAuthUsersActionRequest, ListAdminAuthUsersParams } from '@/shared/api/generated/model';
 import { eliteaFetch } from '@/shared/api/generated/mutator';
 import { unwrapBody, unwrapListPage } from '@/shared/api/unwrap';
 
@@ -35,7 +44,12 @@ const ADMIN_MODE = 'administration';
 /** The two legacy user tabs. `system` rows are the platform's own service accounts. */
 export type AdminUserType = 'platform' | 'system';
 
-/** The administration-mode roles `set_admin_role` accepts. `null` clears them all. */
+/**
+ * The four legacy administration roles the page's single-role picker offers.
+ * `null` clears them all. The server accepts any role of the mode, and a
+ * person may hold several (`admin_roles`); the picker for several roles is
+ * R0.8c (issue 2586).
+ */
 export type AdminRole = 'super_admin' | 'admin' | 'editor' | 'viewer';
 
 /**
@@ -55,7 +69,10 @@ export interface AdminUserRow {
   readonly last_login: string | null;
   readonly suspended: boolean;
   readonly is_admin: boolean;
+  /** The highest of the four legacy roles held; kept for one release (R0.13 removes it). */
   readonly admin_role: AdminRole | null;
+  /** Every administration role held, legacy names first (ADR-0059 R0.8b). */
+  readonly admin_roles: readonly string[];
 }
 
 export interface AdminUsersPage {
@@ -86,16 +103,16 @@ const adminUsersKeys = {
   list: (params: AdminUsersQueryParams) => ['admin', 'auth_users', 'list', params] as const,
 };
 
-function buildListUrl(params: AdminUsersQueryParams): string {
-  const query = new URLSearchParams({
-    limit: String(params.limit),
-    offset: String(params.offset),
-  });
-  if (params.search) query.set('search', params.search);
-  if (params.userType) query.set('user_type', params.userType);
-  if (params.sortBy) query.set('sort_by', params.sortBy);
-  if (params.sortOrder) query.set('sort_order', params.sortOrder);
-  return `/admin/auth_users/${ADMIN_MODE}?${query.toString()}`;
+/** The page's camel-cased query as the operation's parameters; empty ones are left out. */
+function listParams(params: AdminUsersQueryParams): ListAdminAuthUsersParams {
+  return {
+    limit: params.limit,
+    offset: params.offset,
+    ...(params.search ? { search: params.search } : {}),
+    ...(params.userType ? { user_type: params.userType } : {}),
+    ...(params.sortBy ? { sort_by: params.sortBy } : {}),
+    ...(params.sortOrder ? { sort_order: params.sortOrder } : {}),
+  };
 }
 
 /**
@@ -128,7 +145,7 @@ function readCounts(response: unknown): AdminUsersPage['counts'] {
  * `limit: total` request whose size no server bound checks.
  */
 export async function fetchAdminUsersPage(params: AdminUsersQueryParams): Promise<AdminUsersPage> {
-  const response = await eliteaFetch<unknown>(buildListUrl(params));
+  const response: unknown = await listAdminAuthUsers(ADMIN_MODE, listParams(params));
   const { rows, total } = unwrapListPage<AdminUserRow>(response, 'adminAuthUsers');
   return { rows, total, counts: readCounts(response) };
 }
@@ -145,12 +162,8 @@ export function useAdminUsers(
   });
 }
 
-async function postAdminUsersAction(body: Record<string, unknown>): Promise<void> {
-  await eliteaFetch<unknown>(`/admin/auth_users/${ADMIN_MODE}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+async function postAdminUsersAction(body: AdminAuthUsersActionRequest): Promise<void> {
+  await adminAuthUsersAction(ADMIN_MODE, body);
 }
 
 /** `POST … {action:'delete'}` — removes the users outright (the row cascades). */
@@ -163,16 +176,37 @@ export function useDeleteAdminUsers(): UseMutationResult<void, Error, readonly n
   });
 }
 
-/** `POST … {action:'set_admin_role'}` — `null` revokes every administration role. */
+const LEGACY_ADMIN_ROLES: readonly string[] = ['super_admin', 'admin', 'editor', 'viewer'];
+
+/**
+ * The role set the single-role picker means: the picked legacy role (or none)
+ * in place of the legacy role held, and every other role the person holds
+ * kept. The picker shows only the four legacy names, so sending the single
+ * `role_name` form, which replaces the whole set, would silently take a role
+ * the page never showed (an `llm_manager` beside `admin`).
+ */
+function pickedRoleSet(heldRoles: readonly string[], roleName: AdminRole | null): string[] {
+  const kept = heldRoles.filter((role) => !LEGACY_ADMIN_ROLES.includes(role));
+  return roleName === null ? kept : [...kept, roleName];
+}
+
+/**
+ * `POST … {action:'set_admin_role', role_names}` — swaps the legacy role for
+ * `roleName` (`null` clears it) and keeps the person's other roles.
+ */
 export function useSetAdminRole(): UseMutationResult<
   void,
   Error,
-  { userId: number; roleName: AdminRole | null }
+  { userId: number; roleName: AdminRole | null; heldRoles: readonly string[] }
 > {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ userId, roleName }) =>
-      postAdminUsersAction({ action: 'set_admin_role', user_id: userId, role_name: roleName }),
+    mutationFn: ({ userId, roleName, heldRoles }) =>
+      postAdminUsersAction({
+        action: 'set_admin_role',
+        user_id: userId,
+        role_names: pickedRoleSet(heldRoles, roleName),
+      }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: adminUsersKeys.all }),
   });
 }

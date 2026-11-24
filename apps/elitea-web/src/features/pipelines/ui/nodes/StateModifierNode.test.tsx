@@ -9,7 +9,7 @@ import { installCodeMirrorTestPolyfills } from '@/shared/ui/lib/field/codeMirror
 import { ReactFlow, ReactFlowProvider, type Edge } from '@xyflow/react';
 
 import { buildFlowEditorContextValue, renderWithRouterAndProject } from '../../__tests__/testUtils';
-import { FlowEditorContext, type FlowEditorContextValue } from '../../lib/flow-editor/flowEditorContext';
+import { FlowEditorContext, NodeConfigPanelContext, type FlowEditorContextValue } from '../../lib/flow-editor/flowEditorContext';
 import type { YamlPipelineDocument } from '../../lib/flow-editor/helpers/pipelineFlow.types';
 import { StateModifierNode, type StateModifierNodeProps } from './StateModifierNode';
 import { resetBackendCapabilitiesForTests, setBackendCapabilityForTests } from '@/shared/config/backendCapabilities';
@@ -61,7 +61,16 @@ function renderStateModifierNode(
         <ReactFlow
           nodes={[{ id: 'Node1', type: 'testNode', position: { x: 0, y: 0 }, data: {} }]}
           edges={edges}
-          nodeTypes={{ testNode: StateModifierNode }}
+          nodeTypes={{
+            testNode: props => (
+              <>
+                <StateModifierNode {...props} />
+                <NodeConfigPanelContext.Provider value={{ isEntrypoint: false, isLegacyLayout: false }}>
+                  <StateModifierNode {...props} />
+                </NodeConfigPanelContext.Provider>
+              </>
+            ),
+          }}
         />
       </FlowEditorContext.Provider>
     </ReactFlowProvider>,
@@ -78,13 +87,13 @@ describe('StateModifierNode', () => {
   });
 
   it('renders the Jinja Template field, Variables to clean, Input, and Output selects', async () => {
-    const { findByText, getByText } = renderStateModifierNode();
+    const { findByText, getByText, getAllByText } = renderStateModifierNode();
     await findByText('Node1');
 
     expect(getByText('Jinja Template')).toBeInTheDocument();
-    expect(getByText('Variables to clean')).toBeInTheDocument();
-    expect(getByText('Input')).toBeInTheDocument();
-    expect(getByText('Output')).toBeInTheDocument();
+    expect(getAllByText('Variables to clean').length).toBeGreaterThan(0);
+    expect(getAllByText('Input').length).toBeGreaterThan(0);
+    expect(getAllByText('Output').length).toBeGreaterThan(0);
   });
 
   it('renders the template value from the matching yaml node', async () => {
@@ -118,7 +127,9 @@ describe('StateModifierNode', () => {
       <SocketClientContext.Provider value={socketClient}>
         <ReactFlowProvider>
           <FlowEditorContext.Provider value={flowEditorValue}>
-            <StateModifierNode {...minimalStateModifierNodeProps} />
+            <NodeConfigPanelContext.Provider value={{ isEntrypoint: false, isLegacyLayout: false }}>
+              <StateModifierNode {...minimalStateModifierNodeProps} />
+            </NodeConfigPanelContext.Provider>
           </FlowEditorContext.Provider>
         </ReactFlowProvider>
       </SocketClientContext.Provider>,

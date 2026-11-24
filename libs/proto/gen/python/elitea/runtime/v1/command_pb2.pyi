@@ -137,12 +137,14 @@ class WorkerCommandV1(_message.Message):
     def __init__(self, protocol_revision: _Optional[str] = ..., command_id: _Optional[str] = ..., idempotency_key: _Optional[str] = ..., command_type: _Optional[_Union[WorkerCommandTypeV1, str]] = ..., execution_id: _Optional[str] = ..., generation: _Optional[int] = ..., dispatch_ordinal: _Optional[int] = ..., root_execution_id: _Optional[str] = ..., parent_execution_id: _Optional[str] = ..., parent_call_id: _Optional[str] = ..., tenant_id: _Optional[str] = ..., resource_project_id: _Optional[str] = ..., projection_project_id: _Optional[str] = ..., principal_ref: _Optional[str] = ..., input_bundle_ref: _Optional[_Union[_input_pb2.ExecutionInputBundleReferenceV1, _Mapping]] = ..., capability_id: _Optional[str] = ..., capability_version: _Optional[str] = ..., resource_class: _Optional[str] = ..., isolation_class: _Optional[str] = ..., priority: _Optional[int] = ..., deadline_unix_millis: _Optional[int] = ..., traceparent: _Optional[str] = ..., tracestate: _Optional[str] = ..., limits_revision: _Optional[str] = ..., configuration_validation: _Optional[_Union[_validation_pb2.ConfigurationValidationCommandV1, _Mapping]] = ..., toolkit_available_tools: _Optional[_Union[_toolkit_pb2.ToolkitAvailableToolsCommandV1, _Mapping]] = ..., index_ingest: _Optional[_Union[_indexing_pb2.IndexIngestCommandV1, _Mapping]] = ..., agent_execution: _Optional[_Union[_agent_pb2.AgentExecutionCommandV1, _Mapping]] = ..., toolkit_call_tool: _Optional[_Union[_toolkit_pb2.ToolkitCallToolCommandV1, _Mapping]] = ..., toolkit_execute_read: _Optional[_Union[_toolkit_pb2.ToolkitExecuteReadCommandV1, _Mapping]] = ..., security_context_ref: _Optional[_Union[_security_context_pb2.ExecutionSecurityContextReferenceV1, _Mapping]] = ..., egress_policy: _Optional[_Union[WorkerEgressPolicyV1, _Mapping]] = ..., delegation_policy: _Optional[_Union[WorkerDelegationPolicyV1, _Mapping]] = ..., approval_policy: _Optional[_Union[WorkerApprovalPolicyV1, _Mapping]] = ..., run_caps: _Optional[_Union[WorkerRunCapsV1, _Mapping]] = ..., output_contracts: _Optional[_Union[WorkerOutputContractsV1, _Mapping]] = ..., content_controls: _Optional[_Union[WorkerContentControlsV1, _Mapping]] = ...) -> None: ...
 
 class WorkerEgressPolicyV1(_message.Message):
-    __slots__ = ("mode", "allow")
+    __slots__ = ("mode", "allow", "private_allow")
     MODE_FIELD_NUMBER: _ClassVar[int]
     ALLOW_FIELD_NUMBER: _ClassVar[int]
+    PRIVATE_ALLOW_FIELD_NUMBER: _ClassVar[int]
     mode: WorkerEgressModeV1
     allow: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, mode: _Optional[_Union[WorkerEgressModeV1, str]] = ..., allow: _Optional[_Iterable[str]] = ...) -> None: ...
+    private_allow: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, mode: _Optional[_Union[WorkerEgressModeV1, str]] = ..., allow: _Optional[_Iterable[str]] = ..., private_allow: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class WorkerDelegationPolicyV1(_message.Message):
     __slots__ = ("max_depth", "mode", "root_data_classes", "principal_bound", "grants", "root_application_id", "grants_enforced")

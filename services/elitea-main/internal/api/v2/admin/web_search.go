@@ -3,6 +3,7 @@ package admin
 import (
 	"fmt"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
@@ -23,8 +24,9 @@ func webSearchSection() map[string]any {
 		}
 	}
 	return map[string]any{
-		"id":    section,
-		"title": "Web Search",
+		"id":     section,
+		"access": platformConfigAccess(adminaccess.AreaAgentsGovernance),
+		"title":  "Web Search",
 		"description": "Which web search and host-intelligence providers agents may use, and the rules of direct " +
 			"page fetches. A provider also needs a credential: the project's own, or a shared one in the public " +
 			"project (Shodan accepts only a project's own key). Spending is limited by the project and member budgets.",

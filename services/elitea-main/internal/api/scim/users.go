@@ -37,6 +37,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/scimdirectory"
 )
@@ -438,6 +439,10 @@ func decodeUser(w http.ResponseWriter, r *http.Request) (userBody, bool) {
 func (h *Handler) writeWriteFailure(
 	w http.ResponseWriter, r *http.Request, id int, deprovision bool, err error, operation string,
 ) {
+	if errors.Is(err, scimdirectory.ErrLastAdministrator) {
+		h.writeLastAdministrator(w, r, id, err, operation)
+		return
+	}
 	if !errors.Is(err, scimdirectory.ErrProtected) {
 		h.writeStoreFailure(w, err, operation)
 		return
@@ -451,6 +456,35 @@ func (h *Handler) writeWriteFailure(
 	slog.Warn("SCIM: refused a write to a protected account", "operation", operation, "user_id", id,
 		"reason", detail)
 	writeError(w, http.StatusForbidden, "mutability", detail)
+}
+
+// lastAdministratorDetail is the sentence of a refused deprovisioning of the
+// last administrator (ADR-0059 R0.11, issue 2500).
+const lastAdministratorDetail = "SCIM deprovisioning refused: this account is the last administrator of the deployment. " +
+	"Its sessions and tokens were revoked and the account was kept, with its roles, so the deployment keeps an administrator. " +
+	"Give a successor the role (in the console, or with `" + adminaccess.SuccessorCommand + "`), then let the identity provider retry"
+
+// writeLastAdministrator answers a refused deprovisioning of the last
+// administrator: a SCIM error with status 409. The store has already ended the
+// account's access and written the critical security audit event; the
+// request's audit row says why the account is still there.
+func (h *Handler) writeLastAdministrator(w http.ResponseWriter, r *http.Request, id int, err error, operation string) {
+	var refused *scimdirectory.LastAdministratorError
+	eventID := ""
+	if errors.As(err, &refused) {
+		eventID = refused.AuditEventID
+		if id <= 0 {
+			id = refused.UserID // a create names no id; the adopted account is the subject
+		}
+	}
+	annotation := audit.Annotation{Action: adminaccess.LastAdministratorAuditAction, EntityType: "user"}
+	if id > 0 {
+		annotation.EntityID = audit.ID(int64(id))
+	}
+	audit.Annotate(r.Context(), annotation)
+	slog.Warn("SCIM: refused to deprovision the last administrator; its access was ended",
+		"operation", operation, "user_id", id, "security_audit_event", eventID)
+	writeError(w, http.StatusConflict, "", lastAdministratorDetail)
 }
 
 // protectedDetail is the sentence a protected-account refusal carries.

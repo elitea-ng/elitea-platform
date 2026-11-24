@@ -147,6 +147,16 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
+elitea.automountToken — "true" or "false" for automountServiceAccountToken,
+from a component's serviceAccount block (#2953). Only the boolean true (or the
+string "true") mounts the token; unset is false: the component does not call
+the Kubernetes API.
+*/}}
+{{- define "elitea.automountToken" -}}
+{{- ternary "true" "false" (eq (toString (dig "automountToken" false (. | default dict))) "true") -}}
+{{- end }}
+
+{{/*
 elitea.aiProjectId — the ONE id of the platform's public ("shared") project.
 
 # THE PROBLEM

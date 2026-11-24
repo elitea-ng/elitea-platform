@@ -17,8 +17,9 @@ func catalogueSection() map[string]any {
 	const section = platformconfig.SectionCatalogue
 	defaults := platformconfig.DefaultCatalogueSettings()
 	return map[string]any{
-		"id":    section,
-		"title": "Connector Catalogue",
+		"id":     section,
+		"access": agentGovernanceAccess(),
+		"title":  "Connector Catalogue",
 		"description": "Which toolkits and MCP servers projects may use. Open (the default) offers every toolkit type " +
 			"the toolkit policy and guardrails allow. Approved only makes a toolkit type, a pre-built MCP server or a " +
 			"custom MCP server URL usable only by the projects an approved connector request names; approval also " +

@@ -186,7 +186,7 @@ func (h *Handler) Routes() chi.Router {
 	// handlers over separate stores with separate bodies — see withModes.
 	//
 	// GET  /secrets/{mode}/{projectID}            – list secret names
-	r.Get("/secrets/{mode}/{projectID}", h.withModes(
+	r.Method(http.MethodGet, "/secrets/{mode}/{projectID}", h.withModes(
 		h.projectGate(permSecretList, h.List),
 		h.adminGate(permSecretView, h.AdminList)))
 	// POST /secrets/{mode}/{projectID}            – create a new secret
@@ -198,28 +198,28 @@ func (h *Handler) Routes() chi.Router {
 	// administration mode), so it is a bulk-destructive operation with no
 	// caller and no test that could discriminate a correct implementation
 	// from a wrong one.  501 says so instead of guessing.
-	r.Post("/secrets/{mode}/{projectID}", h.withModes(
-		h.projectGate(permSecretCreate, h.Create), notImplementedBulkReplace))
+	r.Method(http.MethodPost, "/secrets/{mode}/{projectID}", h.withModes(
+		h.projectGate(permSecretCreate, h.Create), http.HandlerFunc(notImplementedBulkReplace)))
 	// GET  /secret/{mode}/{projectID}/{name}      – get a single secret (with value)
-	r.Get("/secret/{mode}/{projectID}/{name}", h.withModes(
+	r.Method(http.MethodGet, "/secret/{mode}/{projectID}/{name}", h.withModes(
 		h.projectGate(permSecretUnsecret, h.Get),
 		h.adminGate(permSecretView, h.AdminGet)))
 	// POST /secret/{mode}/{projectID}/{name}      – administration-mode create
 	//
 	// Project mode has no POST on this path (the legacy ProjectAPI defines only
 	// get/put/delete here), so it 405s rather than pretending.
-	r.Post("/secret/{mode}/{projectID}/{name}", h.withModes(methodNotAllowed,
+	r.Method(http.MethodPost, "/secret/{mode}/{projectID}/{name}", h.withModes(methodNotAllowed,
 		h.adminGate(permSecretCreate, h.AdminCreate)))
 	// PUT  /secret/{mode}/{projectID}/{name}      – rename / update a secret
-	r.Put("/secret/{mode}/{projectID}/{name}", h.withModes(
+	r.Method(http.MethodPut, "/secret/{mode}/{projectID}/{name}", h.withModes(
 		h.projectGate(permSecretEdit, h.Update),
 		h.adminGate(permSecretEdit, h.AdminUpdate)))
 	// DELETE /secret/{mode}/{projectID}/{name}    – delete a secret
-	r.Delete("/secret/{mode}/{projectID}/{name}", h.withModes(
+	r.Method(http.MethodDelete, "/secret/{mode}/{projectID}/{name}", h.withModes(
 		h.projectGate(permSecretDelete, h.Delete),
 		h.adminGate(permSecretDelete, h.AdminDelete)))
 	// POST /hide/{mode}/{projectID}/{name}        – move secret to hidden_secrets
-	r.Post("/hide/{mode}/{projectID}/{name}", h.withModes(
+	r.Method(http.MethodPost, "/hide/{mode}/{projectID}/{name}", h.withModes(
 		h.projectGate(permSecretHide, h.Hide),
 		h.adminGate(permSecretEdit, h.AdminHide)))
 
@@ -311,17 +311,41 @@ func (h *Handler) projectGate(permission string, next http.HandlerFunc) http.Han
 // would read and WRITE project 0's vault: the wrong store, silently.  That is
 // what the 501 this replaced was protecting against; unit A14 implements the
 // real second handler in admin.go instead.
-func (h *Handler) withModes(project, administration http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		switch chi.URLParam(r, "mode") {
-		case modeDefault:
-			project(w, r)
-		case modeAdministration:
-			administration(w, r)
-		default:
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown mode"})
-		}
+//
+// The answer is a modeDispatch, which tells the maintenance gate (ADR-0059
+// R0.4b) that a request in the administration mode reaches an
+// administration-mode route gate, when it does: a holder of a narrow
+// administration permission then keeps the route during a window.
+func (h *Handler) withModes(project http.HandlerFunc, administration http.Handler) http.Handler {
+	return modeDispatch{
+		project:             project,
+		administration:      administration,
+		administrationGated: apimw.IsAdministrationGated(administration),
 	}
+}
+
+// modeDispatch is the handler withModes answers.
+type modeDispatch struct {
+	project, administration http.Handler
+	administrationGated     bool
+}
+
+func (d modeDispatch) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	switch chi.URLParam(r, "mode") {
+	case modeDefault:
+		d.project.ServeHTTP(w, r)
+	case modeAdministration:
+		d.administration.ServeHTTP(w, r)
+	default:
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown mode"})
+	}
+}
+
+// AdministrationGated implements apimw.ModeGatedEndpoint: the administration
+// mode is behind an administration-mode route gate on every route but the
+// bulk replacement, which answers 501 to everyone.
+func (d modeDispatch) AdministrationGated(mode string) bool {
+	return mode == modeAdministration && d.administrationGated
 }
 
 // notImplementedBulkReplace is the administration branch of

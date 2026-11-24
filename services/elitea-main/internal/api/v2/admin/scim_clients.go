@@ -27,7 +27,7 @@ package admin
 // bound group, and so into whatever role the group binding grants. That makes
 // minting one a global-administrator power (ADR-0059 R3B-1, issue 2558). The
 // create, the rotate (a fresh secret is a fresh credential) and the delete
-// therefore also need rolepolicy.SuperAdminPermission (identity_trust.go); a
+// therefore also need adminaccess.SuperAdminPermission (identity_trust.go); a
 // refusal is a 403 with code CodeSCIMClientSuperAdminRequired and an audit row.
 // Listing and revoking stay open to the route gate: neither gives anybody a
 // credential.
@@ -194,7 +194,7 @@ func (h *Handler) SCIMClientCreate(w http.ResponseWriter, r *http.Request) {
 	if !h.scimClientsReady(w) {
 		return
 	}
-	if !h.requireSuperAdmin(w, r, scimClientGate("")) {
+	if !h.requireIdentityTrust(w, r, scimClientGate("")) {
 		return
 	}
 	var body scimClientCreateBody
@@ -220,6 +220,9 @@ func (h *Handler) SCIMClientCreate(w http.ResponseWriter, r *http.Request) {
 		}
 		expiresAt = &parsed
 	}
+	// The identity_trust event of the new client, in the store's
+	// transaction (ADR-0059 R1.5).
+	r = h.accessChangeHook(r, identityTrustChange("scim_client", []string{"created", "secret"}))
 	issued, err := h.scimClients.Create(r.Context(), body.Name, body.AuthMethod, expiresAt, createdBy)
 	switch {
 	case errors.Is(err, scimclient.ErrInvalidName), errors.Is(err, scimclient.ErrInvalidMethod),
@@ -234,6 +237,7 @@ func (h *Handler) SCIMClientCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "the SCIM client could not be created"})
 		return
 	}
+	requireChangeHookRan(r, "scim_client.create")
 	annotateTrustChange(r, AuditSCIMClientCreated, "scim_client", issued.Client.Name, audit.ID(issued.Client.ID), nil)
 	noStoreSecret(w)
 	writeJSON(w, http.StatusCreated, issuedBody(issued))
@@ -260,9 +264,10 @@ func (h *Handler) SCIMClientRotate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !h.requireSuperAdmin(w, r, scimClientGate(strconv.FormatInt(id, 10))) {
+	if !h.requireIdentityTrust(w, r, scimClientGate(strconv.FormatInt(id, 10))) {
 		return
 	}
+	r = h.accessChangeHook(r, identityTrustChange("scim_client", []string{"secret"}))
 	issued, err := h.scimClients.Rotate(r.Context(), id)
 	switch {
 	case errors.Is(err, scimclient.ErrNotFound):
@@ -276,6 +281,7 @@ func (h *Handler) SCIMClientRotate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "the SCIM client could not be rotated"})
 		return
 	}
+	requireChangeHookRan(r, "scim_client.rotate")
 	annotateTrustChange(r, AuditSCIMClientRotated, "scim_client", issued.Client.Name, audit.ID(id), nil)
 	noStoreSecret(w)
 	writeJSON(w, http.StatusOK, issuedBody(issued))
@@ -312,7 +318,7 @@ func (h *Handler) SCIMClientDelete(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !h.requireSuperAdmin(w, r, scimClientGate(strconv.FormatInt(id, 10))) {
+	if !h.requireIdentityTrust(w, r, scimClientGate(strconv.FormatInt(id, 10))) {
 		return
 	}
 	err := h.scimClients.Delete(r.Context(), id)

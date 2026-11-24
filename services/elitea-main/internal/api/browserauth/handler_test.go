@@ -42,6 +42,9 @@ func TestRoutesPreserveExactFormSurfaceAndMethods(t *testing.T) {
 		FormLoginPath:     {http.MethodGet, http.MethodHead, http.MethodOptions},
 		FormAuthorizePath: {http.MethodOptions, http.MethodPost},
 		FormLogoutPath:    {http.MethodGet, http.MethodHead, http.MethodOptions},
+		FormReauthenticatePath: {
+			http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodPost,
+		},
 	}
 	if len(observed) != len(expected) {
 		t.Fatalf("routes = %v, want %v", observed, expected)
@@ -955,6 +958,20 @@ type flowStub struct {
 	logoutID         string
 	logoutErr        error
 	logoutCalls      int
+}
+
+func (stub *flowStub) ReauthenticationSubject(
+	_ context.Context, _ string,
+) (browserapp.ReauthenticationSubject, error) {
+	*stub.events = append(*stub.events, "reauthentication-subject")
+	return browserapp.ReauthenticationSubject{}, browserapp.ErrUnauthenticated
+}
+
+func (stub *flowStub) Reauthenticate(
+	_ context.Context, _ string, _ string, _ browserapp.AssertionVerifier,
+) (browserapp.ReauthenticateResult, error) {
+	*stub.events = append(*stub.events, "reauthenticate")
+	return browserapp.ReauthenticateResult{}, browserapp.ErrUnauthenticated
 }
 
 func (stub *flowStub) Begin(_ context.Context, request browserapp.BeginRequest) (browserapp.BeginResult, error) {

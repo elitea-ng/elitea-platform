@@ -69,7 +69,7 @@ func gatedAuthUsersRouter(pool *pgxpool.Pool, principal auth.User) chi.Router {
 
 func getAuthUsers(t *testing.T, pool *pgxpool.Pool, id int) *httptest.ResponseRecorder {
 	t.Helper()
-	principal := auth.User{ID: strconv.Itoa(id), UserID: strconv.Itoa(id)}
+	principal := auth.User{ID: strconv.Itoa(id), UserID: strconv.Itoa(id), CredentialKind: auth.CredentialKindSession}
 	recorder := httptest.NewRecorder()
 	gatedAuthUsersRouter(pool, principal).ServeHTTP(
 		recorder,

@@ -12,8 +12,9 @@ func notificationsSection() map[string]any {
 	const section = platformconfig.SectionNotifications
 	defaults := platformconfig.DefaultNotificationSettings()
 	return map[string]any{
-		"id":    section,
-		"title": "Notifications",
+		"id":     section,
+		"access": agentGovernanceAccess(),
+		"title":  "Notifications",
 		"description": "How the platform tells people that a run ended or waits for them. The bell and the " +
 			"desktop app always show these notices. Web push sends them to the browsers that people opted in.",
 		"order":               9,

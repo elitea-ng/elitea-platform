@@ -36,6 +36,33 @@ The OCSF mapping, in the schema's own description: `event_id` to `metadata.uid`,
 
 `reasons` (stable reason codes), `authorization_epoch`, `revocation_epoch`, `outbox_seq`, and, when set: `calling_application_id`, `authentication_ref`, `agent_binding_id`, `authority_id`, `mandate_ref`, `delegation_ref`, `grant_ref`, `workload_id`, `execution_id`, `invocation_id`, `decision_id`, `policy_revision_id`, `arrangement` (`A`, `B`, `C`). Every value is a reference or an identifier; an event never holds a token, a secret or a provider response.
 
+### `admin.access.changed`
+
+A change of who holds what on the administration surface is one `security_audit` event of type `ai.elitea.security.v1.admin.access.changed` (OCSF 3005 User Access Management), appended in the same transaction as the change: a change whose event cannot be written does not happen. `action` is `admin.access.<kind>`, `actor` is the person who made the change (none for `bootstrap`), `target` is what changed, and `details.access` carries the change:
+
+| Field | Meaning |
+|---|---|
+| `kind` | One of the kinds below. |
+| `before`, `after` | The subject's set before and after the change, by name, sorted. Always present; empty for a kind that names fields instead. |
+| `fields` | For a provider or trust change, the fields that changed (`created`, `deleted`, `issuer`, `secret`, `data.api_base`), never their values or a digest of them. |
+| `mode` | The role mode of a role change (`administration`, `default`). |
+| `source` | For `role_assignment`, how the change was made: `console`, `api`, `bootstrap`, `migration`, `operator`, `review`, `scim` (see [Role changes are recorded](/admin/users-and-roles#role-changes-are-recorded)). |
+| `elevation_id` | The elevation the change was made under, when there was one. |
+| `reason_code` | The reason code the caller gave, when there was one. The event never carries the reason text: that stays in the Audit Trail row. |
+| `membership` | For `project_membership`: `actor_is_member`, `member_holds_admin_role`, `bulk`. |
+
+| Kind | Target | Recorded when |
+|---|---|---|
+| `role_assignment` | `user` | A central role is assigned or removed: the Users page, `/admin/modes`, an account deletion, the first sign-in of an initial administrator. |
+| `role_permissions` | `role` (`<mode>:<name>`) or `project_role` (`<project>:<name>`) | A role's permission set is edited on the Roles page. |
+| `role_created`, `role_deleted` | `role` or `project_role` | A role is created or deleted. A deleted role's `before` is the permission set it held. |
+| `token_scopes` | `token` | A personal access token is given administration scopes. Reserved: comes with administration-scoped tokens. |
+| `project_membership` | `user`, partition the project | A membership is written through a central route (a bulk invite). |
+| `global_provider_route` | `global_provider` | A global provider is created or deleted, or its endpoint, credential or keyless identity changes. |
+| `identity_trust` | `identity_provider` or `scim_client` | An identity provider is created, deleted, turned on or off, or has a trust field or its secret changed; a SCIM client is created or its secret rotated. |
+
+A change that changes nothing (assigning a role already held, a settings-only edit) appends no event.
+
 ### `details` for `admin_audit`
 
 `row_id` (`centry.audit_events.id`), `is_error`, and, when recorded: `http_method`, `http_route` (the matched route pattern, never the raw URL), `status_code`, `duration_ms`.

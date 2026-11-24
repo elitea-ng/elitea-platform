@@ -334,9 +334,20 @@ func configSections() []map[string]any {
 // section list itself, so the sidebar shows an entry the server never described.
 // Every other section — including its permission and, now, its availability — is
 // server-declared, and one that is not is one the page can get wrong on its own.
+//
+// Its READ half is the permission of the page it points at,
+// runtime.airun.serviceproviders, not configuration.service_descriptors (ADR-0059
+// R0.5). The section has no fields: reading it is reading the pointer. No
+// migration grants configuration.service_descriptors (adminaccess
+// ungrantedByMigration), so with that name as the read half the filtered schema
+// list would hide the pointer from every administrator, who saw it before.
+// Whoever may open the page may read where it is. The write half and the legacy
+// path keep configuration.service_descriptors.
 func serviceDescriptorsSection() map[string]any {
 	return map[string]any{
-		"id":                  "service_descriptors",
+		"id": "service_descriptors",
+		"access": narrowAccess(adminaccess.AreaPlatform,
+			adminaccess.RuntimeAirunServiceProviders, adminaccess.ConfigurationServiceDescriptors),
 		"unavailable_reason":  serviceDescriptorsElsewhereUnavailable,
 		"title":               "Service Descriptors",
 		"description":         "Registered provider service descriptors.",
@@ -376,6 +387,7 @@ func serviceDescriptorsSection() map[string]any {
 func guardrailsSection() map[string]any {
 	return map[string]any{
 		"id":          "guardrails",
+		"access":      guardrailSectionAccess,
 		"title":       "Guardrails",
 		"description": "Control platform-wide security policies, toolkit restrictions, and MCP exposure settings.",
 		"order":       1,
@@ -469,6 +481,7 @@ func guardrailsSection() map[string]any {
 func mcpConfigurationSection() map[string]any {
 	return map[string]any{
 		"id":          "mcp_configuration",
+		"access":      platformConfigAccess(adminaccess.AreaAgentsGovernance),
 		"page":        configPageFeatures,
 		"title":       "MCP Configuration",
 		"description": "Control Model Context Protocol exposure across the platform.",
@@ -522,6 +535,7 @@ func mcpConfigurationSection() map[string]any {
 func agentPublishingSection() map[string]any {
 	return map[string]any{
 		"id":          "agent_publishing",
+		"access":      platformConfigAccess(adminaccess.AreaAgentsGovernance),
 		"page":        configPageFeatures,
 		"title":       "Agent Publishing",
 		"description": "Control who may publish agents, and which categories they may publish into.",
@@ -599,6 +613,7 @@ func agentPublishingSection() map[string]any {
 func skillPublishingSection() map[string]any {
 	return map[string]any{
 		"id":          "skill_publishing",
+		"access":      platformConfigAccess(adminaccess.AreaAgentsGovernance),
 		"page":        configPageFeatures,
 		"title":       "Skill Publishing",
 		"description": "Control who may publish skills, and which categories they may publish into.",
@@ -690,7 +705,8 @@ const mcpServersUnavailable = "MCP server definitions are not stored as plugin c
 
 func mcpServersSection() map[string]any {
 	return map[string]any{
-		"id": "mcp_servers",
+		"id":     "mcp_servers",
+		"access": singleAccess(adminaccess.AreaAgentsGovernance, adminaccess.MCPCatalogueManage),
 		// managed_surface names the dedicated surface that really holds this
 		// section's data, so the client can render the right editor WITHOUT a
 		// hardcoded list of section ids.
@@ -741,6 +757,7 @@ func mcpServersSection() map[string]any {
 func analyticsSection() map[string]any {
 	return map[string]any{
 		"id":          "analytics",
+		"access":      platformConfigAccess(adminaccess.AreaPlatform),
 		"page":        configPageFeatures,
 		"title":       "Analytics",
 		"description": "Control whether the Analytics tab is visible in project Settings.",
@@ -821,7 +838,8 @@ const llmProxyUnavailable = "the LLM proxy is not configured as plugin values on
 // rejectUnavailableField exists to prevent.
 func llmProxySection() map[string]any {
 	return map[string]any{
-		"id": "llm_proxy",
+		"id":     "llm_proxy",
+		"access": platformConfigAccess(adminaccess.AreaModelsSpend),
 		// The surface name, not the section id, is what the client keys its
 		// editor registry on — see mcpServersSection() for why that distinction
 		// is load-bearing.
@@ -882,6 +900,7 @@ func llmProxySection() map[string]any {
 func governanceSection() map[string]any {
 	return map[string]any{
 		"id":                  "governance",
+		"access":              llmPolicySectionAccess,
 		"unavailable_reason":  governanceElsewhereUnavailable,
 		"title":               "LLM Governance",
 		"description":         "Author LLM-gateway governance: budgets, rate limits, credential billing policy, per-model/provider scopes, MCP allowlists, egress allowlists, and CEL routing rules. Definitions are enforced by the LLM gateway on every request.",
@@ -1110,7 +1129,8 @@ func governanceSection() map[string]any {
 
 func authSection() map[string]any {
 	return map[string]any{
-		"id": "auth",
+		"id":     "auth",
+		"access": identitySectionAccess,
 		// managed_surface names the dedicated surface that really holds this
 		// section's data, so the client renders the right editor WITHOUT a
 		// hardcoded list of section ids. See mcpServersSection() for why that
@@ -1143,6 +1163,7 @@ func authSection() map[string]any {
 func nativeClientsSection() map[string]any {
 	return map[string]any{
 		"id":                  "native_clients",
+		"access":              nativeClientsSectionAccess,
 		"managed_surface":     "native_clients",
 		"unavailable_reason":  nativeClientsElsewhereUnavailable,
 		"title":               "Native clients",
@@ -1170,6 +1191,7 @@ func nativeClientsSection() map[string]any {
 func emailSection() map[string]any {
 	return map[string]any{
 		"id":                  "email",
+		"access":              singleAccess(adminaccess.AreaPlatform, adminaccess.PlatformEmailManage),
 		"managed_surface":     "email",
 		"unavailable_reason":  emailElsewhereUnavailable,
 		"title":               "E-mail",
@@ -1191,6 +1213,7 @@ func emailSection() map[string]any {
 func microsoftAppsSection() map[string]any {
 	return map[string]any{
 		"id":                  "microsoft_apps",
+		"access":              singleAccess(adminaccess.AreaPlatform, adminaccess.ConfigurationMicrosoftApps),
 		"managed_surface":     "microsoft_apps",
 		"unavailable_reason":  microsoftAppsElsewhereUnavailable,
 		"title":               "Microsoft apps",
@@ -1292,7 +1315,8 @@ func resourcesSection() map[string]any {
 	result = append(result, fields[4:]...)
 
 	return map[string]any{
-		"id": "resources",
+		"id":     "resources",
+		"access": platformConfigAccess(adminaccess.AreaPlatform),
 		// A2 (ELITEA-0032, onetest "Resources Section Appears in Admin
 		// Configuration Before Banner"): back on Configuration — NO `page` key,
 		// which `configSections()`'s own doc comment states is what puts a
@@ -1346,6 +1370,7 @@ func resourcesSection() map[string]any {
 func dedicatedBannerSection() map[string]any {
 	return map[string]any{
 		"id":             "dedicated_banner",
+		"access":         platformConfigAccess(adminaccess.AreaPlatform),
 		"title":          "Banner",
 		"description":    "Enable dedicated banner to communicate important notifications across the platform.",
 		"order":          89,
@@ -1435,8 +1460,9 @@ func brandingSection() map[string]any {
 		}
 	}
 	return map[string]any{
-		"id":    "branding",
-		"title": "Branding",
+		"id":     "branding",
+		"access": singleAccess(adminaccess.AreaPlatform, adminaccess.ConfigurationBranding),
+		"title":  "Branding",
 		"description": "Restyle the platform in your organisation's name, colours and typography. " +
 			"Changes reach every user on their next page load; no rebuild or restart.",
 		"order":               88,
@@ -1498,6 +1524,7 @@ func supportAssistantSection() map[string]any {
 		// `PUT /support_assistant/config` is deliberately not ported, so the
 		// form and the server cannot disagree about field names or defaults.
 		"id":             "support_assistant",
+		"access":         platformConfigAccess(adminaccess.AreaPlatform),
 		"page":           configPageFeatures,
 		"title":          "Support Assistant",
 		"description":    "Enable the in-app support assistant widget for all users.",
@@ -1610,8 +1637,9 @@ func supportAssistantSection() map[string]any {
 
 func voiceFeaturesSection() map[string]any {
 	return map[string]any{
-		"id":   "voice_features",
-		"page": configPageFeatures,
+		"id":     "voice_features",
+		"access": platformConfigAccess(adminaccess.AreaPlatform),
+		"page":   configPageFeatures,
 		// LIVE. The first pass of this unit marked this section unavailable on
 		// the strength of `VoiceControlButton`/`VoiceMiniPlayer` in
 		// `features/chat-input` having no render site — which is true, and was
@@ -1693,8 +1721,9 @@ func voiceFeaturesSection() map[string]any {
 // middleware owns that list; see its doc comment for why each entry is on it.
 func maintenanceSection() map[string]any {
 	return map[string]any{
-		"id":    "maintenance",
-		"title": "Maintenance",
+		"id":     "maintenance",
+		"access": singleAccess(adminaccess.AreaPlatform, adminaccess.PlatformMaintenanceManage),
+		"title":  "Maintenance",
 		"description": "Enable maintenance mode to refuse the API to everyone without administration " +
 			"access and show them a splash screen. Administrators keep full access, so this switch can " +
 			"always be turned off from here.",

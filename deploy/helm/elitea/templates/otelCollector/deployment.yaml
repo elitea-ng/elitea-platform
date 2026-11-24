@@ -28,6 +28,12 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "otel-collector.serviceAccountName" . }}
+      # Nothing in this pod calls the Kubernetes API (#2953).
+      automountServiceAccountToken: {{ include "elitea.automountToken" .Values.otelCollector.serviceAccount }}
+      {{- with .Values.otelCollector.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- include "elitea.scaling.topologySpread" (dict "ctx" . "v" .Values.otelCollector "selector" (include "otel-collector.selectorLabels" .)) | nindent 6 }}
       {{- /*
         On SIGTERM the collector stops its receivers and flushes the batch
@@ -42,6 +48,10 @@ spec:
         - name: otel-collector
           image: "{{ .Values.otelCollector.image.repository }}:{{ .Values.otelCollector.image.tag }}"
           imagePullPolicy: {{ .Values.otelCollector.image.pullPolicy }}
+          {{- with .Values.otelCollector.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           args:
             - "--config=/etc/otel-collector-config.yaml"
           {{- include "elitea.scaling.preStop" $preStop | nindent 10 }}
@@ -57,12 +67,18 @@ spec:
               mountPath: /etc/otel-collector-config.yaml
               subPath: otel-collector-config.yaml
               readOnly: true
+            {{- with .Values.otelCollector.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           resources:
             {{- toYaml .Values.otelCollector.resources | nindent 12 }}
       volumes:
         - name: config
           configMap:
             name: {{ include "otel-collector.fullname" . }}-config
+        {{- with .Values.otelCollector.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- with .Values.otelCollector.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

@@ -197,6 +197,8 @@ var ocsfClasses = map[EventType]int{
 	TypeAgentMemoryChanged:      OCSFClassEntityManagement,
 	TypeAgentProposalChanged:    OCSFClassEntityManagement,
 	TypeAgentWorkforceChanged:   OCSFClassEntityManagement,
+	// A change of who holds what: User Access Management, like a grant.
+	TypeAdminAccessChanged: OCSFClassUserAccessManagement,
 }
 
 // OCSFClassUID returns the OCSF class of t and whether t is known.
@@ -332,6 +334,12 @@ type SecurityEvent struct {
 	ToolName        string
 	ToolkitName     string
 	ArgumentsDigest string
+
+	// Access is the payload of TypeAdminAccessChanged (access_changed.go):
+	// the change kind and the before and after sets. Nil on every other
+	// event, and then absent from the canonical form, so the events chained
+	// before this field existed still verify.
+	Access *AccessChange
 }
 
 // PartitionKey is the chain partition of the event.
@@ -430,7 +438,7 @@ func (e SecurityEvent) Validate() error {
 			return err
 		}
 	}
-	return nil
+	return e.Access.validate(e)
 }
 
 func (e SecurityEvent) stringFields() map[string]string {
@@ -542,6 +550,9 @@ type eventData struct {
 	ToolName             string   `json:"tool_name,omitempty"`
 	ToolkitName          string   `json:"toolkit_name,omitempty"`
 	ArgumentsDigest      string   `json:"arguments_digest,omitempty"`
+	// Access is TypeAdminAccessChanged's payload; omitted on every other
+	// type, so their canonical bytes are unchanged.
+	Access *accessData `json:"access,omitempty"`
 }
 
 // FormatSequence renders a partition sequence as the CloudEvents `sequence`
@@ -608,6 +619,7 @@ func (e SecurityEvent) Canonical(partitionSeq int64) ([]byte, error) {
 			ToolName:             e.ToolName,
 			ToolkitName:          e.ToolkitName,
 			ArgumentsDigest:      e.ArgumentsDigest,
+			Access:               e.Access.data(),
 		},
 	}
 	return marshalEnvelope(env)
@@ -637,6 +649,10 @@ func recanonicalize(stored []byte) (envelope, []byte, error) {
 	}
 	env.Data.Reasons = nonNil(env.Data.Reasons)
 	env.Data.ActorChain = nonNil(env.Data.ActorChain)
+	if env.Data.Access != nil {
+		env.Data.Access.Before = nonNil(env.Data.Access.Before)
+		env.Data.Access.After = nonNil(env.Data.Access.After)
+	}
 	canonical, err := marshalEnvelope(env)
 	if err != nil {
 		return envelope{}, nil, err

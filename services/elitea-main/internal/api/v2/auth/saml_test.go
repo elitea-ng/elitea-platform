@@ -18,12 +18,22 @@ package auth
 // here would be testing the library.
 
 import (
+	"bytes"
+	"compress/flate"
+	"context"
+	"encoding/base64"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 
 	saml2 "github.com/russellhaering/gosaml2"
 	"github.com/russellhaering/gosaml2/types"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/browsersession"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/identityproviders"
 )
 
@@ -275,5 +285,293 @@ func TestAValueContainingADotStillVerifies(t *testing.T) {
 	value, ok := verifyBrowserValue(secret, signed)
 	if !ok || value != "_id|/a.b.c" {
 		t.Fatalf("round trip returned (%q, %v)", value, ok)
+	}
+}
+
+/* ── ForceAuthn and the authentication time (ADR-0059 R1.10b) ───────────── */
+
+// samlRequestDocument inflates the SAMLRequest of a Login redirect.
+func samlRequestDocument(t *testing.T, recorder *httptest.ResponseRecorder) string {
+	t.Helper()
+	if recorder.Code != http.StatusFound {
+		t.Fatalf("login status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	location, err := url.Parse(recorder.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deflated, err := base64.StdEncoding.DecodeString(location.Query().Get("SAMLRequest"))
+	if err != nil {
+		t.Fatalf("SAMLRequest is not base64: %v", err)
+	}
+	inflated, err := io.ReadAll(flate.NewReader(bytes.NewReader(deflated)))
+	if err != nil {
+		t.Fatalf("SAMLRequest does not inflate: %v", err)
+	}
+	return string(inflated)
+}
+
+// samlCookieHead reads what the signed request cookie carries, with the
+// ACS's own reader.
+func samlCookieHead(t *testing.T, handler *SAMLHandler, cookie *http.Cookie) samlLoginRequest {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodPost, "/auth/saml/acs", nil)
+	request.AddCookie(cookie)
+	login, ok := handler.consumeRequestCookie(httptest.NewRecorder(), request)
+	if !ok {
+		t.Fatal("the request cookie did not verify")
+	}
+	return login
+}
+
+func TestASAMLSignInStartedWithALimitSendsForceAuthn(t *testing.T) {
+	handler := samlCookieHandler(t, true)
+	recorder := httptest.NewRecorder()
+	handler.Login(recorder, httptest.NewRequest(http.MethodGet, "/auth/saml/login?max_age=900&target_to=%2Fadmin", nil))
+
+	if document := samlRequestDocument(t, recorder); !strings.Contains(document, `ForceAuthn="true"`) {
+		t.Fatalf("a limited sign-in's AuthnRequest carries no ForceAuthn: %s", document)
+	}
+	login := samlCookieHead(t, handler, samlRequestSetCookie(t, recorder))
+	if !login.limited || login.limit != 15*time.Minute || login.targetTo != "/admin" || login.requestID == "" {
+		t.Fatalf("the signed cookie = %+v, want the 900-second limit and the target", login)
+	}
+}
+
+func TestAnOrdinarySAMLSignInSendsNoForceAuthn(t *testing.T) {
+	handler := samlCookieHandler(t, true)
+	recorder := httptest.NewRecorder()
+	handler.Login(recorder, httptest.NewRequest(http.MethodGet, "/auth/saml/login?target_to=%2Fapp", nil))
+
+	if document := samlRequestDocument(t, recorder); strings.Contains(document, "ForceAuthn") {
+		t.Fatalf("an ordinary sign-in asked for ForceAuthn: %s", document)
+	}
+	if login := samlCookieHead(t, handler, samlRequestSetCookie(t, recorder)); login.limited {
+		t.Fatalf("an ordinary sign-in's cookie carries a limit: %+v", login)
+	}
+}
+
+func TestALimitedSAMLSignInRefusesAMalformedLimitOrAForeignTarget(t *testing.T) {
+	handler := samlCookieHandler(t, true)
+	for _, query := range []string{
+		"max_age=abc", "max_age=-1", "max_age=86401", "max_age=900&target_to=https%3A%2F%2Fevil.example",
+	} {
+		recorder := httptest.NewRecorder()
+		handler.Login(recorder, httptest.NewRequest(http.MethodGet, "/auth/saml/login?"+query, nil))
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("%s: status = %d, want 400", query, recorder.Code)
+		}
+	}
+}
+
+func TestCheckAuthnInstant(t *testing.T) {
+	now := time.Date(2026, time.November, 23, 12, 0, 0, 0, time.UTC)
+	at := func(offset time.Duration) *time.Time { value := now.Add(offset); return &value }
+	limited := samlLoginRequest{limit: 15 * time.Minute, limited: true}
+	for name, testCase := range map[string]struct {
+		instant    *time.Time
+		request    samlLoginRequest
+		skew       time.Duration
+		wantAt     time.Time
+		wantProven bool
+		wantOK     bool
+	}{
+		"an ordinary sign-in records no time, whatever it states": {
+			instant: at(-time.Minute), wantOK: true,
+		},
+		"an ordinary sign-in with no AuthnInstant completes": {
+			wantOK: true,
+		},
+		"a ForceAuthn sign-in within the limit is proven": {
+			instant: at(-2 * time.Minute), request: limited,
+			wantAt: now.Add(-2 * time.Minute), wantProven: true, wantOK: true,
+		},
+		"a ForceAuthn assertion with no AuthnInstant is refused": {
+			request: limited,
+		},
+		"an AuthnInstant older than the limit is refused": {
+			instant: at(-16 * time.Minute), request: limited,
+		},
+		"the authored skew admits a drift, read as a lagging clock": {
+			instant: at(-16 * time.Minute), request: limited, skew: 2 * time.Minute,
+			wantAt: now.Add(-14 * time.Minute), wantProven: true, wantOK: true,
+		},
+		"a skew larger than the limit never records a time after now": {
+			instant: at(-30 * time.Second), request: samlLoginRequest{limited: true}, skew: 2 * time.Minute,
+			wantAt: now, wantProven: true, wantOK: true,
+		},
+		"an AuthnInstant in the future beyond the skew is refused": {
+			instant: at(3 * time.Minute), request: limited, skew: time.Minute,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			gotAt, proven, ok := checkAuthnInstant(testCase.instant, testCase.request, testCase.skew, now)
+			if ok != testCase.wantOK || proven != testCase.wantProven || !gotAt.Equal(testCase.wantAt) {
+				t.Fatalf("checkAuthnInstant = (%s, %v, %v), want (%s, %v, %v)",
+					gotAt, proven, ok, testCase.wantAt, testCase.wantProven, testCase.wantOK)
+			}
+		})
+	}
+}
+
+// acsRig drives the real Login and ACS around a stand-in for the two steps
+// that need a signed response and a database.
+type acsRig struct {
+	handler  *SAMLHandler
+	sessions *memorySessions
+	instant  *time.Time
+	// responseFor overrides the InResponseTo of the next assertion; empty
+	// answers the request the cookie names.
+	responseFor string
+}
+
+func newACSRig(t *testing.T) *acsRig {
+	t.Helper()
+	rig := &acsRig{sessions: newMemorySessions()}
+	manager, err := browsersession.NewManager(rig.sessions, browsersession.Policy{
+		IdleTimeout: time.Hour, AbsoluteLifetime: 24 * time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rig.handler = samlCookieHandler(t, true).WithSessionManager(manager)
+	rig.handler.provision = func(context.Context, *samlRuntime, string, string, string) (string, error) {
+		return "7", nil
+	}
+	return rig
+}
+
+// signIn runs Login with query, then posts a verified assertion to the ACS.
+func (rig *acsRig) signIn(t *testing.T, query string) *httptest.ResponseRecorder {
+	t.Helper()
+	login := httptest.NewRecorder()
+	rig.handler.Login(login, httptest.NewRequest(http.MethodGet, "/auth/saml/login?"+query, nil))
+	cookie := samlRequestSetCookie(t, login)
+	requestID := samlCookieHead(t, rig.handler, cookie).requestID
+	if rig.responseFor != "" {
+		requestID = rig.responseFor
+	}
+	instant := rig.instant
+	rig.handler.retrieveAssertion = func(*samlRuntime, string) (*saml2.AssertionInfo, error) {
+		assertion := validAssertion()
+		data := assertion.Assertions[0].Subject.SubjectConfirmation.SubjectConfirmationData
+		data.InResponseTo = requestID
+		data.Recipient = "https://elitea.example.com/auth/saml/acs"
+		assertion.AuthnInstant = instant
+		return assertion, nil
+	}
+	request := httptest.NewRequest(http.MethodPost, "/auth/saml/acs",
+		strings.NewReader(url.Values{"SAMLResponse": {"stand-in"}}.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(cookie)
+	recorder := httptest.NewRecorder()
+	rig.handler.ACS(recorder, request)
+	return recorder
+}
+
+func (rig *acsRig) rows() []browsersession.Session {
+	rig.sessions.mu.Lock()
+	defer rig.sessions.mu.Unlock()
+	rows := make([]browsersession.Session, 0, len(rig.sessions.rows))
+	for _, row := range rig.sessions.rows {
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+func TestAForceAuthnSAMLSignInRecordsAProvenAuthenticationTime(t *testing.T) {
+	rig := newACSRig(t)
+	instant := time.Now().Add(-time.Minute).UTC().Truncate(time.Second)
+	rig.instant = &instant
+
+	recorder := rig.signIn(t, "max_age=900&target_to=%2Fadmin")
+	if recorder.Code != http.StatusFound || recorder.Header().Get("Location") != "/admin" {
+		t.Fatalf("ACS: %d %q %s", recorder.Code, recorder.Header().Get("Location"), recorder.Body.String())
+	}
+	rows := rig.rows()
+	if len(rows) != 1 || !rows[0].AuthenticationProven || !rows[0].AuthenticatedAt.Equal(instant) ||
+		rows[0].Provider != browsersession.ProviderSAML {
+		t.Fatalf("session rows = %+v, want one proven SAML row at %s", rows, instant)
+	}
+}
+
+// The acceptance criterion: an assertion whose AuthnInstant is older than the
+// limit is refused, before any account or session is touched.
+func TestAForceAuthnSAMLSignInWithAStaleAuthnInstantIsRefused(t *testing.T) {
+	rig := newACSRig(t)
+	provisioned := false
+	rig.handler.provision = func(context.Context, *samlRuntime, string, string, string) (string, error) {
+		provisioned = true
+		return "7", nil
+	}
+	instant := time.Now().Add(-2 * time.Hour)
+	rig.instant = &instant
+
+	recorder := rig.signIn(t, "max_age=900&target_to=%2Fadmin")
+	if recorder.Code != http.StatusFound || recorder.Header().Get("Location") != SignInErrorURL("/admin") {
+		t.Fatalf("ACS: %d %q", recorder.Code, recorder.Header().Get("Location"))
+	}
+	if provisioned || len(rig.rows()) != 0 {
+		t.Fatalf("a refused sign-in provisioned (%v) or wrote sessions (%d)", provisioned, len(rig.rows()))
+	}
+	for _, cookie := range recorder.Result().Cookies() {
+		if cookie.Name == browsersession.CookieName {
+			t.Fatalf("a refused sign-in set the session cookie: %+v", cookie)
+		}
+	}
+}
+
+// The acceptance criterion: a SAML response that was not requested with
+// ForceAuthn does not move the authentication time of an existing session.
+// The existing row is untouched, and the new row records no time at all, so
+// it never satisfies the recent-authentication check however recent the
+// AuthnInstant the identity provider states.
+func TestASAMLResponseNotRequestedWithForceAuthnMovesNoAuthenticationTime(t *testing.T) {
+	rig := newACSRig(t)
+	instant := time.Now().Add(-time.Minute).UTC().Truncate(time.Second)
+	rig.instant = &instant
+	if recorder := rig.signIn(t, "max_age=900&target_to=%2Fadmin"); recorder.Code != http.StatusFound {
+		t.Fatalf("the ForceAuthn sign-in: %d", recorder.Code)
+	}
+	existing := rig.rows()[0]
+	// The existing session is aged, as time would.
+	existing.AuthenticatedAt = existing.AuthenticatedAt.Add(-time.Hour)
+	rig.sessions.rows[existing.ID] = existing
+
+	fresh := time.Now().UTC().Truncate(time.Second)
+	rig.instant = &fresh
+	if recorder := rig.signIn(t, "target_to=%2Fapp"); recorder.Code != http.StatusFound {
+		t.Fatalf("the ordinary sign-in: %d %s", recorder.Code, recorder.Body.String())
+	}
+
+	rows := rig.rows()
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want the existing one and the new one", len(rows))
+	}
+	for _, row := range rows {
+		if row.ID == existing.ID {
+			if !row.AuthenticatedAt.Equal(existing.AuthenticatedAt) || !row.AuthenticationProven {
+				t.Fatalf("the existing session changed: %+v, was %+v", row, existing)
+			}
+			continue
+		}
+		if row.AuthenticationProven || !row.AuthenticatedAt.IsZero() {
+			t.Fatalf("the ordinary sign-in recorded an authentication time: %+v", row)
+		}
+	}
+}
+
+// An unsolicited or replayed response (one answering another request) never
+// reaches the session store: the InResponseTo check refuses it.
+func TestAnUnsolicitedSAMLResponseWritesNoSession(t *testing.T) {
+	rig := newACSRig(t)
+	instant := time.Now().UTC()
+	rig.instant = &instant
+	rig.responseFor = "_another-request"
+	if recorder := rig.signIn(t, "max_age=900&target_to=%2Fadmin"); recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("an unsolicited response: %d, want 401", recorder.Code)
+	}
+	if len(rig.rows()) != 0 {
+		t.Fatalf("an unsolicited response wrote %d sessions", len(rig.rows()))
 	}
 }

@@ -64,6 +64,7 @@ import type {
   N500Response,
   Webhook,
   WebhookDelivery,
+  WebhookWithSecret,
   WebhookWriteRequest,
 } from "../model";
 
@@ -266,7 +267,7 @@ export function useListWebhooks<
 }
 
 export type createWebhookResponse201 = {
-  data: Webhook;
+  data: WebhookWithSecret;
   status: 201;
 };
 
@@ -290,6 +291,11 @@ export type createWebhookResponse500 = {
   status: 500;
 };
 
+export type createWebhookResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
 export type createWebhookResponseSuccess = createWebhookResponse201 & {
   headers: Headers;
 };
@@ -298,6 +304,7 @@ export type createWebhookResponseError = (
   | createWebhookResponse401
   | createWebhookResponse403
   | createWebhookResponse500
+  | createWebhookResponse503
 ) & {
   headers: Headers;
 };
@@ -310,7 +317,7 @@ export const getCreateWebhookUrl = (projectID: string) => {
 };
 
 /**
- * handler.go's Create. The secret is whatever the caller sends — there is no server-side generation — so the UI generates one client-side (the same `crypto.getRandomValues` shape `PipelineWebhookModal.tsx`'s `generateSecretToken` uses) before calling this.
+ * handler.go's Create. A `secret` in the body is sealed into the project vault and returned in this response only; the web UI generates one client-side (256 random bits, base64url). Answers 503 when the deployment has no usable project vault, rather than storing the secret in plain text.
  * @summary Register a new outbound webhook
  */
 export const createWebhook = async (
@@ -363,7 +370,8 @@ export const getCreateWebhookQueryKey = (
 
 export const getCreateWebhookQueryOptions = <
   TData = Awaited<ReturnType<typeof createWebhook>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError =
+    N400Response | N401Response | N403Response | N500Response | ErrorResponse,
 >(
   projectID: string,
   webhookWriteRequest: WebhookWriteRequest,
@@ -404,11 +412,12 @@ export type CreateWebhookQueryResult = NonNullable<
   Awaited<ReturnType<typeof createWebhook>>
 >;
 export type CreateWebhookQueryError =
-  N400Response | N401Response | N403Response | N500Response;
+  N400Response | N401Response | N403Response | N500Response | ErrorResponse;
 
 export function useCreateWebhook<
   TData = Awaited<ReturnType<typeof createWebhook>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError =
+    N400Response | N401Response | N403Response | N500Response | ErrorResponse,
 >(
   projectID: string,
   webhookWriteRequest: WebhookWriteRequest,
@@ -432,7 +441,8 @@ export function useCreateWebhook<
 };
 export function useCreateWebhook<
   TData = Awaited<ReturnType<typeof createWebhook>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError =
+    N400Response | N401Response | N403Response | N500Response | ErrorResponse,
 >(
   projectID: string,
   webhookWriteRequest: WebhookWriteRequest,
@@ -456,7 +466,8 @@ export function useCreateWebhook<
 };
 export function useCreateWebhook<
   TData = Awaited<ReturnType<typeof createWebhook>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError =
+    N400Response | N401Response | N403Response | N500Response | ErrorResponse,
 >(
   projectID: string,
   webhookWriteRequest: WebhookWriteRequest,
@@ -476,7 +487,8 @@ export function useCreateWebhook<
 
 export function useCreateWebhook<
   TData = Awaited<ReturnType<typeof createWebhook>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError =
+    N400Response | N401Response | N403Response | N500Response | ErrorResponse,
 >(
   projectID: string,
   webhookWriteRequest: WebhookWriteRequest,
@@ -541,8 +553,8 @@ export const getGetWebhookUrl = (projectID: string, webhookID: string) => {
 };
 
 /**
- * handler.go's Get.
- * @summary Read one webhook, including its live secret
+ * handler.go's Get. Reports `has_secret`, never the value.
+ * @summary Read one webhook (never its secret)
  */
 export const getWebhook = async (
   projectID: string,
@@ -670,7 +682,7 @@ export function useGetWebhook<
   queryKey: DataTag<QueryKey, TData, TError>;
 };
 /**
- * @summary Read one webhook, including its live secret
+ * @summary Read one webhook (never its secret)
  */
 
 export function useGetWebhook<
@@ -744,8 +756,8 @@ export const getUpdateWebhookUrl = (projectID: string, webhookID: string) => {
 };
 
 /**
- * handler.go's Update. Every field is replaced with what the body sends — this is how the UI both "rotates" the secret (new random value, same url/events/active) and toggles enable/disable (same url/events/secret, flipped active).
- * @summary Replace a webhook's URL, events, secret or active flag
+ * handler.go's Update. `url`, `events` and `active` are replaced with what the body sends. `secret` is optional: omitted keeps the stored secret, which is how the UI edits and toggles a webhook without knowing its secret. The response never carries the secret; use rotateWebhookSecret for a new value shown once.
+ * @summary Replace a webhook's URL, events or active flag
  */
 export const updateWebhook = async (
   projectID: string,
@@ -918,7 +930,7 @@ export function useUpdateWebhook<
   queryKey: DataTag<QueryKey, TData, TError>;
 };
 /**
- * @summary Replace a webhook's URL, events, secret or active flag
+ * @summary Replace a webhook's URL, events or active flag
  */
 
 export function useUpdateWebhook<
@@ -1143,6 +1155,246 @@ export function useDeleteWebhook<
   queryKey: DataTag<QueryKey, TData, TError>;
 } {
   const queryOptions = getDeleteWebhookQueryOptions(
+    projectID,
+    webhookID,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type rotateWebhookSecretResponse200 = {
+  data: WebhookWithSecret;
+  status: 200;
+};
+
+export type rotateWebhookSecretResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type rotateWebhookSecretResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type rotateWebhookSecretResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type rotateWebhookSecretResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type rotateWebhookSecretResponseSuccess =
+  rotateWebhookSecretResponse200 & {
+    headers: Headers;
+  };
+export type rotateWebhookSecretResponseError = (
+  | rotateWebhookSecretResponse401
+  | rotateWebhookSecretResponse403
+  | rotateWebhookSecretResponse404
+  | rotateWebhookSecretResponse503
+) & {
+  headers: Headers;
+};
+
+export type rotateWebhookSecretResponse =
+  rotateWebhookSecretResponseSuccess | rotateWebhookSecretResponseError;
+
+export const getRotateWebhookSecretUrl = (
+  projectID: string,
+  webhookID: string,
+) => {
+  return `/webhooks/prompt_lib/${projectID}/${webhookID}/rotate_secret`;
+};
+
+/**
+ * handler.go's RotateSecret (issue 2963). The server generates a new 256-bit secret, seals it into the project vault, removes the previous value, and returns the new one in this response only. Deliveries sign with the new value from the next event on. Gated on the same update permission as updateWebhook. Takes no body.
+ * @summary Replace a webhook's signing secret and return the new value once
+ */
+export const rotateWebhookSecret = async (
+  projectID: string,
+  webhookID: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<rotateWebhookSecretResponse> => {
+  return eliteaFetch<rotateWebhookSecretResponse>(
+    getRotateWebhookSecretUrl(projectID, webhookID),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getRotateWebhookSecretQueryKey = (
+  projectID: string,
+  webhookID: string,
+) => {
+  return [
+    "POST",
+    `/webhooks/prompt_lib/${projectID}/${webhookID}/rotate_secret`,
+  ] as const;
+};
+
+export const getRotateWebhookSecretQueryOptions = <
+  TData = Awaited<ReturnType<typeof rotateWebhookSecret>>,
+  TError = N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectID: string,
+  webhookID: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rotateWebhookSecret>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getRotateWebhookSecretQueryKey(projectID, webhookID);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof rotateWebhookSecret>>
+  > = ({ signal }) =>
+    rotateWebhookSecret(projectID, webhookID, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectID !== null &&
+      projectID !== undefined &&
+      webhookID !== null &&
+      webhookID !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof rotateWebhookSecret>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RotateWebhookSecretQueryResult = NonNullable<
+  Awaited<ReturnType<typeof rotateWebhookSecret>>
+>;
+export type RotateWebhookSecretQueryError =
+  N401Response | N403Response | N404Response | ErrorResponse;
+
+export function useRotateWebhookSecret<
+  TData = Awaited<ReturnType<typeof rotateWebhookSecret>>,
+  TError = N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectID: string,
+  webhookID: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rotateWebhookSecret>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof rotateWebhookSecret>>,
+          TError,
+          Awaited<ReturnType<typeof rotateWebhookSecret>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRotateWebhookSecret<
+  TData = Awaited<ReturnType<typeof rotateWebhookSecret>>,
+  TError = N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectID: string,
+  webhookID: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rotateWebhookSecret>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof rotateWebhookSecret>>,
+          TError,
+          Awaited<ReturnType<typeof rotateWebhookSecret>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRotateWebhookSecret<
+  TData = Awaited<ReturnType<typeof rotateWebhookSecret>>,
+  TError = N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectID: string,
+  webhookID: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rotateWebhookSecret>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Replace a webhook's signing secret and return the new value once
+ */
+
+export function useRotateWebhookSecret<
+  TData = Awaited<ReturnType<typeof rotateWebhookSecret>>,
+  TError = N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectID: string,
+  webhookID: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rotateWebhookSecret>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRotateWebhookSecretQueryOptions(
     projectID,
     webhookID,
     options,

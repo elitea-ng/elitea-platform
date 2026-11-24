@@ -321,12 +321,22 @@ impl SqlClient {
         )
         .await
         .map_err(|error| {
-            if matches!(
-                error,
-                ResolveError::NotPublic | ResolveError::TooManyAddresses
-            ) {
-                self.egress
-                    .record_refused(self.config.host(), self.config.port());
+            match error {
+                ResolveError::NotPublic => {
+                    self.egress.record_refused(
+                        self.config.host(),
+                        self.config.port(),
+                        crate::egress::REFUSAL_REASON_NOT_PUBLIC,
+                    );
+                }
+                ResolveError::TooManyAddresses => {
+                    self.egress.record_refused(
+                        self.config.host(),
+                        self.config.port(),
+                        crate::egress::REFUSAL_REASON_TOO_MANY_ADDRESSES,
+                    );
+                }
+                ResolveError::Lookup | ResolveError::NotAllowed => {}
             }
             map_resolve_error(error)
         })
