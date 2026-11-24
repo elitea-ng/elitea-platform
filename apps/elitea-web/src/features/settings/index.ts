@@ -39,6 +39,10 @@ import { HttpActionRuleFormDialog } from './ui/http-actions/HttpActionRuleFormDi
 export type { HttpActionRuleFormValues } from './ui/http-actions/HttpActionRuleFormDialog';
 import { HttpActionRulesTable } from './ui/http-actions/HttpActionRulesTable';
 
+import { useDbActionRulePermissions } from './lib/db-actions/useDbActionRulePermissions';
+import { DbActionRuleFormDialog } from './ui/db-actions/DbActionRuleFormDialog';
+import { DbActionRulesTable } from './ui/db-actions/DbActionRulesTable';
+
 
 import { ProjectContextBody, ProjectContextToasts } from './ui/project-context/ProjectContextBody';
 import { AgentPipelineBuilder } from './ui/project-general/AgentPipelineBuilder';
@@ -105,8 +109,11 @@ export const webhooksFeature = {
   WebhookDeliveriesPanel,
 };
 
-/** HTTP actions tab (`pages/settings/HttpActions.tsx`, T-5D). */
-export const httpActionsFeature = { useHttpActionRulePermissions, HttpActionRuleFormDialog, HttpActionRulesTable };
+/** HTTP and DB action rules tabs (`pages/settings/HttpActions.tsx`, `DbActions.tsx`, T-5D / T-5E). */
+export const actionRulesFeature = {
+  http: { useHttpActionRulePermissions, HttpActionRuleFormDialog, HttpActionRulesTable },
+  db: { useDbActionRulePermissions, DbActionRuleFormDialog, DbActionRulesTable },
+};
 
 /** Project-context tab (`pages/settings/ProjectContext.tsx`). */
 export const projectContextFeature = { ProjectContextBody, ProjectContextEmptyState, ProjectContextToasts, ProjectParamsHeader, hasSavedProjectContext, projectContextStyles, readMarkdownImport };

@@ -985,7 +985,9 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // token screen, so MANIFEST_ENTRY_COUNT 394 -> 395 (tokens.adminScopeOffer).
 // 588 -> 593 (5d-1 HTTP actions): listHttpActionRules, createHttpActionRule, getHttpActionRule,
 // updateHttpActionRule, listHttpActionRuleNames.
-const GENERATED_OPERATION_COUNT = 593;
+// 593 -> 598 (5e-2 DB actions): listDbActionRules, createDbActionRule, getDbActionRule,
+// updateDbActionRule, listDbActionRuleNames.
+const GENERATED_OPERATION_COUNT = 598;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1330,8 +1332,10 @@ const GENERATED_OPERATION_COUNT = 593;
  * consumed by the personal-token screen. Generated.
  *
  * 395 -> 400 (5d-1 HTTP actions): the five HTTP action rule operations for Settings › HTTP Actions.
+ *
+ * 400 -> 404 (5e-2 DB actions): the four DB action rule operations for Settings › DB Actions.
  */
-const MANIFEST_ENTRY_COUNT = 400;
+const MANIFEST_ENTRY_COUNT = 404;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

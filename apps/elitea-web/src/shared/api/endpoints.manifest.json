@@ -4802,7 +4802,56 @@
       "responseSchema": "ConfigurationListResponse",
       "fixture": null,
       "usedBy": [
-        "features/settings/lib/http-actions/useOpenApiCredentialOptions.ts"
+        "features/settings/lib/http-actions/useOpenApiCredentialOptions.ts",
+        "features/settings/lib/db-actions/useSqlCredentialOptions.ts"
+      ]
+    },
+    {
+      "id": "dbactions.listDbActionRules",
+      "method": "GET",
+      "path": "/dbactions/prompt_lib/{projectID}/rules",
+      "operationId": "listDbActionRules",
+      "source": "generated",
+      "responseSchema": "ListDbActionRules200",
+      "fixture": null,
+      "usedBy": [
+        "pages/settings/DbActions.tsx"
+      ]
+    },
+    {
+      "id": "dbactions.createDbActionRule",
+      "method": "POST",
+      "path": "/dbactions/prompt_lib/{projectID}/rules",
+      "operationId": "createDbActionRule",
+      "source": "generated",
+      "responseSchema": "DbActionRule",
+      "fixture": null,
+      "usedBy": [
+        "pages/settings/DbActions.tsx"
+      ]
+    },
+    {
+      "id": "dbactions.updateDbActionRule",
+      "method": "PUT",
+      "path": "/dbactions/prompt_lib/{projectID}/rules/{ruleID}",
+      "operationId": "updateDbActionRule",
+      "source": "generated",
+      "responseSchema": "DbActionRule",
+      "fixture": null,
+      "usedBy": [
+        "pages/settings/DbActions.tsx"
+      ]
+    },
+    {
+      "id": "dbactions.listDbActionRuleNames",
+      "method": "GET",
+      "path": "/dbactions/prompt_lib/{projectID}/rule-names",
+      "operationId": "listDbActionRuleNames",
+      "source": "generated",
+      "responseSchema": "ListDbActionRuleNames200",
+      "fixture": null,
+      "usedBy": [
+        "pages/settings/DbActions.tsx"
       ]
     }
   ]

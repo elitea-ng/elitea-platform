@@ -62,6 +62,7 @@ import (
 	v2deepwiki "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
 	v2delegationgrants "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/delegationgrants"
 	desktopopsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
+	v2dbactions "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/dbactions"
 	v2discovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/discovery"
 	v2drafts "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/drafts"
 	v2core "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
@@ -518,6 +519,12 @@ type RouterConfig struct {
 	// the guard from ELITEA_HTTP_ACTION_EGRESS_ALLOWLIST.
 	HTTPActionRules v2httpactions.Repository
 	HTTPActionGuard *egress.Guard
+	// DBActionRules and DBActionGuard back /dbactions/prompt_lib/{projectID}
+	// (internal/api/v2/dbactions). Mounted unconditionally and gated: a nil
+	// repository answers 503, and a nil guard refuses every write. main.go
+	// builds the guard from ELITEA_DB_EGRESS_ALLOWLIST.
+	DBActionRules v2dbactions.Repository
+	DBActionGuard *egress.Guard
 	// MCPAuthorizationEgressGuard is the SSRF guard of the MCP OAuth and DCR
 	// proxies (eliteacore/mcp_oauth_egress.go). main.go builds it from
 	// ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST. Nil does NOT disable the guard: the
@@ -6322,6 +6329,16 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			// the package, and the project comes only from this mount pattern.
 			r.Mount("/httpactions/prompt_lib/{projectID}", v2httpactions.NewHandler(
 				cfg.HTTPActionRules, cfg.HTTPActionGuard, coreResolver,
+			).Routes())
+
+			// === DB action rules ===
+			//
+			// Project rules the `type: db` pipeline node names. Mounted
+			// unconditionally so the audited surface always matches a route;
+			// the gates (manage for rules, list for redacted names) are inside
+			// the package, and the project comes only from this mount pattern.
+			r.Mount("/dbactions/prompt_lib/{projectID}", v2dbactions.NewHandler(
+				cfg.DBActionRules, cfg.DBActionGuard, coreResolver,
 			).Routes())
 
 			// === Events (SSE) ===

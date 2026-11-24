@@ -82,6 +82,7 @@ export function buildSettingsSections(gates: SettingsSectionGates): SettingsSect
     // dismissal policy, for agent managers only.
     ...(workforceManager ? [{ id: 'agent-workforce', label: 'Agent workforce' }] : []),
     { id: 'http-actions', label: 'HTTP actions' },
+    { id: 'db-actions', label: 'DB actions' },
     ...(isPersonalProject ? [] : [{ id: 'users', label: 'Users' }]),
     ...(analyticsVisible ? [{ id: 'analytics', label: 'Analytics' }] : []),
     ...(usageVisible ? [{ id: 'usage', label: 'Usage' }] : []),

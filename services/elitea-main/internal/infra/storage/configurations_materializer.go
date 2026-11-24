@@ -13,6 +13,7 @@ import (
 
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/dbaction"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpoauth"
 	"google.golang.org/protobuf/proto"
@@ -273,6 +274,9 @@ func (m *CurrentConfigurationsMaterializer) materializeAgentExecution(
 			return nil, currentMaterializationError(ctx, err)
 		}
 		version["tools"] = tools
+		if err := m.materializeDBActionSnapshot(ctx, projectID, version, &walker); err != nil {
+			return nil, currentMaterializationError(ctx, err)
+		}
 		application["version_details"] = version
 		request.Application, err = encodeCurrentMaterializationObject(application, maxBytes)
 		if err != nil {
@@ -308,6 +312,69 @@ func (m *CurrentConfigurationsMaterializer) materializeAgentExecution(
 // maxDelegatedCredentialReferences is the open-card cap (contract §5): a wake
 // carries at most one reference per open card.
 const maxDelegatedCredentialReferences = 16
+
+// materializeDBActionSnapshot redeems each frozen `sql` configuration in
+// version["db_action_snapshot"] strictly for the claimed Worker. Every rule's
+// `sql_configuration` must carry Main's CurrentFrozenConfigurationMarker,
+// configuration_type=="sql", and configuration_project_id matching the claimed
+// execution's projectID; the marker is stripped before returning to the Worker.
+func (m *CurrentConfigurationsMaterializer) materializeDBActionSnapshot(
+	ctx context.Context,
+	projectID int32,
+	version map[string]any,
+	walker *currentFrozenConfigurationWalker,
+) error {
+	rawSnapshot, exists := version["db_action_snapshot"]
+	if !exists || rawSnapshot == nil {
+		return nil
+	}
+	snapshot, ok := rawSnapshot.(map[string]any)
+	if !ok || snapshot == nil {
+		return errInvalidCurrentFrozenConfiguration
+	}
+	if schema, _ := snapshot["schema_version"].(string); schema != dbaction.SnapshotSchema {
+		return errInvalidCurrentFrozenConfiguration
+	}
+	rawRules, ok := snapshot["rules"].([]any)
+	if !ok || len(rawRules) == 0 || len(rawRules) > dbaction.MaxRulesPerProject {
+		return errInvalidCurrentFrozenConfiguration
+	}
+	for i, rawRule := range rawRules {
+		ruleMap, ok := rawRule.(map[string]any)
+		if !ok || ruleMap == nil {
+			return errInvalidCurrentFrozenConfiguration
+		}
+		dialect, _ := ruleMap["dialect"].(string)
+		sqlCfg, ok := ruleMap["sql_configuration"].(map[string]any)
+		if !ok || sqlCfg == nil {
+			return errInvalidCurrentFrozenConfiguration
+		}
+		ownerProjectID, marked, err := currentFrozenConfigurationOwner(sqlCfg)
+		if err != nil || !marked || ownerProjectID != projectID {
+			return errInvalidCurrentFrozenConfiguration
+		}
+		if cfgType, _ := sqlCfg["configuration_type"].(string); cfgType != "sql" {
+			return errInvalidCurrentFrozenConfiguration
+		}
+		if walker.configurations >= maxCurrentFrozenConfigurationScopes {
+			return errInvalidCurrentFrozenConfiguration
+		}
+		walker.configurations++
+		materialized, err := walker.materializeOwnedMap(ctx, ownerProjectID, sqlCfg, 0, true)
+		if err != nil {
+			return err
+		}
+		delete(materialized, configurationapp.CurrentFrozenConfigurationMarker)
+		if _, err := dbaction.ParseMaterializedSQLCredential(dialect, materialized); err != nil {
+			return errInvalidCurrentFrozenConfiguration
+		}
+		ruleMap["sql_configuration"] = materialized
+		rawRules[i] = ruleMap
+	}
+	snapshot["rules"] = rawRules
+	version["db_action_snapshot"] = snapshot
+	return nil
+}
 
 // materializeDelegatedCredentials resolves a fan-out wake's
 // mcp_token_references (FU-250) through the one release path, for the live

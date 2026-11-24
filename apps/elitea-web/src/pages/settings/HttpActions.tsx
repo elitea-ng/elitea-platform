@@ -43,10 +43,10 @@ import {
   useListHttpActionRules,
 } from '@/shared/api/generated/httpactions/httpactions';
 
-import { httpActionsFeature } from '@/features/settings';
+import { actionRulesFeature } from '@/features/settings';
 import type { HttpActionRuleFormValues } from '@/features/settings';
 
-const { useHttpActionRulePermissions, HttpActionRuleFormDialog, HttpActionRulesTable } = httpActionsFeature;
+const { useHttpActionRulePermissions, HttpActionRuleFormDialog, HttpActionRulesTable } = actionRulesFeature.http;
 
 /** The write body for a rule's current values; `output_bucket` is omitted when blank (the schema refuses ''). */
 function writeBody(values: HttpActionRuleFormValues, revision?: number): HttpActionRuleWriteRequest {

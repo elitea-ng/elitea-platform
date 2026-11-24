@@ -566,6 +566,7 @@ export default function table(ctx) {
           ELITEA_AI_PROJECT_ID: d("ELITEA_AI_PROJECT_ID", "1"),
           ELITEA_SELF_LLM_ORIGINS: dd("ELITEA_SELF_LLM_ORIGINS", "http://elitea-main:8080/llm/v1,http://localhost:8080/llm/v1"),
           ELITEA_HTTP_ACTION_EGRESS_ALLOWLIST: d("ELITEA_HTTP_ACTION_EGRESS_ALLOWLIST", ""),
+          ELITEA_DB_EGRESS_ALLOWLIST: d("ELITEA_DB_EGRESS_ALLOWLIST", ""),
           ELITEA_PROJECT_INFO_ENABLED: "true",
           ELITEA_INDEX_TYPES_ENABLED: "true",
           ELITEA_APPLICATION_SKILLS_ENABLED: "true",

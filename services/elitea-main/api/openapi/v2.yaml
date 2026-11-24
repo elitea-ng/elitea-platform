@@ -114,6 +114,8 @@ tags:
   - name: tracing
   - name: httpactions
     description: HTTP action rules for the pipeline HTTP Request node
+  - name: dbactions
+    description: DB action rules for the pipeline DB node
   - name: webhooks
     description: OpenTelemetry trace ingest (collect/otlp proxy) and status
   - name: branding
@@ -22959,6 +22961,75 @@ components:
         name: { type: string }
         enabled: { type: boolean }
       required: [name, enabled]
+
+    DbActionRule:
+      type: object
+      description: >
+        One project DB action rule (internal/application/dbaction.Rule).
+        `configuration_id` names a project `sql` configuration whose host,
+        port, username and password live only in the configuration vault
+        (never in pipeline YAML or rule rows).
+      properties:
+        id: { type: integer, format: int64 }
+        revision: { type: integer, format: int64 }
+        name: { type: string }
+        configuration_id: { type: integer, format: int32 }
+        dialect:
+          type: string
+          enum: [postgres, mysql]
+        database_name: { type: string }
+        mode:
+          type: string
+          enum: [read, write]
+        marker_table: { type: string }
+        enabled: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, revision, name, configuration_id, dialect, database_name, mode, enabled, created_at, updated_at]
+
+    DbActionRuleWriteRequest:
+      type: object
+      additionalProperties: false
+      description: >
+        Create/update body. `revision` is required on update and ignored on
+        create. `marker_table` must be omitted for `read` rules and defaults
+        to `elitea_effects` when omitted on `write` rules.
+      properties:
+        name:
+          type: string
+          maxLength: 128
+          pattern: '^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$'
+        configuration_id: { type: integer, format: int32, minimum: 1 }
+        dialect:
+          type: string
+          enum: [postgres, mysql]
+        database_name:
+          type: string
+          maxLength: 128
+          pattern: '^[A-Za-z0-9_][A-Za-z0-9_$-]{0,127}$'
+        mode:
+          type: string
+          enum: [read, write]
+        marker_table:
+          type: string
+          maxLength: 128
+          pattern: '^[A-Za-z_][A-Za-z0-9_]{0,62}(\.[A-Za-z_][A-Za-z0-9_]{0,62})?$'
+        enabled: { type: boolean }
+        revision: { type: integer, format: int64 }
+      required: [name, configuration_id, dialect, database_name, mode, enabled]
+
+    DbActionRuleName:
+      type: object
+      properties:
+        name: { type: string }
+        dialect:
+          type: string
+          enum: [postgres, mysql]
+        mode:
+          type: string
+          enum: [read, write]
+        enabled: { type: boolean }
+      required: [name, dialect, mode, enabled]
 
     # ---- Secrets (v2/secrets) ---------------------------------------------
     Webhook:
@@ -52064,6 +52135,154 @@ paths:
                   items:
                     type: array
                     items: { $ref: '#/components/schemas/HttpActionRuleName' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+
+  # ==========================================================================
+  # DB ACTION RULES — project rules the `type: db` pipeline node names
+  # ==========================================================================
+  #
+  # internal/api/v2/dbactions: project admins (models.db_action_rules.manage)
+  # author rules referencing a project `sql` configuration; host, port,
+  # username and password live only in the configuration vault (never in
+  # pipeline YAML or rule rows). The referenced host/port is checked against
+  # ELITEA_DB_EGRESS_ALLOWLIST on write and enforced again by the Worker at
+  # every TCP dial (5e-1). Rules are disabled, never deleted. The pipeline
+  # editor reads redacted rule names (name, dialect, mode, enabled) via
+  # models.db_action_rules.list and never sees database names or credentials.
+  /dbactions/prompt_lib/{projectID}/rules:
+    parameters:
+      - name: projectID
+        in: path
+        required: true
+        schema: { type: string }
+
+    get:
+      operationId: listDbActionRules
+      summary: List a project's DB action rules (admin view)
+      description: >
+        Every DB action rule of the project, ordered by name. An empty project
+        is `{"items": []}` with 200.
+      tags: [dbactions]
+      responses:
+        '200':
+          description: The project's DB action rules
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/DbActionRule' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+
+    post:
+      operationId: createDbActionRule
+      summary: Create a DB action rule
+      description: >
+        The body is validated against the DB action rule schema
+        (elitea.runtime.db-action-rule.v1), the referenced `sql` configuration
+        is verified for access and dialect compatibility, and its destination
+        is checked against ELITEA_DB_EGRESS_ALLOWLIST before writing. A project
+        holds at most 256 rules.
+      tags: [dbactions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DbActionRuleWriteRequest' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DbActionRule' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '409': { $ref: '#/components/responses/409' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /dbactions/prompt_lib/{projectID}/rules/{ruleID}:
+    parameters:
+      - name: projectID
+        in: path
+        required: true
+        schema: { type: string }
+      - name: ruleID
+        in: path
+        required: true
+        schema: { type: string }
+
+    get:
+      operationId: getDbActionRule
+      summary: Read one DB action rule
+      tags: [dbactions]
+      responses:
+        '200':
+          description: The rule
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DbActionRule' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+
+    put:
+      operationId: updateDbActionRule
+      summary: Replace a DB action rule (edit, enable or disable)
+      description: >
+        Every field is replaced with the body. `revision` must equal the
+        stored revision (409 otherwise), so two admins cannot overwrite each
+        other silently. A disabled rule refuses every DB action that names it.
+      tags: [dbactions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DbActionRuleWriteRequest' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DbActionRule' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '409': { $ref: '#/components/responses/409' }
+
+  /dbactions/prompt_lib/{projectID}/rule-names:
+    parameters:
+      - name: projectID
+        in: path
+        required: true
+        schema: { type: string }
+
+    get:
+      operationId: listDbActionRuleNames
+      summary: List redacted DB rule names for the pipeline editor
+      description: >
+        Names, dialects, modes, and enabled flags only, ordered by name.
+        Database names, marker tables, configuration ids, hosts, and
+        credentials are never returned here.
+      tags: [dbactions]
+      responses:
+        '200':
+          description: The project's DB action rule names
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/DbActionRuleName' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
 

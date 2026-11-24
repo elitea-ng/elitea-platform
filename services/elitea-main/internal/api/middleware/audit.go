@@ -189,6 +189,9 @@ var auditedSurfaces = []string{
 	// HTTP action rules: which origin, path, method and credential a pipeline
 	// may call out to — an egress grant written by project admins.
 	"/api/v2/httpactions/",
+	// DB action rules: which SQL configuration, dialect, database, mode and
+	// marker table a pipeline may query or mutate — written by project admins.
+	"/api/v2/dbactions/",
 }
 
 // AuditedSurfaces returns a copy of the prefix list, so a router-level test can

@@ -210,6 +210,11 @@ type Config struct {
 	// malformed value refuses startup.
 	HTTPActionEgressAllowlist string
 
+	// DBEgressAllowlist is ELITEA_DB_EGRESS_ALLOWLIST, the operator's outer
+	// bound for DB action rule targets (empty: public only). A malformed value
+	// refuses startup.
+	DBEgressAllowlist string
+
 	ControlAddress string
 	OutputAddress  string
 	ContentAddress string
@@ -501,6 +506,10 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 	}
 	config.HTTPActionEgressAllowlist, _ = lookup(egress.HTTPActionAllowlistEnv)
 	if _, err := egress.NewHTTPActionGuard(config.HTTPActionEgressAllowlist); err != nil {
+		return Config{}, err
+	}
+	config.DBEgressAllowlist, _ = lookup(egress.DBActionAllowlistEnv)
+	if _, err := egress.NewDBActionGuard(config.DBEgressAllowlist); err != nil {
 		return Config{}, err
 	}
 	if err := config.Validate(); err != nil {

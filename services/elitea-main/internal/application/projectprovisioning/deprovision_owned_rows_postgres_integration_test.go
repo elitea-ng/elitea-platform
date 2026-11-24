@@ -150,6 +150,8 @@ var ownedRowTables = map[string]string{
 	"elitea_runtime.tool_call_records":      `SELECT count(*) FROM elitea_runtime.tool_call_records WHERE project_id = $1`,
 	"elitea_runtime.http_action_rules":      `SELECT count(*) FROM elitea_runtime.http_action_rules WHERE project_id = $1`,
 	"elitea_runtime.http_action_rule_audit": `SELECT count(*) FROM elitea_runtime.http_action_rule_audit WHERE project_id = $1`,
+	"elitea_runtime.db_action_rules":        `SELECT count(*) FROM elitea_runtime.db_action_rules WHERE project_id = $1`,
+	"elitea_runtime.db_action_rule_audit":   `SELECT count(*) FROM elitea_runtime.db_action_rule_audit WHERE project_id = $1`,
 }
 
 func seedProjectOwnedRows(ctx context.Context, t *testing.T, pool *pgxpool.Pool, projectID int64) {
@@ -175,6 +177,10 @@ func seedProjectOwnedRows(ctx context.Context, t *testing.T, pool *pgxpool.Pool,
 		 VALUES ($1::bigint, 'orders.lookup', 'https://api.example.com', '/v1/orders', 'GET', 0, 'openapi', 'get_order', 1, 1)`,
 		`INSERT INTO elitea_runtime.http_action_rule_audit (rule_id, revision, project_id, actor_id, action, rule_json)
 		 SELECT id, 1, project_id, 1, 'create', '{}'::jsonb FROM elitea_runtime.http_action_rules WHERE project_id = $1::bigint`,
+		`INSERT INTO elitea_runtime.db_action_rules (project_id, name, configuration_id, dialect, database_name, mode, created_by, updated_by)
+		 VALUES ($1::bigint, 'warehouse.read', 1, 'postgres', 'analytics', 'read', 1, 1)`,
+		`INSERT INTO elitea_runtime.db_action_rule_audit (rule_id, revision, project_id, actor_id, action, rule_json)
+		 SELECT id, 1, project_id, 1, 'create', '{}'::jsonb FROM elitea_runtime.db_action_rules WHERE project_id = $1::bigint`,
 	}
 	for _, statement := range statements {
 		if _, err := pool.Exec(ctx, statement, projectID); err != nil {
