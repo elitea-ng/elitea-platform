@@ -271,6 +271,9 @@ var Capabilities = map[string][]Capability{
 	adminaccess.AccessBreakglassReview:  {Attest},
 
 	ExportPermission: {ExportEntitlements},
+	// Which SCIM clients read the entitlement tree (#3026): it narrows
+	// runtime.plugins and the export, and carries both.
+	adminaccess.EntitlementsExportManage: {AdministerPlatform, ExportEntitlements},
 }
 
 // OwnerCapabilities are what being an agent's business or technical owner

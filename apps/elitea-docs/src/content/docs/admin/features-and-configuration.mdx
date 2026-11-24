@@ -165,7 +165,7 @@ The Configuration and Features pages list only the sections the caller can open,
 | Skill Publishing (`skill_publishing`) | Agents and governance | `platform.config.view` | `platform.config.manage` | none |
 | Web Search (`web_search`) | Agents and governance | `platform.config.view` | `platform.config.manage` | none |
 | Worker Egress, Cloud Browser, Remote Agents, Connector Catalogue, Run Caps, Delegation, Agent tools, Proactive agents, Approvals, Notifications, Approval Policy, AI Disclosure, Platform Preamble, Agent Lifecycle, Credential Review | Agents and governance | legacy path only | legacy path only | `configuration.governance` |
-| Entitlement Export (`entitlement_export`) | Security | legacy path only | legacy path only | `entitlements.export` |
+| Entitlement Export (`entitlement_export`) | Security | `entitlements.export` | `entitlements.export.manage` | `entitlements.export` |
 | Default Secrets (`default_secrets`) | Platform | `platform.config.view` | `platform.config.manage` | none |
 | Help Center (`resources`), Banner (`dedicated_banner`), Support Assistant (`support_assistant`), Voice Features (`voice_features`), Analytics (`analytics`) | Platform | `platform.config.view` | `platform.config.manage` | none |
 | Native clients (`native_clients`), Native client policy (`native_client_policy`), Cloud executor (`cloud_executor`) | Platform | `configuration.native_clients` | `configuration.native_clients` | `configuration.native_clients` |
@@ -175,7 +175,7 @@ The Configuration and Features pages list only the sections the caller can open,
 | Maintenance (`maintenance`) | Platform | `platform.maintenance.manage` | `platform.maintenance.manage` | `runtime.plugins` |
 | E-mail (`email`) | Platform | `platform.email.manage` | `platform.email.manage` | `runtime.plugins` |
 
-"None" in the last column means `runtime.plugins` alone is the legacy path. The Service Descriptors section has no fields and only points at the Service Descriptors page, so the permission that opens that page also reads the section. The agent governance sections and Entitlement Export have no narrow permission yet. The schema list carries each section's area and pair as `access`.
+"None" in the last column means `runtime.plugins` alone is the legacy path. The Service Descriptors section has no fields and only points at the Service Descriptors page, so the permission that opens that page also reads the section. The agent governance sections have no narrow permission yet. The Entitlement Export section is read with `entitlements.export`, the permission of the export itself, and saved with `entitlements.export.manage`: the list decides which tools read the entitlement tree, so the read permission does not save it. The schema list carries each section's area and pair as `access`.
 
 <Note>
 Configuration's "Advanced", "Observability", "Runtime", and "Admin Panel" sections from the legacy admin UI have no counterpart here — their fields addressed process environment variables and mounted files that no form could ever write, so they were removed rather than kept as permanently unavailable placeholders.

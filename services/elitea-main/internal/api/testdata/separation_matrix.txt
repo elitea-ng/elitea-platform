@@ -243,7 +243,7 @@ allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin
 allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section default_secrets
 allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section delegation
 allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section email
-allowed allowed refused refused refused refused read    PUT /api/v2/admin/plugin_config_values/administration/{plugin} section entitlement_export
+allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section entitlement_export
 allowed allowed allowed refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section governance
 allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section guardrails
 allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section llm_proxy

@@ -286,6 +286,8 @@ func TestAViewHolderReadsAndCannotSave(t *testing.T) {
 		adminaccess.LLMPolicyView:      {"guardrails", "circuit_breaker", "governance"},
 		adminaccess.PlatformConfigView: {"analytics", "resources", "dedicated_banner"},
 		adminaccess.IdentitySSOView:    {"auth", "session_policy"},
+		// #3026: the export permission reads its section and does not save it.
+		adminaccess.EntitlementsExport: {"entitlement_export"},
 	} {
 		router := newConfigRouter(holder)
 		for _, id := range sections {
@@ -296,6 +298,23 @@ func TestAViewHolderReadsAndCannotSave(t *testing.T) {
 			if got := sectionAnswer(t, router, http.MethodPut, id); got != http.StatusForbidden {
 				t.Errorf("%s: PUT %s = %d, want 403", holder, id, got)
 			}
+		}
+	}
+}
+
+// #3026: entitlements.export.manage saves the entitlement_export section, as
+// the legacy administrator does, and reaches no other section.
+func TestTheEntitlementExportManagerSavesOnlyItsSection(t *testing.T) {
+	legacy := newConfigRouter(legacyAdministratorNames...)
+	router := newConfigRouter(adminaccess.EntitlementsExportManage)
+	for _, method := range []string{http.MethodGet, http.MethodPut} {
+		got := sectionAnswer(t, router, method, "entitlement_export")
+		want := sectionAnswer(t, legacy, method, "entitlement_export")
+		if got == http.StatusForbidden || got != want {
+			t.Errorf("%s entitlement_export = %d, want the legacy administrator's %d", method, got, want)
+		}
+		if got := sectionAnswer(t, router, method, "auth"); got != http.StatusForbidden {
+			t.Errorf("%s auth = %d, want 403", method, got)
 		}
 	}
 }
