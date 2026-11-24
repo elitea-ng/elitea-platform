@@ -205,3 +205,48 @@ func TestCurrentConfigurationReadsTakeTheCentralSettingsBranch(t *testing.T) {
 		t.Fatalf("a caller with no grant read the settings: status=%d", response.Code)
 	}
 }
+
+// authoredRows holds one unshared guarded row another member authored, and
+// records the viewer each list asked for.
+type authoredRows struct{ listViewer **int32 }
+
+func (r authoredRows) List(
+	_ context.Context, request configurationapp.CurrentConfigurationListRequest,
+) (configurationapp.CurrentConfigurationListResult, error) {
+	*r.listViewer = request.ViewerID
+	return configurationapp.CurrentConfigurationListResult{}, nil
+}
+
+func (authoredRows) Get(_ context.Context, projectID, id int32) (configurationapp.CurrentConfiguration, error) {
+	if id != guardedRowID {
+		return configurationapp.CurrentConfiguration{}, configurationapp.ErrCurrentConfigurationNotFound
+	}
+	author := int32(99)
+	return configurationapp.CurrentConfiguration{ID: id, ProjectID: projectID,
+		Type: configurationapp.CloudExecutorConfigurationType, AuthorID: &author}, nil
+}
+
+// A central operator reads a member's unshared guarded setting: the gate lets
+// the same operator update and delete it, so the member visibility rule (#922)
+// must not hide it from the read.
+func TestCentralSettingsReadsSeeUnsharedGuardedRows(t *testing.T) {
+	viewerSeen := new(int32)
+	rows := authoredRows{listViewer: &viewerSeen}
+	route, err := handler.NewCurrentConfigurationReadRoute(rows, 1, centralAuth(),
+		grants{central: []string{adminaccess.ProjectsSettingsManage}}.resolver())
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	route.ServeHTTP(response, currentReadRequest(http.MethodGet, "/api/v2/configurations/configuration/7/21", "10.0.0.8:43120"))
+	if response.Code != http.StatusOK {
+		t.Fatalf("read of an unshared guarded row: status=%d, want 200; body=%s", response.Code, response.Body.String())
+	}
+	response = httptest.NewRecorder()
+	route.ServeHTTP(response, currentReadRequest(http.MethodGet,
+		"/api/v2/configurations/configurations/7?type=cloud_executor", "10.0.0.8:43120"))
+	if response.Code != http.StatusOK || viewerSeen != nil {
+		t.Fatalf("list: status=%d viewer=%v, want 200 and no viewer filter; body=%s",
+			response.Code, viewerSeen, response.Body.String())
+	}
+}

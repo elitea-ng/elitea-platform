@@ -166,7 +166,16 @@ func (h *currentConfigurationReadHandler) get(w http.ResponseWriter, r *http.Req
 // (mutation.go's currentConfigurationMutationAuthorID), which is the column
 // the visibility predicate compares against — the two must agree or a user
 // would be hidden from their own rows.
+//
+// A request the gate admitted through the central override (ADR-0059 R0.6b)
+// reads every row of the guarded types it reached, as the compatibility route
+// does: the operator manages the project's settings, and the same operator
+// may update or delete any of those rows (the gate reads the stored type
+// unfiltered), so withholding one from the read would hide what it can change.
 func currentConfigurationViewerID(ctx context.Context) *int32 {
+	if admittedCentrally(ctx) {
+		return nil
+	}
 	principal, ok := auth.UserFromContext(ctx)
 	if !ok {
 		return nil

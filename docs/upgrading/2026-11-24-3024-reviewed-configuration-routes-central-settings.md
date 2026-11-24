@@ -14,7 +14,9 @@ lacked two rules that the compatibility routes have:
   `worker_egress`, `ai_disclosure`, `browser`, `computer_use`) of a project
   they are not a member of. Before this change, only the `{mode}/{projectID}`
   paths gave such a caller this access. Credential, model and toolkit
-  configuration types stay refused to a non-member.
+  configuration types stay refused to a non-member. A central operator reads
+  every row of a guarded type, including a member's unshared row, as on the
+  compatibility routes. It may also change or delete those rows.
 - **The guarded-type rule.** A project member writes a guarded setting only
   when they hold `models.project_settings.edit` in the project, or hold
   `projects.settings.manage` centrally. The reviewed write routes did not apply

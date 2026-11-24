@@ -175,7 +175,9 @@ func mountReviewedAPIRoutes(r chi.Router, cfg RouterConfig) {
 	// carry the same gate: the central branch of the guarded project settings
 	// (ADR-0059 R0.6b) and the guarded-type rule (#3024). That gate is an
 	// administration gate, and the mark tells the maintenance window so, as
-	// the compatibility route's middleware does.
+	// the compatibility route's middleware does. The gate marks itself too,
+	// but inside the composed handler, where the router's walk of the route
+	// middlewares cannot see it; this mark is the one the walk reads.
 	configurationRoutes := r.With(apimw.MarkAdministrationRoute)
 	if cfg.CurrentConfigurationRead != nil {
 		configurationRoutes.Method(http.MethodGet, configurationapi.CurrentConfigurationListPath, cfg.CurrentConfigurationRead)

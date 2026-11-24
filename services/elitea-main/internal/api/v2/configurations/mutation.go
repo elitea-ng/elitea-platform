@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"math"
 	"mime"
 	"net/http"
@@ -128,10 +129,15 @@ func (h *currentConfigurationMutationHandler) settingsWriteForbidden(
 
 // storedRowType is the stored type of the row an update or a delete reaches,
 // for the guarded-type rule. A row that is not there is left to the mutator,
-// which answers 404; a failed read answers 500 here.
+// which answers 404; a failed read answers 500 here, and is logged. The read
+// fails closed for every type: the type is what it reads, so it cannot first
+// tell a guarded row from another. It runs again after a central admission,
+// on purpose: the rule decides on the type the write is about to change, not
+// on what the gate read before it.
 func (h *currentConfigurationMutationHandler) storedRowType(w http.ResponseWriter, r *http.Request) (string, bool) {
 	stored, err := h.storedType(r)
 	if err != nil {
+		slog.ErrorContext(r.Context(), "configuration mutation: read the stored type", "err", err)
 		writeCurrentConfigurationMutationError(w, http.StatusInternalServerError, "Unexpected error", "unknown")
 		return "", false
 	}
