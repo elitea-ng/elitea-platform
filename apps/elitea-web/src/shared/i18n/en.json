@@ -2006,7 +2006,7 @@
   "pages.pipelines.myLiked.unavailable.description": "The public pipelines API does not yet support filtering by liked status.",
   "pages.pipelines.myLiked.unavailable.title": "Liked pipelines are not available yet.",
   "pages.pipelines.pipelines.tabsAriaLabel": "Pipelines",
-  "pages.pipelines.privateList.empty.description": "Create your first pipeline to get started. Pipelines chain agents, skills and toolkits into one repeatable flow.",
+  "pages.pipelines.privateList.empty.description": "Create your first pipeline to start automating tasks and workflows.",
   "pages.pipelines.privateList.empty.title": "No pipelines yet",
   "pages.pipelines.privateList.emptyFound.description": "Create yours now!",
   "pages.pipelines.privateList.emptyFound.title": "Nothing found.",
@@ -7430,5 +7430,9 @@
   "features.agentLifecycle.import.teamName": "Team: {{name}}",
   "features.agentLifecycle.import.teamOnAgents": "This zip is a team. Import it from the Agents list.",
   "features.agentTeams.exportAction": "Export",
-  "features.agentTeams.exportMemberFailed": "The team could not be exported: the agent {{name}} could not be read."
+  "features.agentTeams.exportMemberFailed": "The team could not be exported: the agent {{name}} could not be read.",
+  "pages.pipelines.createPipeline.saveToTest": "Save the pipeline to test it.",
+  "pages.pipelines.list.createFirst": "Create pipeline",
+  "pipelines.flowEditor.decisionNode.decisionCriteria": "Decision criteria",
+  "pipelines.inputMapping.addOptionalParameter": "Add optional parameter"
 }

@@ -54,7 +54,7 @@ function emptyCopy(filtered: boolean): { readonly title: string; readonly descri
     title: t('pages.pipelines.privateList.empty.title', 'No pipelines yet'),
     description: t(
       'pages.pipelines.privateList.empty.description',
-      'Create your first pipeline to get started. Pipelines chain agents, skills and toolkits into one repeatable flow.',
+      'Create your first pipeline to start automating tasks and workflows.',
     ),
   };
 }

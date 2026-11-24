@@ -1,10 +1,13 @@
 /** Private Gate 5a/5c authoring contracts. Runtime admission stays separate. */
 export type ExtensionRecord = Readonly<Record<string, unknown>>;
+type ExtensionSettingsSection = 'basic' | 'advanced' | 'all';
+
 export interface ExtensionSettingsProps {
   readonly node: ExtensionRecord;
   readonly disabled: boolean;
   readonly change: (field: string, value: unknown) => void;
   readonly remove: (field: string) => void;
+  readonly section?: ExtensionSettingsSection | undefined;
 }
 /**
  * The node types a fan-out node runs directly as its child, per family:

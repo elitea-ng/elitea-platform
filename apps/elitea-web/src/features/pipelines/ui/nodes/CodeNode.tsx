@@ -146,6 +146,7 @@ export const CodeNode = memo(function CodeNode({ id, data, selected, llmSettings
       <NodeConfigSection section="basic">
         <SimpleLLMInputs
           enableAIAssistant
+          nodeType={PipelineNodeTypes.Code}
           inputMappings={inputMappings}
           values={codeValues}
           onChangeMapping={onChangeMapping as never}

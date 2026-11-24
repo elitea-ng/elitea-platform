@@ -21,6 +21,8 @@ export interface SimpleLLMInputsProps {
   readonly modelConfig?: AiAssistantLlmSettings | null;
   readonly gap?: string;
   readonly codeLanguage?: string | undefined;
+  readonly keys?: readonly string[] | undefined;
+  readonly nodeType?: string | undefined;
 }
 
 /**
@@ -28,28 +30,39 @@ export interface SimpleLLMInputsProps {
  * settings/SimpleLLMInputs.jsx` (unit A2h) -- a thin list wrapper over
  * `SimpleLLMInputItem`, one row per `inputMappings` key.
  */
+function readOwn<T>(record: Readonly<Record<string, T>>, key: string): T | undefined {
+  return Object.hasOwn(record, key) ? record[key] : undefined;
+}
+
 export function SimpleLLMInputs(props: SimpleLLMInputsProps): ReactNode {
-  const { inputMappings, values, onChangeMapping, defaultValues, disabled = false, enableAIAssistant = false, modelConfig = null, gap, codeLanguage } = props;
+  const { inputMappings, values, onChangeMapping, defaultValues, disabled = false, enableAIAssistant = false, modelConfig = null, gap, codeLanguage, keys, nodeType } = props;
 
   const containerSx: SxProps<Theme> = { display: 'flex', flexDirection: 'column', gap };
+  const resolvedKeys = keys
+    ? keys.filter((key) => Object.hasOwn(inputMappings, key))
+    : Object.keys(inputMappings);
+
+  if (resolvedKeys.length === 0) return null;
 
   return (
     <Box sx={containerSx}>
-      {Object.keys(inputMappings).map(key => {
-        const current = values[key] ?? inputMappings[key];
+      {resolvedKeys.map(key => {
+        const current = readOwn(values, key) ?? readOwn(inputMappings, key);
+        const defaultVal = readOwn(defaultValues, key);
         return (
           <SimpleLLMInputItem
             key={key}
             variableName={key}
             variable={key}
             type={current?.type ?? 'fixed'}
-            value={current?.value ?? defaultValues[key] ?? ''}
-            defaultValue={defaultValues[key] ?? ''}
+            value={current?.value ?? defaultVal ?? ''}
+            defaultValue={defaultVal ?? ''}
             onChangeMapping={onChangeMapping}
             disabled={disabled}
             enableAIAssistant={enableAIAssistant}
             modelConfig={modelConfig}
             codeLanguage={codeLanguage}
+            nodeType={nodeType}
           />
         );
       })}

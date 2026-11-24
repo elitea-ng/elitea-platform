@@ -48,6 +48,9 @@ import { NodeCard } from './BaseNode/NodeCard';
 import { LLMNodeHandles, useLLMNodeModel } from './LLMNode.parts';
 import { t } from '@/shared/i18n';
 
+const LLM_BASIC_INPUT_KEYS: readonly string[] = ['system', 'task'];
+const LLM_ADVANCED_INPUT_KEYS: readonly string[] = ['chat_history'];
+
 export interface LLMNodeProps extends NodeProps<FlowNode> {
   readonly versionTools?: readonly VersionTool[] | undefined;
   readonly llmSettings?: AiAssistantLlmSettings | null | undefined;
@@ -96,6 +99,8 @@ export const LLMNode = memo(function LLMNode(props: LLMNodeProps): ReactNode {
           />
         ))}
         <SimpleLLMInputs
+          keys={LLM_BASIC_INPUT_KEYS}
+          nodeType={FlowEditorConstants.PipelineNodeTypes.LLM}
           inputMappings={model.inputMappings}
           values={model.inputMappingValues}
           onChangeMapping={model.handleSimpleLLMChange}
@@ -128,6 +133,18 @@ export const LLMNode = memo(function LLMNode(props: LLMNodeProps): ReactNode {
           label={t('pipelines.flowEditor.llmNode.outputLabel', 'Output')}
           outputFieldName="output"
           disabled={model.isFieldsDisabled}
+        />
+        <SimpleLLMInputs
+          keys={LLM_ADVANCED_INPUT_KEYS}
+          nodeType={FlowEditorConstants.PipelineNodeTypes.LLM}
+          inputMappings={model.inputMappings}
+          values={model.inputMappingValues}
+          onChangeMapping={model.handleSimpleLLMChange}
+          defaultValues={model.defaultValues}
+          disabled={model.isFieldsDisabled}
+          enableAIAssistant
+          modelConfig={model.resolvedLlmSettings}
+          gap="1rem"
         />
         <LlmOutputContractSettings
           id={id}

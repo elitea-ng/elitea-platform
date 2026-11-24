@@ -55,10 +55,13 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import { useTheme } from '@mui/material/styles';
 import { useEdges, useNodes } from '@xyflow/react';
 
+import { PipelineNodeTypes } from '../../../lib/flow-editor/constants/flowEditor.constants';
+import { getNodeFieldInfo, NODE_FIELD_KEYS } from '../../../lib/flow-editor/constants/nodeFieldInfo.constants';
 import { getBorderColorAndTooltip } from '../../../lib/flow-editor/helpers/decisionOutput.helpers';
 import type { DecisionOutputBorderColor } from '../../../lib/flow-editor/helpers/decisionOutput.helpers';
 import type { FlowGraphEdge, FlowGraphNode } from '../../../lib/flow-editor/helpers/pipelineFlow.types';
 import { HeadingChip } from '@/shared/ui/HeadingChip';
+import { InfoTooltip } from '@/shared/ui/InfoTooltip';
 import { RemoveIcon } from '@/shared/ui/icons/remove-icon';
 import { t } from '@/shared/i18n';
 
@@ -77,9 +80,14 @@ export function DecisionOutputs(props: DecisionOutputsProps): ReactNode {
   const theme = useTheme();
   const styles = decisionOutputsStyles();
 
+  const decisionOutputsInfo = getNodeFieldInfo(PipelineNodeTypes.Decision, NODE_FIELD_KEYS.decisionOutputs);
+
   return (
     <Box sx={styles.decisionOutputsContainer}>
-      <HeadingChip label={t('pipelines.flowEditor.decisionNode.decisionOutputs', 'Decision outputs')} />
+      <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
+        <HeadingChip label={t('pipelines.flowEditor.decisionNode.decisionOutputs', 'Decision outputs')} />
+        {decisionOutputsInfo ? <InfoTooltip title={decisionOutputsInfo} placement="top" /> : null}
+      </Box>
 
       <Box sx={styles.outputsBorderContainer}>
         {decisionOutput.map(item => {

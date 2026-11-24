@@ -24,9 +24,13 @@ export interface PipelineToolEntry {
   /** `'pipeline'` when `type === 'application'` names a pipeline rather than an agent (baseline: `tool.agent_type === 'pipeline'`). */
   readonly agent_type?: string;
   readonly meta?: { readonly mcp?: boolean };
+  /** Connection state updated by `usePipelineMCPToolsStatusMonitor` for MCP tools. */
+  readonly online?: boolean;
   /** Static tool-name list on a non-dynamic toolkit entry (`ToolkitsSelect.jsx:52`'s `toolkitObj?.tools`). */
   readonly tools?: readonly (string | { readonly name?: string })[];
   readonly settings?: Readonly<Record<string, unknown>> & {
     readonly selected_tools?: readonly string[];
+    readonly application_id?: number;
+    readonly application_version_id?: number;
   };
 }

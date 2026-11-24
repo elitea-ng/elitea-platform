@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
@@ -16,153 +16,56 @@ import {
   type ApplicationCreationInput,
 } from '@/entities/application-form';
 import { applicationServerErrorMessage, CreateAgentForm } from '@/features/agents';
-import { useLivePipelineGraphAdmission } from '@/features/pipelines';
-import { PIPELINE_STARTER_TEMPLATE } from '@/shared/lib/pipelineStarterTemplate';
-import { areAgentLlmSettingsEqual, type AgentLlmSettings } from '@/shared/api/agentLlmSettings';
+import {
+  ConfigurationTab,
+  resetPipelineDraft,
+  useLivePipelineGraphAdmission,
+  usePipelineGraphDraft,
+  usePipelineVersionSync,
+  type ConfigurationTabProps,
+} from '@/features/pipelines';
+import type { ApplicationVersionDetail } from '@/shared/api/generated/model';
+import type { AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 import { t } from '@/shared/i18n';
 import { usePageCrumbs } from '@/shared/ui/page-chrome';
 import { AgentModelSettings } from '@/widgets/agent-model-settings';
 import { disarmUnsavedChangesNavBlocker, useUnsavedChangesNavBlocker } from '@/widgets/app-shell';
 import { PageToolbar, pageSx } from '@/widgets/page-header';
 
+import {
+  areExtraFieldsEqual,
+  CREATE_DRAFT_VERSION_ID,
+  NOOP_CREATE_CHAT_ADAPTER,
+  pipelineInstructions,
+  type CreatePipelineFormExtraFields,
+} from './lib/createPipeline.helpers';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
 import { CreatePipelineAdmissionAlert } from './ui/CreatePipelineAdmissionAlert';
 
-/**
- * The `version_details` subset `CreateAgentForm` reads/writes that
- * `applicationCreationSchema` (name/description/conversation_starters only)
- * does not validate — held as local state rather than widening the RHF form's
- * generic. Same adapter, same reasoning as
- * `pages/agents/CreateApplication.tsx`'s `CreateAgentFormExtraFields`.
- */
-interface CreatePipelineFormExtraFields {
-  readonly instructions: string;
-  readonly welcomeMessage: string;
-  readonly variables: { readonly name: string; readonly value: string }[];
-  readonly stepLimit: number | undefined;
-  /** The model this pipeline's first version will run on; `undefined` leaves it on the project catalogue default. */
-  readonly llmSettings: AgentLlmSettings | undefined;
-}
-
-/**
- * The `extraFields` half of "is this draft dirty?" (#133) — RHF's
- * `formState.isDirty` only sees the three schema-validated fields, so a user
- * who typed only instructions would otherwise lose that work unprompted.
- *
- * Duplicated from `pages/agents/CreateApplication.tsx`'s
- * `areExtraFieldsEqual` rather than shared: `entities/application-form`'s
- * barrel — the only slice both pages could legally reach for it — is at its
- * §3.5 export budget (exactly 20, its own header says so), and a
- * `pages/pipelines` -> `pages/agents` import is a sideways page import. The
- * whole surrounding adapter is already deliberately duplicated between these
- * two files for the same reason (see this file's own header).
- */
-function areExtraFieldsEqual(a: CreatePipelineFormExtraFields, b: CreatePipelineFormExtraFields): boolean {
-  if (a.instructions !== b.instructions) return false;
-  if (a.welcomeMessage !== b.welcomeMessage) return false;
-  if (a.stepLimit !== b.stepLimit) return false;
-  // Key by key, never by identity: the picker hands back a fresh object each
-  // time, so an identity check would report "dirty" from the first render.
-  if (!areAgentLlmSettingsEqual(a.llmSettings, b.llmSettings)) return false;
-  if (a.variables.length !== b.variables.length) return false;
-  return a.variables.every((variable, index) => {
-    const other = b.variables[index];
-    return other !== undefined && variable.name === other.name && variable.value === other.value;
-  });
-}
-
-/**
- * The YAML graph a new pipeline is STORED with.
- *
- * `instructions` IS the pipeline's graph: `usePipelineVersionSync` parses the
- * saved string and seeds both the YAML pane and the canvas from it, and
- * `pipeline_settings` only supplies node geometry on top. An empty string
- * therefore stored a pipeline with no graph, and Create pipeline -> Save
- * opened the editor on a blank document with `End` alone on the canvas. It was
- * also unrunnable: the compiler refuses an empty document, so the first chat
- * turn failed in another process with no signal on this screen.
- *
- * The fallback fires only on a document the user did not author. Anything
- * typed on this page wins, so this can never overwrite real work.
- *
- * IT IS ALSO THE OPENING VALUE OF THE INSTRUCTIONS CONTROL, not only the
- * value Save substitutes. Keeping the seed out of the form state left
- * "+ Pipeline" opening on an empty YAML pane and an empty canvas, and the
- * graph appeared only after Save — so the screen said "you have no graph"
- * while the row it was about to write said the opposite. The starter is the
- * document being created, so it is on screen from the first render and the
- * author can edit it before the first save.
- *
- * The unsaved-changes guard (#133) still reads a fresh page as clean:
- * `initialExtraFields` is captured from this same seeded value, so the
- * comparison starts equal.
- *
- * `usePipelineEditorCreate` applies the same template to the chat surface's
- * create path. This page is the other one, and it is the one the UI actually
- * takes.
- */
-function pipelineInstructions(authored: string): string {
-  return authored.trim() === '' ? PIPELINE_STARTER_TEMPLATE : authored;
-}
-
-const contentSx: SxProps<Theme> = {
+const workspaceSx: SxProps<Theme> = {
   flex: 1,
   minHeight: 0,
-  overflowY: 'auto',
-  padding: '1.5rem',
+  display: 'flex',
+  flexDirection: 'column',
+  overflow: 'hidden',
 };
 
+const chatLockedSx: SxProps<Theme> = (theme: Theme) => ({
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  height: '100%',
+  padding: theme.spacing(3),
+  textAlign: 'center',
+});
+
 /**
- * Ported from `apps/elitea-ui/src/pages/Pipelines/CreatePipeline.jsx` —
- * ROUTE-018 `/pipelines/create` (spec §8.1). Structurally the
- * pipelines-domain mirror of `pages/agents/CreateApplication.tsx` (Wave-2
- * unit A1g) — a Pipeline literally IS an Application row
- * (`agent_type: 'pipeline'`) — differing only in `useCreateApplicationInitialValues(true)`
- * (forPipeline) and the `/pipelines/*` route targets.
+ * Canvas-first Create Pipeline page (`/pipelines/create`, Gap #12).
  *
- * **Disclosed Formik->RHF redesign**, same reasoning `pages/agents/
- * CreateApplication.tsx` and the split `entities/application-form`
- * components already establish: the baseline wraps everything in a `Formik`
- * whose `onSubmit` is a no-op — the real "create" call lives inside
- * `CreateAgentForm`'s own `useFormikContext()`/`useCreateApplication(formik)`
- * reads (`entityType="pipeline"`, `CreatePipeline.jsx:78-83`). This page owns
- * a `useForm` + `FormProvider` instance instead.
- *
- * **Dropped, disclosed:** the baseline's `useEffect` dispatching
- * `actions.initThePipeline({nodes: [], edges: [], yamlJsonObject: {state:
- * FlowEditorConstants.DefaultState}, yamlCode: '', layout_version:
- * FlowEditorConstants.LAYOUT_VERSION})` and `editorActions.
- * resetPipelineEditor()` (`CreatePipeline.jsx:20-33`) resets the Redux
- * pipeline-editor slices before the create form mounts. Its zustand
- * equivalent, `features/pipelines/model/pipelineEditorStore.ts`'s
- * `resetPipelineEditor()`, is not exported from `features/pipelines/
- * index.ts` as of this unit's landing (verified — same gap `useSavePipeline.ts`,
- * this unit, cites in full), so there is no R-L3-legal way to call it from
- * `pages/pipelines`. `useCreateApplicationInitialValues(true)`
- * (`entities/application-form`) already seeds an empty
- * `pipelineSettings: {nodes: [], edges: []}` draft independent of that
- * store, so the create FORM's own initial state is not affected by this
- * gap — only a currently-mounted flow-editor widget's own state (owned by a
- * sibling A2 sub-unit) would be.
- *
- * **Composition gap, CLOSED.** This page previously rendered
- * `<Box data-testid="create-pipeline-form-panel" />` — a self-closing, empty
- * element — on the stated grounds that (a) `features/agents` had no public
- * `CreateAgentForm` export, and (b) `no-sideways-features` would forbid the
- * import anyway. Both were stale by the time the E2E suite first ran and
- * failed here (J16: the testid resolved 24× to an empty div, never visible):
- *
- *  - `CreateAgentForm` IS a public export of `features/agents`
- *    (`features/agents/index.ts:32`), and `pages/agents/CreateApplication.tsx`
- *    already imports it.
- *  - `no-sideways-features` is scoped `from: ^src/features/([^/]+)/`
- *    (`.dependency-cruiser.cjs:54`). This file is a PAGE, not a feature, and
- *    `page -> feature` is the ordinary layer direction (§3.2).
- *
- * The adapter below mirrors `pages/agents/CreateApplication.tsx`'s: the RHF
- * form owns name/description (the only fields `applicationCreationSchema`
- * validates) and local state owns the version_details fields the schema does
- * not cover, exactly as the agents page does and for the same reason.
+ * Mounts the live `ConfigurationTab` workspace (left configuration form + center
+ * interactive `FlowEditor` canvas with `FlowEmptyState` when cleared + locked
+ * test pane) while preserving `CreatePipelineAdmissionAlert`, live/save-time
+ * admission checks, starter-template seeding, and the `#133` unsaved-changes guard.
  */
 export function CreatePipeline(): ReactNode {
   const navigate = useNavigate();
@@ -171,6 +74,10 @@ export function CreatePipeline(): ReactNode {
   const draftDefaults = useCreateApplicationInitialValues(true);
   const { create, isCreating, error: createRequestError } = useCreateApplicationDraft(projectId);
   const [createError, setCreateError] = useState<unknown>(undefined);
+  const [isCanvasYamlDirty, setIsCanvasYamlDirty] = useState(false);
+  const isCanvasYamlDirtyRef = useRef(false);
+  isCanvasYamlDirtyRef.current = isCanvasYamlDirty;
+  const readGraphDraft = usePipelineGraphDraft();
 
   const form = useForm<ApplicationCreationInput>({
     resolver: zodResolver(applicationCreationSchema),
@@ -183,9 +90,6 @@ export function CreatePipeline(): ReactNode {
   });
 
   const [extraFields, setExtraFields] = useState<CreatePipelineFormExtraFields>({
-    // The starter graph is on screen from the first render — see
-    // `pipelineInstructions`. `useState`'s initialiser runs once, so a later
-    // edit is never overwritten by it.
     instructions: pipelineInstructions(draftDefaults.versionDetails.instructions),
     welcomeMessage: '',
     variables: draftDefaults.versionDetails.variables.map((variable) => ({ ...variable })),
@@ -193,29 +97,39 @@ export function CreatePipeline(): ReactNode {
     llmSettings: draftDefaults.versionDetails.llmSettings,
   });
 
-  /*
-   * #133 — arm the app-wide unsaved-changes guard, exactly as
-   * `pages/agents/CreateApplication.tsx` now does. `widgets/app-shell`'s
-   * `NavBlockerDialog` was mounted under this page all along but nothing on
-   * the standalone `/pipelines` editors ever raised the flag, so a typed
-   * draft was thrown away on any nav-link click. `useRef`'s initialiser is
-   * kept only from the first render, so this holds the opening values.
-   */
   const initialExtraFields = useRef(extraFields);
-  const isDraftDirty = form.formState.isDirty || !areExtraFieldsEqual(extraFields, initialExtraFields.current);
+  const isDraftDirty =
+    form.formState.isDirty ||
+    isCanvasYamlDirty ||
+    !areExtraFieldsEqual(extraFields, initialExtraFields.current);
   useUnsavedChangesNavBlocker(isDraftDirty);
 
-  /*
-   * The document Save would store, judged exactly as the editor's save gate
-   * judges it. Before this, create gated only on name/description, so a graph
-   * the runtime refuses (a `split_out` node on a production build) was stored
-   * and the editor's gate then blocked every later save of it. Main refuses
-   * the same node types on its side (`pipelinelimits.Check`).
-   */
-  const admission = useLivePipelineGraphAdmission(pipelineInstructions(extraFields.instructions));
+  useEffect(() => () => {
+    resetPipelineDraft();
+  }, []);
+
+  const syncVersionDetails = useMemo(
+    () =>
+      ({
+        id: CREATE_DRAFT_VERSION_ID,
+        instructions: extraFields.instructions,
+      }) as unknown as ApplicationVersionDetail,
+    [extraFields.instructions],
+  );
+
+  usePipelineVersionSync({
+    isCreateMode: false,
+    versionDetails: syncVersionDetails,
+    versionId: CREATE_DRAFT_VERSION_ID,
+  });
+
+  const admission = useLivePipelineGraphAdmission(
+    isCanvasYamlDirty ? undefined : pipelineInstructions(extraFields.instructions),
+  );
 
   const name = form.watch('name') ?? '';
   const description = form.watch('description') ?? '';
+  const rawConversationStarters = form.watch('version_details.conversation_starters');
 
   const pipelineDraftValues = {
     name,
@@ -228,6 +142,18 @@ export function CreatePipeline(): ReactNode {
       llm_settings: extraFields.llmSettings,
     },
   };
+
+  const tabVersionDetails = useMemo<ConfigurationTabProps['versionDetails']>(
+    () =>
+      ({
+        id: CREATE_DRAFT_VERSION_ID,
+        type: 'chat',
+        tools: [],
+        conversation_starters: (rawConversationStarters ?? []).filter((entry): entry is string => typeof entry === 'string'),
+        ...(extraFields.llmSettings ? { llm_settings: { ...extraFields.llmSettings } } : {}),
+      }) as unknown as ConfigurationTabProps['versionDetails'],
+    [rawConversationStarters, extraFields.llmSettings],
+  );
 
   const handlePipelineFieldChange = useCallback(
     (path: string, value: unknown) => {
@@ -242,6 +168,7 @@ export function CreatePipeline(): ReactNode {
           });
           return;
         case 'version_details.instructions':
+          setIsCanvasYamlDirty(false);
           setExtraFields((previous) => ({ ...previous, instructions: typeof value === 'string' ? value : '' }));
           return;
         case 'version_details.welcome_message':
@@ -259,13 +186,6 @@ export function CreatePipeline(): ReactNode {
             stepLimit: typeof value === 'number' ? value : undefined,
           }));
           return;
-        // No `version_details.llm_settings` case, deliberately: model settings
-        // reach `extraFields.llmSettings` through `handleModelSettingsChange`
-        // below, straight off the `AgentModelSettings` slot. The create form's
-        // dispatcher (`features/agents/model/useCreateAgentFormState.ts`)
-        // emits only the paths above, so a branch here would be dead — the
-        // EDIT page's identical-looking branch IS live, which is what made
-        // this one read as reachable. Do not re-add it.
         default:
           return;
       }
@@ -274,32 +194,20 @@ export function CreatePipeline(): ReactNode {
   );
 
   const handleSave = useCallback(() => {
-    // The button is disabled on this verdict too; this is the click-time half.
-    if (!admission.isAdmissible) return;
+    const graphDraft = isCanvasYamlDirtyRef.current ? readGraphDraft() : undefined;
+    const effectiveAdmission = graphDraft ? graphDraft.admission : admission;
+    if (!effectiveAdmission.isAdmissible) return;
+    const effectiveInstructions = pipelineInstructions(graphDraft?.instructions ?? extraFields.instructions);
+
     void form.handleSubmit(async (values) => {
       setCreateError(undefined);
       const created = await create({
         name: values.name,
         description: values.description,
         type: draftDefaults.type,
-        /*
-         * Every field the page HOLDS, not just the schema-validated ones.
-         * This used to spread `draftDefaults.versionDetails` and override
-         * `conversationStarters` alone, with `extraFields` absent from both
-         * the body and this callback's dependency list — so the instructions,
-         * variables and step limit a user typed on this page were replaced by
-         * the empty draft defaults on Save, silently, with a 201 back. The
-         * agents twin (`pages/agents/CreateApplication.tsx`) always did it
-         * this way; only the pipelines copy drifted.
-         */
         version: {
           ...draftDefaults.versionDetails,
-          // Never the raw field: a blank one stores a pipeline no runtime can
-          // run and no editor can show. See `pipelineInstructions`.
-          instructions: pipelineInstructions(extraFields.instructions),
-          // The same key the agents twin was missing: held in `extraFields`,
-          // echoed back into the form, and absent from this body — so a
-          // pipeline's welcome message was dropped on create with a 201 back.
+          instructions: effectiveInstructions,
           welcomeMessage: extraFields.welcomeMessage,
           conversationStarters: (values.version_details?.conversation_starters ?? []).filter(
             (entry): entry is string => typeof entry === 'string',
@@ -310,14 +218,14 @@ export function CreatePipeline(): ReactNode {
             step_limit: extraFields.stepLimit ?? draftDefaults.versionDetails.meta.step_limit,
           },
           llmSettings: extraFields.llmSettings,
+          ...(graphDraft?.pipelineSettings ? { pipelineSettings: graphDraft.pipelineSettings } : {}),
         },
       });
       if (created === undefined) {
         setCreateError(new Error('createFailed'));
         return;
       }
-      // #133: the draft is persisted — this is the SAVE's own navigation,
-      // not a nav-away from unsaved work.
+      resetPipelineDraft();
       disarmUnsavedChangesNavBlocker();
       void navigate({
         to: '/pipelines/$tab/$agentId',
@@ -325,7 +233,7 @@ export function CreatePipeline(): ReactNode {
         search: { isFromCreation: 'true' },
       });
     })();
-  }, [admission.isAdmissible, form, create, draftDefaults, extraFields, navigate, params.tab]);
+  }, [admission, create, draftDefaults, extraFields, form, navigate, params.tab, readGraphDraft]);
 
   const handleModelSettingsChange = useCallback(
     (next: AgentLlmSettings) => setExtraFields((previous) => ({ ...previous, llmSettings: next })),
@@ -333,12 +241,11 @@ export function CreatePipeline(): ReactNode {
   );
 
   const handleCancel = useCallback(() => {
-    // #133: Cancel IS the explicit discard, so it is not also prompted.
+    resetPipelineDraft();
     disarmUnsavedChangesNavBlocker();
     void navigate({ to: '/pipelines/$tab', params: { tab: params.tab ?? 'latest' } });
   }, [navigate, params.tab]);
 
-  // The page's name is the shell's crumb (`Pipelines ▸ New Pipeline`).
   usePageCrumbs([{ label: t('pages.pipelines.createPipeline.title', 'New Pipeline') }]);
 
   return (
@@ -355,33 +262,55 @@ export function CreatePipeline(): ReactNode {
             />
           }
         />
-        <Box sx={contentSx}>
-          {createError !== undefined && (
-            <Typography
-              role="alert"
-              variant="bodyMedium"
-            >
-              {/* Main's own readable refusal (a node type, a size limit), else the generic text. */}
-              {applicationServerErrorMessage(createRequestError, t('pages.pipelines.createPipeline.error', 'Failed to create the pipeline.'))}
-            </Typography>
-          )}
-          <CreatePipelineAdmissionAlert admission={admission} />
-          <Box data-testid="create-pipeline-form-panel">
-            <CreateAgentForm
-              entityType="pipeline"
-              values={pipelineDraftValues}
-              onFieldChange={handlePipelineFieldChange}
-              disabled={isCreating}
-              modelSettingsSlot={
-                <AgentModelSettings
-                  projectId={projectId}
-                  value={extraFields.llmSettings}
-                  onChange={handleModelSettingsChange}
-                  disabled={isCreating}
-                />
-              }
-            />
-          </Box>
+        <Box sx={workspaceSx} data-testid="create-pipeline-workspace">
+          <ConfigurationTab
+            isFetching={false}
+            isError={false}
+            applicationId={undefined}
+            pipelineName={name}
+            versionDetails={tabVersionDetails}
+            setFieldValue={handlePipelineFieldChange}
+            setYamlDirty={setIsCanvasYamlDirty}
+            adapter={NOOP_CREATE_CHAT_ADAPTER}
+            slots={{
+              renderConfigurationForm: () => (
+                <Box>
+                  {createError !== undefined && (
+                    <Typography role="alert" variant="bodyMedium">
+                      {applicationServerErrorMessage(
+                        createRequestError,
+                        t('pages.pipelines.createPipeline.error', 'Failed to create the pipeline.'),
+                      )}
+                    </Typography>
+                  )}
+                  <CreatePipelineAdmissionAlert admission={admission} />
+                  <Box data-testid="create-pipeline-form-panel">
+                    <CreateAgentForm
+                      entityType="pipeline"
+                      values={pipelineDraftValues}
+                      onFieldChange={handlePipelineFieldChange}
+                      disabled={isCreating}
+                      modelSettingsSlot={
+                        <AgentModelSettings
+                          projectId={projectId}
+                          value={extraFields.llmSettings}
+                          onChange={handleModelSettingsChange}
+                          disabled={isCreating}
+                        />
+                      }
+                    />
+                  </Box>
+                </Box>
+              ),
+              renderChat: () => (
+                <Box sx={chatLockedSx} data-testid="create-pipeline-chat-locked">
+                  <Typography variant="bodySmall" color="text.secondary">
+                    {t('pages.pipelines.createPipeline.saveToTest', 'Save the pipeline to test it.')}
+                  </Typography>
+                </Box>
+              ),
+            }}
+          />
         </Box>
       </Box>
     </FormProvider>

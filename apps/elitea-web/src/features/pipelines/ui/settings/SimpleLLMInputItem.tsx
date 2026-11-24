@@ -7,6 +7,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import { hasBackendCapability } from '@/shared/config';
 import { t } from '@/shared/i18n';
 import { HeadingChip } from '@/shared/ui/HeadingChip';
+import { InfoTooltip } from '@/shared/ui/InfoTooltip';
 import { SingleSelect, type SingleSelectOption } from '@/shared/ui/SingleSelect';
 import { StyledInputEnhancer } from '@/shared/ui/StyledInputEnhancer';
 import { capitalizeFirstChar } from '@/shared/lib/string';
@@ -17,6 +18,7 @@ import type { AiAssistantLlmSettings } from '../../api/aiAssistantPredict';
 import { FStringAutocompletePopper } from '../FStringAutocompletePopper';
 import { useFStringInputAutocomplete } from '../../model/useFStringInputAutocomplete';
 import { FlowEditorConstants } from '../../lib/flow-editor/constants';
+import { getNodeFieldInfo } from '../../lib/flow-editor/constants/nodeFieldInfo.constants';
 import { useInputOptions } from '../../lib/flow-editor/hooks/useInputOptions';
 
 /** Minimal shape both `AIAssistantInput`'s `fieldBinding.onInput` and a plain `<input>` change event satisfy. */
@@ -211,9 +213,11 @@ export interface SimpleLLMInputItemProps {
   readonly enableAIAssistant?: boolean;
   readonly modelConfig?: AiAssistantLlmSettings | null;
   readonly codeLanguage?: string | undefined;
+  readonly nodeType?: string | undefined;
 }
 
 const containerSx: SxProps<Theme> = {};
+const headingRowSx: SxProps<Theme> = { display: 'inline-flex', alignItems: 'center', gap: '0.25rem' };
 /*
  * Type and Value are two identically-built standard fields (label above, underline below), so
  * they need no vertical nudge: the old `translateY(0.89rem)` on Type (and on a non-string Value)
@@ -233,6 +237,24 @@ const valueWrapperSx: SxProps<Theme> = { flex: 1 };
 
 const AI_ASSISTANT_VARIABLE_NAMES: ReadonlySet<string> = new Set(['system', 'task', 'code', 'printer', 'user_message']);
 
+function SimpleLLMFieldHeading({
+  variableName,
+  variable,
+  nodeType,
+}: {
+  readonly variableName: string;
+  readonly variable: string;
+  readonly nodeType: string | undefined;
+}): ReactNode {
+  const fieldInfo = nodeType ? getNodeFieldInfo(nodeType, variable) : '';
+  return (
+    <Box sx={headingRowSx}>
+      <HeadingChip label={capitalizeFirstChar(variableName.replaceAll('_', ' '))} />
+      {fieldInfo ? <InfoTooltip title={fieldInfo} placement="top" /> : null}
+    </Box>
+  );
+}
+
 /**
  * Ported from `apps/elitea-ui/src/[fsd]/features/pipelines/flow-editor/ui/
  * settings/SimpleLLMInputItem.jsx` (unit A2h). See `NodeFieldInput`'s doc
@@ -240,7 +262,7 @@ const AI_ASSISTANT_VARIABLE_NAMES: ReadonlySet<string> = new Set(['system', 'tas
  * around.
  */
 export function SimpleLLMInputItem(props: SimpleLLMInputItemProps): ReactNode {
-  const { variableName, variable, type, value, defaultValue, onChangeMapping, disabled = false, enableAIAssistant = false, modelConfig = null, codeLanguage } = props;
+  const { variableName, variable, type, value, defaultValue, onChangeMapping, disabled = false, enableAIAssistant = false, modelConfig = null, codeLanguage, nodeType } = props;
 
   const typeOptions = useMemo<SingleSelectOption[]>(
     () => FlowEditorConstants.agentTaskTypeOptions.map(option => ({ label: option.label, value: option.value })),
@@ -298,7 +320,7 @@ export function SimpleLLMInputItem(props: SimpleLLMInputItemProps): ReactNode {
 
   return (
     <Box sx={containerSx}>
-      <HeadingChip label={capitalizeFirstChar(variableName.replaceAll('_', ' '))} />
+      <SimpleLLMFieldHeading variableName={variableName} variable={variable} nodeType={nodeType} />
 
       <Box sx={fieldRowSx(isMultiline)}>
         {/*

@@ -12,7 +12,7 @@ import { FlowEditorContext, NodeConfigPanelContext, type FlowEditorContextValue 
 import type { YamlPipelineDocument } from '../../lib/flow-editor/helpers/pipelineFlow.types';
 import type { FlowEdge, FlowNode } from '../../lib/flow-editor/reactFlowTypes';
 import type { PipelineToolEntry } from '../select/pipelineToolEntry.types';
-import { AgentNode, type AgentNodeProps } from './AgentNode';
+import { AgentNode, partitionAgentMappingKeys, type AgentNodeProps } from './AgentNode';
 
 const BASE = '/api/v2';
 const PROJECT_ID = 'proj-1';
@@ -164,5 +164,34 @@ describe('AgentNode', () => {
 
   it('renders without a versionTools prop at all (defaults to an empty list)', () => {
     expect(() => renderAgentNode({ versionTools: undefined })).not.toThrow();
+  });
+
+  it('renders AgentVersionSelect read-only in Basic when onVersionChange is omitted', async () => {
+    const yamlJsonObject: YamlPipelineDocument = {
+      nodes: [{ id: 'Node1', type: 'agent', tool: 'Researcher' }],
+    };
+    const versionTools = [
+      { id: '10', name: 'Researcher', type: 'application', settings: { application_id: 10, application_version_id: 1 } },
+    ];
+    const { findByTestId } = renderAgentNode({ versionTools }, { yamlJsonObject });
+    const versionContainer = await findByTestId('pipeline-agent-node-version-select');
+    const combobox = versionContainer.querySelector('[role="combobox"]');
+    expect(combobox).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('keeps Basic and Advanced mapping keys strictly disjoint and deduplicated', () => {
+    const withChatHistoryRequired = partitionAgentMappingKeys(
+      { task: {}, chat_history: {}, extra_var: {} },
+      ['task', 'chat_history', 'task'],
+    );
+    expect(withChatHistoryRequired.basicKeys).toEqual(['task', 'chat_history']);
+    expect(withChatHistoryRequired.advancedKeys).toEqual(['extra_var']);
+
+    const defaultSplit = partitionAgentMappingKeys(
+      { task: {}, chat_history: {}, optional_a: {} },
+      ['task'],
+    );
+    expect(defaultSplit.basicKeys).toEqual(['task']);
+    expect(defaultSplit.advancedKeys).toEqual(['chat_history', 'optional_a']);
   });
 });

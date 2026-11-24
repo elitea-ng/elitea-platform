@@ -93,7 +93,7 @@ export function PipelineListPanel({
   );
 
   return (
-    <>
+    <Box sx={panelSx} data-testid="pipeline-list-panel">
       <EntityCardList
         items={items}
         isLoading={isLoading}
@@ -104,6 +104,7 @@ export function PipelineListPanel({
             title={emptyTitle}
             description={emptyDescription}
             art="applications"
+            createLabel={t('pages.pipelines.list.createFirst', 'Create pipeline')}
             {...(onCreate === undefined ? {} : { onCreateClick: onCreate })}
           />
         }
@@ -119,8 +120,15 @@ export function PipelineListPanel({
           </BaseBtn>
         </Box>
       )}
-    </>
+    </Box>
   );
 }
+
+const panelSx: SxProps<Theme> = {
+  display: 'flex',
+  flexDirection: 'column',
+  width: '100%',
+  minHeight: 0,
+};
 
 const loadMoreSx: SxProps<Theme> = (theme: Theme) => ({ display: 'flex', justifyContent: 'center', padding: theme.spacing(2) });

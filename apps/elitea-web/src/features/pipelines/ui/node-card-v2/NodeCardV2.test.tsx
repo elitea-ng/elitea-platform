@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
-import { PipelineNodeTypes } from '../../lib/flow-editor/constants/flowEditor.constants';
+import { NodeHeightMap, PipelineNodeTypes } from '../../lib/flow-editor/constants/flowEditor.constants';
 import {
   getNodeCardV2Status,
   getNodeCardV2Summary,
@@ -60,6 +60,27 @@ describe('nodeCardV2 helpers', () => {
         { type: PipelineNodeTypes.Aggregate },
       ),
     ).toEqual({ primary: 'rows', secondary: '1 operation' });
+
+    expect(
+      getNodeCardV2Summary(
+        { id: 'par-2', type: PipelineNodeTypes.Parallel, branches: ['b1', 'b2'], output: ['results'] },
+        { type: PipelineNodeTypes.Parallel },
+      ),
+    ).toEqual({ primary: '2 branches', secondary: 'results' });
+
+    expect(
+      getNodeCardV2Summary(
+        { id: 'split-2', type: PipelineNodeTypes.SplitOut, source: 'rows', output: ['expanded'] },
+        { type: PipelineNodeTypes.SplitOut },
+      ),
+    ).toEqual({ primary: 'rows', secondary: 'expanded' });
+  });
+
+  it('uses compact card heights for graph-extension nodes instead of obsolete 750px inline-form heights', () => {
+    expect(NodeHeightMap[PipelineNodeTypes.Parallel]).toBeLessThanOrEqual(200);
+    expect(NodeHeightMap[PipelineNodeTypes.Map]).toBeLessThanOrEqual(200);
+    expect(NodeHeightMap[PipelineNodeTypes.SplitOut]).toBeLessThanOrEqual(200);
+    expect(NodeHeightMap[PipelineNodeTypes.Aggregate]).toBeLessThanOrEqual(200);
   });
 });
 

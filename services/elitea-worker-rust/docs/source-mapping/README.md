@@ -52,6 +52,7 @@ authorization, failure behavior, and recovery boundary.
 
 Detailed ledgers:
 
+- [Pipeline UI Wave U3 per-node panels, extension cards, Create & List polish (2026-11-24)](pipeline-ui-u3-node-polish-20261124.md) integrates `AgentVersionSelect` and Basic/Advanced mapping splits across `AgentNode`/`BaseToolNode`/`LLMNode`, adds `AddOptionalParameterButton` and disconnected-MCP hints, aligns `NormalDecisionNode` (`Decision criteria`) and `nodeFieldInfo` tooltips across all core nodes, refines extension card summaries/compact `160px` heights/Basic-Advanced sections, moves `CreatePipeline` to a canvas-first workspace with admission checks, and polishes `PipelineListPanel` empty states.
 - [HTTP action Main foundation (5d-1)](http-action-main-foundation-20261123.md) adds project HTTP action rules (migration `shared/0270`, admin API, Settings > HTTP actions UI), revision-2 rendering and start snapshots, invocation v3, the fenced effect ledger, `openapi` credential resolution with singleflight OAuth2 token fetching, dedicated 32/8 pool isolation, and the HTTPS-only egress-guarded `http.RoundTripper` transport (closes FU-073 and Main half of FU-072).
 
 - [Frozen Cargo lookup](code-frozen-cargo-lookup-20261007.md) records lookup before acquisition, authority boundaries, generated contracts, and pending deployed cache acceptance.

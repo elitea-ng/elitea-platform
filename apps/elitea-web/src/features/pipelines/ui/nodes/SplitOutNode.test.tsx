@@ -32,7 +32,9 @@ describe('SplitOutNode authored YAML', () => {
   it('explains the output envelope and offers no groups limit', async () => {
     const screen = renderExtensionCard(SplitOutNode, authoredExtensionYaml(splitNodeYaml));
     expect(await screen.findByText(/Each output row is \{parent_index, position, data\}/u)).toBeInTheDocument();
-    await userEvent.setup().click(screen.getByText('Processing limits'));
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Advanced' }));
+    await user.click(screen.getByText('Processing limits'));
     expect(screen.getByLabelText('values')).toBeInTheDocument();
     expect(screen.queryByLabelText('groups')).toBeNull();
   });
@@ -40,6 +42,7 @@ describe('SplitOutNode authored YAML', () => {
     const screen = renderExtensionCard(SplitOutNode, authoredExtensionYaml(splitNodeYaml));
     const before = currentExtensionDocument();
     const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Advanced' }));
     await selectOption(user, screen, 'Missing list', 'empty');
     const document = currentExtensionDocument();
     expect(document.state).toEqual(before.state);
@@ -62,6 +65,7 @@ describe('SplitOutNode authored YAML', () => {
   it('authors retention pointers, literal aliases and explicit missing behavior', async () => {
     const screen = renderExtensionCard(SplitOutNode, authoredExtensionYaml(splitNodeYaml));
     const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Advanced' }));
     await selectOption(user, screen, 'Retain fields', 'only');
     await user.click(screen.getByRole('button', { name: 'Add retained field' }));
     await user.type(screen.getByLabelText('Retained field pointer 1'), '/a~1b');
@@ -76,6 +80,7 @@ describe('SplitOutNode authored YAML', () => {
       .replace('split: {mode: row_field, path: /a~1b/orders}', 'split: {mode: list}'));
     const screen = renderExtensionCard(SplitOutNode, yaml);
     const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Advanced' }));
     const retention = await screen.findByRole('combobox', { name: 'Retain fields' });
     expect(retention).toHaveTextContent('none');
     expect(await optionLabelsOf(user, screen, 'Retain fields')).toEqual(['none']);
@@ -117,6 +122,7 @@ describe('SplitOutNode authored YAML', () => {
     const before = currentExtensionDocument();
     const originalOrder = [...usePipelineYamlStore.getState().stateKeyOrder];
     const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Advanced' }));
     await selectOption(user, screen, 'Retain fields', next);
     const expectedRetain = { mode: next, vendor: null, opaque: retain.opaque, ...(expectedFields === undefined ? {} : { fields: expectedFields }) };
     const expected = { ...before, nodes: before.nodes?.map((entry) => entry.id === 'extension' ? { ...entry, retain: expectedRetain } : entry) };
@@ -127,6 +133,7 @@ describe('SplitOutNode authored YAML', () => {
   it('disables pointer, retention and source controls while the card is disabled', async () => {
     const screen = renderExtensionCard(SplitOutNode, authoredExtensionYaml(splitNodeYaml), true);
     expect(await screen.findByLabelText('List field pointer')).toBeDisabled();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Advanced' }));
     expect(screen.getByRole('combobox', { name: 'Retain fields' })).toHaveAttribute('aria-disabled', 'true');
     expect(screen.getByRole('combobox', { name: 'Source state variable' })).toHaveAttribute('aria-disabled', 'true');
   });

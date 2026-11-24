@@ -6,5 +6,11 @@ import { ExtensionNodeShell } from '../settings/graph-extensions/ExtensionNodeSh
 import { SplitOutSettings } from '../settings/graph-extensions/SplitOutSettings';
 
 export const SplitOutNode = memo(function SplitOutNode(props: NodeProps<FlowNode>): ReactNode {
-  return <ExtensionNodeShell {...props} renderSettings={(settings) => <SplitOutSettings {...settings} />} />;
+  return (
+    <ExtensionNodeShell
+      {...props}
+      renderSettings={(settings) => <SplitOutSettings {...settings} section="basic" />}
+      renderAdvancedSettings={(settings) => <SplitOutSettings {...settings} section="advanced" />}
+    />
+  );
 });

@@ -439,4 +439,61 @@ describe('CreatePipeline', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(refusal);
     expect(screen.queryByText('Failed to create the pipeline.')).not.toBeInTheDocument();
   });
+
+  it('renders the canvas-first workspace alongside the configuration panel and locked test pane', async () => {
+    renderPipelinesRoute(<CreatePipeline />, '/pipelines/create', { projectId: '1' });
+
+    expect(await screen.findByTestId('create-pipeline-workspace')).toBeInTheDocument();
+    expect(screen.getByTestId('create-pipeline-form-panel')).toBeInTheDocument();
+    expect(screen.getByTestId('create-pipeline-chat-locked')).toHaveTextContent('Save the pipeline to test it.');
+  });
+
+  it('syncs live center YAML-tab edits with CreatePipelineAdmissionAlert and Save (CR-U3P-01)', { timeout: testTimeout(20_000) }, async () => {
+    const user = userEvent.setup({ delay: null });
+    const bodies: Record<string, unknown>[] = [];
+    server.use(
+      http.post('*/elitea_core/applications/prompt_lib/:projectId', async ({ request }) => {
+        bodies.push((await request.json()) as Record<string, unknown>);
+        return HttpResponse.json({ id: '7', version_details: { id: '1' } }, { status: 201 });
+      }),
+    );
+    renderPipelinesRoute(<CreatePipeline />, '/pipelines/create', { projectId: '1' });
+
+    await user.type(await screen.findByTestId('agent-name-input'), 'canvas-pipe');
+    await user.type(screen.getByTestId('agent-description-input'), 'edited on canvas');
+    await waitFor(() => expect(screen.getByTestId('pipeline-save-button')).not.toBeDisabled());
+
+    // Switch center EditorPanel to YAML tab and enter an inadmissible graph.
+    const yamlTab = screen.getByRole('button', { name: /^yaml$/i });
+    await user.click(yamlTab);
+    const editors = document.querySelectorAll('.cm-content');
+    const centerEditor = editors[editors.length - 1];
+    if (!(centerEditor instanceof HTMLElement)) throw new Error('center YAML editor did not render');
+
+    const badDoc = JSON.stringify({
+      entry_point: 'bad',
+      state: { input: 'str' },
+      nodes: [{ id: 'bad', type: 'custom', transition: 'END' }],
+    });
+    await user.click(centerEditor);
+    await user.keyboard('{Control>}a{/Control}{Backspace}');
+    await user.type(centerEditor, badDoc.replace(/[{[]/g, (b) => b + b));
+
+    await waitFor(() => expect(screen.getByTestId('create-pipeline-admission')).toBeInTheDocument());
+    expect(screen.getByTestId('pipeline-save-button')).toBeDisabled();
+
+    // Fix the live center YAML draft to a valid graph; Save re-enables and persists the canvas draft.
+    const starter = load(PIPELINE_STARTER_TEMPLATE) as StarterDocument & { nodes: { id: string; transition?: string }[] };
+    const edited = { ...starter, entry_point: 'canvas_node', nodes: starter.nodes.map((node) => ({ ...node, id: 'canvas_node' })) };
+    await user.click(centerEditor);
+    await user.keyboard('{Control>}a{/Control}{Backspace}');
+    await user.type(centerEditor, JSON.stringify(edited).replace(/[{[]/g, (b) => b + b));
+
+    await waitFor(() => expect(screen.queryByTestId('create-pipeline-admission')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('pipeline-save-button')).not.toBeDisabled());
+    await user.click(screen.getByTestId('pipeline-save-button'));
+
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    expect((load(firstVersionInstructions(bodies)) as StarterDocument).entry_point).toBe('canvas_node');
+  });
 });

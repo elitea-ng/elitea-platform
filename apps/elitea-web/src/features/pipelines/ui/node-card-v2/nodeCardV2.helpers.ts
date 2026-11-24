@@ -112,32 +112,50 @@ function getHitlRoutesSummary(routesValue: unknown): string {
     .join(' · ');
 }
 
+function getMapSummary(yamlNode: YamlPipelineNode): NodeCardV2SummaryData {
+  const source = toPreviewText(yamlNode['source']);
+  const worker = toPreviewText(yamlNode['worker']);
+  const destination = toPreviewText(yamlNode['destination']);
+  const secondary = worker ? `Worker → ${worker}` : destination && source ? `→ ${destination}` : '';
+  return { primary: source || destination, secondary };
+}
+
+function getParallelSummary(yamlNode: YamlPipelineNode): NodeCardV2SummaryData {
+  const branches = Array.isArray(yamlNode['branches']) ? yamlNode['branches'] : [];
+  return {
+    primary: branches.length ? pluralize(branches.length, 'branch', 'branches') : '',
+    secondary: toPreviewText(yamlNode['join']) || joinList(yamlNode['output']),
+  };
+}
+
+function getSplitOutSummary(yamlNode: YamlPipelineNode): NodeCardV2SummaryData {
+  return {
+    primary: toPreviewText(yamlNode['source']),
+    secondary: toPreviewText(yamlNode['destination']) || joinList(yamlNode['output']),
+  };
+}
+
+function getAggregateSummary(yamlNode: YamlPipelineNode): NodeCardV2SummaryData {
+  const ops = Array.isArray(yamlNode['operations']) ? yamlNode['operations'] : [];
+  return {
+    primary: toPreviewText(yamlNode['source']),
+    secondary: ops.length ? pluralize(ops.length, 'operation') : joinList(yamlNode['output']),
+  };
+}
+
+const EXTENSION_SUMMARY_EXTRACTORS: Readonly<Record<string, (n: YamlPipelineNode) => NodeCardV2SummaryData>> = {
+  [PipelineNodeTypes.Map]: getMapSummary,
+  [PipelineNodeTypes.Parallel]: getParallelSummary,
+  [PipelineNodeTypes.SplitOut]: getSplitOutSummary,
+  [PipelineNodeTypes.Aggregate]: getAggregateSummary,
+};
+
 function getExtensionSummary(yamlNode: YamlPipelineNode): NodeCardV2SummaryData | null {
-  switch (yamlNode.type ?? '') {
-    case PipelineNodeTypes.Map: {
-      const source = toPreviewText(yamlNode['source']);
-      const worker = toPreviewText(yamlNode['worker']);
-      return { primary: source, secondary: worker ? `Worker → ${worker}` : '' };
-    }
-    case PipelineNodeTypes.Parallel: {
-      const branches = Array.isArray(yamlNode['branches']) ? yamlNode['branches'] : [];
-      return {
-        primary: branches.length ? pluralize(branches.length, 'branch', 'branches') : '',
-        secondary: toPreviewText(yamlNode['join']),
-      };
-    }
-    case PipelineNodeTypes.SplitOut:
-      return { primary: toPreviewText(yamlNode['source']), secondary: toPreviewText(yamlNode['destination']) };
-    case PipelineNodeTypes.Aggregate: {
-      const ops = Array.isArray(yamlNode['operations']) ? yamlNode['operations'] : [];
-      return {
-        primary: toPreviewText(yamlNode['source']),
-        secondary: ops.length ? pluralize(ops.length, 'operation') : '',
-      };
-    }
-    default:
-      return null;
-  }
+  const nodeType = typeof yamlNode.type === 'string' ? yamlNode.type : '';
+  const extractor = Object.hasOwn(EXTENSION_SUMMARY_EXTRACTORS, nodeType)
+    ? EXTENSION_SUMMARY_EXTRACTORS[nodeType]
+    : undefined;
+  return extractor ? extractor(yamlNode) : null;
 }
 
 type CoreSummaryExtractor = (yamlNode: YamlPipelineNode, requiredInputs: readonly string[]) => NodeCardV2SummaryData;

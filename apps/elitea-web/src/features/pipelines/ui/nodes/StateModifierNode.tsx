@@ -12,12 +12,14 @@
 import type { ReactNode } from 'react';
 import { memo, useCallback, useContext, useMemo } from 'react';
 
+import Box from '@mui/material/Box';
 import { useEdges, type NodeProps } from '@xyflow/react';
 
 import { t } from '@/shared/i18n';
+import { InfoTooltip } from '@/shared/ui/InfoTooltip';
 
 import { FlowEditorConstants } from '../../lib/flow-editor/constants';
-import { NODE_FIELD_KEYS } from '../../lib/flow-editor/constants/nodeFieldInfo.constants';
+import { getNodeFieldInfo, NODE_FIELD_KEYS } from '../../lib/flow-editor/constants/nodeFieldInfo.constants';
 import { updateYamlNode } from '../../lib/flow-editor/helpers/flowEditor.helpers';
 import { FlowEditorContext, type FlowEditorContextValue } from '../../lib/flow-editor/flowEditorContext';
 import { useNodeAiAssistantConfig } from '../../lib/flow-editor/hooks/useNodeAiAssistantConfig';
@@ -124,15 +126,24 @@ export const StateModifierNode = memo(function StateModifierNode(props: StateMod
       )}
     >
       <NodeConfigSection section="basic">
-        <AIAssistantInput
-          value={templateValue}
-          disabled={isFieldsDisabled}
-          label={t('pipelines.flowEditor.stateModifierNode.jinjaTemplate', 'Jinja Template')}
-          fieldName="Template"
-          language="jinja"
-          modelConfig={resolvedLlmSettings}
-          fieldBinding={{ name: 'template', onInput: handleTemplateFilling }}
-        />
+        <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: '0.25rem', width: '100%' }}>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <AIAssistantInput
+              value={templateValue}
+              disabled={isFieldsDisabled}
+              label={t('pipelines.flowEditor.stateModifierNode.jinjaTemplate', 'Jinja Template')}
+              fieldName="Template"
+              language="jinja"
+              modelConfig={resolvedLlmSettings}
+              fieldBinding={{ name: 'template', onInput: handleTemplateFilling }}
+            />
+          </Box>
+          <InfoTooltip
+            title={getNodeFieldInfo(FlowEditorConstants.PipelineNodeTypes.StateModifier, NODE_FIELD_KEYS.jinjaTemplate)}
+            placement="top"
+            data-testid="pipeline-node-field-info"
+          />
+        </Box>
         <NodeFieldHeading
           label={t('pipelines.flowEditor.stateModifierNode.variablesToClean', 'Variables to clean')}
           nodeType={FlowEditorConstants.PipelineNodeTypes.StateModifier}
