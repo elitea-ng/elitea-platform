@@ -198,7 +198,7 @@
       "required": ["kind", "before", "after"],
       "description": "On ai.elitea.security.v1.admin.access.changed (ADR-0059 decision 8): one change of who holds what. Names and ids only. There is no reason text: the reason code is reason_code, and the text stays in the admin audit row.",
       "properties": {
-        "kind": { "enum": ["role_assignment", "role_permissions", "role_created", "role_deleted", "role_renamed", "project_permissions_pushed", "token_scopes", "project_membership", "global_provider_route", "identity_trust"] },
+        "kind": { "enum": ["role_assignment", "role_permissions", "role_created", "role_deleted", "role_renamed", "project_permissions_pushed", "token_scopes", "project_membership", "global_provider_route", "identity_trust", "break_glass_approval"] },
         "mode": { "type": "string", "maxLength": 256, "description": "The role mode of a role change (administration, default)." },
         "source": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_.:-]{0,127}$", "description": "The grant history source of a role assignment: console, api, scim, migration, bootstrap, operator or review." },
         "before": { "type": "array", "maxItems": 1024, "items": { "type": "string", "minLength": 1, "maxLength": 256 }, "description": "The subject's set before the change, by name. On project_permissions_pushed, the permissions the push removed from the role in at least one project; on role_renamed, the old name." },

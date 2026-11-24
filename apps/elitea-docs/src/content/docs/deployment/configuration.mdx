@@ -294,6 +294,10 @@ To rotate, give your receiver the new key first, then list it beside the old one
 
 Off by default. `main.env.ELITEA_ENTERPRISE_CREDENTIAL_GOVERNANCE_ENABLED` pins every new run to a governed profile and an immutable policy revision, mounts the agent identity admin API, and can require an external Vault/OpenBao store. See [Enterprise credential governance](/deployment/credential-governance) before you turn it on.
 
+## Break-glass policy
+
+The durations, caps and approval switch of break-glass elevations are console settings, not chart values: the **Break-glass** section under **Configuration**, which only a holder of `access.breakglass.manage` sees. The caps stop at ceilings in code that no setting can raise: 480 minutes online and 240 minutes with the sealed credential. Switching approval off needs a standing `super_admin`, takes effect after a delay (24 hours by default) and is recorded in the security audit at once. See [Break-glass access](/admin/break-glass#settings) for every setting and its default.
+
 ## Maintenance and the banner
 
 Both are console-editable under **Configuration**, not chart settings: a dismissible banner with its own icon/style/message, and a maintenance mode that answers `503` with a splash screen to every caller without administration access (the admin console and authentication routes stay reachable, so the window is reversible from inside itself). See [Features and configuration](/admin/features-and-configuration#configuration) for the click-through.

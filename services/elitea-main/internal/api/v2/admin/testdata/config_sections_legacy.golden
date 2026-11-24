@@ -60,6 +60,8 @@ GET	/api/v2/admin/plugin_config_values/administration/agent_lifecycle	403
 PUT	/api/v2/admin/plugin_config_values/administration/agent_lifecycle	403
 GET	/api/v2/admin/plugin_config_values/administration/credential_review	403
 PUT	/api/v2/admin/plugin_config_values/administration/credential_review	403
+GET	/api/v2/admin/plugin_config_values/administration/break_glass	403
+PUT	/api/v2/admin/plugin_config_values/administration/break_glass	403
 GET	/api/v2/admin/plugin_config_values/administration/web_search	403
 PUT	/api/v2/admin/plugin_config_values/administration/web_search	403
 GET	/api/v2/admin/plugin_config_values/administration/resources	403
@@ -149,6 +151,8 @@ GET	/api/v2/admin/plugin_config_values/administration/agent_lifecycle	500
 PUT	/api/v2/admin/plugin_config_values/administration/agent_lifecycle	500
 GET	/api/v2/admin/plugin_config_values/administration/credential_review	500
 PUT	/api/v2/admin/plugin_config_values/administration/credential_review	500
+GET	/api/v2/admin/plugin_config_values/administration/break_glass	403
+PUT	/api/v2/admin/plugin_config_values/administration/break_glass	403
 GET	/api/v2/admin/plugin_config_values/administration/web_search	500
 PUT	/api/v2/admin/plugin_config_values/administration/web_search	500
 GET	/api/v2/admin/plugin_config_values/administration/resources	500

@@ -55,6 +55,7 @@ does not match the registry.
 | `POST` | `/api/v2/admin/modes/administration` |  | refused |
 | `POST` | `/api/v2/admin/permissions/{scope}/{mode}` |  | refused |
 | `PUT` | `/api/v2/admin/permissions/{scope}/{mode}` |  | refused |
+| `PUT` | `/api/v2/admin/plugin_config_values/administration/{plugin}` | `break_glass` | refused |
 | `PUT` | `/api/v2/admin/retention/policies/{dataClass}` | `shorten` | refused |
 | `DELETE` | `/api/v2/admin/retention/policies/{dataClass}/projects/{projectID}` | `shorten` | refused |
 | `PUT` | `/api/v2/admin/retention/policies/{dataClass}/projects/{projectID}` | `shorten` | refused |

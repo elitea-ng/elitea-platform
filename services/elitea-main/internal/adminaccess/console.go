@@ -162,8 +162,11 @@ var consoleItems = []ConsoleItem{
 	consoleItem("data-retention", AreaSecurity, RetentionManage, LegalHoldManage),
 
 	// Platform.
+	// The break_glass section (R2.2a) is a section of this page, so its
+	// permission opens it until the break-glass screens (R3.10) ship.
 	consoleItem("configuration", AreaPlatform,
-		PlatformConfigView, PlatformConfigManage, PlatformMaintenanceManage, RuntimePlugins),
+		PlatformConfigView, PlatformConfigManage, PlatformMaintenanceManage, RuntimePlugins,
+		AccessBreakglassManage),
 	consoleItem("features", AreaPlatform, PlatformConfigView, PlatformConfigManage, RuntimePlugins),
 	consoleItem("branding", AreaPlatform, ConfigurationBranding),
 	consoleItem("email", AreaPlatform, PlatformEmailManage, RuntimePlugins),

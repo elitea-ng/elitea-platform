@@ -70,6 +70,16 @@ const (
 	// identity trust. Subject the identity provider or the SCIM client;
 	// Fields names what changed.
 	AccessIdentityTrust AccessChangeKind = "identity_trust"
+	// AccessBreakGlassApproval: the approval switch of the break_glass
+	// section changed (ADR-0059 decision 5, "Switching approval off"; story
+	// R2.2a, issue 2516). Subject configuration_section/break_glass; Fields
+	// ["approval_required"]; before and after are ["approval_required"] while
+	// approval is in force and empty once it is not requested. ReasonCode is
+	// approval_off_requested (written at once, though the switch takes effect
+	// after the delay) or approval_on_restored (at once; cancels a pending
+	// switch-off). The signal platform.control_disabled with the change kind
+	// break_glass_approval_off (R2.4) is derived from approval_off_requested.
+	AccessBreakGlassApproval AccessChangeKind = "break_glass_approval"
 )
 
 var accessChangeKinds = map[AccessChangeKind]bool{
@@ -83,6 +93,7 @@ var accessChangeKinds = map[AccessChangeKind]bool{
 	AccessProjectMembership:        true,
 	AccessGlobalProviderRoute:      true,
 	AccessIdentityTrust:            true,
+	AccessBreakGlassApproval:       true,
 }
 
 // Valid reports whether k is a known change kind.
@@ -94,7 +105,7 @@ func AccessChangeKinds() []AccessChangeKind {
 	return []AccessChangeKind{
 		AccessRoleAssignment, AccessRolePermissions, AccessRoleCreated, AccessRoleDeleted, AccessRoleRenamed,
 		AccessProjectPermissionsPushed, AccessTokenScopes, AccessProjectMembership, AccessGlobalProviderRoute,
-		AccessIdentityTrust,
+		AccessIdentityTrust, AccessBreakGlassApproval,
 	}
 }
 
