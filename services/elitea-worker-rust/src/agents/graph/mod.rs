@@ -82,6 +82,8 @@ pub(crate) mod node_recovery_owner;
 pub(crate) mod node_recovery_receipt;
 pub(crate) mod node_recovery_runtime;
 #[cfg(test)]
+mod node_settings_fanout_tests;
+#[cfg(test)]
 mod node_settings_llm_direct_tool_tests;
 #[cfg(test)]
 mod node_settings_pg_tests;

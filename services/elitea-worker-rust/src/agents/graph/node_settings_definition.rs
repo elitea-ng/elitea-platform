@@ -239,9 +239,6 @@ impl RawSettingsCatalog {
                     return Err(refusal(&id, NodeSettingsRefusal::FamilyPause));
                 }
             };
-            if owned.contains(&id) {
-                return Err(refusal(&id, NodeSettingsRefusal::FanoutOwned));
-            }
             let node = nodes.iter().find(|node| node.id() == id).ok_or(
                 PipelineConfigurationError::Invalid(
                     "a pipeline node with settings is not admitted",
@@ -249,7 +246,8 @@ impl RawSettingsCatalog {
             )?;
             if let Some(target) = raw.settings.error_transition.as_deref()
                 && target != "END"
-                && (target == id
+                && (owned.contains(&id)
+                    || target == id
                     || owned.contains(target)
                     || self.failure_handlers.contains(target)
                     || !nodes.iter().any(|node| node.id() == target))

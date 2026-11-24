@@ -120,15 +120,24 @@ func (r *NodeRecoveryRepository) Read(ctx context.Context, selector app.Selector
 		}
 		var status string
 		var raw, digest []byte
-		err = tx.QueryRow(ctx, `SELECT status,receipt_json,receipt_digest FROM elitea_runtime.node_recovery_visits
-WHERE execution_id=$1 AND generation=$2 ORDER BY created_at DESC,journal_revision DESC LIMIT 1`, scope.executionID, scope.generation).Scan(&status, &raw, &digest)
+		if selector.GraphThread != "" {
+			err = tx.QueryRow(ctx, `SELECT status,receipt_json,receipt_digest FROM elitea_runtime.node_recovery_visits
+WHERE execution_id=$1 AND generation=$2 AND graph_thread=$3 ORDER BY created_at DESC,journal_revision DESC LIMIT 1`, scope.executionID, scope.generation, selector.GraphThread).Scan(&status, &raw, &digest)
+		} else {
+			err = tx.QueryRow(ctx, `SELECT status,receipt_json,receipt_digest FROM elitea_runtime.node_recovery_visits
+WHERE execution_id=$1 AND generation=$2 ORDER BY CASE status WHEN 'SUSPENDED' THEN 0 WHEN 'AUTHORIZED' THEN 1 ELSE 2 END ASC,created_at DESC,journal_revision DESC LIMIT 1`, scope.executionID, scope.generation).Scan(&status, &raw, &digest)
+		}
 		if errors.Is(err, pgx.ErrNoRows) {
 			return app.ErrNotAllowed
 		}
 		if err != nil {
 			return err
 		}
-		if _, err := domain.DecodeReceipt(raw); err != nil {
+		receipt, err := domain.DecodeReceipt(raw)
+		if err != nil {
+			return app.ErrNotAllowed
+		}
+		if selector.GraphThread != "" && receipt.GraphThread != selector.GraphThread {
 			return app.ErrNotAllowed
 		}
 		wanted := sha256.Sum256(raw)

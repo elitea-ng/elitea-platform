@@ -67,7 +67,7 @@ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'SUSPENDED')`, frame.Fence.Executi
 		return outputapp.ErrNodeEventOutputConflict
 	}
 	tag, err = tx.Exec(ctx, `UPDATE elitea_runtime.execution_jobs SET desired_state='SUSPENDED'
-WHERE execution_id=$1 AND generation=$2 AND command_id=$3 AND state='RUNNING' AND desired_state='RUNNING' AND invocation_state='MAY_HAVE_STARTED'`, frame.Fence.ExecutionID, int64(frame.Fence.Generation), frame.Fence.CommandID)
+WHERE execution_id=$1 AND generation=$2 AND command_id=$3 AND state='RUNNING' AND desired_state IN ('RUNNING','SUSPENDED') AND invocation_state='MAY_HAVE_STARTED'`, frame.Fence.ExecutionID, int64(frame.Fence.Generation), frame.Fence.CommandID)
 	if err != nil {
 		return err
 	}

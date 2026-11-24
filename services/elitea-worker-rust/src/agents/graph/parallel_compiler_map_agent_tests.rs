@@ -256,6 +256,9 @@ impl MapFixture {
             code: None,
             code_recovery: false,
             saved_code: std::collections::BTreeMap::new(),
+            node_settings: std::collections::BTreeMap::new(),
+            execution_id: None,
+            execution_deadline: None,
             events: None,
             root_session: None,
         });

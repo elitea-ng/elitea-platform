@@ -278,6 +278,12 @@ func walk(d *json.Decoder, depth int) error {
 	return nil
 }
 
+// ValidGraphThread validates an opaque graph thread selector (root or fan-out
+// child thread) using the same bounds and charset rules as Receipt.GraphThread.
+func ValidGraphThread(value string) bool {
+	return safeThread(value)
+}
+
 func safeThread(value string) bool {
 	return len(value) > 0 && len(value) <= 512 && utf8.ValidString(value) && strings.IndexFunc(value, unicode.IsControl) < 0 && !strings.ContainsAny(value, "\u2028\u2029")
 }

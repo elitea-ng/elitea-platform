@@ -90,3 +90,31 @@ func TestNodeRecoveryInspectionDoesNotRedeemCredentials(t *testing.T) {
 		t.Fatal(stream.sent)
 	}
 }
+
+func TestNodeRecoveryAckAcceptsFanoutChildThreadAndRejectsControlChars(t *testing.T) {
+	control := &recoveryControlStub{}
+	s, err := NewContentServer(contentAuthorizerFunc(func(context.Context, ContentClaim) (ContentAuthorization, error) {
+		return ContentAuthorization{}, nil
+	}), contentStoreFunc(func(context.Context, string, string, string, string) (io.ReadCloser, error) {
+		return nil, nil
+	}), 8192)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.WithNodeRecoveryControl(control)
+	scope := contentScope("0123456789abcdef0123456789abcdef", 1)
+	claimed := contentClaimContext(context.Background(), nil, "claim-1", bytes.Repeat([]byte{1}, 32))
+	act := strings.Repeat("1", 64)
+	reqID := strings.Repeat("2", 64)
+	sha := strings.Repeat("3", 64)
+	eff := strings.Repeat("4", 64)
+	validCont := `{"schema":"elitea.pipeline.node-recovery-required.v1","activation_id":"` + act + `","journal_revision":4,"node_id":"validate","graph_thread":"m1:KRe5343ZNGVAvfuZ-MJ-RAfTgyFfIxbwR_9OVB4NU24","step":2,"attempt":1,"failure_class":"dependency_unavailable","stop_reason":"operator_approval_required","replay_safety":{"kind":"idempotent_effect_not_committed","effect_id":"` + eff + `"},"allowed_actions":["retry"]}`
+	validAck := `{"request_id":"` + reqID + `","activation_id":"` + act + `","expected_revision":3,"receipt_sha256":"` + sha + `","applied_revision":4,"continuation_receipt":` + validCont + `,"terminal_stop_reason":null,"failure_route_continuation":null}`
+	if _, err := s.AcknowledgeNodeRecovery(claimed, &runtimev1.AcknowledgeNodeRecoveryRequestV1{Scope: scope, AckJson: []byte(validAck)}); err != nil {
+		t.Fatalf("fanout child continuation receipt rejected: %v", err)
+	}
+	badCont := strings.Replace(validCont, "m1:KRe5343ZNGVAvfuZ-MJ-RAfTgyFfIxbwR_9OVB4NU24", `m1:bad\nthread`, 1)
+	badAck := `{"request_id":"` + reqID + `","activation_id":"` + act + `","expected_revision":3,"receipt_sha256":"` + sha + `","applied_revision":4,"continuation_receipt":` + badCont + `,"terminal_stop_reason":null,"failure_route_continuation":null}`
+	_, err = s.AcknowledgeNodeRecovery(claimed, &runtimev1.AcknowledgeNodeRecoveryRequestV1{Scope: scope, AckJson: []byte(badAck)})
+	requireContentCode(t, err, codes.InvalidArgument)
+}

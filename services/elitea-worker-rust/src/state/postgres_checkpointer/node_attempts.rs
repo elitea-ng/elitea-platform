@@ -46,8 +46,15 @@ impl NodeRecoveryFactory for PostgresCheckpointer {
         // FU-248: a saved child's thread and steps are reused by every visit,
         // so its journal is scoped to the visit; there is no unscoped fallback.
         // The run root has no visit and keeps its original journal identity.
+        // 5b-5: an authorized direct fan-out child thread (`p1:` / `m1:`, no `/`
+        // subgraph suffix) is already unique per occurrence, branch/item and
+        // input, so it may open visit-scoped (Code child) or thread-scoped
+        // (LLM child) under its own activated child writer while staying fenced
+        // on `self.run_root_thread_id`.
         let in_child = activation.root_thread_id != self.run_root_thread_id;
-        if in_child != activation.visit.is_some() {
+        let direct_fanout_child =
+            in_child && is_direct_fanout_child_thread(&activation.root_thread_id);
+        if !direct_fanout_child && in_child != activation.visit.is_some() {
             return Err(recovery_error("pipeline.node_recovery.unscoped_child"));
         }
         let authority = &self.scope.authority;
@@ -71,6 +78,21 @@ impl NodeRecoveryFactory for PostgresCheckpointer {
             policy.clone(),
         ))
     }
+}
+
+/// Whether `thread_id` is a direct fan-out child thread (`p1:` or `m1:` plus a
+/// 32-byte URL-safe base64 digest, with no `/` saved-subgraph suffix).
+pub(in crate::state) fn is_direct_fanout_child_thread(thread_id: &str) -> bool {
+    let Some(encoded) = thread_id
+        .strip_prefix("p1:")
+        .or_else(|| thread_id.strip_prefix("m1:"))
+    else {
+        return false;
+    };
+    encoded.len() == 43
+        && encoded
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
 /// The journal identity of one node activation. A run root's is exactly what
@@ -383,5 +405,104 @@ mod tests {
                 .is_err()
             );
         }
+    }
+
+    #[test]
+    fn direct_fanout_child_thread_classifier_enforces_exact_prefix_length_and_charset() {
+        // Golden derived ids from fanout_children::tests.
+        assert!(is_direct_fanout_child_thread(
+            "p1:Z8y5h_dA4WoUJhoL5KeWzytJ6KsEHvKFo9OBSMzxW6Q"
+        ));
+        assert!(is_direct_fanout_child_thread(
+            "m1:KRe5343ZNGVAvfuZ-MJ-RAfTgyFfIxbwR_9OVB4NU24"
+        ));
+        for refused in [
+            "",
+            "thread-1",
+            "thread-1/delegate",
+            "p1:",
+            "m1:",
+            // Saved child beneath a fan-out branch must stay visit-scoped (FU-248).
+            "p1:Z8y5h_dA4WoUJhoL5KeWzytJ6KsEHvKFo9OBSMzxW6Q/fetch_short",
+            "m1:KRe5343ZNGVAvfuZ-MJ-RAfTgyFfIxbwR_9OVB4NU24/silver_batch",
+            // Wrong prefix.
+            "n1:Z8y5h_dA4WoUJhoL5KeWzytJ6KsEHvKFo9OBSMzxW6Q",
+            // Length limit - 1 (42) and limit + 1 (44).
+            "p1:Z8y5h_dA4WoUJhoL5KeWzytJ6KsEHvKFo9OBSMzxW6",
+            "p1:Z8y5h_dA4WoUJhoL5KeWzytJ6KsEHvKFo9OBSMzxW6Qa",
+            // Non-URL-safe base64 / padding / control chars.
+            "p1:Z8y5h+dA4WoUJhoL5KeWzytJ6KsEHvKFo9OBSMzxW6Q",
+            "p1:Z8y5h_dA4WoUJhoL5KeWzytJ6KsEHvKFo9OBSMzxW6=",
+            "p1:Z8y5h_dA4WoUJhoL5KeWzytJ6KsEHvKFo9OBSMzx\n6Q",
+        ] {
+            assert!(
+                !is_direct_fanout_child_thread(refused),
+                "must refuse {refused:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fanout_sibling_journals_are_isolated_per_child_thread() {
+        let auth = CheckpointWriterAuthority::new(
+            "tenant-1".to_owned(),
+            7,
+            7,
+            crate::state::postgres_checkpointer::APPLICATION_CAPABILITY_ID,
+            [0x11; 32],
+            "p1:Z8y5h_dA4WoUJhoL5KeWzytJ6KsEHvKFo9OBSMzxW6Q".to_owned(),
+            "execution-1".to_owned(),
+            1,
+            "claim-1".to_owned(),
+            1,
+            1,
+            1_700_000_000_000_000,
+            "workload-1".to_owned(),
+            "producer-1".to_owned(),
+            [0x22; 32],
+        )
+        .expect("authority");
+        let policy = NodeRecoveryPolicy::default();
+        let make = |thread: &str, visit: Option<[u8; 32]>| NodeAttemptActivation {
+            root_thread_id: thread.to_owned(),
+            node_id: "validate".to_owned(),
+            step: 0,
+            node_digest: [0x33; 32],
+            input_digest: [0x44; 32],
+            visit,
+        };
+        let branch_a = journal_activation_id(
+            &auth,
+            &make("p1:Z8y5h_dA4WoUJhoL5KeWzytJ6KsEHvKFo9OBSMzxW6Q", None),
+            &policy,
+        )
+        .expect("branch A");
+        let branch_b = journal_activation_id(
+            &auth,
+            &make("p1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", None),
+            &policy,
+        )
+        .expect("branch B");
+        let item_0 = journal_activation_id(
+            &auth,
+            &make(
+                "m1:KRe5343ZNGVAvfuZ-MJ-RAfTgyFfIxbwR_9OVB4NU24",
+                Some([0x55; 32]),
+            ),
+            &policy,
+        )
+        .expect("item 0");
+        let item_1 = journal_activation_id(
+            &auth,
+            &make(
+                "m1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                Some([0x55; 32]),
+            ),
+            &policy,
+        )
+        .expect("item 1");
+        assert_ne!(branch_a, branch_b);
+        assert_ne!(item_0, item_1);
+        assert_ne!(branch_a, item_0);
     }
 }

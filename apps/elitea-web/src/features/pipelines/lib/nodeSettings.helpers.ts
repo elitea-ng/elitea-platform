@@ -300,7 +300,7 @@ const familyKeys = (node: YamlPipelineNode): readonly string[] | undefined => no
 
 function badErrorTarget({ node, settings }: Block, { ids, owned, failureHandlers }: NodeContext): boolean {
   const target = settings.error_transition;
-  return target !== undefined && target !== 'END' && (target === node.id || owned.has(target) || failureHandlers.has(target) || !ids.has(target));
+  return target !== undefined && target !== 'END' && (owned.has(node.id) || target === node.id || owned.has(target) || failureHandlers.has(target) || !ids.has(target));
 }
 
 /** The per-node admission, in the Worker's order (first match wins). */
@@ -310,7 +310,6 @@ const NODE_CHECKS: readonly (readonly [(block: Block, context: NodeContext) => b
   [({ node }) => familyKeys(node) === undefined, 'family_not_yet'],
   [({ node, settings }) => settings.retry_on_fail && !(familyKeys(node) ?? []).includes('retry_on_fail'), 'retry_not_allowed'],
   [({ node, settings }) => settings.timeout_ms !== undefined && !(familyKeys(node) ?? []).includes('timeout_ms'), 'timeout_not_allowed'],
-  [({ node }, { owned }) => owned.has(node.id), 'fanout_owned'],
   [badErrorTarget, 'error_transition_target'],
   // C5: the raw key, never the runtime's END default.
   [({ node, settings }) => node.type === 'router' && settings.on_error === 'continue' && node.default_output === undefined, 'router_continue_needs_default'],

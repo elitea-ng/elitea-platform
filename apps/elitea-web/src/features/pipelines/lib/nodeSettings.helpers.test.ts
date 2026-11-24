@@ -107,4 +107,25 @@ describe('node settings helpers', () => {
       expect(issues[0]?.message).toBe(`Node a: ${NodeSettingsRefusalTexts['family_not_yet']}`);
     }
   });
+
+  it('admits fan-out child automatic settings and refuses escaping error_transition (5b-5)', () => {
+    const base: YamlPipelineDocument = {
+      entry_point: 'map_entities',
+      state: { entities: { type: 'list', value: [] }, item_result: { type: 'str', value: '' }, mapped: { type: 'list', value: [] }, tail_out: 'str' },
+      nodes: [
+        { id: 'map_entities', type: 'map', worker: 'render', source: 'entities', item: 'entity', index: 'item_index', outputs: ['item_result'], destination: 'mapped', max_items: 64, max_concurrency: 4, reduction: 'ordered_collection', transition: 'tail' },
+        { id: 'render', type: 'state_modifier', input: ['entity', 'item_index'], output: ['item_result'], template: '{{ item_index }}', settings: { on_error: 'error_output', error_transition: 'END' } },
+        { id: 'tail', type: 'state_modifier', template: 'x', output: ['tail_out'], transition: 'END' },
+      ],
+    };
+    expect(graphNodeSettingsIssues(base)).toEqual([]);
+
+    const escaping: YamlPipelineDocument = {
+      ...base,
+      nodes: base.nodes!.map((n) => (n.id === 'render' ? { ...n, settings: { on_error: 'error_output', error_transition: 'tail' } } : n)),
+    };
+    const issues = graphNodeSettingsIssues(escaping);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.message).toBe(`Node render: ${NodeSettingsRefusalTexts['error_transition_target']}`);
+  });
 });

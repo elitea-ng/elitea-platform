@@ -1,0 +1,15 @@
+# Runtime: Worker and migration 0271 ship before Main/Web for fan-out child `settings:` and per-thread node recovery (5b-5, FU-071)
+
+Supported automatic-mode `settings:` blocks (`state_modifier`, `code`, `llm`, `toolkit`, `mcp`, `router`, `split_out`, `aggregate`) are now admitted on nodes owned by `parallel` branches and `map` workers, and operator node-recovery visits (`FU-071`) are scoped per `graph_thread` rather than one pending visit per execution generation.
+
+- **What changed:**
+  - `libs/proto/contracts/pipeline-node-settings-v1-vectors.json`, `elitea-worker-rust`, `elitea-main` (`internal/domain/pipelinelimits`), and `elitea-web` (`nodeSettings.helpers.ts`) lift the `fanout_owned` admission refusal while refusing `error_transition` targets that escape a fan-out child's scope (`END` only for single-node fan-out children) and keeping operator-mode `recovery:` rules intact.
+  - `elitea-worker-rust` compiles admitted child `settings:` for `Parallel` (`llm`, `code`) and `Map` (`state_modifier`, `llm`, `code`) workers with per-child-thread isolated `node_errors` / `execute_once` channels and lifts the root-thread-only journal check in `PostgresCheckpointer::open` strictly for canonical direct fan-out child threads (`p1:` / `m1:`).
+  - Shared migration `services/elitea-main/migrations/shared/0271_node_recovery_per_thread_visit.sql` replaces unique index `node_recovery_one_pending_visit` on `(execution_id, generation)` with `(execution_id, generation, graph_thread)` and adds `node_recovery_latest_visit_by_thread`.
+  - `elitea-main` (`repos/node_recovery*.go`, `api/v2/agentexecution/node_recovery.go`) supports concurrent pending visits across sibling fan-out threads, preserves `desired_state = 'SUSPENDED'` while another thread has a pending visit, and accepts optional `?graph_thread=` on `GET /node_recovery` without changing wire JSON shapes.
+- **Who is affected:** Deployments rolling out `elitea-worker-rust`, `elitea-main`, and `elitea-web` independently where pipelines configure `settings:` inside `parallel` branches or `map` workers/child pipelines.
+- **What to do:** **Run shared migration `0271` and deploy `elitea-worker-rust` before `elitea-main` and `elitea-web`.**
+  - *Migration `0271` with Old Main:* safe; the new partial unique index on `(execution_id, generation, graph_thread)` is strictly more permissive than `(execution_id, generation)` and preserves all single-thread root invariants.
+  - *New Worker + Old Main:* safe; pipelines without fan-out child `settings:` keep identical configuration digests, and Old Main continues refusing fan-out child `settings:` at save time until Main upgrades.
+  - *Old Worker + New Main:* pipelines saved with `settings:` on a `parallel`- or `map`-owned node are refused by Old Worker with `pipeline.node_settings.invalid` (`fanout_owned`) until Worker upgrades.
+  - *Downgrade note:* before rolling back migration `0271`, ensure no execution generation has more than one open (`SUSPENDED`/`AUTHORIZED`) visit across distinct `graph_thread` values in `elitea_runtime.execution_node_recovery_visits`.

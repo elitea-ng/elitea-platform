@@ -49,12 +49,13 @@ impl ParallelChildCheckpointerFactory for PostgresCheckpointer {
             .activate_parallel_branch(activation, branch, ordinal, input_digest, origin)
             .await?;
         let thread_id = child.scope.authority.thread_id.clone();
-        let checkpointer: Arc<dyn Checkpointer> = Arc::new(child);
+        let child = Arc::new(child);
+        let checkpointer: Arc<dyn Checkpointer> = child.clone();
         Ok(ParallelChildCheckpoint {
             admitted_threads: std::collections::BTreeSet::from([thread_id.clone()]),
             thread_id,
             checkpointer,
-            node_recovery: None,
+            node_recovery: Some(child),
             tool_pipelines: None,
         })
     }
@@ -90,13 +91,14 @@ impl ParallelChildCheckpointerFactory for PostgresCheckpointer {
             .zip(latest)
             .map(|(writer, latest)| {
                 let thread_id = writer.scope.authority.thread_id.clone();
-                let checkpointer: Arc<dyn Checkpointer> = Arc::new(writer);
+                let writer = Arc::new(writer);
+                let checkpointer: Arc<dyn Checkpointer> = writer.clone();
                 PreparedChildCheckpoint {
                     child: ParallelChildCheckpoint {
                         admitted_threads: std::collections::BTreeSet::from([thread_id.clone()]),
                         thread_id,
                         checkpointer,
-                        node_recovery: None,
+                        node_recovery: Some(writer),
                         tool_pipelines: None,
                     },
                     latest,

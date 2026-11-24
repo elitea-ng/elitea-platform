@@ -363,14 +363,12 @@ func checkOneNodeSettings(block declaredSettings, ids, owned, failureHandlers ma
 	if settings.timeoutMs != nil && !contains(admittedKeys, "timeout_ms") {
 		return settingsRefusal(id, "timeout_not_allowed")
 	}
-	if _, isOwned := owned[id]; isOwned {
-		return settingsRefusal(id, "fanout_owned")
-	}
 	if target := settings.errorTransition; target != nil && *target != "END" {
+		_, isOwned := owned[id]
 		_, declared := ids[*target]
 		_, targetOwned := owned[*target]
 		_, targetHandler := failureHandlers[*target]
-		if *target == id || targetOwned || targetHandler || !declared {
+		if isOwned || *target == id || targetOwned || targetHandler || !declared {
 			return settingsRefusal(id, "error_transition_target")
 		}
 	}
