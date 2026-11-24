@@ -281,6 +281,8 @@ describe('deriveChatBoxInputState', () => {
   it('closes the composer, not only Send, when the agent was withdrawn', () => {
     const withdrawn = deriveChatBoxInputState({ ...base, isActiveParticipantWithdrawn: true });
     expect(withdrawn.isComposerBusy).toBe(true);
+    expect(withdrawn.isDraftInputBusy).toBe(true);
+    expect(withdrawn.isComposerLoading).toBe(false);
     expect(withdrawn.disabledSend).toBe(true);
   });
 
@@ -305,6 +307,7 @@ describe('deriveChatBoxInputState', () => {
   it('leaves the composer live while a turn streams, but still reports the run', () => {
     const streaming = deriveChatBoxInputState({ ...base, isStreaming: true });
     expect(streaming.isComposerBusy).toBe(false);
+    expect(streaming.isComposerLoading).toBe(false);
     expect(streaming.disabledSend).toBe(false);
     expect(streaming.isInputLoading).toBe(true);
   });
@@ -312,6 +315,7 @@ describe('deriveChatBoxInputState', () => {
   it('still blocks the composer for reasons that are not the run', () => {
     const uploading = deriveChatBoxInputState({ ...base, isStreaming: true, isUploadingAttachments: true });
     expect(uploading.isComposerBusy).toBe(true);
+    expect(uploading.isComposerLoading).toBe(true);
     expect(uploading.disabledSend).toBe(true);
   });
 
@@ -320,9 +324,16 @@ describe('deriveChatBoxInputState', () => {
       const preparing = deriveChatBoxInputState({ ...base, isEditorTest: true, [flag]: true });
       expect(preparing.isDraftInputBusy).toBe(false);
       expect(preparing.isComposerBusy).toBe(true);
+      expect(preparing.isComposerLoading).toBe(true);
       expect(preparing.isInputLoading).toBe(true);
       expect(preparing.disabledSend).toBe(true);
       expect(deriveChatBoxInputState({ ...base, [flag]: true }).isDraftInputBusy).toBe(true);
+    },
+  );
+
+  it.each(['isUploadingAttachments', 'isUpdatingInternalToolsConfig', 'isConversationSending'] as const)(
+    'reports active composer loading during %s', (flag) => {
+      expect(deriveChatBoxInputState({ ...base, [flag]: true }).isComposerLoading).toBe(true);
     },
   );
 
@@ -334,9 +345,12 @@ describe('deriveChatBoxInputState', () => {
     },
   );
 
-  it('keeps selected editor Test playback read-only', () => {
+  it('keeps selected editor Test playback read-only without showing a loading spinner', () => {
     const playback = deriveChatBoxInputState({ ...base, isEditorTest: true, activeConversation: { isPlayback: true } });
     expect(playback.isDraftInputBusy).toBe(true);
+    expect(playback.isComposerBusy).toBe(true);
+    expect(playback.isInputLoading).toBe(true);
+    expect(playback.isComposerLoading).toBe(false);
     expect(playback.disabledSend).toBe(true);
     expect(deriveChatBoxInputState({ ...base, activeConversation: { isPlayback: true } }).isDraftInputBusy).toBe(false);
   });
