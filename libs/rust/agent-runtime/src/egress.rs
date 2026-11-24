@@ -51,8 +51,8 @@ use adk_core::{AdkError, ErrorCategory, ErrorComponent, RetryHint};
 use async_trait::async_trait;
 use elitea_connectors::transport::{Request, Response, Transport, TransportError};
 pub use elitea_egress_guard::{
-    Allowlist, MAX_PRIVATE_PERMIT_ENTRIES, MAX_PUBLIC_ALLOWLIST_ENTRIES, PrivatePermit,
-    PublicPolicy, PublicPolicyError,
+    Allowlist, AllowlistError, MAX_PRIVATE_PERMIT_ENTRIES, MAX_PUBLIC_ALLOWLIST_ENTRIES, PermitSet,
+    PrivatePermit, PublicPolicy, PublicPolicyError,
 };
 use elitea_egress_guard::{Lookup, ResolveError, SystemLookup, resolve_permitted};
 
@@ -558,6 +558,15 @@ impl RunEgress {
     pub fn record_reached(&self, url: &reqwest::Url) {
         if let (Some(host), Some(port)) = (url.host_str(), url.port_or_known_default()) {
             self.count(None, ledger_host(host), port);
+        }
+    }
+
+    /// Count one outbound connection to `host` on `port` that succeeded (for
+    /// non-HTTP protocols such as SQL).
+    pub fn record_reached_host(&self, host: &str, port: u16) {
+        let host = ledger_host(host);
+        if !host.is_empty() && port != 0 {
+            self.count(None, host, port);
         }
     }
 

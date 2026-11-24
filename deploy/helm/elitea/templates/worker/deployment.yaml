@@ -234,6 +234,11 @@ spec:
             # is turned off, until the pinned runs drain.
             - name: ELITEA_WORKER_GOVERNED_CONTEXT
               value: {{ .Values.worker.governedContext | default (get (.Values.main.env | default dict) "ELITEA_ENTERPRISE_CREDENTIAL_GOVERNANCE_ENABLED") | default "false" | toString | quote }}
+            # 5e-1: private database egress permits for the SQL toolkit (CIDR,
+            # IP[:port], localhost[:port]). Empty admits public databases only;
+            # a malformed value fails worker startup.
+            - name: ELITEA_DB_EGRESS_ALLOWLIST
+              value: {{ .Values.worker.dbEgressAllowlist | default "" | toString | quote }}
             # Traces (#1460): global.otelEndpoint, else the bundled collector
             # while otelCollector.enabled, else export off.
             {{- include "elitea.otelEnv" . | trim | nindent 12 }}

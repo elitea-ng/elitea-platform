@@ -777,6 +777,7 @@ export default function table(ctx) {
           SSL_CERT_FILE: trust,
           ELITEA_RUST_LOG: "info",
           ELITEA_RUST_TRACE: "info",
+          ELITEA_DB_EGRESS_ALLOWLIST: dd("ELITEA_DB_EGRESS_ALLOWLIST", ""),
           OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318",
         },
         dependsOn: [

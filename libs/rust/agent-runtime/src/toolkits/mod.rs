@@ -228,7 +228,9 @@ pub use delegated_auth::{
     encode_delegated_authorization_requirement, hide_model_tools,
 };
 pub use elitea_egress_guard::{
-    Allowlist as WebEgressAllowlist, AllowlistError as WebEgressAllowlistError,
+    Allowlist as DbEgressAllowlist, Allowlist as WebEgressAllowlist,
+    AllowlistError as DbEgressAllowlistError, AllowlistError as WebEgressAllowlistError,
+    PermitSet as DbEgressPermitSet,
 };
 pub use families::artifact::ArtifactToolAuthority;
 pub use families::browser::{

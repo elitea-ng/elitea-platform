@@ -224,3 +224,7 @@ zavora-xlsx = { path = "../../libs/rust/vendor/zavora-xlsx" }
 zavora-docx-opc = { path = "../../libs/rust/vendor/zavora-docx-opc" }
 zavora-slide-opc = { path = "../../libs/rust/vendor/zavora-slide-opc" }
 zavora-slide-xlsx = { path = "../../libs/rust/vendor/zavora-slide-xlsx" }
+# SQLx 0.9.0 guarded dial + TLS hostname separation and environment-free
+# PostgreSQL options (../../libs/rust/vendor/README.md), as in libs/rust.
+sqlx-postgres = { path = "../../libs/rust/vendor/sqlx-postgres" }
+sqlx-mysql = { path = "../../libs/rust/vendor/sqlx-mysql" }

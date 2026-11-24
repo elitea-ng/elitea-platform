@@ -1,13 +1,18 @@
 use std::fmt;
+use std::net::IpAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use adk_core::{AdkError, ErrorCategory, ErrorComponent, RetryHint};
 use async_trait::async_trait;
+use elitea_egress_guard::{Lookup, PermitSet, ResolveError, SystemLookup, resolve_checked_with};
 use serde_json::{Map, Value, json};
 use sqlx::mysql::{MySqlConnectOptions, MySqlConnection, MySqlSslMode};
 use sqlx::postgres::{PgConnectOptions, PgConnection, PgSslMode};
 use sqlx::{Acquire, ConnectOptions, Connection, Executor, MySql, Row, Statement};
 use tokio_stream::StreamExt;
+
+use crate::egress::RunEgress;
 
 use super::config::{SqlDialect, SqlToolkitConfig};
 use super::project::{
@@ -63,6 +68,7 @@ const MYSQL_SESSION_MODE_QUERY: &str = "SELECT @@SESSION.sql_mode";
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SqlClientErrorCode {
     InvalidConfiguration,
+    EgressRefused,
     InvalidInput,
     Authentication,
     Authorization,
@@ -82,11 +88,13 @@ pub(crate) struct SqlClientError {
 }
 
 impl SqlClientError {
+    #[cfg(test)]
     #[must_use]
     pub(crate) const fn code(&self) -> SqlClientErrorCode {
         self.code
     }
 
+    #[cfg(test)]
     #[must_use]
     pub(crate) const fn retryable(&self) -> bool {
         self.retryable
@@ -98,6 +106,11 @@ impl SqlClientError {
                 ErrorCategory::InvalidInput,
                 "sql.configuration.invalid",
                 "the SQL toolkit configuration is invalid",
+            ),
+            SqlClientErrorCode::EgressRefused => (
+                ErrorCategory::Forbidden,
+                "sql.egress.refused",
+                "database egress to the configured address is not allowed",
             ),
             SqlClientErrorCode::InvalidInput => (
                 ErrorCategory::InvalidInput,
@@ -177,6 +190,9 @@ impl fmt::Display for SqlClientError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self.code {
             SqlClientErrorCode::InvalidConfiguration => "the SQL client configuration is invalid",
+            SqlClientErrorCode::EgressRefused => {
+                "database egress to the configured address is not allowed"
+            }
             SqlClientErrorCode::InvalidInput => "the SQL statement is invalid",
             SqlClientErrorCode::Authentication => "database authentication failed",
             SqlClientErrorCode::Authorization => "database authorization failed",
@@ -203,22 +219,49 @@ pub(in crate::toolkits) trait SqlApi: Send + Sync {
 
 pub(crate) struct SqlClient {
     config: SqlToolkitConfig,
+    lookup: Arc<dyn Lookup>,
+    private_permits: Arc<PermitSet>,
+    egress: Arc<RunEgress>,
+    #[cfg(test)]
+    test_root_cert_pem: Option<Vec<u8>>,
 }
 
 impl SqlClient {
     #[must_use]
-    pub(crate) const fn new(config: SqlToolkitConfig) -> Self {
-        Self { config }
+    pub(crate) fn new(
+        config: SqlToolkitConfig,
+        private_permits: Arc<PermitSet>,
+        egress: Arc<RunEgress>,
+    ) -> Self {
+        Self {
+            config,
+            lookup: Arc::new(SystemLookup),
+            private_permits,
+            egress,
+            #[cfg(test)]
+            test_root_cert_pem: None,
+        }
     }
 
-    fn postgres_options(&self) -> PgConnectOptions {
-        // SQLx 0.9.0 has no public fully environment-free PostgreSQL options
-        // constructor. Every claim-provided ordinary field and behavior is
-        // overwritten here; production activation remains gated on removing
-        // the driver's ambient PG TLS-file seam.
-        PgConnectOptions::new_without_pgpass()
+    #[cfg(test)]
+    #[must_use]
+    pub(in crate::toolkits) fn with_lookup(mut self, lookup: Arc<dyn Lookup>) -> Self {
+        self.lookup = lookup;
+        self
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub(in crate::toolkits) fn with_test_root_cert_pem(mut self, pem: Vec<u8>) -> Self {
+        self.test_root_cert_pem = Some(pem);
+        self
+    }
+
+    fn postgres_options(&self, connect_addr: IpAddr) -> PgConnectOptions {
+        let options = PgConnectOptions::new_without_env()
             .host(self.config.host())
             .port(self.config.port())
+            .connect_addr(connect_addr)
             .username(self.config.username())
             .password(self.config.password())
             .database(self.config.database())
@@ -231,13 +274,19 @@ impl SqlClient {
                 ("idle_in_transaction_session_timeout", "30000"),
                 ("standard_conforming_strings", "on"),
             ])
-            .disable_statement_logging()
+            .disable_statement_logging();
+        #[cfg(test)]
+        if let Some(pem) = &self.test_root_cert_pem {
+            return options.ssl_root_cert_from_pem(pem.clone());
+        }
+        options
     }
 
-    fn mysql_options(&self) -> MySqlConnectOptions {
-        MySqlConnectOptions::new()
+    fn mysql_options(&self, connect_addr: IpAddr) -> MySqlConnectOptions {
+        let options = MySqlConnectOptions::new()
             .host(self.config.host())
             .port(self.config.port())
+            .connect_addr(connect_addr)
             .username(self.config.username())
             .password(self.config.password())
             .database(self.config.database())
@@ -247,7 +296,104 @@ impl SqlClient {
             .timezone(Some("+00:00".to_owned()))
             .pipes_as_concat(false)
             .no_engine_substitution(false)
-            .disable_statement_logging()
+            .disable_statement_logging();
+        #[cfg(test)]
+        if let Some(pem) = &self.test_root_cert_pem {
+            return options.ssl_ca_from_pem(pem.clone());
+        }
+        options
+    }
+
+    async fn resolve_dial_targets(&self) -> Result<Vec<IpAddr>, SqlClientError> {
+        if self
+            .egress
+            .check(self.config.host(), self.config.port())
+            .is_err()
+        {
+            return Err(egress_refused());
+        }
+        resolve_checked_with(
+            self.lookup.as_ref(),
+            self.config.host(),
+            self.config.port(),
+            self.private_permits.as_ref(),
+            self.egress.policy(),
+        )
+        .await
+        .map_err(|error| {
+            match error {
+                ResolveError::NotPublic => {
+                    self.egress.record_refused(
+                        self.config.host(),
+                        self.config.port(),
+                        crate::egress::REFUSAL_REASON_NOT_PUBLIC,
+                    );
+                }
+                ResolveError::TooManyAddresses => {
+                    self.egress.record_refused(
+                        self.config.host(),
+                        self.config.port(),
+                        crate::egress::REFUSAL_REASON_TOO_MANY_ADDRESSES,
+                    );
+                }
+                ResolveError::Lookup | ResolveError::NotAllowed => {}
+            }
+            map_resolve_error(error)
+        })
+    }
+
+    async fn connect_postgres(&self) -> Result<PgConnection, SqlClientError> {
+        let admitted = self.resolve_dial_targets().await?;
+        let dial = async {
+            let mut last_error = dependency_unavailable(true);
+            for address in admitted {
+                let options = self.postgres_options(address);
+                match PgConnection::connect_with(&options).await {
+                    Ok(connection) => {
+                        self.egress
+                            .record_reached_host(self.config.host(), self.config.port());
+                        return Ok(connection);
+                    }
+                    Err(ref error @ sqlx::Error::Io(ref io_error))
+                        if !is_tls_io_error(io_error) =>
+                    {
+                        last_error = map_pre_dispatch_error(error);
+                    }
+                    Err(error) => return Err(map_pre_dispatch_error(&error)),
+                }
+            }
+            Err(last_error)
+        };
+        tokio::time::timeout(CONNECT_TIMEOUT, dial)
+            .await
+            .map_err(|_| timeout(true))?
+    }
+
+    async fn connect_mysql(&self) -> Result<MySqlConnection, SqlClientError> {
+        let admitted = self.resolve_dial_targets().await?;
+        let dial = async {
+            let mut last_error = dependency_unavailable(true);
+            for address in admitted {
+                let options = self.mysql_options(address);
+                match MySqlConnection::connect_with(&options).await {
+                    Ok(connection) => {
+                        self.egress
+                            .record_reached_host(self.config.host(), self.config.port());
+                        return Ok(connection);
+                    }
+                    Err(ref error @ sqlx::Error::Io(ref io_error))
+                        if !is_tls_io_error(io_error) =>
+                    {
+                        last_error = map_pre_dispatch_error(error);
+                    }
+                    Err(error) => return Err(map_pre_dispatch_error(&error)),
+                }
+            }
+            Err(last_error)
+        };
+        tokio::time::timeout(CONNECT_TIMEOUT, dial)
+            .await
+            .map_err(|_| timeout(true))?
     }
 }
 
@@ -256,13 +402,13 @@ impl SqlApi for SqlClient {
     async fn execute_sql(&self, sql: &str) -> Result<Value, SqlClientError> {
         match self.config.dialect() {
             SqlDialect::Postgres => {
-                let mut connection = connect_postgres(self.postgres_options()).await?;
+                let mut connection = self.connect_postgres().await?;
                 let result = execute_postgres(&mut connection, sql).await;
                 close_connection(connection).await;
                 result
             }
             SqlDialect::MySql => {
-                let mut connection = connect_mysql(self.mysql_options()).await?;
+                let mut connection = self.connect_mysql().await?;
                 let result = match configure_mysql_session(&mut connection).await {
                     Ok(()) => execute_mysql(&mut connection, sql).await,
                     Err(error) => Err(error),
@@ -276,34 +422,18 @@ impl SqlApi for SqlClient {
     async fn list_tables_and_columns(&self) -> Result<Value, SqlClientError> {
         match self.config.dialect() {
             SqlDialect::Postgres => {
-                let mut connection = connect_postgres(self.postgres_options()).await?;
+                let mut connection = self.connect_postgres().await?;
                 let result = introspect_postgres(&mut connection).await;
                 close_connection(connection).await;
                 result
             }
             SqlDialect::MySql => {
-                let mut connection = connect_mysql(self.mysql_options()).await?;
+                let mut connection = self.connect_mysql().await?;
                 let result = introspect_mysql(&mut connection).await;
                 close_connection(connection).await;
                 result
             }
         }
-    }
-}
-
-async fn connect_postgres(options: PgConnectOptions) -> Result<PgConnection, SqlClientError> {
-    match tokio::time::timeout(CONNECT_TIMEOUT, PgConnection::connect_with(&options)).await {
-        Ok(Ok(connection)) => Ok(connection),
-        Ok(Err(error)) => Err(map_pre_dispatch_error(&error)),
-        Err(_) => Err(timeout(true)),
-    }
-}
-
-async fn connect_mysql(options: MySqlConnectOptions) -> Result<MySqlConnection, SqlClientError> {
-    match tokio::time::timeout(CONNECT_TIMEOUT, MySqlConnection::connect_with(&options)).await {
-        Ok(Ok(connection)) => Ok(connection),
-        Ok(Err(error)) => Err(map_pre_dispatch_error(&error)),
-        Err(_) => Err(timeout(true)),
     }
 }
 
@@ -627,6 +757,19 @@ fn map_project_effect_error(_: super::project::ProjectError) -> SqlClientError {
     unknown_outcome()
 }
 
+fn is_tls_io_error(error: &std::io::Error) -> bool {
+    let mut source: Option<&(dyn std::error::Error + 'static)> = error
+        .get_ref()
+        .map(|inner| inner as &(dyn std::error::Error + 'static));
+    while let Some(current) = source {
+        if current.is::<rustls::Error>() {
+            return true;
+        }
+        source = current.source();
+    }
+    false
+}
+
 fn map_pre_dispatch_error(error: &sqlx::Error) -> SqlClientError {
     if let Some(database) = error.as_database_error() {
         return map_database_code(database.code().as_deref(), true);
@@ -635,6 +778,7 @@ fn map_pre_dispatch_error(error: &sqlx::Error) -> SqlClientError {
         sqlx::Error::Configuration(_) | sqlx::Error::InvalidArgument(_) | sqlx::Error::Tls(_) => {
             invalid_configuration()
         }
+        sqlx::Error::Io(io_error) if is_tls_io_error(io_error) => invalid_configuration(),
         sqlx::Error::Io(_)
         | sqlx::Error::Protocol(_)
         | sqlx::Error::WorkerCrashed
@@ -694,9 +838,25 @@ async fn close_connection<C: Connection>(connection: C) {
     let _ = tokio::time::timeout(CLOSE_TIMEOUT, connection.close()).await;
 }
 
+const fn map_resolve_error(error: ResolveError) -> SqlClientError {
+    match error {
+        ResolveError::Lookup => dependency_unavailable(true),
+        ResolveError::TooManyAddresses | ResolveError::NotPublic | ResolveError::NotAllowed => {
+            egress_refused()
+        }
+    }
+}
+
 const fn invalid_configuration() -> SqlClientError {
     SqlClientError {
         code: SqlClientErrorCode::InvalidConfiguration,
+        retryable: false,
+    }
+}
+
+const fn egress_refused() -> SqlClientError {
+    SqlClientError {
+        code: SqlClientErrorCode::EgressRefused,
         retryable: false,
     }
 }
@@ -780,22 +940,28 @@ pub(in crate::toolkits) fn test_map_project_read_error(error: ProjectErrorCode) 
 pub(in crate::toolkits) struct SqlConnectionProfile {
     pub(in crate::toolkits) host: String,
     pub(in crate::toolkits) port: u16,
+    pub(in crate::toolkits) connect_addr: Option<IpAddr>,
     pub(in crate::toolkits) username: String,
     pub(in crate::toolkits) database: String,
     pub(in crate::toolkits) tls: &'static str,
+    pub(in crate::toolkits) has_ssl_root_cert: bool,
+    pub(in crate::toolkits) has_ssl_client_cert: bool,
+    pub(in crate::toolkits) has_ssl_client_key: bool,
 }
 
 #[cfg(test)]
 pub(in crate::toolkits) fn test_connection_profile(
     config: SqlToolkitConfig,
+    connect_addr: IpAddr,
 ) -> SqlConnectionProfile {
-    let client = SqlClient::new(config);
+    let client = SqlClient::new(config, Arc::new(PermitSet::default()), RunEgress::open());
     match client.config.dialect() {
         SqlDialect::Postgres => {
-            let options = client.postgres_options();
+            let options = client.postgres_options(connect_addr);
             SqlConnectionProfile {
                 host: options.get_host().to_owned(),
                 port: options.get_port(),
+                connect_addr: options.get_connect_addr(),
                 username: options.get_username().to_owned(),
                 database: options.get_database().unwrap_or_default().to_owned(),
                 tls: if matches!(options.get_ssl_mode(), PgSslMode::VerifyFull) {
@@ -803,13 +969,17 @@ pub(in crate::toolkits) fn test_connection_profile(
                 } else {
                     "unexpected"
                 },
+                has_ssl_root_cert: options.has_ssl_root_cert(),
+                has_ssl_client_cert: options.has_ssl_client_cert(),
+                has_ssl_client_key: options.has_ssl_client_key(),
             }
         }
         SqlDialect::MySql => {
-            let options = client.mysql_options();
+            let options = client.mysql_options(connect_addr);
             SqlConnectionProfile {
                 host: options.get_host().to_owned(),
                 port: options.get_port(),
+                connect_addr: options.get_connect_addr(),
                 username: options.get_username().to_owned(),
                 database: options.get_database().unwrap_or_default().to_owned(),
                 tls: if matches!(options.get_ssl_mode(), MySqlSslMode::VerifyIdentity) {
@@ -817,6 +987,9 @@ pub(in crate::toolkits) fn test_connection_profile(
                 } else {
                     "unexpected"
                 },
+                has_ssl_root_cert: false,
+                has_ssl_client_cert: false,
+                has_ssl_client_key: false,
             }
         }
     }
