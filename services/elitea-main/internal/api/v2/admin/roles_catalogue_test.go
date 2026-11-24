@@ -1,6 +1,8 @@
 package admin
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -159,4 +161,63 @@ func seededGrants(t *testing.T) []string {
 		}
 	}
 	return names
+}
+
+const goldenCatalogueDeprecated = "testdata/roles_catalogue_deprecated.golden"
+
+// TestRolesCatalogueMarksExactlyTheLegacyNamesDeprecated is the golden test of
+// the `catalogue` the matrix read serves beside its rows (ADR-0059 R0.14a):
+// on a seeded database, and on one where no role holds a legacy name, the
+// entries marked `deprecated: true` are exactly runtime.plugins and
+// configuration.governance, and every row has its entry. Regenerate with
+// UPDATE_GOLDEN=1 only for a change that means to deprecate another name.
+func TestRolesCatalogueMarksExactlyTheLegacyNamesDeprecated(t *testing.T) {
+	t.Parallel()
+	var b strings.Builder
+	for _, database := range []struct {
+		name    string
+		granted []string
+	}{{"seeded", seededGrants(t)}, {"clean", nil}} {
+		matrix := permissionMatrix{catalogue: catalogueFrom(database.granted)}
+		encoded, err := json.Marshal(matrix.response())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var body struct {
+			Rows      []map[string]any `json:"rows"`
+			Catalogue []struct {
+				Name       string `json:"name"`
+				Deprecated *bool  `json:"deprecated"`
+			} `json:"catalogue"`
+		}
+		if err := json.Unmarshal(encoded, &body); err != nil {
+			t.Fatal(err)
+		}
+		if len(body.Catalogue) != len(body.Rows) {
+			t.Fatalf("%s: %d catalogue entries for %d rows", database.name, len(body.Catalogue), len(body.Rows))
+		}
+		fmt.Fprintf(&b, "# %s database\n", database.name)
+		for i, entry := range body.Catalogue {
+			if entry.Name != body.Rows[i]["name"] || entry.Deprecated == nil {
+				t.Fatalf("%s: catalogue entry %d = %+v, want the name of row %v and a deprecated flag",
+					database.name, i, entry, body.Rows[i]["name"])
+			}
+			if *entry.Deprecated {
+				fmt.Fprintf(&b, "%s deprecated\n", entry.Name)
+			}
+		}
+	}
+	got := b.String()
+	if os.Getenv("UPDATE_GOLDEN") == "1" {
+		if err := os.WriteFile(goldenCatalogueDeprecated, []byte(got), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(goldenCatalogueDeprecated)
+	if err != nil {
+		t.Fatalf("read %s: %v (regenerate with UPDATE_GOLDEN=1)", goldenCatalogueDeprecated, err)
+	}
+	if got != string(want) {
+		t.Errorf("the deprecated names of the catalogue changed:\n got:\n%s\nwant:\n%s", got, want)
+	}
 }

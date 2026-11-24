@@ -46,13 +46,15 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
-// adminRolePriority orders the four legacy administration-mode roles from most
-// to least privileged. The listing's single `admin_role` field reports the
-// highest of them that the user holds, matching `list_users_paginated`'s
-// `role_priority`. `admin_roles` carries every role (ADR-0059 R0.8b); the
-// single field is kept for one release so the current page keeps working, and
-// R0.13 (issue 2502) removes it.
-var adminRolePriority = []string{"super_admin", "admin", "editor", "viewer"}
+// legacyAdminRoleOrder serves the listing's single `admin_role` field and
+// nothing else: the highest of the four legacy administration-mode names the
+// user holds, matching `list_users_paginated`'s `role_priority`. The field is
+// kept for one release beside `admin_roles` (ADR-0059 R0.8b) because the
+// Users page still reads it; it goes with this list when that page reads the
+// set (R0.8c, issue 2586). No check decides by this order (R0.13): the
+// listing returns the set by name, and the demotion guard tests the
+// permission admin.auth.users.super_admin (adminaccess.Caller.SuperAdmin).
+var legacyAdminRoleOrder = []string{"super_admin", "admin", "editor", "viewer"}
 
 // maxAssignedRoles bounds the `role_names` set of one request. The built-in
 // catalogue has nine roles; a request naming more than this many is not a
@@ -165,19 +167,17 @@ FROM public.auth_core__user u`).Scan(&totalUsers, &systemUsers)
 		direction = "DESC"
 	}
 
-	// The filter placeholders occupy $1..$len(args); the three below follow.
-	rolePlaceholder := "$" + strconv.Itoa(len(args)+1)
-	limitPlaceholder := "$" + strconv.Itoa(len(args)+2)
-	offsetPlaceholder := "$" + strconv.Itoa(len(args)+3)
-	listArgs := append(append([]any{}, args...), adminRolePriority, params.limit, params.offset)
+	// The filter placeholders occupy $1..$len(args); the two below follow.
+	limitPlaceholder := "$" + strconv.Itoa(len(args)+1)
+	offsetPlaceholder := "$" + strconv.Itoa(len(args)+2)
+	listArgs := append(append([]any{}, args...), params.limit, params.offset)
 
 	// The roles are resolved by a LATERAL aggregate rather than a LEFT JOIN.
 	// A join multiplies the row out once per administration role the user holds
 	// — which the pre-A14 listing did, so a user with two roles appeared twice
 	// and `total` (a separate COUNT) disagreed with the page it labelled. The
-	// aggregate lists the four legacy names first, highest first, then every
-	// other role by name, so the single `admin_role` is its first element
-	// when that is a legacy name.
+	// aggregate lists every role by name: no name ranks above another
+	// (ADR-0059 R0.13), so a narrow or custom role is listed like any other.
 	rows, err := h.pool.Query(ctx, `
 SELECT u.id,
        COALESCE(u.name, u.email, '') AS name,
@@ -187,8 +187,7 @@ SELECT u.id,
        COALESCE(admin_roles.names, '{}'::text[])
 FROM public.auth_core__user u
 LEFT JOIN LATERAL (
-    SELECT array_agg(role.name
-                     ORDER BY array_position(`+rolePlaceholder+`::text[], role.name) NULLS LAST, role.name) AS names
+    SELECT array_agg(role.name ORDER BY role.name COLLATE "C") AS names
     FROM public.auth_core__user_role assignment
     JOIN public.auth_core__role role ON role.id = assignment.role_id
     WHERE assignment.user_id = u.id
@@ -223,7 +222,8 @@ LIMIT `+limitPlaceholder+` OFFSET `+offsetPlaceholder, listArgs...)
 			"is_admin":  len(adminRoles) > 0, // any administration role
 			"is_active": !suspended,
 			// The highest of the four legacy roles, kept for one release
-			// beside the set (ADR-0059 R0.8b); R0.13 removes it.
+			// beside the set (ADR-0059 R0.8b) while the Users page reads
+			// it; removed with R0.8c (issue 2586).
 			"admin_role":  adminRole,
 			"admin_roles": adminRoles,
 		})
@@ -681,7 +681,7 @@ ORDER BY 1`, mode, roles)
 // highestLegacyAdminRole is the single `admin_role` of the listing: the
 // highest of the four legacy names in `roles`, nil when it holds none.
 func highestLegacyAdminRole(roles []string) *string {
-	for _, legacy := range adminRolePriority {
+	for _, legacy := range legacyAdminRoleOrder {
 		if slices.Contains(roles, legacy) {
 			name := legacy
 			return &name
@@ -812,7 +812,7 @@ func (h *Handler) userAdministrationRoles(ctx context.Context, userID int) ([]st
 	var roles []string
 	err := h.pool.QueryRow(ctx, `
 SELECT COALESCE((
-    SELECT array_agg(role.name ORDER BY role.name)
+    SELECT array_agg(role.name ORDER BY role.name COLLATE "C")
     FROM public.auth_core__user_role assignment
     JOIN public.auth_core__role role ON role.id = assignment.role_id
     WHERE assignment.user_id = u.id AND role.mode = 'administration'

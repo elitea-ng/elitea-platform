@@ -122,8 +122,12 @@ type Permission struct {
 	// new capability. A gate that accepts this permission keeps accepting
 	// every name listed here (ADR-0059 decision 2).
 	Narrows []string
-	// Legacy marks a name that ends on the sunset date (story R0.14a sets
-	// it for the two overloaded names).
+	// Legacy marks a name that ends on the sunset date: runtime.plugins and
+	// configuration.governance (story R0.14a). Until then a legacy name keeps
+	// working where it is granted, but the Roles matrix adds it to no role
+	// that does not hold it (CheckDeprecated), the roles catalogue marks it
+	// deprecated, and the gates that name it may only shrink
+	// (internal/api/legacy_gate_ratchet_test.go).
 	Legacy bool
 	// Grantable is any or seeded_only.
 	Grantable Grantable
@@ -269,6 +273,23 @@ func Lookup(name string) (Permission, bool) { return registry.Lookup(name) }
 
 // Names returns every registered permission name, sorted.
 func Names() []string { return registry.Names() }
+
+// LegacyNames returns the names the registry marks Legacy, sorted.
+func LegacyNames() []string {
+	var names []string
+	for _, row := range registry.rows {
+		if row.Legacy {
+			names = append(names, row.Name)
+		}
+	}
+	return names
+}
+
+// IsLegacy reports whether the registry marks name Legacy.
+func IsLegacy(name string) bool {
+	row, ok := registry.Lookup(name)
+	return ok && row.Legacy
+}
 
 // HoldsAdministrationPermission reports whether permissions hold at least one
 // registered administration permission. A string the registry does not know

@@ -316,6 +316,83 @@ describe('Admin › Roles', () => {
     );
   });
 
+  it('marks the names the server deprecates, and explains a permission_deprecated refusal', async () => {
+    // ADR-0059 R0.14a: the catalogue beside the rows marks runtime.plugins
+    // deprecated, and adding it to a role answers 400 permission_deprecated.
+    const legacyRows: MatrixRow[] = [
+      ...ADMIN_ROWS,
+      { name: 'runtime.plugins', system: true, admin: true, editor: false, viewer: false, auditor: false },
+    ];
+    server.use(
+      http.get('*/admin/permissions/administration/administration', () =>
+        HttpResponse.json({
+          ...matrixBody(legacyRows),
+          catalogue: legacyRows.map((row) => ({ name: row.name, deprecated: row.name === 'runtime.plugins' })),
+        }),
+      ),
+      http.put('*/admin/permissions/:scope/:mode', async ({ request }) => {
+        recorded.push({ method: 'PUT', url: 'administration', body: await request.json() });
+        return HttpResponse.json(
+          {
+            error: 'runtime.plugins ends on the sunset date and can no longer be added to a role',
+            code: 'permission_deprecated',
+            role: 'editor',
+            permissions: ['runtime.plugins'],
+          },
+          { status: 400 },
+        );
+      }),
+    );
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminRoles />);
+
+    await expandGroup(user, 'runtime.plugins');
+    const marks = await screen.findAllByTestId('admin-roles-deprecated-mark');
+    expect(marks).toHaveLength(1);
+    expect(marks[0]).toHaveTextContent('Deprecated');
+    const legacyRow = marks[0]?.closest('tr');
+    expect(legacyRow).toHaveTextContent('runtime.plugins');
+    await expandGroup(user, 'models.alpha');
+    expect(screen.getAllByTestId('admin-roles-deprecated-mark')).toHaveLength(1);
+
+    // The group row of `runtime.plugins` has a checkbox of the same name;
+    // the cell is the one in the marked row. A role that does not hold the
+    // deprecated name cannot be given it; the holder can still drop it.
+    const row = within(legacyRow as HTMLElement);
+    expect(row.getByRole('checkbox', { name: 'editor: runtime.plugins' })).toBeDisabled();
+    expect(row.getByRole('checkbox', { name: 'admin: runtime.plugins' })).toBeEnabled();
+    // The group toggle skips the locked cell rather than tick it.
+    const groupRow = screen
+      .getAllByTestId('admin-roles-group-row')
+      .find((candidate) => candidate.textContent?.includes('runtime.plugins')) as HTMLElement;
+    await user.click(within(groupRow).getByRole('checkbox', { name: 'editor: runtime.plugins' }));
+    expect(row.getByRole('checkbox', { name: 'editor: runtime.plugins' })).not.toBeChecked();
+
+    // A refusal still explains itself (another administrator's view was older).
+    await user.click(row.getByRole('checkbox', { name: 'admin: runtime.plugins' }));
+    await user.click(await screen.findByRole('button', { name: 'Save' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(
+      'This permission is being retired, so it can no longer be added to a role. Grant the narrower permission that replaces it. Role: editor. Permissions: runtime.plugins.',
+    );
+    expect(alert).not.toHaveTextContent('sunset date');
+    // The rows went back without the catalogue marks: every key but `name` is a role.
+    const sent = lastPut()?.body as MatrixRow[];
+    expect(sent.every((row) => !('deprecated' in row))).toBe(true);
+  });
+
+  it('keeps the en.json keys of the deprecated mark and its refusal', async () => {
+    const catalogue = (await import('@/shared/i18n/en.json')).default as Record<string, string>;
+    for (const key of [
+      'pages.admin.roles.deprecated',
+      'pages.admin.roles.deprecatedHint',
+      'pages.admin.roles.refusal.deprecated',
+    ]) {
+      expect(catalogue[key], key).toBeTruthy();
+    }
+  });
+
   it('toggles a whole group from its group checkbox', async () => {
     const user = userEvent.setup();
     renderAdminRoute(<AdminRoles />);
