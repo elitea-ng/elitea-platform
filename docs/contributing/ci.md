@@ -379,6 +379,7 @@ These jobs are routed (when `ENG_RUNNER` is on, on our own pull requests):
 | `ci-web-mutation.yml`, `codeql.yml`, `docs-pages.yml` | `mutation-spotcheck`, `analyze`, `build-and-deploy` |
 | `publish.yml`, `release-retention.yml`, `ci-image-cleanup.yml` | `release`, `prune`; `admin`, `prune`; `prune`, `actions-cache` |
 | `eng-runner-image.yml` | `runner-pin` |
+| `sunset-reminder.yml` | `remind` (the ADR-0059 sunset tracking issue, daily on `main`) |
 | `mobile-eas-build.yml`, `mobile-eas-submit.yml` | `build`, `submit` (EAS builds in Expo's cloud) |
 
 Everything else stays hosted, because it needs what the pool does not have (audited 2026-11-21: 46 hosted

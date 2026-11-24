@@ -26,6 +26,11 @@ type CentralFallback func(r *http.Request) (next *http.Request, admitted bool, e
 //
 // The fallback decides on its own terms (the central override's reviewed
 // allowlist); the member path is not widened by it.
+//
+// The gate is marked as an administration gate, so a holder of an
+// administration permission passes the maintenance gate on it during a window
+// (ADR-0059 R0.4b). Such a request is decided by the fallback alone: the
+// project-member path is the product, which the window closes.
 func RequireResolvedPermissionsOrCentral(
 	resolver auth.PermissionResolver,
 	mode string,
@@ -34,7 +39,7 @@ func RequireResolvedPermissionsOrCentral(
 ) func(http.Handler) http.Handler {
 	requiredSet := permissionSet(required)
 	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		return MarkAdministrationRoute(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			user, ok := auth.UserFromContext(r.Context())
 			if !ok {
 				apierr.WriteStatus(w, http.StatusUnauthorized, "authentication required")
@@ -45,7 +50,10 @@ func RequireResolvedPermissionsOrCentral(
 				apierr.WriteStatus(w, http.StatusForbidden, "insufficient permissions")
 				return
 			}
-			resolution, err := resolver.ResolvePermissions(r.Context(), user, mode, projectID)
+			resolution, err := auth.PermissionResolution{}, auth.ErrPermissionDenied
+			if !InMaintenanceAsNarrowHolder(r.Context()) {
+				resolution, err = resolver.ResolvePermissions(r.Context(), user, mode, projectID)
+			}
 			if err != nil && !errors.Is(err, auth.ErrPermissionDenied) {
 				writeResolverError(w, r, err)
 				return
@@ -71,7 +79,7 @@ func RequireResolvedPermissionsOrCentral(
 				}
 			}
 			apierr.WriteStatus(w, http.StatusForbidden, "insufficient permissions")
-		})
+		}))
 	}
 }
 

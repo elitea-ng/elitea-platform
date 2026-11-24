@@ -132,8 +132,10 @@ type Permission struct {
 	// NativeClient says whether a native device session (desktop, mobile)
 	// keeps the permission (ADR-0059 decision 7, "Native sessions").
 	NativeClient bool
-	// Maintenance says whether a holder is admitted during a maintenance
-	// window.
+	// Maintenance says whether a holder is admitted to every route during a
+	// maintenance window (AdmitsDuringMaintenance). Any other administration
+	// permission admits its holder only to the routes an administration
+	// gate decides, which then decides as it does outside a window.
 	Maintenance bool
 }
 
@@ -267,3 +269,29 @@ func Lookup(name string) (Permission, bool) { return registry.Lookup(name) }
 
 // Names returns every registered permission name, sorted.
 func Names() []string { return registry.Names() }
+
+// HoldsAdministrationPermission reports whether permissions hold at least one
+// registered administration permission. A string the registry does not know
+// is no administration permission, whatever role carries it.
+func HoldsAdministrationPermission(permissions []string) bool {
+	for _, name := range permissions {
+		if _, ok := registry.Lookup(name); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// AdmitsDuringMaintenance reports whether permissions hold a name the
+// registry marks Maintenance: the in-application maintenance bypass, which
+// opens every route during a window (ADR-0059 decision 2, R0.4b). The
+// maintenance gate and the platform_settings flag read ask it, so the two
+// cannot disagree.
+func AdmitsDuringMaintenance(permissions []string) bool {
+	for _, name := range permissions {
+		if row, ok := registry.Lookup(name); ok && row.Maintenance {
+			return true
+		}
+	}
+	return false
+}

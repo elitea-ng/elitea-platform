@@ -181,6 +181,7 @@ DELETE	/api/v2/configurations/configuration/{projectID}/{configID}	-	none	false	
 PUT	/api/v2/configurations/configuration/{projectID}/{configID}	-	none	false	flag	allowed
 POST	/api/v2/configurations/configurations/{mode}/{projectID}	-	none	false	flag	allowed
 POST	/api/v2/configurations/configurations/{projectID}	-	none	false	flag	allowed
+PATCH	/api/v2/elitea_core/marketplace_listing/prompt_lib/{projectID}/{listingID}	-	none	false	allow	allowed
 DELETE	/api/v2/elitea_core/project_budget/administration/{projectID}/budget	-	none	false	allow	allowed
 PUT	/api/v2/elitea_core/project_budget/administration/{projectID}/budget	-	none	false	allow	allowed
 DELETE	/api/v2/elitea_core/register_descriptor/{projectID}	-	none	false	allow	allowed
