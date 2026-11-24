@@ -596,6 +596,20 @@ impl PipelineDefinition {
     }
 }
 
+fn llm_child_visit(branch_id: &str, node_id: &str, input: &State) -> Result<String, GraphError> {
+    let ordered = input.iter().collect::<BTreeMap<_, _>>();
+    let bytes = serde_json::to_vec(&ordered).map_err(|_| {
+        GraphError::SerializationError("an LLM child input is not serializable".to_owned())
+    })?;
+    let mut hash = digest::Context::new(&digest::SHA256);
+    hash.update(b"elitea.graph.fanout.llm-child-visit.v1\0");
+    for field in [branch_id.as_bytes(), node_id.as_bytes(), &bytes] {
+        hash.update(&u64::try_from(field.len()).unwrap_or(u64::MAX).to_be_bytes());
+        hash.update(field);
+    }
+    Ok(crate::sandbox::code_recovery::hex(hash.finish().as_ref()))
+}
+
 fn fanout_execution_deadline(
     runtimes: &PipelineNodeRuntimes,
     binding: &ParallelCompilerBinding,
@@ -1062,6 +1076,7 @@ impl CompilerParallelBranches {
             LLM_TOOL_RESUME_STATE_KEY.to_owned(),
             PARALLEL_LLM_INPUTS_STATE_KEY.to_owned(),
             PIPELINE_NODE_EVENT_SCOPE_STATE_KEY.to_owned(),
+            crate::agents::graph::application::APPLICATION_VISIT_STATE_KEY.to_owned(),
         ]);
         channels.extend(definition.input_keys().iter().cloned());
         channels.extend(definition.output_keys().iter().cloned());
@@ -1382,15 +1397,37 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
         branch: &crate::agents::graph::ParallelBranchDefinition,
         parent: &State,
     ) -> Result<State, GraphError> {
+        let stripped;
+        let parent_view =
+            if parent.contains_key(elitea_agent_runtime::graph::node_settings::NODE_ERRORS_KEY) {
+                stripped = parent
+                    .iter()
+                    .filter(|(key, _)| {
+                        key.as_str() != elitea_agent_runtime::graph::node_settings::NODE_ERRORS_KEY
+                    })
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect::<State>();
+                &stripped
+            } else {
+                parent
+            };
         match self.definition(branch)? {
-            OwnedBranch::Agent(node) => node.freeze_parallel_input(parent),
-            OwnedBranch::Llm(node) => node.freeze_parallel_input(parent),
+            OwnedBranch::Agent(node) => node.freeze_parallel_input(parent_view),
+            OwnedBranch::Llm(node) => {
+                let mut input = node.freeze_parallel_input(parent_view)?;
+                let visit = llm_child_visit(branch.id(), node.id(), &input)?;
+                input.insert(
+                    crate::agents::graph::application::APPLICATION_VISIT_STATE_KEY.to_owned(),
+                    serde_json::Value::String(visit),
+                );
+                Ok(input)
+            }
             // A State Modifier reads its declared inputs directly.
             OwnedBranch::StateModifier(node) => node
                 .input_keys()
                 .iter()
                 .map(|key| {
-                    parent
+                    parent_view
                         .get(key)
                         .map(|value| (key.clone(), value.clone()))
                         .ok_or_else(|| {
@@ -1411,7 +1448,7 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
                 let mut input = child
                     .read_keys()
                     .into_iter()
-                    .filter_map(|key| match parent.get(&key) {
+                    .filter_map(|key| match parent_view.get(&key) {
                         Some(value) => Some(Ok((key, value.clone()))),
                         None if reads_all => None,
                         None => Some(Err(GraphError::InvalidGraph(

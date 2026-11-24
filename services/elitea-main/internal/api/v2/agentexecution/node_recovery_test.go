@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -74,51 +75,90 @@ func TestCurrentNodeRecoveryRouteStrictPublicAdmission(t *testing.T) {
 	}
 }
 
-func TestCurrentNodeRecoveryRoutePerThreadReadAndForeignActorRefusal(t *testing.T) {
+func TestCurrentNodeRecoveryRoutePerThreadReadAndAuthorizationMatrix(t *testing.T) {
 	childThread := "p1:Z8y5h_dA4WoUJhoL5KeWzytJ6KsEHvKFo9OBSMzxW6Q"
+	threadAtLimit := "p1:" + strings.Repeat("a", 512-3)
+	threadOverLimit := "p1:" + strings.Repeat("a", 513-3)
 	actionReq := domain.Request{RequestID: strings.Repeat("2", 64), ExecutionID: "0123456789abcdef0123456789abcdef", Generation: 1, ActivationID: strings.Repeat("1", 64), ExpectedRevision: 3, Action: "retry"}
 	actionBody, _ := json.Marshal(actionReq)
+
+	type authMode int
+	const (
+		authSession authMode = iota
+		authToken
+		authNone
+	)
+
 	for _, spec := range []struct {
 		name        string
 		method      string
+		project     string
 		query       string
 		body        string
 		actor       string
+		auth        authMode
 		permission  bool
 		err         error
 		status      int
 		calls       int
 		wantThread  string
+		wantActorID int64
 	}{
-		{name: "read fanout child thread", method: http.MethodGet, query: "graph_thread=" + childThread, actor: "11", permission: true, status: 200, calls: 1, wantThread: childThread},
-		{name: "read default without query", method: http.MethodGet, actor: "11", permission: true, status: 200, calls: 1, wantThread: ""},
-		{name: "foreign actor without permission on fanout child read", method: http.MethodGet, query: "graph_thread=" + childThread, actor: "99", permission: false, status: 403, calls: 0},
-		{name: "foreign actor denied in tx on fanout child read", method: http.MethodGet, query: "graph_thread=" + childThread, actor: "99", permission: true, err: app.ErrNotAllowed, status: 404, calls: 1, wantThread: childThread},
-		{name: "foreign actor denied in tx on fanout child submit", method: http.MethodPost, body: string(actionBody), actor: "99", permission: true, err: app.ErrNotAllowed, status: 409, calls: 1},
-		{name: "unknown query param rejected", method: http.MethodGet, query: "child_thread_id=" + childThread, actor: "11", permission: true, status: 400, calls: 0},
-		{name: "empty graph_thread rejected", method: http.MethodGet, query: "graph_thread=", actor: "11", permission: true, status: 400, calls: 0},
-		{name: "duplicate graph_thread rejected", method: http.MethodGet, query: "graph_thread=" + childThread + "&graph_thread=other", actor: "11", permission: true, status: 400, calls: 0},
-		{name: "control char graph_thread rejected", method: http.MethodGet, query: "graph_thread=p1:bad%0athread", actor: "11", permission: true, status: 400, calls: 0},
-		{name: "post rejects query param", method: http.MethodPost, query: "graph_thread=" + childThread, body: string(actionBody), actor: "11", permission: true, status: 400, calls: 0},
+		// §3a Authorization Matrix: owner, member, foreign-project, other user without permission, unauthenticated, token vs session
+		{name: "owner session read fanout child thread", method: http.MethodGet, project: "7", query: "graph_thread=" + childThread, actor: "11", auth: authSession, permission: true, status: 200, calls: 1, wantThread: childThread, wantActorID: 11},
+		{name: "owner token read fanout child thread", method: http.MethodGet, project: "7", query: "graph_thread=" + childThread, actor: "11", auth: authToken, permission: true, status: 200, calls: 1, wantThread: childThread, wantActorID: 11},
+		{name: "owner token submit fanout action", method: http.MethodPost, project: "7", body: string(actionBody), actor: "11", auth: authToken, permission: true, status: 202, calls: 1, wantActorID: 11},
+		{name: "owner read default without query", method: http.MethodGet, project: "7", actor: "11", auth: authSession, permission: true, status: 200, calls: 1, wantThread: "", wantActorID: 11},
+		{name: "project member denied in tx on foreign execution read", method: http.MethodGet, project: "7", query: "graph_thread=" + childThread, actor: "22", auth: authSession, permission: true, err: app.ErrNotAllowed, status: 404, calls: 1, wantThread: childThread, wantActorID: 22},
+		{name: "project member token denied in tx on foreign execution submit", method: http.MethodPost, project: "7", body: string(actionBody), actor: "22", auth: authToken, permission: true, err: app.ErrNotAllowed, status: 409, calls: 1, wantActorID: 22},
+		{name: "foreign project actor denied permission", method: http.MethodGet, project: "88", query: "graph_thread=" + childThread, actor: "11", auth: authSession, permission: false, status: 403, calls: 0},
+		{name: "foreign project actor denied in tx", method: http.MethodGet, project: "88", query: "graph_thread=" + childThread, actor: "11", auth: authToken, permission: true, err: app.ErrNotAllowed, status: 404, calls: 1, wantThread: childThread, wantActorID: 11},
+		{name: "other user without permission on fanout child read", method: http.MethodGet, project: "7", query: "graph_thread=" + childThread, actor: "99", auth: authSession, permission: false, status: 403, calls: 0},
+		{name: "other user without permission on submit", method: http.MethodPost, project: "7", body: string(actionBody), actor: "99", auth: authToken, permission: false, status: 403, calls: 0},
+		{name: "unauthenticated read rejected 401", method: http.MethodGet, project: "7", query: "graph_thread=" + childThread, auth: authNone, permission: true, status: 401, calls: 0},
+		{name: "unauthenticated submit rejected 401", method: http.MethodPost, project: "7", body: string(actionBody), auth: authNone, permission: true, status: 401, calls: 0},
+		// Query bounds & smuggling guards
+		{name: "graph_thread at 512 byte limit accepted", method: http.MethodGet, project: "7", query: "graph_thread=" + threadAtLimit, actor: "11", auth: authSession, permission: true, status: 200, calls: 1, wantThread: threadAtLimit, wantActorID: 11},
+		{name: "graph_thread at 513 bytes rejected", method: http.MethodGet, project: "7", query: "graph_thread=" + threadOverLimit, actor: "11", auth: authSession, permission: true, status: 400, calls: 0},
+		{name: "oversized raw query over 2048 bytes rejected before parse", method: http.MethodGet, project: "7", query: "graph_thread=" + strings.Repeat("a", 2050), actor: "11", auth: authSession, permission: true, status: 400, calls: 0},
+		{name: "unknown query param rejected", method: http.MethodGet, project: "7", query: "child_thread_id=" + childThread, actor: "11", auth: authSession, permission: true, status: 400, calls: 0},
+		{name: "empty graph_thread rejected", method: http.MethodGet, project: "7", query: "graph_thread=", actor: "11", auth: authSession, permission: true, status: 400, calls: 0},
+		{name: "duplicate graph_thread rejected", method: http.MethodGet, project: "7", query: "graph_thread=" + childThread + "&graph_thread=other", actor: "11", auth: authSession, permission: true, status: 400, calls: 0},
+		{name: "trailing ampersand smuggling rejected", method: http.MethodGet, project: "7", query: "graph_thread=" + childThread + "&", actor: "11", auth: authSession, permission: true, status: 400, calls: 0},
+		{name: "leading ampersand smuggling rejected", method: http.MethodGet, project: "7", query: "&graph_thread=" + childThread, actor: "11", auth: authSession, permission: true, status: 400, calls: 0},
+		{name: "semicolon delimiter smuggling rejected", method: http.MethodGet, project: "7", query: "graph_thread=" + childThread + ";extra=1", actor: "11", auth: authSession, permission: true, status: 400, calls: 0},
+		{name: "malformed percent encoding rejected", method: http.MethodGet, project: "7", query: "graph_thread=p1:%ZZbad", actor: "11", auth: authSession, permission: true, status: 400, calls: 0},
+		{name: "control char graph_thread rejected", method: http.MethodGet, project: "7", query: "graph_thread=p1:bad%0athread", actor: "11", auth: authSession, permission: true, status: 400, calls: 0},
+		{name: "unicode line separator U+2028 rejected", method: http.MethodGet, project: "7", query: "graph_thread=p1:bad%E2%80%A8thread", actor: "11", auth: authSession, permission: true, status: 400, calls: 0},
+		{name: "unicode paragraph separator U+2029 rejected", method: http.MethodGet, project: "7", query: "graph_thread=p1:bad%E2%80%A9thread", actor: "11", auth: authSession, permission: true, status: 400, calls: 0},
+		{name: "post rejects query param", method: http.MethodPost, project: "7", query: "graph_thread=" + childThread, body: string(actionBody), actor: "11", auth: authSession, permission: true, status: 400, calls: 0},
 	} {
 		t.Run(spec.name, func(t *testing.T) {
 			useCase := &recoveryUseCase{err: spec.err}
-			config := apimw.AuthConfig{PrincipalValidator: currentStartPrincipalValidatorFunc(func(_ context.Context, u auth.User) (auth.User, error) { return u, nil }), FormSessions: authtest.FormSessions{}}
-			permissions := currentStartPermissionResolverFunc(func(_ context.Context, _ auth.User, mode, project string) (auth.PermissionResolution, error) {
-				if mode != auth.PermissionModeDefault || project != "7" {
+			config := apimw.AuthConfig{
+				PrincipalValidator: currentStartPrincipalValidatorFunc(func(_ context.Context, u auth.User) (auth.User, error) { return u, nil }),
+				FormSessions:       authtest.FormSessions{},
+				Validator:          authtest.Tokens{},
+			}
+			permissions := currentStartPermissionResolverFunc(func(_ context.Context, u auth.User, mode, project string) (auth.PermissionResolution, error) {
+				if mode != auth.PermissionModeDefault || project != spec.project {
 					t.Fatal(mode, project)
+				}
+				uid, err := strconv.ParseInt(u.ID, 10, 64)
+				if err != nil {
+					t.Fatalf("parse user id %q: %v", u.ID, err)
 				}
 				p := []string{}
 				if spec.permission {
 					p = []string{"models.applications.task.get", "models.chat.messages.create"}
 				}
-				return auth.PermissionResolution{UserID: 11, Permissions: p}, nil
+				return auth.PermissionResolution{UserID: uid, Permissions: p}, nil
 			})
 			route, err := NewCurrentNodeRecoveryRoute(useCase, config, permissions)
 			if err != nil {
 				t.Fatal(err)
 			}
-			target := "/api/v2/elitea_core/task/prompt_lib/7/10000000-0000-4000-8000-000000000043/node_recovery"
+			target := "/api/v2/elitea_core/task/prompt_lib/" + spec.project + "/10000000-0000-4000-8000-000000000043/node_recovery"
 			if spec.method == http.MethodPost {
 				target += "/actions"
 			}
@@ -131,15 +171,30 @@ func TestCurrentNodeRecoveryRoutePerThreadReadAndForeignActorRefusal(t *testing.
 			} else {
 				req = httptest.NewRequest(spec.method, target, nil)
 			}
-			authtest.SignIn(req, spec.actor)
+			switch spec.auth {
+			case authSession:
+				authtest.SignIn(req, spec.actor)
+			case authToken:
+				authtest.BearerToken(req, spec.actor, spec.actor)
+			case authNone:
+				// unauthenticated request
+			}
 			req.RemoteAddr = "10.0.0.8:43120"
 			w := httptest.NewRecorder()
 			route.ServeHTTP(w, req)
 			if w.Code != spec.status || useCase.calls != spec.calls {
 				t.Fatalf("code=%d want=%d calls=%d want=%d body=%s", w.Code, spec.status, useCase.calls, spec.calls, w.Body.String())
 			}
-			if spec.method == http.MethodGet && spec.calls == 1 && useCase.selector.GraphThread != spec.wantThread {
-				t.Fatalf("graph_thread=%q want=%q", useCase.selector.GraphThread, spec.wantThread)
+			if spec.method == http.MethodGet && spec.calls == 1 {
+				if useCase.selector.GraphThread != spec.wantThread {
+					t.Fatalf("graph_thread=%q want=%q", useCase.selector.GraphThread, spec.wantThread)
+				}
+				if useCase.selector.ActorUserID != spec.wantActorID {
+					t.Fatalf("actor=%d want=%d", useCase.selector.ActorUserID, spec.wantActorID)
+				}
+			}
+			if spec.method == http.MethodPost && spec.calls == 1 && useCase.submission.ActorUserID != spec.wantActorID {
+				t.Fatalf("submit actor=%d want=%d", useCase.submission.ActorUserID, spec.wantActorID)
 			}
 		})
 	}

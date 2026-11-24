@@ -34,7 +34,7 @@ func (r *NodeRecoveryRepository) ReadNodeRecoveryResult(ctx context.Context, cla
 		if err != nil {
 			return err
 		}
-		current, err := lockLatestNodeRecoveryVisit(ctx, tx, claim.ExecutionID, claim.Generation)
+		current, err := lockLatestNodeRecoveryVisitForResult(ctx, tx, claim.ExecutionID, claim.Generation, contentID, version)
 		if err != nil {
 			return err
 		}
@@ -57,8 +57,25 @@ FOR UPDATE OF visit,action`, claim.ExecutionID, int64(claim.Generation), current
 		}
 		hash := sha256.Sum256(raw)
 		var action recoveryAction
-		if receipt.ActivationID != current.activation || receipt.JournalRevision != current.revision || json.Unmarshal(actionBytes, &action) != nil || action.ActivationID != receipt.ActivationID || action.ExpectedRevision != receipt.JournalRevision || action.LastAttempt != receipt.Attempt || action.ReceiptSHA256 != hex.EncodeToString(hash[:]) || !bytes.Equal(digest, hash[:]) || actor != strconv.FormatInt(scope.actorID, 10) || ((status == "AUTHORIZED") != (scope.desired == "SUSPENDED")) {
+		if receipt.ActivationID != current.activation || receipt.JournalRevision != current.revision || json.Unmarshal(actionBytes, &action) != nil || action.ActivationID != receipt.ActivationID || action.ExpectedRevision != receipt.JournalRevision || action.LastAttempt != receipt.Attempt || action.ReceiptSHA256 != hex.EncodeToString(hash[:]) || !bytes.Equal(digest, hash[:]) || actor != strconv.FormatInt(scope.actorID, 10) {
 			return storage.ErrContentRejected
+		}
+		if status == "AUTHORIZED" {
+			if scope.desired != "SUSPENDED" {
+				return storage.ErrContentRejected
+			}
+		} else if scope.desired != "RUNNING" {
+			if scope.desired != "SUSPENDED" {
+				return storage.ErrContentRejected
+			}
+			var siblingPending bool
+			err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM elitea_runtime.node_recovery_visits WHERE execution_id=$1 AND generation=$2 AND graph_thread<>$3 AND status IN ('SUSPENDED','AUTHORIZED'))`, claim.ExecutionID, int64(claim.Generation), receipt.GraphThread).Scan(&siblingPending)
+			if err != nil {
+				return err
+			}
+			if !siblingPending {
+				return storage.ErrContentRejected
+			}
 		}
 		proof, err := domain.DecodeOwnerProof(action.OwnerProof, claim.ExecutionID, claim.Generation, receipt, action.Action)
 		ref := proof.ResultRef

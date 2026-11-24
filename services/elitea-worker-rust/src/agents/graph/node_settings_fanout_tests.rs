@@ -183,6 +183,11 @@ impl NodeRecoveryFactory for PerThreadJournalFactory {
                 "pipeline.node_recovery.invalid_scope".to_owned(),
             ));
         }
+        if !self.allowed_prefix.is_empty() && activation.visit.is_none() {
+            return Err(GraphError::Other(
+                "pipeline.node_recovery.unscoped_child".to_owned(),
+            ));
+        }
         let mut hash = digest::Context::new(&digest::SHA256);
         hash.update(b"test.fanout.node-journal.v1\0");
         hash.update(activation.root_thread_id.as_bytes());
@@ -720,6 +725,10 @@ nodes:
         let opened = factory.opened_records();
         assert_eq!(opened.len(), 1, "one journal per branch");
         assert_eq!(opened[0].0, thread);
+        assert!(
+            opened[0].2.is_some(),
+            "inline LLM branch journal is visit-scoped (SEC-5B5-01)"
+        );
         threads.insert(opened[0].0.clone());
         activations.insert(opened[0].3);
     }
@@ -960,6 +969,7 @@ impl CodeSandboxRuntime for SilverBatchCodeRuntime {
 struct ChildPipelineResolver {
     child: Arc<PipelineDefinition>,
     journals: Option<Arc<dyn NodeRecoveryFactory>>,
+    events: Option<super::node_events::PipelineNodeEventSender>,
 }
 
 impl PipelineApplicationResolver for ChildPipelineResolver {
@@ -974,6 +984,9 @@ impl PipelineApplicationResolver for ChildPipelineResolver {
         if let Some(journals) = &self.journals {
             runtimes = runtimes.with_node_recovery_authority(Arc::clone(journals));
         }
+        if let Some(events) = &self.events {
+            runtimes = runtimes.with_events(events.clone());
+        }
         let graph = self
             .child
             .compile_subgraph_with_runtime(checkpointer, &runtimes)
@@ -982,9 +995,13 @@ impl PipelineApplicationResolver for ChildPipelineResolver {
             graph: Arc::new(graph),
             variable_types: self.child.declared_variable_types(),
             static_pauses: self.child.static_pause_catalog(),
-            events: None,
+            events: self.events.clone(),
             display_name: "silver_batch".to_owned(),
         })
+    }
+
+    fn test_activation_checkpoints(&self) -> bool {
+        true
     }
 
     fn fixed_parallel_definition_digest(
@@ -994,6 +1011,17 @@ impl PipelineApplicationResolver for ChildPipelineResolver {
         Ok(self.child.definition_digest())
     }
 
+    fn for_parallel_events(
+        &self,
+        events: super::node_events::PipelineNodeEventSender,
+    ) -> Result<Arc<dyn PipelineApplicationResolver>, ApplicationExecutionError> {
+        Ok(Arc::new(Self {
+            child: Arc::clone(&self.child),
+            journals: self.journals.clone(),
+            events: Some(events),
+        }))
+    }
+
     fn for_branch_journals(
         &self,
         journals: Arc<dyn NodeRecoveryFactory>,
@@ -1001,6 +1029,7 @@ impl PipelineApplicationResolver for ChildPipelineResolver {
         Some(Arc::new(Self {
             child: Arc::clone(&self.child),
             journals: Some(journals),
+            events: self.events.clone(),
         }))
     }
 }
@@ -1118,6 +1147,7 @@ nodes:
     let resolver = Arc::new(ChildPipelineResolver {
         child: child_def,
         journals: None,
+        events: None,
     });
     let runtimes = PipelineNodeRuntimes::new(None, None, Some(resolver))
         .with_execution_id("exec-silver-parent")
@@ -1146,4 +1176,704 @@ nodes:
         cleaned[1]["outputs"]["batch_out"],
         json!("route=continue;errors=0;once=1;visits=2")
     );
+}
+
+struct MayHaveStartedOnceLlmFactory {
+    calls: Arc<AtomicUsize>,
+}
+
+impl PipelineLlmAgentFactory for MayHaveStartedOnceLlmFactory {
+    fn build(
+        &self,
+        definition: &LlmNodeDefinition,
+        _: &LlmExecutionInput,
+        _: Option<Value>,
+        _: Option<&PipelineLlmReplayEnvelope>,
+        _: &PipelineModelScope,
+    ) -> Result<PipelineLlmAgentBinding, LlmExecutionError> {
+        if definition.id() == "ask_b" {
+            return Ok(PipelineLlmAgentBinding::new(
+                Arc::new(BranchScriptedLlmAgent {
+                    outcomes: Arc::new(StdMutex::new(VecDeque::from([Ok("ok-b")]))),
+                    calls: Arc::new(AtomicUsize::new(0)),
+                }),
+                BTreeMap::new(),
+            ));
+        }
+        let count = self.calls.fetch_add(1, Ordering::SeqCst);
+        if count == 0 {
+            Err(LlmExecutionError::MayHaveStarted)
+        } else {
+            panic!("process 2 must never re-dispatch a MayHaveStarted journaled LLM branch");
+        }
+    }
+
+    fn for_fanout_branch(&self) -> Option<Arc<dyn PipelineLlmAgentFactory>> {
+        Some(Arc::new(Self {
+            calls: Arc::clone(&self.calls),
+        }))
+    }
+}
+
+#[tokio::test]
+async fn parallel_llm_branch_crash_restore_after_may_have_started_never_emits_recovery_interrupt_or_reruns()
+ {
+    // SEC-5B5-01: Process 1 hits MayHaveStarted on a tool-free inline Parallel LLM
+    // branch with settings: (committing Reconcile in its visit-scoped n1: journal).
+    // Process 2 replays against the same journal store: assert 0 re-dispatches,
+    // no pipeline_node_recovery interrupt / pause_unproved, and fail-closed error.
+    let yaml = r#"
+entry_point: gather
+state:
+  topic: str
+  a_out: str
+  b_out: str
+  gathered: list
+nodes:
+  - id: gather
+    type: parallel
+    branches:
+      - {id: a, node: ask_a}
+      - {id: b, node: ask_b}
+    max_concurrency: 1
+    wait: all
+    output: [gathered]
+    transition: END
+  - id: ask_a
+    type: llm
+    input: [topic]
+    input_mapping: {task: {type: fstring, value: "A: {topic}"}}
+    output: [a_out]
+    settings: {retry_on_fail: true, max_tries: 3, wait_between_tries_ms: 100, on_error: continue, always_output_data: true}
+  - id: ask_b
+    type: llm
+    input: [topic]
+    input_mapping: {task: {type: fstring, value: "B: {topic}"}}
+    output: [b_out]
+"#;
+    let definition = PipelineDefinition::from_yaml(yaml).expect("parallel llm compiles");
+    let authority = Arc::new(FanoutMemoryAuthority::default());
+    let calls = Arc::new(AtomicUsize::new(0));
+
+    // Process 1: MayHaveStarted commits Reconcile to the branch's visit-scoped n1: journal.
+    let runtimes1 = PipelineNodeRuntimes::new(
+        Some(Arc::new(MayHaveStartedOnceLlmFactory {
+            calls: Arc::clone(&calls),
+        })),
+        None,
+        None,
+    )
+    .with_execution_id("exec-llm-crash-restore")
+    .with_parallel(ParallelCompilerBinding::for_tests(
+        authority.clone(),
+        tokio::time::Instant::now() + Duration::from_secs(60),
+        None,
+    ));
+    let graph1 = definition
+        .compile_with_runtime("par-llm-p1", authority.clone(), None, &runtimes1)
+        .expect("graph1 compiles");
+    let res1 = graph1
+        .invoke(
+            HashMap::from([("topic".to_owned(), json!("restore-me"))]),
+            ExecutionConfig::new("root-par-llm-restore"),
+        )
+        .await
+        .expect("parallel settles with ask_a failed as may_have_started");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let gathered1 = res1["gathered"].as_array().expect("gathered1");
+    let first_run_a = gathered1
+        .iter()
+        .find(|entry| entry["branch_id"] == json!("a"))
+        .expect("branch a");
+    assert_eq!(first_run_a["status"], json!("failed"));
+    assert_eq!(
+        first_run_a["error"]["code"],
+        json!("graph.fanout.may_have_started")
+    );
+
+    // Verify the child journal for ask_a was opened with an explicit visit, and
+    // verify an unscoped child open (visit: None) is rejected fail-closed.
+    let journals = authority.child_journals_snapshot();
+    let (child_thread, child_factory) = journals
+        .iter()
+        .find(|(_, factory)| factory.opened_records().iter().any(|r| r.1 == "ask_a"))
+        .expect("ask_a child journal");
+    let opened = child_factory.opened_records();
+    assert_eq!(opened.len(), 1);
+    assert!(opened[0].2.is_some(), "LLM branch journal must carry visit");
+    let unscoped_err = child_factory
+        .open(
+            &NodeAttemptActivation {
+                root_thread_id: child_thread.clone(),
+                node_id: "ask_a".to_owned(),
+                step: 0,
+                node_digest: [0x11; 32],
+                input_digest: [0x22; 32],
+                visit: None,
+            },
+            &NodeRecoveryPolicy::default(),
+        )
+        .await
+        .err()
+        .expect("unscoped child must be refused");
+    assert!(
+        unscoped_err
+            .to_string()
+            .contains("pipeline.node_recovery.unscoped_child"),
+        "{unscoped_err}"
+    );
+
+    // Process 2: fresh graph/runtime re-invokes the same child journal (simulating
+    // crash before parent persisted branch failure) — reuse child_journals on a
+    // fresh parent/child checkpoint store with the persisted n1: journal stores!
+    let authority2 = Arc::new(FanoutMemoryAuthority::default());
+    {
+        let mut dst = authority2.child_journals.lock().expect("dst");
+        for (thread, factory) in &journals {
+            dst.insert(thread.clone(), Arc::clone(factory));
+        }
+    }
+    let runtimes2 = PipelineNodeRuntimes::new(
+        Some(Arc::new(MayHaveStartedOnceLlmFactory {
+            calls: Arc::clone(&calls),
+        })),
+        None,
+        None,
+    )
+    .with_execution_id("exec-llm-crash-restore")
+    .with_parallel(ParallelCompilerBinding::for_tests(
+        authority2.clone(),
+        tokio::time::Instant::now() + Duration::from_secs(60),
+        None,
+    ));
+    let graph2 = definition
+        .compile_with_runtime("par-llm-p2", authority2, None, &runtimes2)
+        .expect("graph2 compiles");
+    let res2 = graph2
+        .invoke(
+            HashMap::from([("topic".to_owned(), json!("restore-me"))]),
+            ExecutionConfig::new("root-par-llm-restore"),
+        )
+        .await
+        .expect("process 2 settles fail-closed on restored Reconcile");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "process 2 must perform 0 re-dispatches"
+    );
+    let gathered2 = res2["gathered"].as_array().expect("gathered2");
+    let replay_a = gathered2
+        .iter()
+        .find(|entry| entry["branch_id"] == json!("a"))
+        .expect("branch a");
+    assert_eq!(replay_a["status"], json!("failed"));
+    assert_eq!(
+        replay_a["error"]["code"],
+        json!("graph.fanout.may_have_started"),
+        "restored child LLM must fail closed as may_have_started (never pause_unproved / pipeline_node_recovery): {replay_a:?}"
+    );
+    let replay_sibling = gathered2
+        .iter()
+        .find(|entry| entry["branch_id"] == json!("b"))
+        .expect("branch b");
+    assert_eq!(replay_sibling["status"], json!("succeeded"));
+    assert_eq!(replay_sibling["outputs"]["b_out"], json!("ok-b"));
+}
+
+struct UnknownEffectCodeRuntime {
+    attempts: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl CodeSandboxRuntime for UnknownEffectCodeRuntime {
+    fn bind_saved_child_scope(
+        &self,
+        _: Arc<dyn SavedChildScopeProvider>,
+    ) -> Result<Arc<dyn CodeSandboxRuntime>, GraphError> {
+        Ok(Arc::new(Self {
+            attempts: Arc::clone(&self.attempts),
+        }))
+    }
+
+    async fn execute(&self, _: CodeInvocation<'_>) -> Result<Vec<u8>, GraphError> {
+        Err(GraphError::Other("unexpected direct execute".to_owned()))
+    }
+
+    async fn execute_attempt(
+        &self,
+        _: CodeInvocation<'_>,
+        authority: &NodeAttemptAuthority,
+    ) -> Result<Vec<u8>, CodeAttemptFailure> {
+        self.attempts.fetch_add(1, Ordering::SeqCst);
+        Err(CodeAttemptFailure::new(
+            CodeAttemptPhase::Observation,
+            NodeFailureClass::Unknown,
+            ReplaySafety::UnknownExternalEffect {
+                effect_id: authority.dispatch_activation(),
+            },
+        ))
+    }
+}
+
+#[tokio::test]
+async fn fanout_code_child_unknown_external_effect_stops_with_zero_retries_and_no_swallow() {
+    // SEC-5B5-02: even with retry_on_fail + on_error: continue, a fan-out Code
+    // child whose attempt returns UnknownExternalEffect must stop fail-closed
+    // with child_effect_unknown, 0 retries, and never swallow the failure.
+    let yaml = r#"
+entry_point: map_code
+state:
+  items: {type: list, value: []}
+  out: {type: str, value: ''}
+  mapped: {type: list, value: []}
+nodes:
+  - id: map_code
+    type: map
+    worker: run_item
+    source: items
+    item: entity
+    index: item_index
+    outputs: [out]
+    destination: mapped
+    max_items: 4
+    max_concurrency: 1
+    reduction: ordered_collection
+    transition: END
+  - id: run_item
+    type: code
+    language: python
+    code: 'return "ok"'
+    input: [entity, item_index]
+    output: [out]
+    settings:
+      retry_on_fail: true
+      max_tries: 3
+      wait_between_tries_ms: 100
+      on_error: continue
+      always_output_data: true
+"#;
+    let definition = PipelineDefinition::from_yaml(yaml).expect("map code compiles");
+    let authority = Arc::new(FanoutMemoryAuthority::default());
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let runtimes = PipelineNodeRuntimes::default()
+        .with_code(Arc::new(UnknownEffectCodeRuntime {
+            attempts: Arc::clone(&attempts),
+        }))
+        .with_node_recovery_authority(PerThreadJournalFactory::for_thread(String::new()))
+        .with_execution_id("exec-map-code-unknown")
+        .with_parallel(ParallelCompilerBinding::for_tests(
+            authority.clone(),
+            tokio::time::Instant::now() + Duration::from_secs(60),
+            None,
+        ));
+    let graph = definition
+        .compile_with_runtime("map-code-unknown", authority, None, &runtimes)
+        .expect("graph compiles");
+    let err = graph
+        .invoke(
+            HashMap::from([("items".to_owned(), json!(["alpha"]))]),
+            ExecutionConfig::new("root-map-code-unknown"),
+        )
+        .await
+        .expect_err("UnknownExternalEffect must not be retried or swallowed");
+    assert_eq!(attempts.load(Ordering::SeqCst), 1, "zero retries allowed");
+    assert!(
+        err.to_string()
+            .contains("pipeline.node_recovery.child_effect_unknown"),
+        "expected child_effect_unknown: {err}"
+    );
+}
+
+#[tokio::test]
+async fn parent_and_fanout_children_isolate_node_errors_across_parallel_and_map() {
+    // SEC-5B5-02: parent records a root node_errors entry before Parallel and Map;
+    // children fail with on_error: continue; neither direction leaks node_errors,
+    // and explicit YAML attempts to pass node_errors across fan-out are refused.
+    let yaml = r#"
+entry_point: root_fail
+state:
+  topic: {type: str, value: "ok"}
+  items: {type: list, value: []}
+  root_out: {type: str, value: ''}
+  a_out: {type: str, value: ''}
+  b_out: {type: str, value: ''}
+  item_out: {type: str, value: ''}
+  gathered: {type: list, value: []}
+  mapped: {type: list, value: []}
+nodes:
+  - id: root_fail
+    type: state_modifier
+    template: "{{ 1 / 0 }}"
+    output: [root_out]
+    settings: {on_error: continue, always_output_data: true}
+    transition: gather
+  - id: gather
+    type: parallel
+    branches:
+      - {id: a, node: ask_a}
+      - {id: b, node: ask_b}
+    max_concurrency: 2
+    wait: all
+    output: [gathered]
+    transition: map_step
+  - id: ask_a
+    type: llm
+    input: [topic]
+    input_mapping: {task: {type: fstring, value: "A: {topic}"}}
+    output: [a_out]
+    settings: {on_error: continue, always_output_data: true}
+  - id: ask_b
+    type: llm
+    input: [topic]
+    input_mapping: {task: {type: fstring, value: "B: {topic}"}}
+    output: [b_out]
+    settings: {on_error: continue, always_output_data: true}
+  - id: map_step
+    type: map
+    worker: item_fail
+    source: items
+    item: entity
+    index: item_index
+    outputs: [item_out]
+    destination: mapped
+    max_items: 4
+    max_concurrency: 2
+    reduction: ordered_collection
+    transition: END
+  - id: item_fail
+    type: state_modifier
+    template: "{{ 1 / 0 }}"
+    input: [entity, item_index]
+    output: [item_out]
+    settings: {on_error: continue, always_output_data: true}
+"#;
+    let calls_a = Arc::new(AtomicUsize::new(0));
+    let calls_b = Arc::new(AtomicUsize::new(0));
+    let factory = Arc::new(PerNodeScriptedLlmFactory {
+        scripts: BTreeMap::from([
+            (
+                "ask_a".to_owned(),
+                (
+                    Arc::new(StdMutex::new(VecDeque::from([Err(AdkError::new(
+                        ErrorComponent::Model,
+                        ErrorCategory::InvalidInput,
+                        "model_gateway.invalid_request",
+                        "fail-a",
+                    ))]))),
+                    Arc::clone(&calls_a),
+                ),
+            ),
+            (
+                "ask_b".to_owned(),
+                (
+                    Arc::new(StdMutex::new(VecDeque::from([Err(AdkError::new(
+                        ErrorComponent::Model,
+                        ErrorCategory::InvalidInput,
+                        "model_gateway.invalid_request",
+                        "fail-b",
+                    ))]))),
+                    Arc::clone(&calls_b),
+                ),
+            ),
+        ]),
+    });
+    let definition = PipelineDefinition::from_yaml(yaml).expect("pipeline compiles");
+    let authority = Arc::new(FanoutMemoryAuthority::default());
+    let runtimes = PipelineNodeRuntimes::new(Some(factory), None, None)
+        .with_execution_id("exec-isolation")
+        .with_parallel(ParallelCompilerBinding::for_tests(
+            authority.clone(),
+            tokio::time::Instant::now() + Duration::from_secs(60),
+            None,
+        ));
+    let graph = definition
+        .compile_with_runtime("iso-root", authority.clone(), None, &runtimes)
+        .expect("graph compiles");
+    let result = graph
+        .invoke(
+            HashMap::from([("items".to_owned(), json!(["x", "y"]))]),
+            ExecutionConfig::new("root-iso"),
+        )
+        .await
+        .expect("pipeline completes");
+    // Parent node_errors has ONLY root_fail's 1 entry (0 leaked from ask_a or item_fail).
+    let root_errors = result["node_errors"].as_array().expect("root node_errors");
+    assert_eq!(root_errors.len(), 1, "{root_errors:?}");
+    assert_eq!(root_errors[0]["node"], json!("root_fail"));
+
+    // Verify each child checkpoint store has only its own 1 child entry (not root_fail).
+    let stores = authority.child_stores.lock().await;
+    assert_eq!(stores.len(), 4, "2 parallel branches + 2 map items");
+    for (thread, store) in stores.iter() {
+        let cp = store
+            .load(thread)
+            .await
+            .expect("load")
+            .expect("child checkpoint");
+        let child_errors = cp.state["node_errors"]
+            .as_array()
+            .expect("child node_errors");
+        assert_eq!(
+            child_errors.len(),
+            1,
+            "child {thread} must not inherit parent node_errors: {child_errors:?}"
+        );
+        assert_ne!(child_errors[0]["node"], json!("root_fail"));
+    }
+
+    // Explicit YAML boundary crossings are refused with NodeErrorsNestedMapping.
+    for (bad_yaml, expected_node) in [
+        (
+            "entry_point: map_entities\nstate:\n  entities: {type: list, value: []}\n  item_result: {type: str, value: ''}\n  mapped: {type: list, value: []}\nnodes:\n  - {id: map_entities, type: map, worker: render, source: entities, item: entity, index: item_index, broadcast: [node_errors], outputs: [item_result], destination: mapped, max_items: 4, max_concurrency: 2, reduction: ordered_collection, transition: END}\n  - {id: render, type: state_modifier, input: [entity, item_index], output: [item_result], template: '{{ item_index }}', settings: {on_error: continue}}\n",
+            "map_entities",
+        ),
+        (
+            "entry_point: gather\nstate:\n  topic: str\n  a_out: {type: str, value: ''}\n  b_out: {type: str, value: ''}\n  gathered: {type: list, value: []}\nnodes:\n  - id: gather\n    type: parallel\n    branches:\n      - {id: a, node: run_a}\n      - {id: b, node: run_b}\n    max_concurrency: 2\n    wait: all\n    output: [gathered]\n    transition: END\n  - {id: run_a, type: code, language: python, code: 'return \"ok\"', input: [topic, node_errors], output: [a_out], settings: {on_error: continue}}\n  - {id: run_b, type: code, language: python, code: 'return \"ok\"', input: [topic], output: [b_out]}\n",
+            "run_a",
+        ),
+    ] {
+        assert_eq!(
+            refused(bad_yaml),
+            (
+                expected_node.to_owned(),
+                NodeSettingsRefusal::NodeErrorsNestedMapping
+            )
+        );
+    }
+}
+
+#[tokio::test]
+async fn fanout_child_node_errors_enforces_64_65_cap_truncation_and_secret_redaction() {
+    // SEC-5B5-02: prove MAX_NODE_ERRORS (64 ok / 65 -> pipeline.node_errors.exhausted),
+    // <= 512 B message bound, and sentinel secret redaction inside a Map child pipeline.
+    use elitea_agent_runtime::graph::node_settings::{
+        MAX_NODE_ERROR_ENTRY_BYTES, MAX_NODE_ERROR_OBJECT_BYTES, MAX_NODE_ERRORS,
+    };
+
+    let sentinel_api_key = "sk-live-secret-99887766554433221100";
+    let sentinel_bearer = "Bearer topsecret-token-xyz";
+    let child_yaml_for = |seed_count: usize| {
+        let entries: Vec<Value> = (0..seed_count).map(|i| json!({"seed": i})).collect();
+        format!(
+            r#"
+state:
+  input: {{type: str}}
+  node_errors: {{type: list, value: {}, reducer: append}}
+  step_out: {{type: str, value: ''}}
+  summary: {{type: str, value: ''}}
+entry_point: fail_step
+nodes:
+  - id: fail_step
+    type: state_modifier
+    template: "{{{{ ('sk-live-secret-99887766554433221100 Bearer topsecret-token-xyz ' ~ (1 / 0)) }}}}"
+    input: [input]
+    output: [step_out]
+    settings: {{on_error: continue, always_output_data: true}}
+    transition: report
+  - id: report
+    type: state_modifier
+    template: "count={{{{ node_errors | length }}}}"
+    input: [node_errors]
+    output: [summary]
+    transition: END
+"#,
+            Value::Array(entries)
+        )
+    };
+    let parent_yaml = r"
+entry_point: map_child
+state:
+  batches: {type: list, value: []}
+  out: {type: str, value: ''}
+  results: {type: list, value: []}
+nodes:
+  - id: map_child
+    type: map
+    worker: run_child
+    source: batches
+    item: batch
+    index: idx
+    outputs: [out]
+    destination: results
+    max_items: 4
+    max_concurrency: 1
+    reduction: ordered_collection
+    transition: END
+  - id: run_child
+    type: agent
+    tool: bounded_child
+    input: [batch]
+    input_mapping:
+      task: {type: variable, value: batch}
+    output: [out]
+";
+    let parent_def = PipelineDefinition::from_yaml(parent_yaml).expect("parent compiles");
+
+    // 63 seeded + 1 runtime failure = 64 -> succeeds, message <= 512 B, no sentinels leaked.
+    let child_at_64 = Arc::new(
+        PipelineDefinition::from_yaml(&child_yaml_for(MAX_NODE_ERRORS - 1))
+            .expect("child 64 compiles"),
+    );
+    let authority64 = Arc::new(FanoutMemoryAuthority::default());
+    let (event_tx, event_rx) = super::node_events::pipeline_node_event_channel();
+    let runtimes64 = PipelineNodeRuntimes::new(
+        None,
+        None,
+        Some(Arc::new(ChildPipelineResolver {
+            child: child_at_64,
+            journals: None,
+            events: Some(event_tx),
+        })),
+    )
+    .with_execution_id("exec-cap-64")
+    .with_parallel(ParallelCompilerBinding::for_tests(
+        authority64.clone(),
+        tokio::time::Instant::now() + Duration::from_secs(60),
+        None,
+    ));
+    let graph64 = parent_def
+        .compile_with_runtime("cap64", authority64.clone(), None, &runtimes64)
+        .expect("graph64 compiles");
+    let ok64 = graph64
+        .invoke(
+            HashMap::from([("batches".to_owned(), json!(["batch-64"]))]),
+            ExecutionConfig::new("root-cap64"),
+        )
+        .await
+        .expect("64th node_errors entry inside fan-out child succeeds");
+    assert_eq!(ok64["results"][0]["outputs"]["out"], json!("count=64"));
+
+    // Inspect saved child checkpoint's recorded 64th entry: <= 512 B and zero sentinel leakage.
+    let child_stores = authority64.child_stores.lock().await;
+    let mut verified_entry = false;
+    for (thread, store) in child_stores.iter() {
+        let subgraph_thread = format!("{thread}/run_child");
+        if let Some(cp) = store.load(&subgraph_thread).await.expect("load")
+            && let Some(arr) = cp.state.get("node_errors").and_then(Value::as_array)
+            && arr.len() == MAX_NODE_ERRORS
+        {
+            let last = &arr[MAX_NODE_ERRORS - 1];
+            let msg = last["error"]["message_safe"]
+                .as_str()
+                .expect("message_safe");
+            assert!(msg.len() <= 512, "len={}", msg.len());
+            assert!(
+                last["error"].to_string().len() <= MAX_NODE_ERROR_OBJECT_BYTES,
+                "error object len={}",
+                last["error"].to_string().len()
+            );
+            let raw_entry = last.to_string();
+            assert!(
+                raw_entry.len() <= MAX_NODE_ERROR_ENTRY_BYTES,
+                "entry len={}",
+                raw_entry.len()
+            );
+            assert!(!raw_entry.contains(sentinel_api_key), "{raw_entry}");
+            assert!(!raw_entry.contains(sentinel_bearer), "{raw_entry}");
+            verified_entry = true;
+        }
+    }
+    assert!(
+        verified_entry,
+        "expected 64-entry child node_errors checkpoint"
+    );
+    let mut drain = event_rx
+        .drain("inv-cap64", "cap64", "")
+        .await
+        .expect("drain");
+    while let Some(ev) = drain.try_recv() {
+        let serialized = format!("{ev:?}");
+        assert!(!serialized.contains(sentinel_api_key), "{serialized}");
+        assert!(!serialized.contains(sentinel_bearer), "{serialized}");
+    }
+
+    // 64 seeded + 1 runtime failure = 65 -> fails closed with pipeline.node_errors.exhausted.
+    let child_at_65 = Arc::new(
+        PipelineDefinition::from_yaml(&child_yaml_for(MAX_NODE_ERRORS)).expect("child 65 compiles"),
+    );
+    let authority65 = Arc::new(FanoutMemoryAuthority::default());
+    let runtimes65 = PipelineNodeRuntimes::new(
+        None,
+        None,
+        Some(Arc::new(ChildPipelineResolver {
+            child: child_at_65,
+            journals: None,
+            events: None,
+        })),
+    )
+    .with_execution_id("exec-cap-65")
+    .with_parallel(ParallelCompilerBinding::for_tests(
+        authority65.clone(),
+        tokio::time::Instant::now() + Duration::from_secs(60),
+        None,
+    ));
+    let graph65 = parent_def
+        .compile_with_runtime("cap65", authority65, None, &runtimes65)
+        .expect("graph65 compiles");
+    let err65 = graph65
+        .invoke(
+            HashMap::from([("batches".to_owned(), json!(["batch-65"]))]),
+            ExecutionConfig::new("root-cap65"),
+        )
+        .await
+        .expect_err("65th node_errors entry inside fan-out child must fail closed");
+    let err65_text = err65.to_string();
+    assert!(!err65_text.contains(sentinel_api_key), "{err65_text}");
+    assert!(!err65_text.contains(sentinel_bearer), "{err65_text}");
+    assert!(
+        err65_text.contains("item_failed") || err65_text.contains("node_errors"),
+        "{err65_text}"
+    );
+}
+
+#[test]
+fn result_policy_excludes_fanout_owned_error_transition_end_outputs() {
+    // CR-5B5-02: a fan-out child with `settings: {on_error: error_output,
+    // error_transition: END}` must never inject its child-local output keys into
+    // the root pipeline's `terminal_data_keys` and shadow the root's final answer.
+    let yaml = r"
+entry_point: map_step
+state:
+  items: {type: list, value: []}
+  branch_code: {type: int, value: 0}
+  mapped: {type: list, value: []}
+  summary: {type: str, value: ''}
+nodes:
+  - id: map_step
+    type: map
+    worker: item_worker
+    source: items
+    item: entity
+    index: item_index
+    outputs: [branch_code]
+    destination: mapped
+    max_items: 4
+    max_concurrency: 2
+    reduction: ordered_collection
+    transition: finalize
+  - id: finalize
+    type: state_modifier
+    template: 'final-root-answer'
+    output: [summary]
+    transition: END
+  - id: item_worker
+    type: state_modifier
+    template: '{{ item_index }}'
+    input: [entity, item_index]
+    output: [branch_code]
+    settings: {on_error: error_output, error_transition: END}
+";
+    let definition = PipelineDefinition::from_yaml(yaml).expect("compiles");
+    let policy = definition.result_policy();
+    assert_eq!(policy.terminal_data_keys, vec!["summary".to_owned()]);
+    assert!(
+        !policy.terminal_data_keys.iter().any(|k| k == "branch_code"),
+        "fan-out child output leaked into terminal_data_keys: {:?}",
+        policy.terminal_data_keys
+    );
+    let final_state = HashMap::from([
+        ("branch_code".to_owned(), json!(0)),
+        ("summary".to_owned(), json!("final-root-answer")),
+    ]);
+    assert_eq!(definition.completed_text(&final_state), "final-root-answer");
 }

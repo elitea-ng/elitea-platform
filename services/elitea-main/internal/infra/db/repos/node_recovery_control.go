@@ -55,7 +55,7 @@ func (r *NodeRecoveryRepository) PollNodeRecovery(ctx context.Context, claim sto
 		var revision uint64
 		err = tx.QueryRow(ctx, `SELECT receipt_json,receipt_digest,activation_id,journal_revision FROM elitea_runtime.node_recovery_visits
 WHERE execution_id=$1 AND generation=$2 AND status IN ('SUSPENDED','AUTHORIZED','RESUMED','STOPPED')
-ORDER BY CASE status WHEN 'AUTHORIZED' THEN 0 WHEN 'SUSPENDED' THEN 1 ELSE 2 END ASC,created_at DESC,journal_revision DESC LIMIT 1 FOR UPDATE`, claim.ExecutionID, int64(claim.Generation)).Scan(&raw, &digest, &activation, &revision)
+ORDER BY CASE status WHEN 'AUTHORIZED' THEN 0 WHEN 'SUSPENDED' THEN 1 WHEN 'STOPPED' THEN 2 ELSE 3 END ASC,created_at DESC,journal_revision DESC,graph_thread ASC,activation_id DESC LIMIT 1 FOR UPDATE`, claim.ExecutionID, int64(claim.Generation)).Scan(&raw, &digest, &activation, &revision)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return storage.ErrContentRejected
 		}

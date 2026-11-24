@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 
 	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 	app "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/noderecovery"
@@ -92,9 +93,14 @@ func NewCurrentNodeRecoveryRoute(useCase CurrentNodeRecoveryUseCase, authConfig 
 	return router, nil
 }
 
+const maxNodeRecoveryRawQueryBytes = 2048
+
 func parseNodeRecoveryReadThread(rawQuery string) (string, bool) {
 	if rawQuery == "" {
 		return "", true
+	}
+	if len(rawQuery) > maxNodeRecoveryRawQueryBytes || strings.ContainsAny(rawQuery, "&;") {
+		return "", false
 	}
 	values, err := url.ParseQuery(rawQuery)
 	if err != nil || len(values) != 1 {

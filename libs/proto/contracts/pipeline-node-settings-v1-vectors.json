@@ -469,6 +469,24 @@
       "yaml": "entry_point: map_entities\nstate:\n  entities: {type: list, value: []}\n  item_result: {type: str, value: ''}\n  mapped: {type: list, value: []}\nnodes:\n  - {id: map_entities, type: map, worker: Render Item, source: entities, item: entity, index: item_index, outputs: [item_result], destination: mapped, max_items: 64, max_concurrency: 4, reduction: ordered_collection, transition: END}\n  - {id: Render Item, type: state_modifier, input: [entity, item_index], output: [item_result], template: '{{ item_index }}', settings: {on_error: continue}}\n",
       "refusal": null,
       "node": null
+    },
+    {
+      "name": "Map broadcast cannot pass node_errors across fan-out boundary (SEC-5B5-02)",
+      "yaml": "entry_point: map_entities\nstate:\n  entities: {type: list, value: []}\n  item_result: {type: str, value: ''}\n  mapped: {type: list, value: []}\nnodes:\n  - {id: map_entities, type: map, worker: render, source: entities, item: entity, index: item_index, broadcast: [node_errors], outputs: [item_result], destination: mapped, max_items: 64, max_concurrency: 4, reduction: ordered_collection, transition: END}\n  - {id: render, type: state_modifier, input: [entity, item_index], output: [item_result], template: '{{ item_index }}', settings: {on_error: continue}}\n",
+      "refusal": "node_errors_nested_mapping",
+      "node": "map_entities"
+    },
+    {
+      "name": "Parallel Code branch cannot declare input node_errors across fan-out boundary (SEC-5B5-02)",
+      "yaml": "entry_point: gather\nstate:\n  topic: str\n  a_out: {type: str, value: ''}\n  b_out: {type: str, value: ''}\n  gathered: {type: list, value: []}\nnodes:\n  - id: gather\n    type: parallel\n    branches:\n      - {id: a, node: run_a}\n      - {id: b, node: run_b}\n    max_concurrency: 2\n    wait: all\n    output: [gathered]\n    transition: END\n  - id: run_a\n    type: code\n    language: python\n    code: 'return \"ok\"'\n    input: [topic, node_errors]\n    output: [a_out]\n    settings: {on_error: continue}\n  - id: run_b\n    type: code\n    language: python\n    code: 'return \"ok\"'\n    input: [topic]\n    output: [b_out]\n",
+      "refusal": "node_errors_nested_mapping",
+      "node": "run_a"
+    },
+    {
+      "name": "Parallel LLM branch cannot read parent node_errors across fan-out boundary (SEC-5B5-02)",
+      "yaml": "entry_point: gather\nstate:\n  topic: str\n  a_out: str\n  b_out: str\n  gathered: {type: list, value: []}\nnodes:\n  - id: gather\n    type: parallel\n    branches:\n      - {id: a, node: ask_a}\n      - {id: b, node: ask_b}\n    max_concurrency: 2\n    wait: all\n    output: [gathered]\n    transition: END\n  - id: ask_a\n    type: llm\n    input: [topic, node_errors]\n    input_mapping: {task: {type: fstring, value: '{topic}'}}\n    output: [a_out]\n    settings: {on_error: continue}\n  - id: ask_b\n    type: llm\n    input: [topic]\n    input_mapping: {task: {type: fstring, value: '{topic}'}}\n    output: [b_out]\n",
+      "refusal": "node_errors_nested_mapping",
+      "node": "ask_a"
     }
   ]
 }

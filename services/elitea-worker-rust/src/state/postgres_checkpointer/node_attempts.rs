@@ -43,19 +43,20 @@ impl NodeRecoveryFactory for PostgresCheckpointer {
         self.state_writer_lease
             .ensure_current()
             .map_err(|_| recovery_error("pipeline.node_recovery.writer_not_current"))?;
-        // FU-248: a saved child's thread and steps are reused by every visit,
-        // so its journal is scoped to the visit; there is no unscoped fallback.
-        // The run root has no visit and keeps its original journal identity.
-        // 5b-5: an authorized direct fan-out child thread (`p1:` / `m1:`, no `/`
-        // subgraph suffix) is already unique per occurrence, branch/item and
-        // input, so it may open visit-scoped (Code child) or thread-scoped
-        // (LLM child) under its own activated child writer while staying fenced
-        // on `self.run_root_thread_id`.
+        // FU-248 + 5b-5: every child thread (saved child, direct Code child,
+        // direct LLM child) must carry an explicit visit (`APPLICATION_VISIT_STATE_KEY`);
+        // there is no unscoped child fallback. The run root carries no visit.
         let in_child = activation.root_thread_id != self.run_root_thread_id;
-        let direct_fanout_child =
-            in_child && is_direct_fanout_child_thread(&activation.root_thread_id);
-        if !direct_fanout_child && in_child != activation.visit.is_some() {
+        if in_child != activation.visit.is_some() {
             return Err(recovery_error("pipeline.node_recovery.unscoped_child"));
+        }
+        if in_child
+            && (activation.root_thread_id.starts_with("p1:")
+                || activation.root_thread_id.starts_with("m1:"))
+            && !activation.root_thread_id.contains('/')
+            && !is_direct_fanout_child_thread(&activation.root_thread_id)
+        {
+            return Err(recovery_error("pipeline.node_recovery.invalid_scope"));
         }
         let authority = &self.scope.authority;
         let activation_id = journal_activation_id(authority, activation, policy)?;
@@ -80,8 +81,9 @@ impl NodeRecoveryFactory for PostgresCheckpointer {
     }
 }
 
-/// Whether `thread_id` is a direct fan-out child thread (`p1:` or `m1:` plus a
-/// 32-byte URL-safe base64 digest, with no `/` saved-subgraph suffix).
+/// Whether `thread_id` is a canonical direct fan-out child thread (`p1:` or
+/// `m1:` plus a canonical 32-byte URL-safe base64 no-pad digest, with no `/`
+/// saved-subgraph suffix and zero trailing non-canonical base64 bits).
 pub(in crate::state) fn is_direct_fanout_child_thread(thread_id: &str) -> bool {
     let Some(encoded) = thread_id
         .strip_prefix("p1:")
@@ -90,9 +92,9 @@ pub(in crate::state) fn is_direct_fanout_child_thread(thread_id: &str) -> bool {
         return false;
     };
     encoded.len() == 43
-        && encoded
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        && URL_SAFE_NO_PAD
+            .decode(encoded)
+            .is_ok_and(|bytes| bytes.len() == 32)
 }
 
 /// The journal identity of one node activation. A run root's is exactly what
@@ -430,10 +432,12 @@ mod tests {
             // Length limit - 1 (42) and limit + 1 (44).
             "p1:Z8y5h_dA4WoUJhoL5KeWzytJ6KsEHvKFo9OBSMzxW6",
             "p1:Z8y5h_dA4WoUJhoL5KeWzytJ6KsEHvKFo9OBSMzxW6Qa",
-            // Non-URL-safe base64 / padding / control chars.
+            // Non-URL-safe base64 / padding / control chars / non-canonical trailing bits.
             "p1:Z8y5h+dA4WoUJhoL5KeWzytJ6KsEHvKFo9OBSMzxW6Q",
             "p1:Z8y5h_dA4WoUJhoL5KeWzytJ6KsEHvKFo9OBSMzxW6=",
             "p1:Z8y5h_dA4WoUJhoL5KeWzytJ6KsEHvKFo9OBSMzx\n6Q",
+            "p1:Z8y5h_dA4WoUJhoL5KeWzytJ6KsEHvKFo9OBSMzxW6R",
+            "m1:KRe5343ZNGVAvfuZ-MJ-RAfTgyFfIxbwR_9OVB4NU25",
         ] {
             assert!(
                 !is_direct_fanout_child_thread(refused),

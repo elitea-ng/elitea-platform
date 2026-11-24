@@ -122,10 +122,10 @@ func (r *NodeRecoveryRepository) Read(ctx context.Context, selector app.Selector
 		var raw, digest []byte
 		if selector.GraphThread != "" {
 			err = tx.QueryRow(ctx, `SELECT status,receipt_json,receipt_digest FROM elitea_runtime.node_recovery_visits
-WHERE execution_id=$1 AND generation=$2 AND graph_thread=$3 ORDER BY created_at DESC,journal_revision DESC LIMIT 1`, scope.executionID, scope.generation, selector.GraphThread).Scan(&status, &raw, &digest)
+WHERE execution_id=$1 AND generation=$2 AND graph_thread=$3 ORDER BY created_at DESC,journal_revision DESC,activation_id DESC LIMIT 1`, scope.executionID, scope.generation, selector.GraphThread).Scan(&status, &raw, &digest)
 		} else {
 			err = tx.QueryRow(ctx, `SELECT status,receipt_json,receipt_digest FROM elitea_runtime.node_recovery_visits
-WHERE execution_id=$1 AND generation=$2 ORDER BY CASE status WHEN 'SUSPENDED' THEN 0 WHEN 'AUTHORIZED' THEN 1 ELSE 2 END ASC,created_at DESC,journal_revision DESC LIMIT 1`, scope.executionID, scope.generation).Scan(&status, &raw, &digest)
+WHERE execution_id=$1 AND generation=$2 ORDER BY CASE status WHEN 'SUSPENDED' THEN 0 WHEN 'AUTHORIZED' THEN 1 ELSE 2 END ASC,created_at DESC,journal_revision DESC,graph_thread ASC,activation_id DESC LIMIT 1`, scope.executionID, scope.generation).Scan(&status, &raw, &digest)
 		}
 		if errors.Is(err, pgx.ErrNoRows) {
 			return app.ErrNotAllowed

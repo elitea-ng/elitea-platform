@@ -367,8 +367,8 @@ func nodeFields(node *yaml.Node) map[string]*yaml.Node {
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		switch key := aliased(node.Content[i]).Value; key {
 		case "id", "type", "toolkit_name", "branches", "worker", "reduction", "join", "on_error",
-			// Node settings (5b-1): the block and the raw facts it is checked against.
-			settingsKey, "default_output", "recovery", "failure_handler", "output", "input_mapping":
+			// Node settings (5b-1/5b-5): the block and the raw facts it is checked against.
+			settingsKey, "default_output", "recovery", "failure_handler", "input", "output", "outputs", "broadcast", "input_mapping":
 			fields[key] = aliased(node.Content[i+1])
 		}
 	}

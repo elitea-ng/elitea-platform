@@ -475,6 +475,9 @@ impl LlmNodeDefinition {
         let mut state = self
             .input
             .iter()
+            .filter(|key| {
+                key.as_str() != elitea_agent_runtime::graph::node_settings::NODE_ERRORS_KEY
+            })
             .filter_map(|key| parent.get(key).map(|value| (key.clone(), value.clone())))
             .collect::<State>();
         state.insert(PARALLEL_LLM_INPUTS_STATE_KEY.to_owned(), frozen);
@@ -1511,6 +1514,28 @@ impl LlmNode {
                     .await
                     .map_err(|_| node_failure(self.name()))?;
             }
+            return Err(may_have_started(self.name()));
+        }
+        if matches!(
+            &result,
+            Err(GraphError::Other(code))
+                if code == super::node_recovery_runtime::CHILD_EFFECT_UNKNOWN_CODE
+        ) {
+            return Err(may_have_started(self.name()));
+        }
+        if context
+            .state
+            .contains_key(super::application::APPLICATION_VISIT_STATE_KEY)
+            && let Ok(ref output) = result
+            && output.interrupt.as_ref().is_some_and(|interrupt| {
+                matches!(
+                    interrupt,
+                    adk_rust::graph::interrupt::Interrupt::Dynamic { data: Some(data), .. }
+                        if data.get("guardrail_type").and_then(Value::as_str)
+                            == Some("pipeline_node_recovery")
+                )
+            })
+        {
             return Err(may_have_started(self.name()));
         }
         result
